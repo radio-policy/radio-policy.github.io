@@ -156,6 +156,8 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 ③ 주제 "AI로 보강" 버튼: 기존 그래프를 통째로 주고 빠진 관계만 증분 추가(기존 삭제 없음).
 ④ build_law_citation_graph.py(PC): 법령·고시 원문 조문의 「법령명」 인용 + 계열(시행령/규칙)을
    추출해 citation/family 엣지 재구축(멱등). 새 법령 업로드(add_law.py) 후 재실행 권장.
+   노드 매칭은 공백 무시(nrm) — PDF 추출이 단어 중간에 공백을 끼워("전 파법") 변형 노드를
+   양산하던 문제의 재발 방지. 기존 변형 183개는 2026-07-29 정본 병합 완료(배경역사 #30).
 ```
 
 - 세션에서 주제 수동 추가 패턴: 노드 `insert ... on conflict (name) do nothing` → 엣지 `insert ... select` name 조인 + `on conflict do nothing` (source='seed'). 2026-07-23 시드 30주제가 예시.

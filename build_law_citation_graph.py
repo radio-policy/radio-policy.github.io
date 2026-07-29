@@ -261,9 +261,18 @@ def main():
             break
         offset += 1000
 
+    # 공백 무시 색인 — PDF 추출이 단어 중간에 공백을 끼워 넣어("전 파법") 변형 노드가
+    # 양산되는 것을 방지. 같은 nrm이면 doc_name 보유 노드를 정본으로 재사용.
+    existing_nrm = {}
+    for _nm, _row in existing.items():
+        _key = _nm.replace(' ', '')
+        _prev = existing_nrm.get(_key)
+        if _prev is None or (_row.get('doc_name') and not _prev.get('doc_name')):
+            existing_nrm[_key] = _row
+
     def ensure_node(name, ntype, doc_name=None):
-        if name in existing:
-            row = existing[name]
+        row = existing.get(name) or existing_nrm.get(name.replace(' ', ''))
+        if row:
             if doc_name and not row.get('doc_name'):
                 try:
                     sb.table('law_graph_nodes').update({'doc_name': doc_name}).eq('id', row['id']).execute()
@@ -276,6 +285,7 @@ def main():
         }).execute()
         row = ins.data[0]
         existing[name] = row
+        existing_nrm[name.replace(' ', '')] = row
         return row['id']
 
     node_ids = {}
