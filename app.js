@@ -2501,7 +2501,7 @@ async function loadKbDocs(force) {
     var etc = { title: '기타 법령·고시', items: [] };
     rows.forEach(function(r) {
       var p = _kbParseName(r.doc_name);
-      var item = { p: p, chunks: r.chunks, embedded: r.embedded > 0, approved: r.approved !== false };
+      var item = { p: p, docName: r.doc_name, chunks: r.chunks, embedded: r.embedded > 0, approved: r.approved !== false };
       for (var i = 0; i < groups.length; i++) {
         if (groups[i].re.test(p.clean)) { groups[i].items.push(item); return; }
       }
@@ -2520,9 +2520,13 @@ async function loadKbDocs(force) {
           badge += '<span class="badge" style="background:rgba(220,38,38,.12);color:#b91c1c" title="설정에서 승인 전 — AI 자문 미반영">승인 대기</span>';
         }
         var dupTag = it.p.dup ? ' <span style="font-size:10px;color:var(--text-tertiary)">(중복본)</span>' : '';
-        return '<div class="file-item"><div class="file-icon fi-purple"><i class="ti ti-file-text"></i></div>' +
+        // 클릭 → 원문(조문 전체) 모달. doc_name은 목록 표시명이 아닌 DB 원본값을 넘겨야 조회됨.
+        return '<div class="file-item" style="cursor:pointer" title="클릭하면 원문(조문)을 볼 수 있습니다" ' +
+          'onclick="openKbDoc(&quot;' + escHtml(it.docName) + '&quot;)">' +
+          '<div class="file-icon fi-purple"><i class="ti ti-file-text"></i></div>' +
           '<div style="flex:1;min-width:0"><div class="file-name">' + it.p.clean + dupTag + '</div>' +
-          '<div class="file-size">' + (it.p.info ? it.p.info + ' · ' : '') + it.chunks + '청크</div></div>' + badge + '</div>';
+          '<div class="file-size">' + (it.p.info ? it.p.info + ' · ' : '') + it.chunks + '청크</div></div>' + badge +
+          '<i class="ti ti-chevron-right" style="color:var(--text-tertiary);font-size:15px;flex-shrink:0"></i></div>';
       }).join('');
       return '<div class="section-title"' + (gi > 0 ? ' style="margin-top:20px"' : '') + '>' + g.title + ' (' + g.items.length + '종)</div>' +
         '<div class="card" style="cursor:default;margin-bottom:14px">' + fileRows + '</div>';
@@ -2534,6 +2538,94 @@ async function loadKbDocs(force) {
   } catch(e) {
     el.innerHTML = '<div style="color:var(--text-secondary);font-size:12px;padding:16px 0">목록 조회 실패: ' + e.message + '</div>';
   }
+}
+
+// ── 지식베이스 법령 원문 열람 (목록 클릭 → 전체 조문 모달) ──
+// 관계도의 openLawMapDoc은 '앞 6청크 미리보기'라 별도. 여기는 전체 조문 + 조문 검색.
+var _kbDocArticles = [];   // [{ art, text }] — 현재 열린 문서의 조문 단위 목록
+
+async function openKbDoc(docName) {
+  var modal = document.getElementById('kb-doc-modal');
+  var titleEl = document.getElementById('kb-doc-title');
+  var metaEl = document.getElementById('kb-doc-meta');
+  var bodyEl = document.getElementById('kb-doc-body');
+  var searchEl = document.getElementById('kb-doc-search');
+  if (!modal || !sb) return;
+  modal.style.display = 'flex';
+  if (searchEl) searchEl.value = '';
+  var p = _kbParseName(docName);
+  titleEl.innerHTML = '<i class="ti ti-file-text"></i> ' + escHtml(p.clean);
+  metaEl.textContent = p.info || '';
+  bodyEl.innerHTML = '<div style="color:var(--text-tertiary);font-size:12px;padding:20px 0;text-align:center">원문을 불러오는 중...</div>';
+  _kbDocArticles = [];
+  try {
+    // 전체 청크 — PostgREST max-rows 1000 절단 대비 range 페이지네이션 (지침 가드레일)
+    var rows = [], start = 0, PAGE = 1000;
+    while (true) {
+      var r = await sb.from('document_chunks')
+        .select('content,article_no,chunk_index')
+        .eq('doc_name', docName)
+        .order('chunk_index', { ascending: true })
+        .range(start, start + PAGE - 1);
+      if (r.error) throw r.error;
+      var batch = r.data || [];
+      rows = rows.concat(batch);
+      if (batch.length < PAGE) break;
+      start += PAGE;
+    }
+    if (!rows.length) {
+      bodyEl.innerHTML = '<div style="color:var(--text-tertiary);font-size:12px;padding:20px 0;text-align:center">원문 청크를 찾지 못했습니다.</div>';
+      return;
+    }
+    // 같은 조문이 여러 청크로 쪼개진 경우 하나로 합침 (긴 조문 대응)
+    var lawTitle = docName.split('(')[0].replace(/\.(pdf|md|txt)$/i, '').trim();
+    rows.forEach(function(c) {
+      var art = (c.article_no || '').trim();
+      var text = lawmapCleanText(c.content, lawTitle);
+      if (!text) return;
+      var last = _kbDocArticles[_kbDocArticles.length - 1];
+      if (last && art && last.art === art) { last.text += '\n' + text; return; }
+      if (last && !art && !last.art) { last.text += '\n' + text; return; }
+      _kbDocArticles.push({ art: art, text: text });
+    });
+    renderKbDocArticles(_kbDocArticles);
+  } catch(e) {
+    bodyEl.innerHTML = '<div style="color:var(--text-tertiary);font-size:12px;padding:20px 0">원문 조회 실패: ' + escHtml(e && e.message ? e.message : String(e)) + '</div>';
+  }
+}
+
+function renderKbDocArticles(list) {
+  var bodyEl = document.getElementById('kb-doc-body');
+  var countEl = document.getElementById('kb-doc-count');
+  if (countEl) countEl.textContent = list.length + ' / ' + _kbDocArticles.length + '개 조문';
+  if (!list.length) {
+    bodyEl.innerHTML = '<div style="color:var(--text-tertiary);font-size:12px;padding:20px 0;text-align:center">검색 결과가 없습니다.</div>';
+    return;
+  }
+  bodyEl.innerHTML = list.map(function(a) {
+    return '<div style="margin-bottom:16px;padding-bottom:14px;border-bottom:0.5px solid var(--border-light)">' +
+      (a.art ? '<div style="font-size:12.5px;font-weight:600;color:var(--text-primary);margin-bottom:5px">【' + escHtml(a.art) + '】</div>' : '') +
+      '<div style="white-space:pre-wrap">' + escHtml(a.text) + '</div></div>';
+  }).join('');
+  bodyEl.scrollTop = 0;
+}
+
+function filterKbDocArticles() {
+  var q = (document.getElementById('kb-doc-search').value || '').trim();
+  if (!q) { renderKbDocArticles(_kbDocArticles); return; }
+  // '37조'로 쳐도 '제37조'가 잡히도록 조문번호 질의는 접두 '제'를 보정
+  var artQ = q.replace(/^제/, '');
+  var lower = q.toLowerCase();
+  renderKbDocArticles(_kbDocArticles.filter(function(a) {
+    var art = (a.art || '').replace(/^제/, '');
+    return art.indexOf(artQ) === 0 || (a.art || '').indexOf(q) >= 0 || a.text.toLowerCase().indexOf(lower) >= 0;
+  }));
+}
+
+function closeKbDoc() {
+  var m = document.getElementById('kb-doc-modal');
+  if (m) m.style.display = 'none';
+  _kbDocArticles = [];
 }
 
 var diffState = { before: null, after: null };  // { text, name }

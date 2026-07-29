@@ -860,6 +860,25 @@
   </div>
 </div>
 
+<!-- 지식베이스 법령 원문 열람 모달 (전체 조문 + 조문 검색) -->
+<div id="kb-doc-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:1500;align-items:center;justify-content:center;padding:20px" onclick="if(event.target===this)closeKbDoc()">
+  <div style="background:var(--bg-primary);border-radius:var(--radius-lg);width:100%;max-width:900px;max-height:88vh;display:flex;flex-direction:column;overflow:hidden;border:0.5px solid var(--border-light)">
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:0.5px solid var(--border-light);flex-shrink:0;gap:12px">
+      <div style="min-width:0;flex:1">
+        <div id="kb-doc-title" style="font-size:14px;font-weight:600;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><i class="ti ti-file-text"></i> 원문</div>
+        <div id="kb-doc-meta" style="font-size:11px;color:var(--text-tertiary);margin-top:2px"></div>
+      </div>
+      <button class="btn" onclick="closeKbDoc()"><i class="ti ti-x"></i>닫기</button>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;padding:10px 18px;border-bottom:0.5px solid var(--border-light);flex-shrink:0">
+      <input id="kb-doc-search" type="text" placeholder="조문 검색 — 예: 제37조, 로밍, 위기경보" oninput="filterKbDocArticles()"
+             style="flex:1;padding:6px 10px;border:0.5px solid var(--border-mid);border-radius:var(--radius-sm);font-size:12px;background:var(--bg-primary);color:var(--text-primary)">
+      <span id="kb-doc-count" style="font-size:11px;color:var(--text-tertiary);white-space:nowrap"></span>
+    </div>
+    <div id="kb-doc-body" style="overflow-y:auto;padding:14px 18px;font-size:13px;line-height:1.75;color:var(--text-secondary)"></div>
+  </div>
+</div>
+
 <!-- PDF 업로드 모달 -->
 <div id="pdf-upload-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:2000;align-items:center;justify-content:center">
   <div style="background:var(--bg-primary);border-radius:var(--radius-lg);padding:24px;width:480px;max-width:92vw;box-shadow:0 8px 32px rgba(0,0,0,0.35)">
@@ -918,6 +937,6 @@
 <script src="https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js"></script>
 <script>if(typeof pdfjsLib!=='undefined'){pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';}</script>
 <script src="system_prompt.js?v=20260612c"></script>
-<script src="app.js?v=20260729a"></script>
+<script src="app.js?v=20260729b"></script>
 </body>
 </html>
