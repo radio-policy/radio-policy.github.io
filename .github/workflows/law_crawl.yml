@@ -38,3 +38,14 @@ jobs:
           LAW_OC_KEY: ${{ secrets.LAW_OC_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: python summarize_law_amendments.py
+
+      # 지식베이스 등재 법령이 법제처 현행본과 어긋나는지 대조(감시만 — 교체는 PC에서 law_sync.py)
+      - name: Watch knowledge-base law currency
+        continue-on-error: true
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          LAW_OC_KEY: ${{ secrets.LAW_OC_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python law_watch.py

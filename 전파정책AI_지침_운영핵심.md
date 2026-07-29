@@ -217,7 +217,28 @@ python backfill_term_details.py               # 기술용어 상세 백필(tech_
 python build_law_citation_graph.py            # 법령 관계도 인용망 재구축(citation·family 엣지만 — 멱등. 새 법령 업로드 후 실행)
 python clean_pdf_artifacts.py [--apply]       # 기존 document_chunks PDF 편집흔적 일괄 청소(dry-run 기본. content만, embedding 유지)
 python sync_kb_to_bundle.py [--dry-run]       # 웹 생성 OKF(DB) → regulatory-kb 번들 역동기화(월 1회 권장, import_regulatory_kb 전 필수)
+python law_watch.py [--dry-run|--no-notify]   # 법령 현행화 감시(등재본 vs 법제처 현행본 대조 → 알림). GitHub Actions 매일 11시
+python law_sync.py --list                     # 현행화 대상 목록
+python law_sync.py --all-outdated             # 개정 감지분 일괄 현행화(조문 API 취득→청킹→등재→구버전 정리→임베딩 백필)
 ```
+
+## 법령 자동 현행화 (law_watch / law_sync, 2026-07-29 신설)
+
+수동 업로드로만 유지되던 지식베이스를 **법제처 DRF API 기준으로 자동 추적**한다. 조문을 API로 직접 받으므로 **PDF 다운로드·업로드가 불필요**하고, 조문 단위 청킹이라 article_no가 PDF 추출본보다 정확하다.
+
+```
+[매일 11시] law_watch.py  지식베이스 스캔(동적 발견) → 법제처 현행본 대조 → 텔레그램 알림 + law_watch 기록
+[개정 감지] 대시보드 설정 탭 '법령 현행화 상태'에서 확인
+[현행화]   PC에서 law_sync.py --all-outdated  → 조문 취득·등재·구버전 정리·임베딩 백필
+[후속]     build_law_citation_graph.py (인용망) / OKF는 초기=세션, 이후 개정분=승인 훅 API 자동
+```
+
+- **감시 대상은 고정 목록이 아니라 매 실행 자동 발견** — 대시보드 업로드/add_law.py/세션 어느 경로로 추가하든 다음 실행부터 자동 편입. 등록 누락으로 인한 무음 미감시를 원천 차단(가드레일 #18·#22 계열).
+- **버전 상태**: `document_chunks.status` = `current`(자문 검색 대상) / `pending`(시행예정본, 검색 제외·보존) / `superseded`(구버전, 최근 3버전만 보존). 검색 함수 `match_chunks_semantic`·`search_chunks_trgm`에 `only_current` 파라미터(기본 true) — kb_chunks의 동일 패턴.
+- **문서명 관례가 매칭의 전제**: `법령명(법종)(제N호)(YYYYMMDD)`. 관례를 벗어나면 `unmatched`로 뜨고 수동 확인 필요. 법종 괄호가 아예 없는 문서(보도자료 등)는 자동 `excluded`.
+- **기관명 변경 대응**: `ORG_ALIASES`(방송통신위원회→방송미디어통신위원회 등)로 1차 검색 실패 시 재검색. 이 경우 법령명 자체가 바뀌므로 구버전 정리는 감시가 지목한 문서명(prev_doc_name)으로 처리한다 — 빠뜨리면 구버전이 current로 남아 자문이 옛 규정을 답한다.
+- **한계**: 고시의 **별표·서식은 API 조문에 포함되지 않는다**(적합성평가 고시 PDF 166청크 → API 48청크). 별표가 실무상 중요한 고시는 PDF 병행 등재를 검토할 것.
+- **OKF 방침**: 초기 일괄 정비는 세션에서 무료 작성, 이후 개정분만 대시보드 승인 훅이 API 자동 생성(배경역사 #29·#31).
 
 ## 점검 체크리스트 (요약 — 상세 경위는 배경역사 문서)
 
