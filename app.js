@@ -374,18 +374,25 @@ async function buildPendingContext(chunks) {
   lastPendingNotice = null;
   if (!sb || !chunks || !chunks.length) return '';
   try {
-    var docs = [], keys = [];
+    // (문서, 조번호) 쌍으로 모은다. 문서 목록과 조번호 목록을 따로 넘기면 교차곱이 되어
+    // 시행령의 제58조의2를 인용했는데 본법 제58조의2가 딸려 오는 식의 오매칭이 난다.
+    var docs = [], pairs = [], seen = {};
     chunks.forEach(function(c) {
-      if (c.doc_name && docs.indexOf(c.doc_name) < 0) docs.push(c.doc_name);
+      if (!c.doc_name) return;
+      if (docs.indexOf(c.doc_name) < 0) docs.push(c.doc_name);
       var m = String(c.article_no || '').replace(/^제/, '').match(/^([0-9]+조(?:의[0-9]+)?)/);
-      if (m && keys.indexOf(m[1]) < 0) keys.push(m[1]);
+      if (!m) return;
+      var k = c.doc_name + '|' + m[1];
+      if (seen[k]) return;
+      seen[k] = 1;
+      pairs.push({ doc: c.doc_name, key: m[1] });
     });
     if (!docs.length) return '';
 
     var res = await Promise.all([
       sb.rpc('pending_versions_for_docs', { p_docs: docs }),
-      keys.length ? sb.rpc('fetch_pending_articles', { p_docs: docs, p_article_keys: keys, p_limit: 16 })
-                  : Promise.resolve({ data: [] })
+      pairs.length ? sb.rpc('fetch_pending_articles', { p_pairs: pairs, p_limit: 16 })
+                   : Promise.resolve({ data: [] })
     ]);
     var vers = (res[0] && !res[0].error) ? (res[0].data || []) : [];
     var arts = (res[1] && !res[1].error) ? (res[1].data || []) : [];
