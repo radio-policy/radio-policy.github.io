@@ -289,6 +289,22 @@ def chunk_articles(articles):
 
 # ── 문서명 ────────────────────────────────────────────────
 
+
+def _law_type_label(meta, basic):
+    """문서명 괄호에 넣을 법종 표기.
+
+    법제처 '법령구분명'은 부령을 그냥 "부령"으로 준다. 그대로 쓰면
+    '전파법 시행규칙(과학기술정보통신부령)' 이 '(부령)' 으로 바뀌어 같은 법령이
+    두 문서로 갈라진다(실제로 4건 발생). 기존 문서명의 괄호 전체가 API 표기로
+    끝나면(= 소관부처 접두만 더 있는 형태) 기존 표기를 유지한다.
+    """
+    api = (basic.get('법령구분명') or '').strip()
+    full = (meta.get('law_type_full') or '').strip()
+    if full and api and full.endswith(api) and len(full) > len(api):
+        return full
+    return api or full or meta.get('law_type_token')
+
+
 def build_doc_name(law_name, type_token, law_no, enf_date, org=None, target='law'):
     """기존 관례 유지: '전파법(법률)(제21065호)(20260102)'
     행정규칙은 '(과학기술정보통신부고시)'처럼 소관부처+종류."""
@@ -370,7 +386,7 @@ def sync_one(sb, watch_row, args):
     # 조문 취득
     if target == 'law':
         articles, basic = fetch_law_articles(mst)
-        type_token = basic.get('법령구분명') or meta['law_type_token']
+        type_token = _law_type_label(meta, basic)
         org = None
         law_id = str(hit.get('법령ID') or '')
     else:
@@ -700,7 +716,7 @@ def reingest_one(sb, doc_name, args):
 
     if target == 'law':
         articles, basic = fetch_law_articles(mst)
-        type_token = basic.get('법령구분명') or meta['law_type_token']
+        type_token = _law_type_label(meta, basic)
         org, law_id = None, str(hit.get('법령ID') or '')
     else:
         articles, basic = fetch_admrul_articles(mst)

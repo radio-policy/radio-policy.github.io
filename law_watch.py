@@ -93,6 +93,11 @@ def parse_doc_name(doc_name: str):
         "law_name": base,        # 접두 제거본 (검색어)
         "full_name": head,       # 접두 포함본 (정밀 매칭용)
         "law_type_token": m.group(2),
+        # 괄호 안 전체("과학기술정보통신부령"). 재적재 시 문서명을 다시 만들 때 이걸 써야
+        # 소관부처 접두가 보존된다 — 법제처 '법령구분명'은 "부령"만 주기 때문에
+        # 그대로 쓰면 '전파법 시행규칙(과학기술정보통신부령)'이 '(부령)'이 되어
+        # 같은 법령이 두 문서로 갈라진다.
+        "law_type_full": m.group(1).strip(),
         "law_no": no_m.group(1) if no_m else None,
         "enf_date": dt_m.group(1) if dt_m else None,
     }

@@ -2559,6 +2559,8 @@ function filterNews(el, cat) { filterNewsByImportance(el, cat); }
 // ════════════════════════════════════════════
 // ── 지식 베이스 문서 목록 (document_chunks 실시간 · 수동정리 목록과 동일 스타일) ──
 var _kbDocsLoaded = false;
+// 지식베이스 목록의 구버전·시행예정본 표시 토글(기본: 현행본만)
+var _kbShowOlder = false, _kbOlderCount = 0, _kbPendingCount = 0;
 
 var _KB_GROUPS = [
   ['전파법 기본 법령', /^전파법/],
@@ -2597,16 +2599,23 @@ async function loadKbDocs(force) {
   try {
     var resp = await sb.rpc('list_kb_documents');
     if (resp.error) throw resp.error;
-    var rows = (resp.data || []).filter(function(r) {
+    // 구버전(superseded)·시행예정본(pending)은 기본적으로 감춘다. 이것들까지 나열하면
+    // 같은 법령이 2~3개씩 보여 "중복 등재"로 오해된다(실제로는 버전 관리가 정상 동작한 것).
+    // 토글로 펼쳐 볼 수 있게 하고, 상단에 건수만 알린다.
+    var all = (resp.data || []).filter(function(r) {
       if (r.doc_category === 'ITU-R') return false;   // ITU-R 탭에서 별도 표시
       if (/^\d{6}/.test(r.doc_name)) return false;    // 날짜 파일명 = 보도자료 → 정부 보도자료 탭에서 표시
       return true;
     });
+    var older = all.filter(function(r) { return r.status && r.status !== 'current'; });
+    var rows = _kbShowOlder ? all : all.filter(function(r) { return !r.status || r.status === 'current'; });
+    _kbOlderCount = older.length;
+    _kbPendingCount = older.filter(function(r) { return r.status === 'pending'; }).length;
     var groups = _KB_GROUPS.map(function(g) { return { title: g[0], re: g[1], items: [] }; });
     var etc = { title: '기타 법령·고시', items: [] };
     rows.forEach(function(r) {
       var p = _kbParseName(r.doc_name);
-      var item = { p: p, docName: r.doc_name, chunks: r.chunks, embedded: r.embedded > 0, approved: r.approved !== false };
+      var item = { p: p, docName: r.doc_name, chunks: r.chunks, embedded: r.embedded > 0, approved: r.approved !== false, status: r.status };
       for (var i = 0; i < groups.length; i++) {
         if (groups[i].re.test(p.clean)) { groups[i].items.push(item); return; }
       }
@@ -2625,6 +2634,11 @@ async function loadKbDocs(force) {
           badge += '<span class="badge" style="background:rgba(220,38,38,.12);color:#b91c1c" title="설정에서 승인 전 — AI 자문 미반영">승인 대기</span>';
         }
         var dupTag = it.p.dup ? ' <span style="font-size:10px;color:var(--text-tertiary)">(중복본)</span>' : '';
+        if (it.status === 'superseded') {
+          dupTag += ' <span class="badge" style="background:rgba(107,114,128,.15);color:#4b5563" title="개정 전 구버전 — 자문 검색에서 제외됨">구버전</span>';
+        } else if (it.status === 'pending') {
+          dupTag += ' <span class="badge" style="background:rgba(59,130,246,.12);color:#1d4ed8" title="공포됐으나 시행 전 — 시행일 도래 시 자동 승격">시행예정</span>';
+        }
         // 클릭 → 원문(조문 전체) 모달. doc_name은 목록 표시명이 아닌 DB 원본값을 넘겨야 조회됨.
         return '<div class="file-item" style="cursor:pointer" title="클릭하면 원문(조문)을 볼 수 있습니다" ' +
           'onclick="openKbDoc(&quot;' + escHtml(it.docName) + '&quot;)">' +
@@ -2638,7 +2652,19 @@ async function loadKbDocs(force) {
     }).join('');
     var tot = document.getElementById('kb-total');
     if (tot) tot.textContent = total;
-    el.innerHTML = html || '<div style="color:var(--text-secondary);font-size:12px;padding:16px 0">등록된 문서가 없습니다.</div>';
+    // 감춘 구버전·시행예정본을 알리고 펼칠 수 있게 한다(감췄다는 사실 자체를 숨기지 않는다)
+    var note = '';
+    if (_kbOlderCount) {
+      var sup = _kbOlderCount - _kbPendingCount;
+      note = '<div style="font-size:11.5px;color:var(--text-secondary);margin:0 0 12px;padding:8px 10px;'
+        + 'background:var(--bg-secondary);border-radius:8px">'
+        + (_kbShowOlder ? '구버전·시행예정본을 함께 표시하고 있습니다' :
+            '현행본만 표시 중 — 구버전 ' + sup + '건, 시행예정 ' + _kbPendingCount + '건은 감춰져 있습니다')
+        + ' <a href="#" onclick="_kbShowOlder=!_kbShowOlder;loadKbDocs(true);return false" '
+        + 'style="color:var(--accent);font-weight:600;margin-left:6px">'
+        + (_kbShowOlder ? '현행본만 보기' : '모두 보기') + '</a></div>';
+    }
+    el.innerHTML = note + (html || '<div style="color:var(--text-secondary);font-size:12px;padding:16px 0">등록된 문서가 없습니다.</div>');
     _kbDocsLoaded = true;
   } catch(e) {
     el.innerHTML = '<div style="color:var(--text-secondary);font-size:12px;padding:16px 0">목록 조회 실패: ' + e.message + '</div>';
