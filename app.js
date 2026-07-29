@@ -5620,10 +5620,17 @@ async function callReportDraft(userText, reportType, onDelta, opts) {
   // ② 내용: 기존 RAG(법령·고시·뉴스) 재사용
   var ragChunks = await searchKeywords(userText, false);
   var ragContext = buildRagContext(ragChunks);
+  // 자문과 같은 시행예정 컨텍스트를 붙인다. 보고서는 임원 보고로 나가므로
+  // "현행은 X"라고만 써 두면 시행이 임박한 개정을 빠뜨린 문서가 된다.
+  var pendingContext = await buildPendingContext(ragChunks);
 
   // 참고 출처 기록
   lastReportDraftSources = samples.map(function(s){ return '내 보고서: ' + s.title; })
-    .concat((ragChunks||[]).map(function(c){ return c.doc_name; }));
+    .concat((ragChunks||[]).map(function(c){ return c.doc_name; }))
+    .concat((lastPendingNotice||[]).map(function(p){
+      var d = p.enf_date || '';
+      return '시행예정: ' + p.law_name + ' ' + (d.length === 8 ? d.slice(2,4)+'.'+d.slice(4,6)+'.'+d.slice(6,8) : d);
+    }));
 
   // ③ 시스템 프롬프트 조합
   var system =
@@ -5632,7 +5639,7 @@ async function callReportDraft(userText, reportType, onDelta, opts) {
     '확정 사실/해석/추정/의견을 구분하고, 단정 대신 검토의견 톤을 유지하세요. 법령 인용은 조항+핵심내용을 함께 적습니다.\n\n' +
     '[보고서 작성 규칙(내 스타일)]\n' + (styleRules || '(아직 학습된 규칙 없음 — 예시를 직접 모방)') +
     '\n\n[예시 보고서 — 형식·톤의 기준]\n' + (sampleBlock || '(등록된 예시 없음 — 표준 정책보고서 형식 사용)') +
-    ragContext;
+    ragContext + pendingContext;
 
   // 항상 적용할 사용자 지시(영구) 주입 — 최우선
   try {
