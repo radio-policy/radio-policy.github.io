@@ -358,6 +358,73 @@ function buildRagContext(chunks) {
   return '\n\n---\n\n[RAG 검색 결과 — 질문과 관련된 실제 법령·고시 원문]\n아래 내용은 질문과 의미적으로 유사한 문서 청크를 검색한 결과입니다. 반드시 아래 원문을 최우선으로 인용하고, 조항 번호와 내용이 일치하는지 확인하여 답변하세요:\n\n' + items.join('\n\n---\n\n');
 }
 
+// ── 시행예정 개정본 컨텍스트 (Phase 3) ─────────────────────────────
+//
+// RAG가 가져온 것은 '현행' 조문뿐이다(only_current=true). 그런데 법령은 공포 후
+// 시행 전인 개정본이 이미 확정돼 있는 경우가 많고(정보통신망법은 2026.9.11 /
+// 2026.10.1 / 2027.4.1 세 시점), 실무 답변은 "지금은 A인데 언제부터 B가 된다"까지
+// 알려줘야 쓸모가 있다. 여기서 인용된 조문에 대응하는 시행예정 조문 원문을 붙인다.
+//
+// 문자열 diff는 하지 않는다 — 현행 등재본의 다수가 PDF 추출본이라 줄바꿈·따옴표·
+// 날짜 표기가 API본과 달라 기계 비교는 위양성이 100% 난다. 양쪽 원문을 나란히 주고
+// 무엇이 달라지는지는 모델이 읽어 판단하게 한다.
+var lastPendingNotice = null;   // 답변 하단 배지용 [{law_name, enf_date}]
+
+async function buildPendingContext(chunks) {
+  lastPendingNotice = null;
+  if (!sb || !chunks || !chunks.length) return '';
+  try {
+    var docs = [], keys = [];
+    chunks.forEach(function(c) {
+      if (c.doc_name && docs.indexOf(c.doc_name) < 0) docs.push(c.doc_name);
+      var m = String(c.article_no || '').replace(/^제/, '').match(/^([0-9]+조(?:의[0-9]+)?)/);
+      if (m && keys.indexOf(m[1]) < 0) keys.push(m[1]);
+    });
+    if (!docs.length) return '';
+
+    var res = await Promise.all([
+      sb.rpc('pending_versions_for_docs', { p_docs: docs }),
+      keys.length ? sb.rpc('fetch_pending_articles', { p_docs: docs, p_article_keys: keys, p_limit: 16 })
+                  : Promise.resolve({ data: [] })
+    ]);
+    var vers = (res[0] && !res[0].error) ? (res[0].data || []) : [];
+    var arts = (res[1] && !res[1].error) ? (res[1].data || []) : [];
+    if (!vers.length) return '';
+
+    function fmtD(v) { return v && v.length === 8 ? v.slice(0,4)+'.'+v.slice(4,6)+'.'+v.slice(6,8) : (v || ''); }
+
+    // 법령별 시행 일정 요약 — 조문이 매칭되지 않아도 이건 알려줄 수 있어야 한다
+    var byLaw = {};
+    vers.forEach(function(v) { (byLaw[v.law_name] = byLaw[v.law_name] || []).push(v); });
+    var schedule = Object.keys(byLaw).map(function(nm) {
+      return '· ' + nm + ': ' + byLaw[nm].map(function(v) {
+        return fmtD(v.enf_date) + ' 시행(제' + v.law_no + '호)';
+      }).join(' → ');
+    }).join('\n');
+
+    var body = arts.map(function(a) {
+      return '[시행예정 조문] ' + a.law_name + ' 제' + a.law_no + '호 — ' + fmtD(a.enf_date)
+        + ' 시행 예정 | ' + a.article_no + '\n' + a.content;
+    }).join('\n\n---\n\n');
+
+    lastPendingNotice = vers.map(function(v) { return { law_name: v.law_name, enf_date: v.enf_date }; });
+
+    return '\n\n---\n\n[시행예정 개정본 — 아직 시행되지 않은 조문]\n'
+      + '위 RAG 검색 결과는 모두 **현행** 조문입니다. 아래는 이미 공포되었으나 시행일이 도래하지 않은 개정본입니다.\n\n'
+      + '■ 관련 법령의 시행 일정\n' + schedule + '\n\n'
+      + (body ? '■ 인용 조문의 시행예정 원문\n\n' + body + '\n\n' : '')
+      + '[사용 지침]\n'
+      + '- 답변의 기본은 반드시 **현행 조문**입니다. 시행예정 내용을 현재 효력이 있는 것처럼 서술하지 마세요.\n'
+      + '- 인용한 조문에 시행예정 개정이 있으면, 해당 설명 뒤에 "다만 YYYY.M.D.부터는 …로 개정 시행 예정" 형태로 한두 문장 덧붙이세요.\n'
+      + '- 위 시행예정 원문과 현행 원문의 문구가 사실상 같다면(줄바꿈·따옴표·날짜 표기 차이뿐이면) 개정된 것이 아니므로 언급하지 마세요. 현행본 다수가 PDF에서 추출돼 표기가 다를 수 있습니다.\n'
+      + '- 시행일이 여러 단계면 단계별로 무엇이 언제부터 달라지는지 구분해 쓰세요.\n'
+      + '- 위 목록에 없는 조문의 개정 여부는 알 수 없습니다. 추측해서 "개정 예정 없음"이라고 단정하지 마세요.';
+  } catch (e) {
+    console.warn('시행예정 컨텍스트 조회 실패:', e);
+    return '';   // 페일소프트 — 시행예정 조회가 실패해도 자문은 현행 기준으로 정상 동작
+  }
+}
+
 async function searchConfluence(query) {
   // 팀 컨플루언스(Atlassian Cloud) 실시간 검색. Edge Function(confluence-search)이
   // API 토큰을 서버 측 Secret에 들고 대신 호출 → 브라우저 노출 없음(voyage-embed와 동일 패턴).
@@ -1120,6 +1187,7 @@ async function callClaude(userText, onDelta) {
   const lawTrackContext = await lawTrackP;                        // 최근 법령 개정·입법예고 동향
   const confluenceContext = buildConfluenceContext(await confluenceP); // 팀 컨플루언스 실시간 검색(내부 문서)
   const kbContext     = buildKbContext(await kbP);                // 법령·규제 요약 지식베이스(regulatory-kb, 현행본)
+  const pendingContext = await buildPendingContext(ragChunks);    // 인용 조문의 시행예정 개정본(Phase 3)
   const webSearchGuide = '\n\n---\n\n[웹 검색 도구 사용 지침]\n해외 규제·제도 비교, 최신 정책 동향 등 위 참조 자료(법령 RAG·추가 지식·뉴스)에 없는 사실 정보가 필요하면 web_search 도구로 확인 후 답변하세요. 특히 "한국 고유", "유일한", "주요국 중 한국만" 등 국가 간 비교 단정 표현은 검색으로 확인하기 전에는 사용하지 마세요. 국내 법령 해석은 RAG 원문을 최우선으로 하고 웹 검색은 보조로만 사용하세요.';
   // 법령 관계도 자동 축적: 답변 말미에 기계용 <lawmap> 블록을 덧붙이게 함 (별도 API 호출 없음 — 출력 몇 줄 추가뿐)
   const lawTopics = await lawTopicsP;
@@ -1129,7 +1197,7 @@ async function callClaude(userText, onDelta) {
     '- relations에는 이번 답변에서 실제 근거로 사용한 법령·고시만 포함 (최대 8개). law는 정식 명칭(예: "전파법", "전기통신사업법 시행령").\n' +
     '- 기존 주제명 목록에 같은 의미의 주제가 있으면 새 이름을 만들지 말고 그 이름을 그대로 재사용: ' + (lawTopics.length ? lawTopics.join(', ') : '(아직 없음)') + '\n' +
     '- 보고서 작성 요청, 문서 요약, 잡담, 법령 근거가 등장하지 않는 질문이면 이 블록을 출력하지 마세요.';
-  const systemWithRag = SYSTEM_PROMPT + webSearchGuide + lawmapGuide + ragContext + kbContext + customContext + newsContext + lawTrackContext + confluenceContext;
+  const systemWithRag = SYSTEM_PROMPT + webSearchGuide + lawmapGuide + ragContext + pendingContext + kbContext + customContext + newsContext + lawTrackContext + confluenceContext;
 
   chatHistory.push({ role: 'user', content: userText });
 
@@ -1626,6 +1694,23 @@ async function sendChat() {
         return '<span class="rag-tag">' + s + '</span>';
       }).join(' ');
       msgEl.appendChild(srcDiv);
+    }
+
+    // 시행예정 개정본이 컨텍스트에 들어갔음을 가시화 — 답변이 현행 기준임을 명확히 하기 위함
+    if (lastPendingNotice && lastPendingNotice.length) {
+      const seen = {};
+      const items = lastPendingNotice.filter(function(p) {
+        const k = p.law_name + '|' + p.enf_date;
+        if (seen[k]) return false; seen[k] = 1; return true;
+      });
+      const pvDiv = document.createElement('div');
+      pvDiv.className = 'rag-sources';
+      pvDiv.innerHTML = '<i class="ti ti-calendar-clock"></i>시행 예정 반영: ' + items.map(function(p) {
+        const d = p.enf_date || '';
+        return '<span class="rag-tag">' + chEsc(p.law_name) + ' '
+          + (d.length === 8 ? d.slice(2,4)+'.'+d.slice(4,6)+'.'+d.slice(6,8) : chEsc(d)) + '</span>';
+      }).join(' ');
+      msgEl.appendChild(pvDiv);
     }
 
     // 컨플루언스 검색 실패 가시화 (fail-soft로 자문은 정상 진행 — 생략 사실만 표시)
