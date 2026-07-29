@@ -53,7 +53,8 @@ except Exception:
 
 import sb_client
 from law_watch import (norm_name, parse_doc_name, api_target_of,
-                       drf_law_search, pick_exact, row_fields)
+                       drf_law_search, pick_exact, row_fields,
+                       norm_law_no, alias_variants)
 
 SB_URL = os.getenv("SUPABASE_URL")
 SB_KEY = os.getenv("SUPABASE_SERVICE_KEY")
@@ -468,6 +469,137 @@ def promote_due(sb, dry_run=False):
     return done
 
 
+# ── PDF 등재본의 API 재적재 ────────────────────────────────
+
+BYEOL_TABLE_RE = "위반횟수별|행정처분기준|과태료의 부과기준|1차 위반|별표"
+
+
+def _pdf_damage(sb, doc_name):
+    """(전체 청크, 단어중간 줄바꿈 청크, 별표 표로 보이는 청크) — 재적재 판단 근거."""
+    rows, start = [], 0
+    while True:
+        r = (sb.table('document_chunks').select('content')
+             .eq('doc_name', doc_name).eq('status', 'current')
+             .order('chunk_index').range(start, start + 999).execute().data) or []
+        rows += r
+        if len(r) < 1000:
+            break
+        start += 1000
+    total = len(rows)
+    broken = sum(1 for x in rows if re.search(r'[가-힣]\n[가-힣]', x['content'] or ''))
+    table = sum(1 for x in rows if re.search(r'위반횟수별|행정처분기준|과태료의 부과기준|1차 위반', x['content'] or ''))
+    return total, broken, table
+
+
+def reingest_one(sb, doc_name, args):
+    """PDF에서 추출해 등재한 현행본을 법제처 API 조문으로 교체.
+
+    왜: PDF 추출본은 단어 중간에 줄바꿈이 들어가 키워드 검색이 깨진다(전파법은 197청크
+    중 188청크가 그 상태라 '가격경쟁'이 '가격\\n경쟁'으로 잘려 검색에 안 걸린다).
+    조문 단위 청킹이 아니라 800자 단위라 article_no도 부정확하고 law_id도 비어 있다.
+
+    안전장치: 별표 표(행정처분기준·과태료 부과기준 등)가 들어 있는 문서는 거부한다.
+    법제처 조문 API는 별표를 주지 않으므로 그런 문서는 재적재가 곧 손실이다.
+    구본은 삭제하지 않고 superseded로 보존해 되돌릴 수 있게 한다.
+    """
+    meta = parse_doc_name(doc_name)
+    if not meta:
+        print(f"  ! 문서명 파싱 실패: {doc_name[:60]}")
+        return False
+    target = api_target_of(meta['law_type_token'])
+    total, broken, table = _pdf_damage(sb, doc_name)
+    print(f"\n▶ [재적재] {meta['law_name']}  ({total}청크, 손상 {broken}, 별표표 {table})")
+
+    if table and not args.force:
+        print(f"  ! 별표 표로 보이는 청크 {table}건 — API 조문에는 별표가 없어 손실이 된다. 건너뜀(--force로 강행)")
+        return False
+    # API 적재본도 항·호 줄바꿈 때문에 손상 검출기가 몇 %는 잡는다(정보통신망법 211청크 중 9).
+    # PDF 추출본은 90%대가 나오므로 30%를 경계로 둔다.
+    if total and broken * 100 < total * 30 and not args.force:
+        print(f"  → 손상률 {round(broken*100/total)}% — 이미 API 적재본으로 판단. 건너뜀")
+        return False
+
+    rows = drf_law_search(meta['law_name'], target) or []
+    hit = pick_exact(rows, meta['law_name'], meta.get('full_name'))
+    if not hit:
+        for alt in (alias_variants(meta['law_name']) or []):
+            rows = drf_law_search(alt, target) or []
+            hit = pick_exact(rows, meta['law_name'], meta.get('full_name'))
+            if hit:
+                break
+    if not hit:
+        print("  ! 법제처에서 현행본을 찾지 못함 — 건너뜀")
+        return False
+
+    mst, law_no, enf = row_fields(hit, target)
+    if norm_law_no(law_no) != norm_law_no(meta['law_no']):
+        print(f"  ! 등재본({meta['law_no']})과 법제처 현행({law_no})이 다름 — 재적재가 아니라 "
+              f"--all-outdated 대상. 건너뜀")
+        return False
+
+    if target == 'law':
+        articles, basic = fetch_law_articles(mst)
+        type_token = basic.get('법령구분명') or meta['law_type_token']
+        org, law_id = None, str(hit.get('법령ID') or '')
+    else:
+        articles, basic = fetch_admrul_articles(mst)
+        type_token = basic.get('행정규칙종류') or meta['law_type_token']
+        org = basic.get('소관부처명') or hit.get('소관부처명') or ''
+        law_id = str(hit.get('행정규칙ID') or '')
+
+    chunks = chunk_articles(articles)
+    if not chunks:
+        print("  ! 조문 취득 결과가 비어 있음 — 중단")
+        return False
+
+    new_doc = build_doc_name(meta['law_name'], type_token, law_no, enf, org, target)
+    print(f"  조문 {len(articles)}개 → 청크 {len(chunks)}개 (PDF본 {total}청크 대체)")
+    print(f"  신규 문서명: {new_doc}")
+    if args.dry_run:
+        print("  [dry-run] DB 변경 없음")
+        return True
+
+    now = datetime.now(timezone.utc).isoformat()
+    # 구본 보존 — 문서명이 같으면 충돌하므로 접미를 붙여 구분한다(되돌릴 수 있게 삭제하지 않음)
+    old_doc = doc_name
+    if new_doc == doc_name:
+        old_doc = doc_name + ' [PDF원본]'
+        sb.table('document_chunks').update({'doc_name': old_doc}).eq('doc_name', doc_name).execute()
+    sb.table('document_chunks').update({'status': 'superseded'}).eq('doc_name', old_doc).execute()
+    print(f"  ✓ 구 PDF본 → superseded: {old_doc[:66]}")
+
+    category = next(iter([r['doc_category'] for r in
+                          ((sb.table('document_chunks').select('doc_category')
+                            .eq('doc_name', old_doc).limit(1).execute().data) or [])
+                          if r.get('doc_category')]), None) or ('법령' if target == 'law' else '고시')
+    payload = [{
+        'doc_name': new_doc, 'doc_category': category, 'chunk_index': i,
+        'content': c['content'], 'article_no': c['article_no'],
+        'effective_date': enf, 'notice_no': (law_no if target != 'law' else None),
+        'law_id': law_id, 'law_mst': mst, 'status': 'current', 'is_approved': True,
+    } for i, c in enumerate(chunks)]
+    for i in range(0, len(payload), 50):
+        sb.table('document_chunks').insert(payload[i:i + 50]).execute()
+    print(f"  ✓ API본 등재 {len(payload)}청크")
+
+    sb.table('law_watch').upsert({
+        'doc_name': new_doc, 'law_name': meta['law_name'],
+        'law_type_token': meta['law_type_token'], 'api_target': target,
+        'law_id': law_id, 'registered_mst': mst,
+        'registered_law_no': law_no, 'registered_enf': enf,
+        'latest_mst': mst, 'latest_law_no': law_no, 'latest_enf': enf,
+        'watch_status': 'watching', 'sync_status': 'current',
+        'last_checked_at': now, 'updated_at': now,
+        'note': f'PDF본 → API 재적재 ({datetime.now():%Y-%m-%d})',
+    }, on_conflict='doc_name').execute()
+    if doc_name != new_doc:
+        sb.table('law_watch').delete().eq('doc_name', doc_name).execute()
+    # 시행예정본이 이 문서를 가리키고 있으면 새 문서명으로 이관
+    sb.table('law_pending').update({'watch_doc_name': new_doc, 'updated_at': now}) \
+        .eq('watch_doc_name', doc_name).execute()
+    return True
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--doc-name', help='현행화할 등재 문서명(부분 일치 허용)')
@@ -481,6 +613,11 @@ def main():
     ap.add_argument('--pending-law', help='--pending 대상을 특정 법령명으로 한정')
     ap.add_argument('--promote', action='store_true',
                     help='시행일이 도래한 시행예정본을 current로 승격(매일 자동 실행 대상)')
+    ap.add_argument('--reingest', action='store_true',
+                    help='PDF 등재본을 법제처 API 조문으로 교체(--doc-name 또는 --reingest-laws)')
+    ap.add_argument('--reingest-laws', action='store_true',
+                    help='법률(법률 계열) 중 PDF 손상본 전체를 재적재. 별표 표가 있는 문서는 자동 제외')
+    ap.add_argument('--force', action='store_true', help='재적재 안전장치(별표 표 검출) 무시')
     a = ap.parse_args()
 
     if not (SB_URL and SB_KEY and OC_KEY):
@@ -490,6 +627,37 @@ def main():
 
     if a.promote:
         promote_due(sb, a.dry_run)
+        return
+
+    if a.reingest or a.reingest_laws:
+        if a.reingest_laws:
+            w = (sb.table('law_watch').select('doc_name, law_type_token')
+                 .eq('api_target', 'law').eq('watch_status', 'watching')
+                 .eq('sync_status', 'current').order('doc_name').execute().data) or []
+            targets = [r['doc_name'] for r in w if r.get('law_type_token') == '법률']
+        elif a.doc_name:
+            w = (sb.table('law_watch').select('doc_name').execute().data) or []
+            targets = [r['doc_name'] for r in w if a.doc_name in r['doc_name']]
+        else:
+            print("오류: --reingest 는 --doc-name 과 함께, 또는 --reingest-laws 를 쓰세요")
+            sys.exit(1)
+        if not targets:
+            print("대상 없음")
+            return
+        print(f"=== PDF본 → API 재적재: 후보 {len(targets)}건 (dry-run={a.dry_run}) ===")
+        done = 0
+        for d in targets:
+            try:
+                if reingest_one(sb, d, a):
+                    done += 1
+            except Exception as e:
+                print(f"  ! 실패({d[:50]}): {str(e)[:140]}")
+            time.sleep(0.3)
+        print(f"\n=== 완료: {done}/{len(targets)}건 재적재 ===")
+        if done and not a.dry_run and not a.no_backfill:
+            print("\n[임베딩 백필]")
+            subprocess.run([sys.executable, str(ROOT / 'backfill_embeddings.py')], check=False)
+            print("\n※ 관계도 인용망 재구축 권장: python build_law_citation_graph.py")
         return
 
     if a.pending:
