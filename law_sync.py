@@ -67,6 +67,8 @@ KEEP_VERSIONS = 3         # 현행 포함 보존 버전 수 (지침: 최근 2~3�
 ADDENDA_KEEP = 15         # 담을 부칙 개수(최근순). 정부조직법처럼 개정이 잦은 법은 부칙이 조문보다 많아진다
 ADDENDA_MAX_CHARS = 6000  # 부칙 1건 텍스트 상한 — '다른 법률의 개정' 나열이 수만 자에 이른다
 ROOT = Path(__file__).parent
+# PDF 추출본 판별 — 단어 중간에 줄바꿈이 들어간 청크(한글 다음 개행 다음 한글)
+BROKEN_RE = re.compile('[가-힣]\n[가-힣]')
 
 
 # ── 조문 취득 ─────────────────────────────────────────────
@@ -574,6 +576,27 @@ def _delete_doc_chunks(sb, doc_name):
         sb.table('document_chunks').delete().in_('id', ids).execute()
 
 
+def _damaged_docs(sb, min_broken=30):
+    """손상률(단어 중간 줄바꿈 비율)이 기준 이상인 현행 등재본 — 재적재 대상.
+    문서명 정렬로 고정 순서를 보장해 --shard 분할이 프로세스 간 겹치지 않게 한다."""
+    watch = {r['doc_name'] for r in ((sb.table('law_watch')
+             .select('doc_name, watch_status, sync_status').execute().data) or [])
+             if r.get('watch_status') == 'watching' and r.get('sync_status') == 'current'}
+    stats, start = {}, 0
+    while True:
+        rows = (sb.table('document_chunks').select('doc_name, content')
+                .eq('status', 'current').order('id').range(start, start + 999).execute().data) or []
+        for r in rows:
+            if r['doc_name'] not in watch:
+                continue
+            t, b = stats.get(r['doc_name'], (0, 0))
+            stats[r['doc_name']] = (t + 1, b + (1 if BROKEN_RE.search(r['content'] or '') else 0))
+        if len(rows) < 1000:
+            break
+        start += 1000
+    return sorted(d for d, (t, b) in stats.items() if t and b * 100 >= t * min_broken)
+
+
 def _update_doc_chunks(sb, doc_name, patch):
     """대량 UPDATE도 배치로. 지방세법(860청크)을 한 번에 갱신하면 statement timeout(57014).
 
@@ -741,7 +764,11 @@ def main():
                     help='PDF 등재본을 법제처 API 조문으로 교체(--doc-name 또는 --reingest-laws)')
     ap.add_argument('--reingest-laws', action='store_true',
                     help='법률(법률 계열) 중 PDF 손상본 전체를 재적재. 별표 표가 있는 문서는 자동 제외')
-    ap.add_argument('--force', action='store_true', help='재적재 안전장치(별표 표 검출) 무시')
+    ap.add_argument('--force', action='store_true', help='재적재 시 손상률 검사 무시(이미 API본도 재취득)')
+    ap.add_argument('--reingest-all', action='store_true',
+                    help='법률·시행령·부령·고시 통틀어 PDF 손상본 전체를 재적재')
+    ap.add_argument('--shard', help='병렬 분할 실행: "1/6" 형식(1-base). 여러 프로세스로 나눠 돌릴 때')
+    ap.add_argument('--min-broken', type=int, default=30, help='재적재 대상 최소 손상률(%%)')
     a = ap.parse_args()
 
     if not (SB_URL and SB_KEY and OC_KEY):
@@ -753,8 +780,10 @@ def main():
         promote_due(sb, a.dry_run)
         return
 
-    if a.reingest or a.reingest_laws:
-        if a.reingest_laws:
+    if a.reingest or a.reingest_laws or a.reingest_all:
+        if a.reingest_all:
+            targets = _damaged_docs(sb, a.min_broken)
+        elif a.reingest_laws:
             w = (sb.table('law_watch').select('doc_name, law_type_token')
                  .eq('api_target', 'law').eq('watch_status', 'watching')
                  .eq('sync_status', 'current').order('doc_name').execute().data) or []
@@ -765,6 +794,10 @@ def main():
         else:
             print("오류: --reingest 는 --doc-name 과 함께, 또는 --reingest-laws 를 쓰세요")
             sys.exit(1)
+        if a.shard:
+            i, n = (int(x) for x in a.shard.split('/'))
+            targets = [d for k, d in enumerate(targets) if k % n == (i - 1) % n]
+            print(f"샤드 {i}/{n} → {len(targets)}건")
         if not targets:
             print("대상 없음")
             return
