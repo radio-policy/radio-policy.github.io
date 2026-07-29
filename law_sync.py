@@ -64,6 +64,8 @@ DRF_SERVICE = "https://www.law.go.kr/DRF/lawService.do"
 CHUNK_SIZE = 800          # upload_law_pdf.py와 동일
 CHUNK_OVERLAP = 100
 KEEP_VERSIONS = 3         # 현행 포함 보존 버전 수 (지침: 최근 2~3개)
+ADDENDA_KEEP = 15         # 담을 부칙 개수(최근순). 정부조직법처럼 개정이 잦은 법은 부칙이 조문보다 많아진다
+ADDENDA_MAX_CHARS = 6000  # 부칙 1건 텍스트 상한 — '다른 법률의 개정' 나열이 수만 자에 이른다
 ROOT = Path(__file__).parent
 
 
@@ -127,7 +129,94 @@ def fetch_law_articles(mst: str, ef_date: str = None):
         text = "\n".join(p for p in parts if p)
         if len(text.strip()) > 10:
             out.append((art_no, text))
-    return out, basic
+    return out + _addenda(d) + _tables(d), basic
+
+
+def _addenda(body):
+    """부칙(附則) → [(article_no, text)].
+
+    시행일·경과조치·적용례·다른 법률의 개정이 전부 부칙에 있다. 조문만 담고 부칙을
+    빠뜨리면 "언제부터 누구에게 적용되나"를 답할 근거가 사라진다(재적재 1차에서
+    9건 중 8건의 부칙이 통째로 누락됐던 사고). 오래된 부칙의 경과조치도 여전히
+    유효한 경우가 있으므로 전부 담는다.
+
+    응답 모양이 두 가지다 — 법령은 부칙단위[{내용,번호,일자}], 행정규칙은
+    {부칙내용:[...], 부칙공포번호:[...], 부칙공포일자:[...]} 병렬 배열.
+    """
+    bu = body.get('부칙') or {}
+    if not isinstance(bu, dict):
+        return []
+    units = bu.get('부칙단위')
+    rows = []
+    if units:
+        if isinstance(units, dict):
+            units = [units]
+        for u in units:
+            if isinstance(u, dict):
+                rows.append((_txt(u.get('부칙내용')), _txt(u.get('부칙공포번호')),
+                             _txt(u.get('부칙공포일자'))))
+    else:
+        conts = bu.get('부칙내용') or []
+        if isinstance(conts, str):
+            conts = [conts]
+        nos = bu.get('부칙공포번호') or []
+        dts = bu.get('부칙공포일자') or []
+        if isinstance(nos, str):
+            nos = [nos]
+        if isinstance(dts, str):
+            dts = [dts]
+        for i, c in enumerate(conts):
+            rows.append((_txt(c), _txt(nos[i]) if i < len(nos) else '',
+                         _txt(dts[i]) if i < len(dts) else ''))
+
+    out = []
+    for text, no, dt in rows:
+        text = text.strip()
+        if len(text) < 10:
+            continue
+        # '다른 법률의 개정' 부칙은 수백 개 법률을 나열해 한 건이 수만 자에 이른다
+        # (정부조직법을 전부 담았더니 부칙만 1,131청크가 됐다). 자문 가치가 낮은
+        # 뒷부분을 잘라낸다 — 시행일·경과조치·적용례는 부칙 앞머리에 있다.
+        if len(text) > ADDENDA_MAX_CHARS:
+            text = text[:ADDENDA_MAX_CHARS] + '\n…(이하 「다른 법률의 개정」 등 생략 — 원문은 국가법령정보센터 참조)'
+        label = '부칙' + (f' 제{no}호' if no else '') + (f'({dt})' if dt else '')
+        out.append((label, text, dt))
+
+    # 최근 부칙 우선. 오래된 개편 부칙까지 전부 담으면 조문보다 부칙이 많아져
+    # 검색이 옛 경과조치로 오염된다. 필요하면 구 PDF본(superseded)이나 원문을 본다.
+    out.sort(key=lambda x: x[2] or '', reverse=True)
+    return [(lbl, txt) for lbl, txt, _ in out[:ADDENDA_KEEP]]
+
+
+def _tables(body):
+    """별표·별지·서식 → [(article_no, text)].
+
+    법제처 API는 별표를 준다 — 법령·행정규칙 모두 응답의 '별표.별표단위'에 표 본문까지
+    들어 있다(전파법 시행령 43건, 적합성평가 고시 30건). 처음에 이걸 읽지 않아
+    "API는 별표를 주지 않는다"고 잘못 판단했고, 그 전제로 고시·시행령의 재적재를
+    포기했었다. 별표가 실질인 문서(적합성평가 고시·행정처분기준 등)에서는
+    이 부분이 본문보다 중요하다.
+    """
+    byl = body.get('별표') or {}
+    if not isinstance(byl, dict):
+        return []
+    units = byl.get('별표단위') or []
+    if isinstance(units, dict):
+        units = [units]
+    out = []
+    for u in units:
+        if not isinstance(u, dict):
+            continue
+        text = _txt(u.get('별표내용'))
+        if len(text.strip()) < 10:
+            continue
+        kind = _txt(u.get('별표구분')) or '별표'
+        no = (_txt(u.get('별표번호')) or '').lstrip('0') or '?'
+        br = (_txt(u.get('별표가지번호')) or '').lstrip('0')
+        title = _txt(u.get('별표제목'))
+        label = f"{kind} {no}" + (f"의{br}" if br else "") + (f"({title})" if title else "")
+        out.append((label, text))
+    return out
 
 
 ADM_ART_RE = re.compile(r'^제(\d+)조(?:의(\d+))?\s*(?:\(([^)]*)\))?')
@@ -157,7 +246,7 @@ def fetch_admrul_articles(rule_id: str):
         else:
             art_no = None          # 장 제목 등
         out.append((art_no, text))
-    return out, basic
+    return out + _addenda(d[top]) + _tables(d[top]), basic
 
 
 # ── 청킹 ──────────────────────────────────────────────────
@@ -474,6 +563,36 @@ def promote_due(sb, dry_run=False):
 BYEOL_TABLE_RE = "위반횟수별|행정처분기준|과태료의 부과기준|1차 위반|별표"
 
 
+def _delete_doc_chunks(sb, doc_name):
+    """청크 삭제를 배치로. 800청크가 넘는 문서를 한 번에 지우면 statement timeout(57014)이
+    나고, 그 경우 삭제는 롤백되지만 스크립트는 실패로 끝난다(지방세법 860청크에서 발생)."""
+    while True:
+        ids = [r['id'] for r in ((sb.table('document_chunks').select('id')
+                                  .eq('doc_name', doc_name).limit(200).execute().data) or [])]
+        if not ids:
+            return
+        sb.table('document_chunks').delete().in_('id', ids).execute()
+
+
+def _update_doc_chunks(sb, doc_name, patch):
+    """대량 UPDATE도 배치로. 지방세법(860청크)을 한 번에 갱신하면 statement timeout(57014).
+
+    id 커서로 페이지네이션한다. 커서 없이 limit만 걸고 '이미 처리한 id'를 메모리에서
+    제외하면, 같은 200행이 계속 조회되다 빈 목록이 되어 조용히 절반만 갱신된다.
+    """
+    last = 0
+    while True:
+        rows = (sb.table('document_chunks').select('id')
+                .eq('doc_name', doc_name).gt('id', last)
+                .order('id').limit(200).execute().data) or []
+        if not rows:
+            return
+        ids = [r['id'] for r in rows]
+        sb.table('document_chunks').update(patch).in_('id', ids).execute()
+        # doc_name을 바꾸면 갱신된 행은 필터에서 빠지므로 커서를 되감아도 무한루프가 없다
+        last = 0 if 'doc_name' in patch else ids[-1]
+
+
 def _pdf_damage(sb, doc_name):
     """(전체 청크, 단어중간 줄바꿈 청크, 별표 표로 보이는 청크) — 재적재 판단 근거."""
     rows, start = [], 0
@@ -510,13 +629,12 @@ def reingest_one(sb, doc_name, args):
     total, broken, table = _pdf_damage(sb, doc_name)
     print(f"\n▶ [재적재] {meta['law_name']}  ({total}청크, 손상 {broken}, 별표표 {table})")
 
-    if table and not args.force:
-        print(f"  ! 별표 표로 보이는 청크 {table}건 — API 조문에는 별표가 없어 손실이 된다. 건너뜀(--force로 강행)")
-        return False
+    # 과거에는 '별표 표가 있으면 거부'했다. API가 별표를 주지 않는다고 잘못 알았기 때문이다.
+    # 실제로는 응답의 '별표.별표단위'에 표 본문까지 들어 있어(전파법 시행령 43건,
+    # 적합성평가 고시 30건) 그 제약은 없다. 이제 조문+부칙+별표를 모두 가져온다.
     # API 적재본도 항·호 줄바꿈 때문에 손상 검출기가 몇 %는 잡는다(정보통신망법 211청크 중 9).
-    # PDF 추출본은 90%대가 나오므로 30%를 경계로 둔다.
     if total and broken * 100 < total * 30 and not args.force:
-        print(f"  → 손상률 {round(broken*100/total)}% — 이미 API 적재본으로 판단. 건너뜀")
+        print(f"  → 손상률 {round(broken*100/total)}% — 이미 API 적재본으로 판단. 건너뜀(--force로 재취득)")
         return False
 
     rows = drf_law_search(meta['law_name'], target) or []
@@ -560,18 +678,24 @@ def reingest_one(sb, doc_name, args):
         return True
 
     now = datetime.now(timezone.utc).isoformat()
-    # 구본 보존 — 문서명이 같으면 충돌하므로 접미를 붙여 구분한다(되돌릴 수 있게 삭제하지 않음)
-    old_doc = doc_name
-    if new_doc == doc_name:
-        old_doc = doc_name + ' [PDF원본]'
-        sb.table('document_chunks').update({'doc_name': old_doc}).eq('doc_name', doc_name).execute()
-    sb.table('document_chunks').update({'status': 'superseded'}).eq('doc_name', old_doc).execute()
-    print(f"  ✓ 구 PDF본 → superseded: {old_doc[:66]}")
+    prev = ((sb.table('document_chunks').select('doc_category, law_id')
+             .eq('doc_name', doc_name).limit(1).execute().data) or [{}])[0]
+    category = prev.get('doc_category') or ('법령' if target == 'law' else '고시')
+    already_api = bool(prev.get('law_id'))
 
-    category = next(iter([r['doc_category'] for r in
-                          ((sb.table('document_chunks').select('doc_category')
-                            .eq('doc_name', old_doc).limit(1).execute().data) or [])
-                          if r.get('doc_category')]), None) or ('법령' if target == 'law' else '고시')
+    if already_api:
+        # 이미 API 적재본을 다시 받는 경우(부칙·별표 누락분 보완 등) — 버전이 바뀐 게
+        # 아니므로 superseded 사본을 또 만들지 않고 같은 문서명 안에서 내용만 교체한다.
+        _delete_doc_chunks(sb, doc_name)
+        print(f"  ✓ 기존 API본 내용 교체(총 {total}청크 삭제)")
+    else:
+        # 구 PDF본 보존 — 문서명이 같으면 충돌하므로 접미를 붙인다(되돌릴 수 있게 삭제하지 않음)
+        old_doc = doc_name
+        if new_doc == doc_name:
+            old_doc = doc_name + ' [PDF원본]'
+            _update_doc_chunks(sb, doc_name, {'doc_name': old_doc})
+        _update_doc_chunks(sb, old_doc, {'status': 'superseded'})
+        print(f"  ✓ 구 PDF본 → superseded: {old_doc[:66]}")
     payload = [{
         'doc_name': new_doc, 'doc_category': category, 'chunk_index': i,
         'content': c['content'], 'article_no': c['article_no'],
