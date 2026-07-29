@@ -182,10 +182,13 @@ async function searchKeywords(query, lawOnly) {
   var trgmPromise = null;
   var semanticPromise = null;
   if (query && query.length >= 3) {
+    // only_current를 명시적으로 넘긴다 — 기본값에 기대면 인자 개수가 다른 오버로드가
+    // 생겼을 때 status 필터 없는 쪽으로 조용히 해석된다(배경역사 #31 후속 사고).
     trgmPromise = sb.rpc('search_chunks_trgm', {
       query_text: query,
       match_threshold: 0.12,
-      match_count: 8
+      match_count: 8,
+      only_current: true
     }).then(function(r) { return r.data || []; }).catch(function(e) {
       console.warn('trgm 검색 오류:', e); return [];
     });
@@ -195,7 +198,8 @@ async function searchKeywords(query, lawOnly) {
       return sb.rpc('match_chunks_semantic', {
         query_embedding: emb,
         match_threshold: 0.45,
-        match_count: 8
+        match_count: 8,
+        only_current: true
       }).then(function(r) { return r.data || []; }).catch(function(e) {
         console.warn('시맨틱 검색 오류:', e); return [];
       });
@@ -212,6 +216,7 @@ async function searchKeywords(query, lawOnly) {
       .from('document_chunks')
       .select('id, doc_name, doc_category, chunk_index, content, notice_no, article_no, effective_date')
       .eq('is_approved', true)  // 승인 게이트: trgm·시맨틱 RPC와 동일하게 승인 전 문서 제외
+      .eq('status', 'current')  // 구버전(superseded)·시행예정본(pending) 제외 — RPC 2종과 동일 기준
       .ilike('content', '%' + kw + '%')
       .limit(4)
       .then(function(resp) { return resp.data || []; })
@@ -3468,14 +3473,27 @@ async function loadLawWatch() {
   }
   listEl.innerHTML = '<div style="padding:14px;text-align:center;color:var(--text-secondary);font-size:12px">불러오는 중...</div>';
   try {
-    var r = await sb.from('law_watch')
-      .select('doc_name,law_name,registered_law_no,registered_enf,latest_law_no,latest_enf,pending_law_no,pending_enf,sync_status,watch_status,last_checked_at')
-      .neq('watch_status', 'excluded').order('law_name');
+    // law_watch = 현행 등재본 감시. 시행예정은 법령당 여러 건일 수 있어 law_pending(1:N)이 정본.
+    var res = await Promise.all([
+      sb.from('law_watch')
+        .select('doc_name,law_name,registered_law_no,registered_enf,latest_law_no,latest_enf,sync_status,watch_status,last_checked_at')
+        .neq('watch_status', 'excluded').order('law_name'),
+      sb.from('law_pending')
+        .select('law_name,law_no,enf_date,sync_state')
+        .in('sync_state', ['detected', 'loaded']).order('enf_date')
+    ]);
+    var r = res[0];
     if (r.error) throw r.error;
     var rows = r.data || [];
+    var pend = (res[1] && !res[1].error) ? (res[1].data || []) : [];
     var outdated = rows.filter(function(x){ return x.sync_status === 'outdated'; });
     var unmatched = rows.filter(function(x){ return x.watch_status === 'unmatched'; });
-    var upcoming = rows.filter(function(x){ return x.pending_enf; });
+    // 법령별로 묶어 다단 시행을 한 줄에 보여준다
+    var byLaw = {};
+    pend.forEach(function(p){ (byLaw[p.law_name] = byLaw[p.law_name] || []).push(p); });
+    var upcoming = Object.keys(byLaw).sort(function(a, b){
+      return byLaw[a][0].enf_date.localeCompare(byLaw[b][0].enf_date);
+    }).map(function(k){ return { law_name: k, steps: byLaw[k] }; });
     if (badgeEl) badgeEl.textContent = outdated.length ? outdated.length + '건 개정' : '';
 
     var last = rows.reduce(function(m, x){ return (x.last_checked_at || '') > m ? x.last_checked_at : m; }, '');
@@ -3499,11 +3517,18 @@ async function loadLawWatch() {
       }).join('');
     }
     if (upcoming.length) {
-      html += '<div style="font-size:11.5px;font-weight:600;color:var(--text-secondary);margin:12px 0 6px">📅 시행 예정 (' + upcoming.length + '건)</div>';
-      html += upcoming.sort(function(a,b){ return (a.pending_enf||'').localeCompare(b.pending_enf||''); }).map(function(x){
+      html += '<div style="font-size:11.5px;font-weight:600;color:var(--text-secondary);margin:12px 0 6px">📅 시행 예정 ('
+        + pend.length + '건 / 법령 ' + upcoming.length + '건)</div>';
+      html += upcoming.map(function(x){
+        var steps = x.steps.map(function(s){
+          var loaded = s.sync_state === 'loaded';
+          return '<span title="' + (loaded ? '조문 등재 완료(pending)' : '미적재 — law_sync.py --pending 필요') + '" style="'
+            + (loaded ? '' : 'opacity:.6;') + '"><strong>' + fmtDate(s.enf_date) + '</strong> '
+            + escHtml(fmtNo(s.law_no)) + (loaded ? '' : ' <i class="ti ti-download-off"></i>') + '</span>';
+        }).join(' <span style="color:var(--text-tertiary)">›</span> ');
         return '<div style="font-size:11.5px;color:var(--text-secondary);padding:3px 0 3px 4px">· '
-          + escHtml(x.law_name) + ' — <strong>' + fmtDate(x.pending_enf) + '</strong> 시행 예정 ('
-          + escHtml(fmtNo(x.pending_law_no)) + ')</div>';
+          + escHtml(x.law_name) + (x.steps.length > 1 ? ' <span style="color:#b45309">' + x.steps.length + '단계</span>' : '')
+          + '<div style="padding-left:10px;font-size:11px;color:var(--text-tertiary)">' + steps + '</div></div>';
       }).join('');
     }
     if (unmatched.length) {

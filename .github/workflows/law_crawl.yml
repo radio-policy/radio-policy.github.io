@@ -39,6 +39,16 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: python summarize_law_amendments.py
 
+      # 시행일이 도래한 시행예정본을 현행으로 승격(조문은 이미 적재돼 있으므로 상태 전환만).
+      # 감시보다 먼저 돌려야 승격된 문서가 그날 감시의 기준본이 된다.
+      - name: Promote due pending law versions
+        continue-on-error: true
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          LAW_OC_KEY: ${{ secrets.LAW_OC_KEY }}
+        run: python law_sync.py --promote
+
       # 지식베이스 등재 법령이 법제처 현행본과 어긋나는지 대조(감시만 — 교체는 PC에서 law_sync.py)
       - name: Watch knowledge-base law currency
         continue-on-error: true

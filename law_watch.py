@@ -6,7 +6,9 @@
      (대시보드 업로드/add_law.py/세션 어느 경로로 추가하든 다음 실행부터 자동 편입)
   ② 문서명에서 법령명·법종·법령번호·시행일 파싱 → 법제처 DRF API로 현행본 조회
   ③ 등재본 ≠ 현행본이면 law_watch.sync_status='outdated' + 텔레그램 알림
-  ④ eflaw(시행일법령)로 시행예정본도 기록(Phase 3 대비 — 저장만, 자문 노출 안 함)
+  ④ 시행예정 통합본을 '전부' law_pending에 기록(다단 시행 수용 — 정보통신망법처럼
+     2026.9.11 / 2026.10.1 / 2027.4.1 세 시점이 걸린 경우도 3건 모두 남는다).
+     조문 취득·적재는 law_sync.py --pending 이 담당한다(감시는 발견만).
 
 법제처에 없는 문서(ITU-R·보도자료·사내자료)는 watch_status='unmatched'로 1회만 알리고,
 운영자가 'excluded'로 표시하면 이후 조용히 건너뛴다(알림 노이즈 방지).
@@ -124,11 +126,17 @@ def api_target_of(type_token: str) -> str:
 
 
 def fetch_all_doc_rows(sb):
-    """document_chunks의 (doc_name, doc_category) 전체 — PostgREST 1000행 절단 회피(지침 가드레일)"""
+    """감시 대상 (doc_name, doc_category) — status='current'만.
+
+    구버전(superseded)·시행예정본(pending)까지 긁으면 그것들이 법제처 현행본과 달라
+    매번 '개정 감지'로 잘못 잡히고, --all-outdated가 이미 최신인 법령을 다시 받아온다.
+    PostgREST 1000행 절단 회피를 위한 range 페이지네이션(지침 가드레일).
+    """
     seen, start, page = {}, 0, 1000
     while True:
         r = (sb.table('document_chunks')
              .select('doc_name, doc_category')
+             .eq('status', 'current')
              .order('id').range(start, start + page - 1).execute())
         rows = r.data or []
         for row in rows:
@@ -170,27 +178,47 @@ def _strip_org(s: str) -> str:
     return re.sub(r'^\([^)]*\)\s*', '', norm_name(s or '')).strip()
 
 
-def pick_exact(rows, law_name: str, full_name: str = None):
-    """검색 결과 중 해당 법령 행 선택.
-    ① 접두(소관부처) 포함 완전일치 → ② 접두 제거 후 일치 (현행 우선)
+def name_of(r):
+    return r.get('법령명한글') or r.get('행정규칙명') or ''
+
+
+def match_rows(rows, law_name: str, full_name: str = None):
+    """검색 결과 중 해당 법령에 해당하는 행 전체.
+    ① 접두(소관부처) 포함 완전일치 → 없으면 ② 접두 제거 후 일치
     """
     if not rows:
-        return None
-
-    def name_of(r):
-        return r.get('법령명한글') or r.get('행정규칙명') or ''
-
-    def is_current(r):
-        return (r.get('현행연혁코드') or r.get('현행연혁구분') or '') == '현행'
-
+        return []
     if full_name:
         exact = [r for r in rows if _key(name_of(r)) == _key(full_name)]
         if exact:
-            return next((r for r in exact if is_current(r)), exact[0])
-    loose = [r for r in rows if _key(_strip_org(name_of(r))) == _key(law_name)]
-    if loose:
-        return next((r for r in loose if is_current(r)), loose[0])
-    return None
+            return exact
+    return [r for r in rows if _key(_strip_org(name_of(r))) == _key(law_name)]
+
+
+def pick_exact(rows, law_name: str, full_name: str = None, today: str = None):
+    """검색 결과 중 '현재 시행 중인' 행 선택.
+
+    행정규칙(admrul) 검색은 현행본과 시행예정본을 구분 없이 함께 돌려주고
+    현행연혁코드도 비어 있는 경우가 많다. 목록 순서에 기대면 미래 시행본을
+    현행으로 착각해 등재한다(적합성평가 고시 오적재 사고). 시행일자로 판정한다:
+      ① 시행일 ≤ 오늘 인 것 중 시행일이 가장 늦은 행
+      ② 그런 행이 없으면(전부 미래) 시행일이 가장 이른 행
+    """
+    cands = match_rows(rows, law_name, full_name)
+    if not cands:
+        return None
+    today = today or datetime.now(KST).strftime('%Y%m%d')
+
+    def enf(r):
+        return str(r.get('시행일자') or '')
+
+    in_force = [r for r in cands if enf(r) and enf(r) <= today]
+    if in_force:
+        return sorted(in_force, key=enf)[-1]
+    dated = [r for r in cands if enf(r)]
+    if dated:
+        return sorted(dated, key=enf)[0]
+    return cands[0]
 
 
 def row_fields(row, target: str):
@@ -209,6 +237,84 @@ def norm_law_no(v):
     if not v:
         return ''
     return re.sub(r'[^0-9\-]', '', str(v))
+
+
+# ── 시행예정본(다건) ───────────────────────────────────────
+
+def _mst_key(mst):
+    """일련번호 비교키 — 클수록 나중에 생성된 통합본. 숫자가 아니면 문자열로 폴백."""
+    s = str(mst or '')
+    return (1, int(s)) if s.isdigit() else (0, 0)
+
+
+def find_pending_rows(meta, target: str, current_hit, today: str):
+    """해당 법령의 시행예정 통합본 '전부'를 시행일 오름차순으로 반환.
+
+    법령(law)  : 일반 검색(target=law)은 현행본만 주므로 eflaw(시행일법령)로 조회한다.
+                 같은 MST가 서로 다른 시행일 통합본을 갖는 경우가 실제로 있어
+                 (정보통신망법 MST 285199 → 20261001 / 20270401) 식별자는 (MST, 시행일).
+    행정규칙   : admrul 검색이 현행본과 시행예정본을 함께 돌려주므로 추가 조회 없이
+                 결과에서 시행일 > 오늘 인 행을 고른다.
+    """
+    if target == 'law':
+        rows = drf_law_search(meta['law_name'], 'law', ef=True) or []
+    else:
+        rows = drf_law_search(meta['law_name'], 'admrul') or []
+        if not match_rows(rows, meta['law_name'], meta.get('full_name')):
+            for alt in alias_variants(meta['law_name']):
+                rows = drf_law_search(alt, 'admrul') or []
+                if match_rows(rows, meta['law_name'], meta.get('full_name')):
+                    break
+
+    cands = match_rows(rows, meta['law_name'], meta.get('full_name'))
+
+    # 시행일 1개 = 통합본 1개. 같은 날 시행되는 개정법률이 여러 건이면 법제처가 공포번호마다
+    # 행을 주지만 그 시행일의 통합본 본문은 동일하다(국가재정법 20260811: MST 285521/283171
+    # → 조문 137개·본문 해시 일치 확인). 시행일로 묶고 가장 나중 공포건만 남긴다.
+    best = {}
+    for r in cands:
+        mst, law_no, enf = row_fields(r, target)
+        if not enf or enf <= today:
+            continue
+        prev = best.get(enf)
+        if prev is None or _mst_key(mst) > _mst_key(prev['fields'][0]):
+            best[enf] = {'fields': (mst, law_no, enf), 'enf': enf}
+    return [best[k] for k in sorted(best)]
+
+
+def save_pending(sb, meta, target: str, watch_doc_name: str, law_id: str, futures, today: str):
+    """law_pending upsert + 이번에 안 잡힌 미적재 예정본 정리."""
+    now = datetime.now(timezone.utc).isoformat()
+    keep = set()
+    for f in futures:
+        mst, law_no, enf = f['fields']
+        keep.add((mst, enf))
+        sb.table('law_pending').upsert({
+            'law_name': meta['law_name'], 'law_id': law_id or None,
+            'law_type_token': meta['law_type_token'], 'api_target': target,
+            'watch_doc_name': watch_doc_name,
+            'mst': mst, 'law_no': law_no, 'enf_date': enf,
+            'updated_at': now,
+        }, on_conflict='law_name,mst,enf_date', ignore_duplicates=False).execute()
+    retire_pending(sb, meta['law_name'], keep, today)
+
+
+def retire_pending(sb, law_name: str, keep, today: str):
+    """법제처 목록에서 사라진 예정본을 obsolete 처리.
+
+    이미 적재(loaded)·승격(promoted)된 행은 건드리지 않는다 — 조문이 DB에 실재하므로
+    상태를 지우면 추적을 잃는다. 시행일이 도래한 detected 행도 남긴다(승격 대상).
+    """
+    rows = (sb.table('law_pending').select('id, mst, enf_date, sync_state')
+            .eq('law_name', law_name).eq('sync_state', 'detected').execute().data) or []
+    now = datetime.now(timezone.utc).isoformat()
+    for r in rows:
+        if (r['mst'], r['enf_date']) in keep or r['enf_date'] <= today:
+            continue
+        sb.table('law_pending').update({
+            'sync_state': 'obsolete', 'updated_at': now,
+            'note': f'법제처 시행예정 목록에서 사라짐({today})',
+        }).eq('id', r['id']).execute()
 
 
 def notify(lines):
@@ -257,6 +363,7 @@ def main():
           f"(제외 카테고리·excluded 제외)\n")
 
     outdated, unmatched, upcoming, auto_excluded, ok = [], [], [], [], 0
+    today = datetime.now(KST).strftime('%Y%m%d')
 
     for i, (doc_name, cat) in enumerate(targets, 1):
         meta = parse_doc_name(doc_name)
@@ -317,18 +424,19 @@ def main():
                 rec['sync_status'] = 'outdated'
                 outdated.append((doc_name, meta['law_name'], meta['law_no'], meta['enf_date'], law_no, enf))
 
-            # 시행예정본(eflaw) — 저장만, 자문 노출은 Phase 3
-            if target == 'law':
-                efs = drf_law_search(meta['law_name'], 'law', ef=True) or []
-                today = datetime.now(KST).strftime('%Y%m%d')
-                future = [r for r in efs
-                          if pick_exact([r], meta['law_name'], meta.get('full_name'))
-                          and str(r.get('시행일자') or '') > today]
-                if future:
-                    nxt = sorted(future, key=lambda r: str(r.get('시행일자')))[0]
-                    p_mst, p_no, p_enf = row_fields(nxt, 'law')
-                    rec.update({'pending_mst': p_mst, 'pending_law_no': p_no, 'pending_enf': p_enf})
-                    upcoming.append((meta['law_name'], p_no, p_enf))
+            # 시행예정본 — 있는 대로 전부 law_pending에 기록(다단 시행 수용)
+            futures = find_pending_rows(meta, target, hit, today)
+            if futures:
+                if not a.dry_run:
+                    save_pending(sb, meta, target, doc_name, rec['law_id'], futures, today)
+                # law_watch의 pending_* 3칼럼은 '가장 이른 1건' 요약(대시보드 배지용).
+                # 전체 목록은 law_pending을 본다.
+                p_mst, p_no, p_enf = futures[0]['fields']
+                rec.update({'pending_mst': p_mst, 'pending_law_no': p_no, 'pending_enf': p_enf})
+                upcoming.append((meta['law_name'], futures))
+            elif not a.dry_run:
+                # 예정본이 사라졌으면(개정 철회·이미 시행) 미적재분 정리
+                retire_pending(sb, meta['law_name'], keep=set(), today=today)
 
         if not a.dry_run:
             sb.table('law_watch').upsert(rec, on_conflict='doc_name').execute()
@@ -344,7 +452,8 @@ def main():
     print(f"  구버전    : {len(outdated)}건")
     print(f"  미매칭    : {len(unmatched)}건  (법령명은 파싱됐으나 법제처 검색 실패 — 수동 확인)")
     print(f"  자동 제외 : {len(auto_excluded)}건  (법령 문서가 아님 — 보도자료 등)")
-    print(f"  시행예정본 존재: {len(upcoming)}건")
+    pending_total = sum(len(f) for _, f in upcoming)
+    print(f"  시행예정본: {pending_total}건 / 법령 {len(upcoming)}건")
 
     if outdated:
         print("\n[구버전 목록]")
@@ -352,8 +461,9 @@ def main():
             print(f"  - {nm}: 등재 {r_no}({r_enf}) → 현행 {l_no}({l_enf})")
     if upcoming:
         print("\n[시행예정]")
-        for nm, p_no, p_enf in upcoming:
-            print(f"  - {nm}: {p_no} ({p_enf} 시행 예정)")
+        for nm, futs in upcoming:
+            steps = ", ".join(f"{f['fields'][1]}({f['enf']})" for f in futs)
+            print(f"  - {nm}: {len(futs)}단계 → {steps}")
     if unmatched:
         print("\n[미매칭 — 수동 확인 필요]")
         for d, why in unmatched:
@@ -369,9 +479,11 @@ def main():
                 lines.append(f"  … 외 {len(outdated) - 10}건")
             lines.append("")
         if upcoming:
-            lines.append(f"📅 <b>시행예정 {len(upcoming)}건</b>")
-            for nm, p_no, p_enf in upcoming[:5]:
-                lines.append(f"· {nm}: {p_enf} 시행 예정")
+            lines.append(f"📅 <b>시행예정 {pending_total}건</b> (법령 {len(upcoming)}건)")
+            for nm, futs in upcoming[:5]:
+                lines.append(f"· {nm}: " + " / ".join(f"{f['enf']}" for f in futs))
+            if len(upcoming) > 5:
+                lines.append(f"  … 외 {len(upcoming) - 5}개 법령")
         notify(lines)
 
     print("\n=== 완료 ===")

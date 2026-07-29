@@ -20,6 +20,9 @@ OKF 요약은 만들지 않는다(--with-okf 미지원). 초기 일괄 정비는
   python law_sync.py --doc-name "<문서명>" --keep-old # 구버전을 superseded로만(삭제 안 함)
   python law_sync.py --all-outdated                  # outdated 전체
   python law_sync.py --doc-name "<문서명>" --dry-run  # 취득·청킹만, DB 미변경
+  python law_sync.py --pending                       # 시행예정본 전부 status=pending으로 등재
+  python law_sync.py --pending --pending-law 정보통신망 # 특정 법령만
+  python law_sync.py --promote                       # 시행일 도래분 → current 승격(매일 자동)
 
 필요 .env: SUPABASE_URL, SUPABASE_SERVICE_KEY, LAW_OC_KEY, VOYAGE_API_KEY(백필용)
 """
@@ -75,10 +78,17 @@ def _txt(v):
     return str(v).strip()
 
 
-def fetch_law_articles(mst: str):
-    """법령(target=law) → [(article_no, text)] + 기본정보"""
-    r = requests.get(DRF_SERVICE, params={'OC': OC_KEY, 'target': 'law',
-                                          'type': 'JSON', 'MST': mst}, timeout=60)
+def fetch_law_articles(mst: str, ef_date: str = None):
+    """법령 → [(article_no, text)] + 기본정보.
+
+    ef_date를 주면 시행일법령(target=eflaw)의 해당 시행일 통합본을 받는다.
+    같은 MST가 시행일별로 다른 통합본을 갖는 경우가 있어(정보통신망법 MST 285199 →
+    20261001 179조 / 20270401 180조) MST만으로는 특정되지 않는다. eflaw는 efYd가
+    없으면 빈 응답을 주므로 반드시 함께 넘겨야 한다.
+    """
+    params = {'OC': OC_KEY, 'type': 'JSON', 'MST': mst}
+    params.update({'target': 'eflaw', 'efYd': ef_date} if ef_date else {'target': 'law'})
+    r = requests.get(DRF_SERVICE, params=params, timeout=60)
     r.raise_for_status()
     d = r.json()['법령']
     basic = d.get('기본정보', {})
@@ -335,6 +345,129 @@ def sync_one(sb, watch_row, args):
     return True
 
 
+# ── 시행예정본 적재·승격 ──────────────────────────────────
+
+def load_pending_one(sb, row, args):
+    """law_pending 1건 → 조문 취득 후 status='pending'으로 등재.
+
+    현행본을 건드리지 않는다(자문은 only_current=true라 pending은 검색에서 제외된다).
+    시행일이 도래하면 promote_due()가 current로 올린다.
+    """
+    law_name, target = row['law_name'], row.get('api_target') or 'law'
+    mst, enf, law_no = row['mst'], row['enf_date'], row.get('law_no')
+    print(f"\n▶ [시행예정] {law_name}  {law_no}({enf} 시행) mst={mst}")
+
+    if target == 'law':
+        articles, basic = fetch_law_articles(mst, ef_date=enf)
+        type_token = basic.get('법령구분명') or row.get('law_type_token') or '법률'
+        org, law_id = None, str(basic.get('법령ID') or row.get('law_id') or '')
+    else:
+        articles, basic = fetch_admrul_articles(mst)
+        type_token = basic.get('행정규칙종류') or row.get('law_type_token') or '고시'
+        org = basic.get('소관부처명') or ''
+        law_id = str(basic.get('행정규칙ID') or row.get('law_id') or '')
+
+    chunks = chunk_articles(articles)
+    if not chunks:
+        print("  ! 조문 취득 결과가 비어 있음 — 건너뜀")
+        return False
+
+    new_doc = build_doc_name(law_name, type_token, law_no, enf, org, target)
+    print(f"  문서명: {new_doc}\n  조문 {len(articles)}개 → 청크 {len(chunks)}개")
+
+    # 같은 판이 이미 등재돼 있으면(대부분 운영자가 PDF로 미리 올려둔 시행예정본) 새로 넣지 않는다.
+    # PDF 경로로 올린 문서는 doc_name 끝에 '.pdf'가 붙고 별표까지 포함돼 API본보다 내용이 많다.
+    dup = (sb.table('document_chunks').select('doc_name')
+           .in_('doc_name', [new_doc, new_doc + '.pdf']).limit(1).execute().data) or []
+    if dup:
+        existing_doc = dup[0]['doc_name']
+        print(f"  → 이미 등재됨({existing_doc[:64]}). 상태만 연결")
+        if not args.dry_run:
+            sb.table('law_pending').update({
+                'doc_name': existing_doc, 'sync_state': 'loaded',
+                'loaded_at': datetime.now(timezone.utc).isoformat(),
+                'updated_at': datetime.now(timezone.utc).isoformat(),
+            }).eq('id', row['id']).execute()
+        return False
+    if args.dry_run:
+        print("  [dry-run] DB 변경 없음")
+        return True
+
+    category = '법령' if target == 'law' else '고시'
+    payload = [{
+        'doc_name': new_doc, 'doc_category': category, 'chunk_index': i,
+        'content': c['content'], 'article_no': c['article_no'],
+        'effective_date': enf, 'notice_no': (law_no if target != 'law' else None),
+        'law_id': law_id, 'law_mst': mst, 'status': 'pending',
+        'is_approved': True,
+    } for i, c in enumerate(chunks)]
+    for i in range(0, len(payload), 50):
+        sb.table('document_chunks').insert(payload[i:i + 50]).execute()
+    print(f"  ✓ 시행예정본 등재 {len(payload)}청크 (status=pending — 자문 검색 제외)")
+
+    now = datetime.now(timezone.utc).isoformat()
+    sb.table('law_pending').update({
+        'doc_name': new_doc, 'law_id': law_id or None, 'sync_state': 'loaded',
+        'loaded_at': now, 'updated_at': now,
+    }).eq('id', row['id']).execute()
+    return True
+
+
+def promote_due(sb, dry_run=False):
+    """시행일이 도래한 pending을 current로 승격하고 직전 current를 superseded로 내린다.
+
+    이게 없으면 시행일이 지나도 자문은 옛 조문을 계속 현행으로 답한다.
+    같은 법령에 여러 건이 걸려 있으면 시행일 순으로 올려 마지막 것만 current로 남긴다.
+    """
+    today = datetime.now().strftime('%Y%m%d')
+    rows = (sb.table('law_pending').select('*')
+            .eq('sync_state', 'loaded').lte('enf_date', today)
+            .order('enf_date').execute().data) or []
+    if not rows:
+        print("승격 대상 없음(시행일 도래한 시행예정본 없음)")
+        return 0
+
+    print(f"=== 시행일 도래 {len(rows)}건 승격 (dry-run={dry_run}) ===")
+    done = 0
+    for r in rows:
+        doc, law_name = r.get('doc_name'), r['law_name']
+        if not doc:
+            print(f"  ! {law_name}: doc_name 없음(미적재) — 건너뜀")
+            continue
+        print(f"  ▶ {law_name}: {r.get('law_no')} ({r['enf_date']} 시행) → current")
+        if dry_run:
+            done += 1
+            continue
+        now = datetime.now(timezone.utc).isoformat()
+        # ① 같은 법령의 기존 current를 superseded로 (승격본 자신은 제외)
+        existing = fetch_existing(sb, law_name)
+        for old_doc, info in existing.items():
+            if old_doc == doc or info.get('status') != 'current':
+                continue
+            sb.table('document_chunks').update({'status': 'superseded'}).eq('doc_name', old_doc).execute()
+            sb.table('law_watch').delete().eq('doc_name', old_doc).execute()
+            print(f"      구버전 → superseded: {old_doc[:64]}")
+        # ② 승격
+        sb.table('document_chunks').update({'status': 'current'}).eq('doc_name', doc).execute()
+        sb.table('law_pending').update({
+            'sync_state': 'promoted', 'promoted_at': now, 'updated_at': now,
+        }).eq('id', r['id']).execute()
+        # ③ law_watch에 현행본으로 등록 — 다음 감시부터 이 문서가 기준이 된다
+        sb.table('law_watch').upsert({
+            'doc_name': doc, 'law_name': law_name,
+            'law_type_token': r.get('law_type_token'), 'api_target': r.get('api_target') or 'law',
+            'law_id': r.get('law_id'), 'registered_mst': r['mst'],
+            'registered_law_no': r.get('law_no'), 'registered_enf': r['enf_date'],
+            'latest_mst': r['mst'], 'latest_law_no': r.get('law_no'), 'latest_enf': r['enf_date'],
+            'watch_status': 'watching', 'sync_status': 'current',
+            'last_checked_at': now, 'updated_at': now,
+            'note': f'시행일 도래 자동 승격 ({datetime.now():%Y-%m-%d})',
+        }, on_conflict='doc_name').execute()
+        done += 1
+    print(f"=== 승격 완료: {done}건 ===")
+    return done
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--doc-name', help='현행화할 등재 문서명(부분 일치 허용)')
@@ -343,12 +476,46 @@ def main():
     ap.add_argument('--keep-old', action='store_true', help='구버전 삭제 없이 superseded로만')
     ap.add_argument('--dry-run', action='store_true')
     ap.add_argument('--no-backfill', action='store_true', help='임베딩 백필 생략')
+    ap.add_argument('--pending', action='store_true',
+                    help='law_pending의 미적재 시행예정본을 status=pending으로 등재')
+    ap.add_argument('--pending-law', help='--pending 대상을 특정 법령명으로 한정')
+    ap.add_argument('--promote', action='store_true',
+                    help='시행일이 도래한 시행예정본을 current로 승격(매일 자동 실행 대상)')
     a = ap.parse_args()
 
     if not (SB_URL and SB_KEY and OC_KEY):
         print("오류: .env에 SUPABASE_URL, SUPABASE_SERVICE_KEY, LAW_OC_KEY 필요")
         sys.exit(1)
     sb = sb_client.make_client(SB_URL, SB_KEY)
+
+    if a.promote:
+        promote_due(sb, a.dry_run)
+        return
+
+    if a.pending:
+        today = datetime.now().strftime('%Y%m%d')
+        q = (sb.table('law_pending').select('*')
+             .eq('sync_state', 'detected').gt('enf_date', today))
+        if a.pending_law:
+            q = q.ilike('law_name', f'%{a.pending_law}%')
+        rows = (q.order('law_name').order('enf_date').execute().data) or []
+        if not rows:
+            print("적재할 시행예정본 없음 (law_watch.py를 먼저 실행하세요)")
+            return
+        print(f"=== 시행예정본 적재: {len(rows)}건 (dry-run={a.dry_run}) ===")
+        done = 0
+        for r in rows:
+            try:
+                if load_pending_one(sb, r, a):
+                    done += 1
+            except Exception as e:
+                print(f"  ! 실패({r.get('law_name')} {r.get('enf_date')}): {str(e)[:140]}")
+            time.sleep(0.3)
+        print(f"\n=== 완료: {done}/{len(rows)}건 등재 ===")
+        if done and not a.dry_run and not a.no_backfill:
+            print("\n[임베딩 백필]")
+            subprocess.run([sys.executable, str(ROOT / 'backfill_embeddings.py')], check=False)
+        return
 
     outdated = (sb.table('law_watch').select('*')
                 .eq('sync_status', 'outdated').order('law_name').execute().data) or []
