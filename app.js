@@ -2603,9 +2603,14 @@ function renderKbDocArticles(list) {
     return;
   }
   bodyEl.innerHTML = list.map(function(a) {
+    // article_no는 문서에 따라 '제38조(...)'/'38조(...)' 두 형태로 저장됨(배경역사 #28) → 표시는 '제'로 통일
+    var art = a.art ? a.art.replace(/^(?!제)(?=\d)/, '제') : '';
+    // 본문 첫머리가 조문 표기와 겹치면(대부분 그렇다) 헤더와 중복이므로 본문 쪽을 제거
+    var text = a.text;
+    if (art && text.indexOf(art) === 0) text = text.slice(art.length).replace(/^[\s:·-]+/, '');
     return '<div style="margin-bottom:16px;padding-bottom:14px;border-bottom:0.5px solid var(--border-light)">' +
-      (a.art ? '<div style="font-size:12.5px;font-weight:600;color:var(--text-primary);margin-bottom:5px">【' + escHtml(a.art) + '】</div>' : '') +
-      '<div style="white-space:pre-wrap">' + escHtml(a.text) + '</div></div>';
+      (art ? '<div style="font-size:12.5px;font-weight:600;color:var(--text-primary);margin-bottom:5px">' + escHtml(art) + '</div>' : '') +
+      '<div style="white-space:pre-wrap">' + escHtml(text) + '</div></div>';
   }).join('');
   bodyEl.scrollTop = 0;
 }
