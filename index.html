@@ -637,6 +637,19 @@
             <div id="pending-approval-list"><div style="padding:14px;text-align:center;color:var(--text-secondary);font-size:12px">불러오는 중...</div></div>
           </div>
 
+          <!-- 법령 현행화 상태 (law_watch) -->
+          <div class="card" style="margin-bottom:12px;cursor:default">
+            <div class="section-title" style="margin-bottom:6px">
+              <i class="ti ti-refresh-alert"></i>법령 현행화 상태
+              <span id="lawwatch-count-badge" style="font-size:11px;color:#b45309;font-weight:600;margin-left:6px"></span>
+              <button class="btn" style="font-size:11px;padding:3px 10px;margin-left:auto" onclick="loadLawWatch()"><i class="ti ti-refresh"></i>새로고침</button>
+            </div>
+            <div style="font-size:11px;color:var(--text-tertiary);margin-bottom:10px">
+              매일 11시 법제처와 대조합니다. <strong>개정 감지 시 PC에서 현행화</strong>: <code style="font-size:10.5px">python law_sync.py --all-outdated</code>
+            </div>
+            <div id="lawwatch-list"><div style="padding:14px;text-align:center;color:var(--text-secondary);font-size:12px">불러오는 중...</div></div>
+          </div>
+
           <!-- API 키 설정 -->
           <div class="card" style="margin-bottom:12px;cursor:default">
             <div class="section-title" style="margin-bottom:12px"><i class="ti ti-key"></i>API 키 설정</div>
@@ -937,6 +950,6 @@
 <script src="https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js"></script>
 <script>if(typeof pdfjsLib!=='undefined'){pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';}</script>
 <script src="system_prompt.js?v=20260612c"></script>
-<script src="app.js?v=20260729c"></script>
+<script src="app.js?v=20260729d"></script>
 </body>
 </html>

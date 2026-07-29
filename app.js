@@ -3416,6 +3416,7 @@ function loadSettingsFields() {
   if (cfg.sbKey) document.getElementById('inp-sb-key').value = cfg.sbKey;
   if (cfg.claudeKey) document.getElementById('inp-claude-key').value = cfg.claudeKey;
   loadPendingApprovals();
+  loadLawWatch();
 }
 
 // ── 지식베이스 승인 대기 (업로드 파일 게이트) ──
@@ -3451,6 +3452,72 @@ async function loadPendingApprovals() {
     }).join('');
   } catch(e) {
     listEl.innerHTML = '<div style="padding:14px;color:var(--text-secondary);font-size:12px">목록 조회 실패: ' + escHtml(e.message || String(e)) + '</div>';
+  }
+}
+
+// ── 법령 현행화 상태 (law_watch) ──
+// 감시(law_watch.py)는 GitHub Actions가 매일 돌리고, 여기서는 결과만 읽어 보여준다.
+// 실제 현행화는 PC에서 law_sync.py 실행(조문 취득·임베딩이 무거워 브라우저에서 수행하지 않음).
+async function loadLawWatch() {
+  var listEl = document.getElementById('lawwatch-list');
+  var badgeEl = document.getElementById('lawwatch-count-badge');
+  if (!listEl) return;
+  if (!sb) {
+    listEl.innerHTML = '<div style="padding:14px;text-align:center;color:var(--text-secondary);font-size:12px">Supabase 연결 후 표시됩니다.</div>';
+    return;
+  }
+  listEl.innerHTML = '<div style="padding:14px;text-align:center;color:var(--text-secondary);font-size:12px">불러오는 중...</div>';
+  try {
+    var r = await sb.from('law_watch')
+      .select('doc_name,law_name,registered_law_no,registered_enf,latest_law_no,latest_enf,pending_law_no,pending_enf,sync_status,watch_status,last_checked_at')
+      .neq('watch_status', 'excluded').order('law_name');
+    if (r.error) throw r.error;
+    var rows = r.data || [];
+    var outdated = rows.filter(function(x){ return x.sync_status === 'outdated'; });
+    var unmatched = rows.filter(function(x){ return x.watch_status === 'unmatched'; });
+    var upcoming = rows.filter(function(x){ return x.pending_enf; });
+    if (badgeEl) badgeEl.textContent = outdated.length ? outdated.length + '건 개정' : '';
+
+    var last = rows.reduce(function(m, x){ return (x.last_checked_at || '') > m ? x.last_checked_at : m; }, '');
+    var html = '<div style="font-size:11px;color:var(--text-tertiary);margin-bottom:8px">'
+      + '감시 ' + rows.length + '건 · 최신 ' + (rows.length - outdated.length - unmatched.length) + '건'
+      + (last ? ' · 최근 점검 ' + new Date(last).toLocaleString('ko-KR', {month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}) : '')
+      + '</div>';
+
+    function fmtNo(v) { v = v || ''; return /^제/.test(v) ? v : (v ? '제' + v + '호' : '-'); }
+    function fmtDate(v) { return v && v.length === 8 ? v.slice(2,4)+'.'+v.slice(4,6)+'.'+v.slice(6,8) : (v || ''); }
+
+    if (outdated.length) {
+      html += '<div style="font-size:11.5px;font-weight:600;color:#b45309;margin:8px 0 6px">🔄 개정 감지 — 현행화 필요</div>';
+      html += outdated.map(function(x){
+        return '<div class="file-item" style="margin-bottom:6px">'
+          + '<div class="file-icon" style="background:rgba(245,158,11,.15);color:#b45309"><i class="ti ti-alert-triangle"></i></div>'
+          + '<div style="flex:1;min-width:0"><div class="file-name">' + escHtml(x.law_name || x.doc_name) + '</div>'
+          + '<div class="file-size">등재 ' + escHtml(fmtNo(x.registered_law_no)) + '(' + fmtDate(x.registered_enf) + ')'
+          + ' → <strong style="color:#b45309">' + escHtml(fmtNo(x.latest_law_no)) + '</strong>(' + fmtDate(x.latest_enf) + ' 시행)</div></div>'
+          + '</div>';
+      }).join('');
+    }
+    if (upcoming.length) {
+      html += '<div style="font-size:11.5px;font-weight:600;color:var(--text-secondary);margin:12px 0 6px">📅 시행 예정 (' + upcoming.length + '건)</div>';
+      html += upcoming.sort(function(a,b){ return (a.pending_enf||'').localeCompare(b.pending_enf||''); }).map(function(x){
+        return '<div style="font-size:11.5px;color:var(--text-secondary);padding:3px 0 3px 4px">· '
+          + escHtml(x.law_name) + ' — <strong>' + fmtDate(x.pending_enf) + '</strong> 시행 예정 ('
+          + escHtml(fmtNo(x.pending_law_no)) + ')</div>';
+      }).join('');
+    }
+    if (unmatched.length) {
+      html += '<div style="font-size:11.5px;font-weight:600;color:var(--text-secondary);margin:12px 0 6px">❓ 미매칭 — 수동 확인 (' + unmatched.length + '건)</div>';
+      html += unmatched.map(function(x){
+        return '<div style="font-size:11px;color:var(--text-tertiary);padding:2px 0 2px 4px">· ' + escHtml((x.law_name || x.doc_name).slice(0, 60)) + '</div>';
+      }).join('');
+    }
+    if (!outdated.length && !upcoming.length && !unmatched.length) {
+      html += '<div style="padding:12px;text-align:center;color:var(--text-secondary);font-size:12px">✅ 모든 법령이 현행 상태입니다.</div>';
+    }
+    listEl.innerHTML = html;
+  } catch(e) {
+    listEl.innerHTML = '<div style="padding:14px;color:var(--text-secondary);font-size:12px">조회 실패: ' + escHtml(e.message || String(e)) + '</div>';
   }
 }
 
