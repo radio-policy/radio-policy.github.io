@@ -490,6 +490,21 @@ HTTP/2 사고에서 직접 겪은 불편(빈 브리핑·주말 오경보·점검
 
 ---
 
+## 29. 대시보드 승인 훅 OKF 자동 생성 + 번들 역동기화 (2026-07-29)
+
+**배경**: 재난로밍 정책 조사 중 "재난 및 안전관리 기본법"이 관계도에 이름만 있고 원문·요약이 없음을 발견 → 웹 업로드 경로의 한계 논의로 이어짐. 웹 업로드는 청킹 + (배경 #23의) 승인 시 임베딩까지는 자동이지만 **OKF 요약(kb_documents) 생성은 PC add_law.py에서만 가능**했다. 운영자가 "①(웹 업로드)도 PC와 같게 할 수 없나" 요청 → 선택지 검토(A: 웹에서 OKF까지+주기 역동기화 / B: Edge Function이 GitHub API로 번들 커밋까지 / C: 현행 유지) 후 **A안 채택**. B안 기각 사유: add_law.py의 dedup·supersede 로직을 JS로 이중 유지보수 + 실패 지점 증가 대비, 법령 추가 빈도(월 수 건)가 낮음.
+
+**구현** (커밋 참조):
+1. **admin RPC 2종 신설**(migration `admin_kb_okf_rpcs`): `admin_upsert_kb_document`(동일 path 덮어쓰기 + 같은 dedup_key의 기존 current를 superseded 처리 — add_law.py on_readd_rule의 SQL판), `admin_insert_kb_chunks`. 기존 admin_* 패턴 동일(SECURITY DEFINER + 비밀번호 sha256 검증).
+2. **app.js `generateOkfForDoc`**: 승인 훅(approveDoc)에서 법령·고시 카테고리만 실행 — 조문 청크 앞 18,000자 발췌 → Haiku(add_law.py와 동일 프롬프트, 브라우저 직접 호출) → frontmatter 파싱(JS판 split_frontmatter) → 헤더 경계 청킹(1000/100/최소30, [제목] 접두 — import_regulatory_kb.chunk_body 동일 규칙) → voyage-embed Edge(`voyage-law-2`) 5개 동시 → RPC 적재. 파일명 관례 "제목(법률)(제N호)(YYYYMMDD)"에서 메타 자동 추출, 없으면 Haiku frontmatter로 보완. **실패 시에도 승인·조문 임베딩은 유지**(자문은 조문 기반 동작, add_law.py로 보완) — 기존 임베딩 실패 처리와 같은 fail-soft 원칙.
+3. **sync_kb_to_bundle.py 신설**: 웹 생성 OKF(path `laws/web-upload/…`)는 DB에만 존재 → manifest에 없는 path를 번들 md(컬럼으로 frontmatter 재구성)+manifest 항목으로 저장, status 불일치(웹 supersede)도 manifest에 반영. 멱등·range 페이지네이션(#28 교훈)·sb_client 경유(#15).
+
+**왜 번들을 유지하나(운영자 문답)**: "①②도 로컬에 없는데 ③(요약)만 왜 로컬에?"에 대한 결론 — 원문(Storage)·조문 청크(DB)는 법제처에서 언제든 재취득·재생성 가능하지만, **요약은 이 시스템의 창작물이라 DB가 유일 사본이고 무료 플랜은 DB 백업이 없다.** git 번들이 요약의 유일한 백업+수정이력이므로 유지. 그 대가로 생기는 웹 생성분의 번들 공백을 sync 스크립트가 메운다.
+
+**신규 가드레일**: `import_regulatory_kb.py` 전체 재적재 전 `sync_kb_to_bundle.py` 필수(안 하면 웹 생성 OKF 유실 — manifest 정본 원칙의 이면). 지침 do-not에 등재.
+
+---
+
 ## 부록 — 보고서 초안 제안 데이터 흐름
 
 ```

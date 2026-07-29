@@ -3384,15 +3384,159 @@ async function approveDoc(idx) {
   if (res.error) { _handleAdminRpcError(res.error, '승인'); return; }
   _kbDocsLoaded = false;   // KB 목록 재조회 유도
   await loadPendingApprovals();
+  var msgs = [];
   // 승인 직후 임베딩 자동 생성 — 실패해도 승인은 유지되고 '임베딩 대기'로 남음(PC 백필 가능)
   try {
     var n = await embedDocChunks(doc.doc_name, pwd);
-    alert(n > 0 ? '승인 완료 — 의미검색 임베딩 ' + n + '건 자동 생성됨' : '승인 완료');
+    if (n > 0) msgs.push('의미검색 임베딩 ' + n + '건 자동 생성');
   } catch(e) {
     console.warn('자동 임베딩 실패(임베딩 대기 유지 — PC에서 backfill_embeddings.py로 보완):', e);
-    alert('승인은 완료됐습니다. 임베딩 자동 생성은 실패해 "임베딩 대기"로 남습니다 (PC 백필로 보완 가능).');
+    msgs.push('⚠️ 임베딩 자동 생성 실패 — "임베딩 대기"로 남음 (PC 백필로 보완 가능)');
   }
+  // 법령·고시는 OKF 요약(kb_documents)까지 자동 생성 — 실패해도 승인·임베딩은 유지 (add_law.py로 보완 가능)
+  if (doc.doc_category === '법령' || doc.doc_category === '고시') {
+    try {
+      var okf = await generateOkfForDoc(doc.doc_name, doc.doc_category, pwd);
+      msgs.push('OKF 요약 자동 생성: ' + okf.chunks + '청크 (' + okf.path + ')');
+      msgs.push('※ Haiku 초안 — 번들 파일은 PC에서 sync_kb_to_bundle.py 실행 시 저장됨');
+    } catch(e) {
+      console.warn('OKF 자동 생성 실패(자문은 조문 기반으로 정상 동작 — PC add_law.py로 보완 가능):', e);
+      msgs.push('⚠️ OKF 요약 생성 실패(' + (e && e.message ? e.message : e) + ') — PC add_law.py로 보완 가능');
+    }
+  }
+  alert('승인 완료' + (msgs.length ? '\n- ' + msgs.join('\n- ') : ''));
   _kbDocsLoaded = false;
+}
+
+// ── OKF 요약 자동 생성 (승인 훅) — add_law.py ②단계의 브라우저판 ──
+// Haiku가 요약 초안 작성 → 마크다운 청킹 → voyage-law-2 임베딩(Edge Function) → admin RPC로 kb_* 적재.
+// 번들(regulatory-kb) 파일은 브라우저가 못 쓰므로 DB에만 존재 — PC의 sync_kb_to_bundle.py가 역동기화.
+
+function _okfNormTitle(t) { return (t || '').replace(/\s*\((구버전|현행)\)\s*/g, '').trim(); }
+
+function _okfSlug(title) {
+  var base = _okfNormTitle(title).replace(/[^0-9a-zA-Z가-힣]+/g, '_').replace(/^_+|_+$/g, '').toLowerCase();
+  return (base.slice(0, 60) || 'law');
+}
+
+// 파일명 관례 "제목(법률)(제21065호)(20260102)" 에서 메타 추출 (없으면 빈 값 → Haiku frontmatter로 보완)
+function _okfMetaFromDocName(docName) {
+  var name = (docName || '').replace(/\.(pdf|docx|md|pptx)$/i, '');
+  var m = name.match(/^(.*?)\(([^()]*(?:법률|대통령령|총리령|부령|고시|훈령|예규|공고|규칙|규정)[^()]*)\)\s*\((제[^()]*호)\)\s*\((\d{8})\)/);
+  if (!m) return { title: name.replace(/\([^()]*\)/g, '').trim() || name, law_type: '', law_number: '', enf: '' };
+  return { title: m[1].trim(), law_type: m[2].trim(), law_number: m[3].trim(),
+           enf: m[4].slice(0, 4) + '-' + m[4].slice(4, 6) + '-' + m[4].slice(6, 8) };
+}
+
+// --- ... --- frontmatter 분리 (import_regulatory_kb.split_frontmatter의 JS판 — 키:값 스칼라만)
+function _okfSplitFrontmatter(text) {
+  var fm = {}, body = text;
+  if (text.slice(0, 3) === '---') {
+    var end = text.indexOf('\n---', 3);
+    if (end !== -1) {
+      var block = text.slice(3, end);
+      body = text.slice(end + 4).replace(/^\n+/, '');
+      block.split('\n').forEach(function(line) {
+        if (line.indexOf(':') !== -1 && !/^\s*-/.test(line)) {
+          var idx = line.indexOf(':');
+          fm[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
+        }
+      });
+    }
+  }
+  return { fm: fm, body: body };
+}
+
+// 마크다운 헤더 경계 우선 청킹 (import_regulatory_kb.chunk_body와 동일 규칙: 1000자/오버랩100/최소30/제목 접두)
+function _okfChunkBody(body, title) {
+  var SIZE = 1000, OVERLAP = 100;
+  var parts = body.split(/(?=^#{1,3}\s)/m);
+  var raw = [];
+  parts.forEach(function(p) {
+    p = p.trim();
+    if (!p) return;
+    if (p.length <= SIZE) { raw.push(p); return; }
+    var start = 0;
+    while (start < p.length) {
+      raw.push(p.slice(start, start + SIZE));
+      start += SIZE - OVERLAP;
+    }
+  });
+  return raw.filter(function(c) { return c.trim().length >= 30; })
+            .map(function(c) { return '[' + title + '] ' + c; });
+}
+
+async function generateOkfForDoc(docName, category, pwd) {
+  var cfg = getConfig();
+  if (!cfg.claudeKey) throw new Error('Claude API 키 미설정');
+  // 1) 조문 청크에서 원문 발췌 (add_law.py와 동일하게 앞부분 최대 18000자)
+  var resp = await sb.from('document_chunks')
+    .select('chunk_index, content').eq('doc_name', docName)
+    .order('chunk_index').limit(60);
+  if (resp.error) throw new Error(resp.error.message);
+  var lawText = (resp.data || []).map(function(r) { return r.content; }).join('\n').slice(0, 18000);
+  if (lawText.length < 200) throw new Error('원문 텍스트 부족');
+
+  var meta = _okfMetaFromDocName(docName);
+  var conceptType = (category === '법령') ? 'Law' : 'Notice';
+  // 2) Haiku 요약 초안 (add_law.py anthropic_summarize와 동일 프롬프트)
+  var sysPrompt = '너는 대한민국 전파·통신 규제 전문가다. 주어진 법령/고시 원문을 바탕으로 ' +
+    'OKF 지식베이스용 마크다운 문서를 작성한다. 반드시 아래 형식만 출력(설명 문장 금지):\n' +
+    '--- 로 감싼 YAML frontmatter: type, title, description(한 문장), tags(목록), ' +
+    'law_type, law_number, enforcement_date, competent_authority, status: current\n' +
+    "그 다음 본문 섹션: '# 요약' '# 적용 범위' '# 주요 내용(구조화)' '# 실무 체크리스트' '# Citations'.\n" +
+    '요약은 실무자가 이해하기 쉽게, 조문 번호는 본문에 인용하되 과장 없이 사실만.';
+  var userMsg = '[메타] title=' + meta.title + ' / law_type=' + meta.law_type +
+    ' / law_number=' + meta.law_number + ' / enforcement_date=' + meta.enf +
+    ' / concept_type=' + conceptType + ' / competent_authority=\n\n[원문 발췌]\n' + lawText;
+  var res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'x-api-key': cfg.claudeKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json', 'anthropic-dangerous-direct-browser-access': 'true' },
+    body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 4096, system: sysPrompt,
+      messages: [{ role: 'user', content: userMsg }] })
+  });
+  var data = await res.json();
+  if (!res.ok) throw new Error('Claude API 오류: ' + ((data.error && data.error.message) || res.status));
+  var md = (data.content || []).filter(function(b) { return b.type === 'text'; })
+    .map(function(b) { return b.text; }).join('').trim();
+  md = md.replace(/^```(?:markdown|md)?\s*\n/, '').replace(/\n```\s*$/, '');
+  if (md.length < 200) throw new Error('요약 결과가 비정상적으로 짧음');
+
+  var sf = _okfSplitFrontmatter(md);
+  var title = meta.title || sf.fm.title || docName;
+  var lawType = meta.law_type || sf.fm.law_type || '';
+  var lawNumber = meta.law_number || sf.fm.law_number || '';
+  var enfDate = meta.enf || sf.fm.enforcement_date || '';
+  // 3) 요약 본문 청킹 + voyage-law-2 임베딩 (kb_chunks 저장 모델과 동일 — Edge Function 경유)
+  var chunks = _okfChunkBody(sf.body, title);
+  if (!chunks.length) throw new Error('요약 청킹 결과 없음');
+  var embeddings = [];
+  for (var i = 0; i < chunks.length; i += 5) {
+    var batch = chunks.slice(i, i + 5);
+    var embs = await Promise.all(batch.map(function(c) {
+      return sb.functions.invoke('voyage-embed', {
+        body: { query: c, model: 'voyage-law-2', input_type: 'document' }
+      }).then(function(r2) {
+        if (r2.error || !r2.data || !r2.data.embedding) throw new Error('voyage-embed 실패');
+        return r2.data.embedding;
+      });
+    }));
+    embs.forEach(function(e) { embeddings.push(e); });
+  }
+  // 4) admin RPC로 kb_documents/kb_chunks 적재 (동일 path 덮어쓰기 + 구버전 supersede는 RPC가 처리)
+  var path = 'laws/web-upload/' + _okfSlug(title) + '.md';
+  var r1 = await sb.rpc('admin_upsert_kb_document', {
+    p_pwd: pwd, p_dedup_key: _okfNormTitle(title) + '|' + lawType, p_title: title,
+    p_concept_type: conceptType, p_family: 'web-upload', p_law_type: lawType,
+    p_law_number: lawNumber, p_enforcement_date: enfDate,
+    p_competent_authority: sf.fm.competent_authority || '', p_path: path,
+    p_description: sf.fm.description || '', p_body_md: sf.body
+  });
+  if (r1.error) { if (/AUTH_FAILED/.test(r1.error.message || '')) _adminPwd = ''; throw new Error(r1.error.message); }
+  var vecs = embeddings.map(function(e) { return '[' + e.join(',') + ']'; });
+  var r2b = await sb.rpc('admin_insert_kb_chunks', { p_pwd: pwd, p_doc_id: r1.data, p_contents: chunks, p_embeddings: vecs });
+  if (r2b.error) throw new Error(r2b.error.message);
+  return { title: title, chunks: chunks.length, path: path };
 }
 
 // 승인된 문서의 embedding NULL 청크를 Edge Function(voyage-embed)으로 채움 (배경역사 #23)
@@ -4551,7 +4695,7 @@ async function doPdfUpload() {
       closePdfUpload();
       var pendingNote = (_pdfUploadCtx === 'press')
         ? ''
-        : '\n\n⏳ 승인 대기 상태로 등록되었습니다. 설정 → 승인 대기 문서에서 승인하면 AI 자문 반영 + 의미검색 임베딩까지 자동 생성됩니다.';
+        : '\n\n⏳ 승인 대기 상태로 등록되었습니다. 설정 → 승인 대기 문서에서 승인하면 AI 자문 반영 + 의미검색 임베딩' + (_pdfUploadCtx === 'law' ? ' + OKF 요약(법령·고시)' : '') + '까지 자동 생성됩니다.';
       var msg = totalFiles === 1
         ? '✅ "' + (docName || files[0].name.replace(/\.[^.]+$/, '')) + '" 업로드 완료!\n' + totalChunks + '개 청크가 등록되었습니다.' + pendingNote
         : '✅ ' + totalFiles + '개 파일 업로드 완료!\n총 ' + totalChunks + '개 청크가 등록되었습니다.' + pendingNote;
