@@ -402,10 +402,18 @@ async function buildPendingContext(chunks) {
       }).join(' → ');
     }).join('\n');
 
-    var body = arts.map(function(a) {
-      return '[시행예정 조문] ' + a.law_name + ' 제' + a.law_no + '호 — ' + fmtD(a.enf_date)
+    // 총량 상한 — 과태료 조문처럼 긴 조문이 몇 개만 걸려도 수만 자가 된다.
+    // 조문을 중간에서 자르면 모델이 잘린 문구를 인용할 수 있으므로 조문 단위로 끊고,
+    // 빠진 건수는 명시한다(조용한 누락 금지).
+    var BUDGET = 24000, used = 0, kept = [], dropped = 0;
+    arts.forEach(function(a) {
+      var s = '[시행예정 조문] ' + a.law_name + ' 제' + a.law_no + '호 — ' + fmtD(a.enf_date)
         + ' 시행 예정 | ' + a.article_no + '\n' + a.content;
-    }).join('\n\n---\n\n');
+      if (used + s.length > BUDGET && kept.length) { dropped++; return; }
+      used += s.length; kept.push(s);
+    });
+    var body = kept.join('\n\n---\n\n')
+      + (dropped ? '\n\n(분량 상한으로 시행예정 조문 ' + dropped + '건 생략 — 필요하면 해당 조문을 지목해 다시 질문하도록 안내하세요)' : '');
 
     lastPendingNotice = vers.map(function(v) { return { law_name: v.law_name, enf_date: v.enf_date }; });
 
