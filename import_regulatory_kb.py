@@ -198,6 +198,20 @@ def main():
 
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
     entries = manifest["entries"]
+
+    # --only <부분문자열> [...] : 해당 path만 재적재. 개정 1~2건 반영에 전체 100여 건을
+    # 다시 임베딩하는 낭비(및 그 사이 삭제-삽입 공백)를 피한다.
+    if "--only" in sys.argv:
+        pats = [a for a in sys.argv[sys.argv.index("--only") + 1:] if not a.startswith("--")]
+        if not pats:
+            print("오류: --only 뒤에 path(부분문자열)를 1개 이상 지정")
+            sys.exit(1)
+        entries = [e for e in entries if any(p in e["path"] for p in pats)]
+        if not entries:
+            print(f"오류: --only 패턴과 일치하는 manifest 항목 없음 → {pats}")
+            sys.exit(1)
+        print(f"--only 필터: {len(entries)}건 선택")
+
     print(f"manifest entries: {len(entries)}  (모델: {VOYAGE_MODEL}, dry-run={dry})")
 
     missing, total_chunks, done = [], 0, 0

@@ -220,6 +220,7 @@ python sync_kb_to_bundle.py [--dry-run]       # 웹 생성 OKF(DB) → regulator
 python law_watch.py [--dry-run|--no-notify]   # 법령 현행화 감시(등재본 vs 법제처 현행본 대조 → 알림). GitHub Actions 매일 11시
 python law_sync.py --list                     # 현행화 대상 목록
 python law_sync.py --all-outdated             # 개정 감지분 일괄 현행화(조문 API 취득→청킹→등재→구버전 정리→임베딩 백필)
+python import_regulatory_kb.py --only <path조각> [...]   # OKF 요약 일부만 재적재(전량 재임베딩 방지). --dry-run으로 대상 확인 후 실행
 ```
 
 ## 법령 자동 현행화 (law_watch / law_sync, 2026-07-29 신설)
@@ -239,6 +240,17 @@ python law_sync.py --all-outdated             # 개정 감지분 일괄 현행�
 - **기관명 변경 대응**: `ORG_ALIASES`(방송통신위원회→방송미디어통신위원회 등)로 1차 검색 실패 시 재검색. 이 경우 법령명 자체가 바뀌므로 구버전 정리는 감시가 지목한 문서명(prev_doc_name)으로 처리한다 — 빠뜨리면 구버전이 current로 남아 자문이 옛 규정을 답한다.
 - **한계**: 고시의 **별표·서식은 API 조문에 포함되지 않는다**(적합성평가 고시 PDF 166청크 → API 48청크). 별표가 실무상 중요한 고시는 PDF 병행 등재를 검토할 것.
 - **OKF 방침**: 초기 일괄 정비는 세션에서 무료 작성, 이후 개정분만 대시보드 승인 훅이 API 자동 생성(배경역사 #29·#31).
+
+### 법령 개정 시 OKF 요약 갱신 절차(조문 현행화 이후)
+
+조문(`document_chunks`)이 현행화돼도 **OKF 요약(`kb_documents`)은 자동으로 따라오지 않는다.** 요약이 옛 판을 설명하면 자문이 폐지된 조문을 근거로 답한다 — 조문 현행화와 반드시 짝으로 처리할 것.
+
+1. `document_chunks`에서 신판 조문을 읽고 **번들 md 파일**(`regulatory-kb/…`)을 갱신한다. DB를 직접 UPDATE하지 말 것 — 번들이 정본이고, 다음 `import_regulatory_kb.py` 실행이 DB를 덮어쓴다.
+2. `regulatory-kb/manifest.json`의 `law_number`·`enforcement_date`(및 기관명 개명 시 `title`·`dedup_key`·`law_type`)를 함께 고친다. 파일만 고치면 DB 메타는 옛 값 그대로다.
+3. 제목에 호수가 들어간 고시(적합성평가·시험기관 계열)는 **버전당 파일**이 관례다 — 신판 파일을 추가하고 구판 항목을 `status: superseded` + `superseded_by`로 내린다. 제목에 호수가 없는 법령은 같은 파일에 덮어쓴다.
+4. `python import_regulatory_kb.py --dry-run --only <path조각> …` 로 대상·청크 수를 확인한 뒤 `--only` 없이 재실행하지 말고 **같은 `--only`로 실제 적재**한다(전량 재적재는 100여 건을 다시 임베딩하고 그 사이 삭제-삽입 공백이 생긴다).
+5. `kb_chunks`의 `embedding is null` 0건, 문서 수 = manifest `entry_count`인지 확인한다.
+6. **별표는 법제처 조문 API에 없다.** 조문 본문이 직전판과 동일한데 호수만 오른 고시는 십중팔구 별표 개정이다 — 요약에 "실질 변경은 별표이며 원본 대조 필요"를 명시하고, 옛 별표 수치를 새 판 것인 양 옮겨 적지 말 것.
 
 ## 점검 체크리스트 (요약 — 상세 경위는 배경역사 문서)
 

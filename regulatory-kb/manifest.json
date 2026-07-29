@@ -1,7 +1,7 @@
 {
   "schema": "regulatory-kb-manifest/v1",
-  "updated": "2026-07-02",
-  "entry_count": 107,
+  "updated": "2026-07-29",
+  "entry_count": 109,
   "dedup_key_rule": "정규화 제목(버전 수식어 '(구버전)' 등 제거) + '|' + law_type. 같은 dedup_key = 같은 법령(버전만 다를 수 있음).",
   "on_readd_rule": {
     "same_law_number": "동일 법령번호 재추가 → 기존 path에 덮어쓰기(idempotent). 신규 파일 생성 금지.",
@@ -41,11 +41,11 @@
       "status": "current"
     },
     {
-      "dedup_key": "전파법 시행에 관한 방송통신위원회 규칙|방송통신위원회고시",
-      "title": "전파법 시행에 관한 방송통신위원회 규칙",
-      "law_type": "방송통신위원회고시",
-      "law_number": "제2019-2호",
-      "enforcement_date": "2019-01-08",
+      "dedup_key": "전파법 시행에 관한 방송미디어통신위원회 규칙|방송미디어통신위원회고시",
+      "title": "전파법 시행에 관한 방송미디어통신위원회 규칙",
+      "law_type": "방송미디어통신위원회고시",
+      "law_number": "제2026-18호",
+      "enforcement_date": "2026-06-16",
       "concept_type": "Notice",
       "path": "laws/radio-act/notices/kcc_radio_rule.md",
       "status": "current"
@@ -94,8 +94,8 @@
       "dedup_key": "정보통신망 이용촉진 및 정보보호 등에 관한 법률|법률",
       "title": "정보통신망 이용촉진 및 정보보호 등에 관한 법률",
       "law_type": "법률",
-      "law_number": "제21066호",
-      "enforcement_date": "2025-10-01",
+      "law_number": "제21305호",
+      "enforcement_date": "2026-07-07",
       "concept_type": "Law",
       "path": "laws/network-act/network_act.md",
       "status": "current"
@@ -104,8 +104,8 @@
       "dedup_key": "정보통신망 이용촉진 및 정보보호 등에 관한 법률 시행령|대통령령",
       "title": "정보통신망 이용촉진 및 정보보호 등에 관한 법률 시행령",
       "law_type": "대통령령",
-      "law_number": "제36220호",
-      "enforcement_date": "2026-03-24",
+      "law_number": "제36502호",
+      "enforcement_date": "2026-07-07",
       "concept_type": "Regulation",
       "path": "laws/network-act/enforcement_decree.md",
       "status": "current"
@@ -605,8 +605,8 @@
       "dedup_key": "간이무선국·우주국·지구국의 무선설비 및 전파탐지용 무선설비 등 그 밖의 업무용 무선설비의 기술기준|국립전파연구원고시",
       "title": "간이무선국·우주국·지구국의 무선설비 및 전파탐지용 무선설비 등 그 밖의 업무용 무선설비의 기술기준",
       "law_type": "국립전파연구원고시",
-      "law_number": "제2025-5호",
-      "enforcement_date": "2025-05-26",
+      "law_number": "제2026-3호",
+      "enforcement_date": "2026-07-07",
       "concept_type": "Notice",
       "path": "laws/radio-act/wireless-notices/misc_radio_equipment_standard.md",
       "status": "current"
@@ -769,7 +769,8 @@
       "enforcement_date": "2026-07-01",
       "concept_type": "Notice",
       "path": "laws/radio-act/conformity-assessment/conformity_assessment_notice_nira_2025_22.md",
-      "status": "current"
+      "status": "superseded",
+      "superseded_by": "제2026-4호"
     },
     {
       "dedup_key": "방송통신기자재등 시험기관의 지정 및 관리에 관한 고시 (제2025-22호)|국립전파연구원고시",
@@ -779,7 +780,8 @@
       "enforcement_date": "2026-07-01",
       "concept_type": "Notice",
       "path": "laws/radio-act/conformity-assessment/test_lab_designation_2025_22.md",
-      "status": "current"
+      "status": "superseded",
+      "superseded_by": "제2026-4호"
     },
     {
       "dedup_key": "방송통신기자재등 시험기관의 지정 및 관리에 관한 고시 (제2025-4호)|국립전파연구원고시",
@@ -1081,6 +1083,26 @@
       "enforcement_date": "2025-07-08",
       "concept_type": "Regulation",
       "path": "laws/disaster-safety/재난_및_안전관리_기본법_시행규칙.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "방송통신기자재등 시험기관의 지정 및 관리에 관한 고시 (제2026-4호)|국립전파연구원고시",
+      "title": "방송통신기자재등 시험기관의 지정 및 관리에 관한 고시 (제2026-4호)",
+      "law_type": "국립전파연구원고시",
+      "law_number": "제2026-4호",
+      "enforcement_date": "2026-07-24",
+      "concept_type": "Notice",
+      "path": "laws/radio-act/conformity-assessment/test_lab_designation_2026_4.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "방송통신기자재등의 적합성평가에 관한 고시 (국립전파연구원고시 제2026-4호)|국립전파연구원고시",
+      "title": "방송통신기자재등의 적합성평가에 관한 고시 (국립전파연구원고시 제2026-4호)",
+      "law_type": "국립전파연구원고시",
+      "law_number": "제2026-4호",
+      "enforcement_date": "2026-07-24",
+      "concept_type": "Notice",
+      "path": "laws/radio-act/conformity-assessment/conformity_assessment_notice_nira_2026_4.md",
       "status": "current"
     }
   ]
