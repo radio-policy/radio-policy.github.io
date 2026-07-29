@@ -570,7 +570,7 @@ def _delete_doc_chunks(sb, doc_name):
     나고, 그 경우 삭제는 롤백되지만 스크립트는 실패로 끝난다(지방세법 860청크에서 발생)."""
     while True:
         ids = [r['id'] for r in ((sb.table('document_chunks').select('id')
-                                  .eq('doc_name', doc_name).limit(200).execute().data) or [])]
+                                  .eq('doc_name', doc_name).limit(100).execute().data) or [])]
         if not ids:
             return
         sb.table('document_chunks').delete().in_('id', ids).execute()
@@ -582,19 +582,24 @@ def _damaged_docs(sb, min_broken=30):
     watch = {r['doc_name'] for r in ((sb.table('law_watch')
              .select('doc_name, watch_status, sync_status').execute().data) or [])
              if r.get('watch_status') == 'watching' and r.get('sync_status') == 'current'}
-    stats, start = {}, 0
+    stats, api_done, start = {}, set(), 0
     while True:
-        rows = (sb.table('document_chunks').select('doc_name, content')
+        rows = (sb.table('document_chunks').select('doc_name, content, law_id')
                 .eq('status', 'current').order('id').range(start, start + 999).execute().data) or []
         for r in rows:
             if r['doc_name'] not in watch:
                 continue
+            if r.get('law_id'):
+                # 이미 API로 적재된 문서. 항·호 줄바꿈 때문에 손상 추정치가 30%를 넘길 수
+                # 있어(부담금관리 기본법 38청크 중 16) 제외하지 않으면 매 실행 재처리된다.
+                api_done.add(r['doc_name'])
             t, b = stats.get(r['doc_name'], (0, 0))
             stats[r['doc_name']] = (t + 1, b + (1 if BROKEN_RE.search(r['content'] or '') else 0))
         if len(rows) < 1000:
             break
         start += 1000
-    return sorted(d for d, (t, b) in stats.items() if t and b * 100 >= t * min_broken)
+    return sorted(d for d, (t, b) in stats.items()
+                  if t and b * 100 >= t * min_broken and d not in api_done)
 
 
 def _update_doc_chunks(sb, doc_name, patch):
@@ -607,7 +612,7 @@ def _update_doc_chunks(sb, doc_name, patch):
     while True:
         rows = (sb.table('document_chunks').select('id')
                 .eq('doc_name', doc_name).gt('id', last)
-                .order('id').limit(200).execute().data) or []
+                .order('id').limit(100).execute().data) or []
         if not rows:
             return
         ids = [r['id'] for r in rows]
@@ -616,19 +621,24 @@ def _update_doc_chunks(sb, doc_name, patch):
         last = 0 if 'doc_name' in patch else ids[-1]
 
 
+DAMAGE_SAMPLE = 300
+
+
 def _pdf_damage(sb, doc_name):
-    """(전체 청크, 단어중간 줄바꿈 청크, 별표 표로 보이는 청크) — 재적재 판단 근거."""
-    rows, start = [], 0
-    while True:
-        r = (sb.table('document_chunks').select('content')
-             .eq('doc_name', doc_name).eq('status', 'current')
-             .order('chunk_index').range(start, start + 999).execute().data) or []
-        rows += r
-        if len(r) < 1000:
-            break
-        start += 1000
-    total = len(rows)
-    broken = sum(1 for x in rows if re.search(r'[가-힣]\n[가-힣]', x['content'] or ''))
+    """(전체 청크, 단어중간 줄바꿈 청크 추정, 별표 표로 보이는 청크) — 재적재 판단 근거.
+
+    손상률은 판정용 휴리스틱이라 전량을 읽을 필요가 없다. 1,230청크짜리 문서의 본문을
+    통째로 끌어오다 statement timeout(57014)이 반복해서 났다 — 앞 300청크만 표본으로
+    보고 비율을 전체로 환산한다.
+    """
+    rows = (sb.table('document_chunks').select('content')
+            .eq('doc_name', doc_name).eq('status', 'current')
+            .order('chunk_index').limit(DAMAGE_SAMPLE).execute().data) or []
+    total = ((sb.table('document_chunks').select('id', count='exact')
+              .eq('doc_name', doc_name).eq('status', 'current')
+              .limit(1).execute()).count) or len(rows)
+    n = len(rows) or 1
+    broken = round(sum(1 for x in rows if BROKEN_RE.search(x['content'] or '')) * total / n)
     table = sum(1 for x in rows if re.search(r'위반횟수별|행정처분기준|과태료의 부과기준|1차 위반', x['content'] or ''))
     return total, broken, table
 
@@ -716,6 +726,14 @@ def reingest_one(sb, doc_name, args):
         # (already_api면 어차피 뒤에서 지울 것이라 접미는 임시 표식일 뿐이다)
         old_doc = doc_name + (' [교체중]' if already_api else ' [PDF원본]')
         _update_doc_chunks(sb, doc_name, {'doc_name': old_doc})
+
+    # 멱등성 — 앞선 시도가 삽입까지는 성공하고 뒤 단계에서 죽었을 수 있다. 그대로 다시
+    # 넣으면 같은 chunk_index가 여러 벌 쌓인다(재시도 3회에 5배 중복이 생겼다).
+    dup = ((sb.table('document_chunks').select('id', count='exact')
+            .eq('doc_name', new_doc).limit(1).execute()).count) or 0
+    if dup:
+        print(f"  · 이전 시도의 잔여 {dup}청크 발견 → 삭제 후 재삽입")
+        _delete_doc_chunks(sb, new_doc)
 
     payload = [{
         'doc_name': new_doc, 'doc_category': category, 'chunk_index': i,
