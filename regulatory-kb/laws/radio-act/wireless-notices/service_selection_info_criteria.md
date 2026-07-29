@@ -2,14 +2,14 @@
 type: Notice
 title: 전기통신역무 선택에 필요한 정보 제공 기준
 description: 전기통신사업법 제56조의2제2항에 따라 전기통신사업자가 이용자에게 제공해야 하는 이동통신·인터넷 등 역무의 이용가능 지역·종류 등 정보의 종류·범위·제공방법·절차를 정한 과학기술정보통신부 고시
-resource: 전기통신역무 선택에 필요한 정보 제공 기준(과학기술정보통신부고시)(제2019-27호)(20190610).pdf
+resource: 법제처 DRF API(law_sync.py) 취득 — 조문 원문은 document_chunks 참조
 tags: [telecom, coverage, information-disclosure, mobile, internet, consumer-protection]
 timestamp: 2026-07-02T00:00:00Z
 law_type: 고시
 law_number: 제2019-27호
 enforcement_date: 2019-06-10
 competent_authority: 과학기술정보통신부(통신자원정책과)
-source_path: C:\Users\SKTelecom\Desktop\팀 관련 규제 자료\무선 행정규칙\전기통신역무 선택에 필요한 정보 제공 기준(과학기술정보통신부고시)(제2019-27호)(20190610).pdf
+source_path: 법제처 DRF API(law_sync.py) 취득 — 조문 원문은 document_chunks 참조
 target_space: https://confluence.tde.sktelecom.com/spaces/~1108400/
 ---
 
@@ -49,6 +49,16 @@ target_space: https://confluence.tde.sktelecom.com/spaces/~1108400/
 ## 재검토기한 (제7조)
 - 2017. 1. 1. 기준 매 3년마다 타당성 검토.
 
+# 별표·서식 목록
+
+- **별표·별지·서식 없음.** 이 고시는 제1조~제7조와 부칙 2건이 전부다(원문 확인). 75m×75m 격자, 속도 구간(10기가급/기가급/초고속), 매출 5,000억원 기준 등 모든 수치가 조문 본문에 직접 규정되어 있다.
+- 제6조의 "과학기술정보통신부장관이 정한 방식"(정기점검 자료 제출 방식)은 이 고시에 서식으로 포함되어 있지 않고 **별도 통보로 정해진다** — 제출 직전에 소관과(통신자원정책과)의 최신 제출 양식을 확인할 것.
+
+# 부칙(실무 관련)
+
+- **부칙 <제2019-27호, 2019. 6. 10.>** — "이 고시는 고시한 날부터 시행한다." 현행판. **경과조치·적용례 없음** → 5G 항목이 추가된 개정 내용이 유예 없이 즉시 적용되었다.
+- 부칙 <제2016-82호, 2016. 7. 22.> — 2016년 7월 28일부터 시행(종전판).
+
 # 실무 체크리스트
 - 5G/LTE/IMT2000 커버리지 정보는 전국 75m×75m 격자 단위로 산출하여 홈페이지에 지도(색깔·무늬) 형태로 게시.
 - 무선랜(WiFi)·인터넷가입자접속서비스는 서비스 지점 정보로 대체 제공 가능.
@@ -62,5 +72,5 @@ target_space: https://confluence.tde.sktelecom.com/spaces/~1108400/
 - 재난 시 무선통신시설 공동이용 범위 및 절차에 대한 고시 ([disaster_facility_sharing.md](disaster_facility_sharing.md))
 
 # Citations
-- 전기통신역무 선택에 필요한 정보 제공 기준(과학기술정보통신부고시 제2019-27호, 2019. 6. 10. 일부개정), 제1조~제7조.
+- 전기통신역무 선택에 필요한 정보 제공 기준(과학기술정보통신부고시 제2019-27호, 2019. 6. 10. 일부개정), 제1조~제7조 및 부칙 2건 — 법제처 DRF API 취득본(document_chunks). 별표 없음.
 - 전기통신사업법 제56조의2제2항, 제2조제6호·제8호.

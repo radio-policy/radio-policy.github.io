@@ -2,14 +2,14 @@
 type: Notice
 title: 주파수 공동사용 범위와 조건, 절차, 방법 등에 관한 기준
 description: 전파법 제6조의3제2항에 근거하여 특정 주파수 대역을 둘 이상 이용자가 공동사용하도록 할 때의 범위·조건·절차·방법과 기존/신규 이용자 보호 원칙을 규정한 과학기술정보통신부 고시.
-resource: 주파수 공동사용 범위와 조건, 절차, 방법 등에 관한 기준(과학기술정보통신부고시)(제2019-96호)(20191206).pdf
+resource: 법제처 DRF API(law_sync.py) 취득 — 조문 원문은 document_chunks 참조
 tags: [radio, spectrum]
 timestamp: 2026-07-02T00:00:00Z
 law_type: 과학기술정보통신부고시
 law_number: 제2019-96호
 enforcement_date: 2019-12-06
 competent_authority: 과학기술정보통신부
-source_path: C:\Users\SKTelecom\Desktop\팀 관련 규제 자료\주파수 행정규칙\주파수 공동사용 범위와 조건, 절차, 방법 등에 관한 기준(과학기술정보통신부고시)(제2019-96호)(20191206).pdf
+source_path: 법제처 DRF API(law_sync.py) 취득 — 조문 원문은 document_chunks 참조
 target_space: https://confluence.tde.sktelecom.com/spaces/~1108400/
 ---
 
@@ -54,6 +54,14 @@ target_space: https://confluence.tde.sktelecom.com/spaces/~1108400/
 
 ## 재검토 기한(제12조)
 - 2020년 1월 1일 기준 3년마다(매 3년째 12월 31일까지) 타당성 검토.
+
+# 별표·서식 목록
+
+- **별표·별지서식 없음.** 제1조~제12조 조문만으로 구성되며, 공동사용 대역과 이용조건은 별표가 아니라 제8조·제9조에 따른 개별 검토·선정으로 정해진다.
+
+# 부칙
+
+- 부칙 <제2019-96호, 2019.12.6.> 제1조: 이 고시는 공포한 날부터 시행. 경과조치·적용례 규정은 없다.
 
 # 실무 체크리스트
 

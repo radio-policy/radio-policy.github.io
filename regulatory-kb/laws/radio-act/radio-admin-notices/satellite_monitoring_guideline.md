@@ -2,14 +2,14 @@
 type: Procedure
 title: 위성전파감시 업무에 관한 지침
 description: 위성전파감시센터의 위성전파감시 범위·측정항목·위반 및 혼신 처리·자료 관리 등 업무 처리 방법과 절차를 정한 훈령
-resource: 위성전파감시 업무에 관한 지침(중앙전파관리소훈령)(제124호)(20210101).pdf
+resource: 법제처 DRF API(law_sync.py) 취득 — 조문 원문은 document_chunks 참조
 tags: [radio, procedure, satellite, monitoring, interference, itu-rr]
 timestamp: 2026-07-02T00:00:00Z
 law_type: 중앙전파관리소훈령
 law_number: 제124호
 enforcement_date: 2021-01-01
 competent_authority: 중앙전파관리소
-source_path: C:\Users\SKTelecom\Desktop\팀 관련 규제 자료\전파 행정규칙\위성전파감시 업무에 관한 지침(중앙전파관리소훈령)(제124호)(20210101).pdf
+source_path: 법제처 DRF API(law_sync.py) 취득 — 조문 원문은 document_chunks 참조
 target_space: https://confluence.tde.sktelecom.com/spaces/~1108400/
 ---
 
@@ -48,9 +48,16 @@ target_space: https://confluence.tde.sktelecom.com/spaces/~1108400/
 
 # 별표·서식 목록
 
-- [별지 1] 혼신조사 처리결과 보고서
-- [별지 2] 혼신보고서
-- [별지 3] 긴급보고서
+**별표는 없고 별지서식 3종만 규정**되어 있으며, 세 서식 모두 본문이 등재되어 있다.
+
+- **[별지 1] 혼신조사 처리결과 보고서**(제8조) — 개요(발생일시·주파수·내용)/조사 경과/조사 결과, 스펙트럼 파형·사진 첨부. 경미한 혼신의 본소 보고용.
+- **[별지 2] 혼신보고서**(제8조) — ITU 전파규칙 제15조 제Ⅵ절 부록 10 양식. 혼신 유발국·피혼신국 항목(호출부호, 측정주파수, 전파형식, 대역폭, 전계강도/전력속밀도, 편파, 위치 등)을 **국문·영문 병기**로 작성.
+- **[별지 3] 긴급보고서**(제8조) — 발생기관·일시(발생/입수)·장소·입수경위·입수내용·관계기관 통보 및 사후처리 사항. 중대·긴급 사항 즉시 본부 보고용.
+
+# 부칙
+
+- 부칙 <제124호, 2021.1.1.> 제1조: 이 지침은 발령한 날부터 시행.
+- 부칙 <제103호, 2018.1.1.> 제2조: 시행과 동시에 종전 중앙전파관리소 예규 제87호 「위성전파감시업무에 관한 지침」 폐지(훈령으로 전환).
 
 # 실무 체크리스트
 

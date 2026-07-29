@@ -753,7 +753,17 @@ def reingest_one(sb, doc_name, args):
     } for i, c in enumerate(chunks)]
     for i in range(0, len(payload), 50):
         sb.table('document_chunks').insert(payload[i:i + 50]).execute()
-    print(f"  ✓ API본 등재 {len(payload)}청크")
+
+    # 삽입 검증 — 배치 중간에 statement timeout이 나면 앞부분만 들어가고 예외가 나는데,
+    # 예외를 삼키는 상위 루프가 있으면 "부분 삽재"가 완료로 위장된다. 실제로 대한민국
+    # 주파수 분배표가 1,089청크 중 150청크(배치 3개)만 들어간 채 방치돼 있었고,
+    # 이미 law_id가 있어 이후 재적재 대상에서도 빠져 아무도 알아채지 못했다.
+    got = ((sb.table('document_chunks').select('id', count='exact')
+            .eq('doc_name', new_doc).limit(1).execute()).count) or 0
+    if got != len(payload):
+        raise RuntimeError(f"삽입 검증 실패: {len(payload)}청크를 넣었는데 {got}청크만 확인됨 "
+                           f"— 부분 삽입 상태이므로 재실행 필요 ({new_doc[:50]})")
+    print(f"  ✓ API본 등재 {len(payload)}청크 (검증 완료)")
 
     # 신본 등재가 끝난 뒤에야 구본을 내린다(위 주석의 순서 이유).
     if already_api:

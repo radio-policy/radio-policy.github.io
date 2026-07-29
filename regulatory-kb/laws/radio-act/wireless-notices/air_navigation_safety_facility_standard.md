@@ -2,14 +2,14 @@
 type: Notice
 title: 항행안전무선시설의 설치 및 기술기준
 description: 공항시설법 시행규칙 제36조·제40조에 따라 지상 항행안전무선시설(ILS·VOR·DME·NDB·GNSS·SSR·ACAS 등)의 설치 및 기술기준을 규정한 국토교통부 고시
-resource: 항행안전무선시설의 설치 및 기술기준(국토교통부고시)(제2024-710호)(20241203).pdf
+resource: 법제처 DRF API(law_sync.py) 취득 — 조문 원문은 document_chunks 참조
 tags: [radio, aeronautical, navigation-aids, notice, ILS, GNSS, surveillance]
 timestamp: 2026-07-02T00:00:00Z
 law_type: 국토교통부고시
 law_number: 제2024-710호
 enforcement_date: 2024-12-03
 competent_authority: 국토교통부(항행위성정책과)
-source_path: C:\Users\SKTelecom\Desktop\팀 관련 규제 자료\무선 행정규칙\항행안전무선시설의 설치 및 기술기준(국토교통부고시)(제2024-710호)(20241203).pdf
+source_path: 법제처 DRF API(law_sync.py) 취득 — 조문 원문은 document_chunks 참조
 target_space: https://confluence.tde.sktelecom.com/spaces/~1108400/
 ---
 
@@ -51,15 +51,15 @@ target_space: https://confluence.tde.sktelecom.com/spaces/~1108400/
 
 # 별표·서식 목록
 
-| 구분 | 제목 |
-|---|---|
-| 별표 1 | 항법무선시설(ILS·PAR·VOR·NDB·DME·마커비콘·GNSS·ADF 등) |
-| 별표 2 | 감시 및 충돌회피 시스템(SSR·ACAS·모드-S 확장스퀴터·MLAT) |
-| 별지 1 | 기술성능기록부 |
-| 별지 2 | 대상시설 제원 |
-| 별지 3 | 운영개시 검사표 |
+| 구분 | 제목 | 내용 |
+|---|---|---|
+| 별표 1 | 항법무선시설 | 제1장 일반규정(정의) / 제2장 일반규정(표준·지상 및 비행점검·운용상태 정보·전력공급·인적요인) / 제3장 규격(3.1 ILS, 3.2 PAR, 3.3 VOR, 3.4 NDB, 3.5 UHF DME, 3.6 VHF 마커비콘, 3.7 GNSS, 3.9 ADF, 부록 B GNSS 기술기준) / 제4장 기타 시설(ASR·ARSR·SSR·ARTS·ASDE, 일차감시레이더, TACAN, 공동·근접채널 지리적 분리기준) |
+| 별표 2 | 감시 및 충돌회피 시스템 | 제1장 정의 / 제2장 일반사항(SSR·인적요소) / 제3장 SSR 시스템 특성 / 제4장 ACAS I·II·III 및 충돌회피 로직 / 제5장 모드-S 확장 스퀴터 / 제6장 MLAT / 제7장 항공기 감시 적용 기술 요구사항 |
+| 별지 1 | 기술성능기록부 | 시설위치·유지보수기관·시설약자·식별부호 등 성능 기록 양식 |
+| 별지 2 | 대상시설 제원 | 검사 대상시설의 제원 기재 양식 |
+| 별지 3 | **운용개시 검사표** | 시설명·검사일시·검사결과(합격/불합격) 기재 양식 (※ 정식 명칭은 "운영개시"가 아닌 **운용개시 검사표**) |
 
-(별표 1·2는 ICAO Annex 10 기반 대용량 기술규격으로, 세부 수치·표는 원본 PDF 참조)
+별표 1·2는 ICAO Annex 10 체계를 그대로 옮긴 대용량 기술규격이며, 목차·본문·수치표가 모두 텍스트로 등재되어 있다(별표 1이 압도적으로 큰 분량, 별표 2가 그 다음).
 
 # 실무 체크리스트
 

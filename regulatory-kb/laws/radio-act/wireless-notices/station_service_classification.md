@@ -2,14 +2,14 @@
 type: Notice
 title: 무선국이 하는 업무 및 무선국의 분류
 description: 전파법 시행령에서 열거하지 않은 무선국의 업무(우주연구·우주운용·무선항행위성 등 6종)와 무선국(생활무선국)을 보충 규정한 과학기술정보통신부고시.
-resource: 무선국이 하는 업무 및 무선국의 분류(과학기술정보통신부고시)(제2018-28호)(20180503).pdf
+resource: 법제처 DRF API(law_sync.py) 취득 — 조문 원문은 document_chunks 참조
 tags: [radio, notice, wireless, station-classification, satellite]
 timestamp: 2026-07-02T00:00:00Z
 law_type: 과학기술정보통신부고시
 law_number: 제2018-28호
 enforcement_date: 2018-05-03
 competent_authority: 과학기술정보통신부
-source_path: C:\Users\SKTelecom\Desktop\팀 관련 규제 자료\무선 행정규칙\무선국이 하는 업무 및 무선국의 분류(과학기술정보통신부고시)(제2018-28호)(20180503).pdf
+source_path: 법제처 DRF API(law_sync.py) 취득 — 조문 원문은 document_chunks 참조
 target_space: https://confluence.tde.sktelecom.com/spaces/~1108400/
 ---
 
@@ -45,6 +45,14 @@ target_space: https://confluence.tde.sktelecom.com/spaces/~1108400/
 
 - **생활무선국**: 개인의 일상생활에 자유로이 사용하기 위하여 법 제58조의2제1항에 따른 적합성평가를 받은 무선기기를 이용하여 개설하는 무선국
 
+# 별표·서식 목록
+
+- **별표·별지 서식 없음.** 조문 원문(document_chunks)은 제1조~제3조와 부칙 1건뿐이며, 업무·무선국 구분이 모두 조문 본문에 직접 열거되어 있다.
+
+# 부칙
+
+- 부칙 <제2018-28호, 2018. 5. 3.> — 고시한 날부터 시행. 경과조치·적용례 없음(현행 판본에 남아 있는 부칙은 이 1건뿐).
+
 # 실무 체크리스트
 
 - [ ] 위성업무 무선국 허가·분류 시 해당 업무가 위 6종 중 어디에 해당하는지 확인
@@ -58,4 +66,4 @@ target_space: https://confluence.tde.sktelecom.com/spaces/~1108400/
 
 # Citations
 
-- 무선국이 하는 업무 및 무선국의 분류(과학기술정보통신부고시 제2018-28호, 시행 2018.5.3.) 제1~3조, 부칙
+- 무선국이 하는 업무 및 무선국의 분류(과학기술정보통신부고시 제2018-28호, 시행 2018.5.3.) 제1조(목적)·제2조(업무의 분류)·제3조(무선국의 분류) 및 부칙 1건. 조문 원문은 법제처 DRF API로 취득하여 `document_chunks`에 적재

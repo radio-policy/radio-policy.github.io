@@ -2,14 +2,14 @@
 type: Regulation
 title: 국가회계법 시행령
 description: 「국가회계법」에서 위임된 사항과 시행에 필요한 사항(회계책임관 업무, 국가회계기준 업무 위탁, 기금결산 회계법인 감사, 결산보고서 세입세출·수입지출결산 작성사항 및 부속서류, 회계장부 비치, 실지 지도·조사, 회계관계공무원 교육)을 규정하는 대통령령
-resource: 국가회계법 시행령(대통령령)(제35947호)(20260102).pdf
+resource: 법제처 DRF API(law_sync.py) 취득 — 조문 원문은 document_chunks 참조
 tags: [national-accounting, enforcement-decree, settlement, fund-audit, financial-statements, accounting-standards, regulation, compliance]
 timestamp: 2026-07-02T00:00:00Z
 law_type: 대통령령
 law_number: 제35947호
 enforcement_date: 2026-01-02
 competent_authority: 재정경제부(회계결산과) 044-215-5431
-source_path: C:\Users\SKTelecom\Desktop\팀 관련 규제 자료\추가 법령 - 20260615\국가회계법 시행령(대통령령)(제35947호)(20260102).pdf
+source_path: 법제처 DRF API(law_sync.py) 취득 — 조문 원문은 document_chunks 참조
 target_space: https://confluence.tde.sktelecom.com/spaces/~1108400/
 ---
 
@@ -74,7 +74,11 @@ target_space: https://confluence.tde.sktelecom.com/spaces/~1108400/
 - 실무 영향: 소속 회계관계공무원 교육훈련 참여·수요 조사 관리.
 
 # 별표·서식 목록
-- 본 시행령에는 별표·서식이 규정되어 있지 않음. 결산보고서·부속서류의 구체 서식은 재정경제부장관이 정하는 지침·고시 및 국가회계기준(재정경제부령)에 위임.
+- **별표·별지서식 없음**(법제처 등재 조문 전문 기준 확인). 결산보고서·부속서류의 구체 서식은 재정경제부장관이 정하는 지침·고시 및 국가회계기준(재정경제부령)에 위임.
+
+# 부칙 주요 사항
+- 부칙(재정경제부 직제) <제35947호, 2025.12.30.> 제1조: 이 영은 2026.1.2.부터 시행. 제6조<17>에서 국가회계법 시행령의 "기획재정부장관"을 "재정경제부장관"(일부 조항은 "재정경제부장관 및 기획예산처장관")으로 개정.
+- 부칙 <제21361호, 2009.3.25.> 제2조(적용례): 제3조~제5조는 2009회계연도 결산부터, 제5조제2항은 2010회계연도 결산부터 적용.
 
 # 실무 체크리스트
 - [ ] 회계책임관 직무에 결산 작성·분석 및 성과관리 포함 여부 반영(제1조의2)

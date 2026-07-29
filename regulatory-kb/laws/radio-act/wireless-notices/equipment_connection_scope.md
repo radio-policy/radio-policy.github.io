@@ -2,14 +2,14 @@
 type: Notice
 title: 무선설비의 접속사용 범위
 description: 전파법 제25조제2항에 따라 서로 다른 무선통신망 간 무선설비의 접속·사용이 허용되는 4가지 예외 범위(소방-응급의료, 재난관리기관 간, 재난안전통신망-이동통신, 마을 공지사항 간이무선국)를 정한 과학기술정보통신부고시.
-resource: 무선설비의 접속사용 범위(과학기술정보통신부고시)(제2024-34호)(20240819).pdf
+resource: 법제처 DRF API(law_sync.py) 취득 — 조문 원문은 document_chunks 참조
 tags: [radio, notice, wireless, equipment, disaster, interconnection]
 timestamp: 2026-07-02T00:00:00Z
 law_type: 과학기술정보통신부고시
 law_number: 제2024-34호
 enforcement_date: 2024-08-19
 competent_authority: 과학기술정보통신부
-source_path: C:\Users\SKTelecom\Desktop\팀 관련 규제 자료\무선 행정규칙\무선설비의 접속사용 범위(과학기술정보통신부고시)(제2024-34호)(20240819).pdf
+source_path: 법제처 DRF API(law_sync.py) 취득 — 조문 원문은 document_chunks 참조
 target_space: https://confluence.tde.sktelecom.com/spaces/~1108400/
 ---
 
@@ -42,6 +42,15 @@ target_space: https://confluence.tde.sktelecom.com/spaces/~1108400/
 ## 제3조 재검토기한
 
 - 2019.1.1 기준 매 3년(매 3년째 12월 31일)마다 타당성 검토
+
+# 별표·서식 목록
+
+- **별표·별지서식 없음.** 제1조(목적)·제2조(허용범위)·제3조(재검토기한) 3개 조문만으로 구성되며, 허용범위는 제2조 각 호에 직접 열거된다.
+
+# 부칙
+
+- 부칙 <제2024-34호, 2024.8.19.>: 발령한 날부터 시행(일부개정). 등재 부칙 이력은 제2008-31호 → 제2013-175호 → 제2016-65호 → 제2018-77호 → 제2020-5호 → 제2024-34호.
+- 각 부칙은 시행일만 규정하며, 경과조치·적용례는 없다(개정 즉시 새 허용범위 적용).
 
 # 실무 체크리스트
 

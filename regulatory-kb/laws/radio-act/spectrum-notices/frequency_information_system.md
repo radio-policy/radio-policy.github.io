@@ -2,14 +2,14 @@
 type: Notice
 title: 주파수 종합정보시스템 구축 및 운영에 관한 고시
 description: 전파법 시행령 제85조에 근거하여 주파수이용현황을 대국민 공개하는 종합정보시스템(spectrummap.kr)의 구축·운영 주체, 운영기관(한국방송통신전파진흥원)의 보고 의무, 정보 연계 절차를 규정한 과학기술정보통신부 고시.
-resource: 주파수 종합정보시스템 구축 및 운영에 관한 고시(과학기술정보통신부고시)(제2018-16호)(20180312).pdf
+resource: 주파수 종합정보시스템 구축 및 운영에 관한 고시(과학기술정보통신부고시)(제2018-16호)(20180312)
 tags: [radio, spectrum]
 timestamp: 2026-07-02T00:00:00Z
 law_type: 과학기술정보통신부고시
 law_number: 제2018-16호
 enforcement_date: 2018-03-12
 competent_authority: 과학기술정보통신부
-source_path: C:\Users\SKTelecom\Desktop\팀 관련 규제 자료\주파수 행정규칙\주파수 종합정보시스템 구축 및 운영에 관한 고시(과학기술정보통신부고시)(제2018-16호)(20180312).pdf
+source_path: 법제처 DRF API(law_sync.py) 취득 — 조문 원문은 document_chunks 참조
 target_space: https://confluence.tde.sktelecom.com/spaces/~1108400/
 ---
 
@@ -47,7 +47,13 @@ target_space: https://confluence.tde.sktelecom.com/spaces/~1108400/
 
 # 별표·서식 목록
 
-- **[별표 1] 주파수 종합정보시스템 인터넷 주소**: http://spectrummap.kr
+본 고시의 별표는 **별표 1 한 건뿐이며 별지서식은 없다**(document_chunks 확인).
+
+- **[별표 1] 주파수 종합정보시스템 인터넷 주소** — 표 안에 `ㅇ http://spectrummap.kr` 한 줄만 기재된 별표다(제4조제1항 관련). 즉 공개 창구 URL 자체가 별표로 고시되어 있어, 주소가 바뀌려면 고시 개정이 필요하다.
+
+# 부칙(시행일)
+
+- **부칙 <제2018-16호, 2018. 3. 12.>**: 이 고시는 **발령한 날부터 시행**한다. 제정 고시이므로 경과조치·적용례는 없다.
 
 # 실무 체크리스트
 
@@ -64,6 +70,6 @@ target_space: https://confluence.tde.sktelecom.com/spaces/~1108400/
 
 # Citations
 
-- 주파수 종합정보시스템 구축 및 운영에 관한 고시(과학기술정보통신부고시 제2018-16호, 2018. 3. 12. 제정·시행) 제1조~제7조, 부칙, 별표1.
+- 주파수 종합정보시스템 구축 및 운영에 관한 고시(과학기술정보통신부고시 제2018-16호, 2018. 3. 12. 제정·시행) 제1조~제7조, 부칙, 별표 1 — 원문은 법제처 DRF API 취득본(document_chunks) 참조.
 - 「전파법 시행령」 제85조(종합정보시스템 구축·공개), 제4조제1항(조사 대상).
 - 「전파법」 제66조(한국방송통신전파진흥원).

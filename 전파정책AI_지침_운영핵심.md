@@ -295,6 +295,38 @@ python law_sync.py --reingest --doc-name "<문서명>"   # 1건만
 - 재적재 후 `law_pending.watch_doc_name`이 새 문서명으로 자동 이관된다(시행예정 연결 유지). **인용망 재구축(`build_law_citation_graph.py`)은 수동으로 한 번 돌릴 것.**
 - **문서명 관례가 매칭의 전제**: `법령명(법종)(제N호)(YYYYMMDD)`. 관례를 벗어나면 `unmatched`로 뜨고 수동 확인 필요. 법종 괄호가 아예 없는 문서(보도자료 등)는 자동 `excluded`.
 - **기관명 변경 대응**: `ORG_ALIASES`(방송통신위원회→방송미디어통신위원회 등)로 1차 검색 실패 시 재검색. 이 경우 법령명 자체가 바뀌므로 구버전 정리는 감시가 지목한 문서명(prev_doc_name)으로 처리한다 — 빠뜨리면 구버전이 current로 남아 자문이 옛 규정을 답한다.
+- **재적재 후 반드시 정합성 점검.** 실행이 끝났다고 끝난 게 아니다 — 아래 4종을 확인한다.
+  ```sql
+  -- ① law_watch가 가리키는 문서에 현행 청크가 없는가(구본만 강등된 공백)
+  select w.doc_name from law_watch w where w.watch_status='watching'
+    and not exists (select 1 from document_chunks c where c.doc_name=w.doc_name and c.status='current');
+  -- ② chunk_index 중복(재시도가 만든 중복 삽입) — status 구분 없이 전수로 볼 것
+  select status, doc_name from document_chunks group by 1,2
+   having count(*) > count(distinct chunk_index);
+  -- ③ 임시 접미가 current로 남았는가
+  select distinct doc_name from document_chunks where status='current'
+    and (doc_name like '%[교체중]' or doc_name like '%[PDF원본]');
+  -- ④ 부분 삽입(배치 경계에서 끊긴 문서). 삽입 배치가 50이므로 청크 수가 50의 배수면 의심
+  select doc_name, count(*) from document_chunks where status='current' and law_id is not null
+   group by 1 having count(*) % 50 = 0;
+  -- ⑤ 감시 사각지대 — 현행 문서인데 law_watch에 행이 없는 것
+  select distinct c.doc_name from document_chunks c
+   where c.status='current' and c.doc_category not in ('ITU-R','보도자료','추가지식','기타')
+     and not exists (select 1 from law_watch w where w.doc_name = c.doc_name);
+  -- ⑥ 임베딩 누락 (재적재를 --no-backfill로 돌린 뒤 백필을 안 하면 남는다)
+  select doc_name, count(*) from document_chunks where embedding is null group by 1;
+  -- ⑦ 부칙·별표 기능 추가 전에 적재된 문서가 남았는가
+  select doc_name from document_chunks where status='current' and law_id is not null
+   group by 1 having count(*) filter (where article_no like '부칙%') = 0;
+  ```
+  ②는 `current`만 보면 놓친다(`superseded`에서 2건이 뒤늦게 나왔다). ⑦은 도중에 기능을 추가하면 그 전에 처리된 문서가 구버전 상태로 남기 때문이다(실제로 6건이 그랬다).
+
+  **④가 가장 위험하다.** 대한민국 주파수 분배표는 API가 750,112자(1,089청크)를 정상적으로 주는데도 DB에는 **150청크(배치 3개)만** 들어간 채 방치돼 있었다. 삽입 도중 timeout이 났고, 이미 `law_id`가 붙어 있어 이후 재적재 대상에서도 빠져 아무도 몰랐다 — 이동통신 대역과 K주석 전체가 자문에서 빠져 있었다. 지금은 `reingest_one`이 **삽입 후 저장 건수를 검증**해 다르면 예외를 던진다.
+
+  **⑤는 stale 정리의 부작용이다.** "신본이 있으니 구 `law_watch` 행은 stale"이라고 판단해 지웠는데, 실은 신본 등재가 실패해 새 행이 만들어지지 않은 상태였다. 그 문서는 감시 대상에서 통째로 사라진다 — **law_watch 행을 지우기 전에 새 doc_name의 행이 실제로 있는지 확인할 것.**
+
+- **큰 문서에 `--force` 재시도를 반복하지 말 것.** 1회차가 성공해도 2회차가 같은 문서를 다시 처리하다 timeout이 나면, 온전한 데이터가 `[교체중]` 이름에 남고 정식 이름에는 부분 삽입분만 남는다(주파수 분배표에서 실제 발생). 성공 로그(`검증 완료`)를 확인하고 멈출 것.
+- **재적재 불가 사례가 있다.** 법제처에 등록돼 있어도 `조문내용`·`부칙`이 빈 문자열이고 **첨부파일만** 있는 경우가 있다(2012년 '공고' 계열). 이때는 `조문 취득 결과가 비어 있음 — 중단`으로 끝나며 재시도로 해결되지 않는다 — PDF 등재본을 그대로 두는 것이 맞다.
 - **조문 취득 범위**: `law_sync.py`는 **조문 + 부칙 + 별표**를 모두 가져온다. 응답의 `조문.조문단위`, `부칙`, `별표.별표단위` 세 곳을 읽어야 한다 — 처음에 조문만 읽어 부칙이 통째로 빠졌고(9건 중 8건), 그 상태로 "API는 별표를 주지 않는다"고 잘못 단정했다.
   - **부칙**은 응답 모양이 두 가지다. 법령은 `부칙단위[{내용,번호,일자}]`, 행정규칙은 `{부칙내용:[...], 부칙공포번호:[...], 부칙공포일자:[...]}` 병렬 배열.
   - **부칙은 최근 15건, 1건당 6,000자 상한.** 정부조직법처럼 개편이 잦은 법은 '다른 법률의 개정'이 수백 개 법률을 나열해 부칙만 1,131청크가 된다(조문의 20배). 시행일·경과조치·적용례는 부칙 앞머리에 있다.

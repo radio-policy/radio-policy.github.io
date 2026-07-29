@@ -2,14 +2,14 @@
 type: Notice
 title: 지방자치단체 기간통신사업 적합성 평가 외부전문기관
 description: 「전기통신사업법」제7조제3항 및 시행령 제11조의2제1항에 따라 지방자치단체가 기간통신사업을 하려 할 때 적합성 평가를 수행할 외부전문기관을 정보통신정책연구원(KISDI)으로 지정한 과학기술정보통신부 고시.
-resource: 지방자치단체 기간통신사업 적합성 평가 외부전문기관(과학기술정보통신부고시)(제2024-13호)(20240322).pdf
+resource: 법제처 DRF API(law_sync.py) 취득 — 조문 원문은 document_chunks 참조
 tags: [radio, conformity-assessment, telecom]
 timestamp: 2026-07-02T00:00:00Z
 law_type: 과학기술정보통신부고시
 law_number: 제2024-13호
 enforcement_date: 2024-03-22
 competent_authority: 과학기술정보통신부
-source_path: C:\Users\SKTelecom\Desktop\팀 관련 규제 자료\적합성평가 행정규칙\지방자치단체 기간통신사업 적합성 평가 외부전문기관(과학기술정보통신부고시)(제2024-13호)(20240322).pdf
+source_path: 법제처 DRF API(law_sync.py) 취득 — 조문 원문은 document_chunks 참조
 target_space: https://confluence.tde.sktelecom.com/spaces/~1108400/
 ---
 
@@ -32,7 +32,11 @@ target_space: https://confluence.tde.sktelecom.com/spaces/~1108400/
 - 「훈령·예규 등의 발령 및 관리에 관한 규정」에 따라 2024년 1월 1일 기준 매 3년(매 3년째 12월 31일까지)마다 타당성 검토.
 
 ## 시행(부칙)
-- 발령일(2024.3.22.)부터 시행.
+- 부칙 <제2024-13호, 2024. 3. 22.>: "이 고시는 발령일부터 시행한다." 제정 고시이므로 경과조치·적용례는 없다.
+
+# 별표·서식 목록
+
+- **별표·별지·서식 없음.** 이 고시는 제1조(외부전문기관), 제2조(재검토기한), 부칙 1건이 전부다(원문 확인). 평가 기준·절차·신청서식은 이 고시가 아니라 「전기통신사업법」 및 같은 법 시행령·시행규칙에서 확인해야 한다.
 
 # 실무 체크리스트
 
@@ -47,5 +51,4 @@ target_space: https://confluence.tde.sktelecom.com/spaces/~1108400/
 # Citations
 
 - 과학기술정보통신부고시 제2024-13호(2024.3.22. 제정, 시행 2024.3.22.), 통신자원정책과.
-- 제1조(외부전문기관), 제2조(재검토기한), 부칙(제2024-13호).
-- 원문 PDF: 국가법령정보센터 게시본(source_path 참조).
+- 제1조(외부전문기관), 제2조(재검토기한), 부칙(제2024-13호) — 법제처 DRF API 취득본(document_chunks). 별표·별지 없음.

@@ -2,14 +2,14 @@
 type: Notice
 title: 방송통신분야 적합성평가기관 비교숙련도시험 운영규정
 description: 「방송통신기자재등 시험기관의 지정 및 관리에 관한 고시」에 따른 지정시험기관 비교숙련도시험(proficiency test)의 시행주기·계획·시료·실시·통계처리·시정조치·운영위원회 등 세부절차를 정한 국립전파연구원 공고.
-resource: 방송통신분야 적합성평가기관 비교숙련도시험 운영규정(국립전파연구원공고)(제2012-12호)(20120424).pdf
+resource: 법제처 DRF API(law_sync.py) 취득 — 조문 원문은 document_chunks 참조
 tags: [radio, conformity-assessment, proficiency-test]
 timestamp: 2026-07-02T00:00:00Z
 law_type: 국립전파연구원공고
 law_number: 제2012-12호
 enforcement_date: 2012-04-24
 competent_authority: 국립전파연구원
-source_path: C:\Users\SKTelecom\Desktop\팀 관련 규제 자료\적합성평가 행정규칙\방송통신분야 적합성평가기관 비교숙련도시험 운영규정(국립전파연구원공고)(제2012-12호)(20120424).pdf
+source_path: 법제처 DRF API(law_sync.py) 취득 — 조문 원문은 document_chunks 참조
 target_space: https://confluence.tde.sktelecom.com/spaces/~1108400/
 ---
 
@@ -57,7 +57,13 @@ target_space: https://confluence.tde.sktelecom.com/spaces/~1108400/
 
 # 별표·서식 목록
 
-- [서식] 비교숙련도시험 참가신청서
+- **별표 없음.** 조문 원문(document_chunks)은 제1조~제14조와 부칙 1건뿐이며, 별표는 존재하지 않는다.
+- [별지서식] 비교숙련도시험 **참가신청서** — 제5조제2항이 인용(시험기관이 숙련도시험 참가 시 제출). 서식 본문은 조문 단위로 적재되어 있지 않다.
+- 시험 결과보고(제8조제1항)는 별지 번호 없이 "지정된 서식"으로만 규정되어, 원장이 시행 때마다 정하는 결과보고 서식을 사용한다.
+
+# 부칙
+
+- 부칙 <제2012-12호, 2012. 4. 24.> — 공고한 날로부터 시행. 경과조치·적용례 없음(현행 판본에 남아 있는 부칙은 이 1건뿐).
 
 # 실무 체크리스트
 
@@ -76,6 +82,6 @@ target_space: https://confluence.tde.sktelecom.com/spaces/~1108400/
 
 # Citations
 
-- 방송통신분야 적합성평가기관 비교숙련도시험 운영규정(국립전파연구원공고 제2012-12호, 2012.4.24. 일부개정·시행) 제1조~제14조 및 부칙, 참가신청서 서식.
+- 방송통신분야 적합성평가기관 비교숙련도시험 운영규정(국립전파연구원공고 제2012-12호, 2012.4.24. 일부개정·시행) 제1조~제14조 및 부칙. 조문 원문은 법제처 DRF API로 취득하여 `document_chunks`에 적재.
 - 상위 「방송통신기자재등 시험기관의 지정 및 관리에 관한 고시」(비교숙련도시험 조항).
 - ISO/IEC 17000·17011·17025·17043, ISO 13528(통계처리) — 준용 국제표준.
