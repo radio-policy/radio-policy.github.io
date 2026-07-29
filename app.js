@@ -1203,6 +1203,9 @@ async function callClaude(userText, onDelta) {
   const confluenceContext = buildConfluenceContext(await confluenceP); // 팀 컨플루언스 실시간 검색(내부 문서)
   const kbContext     = buildKbContext(await kbP);                // 법령·규제 요약 지식베이스(regulatory-kb, 현행본)
   const pendingContext = await buildPendingContext(ragChunks);    // 인용 조문의 시행예정 개정본(Phase 3)
+  // 배지용 스냅샷 — lastPendingNotice는 보고서 초안 경로와 공유하는 전역이라,
+  // 자문 스트리밍(수 분) 중 보고서를 생성하면 답변 완료 시점엔 다른 값이 들어 있다.
+  window._advPendingNotice = lastPendingNotice;
   const webSearchGuide = '\n\n---\n\n[웹 검색 도구 사용 지침]\n해외 규제·제도 비교, 최신 정책 동향 등 위 참조 자료(법령 RAG·추가 지식·뉴스)에 없는 사실 정보가 필요하면 web_search 도구로 확인 후 답변하세요. 특히 "한국 고유", "유일한", "주요국 중 한국만" 등 국가 간 비교 단정 표현은 검색으로 확인하기 전에는 사용하지 마세요. 국내 법령 해석은 RAG 원문을 최우선으로 하고 웹 검색은 보조로만 사용하세요.';
   // 법령 관계도 자동 축적: 답변 말미에 기계용 <lawmap> 블록을 덧붙이게 함 (별도 API 호출 없음 — 출력 몇 줄 추가뿐)
   const lawTopics = await lawTopicsP;
@@ -1712,9 +1715,9 @@ async function sendChat() {
     }
 
     // 시행예정 개정본이 컨텍스트에 들어갔음을 가시화 — 답변이 현행 기준임을 명확히 하기 위함
-    if (lastPendingNotice && lastPendingNotice.length) {
+    if (window._advPendingNotice && window._advPendingNotice.length) {
       const seen = {};
-      const items = lastPendingNotice.filter(function(p) {
+      const items = window._advPendingNotice.filter(function(p) {
         const k = p.law_name + '|' + p.enf_date;
         if (seen[k]) return false; seen[k] = 1; return true;
       });
@@ -2578,11 +2581,11 @@ function _kbParseName(raw) {
   var name = String(raw || '').replace(/\.(pdf|md|pptx|txt)$/i, '').replace(/\s*\(\d\)\s*$/, '');
   var dup = /^_중복_/.test(name);
   name = name.replace(/^_중복_/, '');
-  var kind = (name.match(/\((법률|대통령령|[가-힣]+부령|[가-힣]+고시|총리령)\)/) || [])[1] || '';
+  var kind = (name.match(/\(([가-힣]*(?:법률|대통령령|총리령|부령|고시|훈령|공고|예규|위원회규칙|연구원규칙))\)/) || [])[1] || '';
   var no = (name.match(/\(제([0-9\-]+)호\)/) || [])[1] || '';
   var date = (name.match(/\((20\d{6})\)/) || [])[1] || '';
   var clean = name
-    .replace(/\((법률|대통령령|[가-힣]+부령|[가-힣]+고시|총리령)\)/g, '')
+    .replace(/\(([가-힣]*(?:법률|대통령령|총리령|부령|고시|훈령|공고|예규|위원회규칙|연구원규칙))\)/g, '')
     .replace(/\(제[0-9\-]+호\)/g, '')
     .replace(/\(20\d{6}\)/g, '')
     .trim();
@@ -2643,7 +2646,7 @@ async function loadKbDocs(force) {
         return '<div class="file-item" style="cursor:pointer" title="클릭하면 원문(조문)을 볼 수 있습니다" ' +
           'onclick="openKbDoc(&quot;' + escHtml(it.docName) + '&quot;)">' +
           '<div class="file-icon fi-purple"><i class="ti ti-file-text"></i></div>' +
-          '<div style="flex:1;min-width:0"><div class="file-name">' + it.p.clean + dupTag + '</div>' +
+          '<div style="flex:1;min-width:0"><div class="file-name">' + escHtml(it.p.clean) + dupTag + '</div>' +
           '<div class="file-size">' + (it.p.info ? it.p.info + ' · ' : '') + it.chunks + '청크</div></div>' + badge +
           '<i class="ti ti-chevron-right" style="color:var(--text-tertiary);font-size:15px;flex-shrink:0"></i></div>';
       }).join('');
@@ -2651,7 +2654,12 @@ async function loadKbDocs(force) {
         '<div class="card" style="cursor:default;margin-bottom:14px">' + fileRows + '</div>';
     }).join('');
     var tot = document.getElementById('kb-total');
-    if (tot) tot.textContent = total;
+    // 총계는 토글과 무관하게 '현행본 수'로 고정 — 토글에 따라 숫자가 출렁이면
+    // 문서가 늘거나 준 것으로 오해된다. 감춤 건수는 괄호로 병기.
+    if (tot) {
+      var curCount = all.filter(function(r) { return !r.status || r.status === 'current'; }).length;
+      tot.textContent = curCount + (_kbOlderCount ? ' (+비현행 ' + _kbOlderCount + ')' : '');
+    }
     // 감춘 구버전·시행예정본을 알리고 펼칠 수 있게 한다(감췄다는 사실 자체를 숨기지 않는다)
     var note = '';
     if (_kbOlderCount) {

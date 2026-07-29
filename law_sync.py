@@ -187,7 +187,7 @@ def _addenda(body):
                          _txt(dts[i]) if i < len(dts) else ''))
 
     out = []
-    for text, no, dt in rows:
+    for idx, (text, no, dt) in enumerate(rows):
         text = text.strip()
         if len(text) < 10:
             continue
@@ -197,12 +197,16 @@ def _addenda(body):
         if len(text) > ADDENDA_MAX_CHARS:
             text = text[:ADDENDA_MAX_CHARS] + '\n…(이하 「다른 법률의 개정」 등 생략 — 원문은 국가법령정보센터 참조)'
         label = '부칙' + (f' 제{no}호' if no else '') + (f'({dt})' if dt else '')
-        out.append((label, text, dt))
+        if not no and not dt:
+            label = f'부칙 #{idx + 1}'          # 번호·날짜가 모두 없으면 순번으로 구분
+        out.append((label, text, dt, idx))
 
     # 최근 부칙 우선. 오래된 개편 부칙까지 전부 담으면 조문보다 부칙이 많아져
     # 검색이 옛 경과조치로 오염된다. 필요하면 구 PDF본(superseded)이나 원문을 본다.
-    out.sort(key=lambda x: x[2] or '', reverse=True)
-    return [(lbl, txt) for lbl, txt, _ in out[:ADDENDA_KEEP]]
+    # 공포일자가 없는 행은 API 원순서상 '뒤쪽 = 최신'이므로 원래 인덱스를 보조키로 쓴다
+    # — 빈 문자열 키로 두면 항상 맨 뒤로 밀려 최신 부칙(현행 시행일 포함)이 먼저 잘린다.
+    out.sort(key=lambda x: (x[2] or '', x[3]), reverse=True)
+    return [(lbl, txt) for lbl, txt, _, _ in out[:ADDENDA_KEEP]]
 
 
 def _tables(body):
@@ -412,8 +416,36 @@ def sync_one(sb, watch_row, args):
               ", ".join(f"{k.split('(')[-2] if '(' in k else k}" for k in list(existing)[:3]))
 
     if new_doc in existing:
-        print("  → 이미 등재된 버전입니다. 건너뜀")
-        return False
+        # 신본이 이미 있어도 그냥 건너뛰면 안 된다 — 앞선 실행이 '삽입 성공 → 강등 실패'로
+        # 죽었을 수 있고, 그때 구본이 current로 영영 남는다(재진입 구멍). 상태만 정리한다.
+        stale = [d for d, v in existing.items()
+                 if d != new_doc and v.get('status') == 'current']
+        if not stale:
+            print("  → 이미 등재된 버전입니다. 건너뜀")
+            return False
+        print(f"  → 신본은 이미 등재됨. 앞선 실행이 남긴 current 구본 {len(stale)}건만 정리")
+        if args.dry_run:
+            print("  [dry-run] DB 변경 없음")
+            return True
+        today0 = datetime.now().strftime('%Y%m%d')
+        for old_doc in stale:
+            st = 'pending' if (existing[old_doc].get('enf') or '') > today0 else 'superseded'
+            _update_doc_chunks(sb, old_doc, {'status': st})
+            print(f"  ✓ {st}: {old_doc[:64]}")
+        now0 = datetime.now(timezone.utc).isoformat()
+        sb.table('law_watch').upsert({
+            'doc_name': new_doc, 'law_name': law_name,
+            'law_type_token': meta['law_type_token'], 'api_target': target,
+            'law_id': law_id, 'registered_mst': mst,
+            'registered_law_no': law_no, 'registered_enf': enf,
+            'latest_mst': mst, 'latest_law_no': law_no, 'latest_enf': enf,
+            'watch_status': 'watching', 'sync_status': 'current',
+            'last_checked_at': now0, 'updated_at': now0,
+            'note': f'재진입 상태 정리 ({datetime.now():%Y-%m-%d})',
+        }, on_conflict='doc_name').execute()
+        if doc_name != new_doc:
+            sb.table('law_watch').delete().eq('doc_name', doc_name).execute()
+        return True
 
     if args.dry_run:
         print("  [dry-run] DB 변경 없음")
@@ -430,14 +462,20 @@ def sync_one(sb, watch_row, args):
     } for i, c in enumerate(chunks)]
     for i in range(0, len(payload), 50):
         sb.table('document_chunks').insert(payload[i:i + 50]).execute()
-    print(f"  ✓ 신규 등재 {len(payload)}청크")
+    # 삽입 검증 — 부분 삽입이 '완료'로 위장되는 것을 막는다(reingest_one과 동일 가드)
+    got = ((sb.table('document_chunks').select('id', count='exact')
+            .eq('doc_name', new_doc).limit(1).execute()).count) or 0
+    if got != len(payload):
+        raise RuntimeError(f"삽입 검증 실패: {len(payload)}청크 중 {got}청크만 확인 — 재실행 필요")
+    print(f"  ✓ 신규 등재 {len(payload)}청크 (검증 완료)")
 
     # ② 기존 버전 상태 정리 — 시행일이 미래면 pending(시행예정본), 과거면 superseded
+    #    대형 문서 단문 UPDATE는 timeout(57014)이 나므로 배치 헬퍼 사용
     today = datetime.now().strftime('%Y%m%d')
     pend, sup = [], []
     for old_doc, info in existing.items():
         st = 'pending' if (info['enf'] or '') > today else 'superseded'
-        sb.table('document_chunks').update({'status': st}).eq('doc_name', old_doc).execute()
+        _update_doc_chunks(sb, old_doc, {'status': st})
         (pend if st == 'pending' else sup).append(old_doc)
     if sup:
         print(f"  ✓ 구버전 {len(sup)}건 → superseded")
@@ -449,7 +487,7 @@ def sync_one(sb, watch_row, args):
         olds = sorted(((k, v) for k, v in existing.items() if k in sup),
                       key=lambda kv: kv[1]['enf'], reverse=True)
         for old_doc, info in olds[KEEP_VERSIONS - 1:]:
-            sb.table('document_chunks').delete().eq('doc_name', old_doc).execute()
+            _delete_doc_chunks(sb, old_doc)
             print(f"  ✓ 보존 상한 초과 삭제: {old_doc[:60]} ({info['count']}청크)")
 
     # ④ law_watch 갱신 — 기존 행은 새 문서명으로 이관
@@ -562,16 +600,18 @@ def promote_due(sb, dry_run=False):
             done += 1
             continue
         now = datetime.now(timezone.utc).isoformat()
-        # ① 같은 법령의 기존 current를 superseded로 (승격본 자신은 제외)
+        # ① 승격을 먼저 한다. 강등을 먼저 하면 승격 UPDATE가 timeout으로 죽었을 때
+        #    그 법령의 current 청크가 0이 된다(reingest에서 실제 발생한 사고와 동일 모드).
+        #    잠깐 current가 두 벌 공존하는 쪽이 0벌보다 낫다. 대형 문서 대비 배치 UPDATE.
         existing = fetch_existing(sb, law_name)
+        _update_doc_chunks(sb, doc, {'status': 'current'})
+        # ② 직전 current를 superseded로 (승격본 자신은 제외)
         for old_doc, info in existing.items():
             if old_doc == doc or info.get('status') != 'current':
                 continue
-            sb.table('document_chunks').update({'status': 'superseded'}).eq('doc_name', old_doc).execute()
+            _update_doc_chunks(sb, old_doc, {'status': 'superseded'})
             sb.table('law_watch').delete().eq('doc_name', old_doc).execute()
             print(f"      구버전 → superseded: {old_doc[:64]}")
-        # ② 승격
-        sb.table('document_chunks').update({'status': 'current'}).eq('doc_name', doc).execute()
         sb.table('law_pending').update({
             'sync_state': 'promoted', 'promoted_at': now, 'updated_at': now,
         }).eq('id', r['id']).execute()
@@ -592,9 +632,6 @@ def promote_due(sb, dry_run=False):
 
 
 # ── PDF 등재본의 API 재적재 ────────────────────────────────
-
-BYEOL_TABLE_RE = "위반횟수별|행정처분기준|과태료의 부과기준|1차 위반|별표"
-
 
 def _delete_doc_chunks(sb, doc_name):
     """청크 삭제를 배치로. 800청크가 넘는 문서를 한 번에 지우면 statement timeout(57014)이
@@ -665,7 +702,7 @@ def _pdf_damage(sb, doc_name):
               .limit(1).execute()).count) or len(rows)
     n = len(rows) or 1
     broken = round(sum(1 for x in rows if BROKEN_RE.search(x['content'] or '')) * total / n)
-    table = sum(1 for x in rows if re.search(r'위반횟수별|행정처분기준|과태료의 부과기준|1차 위반', x['content'] or ''))
+    table = sum(1 for x in rows if re.search(r'위반횟수별|행정처분기준|과태료의 부과기준|1차 위반', x['content'] or ''))  # 참고용 지표(판정에는 미사용)
     return total, broken, table
 
 
@@ -676,9 +713,8 @@ def reingest_one(sb, doc_name, args):
     중 188청크가 그 상태라 '가격경쟁'이 '가격\\n경쟁'으로 잘려 검색에 안 걸린다).
     조문 단위 청킹이 아니라 800자 단위라 article_no도 부정확하고 law_id도 비어 있다.
 
-    안전장치: 별표 표(행정처분기준·과태료 부과기준 등)가 들어 있는 문서는 거부한다.
-    법제처 조문 API는 별표를 주지 않으므로 그런 문서는 재적재가 곧 손실이다.
-    구본은 삭제하지 않고 superseded로 보존해 되돌릴 수 있게 한다.
+    API가 조문+부칙+별표를 모두 주므로(응답 '별표.별표단위'에 표 본문 포함) 재적재로
+    잃는 내용은 없다. 구본은 삭제하지 않고 superseded로 보존해 되돌릴 수 있게 한다.
     """
     meta = parse_doc_name(doc_name)
     if not meta:
@@ -688,11 +724,24 @@ def reingest_one(sb, doc_name, args):
     total, broken, table = _pdf_damage(sb, doc_name)
     print(f"\n▶ [재적재] {meta['law_name']}  ({total}청크, 손상 {broken}, 별표표 {table})")
 
-    # 과거에는 '별표 표가 있으면 거부'했다. API가 별표를 주지 않는다고 잘못 알았기 때문이다.
-    # 실제로는 응답의 '별표.별표단위'에 표 본문까지 들어 있어(전파법 시행령 43건,
-    # 적합성평가 고시 30건) 그 제약은 없다. 이제 조문+부칙+별표를 모두 가져온다.
+    # 앞선 시도가 '개명 → 삽입 → 검증 실패'로 죽으면 접미 붙은 구본이 current로 남는다.
+    # 그 상태에서 손상률만 보면 부분 삽입된 API 청크 때문에 "이미 API본"으로 오판하고
+    # 건너뛰어 사고가 고착된다 — 접미 잔존을 먼저 탐지해 무조건 재처리 경로로 태운다.
+    leftover = []
+    for suf in (' [교체중]', ' [PDF원본]'):
+        n = ((sb.table('document_chunks').select('id', count='exact')
+              .eq('doc_name', doc_name + suf).eq('status', 'current')
+              .limit(1).execute()).count) or 0
+        if n:
+            leftover.append((doc_name + suf, n))
+    if leftover:
+        print(f"  ⚠ 이전 실패의 잔존 감지: " +
+              ", ".join(f"{d[-20:]}({n}청크)" for d, n in leftover) + " — 복구 재처리")
+
     # API 적재본도 항·호 줄바꿈 때문에 손상 검출기가 몇 %는 잡는다(정보통신망법 211청크 중 9).
-    if total and broken * 100 < total * 30 and not args.force:
+    # 기준은 --min-broken(기본 30%). 잔존 복구 중이면 이 스킵을 타지 않는다.
+    min_broken = getattr(args, 'min_broken', 30) or 30
+    if total and broken * 100 < total * min_broken and not args.force and not leftover:
         print(f"  → 손상률 {round(broken*100/total)}% — 이미 API 적재본으로 판단. 건너뜀(--force로 재취득)")
         return False
 
@@ -746,7 +795,20 @@ def reingest_one(sb, doc_name, args):
     # (statement timeout 등) 그 법령의 현행 청크가 0이 되어 자문에서 통째로 사라진다.
     # 실제로 병렬 재적재 중 3건이 그 상태가 됐다. 신본을 먼저 넣고 성공한 뒤에 구본을 내린다.
     old_doc = doc_name
-    if new_doc == doc_name:
+    if leftover:
+        # 앞선 시도가 이미 구본을 접미로 옮겨뒀다. 지금 doc_name 아래 남은 것은 그때
+        # 부분 삽입된 API 잔해이므로 지우고, 접미본을 구본으로 삼는다. already_api도
+        # doc_name의 잔해가 아니라 접미로 판정해야 한다 — 잔해 기준으로 True가 되면
+        # 마지막 단계에서 [PDF원본]을 삭제해 버린다.
+        _delete_doc_chunks(sb, doc_name)
+        pdfs = [d for d, _ in leftover if d.endswith(' [PDF원본]')]
+        for d, _ in leftover:
+            if pdfs and d.endswith(' [교체중]'):     # PDF원본이 있으면 교체중은 그 자체가 잔해
+                _delete_doc_chunks(sb, d)
+        old_doc = pdfs[0] if pdfs else leftover[0][0]
+        already_api = old_doc.endswith(' [교체중]')
+        print(f"  ✓ 부분 삽입 잔해 제거 — 구본: …{old_doc[-24:]}")
+    elif new_doc == doc_name:
         # 문서명이 같으면 이름이 충돌하므로 구본을 먼저 옮겨야 한다. 다만 status는
         # 그대로 current로 두어, 삽입이 실패해도 검색 공백이 생기지 않게 한다.
         # (already_api면 어차피 뒤에서 지울 것이라 접미는 임시 표식일 뿐이다)
@@ -823,7 +885,7 @@ def main():
     ap.add_argument('--reingest', action='store_true',
                     help='PDF 등재본을 법제처 API 조문으로 교체(--doc-name 또는 --reingest-laws)')
     ap.add_argument('--reingest-laws', action='store_true',
-                    help='법률(법률 계열) 중 PDF 손상본 전체를 재적재. 별표 표가 있는 문서는 자동 제외')
+                    help='법률(법률 계열) 중 PDF 손상본 전체를 재적재(조문+부칙+별표 취득)')
     ap.add_argument('--force', action='store_true', help='재적재 시 손상률 검사 무시(이미 API본도 재취득)')
     ap.add_argument('--reingest-all', action='store_true',
                     help='법률·시행령·부령·고시 통틀어 PDF 손상본 전체를 재적재')

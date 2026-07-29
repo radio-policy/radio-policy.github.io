@@ -137,8 +137,17 @@ create table if not exists public.document_chunks (
   effective_date text,
   embedding      extensions.vector(1024),
   file_path      text,
-  is_approved    boolean not null default true
+  is_approved    boolean not null default true,
+  -- 법령 버전 추적 (migration law_version_tracking, 2026-07-29)
+  law_id         text,                                -- 법제처 법령ID/행정규칙ID (API 적재본만)
+  law_mst        text,                                -- 법령일련번호/행정규칙일련번호
+  status         text not null default 'current'      -- current | pending(시행예정) | superseded(구버전)
 );
+create index if not exists idx_document_chunks_status on public.document_chunks(status);
+create index if not exists idx_document_chunks_law    on public.document_chunks(law_id, status);
+-- 백필 조회(embedding IS NULL) 가속 — 부분 인덱스 없이는 Seq Scan 5초+ (2026-07-30 실측)
+create index if not exists document_chunks_embedding_null_idx
+  on public.document_chunks (id) where embedding is null;
 
 -- 1-9) 보고서 샘플(형식·톤 학습용, 청킹 안 함) ------------------------------
 create table if not exists public.report_samples (
@@ -288,10 +297,14 @@ create index if not exists tech_terms_content_idx  on public.tech_terms using gi
 -- ===========================================================================
 
 -- 3-1) 시맨틱(벡터) 검색 -----------------------------------------------------
+-- only_current 기본 true — 구버전(superseded)·시행예정본(pending) 제외.
+-- ⚠ 인자 추가 시 구 시그니처를 반드시 DROP할 것. 인자 수가 다르면 CREATE OR REPLACE는
+--    새 오버로드를 만들고, 호출부가 옛 인자 수로 부르면 필터 없는 쪽이 조용히 쓰인다(배경역사 #31 후속2).
 create or replace function public.match_chunks_semantic(
   query_embedding extensions.vector,
   match_threshold double precision default 0.5,
-  match_count integer default 8)
+  match_count integer default 8,
+  only_current boolean default true)
 returns table(id bigint, doc_name text, doc_category text, chunk_index integer,
   content text, notice_no text, article_no text, effective_date text, similarity double precision)
 language sql stable security definer
@@ -301,6 +314,7 @@ as $$
          (1 - (embedding <=> query_embedding))::float as similarity
   from public.document_chunks
   where embedding is not null and is_approved
+    and (not only_current or status = 'current')
     and (1 - (embedding <=> query_embedding)) > match_threshold
   order by embedding <=> query_embedding
   limit match_count;
@@ -310,7 +324,8 @@ $$;
 create or replace function public.search_chunks_trgm(
   query_text text,
   match_threshold double precision default 0.12,
-  match_count integer default 8)
+  match_count integer default 8,
+  only_current boolean default true)
 returns table(id bigint, doc_name text, doc_category text, chunk_index integer,
   content text, notice_no text, article_no text, effective_date text, trgm_score double precision)
 language sql stable security definer
@@ -320,6 +335,7 @@ as $$
          extensions.word_similarity(query_text, content)::float as trgm_score
   from public.document_chunks
   where is_approved
+    and (not only_current or status = 'current')
     and extensions.word_similarity(query_text, content) > match_threshold
   order by trgm_score desc
   limit match_count;
@@ -369,17 +385,117 @@ as $$
 $$;
 
 -- 3-4) 지식베이스 문서 목록 --------------------------------------------------
+-- status 포함 — UI가 현행본만 기본 표시하고 구버전·시행예정을 토글로 감춘다(2026-07-30)
 create or replace function public.list_kb_documents()
-returns table(doc_category text, doc_name text, chunks bigint, embedded bigint, approved boolean)
+returns table(doc_category text, doc_name text, chunks bigint, embedded bigint,
+  approved boolean, status text)
 language sql stable
 as $$
   select min(doc_category) as doc_category, doc_name, count(*) as chunks,
          count(*) filter (where embedding is not null) as embedded,
-         bool_and(is_approved) as approved
+         bool_and(is_approved) as approved,
+         min(status) as status
   from public.document_chunks
   where doc_category is distinct from '보도자료'
   group by doc_name
   order by doc_name;
+$$;
+
+-- ===========================================================================
+-- 3b. 법령 자동 현행화 (law_watch.py / law_sync.py, 2026-07-29~30)
+-- ===========================================================================
+
+-- 감시 레지스트리 — 등재본 vs 법제처 현행본 대조 결과 (매일 11시 GitHub Actions)
+create table if not exists public.law_watch (
+  id                bigserial primary key,
+  doc_name          text unique not null,     -- 등재 문서명(document_chunks.doc_name)
+  law_name          text,
+  law_type_token    text,                     -- 법률/대통령령/부령/고시 …
+  api_target        text,                     -- law | admrul
+  law_id            text,
+  registered_mst    text, registered_law_no text, registered_enf text,
+  latest_mst        text, latest_law_no     text, latest_enf     text,
+  pending_mst       text, pending_law_no    text, pending_enf    text,  -- 요약(가장 이른 1건) — 전체는 law_pending
+  watch_status      text,                     -- watching | unmatched | excluded
+  sync_status       text,                     -- current | outdated | unknown
+  approved_at       timestamptz, approved_mst text,
+  last_checked_at   timestamptz,
+  note              text,
+  created_at        timestamptz default now(),
+  updated_at        timestamptz default now()
+);
+
+-- 시행예정본 추적(1:N — 정보통신망법처럼 시행일이 3개 걸리는 다단 시행 수용)
+create table if not exists public.law_pending (
+  id              bigserial primary key,
+  law_name        text not null,
+  law_id          text,
+  law_type_token  text,
+  api_target      text not null default 'law',
+  watch_doc_name  text,                       -- 감시 기준이 된 현행 등재본
+  mst             text not null,              -- (MST, 시행일)이 통합본 식별자 — 같은 MST가 시행일별 통합본을 가짐
+  law_no          text,
+  enf_date        text not null,              -- YYYYMMDD
+  doc_name        text,                       -- 적재된 경우 document_chunks.doc_name(status='pending')
+  sync_state      text not null default 'detected',  -- detected | loaded | promoted | obsolete
+  note            text,
+  detected_at     timestamptz not null default now(),
+  loaded_at       timestamptz, promoted_at timestamptz,
+  updated_at      timestamptz not null default now(),
+  constraint law_pending_uniq unique (law_name, mst, enf_date)
+);
+create index if not exists law_pending_state_idx on public.law_pending (sync_state, enf_date);
+create index if not exists law_pending_law_idx   on public.law_pending (law_name, enf_date);
+
+-- 3b-1) 조번호 정규화 — article_no의 제목을 떼고 번호만("48조의3(침해사고…)" → "48조의3")
+create or replace function public.norm_article_key(a text)
+returns text language sql immutable as $$
+  select (regexp_match(regexp_replace(coalesce(a, ''), '^제', ''),
+                       '^([0-9]+조(?:의[0-9]+)?)'))[1];
+$$;
+
+-- 3b-2) Phase 3 — 인용된 현행 조문에 대응하는 시행예정 조문 (자문·보고서 초안이 호출)
+-- (doc, key) 쌍으로 매칭 — 배열 2개를 따로 받으면 교차곱 오매칭이 난다
+create or replace function public.fetch_pending_articles(
+  p_pairs jsonb,                              -- [{"doc":"<현행 doc_name>","key":"48조의3"}, ...]
+  p_limit integer default 16)
+returns table(law_name text, enf_date text, law_no text, pending_doc text,
+  current_doc text, article_no text, content text)
+language sql stable as $$
+  with want as (
+    select distinct e->>'doc' as doc, e->>'key' as akey
+    from jsonb_array_elements(p_pairs) e
+    where coalesce(e->>'doc','') <> '' and coalesce(e->>'key','') <> ''
+  ), art as (
+    select p.law_name, p.enf_date, p.law_no, p.doc_name as pending_doc,
+           p.watch_doc_name as current_doc, c.article_no, w.akey,
+           string_agg(c.content, E'\n' order by c.chunk_index) as content
+    from want w
+    join law_pending p on p.watch_doc_name = w.doc and p.sync_state in ('detected','loaded')
+    join document_chunks c on c.doc_name = p.doc_name and c.status = 'pending'
+     and public.norm_article_key(c.article_no) = w.akey
+    group by 1,2,3,4,5,6,7
+  ), dedup as (
+    select art.*, lag(regexp_replace(content, '\s+', '', 'g'))
+      over (partition by current_doc, akey order by enf_date, article_no) as prev_norm
+    from art
+  )
+  select law_name, enf_date, law_no, pending_doc, current_doc, article_no, content
+  from dedup
+  where content !~ '^제[0-9]+조(의[0-9]+)?\s*삭제'
+    and (prev_norm is null or prev_norm <> regexp_replace(content, '\s+', '', 'g'))
+  order by enf_date, article_no
+  limit p_limit;
+$$;
+
+-- 3b-3) 인용 문서에 걸린 시행예정 일정(조문 매칭 없이도 시행 일정은 알림)
+create or replace function public.pending_versions_for_docs(p_docs text[])
+returns table(law_name text, current_doc text, law_no text, enf_date text, loaded boolean)
+language sql stable as $$
+  select p.law_name, p.watch_doc_name, p.law_no, p.enf_date, (p.sync_state = 'loaded')
+  from law_pending p
+  where p.sync_state in ('detected','loaded') and p.watch_doc_name = any(p_docs)
+  order by p.law_name, p.enf_date;
 $$;
 
 

@@ -261,17 +261,22 @@ def find_pending_rows(meta, target: str, current_hit, today: str):
     행정규칙   : admrul 검색이 현행본과 시행예정본을 함께 돌려주므로 추가 조회 없이
                  결과에서 시행일 > 오늘 인 행을 고른다.
     """
+    # 대조 기준 이름을 검색어와 함께 추적한다 — 별칭으로 재검색해 놓고 원래 이름과
+    # 대조하면, 기관명이 이름 중간에 박힌 규칙('…방송통신위원회 규칙'류)은 결과가
+    # 와도 매칭 0건이 되어 시행예정이 조용히 누락된다.
+    match_name, match_full = meta['law_name'], meta.get('full_name')
     if target == 'law':
         rows = drf_law_search(meta['law_name'], 'law', ef=True) or []
     else:
         rows = drf_law_search(meta['law_name'], 'admrul') or []
-        if not match_rows(rows, meta['law_name'], meta.get('full_name')):
+        if not match_rows(rows, match_name, match_full):
             for alt in alias_variants(meta['law_name']):
                 rows = drf_law_search(alt, 'admrul') or []
-                if match_rows(rows, meta['law_name'], meta.get('full_name')):
+                if match_rows(rows, alt, None):
+                    match_name, match_full = alt, None
                     break
 
-    cands = match_rows(rows, meta['law_name'], meta.get('full_name'))
+    cands = match_rows(rows, match_name, match_full)
 
     # 시행일 1개 = 통합본 1개. 같은 날 시행되는 개정법률이 여러 건이면 법제처가 공포번호마다
     # 행을 주지만 그 시행일의 통합본 본문은 동일하다(국가재정법 20260811: MST 285521/283171
