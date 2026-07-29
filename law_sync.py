@@ -67,8 +67,23 @@ KEEP_VERSIONS = 3         # 현행 포함 보존 버전 수 (지침: 최근 2~3�
 ADDENDA_KEEP = 15         # 담을 부칙 개수(최근순). 정부조직법처럼 개정이 잦은 법은 부칙이 조문보다 많아진다
 ADDENDA_MAX_CHARS = 6000  # 부칙 1건 텍스트 상한 — '다른 법률의 개정' 나열이 수만 자에 이른다
 ROOT = Path(__file__).parent
-# PDF 추출본 판별 — 단어 중간에 줄바꿈이 들어간 청크(한글 다음 개행 다음 한글)
-BROKEN_RE = re.compile('[가-힣]\n[가-힣]')
+# PDF 추출본 판별 — 단어 중간에 줄바꿈이 들어간 청크.
+#
+# 단순히 '한글\n한글'로 잡으면 API 적재본도 30~40%가 걸린다. API 본문에도 줄바꿈이
+# 있지만 그것은 항·호·조문 사이의 구조 경계이기 때문이다
+# (예: "1. 기획예산처차관\n제9조제3항제2호 중 …" — '관\n제'가 매칭된다).
+# 개행 뒤가 구조 표지(제N조/①~⑮/1./가./부칙/별표/별지/서식/괄호)로 시작하면 정상으로 본다.
+# 이 규칙으로 API본 0~16% / PDF본 94%로 갈린다(전파법·전파법 시행령·부담금관리 기본법 실측).
+BROKEN_RE = re.compile(
+    r'[가-힣]\n'
+    r'(?!제\s*\d)'          # 제N조·제N항
+    r'(?![①-⑮])'           # 항 기호
+    r'(?!\d+\s*\.)'         # 1.
+    r'(?![가-하]\s*\.)'      # 가.
+    r'(?!부칙|별표|별지|서식)'
+    r'(?![<\[(])'
+    r'[가-힣]'
+)
 
 
 # ── 조문 취득 ─────────────────────────────────────────────
@@ -582,24 +597,19 @@ def _damaged_docs(sb, min_broken=30):
     watch = {r['doc_name'] for r in ((sb.table('law_watch')
              .select('doc_name, watch_status, sync_status').execute().data) or [])
              if r.get('watch_status') == 'watching' and r.get('sync_status') == 'current'}
-    stats, api_done, start = {}, set(), 0
+    stats, start = {}, 0
     while True:
-        rows = (sb.table('document_chunks').select('doc_name, content, law_id')
+        rows = (sb.table('document_chunks').select('doc_name, content')
                 .eq('status', 'current').order('id').range(start, start + 999).execute().data) or []
         for r in rows:
             if r['doc_name'] not in watch:
                 continue
-            if r.get('law_id'):
-                # 이미 API로 적재된 문서. 항·호 줄바꿈 때문에 손상 추정치가 30%를 넘길 수
-                # 있어(부담금관리 기본법 38청크 중 16) 제외하지 않으면 매 실행 재처리된다.
-                api_done.add(r['doc_name'])
             t, b = stats.get(r['doc_name'], (0, 0))
             stats[r['doc_name']] = (t + 1, b + (1 if BROKEN_RE.search(r['content'] or '') else 0))
         if len(rows) < 1000:
             break
         start += 1000
-    return sorted(d for d, (t, b) in stats.items()
-                  if t and b * 100 >= t * min_broken and d not in api_done)
+    return sorted(d for d, (t, b) in stats.items() if t and b * 100 >= t * min_broken)
 
 
 def _update_doc_chunks(sb, doc_name, patch):
