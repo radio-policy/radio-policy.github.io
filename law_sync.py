@@ -706,19 +706,17 @@ def reingest_one(sb, doc_name, args):
     category = prev.get('doc_category') or ('법령' if target == 'law' else '고시')
     already_api = bool(prev.get('law_id'))
 
-    if already_api:
-        # 이미 API 적재본을 다시 받는 경우(부칙·별표 누락분 보완 등) — 버전이 바뀐 게
-        # 아니므로 superseded 사본을 또 만들지 않고 같은 문서명 안에서 내용만 교체한다.
-        _delete_doc_chunks(sb, doc_name)
-        print(f"  ✓ 기존 API본 내용 교체(총 {total}청크 삭제)")
-    else:
-        # 구 PDF본 보존 — 문서명이 같으면 충돌하므로 접미를 붙인다(되돌릴 수 있게 삭제하지 않음)
-        old_doc = doc_name
-        if new_doc == doc_name:
-            old_doc = doc_name + ' [PDF원본]'
-            _update_doc_chunks(sb, doc_name, {'doc_name': old_doc})
-        _update_doc_chunks(sb, old_doc, {'status': 'superseded'})
-        print(f"  ✓ 구 PDF본 → superseded: {old_doc[:66]}")
+    # ⚠ 순서가 중요하다. 구본을 먼저 내리고 신본을 넣으면, 삽입이 중간에 실패했을 때
+    # (statement timeout 등) 그 법령의 현행 청크가 0이 되어 자문에서 통째로 사라진다.
+    # 실제로 병렬 재적재 중 3건이 그 상태가 됐다. 신본을 먼저 넣고 성공한 뒤에 구본을 내린다.
+    old_doc = doc_name
+    if new_doc == doc_name:
+        # 문서명이 같으면 이름이 충돌하므로 구본을 먼저 옮겨야 한다. 다만 status는
+        # 그대로 current로 두어, 삽입이 실패해도 검색 공백이 생기지 않게 한다.
+        # (already_api면 어차피 뒤에서 지울 것이라 접미는 임시 표식일 뿐이다)
+        old_doc = doc_name + (' [교체중]' if already_api else ' [PDF원본]')
+        _update_doc_chunks(sb, doc_name, {'doc_name': old_doc})
+
     payload = [{
         'doc_name': new_doc, 'doc_category': category, 'chunk_index': i,
         'content': c['content'], 'article_no': c['article_no'],
@@ -728,6 +726,14 @@ def reingest_one(sb, doc_name, args):
     for i in range(0, len(payload), 50):
         sb.table('document_chunks').insert(payload[i:i + 50]).execute()
     print(f"  ✓ API본 등재 {len(payload)}청크")
+
+    # 신본 등재가 끝난 뒤에야 구본을 내린다(위 주석의 순서 이유).
+    if already_api:
+        _delete_doc_chunks(sb, old_doc)
+        print(f"  ✓ 기존 API본 {total}청크 삭제(내용 교체)")
+    else:
+        _update_doc_chunks(sb, old_doc, {'status': 'superseded'})
+        print(f"  ✓ 구 PDF본 → superseded: {old_doc[:66]}")
 
     sb.table('law_watch').upsert({
         'doc_name': new_doc, 'law_name': meta['law_name'],
