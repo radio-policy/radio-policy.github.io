@@ -7,6 +7,15 @@ Voyage AI 임베딩 백필 스크립트
 - 완료 후 HNSW 인덱스 자동 생성
 """
 
+import sys
+
+# cp949 콘솔·파이프에서 이모지 print 크래시 방지 (지침 가드레일 #19)
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
 import os
 import time
 import requests

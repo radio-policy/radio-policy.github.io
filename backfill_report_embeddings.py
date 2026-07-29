@@ -9,6 +9,15 @@
   (실행 전에도 키워드·유형 필터로는 즉시 검색됨 — "임베딩 대기" 배지)
 """
 
+import sys
+
+# cp949 콘솔·파이프에서 이모지 print 크래시 방지 (지침 가드레일 #19)
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
 import os
 import time
 import requests

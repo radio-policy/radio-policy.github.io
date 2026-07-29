@@ -17,6 +17,14 @@ import re
 from pathlib import Path
 from dotenv import load_dotenv
 
+# cp949 콘솔·파이프에서 이모지/한글 print 크래시 방지 (지침 가드레일 #19 —
+# 이 크래시가 마지막 임베딩 백필 단계를 조용히 건너뛰게 만든 사고가 있었음)
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
 load_dotenv()
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
