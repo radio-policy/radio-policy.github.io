@@ -273,10 +273,19 @@ def main():
     def ensure_node(name, ntype, doc_name=None):
         row = existing.get(name) or existing_nrm.get(name.replace(' ', ''))
         if row:
+            patch = {}
             if doc_name and not row.get('doc_name'):
+                patch['doc_name'] = doc_name
+            # 공백무시로 재사용된 노드가 과거 인용 스텁의 손상된 이름을 그대로 물고 있을 수 있다
+            # ("정보통신기반 보호법 시행령"의 인용 스텁이 "정보통신기 반 보호법 시행령"으로 잘못
+            # 생성된 뒤, 실제 문서가 들어와도 doc_name만 채워지고 name은 안 고쳐져 영구 오타가 됨).
+            # doc_name을 갖고 들어온 쪽(=실제 원문 파싱 결과)이 항상 정본이므로 name도 맞춘다.
+            if doc_name and row.get('name') != name:
+                patch['name'] = name
+            if patch:
                 try:
-                    sb.table('law_graph_nodes').update({'doc_name': doc_name}).eq('id', row['id']).execute()
-                    row['doc_name'] = doc_name
+                    sb.table('law_graph_nodes').update(patch).eq('id', row['id']).execute()
+                    row.update(patch)
                 except Exception:
                     pass
             return row['id']

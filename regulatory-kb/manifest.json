@@ -1,7 +1,7 @@
 {
  "schema": "regulatory-kb-manifest/v1",
  "updated": "2026-07-30",
- "entry_count": 116,
+ "entry_count": 169,
  "dedup_key_rule": "정규화 제목(버전 수식어 '(구버전)' 등 제거) + '|' + law_type. 같은 dedup_key = 같은 법령(버전만 다를 수 있음).",
  "on_readd_rule": {
   "same_law_number": "동일 법령번호 재추가 → 기존 path에 덮어쓰기(idempotent). 신규 파일 생성 금지.",
@@ -1173,6 +1173,536 @@
    "enforcement_date": "2021-10-07",
    "concept_type": "Notice",
    "path": "laws/radio-act/wireless-notices/aviation_wireless_communication_manual.md",
+   "status": "current"
+  },
+  {
+   "dedup_key": "방송통신발전기금 분담금 산정 및 부과에 관한 세부사항|방송미디어통신위원회고시",
+   "title": "방송통신발전기금 분담금 산정 및 부과에 관한 세부사항",
+   "law_type": "방송미디어통신위원회고시",
+   "law_number": "제2026-24호",
+   "enforcement_date": "2026-07-09",
+   "concept_type": "Notice",
+   "path": "laws/broadcasting-telecom-development-act/notices/fund_contribution_calculation.md",
+   "status": "current"
+  },
+  {
+   "dedup_key": "방송통신발전기금 분담금 징수 및 부과 등에 관한 사항|방송미디어통신위원회고시",
+   "title": "방송통신발전기금 분담금 징수 및 부과 등에 관한 사항",
+   "law_type": "방송미디어통신위원회고시",
+   "law_number": "제2026-23호",
+   "enforcement_date": "2026-07-09",
+   "concept_type": "Notice",
+   "path": "laws/broadcasting-telecom-development-act/notices/fund_contribution_collection.md",
+   "status": "current"
+  },
+  {
+   "dedup_key": "재난방송 및 민방위경보방송의 실시에 관한 기준|방송미디어통신위원회고시",
+   "title": "재난방송 및 민방위경보방송의 실시에 관한 기준",
+   "law_type": "방송미디어통신위원회고시",
+   "law_number": "제2026-10호",
+   "enforcement_date": "2026-05-06",
+   "concept_type": "Notice",
+   "path": "laws/disaster-safety/notices/disaster_broadcast_civil_defense.md",
+   "status": "current"
+  },
+  {
+   "dedup_key": "재난안전통신망 표준운영절차의 관리와 활용에 관한 규정|행정안전부고시",
+   "title": "재난안전통신망 표준운영절차의 관리와 활용에 관한 규정",
+   "law_type": "행정안전부고시",
+   "law_number": "제2023-48호",
+   "enforcement_date": "2023-06-23",
+   "concept_type": "Notice",
+   "path": "laws/disaster-safety/notices/disaster_comm_network_sop.md",
+   "status": "current"
+  },
+  {
+   "dedup_key": "재난피해자등의 개인 및 위치정보 요청ㆍ제공ㆍ이용지침|행정안전부고시",
+   "title": "재난피해자등의 개인 및 위치정보 요청ㆍ제공ㆍ이용지침",
+   "law_type": "행정안전부고시",
+   "law_number": "제2025-67호",
+   "enforcement_date": "2025-11-27",
+   "concept_type": "Notice",
+   "path": "laws/disaster-safety/notices/disaster_victim_location_info_guideline.md",
+   "status": "current"
+  },
+  {
+   "dedup_key": "재난문자방송 기준 및 운영규정|행정안전부예규",
+   "title": "재난문자방송 기준 및 운영규정",
+   "law_type": "행정안전부예규",
+   "law_number": "제361호",
+   "enforcement_date": "2026-02-04",
+   "concept_type": "Notice",
+   "path": "laws/disaster-safety/notices/emergency_text_broadcast.md",
+   "status": "current"
+  },
+  {
+   "dedup_key": "긴급구조를 위한 소방기관의 위치정보 이용ㆍ관리 지침|소방청예규",
+   "title": "긴급구조를 위한 소방기관의 위치정보 이용ㆍ관리 지침",
+   "law_type": "소방청예규",
+   "law_number": "제114호",
+   "enforcement_date": "2025-07-01",
+   "concept_type": "Notice",
+   "path": "laws/disaster-safety/notices/fire_rescue_location_info_guideline.md",
+   "status": "current"
+  },
+  {
+   "dedup_key": "정보통신기반 보호법 시행령|대통령령",
+   "title": "정보통신기반 보호법 시행령",
+   "law_type": "대통령령",
+   "law_number": "제35947호",
+   "enforcement_date": "2026-01-02",
+   "concept_type": "Decree",
+   "path": "laws/information-infrastructure/enforcement_decree.md",
+   "status": "current"
+  },
+  {
+   "dedup_key": "정보통신기반 보호법 시행규칙|과학기술정보통신부령",
+   "title": "정보통신기반 보호법 시행규칙",
+   "law_type": "과학기술정보통신부령",
+   "law_number": "제156호",
+   "enforcement_date": "2025-10-01",
+   "concept_type": "Rule",
+   "path": "laws/information-infrastructure/enforcement_rule.md",
+   "status": "current"
+  },
+  {
+   "dedup_key": "정보통신기반 보호법|법률",
+   "title": "정보통신기반 보호법",
+   "law_type": "법률",
+   "law_number": "제20068호",
+   "enforcement_date": "2025-01-24",
+   "concept_type": "Act",
+   "path": "laws/information-infrastructure/infrastructure_protection_act.md",
+   "status": "current"
+  },
+  {
+   "dedup_key": "주요정보통신기반시설 취약점 분석ㆍ평가 기준|과학기술정보통신부고시",
+   "title": "주요정보통신기반시설 취약점 분석ㆍ평가 기준",
+   "law_type": "과학기술정보통신부고시",
+   "law_number": "제2025-62호",
+   "enforcement_date": "2025-12-24",
+   "concept_type": "Notice",
+   "path": "laws/information-infrastructure/notices/vulnerability_assessment_criteria.md",
+   "status": "current"
+  },
+  {
+   "dedup_key": "방송미디어통신위원회의 설치 및 운영에 관한 법률 시행령|대통령령",
+   "title": "방송미디어통신위원회의 설치 및 운영에 관한 법률 시행령",
+   "law_type": "대통령령",
+   "law_number": "제36339호",
+   "enforcement_date": "2026-05-19",
+   "concept_type": "Decree",
+   "path": "laws/kmcc-act/enforcement_decree.md",
+   "status": "current"
+  },
+  {
+   "dedup_key": "방송미디어통신위원회의 설치 및 운영에 관한 법률|법률",
+   "title": "방송미디어통신위원회의 설치 및 운영에 관한 법률",
+   "law_type": "법률",
+   "law_number": "제21379호",
+   "enforcement_date": "2026-02-19",
+   "concept_type": "Act",
+   "path": "laws/kmcc-act/kmcc_establishment_act.md",
+   "status": "current"
+  },
+  {
+   "dedup_key": "위치정보의 보호 및 이용 등에 관한 법률 시행령|대통령령",
+   "title": "위치정보의 보호 및 이용 등에 관한 법률 시행령",
+   "law_type": "대통령령",
+   "law_number": "제36084호",
+   "enforcement_date": "2026-02-10",
+   "concept_type": "Decree",
+   "path": "laws/location-info-act/enforcement_decree.md",
+   "status": "current"
+  },
+  {
+   "dedup_key": "위치정보의 보호 및 이용 등에 관한 법률|법률",
+   "title": "위치정보의 보호 및 이용 등에 관한 법률",
+   "law_type": "법률",
+   "law_number": "제21066호",
+   "enforcement_date": "2025-10-01",
+   "concept_type": "Act",
+   "path": "laws/location-info-act/location_info_act.md",
+   "status": "current"
+  },
+  {
+   "dedup_key": "위치정보보호 법규 위반에 대한 과징금 부과기준|고시",
+   "title": "위치정보보호 법규 위반에 대한 과징금 부과기준",
+   "law_type": "고시",
+   "law_number": "제2026-11호",
+   "enforcement_date": "2026-05-18",
+   "concept_type": "Notice",
+   "path": "laws/location-info-act/notices/penalty_criteria.md",
+   "status": "current"
+  },
+  {
+   "dedup_key": "위치정보의 관리적ㆍ기술적 보호조치 기준|고시",
+   "title": "위치정보의 관리적ㆍ기술적 보호조치 기준",
+   "law_type": "고시",
+   "law_number": "제2026-11호",
+   "enforcement_date": "2026-05-18",
+   "concept_type": "Notice",
+   "path": "laws/location-info-act/notices/protection_measures_standard.md",
+   "status": "current"
+  },
+  {
+   "dedup_key": "개인정보 보호법 시행령|대통령령",
+   "title": "개인정보 보호법 시행령",
+   "law_type": "대통령령",
+   "law_number": "제36340호",
+   "enforcement_date": "2026-05-19",
+   "concept_type": "Decree",
+   "path": "laws/privacy-act/enforcement_decree.md",
+   "status": "current"
+  },
+  {
+   "dedup_key": "개인정보의 안전성 확보조치 기준|고시",
+   "title": "개인정보의 안전성 확보조치 기준",
+   "law_type": "고시",
+   "law_number": "제2026-9호",
+   "enforcement_date": "2026-07-01",
+   "concept_type": "Notice",
+   "path": "laws/privacy-act/notices/safety_measures_standard.md",
+   "status": "current"
+  },
+  {
+   "dedup_key": "개인정보 보호법|법률",
+   "title": "개인정보 보호법",
+   "law_type": "법률",
+   "law_number": "제20897호",
+   "enforcement_date": "2025-10-02",
+   "concept_type": "Act",
+   "path": "laws/privacy-act/privacy_act.md",
+   "status": "current"
+  },
+  {
+   "dedup_key": "통신비밀보호법|법률",
+   "title": "통신비밀보호법",
+   "law_type": "법률",
+   "law_number": "제20735호",
+   "enforcement_date": "2025-08-01",
+   "concept_type": "Act",
+   "path": "laws/secret-protection-act/communication_secret_protection_act.md",
+   "status": "current"
+  },
+  {
+   "dedup_key": "통신비밀보호법 시행령|대통령령",
+   "title": "통신비밀보호법 시행령",
+   "law_type": "대통령령",
+   "law_number": "제35674호",
+   "enforcement_date": "2025-08-01",
+   "concept_type": "Decree",
+   "path": "laws/secret-protection-act/enforcement_decree.md",
+   "status": "current"
+  },
+  {
+   "dedup_key": "전기통신사업 회계정리 및 보고에 관한 규정|대통령령",
+   "title": "전기통신사업 회계정리 및 보고에 관한 규정",
+   "law_type": "대통령령",
+   "law_number": "제31380호",
+   "enforcement_date": "2021-01-05",
+   "concept_type": "Notice",
+   "path": "laws/telecom-business-act/notices/accounting_regulation.md",
+   "status": "current"
+  },
+  {
+   "dedup_key": "전기통신사업 회계분리기준|과학기술정보통신부고시",
+   "title": "전기통신사업 회계분리기준",
+   "law_type": "과학기술정보통신부고시",
+   "law_number": "제2025-23호",
+   "enforcement_date": "2025-05-26",
+   "concept_type": "Notice",
+   "path": "laws/telecom-business-act/notices/accounting_separation_standard.md",
+   "status": "current"
+  },
+  {
+   "dedup_key": "기간통신사업의 양수·합병 인가 등의 심사기준 및 절차|과학기술정보통신부고시",
+   "title": "기간통신사업의 양수·합병 인가 등의 심사기준 및 절차",
+   "law_type": "과학기술정보통신부고시",
+   "law_number": "제2019-46호",
+   "enforcement_date": "2019-06-25",
+   "concept_type": "Notice",
+   "path": "laws/telecom-business-act/notices/acquisition_merger_review_criteria.md",
+   "status": "current"
+  },
+  {
+   "dedup_key": "결합판매의 금지행위 세부 유형 및 심사기준|방송미디어통신위원회고시",
+   "title": "결합판매의 금지행위 세부 유형 및 심사기준",
+   "law_type": "방송미디어통신위원회고시",
+   "law_number": "제2026-11호",
+   "enforcement_date": "2026-05-18",
+   "concept_type": "Notice",
+   "path": "laws/telecom-business-act/notices/bundling_prohibited_conduct_criteria.md",
+   "status": "current"
+  },
+  {
+   "dedup_key": "기반시설에 해당하는 전기통신설비|과학기술정보통신부고시",
+   "title": "기반시설에 해당하는 전기통신설비",
+   "law_type": "과학기술정보통신부고시",
+   "law_number": "제2017-7호",
+   "enforcement_date": "2017-08-24",
+   "concept_type": "Notice",
+   "path": "laws/telecom-business-act/notices/critical_facility_designation.md",
+   "status": "current"
+  },
+  {
+   "dedup_key": "전기통신설비의 정보제공기준|과학기술정보통신부고시",
+   "title": "전기통신설비의 정보제공기준",
+   "law_type": "과학기술정보통신부고시",
+   "law_number": "제2017-7호",
+   "enforcement_date": "2017-08-24",
+   "concept_type": "Notice",
+   "path": "laws/telecom-business-act/notices/facility_information_provision_standard.md",
+   "status": "current"
+  },
+  {
+   "dedup_key": "설비등의 제공조건 및 대가산정기준|과학기술정보통신부고시",
+   "title": "설비등의 제공조건 및 대가산정기준",
+   "law_type": "과학기술정보통신부고시",
+   "law_number": "제2023-36호",
+   "enforcement_date": "2023-11-03",
+   "concept_type": "Notice",
+   "path": "laws/telecom-business-act/notices/facility_provision_price_standard.md",
+   "status": "current"
+  },
+  {
+   "dedup_key": "전기통신설비의 공동사용 등의 기준|과학기술정보통신부고시",
+   "title": "전기통신설비의 공동사용 등의 기준",
+   "law_type": "과학기술정보통신부고시",
+   "law_number": "제2017-7호",
+   "enforcement_date": "2017-08-24",
+   "concept_type": "Notice",
+   "path": "laws/telecom-business-act/notices/facility_shared_use_standard.md",
+   "status": "current"
+  },
+  {
+   "dedup_key": "거짓으로 표시된 전화번호로 인한 이용자의 피해 예방 등에 관한 고시|과학기술정보통신부고시",
+   "title": "거짓으로 표시된 전화번호로 인한 이용자의 피해 예방 등에 관한 고시",
+   "law_type": "과학기술정보통신부고시",
+   "law_number": "제2026-48호",
+   "enforcement_date": "2026-07-10",
+   "concept_type": "Notice",
+   "path": "laws/telecom-business-act/notices/fake_caller_id_prevention_notice.md",
+   "status": "current"
+  },
+  {
+   "dedup_key": "본인확인기관 지정 등에 관한 기준|방송미디어통신위원회고시",
+   "title": "본인확인기관 지정 등에 관한 기준",
+   "law_type": "방송미디어통신위원회고시",
+   "law_number": "제2026-11호",
+   "enforcement_date": "2026-05-18",
+   "concept_type": "Notice",
+   "path": "laws/telecom-business-act/notices/identity_verification_agency_designation.md",
+   "status": "current"
+  },
+  {
+   "dedup_key": "중요한 전기통신설비|과학기술정보통신부고시",
+   "title": "중요한 전기통신설비",
+   "law_type": "과학기술정보통신부고시",
+   "law_number": "제2017-7호",
+   "enforcement_date": "2017-08-24",
+   "concept_type": "Notice",
+   "path": "laws/telecom-business-act/notices/important_facility_designation.md",
+   "status": "current"
+  },
+  {
+   "dedup_key": "전기통신설비의 상호접속ㆍ공동사용 및 정보제공 협정의 인가대상 기간통신사업자|과학기술정보통신부고시",
+   "title": "전기통신설비의 상호접속ㆍ공동사용 및 정보제공 협정의 인가대상 기간통신사업자",
+   "law_type": "과학기술정보통신부고시",
+   "law_number": "제2017-7호",
+   "enforcement_date": "2017-08-24",
+   "concept_type": "Notice",
+   "path": "laws/telecom-business-act/notices/interconnection_authorization_target.md",
+   "status": "current"
+  },
+  {
+   "dedup_key": "전기통신설비의 상호접속기준|과학기술정보통신부고시",
+   "title": "전기통신설비의 상호접속기준",
+   "law_type": "과학기술정보통신부고시",
+   "law_number": "제2026-31호",
+   "enforcement_date": "2026-04-28",
+   "concept_type": "Notice",
+   "path": "laws/telecom-business-act/notices/interconnection_standard.md",
+   "status": "current"
+  },
+  {
+   "dedup_key": "국제전화요금 정산계약에 관한 신고방식 및 절차|과학기술정보통신부고시",
+   "title": "국제전화요금 정산계약에 관한 신고방식 및 절차",
+   "law_type": "과학기술정보통신부고시",
+   "law_number": "제2019-28호",
+   "enforcement_date": "2019-06-25",
+   "concept_type": "Notice",
+   "path": "laws/telecom-business-act/notices/international_call_settlement_notice.md",
+   "status": "current"
+  },
+  {
+   "dedup_key": "방송통신위원회 재정 및 알선 등에 관한 규정|방송미디어통신위원회고시",
+   "title": "방송통신위원회 재정 및 알선 등에 관한 규정",
+   "law_type": "방송미디어통신위원회고시",
+   "law_number": "제2024-5호",
+   "enforcement_date": "2024-05-21",
+   "concept_type": "Notice",
+   "path": "laws/telecom-business-act/notices/kcc_mediation_regulation.md",
+   "status": "current"
+  },
+  {
+   "dedup_key": "주요통신사업자의 통신시설 등급 지정 및 관리 기준|과학기술정보통신부고시",
+   "title": "주요통신사업자의 통신시설 등급 지정 및 관리 기준",
+   "law_type": "과학기술정보통신부고시",
+   "law_number": "제2026-12호",
+   "enforcement_date": "2026-03-10",
+   "concept_type": "Notice",
+   "path": "laws/telecom-business-act/notices/major_carrier_facility_grade.md",
+   "status": "current"
+  },
+  {
+   "dedup_key": "전기통신설비 의무제공대상 기간통신사업자|과학기술정보통신부고시",
+   "title": "전기통신설비 의무제공대상 기간통신사업자",
+   "law_type": "과학기술정보통신부고시",
+   "law_number": "제2021-103호",
+   "enforcement_date": "2021-12-28",
+   "concept_type": "Notice",
+   "path": "laws/telecom-business-act/notices/mandatory_facility_provider.md",
+   "status": "current"
+  },
+  {
+   "dedup_key": "이동통신사업자 등의 자료제출 방법 등에 대한 고시|과학기술정보통신부고시",
+   "title": "이동통신사업자 등의 자료제출 방법 등에 대한 고시",
+   "law_type": "과학기술정보통신부고시",
+   "law_number": "제2026-29호",
+   "enforcement_date": "2026-04-28",
+   "concept_type": "Notice",
+   "path": "laws/telecom-business-act/notices/mno_data_submission_method.md",
+   "status": "current"
+  },
+  {
+   "dedup_key": "이동전화망번호관리기준|과학기술정보통신부고시",
+   "title": "이동전화망번호관리기준",
+   "law_type": "과학기술정보통신부고시",
+   "law_number": "제2021-94호",
+   "enforcement_date": "2021-12-07",
+   "concept_type": "Notice",
+   "path": "laws/telecom-business-act/notices/mobile_number_management_standard.md",
+   "status": "current"
+  },
+  {
+   "dedup_key": "전기통신번호관리세칙|과학기술정보통신부고시",
+   "title": "전기통신번호관리세칙",
+   "law_type": "과학기술정보통신부고시",
+   "law_number": "제2021-93호",
+   "enforcement_date": "2021-12-07",
+   "concept_type": "Notice",
+   "path": "laws/telecom-business-act/notices/number_management_rules.md",
+   "status": "current"
+  },
+  {
+   "dedup_key": "이동전화서비스 번호이동성 시행 등에 관한 기준|과학기술정보통신부고시",
+   "title": "이동전화서비스 번호이동성 시행 등에 관한 기준",
+   "law_type": "과학기술정보통신부고시",
+   "law_number": "제2023-41호",
+   "enforcement_date": "2024-01-01",
+   "concept_type": "Notice",
+   "path": "laws/telecom-business-act/notices/number_portability_standard.md",
+   "status": "current"
+  },
+  {
+   "dedup_key": "방송통신사업 금지행위 등에 대한 업무처리규정|방송미디어통신위원회고시",
+   "title": "방송통신사업 금지행위 등에 대한 업무처리규정",
+   "law_type": "방송미디어통신위원회고시",
+   "law_number": "제2026-11호",
+   "enforcement_date": "2026-05-18",
+   "concept_type": "Notice",
+   "path": "laws/telecom-business-act/notices/prohibited_conduct_handling.md",
+   "status": "current"
+  },
+  {
+   "dedup_key": "금지행위 위반에 대한 과징금 부과 세부기준|방송미디어통신위원회고시",
+   "title": "금지행위 위반에 대한 과징금 부과 세부기준",
+   "law_type": "방송미디어통신위원회고시",
+   "law_number": "제2026-11호",
+   "enforcement_date": "2026-05-18",
+   "concept_type": "Notice",
+   "path": "laws/telecom-business-act/notices/prohibited_conduct_penalty.md",
+   "status": "current"
+  },
+  {
+   "dedup_key": "공익성심사의 대상이 되는 기간통신사업자의 범위|과학기술정보통신부고시",
+   "title": "공익성심사의 대상이 되는 기간통신사업자의 범위",
+   "law_type": "과학기술정보통신부고시",
+   "law_number": "제2017-7호",
+   "enforcement_date": "2017-08-24",
+   "concept_type": "Notice",
+   "path": "laws/telecom-business-act/notices/public_interest_review_scope.md",
+   "status": "current"
+  },
+  {
+   "dedup_key": "요금한도 초과 등의 고지에 관한 기준|과학기술정보통신부고시",
+   "title": "요금한도 초과 등의 고지에 관한 기준",
+   "law_type": "과학기술정보통신부고시",
+   "law_number": "제2026-27호",
+   "enforcement_date": "2026-04-28",
+   "concept_type": "Notice",
+   "path": "laws/telecom-business-act/notices/rate_limit_notice_standard.md",
+   "status": "current"
+  },
+  {
+   "dedup_key": "정보통신망을 이용한 이동통신단말장치의 지원금 제시행위 시 사전승낙서 게시 기준|방송미디어통신위원회고시",
+   "title": "정보통신망을 이용한 이동통신단말장치의 지원금 제시행위 시 사전승낙서 게시 기준",
+   "law_type": "방송미디어통신위원회고시",
+   "law_number": "제2026-4호",
+   "enforcement_date": "2026-04-28",
+   "concept_type": "Notice",
+   "path": "laws/telecom-business-act/notices/subsidy_preapproval_notice.md",
+   "status": "current"
+  },
+  {
+   "dedup_key": "이용약관 인가대상 기간통신서비스와 기간통신사업자|과학기술정보통신부고시",
+   "title": "이용약관 인가대상 기간통신서비스와 기간통신사업자",
+   "law_type": "과학기술정보통신부고시",
+   "law_number": "제2026-30호",
+   "enforcement_date": "2026-04-28",
+   "concept_type": "Notice",
+   "path": "laws/telecom-business-act/notices/terms_approval_target.md",
+   "status": "current"
+  },
+  {
+   "dedup_key": "전기통신사업자간 불합리하거나 차별적인 조건·제한 부과의 부당한 행위 세부기준|방송미디어통신위원회고시",
+   "title": "전기통신사업자간 불합리하거나 차별적인 조건·제한 부과의 부당한 행위 세부기준",
+   "law_type": "방송미디어통신위원회고시",
+   "law_number": "제2026-11호",
+   "enforcement_date": "2026-05-18",
+   "concept_type": "Notice",
+   "path": "laws/telecom-business-act/notices/unfair_conduct_criteria.md",
+   "status": "current"
+  },
+  {
+   "dedup_key": "보편적역무손실보전금 산정방법 등에 관한 기준|과학기술정보통신부고시",
+   "title": "보편적역무손실보전금 산정방법 등에 관한 기준",
+   "law_type": "과학기술정보통신부고시",
+   "law_number": "제2025-32호",
+   "enforcement_date": "2025-07-01",
+   "concept_type": "Notice",
+   "path": "laws/telecom-business-act/notices/universal_service_loss_compensation.md",
+   "status": "current"
+  },
+  {
+   "dedup_key": "경고문구의 표기 내용 및 방법|과학기술정보통신부고시",
+   "title": "경고문구의 표기 내용 및 방법",
+   "law_type": "과학기술정보통신부고시",
+   "law_number": "제2019-36호",
+   "enforcement_date": "2019-06-20",
+   "concept_type": "Notice",
+   "path": "laws/telecom-business-act/notices/warning_label_notice.md",
+   "status": "current"
+  },
+  {
+   "dedup_key": "도매제공의무사업자의 도매제공의무서비스 대상과 도매제공의 조건·절차·방법 및 대가의 산정에 관한 기준|과학기술정보통신부고시",
+   "title": "도매제공의무사업자의 도매제공의무서비스 대상과 도매제공의 조건·절차·방법 및 대가의 산정에 관한 기준",
+   "law_type": "과학기술정보통신부고시",
+   "law_number": "제2025-7호",
+   "enforcement_date": "2025-02-21",
+   "concept_type": "Notice",
+   "path": "laws/telecom-business-act/notices/wholesale_provision_price_standard.md",
    "status": "current"
   }
  ]
