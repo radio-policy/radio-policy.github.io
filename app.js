@@ -6086,6 +6086,8 @@ let _lawMapNodes = [];
 let _lawMapEdges = [];
 let _lawMapNet = null;        // vis.Network 인스턴스
 let _lawMapFocusId = null;    // 현재 포커스 노드(주제) id — null이면 전체 인용망
+let _lawMapShowNotice = false; // 전체 뷰에서 고시·행정규칙 표시 여부 (기본 접힘 — 노드 과반이 고시라 조망 불가)
+let _lawMapHiddenCount = 0;    // 접힌 고시 수 (토글 라벨용)
 let _visNetLoadPromise = null;
 
 function lmEsc(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
@@ -6115,6 +6117,26 @@ function loadVisNetwork() {
 function setLawMapStatus(html) {
   var el = document.getElementById('lawmap-status');
   if (el) el.innerHTML = html || '';
+}
+
+// 고시 접기 토글 — 전체 뷰에서만 노출. 숨긴 사실을 화면에 드러내 '정보가 없다'는 오해를 막는다. (배경역사 #36)
+function updateLawMapNoticeToggle(isFullView) {
+  var btn = document.getElementById('lawmap-notice-toggle');
+  if (!btn) return;
+  if (!isFullView) { btn.style.display = 'none'; return; }
+  btn.style.display = 'inline-flex';
+  if (_lawMapShowNotice) {
+    btn.innerHTML = '<i class="ti ti-eye-off"></i> 고시 접기';
+    btn.title = '고시·행정규칙을 접어 주제·법령 뼈대만 봅니다';
+  } else {
+    btn.innerHTML = '<i class="ti ti-eye"></i> 고시 ' + _lawMapHiddenCount + '개 펼치기';
+    btn.title = '전체 조망을 위해 고시·행정규칙을 접어 두었습니다. 주제·법령을 클릭하면 접힌 고시도 그대로 보입니다.';
+  }
+}
+
+function toggleLawMapNotice() {
+  _lawMapShowNotice = !_lawMapShowNotice;
+  renderLawMapGraph(null);
 }
 
 async function loadLawMap(force) {
@@ -6226,7 +6248,37 @@ function renderLawMapGraph(focusId) {
     var usedIds2 = new Set();
     edges.forEach(function(e) { usedIds2.add(e.source_id); usedIds2.add(e.target_id); });
     nodes = _lawMapNodes.filter(function(n) { return usedIds2.has(n.id) || n.node_type === 'topic'; });
+    // 전체 뷰에서 고시·행정규칙 접기 — 노드의 절반 이상(96/178)이 고시라 중앙이 뭉개져 조망이 불가능했다.
+    // 고시는 '법률→시행령→고시' 말단이라 전체 조망에선 잔가지이고, 주제·법령을 클릭하면 그대로 다 보인다.
+    // ★ 단, 근거가 고시뿐인 주제(충전단자 표준화 등 3개)는 통째로 숨기면 엣지 없는 단독 버블이 된다 —
+    //   #28에서 이미 고쳤던 회귀라, 그런 주제의 직결 고시는 예외로 남긴다. (배경역사 #36)
+    if (!_lawMapShowNotice) {
+      var noticeIds = new Set();
+      nodes.forEach(function(n) { if (n.node_type === 'notice' || n.node_type === 'etc') noticeIds.add(n.id); });
+      var degNoNotice = {};
+      edges.forEach(function(e) {
+        if (noticeIds.has(e.source_id) || noticeIds.has(e.target_id)) return;
+        degNoNotice[e.source_id] = 1; degNoNotice[e.target_id] = 1;
+      });
+      var orphanTopics = new Set();
+      nodes.forEach(function(n) { if (n.node_type === 'topic' && !degNoNotice[n.id]) orphanTopics.add(n.id); });
+      var rescued = new Set();
+      edges.forEach(function(e) {
+        if (orphanTopics.has(e.source_id) && noticeIds.has(e.target_id)) rescued.add(e.target_id);
+        if (orphanTopics.has(e.target_id) && noticeIds.has(e.source_id)) rescued.add(e.source_id);
+      });
+      var hiddenIds = new Set();
+      noticeIds.forEach(function(id) { if (!rescued.has(id)) hiddenIds.add(id); });
+      _lawMapHiddenCount = hiddenIds.size;
+      if (hiddenIds.size) {
+        edges = edges.filter(function(e) { return !hiddenIds.has(e.source_id) && !hiddenIds.has(e.target_id); });
+        nodes = nodes.filter(function(n) { return !hiddenIds.has(n.id); });
+      }
+    } else {
+      _lawMapHiddenCount = 0;
+    }
   }
+  updateLawMapNoticeToggle(!_lawMapFocusId);
   // 보강 버튼: 주제 포커스일 때만 노출
   var enrichBtn = document.getElementById('lawmap-enrich-btn');
   if (enrichBtn) enrichBtn.style.display = (focusNode && focusNode.node_type === 'topic') ? 'inline-flex' : 'none';

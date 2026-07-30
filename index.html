@@ -319,6 +319,7 @@
           <select id="lawmap-topic-select" onchange="lawMapSelectTopic(this.value)" style="padding:5px 10px;font-size:12px;border:0.5px solid var(--border-mid);border-radius:var(--radius-md);background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;outline:none;max-width:260px">
             <option value="">전체 인용망</option>
           </select>
+          <button class="btn" id="lawmap-notice-toggle" style="font-size:11px;padding:3px 10px;display:none" onclick="toggleLawMapNotice()"><i class="ti ti-eye"></i> 고시 펼치기</button>
           <span id="lawmap-status" style="font-size:11px;color:var(--text-secondary)"></span>
           <button class="btn" id="lawmap-enrich-btn" style="margin-left:auto;font-size:11px;padding:3px 10px;display:none" onclick="enrichLawMapTopic()"><i class="ti ti-sparkles"></i> AI로 보강</button>
           <button class="btn" style="font-size:11px;padding:3px 10px" onclick="loadLawMap(true)"><i class="ti ti-refresh"></i> 새로고침</button>
@@ -950,6 +951,6 @@
 <script src="https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js"></script>
 <script>if(typeof pdfjsLib!=='undefined'){pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';}</script>
 <script src="system_prompt.js?v=20260612c"></script>
-<script src="app.js?v=20260730e"></script>
+<script src="app.js?v=20260731a"></script>
 </body>
 </html>
