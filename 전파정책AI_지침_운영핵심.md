@@ -442,6 +442,7 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **Daily Briefing "오늘" 배지를 UTC로 되돌리지 말 것** — KST 자정~09시 오판. KST(+9h) 유지.
 - **parseBriefingContent 마크다운 처리·📢 블록 스타일링·🔗 링크화 제거 금지** — 기호 노출·링크 미클릭 문제 해결책.
 - **crawl_naver_news를 HTML 스크래핑으로 되돌리지 말 것** — 0건 회귀(에러 없이) 사고. 공식 OpenAPI가 정답.
+- **crawl_msit(과기정통부)를 DOM 셀렉터 파싱으로 되돌리지 말 것 — 인라인 스크립트 정규식 추출 유지, 상세 URL에 `bbsSeqNo` 필수** — 2026-07 사이트 개편으로 목록 DOM이 빈 껍데기가 되어 수 주간 무음 0건이었다(파서는 죽어도 heartbeat는 정상). bbsSeqNo 없는 상세 링크는 200인데 본문이 "시스템 점검 안내"(소프트 차단). 로그의 `행 N개 스캔`이 0이면 개편 재발 신호다. 방통위 0건은 고장이 아니라 키워드 필터의 정상 동작(방송 안건 위주). (배경역사 #39)
 - **Supabase 신규 프로젝트 생성 제안 금지** — 무료 슬롯 2개 모두 사용 중.
 - **Sonnet으로 긴급도 분류 업그레이드 제안 금지** — Haiku+피드백 학습으로 충분.
 - **Cowork 예약 태스크로 크롤러 재등록 금지** — 중복 실행.

@@ -247,36 +247,60 @@ def crawl_msit() -> list:
         ('https://www.msit.go.kr/bbs/list.do?sCode=user&mPid=103&mId=109', '입법행정예고'),
         ('https://www.msit.go.kr/bbs/list.do?sCode=user&mPid=103&mId=108', '훈령예규고시'),
     ]
+    from urllib.parse import unquote, urlparse, parse_qs
     for url, label in targets:
         try:
             res = fetch_with_retry(url, timeout=20)
             res.encoding = getattr(res, 'apparent_encoding', None) or 'utf-8'
-            soup = BeautifulSoup(res.text, 'html.parser')
-            rows = soup.select('table tbody tr, ul.bbs_list li')[:20]
-            for row in rows:
-                title_tag = row.find('a')
-                if not title_tag:
-                    continue
-                title = title_tag.get_text(strip=True)
+            html = res.text
+            # 2026-07 사이트 개편: 목록 DOM은 빈 껍데기이고 제목·날짜를 인라인 스크립트가
+            # $('#td_NTT_SJ_N').html(unescape('제목')) 식으로 채운다 → 스크립트에서 직접 추출.
+            # 상세 링크는 bbsSeqNo(폼 hidden)까지 붙여야 열림 — 없으면 '시스템 점검 안내'로 소프트 차단. (배경역사 #39)
+            ids    = re.findall(r'onclick="fn_detail\((\d+)\);"', html)
+            titles = re.findall(r"sHtml\+= unescape\('(.*?)'\);\s*sHtml\+= newHtml;", html, re.S)
+            date_map = dict(re.findall(r"REG_DT'\+'_(\d+)'\)\.html\('(\d{4}-\d{2}-\d{2})'\)", html))
+            m_bbs = re.search(r'name="bbsSeqNo"[^>]*value="(\d+)"', html)
+            bbs_seq = m_bbs.group(1) if m_bbs else ''
+            q = parse_qs(urlparse(url).query)
+            m_id, m_pid = q.get('mId', [''])[0], q.get('mPid', [''])[0]
+            found = 0
+            for i, (seq, raw_title) in enumerate(zip(ids, titles)):
+                title = unquote(raw_title).strip()
                 if not title or not any(k in title for k in RADIO_KEYWORDS):
                     continue
-                href = title_tag.get('href', '')
-                if href.startswith('/'):
-                    href = 'https://www.msit.go.kr' + href
-                date_tag = row.find(class_=re.compile(r'date|day|time'))
-                date_str = date_tag.get_text(strip=True) if date_tag else ''
                 items.append({
                     'title':        title,
                     'source':       '과기정통부 ' + label,
                     'category':     detect_category(title),
-                    'url':          href,
+                    'url':          'https://www.msit.go.kr/bbs/view.do?sCode=user&mId=%s&mPid=%s&bbsSeqNo=%s&nttSeqNo=%s' % (m_id, m_pid, bbs_seq, seq),
                     'is_read':      False,
-                    'published_at': parse_date(date_str),
+                    'published_at': parse_date(date_map.get(str(i), '')),
                     'urgency':      '보통',
                     'importance':   '보통',
                 })
-            msit_cnt = sum(1 for i in items if '과기정통부' in i['source'])
-            print('[MSIT] %s: %d건' % (label, msit_cnt))
+                found += 1
+            # 구(舊) DOM 구조 폴백 — 사이트가 되돌아갈 경우 대비
+            if not ids:
+                soup = BeautifulSoup(html, 'html.parser')
+                for row in soup.select('table tbody tr, ul.bbs_list li')[:20]:
+                    title_tag = row.find('a')
+                    if not title_tag:
+                        continue
+                    title = title_tag.get_text(strip=True)
+                    if not title or not any(k in title for k in RADIO_KEYWORDS):
+                        continue
+                    href = title_tag.get('href', '')
+                    if href.startswith('/'):
+                        href = 'https://www.msit.go.kr' + href
+                    date_tag = row.find(class_=re.compile(r'date|day|time'))
+                    items.append({
+                        'title': title, 'source': '과기정통부 ' + label,
+                        'category': detect_category(title), 'url': href, 'is_read': False,
+                        'published_at': parse_date(date_tag.get_text(strip=True) if date_tag else ''),
+                        'urgency': '보통', 'importance': '보통',
+                    })
+                    found += 1
+            print('[MSIT] %s: 행 %d개 스캔, 키워드 매칭 %d건' % (label, len(ids), found))
         except Exception as e:
             print('[MSIT 오류] %s: %s' % (label, e))
         time.sleep(1)
