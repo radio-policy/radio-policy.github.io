@@ -218,9 +218,12 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 git add [파일명] && git commit -m "설명" && git push origin main
 # 원격 검증: git show HEAD:index.html | findstr "app.js?v="
 
-# Cowork 샌드박스 마운트가 stale/절단될 수 있음(파일별 제각각) → 샌드박스에서 커밋 금지.
-#   파일은 Edit/Write로 실제 디스크 반영됨(Read로 확인). 변경 함수는 outputs에 떼어 node --check로 문법 검증.
-#   커밋·푸시는 PC 터미널에서. 여러 세션이 같은 repo 동시 커밋 금지(stale 되돌림 위험).
+# 세션 커밋: 3단계 검증을 붙이면 허용 (2026-07-31 완화 — 배경역사 #37).
+#   ① 커밋 전 대상 파일 끝(tail) 온전 확인  ② git add는 명시 파일명만  ③ 푸시 후 원격-로컬 대조
+#      (git fetch → rev-parse 일치 + git diff origin/main -- <파일> 0줄 + 원격 파일 끝줄 확인)
+#   ③에서 불일치가 나오면 절대 재푸시하지 말고 원인 규명 먼저(과거 사고: 마운트 절단 파일이 그대로 푸시됨).
+#   구형 Cowork 샌드박스(마운트 stale/절단 이력)에서는 여전히 커밋 금지 — 검증 ①③이 통과할 수 없는 환경이었음.
+#   여러 세션이 같은 repo 동시 커밋 금지는 그대로 유지(stale 되돌림 위험).
 
 # 크롤러 수동 실행
 python crawler.py            # 뉴스("[네이버 뉴스] N건 수집" N>0 확인). NAVER_CLIENT_ID/SECRET 필요
