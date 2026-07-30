@@ -8,7 +8,6 @@
   "newer_version": "같은 dedup_key + 더 최신 law_number/enforcement_date → 기존 항목 status를 'superseded'로 변경(superseded_by 기재)하고, 최신본을 status 'current'로 추가/갱신.",
   "different_title": "dedup_key 불일치 → 신규 concept 문서로 추가."
  },
- "confluence_rule": "업로드 시 space ~1108400에서 제목으로 기존 페이지 검색 → 있으면 update, 없으면 create (동일 제목 중복 페이지 생성 금지).",
  "entries": [
   {
    "dedup_key": "전파법|법률",

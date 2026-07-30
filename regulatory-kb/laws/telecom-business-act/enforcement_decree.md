@@ -10,7 +10,6 @@ law_number: 제36281호
 enforcement_date: 2026-04-28
 competent_authority: 과학기술정보통신부(통신정책기획과), 방송미디어통신위원회
 source_path: 법제처 DRF API(law_sync.py) 취득 — 조문 원문은 document_chunks 참조
-target_space: https://confluence.tde.sktelecom.com/spaces/~1108400/
 ---
 
 # 요약

@@ -10,7 +10,6 @@ law_number: 제2012-23호
 enforcement_date: 2012-07-01
 competent_authority: 국립전파연구원
 source_path: C:\Users\SKTelecom\Desktop\팀 관련 규제 자료\전자파 행정규칙\전기안전 및 전자파적합성 시험·인증 통합 처리지침(국립전파연구원공고)(제2012-23호)(20120701).pdf
-target_space: https://confluence.tde.sktelecom.com/spaces/~1108400/
 ---
 
 # 요약

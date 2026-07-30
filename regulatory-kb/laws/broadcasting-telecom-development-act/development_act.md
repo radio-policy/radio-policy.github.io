@@ -10,7 +10,6 @@ law_number: 제21066호
 enforcement_date: 2025-10-01
 competent_authority: 과학기술정보통신부(정보통신산업정책과·디지털기반안전과·기금팀), 방송미디어통신위원회(재정팀 - 방송통신발전기금, 재난방송관리팀 - 재난방송)
 source_path: 법제처 DRF API(law_sync.py) 취득 — 조문 원문은 document_chunks 참조
-target_space: https://confluence.tde.sktelecom.com/spaces/~1108400/
 ---
 
 # 요약

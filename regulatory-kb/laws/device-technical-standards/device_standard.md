@@ -16,7 +16,6 @@ enforcement_date: 2026-06-23
 competent_authority: 국립전파연구원
 source_path: 법제처 DRF API(law_sync.py) 취득 — 조문 원문은 document_chunks 참조
 status: current
-target_space: https://confluence.tde.sktelecom.com/spaces/~1108400/
 ---
 
 # 요약

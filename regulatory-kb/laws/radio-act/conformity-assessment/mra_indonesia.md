@@ -10,7 +10,6 @@ law_number: 제2025-25호
 enforcement_date: 2025-05-27
 competent_authority: 과학기술정보통신부
 source_path: C:\Users\SKTelecom\Desktop\팀 관련 규제 자료\적합성평가 행정규칙\대한민국 과학기술정보통신부와 인도네시아 통신디지털부 (舊 통신정보부) 간의 방송통신기자재등의 적합성평가에 대한 상호인정협정(과학기술정보통신부고시)(제2025-25호)(20250527).pdf
-target_space: https://confluence.tde.sktelecom.com/spaces/~1108400/
 ---
 
 # 요약

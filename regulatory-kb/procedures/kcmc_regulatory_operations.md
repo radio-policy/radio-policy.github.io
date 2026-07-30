@@ -10,7 +10,6 @@ law_number: 제28호
 enforcement_date: 2026-04-21
 competent_authority: 방송미디어통신위원회(행정법무담당관)
 source_path: 법제처 DRF API(law_sync.py) 취득 — 조문 원문은 document_chunks 참조
-target_space: https://confluence.tde.sktelecom.com/spaces/~1108400/
 ---
 
 # 요약

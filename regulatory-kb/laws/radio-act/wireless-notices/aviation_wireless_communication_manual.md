@@ -11,7 +11,6 @@ enforcement_date: 2021-10-07
 competent_authority: 국토교통부
 status: current
 source_path: 법제처 DRF API(law_sync.py) 취득 — 본문 첨부파일 미포함(아래 참조)
-target_space: https://confluence.tde.sktelecom.com/spaces/~1108400/
 ---
 
 # 요약

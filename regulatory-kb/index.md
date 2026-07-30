@@ -10,4 +10,3 @@
 관리 파일: [manifest.json](manifest.json) (중복 방지 레지스트리) · [MAINTENANCE.md](MAINTENANCE.md) (법령 추가/갱신 절차)
 
 > 출처: SK텔레콤 기술정책팀 규제 자료 (전파법 4건, 전기통신사업법 4건, 정보통신망법 3건, 방송통신발전기본법·설비기술기준·단말장치기술기준 등 14건)
-> 대상 Confluence 공간: https://confluence.tde.sktelecom.com/spaces/~1108400/

@@ -20,7 +20,6 @@ law_number: 제2025-22호
 enforcement_date: 2026-07-01
 competent_authority: 국립전파연구원
 source_path: C:\Users\SKTelecom\Desktop\팀 관련 규제 자료\적합성평가 행정규칙\방송통신기자재등의 적합성평가에 관한 고시(국립전파연구원고시)(제2025-22호)(20260701).pdf
-target_space: https://confluence.tde.sktelecom.com/spaces/~1108400/
 ---
 
 # 요약

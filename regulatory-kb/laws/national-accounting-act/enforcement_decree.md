@@ -10,7 +10,6 @@ law_number: 제35947호
 enforcement_date: 2026-01-02
 competent_authority: 재정경제부(회계결산과) 044-215-5431
 source_path: 법제처 DRF API(law_sync.py) 취득 — 조문 원문은 document_chunks 참조
-target_space: https://confluence.tde.sktelecom.com/spaces/~1108400/
 ---
 
 # 요약

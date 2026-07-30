@@ -23,7 +23,6 @@ enforcement_date: 2026-07-24
 competent_authority: 국립전파연구원
 status: current
 source_path: 운영자 제공 PDF(국가법령정보센터 원문, 2026.7.24. 일부개정본) — 조문 원문은 document_chunks 참조. 법제처 DRF API는 첨부파일 전용으로 조문 미제공(2026-07-30 확인)
-target_space: https://confluence.tde.sktelecom.com/spaces/~1108400/
 ---
 
 # 요약

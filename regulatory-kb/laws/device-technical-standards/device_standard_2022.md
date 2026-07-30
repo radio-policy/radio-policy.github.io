@@ -19,7 +19,6 @@ competent_authority: 국립전파연구원
 status: superseded
 superseded_by: 제2025-13호
 source_path: C:\Users\SKTelecom\Desktop\팀 관련 규제 자료\단말장치 기술기준\단말장치 기술기준(국립전파연구원고시)(제2022-16호)(20220905).pdf
-target_space: https://confluence.tde.sktelecom.com/spaces/~1108400/
 ---
 
 # 요약

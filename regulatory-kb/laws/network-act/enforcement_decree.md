@@ -23,7 +23,6 @@ law_number: 제36502호
 enforcement_date: 2026-07-07
 competent_authority: 과학기술정보통신부·방송미디어통신위원회(공동소관)
 source_path: 법제처 DRF API(law_sync.py) 취득 — 조문 원문은 document_chunks 참조
-target_space: https://confluence.tde.sktelecom.com/spaces/~1108400/
 ---
 
 # 요약

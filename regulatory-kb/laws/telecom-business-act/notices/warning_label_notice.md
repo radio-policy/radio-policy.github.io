@@ -11,7 +11,6 @@ enforcement_date: 2019-06-20
 competent_authority: 과학기술정보통신부
 status: current
 source_path: 법제처 DRF API(law_sync.py) 취득 — 조문 원문은 document_chunks 참조
-target_space: https://confluence.tde.sktelecom.com/spaces/~1108400/
 ---
 
 # 요약

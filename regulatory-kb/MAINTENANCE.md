@@ -16,9 +16,6 @@
    - **dedup_key 없음** → *신규*. 적절한 법령군 폴더에 concept 문서 생성.
 4. 문서 생성/갱신 후 `manifest.json`, 해당 `index.md`, `references/index.md`, `log.md` 갱신.
 
-## Confluence 업로드 시
-- space `~1108400`에서 **제목으로 기존 페이지를 먼저 검색** → 있으면 `update`, 없으면 `create`.
-- 동일 제목의 새 페이지를 만들지 않는다(중복 페이지 방지). 버전 변경은 페이지 갱신 + 라벨/버전 노트로 표기.
 
 ## 자동화 권장(선택)
 `manifest.json`은 기계가독형이므로, 추후 앱(`okf.py` 등)에서 로드시 dedup_key 충돌을 검증하거나, 업로드 스크립트에서 제목→page_id 매핑 캐시로 재사용할 수 있다.

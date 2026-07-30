@@ -10,7 +10,6 @@ law_number: 제35801호
 enforcement_date: 2025-10-01
 competent_authority: 과학기술정보통신부(전파정책기획과·전파기반과), 방송미디어통신위원회(방송용 주파수)
 source_path: 법제처 DRF API(law_sync.py) 취득 — 조문 원문은 document_chunks 참조
-target_space: https://confluence.tde.sktelecom.com/spaces/~1108400/
 ---
 
 # 요약

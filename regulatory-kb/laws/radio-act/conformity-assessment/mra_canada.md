@@ -19,7 +19,6 @@ law_number: 제2019-23호
 enforcement_date: 2019-06-15
 competent_authority: 과학기술정보통신부
 source_path: C:\Users\SKTelecom\Desktop\팀 관련 규제 자료\통신기자재 행정규칙\대한민국 과학기술정보통신부와 캐나다 혁신과학경제개발부간의 방송통신기자재등에 대한 상호인정협정(과학기술정보통신부고시)(제2019-23호)(20190615).pdf
-target_space: https://confluence.tde.sktelecom.com/spaces/~1108400/
 ---
 
 # 요약

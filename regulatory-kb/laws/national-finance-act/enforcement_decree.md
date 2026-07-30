@@ -10,7 +10,6 @@ law_number: 제36312호
 enforcement_date: 2026-05-06
 competent_authority: 기획예산처(지출혁신과), 재정경제부(회계결산과·국고총괄과·출자관리과)
 source_path: 법제처 DRF API(law_sync.py) 취득 — 조문 원문은 document_chunks 참조
-target_space: https://confluence.tde.sktelecom.com/spaces/~1108400/
 ---
 
 # 요약
