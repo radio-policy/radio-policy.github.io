@@ -6096,16 +6096,19 @@ function renderLawMapGraph(focusId) {
     var sub = lawmapNeighborhood(_lawMapFocusId);
     nodes = sub.nodes; edges = sub.edges;
   } else {
-    // 전체 뷰: '전파정책 관련 법'만 — 주제 + 시드로 연결된 법 + 그 법의 계열(하위법령)로 코어를 정하고,
-    //   엣지는 시드 + (코어 내부의 계열·인용)만 표시. 지방세법처럼 세금 감면 조항에서 농지법·축산법 등
+    // 전체 뷰: '전파정책 관련 법'만 — 주제 + 주제·시드에 연결된 법 + 그 법의 계열(하위법령)로 코어를 정하고,
+    //   엣지는 시드·주제 엣지 + (코어 내부의 계열·인용)만 표시. 지방세법처럼 세금 감면 조항에서 농지법·축산법 등
     //   타 분야 법을 대량 인용하는 허브의 바깥 인용은 코어 밖이라 제외됨(그 법의 전체 인용은 노드 클릭 시).
     var core = new Set();
-    _lawMapNodes.forEach(function(n) { if (n.node_type === 'topic') core.add(n.id); });
-    _lawMapEdges.forEach(function(e) { if (e.source === 'seed') { core.add(e.source_id); core.add(e.target_id); } });
+    var topicIds = new Set();
+    _lawMapNodes.forEach(function(n) { if (n.node_type === 'topic') { core.add(n.id); topicIds.add(n.id); } });
+    // 주제에 닿은 엣지(seed·ai 등 출처 불문)의 양끝은 코어 — 시드 밖 법령만 근거로 가진 주제(예: 침해사고 신고→정보통신망법)가
+    //   엣지 없는 단독 버블로 뜨던 문제 방지. 주제 엣지는 소수라 그래프 폭발 위험 없음.
+    _lawMapEdges.forEach(function(e) { if (e.source === 'seed' || topicIds.has(e.source_id) || topicIds.has(e.target_id)) { core.add(e.source_id); core.add(e.target_id); } });
     _lawMapEdges.forEach(function(e) { if (e.source === 'family' && (core.has(e.source_id) || core.has(e.target_id))) { core.add(e.source_id); core.add(e.target_id); } });
     var keep = new Set();
     _lawMapEdges.forEach(function(e) {
-      if (e.source === 'seed') keep.add(e.id);
+      if (e.source === 'seed' || topicIds.has(e.source_id) || topicIds.has(e.target_id)) keep.add(e.id);
       else if (core.has(e.source_id) && core.has(e.target_id)) keep.add(e.id);
     });
     edges = _lawMapEdges.filter(function(e) { return keep.has(e.id); });
