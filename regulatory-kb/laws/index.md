@@ -12,3 +12,4 @@
 * [국가재정법 계열](national-finance-act/) - 국가재정법·시행령 (기금 운용 근거)
 * [국가회계법 계열](national-accounting-act/) - 국가회계법·시행령
 * [정부조직법](government-organization-act/) - 과기정통부·방미통위 등 정부 조직 근거
+* [지방세법 계열](local-tax-act/) - 무선국 등록면허세·기지국 철탑 취득세/재산세 (무선국 비용 근거)

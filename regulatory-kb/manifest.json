@@ -1,7 +1,7 @@
 {
  "schema": "regulatory-kb-manifest/v1",
  "updated": "2026-07-30",
- "entry_count": 113,
+ "entry_count": 116,
  "dedup_key_rule": "정규화 제목(버전 수식어 '(구버전)' 등 제거) + '|' + law_type. 같은 dedup_key = 같은 법령(버전만 다를 수 있음).",
  "on_readd_rule": {
   "same_law_number": "동일 법령번호 재추가 → 기존 path에 덮어쓰기(idempotent). 신규 파일 생성 금지.",
@@ -1143,6 +1143,36 @@
    "enforcement_date": "2026-05-04",
    "concept_type": "Notice",
    "path": "laws/radio-act/wireless-notices/nfpc505_fire_safety_perf.md",
+   "status": "current"
+  },
+  {
+   "dedup_key": "지방세법|법률",
+   "title": "지방세법",
+   "law_type": "법률",
+   "law_number": "제21308호",
+   "enforcement_date": "2026-07-01",
+   "concept_type": "Act",
+   "path": "laws/local-tax-act/local_tax_act.md",
+   "status": "current"
+  },
+  {
+   "dedup_key": "지방세법 시행령|대통령령",
+   "title": "지방세법 시행령",
+   "law_type": "대통령령",
+   "law_number": "제36445호",
+   "enforcement_date": "2026-07-01",
+   "concept_type": "Decree",
+   "path": "laws/local-tax-act/enforcement_decree.md",
+   "status": "current"
+  },
+  {
+   "dedup_key": "무선통신매뉴얼|국토교통부고시",
+   "title": "무선통신매뉴얼 (항공교통 무선통신 절차)",
+   "law_type": "국토교통부고시",
+   "law_number": "제2021-1140호",
+   "enforcement_date": "2021-10-07",
+   "concept_type": "Notice",
+   "path": "laws/radio-act/wireless-notices/aviation_wireless_communication_manual.md",
    "status": "current"
   }
  ]
