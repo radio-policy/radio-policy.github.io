@@ -61,7 +61,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 | assembly_bills | 국회 법안. bill_id(UNIQUE)·법안명·단계·소관위·제안일·링크 |
 | document_chunks | 법령·고시·보도자료 RAG 청크. embedding(vector 1024, HNSW), article_no=조항번호+제목. file_path=업로드 원본 Storage 경로 |
 | custom_knowledge | 팀 추가 지식(수동 입력). AI 자문 키워드 매칭 참조 |
-| chat_logs | AI 자문 이력. 삭제 가능 |
+| chat_logs | AI 자문 이력. 삭제 가능. `sources`(text)는 **두 종류를 접두사로 구분해** 담는다 — 법령·문서명은 그대로, 수집 뉴스는 `[뉴스] 제목 (매체, 날짜)`. 화면·내보내기에서 `splitSources()`로 갈라 별도 표기(법령은 6개 초과분 `… 등 N개`). **뉴스는 본문 발췌로 실제 반영된 건만** 기록(제목 목록 30건은 근거 아님). 스키마 변경 없이 반영 여부를 사후 검증하려는 구조. (배경역사 #35) |
 | report_samples | 보고서 초안 제안 — 내 보고서 전문(형식·톤 학습용, 청킹 안 함). embedding(vector 1024, HNSW). report_type=정책검토/규제영향/동향보고/기타 |
 | report_style_rules | 보고서 스타일 가이드 캐시(단일 행 id=1). sample_count·feedback_count로 자동 재증류 임계(+2) 추적 |
 | report_feedback | 보고서 피드백 — request·draft·final(채택·교정본)·rating(1/-1). 편집-diff 학습 데이터. 영구 |
@@ -142,6 +142,23 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 인용: buildRagContext()가 조항(번호+제목)·고시번호·시행일 표시. article_no에 조문 제목 포함.
 임베딩 백필: 신규 업로드 후 PC에서 python backfill_embeddings.py (NULL만). 그 전엔 "임베딩 대기" 배지.
 ```
+
+## 자문 뉴스 컨텍스트 (news_feed → 프롬프트)
+
+법령 RAG와 별개 경로다. `fetchRecentNewsContext()`(app.js)가 두 블록을 만들어 시스템 프롬프트에 붙인다.
+
+```
+[질문 관련 최신 기사]  ← 최대 3건. extractNewsKeywords(뉴스 전용) 6개로 조회,
+                         제목 일치 가중 3 + 본문 일치 가중 1 → 관련도 순(최신순 아님).
+                         2점 미만은 배제(0건일 때만 상위 2건 완화).
+                         발췌 예산 차등: 1위 1,800자 / 2·3위 700자.
+[최근 수집 뉴스 동향]  ← 최근 60일 제목 30건(최신순). 동향 참고용이며 근거가 아니다.
+발췌 직후 지시: 질문이 수치·순위 비교면 웹검색·학습지식 대신 발췌 수치를 매체·날짜와 함께 인용.
+출처 표기: 본문 발췌분만 chat_logs.sources에 [뉴스] 접두사로 기록 → 답변 아래 🗞️ 참조 뉴스 배지.
+```
+
+- 대상은 최근 60일 + `locked=true`(잠금 기사는 기간 무관 상시 참조).
+- 반영 여부는 답변 아래 `🗞️ 참조 뉴스` 배지로 확인한다. **배지가 없으면 그 답변에는 뉴스가 안 들어간 것** — 사후 판별 수단이 없어 오답을 신뢰했던 사고의 재발 방지 장치다. (배경역사 #35)
 
 ## 법령 관계도 (lawmap 메뉴, 2026-07-23 신설)
 
@@ -431,6 +448,10 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **news_feed 수동 정리 시 `AND locked=false` 필수.**
 - **news_feed 저장을 plain `insert`로 되돌리지 말 것 — `upsert(on_conflict='url', ignore_duplicates=True)` 유지(crawler.py·gov_notice_crawler.py 동일)** — url은 실DB UNIQUE라 plain insert는 중복 1건에 배치 전체가 실패해 그 회차 신규 기사 통째 유실. (배경역사 #23)
 - **AI 자문 검색 병렬 실행(searchKeywords Promise.all·callClaude 보조 컨텍스트 5종 동시 시작)을 순차 await로 되돌리지 말 것** — 검색 6종 릴레이로 답변 시작 2~4초 지연 회귀. 프롬프트 조립 순서는 코드가 고정하므로 결과 동일. (배경역사 #23)
+- **자문 뉴스 본문 매칭을 최신순 상위 N건(`order published_at desc limit 2`)으로 되돌리지 말 것 — 제목 가중 3·본문 가중 1 관련도 스코어링 유지** — 특정 이슈가 폭주한 날(예: KT 과징금 제재일) 발췌 3칸이 무관 기사로 잠식돼, 질문이 그대로 인용한 기사조차 프롬프트에 못 들어간다. 제목 목록(`limit 30`)도 최신순이라 그날 신규 49건에 밀려 함께 탈락했다. (배경역사 #35)
+- **`extractNewsKeywords`(뉴스)와 `extractKeywords`(법령)를 합치거나 서로의 불용어를 섞지 말 것** — 뉴스 불용어(`통신사`·`영향`·`분석해줘`)를 법령용에 넣으면 법령 RAG 검색이 깨지고, 반대로 법령용을 뉴스에 쓰면 `같은/지하철인데/통신사`가 뽑혀 이번 누락이 재발한다(`인데`가 조사 목록에 없어 본문 매칭 0건). 도메인어 절단 보호(`와이파이`의 끝 `이`를 조사로 오인) 분기도 유지. (배경역사 #35)
+- **자문 뉴스 발췌를 일괄 600자로 되돌리지 말 것(1위 1,800자·2·3위 700자 차등 유지) / 출처에 제목 목록 30건을 넣지 말 것(본문 발췌분만)** — 600자는 기사 앞부분 수치는 살리고 뒷부분 최신 상황만 잘라내 답변을 옛 시점으로 후퇴시킨다(실측: `28㎓` 627자, `시범 운영` 1252자 지점). 근거로 쓰이지 않은 제목 목록을 출처로 표기하면 거짓 표기가 된다. (배경역사 #35)
+- **자문 뉴스 발췌 뒤의 "수치 인용 우선" 지시를 제거하지 말 것** — 기사 본문이 프롬프트에 들어가 있어도 모델이 웹검색 쪽 옛 수치를 골라 쓴 사례가 있다(검색이 아니라 생성 단계 문제). 질문이 수치·순위 비교를 묻고 발췌에 그 수치가 있으면 매체·날짜와 함께 인용하게 강제한다. (배경역사 #35)
 - **deleted_news·importance_feedback·feedback_rules 비우지 말 것** — 재수집 방지·학습용 영구.
 - **report_samples·report_feedback·report_directives·report_style_rules 비우지 말 것** — 보고서 형식·개인화 학습 데이터(비우면 초기화).
 - **보고서 개인화 채널(말로 지시·빨간펜·👍/👎·자동 재증류)을 단일 채널로 축소 금지** — "쓸수록 내 톤" 핵심.
