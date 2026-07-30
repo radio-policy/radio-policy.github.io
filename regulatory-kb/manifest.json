@@ -1,7 +1,7 @@
 {
  "schema": "regulatory-kb-manifest/v1",
  "updated": "2026-07-30",
- "entry_count": 169,
+ "entry_count": 170,
  "dedup_key_rule": "정규화 제목(버전 수식어 '(구버전)' 등 제거) + '|' + law_type. 같은 dedup_key = 같은 법령(버전만 다를 수 있음).",
  "on_readd_rule": {
   "same_law_number": "동일 법령번호 재추가 → 기존 path에 덮어쓰기(idempotent). 신규 파일 생성 금지.",
@@ -1703,6 +1703,16 @@
    "enforcement_date": "2025-02-21",
    "concept_type": "Notice",
    "path": "laws/telecom-business-act/notices/wholesale_provision_price_standard.md",
+   "status": "current"
+  },
+  {
+   "dedup_key": "전기통신사업용 무선설비의 기술기준|국립전파연구원고시",
+   "title": "전기통신사업용 무선설비의 기술기준",
+   "law_type": "국립전파연구원고시",
+   "law_number": "제2026-4호",
+   "enforcement_date": "2026-07-24",
+   "concept_type": "Notice",
+   "path": "laws/radio-act/wireless-notices/telecom_business_radio_equipment_standard.md",
    "status": "current"
   }
  ]
