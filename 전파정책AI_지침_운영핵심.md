@@ -25,7 +25,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 ├── requirements.txt            # 의존성 버전 고정(lock, 61개). 모든 워크플로가 `pip install -r requirements.txt`로 설치 — 자동 최신화 사고 방지(배경역사 #15)
 ├── crawler.py                  # 메인 크롤러(GitHub Actions 매시간) — 네이버 검색 OpenAPI(키 없으면 Google RSS 폴백), Haiku 긴급도 분류(피드백 학습), fetch_article_body 본문 수집
 ├── morning_briefing.py         # 모닝 브리핑 생성·발송(06:00 KST) — 🔴=DB 긴급도, SKT 영향 분석, 신규 입법예고 📢 섹션, 본문 0건 시 요약→제목 폴백(빈 브리핑 방지), 기사 0건 시 시각무관 1일1회 '🕊️무뉴스' 통지+placeholder(_handle_no_news)
-├── refetch_content.py          # 본문 재수집·요약·15일 초과 정리(Windows 스케줄러, 한국 IP) · heartbeat(last_refetch_run)
+├── refetch_content.py          # 본문 재수집·요약·60일 초과 정리(Windows 스케줄러, 한국 IP) · heartbeat(last_refetch_run)
 ├── gov_notice_crawler.py       # 정부 고시(RRA·MSIT·KCC)→news_feed + 입법예고(opinion.lawmaking.go.kr)→law_amendments(lsAnc) (17:00, 한국 IP) · heartbeat(last_gov_notice_run)
 ├── law_crawler.py              # 법제처 DRF API 법령·고시 모니터링(11:00 KST). 엔드포인트 www.law.go.kr/DRF/lawSearch.do, OC=radiopolicyai
 ├── assembly_crawler.py         # 국회 법안 모니터링(열린국회정보 API, 22대)
@@ -51,7 +51,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 
 | 테이블 | 설명 |
 |---|---|
-| news_feed | 뉴스 본문·요약·긴급도(15일 유지). locked=true면 자동삭제 제외+AI 자문 상시 참조. 내부값 긴급/보통/참고. **url UNIQUE**(idx_news_feed_url_unique) — 저장은 반드시 `upsert(on_conflict='url', ignore_duplicates=True)`로 (plain insert는 중복 1건에 배치 전체 실패, #23) |
+| news_feed | 뉴스 본문·요약·긴급도(**60일 유지** — 2026-07-31 확대, 자문 뉴스 검색 60일 창과 정합). locked=true면 자동삭제 제외+AI 자문 상시 참조. 내부값 긴급/보통/참고. **url UNIQUE**(idx_news_feed_url_unique) — 저장은 반드시 `upsert(on_conflict='url', ignore_duplicates=True)`로 (plain insert는 중복 1건에 배치 전체 실패, #23) |
 | deleted_news | 삭제 기사 url·title 블록리스트(재수집 방지). 영구 |
 | importance_feedback | 긴급도 수동 수정 내역(news_id당 1행). 분류 학습 데이터. 영구 |
 | feedback_rules | 피드백 증류 규칙 캐시(단일 행 id=1). 20건↑ 증류, 10건마다 재증류 |
@@ -95,7 +95,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 | jobid | jobname | UTC | KST | 역할 |
 |---|---|---|---|---|
 | 1 | briefing-health-check | `0 1 * * *` | 10:00 | 브리핑 상태 점검(경고 전용) |
-| 2 | news-feed-cleanup | `0 15 * * *` | 00:00 | 15일 초과 뉴스 자동 삭제(created_at>15d AND locked=false) — PC 불필요 |
+| 2 | news-feed-cleanup | `0 15 * * *` | 00:00 | 60일 초과 뉴스 자동 삭제(created_at>60d AND locked=false) — PC 불필요 |
 | 9 | crawl-trigger-hourly | `47 * * * *` | 매시 :47 | 뉴스 크롤러 트리거(주 트리거) → daily_crawl.yml dispatch |
 | 10 | assembly-crawl-trigger | `30 1 * * *` | 10:30 | 국회 크롤러 백업 트리거 |
 | 11 | law-crawl-trigger | `30 2 * * *` | 11:30 | 법령·입법예고 크롤러 백업 트리거 |
@@ -194,7 +194,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 - **수정 배포 시 index.html 캐시 버스터 `app.js?v=`·`styles.css?v=` 갱신 필수 (현재 `app.js?v=20260729a` / `styles.css?v=20260723b`)** — CSS 고칠 때 styles.css 버스터도 갱신해야 사용자 브라우저가 새로 받음
 - 아이콘은 Tabler Icons webfont(ti ti-*) — 존재하는 이름만(없으면 빈칸 렌더).
 - 메뉴: [모니터링] 보도자료·뉴스 / Daily Briefing / 기술 용어 · [자문] AI 자문 / 보고서 초안 제안 / **법령 관계도(lawmap)** · [법안 동향] 국회 법안 / 행정부 입법예고·법령 개정 / 법령 DIFF 분석 · [지식 베이스] 국내 법령·고시 / ITU-R / 정부 보도자료 / 추가 지식 입력 / 설정 / 운영 상태(크롤·브리핑·heartbeat 한눈 점검) — ※ lawmap은 질문·AI 생성 성격이라 자문 그룹에 배치(데스크톱). 모바일은 자문 서브메뉴가 없어 지식베이스 서브메뉴(law-sub)로 접근(pageTobn=bn-law).
-- 뉴스 중요도: 화면 라벨 "🔴 중요/🟡 보통/🟢 참고", 내부값·DB·코드는 '긴급/보통/참고'. 수정 시 news_feed 갱신+importance_feedback 기록+당일 브리핑 🔴 동기화. 잠금=15일 삭제 제외, 삭제=영구+deleted_news 기록.
+- 뉴스 중요도: 화면 라벨 "🔴 중요/🟡 보통/🟢 참고", 내부값·DB·코드는 '긴급/보통/참고'. 수정 시 news_feed 갱신+importance_feedback 기록+당일 브리핑 🔴 동기화. 잠금=60일 삭제 제외, 삭제=영구+deleted_news 기록.
 
 ## 알림 채널
 
@@ -446,6 +446,7 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **Sonnet으로 긴급도 분류 업그레이드 제안 금지** — Haiku+피드백 학습으로 충분.
 - **Cowork 예약 태스크로 크롤러 재등록 금지** — 중복 실행.
 - **news_feed 수동 정리 시 `AND locked=false` 필수.**
+- **뉴스 목록(loadNews)의 잠금 기사 별도 조회·병합을 제거하지 말 것** — 최신순 limit(500)만으로는 오래된 잠금 기사가 순위 밖으로 밀려 화면에서 "지워진 것처럼" 보인다(실DB엔 생존 — 삭제 오인 신고의 실제 원인). 보존을 60일로 늘려 행수가 커질수록 더 밀린다. (배경역사 #38)
 - **news_feed 저장을 plain `insert`로 되돌리지 말 것 — `upsert(on_conflict='url', ignore_duplicates=True)` 유지(crawler.py·gov_notice_crawler.py 동일)** — url은 실DB UNIQUE라 plain insert는 중복 1건에 배치 전체가 실패해 그 회차 신규 기사 통째 유실. (배경역사 #23)
 - **AI 자문 검색 병렬 실행(searchKeywords Promise.all·callClaude 보조 컨텍스트 5종 동시 시작)을 순차 await로 되돌리지 말 것** — 검색 6종 릴레이로 답변 시작 2~4초 지연 회귀. 프롬프트 조립 순서는 코드가 고정하므로 결과 동일. (배경역사 #23)
 - **자문 뉴스 본문 매칭을 최신순 상위 N건(`order published_at desc limit 2`)으로 되돌리지 말 것 — 제목 가중 3·본문 가중 1 관련도 스코어링 유지** — 특정 이슈가 폭주한 날(예: KT 과징금 제재일) 발췌 3칸이 무관 기사로 잠식돼, 질문이 그대로 인용한 기사조차 프롬프트에 못 들어간다. 제목 목록(`limit 30`)도 최신순이라 그날 신규 49건에 밀려 함께 탈락했다. (배경역사 #35)
@@ -499,7 +500,7 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 3. Supabase 무료 슬롯 2개 모두 사용 중 — 신규 프로젝트 생성 금지.
 4. 스포츠 기사 오탐: EXCLUDE_KEYWORDS+피드백 관리.
 5. 신규 업로드 문서·보고서: backfill 전까지 시맨틱 미적용("임베딩 대기"). 보고서는 backfill_report_embeddings.py(PC 의존).
-6. 15일 초과 삭제는 Supabase pg_cron(jobid 2, 매일 00:00 KST, created_at 기준 `DELETE ... AND locked=false`)이 PC 없이 자동 수행. refetch_content.py는 published_at 기준 보조 정리(PC 의존). 입법예고 수집만 PC 의존(17:00 로컬).
+6. 60일 초과 삭제는 Supabase pg_cron(jobid 2, 매일 00:00 KST, created_at 기준 `DELETE ... AND locked=false`)이 PC 없이 자동 수행. refetch_content.py는 published_at 기준 보조 정리(PC 의존). 입법예고 수집만 PC 의존(17:00 로컬).
 7. 무선국 자기적합확인(전파법 제24조②, 2026.10.22 시행): 시행령 위임 미반영 — 개정 공포 시 PDF 업로드.
 8. 일부 고시는 시행 전 개정본만 보유(적합성평가 2025-56호 등).
 9. ITU-R 탭은 정적 목록.

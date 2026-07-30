@@ -2027,9 +2027,20 @@ function classifyNewsImportance(news) {
 async function loadNews() {
   if (!sb) return;
   try {
-    var { data } = await sb.from('news_feed').select('*')
-      .order('published_at', { ascending: false, nullsFirst: false }).limit(500);
-    newsDataCache = data || [];
+    // 잠금 기사는 별도 조회로 항상 포함 — 최신순 limit에만 의존하면 오래된 잠금 기사가
+    // 목록 순위 밖으로 밀려 "지워진 것처럼" 보인다(실DB엔 생존). 60일 보존 확대 후엔
+    // 행수가 수천 건이라 limit 확대만으론 해결이 안 됨. (배경역사 #38)
+    var r = await Promise.all([
+      sb.from('news_feed').select('*')
+        .order('published_at', { ascending: false, nullsFirst: false }).limit(500),
+      sb.from('news_feed').select('*').eq('locked', true).limit(200)
+    ]);
+    var seen = new Set();
+    newsDataCache = [];
+    (r[0].data || []).concat(r[1].data || []).forEach(function(n) {
+      if (seen.has(n.id)) return; seen.add(n.id); newsDataCache.push(n);
+    });
+    newsDataCache.sort(function(a, b) { return (b.published_at || '').localeCompare(a.published_at || ''); });
     // 중요도 분류 (캐시에 저장)
     newsDataCache.forEach(function(n) { n._importance = n.importance || n.urgency || classifyNewsImportance(n); });
     renderNewsList();
@@ -2130,7 +2141,7 @@ function _renderSingleItem(n) {
     ? ' <a href="' + n.url + '" target="_blank" onclick="event.stopPropagation()" style="color:var(--accent);font-size:11px;vertical-align:middle"><i class="ti ti-external-link"></i></a>'
     : '';
   var lockIcon = ' <span onclick="event.stopPropagation();toggleNewsLock(\'' + n.id + '\')" ' +
-    'title="' + (n.locked ? '잠금 해제 (해제 시 15일 경과 후 삭제됨)' : '잠금 (15일이 지나도 삭제되지 않음)') + '" ' +
+    'title="' + (n.locked ? '잠금 해제 (해제 시 60일 경과 후 삭제됨)' : '잠금 (60일이 지나도 삭제되지 않음)') + '" ' +
     'style="cursor:pointer;font-size:11px;vertical-align:middle;color:' + (n.locked ? 'var(--accent)' : 'var(--text-tertiary)') + ';opacity:' + (n.locked ? '1' : '.4') + '">' +
     '<i class="ti ti-' + (n.locked ? 'lock' : 'lock-open') + '"></i></span>';
   var delIcon = ' <span onclick="event.stopPropagation();deleteNewsItem(\'' + n.id + '\')" ' +
@@ -2239,7 +2250,7 @@ function filterNewsByImportance(el, importance) {
 }
 
 // ── 뉴스 상세 패널 ─────────────────────────────────────────
-// ── 뉴스 잠금 토글 (locked=true면 15일 경과해도 삭제되지 않음) ──
+// ── 뉴스 잠금 토글 (locked=true면 60일 경과해도 삭제되지 않음) ──
 async function toggleNewsLock(newsId) {
   var n = newsDataCache.find(function(x) { return String(x.id) === String(newsId); });
   if (!n || !sb) return;
@@ -2379,7 +2390,7 @@ function showNewsDetail(newsId) {
     ? '<a href="' + n.url + '" target="_blank" class="btn" style="font-size:11px;padding:4px 10px;text-decoration:none;white-space:nowrap"><i class="ti ti-external-link"></i> 원문 보기</a>'
     : '';
   var lockBtn = '<button class="btn" id="lock-btn-' + n.id + '" onclick="toggleNewsLock(\'' + n.id + '\')" ' +
-    'title="잠금 시 15일이 지나도 삭제되지 않고 AI 자문에서 계속 참조됩니다" ' +
+    'title="잠금 시 60일이 지나도 삭제되지 않고 AI 자문에서 계속 참조됩니다" ' +
     'style="font-size:11px;padding:4px 10px;cursor:pointer;white-space:nowrap;' + (n.locked ? 'color:var(--accent)' : '') + '">' +
     (n.locked ? '<i class="ti ti-lock"></i> 잠금됨' : '<i class="ti ti-lock-open"></i> 잠금') + '</button>';
   var delBtn = '<button class="btn" onclick="deleteNewsItem(\'' + n.id + '\')" ' +
@@ -4170,7 +4181,7 @@ async function loadOpsStatus() {
     rows += opsRow('본문 수집 (refetch, heartbeat)', opsAgoText(lastRefetch), null,
                    lastRefetch ? ('최근 결과: ' + hbNote('last_refetch_run')) : 'PC 본문 수집 (heartbeat 대기)');
     rows += opsRow('국회 법안 최근 갱신', opsAgoText(lastBill), null, '매일 10:00');
-    rows += opsRow('뉴스 보관 건수', (newsCount != null ? newsCount + '건' : '—'), null, '15일 유지');
+    rows += opsRow('뉴스 보관 건수', (newsCount != null ? newsCount + '건' : '—'), null, '60일 유지');
 
     el.innerHTML =
       '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">' +
