@@ -15,7 +15,7 @@
 
 ## 적합성평가 관리(범부처)
 * [적합성평가 관리 등에 관한 운용요령](conformity_mgmt_guideline_kats.md) - 국가기술표준원고시 제2024-56호
-* [적합성평가 부정행위 조사 및 경영체제 인정기구 지정에 관한 운용요령](conformity_fraud_investigation.md) - 산업통상자원부고시 제2025-119호
+* [적합성평가 부정행위 조사 및 경영체제 인정기구 지정에 관한 운용요령](conformity_fraud_investigation.md) - 산업통상부고시 제2025-119호
 * [지방자치단체 기간통신사업 적합성 평가 외부전문기관](local_govt_telecom_assessment_agency.md) - 과기정통부고시 제2024-13호
 
 ## 국가 간 상호인정협정(MRA)

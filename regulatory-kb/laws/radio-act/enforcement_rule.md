@@ -180,4 +180,4 @@ target_space: https://confluence.tde.sktelecom.com/spaces/~1108400/
 - 상위 법령: [전파법](radio_act.md), [전파법 시행령](enforcement_decree.md)
 
 # Citations
-[1] 전파법 시행규칙(과학기술정보통신부령 제156호, 시행 2025. 10. 1.) — 법제처 DRF API(law_sync.py)로 취득한 조문 전문. 조문·부칙·별지 서식 원문은 `document_chunks`의 doc_name "전파법 시행규칙(부령)(제00156호)(20251001)"에서 조회 가능.
+[1] 전파법 시행규칙(과학기술정보통신부령 제156호, 시행 2025. 10. 1.) — 법제처 DRF API(law_sync.py)로 취득한 조문 전문. 조문·부칙·별지 서식 원문은 `document_chunks`의 doc_name "전파법 시행규칙(과학기술정보통신부령)(제00156호)(20251001)"에서 조회 가능.

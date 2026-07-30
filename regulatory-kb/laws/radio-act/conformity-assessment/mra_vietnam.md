@@ -2,7 +2,7 @@
 type: Notice
 title: 한-베트남 방송통신기자재 상호인정협정(MRA)
 description: 대한민국 방송통신위원회와 베트남 정보통신부(MIC) 간 방송통신기자재등에 대한 상호인정협정을 고시화한 방송통신위원회고시. APEC MRA에 근거해 양국 적합성평가 시험기관(1단계)을 상호 지정·승인하며, 상대국 인정 시험기관이 발행한 시험성적서를 적합성평가에 활용할 수 있게 한다. 별표 1에 베트남 대상기자재(단말·무선·IT기기)와 TCN/TCVN 기술기준을 명시.
-resource: 대한민국 방송통신위원회와 베트남 정보통신부간의 방송통신기자재등에 대한 상호인정협정(방송통신위원회고시)(제2011-41호)(20110802).pdf
+resource: 법제처 DRF API(law_sync.py) 취득 — 조문 원문은 document_chunks 참조
 tags:
   - 상호인정협정
   - MRA
@@ -20,7 +20,7 @@ law_type: 방송통신위원회고시
 law_number: 제2011-41호
 enforcement_date: 2011-08-02
 competent_authority: 방송통신위원회
-source_path: C:\Users\SKTelecom\Desktop\팀 관련 규제 자료\통신기자재 행정규칙\대한민국 방송통신위원회와 베트남 정보통신부간의 방송통신기자재등에 대한 상호인정협정(방송통신위원회고시)(제2011-41호)(20110802).pdf
+source_path: 법제처 DRF API(law_sync.py) 취득 — 조문 원문은 document_chunks 참조
 target_space: https://confluence.tde.sktelecom.com/spaces/~1108400/
 ---
 

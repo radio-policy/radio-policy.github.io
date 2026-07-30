@@ -2,14 +2,14 @@
 type: Notice
 title: 전자파흡수율(SAR) 측정기준 (제2025-9호)
 description: 「전파법」 제47조의2제1항에 근거하여 무선설비 등에서 발생하는 전자파의 인체 흡수율(SAR) 측정에 필요한 사항을 규정한 국립전파연구원 고시. 측정 세부사항은 KS C 3350을 적용한다.
-resource: 전자파흡수율 측정기준(국립전파연구원고시)(제2025-9호)(20260401).pdf
+resource: 법제처 DRF API(law_sync.py) 취득 — 조문 원문은 document_chunks 참조
 tags: [radio, emf, sar]
 timestamp: 2026-07-02T00:00:00Z
 law_type: 국립전파연구원고시
 law_number: 제2025-9호
 enforcement_date: 2026-04-01
 competent_authority: 국립전파연구원
-source_path: C:\Users\SKTelecom\Desktop\팀 관련 규제 자료\전자파 행정규칙\전자파흡수율 측정기준(국립전파연구원고시)(제2025-9호)(20260401).pdf
+source_path: 법제처 DRF API(law_sync.py) 취득 — 조문 원문은 document_chunks 참조
 target_space: https://confluence.tde.sktelecom.com/spaces/~1108400/
 ---
 
