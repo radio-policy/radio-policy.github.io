@@ -2027,17 +2027,22 @@ function classifyNewsImportance(news) {
 async function loadNews() {
   if (!sb) return;
   try {
-    // 잠금 기사는 별도 조회로 항상 포함 — 최신순 limit에만 의존하면 오래된 잠금 기사가
-    // 목록 순위 밖으로 밀려 "지워진 것처럼" 보인다(실DB엔 생존). 60일 보존 확대 후엔
-    // 행수가 수천 건이라 limit 확대만으론 해결이 안 됨. (배경역사 #38)
-    var r = await Promise.all([
-      sb.from('news_feed').select('*')
-        .order('published_at', { ascending: false, nullsFirst: false }).limit(500),
-      sb.from('news_feed').select('*').eq('locked', true).limit(200)
-    ]);
+    // 전량 페이지네이션 조회 — PostgREST 서버 max-rows가 1000이라 limit만 키워선 잘린다(#28).
+    // 60일 보존이라 행수가 수천 건까지 자라며, 상한 없이 전부 가져온다(안전 상한 10,000행).
+    var all = [];
+    for (var off = 0; off < 10000; off += 1000) {
+      var page = await sb.from('news_feed').select('*')
+        .order('published_at', { ascending: false, nullsFirst: false })
+        .range(off, off + 999);
+      if (page.error) throw page.error;
+      all = all.concat(page.data || []);
+      if ((page.data || []).length < 1000) break;
+    }
+    // 잠금 기사 별도 조회·병합 유지(배경역사 #38) — 전량 조회가 어떤 이유로든 잘려도 잠금 기사는 항상 포함
+    var lockedResp = await sb.from('news_feed').select('*').eq('locked', true).limit(500);
     var seen = new Set();
     newsDataCache = [];
-    (r[0].data || []).concat(r[1].data || []).forEach(function(n) {
+    all.concat(lockedResp.data || []).forEach(function(n) {
       if (seen.has(n.id)) return; seen.add(n.id); newsDataCache.push(n);
     });
     newsDataCache.sort(function(a, b) { return (b.published_at || '').localeCompare(a.published_at || ''); });
@@ -3469,11 +3474,11 @@ async function loadBriefing() {
   }
   listEl.innerHTML = '<div style="color:var(--text-secondary);padding:20px;text-align:center">불러오는 중...</div>';
   try {
+    // 브리핑은 DB에서 삭제하지 않고 전량 보관 — 목록도 제한 없이 표시 (하루 1건이라 서버 상한 1000행 = 약 2.7년치)
     const { data, error } = await sb
       .from('daily_briefings')
       .select('*')
-      .order('briefing_date', { ascending: false })
-      .limit(30);
+      .order('briefing_date', { ascending: false });
     if (error) throw error;
     if (!data || data.length === 0) {
       listEl.innerHTML = '<div style="color:var(--text-secondary);padding:40px;text-align:center">아직 브리핑이 없습니다.<br>매일 오전 8시에 자동으로 생성됩니다.</div>';

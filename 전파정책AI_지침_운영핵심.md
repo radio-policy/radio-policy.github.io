@@ -55,7 +55,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 | deleted_news | 삭제 기사 url·title 블록리스트(재수집 방지). 영구 |
 | importance_feedback | 긴급도 수동 수정 내역(news_id당 1행). 분류 학습 데이터. 영구 |
 | feedback_rules | 피드백 증류 규칙 캐시(단일 행 id=1). 20건↑ 증류, 10건마다 재증류 |
-| daily_briefings | 일일 브리핑 원문("⚠️ SKT 영향 분석:" 포함). 긴급도 수정 시 🔴 자동 동기화 |
+| daily_briefings(삭제 없음·전량 보관, 목록도 무제한 표시) | 일일 브리핑 원문("⚠️ SKT 영향 분석:" 포함). 긴급도 수정 시 🔴 자동 동기화 |
 | law_amendments | 법령·고시·입법예고. law_type: law/bylaw/rules/admrul/lsAnc. lsAnc는 law_id=`lsAnc_op_{md5}` |
 | assembly_bills | 국회 법안. bill_id(UNIQUE)·법안명·단계·소관위·제안일·링크 |
 | document_chunks | 법령·고시·보도자료 RAG 청크. embedding(vector 1024, HNSW), article_no=조항번호+제목. file_path=업로드 원본 Storage 경로 |
@@ -446,7 +446,7 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **Sonnet으로 긴급도 분류 업그레이드 제안 금지** — Haiku+피드백 학습으로 충분.
 - **Cowork 예약 태스크로 크롤러 재등록 금지** — 중복 실행.
 - **news_feed 수동 정리 시 `AND locked=false` 필수.**
-- **뉴스 목록(loadNews)의 잠금 기사 별도 조회·병합을 제거하지 말 것** — 최신순 limit(500)만으로는 오래된 잠금 기사가 순위 밖으로 밀려 화면에서 "지워진 것처럼" 보인다(실DB엔 생존 — 삭제 오인 신고의 실제 원인). 보존을 60일로 늘려 행수가 커질수록 더 밀린다. (배경역사 #38)
+- **뉴스 목록(loadNews)은 전량 페이지네이션 조회(range 루프, PostgREST 서버 상한 1000행/요청) + 잠금 기사 별도 병합 유지 — limit 단건 조회로 되돌리지 말 것** — 한때 최신순 limit(500)이라 오래된 잠금 기사가 순위 밖으로 밀려 "지워진 것처럼" 보였다(실DB엔 생존 — 삭제 오인 신고의 실제 원인). (배경역사 #38)
 - **news_feed 저장을 plain `insert`로 되돌리지 말 것 — `upsert(on_conflict='url', ignore_duplicates=True)` 유지(crawler.py·gov_notice_crawler.py 동일)** — url은 실DB UNIQUE라 plain insert는 중복 1건에 배치 전체가 실패해 그 회차 신규 기사 통째 유실. (배경역사 #23)
 - **AI 자문 검색 병렬 실행(searchKeywords Promise.all·callClaude 보조 컨텍스트 5종 동시 시작)을 순차 await로 되돌리지 말 것** — 검색 6종 릴레이로 답변 시작 2~4초 지연 회귀. 프롬프트 조립 순서는 코드가 고정하므로 결과 동일. (배경역사 #23)
 - **자문 뉴스 본문 매칭을 최신순 상위 N건(`order published_at desc limit 2`)으로 되돌리지 말 것 — 제목 가중 3·본문 가중 1 관련도 스코어링 유지** — 특정 이슈가 폭주한 날(예: KT 과징금 제재일) 발췌 3칸이 무관 기사로 잠식돼, 질문이 그대로 인용한 기사조차 프롬프트에 못 들어간다. 제목 목록(`limit 30`)도 최신순이라 그날 신규 49건에 밀려 함께 탈락했다. (배경역사 #35)
