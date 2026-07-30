@@ -76,23 +76,25 @@
           <div class="chat-area" id="chat-area">
             <div class="msg msg-ai">
               <div class="msg-name">전파정책 전문가 AI</div>
-              안녕하세요. 전파법·관련 고시, ITU-R 권고, 최신 뉴스, 웹 검색, 그리고 팀이 직접 입력한 검증 지식을 종합하여 제3자 관점에서 객관적인 자문을 드립니다.<br><br>
-              🔎 <strong>3중 하이브리드 검색</strong> <span style="font-size:10px;color:var(--accent-blue)">NEW</span><br>
+              안녕하세요. 법령·고시 원문, ITU-R 권고, 수집 뉴스, 웹 검색, 팀 내부 지식(추가 지식·컨플루언스)을 종합하여 제3자 관점에서 객관적인 자문을 드립니다.<br><br>
+              🔎 <strong>3중 하이브리드 검색</strong><br>
               · ① AI 쿼리 확장(질문을 동의어·법령 공식 용어로 변환) ② 키워드·조문 유사도 검색 ③ 시맨틱 벡터 검색(표현이 달라도 의미로 매칭)<br>
-              · 답변에 조항 번호·고시번호·시행일을 함께 인용합니다.<br><br>
+              · 답변에 조항 번호·고시번호·시행일을 함께 인용하고, 답변 아래 <strong>참조 문서·참조 뉴스 배지</strong>로 실제 근거를 표시합니다. <span style="font-size:10px;color:var(--accent-blue)">NEW</span><br><br>
               📄 <strong>법령·고시 (하이브리드 RAG — 전 문서 임베딩 · 실시간 목록: 지식 베이스 → 국내 법령·고시)</strong><br>
-              · 전파법·시행령·시행규칙, 주파수 분배표, 무선설비 기술기준, 전자파 기준, 적합성평가 고시<br>
-              · 지방세법·시행령 (무선국 등록면허세 등) <span style="font-size:10px;color:var(--accent-blue)">NEW</span><br>
+              · 전파법·전기통신사업법·정보통신망법·방송통신발전기본법 계열 등 <strong>법령·고시 약 170종</strong> (주파수 분배표, 무선설비·전자파 기준, 적합성평가, 지방세법 등록면허세 포함)<br>
+              · 법령별 실무 요약(적용범위·체크리스트) 165종을 원문과 함께 참조 <span style="font-size:10px;color:var(--accent-blue)">NEW</span><br>
+              · <strong>시행 예정 개정본 자동 반영</strong> — 인용 조문에 개정 예정이 있으면 "현행은 A, ○일부터 B"로 함께 안내 <span style="font-size:10px;color:var(--accent-blue)">NEW</span><br>
               · ITU-R M.2150-3(5G) / M.2160-0(6G) / M.1036-8 / SM.329-13 등 6종<br>
-              · 전기통신사업법·정보통신망법 계열 7종, 방송통신발전기본법 계열 규정 11종<br>
-              · 과기정통부 보도자료(2024~2026년, 원문 136건 직접 검색)<br><br>
-              🌐 <strong>웹 검색 (자동 수행)</strong> <span style="font-size:10px;color:var(--accent-blue)">NEW</span><br>
+              · 과기정통부 보도자료(2024~2026년, 원문 142건 직접 검색)<br><br>
+              🌐 <strong>웹 검색 (자동 수행)</strong><br>
               · 해외 규제·제도 비교, 최신 정책 동향 등 내부 자료에 없는 정보는 웹을 실시간 검색하고 출처 링크를 함께 표시합니다.<br><br>
-              📰 <strong>최신 뉴스 (자동 반영)</strong><br>
-              · 매일 수집되는 전파·통신 분야 뉴스의 본문을 질문 키워드로 검색하여 관련 기사를 자동 참조합니다.<br><br>
-              🗂️ <strong>팀 추가 지식 (누적 반영)</strong><br>
-              · 지식 베이스 → <em>추가 지식 입력</em>에 저장된 내용을 질문과 매칭하여 자동으로 참조합니다.<br>
-              · 내부 검토 결과, 유권해석 사례, 협의 내용 등을 입력할수록 답변이 정교해집니다.<br><br>
+              📰 <strong>수집 뉴스 (자동 반영)</strong><br>
+              · 매일 수집되는 전파·통신 뉴스에서 질문과 관련도가 높은 기사를 골라 본문을 참조하고, 수치·시점은 뉴스 발췌를 웹 검색보다 우선합니다. 반영된 기사는 답변 아래 <strong>참조 뉴스</strong> 배지로 확인할 수 있습니다. <span style="font-size:10px;color:var(--accent-blue)">NEW</span><br><br>
+              🗂️ <strong>팀 지식 (누적·실시간 반영)</strong><br>
+              · <em>추가 지식 입력</em>에 저장된 검토 결과·유권해석·협의 내용을 질문과 매칭하여 참조합니다.<br>
+              · 팀 컨플루언스 문서를 실시간 검색해 [팀문서] 근거로 활용합니다(연결 장애 시에도 자문은 정상 동작).<br><br>
+              🕸️ <strong>법령 관계도 자동 축적</strong><br>
+              · 자문에서 실제 근거로 쓴 법령·고시가 <em>법령 관계도</em>에 자동으로 쌓이고, 답변 아래 미니 관계도로 표시됩니다.<br><br>
               지난 질문·답변은 우측 상단 <strong>자문 이력</strong> 버튼에서 다시 볼 수 있습니다. 궁금하신 사항을 입력해 주세요.
             </div>
           </div>
