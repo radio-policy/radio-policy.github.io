@@ -98,6 +98,7 @@ function initSupabase() {
 let lastRagSources = [];
 let lastConfluenceFailed = false; // 직전 자문에서 컨플루언스 검색이 실패해 생략됐는지 (무음 실패 가시화)
 let lastLawmapData = null;        // 직전 자문 답변의 <lawmap> 블록 파싱 결과 (법령 관계도 자동 축적용)
+let lastNewsSources = [];         // 직전 자문에 '본문 발췌로 실제 들어간' 수집 뉴스 (출처 표시·검증용)
 
 function extractKeywords(text) {
   // 한국어 조사·어미·불용어 제거
@@ -120,6 +121,61 @@ function extractKeywords(text) {
   var all = priority.concat(rest);
   // 중복 제거
   return all.filter(function(v, i, a) { return a.indexOf(v) === i; }).slice(0, 5);
+}
+
+// 뉴스 전용 키워드 추출 — 위 extractKeywords(법령 검색용)와 반드시 분리해서 쓴다.
+// 여기 불용어('통신사','영향','분석' 등)를 extractKeywords에 넣으면 법령 RAG 검색 품질이 함께 망가진다.
+// (사고: "같은 지하철인데 통신사 와이파이 속도…" 질문에서 키워드가 '같은/지하철인데/통신사'로 뽑혀
+//  정작 질문이 인용한 기사 본문이 프롬프트에 못 들어갔음 — '인데'가 조사 목록에 없어 0건)
+function extractNewsKeywords(text) {
+  // 뉴스 본문 어디에나 나오는 저변별력 단어 + 질문 상투어는 버린다
+  var stopwords = ['같은','같이','최대','최소','정도','이유','영향','분석','분석해','분석해줘','차이',
+    '통신사','통신','관련','현황','상황','내용','문제','방안','대응','전망','의미','비교','평가','수준','규모',
+    '최근','요즘','지금','현재','올해','작년','국내','해외','업계','우리','회사','부분','경우','전체',
+    '해줘','알려줘','설명','설명해줘','정리','정리해줘','작성','검토','어떻게','어떤','무엇','언제','어디','왜',
+    '있다','없다','하다','되다','이다','대해','관해','통해','위해','따라','대한','관한','그리고','하지만'];
+  // 조사·어미 (extractKeywords보다 넓게 — 뉴스 질문 말투를 벗긴다: "지하철인데" → "지하철")
+  var tail = /(이라는데|이라는|이라며|이라고|인데도|에서는|으로는|에서의|에서도|라는데|인데|인가|인지|라며|라고|는데|에서|에는|으로|로는|보다|부터|까지|처럼|마다|조차|밖에|이나|나는|은|는|이|가|을|를|의|에|와|과|도|만)$/;
+  // 통신·전파 도메인어 — 우선순위 부여 + 조사 절단 보호에 함께 쓴다
+  var domain = /주파수|대역|백홀|기지국|중계기|와이파이|WiFi|5G|6G|LTE|위성|전파|간섭|품질평가|재할당|할당|요금|보조금|단말|로밍|알뜰폰|MVNO|망중립|해킹|유출|과징금|지하철|철도|국회|고시|시행령|입법예고/i;
+  var words = text.split(/[\s,\.·\(\)\[\]\「\」\『\』\<\>\:;\!\?\"\']+/)
+    .map(function(w) { return w.replace(/[^가-힣a-zA-Z0-9]/g, '').trim(); })
+    .map(function(w) {
+      var s = w.replace(tail, '');
+      if (domain.test(s)) return s;                 // "지하철인데"→"지하철", "와이파이에서는"→"와이파이"
+      if (domain.test(w)) return w;                 // "와이파이"의 끝 '이'를 조사로 오인해 자르는 것 방지
+      return s.length >= 2 ? s : w;
+    })
+    .filter(function(w) { return w.length >= 2 && stopwords.indexOf(w) === -1; });
+  var uniq = words.filter(function(v, i, a) { return a.indexOf(v) === i; });
+  var pri  = uniq.filter(function(w) { return domain.test(w); });
+  var rest = uniq.filter(function(w) { return !domain.test(w); })
+    .sort(function(a, b) { return b.length - a.length; });
+  return pri.concat(rest).slice(0, 6);
+}
+
+// ── 자문 출처 표기 ──────────────────────────────────────────
+// chat_logs.sources는 text 1개 컬럼이라, 뉴스는 접두사로 구분해 같은 배열에 담는다 (스키마 변경 없음).
+var NEWS_SRC_PREFIX = '[뉴스] ';
+function splitSources(arr) {
+  var laws = [], news = [];
+  (arr || []).forEach(function(s) {
+    if (typeof s !== 'string' || !s) return;
+    if (s.indexOf(NEWS_SRC_PREFIX) === 0) { if (news.indexOf(s) === -1) news.push(s); }
+    else if (laws.indexOf(s) === -1) laws.push(s);
+  });
+  return { laws: laws, news: news };
+}
+function stripNewsPrefix(s) { return s.indexOf(NEWS_SRC_PREFIX) === 0 ? s.slice(NEWS_SRC_PREFIX.length) : s; }
+// 법령·문서 태그 — limit 초과분은 "… 등 N개"로 접는다 (무관 청크 12건이 화면을 뒤덮는 것 방지)
+function sourceTagsHtml(list, limit) {
+  var lim = limit || 6;
+  var html = list.slice(0, lim).map(function(s) { return '<span class="rag-tag">' + chEsc(s) + '</span>'; }).join(' ');
+  if (list.length > lim) html += ' <span class="rag-tag rag-tag-more">… 등 ' + list.length + '개</span>';
+  return html;
+}
+function newsTagsHtml(list) {
+  return list.map(function(s) { return '<span class="rag-tag">' + chEsc(stripNewsPrefix(s)) + '</span>'; }).join(' ');
 }
 
 // 쿼리 확장 — Haiku로 동의어·법령 공식 용어 키워드 생성 (실패 시 빈 배열 → 기존 키워드만 사용)
@@ -834,6 +890,7 @@ async function generateTermDetail(id) {
 //  뉴스 컨텍스트 — 키워드 매칭 본문 발췌 + 제목 목록 (AI 자문 참조용)
 // ════════════════════════════════════════════
 async function fetchRecentNewsContext(query) {
+  lastNewsSources = [];
   if (!sb) return '';
   try {
     var cutoff = new Date();
@@ -850,32 +907,62 @@ async function fetchRecentNewsContext(query) {
       .limit(30);
     var allTitles = listResp.data || [];
 
-    // [2] 질문 키워드로 본문 매칭 (최대 3건, content 컬럼 있는 경우)
+    // [2] 질문 키워드로 관련 기사 선별 (최대 3건) — 제목 일치 가중 + 관련도 순 정렬
+    //     ★ 최신순(order published_at desc, limit 2)으로 뽑으면 특정 이슈가 폭주한 날
+    //       질문과 무관한 기사가 발췌 3칸을 다 차지한다. 실제로 그렇게 누락 사고가 났으므로
+    //       "최신순 상위 N건" 방식으로 되돌리지 말 것. (배경역사 #35)
     var bodyResults = [];
     if (query) {
-      var keywords = extractKeywords(query);
-      var seen = new Set();
-      for (var ki = 0; ki < Math.min(keywords.length, 3); ki++) {
-        var kw = keywords[ki];
-        if (kw.length < 2) continue;
-        try {
-          var bodyResp = await sb
-            .from('news_feed')
-            .select('title, source, published_at, content')
-            .or('published_at.gte.' + cutoffStr + ',locked.eq.true')
-            .ilike('content', '%' + kw + '%')
-            .not('content', 'is', null)
-            .order('published_at', { ascending: false })
-            .limit(2);
-          (bodyResp.data || []).forEach(function(n) {
-            if (!seen.has(n.title) && n.content) {
-              seen.add(n.title);
-              bodyResults.push(n);
-            }
-          });
-        } catch(e) { /* content 컬럼 없으면 무시 */ }
-        if (bodyResults.length >= 3) break;
+      var keywords = extractNewsKeywords(query);
+      var qs = [];
+      keywords.forEach(function(kw) {
+        var esc = String(kw).replace(/[%_,]/g, ' ').trim();
+        if (esc.length < 2) return;
+        // 제목 일치(가중 3) — 질문이 특정 기사를 가리킬 때 가장 강한 신호
+        qs.push(sb.from('news_feed').select('title, source, published_at, content')
+          .or('published_at.gte.' + cutoffStr + ',locked.eq.true')
+          .ilike('title', '%' + esc + '%')
+          .order('published_at', { ascending: false }).limit(10)
+          .then(function(r) { return { w: 3, rows: r.data || [] }; })
+          .catch(function() { return { w: 3, rows: [] }; }));
+        // 본문 일치(가중 1)
+        qs.push(sb.from('news_feed').select('title, source, published_at, content')
+          .or('published_at.gte.' + cutoffStr + ',locked.eq.true')
+          .ilike('content', '%' + esc + '%').not('content', 'is', null)
+          .order('published_at', { ascending: false }).limit(10)
+          .then(function(r) { return { w: 1, rows: r.data || [] }; })
+          .catch(function() { return { w: 1, rows: [] }; }));
+      });
+      var cand = {};
+      (await Promise.all(qs)).forEach(function(p) {
+        p.rows.forEach(function(n) {
+          if (!n || !n.content) return;                    // 본문 없으면 발췌 불가
+          if (!cand[n.title]) cand[n.title] = { row: n, score: 0 };
+          cand[n.title].score += p.w;
+        });
+      });
+      var ranked = Object.keys(cand).map(function(k) { return cand[k]; })
+        .sort(function(a, b) {
+          if (b.score !== a.score) return b.score - a.score;
+          return String(b.row.published_at || '').localeCompare(String(a.row.published_at || ''));
+        });
+      // 관련도 2점 미만(키워드 1개만 스친 기사)은 "질문 관련"으로 보기 어렵다 →
+      // 2점 이상이 하나도 없을 때만 상위 2건으로 완화
+      var strong = ranked.filter(function(c) { return c.score >= 2; });
+      bodyResults = (strong.length ? strong.slice(0, 3) : ranked.slice(0, 2))
+        .map(function(c) { return c.row; });
+      if (bodyResults.length) {
+        console.log('[뉴스 컨텍스트] 키워드(' + keywords.join(', ') + ') → 발췌 ' +
+          bodyResults.length + '건: ' + bodyResults.map(function(n) { return n.title; }).join(' / '));
+      } else {
+        console.log('[뉴스 컨텍스트] 키워드(' + keywords.join(', ') + ') → 관련 기사 없음');
       }
+      // 본문 발췌로 실제 반영된 기사만 출처로 남긴다
+      // (제목 목록 30건은 동향 참고용이라 근거가 아니므로 출처에 넣지 않는다 — 거짓 표기 방지)
+      lastNewsSources = bodyResults.map(function(n) {
+        return NEWS_SRC_PREFIX + n.title +
+          ' (' + (n.source || '출처미상') + ', ' + String(n.published_at || '').slice(0, 10) + ')';
+      });
     }
 
     var lines = [];
@@ -883,10 +970,15 @@ async function fetchRecentNewsContext(query) {
     // 관련 기사 본문 발췌 (질문과 관련된 경우 우선 표시)
     if (bodyResults.length > 0) {
       lines.push('[질문 관련 최신 기사]');
-      bodyResults.slice(0, 3).forEach(function(n) {
-        var excerpt = (n.content || '').slice(0, 600).trim();
-        lines.push('■ [' + (n.published_at || '').slice(0, 10) + '] ' + n.title + ' (' + (n.source || '') + ')');
-        if (excerpt) lines.push('  → ' + excerpt + (n.content.length > 600 ? '...' : ''));
+      // 발췌 길이는 순위별로 차등 — 1위(질문이 가리키는 기사)는 거의 전문, 2·3위는 요지만.
+      // 일괄 600자로 자르면 기사 후반의 최신 상황(예: "SKT 시범 운영 중", 관계자 코멘트)이
+      // 잘려 나가 답변이 옛 시점으로 후퇴한다. 실제 그 오류가 났으므로 줄이지 말 것. (배경역사 #35)
+      bodyResults.slice(0, 3).forEach(function(n, i) {
+        var lim = (i === 0) ? 1800 : 700;
+        var full = (n.content || '');
+        var excerpt = full.slice(0, lim).trim();
+        lines.push('■ [' + String(n.published_at || '').slice(0, 10) + '] ' + n.title + ' (' + (n.source || '') + ')');
+        if (excerpt) lines.push('  → ' + excerpt + (full.length > lim ? '...' : ''));
       });
     }
 
@@ -1199,6 +1291,8 @@ async function callClaude(userText, onDelta) {
   const ragContext    = buildRagContext(ragChunks);
   const customContext = await customP;                            // 팀 내부 추가 지식
   const newsContext   = await newsP;                              // 뉴스 본문+제목
+  // 본문 발췌로 실제 반영된 뉴스만 출처에 합친다 (제목 목록 30건은 근거가 아니라 동향 참고용)
+  if (lastNewsSources.length) lastRagSources = lastRagSources.concat(lastNewsSources);
   const lawTrackContext = await lawTrackP;                        // 최근 법령 개정·입법예고 동향
   const confluenceContext = buildConfluenceContext(await confluenceP); // 팀 컨플루언스 실시간 검색(내부 문서)
   const kbContext     = buildKbContext(await kbP);                // 법령·규제 요약 지식베이스(regulatory-kb, 현행본)
@@ -1206,7 +1300,7 @@ async function callClaude(userText, onDelta) {
   // 배지용 스냅샷 — lastPendingNotice는 보고서 초안 경로와 공유하는 전역이라,
   // 자문 스트리밍(수 분) 중 보고서를 생성하면 답변 완료 시점엔 다른 값이 들어 있다.
   window._advPendingNotice = lastPendingNotice;
-  const webSearchGuide = '\n\n---\n\n[웹 검색 도구 사용 지침]\n해외 규제·제도 비교, 최신 정책 동향 등 위 참조 자료(법령 RAG·추가 지식·뉴스)에 없는 사실 정보가 필요하면 web_search 도구로 확인 후 답변하세요. 특히 "한국 고유", "유일한", "주요국 중 한국만" 등 국가 간 비교 단정 표현은 검색으로 확인하기 전에는 사용하지 마세요. 국내 법령 해석은 RAG 원문을 최우선으로 하고 웹 검색은 보조로만 사용하세요.';
+  const webSearchGuide = '\n\n---\n\n[웹 검색 도구 사용 지침]\n해외 규제·제도 비교, 최신 정책 동향 등 위 참조 자료(법령 RAG·추가 지식·뉴스)에 없는 사실 정보가 필요하면 web_search 도구로 확인 후 답변하세요. 특히 "한국 고유", "유일한", "주요국 중 한국만" 등 국가 간 비교 단정 표현은 검색으로 확인하기 전에는 사용하지 마세요. 국내 법령 해석은 RAG 원문을 최우선으로 하고 웹 검색은 보조로만 사용하세요.\n국내 최신 동향(속도·요금·투자·품질평가 수치, 사업 추진 단계 등)은 위 [질문 관련 최신 기사]·[최근 수집 뉴스 동향]을 최우선 근거로 삼고, 웹 검색 결과가 수집 뉴스와 상충하면(수치가 다르거나 시점이 더 과거이면) 수집 뉴스를 따르세요.';
   // 법령 관계도 자동 축적: 답변 말미에 기계용 <lawmap> 블록을 덧붙이게 함 (별도 API 호출 없음 — 출력 몇 줄 추가뿐)
   const lawTopics = await lawTopicsP;
   const lawmapGuide = '\n\n---\n\n[법령 관계도 블록 지침]\n' +
@@ -1535,8 +1629,11 @@ function _chatExportStyle() {
 
 function _chatContentHtml() {
   var d = _chatDetail || {};
-  var srcHtml = (d.sources && d.sources.length)
-    ? '<p class="ex-src"><b>참조:</b> ' + d.sources.map(chEsc).join(', ') + '</p>' : '';
+  // 내보내기(PDF·Word)는 화면과 달리 6개 제한 없이 전부 남긴다 — 문서는 근거를 온전히 보존해야 함
+  var xs = splitSources(d.sources);
+  var srcHtml =
+    (xs.laws.length ? '<p class="ex-src"><b>참조 법령·문서:</b> ' + xs.laws.map(chEsc).join(', ') + '</p>' : '') +
+    (xs.news.length ? '<p class="ex-src"><b>참조 뉴스:</b> ' + xs.news.map(function(s) { return chEsc(stripNewsPrefix(s)); }).join(', ') + '</p>' : '');
   return '<h1 class="ex-q">' + chEsc(d.question || '') + '</h1>' +
     '<p class="ex-meta">분류: ' + chEsc(d.category || '일반') + ' &nbsp;|&nbsp; ' + chDate(d.created_at) + '</p>' +
     '<hr>' + renderMd(d.answer || '') + srcHtml;
@@ -1549,7 +1646,9 @@ function exportChatMd() {
   md += '- 분류: ' + (d.category || '일반') + '\n';
   md += '- 일시: ' + chDate(d.created_at) + '\n\n---\n\n';
   md += (d.answer || '') + '\n';
-  if (d.sources && d.sources.length) md += '\n---\n\n**참조:** ' + d.sources.join(', ') + '\n';
+  var ms = splitSources(d.sources);
+  if (ms.laws.length) md += '\n---\n\n**참조 법령·문서:** ' + ms.laws.join(', ') + '\n';
+  if (ms.news.length) md += '\n**참조 뉴스:** ' + ms.news.map(stripNewsPrefix).join(', ') + '\n';
   _chatDownload(new Blob([md], { type: 'text/markdown;charset=utf-8' }), _chatExportName('md'));
 }
 
@@ -1613,17 +1712,21 @@ async function viewChatHistoryItem(id) {
       .eq('id', id).single();
     if (resp.error) throw resp.error;
     var row = resp.data;
-    var srcHtml = '';
     var srcs = row.sources;
     if (typeof srcs === 'string') {
       try { srcs = JSON.parse(srcs); } catch(e) { srcs = srcs ? [srcs] : []; }
     }
-    var uniqueSrcs = Array.isArray(srcs) ? srcs.filter(function(v, i, a) { return a.indexOf(v) === i; }) : [];
-    if (uniqueSrcs.length > 0) {
-      srcHtml = '<div class="rag-sources" style="margin-top:12px"><i class="ti ti-book"></i> 참조: ' +
-        uniqueSrcs.slice(0, 6).map(function(s) { return '<span class="rag-tag">' + chEsc(s) + '</span>'; }).join(' ') + '</div>';
+    var sp = splitSources(Array.isArray(srcs) ? srcs : []);
+    var srcHtml = '';
+    if (sp.laws.length > 0) {
+      srcHtml += '<div class="rag-sources" style="margin-top:12px"><i class="ti ti-book"></i> 참조 법령·문서: ' +
+        sourceTagsHtml(sp.laws, 6) + '</div>';
     }
-    _chatDetail = { question: row.question || '', answer: row.answer || '', category: row.category || '일반', created_at: row.created_at, sources: uniqueSrcs };
+    if (sp.news.length > 0) {
+      srcHtml += '<div class="rag-sources" style="margin-top:6px"><i class="ti ti-news"></i> 참조 뉴스: ' +
+        newsTagsHtml(sp.news) + '</div>';
+    }
+    _chatDetail = { question: row.question || '', answer: row.answer || '', category: row.category || '일반', created_at: row.created_at, sources: sp.laws.concat(sp.news) };
     body.innerHTML =
       '<button class="btn" onclick="openChatHistory()" style="margin-bottom:12px"><i class="ti ti-arrow-left"></i>목록으로</button>' +
       '<button class="btn" onclick="deleteChatHistoryItem(\'' + id + '\', null)" style="margin-bottom:12px;margin-left:8px;color:#d04545"><i class="ti ti-trash"></i>삭제</button>' +
@@ -1703,15 +1806,19 @@ async function sendChat() {
     msgEl.innerHTML = '<div class="msg-name">전파정책 전문가 AI</div>' + renderMd(answer);
     chatArea.scrollTop = chatArea.scrollHeight;
 
-    // RAG 출처 표시
-    if (lastRagSources && lastRagSources.length > 0) {
-      const unique = lastRagSources.filter(function(v, i, a) { return a.indexOf(v) === i; });
+    // RAG 출처 표시 — 법령·문서와 뉴스는 근거 성격이 달라 한 배지에 섞지 않는다
+    const _advSrc = splitSources(lastRagSources);
+    if (_advSrc.laws.length > 0) {
       const srcDiv = document.createElement('div');
       srcDiv.className = 'rag-sources';
-      srcDiv.innerHTML = '<i class="ti ti-database"></i>참조 문서: ' + unique.map(function(s) {
-        return '<span class="rag-tag">' + s + '</span>';
-      }).join(' ');
+      srcDiv.innerHTML = '<i class="ti ti-database"></i>참조 문서: ' + sourceTagsHtml(_advSrc.laws, 6);
       msgEl.appendChild(srcDiv);
+    }
+    if (_advSrc.news.length > 0) {
+      const nwDiv = document.createElement('div');
+      nwDiv.className = 'rag-sources';
+      nwDiv.innerHTML = '<i class="ti ti-news"></i>참조 뉴스: ' + newsTagsHtml(_advSrc.news);
+      msgEl.appendChild(nwDiv);
     }
 
     // 시행예정 개정본이 컨텍스트에 들어갔음을 가시화 — 답변이 현행 기준임을 명확히 하기 위함
