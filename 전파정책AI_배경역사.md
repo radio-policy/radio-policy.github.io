@@ -294,43 +294,6 @@ HTTP/2 사고에서 직접 겪은 불편(빈 브리핑·주말 오경보·점검
 
 ---
 
-## 20. 팀 컨플루언스(Atlassian Cloud) 실시간 검색 연동 (2026-07-01)
-
-**요구**: AI 자문이 법령·고시·뉴스뿐 아니라 **우리 팀 내부 문서(컨플루언스)**도 근거로 삼게 하고 싶다. 방식은 "질문 시 실시간 조회"(RAG 사전 수집이 아님).
-
-**환경 확인 결과(설계 좌우)**: 처음엔 Atlassian Cloud를 가정했으나, 실제로는 **사내 호스팅 Confluence(Server/Data Center), 회사 도메인**이었다. 두 갈래를 갈랐다:
-- 인증: Cloud는 이메일+API토큰(Basic)이지만 Server/DC는 **PAT(Personal Access Token) Bearer**. `id.atlassian.com`의 API 토큰은 Cloud 전용이라 사내엔 안 통함. PAT는 Confluence 프로필→Settings→Personal Access Tokens에서 발급하며 SSO(SAML)가 걸려도 REST API에서 통한다.
-- 접근성: **외부 인터넷에서도 열리는 것을 확인** → Supabase Edge Function(도쿄, 공용 클라우드)이 도달 가능 → Edge 경유 구조 유지 확정. (만약 사내망 전용이었다면 gov_notice_crawler처럼 PC 로컬 실행으로 구조를 갈아엎어야 했음.)
-- Edge Function은 두 방식을 모두 지원하도록 **인증 자동 분기**: `CONFLUENCE_EMAIL`이 있으면 Basic(Cloud), 없으면 Bearer(Server/DC PAT). 페이지 링크는 응답 `_links.base`(context path 포함 정식 절대경로) 우선.
-
-**핵심 결정 — 왜 브라우저 직접 호출이 아니라 Edge Function인가**:
-- 대시보드(`app.js`)는 GitHub Pages 정적 파일이라 공개 repo·브라우저에 그대로 노출된다. Confluence API 토큰을 여기 넣으면 유출(과거 Voyage 키 유출 사고와 동일 위험). 또한 Confluence Cloud API는 브라우저에서 부르면 CORS로 막힌다.
-- 그래서 기존 `voyage-embed`와 **똑같은 패턴**으로 신규 Edge Function `confluence-search`를 두고, 토큰을 Supabase Edge Secret에 보관하여 서버 측에서만 Confluence를 호출한다. 대시보드는 anon으로 Edge Function만 부른다.
-
-**데이터 흐름**:
-```
-질문 → callClaude → searchConfluence(질문) → Edge:confluence-search (토큰 보관)
-     → CQL: type=page AND text ~ "질문" [AND space in (…)] ORDER BY lastmodified DESC
-     → Confluence Cloud REST v1 /rest/api/content/search (expand=space,version,body.view)
-     → 상위 5건 제목·링크·본문발췌(HTML→평문 900자) → buildConfluenceContext → system 프롬프트 주입
-```
-- 발췌 컨텍스트는 "법령 조문은 RAG 원문 우선, 팀 문서는 내부 맥락 보강용"이라고 명시해 조문 인용이 팀 문서로 오염되지 않게 함(#7 RAG 인용 정확성 장치와 같은 취지).
-
-**폴백 설계(자문 무중단)**: `searchConfluence`는 미배포·Secret 미설정·403/401·네트워크 오류 어느 경우든 `[]`를 반환하고 `buildConfluenceContext`는 `''`를 반환. 따라서 **배포 전에도 자문은 기존과 동일하게 동작**하고, 배포·Secret 설정이 끝나면 자동으로 팀 문서가 붙는다. (voyage-embed 실패 시 시맨틱만 빠지고 자문이 사는 것과 같은 무중단 철학.)
-
-**검색 space를 코드가 아니라 Secret(`CONFLUENCE_SPACES`)으로 둔 이유**: 대상 space가 바뀌어도 app.js 재배포·캐시버스터 갱신 없이 Secret만 바꾸면 됨. 비우면 토큰 계정이 열람 가능한 전체 space 검색. 검색 범위는 결국 **토큰 발급 계정의 Confluence 권한**에 종속(권한 밖 문서는 애초에 안 나옴).
-
-**CQL 안전화**: 사용자 질문의 `"`·`\`를 공백으로 치환하고 200자로 잘라 CQL 문법 깨짐/인젝션 방지.
-
-**배포 절차(수동, PC/콘솔)**:
-1. Supabase → Edge Functions → `confluence-search` 생성, `docs/confluence-search.ts` 전체 붙여넣고 Deploy(verify_jwt off).
-2. Edge Secrets 등록(사내 Server/DC=PAT): `CONFLUENCE_BASE_URL`(사이트 루트, /wiki·끝슬래시 없이), `CONFLUENCE_API_TOKEN`(Confluence 프로필→Personal Access Tokens), 선택 `CONFLUENCE_SPACES`. `CONFLUENCE_EMAIL`은 비움(Bearer 인증).
-3. `app.js`·`index.html`(캐시버스터 `app.js?v=20260701a`) PC 터미널에서 커밋·푸시.
-
-**관련 커밋**: app.js(searchConfluence·buildConfluenceContext·callClaude 주입), index.html(캐시버스터), docs/confluence-search.ts(신규 Edge 템플릿). — 배포·Secret 등록 후 자문 탭에서 팀 문서 관련 질문으로 `[팀문서 N]` 컨텍스트가 붙는지 확인.
-
----
-
 ## 21. 타 프로젝트 OKF 법령 번들(regulatory-kb) 적재 — 요약 레이어 신설 (2026-07-03)
 
 **요구**: 다른 프로젝트에서 만든 **OKF(Open Knowledge Format) 법령 번들**(`regulatory-kb/`, 104 concept = 법령/고시/훈령/예규/절차 103 + 용어집 1)을 이 프로젝트로 가져와 자문에 쓰고 싶다. 기존 지식베이스(document_chunks)와 상당수 겹침. 1회 적재, 원본 동기화 불필요.
@@ -340,7 +303,7 @@ HTTP/2 사고에서 직접 겪은 불편(빈 브리핑·주말 오경보·점검
 **설계 결정**:
 - **별도 스토어 `kb_documents`/`kb_chunks` 신설**(document_chunks 무변경). manifest.json(정본, 104 entries)을 순회해 적재. concept_type·law_type·law_number·enforcement_date·status·body_md를 컬럼 보존. path 유니크(문서 정체 키), dedup_key로 버전 그룹.
 - **임베딩 voyage-law-2(법률 특화, 1024)**: document_chunks의 voyage-4-lite와 **분리**. 서로 다른 모델 벡터는 같은 공간 비교가 무의미하므로, kb 질의도 반드시 voyage-law-2로 임베딩해야 함 → `voyage-embed` Edge에 `model` 파라미터 추가(미지정 시 기존 voyage-4-lite로 하위호환). 두 모델 다 1024차원이라 컬럼은 호환되나 **혼용은 금지**.
-- **자문 연동은 병행 조회(대체 아님)**: app.js `searchKbSummaries`(시맨틱 voyage-law-2 + trgm 병행) → `buildKbContext`가 `[법령요약]` 컨텍스트 주입(컨플루언스 `[팀문서]`와 같은 패턴). 시스템 프롬프트에 조문 인용은 document_chunks 원문 우선, 요약은 맥락 보강이라 명시.
+- **자문 연동은 병행 조회(대체 아님)**: app.js `searchKbSummaries`(시맨틱 voyage-law-2 + trgm 병행) → `buildKbContext`가 `[법령요약]` 컨텍스트 주입. 시스템 프롬프트에 조문 인용은 document_chunks 원문 우선, 요약은 맥락 보강이라 명시.
 - **구버전(superseded) 처리**: manifest의 status를 컬럼 보존해 전부 적재하되(이력 유지), 자문 검색 RPC 기본 `only_current=true`로 **현행본만 노출**(구버전은 명시 요청 시). "구버전 인용 금지" 가드레일(#7 계열)과 이력 보존을 동시 충족. 최초 적재분: current 101 / superseded 3(단말장치 기술기준 2022-16호, 시험기관 지정 2025-4호, 전자파적합성 2023-13호).
 - **적재 스크립트 `import_regulatory_kb.py`**: 외부 의존성 없이 stdlib(urllib)만 사용, .env·프론트매터 수동 파싱, `insert_kb_chunks` RPC로 청크+임베딩 일괄 삽입(text→vector 캐스팅, batch_update_embeddings와 동일 패턴). PC 스크립트라 stdout UTF-8 강제(#19). 최초 적재 검증: 문서 104, 청크 1241, 임베딩 누락 0, 1024차원.
 
@@ -376,13 +339,13 @@ HTTP/2 사고에서 직접 겪은 불편(빈 브리핑·주말 오경보·점검
 
 **배경**: 전체 구조 최적화 점검(프론트/크롤러/DB·RAG 3영역)을 수행. "결과 불변 효율 개선 → 에러 감소 → 결과 개선" 순서로 항목별 검토·적용.
 
-**적용 ① — AI 자문 검색 병렬화 (커밋 7aa1d44)**: `searchKeywords()`의 키워드별 검색이 for 루프 안 순차 `await`(최대 10회 직렬 DB 왕복)였던 것을 `Promise.all` 동시 조회로 전환. 또 `callClaude()`의 보조 컨텍스트 5종(추가지식·뉴스·법령동향·컨플루언스·법령요약 KB)이 조문 RAG까지 6종 릴레이로 순차 실행되던 것을, 함수 시작 시 5종을 동시에 출발시키고 결과만 기존 순서로 조립하도록 변경. 병합 순서·중복제거·랭킹·프롬프트 조립 순서는 코드가 고정하므로 **AI에 들어가는 최종 프롬프트는 동일**, 답변 시작 대기만 단축. 각 병렬 호출에 개별 catch를 둬 기존 fail-soft(컨플루언스 다운에도 자문 동작) 성질 유지.
+**적용 ① — AI 자문 검색 병렬화 (커밋 7aa1d44)**: `searchKeywords()`의 키워드별 검색이 for 루프 안 순차 `await`(최대 10회 직렬 DB 왕복)였던 것을 `Promise.all` 동시 조회로 전환. 또 `callClaude()`의 보조 컨텍스트(추가지식·뉴스·법령동향·법령요약 KB)가 조문 RAG까지 릴레이로 순차 실행되던 것을, 함수 시작 시 동시에 출발시키고 결과만 기존 순서로 조립하도록 변경. 병합 순서·중복제거·랭킹·프롬프트 조립 순서는 코드가 고정하므로 **AI에 들어가는 최종 프롬프트는 동일**, 답변 시작 대기만 단축. 각 병렬 호출에 개별 catch를 둬 기존 fail-soft(개별 검색 실패에도 자문 동작) 성질 유지.
 
 **적용 ② — news_feed 저장 견고화**: 실DB의 `idx_news_feed_url_unique`는 **이미 UNIQUE**였으나(중복 0건 확인), 문서 사본 docs/schema.sql이 일반 인덱스로 잘못 기록돼 있어 교정. gov_notice_crawler.py의 저장이 plain `insert` 배치라 **중복 URL 1건에 그 회차 배치 전체가 실패**할 수 있어, crawler.py와 동일한 `upsert(on_conflict='url', ignore_duplicates=True)` 패턴으로 통일.
 
 **적용 ③ — 크롤러 견고화 2종 + cp949 가드 보강**: (1) gov_notice_crawler.py의 `parse_date`를 crawler.py의 다중 형식 해석기로 교체 — 날짜만 있는 기존 입력은 결과 불변(테스트로 확인), 시각 포함·ISO·상대날짜 등 기존에 빈 값이 되던 형식이 추가로 파싱됨. (2) law_crawler.py·assembly_crawler.py API 호출에 3회/5초 재시도 부여 — 하루 1회 잡이라 일시 오류 1회가 하루치 누락으로 직결되던 것을 방지(gov와 동일 정책). (3) 검증 중 law_crawler.py가 cp949 콘솔에서 `—`(em dash) print로 즉사하는 것을 발견 — #19 가드(`sys.stdout.reconfigure(encoding="utf-8")`)가 law·assembly에는 없었음(평소 GitHub Actions에서만 돌아 잠복). 두 파일에 가드 추가. 세 크롤러 수동 실행으로 정상 완주 확인.
 
-**적용 ④ — 무음 실패 가시화 (app.js)**: 오류를 흔적 없이 삼키던 빈 `catch(e){}` 7곳(chat_logs 저장·deleted_news 기록·읽음표시·custom_knowledge 조회·Storage 정리·스타일 재증류)에 `console.warn` 추가 — 화면 동작 불변, F12 콘솔에만 흔적. 컨플루언스 검색 실패 시엔 자문 답변 하단에 "팀 컨플루언스 검색 실패 — 팀 문서 미반영" 표시 추가(`lastConfluenceFailed` 플래그) — **fail-soft(자문 무중단)는 그대로 유지**(#20 규칙 준수), PAT 만료 등으로 몇 주씩 조용히 생략되던 것을 보이게만 함.
+**적용 ④ — 무음 실패 가시화 (app.js)**: 오류를 흔적 없이 삼키던 빈 `catch(e){}` 7곳(chat_logs 저장·deleted_news 기록·읽음표시·custom_knowledge 조회·Storage 정리·스타일 재증류)에 `console.warn` 추가 — 화면 동작 불변, F12 콘솔에만 흔적.
 
 **적용 ⑤ — 하이브리드 검색 점수 정규화 (③단계, 결과가 바뀌는 변경)**: 기존 채점은 키워드 매칭(무제한 누적, 20점+) + trgm×5 + 시맨틱×10으로 척도가 어긋나 흔한 단어 물량이 의미 유사도를 압도할 수 있었음. 키워드 점수를 결과 내 최대값으로 0~1 정규화하고, trgm·시맨틱(원래 0~1 절대 척도)은 그대로 두되 시맨틱에 2배 가중으로 변경. **상위 12개 청크 구성이 실제로 달라질 수 있는 변경** — 운영자 체감 비교로 검증하고, 회귀 시 해당 커밋 revert 1번으로 원복.
 

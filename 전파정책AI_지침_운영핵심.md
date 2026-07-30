@@ -38,8 +38,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 ├── resend_briefing.py / send_briefing.py  # 브리핑 재발송·발송 단독
 ├── health_watchdog.py          # 외부 헬스 워치독(GitHub Actions, Supabase 독립) — 크롤러 성공여부 인지(고장 vs 뉴스없음 구분)
 ├── system_prompt.js            # 대시보드 AI 자문 시스템 프롬프트(위임 관계 검증·핵심 조문 참조)
-├── index.html / app.js         # 대시보드 프론트엔드(GitHub Pages). AI 자문·보고서 초안 모두 SSE 스트리밍(stream:true) — 비스트리밍 복귀 금지. AI 자문은 RAG+뉴스+법령동향+팀 컨플루언스(searchConfluence, Edge confluence-search 경유) 컨텍스트 조합
-├── docs/confluence-search.ts   # 신규 Edge Function 템플릿 — 팀 컨플루언스 실시간 CQL 검색(토큰은 Edge Secrets, 브라우저 노출 금지). (배경역사 #20)
+├── index.html / app.js         # 대시보드 프론트엔드(GitHub Pages). AI 자문·보고서 초안 모두 SSE 스트리밍(stream:true) — 비스트리밍 복귀 금지. AI 자문은 RAG+뉴스+법령동향 컨텍스트 조합
 ├── run_gov_crawler.bat / run_briefing_backup.bat / setup_*.ps1  # 배치·스케줄러 등록
 └── .github/workflows/          # daily_crawl·morning_briefing·law_crawl·assembly_crawl·backfill·cleanup·health_watchdog
 ```
@@ -78,7 +77,6 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 |---|---|
 | voyage-embed (Edge) | 질의 임베딩. VOYAGE_API_KEY는 Supabase Secrets(브라우저 노출 금지). **body.model로 모델 선택(하위호환)**: 미지정=voyage-4-lite(document_chunks 조문), `voyage-law-2`(kb_chunks 법령요약). 저장·질의 모델 반드시 일치 |
 | match_kb_chunks_semantic / search_kb_chunks_trgm (RPC) | 법령요약(kb_chunks) 시맨틱/trgm 검색. 기본 `only_current=true`(구버전 제외). insert_kb_chunks(RPC)는 적재 시 청크 일괄 삽입(text→vector) |
-| confluence-search (Edge) | 팀 컨플루언스(Atlassian Cloud) 실시간 CQL 검색. AI 자문이 내부 팀 문서를 근거로 삼음. 토큰(CONFLUENCE_*)은 Supabase Edge Secrets — 브라우저 노출 금지. 미설정·오류 시 자문은 폴백(팀 문서만 생략). (배경역사 #20) |
 | list_kb_documents (RPC) | 지식 베이스 문서 목록(doc_name 그룹핑) |
 | search_chunks_trgm / match_chunks_semantic (RPC) | trgm / pgvector 시맨틱 검색 |
 | match_report_samples (RPC) | 보고서 샘플 시맨틱 검색(코사인). filter_type으로 유형 한정 |
@@ -287,7 +285,7 @@ python import_regulatory_kb.py --only <path조각> [...]   # OKF 요약 일부�
 - **짝짓기 축은 `law_pending.watch_doc_name ↔ doc_name` 문자열 조인.** `law_id` 조인은 못 쓴다 — current 문서의 **97%(256/263)가 PDF 업로드본이라 law_id가 NULL**이고 성립하는 쌍이 3쌍뿐이다.
 - **현행 ↔ 시행예정의 문자열 diff는 하지 말 것.** 현행 등재본 15쌍 중 12쌍이 PDF 추출본이라 줄바꿈·따옴표·날짜 표기(`2015. 1. 20.` vs `2015.1.20`)가 API본과 달라 **위양성이 100%** 난다(전파법은 130개 조문 전부가 '변경'으로 나온다). 양쪽 원문을 나란히 주고 판단은 모델에 맡기며, 프롬프트에 "표기 차이뿐이면 개정이 아니다"를 명시한다. **시행예정본끼리의 비교는 전부 API 적재본이라 신뢰 가능** — 같은 조문이 여러 시행일에 걸쳐 본문이 같으면 중복 제거에 쓴다.
 - **총량 상한 24,000자.** 과태료 조문처럼 긴 조문 2건만으로 17KB가 된다. **조문 중간에서 자르지 말 것**(모델이 잘린 문구를 인용한다) — 조문 경계에서 끊고 생략 건수를 프롬프트에 남긴다.
-- 페일소프트: 조회 실패 시 빈 문자열 반환, 자문은 현행 기준으로 정상 동작(컨플루언스와 동일 패턴).
+- 페일소프트: 조회 실패 시 빈 문자열 반환, 자문은 현행 기준으로 정상 동작.
 - 답변 하단에 '시행 예정 반영' 배지를 띄워 답변이 현행 기준임을 가시화한다.
 - **보고서 초안 생성 경로에도 동일 적용.** 보고서는 임원 보고로 나가므로 "현행은 X"만 쓰면 시행 임박 개정을 빠뜨린 문서가 된다. 참고 출처 목록에 `시행예정: <법령> <시행일>`이 함께 남는다.
 ### PDF 등재본의 API 재적재 (`law_sync.py --reingest`)
@@ -424,7 +422,6 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 ## 하지 말아야 할 것 (규칙 + 한 줄 이유 / 상세는 배경역사 문서)
 
 - **API 키 하드코딩 금지(공개 repo)** — .env·GitHub/Supabase Secrets에만. (Voyage 키 유출 사례)
-- **컨플루언스 API 토큰(PAT)을 app.js/브라우저에서 직접 호출·노출 금지 — 반드시 Edge Function `confluence-search` 경유** — 공개 repo·CORS 문제. 우리 Confluence는 사내 Server/DC(회사도메인·외부접속 가능)라 **PAT(Bearer)** 인증. 토큰은 Edge Secrets(`CONFLUENCE_BASE_URL`·`CONFLUENCE_API_TOKEN`·선택 `CONFLUENCE_SPACES`; EMAIL 비움). `searchConfluence`의 오류 시 `[]` 폴백(자문 무중단)·CQL 안전화·인증 자동분기(EMAIL 유무) 제거 금지. 검색 space는 코드가 아니라 `CONFLUENCE_SPACES` Secret로 조정. (배경역사 #20)
 - **Supabase 파이썬 클라이언트는 `sb_client.make_client` 사용, `create_client` 직접 호출 금지** — supabase-py 2.31 httpx HTTP/2 keepalive 끊김(RemoteProtocolError: Server disconnected) 회피(HTTP/1.1 강제+재시도). 신규 스크립트도 동일 적용. (배경역사 #15)
 - **워크플로 pip를 버전 무고정으로 되돌리지 말 것(`requirements.txt` 유지)** — 무고정 자동 최신화가 어느 날 갑자기 깨뜨림(HTTP/2 사고). 버전 올릴 땐 한 번에 하나씩 바꿔 Run으로 검증. (배경역사 #15)
 - **GitHub PAT 재생성·교체 시 Actions(R/W) 권한 확인 누락 금지 / pg_cron 'succeeded'를 트리거 성공으로 믿지 말 것** — fine-grained PAT 필수권한은 Contents(R/W)+Metadata(자동)+Actions(R/W). Actions가 빠지면 git push는 되지만 workflow_dispatch는 403, 그런데 net.http_post가 비동기라 cron 잡은 succeeded로 찍혀 모든 트리거가 무음으로 멈춤. 교체 검증은 `net._http_response.status_code`(204=성공)로. (배경역사 #18)
@@ -527,7 +524,6 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 | opinion.lawmaking.go.kr | 입법예고 | 로컬 수집, 키 불필요 |
 | 열린국회정보 API | 국회 법안 | ASSEMBLY_API_KEY |
 | 네이버 검색 OpenAPI | 뉴스 1순위 | NAVER_CLIENT_ID·SECRET, 일 25,000회 |
-| Confluence (사내 Server/DC) | 팀 내부 문서(AI 자문 근거) | Edge confluence-search 경유. 회사도메인·외부접속 가능. PAT(Bearer) 인증: CONFLUENCE_BASE_URL·API_TOKEN(+선택 SPACES). 검색범위=토큰 계정 권한 |
 
 ### GitHub Secrets
 ```
@@ -537,7 +533,7 @@ TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, LAW_OC_KEY(=radiopolicyai),
 ASSEMBLY_API_KEY, NAVER_CLIENT_ID, NAVER_CLIENT_SECRET
 ※ 로컬은 동일 키를 .env에(.gitignore 등록). backfill_report_embeddings.py는 SUPABASE_URL·SERVICE_KEY·VOYAGE_API_KEY만.
 ※ Vault github_pat(fine-grained PAT, radio-policy-commit) 필수권한: Repository — Contents(R/W)·Metadata(자동)·Actions(R/W). 재생성 시 Actions 누락 주의(배경역사 #18).
-※ Supabase Edge Function Secrets(GitHub 아님, Project Settings → Edge Functions → Secrets): voyage-embed=`VOYAGE_API_KEY` / confluence-search=`CONFLUENCE_BASE_URL`·`CONFLUENCE_API_TOKEN`(+선택 `CONFLUENCE_SPACES`). **우리 Confluence는 사내 Server/DC(회사도메인)라 PAT(Bearer) 인증**: `CONFLUENCE_BASE_URL`=사이트 루트(끝 /wiki·슬래시 없이), `CONFLUENCE_API_TOKEN`=Confluence 프로필→Personal Access Tokens 발급, `CONFLUENCE_EMAIL`은 비움. (Cloud였다면 EMAIL 채우면 Basic 인증으로 자동 분기.)
+※ Supabase Edge Function Secrets(GitHub 아님, Project Settings → Edge Functions → Secrets): voyage-embed=`VOYAGE_API_KEY`.
 ```
 
 ---

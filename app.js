@@ -96,7 +96,6 @@ function initSupabase() {
 //  RAG — 키워드 검색 + Haiku 쿼리 확장 (동의어·법령 용어)
 // ════════════════════════════════════════════
 let lastRagSources = [];
-let lastConfluenceFailed = false; // 직전 자문에서 컨플루언스 검색이 실패해 생략됐는지 (무음 실패 가시화)
 let lastLawmapData = null;        // 직전 자문 답변의 <lawmap> 블록 파싱 결과 (법령 관계도 자동 축적용)
 let lastNewsSources = [];         // 직전 자문에 '본문 발췌로 실제 들어간' 수집 뉴스 (출처 표시·검증용)
 
@@ -494,35 +493,6 @@ async function buildPendingContext(chunks) {
     console.warn('시행예정 컨텍스트 조회 실패:', e);
     return '';   // 페일소프트 — 시행예정 조회가 실패해도 자문은 현행 기준으로 정상 동작
   }
-}
-
-async function searchConfluence(query) {
-  // 팀 컨플루언스(Atlassian Cloud) 실시간 검색. Edge Function(confluence-search)이
-  // API 토큰을 서버 측 Secret에 들고 대신 호출 → 브라우저 노출 없음(voyage-embed와 동일 패턴).
-  // 미배포·미설정·오류 시엔 []를 돌려 자문이 죽지 않고 기존 흐름 그대로 진행한다.
-  lastConfluenceFailed = false;
-  try {
-    if (!sb || !query || query.trim().length < 2) return [];
-    var result = await sb.functions.invoke('confluence-search', { body: { query: query, limit: 5 } });
-    if (result.error) { lastConfluenceFailed = true; console.warn('confluence-search 오류 (건너뜀):', result.error); return []; }
-    return (result.data && Array.isArray(result.data.results)) ? result.data.results : [];
-  } catch(e) { lastConfluenceFailed = true; console.warn('컨플루언스 검색 실패 (건너뜀):', e); return []; }
-}
-
-function buildConfluenceContext(pages) {
-  if (!pages || pages.length === 0) return '';
-  var items = pages.map(function(p, i) {
-    var meta = [];
-    if (p.space) meta.push('공간: ' + p.space);
-    if (p.lastModified) meta.push('수정: ' + p.lastModified);
-    var metaStr = meta.length ? ' [' + meta.join(' | ') + ']' : '';
-    var link = p.url ? '\n링크: ' + p.url : '';
-    return '[팀문서 ' + (i+1) + '] ' + (p.title || '') + metaStr + link + '\n' + (p.excerpt || '');
-  });
-  return '\n\n---\n\n[팀 컨플루언스 검색 결과 — 우리 팀 내부 문서]\n' +
-    '아래는 사내 컨플루언스에서 질문과 관련해 실시간 검색한 팀 문서입니다. 팀 내부 방침·업무 맥락·과거 논의·담당 업무를 물을 때 참고하세요. ' +
-    '단, 법령·고시의 정확한 조문 인용은 위 RAG 원문을 최우선으로 하고, 팀 문서는 내부 맥락 보강용으로만 쓰세요. ' +
-    '팀 문서를 근거로 답할 때는 문서 제목과 링크를 함께 제시하세요:\n\n' + items.join('\n\n---\n\n');
 }
 
 // ── 법령·규제 요약 지식베이스(regulatory-kb / kb_chunks) ──
@@ -1253,11 +1223,10 @@ async function callClaude(userText, onDelta) {
   const { claudeKey } = getConfig();
   if (!claudeKey) throw new Error('Claude API 키가 설정되지 않았습니다. 설정 탭에서 입력해주세요.');
 
-  // 보조 컨텍스트 검색 5종을 먼저 동시에 시작 (조문 RAG와 병렬 실행 — 프롬프트 조합 순서는 아래에서 고정)
+  // 보조 컨텍스트 검색 4종을 먼저 동시에 시작 (조문 RAG와 병렬 실행 — 프롬프트 조합 순서는 아래에서 고정)
   const customP     = searchCustomKnowledge(userText).catch(function(e) { console.warn('추가지식 검색 실패(건너뜀):', e); return ''; });
   const newsP       = fetchRecentNewsContext(userText).catch(function(e) { console.warn('뉴스 컨텍스트 실패(건너뜀):', e); return ''; });
   const lawTrackP   = fetchLawTrackContext().catch(function(e) { console.warn('법령동향 실패(건너뜀):', e); return ''; });
-  const confluenceP = searchConfluence(userText).catch(function(e) { console.warn('컨플루언스 검색 실패(건너뜀):', e); return []; });
   const kbP         = searchKbSummaries(userText).catch(function(e) { console.warn('법령요약 검색 실패(건너뜀):', e); return []; });
   // 법령 관계도: 기존 주제명 목록(주제명 분열 방지용) — 실패해도 자문은 정상 진행
   const lawTopicsP  = sb
@@ -1298,7 +1267,6 @@ async function callClaude(userText, onDelta) {
   // 본문 발췌로 실제 반영된 뉴스만 출처에 합친다 (제목 목록 30건은 근거가 아니라 동향 참고용)
   if (lastNewsSources.length) lastRagSources = lastRagSources.concat(lastNewsSources);
   const lawTrackContext = await lawTrackP;                        // 최근 법령 개정·입법예고 동향
-  const confluenceContext = buildConfluenceContext(await confluenceP); // 팀 컨플루언스 실시간 검색(내부 문서)
   const kbContext     = buildKbContext(await kbP);                // 법령·규제 요약 지식베이스(regulatory-kb, 현행본)
   const pendingContext = await buildPendingContext(ragChunks);    // 인용 조문의 시행예정 개정본(Phase 3)
   // 배지용 스냅샷 — lastPendingNotice는 보고서 초안 경로와 공유하는 전역이라,
@@ -1313,7 +1281,7 @@ async function callClaude(userText, onDelta) {
     '- relations에는 이번 답변에서 실제 근거로 사용한 법령·고시만 포함 (최대 8개). law는 정식 명칭(예: "전파법", "전기통신사업법 시행령").\n' +
     '- 기존 주제명 목록에 같은 의미의 주제가 있으면 새 이름을 만들지 말고 그 이름을 그대로 재사용: ' + (lawTopics.length ? lawTopics.join(', ') : '(아직 없음)') + '\n' +
     '- 보고서 작성 요청, 문서 요약, 잡담, 법령 근거가 등장하지 않는 질문이면 이 블록을 출력하지 마세요.';
-  const systemWithRag = SYSTEM_PROMPT + webSearchGuide + lawmapGuide + ragContext + pendingContext + kbContext + customContext + newsContext + lawTrackContext + confluenceContext;
+  const systemWithRag = SYSTEM_PROMPT + webSearchGuide + lawmapGuide + ragContext + pendingContext + kbContext + customContext + newsContext + lawTrackContext;
 
   chatHistory.push({ role: 'user', content: userText });
 
@@ -1840,15 +1808,6 @@ async function sendChat() {
           + (d.length === 8 ? d.slice(2,4)+'.'+d.slice(4,6)+'.'+d.slice(6,8) : chEsc(d)) + '</span>';
       }).join(' ');
       msgEl.appendChild(pvDiv);
-    }
-
-    // 컨플루언스 검색 실패 가시화 (fail-soft로 자문은 정상 진행 — 생략 사실만 표시)
-    if (lastConfluenceFailed) {
-      const cfDiv = document.createElement('div');
-      cfDiv.className = 'rag-sources';
-      cfDiv.style.color = '#b45309';
-      cfDiv.innerHTML = '<i class="ti ti-alert-triangle"></i>팀 컨플루언스 검색 실패 — 이번 답변에는 팀 문서가 반영되지 않았습니다';
-      msgEl.appendChild(cfDiv);
     }
 
     // 법령 관계도 자동 축적: 답변의 <lawmap> 블록 → DB 저장 + 답변 밑 미니 관계도 표시 (추가 API 호출 없음)

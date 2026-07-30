@@ -35,7 +35,7 @@ SKT Comm Center 기술정책팀's radio/telecom **policy-monitoring automation s
 **Briefing/alerts** — `morning_briefing.py` sends 06:00 KST email(with analysis)/Telegram(without). Zero-news days still send a "🕊️ no news" notice so silent failure isn't mistaken for breakage.
 
 **Dashboard frontend** — `index.html` + `app.js` (~270 KB, single file) + `styles.css`, plus `system_prompt.js`. Two AI features, both **SSE-streamed (`stream:true`) — do not revert to non-streaming** (2 min+ responses hit an idle "Failed to fetch"):
-- *AI advisory*: RAG 3-way hybrid — keyword `ilike`+`search_chunks_trgm`, plus Voyage embedding → `match_chunks_semantic` (pgvector) → hybrid rank → Claude Sonnet. Also live-queries the team's internal Confluence (Server/DC) via the `confluence-search` Edge Function — the PAT stays in a Supabase Edge Secret (never in the browser), results inject as `[팀문서]` context. Fails soft: advisory still works if Confluence is down/unconfigured. See 지침 §Edge Function + do-not list, 배경역사 #20.
+- *AI advisory*: RAG 3-way hybrid — keyword `ilike`+`search_chunks_trgm`, plus Voyage embedding → `match_chunks_semantic` (pgvector) → hybrid rank → Claude Sonnet.
 - *Report draft*: learns format/tone from the operator's own reports (stored whole, **not chunked**) + RAG for factual grounding; 3 personalization channels (spoken directives / red-pen edit-diff / 👍👎) with auto-redistillation.
 
 **Scheduling is dual** — Supabase **pg_cron is the primary trigger** (GitHub cron drops jobs unreliably); GitHub Actions cron is backup. An external `health_watchdog.py` (independent of Supabase) distinguishes "broken" from "no news." See the pg_cron job table in the 지침.

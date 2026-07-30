@@ -76,7 +76,7 @@
           <div class="chat-area" id="chat-area">
             <div class="msg msg-ai">
               <div class="msg-name">전파정책 전문가 AI</div>
-              안녕하세요. 법령·고시 원문, ITU-R 권고, 수집 뉴스, 웹 검색, 팀 내부 지식(추가 지식·컨플루언스)을 종합하여 제3자 관점에서 객관적인 자문을 드립니다.<br><br>
+              안녕하세요. 법령·고시 원문, ITU-R 권고, 수집 뉴스, 웹 검색, 팀이 직접 입력한 검증 지식을 종합하여 제3자 관점에서 객관적인 자문을 드립니다.<br><br>
               🔎 <strong>3중 하이브리드 검색</strong><br>
               · ① AI 쿼리 확장(질문을 동의어·법령 공식 용어로 변환) ② 키워드·조문 유사도 검색 ③ 시맨틱 벡터 검색(표현이 달라도 의미로 매칭)<br>
               · 답변에 조항 번호·고시번호·시행일을 함께 인용하고, 답변 아래 <strong>참조 문서·참조 뉴스 배지</strong>로 실제 근거를 표시합니다. <span style="font-size:10px;color:var(--accent-blue)">NEW</span><br><br>
@@ -90,9 +90,8 @@
               · 해외 규제·제도 비교, 최신 정책 동향 등 내부 자료에 없는 정보는 웹을 실시간 검색하고 출처 링크를 함께 표시합니다.<br><br>
               📰 <strong>수집 뉴스 (자동 반영)</strong><br>
               · 매일 수집되는 전파·통신 뉴스에서 질문과 관련도가 높은 기사를 골라 본문을 참조하고, 수치·시점은 뉴스 발췌를 웹 검색보다 우선합니다. 반영된 기사는 답변 아래 <strong>참조 뉴스</strong> 배지로 확인할 수 있습니다. <span style="font-size:10px;color:var(--accent-blue)">NEW</span><br><br>
-              🗂️ <strong>팀 지식 (누적·실시간 반영)</strong><br>
-              · <em>추가 지식 입력</em>에 저장된 검토 결과·유권해석·협의 내용을 질문과 매칭하여 참조합니다.<br>
-              · 팀 컨플루언스 문서를 실시간 검색해 [팀문서] 근거로 활용합니다(연결 장애 시에도 자문은 정상 동작).<br><br>
+              🗂️ <strong>팀 추가 지식 (누적 반영)</strong><br>
+              · <em>추가 지식 입력</em>에 저장된 검토 결과·유권해석·협의 내용을 질문과 매칭하여 참조합니다.<br><br>
               🕸️ <strong>법령 관계도 자동 축적</strong><br>
               · 자문에서 실제 근거로 쓴 법령·고시가 <em>법령 관계도</em>에 자동으로 쌓이고, 답변 아래 미니 관계도로 표시됩니다.<br><br>
               지난 질문·답변은 우측 상단 <strong>자문 이력</strong> 버튼에서 다시 볼 수 있습니다. 궁금하신 사항을 입력해 주세요.
@@ -953,6 +952,6 @@
 <script src="https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js"></script>
 <script>if(typeof pdfjsLib!=='undefined'){pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';}</script>
 <script src="system_prompt.js?v=20260612c"></script>
-<script src="app.js?v=20260731a"></script>
+<script src="app.js?v=20260731b"></script>
 </body>
 </html>
