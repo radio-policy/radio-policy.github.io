@@ -1,0 +1,40 @@
+name: ITU-R 권고 개정 감시
+
+# 지식베이스에 등재된 ITU-R 권고의 판 번호를 ITU 공식 페이지의 현행판과 대조한다.
+# PDF는 내려받지 않는다 — ITU 원문에 재배포 금지가 명시돼 있어(법령의 공공누리와 다름)
+# 감지·알림까지만 하고 실제 교체는 운영자가 대시보드 업로드로 처리한다. (배경역사 #49)
+#
+# PC가 아니라 GitHub Actions에서 도는 이유: itu.int는 해외 IP 차단이 없어
+# PC가 꺼져 있어도 돌릴 수 있다(정부 사이트를 긁는 gov_notice_crawler와 다른 점).
+
+on:
+  schedule:
+    # 매월 1일 03:00 UTC = 12:00 KST. 권고 개정은 드물어(M.1036은 32년간 8회) 월 1회로 충분하다.
+    - cron: '0 3 1 * *'
+  workflow_dispatch:
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # 조회가 전량 실패하면 스크립트가 텔레그램으로 경고를 보낸다 —
+      # '개정 0건'과 '감시가 죽음'을 구분하기 위함(#39·#48의 무성 실패 교훈).
+      - name: Watch ITU-R recommendation revisions
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python itu_rec_watch.py

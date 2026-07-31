@@ -248,6 +248,7 @@ python build_law_citation_graph.py            # 법령 관계도 인용망 재�
 python clean_pdf_artifacts.py [--apply]       # 기존 document_chunks PDF 편집흔적 일괄 청소(dry-run 기본. content만, embedding 유지)
 python sync_kb_to_bundle.py [--dry-run]       # 웹 생성 OKF(DB) → regulatory-kb 번들 역동기화(월 1회 권장, import_regulatory_kb 전 필수)
 python law_watch.py [--dry-run|--no-notify]   # 법령 현행화 감시(등재본 vs 법제처 현행본 대조 + 시행예정본 발견 → 알림). GitHub Actions 매일 11시
+python itu_rec_watch.py [--dry-run]           # ITU-R 권고 개정 감시(보유 판 vs ITU "In force" 판 대조 → 알림만, PDF 자동 수집 없음). GitHub Actions 매월 1일 12시. 감시 대상은 DB에서 읽어 하드코딩 없음 (#49)
 python law_sync.py --list                     # 현행화 대상 목록
 python law_sync.py --all-outdated             # 개정 감지분 일괄 현행화(조문 API 취득→청킹→등재→구버전 정리→임베딩 백필)
 python law_sync.py --pending                  # 시행예정본 전건을 status='pending'으로 적재(자문 검색 제외 상태로 보관)
