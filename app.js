@@ -2945,9 +2945,17 @@ async function loadKbDocs(force) {
     // 구버전(superseded)·시행예정본(pending)은 기본적으로 감춘다. 이것들까지 나열하면
     // 같은 법령이 2~3개씩 보여 "중복 등재"로 오해된다(실제로는 버전 관리가 정상 동작한 것).
     // 토글로 펼쳐 볼 수 있게 하고, 상단에 건수만 알린다.
+    // 이 목록은 '법령·고시'만 보여야 한다. 제외 조건이 ITU-R과 날짜 파일명 둘뿐이라
+    // 논문·메모(추가지식)와 보도자료가 섞여 들어왔다 — 제목에 '전자파'가 든 논문이
+    // '전자파 행정규칙' 그룹에 끼어 보이는 식이었다. 카테고리로 걸러야 정확하다. (#50)
+    // ※ 화면에서만 빼는 것이고 자문 RAG에서는 계속 검색된다(논문·메모는 유용한 근거).
     var all = _kbDocsRows.filter(function(r) {
-      if (r.doc_category === 'ITU-R') return false;   // ITU-R 탭에서 별도 표시
-      if (/^\d{6}/.test(r.doc_name)) return false;    // 날짜 파일명 = 보도자료 → 정부 보도자료 탭에서 표시
+      if (r.doc_category === 'ITU-R') return false;    // ITU-R 문서 탭
+      if (r.doc_category === '추가지식') return false;  // 추가 지식 입력 탭
+      if (r.doc_category === '보도자료') return false;  // 정부 보도자료 탭
+      // 날짜 파일명(240717…)도 보도자료. '과기정통부_보도자료_2024.md'처럼
+      // 접두가 다른 것은 위 카테고리 조건이 잡는다.
+      if (/^\d{6}/.test(r.doc_name)) return false;
       return true;
     });
     var older = all.filter(function(r) { return r.status && r.status !== 'current'; });
