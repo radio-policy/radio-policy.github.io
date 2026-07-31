@@ -1,7 +1,7 @@
 {
   "schema": "regulatory-kb-manifest/v1",
   "updated": "2026-07-31",
-  "entry_count": 214,
+  "entry_count": 217,
   "dedup_key_rule": "정규화 제목(버전 수식어 '(구버전)' 등 제거) + '|' + law_type. 같은 dedup_key = 같은 법령(버전만 다를 수 있음).",
   "on_readd_rule": {
     "same_law_number": "동일 법령번호 재추가 → 기존 path에 덮어쓰기(idempotent). 신규 파일 생성 금지.",
@@ -2152,6 +2152,36 @@
       "enforcement_date": "",
       "concept_type": "Guideline",
       "path": "references/itu-r/M.1544-아마추어무선-자격기준.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "ITU-R 보고서 M.2410 — IMT-2020(5G) 최소 성능 요구사항|Guideline",
+      "title": "ITU-R 보고서 M.2410 — IMT-2020(5G) 최소 성능 요구사항",
+      "law_type": "ITU-R 권고",
+      "law_number": "M.2410-0",
+      "enforcement_date": "",
+      "concept_type": "Guideline",
+      "path": "references/itu-r/M.2410-IMT-2020-최소성능요구사항.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "ITU-R 권고 M.2083 — IMT Vision, IMT-2020(5G) 프레임워크 및 개발 목표|Guideline",
+      "title": "ITU-R 권고 M.2083 — IMT Vision, IMT-2020(5G) 프레임워크 및 개발 목표",
+      "law_type": "ITU-R 권고",
+      "law_number": "M.2083-0",
+      "enforcement_date": "",
+      "concept_type": "Guideline",
+      "path": "references/itu-r/M.2083-IMT-Vision-5G-프레임워크.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "ITU-R 권고 M.2101 — IMT 망 모델링·시뮬레이션(공유·양립성 연구용)|Guideline",
+      "title": "ITU-R 권고 M.2101 — IMT 망 모델링·시뮬레이션(공유·양립성 연구용)",
+      "law_type": "ITU-R 권고",
+      "law_number": "M.2101-0",
+      "enforcement_date": "",
+      "concept_type": "Guideline",
+      "path": "references/itu-r/M.2101-공유양립성-모델링.md",
       "status": "current"
     }
   ]
