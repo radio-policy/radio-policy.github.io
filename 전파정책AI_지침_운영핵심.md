@@ -82,6 +82,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 | voyage-embed (Edge) | 질의 임베딩. VOYAGE_API_KEY는 Supabase Secrets(브라우저 노출 금지). **body.model로 모델 선택(하위호환)**: 미지정=voyage-4-lite(document_chunks 조문), `voyage-law-2`(kb_chunks 법령요약). 저장·질의 모델 반드시 일치 |
 | match_kb_chunks_semantic / search_kb_chunks_trgm (RPC) | 법령요약(kb_chunks) 시맨틱/trgm 검색. 기본 `only_current=true`(구버전 제외). insert_kb_chunks(RPC)는 적재 시 청크 일괄 삽입(text→vector) |
 | list_kb_documents (RPC) | 지식 베이스 문서 목록(doc_name 그룹핑) |
+| admin_delete_custom_file / admin_delete_chat_log (RPC) | 대시보드 삭제용(비밀번호 검증, security definer). **삭제된 행 수를 반환**하며 프런트는 0이면 실패로 처리한다. `document_chunks`·`chat_logs`는 RLS가 켜져 있고 DELETE 정책이 없어 프런트 직접 `delete()`가 오류 없이 0건으로 끝났다(#48) |
 | list_kb_guide_docs (RPC) | `실무 안내` 탭 목록(현행본 203건). **body_md는 안 돌려준다** — 203건 합계 681kB라 브라우저로 내려받으면 안 되고, `has_table`(표 포함 여부)·`chunks`(청크 수)만 서버에서 계산해 준다. 본문은 클릭 시 그 문서 1건만 조회 |
 | search_chunks_trgm / match_chunks_semantic (RPC) | trgm / pgvector 시맨틱 검색 |
 | match_report_samples (RPC) | 보고서 샘플 시맨틱 검색(코사인). filter_type으로 유형 한정 |
@@ -486,6 +487,7 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **`「다른 법령」 별표 N` 인용은 따라가지 말 것** — 같은 문서의 같은 번호 별표를 붙이면 엉뚱한 표가 들어간다(인용 978건 중 90건이 타 법령). (배경역사 #43)
 - **별표 검색이 안 될 때 "제목 머리말 붙여 재적재"로 해결하려 하지 말 것** — 실측으로 기각됐다. 머리말 추가 후 유사도 0.408→0.406(변화 없음), 임계값 0.45 미달 그대로. 첫 청크엔 이미 제목이 원문에 있고, 「변경신고」↔「변경허가」처럼 **제도가 다르면 어휘로 못 좁힌다.** 인용 관계를 규칙으로 따라가는 쪽이 답. (배경역사 #43)
 - **영문 원문(ITU-R 등)은 한국어 요약을 kb 레이어에 짝으로 둘 것 — 어휘 매핑으로 때우지 말 것** — 영문 문서는 한국어 질문에 임계값(0.45)을 못 넘는다(실측: `스퓨리어스 발사 한계값` 0.375, `spurious emission limits` 0.563). 제목에 한글 머리말을 붙여도 0.384로 미달이라 기각됐다. `regulatory-kb/references/itu-r/` 6건이 그 짝이며, **요약은 찾아가는 다리이고 수치·표 인용은 반드시 영문 원문에서** 한다. 새 ITU-R 문서를 올리면 한국어 요약도 함께 만들 것. (배경역사 #47)
+- **RLS 켜진 테이블에 프런트에서 직접 `delete()` 하지 말 것** — DELETE 정책이 없으면 PostgREST가 **오류 없이 '0건 삭제 성공'으로 응답**해 조용히 실패한다(운영자가 삭제 버튼을 눌러도 아무 일도 안 일어났다). 관리자 RPC(`admin_delete_*`)를 쓰고 **반환된 행 수가 0이면 실패로 처리**할 것. 현재 RLS 켜짐+DELETE 정책 없음: `document_chunks`·`chat_logs`. (배경역사 #48)
 - **자문 컨텍스트에 넣은 지식은 반드시 출처 배지에도 기록할 것** — kb는 프롬프트에만 들어가고 `lastRagSources`에 안 쌓여, 165+38건 전체가 배지에 한 번도 안 떴다. **반영 여부를 볼 창구가 없으면 틀린 답도 믿을 만해 보인다.** 검증 방법을 안내하기 전에 그 창구부터 확인할 것. (배경역사 #41, #35와 동일 부류)
 - **목록 검색은 표시용 정리 이름으로 매칭하고, 타자마다 DB를 치지 말 것** — 원본 `doc_name`엔 `_중복_`·`.pdf`가, kb `title`엔 `중앙전파관리소 업무안내 — {분야} > ` 접두가 붙어 결과가 어긋난다. `oninput` 재렌더는 `_kbDocsRows`/`_guideRows` 캐시로 처리(force=true일 때만 재조회). (배경역사 #42)
 - **`실무 안내` 목록에서 `body_md`를 통째로 내려받지 말 것** — 203건 합계 681kB다. 표 포함 여부·청크 수는 `list_kb_guide_docs` RPC가 서버에서 계산하고, 본문은 클릭한 1건만 조회한다. (배경역사 #42)

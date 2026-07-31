@@ -1074,6 +1074,32 @@ C는 "API에 없는 내용이 있어 보존"이라고 판단했는데, 운영자
 
 ---
 
+## 48. 대시보드 삭제 버튼이 아무 일도 하지 않던 문제 — RLS + PostgREST 무성 실패 (2026-08-01)
+
+운영자가 `추가 지식 입력` 탭에서 김호영 박사논문(247청크, 임베딩 완료)의 삭제 버튼을 눌렀는데 **아무 일도 일어나지 않았다.** 오류 메시지도 없었다.
+
+**원인 — 두 층이 겹쳐 실패를 숨겼다.**
+1. `document_chunks`는 RLS가 켜져 있는데 정책이 `SELECT`·`INSERT` 둘뿐이고 **`DELETE` 정책이 없다.** RLS는 정책이 없는 명령을 "대상 0행"으로 처리한다.
+2. **PostgREST는 이를 오류가 아니라 성공(0건 삭제)으로 응답한다.**
+
+그래서 `onDeleteCustomFile()`의 `if (error) throw` 가드를 그대로 통과하고, 목록만 다시 그려져 "안 지워졌다"로만 보였다. **동작은 실패했는데 실패라고 말해 주는 창구가 없다** — #35(뉴스 반영)·#41(kb 배지)과 같은 부류이며, 이번 세션에서만 세 번째다.
+
+**같은 상태가 `chat_logs`(자문 이력 삭제)에도 있었다.** 전수 점검 결과: RLS 켜짐+DELETE 정책 없음은 `document_chunks`·`chat_logs` 둘, `news_feed`·`custom_knowledge`는 RLS 자체가 꺼져 있어 정상, `report_samples`·`report_directives`는 DELETE 정책이 있어 정상.
+
+**조치 — 관리자 RPC 2종 신설.** `admin_delete_kb_document`와 같은 패턴(`security definer` + sha256 비밀번호 검증):
+- `admin_delete_custom_file(p_doc_name, p_pwd)` — **카테고리 조건 필수**(`doc_category='추가지식'`). 기존 `admin_delete_kb_document`는 `doc_name`만 보고 지우므로 다른 카테고리의 동명 문서를 함께 날릴 수 있다.
+- `admin_delete_chat_log(p_id uuid, p_pwd)`
+
+**anon DELETE 정책은 만들지 않았다** — 대시보드가 공개 URL이라 누구나 청크를 지울 수 있게 된다.
+
+**핵심은 반환값이다.** 두 함수 모두 `GET DIAGNOSTICS … ROW_COUNT`로 **삭제 행수를 반환**하고, 프런트가 `if (!res.data)` 로 0을 실패 처리한다. RPC로 바꾸기만 하고 이 가드를 안 넣으면 같은 무성 실패가 다른 이유로 재발한다.
+
+**세 번째 자리도 함께 고쳤다.** `app.js`의 파일 재업로드 경로에 `document_chunks` 직접 delete가 하나 더 있었다("기존 동일 문서명 청크 삭제"). 이것도 조용히 실패하고 있었으므로 **같은 이름으로 재업로드하면 옛 청크가 남아 중복 누적된다.** 실측으로 피해 여부를 확인했더니 `chunk_index` 중복은 0건이었다 — 아직 같은 이름으로 재업로드한 적이 없어 터지지 않았을 뿐이다. `admin_delete_kb_document` 호출로 교체했다.
+
+**교훈**: **"오류가 없었다"는 "성공했다"가 아니다.** ORM·API 계층이 권한 실패를 빈 결과로 바꿔 놓는 조합이 있고, 그때는 **영향 행 수를 확인하는 것만이 유일한 검증**이다. 삭제·갱신처럼 부수효과가 목적인 호출은 반환된 행 수를 반드시 확인할 것.
+
+---
+
 ## 부록 — 보고서 초안 제안 데이터 흐름
 
 ```

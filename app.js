@@ -1309,6 +1309,8 @@ async function onDownloadCustomFile(filePath, downloadName) {
 
 async function onDeleteCustomFile(docName, btn) {
   if (!confirm('업로드 파일 "' + docName + '"의 모든 청크를 삭제하시겠습니까?')) return;
+  var pwd = _ensureAdminPwd();
+  if (!pwd) return;
   if (btn) btn.disabled = true;
   try {
     // 원본 파일 보관 경로 조회 → Storage 객체도 함께 삭제
@@ -1320,9 +1322,18 @@ async function onDeleteCustomFile(docName, btn) {
         .not('file_path', 'is', null).limit(1);
       (fp || []).forEach(function(r) { if (r.file_path) paths.push(r.file_path); });
     } catch(e) { console.warn('원본 file_path 조회 실패(Storage 정리 생략될 수 있음):', e); }
-    var { error } = await sb.from('document_chunks').delete()
-      .eq('doc_category', '추가지식').eq('doc_name', docName);
-    if (error) throw new Error(error.message);
+
+    // document_chunks는 RLS가 켜져 있고 DELETE 정책이 없다. 프런트에서 직접
+    // delete()하면 PostgREST가 오류 없이 '0건 삭제 성공'으로 응답해 조용히 실패한다
+    // (운영자가 삭제 버튼을 눌러도 아무 일도 안 일어나던 원인). 서버 검증 RPC로 처리. (#48)
+    var res = await sb.rpc('admin_delete_custom_file', { p_doc_name: docName, p_pwd: pwd });
+    if (res.error) { _handleAdminRpcError(res.error, '삭제'); if (btn) btn.disabled = false; return; }
+    // 반환된 삭제 행수가 0이면 실패다 — 이 가드가 없으면 같은 무성 실패가 재발한다
+    if (!res.data) {
+      alert('삭제된 청크가 없습니다. 문서명이 바뀌었거나 이미 삭제된 항목일 수 있습니다.');
+      if (btn) btn.disabled = false;
+      return;
+    }
     if (paths.length) { try { await sb.storage.from('uploads').remove(paths); } catch(e) { console.warn('Storage 원본 삭제 실패(파일 잔존 가능):', e); } }
     renderCustomKnowledgeList((document.getElementById('ck-list-search') || {}).value || '');
   } catch(e) {
@@ -1901,9 +1912,14 @@ function closeChatHistory() {
 // 자문 이력 삭제 — 목록 카드의 휴지통 버튼(btn 전달) / 상세 보기의 삭제 버튼(btn=null)
 async function deleteChatHistoryItem(id, btn) {
   if (!confirm('이 자문 이력을 삭제할까요?')) return;
+  var pwd = _ensureAdminPwd();
+  if (!pwd) return;
   try {
-    var resp = await sb.from('chat_logs').delete().eq('id', id);
-    if (resp.error) throw resp.error;
+    // chat_logs도 RLS 켜짐 + DELETE 정책 없음 → 직접 delete()는 조용히 실패한다.
+    // 서버 검증 RPC + 삭제 행수 확인. (#48)
+    var resp = await sb.rpc('admin_delete_chat_log', { p_id: id, p_pwd: pwd });
+    if (resp.error) { _handleAdminRpcError(resp.error, '삭제'); return; }
+    if (!resp.data) { alert('삭제된 이력이 없습니다. 이미 삭제된 항목일 수 있습니다.'); return; }
     if (btn && btn.closest) {
       var card = btn.closest('.card');
       if (card) card.remove();
@@ -5605,7 +5621,16 @@ async function doPdfUpload() {
         Math.round(fileProgress * 80 + 20),
         '(' + (fi+1) + '/' + totalFiles + ') 기존 데이터 정리 중...'
       );
-      await sb.from('document_chunks').delete().eq('doc_name', thisDocName);
+      // RLS로 프런트 직접 delete가 막혀 조용히 0건 처리된다 — 그대로 두면 같은 이름으로
+      // 재업로드할 때 옛 청크가 남아 중복 누적된다. 관리자 RPC로 지운다. (#48)
+      // 비밀번호가 없으면(취소) 정리를 건너뛰되, 중복 위험을 알린다.
+      var _cleanPwd = _ensureAdminPwd();
+      if (_cleanPwd) {
+        var _del = await sb.rpc('admin_delete_kb_document', { p_doc_name: thisDocName, p_pwd: _cleanPwd });
+        if (_del.error) console.warn('기존 청크 정리 실패(중복 누적 가능):', _del.error.message);
+      } else {
+        console.warn('기존 청크 정리 건너뜀 — 같은 문서명이 이미 있으면 청크가 중복될 수 있습니다.');
+      }
 
       // 5. 청크 배치 삽입 (50개씩)
       var BATCH = 50;
