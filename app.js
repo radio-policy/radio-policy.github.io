@@ -156,23 +156,29 @@ function extractNewsKeywords(text) {
 
 // ── 자문 출처 표기 ──────────────────────────────────────────
 // chat_logs.sources는 text 1개 컬럼이라, 종류별 접두사로 구분해 같은 배열에 담는다 (스키마 변경 없음).
-// 조문 원문(document_chunks)은 접두사 없음 / 뉴스 / 요약·실무(kb_chunks) 3종.
+// 조문 원문(document_chunks)은 접두사 없음 / 뉴스 / 요약·실무(kb_chunks) / 별표 4종.
 var NEWS_SRC_PREFIX = '[뉴스] ';
 var KB_SRC_PREFIX = '[요약] ';
+var ANNEX_SRC_PREFIX = '[별표] ';
 function splitSources(arr) {
-  var laws = [], news = [], kb = [];
+  var laws = [], news = [], kb = [], annex = [];
   (arr || []).forEach(function(s) {
     if (typeof s !== 'string' || !s) return;
     if (s.indexOf(NEWS_SRC_PREFIX) === 0) { if (news.indexOf(s) === -1) news.push(s); }
     else if (s.indexOf(KB_SRC_PREFIX) === 0) { if (kb.indexOf(s) === -1) kb.push(s); }
+    else if (s.indexOf(ANNEX_SRC_PREFIX) === 0) { if (annex.indexOf(s) === -1) annex.push(s); }
     else if (laws.indexOf(s) === -1) laws.push(s);
   });
-  return { laws: laws, news: news, kb: kb };
+  return { laws: laws, news: news, kb: kb, annex: annex };
 }
 function stripNewsPrefix(s) { return s.indexOf(NEWS_SRC_PREFIX) === 0 ? s.slice(NEWS_SRC_PREFIX.length) : s; }
 function stripKbPrefix(s) { return s.indexOf(KB_SRC_PREFIX) === 0 ? s.slice(KB_SRC_PREFIX.length) : s; }
+function stripAnnexPrefix(s) { return s.indexOf(ANNEX_SRC_PREFIX) === 0 ? s.slice(ANNEX_SRC_PREFIX.length) : s; }
 function kbTagsHtml(list) {
   return list.map(function(s) { return '<span class="rag-tag">' + chEsc(stripKbPrefix(s)) + '</span>'; }).join(' ');
+}
+function annexTagsHtml(list) {
+  return list.map(function(s) { return '<span class="rag-tag">' + chEsc(stripAnnexPrefix(s)) + '</span>'; }).join(' ');
 }
 // 법령·문서 태그 — limit 초과분은 "… 등 N개"로 접는다 (무관 청크 12건이 화면을 뒤덮는 것 방지)
 function sourceTagsHtml(list, limit) {
@@ -432,6 +438,126 @@ function buildRagContext(chunks) {
 // 날짜 표기가 API본과 달라 기계 비교는 위양성이 100% 난다. 양쪽 원문을 나란히 주고
 // 무엇이 달라지는지는 모델이 읽어 판단하게 한다.
 var lastPendingNotice = null;   // 답변 하단 배지용 [{law_name, enf_date}]
+
+// ── 별표 동반 인출 ────────────────────────────────────────────────
+//
+// 조문과 별표는 별개 청크라 서로 끌어주지 못한다. "무선국 변경신고 금액?"에
+// 시행령 제95조("변경허가를 신청하는 자는 별표 12에 따른 수수료를 낸다")는
+// 잡혔는데 정작 금액이 적힌 별표12는 안 따라와, 자문이 "원문을 별도 확인하라"고
+// 답했다 — DB에 있는 자료를 두고 사용자를 밖으로 내보낸 것이다. (배경역사 #43)
+//
+// 왜 검색으로는 못 잡나(실측): 별표12 첫 청크의 시맨틱 유사도가 그 질문에서
+// 0.408로 임계값 0.45 미달. 별표 제목을 머리말로 붙여 재임베딩해도 0.406으로
+// 그대로였다 — 「변경신고」(법 제22조의2)와 「변경허가」(제21조)는 다른 제도라
+// 어휘를 손봐도 좁혀지지 않는다. 반면 둘을 잇는 다리인 제95조는 이미 잡혔다.
+// 그래서 검색 확률을 올리는 대신 **인용 관계를 규칙으로 따라간다**.
+var lastAnnexSources = [];       // 답변 하단 '참조 별표' 배지용
+var ANNEX_MAX_UNITS  = 2;        // 질문당 별표 개수
+var ANNEX_MAX_CHUNKS = 6;        // 별표당 청크 (별표 하나가 최대 812청크라 상한 필수)
+
+async function buildAnnexContext(chunks, question) {
+  lastAnnexSources = [];
+  if (!sb || !chunks || !chunks.length) return '';
+  try {
+    // 1) 검색된 '조문' 청크에서 별표 인용을 뽑는다. 별표·별지 청크 자신은 제외(자기 참조 방지).
+    //    「다른 법령」 별표 N 형태는 건너뛴다 — 같은 문서의 같은 번호 별표를 붙이면
+    //    엉뚱한 표가 들어간다(전체 인용 978건 중 90건이 타 법령 인용).
+    var wanted = [], seen = {};
+    var reCite = /(「[^」]{2,40}」[^\n]{0,20}?)?별표\s*제?\s*(\d+(?:의\d+)?)/g;
+    chunks.forEach(function(c) {
+      if (/^(별표|별지)/.test(c.article_no || '')) return;
+      var m; reCite.lastIndex = 0;
+      while ((m = reCite.exec(String(c.content || '')))) {
+        if (m[1]) continue;                       // 타 법령 인용 — 건너뜀
+        var key = c.doc_name + '|' + m[2];
+        if (seen[key]) continue;
+        seen[key] = 1;
+        wanted.push({ doc_name: c.doc_name, no: m[2], from: c.article_no || '' });
+      }
+    });
+    // 인용이 없어도 그냥 끝내면 안 된다 — 아래 2)의 '표 머리 보충'이 필요한 경우가
+    // 바로 이 경우다(별표 조각만 검색되고 조문은 안 잡힌 질문). 실측에서 놓칠 뻔했다.
+    wanted = wanted.slice(0, ANNEX_MAX_UNITS);    // chunks가 순위순이라 앞쪽이 상위 조문
+
+    var qWords = extractKeywords(question || '');
+    var blocks = [];
+    for (var i = 0; i < wanted.length; i++) {
+      var w = wanted[i];
+      var r = await sb.from('document_chunks')
+        .select('chunk_index,article_no,content')
+        .eq('doc_name', w.doc_name).eq('status', 'current')
+        .like('article_no', '별표 ' + w.no + '(%')
+        .order('chunk_index', { ascending: true });
+      if (r.error || !r.data || !r.data.length) continue;
+
+      // 첫 청크는 무조건 넣는다 — 표의 열 이름이 여기에만 있어서,
+      // 가운데 청크만 넣으면 '1만원 │― │―'처럼 무슨 숫자인지 알 수 없다.
+      var all = r.data;
+      var picked = [all[0]];
+      var rest = all.slice(1).map(function(c) {
+        var t = String(c.content || '');
+        var hit = qWords.reduce(function(a, kw) { return a + (t.indexOf(kw) >= 0 ? 1 : 0); }, 0);
+        return { c: c, hit: hit };
+      }).sort(function(a, b) {
+        return b.hit !== a.hit ? b.hit - a.hit : a.c.chunk_index - b.c.chunk_index;
+      });
+      rest.slice(0, ANNEX_MAX_CHUNKS - 1).forEach(function(x) { picked.push(x.c); });
+      picked.sort(function(a, b) { return a.chunk_index - b.chunk_index; });
+
+      var title = (all[0].article_no || ('별표 ' + w.no));
+      var omitted = all.length - picked.length;
+      blocks.push('[' + w.doc_name + ' ' + title + ']'
+        + (omitted > 0 ? '\n※ 이 별표는 전체 ' + all.length + '개 조각 중 질문과 가까운 ' + picked.length + '개만 실었습니다. 표의 일부만 보이면 그렇게 밝히세요.' : '')
+        + '\n' + picked.map(function(c) { return c.content; }).join('\n'));
+      lastAnnexSources.push(w.doc_name.split('(')[0].trim() + ' ' + title.split('(')[0].trim());
+    }
+    // 2) 별표 청크가 검색으로 직접 잡혔는데 '첫 조각'이 빠진 경우 그것만 보충한다.
+    //    표의 열 이름은 첫 조각에만 있어서, 가운데 조각만 들어가면 모델은
+    //    '│1만원 │― │―│' 같은 숫자열만 보고 무슨 항목인지 모른다(실측: 별표 27이 그랬다).
+    //    대상은 **검색 상위 5위 안에 든 별표**로 좁힌다. 검색에 걸린 모든 별표에
+    //    머리를 붙였더니 질문과 무관한 표(적합성평가 시험수수료, 상호인정협정 별표)까지
+    //    딸려 왔다. 하위권 별표는 어차피 근거로 안 쓰인다.
+    //    그리고 '첫 조각이 빠진 것'만 먼저 추린 뒤에 개수 상한을 건다 —
+    //    먼저 자르면 이미 충족된 별표가 자리를 차지해 정작 필요한 것이 잘린다(실측 사고).
+    var needHead = {}, headBlocks = [];
+    chunks.slice(0, 5).forEach(function(c) {
+      if (!/^별표/.test(c.article_no || '')) return;
+      var k = c.doc_name + '|' + String(c.article_no).split('(')[0];
+      if (!needHead[k]) needHead[k] = c;
+    });
+    var heads = Object.keys(needHead);
+    for (var j = 0; j < heads.length && headBlocks.length < 2; j++) {
+      var hc = needHead[heads[j]];
+      var prefix = String(hc.article_no).split('(')[0];
+      var hr = await sb.from('document_chunks')
+        .select('chunk_index,article_no,content')
+        .eq('doc_name', hc.doc_name).eq('status', 'current')
+        .like('article_no', prefix + '(%')
+        .order('chunk_index', { ascending: true }).limit(1);
+      if (hr.error || !hr.data || !hr.data.length) continue;
+      var first = hr.data[0];
+      // 이미 검색 결과에 첫 조각이 들어 있으면 중복이므로 건너뛴다
+      if (chunks.some(function(c) { return c.doc_name === hc.doc_name && c.chunk_index === first.chunk_index; })) continue;
+      // 1)에서 이 별표를 통째로 실었다면 머리도 이미 들어갔다
+      if (lastAnnexSources.indexOf(hc.doc_name.split('(')[0].trim() + ' ' + prefix) >= 0) continue;
+      headBlocks.push('[' + hc.doc_name + ' ' + (first.article_no || prefix) + ' — 표 머리(열 이름)]\n' + first.content);
+      lastAnnexSources.push(hc.doc_name.split('(')[0].trim() + ' ' + prefix + ' 머리');
+    }
+    if (headBlocks.length) {
+      blocks.push('※ 아래는 위 검색 결과에 열 이름 없이 일부만 실린 표의 머리 부분입니다. 숫자가 어느 항목인지 여기서 확인하세요.\n\n'
+        + headBlocks.join('\n\n'));
+    }
+
+    if (!blocks.length) return '';
+    return '\n\n---\n\n[인용 조문이 가리키는 별표 원문]\n'
+      + '위 조문이 "별표 N에 따른다"고 한 그 별표를 함께 싣습니다. **금액·기준·요율은 조문이 아니라 이 별표가 정본**이므로 여기서 인용하세요. '
+      + '단, 질문이 묻는 항목이 이 별표에 없으면 없다고 답하고 임의로 유추하지 마세요.\n\n'
+      + blocks.join('\n\n---\n\n');
+  } catch(e) {
+    console.warn('별표 동반 인출 실패(건너뜀):', e);
+    return '';
+  }
+}
 
 async function buildPendingContext(chunks) {
   lastPendingNotice = null;
@@ -1285,6 +1411,8 @@ async function callClaude(userText, onDelta) {
   const kbContext     = buildKbContext(await kbP);                // 법령·규제 요약 지식베이스(regulatory-kb, 현행본)
   if (lastKbSources.length) lastRagSources = lastRagSources.concat(lastKbSources);
   const pendingContext = await buildPendingContext(ragChunks);    // 인용 조문의 시행예정 개정본(Phase 3)
+  const annexContext  = await buildAnnexContext(ragChunks, userText);  // 인용 조문이 가리키는 별표 원문 (배경역사 #43)
+  if (lastAnnexSources.length) lastRagSources = lastRagSources.concat(lastAnnexSources.map(function(s) { return ANNEX_SRC_PREFIX + s; }));
   // 배지용 스냅샷 — lastPendingNotice는 보고서 초안 경로와 공유하는 전역이라,
   // 자문 스트리밍(수 분) 중 보고서를 생성하면 답변 완료 시점엔 다른 값이 들어 있다.
   window._advPendingNotice = lastPendingNotice;
@@ -1297,7 +1425,7 @@ async function callClaude(userText, onDelta) {
     '- relations에는 이번 답변에서 실제 근거로 사용한 법령·고시만 포함 (최대 8개). law는 정식 명칭(예: "전파법", "전기통신사업법 시행령").\n' +
     '- 기존 주제명 목록에 같은 의미의 주제가 있으면 새 이름을 만들지 말고 그 이름을 그대로 재사용: ' + (lawTopics.length ? lawTopics.join(', ') : '(아직 없음)') + '\n' +
     '- 보고서 작성 요청, 문서 요약, 잡담, 법령 근거가 등장하지 않는 질문이면 이 블록을 출력하지 마세요.';
-  const systemWithRag = SYSTEM_PROMPT + webSearchGuide + lawmapGuide + ragContext + pendingContext + kbContext + customContext + newsContext + lawTrackContext;
+  const systemWithRag = SYSTEM_PROMPT + webSearchGuide + lawmapGuide + ragContext + annexContext + pendingContext + kbContext + customContext + newsContext + lawTrackContext;
 
   chatHistory.push({ role: 'user', content: userText });
 
@@ -1640,6 +1768,7 @@ function _chatContentHtml() {
   var xs = splitSources(d.sources);
   var srcHtml =
     (xs.laws.length ? '<p class="ex-src"><b>참조 법령·문서:</b> ' + xs.laws.map(chEsc).join(', ') + '</p>' : '') +
+    (xs.annex.length ? '<p class="ex-src"><b>참조 별표:</b> ' + xs.annex.map(function(s) { return chEsc(stripAnnexPrefix(s)); }).join(', ') + '</p>' : '') +
     (xs.kb.length ? '<p class="ex-src"><b>참조 요약·실무:</b> ' + xs.kb.map(function(s) { return chEsc(stripKbPrefix(s)); }).join(', ') + '</p>' : '') +
     (xs.news.length ? '<p class="ex-src"><b>참조 뉴스:</b> ' + xs.news.map(function(s) { return chEsc(stripNewsPrefix(s)); }).join(', ') + '</p>' : '');
   return '<h1 class="ex-q">' + chEsc(d.question || '') + '</h1>' +
@@ -1656,6 +1785,7 @@ function exportChatMd() {
   md += (d.answer || '') + '\n';
   var ms = splitSources(d.sources);
   if (ms.laws.length) md += '\n---\n\n**참조 법령·문서:** ' + ms.laws.join(', ') + '\n';
+  if (ms.annex.length) md += '\n**참조 별표:** ' + ms.annex.map(stripAnnexPrefix).join(', ') + '\n';
   if (ms.kb.length) md += '\n**참조 요약·실무:** ' + ms.kb.map(stripKbPrefix).join(', ') + '\n';
   if (ms.news.length) md += '\n**참조 뉴스:** ' + ms.news.map(stripNewsPrefix).join(', ') + '\n';
   _chatDownload(new Blob([md], { type: 'text/markdown;charset=utf-8' }), _chatExportName('md'));
@@ -1731,6 +1861,10 @@ async function viewChatHistoryItem(id) {
       srcHtml += '<div class="rag-sources" style="margin-top:12px"><i class="ti ti-book"></i> 참조 법령·문서: ' +
         sourceTagsHtml(sp.laws, 6) + '</div>';
     }
+    if (sp.annex.length > 0) {
+      srcHtml += '<div class="rag-sources" style="margin-top:6px"><i class="ti ti-table"></i> 참조 별표: ' +
+        annexTagsHtml(sp.annex) + '</div>';
+    }
     if (sp.kb.length > 0) {
       srcHtml += '<div class="rag-sources" style="margin-top:6px"><i class="ti ti-clipboard-text"></i> 참조 요약·실무: ' +
         kbTagsHtml(sp.kb) + '</div>';
@@ -1739,7 +1873,7 @@ async function viewChatHistoryItem(id) {
       srcHtml += '<div class="rag-sources" style="margin-top:6px"><i class="ti ti-news"></i> 참조 뉴스: ' +
         newsTagsHtml(sp.news) + '</div>';
     }
-    _chatDetail = { question: row.question || '', answer: row.answer || '', category: row.category || '일반', created_at: row.created_at, sources: sp.laws.concat(sp.kb, sp.news) };
+    _chatDetail = { question: row.question || '', answer: row.answer || '', category: row.category || '일반', created_at: row.created_at, sources: sp.laws.concat(sp.annex, sp.kb, sp.news) };
     body.innerHTML =
       '<button class="btn" onclick="openChatHistory()" style="margin-bottom:12px"><i class="ti ti-arrow-left"></i>목록으로</button>' +
       '<button class="btn" onclick="deleteChatHistoryItem(\'' + id + '\', null)" style="margin-bottom:12px;margin-left:8px;color:#d04545"><i class="ti ti-trash"></i>삭제</button>' +
@@ -1826,6 +1960,13 @@ async function sendChat() {
       srcDiv.className = 'rag-sources';
       srcDiv.innerHTML = '<i class="ti ti-database"></i>참조 문서: ' + sourceTagsHtml(_advSrc.laws, 6);
       msgEl.appendChild(srcDiv);
+    }
+    // 별표는 금액·요율의 정본이라 조문 배지와 따로 보여야, 표를 실제로 근거 삼았는지 바로 보인다
+    if (_advSrc.annex.length > 0) {
+      const anDiv = document.createElement('div');
+      anDiv.className = 'rag-sources';
+      anDiv.innerHTML = '<i class="ti ti-table"></i>참조 별표: ' + annexTagsHtml(_advSrc.annex);
+      msgEl.appendChild(anDiv);
     }
     if (_advSrc.kb.length > 0) {
       const kbDiv = document.createElement('div');
@@ -6087,10 +6228,13 @@ async function callReportDraft(userText, reportType, onDelta, opts) {
   // 자문과 같은 시행예정 컨텍스트를 붙인다. 보고서는 임원 보고로 나가므로
   // "현행은 X"라고만 써 두면 시행이 임박한 개정을 빠뜨린 문서가 된다.
   var pendingContext = await buildPendingContext(ragChunks);
+  // 보고서에 금액·요율이 들어갈 때 조문만 보고 쓰면 숫자가 빠진다 — 별표도 같이 붙인다
+  var annexContext = await buildAnnexContext(ragChunks, userText);
 
   // 참고 출처 기록
   lastReportDraftSources = samples.map(function(s){ return '내 보고서: ' + s.title; })
     .concat((ragChunks||[]).map(function(c){ return c.doc_name; }))
+    .concat((lastAnnexSources||[]).map(function(a){ return '별표: ' + a; }))
     .concat((lastPendingNotice||[]).map(function(p){
       var d = p.enf_date || '';
       return '시행예정: ' + p.law_name + ' ' + (d.length === 8 ? d.slice(2,4)+'.'+d.slice(4,6)+'.'+d.slice(6,8) : d);
@@ -6103,7 +6247,7 @@ async function callReportDraft(userText, reportType, onDelta, opts) {
     '확정 사실/해석/추정/의견을 구분하고, 단정 대신 검토의견 톤을 유지하세요. 법령 인용은 조항+핵심내용을 함께 적습니다.\n\n' +
     '[보고서 작성 규칙(내 스타일)]\n' + (styleRules || '(아직 학습된 규칙 없음 — 예시를 직접 모방)') +
     '\n\n[예시 보고서 — 형식·톤의 기준]\n' + (sampleBlock || '(등록된 예시 없음 — 표준 정책보고서 형식 사용)') +
-    ragContext + pendingContext;
+    ragContext + annexContext + pendingContext;
 
   // 항상 적용할 사용자 지시(영구) 주입 — 최우선
   try {
