@@ -1444,14 +1444,33 @@ function renderMd(text) {
     // 표: |헤더| 다음 줄이 |---|---| 구분선
     if (t.startsWith('|') && i + 1 < lines.length && /^\|?[\s:|-]+\|?$/.test(lines[i + 1].trim()) && lines[i + 1].includes('-')) {
       flush();
-      const head = splitRow(t);
+      let head = splitRow(t);
       i += 2;
-      let body = '';
+      const rows = [];
       while (i < lines.length && lines[i].trim().startsWith('|')) {
-        const cells = splitRow(lines[i]);
-        body += '<tr>' + head.map((_, c) => '<td>' + inline(cells[c] || '') + '</td>').join('') + '</tr>';
+        rows.push(splitRow(lines[i]));
         i++;
       }
+      // 웹에서 긁어온 표는 원본의 rowspan이 풀리면서 ①어느 행에서도 안 쓰는 빈 열과
+      // ②내용이 첫 칸에만 들어간 '이어지는 행'을 남긴다(중앙전파관리소 등록요건 표).
+      // 빈 열을 그대로 두면 표가 가로로 짓눌리고, 이어지는 행은 내용이 엉뚱한 열
+      // 머리글(예: '구분') 아래로 들어가 규정을 잘못 읽게 만든다. (배경역사 #42)
+      const used = head.map(function(h, c) {
+        return (h || '').trim() !== '' || rows.some(function(r) { return (r[c] || '').trim() !== ''; });
+      });
+      const keep = head.map(function(_, c) { return c; }).filter(function(c) { return used[c]; });
+      head = keep.map(function(c) { return head[c]; });
+      let body = '';
+      rows.forEach(function(r) {
+        const cells = keep.map(function(c) { return (r[c] || '').trim(); });
+        // 첫 칸에만 내용이 있는 행 = 앞 행에서 이어지는 내용. 열을 배정하지 않고
+        // 통칸으로 깔아, 없는 열 구분을 지어내지 않는다.
+        if (head.length > 1 && cells[0] && cells.slice(1).every(function(x) { return !x; })) {
+          body += '<tr><td colspan="' + head.length + '" class="md-cont">' + inline(cells[0]) + '</td></tr>';
+          return;
+        }
+        body += '<tr>' + cells.map(function(x) { return '<td>' + inline(x) + '</td>'; }).join('') + '</tr>';
+      });
       html += '<div class="md-table-wrap"><table><thead><tr>' +
         head.map(h => '<th>' + inline(h) + '</th>').join('') +
         '</tr></thead><tbody>' + body + '</tbody></table></div>';

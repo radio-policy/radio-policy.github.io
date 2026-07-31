@@ -459,3 +459,28 @@ mark.kb-hit { background: rgba(245, 197, 24, .38); color: inherit; border-radius
   font-size: 10px; padding: 1px 6px; border-radius: 999px; flex-shrink: 0;
   background: rgba(59, 130, 246, .12); color: #1d4ed8;
 }
+
+/* ── 실무 안내 본문 모달의 마크다운 — 표 스타일이 .msg-ai에만 걸려 있어
+      모달에서는 테두리 없이 글자만 흩어져 읽을 수 없었다. 같은 규칙을 여기에도 준다. */
+#kb-doc-body .md-table-wrap { overflow-x: auto; margin: 10px 0; }
+#kb-doc-body table { border-collapse: collapse; font-size: 12px; width: 100%; line-height: 1.55; }
+#kb-doc-body th, #kb-doc-body td {
+  border: 0.5px solid var(--border-mid); padding: 7px 10px;
+  text-align: left; vertical-align: top;
+  /* 한글은 단어 중간에서 끊지 않는다 — keep-all이 없으면 '재판매하/는 사업'처럼 갈라진다 */
+  word-break: keep-all; overflow-wrap: break-word; min-width: 96px;
+}
+#kb-doc-body th { background: var(--bg-tertiary); font-weight: 600; white-space: nowrap; }
+#kb-doc-body tbody tr:nth-child(even) { background: var(--bg-secondary); }
+#kb-doc-body h1, #kb-doc-body h2, #kb-doc-body h3, #kb-doc-body h4 {
+  font-size: 13px; font-weight: 600; color: var(--text-primary); margin: 16px 0 6px;
+}
+#kb-doc-body h1:first-child, #kb-doc-body h2:first-child { margin-top: 0; }
+#kb-doc-body p { margin: 0 0 8px; word-break: keep-all; }
+#kb-doc-body ul, #kb-doc-body ol { margin: 6px 0 10px; padding-left: 20px; }
+#kb-doc-body li { margin-bottom: 3px; word-break: keep-all; }
+#kb-doc-body pre { background: var(--bg-secondary); padding: 10px 12px; border-radius: var(--radius-sm); overflow-x: auto; font-size: 11.5px; }
+#kb-doc-body code { background: var(--bg-secondary); padding: 1px 5px; border-radius: 3px; font-size: 11.5px; }
+#kb-doc-body a { color: var(--accent); }
+/* 웹 표의 rowspan이 풀려 첫 칸에만 남은 '이어지는 행' — 통칸으로 깔고 살짝 들여쓴다 */
+#kb-doc-body td.md-cont, .msg-ai td.md-cont { padding-left: 24px; color: var(--text-secondary); }
