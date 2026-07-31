@@ -2883,29 +2883,63 @@ var _GUIDE_SUB_KO = {
 };
 
 var _guideLoaded = false;
-var _guideRows = [];    // kb_documents 캐시 — 검색 재렌더가 DB를 다시 치지 않도록
-var _guideChunks = {};  // doc_id → 청크 수
+var _guideRows = [];          // list_kb_guide_docs 캐시 — 검색·접기 재렌더가 DB를 다시 치지 않도록
+var _guideScope = 'all';      // 필터 칩: all | crms | laws
+var _guideOpen = {};          // 펼친 노드 키 집합
+var _guideAllOpen = false;
+var _guideInit = false;       // 첫 렌더 여부 — 구획별 맨 위 묶음 자동 펼침용
 
-function _guideGroupOf(path) {
+// path → 계층. CRMS는 2단(분야 > 문서), 법령 요약은 3단(계열 > 하위 묶음 > 문서).
+function _guideNodeOf(path) {
   var segs = String(path || '').split('/');
   if (segs[0] === 'procedures' && segs[1] === 'crms') {
-    return { sec: 0, key: '중앙전파관리소 업무안내 › ' + (segs[2] || '').replace(/_/g, ' ') };
+    return { sec: 'crms', l1: (segs[2] || '').replace(/_/g, ' '), l1dir: '', l2: '', l2dir: '' };
   }
   if (segs[0] === 'laws') {
-    var fam = _GUIDE_FAMILY_KO[segs[1]] || segs[1];
-    // laws/{family}/{sub}/{file}.md — 3단이면 하위 묶음이 있고, 2단이면 계열 본문이다
-    var sub = segs.length >= 4 ? (_GUIDE_SUB_KO[segs[2]] || segs[2]) : '';
-    return { sec: 1, key: fam + (sub ? ' › ' + sub : '') };
+    var famDir = segs[1] || '';
+    // laws/{계열}/{하위}/{파일}.md — 4조각이면 하위 묶음이 있고, 3조각이면 계열 본문이다
+    var subDir = segs.length >= 4 ? (segs[2] || '') : '';
+    return {
+      sec: 'laws',
+      l1: (_GUIDE_FAMILY_KO[famDir] || famDir) + ' 계열', l1dir: famDir,
+      l2: subDir ? (_GUIDE_SUB_KO[subDir] || subDir) : '', l2dir: subDir
+    };
   }
-  return { sec: 2, key: '기타' };
+  return { sec: 'etc', l1: '기타', l1dir: segs[0] || '', l2: '', l2dir: '' };
 }
 
-// 목록 표시명 — CRMS 문서는 제목에 '중앙전파관리소 업무안내 — {분야} > ' 접두가 붙어 있는데
-// 그룹 머리글이 이미 같은 말을 하므로 떼어낸다(붙여두면 한 줄이 전부 같은 글자로 보인다).
+// 목록 표시명 — CRMS 제목의 '중앙전파관리소 업무안내 — {분야} > ' 접두를 뗀다.
+// 그룹 머리글이 이미 같은 말을 하므로, 붙여두면 한 줄이 전부 같은 글자로 보인다.
 function _guideDisplayName(title) {
   var t = String(title || '').replace(/^중앙전파관리소 업무안내\s*[—-]\s*/, '');
   var gt = t.indexOf(' > ');
   return gt >= 0 ? t.slice(gt + 3) : t;
+}
+
+function toggleGuideNode(key) {
+  if (_guideOpen[key]) delete _guideOpen[key]; else _guideOpen[key] = 1;
+  renderGuideTree();
+}
+function setGuideScope(scope, el) {
+  _guideScope = scope;
+  document.querySelectorAll('.guide-chip').forEach(function(c) { c.classList.remove('active'); });
+  if (el) el.classList.add('active');
+  renderGuideTree();
+}
+function toggleGuideAll() {
+  _guideAllOpen = !_guideAllOpen;
+  _guideOpen = {};
+  if (_guideAllOpen) {
+    _guideRows.forEach(function(r) {
+      var n = _guideNodeOf(r.path);
+      _guideOpen[n.sec + '|' + n.l1] = 1;
+      if (n.l2) _guideOpen[n.sec + '|' + n.l1 + '|' + n.l2] = 1;
+    });
+  }
+  var ic = document.getElementById('guide-expand-icon'), lb = document.getElementById('guide-expand-label');
+  if (ic) ic.className = 'ti ' + (_guideAllOpen ? 'ti-chevrons-up' : 'ti-chevrons-down');
+  if (lb) lb.textContent = _guideAllOpen ? '모두 접기' : '모두 펼치기';
+  renderGuideTree();
 }
 
 async function loadGuideDocs(force) {
@@ -2913,88 +2947,115 @@ async function loadGuideDocs(force) {
   if (!el || !sb) return;
   try {
     if (!_guideLoaded || force) {
-      // PostgREST max-rows 1000 절단 대비 range 페이지네이션 (지침 가드레일)
-      var rows = [], off = 0;
-      while (true) {
-        var r = await sb.from('kb_documents')
-          .select('id,title,path,description,concept_type,competent_authority')
-          .eq('status', 'current')
-          .order('path', { ascending: true })
-          .range(off, off + 999);
-        if (r.error) throw r.error;
-        rows = rows.concat(r.data || []);
-        if ((r.data || []).length < 1000) break;
-        off += 1000;
-      }
-      _guideRows = rows;
-      // 청크 수 — doc_id만 받아 세어 본다. 0청크 문서는 등재만 되고 자문 검색에는
-      // 잡히지 않는 상태라 반드시 눈에 보여야 한다(무성 실패 방지).
-      _guideChunks = {};
-      var coff = 0;
-      while (true) {
-        var c = await sb.from('kb_chunks').select('doc_id').range(coff, coff + 999);
-        if (c.error) throw c.error;
-        (c.data || []).forEach(function(x) { _guideChunks[x.doc_id] = (_guideChunks[x.doc_id] || 0) + 1; });
-        if ((c.data || []).length < 1000) break;
-        coff += 1000;
-      }
+      // body_md는 203건 합계 681kB라 내려받지 않는다. RPC가 표 포함 여부·청크 수만 계산해 준다.
+      var r = await sb.rpc('list_kb_guide_docs');
+      if (r.error) throw r.error;
+      _guideRows = r.data || [];
+      _guideLoaded = true;
+      _guideInit = true;   // 첫 렌더에서 각 구획 맨 위 묶음만 펼친다(renderGuideTree가 처리)
     }
-
-    var terms = kbSearchTerms('guide-search');
-    var map = {}, order = [], matched = 0;
-    _guideRows.forEach(function(r) {
-      var name = _guideDisplayName(r.title);
-      if (!kbNameMatches(name, terms)) return;
-      matched++;
-      var g = _guideGroupOf(r.path);
-      if (!map[g.key]) { map[g.key] = { sec: g.sec, key: g.key, items: [] }; order.push(g.key); }
-      map[g.key].items.push({ row: r, name: name, chunks: _guideChunks[r.id] || 0 });
-    });
-    // 중앙전파관리소(실무) → 법령 요약 → 기타 순. 같은 구획 안에서는 건수 많은 순.
-    var groups = order.map(function(k) { return map[k]; }).sort(function(a, b) {
-      if (a.sec !== b.sec) return a.sec - b.sec;
-      if (b.items.length !== a.items.length) return b.items.length - a.items.length;
-      return a.key.localeCompare(b.key, 'ko');
-    });
-
-    var lastSec = -1;
-    var html = groups.map(function(g) {
-      var head = '';
-      if (g.sec !== lastSec) {
-        lastSec = g.sec;
-        var secName = g.sec === 0 ? '중앙전파관리소 업무안내 (실무 절차)'
-                    : g.sec === 1 ? '법령 요약 (조문 원문이 아닌 요약본)' : '기타';
-        head = '<div style="font-size:12px;font-weight:700;color:var(--text-primary);margin:22px 0 8px;'
-             + 'padding-bottom:6px;border-bottom:0.5px solid var(--border-mid)">' + secName + '</div>';
-      }
-      g.items.sort(function(a, b) { return a.name.localeCompare(b.name, 'ko'); });
-      var fileRows = g.items.map(function(it) {
-        var warn = it.chunks === 0
-          ? '<span class="badge" style="background:rgba(220,38,38,.12);color:#b91c1c" title="본문 청크가 없어 자문 검색에 잡히지 않습니다">청크 없음</span>'
-          : '';
-        var desc = (it.row.description || '').trim();
-        var sub = (it.chunks ? it.chunks + '청크' : '0청크') + (desc ? ' · ' + escHtml(desc) : '');
-        return '<div class="file-item" style="cursor:pointer" title="클릭하면 본문을 볼 수 있습니다" ' +
-          'onclick="openGuideDoc(' + it.row.id + ')">' +
-          '<div class="file-icon fi-purple"><i class="ti ti-clipboard-text"></i></div>' +
-          '<div style="flex:1;min-width:0"><div class="file-name">' + kbHighlight(it.name, terms) + '</div>' +
-          '<div class="file-size">' + sub + '</div></div>' + warn +
-          '<i class="ti ti-chevron-right" style="color:var(--text-tertiary);font-size:15px;flex-shrink:0"></i></div>';
-      }).join('');
-      return head + '<div class="section-title">' + escHtml(g.key) + ' (' + g.items.length + '건)</div>' +
-        '<div class="card" style="cursor:default;margin-bottom:14px">' + fileRows + '</div>';
-    }).join('');
-
-    var tot = document.getElementById('guide-total');
-    if (tot) tot.textContent = _guideRows.length;
-    kbSearchStatus('guide-search-count', 'guide-search-clear', 'guide-search', matched);
-    el.innerHTML = html || '<div style="color:var(--text-secondary);font-size:12px;padding:16px 0">'
-      + (terms.length ? '‘' + escHtml(terms.join(' ')) + '’와 일치하는 문서가 없습니다.' : '등록된 문서가 없습니다.') + '</div>';
-    _guideLoaded = true;
+    renderGuideTree();
   } catch(e) {
     el.innerHTML = '<div style="color:var(--text-secondary);font-size:12px;padding:16px 0">목록 조회 실패: '
       + escHtml(e && e.message ? e.message : String(e)) + '</div>';
   }
+}
+
+function renderGuideTree() {
+  var el = document.getElementById('guide-groups');
+  if (!el) return;
+  var terms = kbSearchTerms('guide-search');
+
+  // 1) 필터(칩 + 검색어) 통과한 문서만 계층 트리로 접는다
+  var secs = { crms: { key: 'crms', l1s: [], map: {} }, laws: { key: 'laws', l1s: [], map: {} }, etc: { key: 'etc', l1s: [], map: {} } };
+  var nCrms = 0, nLaws = 0, matched = 0;
+  _guideRows.forEach(function(row) {
+    var n = _guideNodeOf(row.path);
+    if (n.sec === 'crms') nCrms++; else if (n.sec === 'laws') nLaws++;
+    if (_guideScope !== 'all' && n.sec !== _guideScope) return;
+    var name = _guideDisplayName(row.title);
+    if (!kbNameMatches(name, terms)) return;
+    matched++;
+    var S = secs[n.sec];
+    if (!S.map[n.l1]) { S.map[n.l1] = { name: n.l1, dir: n.l1dir, docs: [], l2s: [], l2map: {} }; S.l1s.push(S.map[n.l1]); }
+    var G = S.map[n.l1];
+    var item = { row: row, name: name };
+    if (!n.l2) { G.docs.push(item); return; }
+    if (!G.l2map[n.l2]) { G.l2map[n.l2] = { name: n.l2, dir: n.l2dir, docs: [] }; G.l2s.push(G.l2map[n.l2]); }
+    G.l2map[n.l2].docs.push(item);
+  });
+
+  var nc = document.getElementById('guide-n-crms'), nl = document.getElementById('guide-n-laws');
+  if (nc) nc.textContent = nCrms;
+  if (nl) nl.textContent = nLaws;
+  var tot = document.getElementById('guide-total');
+  if (tot) tot.textContent = _guideRows.length;
+  kbSearchStatus('guide-search-count', 'guide-search-clear', 'guide-search', matched);
+
+  // 2) 그리기 — 검색 중에는 일치한 묶음을 자동으로 펼친다(접힌 채면 결과가 안 보인다)
+  var auto = terms.length > 0;
+  var html = ['crms', 'laws', 'etc'].map(function(sk) {
+    var S = secs[sk];
+    if (!S.l1s.length) return '';
+    var head = sk === 'crms' ? '중앙전파관리소 업무안내 <em>· 2단</em>'
+             : sk === 'laws' ? '법령 요약 <em>· 3단 (회색은 폴더 실제 이름)</em>'
+             : '기타';
+    S.l1s.sort(function(a, b) {
+      var ca = _guideCount(a), cb = _guideCount(b);
+      return cb !== ca ? cb - ca : a.name.localeCompare(b.name, 'ko');
+    });
+    // 첫 화면은 접힌 상태가 기본 — 203건이 쏟아지면 계층이 안 보인다. 다만 구획마다
+    // 맨 위 묶음 하나는 펼쳐 둬야 "눌러서 펼치는 목록"임이 바로 드러난다.
+    // 정렬 뒤에 정해야 화면 맨 위 묶음과 펼쳐진 묶음이 일치한다.
+    if (_guideInit && S.l1s.length) _guideOpen[sk + '|' + S.l1s[0].name] = 1;
+    var groups = S.l1s.map(function(g) {
+      var k1 = sk + '|' + g.name;
+      var open = auto || _guideOpen[k1];
+      var rows = '<div class="guide-row l1" onclick="toggleGuideNode(\'' + escHtml(k1) + '\')">' +
+        '<i class="ti ti-chevron-' + (open ? 'down' : 'right') + '"></i>' +
+        '<span class="guide-label">' + escHtml(g.name) +
+        (g.dir ? '<span class="guide-folder">' + escHtml(g.dir) + '</span>' : '') + '</span>' +
+        '<span class="guide-count">' + _guideCount(g) + '</span></div>';
+      if (open) {
+        rows += g.docs.sort(_guideByName).map(function(it) { return _guideDocRow(it, terms, false); }).join('');
+        rows += g.l2s.sort(function(a, b) { return b.docs.length - a.docs.length; }).map(function(s2) {
+          var k2 = k1 + '|' + s2.name;
+          var open2 = auto || _guideOpen[k2];
+          var r2 = '<div class="guide-row l2" onclick="toggleGuideNode(\'' + escHtml(k2) + '\')">' +
+            '<i class="ti ti-chevron-' + (open2 ? 'down' : 'right') + '"></i>' +
+            '<span class="guide-label">' + escHtml(s2.name) +
+            (s2.dir ? '<span class="guide-folder">' + escHtml(s2.dir) + '</span>' : '') + '</span>' +
+            '<span class="guide-count">' + s2.docs.length + '</span></div>';
+          if (open2) r2 += s2.docs.sort(_guideByName).map(function(it) { return _guideDocRow(it, terms, true); }).join('');
+          return r2;
+        }).join('');
+      }
+      return rows;
+    }).join('');
+    return '<div class="guide-sec">' + head + '</div>' +
+           '<div class="card" style="cursor:default;padding:0;overflow:hidden">' + groups + '</div>';
+  }).join('');
+
+  el.innerHTML = html || '<div style="color:var(--text-secondary);font-size:12px;padding:16px 0">'
+    + (terms.length ? '‘' + escHtml(terms.join(' ')) + '’와 일치하는 문서가 없습니다.' : '등록된 문서가 없습니다.') + '</div>';
+  _guideInit = false;
+}
+
+function _guideByName(a, b) { return a.name.localeCompare(b.name, 'ko'); }
+
+function _guideCount(g) {
+  return g.docs.length + g.l2s.reduce(function(a, s) { return a + s.docs.length; }, 0);
+}
+
+function _guideDocRow(it, terms, deep) {
+  // 청크 0 = 등재만 되고 자문 검색에는 안 잡히는 상태. 반드시 눈에 보여야 한다(무음 실패 방지).
+  var badge = it.row.chunks === 0
+    ? '<span class="guide-tbl" style="background:rgba(220,38,38,.12);color:#b91c1c" title="본문 청크가 없어 자문 검색에 잡히지 않습니다">청크 없음</span>'
+    : (it.row.has_table ? '<span class="guide-tbl" title="수수료표·산정식 등 표가 들어 있습니다">표 포함</span>' : '');
+  return '<div class="guide-row l3' + (deep ? ' deep' : '') + '" onclick="openGuideDoc(' + it.row.id + ')"' +
+    ' title="' + escHtml(it.row.description || it.row.title) + '">' +
+    '<span class="guide-label">' + kbHighlight(it.name, terms) + '</span>' + badge +
+    '<i class="ti ti-chevron-right"></i></div>';
 }
 
 // 실무 안내 본문 열람 — 조문 모달을 함께 쓰되 조문 검색줄은 감춘다(요약본은 조문 단위가 아니다).

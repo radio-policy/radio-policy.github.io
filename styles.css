@@ -418,3 +418,44 @@ textarea:focus { border-color: var(--accent); }
 
 /* 지식 목록 이름 검색 — 일치 글자 강조 (다크모드에서도 대비 확보) */
 mark.kb-hit { background: rgba(245, 197, 24, .38); color: inherit; border-radius: 2px; padding: 0 1px; }
+
+/* ── 실무 안내 탭 — 필터 칩 + 접히는 계층 목록 ───────────────────────── */
+.guide-chip {
+  font-size: 11.5px; padding: 4px 12px; border-radius: 999px; cursor: pointer;
+  border: 0.5px solid var(--border-mid); background: var(--bg-secondary);
+  color: var(--text-secondary); font-family: inherit; transition: all .15s;
+}
+.guide-chip:hover { border-color: var(--accent); color: var(--text-primary); }
+.guide-chip.active { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+.guide-chip span { opacity: .75; margin-left: 3px; }
+
+/* 구획 머리(중앙전파관리소 업무안내 · 2단 / 법령 요약 · 3단) */
+.guide-sec {
+  font-size: 11.5px; font-weight: 600; color: var(--accent);
+  background: var(--bg-secondary); border: 0.5px solid var(--border-light);
+  border-radius: var(--radius-md); padding: 7px 12px; margin: 14px 0 6px;
+}
+.guide-sec:first-child { margin-top: 0; }
+.guide-sec em { font-style: normal; font-weight: 400; color: var(--text-tertiary); margin-left: 4px; }
+
+/* 계층 행 — L1(분야/계열) · L2(하위 묶음) · L3(문서) */
+.guide-row {
+  display: flex; align-items: center; gap: 7px; cursor: pointer;
+  padding: 8px 12px; border-bottom: 0.5px solid var(--border-light);
+  font-size: 12.5px; color: var(--text-primary); transition: background .12s;
+}
+.guide-row:last-child { border-bottom: none; }
+.guide-row:hover { background: var(--bg-secondary); }
+.guide-row .ti-chevron-right, .guide-row .ti-chevron-down { font-size: 14px; color: var(--text-tertiary); flex-shrink: 0; }
+.guide-row.l1 { font-weight: 600; }
+.guide-row.l2 { padding-left: 30px; font-size: 12px; }
+.guide-row.l3 { padding-left: 30px; font-size: 12px; color: var(--text-secondary); cursor: pointer; }
+.guide-row.l3.deep { padding-left: 52px; }
+.guide-row.l3:hover { color: var(--text-primary); }
+.guide-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.guide-folder { font-size: 10.5px; color: var(--text-tertiary); font-weight: 400; margin-left: 5px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.guide-count { font-size: 11px; color: var(--text-tertiary); flex-shrink: 0; font-variant-numeric: tabular-nums; }
+.guide-tbl {
+  font-size: 10px; padding: 1px 6px; border-radius: 999px; flex-shrink: 0;
+  background: rgba(59, 130, 246, .12); color: #1d4ed8;
+}
