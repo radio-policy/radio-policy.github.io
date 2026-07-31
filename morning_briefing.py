@@ -59,8 +59,11 @@ def fetch_items_with_content() -> list:
             .gte('published_at', cutoff) \
             .not_.is_('content', 'null') \
             .order('published_at', desc=True) \
-            .limit(60) \
+            .limit(300) \
             .execute()
+        # limit 60이던 시절, 대형 사건 재보도가 하루 261건 쏟아지자 조회 60건 중 55건이
+        # 한 사건이었고 다른 뉴스가 브리핑에서 통째로 밀려났다(배경역사 #44).
+        # 넉넉히 300건을 받아 클러스터링으로 줄이는 방식으로 변경.
         items = [it for it in (resp.data or []) if it.get('content') and len(it['content'].strip()) > 50]
         print(f'[조회] 본문 확인 기사 {len(items)}건 / 24h 내')
         return items
@@ -80,7 +83,7 @@ def fetch_items_fallback() -> tuple:
             .select('id,title,source,url,published_at,summary,urgency') \
             .gte('published_at', cutoff) \
             .not_.is_('summary', 'null') \
-            .order('published_at', desc=True).limit(60).execute()
+            .order('published_at', desc=True).limit(300).execute()
         items = []
         for it in (resp.data or []):
             s = (it.get('summary') or '').strip()
@@ -97,7 +100,7 @@ def fetch_items_fallback() -> tuple:
         resp = sb.table('news_feed') \
             .select('id,title,source,url,published_at,urgency') \
             .gte('published_at', cutoff) \
-            .order('published_at', desc=True).limit(60).execute()
+            .order('published_at', desc=True).limit(300).execute()
         items = []
         for it in (resp.data or []):
             t = (it.get('title') or '').strip()
@@ -113,6 +116,49 @@ def fetch_items_fallback() -> tuple:
 
 
 # ═══════════════════════════════════════════════════════
+#  STEP 1.5 — 같은 사건 클러스터링 (배경역사 #44)
+# ═══════════════════════════════════════════════════════
+
+def cluster_briefing_items(items: list) -> list:
+    """같은 사건 재보도를 대표 1건으로 묶어 Haiku 입력을 만든다.
+
+    프롬프트의 '중복 주제 제외' 지시만으로는 입력 60건 중 55건이 한 사건일 때
+    무력했다(실측) — 입력 자체에서 중복을 없애는 것이 확실하다.
+    별-형 클러스터링(전이 없음)을 쓰는 이유는 news_dedup.py 주석 참조.
+    전일(24~72h 전) 기사와 유사한 묶음에는 '전일 기보도' 꼬리표를 단다.
+    실패 시 원본 그대로 반환(fail-open)."""
+    if not items:
+        return items
+    try:
+        from news_dedup import extract_keywords, cluster_star
+
+        reps = []
+        for rep, members in cluster_star(items):   # 최신순 입력 → 최신 기사가 대표
+            rep['_related'] = len(members)
+            reps.append(rep)
+        print(f'[클러스터] {len(items)}건 → {len(reps)}묶음')
+
+        # 전일 기보도 꼬리표 — 어제 브리핑에서 이미 다룬 사건이 이어지는 것임을 표시
+        try:
+            end = (datetime.now(KST) - timedelta(hours=24)).isoformat()
+            start = (datetime.now(KST) - timedelta(hours=72)).isoformat()
+            resp = sb.table('news_feed').select('title') \
+                .gte('published_at', start).lt('published_at', end) \
+                .order('published_at', desc=True).limit(1000).execute()
+            prev_kws = [extract_keywords(r.get('title') or '') for r in (resp.data or [])]
+            for rep in reps:
+                kw = extract_keywords(rep.get('title') or '')
+                if any(len(kw & pk) >= 3 for pk in prev_kws):
+                    rep['_prev'] = True
+        except Exception as e:
+            print(f'[클러스터] 전일 꼬리표 실패(무시): {e}')
+        return reps
+    except Exception as e:
+        print(f'[클러스터] 오류 → 원본 사용(fail-open): {e}')
+        return items
+
+
+# ═══════════════════════════════════════════════════════
 #  STEP 2 — 브리핑 생성
 # ═══════════════════════════════════════════════════════
 
@@ -122,6 +168,8 @@ _BRIEFING_SYSTEM = """당신은 SK텔레콤 Comm센터 기술정책팀의 전파
 작성 규칙:
 - [주요 뉴스]는 제공된 기사에서만 선별 (최대 8건, 긴급·보통 기사 우선)
 - 같은 사건·주제를 다룬 기사가 여러 건일 경우 가장 중요한 1건만 선별 (중복 주제 제외)
+- 제목 뒤 (관련 보도 N건)은 같은 사건을 다룬 기사 수 — 선별한 항목에 그대로 표기해 보도 규모가 보이게 할 것
+- 〔전일 기보도 이어짐〕 표시가 있는 기사를 선별하면 그 표시를 제목 뒤에 유지하고, 요약은 새로 알려진 내용 위주로 짧게 쓸 것
 - [주목 포인트]는 SKT Comm센터 정책·기술 관점에서 핵심 이슈 1~3개 도출
 - 반드시 제공된 본문 내용에 근거해서만 요약 작성 — 추측·외부 지식 금지
 - 각 뉴스에 본문 기반 한 줄 요약 포함
@@ -159,8 +207,11 @@ def generate_briefing(items: list, new_terms: list) -> str:
     for it in items[:50]:
         icon = {'긴급': '🔴', '보통': '🟡', '참고': '🟢'}.get(it.get('urgency', '참고'), '🟢')
         body = (it.get('content') or '').replace('\n', ' ').strip()[:400]
+        # 클러스터 대표에는 보도 규모·전일 연속 여부를 병기 (배경역사 #44)
+        rel = it.get('_related', 0)
+        tags = (f' (관련 보도 {rel + 1}건)' if rel else '') + (' 〔전일 기보도 이어짐〕' if it.get('_prev') else '')
         news_lines.append(
-            f"{icon} {it['title']} — {it.get('source','')} [ID:{it['id']}]\n"
+            f"{icon} {it['title']}{tags} — {it.get('source','')} [ID:{it['id']}]\n"
             f"   URL: {it.get('url','')}\n"
             f"   발행: {str(it.get('published_at',''))[:10]}\n"
             f"   본문: {body}"
@@ -560,6 +611,9 @@ def main():
         print('[종료] 최근 24시간 내 수집된 기사 자체가 없음')
         _handle_no_news()   # 시각 무관 1일 1회 통지 + 대시보드 placeholder
         return
+
+    # 같은 사건 재보도 → 대표 1건 + 관련 건수 (배경역사 #44)
+    items = cluster_briefing_items(items)
 
     # 신규 기술 용어 조회 (오늘 추가된 것)
     new_terms = []

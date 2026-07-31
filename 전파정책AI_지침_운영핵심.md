@@ -23,8 +23,9 @@ SKT Comm센터 기술정책팀의 전파·통신 정책 모니터링 자동화 �
 C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 ├── sb_client.py                # Supabase 클라이언트 공용 생성기 — HTTP/2 끄고 HTTP/1.1+재시도(make_client). 모든 스크립트가 create_client 대신 사용(RemoteProtocolError 끊김 회피)
 ├── requirements.txt            # 의존성 버전 고정(lock, 61개). 모든 워크플로가 `pip install -r requirements.txt`로 설치 — 자동 최신화 사고 방지(배경역사 #15)
-├── crawler.py                  # 메인 크롤러(GitHub Actions 매시간) — 네이버 검색 OpenAPI(키 없으면 Google RSS 폴백), Haiku 긴급도 분류(피드백 학습), fetch_article_body 본문 수집
-├── morning_briefing.py         # 모닝 브리핑 생성·발송(06:00 KST) — 🔴=DB 긴급도, SKT 영향 분석, 신규 입법예고 📢 섹션, 본문 0건 시 요약→제목 폴백(빈 브리핑 방지), 기사 0건 시 시각무관 1일1회 '🕊️무뉴스' 통지+placeholder(_handle_no_news)
+├── crawler.py                  # 메인 크롤러(GitHub Actions 매시간) — 네이버 검색 OpenAPI(키 없으면 Google RSS 폴백), Haiku 긴급도 분류(피드백 학습), fetch_article_body 본문 수집, 긴급 재알림 억제(suppress_repeat_alerts, #44)
+├── morning_briefing.py         # 모닝 브리핑 생성·발송(06:00 KST) — 🔴=DB 긴급도, 같은 사건 클러스터링(대표 1건+관련 N건, #44), SKT 영향 분석, 신규 입법예고 📢 섹션, 본문 0건 시 요약→제목 폴백(빈 브리핑 방지), 기사 0건 시 시각무관 1일1회 '🕊️무뉴스' 통지+placeholder(_handle_no_news)
+├── news_dedup.py               # 같은 사건 재보도 판정 공용 유틸(제목 키워드, API 비용 0) — crawler·morning_briefing 공유. 임계 3·별-형 클러스터링 근거는 파일 주석 (#44)
 ├── refetch_content.py          # 본문 재수집·요약·60일 초과 정리(Windows 스케줄러, 한국 IP) · heartbeat(last_refetch_run)
 ├── gov_notice_crawler.py       # 정부 고시(RRA·MSIT·KCC)→news_feed + 입법예고(opinion.lawmaking.go.kr)→law_amendments(lsAnc) (17:00, 한국 IP) · heartbeat(last_gov_notice_run)
 ├── law_crawler.py              # 법제처 DRF API 법령·고시 모니터링(11:00 KST). 엔드포인트 www.law.go.kr/DRF/lawSearch.do, OC=radiopolicyai
@@ -66,6 +67,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 | report_style_rules | 보고서 스타일 가이드 캐시(단일 행 id=1). sample_count·feedback_count로 자동 재증류 임계(+2) 추적 |
 | report_feedback | 보고서 피드백 — request·draft·final(채택·교정본)·rating(1/-1). 편집-diff 학습 데이터. 영구 |
 | report_directives | "항상 적용" 영구 지시 — 모든 초안 시스템 프롬프트에 최우선 주입. 관리 탭에서 삭제 가능 |
+| alert_suppress_log | 긴급 재알림 억제 내역(어떤 기존 기사와 유사해 막았는지, 공유 키워드). **1~2주 실측 후 "본문에만 새 내용" 놓침이 있으면 Haiku 판정 층(월 2~6$) 추가 판단**용. service만 접근(정책 없음) (#44) |
 | system_health | 운영 heartbeat(key별 1행). last_crawl_run=뉴스크롤러 / last_gov_notice_run=입법예고·정부고시 / last_refetch_run=본문수집. 워치독 '고장 vs 없음' 구분 + 운영상태 탭. RLS+anon select |
 | kb_documents | 법령·규제 **요약/실무 문서**(regulatory-kb OKF 번들, 문서당 1행). concept_type·law_type·law_number·enforcement_date·status(current/superseded)·body_md 컬럼. path 유니크(정체 키). **document_chunks(조문 원문)와 별개 레이어** — 조문 인용은 그쪽, 요약·적용범위·실무는 이쪽. RLS+anon select |
 | kb_chunks | kb_documents 본문 청크 + embedding(**voyage-law-2** 1024, HNSW). doc_id FK(cascade). 자문이 시맨틱+trgm으로 조회 |
@@ -475,6 +477,9 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **regulatory-kb 요약(kb_*)을 document_chunks(조문 원문)와 합치거나 서로 대체하지 말 것** — 요약↔원문은 상호보완 레이어. 조문 인용은 원문 우선, 요약은 맥락 보강. 합치면 조문 인용 회귀. (배경역사 #21)
 - **kb 자문 조회 기본을 `only_current=true`로 유지(구버전 기본 노출 금지)** — status=superseded는 명시 요청 시만. (배경역사 #21)
 - **kb_* 적재는 manifest.json을 정본으로 순회할 것(파일 스캔·개별 손삽입 금지)** — dedup·버전 판정이 manifest 기준. 신규/갱신은 add_law.py(MAINTENANCE.md 규칙). (배경역사 #21)
+- **뉴스 중복 판정 임계(공유 키워드 3)를 2로 낮추지 말 것** — 「KT 해킹 540억」과 「KT 5G 과장광고 139억 소송」이 'KT+과징금' 2개 공유로 한 사건이 되어 **두 번째 사건의 첫 알림이 삼켜진다**(실측). 반대로 4로 올리면 재보도 억제율이 급락. (배경역사 #44)
+- **브리핑 클러스터링을 전이 연결 방식으로 바꾸지 말 것** — "540억 이어 5G 소송도 패소" 같은 다리 기사가 서로 다른 사건을 한 묶음(실측 261건)으로 이어 브리핑에서 사건 하나가 통째로 사라진다. 별-형(씨앗 비교, news_dedup.cluster_star)만 사용. (배경역사 #44)
+- **재알림 억제·클러스터링의 fail-open을 없애지 말 것** — 판정 코드가 죽으면 전부 알림/원본 그대로가 정상 동작. 억제 기능의 장애가 알림 장애로 번지면 안 된다. (배경역사 #44)
 - **별표 동반 인출(`buildAnnexContext`)의 상한 3종을 풀지 말 것** — 질문당 별표 2개 / 별표당 6청크 / 첫 청크 필수. 별표 하나가 최대 **812청크**(항행안전무선시설 별표1)라 상한을 풀면 프롬프트가 65만 자로 터진다. 첫 청크에만 표의 열 이름이 있어, 빼면 `│1만원 │― │―│`처럼 무슨 숫자인지 모르는 조각만 들어간다. (배경역사 #43)
 - **`「다른 법령」 별표 N` 인용은 따라가지 말 것** — 같은 문서의 같은 번호 별표를 붙이면 엉뚱한 표가 들어간다(인용 978건 중 90건이 타 법령). (배경역사 #43)
 - **별표 검색이 안 될 때 "제목 머리말 붙여 재적재"로 해결하려 하지 말 것** — 실측으로 기각됐다. 머리말 추가 후 유사도 0.408→0.406(변화 없음), 임계값 0.45 미달 그대로. 첫 청크엔 이미 제목이 원문에 있고, 「변경신고」↔「변경허가」처럼 **제도가 다르면 어휘로 못 좁힌다.** 인용 관계를 규칙으로 따라가는 쪽이 답. (배경역사 #43)

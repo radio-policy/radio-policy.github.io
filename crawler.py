@@ -1712,6 +1712,70 @@ def send_morning_telegram(items: list, briefing_text: str = ''):
         print(f'[텔레그램 모닝 오류] {e}')
 
 
+def suppress_repeat_alerts(urgent_items: list) -> list:
+    """같은 사건 재보도의 재알림 억제 (배경역사 #44).
+
+    ① 최근 3일 내 이미 DB에 있던 긴급 기사와 제목 유사(공유 키워드 3+) → 억제.
+       단, 국면 신호 단어(소송·고발·상고…)가 새로 등장한 제목은 통과(새 전개).
+    ② 이번 실행분 안에서도 유사 기사는 대표 1건으로 묶고 '(관련 보도 N건)' 병기.
+    억제 내역은 alert_suppress_log에 남긴다 — 1~2주 실측 후 Haiku 판정 층 추가 여부 결정.
+    어떤 오류든 나면 원본 그대로 반환(fail-open) — 판정이 죽어서 알림까지 죽으면 안 된다."""
+    if not urgent_items:
+        return urgent_items
+    try:
+        from news_dedup import extract_keywords, is_followup, cluster_star
+
+        # 이번 실행에서 방금 저장한 기사는 비교 대상에서 빼야 한다 (자기 자신과 비교 방지)
+        batch_urls = {i.get('url') for i in urgent_items}
+        cutoff_3d = (datetime.now(KST) - timedelta(days=3)).isoformat()
+        prior = []
+        resp = sb.table('news_feed').select('title,url') \
+            .eq('urgency', '긴급').gte('created_at', cutoff_3d) \
+            .order('created_at', desc=True).limit(1000).execute()
+        for r in (resp.data or []):
+            if r.get('url') not in batch_urls:
+                prior.append({'title': r.get('title') or '', 'kw': extract_keywords(r.get('title') or '')})
+
+        passed, sup_rows = [], []
+        for it in urgent_items:
+            kw = extract_keywords(it.get('title') or '')
+            matched = None
+            for pv in prior:
+                if is_followup(kw, pv['kw'], it.get('title') or '', pv['title']):
+                    matched = pv
+                    break
+            if matched:
+                sup_rows.append({
+                    'article_title': it.get('title') or '',
+                    'article_url': it.get('url') or '',
+                    'matched_title': matched['title'],
+                    'shared_keywords': ','.join(sorted(kw & matched['kw'])),
+                })
+            else:
+                passed.append(it)
+
+        # 같은 실행분 내 유사 기사 묶기 — 사건 첫날 첫 실행에 재보도 수십 건이
+        # 한꺼번에 들어오면 한 통에 수십 줄이 되는 것을 대표 1건으로 줄인다
+        reps = []
+        for rep, members in cluster_star(passed):
+            rep['_related'] = len(members)
+            reps.append(rep)
+
+        if sup_rows:
+            print(f'[긴급 억제] 재보도 {len(sup_rows)}건 알림 생략 (3일 내 기보도 사건과 유사)')
+            try:
+                sb.table('alert_suppress_log').insert(sup_rows).execute()
+            except Exception as e:
+                print(f'[긴급 억제] 로그 저장 실패(무시): {e}')
+        merged = len(passed) - len(reps)
+        if merged:
+            print(f'[긴급 억제] 실행분 내 유사 {merged}건 대표에 병합')
+        return reps
+    except Exception as e:
+        print(f'[긴급 억제] 판정 오류 → 전부 알림(fail-open): {e}')
+        return urgent_items
+
+
 def send_telegram(urgent_items: list):
     """긴급 기사를 Telegram Bot으로 즉시 알림"""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
@@ -1726,7 +1790,9 @@ def send_telegram(urgent_items: list):
         title = item.get('title', '')
         source = item.get('source', '')
         url = item.get('url', '')
-        lines.append(f'*{i}. {title}*')
+        rel = item.get('_related', 0)
+        rel_txt = f' (관련 보도 {rel}건)' if rel else ''
+        lines.append(f'*{i}. {title}*{rel_txt}')
         lines.append(f'   출처: {source}')
         lines.append(f'   🔗 {url}\n')
 
@@ -2034,6 +2100,14 @@ def main():
     skipped = [i for i in new_items if i.get('urgency') == '긴급' and not is_within_24h(i)]
     if skipped:
         print(f'[긴급] {len(skipped)}건 발행 24시간 초과 — 알림 제외')
+
+    # ── 재알림 억제 (배경역사 #44) ──────────────────────
+    # 같은 사건 재보도가 매시간 새 긴급 기사로 들어와 텔레그램이 며칠간 수십 통
+    # (KT 과징금: 8일 339건 알림). 최근 3일 내 이미 DB에 있던 긴급 기사와 제목이
+    # 유사하면 후속 보도로 보고 알림만 생략한다 — 수집·브리핑·대시보드에는 그대로 반영.
+    # 실패 시에는 전부 알림(fail-open): 억제가 목적이므로 판정이 죽으면 시끄러운 쪽이 안전.
+    urgent_items = suppress_repeat_alerts(urgent_items)
+
     if urgent_items:
         print(f'[긴급] {len(urgent_items)}건 — 알림 발송')
         send_telegram(urgent_items)
