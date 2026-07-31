@@ -426,6 +426,9 @@ def crawl_naver_news() -> tuple:
                 href = naver_link if 'naver.com' in naver_link else (origin or naver_link)
                 if not href or href in seen_urls:
                     continue
+                # 스포츠·연예 오인 차단 — 도메인까지 봐야 하므로 URL 확정 후에 판정 (배경역사 #45)
+                if not is_personnel and is_sports_noise(title, href):
+                    continue
                 seen_urls.add(href)
 
                 items.append({
@@ -516,6 +519,10 @@ def crawl_google_news_rss() -> list:
                                 link = r.url
                         except Exception:
                             pass  # 실패 시 원본 URL 유지
+
+                # 스포츠·연예 오인 차단 — 리다이렉트 해제 후의 실제 URL로 판정 (배경역사 #45)
+                if not is_personnel and is_sports_noise(title, link):
+                    continue
 
                 # 발행일: published_parsed(UTC struct_time) → KST ISO
                 pub_struct = entry.get('published_parsed')
@@ -654,6 +661,41 @@ EXCLUDE_KEYWORDS = [
     # 기타
     '레시피', '맛집', '여행', '날씨',
 ]
+
+# ───────────────────────────────────────────────────────
+#  스포츠·방송코너 오인 차단 — 단어 목록이 아니라 '패턴'으로 (배경역사 #45)
+#
+#  EXCLUDE_KEYWORDS에 야구 용어를 40개 넘게 쌓아 왔지만, 정작 새 나가는 제목들에는
+#  그 단어가 하나도 없었다 — '3G 연속포', '3G 8타점', '3G 무패', '3G 연속골'.
+#  스포츠 기사가 3G를 쓰는 방식은 정해져 있는데(3G+기록어) 목록은 선수 이름만 쫓아
+#  다녔던 것. 새 선수·새 표현이 나올 때마다 뚫린다. 그래서 조합을 본다.
+#
+#  실측 검증(2026-08-01): DB의 3G/LTE 기사 14건에 걸어 스포츠 2건만 걸리고
+#  통신 기사 12건은 전원 통과 — 특히 진행 중인 '3G 종료' 이슈 7건 모두 통과.
+#   \d* 는 '3G 2골'처럼 숫자가 끼는 표기 대응(테스트로 발견). '2G/3G 종료'는
+#   숫자 뒤가 'G'라 기록어에 걸리지 않아 안전하다.
+_SPORTS_NUM_RE = re.compile(
+    r'\b[36]G\b\s*\d*\s*(연속|무패|무실점|타점|타수|안타|홈런|골|승|패|세이브|QS|경기|보살)')
+# 지역 MBC 등이 실시간 리포트 코너명으로 [LTE]를 쓴다.
+# '[LTE/리포트]' 같은 변형이 있어 대괄호 안 뒷부분을 열어 둔다(테스트로 발견).
+_LTE_CORNER_RE = re.compile(r'\[\s*LTE\b[^\]]*\]|^LTE\)')
+# 도메인이 가장 확실하다 — 삭제 이력 25건 중 12건이 이 두 곳이었다
+_SPORTS_DOMAINS = ('sports.naver.com', 'entertain.naver.com')
+
+
+def is_sports_noise(title: str, url: str = '') -> bool:
+    """스포츠·연예 오인 기사인가. 제목 패턴 + 출처 도메인 조합으로 판정.
+    '3G 종료', 'LTE 20배', 'LTE-R'처럼 통신 맥락은 걸리지 않는다(실측 확인)."""
+    t = title or ''
+    if _SPORTS_NUM_RE.search(t):
+        return True
+    if _LTE_CORNER_RE.search(t):
+        return True
+    u = (url or '').lower()
+    if any(d in u for d in _SPORTS_DOMAINS):
+        return True
+    return False
+
 
 # ───────────────────────────────────────────────────────
 # 과기정통부·방통위 등 소관 부처 인사이동 뉴스 — 항상 포함
