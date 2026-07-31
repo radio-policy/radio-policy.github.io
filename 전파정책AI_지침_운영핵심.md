@@ -39,7 +39,8 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 ├── health_watchdog.py          # 외부 헬스 워치독(GitHub Actions, Supabase 독립) — 크롤러 성공여부 인지(고장 vs 뉴스없음 구분)
 ├── system_prompt.js            # 대시보드 AI 자문 시스템 프롬프트(위임 관계 검증·핵심 조문 참조)
 ├── index.html / app.js         # 대시보드 프론트엔드(GitHub Pages). AI 자문·보고서 초안 모두 SSE 스트리밍(stream:true) — 비스트리밍 복귀 금지. AI 자문은 RAG+뉴스+법령동향 컨텍스트 조합
-├── run_gov_crawler.bat / run_briefing_backup.bat / setup_*.ps1  # 배치·스케줄러 등록
+├── crms_guide_sync.py          # 중앙전파관리소 업무안내 38p → regulatory-kb 적재(월 1회, 한국 IP). 본문 sha256 비교로 변경분만
+├── run_gov_crawler.bat / run_briefing_backup.bat / run_crms_sync.bat / setup_*.ps1  # 배치·스케줄러 등록
 └── .github/workflows/          # daily_crawl·morning_briefing·law_crawl·assembly_crawl·backfill·cleanup·health_watchdog
 ```
 
@@ -442,6 +443,8 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **Daily Briefing "오늘" 배지를 UTC로 되돌리지 말 것** — KST 자정~09시 오판. KST(+9h) 유지.
 - **parseBriefingContent 마크다운 처리·📢 블록 스타일링·🔗 링크화 제거 금지** — 기호 노출·링크 미클릭 문제 해결책.
 - **crawl_naver_news를 HTML 스크래핑으로 되돌리지 말 것** — 0건 회귀(에러 없이) 사고. 공식 OpenAPI가 정답.
+- **지식 수집에 `crawler.fetch_article_body()`를 쓰지 말 것 — 반환 본문이 `[:1500]`으로 하드 절단된다** — 뉴스 발췌용 함수라 상한이 박혀 있다. 웹 문서를 RAG 지식으로 넣을 땐 `trafilatura.extract(include_tables=True)`를 직접 호출할 것(전파사용료 페이지 3,255자가 잘린다). (배경역사 #40)
+- **crms_guide_sync의 메뉴 링크를 하드코딩하지 말 것 / 분야는 `<title>` breadcrumb, 제목은 nav 링크 텍스트에서 각각 뽑을 것** — nav 순서로 분야를 추정하면 '방송업무'가 조사단속 하위로 붙고, 반대로 `<title>` 끝 조각을 제목으로 쓰면 '개요'가 3개 나와 파일명이 충돌한다. 링크 0건이면 사이트 개편 신호. (배경역사 #40)
 - **crawl_msit(과기정통부)를 DOM 셀렉터 파싱으로 되돌리지 말 것 — 인라인 스크립트 정규식 추출 유지, 상세 URL에 `bbsSeqNo` 필수** — 2026-07 사이트 개편으로 목록 DOM이 빈 껍데기가 되어 수 주간 무음 0건이었다(파서는 죽어도 heartbeat는 정상). bbsSeqNo 없는 상세 링크는 200인데 본문이 "시스템 점검 안내"(소프트 차단). 로그의 `행 N개 스캔`이 0이면 개편 재발 신호다. 방통위 0건은 고장이 아니라 키워드 필터의 정상 동작(방송 안건 위주). (배경역사 #39)
 - **Supabase 신규 프로젝트 생성 제안 금지** — 무료 슬롯 2개 모두 사용 중.
 - **Sonnet으로 긴급도 분류 업그레이드 제안 금지** — Haiku+피드백 학습으로 충분.
@@ -526,6 +529,7 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 | opinion.lawmaking.go.kr | 입법예고 | 로컬 수집, 키 불필요 |
 | 열린국회정보 API | 국회 법안 | ASSEMBLY_API_KEY |
 | 네이버 검색 OpenAPI | 뉴스 1순위 | NAVER_CLIENT_ID·SECRET, 일 25,000회 |
+| crms.go.kr (중앙전파관리소) | 업무안내 해설 38p → regulatory-kb | 키 불필요. 공공누리 **제1유형**(출처표시)이라 재배포·변형 허용. robots.txt 전면 허용 |
 
 ### GitHub Secrets
 ```
