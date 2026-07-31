@@ -98,6 +98,7 @@ function initSupabase() {
 let lastRagSources = [];
 let lastLawmapData = null;        // 직전 자문 답변의 <lawmap> 블록 파싱 결과 (법령 관계도 자동 축적용)
 let lastNewsSources = [];         // 직전 자문에 '본문 발췌로 실제 들어간' 수집 뉴스 (출처 표시·검증용)
+let lastKbSources = [];           // 직전 자문에 들어간 요약·실무 문서(kb_chunks) — 동일 목적
 
 function extractKeywords(text) {
   // 한국어 조사·어미·불용어 제거
@@ -154,18 +155,25 @@ function extractNewsKeywords(text) {
 }
 
 // ── 자문 출처 표기 ──────────────────────────────────────────
-// chat_logs.sources는 text 1개 컬럼이라, 뉴스는 접두사로 구분해 같은 배열에 담는다 (스키마 변경 없음).
+// chat_logs.sources는 text 1개 컬럼이라, 종류별 접두사로 구분해 같은 배열에 담는다 (스키마 변경 없음).
+// 조문 원문(document_chunks)은 접두사 없음 / 뉴스 / 요약·실무(kb_chunks) 3종.
 var NEWS_SRC_PREFIX = '[뉴스] ';
+var KB_SRC_PREFIX = '[요약] ';
 function splitSources(arr) {
-  var laws = [], news = [];
+  var laws = [], news = [], kb = [];
   (arr || []).forEach(function(s) {
     if (typeof s !== 'string' || !s) return;
     if (s.indexOf(NEWS_SRC_PREFIX) === 0) { if (news.indexOf(s) === -1) news.push(s); }
+    else if (s.indexOf(KB_SRC_PREFIX) === 0) { if (kb.indexOf(s) === -1) kb.push(s); }
     else if (laws.indexOf(s) === -1) laws.push(s);
   });
-  return { laws: laws, news: news };
+  return { laws: laws, news: news, kb: kb };
 }
 function stripNewsPrefix(s) { return s.indexOf(NEWS_SRC_PREFIX) === 0 ? s.slice(NEWS_SRC_PREFIX.length) : s; }
+function stripKbPrefix(s) { return s.indexOf(KB_SRC_PREFIX) === 0 ? s.slice(KB_SRC_PREFIX.length) : s; }
+function kbTagsHtml(list) {
+  return list.map(function(s) { return '<span class="rag-tag">' + chEsc(stripKbPrefix(s)) + '</span>'; }).join(' ');
+}
 // 법령·문서 태그 — limit 초과분은 "… 등 N개"로 접는다 (무관 청크 12건이 화면을 뒤덮는 것 방지)
 function sourceTagsHtml(list, limit) {
   var lim = limit || 6;
@@ -523,7 +531,14 @@ async function searchKbSummaries(query) {
 }
 
 function buildKbContext(rows) {
+  lastKbSources = [];
   if (!rows || rows.length === 0) return '';
+  // 실제 프롬프트에 들어간 요약·실무 문서만 출처로 남긴다 — 그동안 kb 레이어(법령요약 165 + 실무안내 38)는
+  // 배지에 전혀 표시되지 않아 "쓰였는지" 확인할 방법이 없었다. 뉴스(#35)와 같은 무음 구멍. (배경역사 #41)
+  rows.forEach(function(r) {
+    var t = (r.title || '').trim();
+    if (t && lastKbSources.indexOf(KB_SRC_PREFIX + t) === -1) lastKbSources.push(KB_SRC_PREFIX + t);
+  });
   var items = rows.map(function(r, i) {
     var meta = [];
     if (r.law_type) meta.push(r.law_type);
@@ -1268,6 +1283,7 @@ async function callClaude(userText, onDelta) {
   if (lastNewsSources.length) lastRagSources = lastRagSources.concat(lastNewsSources);
   const lawTrackContext = await lawTrackP;                        // 최근 법령 개정·입법예고 동향
   const kbContext     = buildKbContext(await kbP);                // 법령·규제 요약 지식베이스(regulatory-kb, 현행본)
+  if (lastKbSources.length) lastRagSources = lastRagSources.concat(lastKbSources);
   const pendingContext = await buildPendingContext(ragChunks);    // 인용 조문의 시행예정 개정본(Phase 3)
   // 배지용 스냅샷 — lastPendingNotice는 보고서 초안 경로와 공유하는 전역이라,
   // 자문 스트리밍(수 분) 중 보고서를 생성하면 답변 완료 시점엔 다른 값이 들어 있다.
@@ -1605,6 +1621,7 @@ function _chatContentHtml() {
   var xs = splitSources(d.sources);
   var srcHtml =
     (xs.laws.length ? '<p class="ex-src"><b>참조 법령·문서:</b> ' + xs.laws.map(chEsc).join(', ') + '</p>' : '') +
+    (xs.kb.length ? '<p class="ex-src"><b>참조 요약·실무:</b> ' + xs.kb.map(function(s) { return chEsc(stripKbPrefix(s)); }).join(', ') + '</p>' : '') +
     (xs.news.length ? '<p class="ex-src"><b>참조 뉴스:</b> ' + xs.news.map(function(s) { return chEsc(stripNewsPrefix(s)); }).join(', ') + '</p>' : '');
   return '<h1 class="ex-q">' + chEsc(d.question || '') + '</h1>' +
     '<p class="ex-meta">분류: ' + chEsc(d.category || '일반') + ' &nbsp;|&nbsp; ' + chDate(d.created_at) + '</p>' +
@@ -1620,6 +1637,7 @@ function exportChatMd() {
   md += (d.answer || '') + '\n';
   var ms = splitSources(d.sources);
   if (ms.laws.length) md += '\n---\n\n**참조 법령·문서:** ' + ms.laws.join(', ') + '\n';
+  if (ms.kb.length) md += '\n**참조 요약·실무:** ' + ms.kb.map(stripKbPrefix).join(', ') + '\n';
   if (ms.news.length) md += '\n**참조 뉴스:** ' + ms.news.map(stripNewsPrefix).join(', ') + '\n';
   _chatDownload(new Blob([md], { type: 'text/markdown;charset=utf-8' }), _chatExportName('md'));
 }
@@ -1694,11 +1712,15 @@ async function viewChatHistoryItem(id) {
       srcHtml += '<div class="rag-sources" style="margin-top:12px"><i class="ti ti-book"></i> 참조 법령·문서: ' +
         sourceTagsHtml(sp.laws, 6) + '</div>';
     }
+    if (sp.kb.length > 0) {
+      srcHtml += '<div class="rag-sources" style="margin-top:6px"><i class="ti ti-clipboard-text"></i> 참조 요약·실무: ' +
+        kbTagsHtml(sp.kb) + '</div>';
+    }
     if (sp.news.length > 0) {
       srcHtml += '<div class="rag-sources" style="margin-top:6px"><i class="ti ti-news"></i> 참조 뉴스: ' +
         newsTagsHtml(sp.news) + '</div>';
     }
-    _chatDetail = { question: row.question || '', answer: row.answer || '', category: row.category || '일반', created_at: row.created_at, sources: sp.laws.concat(sp.news) };
+    _chatDetail = { question: row.question || '', answer: row.answer || '', category: row.category || '일반', created_at: row.created_at, sources: sp.laws.concat(sp.kb, sp.news) };
     body.innerHTML =
       '<button class="btn" onclick="openChatHistory()" style="margin-bottom:12px"><i class="ti ti-arrow-left"></i>목록으로</button>' +
       '<button class="btn" onclick="deleteChatHistoryItem(\'' + id + '\', null)" style="margin-bottom:12px;margin-left:8px;color:#d04545"><i class="ti ti-trash"></i>삭제</button>' +
@@ -1785,6 +1807,12 @@ async function sendChat() {
       srcDiv.className = 'rag-sources';
       srcDiv.innerHTML = '<i class="ti ti-database"></i>참조 문서: ' + sourceTagsHtml(_advSrc.laws, 6);
       msgEl.appendChild(srcDiv);
+    }
+    if (_advSrc.kb.length > 0) {
+      const kbDiv = document.createElement('div');
+      kbDiv.className = 'rag-sources';
+      kbDiv.innerHTML = '<i class="ti ti-clipboard-text"></i>참조 요약·실무: ' + kbTagsHtml(_advSrc.kb);
+      msgEl.appendChild(kbDiv);
     }
     if (_advSrc.news.length > 0) {
       const nwDiv = document.createElement('div');
