@@ -415,3 +415,6 @@ textarea:focus { border-color: var(--accent); }
 }
 .lawmap-mini-link { font-size: 11px; color: var(--accent); margin-top: 4px; }
 .lawmap-mini:hover .lawmap-mini-link { text-decoration: underline; }
+
+/* 지식 목록 이름 검색 — 일치 글자 강조 (다크모드에서도 대비 확보) */
+mark.kb-hit { background: rgba(245, 197, 24, .38); color: inherit; border-radius: 2px; padding: 0 1px; }

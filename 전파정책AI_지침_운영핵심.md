@@ -130,6 +130,8 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 - 임베딩은 **voyage-law-2**(법률 특화, 1024). 질의도 voyage-embed의 `model:'voyage-law-2'`로 임베딩(모델 일치 필수). 시맨틱+trgm 병행, 기본 **현행본(status=current)만**(구버전은 명시 요청 시).
 - 적재: `python import_regulatory_kb.py`(manifest 정본 순회, path별 idempotent). 신규/갱신은 `add_law.py`(dedup·최신본 superseded 처리는 regulatory-kb/MAINTENANCE.md).
 - **대시보드 승인 훅 OKF 자동 생성(2026-07-29)**: 웹 업로드(법령·고시 카테고리) 승인 시 임베딩에 이어 **OKF 요약까지 자동 적재** — 브라우저가 Haiku로 초안 작성(add_law.py와 동일 프롬프트) → voyage-law-2 임베딩(voyage-embed Edge) → `admin_upsert_kb_document`/`admin_insert_kb_chunks` RPC(비밀번호 검증, 동일 path 덮어쓰기·구버전 supersede는 RPC가 처리). 실패해도 승인·조문 임베딩은 유지(자문은 조문 기반으로 동작, add_law.py로 보완). path는 `laws/web-upload/…`, family=`web-upload`.
+- **화면은 `실무 안내` 탭(2026-07-31 신설)** — kb_documents 203건(중앙전파관리소 실무 38 + 법령요약 165)을 분야·계열별로 열람. `국내 법령·고시` 탭은 조문 원문(document_chunks) 전용이라 kb는 한 건도 안 보인다. 폴더명이 영문이라 app.js `_GUIDE_FAMILY_KO`/`_GUIDE_SUB_KO`로 한글 이름표를 매핑한다 — **계열 폴더를 새로 만들면 이 표에도 넣을 것**(안 넣으면 영문 폴더명이 그대로 노출). 목록의 **`청크 없음` 배지 = 등재됐으나 자문 검색엔 안 잡히는 상태**(즉시 재적재 대상). (배경역사 #42)
+- **자문 답변 하단 출처 배지는 3종**: 접두 없음=`참조 법령`(조문 원문) / `[뉴스] `=`참조 뉴스` / `[요약] `=`참조 요약·실무`(kb). **`참조 요약·실무`가 안 뜨면 kb 레이어가 반영 안 된 것** — 적재 검증은 반드시 이 배지로 한다. (배경역사 #41)
 - **번들 역동기화(필수 주기 작업)**: 웹 생성 OKF는 DB에만 존재(브라우저는 번들 파일을 못 씀) → PC에서 `python sync_kb_to_bundle.py`가 manifest에 없는 path를 md 파일+manifest 항목으로 저장하고 status 불일치(supersede)도 manifest에 반영. **`import_regulatory_kb.py` 전체 재적재 전에 반드시 먼저 실행**(안 하면 웹 생성 OKF가 재적재에서 유실). 번들=요약의 유일한 백업(무료 플랜은 DB 백업 없음)이므로 월 1회 실행+커밋 권장.
 
 ## RAG 3중 하이브리드 검색
@@ -194,7 +196,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 - URL: https://youjinwoong.github.io/radio-policy-ai/
 - **수정 배포 시 index.html 캐시 버스터 `app.js?v=`·`styles.css?v=` 갱신 필수 (현재 `app.js?v=20260729a` / `styles.css?v=20260723b`)** — CSS 고칠 때 styles.css 버스터도 갱신해야 사용자 브라우저가 새로 받음
 - 아이콘은 Tabler Icons webfont(ti ti-*) — 존재하는 이름만(없으면 빈칸 렌더).
-- 메뉴: [모니터링] 보도자료·뉴스 / Daily Briefing / 기술 용어 · [자문] AI 자문 / 보고서 초안 제안 / **법령 관계도(lawmap)** · [법안 동향] 국회 법안 / 행정부 입법예고·법령 개정 / 법령 DIFF 분석 · [지식 베이스] 국내 법령·고시 / ITU-R / 정부 보도자료 / 추가 지식 입력 / 설정 / 운영 상태(크롤·브리핑·heartbeat 한눈 점검) — ※ lawmap은 질문·AI 생성 성격이라 자문 그룹에 배치(데스크톱). 모바일은 자문 서브메뉴가 없어 지식베이스 서브메뉴(law-sub)로 접근(pageTobn=bn-law).
+- 메뉴: [모니터링] 보도자료·뉴스 / Daily Briefing / 기술 용어 · [자문] AI 자문 / 보고서 초안 제안 / **법령 관계도(lawmap)** · [법안 동향] 국회 법안 / 행정부 입법예고·법령 개정 / 법령 DIFF 분석 · [지식 베이스] 국내 법령·고시(조문 원문) / **실무 안내(kb 요약·실무 203건)** / ITU-R / 정부 보도자료 / 추가 지식 입력 / 설정 / 운영 상태(크롤·브리핑·heartbeat 한눈 점검) — ※ lawmap은 질문·AI 생성 성격이라 자문 그룹에 배치(데스크톱). 모바일은 자문 서브메뉴가 없어 지식베이스 서브메뉴(law-sub)로 접근(pageTobn=bn-law).
 - 뉴스 중요도: 화면 라벨 "🔴 중요/🟡 보통/🟢 참고", 내부값·DB·코드는 '긴급/보통/참고'. 수정 시 news_feed 갱신+importance_feedback 기록+당일 브리핑 🔴 동기화. 잠금=60일 삭제 제외, 삭제=영구+deleted_news 기록.
 
 ## 알림 채널
@@ -470,6 +472,9 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **regulatory-kb 요약(kb_*)을 document_chunks(조문 원문)와 합치거나 서로 대체하지 말 것** — 요약↔원문은 상호보완 레이어. 조문 인용은 원문 우선, 요약은 맥락 보강. 합치면 조문 인용 회귀. (배경역사 #21)
 - **kb 자문 조회 기본을 `only_current=true`로 유지(구버전 기본 노출 금지)** — status=superseded는 명시 요청 시만. (배경역사 #21)
 - **kb_* 적재는 manifest.json을 정본으로 순회할 것(파일 스캔·개별 손삽입 금지)** — dedup·버전 판정이 manifest 기준. 신규/갱신은 add_law.py(MAINTENANCE.md 규칙). (배경역사 #21)
+- **자문 컨텍스트에 넣은 지식은 반드시 출처 배지에도 기록할 것** — kb는 프롬프트에만 들어가고 `lastRagSources`에 안 쌓여, 165+38건 전체가 배지에 한 번도 안 떴다. **반영 여부를 볼 창구가 없으면 틀린 답도 믿을 만해 보인다.** 검증 방법을 안내하기 전에 그 창구부터 확인할 것. (배경역사 #41, #35와 동일 부류)
+- **목록 검색은 표시용 정리 이름으로 매칭하고, 타자마다 DB를 치지 말 것** — 원본 `doc_name`엔 `_중복_`·`.pdf`가, kb `title`엔 `중앙전파관리소 업무안내 — {분야} > ` 접두가 붙어 결과가 어긋난다. `oninput` 재렌더는 `_kbDocsRows`/`_guideRows` 캐시로 처리(force=true일 때만 재조회). (배경역사 #42)
+- **`실무 안내`에서 조문 모달을 재사용할 때 조문 검색줄 복원을 빠뜨리지 말 것** — `openGuideDoc()`이 `kb-doc-searchrow`를 감추므로 `openKbDoc()`이 되살리지 않으면 이후 조문 검색이 영영 사라진다. (배경역사 #42)
 - **여러 세션이 같은 repo 동시 커밋 금지** — stale 마운트로 작업 되돌림 사고(f37fd0b).
 - **pg_cron 트리거 잡·`dispatch_github_workflow`·`trigger_briefing_if_missing`·Vault `github_pat` 삭제 금지** — GitHub cron 드롭 보완 핵심(Supabase가 주 트리거).
 - **같은 문서를 다른 카테고리로 중복 업로드 금지** — 청크 중복→검색 노이즈.

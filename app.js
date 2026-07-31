@@ -1895,7 +1895,8 @@ function smartRefresh() {
     'panel-briefing': function() { loadBriefing(); },
     'panel-terms':    function() { loadTerms && loadTerms(); },
     'panel-press':    function() { loadPressJSON(); },
-    'panel-law':      function() { loadKbDocs(); },
+    'panel-law':      function() { loadKbDocs(true); },
+    'panel-guide':    function() { loadGuideDocs(true); },
     'panel-lawmap':   function() { loadLawMap(true); },
   };
   var fn = map[id] || function() { loadNews(); };
@@ -2676,8 +2677,48 @@ function filterNews(el, cat) { filterNewsByImportance(el, cat); }
 // ════════════════════════════════════════════
 // ── 지식 베이스 문서 목록 (document_chunks 실시간 · 수동정리 목록과 동일 스타일) ──
 var _kbDocsLoaded = false;
+var _kbDocsRows = [];    // list_kb_documents 원본 캐시 — 검색 재렌더가 DB를 다시 치지 않도록
 // 지식베이스 목록의 구버전·시행예정본 표시 토글(기본: 현행본만)
 var _kbShowOlder = false, _kbOlderCount = 0, _kbPendingCount = 0;
+
+// ── 지식 목록 이름 검색 (국내 법령·고시 / 실무 안내 공용) ────────────────
+// 공백으로 나눈 단어를 모두 포함해야 통과(AND). 매칭 0건인 그룹은 렌더 단계에서 통째로 빠진다.
+function kbSearchTerms(inputId) {
+  var el = document.getElementById(inputId);
+  var v = (el && el.value || '').trim().toLowerCase();
+  return v ? v.split(/\s+/).filter(function(t) { return t; }) : [];
+}
+function kbNameMatches(name, terms) {
+  if (!terms.length) return true;
+  var s = String(name || '').toLowerCase();
+  return terms.every(function(t) { return s.indexOf(t) !== -1; });
+}
+function kbHighlight(name, terms) {
+  var html = escHtml(name);
+  if (!terms.length) return html;
+  // 긴 단어부터 치환해야 짧은 단어가 <mark> 태그 안쪽을 깨뜨리지 않는다
+  terms.slice().sort(function(a, b) { return b.length - a.length; }).forEach(function(t) {
+    var re = new RegExp('(' + t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'gi');
+    html = html.replace(re, '\u0001$1\u0002');
+  });
+  return html.replace(/\u0001/g, '<mark class="kb-hit">').replace(/\u0002/g, '</mark>');
+}
+function kbSearchStatus(countId, clearId, inputId, n) {
+  var c = document.getElementById(countId), x = document.getElementById(clearId);
+  var has = kbSearchTerms(inputId).length > 0;
+  if (c) c.textContent = has ? n + '건' : '';
+  if (x) x.style.display = has ? 'block' : 'none';
+}
+function clearKbSearch() {
+  var el = document.getElementById('kb-search');
+  if (el) { el.value = ''; el.focus(); }
+  loadKbDocs();
+}
+function clearGuideSearch() {
+  var el = document.getElementById('guide-search');
+  if (el) { el.value = ''; el.focus(); }
+  loadGuideDocs();
+}
 
 var _KB_GROUPS = [
   ['전파법 기본 법령', /^전파법/],
@@ -2712,14 +2753,18 @@ function _kbParseName(raw) {
 async function loadKbDocs(force) {
   var el = document.getElementById('kb-doc-groups');
   if (!el || !sb) return;
-  if (_kbDocsLoaded && !force) return;
   try {
-    var resp = await sb.rpc('list_kb_documents');
-    if (resp.error) throw resp.error;
+    // 검색어 입력마다 이 함수가 다시 불리므로 DB는 최초 1회(또는 force)만 조회하고
+    // 이후에는 캐시로 다시 그린다. 매 타자마다 RPC를 때리면 목록이 깜빡이고 요금도 낭비된다.
+    if (!_kbDocsLoaded || force) {
+      var resp = await sb.rpc('list_kb_documents');
+      if (resp.error) throw resp.error;
+      _kbDocsRows = resp.data || [];
+    }
     // 구버전(superseded)·시행예정본(pending)은 기본적으로 감춘다. 이것들까지 나열하면
     // 같은 법령이 2~3개씩 보여 "중복 등재"로 오해된다(실제로는 버전 관리가 정상 동작한 것).
     // 토글로 펼쳐 볼 수 있게 하고, 상단에 건수만 알린다.
-    var all = (resp.data || []).filter(function(r) {
+    var all = _kbDocsRows.filter(function(r) {
       if (r.doc_category === 'ITU-R') return false;   // ITU-R 탭에서 별도 표시
       if (/^\d{6}/.test(r.doc_name)) return false;    // 날짜 파일명 = 보도자료 → 정부 보도자료 탭에서 표시
       return true;
@@ -2728,10 +2773,16 @@ async function loadKbDocs(force) {
     var rows = _kbShowOlder ? all : all.filter(function(r) { return !r.status || r.status === 'current'; });
     _kbOlderCount = older.length;
     _kbPendingCount = older.filter(function(r) { return r.status === 'pending'; }).length;
+    // 이름 검색 — 표시용 정리 이름(_kbParseName.clean)으로 매칭한다.
+    // 원본 doc_name은 '_중복_' 접두·'.pdf' 확장자가 붙어 있어 그걸로 매칭하면 결과가 어긋난다. (배경역사 #41)
+    var kbTerms = kbSearchTerms('kb-search');
     var groups = _KB_GROUPS.map(function(g) { return { title: g[0], re: g[1], items: [] }; });
     var etc = { title: '기타 법령·고시', items: [] };
+    var matched = 0;
     rows.forEach(function(r) {
       var p = _kbParseName(r.doc_name);
+      if (!kbNameMatches(p.clean, kbTerms)) return;
+      matched++;
       var item = { p: p, docName: r.doc_name, chunks: r.chunks, embedded: r.embedded > 0, approved: r.approved !== false, status: r.status };
       for (var i = 0; i < groups.length; i++) {
         if (groups[i].re.test(p.clean)) { groups[i].items.push(item); return; }
@@ -2750,6 +2801,7 @@ async function loadKbDocs(force) {
         if (!it.approved) {
           badge += '<span class="badge" style="background:rgba(220,38,38,.12);color:#b91c1c" title="설정에서 승인 전 — AI 자문 미반영">승인 대기</span>';
         }
+        var nameHtml = kbHighlight(it.p.clean, kbTerms);
         var dupTag = it.p.dup ? ' <span style="font-size:10px;color:var(--text-tertiary)">(중복본)</span>' : '';
         if (it.status === 'superseded') {
           dupTag += ' <span class="badge" style="background:rgba(107,114,128,.15);color:#4b5563" title="개정 전 구버전 — 자문 검색에서 제외됨">구버전</span>';
@@ -2760,7 +2812,7 @@ async function loadKbDocs(force) {
         return '<div class="file-item" style="cursor:pointer" title="클릭하면 원문(조문)을 볼 수 있습니다" ' +
           'onclick="openKbDoc(&quot;' + escHtml(it.docName) + '&quot;)">' +
           '<div class="file-icon fi-purple"><i class="ti ti-file-text"></i></div>' +
-          '<div style="flex:1;min-width:0"><div class="file-name">' + escHtml(it.p.clean) + dupTag + '</div>' +
+          '<div style="flex:1;min-width:0"><div class="file-name">' + nameHtml + dupTag + '</div>' +
           '<div class="file-size">' + (it.p.info ? it.p.info + ' · ' : '') + it.chunks + '청크</div></div>' + badge +
           '<i class="ti ti-chevron-right" style="color:var(--text-tertiary);font-size:15px;flex-shrink:0"></i></div>';
       }).join('');
@@ -2786,10 +2838,190 @@ async function loadKbDocs(force) {
         + 'style="color:var(--accent);font-weight:600;margin-left:6px">'
         + (_kbShowOlder ? '현행본만 보기' : '모두 보기') + '</a></div>';
     }
-    el.innerHTML = note + (html || '<div style="color:var(--text-secondary);font-size:12px;padding:16px 0">등록된 문서가 없습니다.</div>');
+    kbSearchStatus('kb-search-count', 'kb-search-clear', 'kb-search', matched);
+    var empty = kbTerms.length
+      ? '<div style="color:var(--text-secondary);font-size:12px;padding:16px 0">‘' + escHtml(kbTerms.join(' ')) + '’와 일치하는 문서가 없습니다.</div>'
+      : '<div style="color:var(--text-secondary);font-size:12px;padding:16px 0">등록된 문서가 없습니다.</div>';
+    el.innerHTML = note + (html || empty);
     _kbDocsLoaded = true;
   } catch(e) {
     el.innerHTML = '<div style="color:var(--text-secondary);font-size:12px;padding:16px 0">목록 조회 실패: ' + e.message + '</div>';
+  }
+}
+
+// ── 실무 안내 탭 (regulatory-kb / kb_documents) ─────────────────────────
+// '국내 법령·고시'는 조문 원문(document_chunks), 이 탭은 요약·실무(kb_chunks) 레이어다.
+// 자문 답변 하단 '참조 요약·실무' 배지에 뜨는 문서들이 여기에 있다. (배경역사 #41)
+// 폴더명이 영문이라 한글 이름표로 옮겨 보여준다 — 운영자가 영문 계열명을 알 이유가 없다.
+var _GUIDE_FAMILY_KO = {
+  'radio-act': '전파법',
+  'telecom-business-act': '전기통신사업법',
+  'telecom-facility-standards': '방송통신설비 기술기준',
+  'device-technical-standards': '단말장치 기술기준',
+  'broadcasting-telecom-development-act': '방송통신발전 기본법',
+  'kmcc-act': '방송미디어통신위원회법',
+  'network-act': '정보통신망법',
+  'privacy-act': '개인정보 보호법',
+  'location-info-act': '위치정보법',
+  'secret-protection-act': '통신비밀보호법',
+  'information-infrastructure': '정보통신기반 보호',
+  'disaster-safety': '재난 및 안전관리 기본법',
+  'ict-industry-promotion-act': '정보통신산업 진흥법',
+  'local-tax-act': '지방세법',
+  'charge-management-act': '부담금관리 기본법',
+  'national-finance-act': '국가재정법',
+  'national-accounting-act': '국가회계법',
+  'government-organization-act': '정부조직법'
+};
+var _GUIDE_SUB_KO = {
+  'notices': '하위 고시·지침',
+  'wireless-notices': '무선설비·무선국 고시',
+  'spectrum-notices': '주파수 고시·공고',
+  'conformity-assessment': '적합성평가 고시',
+  'emf-notices': '전자파 고시',
+  'radio-admin-notices': '전파행정 고시'
+};
+
+var _guideLoaded = false;
+var _guideRows = [];    // kb_documents 캐시 — 검색 재렌더가 DB를 다시 치지 않도록
+var _guideChunks = {};  // doc_id → 청크 수
+
+function _guideGroupOf(path) {
+  var segs = String(path || '').split('/');
+  if (segs[0] === 'procedures' && segs[1] === 'crms') {
+    return { sec: 0, key: '중앙전파관리소 업무안내 › ' + (segs[2] || '').replace(/_/g, ' ') };
+  }
+  if (segs[0] === 'laws') {
+    var fam = _GUIDE_FAMILY_KO[segs[1]] || segs[1];
+    // laws/{family}/{sub}/{file}.md — 3단이면 하위 묶음이 있고, 2단이면 계열 본문이다
+    var sub = segs.length >= 4 ? (_GUIDE_SUB_KO[segs[2]] || segs[2]) : '';
+    return { sec: 1, key: fam + (sub ? ' › ' + sub : '') };
+  }
+  return { sec: 2, key: '기타' };
+}
+
+// 목록 표시명 — CRMS 문서는 제목에 '중앙전파관리소 업무안내 — {분야} > ' 접두가 붙어 있는데
+// 그룹 머리글이 이미 같은 말을 하므로 떼어낸다(붙여두면 한 줄이 전부 같은 글자로 보인다).
+function _guideDisplayName(title) {
+  var t = String(title || '').replace(/^중앙전파관리소 업무안내\s*[—-]\s*/, '');
+  var gt = t.indexOf(' > ');
+  return gt >= 0 ? t.slice(gt + 3) : t;
+}
+
+async function loadGuideDocs(force) {
+  var el = document.getElementById('guide-groups');
+  if (!el || !sb) return;
+  try {
+    if (!_guideLoaded || force) {
+      // PostgREST max-rows 1000 절단 대비 range 페이지네이션 (지침 가드레일)
+      var rows = [], off = 0;
+      while (true) {
+        var r = await sb.from('kb_documents')
+          .select('id,title,path,description,concept_type,competent_authority')
+          .eq('status', 'current')
+          .order('path', { ascending: true })
+          .range(off, off + 999);
+        if (r.error) throw r.error;
+        rows = rows.concat(r.data || []);
+        if ((r.data || []).length < 1000) break;
+        off += 1000;
+      }
+      _guideRows = rows;
+      // 청크 수 — doc_id만 받아 세어 본다. 0청크 문서는 등재만 되고 자문 검색에는
+      // 잡히지 않는 상태라 반드시 눈에 보여야 한다(무성 실패 방지).
+      _guideChunks = {};
+      var coff = 0;
+      while (true) {
+        var c = await sb.from('kb_chunks').select('doc_id').range(coff, coff + 999);
+        if (c.error) throw c.error;
+        (c.data || []).forEach(function(x) { _guideChunks[x.doc_id] = (_guideChunks[x.doc_id] || 0) + 1; });
+        if ((c.data || []).length < 1000) break;
+        coff += 1000;
+      }
+    }
+
+    var terms = kbSearchTerms('guide-search');
+    var map = {}, order = [], matched = 0;
+    _guideRows.forEach(function(r) {
+      var name = _guideDisplayName(r.title);
+      if (!kbNameMatches(name, terms)) return;
+      matched++;
+      var g = _guideGroupOf(r.path);
+      if (!map[g.key]) { map[g.key] = { sec: g.sec, key: g.key, items: [] }; order.push(g.key); }
+      map[g.key].items.push({ row: r, name: name, chunks: _guideChunks[r.id] || 0 });
+    });
+    // 중앙전파관리소(실무) → 법령 요약 → 기타 순. 같은 구획 안에서는 건수 많은 순.
+    var groups = order.map(function(k) { return map[k]; }).sort(function(a, b) {
+      if (a.sec !== b.sec) return a.sec - b.sec;
+      if (b.items.length !== a.items.length) return b.items.length - a.items.length;
+      return a.key.localeCompare(b.key, 'ko');
+    });
+
+    var lastSec = -1;
+    var html = groups.map(function(g) {
+      var head = '';
+      if (g.sec !== lastSec) {
+        lastSec = g.sec;
+        var secName = g.sec === 0 ? '중앙전파관리소 업무안내 (실무 절차)'
+                    : g.sec === 1 ? '법령 요약 (조문 원문이 아닌 요약본)' : '기타';
+        head = '<div style="font-size:12px;font-weight:700;color:var(--text-primary);margin:22px 0 8px;'
+             + 'padding-bottom:6px;border-bottom:0.5px solid var(--border-mid)">' + secName + '</div>';
+      }
+      g.items.sort(function(a, b) { return a.name.localeCompare(b.name, 'ko'); });
+      var fileRows = g.items.map(function(it) {
+        var warn = it.chunks === 0
+          ? '<span class="badge" style="background:rgba(220,38,38,.12);color:#b91c1c" title="본문 청크가 없어 자문 검색에 잡히지 않습니다">청크 없음</span>'
+          : '';
+        var desc = (it.row.description || '').trim();
+        var sub = (it.chunks ? it.chunks + '청크' : '0청크') + (desc ? ' · ' + escHtml(desc) : '');
+        return '<div class="file-item" style="cursor:pointer" title="클릭하면 본문을 볼 수 있습니다" ' +
+          'onclick="openGuideDoc(' + it.row.id + ')">' +
+          '<div class="file-icon fi-purple"><i class="ti ti-clipboard-text"></i></div>' +
+          '<div style="flex:1;min-width:0"><div class="file-name">' + kbHighlight(it.name, terms) + '</div>' +
+          '<div class="file-size">' + sub + '</div></div>' + warn +
+          '<i class="ti ti-chevron-right" style="color:var(--text-tertiary);font-size:15px;flex-shrink:0"></i></div>';
+      }).join('');
+      return head + '<div class="section-title">' + escHtml(g.key) + ' (' + g.items.length + '건)</div>' +
+        '<div class="card" style="cursor:default;margin-bottom:14px">' + fileRows + '</div>';
+    }).join('');
+
+    var tot = document.getElementById('guide-total');
+    if (tot) tot.textContent = _guideRows.length;
+    kbSearchStatus('guide-search-count', 'guide-search-clear', 'guide-search', matched);
+    el.innerHTML = html || '<div style="color:var(--text-secondary);font-size:12px;padding:16px 0">'
+      + (terms.length ? '‘' + escHtml(terms.join(' ')) + '’와 일치하는 문서가 없습니다.' : '등록된 문서가 없습니다.') + '</div>';
+    _guideLoaded = true;
+  } catch(e) {
+    el.innerHTML = '<div style="color:var(--text-secondary);font-size:12px;padding:16px 0">목록 조회 실패: '
+      + escHtml(e && e.message ? e.message : String(e)) + '</div>';
+  }
+}
+
+// 실무 안내 본문 열람 — 조문 모달을 함께 쓰되 조문 검색줄은 감춘다(요약본은 조문 단위가 아니다).
+async function openGuideDoc(docId) {
+  var modal = document.getElementById('kb-doc-modal');
+  var bodyEl = document.getElementById('kb-doc-body');
+  var row = document.getElementById('kb-doc-searchrow');
+  if (!modal || !sb) return;
+  modal.style.display = 'flex';
+  if (row) row.style.display = 'none';
+  _kbDocArticles = [];
+  var meta = _guideRows.filter(function(r) { return r.id === docId; })[0] || {};
+  document.getElementById('kb-doc-title').innerHTML = '<i class="ti ti-clipboard-text"></i> ' + escHtml(meta.title || '실무 안내');
+  document.getElementById('kb-doc-meta').textContent =
+    [meta.concept_type, meta.competent_authority, meta.description].filter(Boolean).join(' · ');
+  bodyEl.innerHTML = '<div style="color:var(--text-tertiary);font-size:12px;padding:20px 0;text-align:center">본문을 불러오는 중...</div>';
+  try {
+    var r = await sb.from('kb_documents').select('body_md').eq('id', docId).limit(1);
+    if (r.error) throw r.error;
+    var md = (r.data && r.data[0] && r.data[0].body_md) || '';
+    bodyEl.innerHTML = md
+      ? renderMd(md)
+      : '<div style="color:var(--text-tertiary);font-size:12px;padding:20px 0;text-align:center">본문이 비어 있습니다.</div>';
+    bodyEl.scrollTop = 0;
+  } catch(e) {
+    bodyEl.innerHTML = '<div style="color:var(--text-tertiary);font-size:12px;padding:20px 0">본문 조회 실패: '
+      + escHtml(e && e.message ? e.message : String(e)) + '</div>';
   }
 }
 
@@ -2806,6 +3038,9 @@ async function openKbDoc(docName) {
   if (!modal || !sb) return;
   modal.style.display = 'flex';
   if (searchEl) searchEl.value = '';
+  // 실무 안내(openGuideDoc)가 감춰 놓았을 수 있으므로 조문 검색줄을 되살린다
+  var searchRow = document.getElementById('kb-doc-searchrow');
+  if (searchRow) searchRow.style.display = 'flex';
   var p = _kbParseName(docName);
   titleEl.innerHTML = '<i class="ti ti-file-text"></i> ' + escHtml(p.clean);
   metaEl.textContent = p.info || '';
@@ -4240,12 +4475,12 @@ function go(page, navEl, sourceType) {
 
   // 상단 바 제목 업데이트
   var newsTitle = currentNewsSourceType === 'gov' ? '정부 보도자료·공지사항' : (currentNewsSourceType === 'media' ? '뉴스' : '보도자료·뉴스');
-  var titles = {home:'대시보드', chat:'AI 자문', reportdraft:'보고서 초안 제안', diff:'법령 DIFF 분석', law:'국내 법령·고시', lawmap:'법령 관계도', itu:'ITU-R 문서', press:'정부 보도자료', terms:'기술 용어', news:newsTitle, briefing:'Daily Briefing', assembly:'국회 법안', lawtrack:'행정부 입법예고·법령 개정', settings:'설정', opsstatus:'운영 상태'};
+  var titles = {home:'대시보드', chat:'AI 자문', reportdraft:'보고서 초안 제안', diff:'법령 DIFF 분석', law:'국내 법령·고시', guide:'실무 안내', lawmap:'법령 관계도', itu:'ITU-R 문서', press:'정부 보도자료', terms:'기술 용어', news:newsTitle, briefing:'Daily Briefing', assembly:'국회 법안', lawtrack:'행정부 입법예고·법령 개정', settings:'설정', opsstatus:'운영 상태'};
   var ttEl = document.getElementById('topbar-title');
   if (ttEl && titles[page]) ttEl.textContent = titles[page];
 
   // 모바일 하단 네비 동기화
-  var pageTobn = {home:'bn-more', chat:'bn-chat', reportdraft:'bn-chat', lawmap:'bn-chat', law:'bn-law', itu:'bn-law', press:'bn-law', custom:'bn-law', terms:'bn-terms', news:'bn-monitor', briefing:'bn-monitor', assembly:'bn-monitor', lawtrack:'bn-monitor', diff:'bn-monitor', settings:'bn-more', opsstatus:'bn-more'};
+  var pageTobn = {home:'bn-more', chat:'bn-chat', reportdraft:'bn-chat', lawmap:'bn-chat', law:'bn-law', guide:'bn-law', itu:'bn-law', press:'bn-law', custom:'bn-law', terms:'bn-terms', news:'bn-monitor', briefing:'bn-monitor', assembly:'bn-monitor', lawtrack:'bn-monitor', diff:'bn-monitor', settings:'bn-more', opsstatus:'bn-more'};
   if (pageTobn[page]) setBottomNav(pageTobn[page]);
 
   if (page === 'news') loadNews();
@@ -4255,6 +4490,7 @@ function go(page, navEl, sourceType) {
   if (page === 'press') loadPressFromSupabase();
   if (page === 'terms') loadTerms();
   if (page === 'law') loadKbDocs();
+  if (page === 'guide') loadGuideDocs();
   if (page === 'lawmap') loadLawMap();
   if (page === 'assembly') loadAssemblyBills();
   if (page === 'lawtrack') loadLawTrack();

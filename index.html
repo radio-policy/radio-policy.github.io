@@ -6,7 +6,7 @@
 <title>전파정책 전문가 AI — SKT Comm센터 기술정책팀</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <link rel="stylesheet" href="styles.css?v=20260730d">
+  <link rel="stylesheet" href="styles.css?v=20260731f">
 
 </head>
 <body>
@@ -40,6 +40,7 @@
     <div class="nav-group">
       <div class="nav-label">지식 베이스</div>
       <div class="nav-item" onclick="go('law',this)"><i class="ti ti-file-text"></i>국내 법령·고시</div>
+      <div class="nav-item" onclick="go('guide',this)"><i class="ti ti-clipboard-text"></i>실무 안내</div>
       <div class="nav-item" onclick="go('itu',this)"><i class="ti ti-world"></i>ITU-R 문서</div>
       <div class="nav-item" onclick="go('press',this)"><i class="ti ti-speakerphone"></i>정부 보도자료</div>
       <div class="nav-item" onclick="go('custom',this)"><i class="ti ti-pencil-plus"></i>추가 지식 입력</div>
@@ -307,7 +308,35 @@
         </div>
         <div id="law-upload-list"></div>
 
+        <div style="position:relative;margin-bottom:14px">
+          <i class="ti ti-search" style="position:absolute;left:11px;top:50%;transform:translateY(-50%);font-size:15px;color:var(--text-tertiary)"></i>
+          <input type="text" id="kb-search" placeholder="문서 이름으로 검색 (공백으로 여러 단어)" oninput="loadKbDocs()" aria-label="법령·고시 문서 이름 검색"
+                 style="width:100%;padding:7px 74px 7px 32px;font-size:12px;border:0.5px solid var(--border-mid);border-radius:var(--radius-md);background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;outline:none">
+          <span id="kb-search-count" style="position:absolute;right:30px;top:50%;transform:translateY(-50%);font-size:11px;color:var(--text-tertiary)"></span>
+          <i class="ti ti-x" id="kb-search-clear" onclick="clearKbSearch()" title="검색어 지우기"
+             style="display:none;position:absolute;right:10px;top:50%;transform:translateY(-50%);font-size:14px;color:var(--text-tertiary);cursor:pointer"></i>
+        </div>
+
         <div id="kb-doc-groups"><div style="color:var(--text-secondary);font-size:12px;padding:16px 0">불러오는 중...</div></div>
+      </div>
+
+      <!-- 실무 안내 (regulatory-kb 요약·실무 문서) -->
+      <div class="panel" id="panel-guide">
+        <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center;flex-wrap:wrap">
+          <span style="font-size:12px;color:var(--text-secondary)">총 <strong id="guide-total">—</strong>개 · 자문이 근거로 삼는 실무 안내·법령 요약 (답변 하단 <strong>참조 요약·실무</strong> 배지로 표시됨)</span>
+          <button class="btn" style="font-size:11px;padding:3px 10px" onclick="loadGuideDocs(true)"><i class="ti ti-refresh"></i> 새로고침</button>
+        </div>
+
+        <div style="position:relative;margin-bottom:14px">
+          <i class="ti ti-search" style="position:absolute;left:11px;top:50%;transform:translateY(-50%);font-size:15px;color:var(--text-tertiary)"></i>
+          <input type="text" id="guide-search" placeholder="문서 이름으로 검색 (공백으로 여러 단어)" oninput="loadGuideDocs()" aria-label="실무 안내 문서 이름 검색"
+                 style="width:100%;padding:7px 74px 7px 32px;font-size:12px;border:0.5px solid var(--border-mid);border-radius:var(--radius-md);background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;outline:none">
+          <span id="guide-search-count" style="position:absolute;right:30px;top:50%;transform:translateY(-50%);font-size:11px;color:var(--text-tertiary)"></span>
+          <i class="ti ti-x" id="guide-search-clear" onclick="clearGuideSearch()" title="검색어 지우기"
+             style="display:none;position:absolute;right:10px;top:50%;transform:translateY(-50%);font-size:14px;color:var(--text-tertiary);cursor:pointer"></i>
+        </div>
+
+        <div id="guide-groups"><div style="color:var(--text-secondary);font-size:12px;padding:16px 0">불러오는 중...</div></div>
       </div>
 
       <!-- 법령 관계도 -->
@@ -813,6 +842,9 @@
       <button class="mobile-submenu-item" onclick="go('law',null);setBottomNav('bn-law');closeMobileSubMenu('law-sub')">
         <i class="ti ti-file-text"></i>국내 법령·고시
       </button>
+      <button class="mobile-submenu-item" onclick="go('guide',null);setBottomNav('bn-law');closeMobileSubMenu('law-sub')">
+        <i class="ti ti-clipboard-text"></i>실무 안내
+      </button>
       <button class="mobile-submenu-item" onclick="go('itu',null);setBottomNav('bn-law');closeMobileSubMenu('law-sub')">
         <i class="ti ti-world"></i>ITU-R 문서
       </button>
@@ -885,7 +917,7 @@
       </div>
       <button class="btn" onclick="closeKbDoc()"><i class="ti ti-x"></i>닫기</button>
     </div>
-    <div style="display:flex;gap:8px;align-items:center;padding:10px 18px;border-bottom:0.5px solid var(--border-light);flex-shrink:0">
+    <div id="kb-doc-searchrow" style="display:flex;gap:8px;align-items:center;padding:10px 18px;border-bottom:0.5px solid var(--border-light);flex-shrink:0">
       <input id="kb-doc-search" type="text" placeholder="조문 검색 — 예: 제37조, 로밍, 위기경보" oninput="filterKbDocArticles()"
              style="flex:1;padding:6px 10px;border:0.5px solid var(--border-mid);border-radius:var(--radius-sm);font-size:12px;background:var(--bg-primary);color:var(--text-primary)">
       <span id="kb-doc-count" style="font-size:11px;color:var(--text-tertiary);white-space:nowrap"></span>
@@ -952,6 +984,6 @@
 <script src="https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js"></script>
 <script>if(typeof pdfjsLib!=='undefined'){pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';}</script>
 <script src="system_prompt.js?v=20260612c"></script>
-<script src="app.js?v=20260731e"></script>
+<script src="app.js?v=20260731f"></script>
 </body>
 </html>
