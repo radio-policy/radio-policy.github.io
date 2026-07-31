@@ -119,7 +119,7 @@ def fetch_items_fallback() -> tuple:
 #  STEP 1.5 — 같은 사건 클러스터링 (배경역사 #44)
 # ═══════════════════════════════════════════════════════
 
-def cluster_briefing_items(items: list) -> list:
+def cluster_briefing_items(items: list, for_date: datetime = None) -> list:
     """같은 사건 재보도를 대표 1건으로 묶어 Haiku 입력을 만든다.
 
     프롬프트의 '중복 주제 제외' 지시만으로는 입력 60건 중 55건이 한 사건일 때
@@ -140,8 +140,11 @@ def cluster_briefing_items(items: list) -> list:
 
         # 전일 기보도 꼬리표 — 어제 브리핑에서 이미 다룬 사건이 이어지는 것임을 표시
         try:
-            end = (datetime.now(KST) - timedelta(hours=24)).isoformat()
-            start = (datetime.now(KST) - timedelta(hours=72)).isoformat()
+            # for_date 기준으로 창을 잡는다 — 과거 재생성 시 '오늘'로 계산하면
+            # 엉뚱한 날과 비교해 꼬리표가 잘못 붙는다 (#46)
+            base = for_date or datetime.now(KST)
+            end = (base - timedelta(hours=24)).isoformat()
+            start = (base - timedelta(hours=72)).isoformat()
             resp = sb.table('news_feed').select('title') \
                 .gte('published_at', start).lt('published_at', end) \
                 .order('published_at', desc=True).limit(1000).execute()
@@ -169,6 +172,7 @@ _BRIEFING_SYSTEM = """당신은 SK텔레콤 Comm센터 기술정책팀의 전파
 - [주요 뉴스]는 제공된 기사에서만 선별 (최대 8건, 긴급·보통 기사 우선)
 - 같은 사건·주제를 다룬 기사가 여러 건일 경우 가장 중요한 1건만 선별 (중복 주제 제외)
 - 제목 뒤 (관련 보도 N건)은 같은 사건을 다룬 기사 수 — 선별한 항목에 그대로 표기해 보도 규모가 보이게 할 것
+- **같은 사건이 여러 항목으로 나뉘어 들어올 수 있다**(예: 같은 과징금 건이 금액 표기만 다르게 2~3건). 이때는 (관련 보도 N건)이 가장 큰 1건만 [주요 뉴스]에 넣고 나머지는 버릴 것 — 사건이 같은지는 제목의 주체·사안으로 판단
 - 〔전일 기보도 이어짐〕 표시가 있는 기사를 선별하면 그 표시를 제목 뒤에 유지하고, 요약은 새로 알려진 내용 위주로 짧게 쓸 것
 - [주목 포인트]는 SKT Comm센터 정책·기술 관점에서 핵심 이슈 1~3개 도출
 - 반드시 제공된 본문 내용에 근거해서만 요약 작성 — 추측·외부 지식 금지
@@ -196,12 +200,14 @@ _BRIEFING_SYSTEM = """당신은 SK텔레콤 Comm센터 기술정책팀의 전파
 뉴스 N건 / 기술 용어 N건"""
 
 
-def generate_briefing(items: list, new_terms: list) -> str:
+def generate_briefing(items: list, new_terms: list, for_date: datetime = None) -> str:
+    """for_date: 과거 브리핑 재생성용. 미지정 시 오늘(정상 운영 경로).
+    지정하지 않으면 재생성본에 '오늘' 날짜가 찍혀 7/31 브리핑에 8/1이 박힌다(#46)."""
     if not ANTHROPIC_API_KEY:
         print('[브리핑] ANTHROPIC_API_KEY 없음 — 건너뜀')
         return ''
 
-    today_str = datetime.now(KST).strftime('%Y년 %m월 %d일')
+    today_str = (for_date or datetime.now(KST)).strftime('%Y년 %m월 %d일')
 
     news_lines = []
     for it in items[:50]:

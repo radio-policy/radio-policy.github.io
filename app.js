@@ -914,6 +914,57 @@ function closeTermsModal() {
   document.getElementById('terms-modal').style.display = 'none';
 }
 
+// ── 용어 상세 생성: 화면과 분리된 핵심부 ──────────────────────────
+// 자동 생성(신규 추출 직후)과 수동 생성(모달 열기)이 같은 프롬프트를 쓰도록
+// DOM을 건드리지 않는 순수 함수로 뽑았다. 반환: {description, diagram_html, related_terms}
+// 실패 시 예외를 던진다 — 호출부가 화면 표시 여부를 정한다. (배경역사 #46)
+async function _fetchTermDetail(t, claudeKey) {
+  var termLabel = t.term + (t.term_en ? ' (' + t.term_en + ')' : '');
+  var systemMsg = '당신은 이동통신·전파 정책 전문가입니다. 반드시 지정된 XML 태그 형식으로만 답변하세요.';
+  var userMsg = '기술 용어 [' + termLabel + '] 에 대해 아래 형식으로 정확히 답변하세요.\n' +
+    '분야: ' + (t.category||'기타') + '. 현재 정의: ' + (t.definition||'없음') + '.\n\n' +
+    '<description>\n' +
+    '3~5문단 상세 설명. **굵은글씨**로 핵심 개념 강조. 단락 구분은 빈 줄로.\n' +
+    '내용: 개념 배경/기술 원리/국내외 현황/관련 표준 순서로 서술.\n' +
+    '</description>\n\n' +
+    '<diagram>\n' +
+    '아래 조건을 모두 지킨 SVG를 생성하라:\n' +
+    '- viewBox="0 0 680 320" xmlns="http://www.w3.org/2000/svg"\n' +
+    '- 배경: rect fill="#f8fafc" 전체 채움\n' +
+    '- 한국어 레이블 사용, font-family="sans-serif"\n' +
+    '- 주요 구성요소를 박스/원/화살표로 시각화 (최소 4개 요소)\n' +
+    '- 색상: 주요 박스 #6366f1(보라), 보조 #10b981(초록), 강조 #f59e0b(노랑), 배경박스 #e0e7ff\n' +
+    '- 화살표는 marker-end 사용하여 방향 표시\n' +
+    '- 개념 흐름이나 계층 구조를 한눈에 파악할 수 있게\n' +
+    '</diagram>\n\n' +
+    '<related>관련용어1,관련용어2,관련용어3</related>';
+  var res = await fetch('https://api.anthropic.com/v1/messages', {
+    method:'POST',
+    headers:{'x-api-key':claudeKey,'anthropic-version':'2023-06-01','content-type':'application/json','anthropic-dangerous-direct-browser-access':'true'},
+    body:JSON.stringify({model:'claude-sonnet-5',max_tokens:6000,system:systemMsg,messages:[{role:'user',content:userMsg}]})
+  });
+  var data = await res.json();
+  if (data.type === 'error' || !data.content) {
+    var errMsg = (data.error && data.error.message) ? data.error.message : JSON.stringify(data);
+    throw new Error('Claude API 오류: ' + errMsg);
+  }
+  var textBlock = data.content.find(function(b) { return b.type === 'text'; });
+  var text = textBlock ? textBlock.text : '';
+  if (!text) throw new Error('Claude 응답 없음');
+
+  // XML 태그로 파싱 (JSON 불필요 — SVG 포함 안전)
+  var descMatch    = text.match(/<description>([\s\S]*?)<\/description>/);
+  var diagramMatch = text.match(/<diagram>([\s\S]*?)<\/diagram>/);
+  var relatedMatch = text.match(/<related>([\s\S]*?)<\/related>/);
+  return {
+    description:   descMatch    ? descMatch[1].trim()    : '',
+    diagram_html:  diagramMatch ? diagramMatch[1].trim() : '',
+    related_terms: relatedMatch
+      ? relatedMatch[1].trim().split(',').map(function(s){return s.trim();}).filter(Boolean)
+      : []
+  };
+}
+
 async function generateTermDetail(id) {
   var t = termsData.find(function(x) { return x.id === id; });
   if (!t) return;
@@ -922,53 +973,7 @@ async function generateTermDetail(id) {
   var { claudeKey } = getConfig();
   if (!claudeKey) { alert('Claude API 키가 필요합니다.'); if(btn){btn.disabled=false;btn.textContent='🤖 Claude로 상세 설명·다이어그램 생성';} return; }
   try {
-    var termLabel = t.term + (t.term_en ? ' (' + t.term_en + ')' : '');
-    var systemMsg = '당신은 이동통신·전파 정책 전문가입니다. 반드시 지정된 XML 태그 형식으로만 답변하세요.';
-    var userMsg = '기술 용어 [' + termLabel + '] 에 대해 아래 형식으로 정확히 답변하세요.\n' +
-      '분야: ' + (t.category||'기타') + '. 현재 정의: ' + (t.definition||'없음') + '.\n\n' +
-      '<description>\n' +
-      '3~5문단 상세 설명. **굵은글씨**로 핵심 개념 강조. 단락 구분은 빈 줄로.\n' +
-      '내용: 개념 배경/기술 원리/국내외 현황/관련 표준 순서로 서술.\n' +
-      '</description>\n\n' +
-      '<diagram>\n' +
-      '아래 조건을 모두 지킨 SVG를 생성하라:\n' +
-      '- viewBox="0 0 680 320" xmlns="http://www.w3.org/2000/svg"\n' +
-      '- 배경: rect fill="#f8fafc" 전체 채움\n' +
-      '- 한국어 레이블 사용, font-family="sans-serif"\n' +
-      '- 주요 구성요소를 박스/원/화살표로 시각화 (최소 4개 요소)\n' +
-      '- 색상: 주요 박스 #6366f1(보라), 보조 #10b981(초록), 강조 #f59e0b(노랑), 배경박스 #e0e7ff\n' +
-      '- 화살표는 marker-end 사용하여 방향 표시\n' +
-      '- 개념 흐름이나 계층 구조를 한눈에 파악할 수 있게\n' +
-      '</diagram>\n\n' +
-      '<related>관련용어1,관련용어2,관련용어3</related>';
-    var res = await fetch('https://api.anthropic.com/v1/messages', {
-      method:'POST',
-      headers:{'x-api-key':claudeKey,'anthropic-version':'2023-06-01','content-type':'application/json','anthropic-dangerous-direct-browser-access':'true'},
-      body:JSON.stringify({model:'claude-sonnet-5',max_tokens:6000,system:systemMsg,messages:[{role:'user',content:userMsg}]})
-    });
-    var data = await res.json();
-
-    // API 오류 체크
-    if (data.type === 'error' || !data.content) {
-      var errMsg = (data.error && data.error.message) ? data.error.message : JSON.stringify(data);
-      throw new Error('Claude API 오류: ' + errMsg);
-    }
-    var textBlock = data.content.find(function(b) { return b.type === 'text'; });
-    var text = textBlock ? textBlock.text : '';
-    if (!text) throw new Error('Claude 응답 없음');
-
-    // XML 태그로 파싱 (JSON 불필요 — SVG 포함 안전)
-    var descMatch   = text.match(/<description>([\s\S]*?)<\/description>/);
-    var diagramMatch = text.match(/<diagram>([\s\S]*?)<\/diagram>/);
-    var relatedMatch = text.match(/<related>([\s\S]*?)<\/related>/);
-
-    var parsed = {
-      description:   descMatch   ? descMatch[1].trim()   : '',
-      diagram_html:  diagramMatch ? diagramMatch[1].trim() : '',
-      related_terms: relatedMatch
-        ? relatedMatch[1].trim().split(',').map(function(s){return s.trim();}).filter(Boolean)
-        : []
-    };
+    var parsed = await _fetchTermDetail(t, claudeKey);
 
     // Supabase 업데이트
     if (sb) {
@@ -5000,6 +5005,44 @@ function loadPressFromSupabase() { loadPressJSON(); }
 // ════════════════════════════════════════════
 //  기술 용어 자동 추출 (하루 1회, 백그라운드)
 // ════════════════════════════════════════════
+// ── 신규 용어 상세 자동 채움 (배경역사 #46) ──────────────────────
+// 순차 실행한다 — 동시에 던지면 API 레이트리밋에 걸리고, 어차피 백그라운드라
+// 빠를 이유가 없다. 한 건이 실패해도 나머지는 계속 채운다(부분 성공 허용).
+async function backfillTermDetails(rows, claudeKey) {
+  if (!sb || !claudeKey || !rows || !rows.length) return;
+  var ok = 0;
+  for (var i = 0; i < rows.length; i++) {
+    var row = rows[i];
+    try {
+      var parsed = await _fetchTermDetail(row, claudeKey);
+      if (!parsed.description) continue;      // 빈 응답이면 덮어쓰지 않는다
+      var up = await sb.from('tech_terms').update({
+        description:   parsed.description,
+        diagram_html:  parsed.diagram_html,
+        related_terms: parsed.related_terms
+      }).eq('id', row.id);
+      if (!up.error) {
+        ok++;
+        // 목록이 이미 떠 있으면 즉시 반영 (안 떠 있으면 다음 loadTerms에서 반영됨)
+        var idx = (typeof termsData !== 'undefined' && termsData)
+          ? termsData.findIndex(function(x) { return x.id === row.id; }) : -1;
+        if (idx >= 0) {
+          termsData[idx].description   = parsed.description;
+          termsData[idx].diagram_html  = parsed.diagram_html;
+          termsData[idx].related_terms = parsed.related_terms;
+        }
+      }
+    } catch(e) {
+      console.warn('[기술 용어] 상세 자동 생성 실패(' + row.term + '):', e.message);
+    }
+  }
+  console.log('[기술 용어] 상세 자동 생성 ' + ok + '/' + rows.length + '건');
+  if (ok && document.getElementById('panel-terms')
+      && document.getElementById('panel-terms').classList.contains('active')) {
+    loadTerms();
+  }
+}
+
 async function autoExtractTermsIfNeeded() {
   var today = new Date().toISOString().slice(0, 10);
   var lastRun = localStorage.getItem('last_terms_extraction');
@@ -5056,7 +5099,7 @@ async function autoExtractTermsIfNeeded() {
     try { terms = JSON.parse(text.slice(firstBracket, lastBracket + 1)); } catch(e) { return; }
     if (!terms.length) { console.log('[기술 용어] 신규 용어 없음'); return; }
 
-    var saved = 0;
+    var saved = 0, newRows = [];
     for (var t of terms) {
       if (!t.term || existingSet.has(t.term.toLowerCase())) continue;
       var payload = {
@@ -5067,11 +5110,36 @@ async function autoExtractTermsIfNeeded() {
         source: t.source || '뉴스 자동 추출',
         is_reviewed: false
       };
-      var r2 = await sb.from('tech_terms').insert(payload);
-      if (!r2.error) { saved++; existingSet.add(t.term.toLowerCase()); }
+      // 이어서 상세 생성을 걸어야 하므로 삽입된 행(id 포함)을 받아 둔다
+      var r2 = await sb.from('tech_terms').insert(payload).select('id,term,term_en,category,definition');
+      if (!r2.error) {
+        saved++;
+        existingSet.add(t.term.toLowerCase());
+        if (r2.data && r2.data[0]) newRows.push(r2.data[0]);
+      }
     }
     localStorage.setItem('last_terms_extraction', today);
     console.log('[기술 용어] 자동 추출 완료:', saved, '건 저장');
+
+    // 신규 용어의 상세 설명·개념도를 곧바로 채운다 — 운영자가 클릭할 때까지
+    // 비워 두면 열어 볼 때마다 수십 초를 기다려야 한다. (배경역사 #46)
+    if (newRows.length) await backfillTermDetails(newRows, claudeKey);
+
+    // 과거에 생성이 실패했거나 자동화 이전에 들어온 빈 용어도 같이 메운다.
+    // 하루 5건으로 제한 — 한 번에 몰아 돌리면 API 비용·시간이 튄다.
+    try {
+      var empties = await sb.from('tech_terms')
+        .select('id,term,term_en,category,definition')
+        .or('description.is.null,description.eq.')
+        .limit(5);
+      var pending = (empties.data || []).filter(function(r) {
+        return !newRows.some(function(n) { return n.id === r.id; });
+      });
+      if (pending.length) {
+        console.log('[기술 용어] 미완성 ' + pending.length + '건 보충 생성');
+        await backfillTermDetails(pending, claudeKey);
+      }
+    } catch(e) { console.warn('[기술 용어] 미완성 보충 조회 실패:', e); }
   } catch(e) {
     console.warn('[기술 용어] 자동 추출 오류:', e);
   }
