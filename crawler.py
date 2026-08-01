@@ -2154,6 +2154,13 @@ def main():
         print(f'[긴급] {len(urgent_items)}건 — 알림 발송')
         send_telegram(urgent_items)
         send_urgent_email(urgent_items)
+        # 구독자 봇: 즉시 발송이 아니라 큐에 적재 → 각자 고른 수신 시각에 모아서 발송된다.
+        # 반드시 억제·클러스터링을 거친 urgent_items로만 호출할 것(#44).
+        try:
+            from subscriber_notify import queue_for_subscribers, format_urgent_html
+            queue_for_subscribers(sb, 'urgent', format_urgent_html(urgent_items))
+        except Exception as e:
+            print(f'[구독자 큐 적재 실패(무시)] {e}')
     else:
         print('[긴급] 해당 없음')
 

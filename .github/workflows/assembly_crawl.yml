@@ -30,6 +30,7 @@ jobs:
           ASSEMBLY_API_KEY: ${{ secrets.ASSEMBLY_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SUBSCRIBER_BOT_TOKEN: ${{ secrets.SUBSCRIBER_BOT_TOKEN }}
         run: python assembly_crawler.py
 
       # 신규 법안 제안이유 AI 요약 (소량). 해외 IP 차단 시 실패해도 NULL 유지 → 로컬 스케줄러가 보충.

@@ -352,21 +352,75 @@ def backfill_summaries(briefing_text: str):
 #  STEP 5 — 텔레그램 + 이메일 발송
 # ═══════════════════════════════════════════════════════
 
+# ── 텔레그램 HTML 변환 ──────────────────────────────────
+# 기사 제목 자체를 하이퍼링크로 만들고 별도 "🔗 URL" 줄은 없앤다(줄 수 절감 + 가독성).
+# Edge Function _shared/telegram_format.ts 의 briefingToTelegramHtml 과 동일 규칙 — 한쪽만 고치지 말 것.
+_BULLET_RE = re.compile(r'^(\s*[•·]\s*)([🔴🟡🟢]\s*)?(.+?)(\s+[—–-]\s+[^—–]+)?$')
+_LINK_RE = re.compile(r'^\s*🔗\s*(https?:\S+)\s*$')
+
+
+def _tg_esc(s: str) -> str:
+    """텔레그램 HTML 이스케이프 — 이스케이프 누락 시 sendMessage가 400으로 전체 실패한다."""
+    return s.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+
+
+def _briefing_to_telegram_html(text: str) -> str:
+    lines = [l.rstrip() for l in text.split('\n')]
+    skip, out = set(), []
+    for i, line in enumerate(lines):
+        if i in skip:
+            continue
+        esc = _tg_esc(line)
+        if line.startswith('📡') or line.startswith('📢') or re.fullmatch(r'\[.+\]', line.strip() or ' '):
+            out.append(f'<b>{esc}</b>')
+            continue
+        m = _BULLET_RE.match(line)
+        if m and m.group(3):
+            url = ''
+            for j in range(i + 1, min(i + 4, len(lines))):
+                if lines[j].lstrip().startswith(('•', '·')):
+                    break                       # 다음 기사에 도달하면 중단
+                lm = _LINK_RE.match(lines[j])
+                if lm:
+                    url = lm.group(1)
+                    skip.add(j)
+                    break
+            head = _tg_esc(m.group(1)) + _tg_esc(m.group(2) or '')
+            title = _tg_esc(m.group(3))
+            tail = _tg_esc(m.group(4) or '')
+            body = f'<a href="{_tg_esc(url)}">{title}</a>' if url else f'<b>{title}</b>'
+            out.append(head + body + tail)
+            continue
+        lm = _LINK_RE.match(line)
+        if lm:                                   # 짝 못 찾은 고아 링크만 링크 줄로 유지
+            out.append(f'🔗 <a href="{_tg_esc(lm.group(1))}">기사 보기</a>')
+            continue
+        out.append(esc)
+    return '\n'.join(out)
+
+
 def send_telegram(briefing_text: str):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print('[텔레그램] 환경변수 미설정 — 건너뜀')
         return
-    text = briefing_text[:4000]
-    if len(briefing_text) > 4000:
+    html_text = _briefing_to_telegram_html(briefing_text)
+    text = html_text[:4000]
+    if len(html_text) > 4000:
+        # 태그 중간에서 잘리면 400이 나므로 마지막 완결 줄까지만 남긴다
+        text = text[:text.rfind('\n')] if '\n' in text else text
         text += '\n\n...(전문은 대시보드 참조)'
-    text += '\n\n📊 https://youjinwoong.github.io/radio-policy-ai/'
+    text += '\n\n📊 <a href="https://youjinwoong.github.io/radio-policy-ai/">대시보드</a>'
+    api = f'https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage'
+    body = {'chat_id': TELEGRAM_CHAT_ID, 'text': text, 'parse_mode': 'HTML',
+            'disable_web_page_preview': True}
     try:
-        resp = requests.post(
-            f'https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage',
-            json={'chat_id': TELEGRAM_CHAT_ID, 'text': text,
-                  'disable_web_page_preview': True},
-            timeout=15
-        )
+        resp = requests.post(api, json=body, timeout=15)
+        if resp.status_code == 400:
+            # HTML 파싱 실패 시 평문으로 재시도 — 포맷 때문에 브리핑 자체를 잃지 않도록(fail-open)
+            print(f'[텔레그램] HTML 400 → 평문 재시도: {resp.text[:150]}')
+            plain = re.sub(r'<[^>]+>', '', text)
+            resp = requests.post(api, json={'chat_id': TELEGRAM_CHAT_ID, 'text': plain,
+                                            'disable_web_page_preview': True}, timeout=15)
         if resp.status_code == 200:
             print('[텔레그램] 발송 완료')
         else:

@@ -54,16 +54,23 @@ print("── 텔레그램 발송 ──")
 if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
     print("  ❌ 환경변수 미설정 — 건너뜀")
 else:
-    text = f"[재발송: {briefing_date}]\n\n" + briefing_text[:3900]
-    if len(briefing_text) > 3900:
+    # 포맷은 정규 발송과 동일 규칙을 재사용 (제목=하이퍼링크, 별도 🔗 줄 없음)
+    from morning_briefing import _briefing_to_telegram_html
+    html_text = _briefing_to_telegram_html(briefing_text)
+    text = f"<b>[재발송: {briefing_date}]</b>\n\n" + html_text[:3900]
+    if len(html_text) > 3900:
+        text = text[:text.rfind('\n')]          # 태그 중간 절단 방지
         text += '\n\n...(전문은 대시보드 참조)'
-    text += '\n\n📊 https://youjinwoong.github.io/radio-policy-ai/'
+    text += '\n\n📊 <a href="https://youjinwoong.github.io/radio-policy-ai/">대시보드</a>'
+    api = f'https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage'
     try:
-        r = requests.post(
-            f'https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage',
-            json={'chat_id': TELEGRAM_CHAT_ID, 'text': text, 'disable_web_page_preview': True},
-            timeout=15
-        )
+        r = requests.post(api, json={'chat_id': TELEGRAM_CHAT_ID, 'text': text,
+                                     'parse_mode': 'HTML', 'disable_web_page_preview': True}, timeout=15)
+        if r.status_code == 400:
+            import re as _re
+            print(f"  ⚠️ HTML 400 → 평문 재시도: {r.text[:150]}")
+            r = requests.post(api, json={'chat_id': TELEGRAM_CHAT_ID, 'text': _re.sub(r'<[^>]+>', '', text),
+                                         'disable_web_page_preview': True}, timeout=15)
         if r.status_code == 200:
             print(f"  ✅ 발송 완료")
         else:

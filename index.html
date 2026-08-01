@@ -15,7 +15,7 @@
   <!-- Sidebar -->
   <div class="sidebar">
     <div class="sidebar-logo">
-      <div class="title"><i class="ti ti-antenna"></i>전파정책 도우미 <i class="ti ti-compass"></i></div>
+      <div class="title"><i class="ti ti-antenna"></i>정책AI 도우미 <i class="ti ti-compass"></i></div>
       <div class="subtitle">SKT Comm센터 · 기술정책팀</div>
     </div>
     <div class="nav-group">
@@ -414,29 +414,29 @@
         <div style="margin-bottom:12px;padding:9px 12px;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border);font-size:11px;color:var(--text-secondary)">
           <div style="display:flex;align-items:center;gap:4px;margin-bottom:7px">
             <i class="ti ti-antenna" style="font-size:13px"></i>
-            <span>수집 대상 언론·기관</span>
-            <span style="opacity:.6;font-size:10px">· 매일 오전 8시 자동 수집</span>
+            <span>수집 방식</span>
+            <span style="opacity:.6;font-size:10px">· 매시간 자동 수집</span>
           </div>
+          <!-- 이 안내는 실제 크롤러 동작과 일치해야 한다.
+               뉴스는 매체를 지정해 긁는 방식이 아니라 키워드 검색(네이버 OpenAPI, 실패 시 Google RSS)이라
+               아래 매체 목록은 '자주 잡히는 곳'일 뿐 한정 목록이 아니다. 정부기관 공지는 별도 스크립트
+               (gov_notice_crawler.py, PC 매일 17시)가 담당한다. — 2026-08-01 실제 코드와 대조해 정정 -->
           <div style="display:flex;flex-direction:column;gap:4px;line-height:1.6">
             <div style="display:flex;gap:6px">
-              <span style="width:64px;flex-shrink:0;font-weight:500;color:var(--text-secondary)">정부 기관</span>
-              <span>국립전파연구원 · 과기정통부 · 방송통신위원회 · ETRI · KISDI</span>
+              <span style="width:64px;flex-shrink:0;font-weight:500;color:var(--text-secondary)">뉴스</span>
+              <span>네이버 뉴스 검색(주) · Google News RSS(폴백) — 전파·주파수·이동통신 등 키워드로 <b>매체 제한 없이</b> 수집</span>
             </div>
             <div style="display:flex;gap:6px">
-              <span style="width:64px;flex-shrink:0;font-weight:500;color:var(--text-secondary)">IT 전문지</span>
-              <span>전자신문 · 디지털타임스 · 디지털데일리 · ZDNet Korea · 아이뉴스24 · 블로터 · 정보통신신문</span>
+              <span style="width:64px;flex-shrink:0;font-weight:500;color:var(--text-secondary)">자주 잡히는 곳</span>
+              <span>전자신문 · 디지털타임스 · 디지털데일리 · ZDNet Korea · 아이뉴스24 · 블로터 · 매일경제 · 머니투데이 · 한국경제 · 서울경제 · 연합뉴스 · 뉴시스 · 조선 · 중앙 · 동아 · 한겨레 · 경향 <span style="opacity:.7">(그 밖의 매체도 포함됨)</span></span>
             </div>
             <div style="display:flex;gap:6px">
-              <span style="width:64px;flex-shrink:0;font-weight:500;color:var(--text-secondary)">경제지</span>
-              <span>매일경제 · 머니투데이 · 한국경제 · 서울경제</span>
+              <span style="width:64px;flex-shrink:0;font-weight:500;color:var(--text-secondary)">정부·기관</span>
+              <span>국립전파연구원 · 과기정통부 · 방송통신위원회 · 중앙전파관리소 · 입법예고 <span style="opacity:.7">(매일 17시 · <b>정부 보도자료·공지사항</b> 탭에 표시)</span></span>
             </div>
             <div style="display:flex;gap:6px">
-              <span style="width:64px;flex-shrink:0;font-weight:500;color:var(--text-secondary)">종합일간지</span>
-              <span>연합뉴스 · 뉴시스 · 조선일보 · 중앙일보 · 동아일보 · 한겨레 · 경향신문</span>
-            </div>
-            <div style="display:flex;gap:6px">
-              <span style="width:64px;flex-shrink:0;font-weight:500;color:var(--text-secondary)">검색 RSS</span>
-              <span>네이버 뉴스 검색 · Google News RSS (폴백)</span>
+              <span style="width:64px;flex-shrink:0;font-weight:500;color:var(--text-secondary)">연구기관</span>
+              <span>ETRI · KISDI <span style="opacity:.7">(보도자료 — 6G·표준화 등 연구 동향, 참고 등급)</span></span>
             </div>
           </div>
         </div>

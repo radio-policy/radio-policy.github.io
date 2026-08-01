@@ -307,7 +307,9 @@ def crawl_msit() -> list:
     return items
 
 
-def crawl_kcc() -> list:
+# 중앙전파관리소(kmcc.go.kr). 오랫동안 함수명 crawl_kcc + 출처 '방통위'로 잘못 적혀 있었다.
+# 방통위는 kcc.go.kr 로 별도 존재하며 아래 crawl_kcc()가 담당한다. (2026-08-01 정정)
+def crawl_kmcc() -> list:
     items = []
     targets = [
         ('https://www.kmcc.go.kr/user.do?boardId=1113&page=A05030000&dc=K05030000', '보도자료'),
@@ -333,7 +335,7 @@ def crawl_kcc() -> list:
                 date_str = date_tag.get_text(strip=True) if date_tag else ''
                 items.append({
                     'title':        title,
-                    'source':       '방통위 ' + label,
+                    'source':       '중앙전파관리소 ' + label,
                     'category':     detect_category(title),
                     'url':          href,
                     'is_read':      False,
@@ -342,9 +344,185 @@ def crawl_kcc() -> list:
                     'importance':   '보통',
                 })
         except Exception as e:
-            print('[KCC 오류] %s: %s' % (label, e))
+            print('[KMCC 오류] %s: %s' % (label, e))
         time.sleep(1)
-    print('[KCC] %d건' % len(items))
+    print('[중앙전파관리소] %d건' % len(items))
+    return items
+
+
+# ═══════════════════════════════════════════════════════
+#  크롤러 — 방송통신위원회 (kcc.go.kr)
+#
+#  주의: 위 crawl_kmcc()가 긁는 kmcc.go.kr 은 '중앙전파관리소'다. 두 사이트가 같은 CMS라
+#  boardId 체계까지 비슷해 오랫동안 방통위로 잘못 표기돼 있었다(2026-08-01 정정).
+#  방통위 본체는 www.kcc.go.kr 이며 목록은 mode 없이 boardId 를 줘야 표가 나온다
+#  (mode=view 를 주면 안내 페이지만 반환됨 — 실측 확인).
+# ═══════════════════════════════════════════════════════
+
+# 방통위 보도자료는 방송 거버넌스(재허가·이사 임명·위원회 결과)가 대부분이라
+# RADIO_KEYWORDS로만 거르면 매칭이 0건이 된다(실측). 기술정책팀에 의미 있는 축은
+# 단말기 유통·이용자보호·스팸·요금 쪽이라 그 축을 더한다. 방송 거버넌스는 일부러 안 넣는다.
+KCC_KEYWORDS = RADIO_KEYWORDS + [
+    '단말기', '지원금', '스팸', '이용자', '요금', '결합판매', '번호이동',
+    '위치정보', '재난문자', '과장광고', '유통', '개인정보',
+]
+
+
+def crawl_kcc() -> list:
+    items = []
+    targets = [
+        ('https://www.kcc.go.kr/user.do?boardId=1113&page=A05030000&dc=K05030000', '보도자료'),
+    ]
+    for url, label in targets:
+        try:
+            res = fetch_with_retry(url, timeout=20)
+            res.encoding = getattr(res, 'apparent_encoding', None) or 'utf-8'
+            soup = BeautifulSoup(res.text, 'html.parser')
+            rows = soup.select('table tbody tr')[:20]
+            found = 0
+            for row in rows:
+                title_tag = row.find('a')
+                if not title_tag:
+                    continue
+                title = title_tag.get_text(' ', strip=True)
+                if not title or not any(k in title for k in KCC_KEYWORDS):
+                    continue
+                href = title_tag.get('href', '')
+                # /user.do;jsessionid=... 형태 — 세션 조각은 떼야 URL 중복판정이 안정된다
+                href = re.sub(r';jsessionid=[^?]*', '', href)
+                if href.startswith('/'):
+                    href = 'https://www.kcc.go.kr' + href
+                # 날짜는 td 중 YYYY-MM-DD 패턴을 찾는다(칼럼 순서 변경에 견디도록)
+                date_str = ''
+                for td in row.find_all('td'):
+                    t = td.get_text(strip=True)
+                    if re.fullmatch(r'\d{4}[-.]\d{1,2}[-.]\d{1,2}', t):
+                        date_str = t
+                        break
+                items.append({
+                    'title':        title,
+                    'source':       '방송통신위원회 ' + label,
+                    'category':     detect_category(title),
+                    'url':          href,
+                    'is_read':      False,
+                    'published_at': parse_date(date_str),
+                    'urgency':      '보통',
+                    'importance':   '보통',
+                })
+                found += 1
+            print('[방통위] %s: 행 %d개 스캔, 키워드 매칭 %d건' % (label, len(rows), found))
+        except Exception as e:
+            print('[방통위 오류] %s: %s' % (label, e))
+        time.sleep(1)
+    return items
+
+
+# ═══════════════════════════════════════════════════════
+#  크롤러 — ETRI (etri.re.kr) 보도자료
+#  연구원 보도자료라 RADIO_KEYWORDS만으론 6G·표준화 소식을 놓쳐 키워드를 넓혔다.
+# ═══════════════════════════════════════════════════════
+
+ETRI_KEYWORDS = RADIO_KEYWORDS + ['6G', '5G', 'IMT', '표준화', '위성', '안테나', '네트워크', '테라헤르츠']
+
+
+def crawl_etri() -> list:
+    items = []
+    url = 'https://www.etri.re.kr/kor/bbs/list.etri?b_board_id=ETRI06'   # 보도자료
+    try:
+        res = fetch_with_retry(url, timeout=20)
+        res.encoding = getattr(res, 'apparent_encoding', None) or 'utf-8'
+        soup = BeautifulSoup(res.text, 'html.parser')
+        rows = soup.select('table tbody tr')[:20]
+        found = 0
+        for row in rows:
+            title_tag = row.find('a')
+            if not title_tag:
+                continue
+            title = title_tag.get_text(' ', strip=True)
+            if not title or not any(k in title for k in ETRI_KEYWORDS):
+                continue
+            href = re.sub(r';jsessionid=[^?]*', '', title_tag.get('href', ''))
+            if href.startswith('/'):
+                href = 'https://www.etri.re.kr' + href
+            date_str = ''
+            for td in row.find_all('td'):
+                t = td.get_text(strip=True)
+                if re.fullmatch(r'\d{4}[-.]\d{1,2}[-.]\d{1,2}', t):
+                    date_str = t
+                    break
+            items.append({
+                'title':        title,
+                'source':       'ETRI 보도자료',
+                'category':     detect_category(title),
+                'url':          href,
+                'is_read':      False,
+                'published_at': parse_date(date_str),
+                'urgency':      '참고',      # 연구원 보도자료는 정책 결정이 아니라 동향 참고
+                'importance':   '참고',
+            })
+            found += 1
+        print('[ETRI] 행 %d개 스캔, 키워드 매칭 %d건' % (len(rows), found))
+    except Exception as e:
+        print('[ETRI 오류] %s' % e)
+    time.sleep(1)
+    return items
+
+
+# ═══════════════════════════════════════════════════════
+#  크롤러 — KISDI (kisdi.re.kr) 보도자료·공지사항
+#
+#  주의: /bbs/list.do 목록은 JS로 그려져 HTML에 항목이 없다(실측). 대신 메인(index.do)이
+#  최신 항목을 서버렌더링으로 뿌리므로 거기서 view.do 링크를 골라낸다.
+#  게시판 구분은 URL의 key 값으로 한다.
+# ═══════════════════════════════════════════════════════
+
+KISDI_BOARDS = {
+    'm2101113055776': '보도자료',
+    'm2101113055944': '공지사항',
+}
+
+
+def crawl_kisdi() -> list:
+    items = []
+    try:
+        res = fetch_with_retry('https://www.kisdi.re.kr/index.do', timeout=20)
+        res.encoding = getattr(res, 'apparent_encoding', None) or 'utf-8'
+        soup = BeautifulSoup(res.text, 'html.parser')
+        seen_href = set()
+        scanned = found = 0
+        for a in soup.find_all('a', href=True):
+            href = a['href']
+            if '/bbs/view.do' not in href:
+                continue
+            m = re.search(r'key=(m\d+)', href)
+            if not m or m.group(1) not in KISDI_BOARDS:
+                continue
+            if href in seen_href:
+                continue
+            seen_href.add(href)
+            scanned += 1
+            label = KISDI_BOARDS[m.group(1)]
+            # 메인 카드에는 "보도자료 제목…" 처럼 분류명이 앞에 붙어 나온다 — 제거
+            title = a.get_text(' ', strip=True)
+            title = re.sub(r'^(보도자료|공지사항|채용공고)\s*', '', title).strip()
+            if not title or not any(k in title for k in RADIO_KEYWORDS):
+                continue
+            items.append({
+                'title':        title,
+                'source':       'KISDI ' + label,
+                'category':     detect_category(title),
+                'url':          'https://www.kisdi.re.kr' + href if href.startswith('/') else href,
+                'is_read':      False,
+                # 메인 카드에는 날짜가 없는 경우가 많다 → 빈 값이면 save_items가 오늘로 채운다
+                'published_at': '',
+                'urgency':      '참고',
+                'importance':   '참고',
+            })
+            found += 1
+        print('[KISDI] 링크 %d개 스캔, 키워드 매칭 %d건' % (scanned, found))
+    except Exception as e:
+        print('[KISDI 오류] %s' % e)
+    time.sleep(1)
     return items
 
 
@@ -780,7 +958,10 @@ def main():
     all_items = []
     all_items += crawl_rra()
     all_items += crawl_msit()
-    all_items += crawl_kcc()
+    all_items += crawl_kmcc()     # 중앙전파관리소 (예전엔 '방통위'로 잘못 표기돼 있었음)
+    all_items += crawl_kcc()      # 방송통신위원회 (신규)
+    all_items += crawl_etri()     # ETRI 보도자료 (신규)
+    all_items += crawl_kisdi()    # KISDI 보도자료·공지 (신규)
     all_items += crawl_opinion_lawmaking()
     print('[수집] 총 %d건' % len(all_items))
 

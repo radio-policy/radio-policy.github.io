@@ -208,6 +208,12 @@ def send_telegram(msg: str):
     }, timeout=10)
     if resp.status_code != 200:
         print(f'[텔레그램 오류] {resp.status_code}: {resp.text[:100]}')
+    # 구독자 봇: 큐에 적재 → 각자 고른 수신 시각에 모아서 발송 (메시지가 이미 HTML이라 그대로 재사용)
+    try:
+        from subscriber_notify import queue_for_subscribers
+        queue_for_subscribers(sb, 'assembly', msg)
+    except Exception as e:
+        print(f'[구독자 큐 적재 실패(무시)] {e}')
 
 
 def notify_new(bill: dict, keywords: list[str]):
