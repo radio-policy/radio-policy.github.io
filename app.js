@@ -5007,7 +5007,7 @@ function go(page, navEl, sourceType) {
   if (ttEl && titles[page]) ttEl.textContent = titles[page];
 
   // 모바일 하단 네비 동기화
-  var pageTobn = {home:'bn-more', chat:'bn-chat', reportdraft:'bn-chat', lawmap:'bn-chat', law:'bn-law', guide:'bn-law', itu:'bn-law', press:'bn-law', custom:'bn-law', terms:'bn-terms', news:'bn-monitor', briefing:'bn-monitor', assembly:'bn-monitor', minutes:'bn-monitor', overseas:'bn-monitor', lawtrack:'bn-monitor', diff:'bn-monitor', settings:'bn-more', opsstatus:'bn-more'};
+  var pageTobn = {home:'bn-more', chat:'bn-chat', reportdraft:'bn-chat', lawmap:'bn-chat', law:'bn-law', guide:'bn-law', itu:'bn-law', press:'bn-law', custom:'bn-law', terms:'bn-monitor', news:'bn-monitor', briefing:'bn-monitor', assembly:'bn-bills', minutes:'bn-bills', overseas:'bn-monitor', lawtrack:'bn-bills', diff:'bn-bills', settings:'bn-more', opsstatus:'bn-more'};
   if (pageTobn[page]) setBottomNav(pageTobn[page]);
 
   if (page === 'news') loadNews();
@@ -6392,11 +6392,13 @@ async function loadAssemblyMinutes(force) {
           var m = s.match(/^## (\d{6}) (.+)/);
           if (!m) return;
           var sm = s.slice(0, 900).match(/^요약:\s*(.+)$/m);
+          // 구버전 수집분의 '# 요약' 접두 중복 표시 방어 (데이터는 소급 작업이 정리, #54)
+          var smText = sm ? sm[1].replace(/^[#\s]*(요약\s*[:：]?\s*)+/, '').trim() : '';
           minutes.push({
             title: m[2].trim(),
             date: '20' + m[1].slice(0, 2) + '-' + m[1].slice(2, 4) + '-' + m[1].slice(4, 6),
             doc_name: dn,
-            summary: sm ? sm[1].trim() : ''
+            summary: smText
           });
         });
       });
@@ -6422,7 +6424,10 @@ async function loadAssemblyMinutes(force) {
         '<span style="font-size:12px;color:var(--text-primary);line-height:1.4">' + escHtml(mt.title) + '</span>' +
       '</div>' +
       (mt.summary
-        ? '<div style="font-size:11px;color:var(--text-secondary);line-height:1.5;margin:4px 0 0 76px">' + escHtml(mt.summary) + '</div>'
+        ? '<div style="font-size:11px;color:var(--text-secondary);line-height:1.5;margin:4px 0 0 76px">' +
+            '<span style="font-size:10px;font-weight:700;color:var(--accent-purple);background:rgba(139,92,246,.1);padding:0 5px;border-radius:3px;margin-right:6px">요약</span>' +
+            escHtml(mt.summary) +
+          '</div>'
         : '') +
     '</div>';
   });

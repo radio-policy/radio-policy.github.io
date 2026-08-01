@@ -284,7 +284,8 @@ def summarize_meeting(meeting_title: str, picked_texts: list) -> str:
             if getattr(blk, 'type', '') == 'text':
                 txt = (blk.text or '').strip()
                 break
-        txt = re.sub(r'^[\-•*"\s]+', '', txt).replace('\n', ' ').strip()
+        # 모델이 "# 요약 ..." 머리글을 붙여오는 경우가 있어 접두를 걷어낸다 (실측 #54)
+        txt = re.sub(r'^[#\-•*"\s]*(요약\s*[::]?\s*)?', '', txt).replace('\n', ' ').strip()
         return txt[:250] if len(txt) >= 10 else ''
     except Exception as e:
         print('  [요약 실패 — 생략] %s' % str(e)[:60])
