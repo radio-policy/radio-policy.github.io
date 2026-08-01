@@ -3048,6 +3048,7 @@ async function loadKbDocs(force) {
       if (r.doc_category === '추가지식') return false;  // 추가 지식 입력 탭
       if (r.doc_category === '보도자료') return false;  // 정부 보도자료 탭
       if (r.doc_category === '회의록') return false;    // 국회 법안 탭 (과방위 회의록)
+      if (r.doc_category === '해외동향') return false;  // 해외 주요 정책 KB 승격분 (자문 참조용, #54)
       // 날짜 파일명(240717…)도 보도자료. '과기정통부_보도자료_2024.md'처럼
       // 접두가 다른 것은 위 카테고리 조건이 잡는다.
       if (/^\d{6}/.test(r.doc_name)) return false;

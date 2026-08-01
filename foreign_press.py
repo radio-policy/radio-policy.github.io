@@ -314,8 +314,14 @@ JUDGE_TOOL = {
                 'type': 'string',
                 'description': '한글 정확히 3문장 요약. 무관이면 빈 문자열 허용',
             },
+            'major': {
+                'type': 'boolean',
+                'description': ('주요 정책이면 true — 규제·규칙의 제·개정, 공식 협의(consultation) '
+                                '개시·결과, 인허가 제도 변경, 국가 전략·계획 발표 등 정책 행위. '
+                                '단신·통계·보고서 소개·행사 안내는 false. 무관이면 false'),
+            },
         },
-        'required': ['relevant', 'title_ko', 'summary_ko'],
+        'required': ['relevant', 'title_ko', 'summary_ko', 'major'],
     },
 }
 
@@ -332,7 +338,9 @@ def make_judge(criteria: str):
             '아래는 해외 규제기관 발표의 관련성 판정 기준이다.\n\n'
             + criteria
             + '\n\n다음 발표를 판정하고, 관련이면 한글 제목 번역과 한글 3문장 요약을 작성하라. '
-              '요약은 발표의 핵심 내용·배경·의미를 담되 발췌에 없는 내용은 지어내지 마라.\n\n'
+              '요약은 발표의 핵심 내용·배경·의미를 담되 발췌에 없는 내용은 지어내지 마라. '
+              '관련인 경우 major(주요 정책 여부)도 판정하라 — 규제·규칙 제·개정, 공식 협의 개시·결과, '
+              '인허가 제도 변경, 국가 전략 발표면 true, 단신·통계·소개면 false.\n\n'
             + '기관: %s\n원문 제목: %s\n원문 발췌:\n%s' % (source, title, (excerpt or '(본문 없음 — 제목만으로 판정)')[:JUDGE_EXCERPT])
         )
         try:
@@ -350,6 +358,7 @@ def make_judge(criteria: str):
                         'relevant': bool(out.get('relevant')),
                         'title_ko': (out.get('title_ko') or '').strip(),
                         'summary_ko': (out.get('summary_ko') or '').strip(),
+                        'major': bool(out.get('major')),
                     }
             return None
         except Exception as e:
@@ -428,7 +437,7 @@ def run(dry: bool = False, only: list = None) -> int:
     print('[해외 수집] 기존 news_feed url %d건, dry-run=%s' % (len(existing), dry))
 
     rows_to_save = []
-    totals = {'scan': 0, 'new': 0, 'rel': 0, 'irrel': 0, 'fail': 0}
+    totals = {'scan': 0, 'new': 0, 'rel': 0, 'irrel': 0, 'fail': 0, 'promoted': 0}
     for src, fetch_fn in SOURCES.items():
         if only and src not in only:
             continue
@@ -481,16 +490,36 @@ def run(dry: bool = False, only: list = None) -> int:
                 'is_read': False,
             }
             if dry:
-                print('  [dry-run 관련][%s] %s' % (src, verdict['title_ko'][:70]))
+                print('  [dry-run 관련%s][%s] %s' % (
+                    '·주요' if verdict.get('major') else '', src, verdict['title_ko'][:70]))
                 print('     원제: %s' % it['title'][:80])
                 print('     요약: %s' % verdict['summary_ko'][:160])
             else:
                 rows_to_save.append(row)
+                # 주요 정책은 지식베이스로 승격 — 영구 보관 + AI 자문 참조 (운영자 지시 2026-08-02, #54)
+                if verdict.get('major'):
+                    try:
+                        import press_ingest
+                        year = pub.year
+                        kb_body = (verdict['summary_ko']
+                                   + '\n\n' + (body or '')[:2000]
+                                   + '\n\n(원제) ' + it['title']
+                                   + '\n(기관) ' + src)
+                        header = ('# 해외 규제동향 %d년\n\n> FCC·Ofcom·BEREC·日총무성·ITU '
+                                  '주요 정책 자동 승격분\n\n---\n\n' % year)
+                        if press_ingest.register_kb_section(
+                                sb, '해외규제동향_%d.md' % year, '해외동향',
+                                pub.strftime('%y%m%d'), '[%s] %s' % (src, verdict['title_ko']),
+                                kb_body, it['url'], header):
+                            stats['promoted'] = stats.get('promoted', 0) + 1
+                            print('  [KB 승격][%s] %s' % (src, verdict['title_ko'][:60]))
+                    except Exception as e:
+                        print('  [KB 승격 실패 — 무시] %s' % str(e)[:80])
         print('[%s] 스캔 %d, 신규 %d, 관련 %d, 무관 %d, 실패 %d'
               % (src, stats['scan'], stats['new'], stats['rel'],
                  stats['irrel'], stats['fail']))
         for k in totals:
-            totals[k] += stats[k]
+            totals[k] += stats.get(k, 0)
         time.sleep(1)
 
     if rows_to_save and not dry:
@@ -503,11 +532,24 @@ def run(dry: bool = False, only: list = None) -> int:
             totals['fail'] += len(rows_to_save)
             totals['rel'] -= len(rows_to_save)
 
-    note = 'scan=%d new=%d rel=%d irrel=%d fail=%d' % (
-        totals['scan'], totals['new'], totals['rel'], totals['irrel'], totals['fail'])
+    note = 'scan=%d new=%d rel=%d irrel=%d fail=%d promoted=%d' % (
+        totals['scan'], totals['new'], totals['rel'], totals['irrel'], totals['fail'],
+        totals.get('promoted', 0))
     print('[해외 수집 완료] ' + note)
     if not dry:
         _heartbeat(sb, note)
+        # KB 승격분 임베딩 백필 (NULL만 채움 — 멱등)
+        if totals.get('promoted', 0) > 0:
+            import subprocess
+            try:
+                r = subprocess.run(
+                    [sys.executable, 'backfill_embeddings.py'],
+                    cwd=os.path.dirname(os.path.abspath(__file__)),
+                    capture_output=True, encoding='utf-8', errors='replace',
+                    env={**os.environ, 'PYTHONIOENCODING': 'utf-8'}, timeout=1800)
+                print('[임베딩 백필] rc=%d' % r.returncode)
+            except Exception as e:
+                print('[임베딩 백필 오류] %s' % e)
     return totals['rel']
 
 
