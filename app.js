@@ -5001,8 +5001,8 @@ function go(page, navEl, sourceType) {
   if (page === 'news' && sourceType !== undefined) currentNewsSourceType = sourceType;
 
   // 상단 바 제목 업데이트
-  var newsTitle = currentNewsSourceType === 'gov' ? '정부 보도자료·공지사항' : (currentNewsSourceType === 'media' ? '뉴스' : '보도자료·뉴스');
-  var titles = {home:'대시보드', chat:'AI 자문', reportdraft:'보고서 초안 제안', diff:'법령 DIFF 분석', law:'국내 법령·고시', guide:'실무 안내', lawmap:'법령 관계도', itu:'ITU-R 문서', press:'정부 보도자료', terms:'기술 용어', news:newsTitle, briefing:'Daily Briefing', assembly:'국회 법안', minutes:'과방위 회의록', overseas:'해외 규제동향', lawtrack:'행정부 입법예고·법령 개정', settings:'설정', opsstatus:'운영 상태'};
+  var newsTitle = currentNewsSourceType === 'gov' ? '정부 보도자료·공지사항 (최근 60일)' : (currentNewsSourceType === 'media' ? '뉴스 (최근 60일)' : '보도자료·뉴스 (최근 60일)');
+  var titles = {home:'대시보드', chat:'AI 자문', reportdraft:'보고서 초안 제안', diff:'법령 DIFF 분석', law:'국내 법령·고시', guide:'실무 안내', lawmap:'법령 관계도', itu:'ITU-R 문서', press:'정부 보도자료', terms:'기술 용어', news:newsTitle, briefing:'Daily Briefing', assembly:'국회 법안', minutes:'과방위 회의록', overseas:'해외 규제동향 (최근 60일)', lawtrack:'행정부 입법예고·법령 개정', settings:'설정', opsstatus:'운영 상태'};
   var ttEl = document.getElementById('topbar-title');
   if (ttEl && titles[page]) ttEl.textContent = titles[page];
 
@@ -5173,7 +5173,7 @@ async function loadPressJSON() {
 
     // 상단 출처 문구 동적 갱신 ("원본 파일 136개" 하드코딩 대체)
     var srcLine = document.getElementById('press-source-line');
-    if (srcLine) srcLine.textContent = '보도자료 ' + cnt.total + '건 · 6개 기관 · 매일 17시 자동 수집';
+    if (srcLine) srcLine.textContent = '보도자료 ' + cnt.total + '건 · 6개 기관 · 매일 17시 자동 수집 · 영구 누적';
 
     // 기관 탭·검색어 필터를 반영해 렌더
     filterPressList();
