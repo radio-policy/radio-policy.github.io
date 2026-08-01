@@ -28,7 +28,9 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 ├── news_dedup.py               # 같은 사건 재보도 판정 공용 유틸(제목 키워드, API 비용 0) — crawler·morning_briefing 공유. 임계 3·별-형 클러스터링 근거는 파일 주석 (#44)
 ├── regenerate_briefings.py     # 과거 브리핑을 클러스터링 적용본으로 재생성(수동). morning_briefing 함수 재사용, 입법예고 섹션 보존. **실행 전 daily_briefings_backup에 원본 백업 필수** (#46)
 ├── refetch_content.py          # 본문 재수집·요약·60일 초과 정리(Windows 스케줄러, 한국 IP) · heartbeat(last_refetch_run)
-├── gov_notice_crawler.py       # 정부 고시(RRA·MSIT·KCC)→news_feed + 입법예고(opinion.lawmaking.go.kr)→law_amendments(lsAnc) (17:00, 한국 IP) · heartbeat(last_gov_notice_run)
+├── gov_notice_crawler.py       # 정부·기관 고시→news_feed + 입법예고(opinion.lawmaking.go.kr)→law_amendments(lsAnc) (17:00, 한국 IP) · heartbeat(last_gov_notice_run)
+│                               #   RRA(국립전파연구원)·MSIT(과기정통부)·KMCC(중앙전파관리소)·KCC(방통위)·ETRI·KISDI
+│                               #   ※ crawl_kcc()는 방통위(kcc.go.kr), crawl_kmcc()는 중앙전파관리소(kmcc.go.kr) — 도메인 한 글자 차이라 혼동 주의
 ├── law_crawler.py              # 법제처 DRF API 법령·고시 모니터링(11:00 KST). 엔드포인트 www.law.go.kr/DRF/lawSearch.do, OC=radiopolicyai
 ├── assembly_crawler.py         # 국회 법안 모니터링(열린국회정보 API, 22대)
 ├── upload_law_pdf.py           # PDF/MD/PPTX→document_chunks RAG 업로드(조문 헤더 청킹)
@@ -74,6 +76,8 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 | kb_chunks | kb_documents 본문 청크 + embedding(**voyage-law-2** 1024, HNSW). doc_id FK(cascade). 자문이 시맨틱+trgm으로 조회 |
 | law_graph_nodes | 법령 관계도 노드(name UNIQUE). node_type: topic(주제)/law/decree/rules/notice/etc. source: seed(세션 시드)/citation(인용망 스크립트)/ai(자문·즉석 생성). doc_name=document_chunks 연결(원문 보기). RLS+anon select/insert/update(delete는 service 전용) |
 | law_graph_edges | 법령 관계도 엣지(source_id→target_id, on delete cascade). relation_type: 근거(주제→법령)/인용(조문 인용)/하위법령(계열). source: seed/citation/family/ai. weight=인용·재확인 횟수(엣지 굵기). unique(source,target,relation_type). RLS 동일 |
+| telegram_subscribers | 구독자 봇 가입자(chat_id PK). topic_briefing/urgent/assembly(각각 on·off), days(daily/weekday), briefing_hour(6~12, **3종 공통 수신 시각**), last_briefing_sent_date·last_urgent_sent_at·last_assembly_sent_at(중복 발송 방지), ai_allowed(**기본 false** — AI 자문 승인 플래그), ai_count_date·ai_count(일일 20회 상한). active는 봇 차단(403) 자동 처리 전용이며 화면에 버튼은 없다. **RLS 켜고 정책 0개 = service_role 전용**(chat_id는 개인정보, 프런트 노출 금지 — 의도된 설계) |
+| subscriber_queue | 긴급·법안 알림 큐(topic: urgent/assembly, html, created_at). 크롤러가 **발송 대신 적재**하고 send-subscriber-briefing이 각 구독자 수신 시각에 꺼내 보낸다. 억제·클러스터링(#44)·법안 상태변경 판정을 TS로 재구현하지 않으려는 구조. RLS 정책 0개 |
 
 ### Edge Function · RPC
 
@@ -86,6 +90,9 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 | list_kb_guide_docs (RPC) | `실무 안내` 탭 목록(현행본 203건). **body_md는 안 돌려준다** — 203건 합계 681kB라 브라우저로 내려받으면 안 되고, `has_table`(표 포함 여부)·`chunks`(청크 수)만 서버에서 계산해 준다. 본문은 클릭 시 그 문서 1건만 조회 |
 | search_chunks_trgm / match_chunks_semantic (RPC) | trgm / pgvector 시맨틱 검색 |
 | match_report_samples (RPC) | 보고서 샘플 시맨틱 검색(코사인). filter_type으로 유형 한정 |
+| telegram-webhook (Edge) | 구독자 봇 수신부. `/start`·`/settings` 인라인 키보드, `/law "OO법 N조"` 조문 원문 즉답, `/ask` AI 자문(승인제), `/admin`(운영자). **verify_jwt off** 대신 `X-Telegram-Bot-Api-Secret-Token` 검증. 오류가 나도 200을 반환한다 — 비200이면 텔레그램이 같은 업데이트를 무한 재전송한다 |
+| send-subscriber-briefing (Edge) | 구독자 정시 발송. pg_cron이 매시 호출 → 브리핑(daily_briefings)+긴급·법안(subscriber_queue)을 **수신 시각이 도래한 구독자에게 한 번에** 보낸다. `briefing_hour <= 현재KST시` catch-up이라 브리핑이 늦게 생성돼도 다음 정각에 따라잡는다. `x-cron-secret` 검증 |
+| supabase/functions/_shared/ | 두 함수 공용 모듈. `telegram_format.ts`(HTML 이스케이프·분할·발송, 400시 plain 폴백), `rag.ts`(자문 RAG — 조문+법령요약+조문정밀검색+수집뉴스 → Sonnet) |
 
 ### Storage
 
@@ -109,6 +116,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 | 7 | briefing-trigger-0620 | `20 21 * * *` | 06:20 | 위 백업 재시도 |
 | 12 | news-health-check | `0 12 * * *` | 21:00 | 무음 실패 알람(내부) check_news_health() |
 | 13 | watchdog-trigger | `35 12 * * *` | 21:35 | 외부 워치독 백업 dispatch |
+| — | subscriber-briefing-hourly | `25 * * * *` | 매시 :25 | 구독자 정시 발송 → send-subscriber-briefing. `:25`는 06:05~06:20 브리핑 생성 창을 피한 값. 대상이 없으면 no-op이라 매시 돌아도 부담 없음. Vault `subscriber_cron_secret` 사용 |
 
 - 공용 디스패치 함수 `dispatch_github_workflow(p_workflow)` + `trigger_briefing_if_missing()`. 인증: GitHub PAT을 Supabase Vault `github_pat`에 저장. 텔레그램 토큰은 Vault `telegram_bot_token`.
 - ⚠️ PAT 만료/회수 시 모든 트리거가 조용히 멈춤 → Vault `github_pat` 갱신. **PAT 재생성 시 권한 3종(Contents R/W·Metadata·Actions R/W) 반드시 확인 — Actions 누락 시 workflow_dispatch가 403인데 pg_cron은 'succeeded'로 찍혀 무음 실패. 교체 검증은 cron 잡 상태가 아니라 `net._http_response.status_code`(204=성공)로 한다.** (설계 배경·드롭 경위·#18 사고는 배경역사 문서 참조)
@@ -208,6 +216,8 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 
 ## 알림 채널
 
+**① 운영자 채널** (기존, `TELEGRAM_BOT_TOKEN` / TG 344506450)
+
 ```
 매일 06:00 KST     | 텔레그램(분석 제외)·이메일(분석 포함) | you.jinwoong@gmail.com / TG 344506450
 기사 0건인 날      | 텔레그램(🕊️ 신규 뉴스 없음 — 시각무관 1일1회, 크롤러 정상 안내)
@@ -216,6 +226,21 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 법령·고시 신규/개정| 텔레그램  (첫 실행 베이스라인은 생략)
 국회 법안 단계변경 | 텔레그램
 ```
+
+**② 구독자 봇 채널** (2026-08-01 신설 — `정책AI 도우미` @radio_policy_law_ai_bot, `SUBSCRIBER_BOT_TOKEN`)
+
+```
+브리핑·긴급·법안   | 구독자가 고른 시각(6~12시)에 3종을 한 번에 발송 — 즉시 발송 없음
+                   | 요일 선택(매일/평일만), 항목별 on·off. 항목 전부 끄면 수신 없음
+조문 조회 /law     | "OO법 N조" 원문 즉답 (LLM 없음, 비용 0)
+AI 자문 /ask       | 운영자 승인(chat_id별 1회) + 일일 20회 상한. 건당 100~400원
+```
+
+- **운영자 채널과 완전히 별개**다. 운영자는 종전대로 즉시 알림을 받고, 구독자만 정시 수신.
+- 긴급·법안은 크롤러가 `subscriber_queue`에 적재만 하고 정시에 묶여 나간다 — 즉시 발송이 없으므로
+  '야간 무음' 같은 토글이 필요 없고, 알림 개수도 하루 1회로 고정된다(#44 취지 유지).
+- 브리핑 하단에 **기준 시각**을 표기한다("오늘 06:05 기준"). 12시 수신자가 06~12시 뉴스가
+  빠진 것을 누락으로 오해하지 않도록(그 건은 다음날 브리핑에 포함).
 
 ## 표준 작업 패턴
 
@@ -433,6 +458,16 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 ## 하지 말아야 할 것 (규칙 + 한 줄 이유 / 상세는 배경역사 문서)
 
 - **API 키 하드코딩 금지(공개 repo)** — .env·GitHub/Supabase Secrets에만. (Voyage 키 유출 사례)
+- **구독자 봇 토큰과 운영자 봇 토큰을 섞어 쓰지 말 것** — `SUBSCRIBER_BOT_TOKEN`(구독자용)과 `TELEGRAM_BOT_TOKEN`(운영자용)은 다른 봇이다. 바꿔 넣으면 구독자에게 운영자 알림이 가거나 그 반대가 된다. (배경역사 #51)
+- **Supabase 콘솔에 시크릿을 붙여넣을 때 줄바꿈 혼입 주의 / Edge Function의 env는 반드시 `.trim()`** — 메모장에서 줄 단위로 복사하면 값 끝에 `\n`이 딸려 들어가고, 그러면 시크릿 비교가 조용히 어긋나 401만 반복된다(등록은 돼 있어 원인 파악이 어렵다). 값 검증은 콘솔의 SHA256 다이제스트와 로컬 해시를 대조. (배경역사 #51)
+- **서버측 Anthropic 키로 `app_config.claude_key`를 재사용하지 말 것** — 그 값은 anon도 읽을 수 있어 브라우저에 노출되는 키다. Edge Function은 Edge Secrets의 `ANTHROPIC_API_KEY`만 쓴다.
+- **`system_prompt.js`를 고친 뒤 `sync_system_prompt.py` 실행을 빠뜨리지 말 것** — 대시보드는 파일을 직접 읽지만 텔레그램 봇은 `app_config.system_prompt`를 읽는다. 안 돌리면 봇만 옛 프롬프트로 답하거나(미등록 시) 자문이 통째로 실패한다. (배경역사 #51)
+- **긴급 fan-out을 억제·클러스터링 이전 목록에 걸지 말 것** — `crawler.py`의 큐 적재는 `suppress_repeat_alerts()`+클러스터링을 **거친 뒤** 호출해야 한다. 앞에 걸면 구독자에게 중복 알림이 쏟아진다. (배경역사 #44)
+- **텔레그램 webhook은 어떤 오류에도 200을 반환할 것** — 비200이면 텔레그램이 같은 업데이트를 재전송해 무한 반복된다. 오류는 `console.error`로만 남긴다.
+- **`X-Telegram-Bot-Api-Secret-Token` 검증을 제거하지 말 것** — webhook은 verify_jwt off라 이 검증이 유일한 관문이다.
+- **조문 검색에서 `.pdf`·`.md` 문서를 제외하는 필터를 빼지 말 것** — 「실행계획(안).pdf」 같은 자료도 `article_no`("6조")를 갖고 있어 조문번호 유무만으로는 안 걸러진다. `doc_category`로도 불가(‘기타’에 고시와 박사논문이 섞여 있음). (배경역사 #51)
+- **PostgREST 조회에 `limit`을 작게 주면서 정렬을 생략하지 말 것** — 정렬 없는 limit은 임의의 N건을 돌려준다. '폐업'으로 6건만 받았더니 위치정보법·지방세법이 자리를 채우고 정작 전기통신사업법 19조가 빠졌다. 넉넉히 받아 점수로 거를 것. (배경역사 #51)
+- **파일을 통째로 다시 쓸 때 원자적 쓰기(임시 파일 → 교체)를 쓸 것** — 여는 순간 truncate되므로 쓰기 중 예외가 나면 0바이트가 된다. 실제로 `telegram-webhook/index.ts`가 그렇게 날아갔다(배포본에서 복구). (배경역사 #51)
 - **Supabase 파이썬 클라이언트는 `sb_client.make_client` 사용, `create_client` 직접 호출 금지** — supabase-py 2.31 httpx HTTP/2 keepalive 끊김(RemoteProtocolError: Server disconnected) 회피(HTTP/1.1 강제+재시도). 신규 스크립트도 동일 적용. (배경역사 #15)
 - **워크플로 pip를 버전 무고정으로 되돌리지 말 것(`requirements.txt` 유지)** — 무고정 자동 최신화가 어느 날 갑자기 깨뜨림(HTTP/2 사고). 버전 올릴 땐 한 번에 하나씩 바꿔 Run으로 검증. (배경역사 #15)
 - **GitHub PAT 재생성·교체 시 Actions(R/W) 권한 확인 누락 금지 / pg_cron 'succeeded'를 트리거 성공으로 믿지 말 것** — fine-grained PAT 필수권한은 Contents(R/W)+Metadata(자동)+Actions(R/W). Actions가 빠지면 git push는 되지만 workflow_dispatch는 403, 그런데 net.http_post가 비동기라 cron 잡은 succeeded로 찍혀 모든 트리거가 무음으로 멈춤. 교체 검증은 `net._http_response.status_code`(204=성공)로. (배경역사 #18)
@@ -447,6 +482,8 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **`.bat`은 ASCII+CRLF만 — 편집했으면 반드시 바이트로 검증(비ASCII=0·bareLF=0), git status를 믿지 말 것** — 한국어 로케일 cmd가 UTF-8 한국어+LF 배치를 오파싱해 `echo [%date% %time%]` 줄을 `time` 명령으로 실행→대화형 프롬프트 무한 대기→heartbeat 무음 중단. `.gitattributes`의 eol 정규화 때문에 working tree가 LF로 훼손돼도 git status는 clean으로 보여 git으로는 탐지 불가. (배경역사 #22)
 - **PC 스케줄러 작업·배치에서 bare `python` 호출 금지 — Python312 전체 경로(`C:\Users\SKTelecom\AppData\Local\Programs\Python\Python312\python.exe`) 고정** — 공유 PC에 다른 Python(3.13)이 설치되면 PATH를 가려 bs4 등 ModuleNotFoundError로 매일 무음 실패. 패키지는 3.12에만 설치돼 있음. (배경역사 #22)
 - **gov_notice_crawler.py를 GitHub Actions로 옮기지 말 것** — 정부 사이트 해외 IP 차단·입법예고 한국 IP 필요.
+- **방통위 수집에 RADIO_KEYWORDS만 쓰지 말 것(`KCC_KEYWORDS` 유지)** — 방통위 보도자료는 재허가·이사 임명·위원회 결과 등 방송 거버넌스가 대부분이라 전파 키워드로 거르면 매칭 0건이 된다. 기술정책팀에 의미 있는 축은 단말기·지원금·스팸·이용자보호다. (배경역사 #51)
+- **게시판 링크의 `;jsessionid=...` 제거를 빼지 말 것** — 안 떼면 실행할 때마다 URL이 달라져 같은 기사가 매번 신규로 저장된다.
 - **입법예고 수집을 lsNm(제명) 키워드 검색으로 되돌리지 말 것** — 관련 예고 통째 누락. 전체목록 스캔+소관부처 보강이 정답.
 - **입법예고 매칭의 "○○부 소관" 접두사 제거를 빼지 말 것** — 부처명 '정보통신' 글자 오탐 차단.
 - **입법예고 요약 생성(backfill_opinion_summaries)·브리핑 summary 표시 제거 금지** — lsAnc는 gov_notice_crawler가 요약 단독 담당.
@@ -551,7 +588,7 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 | Voyage AI | 임베딩(voyage-4-lite, 1024) | 무료 2억 토큰 |
 | Anthropic API | AI 자문·보고서 초안(sonnet stream)+긴급도/요약/스타일증류(Haiku) | 키는 app_config(claude_key) |
 | Resend | 이메일 | 100/일 |
-| Telegram Bot | 알림 | 무제한 |
+| Telegram Bot | 알림 | 무제한. **봇 2개** — 운영자용(`TELEGRAM_BOT_TOKEN`)·구독자용 `정책AI 도우미`(`SUBSCRIBER_BOT_TOKEN`, @radio_policy_law_ai_bot) |
 | trafilatura(pip) | 본문 추출 | 로컬 설치 |
 | pdf.js·mammoth·JSZip(CDN) | 브라우저 파일 파싱 | 보고서 등록·지식 업로드 공용 |
 | 법제처 DRF | 법령·고시 | LAW_OC_KEY=radiopolicyai |
@@ -565,10 +602,32 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 SUPABASE_URL, SUPABASE_SERVICE_KEY, ANTHROPIC_API_KEY,
 EMAIL_FROM, EMAIL_PASSWORD, EMAIL_TO, RESEND_API_KEY,
 TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, LAW_OC_KEY(=radiopolicyai),
-ASSEMBLY_API_KEY, NAVER_CLIENT_ID, NAVER_CLIENT_SECRET
+ASSEMBLY_API_KEY, NAVER_CLIENT_ID, NAVER_CLIENT_SECRET, SUBSCRIBER_BOT_TOKEN
 ※ 로컬은 동일 키를 .env에(.gitignore 등록). backfill_report_embeddings.py는 SUPABASE_URL·SERVICE_KEY·VOYAGE_API_KEY만.
 ※ Vault github_pat(fine-grained PAT, radio-policy-commit) 필수권한: Repository — Contents(R/W)·Metadata(자동)·Actions(R/W). 재생성 시 Actions 누락 주의(배경역사 #18).
-※ Supabase Edge Function Secrets(GitHub 아님, Project Settings → Edge Functions → Secrets): voyage-embed=`VOYAGE_API_KEY`.
+```
+
+### Supabase Edge Function Secrets
+(GitHub 아님 — Project Settings → Edge Functions → Secrets)
+```
+VOYAGE_API_KEY           voyage-embed + rag.ts 임베딩
+SUBSCRIBER_BOT_TOKEN     구독자 봇 (운영자 봇 토큰과 다름)
+TELEGRAM_WEBHOOK_SECRET  webhook 진위 검증 (Telegram이 헤더로 보냄)
+CRON_SECRET              pg_cron → send-subscriber-briefing 인증
+ANTHROPIC_API_KEY        자문·키워드확장 (app_config.claude_key 재사용 금지)
+OPERATOR_CHAT_ID         344506450 — 자문 승인 버튼 수신자
+※ Vault subscriber_cron_secret = CRON_SECRET 과 같은 값(트리거 함수가 여기서 읽음).
+※ 값 붙여넣기 시 줄바꿈 혼입 주의 — 콘솔의 SHA256 다이제스트로 대조 검증할 것.
+```
+
+### 구독자 봇 설치·운영 (`SUBSCRIBER_BOT_TOKEN`)
+```
+python init_subscriber_secrets.py --out <경로>   # 랜덤 시크릿 생성 → .env 기록 + 등록 안내 파일
+python setup_subscriber_bot.py                   # setWebhook + 명령 메뉴 + 표시명·소개문
+python sync_system_prompt.py                     # system_prompt.js → app_config (프롬프트 수정 시마다)
+npx supabase@latest functions deploy telegram-webhook --project-ref zwkjedumfuhodckmtxxn --no-verify-jwt
+npx supabase@latest functions deploy send-subscriber-briefing --project-ref zwkjedumfuhodckmtxxn --no-verify-jwt
+※ CLI 배포는 .env의 SUPABASE_ACCESS_TOKEN(sbp_...) 필요. MCP 전송 방식은 파일 50KB 넘으면 실패한다.
 ```
 
 ---
