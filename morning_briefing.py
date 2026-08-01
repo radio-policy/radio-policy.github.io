@@ -236,14 +236,24 @@ def generate_briefing(items: list, new_terms: list, for_date: datetime = None) -
 
     try:
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        # 브리핑 생성만 Sonnet 5 (2026-08-02 운영자 결정 — 선별·통찰 품질, 일 1콜이라 비용 미미).
+        # Sonnet 5는 적응형 추론이 기본 ON: thinking을 끄고, content[0]이 아니라 text 블록을 찾는다.
+        # temperature 등 샘플링 파라미터 금지(400). 판정·번역·짧은 요약류는 Haiku 유지.
         resp = client.messages.create(
-            model='claude-haiku-4-5-20251001',
+            model='claude-sonnet-5',
             max_tokens=2500,
+            thinking={'type': 'disabled'},
             system=_BRIEFING_SYSTEM,
             messages=[{'role': 'user', 'content': user_msg}],
         )
-        text = resp.content[0].text.strip()
-        print(f'[브리핑] 생성 완료 ({len(text)}자)')
+        text = ''
+        for blk in resp.content:
+            if getattr(blk, 'type', '') == 'text':
+                text = (blk.text or '').strip()
+                break
+        if not text:
+            raise RuntimeError('text 블록 없음')
+        print(f'[브리핑] 생성 완료 (Sonnet 5, {len(text)}자)')
         return text
     except Exception as e:
         print(f'[브리핑 생성 오류] {e}')

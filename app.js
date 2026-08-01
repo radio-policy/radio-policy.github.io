@@ -2097,11 +2097,11 @@ function askQ(q) {
 //  Dashboard
 // ════════════════════════════════════════════
 function smartRefresh() {
-  var active = document.querySelector('.panel[style*="display: block"], .panel[style*="display:block"]');
-  if (!active) active = document.getElementById('panel-news');
+  // 패널 활성화는 inline style이 아니라 .active 클래스다 — 옛 선택자는 항상 실패해
+  // 어느 페이지에서든 뉴스만 갱신되던 버그(그래서 패널마다 중복 새로고침 버튼이 생겼었다). (#54)
+  var active = document.querySelector('.panel.active');
   var id = active ? active.id : 'panel-news';
   var map = {
-
     'panel-news':     function() { loadNews(); },
     'panel-briefing': function() { loadBriefing(); },
     'panel-terms':    function() { loadTerms && loadTerms(); },
@@ -2109,9 +2109,16 @@ function smartRefresh() {
     'panel-law':      function() { loadKbDocs(true); },
     'panel-guide':    function() { loadGuideDocs(true); },
     'panel-lawmap':   function() { loadLawMap(true); },
+    'panel-assembly': function() { loadAssemblyBills(true); },
+    'panel-minutes':  function() { loadAssemblyMinutes(true); },
+    'panel-overseas': function() { loadOverseasNews(true); },
+    'panel-lawtrack': function() { loadLawTrack(true); },
+    'panel-diff':     function() { loadLawDiffs(true); },
+    'panel-opsstatus': function() { typeof loadOpsStatus === 'function' && loadOpsStatus(); },
+    'panel-settings': function() { typeof loadSettingsUI === 'function' && loadSettingsUI(); },
   };
-  var fn = map[id] || function() { loadNews(); };
-  fn();
+  var fn = map[id];
+  if (fn) fn();
 }
 
 async function refreshDashboard() {
@@ -6359,41 +6366,38 @@ async function loadAssemblyMinutes(force) {
   if (!_assemblyMinutesCache || force) {
     listEl.innerHTML = '<div style="color:var(--text-secondary);padding:12px;text-align:center;font-size:12px">불러오는 중...</div>';
     try {
-      // 보도자료 loadPressJSON과 같은 order+range 페이징 — 요청당 1,000행 컷 주의 (#53)
+      // 회의록 전체 청크를 문서별로 이어붙여 섹션 단위 파싱 (order+range 페이징 — 1,000행 컷 #53).
+      // 헤더-청크만 읽으면 '요약:' 줄이 다음 청크에 걸릴 때 놓치므로 전체를 읽는다(문서가 작아 부담 없음).
       var chunks = [];
       var pageStart = 0;
-      var useRegex = true;
       while (true) {
-        var q = sb.from('document_chunks')
-          .select('doc_name, content')
-          .eq('doc_category', '회의록');
-        if (useRegex) q = q.filter('content', '~', '## [0-9][0-9][0-9][0-9][0-9][0-9]');
-        var resp = await q.order('id').range(pageStart, pageStart + 999);
-        if (resp.error) {
-          // 정규식 필터 미지원 폴백 — 회의록 전체 청크 조회로 재시도
-          if (useRegex && pageStart === 0) { useRegex = false; continue; }
-          throw resp.error;
-        }
+        var resp = await sb.from('document_chunks')
+          .select('doc_name, chunk_index, content')
+          .eq('doc_category', '회의록')
+          .order('doc_name').order('chunk_index')
+          .range(pageStart, pageStart + 999);
+        if (resp.error) throw resp.error;
         chunks = chunks.concat(resp.data || []);
         if (!resp.data || resp.data.length < 1000) break;
         pageStart += 1000;
       }
-
-      // '## YYMMDD 제목' 헤더 파싱 → 회의일·제목
-      var seen = {};
+      var docsMap = {};
+      chunks.forEach(function(c) { (docsMap[c.doc_name] = docsMap[c.doc_name] || []).push(c); });
       var minutes = [];
-      chunks.forEach(function(chunk) {
-        (chunk.content || '').split('\n').forEach(function(line) {
-          var m = line.match(/^##\s+(\d{6})\s+(.+)/);
+      Object.keys(docsMap).forEach(function(dn) {
+        var full = docsMap[dn]
+          .sort(function(a, b) { return (a.chunk_index || 0) - (b.chunk_index || 0); })
+          .map(function(c) { return c.content || ''; }).join('');
+        full.split(/(?=^## \d{6} )/m).forEach(function(s) {
+          var m = s.match(/^## (\d{6}) (.+)/);
           if (!m) return;
-          var yymmdd = m[1];
-          var title = m[2].trim();
-          if (!title) return;
-          var dateStr = '20' + yymmdd.substring(0, 2) + '-' + yymmdd.substring(2, 4) + '-' + yymmdd.substring(4, 6);
-          var key = dateStr + '_' + title.substring(0, 30);
-          if (seen[key]) return;
-          seen[key] = true;
-          minutes.push({ title: title, date: dateStr, doc_name: chunk.doc_name });
+          var sm = s.slice(0, 900).match(/^요약:\s*(.+)$/m);
+          minutes.push({
+            title: m[2].trim(),
+            date: '20' + m[1].slice(0, 2) + '-' + m[1].slice(2, 4) + '-' + m[1].slice(4, 6),
+            doc_name: dn,
+            summary: sm ? sm[1].trim() : ''
+          });
         });
       });
       minutes.sort(function(a, b) { return b.date.localeCompare(a.date); });
@@ -6412,9 +6416,14 @@ async function loadAssemblyMinutes(force) {
 
   var html = '<div class="card" style="cursor:default;padding:0;overflow:hidden">';
   minutes.forEach(function(mt, i) {
-    html += '<div style="' + (i ? 'border-top:1px solid var(--border);' : '') + 'padding:10px 14px;cursor:pointer;display:flex;gap:10px;align-items:baseline" onclick="openAssemblyMinute(' + i + ')">' +
-      '<span style="font-size:11px;color:var(--text-muted);white-space:nowrap">' + mt.date + '</span>' +
-      '<span style="font-size:12px;color:var(--text-primary);line-height:1.4">' + escHtml(mt.title) + '</span>' +
+    html += '<div style="' + (i ? 'border-top:1px solid var(--border);' : '') + 'padding:10px 14px;cursor:pointer" onclick="openAssemblyMinute(' + i + ')">' +
+      '<div style="display:flex;gap:10px;align-items:baseline">' +
+        '<span style="font-size:11px;color:var(--text-muted);white-space:nowrap">' + mt.date + '</span>' +
+        '<span style="font-size:12px;color:var(--text-primary);line-height:1.4">' + escHtml(mt.title) + '</span>' +
+      '</div>' +
+      (mt.summary
+        ? '<div style="font-size:11px;color:var(--text-secondary);line-height:1.5;margin:4px 0 0 76px">' + escHtml(mt.summary) + '</div>'
+        : '') +
     '</div>';
   });
   html += '</div>';

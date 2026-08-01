@@ -260,8 +260,42 @@ def _section_title(meeting: dict) -> str:
     return '제%s차 (%s)' % (meeting['dgr'] or '?', first or '안건 미상')
 
 
-def build_section_body(meeting: dict, detail: dict, blocks: list, picked: list) -> str:
+def summarize_meeting(meeting_title: str, picked_texts: list) -> str:
+    """관련 발언 1~2문장 요약(Haiku) — 목록 화면의 부제로 쓰인다 (운영자 지시 2026-08-02).
+    실패·키 없음·발언 없음이면 '' (요약 줄 생략)."""
+    api_key = os.environ.get('ANTHROPIC_API_KEY', '')
+    if not api_key or not picked_texts:
+        return ''
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=api_key)
+        joined = '\n'.join(picked_texts)[:6000]
+        resp = client.messages.create(
+            model='claude-haiku-4-5-20251001',
+            max_tokens=200,
+            messages=[{'role': 'user', 'content': (
+                '아래는 국회 과방위 회의 「%s」에서 발췌한 통신·전파·AI 관련 발언들이다. '
+                '통신사(SK텔레콤) 관점에서 어떤 논의가 있었는지 1~2문장(130자 이내)으로 요약하라. '
+                '머리기호·따옴표 없이 문장만 출력.\n\n%s' % (meeting_title, joined)
+            )}],
+        )
+        txt = ''
+        for blk in resp.content:
+            if getattr(blk, 'type', '') == 'text':
+                txt = (blk.text or '').strip()
+                break
+        txt = re.sub(r'^[\-•*"\s]+', '', txt).replace('\n', ' ').strip()
+        return txt[:250] if len(txt) >= 10 else ''
+    except Exception as e:
+        print('  [요약 실패 — 생략] %s' % str(e)[:60])
+        return ''
+
+
+def build_section_body(meeting: dict, detail: dict, blocks: list, picked: list,
+                       summary: str = '') -> str:
     lines = ['**%s**' % meeting['title']]
+    if summary:
+        lines.append('요약: %s' % summary)
     when = detail.get('CONF_DT') or meeting['conf_date']
     bg = (detail.get('BG_PTM') or '').strip()
     ed = (detail.get('ED_PTM') or '').strip()
@@ -350,7 +384,10 @@ def run(sb, api_key: str, year: int, limit: int = 0, dry: bool = False) -> dict:
         picked = select_relevant(blocks, keywords, judge, m['title'])
         detail = fetch_detail(api_key, m['conf_id'])
         title = _section_title(m)
-        body = build_section_body(m, detail, blocks, picked)
+        picked_texts = ['%s: %s' % (blocks[i]['name'], blocks[i]['text'][:800])
+                        for i in picked[:MAX_EXCERPTS]]
+        summary = '' if dry else summarize_meeting(m['title'], picked_texts)
+        body = build_section_body(m, detail, blocks, picked, summary)
         url = VIEWER_URL % m['confer_num']
         if dry:
             print('  [dry-run] ## %s %s | 원문=%s 블록 %d, 발췌 %d, %d자'

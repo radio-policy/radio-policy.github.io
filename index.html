@@ -324,7 +324,6 @@
       <div class="panel" id="panel-law">
         <div style="display:flex;gap:8px;margin-bottom:16px;align-items:center">
           <span style="font-size:12px;color:var(--text-secondary)">총 <strong id="kb-total">—</strong>개 문서 · 지식 베이스 실시간 목록 · 출처: law.go.kr · rra.go.kr</span>
-          <button class="btn" style="font-size:11px;padding:3px 10px" onclick="loadKbDocs(true)"><i class="ti ti-refresh"></i> 새로고침</button>
           <!-- 업로드 버튼 제거(2026-08-01) — 법령·고시는 법제처 API로 본문까지 받는다.
                law_sync.py가 조문 구조(조문번호·항·호)를 그대로 가져오므로 PDF 추출보다 정확하고,
                PDF로 넣으면 오히려 article_no가 부정확해진다. API에 없는 예외 문서(상호인정협정·
@@ -348,7 +347,6 @@
       <div class="panel" id="panel-guide">
         <div style="display:flex;gap:8px;margin-bottom:10px;align-items:center;flex-wrap:wrap">
           <span style="font-size:12px;color:var(--text-secondary)">자문이 근거로 삼는 실무 안내·법령 요약 (답변 하단 <strong>참조 요약·실무</strong> 배지로 표시됨)</span>
-          <button class="btn" style="font-size:11px;padding:3px 10px" onclick="loadGuideDocs(true)"><i class="ti ti-refresh"></i> 새로고침</button>
           <span style="margin-left:auto;font-size:11.5px;color:var(--text-tertiary)">전체 <strong id="guide-total">—</strong>건</span>
         </div>
 
@@ -384,7 +382,6 @@
           <button class="btn" id="lawmap-notice-toggle" style="font-size:11px;padding:3px 10px;display:none" onclick="toggleLawMapNotice()"><i class="ti ti-eye"></i> 고시 펼치기</button>
           <span id="lawmap-status" style="font-size:11px;color:var(--text-secondary)"></span>
           <button class="btn" id="lawmap-enrich-btn" style="margin-left:auto;font-size:11px;padding:3px 10px;display:none" onclick="enrichLawMapTopic()"><i class="ti ti-sparkles"></i> AI로 보강</button>
-          <button class="btn" style="font-size:11px;padding:3px 10px" onclick="loadLawMap(true)"><i class="ti ti-refresh"></i> 새로고침</button>
         </div>
         <div id="lawmap-graph" class="lawmap-graph"><div style="color:var(--text-secondary);font-size:12px;padding:16px">불러오는 중...</div></div>
         <div class="lawmap-legend">
@@ -797,7 +794,6 @@
       <div class="panel" id="panel-lawtrack">
         <div style="display:flex;gap:8px;margin-bottom:14px;align-items:center">
           <span style="font-size:12px;color:var(--text-secondary)">법제처 Open API · 매일 11:00 KST 갱신 · 입법예고→공포→시행 단계 추적</span>
-          <button class="btn" style="font-size:11px;padding:3px 10px;margin-left:auto" onclick="loadLawTrack(true)"><i class="ti ti-refresh"></i> 새로고침</button>
         </div>
         <div class="stat-row" style="grid-template-columns:repeat(4,1fr);margin-bottom:16px" id="lawtrack-stats">
           <div class="stat-card" style="cursor:pointer" data-mode="입법예고중" onclick="filterLawTrack(this,'입법예고중')"><div class="stat-value" id="lt-anc" style="color:var(--accent)">—</div><div class="stat-label">입법예고 중</div></div>
@@ -814,7 +810,6 @@
       <div class="panel" id="panel-assembly">
         <div style="display:flex;gap:8px;margin-bottom:14px;align-items:center">
           <span style="font-size:12px;color:var(--text-secondary)">22대 국회 · 전파·통신 관련 법안 자동 추적 · 매일 10:00 KST 갱신</span>
-          <button class="btn" style="font-size:11px;padding:3px 10px;margin-left:auto" onclick="loadAssemblyBills(true)"><i class="ti ti-refresh"></i> 새로고침</button>
         </div>
 
         <!-- 통계 -->
@@ -836,7 +831,6 @@
       <div class="panel" id="panel-minutes">
         <div style="display:flex;gap:8px;margin-bottom:14px;align-items:center">
           <span style="font-size:12px;color:var(--text-secondary)">과학기술정보방송통신위원회 회의록 · 통신·전파·AI 관련 발언 발췌 · 22대(2024~) · 매일 17:00 갱신</span>
-          <button class="btn" style="font-size:11px;padding:3px 10px;margin-left:auto" onclick="loadAssemblyMinutes(true)"><i class="ti ti-refresh"></i> 새로고침</button>
         </div>
         <div id="assembly-minutes">
           <div id="assembly-minutes-list">
@@ -849,7 +843,6 @@
       <div class="panel" id="panel-overseas">
         <div style="display:flex;gap:8px;margin-bottom:14px;align-items:center">
           <span style="font-size:12px;color:var(--text-secondary)">FCC · Ofcom · BEREC · 日총무성 · ITU — AI 관련성 판정 + 한글 요약 · 매일 05:30 수집 · 60일 보관</span>
-          <button class="btn" style="font-size:11px;padding:3px 10px;margin-left:auto" onclick="loadOverseasNews(true)"><i class="ti ti-refresh"></i> 새로고침</button>
         </div>
         <div id="overseas-list">
           <div style="color:var(--text-secondary);padding:20px;text-align:center;font-size:12px">불러오는 중...</div>
@@ -1081,6 +1074,6 @@
 <script src="https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js"></script>
 <script>if(typeof pdfjsLib!=='undefined'){pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';}</script>
 <script src="system_prompt.js?v=20260612c"></script>
-<script src="app.js?v=20260803b"></script>
+<script src="app.js?v=20260803c"></script>
 </body>
 </html>
