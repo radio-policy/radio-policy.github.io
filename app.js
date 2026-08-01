@@ -4995,12 +4995,12 @@ function go(page, navEl, sourceType) {
 
   // 상단 바 제목 업데이트
   var newsTitle = currentNewsSourceType === 'gov' ? '정부 보도자료·공지사항' : (currentNewsSourceType === 'media' ? '뉴스' : '보도자료·뉴스');
-  var titles = {home:'대시보드', chat:'AI 자문', reportdraft:'보고서 초안 제안', diff:'법령 DIFF 분석', law:'국내 법령·고시', guide:'실무 안내', lawmap:'법령 관계도', itu:'ITU-R 문서', press:'정부 보도자료', terms:'기술 용어', news:newsTitle, briefing:'Daily Briefing', assembly:'국회 법안', lawtrack:'행정부 입법예고·법령 개정', settings:'설정', opsstatus:'운영 상태'};
+  var titles = {home:'대시보드', chat:'AI 자문', reportdraft:'보고서 초안 제안', diff:'법령 DIFF 분석', law:'국내 법령·고시', guide:'실무 안내', lawmap:'법령 관계도', itu:'ITU-R 문서', press:'정부 보도자료', terms:'기술 용어', news:newsTitle, briefing:'Daily Briefing', assembly:'국회 법안', minutes:'과방위 회의록', overseas:'해외 규제동향', lawtrack:'행정부 입법예고·법령 개정', settings:'설정', opsstatus:'운영 상태'};
   var ttEl = document.getElementById('topbar-title');
   if (ttEl && titles[page]) ttEl.textContent = titles[page];
 
   // 모바일 하단 네비 동기화
-  var pageTobn = {home:'bn-more', chat:'bn-chat', reportdraft:'bn-chat', lawmap:'bn-chat', law:'bn-law', guide:'bn-law', itu:'bn-law', press:'bn-law', custom:'bn-law', terms:'bn-terms', news:'bn-monitor', briefing:'bn-monitor', assembly:'bn-monitor', lawtrack:'bn-monitor', diff:'bn-monitor', settings:'bn-more', opsstatus:'bn-more'};
+  var pageTobn = {home:'bn-more', chat:'bn-chat', reportdraft:'bn-chat', lawmap:'bn-chat', law:'bn-law', guide:'bn-law', itu:'bn-law', press:'bn-law', custom:'bn-law', terms:'bn-terms', news:'bn-monitor', briefing:'bn-monitor', assembly:'bn-monitor', minutes:'bn-monitor', overseas:'bn-monitor', lawtrack:'bn-monitor', diff:'bn-monitor', settings:'bn-more', opsstatus:'bn-more'};
   if (pageTobn[page]) setBottomNav(pageTobn[page]);
 
   if (page === 'news') loadNews();
@@ -5012,7 +5012,9 @@ function go(page, navEl, sourceType) {
   if (page === 'law') loadKbDocs();
   if (page === 'guide') loadGuideDocs();
   if (page === 'lawmap') loadLawMap();
-  if (page === 'assembly') { loadAssemblyBills(); loadAssemblyMinutes(); }
+  if (page === 'assembly') loadAssemblyBills();
+  if (page === 'minutes') loadAssemblyMinutes();
+  if (page === 'overseas') loadOverseasNews();
   if (page === 'lawtrack') loadLawTrack();
   if (page === 'diff') loadLawDiffs();
   if (page === 'opsstatus') loadOpsStatus();
@@ -6309,6 +6311,46 @@ function escHtml(str) {
 //  doc_name='과방위_회의록_{YYYY}.md', 섹션 '## YYMMDD 제N차 (안건)' 형식.
 // ════════════════════════════════════════════
 var _assemblyMinutesCache = null;
+
+// 해외 규제동향 — 독립 메뉴 (news_feed category='해외', 2026-08-02 #54)
+var _overseasCache = null;
+async function loadOverseasNews(force) {
+  var el = document.getElementById('overseas-list');
+  if (!el || !sb) return;
+  if (!_overseasCache || force) {
+    el.innerHTML = '<div style="color:var(--text-secondary);padding:20px;text-align:center;font-size:12px">로딩 중...</div>';
+    try {
+      var resp = await sb.from('news_feed')
+        .select('title, source, url, summary, published_at')
+        .eq('category', '해외')
+        .order('published_at', { ascending: false })
+        .limit(100);
+      if (resp.error) throw resp.error;
+      _overseasCache = resp.data || [];
+    } catch (e) {
+      el.innerHTML = '<div style="color:#f66;padding:20px;text-align:center;font-size:12px">불러오기 실패: ' + escHtml((e && e.message) || String(e)) + '</div>';
+      return;
+    }
+  }
+  var rows = _overseasCache;
+  if (rows.length === 0) {
+    el.innerHTML = '<div style="color:var(--text-secondary);padding:20px;text-align:center;font-size:12px">수집된 해외 동향이 없습니다 (매일 05:30 수집)</div>';
+    return;
+  }
+  var SRC_COLOR = { FCC: '#2563eb', Ofcom: '#7c3aed', BEREC: '#0891b2', '日총무성': '#dc2626', ITU: '#16a34a' };
+  el.innerHTML = rows.map(function(n) {
+    var c = SRC_COLOR[n.source] || 'var(--text-muted)';
+    return '<div class="card" style="cursor:default;padding:12px 14px;margin-bottom:8px">' +
+      '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:wrap">' +
+        '<span style="font-size:10px;font-weight:700;color:' + c + ';border:1px solid ' + c + ';padding:0 6px;border-radius:4px;white-space:nowrap">' + escHtml(n.source || '') + '</span>' +
+        '<span style="font-size:10px;color:var(--text-muted)">' + escHtml(String(n.published_at || '').slice(0, 10)) + '</span>' +
+        (n.url ? '<a href="' + escHtml(n.url) + '" target="_blank" rel="noopener" style="margin-left:auto;font-size:10px;text-decoration:none">원문 <i class="ti ti-external-link"></i></a>' : '') +
+      '</div>' +
+      '<div style="font-size:12px;font-weight:600;color:var(--text-primary);line-height:1.5;margin-bottom:4px">' + escHtml(n.title || '') + '</div>' +
+      (n.summary ? '<div style="font-size:11px;color:var(--text-secondary);line-height:1.6">' + escHtml(n.summary) + '</div>' : '') +
+    '</div>';
+  }).join('');
+}
 
 async function loadAssemblyMinutes(force) {
   var listEl = document.getElementById('assembly-minutes-list');

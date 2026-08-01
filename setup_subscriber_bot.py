@@ -33,7 +33,7 @@ WEBHOOK_URL = 'https://zwkjedumfuhodckmtxxn.supabase.co/functions/v1/telegram-we
 
 # 채팅방 상단에 보이는 이름(표시명). 사용자명(@radio_policy_law_ai_bot)과는 별개이며
 # 표시명은 한글도 가능하다. 사용자명 변경은 BotFather에서만 가능(중복 불가, bot으로 끝나야 함).
-BOT_NAME = '정책AI 도우미'
+BOT_NAME = '정책 AI도우미'
 BOT_SHORT_DESC = '전파정책 브리핑·법령 검색·AI 자문'
 BOT_DESC = (
     '전파·통신 정책 브리핑을 원하는 시각에 받아보고, 법령 조문을 검색할 수 있는 봇입니다.\n\n'
