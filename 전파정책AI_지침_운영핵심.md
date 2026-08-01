@@ -536,6 +536,7 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **fcc.gov 안의 /rss 경로를 RSS로 믿지 말 것** — HTML을 반환하는 가짜 경로다. 진짜 피드는 EDOCS API(api2.fcc.gov)에 있다. Ofcom은 전 경로 Cloudflare 차단이라 직접 수집 시도 금지(구글 뉴스 site: RSS 우회 유지). (배경역사 #54)
 - **국회 회의록은 PDF가 아니라 뷰어(xml.do)가 정본** — PDF_LINK_URL의 PDF는 pdftotext에서 중반부 글리프가 깨진다(폰트 문제). 뷰어의 발언자 단위 구조를 쓰고 PDF는 폴백으로만. (배경역사 #54)
 - **'보고서 초안 제안' 메뉴는 숨김 상태(삭제 아님)** — index.html 주석 2곳을 해제하면 복원된다. 패널·함수·report_* 테이블은 보존 중(봇 보고서 기능이 재사용 예정). (배경역사 #54)
+- **구본(superseded) 청크는 임베딩을 두지 말 것** — 검색이 결과에서 걸러내는데 HNSW RAM만 차지한다(2,635개 제거로 작업세트가 캐시 안으로 들어옴). backfill_embeddings.py에 status neq.superseded 필터가 있으니 제거하지 말 것. promote_due가 새로 강등한 구본은 임베딩이 남는데, 작업세트가 다시 캐시에 근접하면 `update document_chunks set embedding=null where status='superseded'` + REINDEX로 정리. (배경역사 #54)
 - **Supabase 파이썬 클라이언트는 `sb_client.make_client` 사용, `create_client` 직접 호출 금지** — supabase-py 2.31 httpx HTTP/2 keepalive 끊김(RemoteProtocolError: Server disconnected) 회피(HTTP/1.1 강제+재시도). 신규 스크립트도 동일 적용. (배경역사 #15)
 - **워크플로 pip를 버전 무고정으로 되돌리지 말 것(`requirements.txt` 유지)** — 무고정 자동 최신화가 어느 날 갑자기 깨뜨림(HTTP/2 사고). 버전 올릴 땐 한 번에 하나씩 바꿔 Run으로 검증. (배경역사 #15)
 - **GitHub PAT 재생성·교체 시 Actions(R/W) 권한 확인 누락 금지 / pg_cron 'succeeded'를 트리거 성공으로 믿지 말 것** — fine-grained PAT 필수권한은 Contents(R/W)+Metadata(자동)+Actions(R/W). Actions가 빠지면 git push는 되지만 workflow_dispatch는 403, 그런데 net.http_post가 비동기라 cron 잡은 succeeded로 찍혀 모든 트리거가 무음으로 멈춤. 교체 검증은 `net._http_response.status_code`(204=성공)로. (배경역사 #18)

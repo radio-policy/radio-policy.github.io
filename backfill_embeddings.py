@@ -57,7 +57,7 @@ def count_null_embeddings():
     resp = requests.get(
         f"{SUPABASE_URL}/rest/v1/document_chunks",
         headers=_sb_headers({"Prefer": "count=exact"}),
-        params={"embedding": "is.null", "select": "id"},
+        params={"embedding": "is.null", "status": "neq.superseded", "select": "id"},
     )
     resp.raise_for_status()
     cr = resp.headers.get("content-range", "0/0")
@@ -71,6 +71,8 @@ def fetch_chunks(offset, limit=FETCH_BATCH):
         params={
             "select": "id,content",
             "embedding": "is.null",
+            # 구본(superseded)은 검색 결과에서 걸러지므로 임베딩하지 않는다 — RAM 최적화 (2026-08-02, #54)
+            "status": "neq.superseded",
             "order": "id.asc",
             "offset": offset,
             "limit": limit,
