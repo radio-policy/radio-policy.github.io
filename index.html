@@ -6,7 +6,7 @@
 <title>전파정책 전문가 AI — SKT Comm센터 기술정책팀</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <link rel="stylesheet" href="styles.css?v=20260801d">
+  <link rel="stylesheet" href="styles.css?v=20260801e">
 
 </head>
 <body>
@@ -304,9 +304,12 @@
         <div style="display:flex;gap:8px;margin-bottom:16px;align-items:center">
           <span style="font-size:12px;color:var(--text-secondary)">총 <strong id="kb-total">—</strong>개 문서 · 지식 베이스 실시간 목록 · 출처: law.go.kr · rra.go.kr</span>
           <button class="btn" style="font-size:11px;padding:3px 10px" onclick="loadKbDocs(true)"><i class="ti ti-refresh"></i> 새로고침</button>
-          <button class="btn btn-primary" style="margin-left:auto;font-size:12px" onclick="openPdfUpload('law')"><i class="ti ti-upload"></i> 업로드 (PDF·Word·MD)</button>
+          <!-- 업로드 버튼 제거(2026-08-01) — 법령·고시는 법제처 API로 본문까지 받는다.
+               law_sync.py가 조문 구조(조문번호·항·호)를 그대로 가져오므로 PDF 추출보다 정확하고,
+               PDF로 넣으면 오히려 article_no가 부정확해진다. API에 없는 예외 문서(상호인정협정·
+               정책자료)는 PC에서 `python upload_law_pdf.py <파일> "<이름>" 고시`로 넣는다. (#52) -->
+          <span style="margin-left:auto;font-size:11px;color:var(--text-tertiary)">개정 감지 시 <code>law_sync.py</code>로 자동 현행화 · 업로드 불필요</span>
         </div>
-        <div id="law-upload-list"></div>
 
         <div style="position:relative;margin-bottom:14px">
           <i class="ti ti-search" style="position:absolute;left:11px;top:50%;transform:translateY(-50%);font-size:15px;color:var(--text-tertiary)"></i>
@@ -998,6 +1001,6 @@
 <script src="https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js"></script>
 <script>if(typeof pdfjsLib!=='undefined'){pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';}</script>
 <script src="system_prompt.js?v=20260612c"></script>
-<script src="app.js?v=20260801d"></script>
+<script src="app.js?v=20260801e"></script>
 </body>
 </html>

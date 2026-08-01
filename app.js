@@ -5367,13 +5367,12 @@ function openPdfUpload(ctx) {
     if (title) title.textContent = 'ITU-R 문서 업로드 (PDF · MD · Word · PPTX)';
     if (catRow) catRow.style.display = 'none';
     if (dateRow) dateRow.style.display = 'none';
-  } else if (ctx === 'custom') {
+  } else {
+    // 'custom'(추가 지식) — 법령·고시 업로드 진입점은 없앴다(#52). API(law_sync.py)가
+    // 조문 구조를 그대로 가져와 PDF 추출보다 정확하고, PDF로 넣으면 article_no가 어긋난다.
+    // API에 없는 예외 문서는 PC에서 upload_law_pdf.py로 넣는다.
     if (title) title.textContent = '추가 지식 파일 업로드 (PDF · MD · Word · PPTX)';
     if (catRow) catRow.style.display = 'none';
-    if (dateRow) dateRow.style.display = 'none';
-  } else {
-    if (title) title.textContent = '법령·고시 업로드 (PDF · MD · Word · PPTX)';
-    if (catRow) catRow.style.display = 'block';
     if (dateRow) dateRow.style.display = 'none';
   }
   modal.style.display = 'flex';
@@ -5662,9 +5661,11 @@ async function doPdfUpload() {
         });
       }
 
-      // 7. 법령·고시 또는 ITU-R면 화면 목록에 추가
-      if (_pdfUploadCtx === 'law' || _pdfUploadCtx === 'itu') {
-        var listEl = document.getElementById(_pdfUploadCtx === 'itu' ? 'itu-upload-list' : 'law-upload-list');
+      // 7. ITU-R이면 화면 목록에 추가
+      //    법령·고시('law')는 업로드 진입점을 없앴다 — API(law_sync.py)가 조문 구조를
+      //    그대로 가져와 PDF 추출보다 정확하기 때문. 여기 'law' 분기도 함께 정리. (#52)
+      if (_pdfUploadCtx === 'itu') {
+        var listEl = document.getElementById('itu-upload-list');
         if (listEl) {
           var item = document.createElement('div');
           item.className = 'card';
@@ -5690,7 +5691,7 @@ async function doPdfUpload() {
       closePdfUpload();
       var pendingNote = (_pdfUploadCtx === 'press')
         ? ''
-        : '\n\n⏳ 승인 대기 상태로 등록되었습니다. 설정 → 승인 대기 문서에서 승인하면 AI 자문 반영 + 의미검색 임베딩' + (_pdfUploadCtx === 'law' ? ' + OKF 요약(법령·고시)' : '') + '까지 자동 생성됩니다.';
+        : '\n\n⏳ 승인 대기 상태로 등록되었습니다. 설정 → 승인 대기 문서에서 승인하면 AI 자문 반영 + 의미검색 임베딩까지 자동 생성됩니다.';
       var msg = totalFiles === 1
         ? '✅ "' + (docName || files[0].name.replace(/\.[^.]+$/, '')) + '" 업로드 완료!\n' + totalChunks + '개 청크가 등록되었습니다.' + pendingNote
         : '✅ ' + totalFiles + '개 파일 업로드 완료!\n총 ' + totalChunks + '개 청크가 등록되었습니다.' + pendingNote;
