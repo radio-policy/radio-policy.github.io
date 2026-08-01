@@ -465,6 +465,44 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **프루닝 방식**: 무관 자료 삭제는 섹션-청크 경계가 어긋나므로 **문서 전문 백업 → 섹션 제외 재조립 →
   재청킹 → 문서 단위 교체 → 재임베딩 → REINDEX** 순서로만 할 것(청크 직접 delete 금지).
 
+## 법령 DIFF 자동화 (law_diff_gen, 2026-08-02 신설 — 배경역사 #54)
+
+- 신규 테이블 **law_diffs**: 개정 1건=1행, diff_kind('pending'현행↔시행예정|'promoted'구현행↔신현행),
+  summary(총괄)·impact(SKT 영향)·urgency·articles jsonb[{article_no,change,before,after,impact}].
+  **전/후 원문을 jsonb에 보존**(KEEP_VERSIONS 정리와 무관). unique(law_name,new_doc,diff_kind).
+- `law_diff_gen.py`(17시 run_gov_crawler.bat 체인): law_pending loaded/promoted 쌍 → 조문 3분류
+  diff → Sonnet 1콜(JSON 강제, 변경 조문만 투입) → upsert → 운영자 텔레그램 + heartbeat
+  last_law_diff_run. **pending→promoted 전환은 AI 재호출 없이 kind만 갱신**. PDF 수기 등재본 제외,
+  변경비율>70%는 전부개정 판정(조문 표 생략).
+- 대시보드 DIFF 탭: 자동 감지 리스트(관련도 정렬 — 전파법·전기통신사업법·방발법 계열 우선) →
+  상세(총괄+조문 표). 수동 파일 비교는 하단 유지.
+- **입법예고 단계도 DIFF 생성**(diff_kind='proposed', 2026-08-02 확장 — 운영자 지시): 과기정통부
+  입법행정예고 게시물의 개정안 첨부(msit_extract 재사용)를 현행 조문(law_watch 등재본)과 대비.
+  enf_date에는 **의견제출 마감일**이 들어가고 화면 라벨도 '의견마감'. articles의 after는 개정안
+  문안 인용(확정본 아님 — 상세에 경고문 표시). **정렬 최상위**(의견제출로 개입 가능한 유일한
+  단계라는 운영자 판단 — 시행예정→시행완료 순). 공포되어 pending DIFF가 생기면 같은 법령의
+  proposed 행은 자동 삭제(대체).
+
+## 해외 규제기관 모니터링 (foreign_press, 2026-08-02 신설 — 배경역사 #54)
+
+- FCC·Ofcom·BEREC·日총무성·ITU → Haiku 1콜(관련성+한글 제목 번역+3문장 요약, 기준문
+  app_config.**foreign_relevance_criteria**) → news_feed(category='해외', 60일 롤링).
+- 소스 경로는 실측 확정본만 사용: FCC=**EDOCS API RSS**(fcc.gov 내 /rss 경로들은 HTML 반환하는
+  가짜), Ofcom=**전 경로 Cloudflare 차단 → 구글 뉴스 site: RSS 우회**, 日총무성=Shift_JIS HTML,
+  BEREC·ITU=공식 RSS. **API 키 없으면 fail-closed**(외국어라 키워드 폴백 불성립 — heartbeat에 기록).
+- 스케줄: 매일 05:30 radio_TEMP_foreign(임시) — 한국 IP 불요라 **계정 복구 후 GitHub Actions 이관 대상**.
+- 브리핑 [해외 동향] 섹션: 파이썬 결정적 조립, briefing 뒤쪽 배치.
+
+## 과방위 회의록 수집 (assembly_minutes, 2026-08-02 신설 — 배경역사 #54)
+
+- 열린국회 API **ncwgseseafwbuheph**(row=안건 단위 → CONFER_NUM으로 회의 그룹핑) →
+  **원문은 record.assembly.go.kr 뷰어 xml.do가 정본**(PDF는 pdftotext에서 글리프 깨짐 — 폴백만).
+- 발언 선별: press_keywords 1차 + Haiku 2차(press_relevance_criteria) → 채택+전후 1블록 →
+  `과방위_회의록_{YYYY}.md`(doc_category='회의록', 섹션 '## YYMMDD 제N차 (안건)') —
+  press_ingest.**register_kb_section**(register_press의 일반화) 사용. 22대 개원(2024)부터 백필.
+- 대시보드: 국회 법안 탭 하단 목록 + openPressDetail 재사용. KB 목록 블랙리스트에 '회의록' 포함.
+- 17시 run_gov_crawler.bat 체인에서 매일 신규분 수집. heartbeat last_minutes_run.
+
 ## 점검 체크리스트 (요약 — 상세 경위는 배경역사 문서)
 
 - **이상 의심 시 1차 점검**: 대시보드 설정 밑 **"운영 상태"** 탭 — 크롤러 heartbeat·뉴스 입력·오늘 브리핑·입법예고·국회 한눈. (배경역사 #16)
@@ -495,6 +533,9 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **보도자료 수집 키워드·AI 판정 기준문은 코드 상수가 아니라 DB(app_config)가 원본** — 코드의 FALLBACK은 조회 실패 시 비상용일 뿐이다. 기준을 바꿀 때 코드만 고치면 대시보드 편집분과 어긋난다. (배경역사 #53)
 - **PostgREST는 요청당 최대 1,000행에서 자른다 — `.limit(2000)`도 1,000에서 잘린다** — 무정렬이면 어떤 1,000건이 올지도 임의라 "최근 것만 사라지는" 형태로 증상이 난다(보도자료 목록·상세가 실제로 그랬다). 대량 조회는 반드시 `order + range` 페이징. (배경역사 #53)
 - **게시판 목록을 페이지 순회할 때 순환 방어를 넣을 것** — 마지막 페이지를 넘겨도 같은 내용을 반복 반환하는 게시판(ETRI)이 있고, URL에 페이지 번호가 박혀 'URL 신규' 판정으로는 못 거른다. 페이지의 제목 조합(fingerprint)이 재등장하면 종료. (배경역사 #53)
+- **fcc.gov 안의 /rss 경로를 RSS로 믿지 말 것** — HTML을 반환하는 가짜 경로다. 진짜 피드는 EDOCS API(api2.fcc.gov)에 있다. Ofcom은 전 경로 Cloudflare 차단이라 직접 수집 시도 금지(구글 뉴스 site: RSS 우회 유지). (배경역사 #54)
+- **국회 회의록은 PDF가 아니라 뷰어(xml.do)가 정본** — PDF_LINK_URL의 PDF는 pdftotext에서 중반부 글리프가 깨진다(폰트 문제). 뷰어의 발언자 단위 구조를 쓰고 PDF는 폴백으로만. (배경역사 #54)
+- **'보고서 초안 제안' 메뉴는 숨김 상태(삭제 아님)** — index.html 주석 2곳을 해제하면 복원된다. 패널·함수·report_* 테이블은 보존 중(봇 보고서 기능이 재사용 예정). (배경역사 #54)
 - **Supabase 파이썬 클라이언트는 `sb_client.make_client` 사용, `create_client` 직접 호출 금지** — supabase-py 2.31 httpx HTTP/2 keepalive 끊김(RemoteProtocolError: Server disconnected) 회피(HTTP/1.1 강제+재시도). 신규 스크립트도 동일 적용. (배경역사 #15)
 - **워크플로 pip를 버전 무고정으로 되돌리지 말 것(`requirements.txt` 유지)** — 무고정 자동 최신화가 어느 날 갑자기 깨뜨림(HTTP/2 사고). 버전 올릴 땐 한 번에 하나씩 바꿔 Run으로 검증. (배경역사 #15)
 - **GitHub PAT 재생성·교체 시 Actions(R/W) 권한 확인 누락 금지 / pg_cron 'succeeded'를 트리거 성공으로 믿지 말 것** — fine-grained PAT 필수권한은 Contents(R/W)+Metadata(자동)+Actions(R/W). Actions가 빠지면 git push는 되지만 workflow_dispatch는 403, 그런데 net.http_post가 비동기라 cron 잡은 succeeded로 찍혀 모든 트리거가 무음으로 멈춤. 교체 검증은 `net._http_response.status_code`(204=성공)로. (배경역사 #18)

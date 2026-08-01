@@ -1426,3 +1426,76 @@ searchPressReleases 스키마 불일치 버그(자문 TypeError 유발 가능) �
 제거(수동 등재는 '추가 지식 입력'으로 일원화). refetch_content는 msit.go.kr URL이면 첨부 추출기를
 먼저 시도하게 연결 — 입법예고·고시도 아침 브리핑에 전문 요약이 실리게 됐다. 개선 로드맵 5건은
 docs/개선로드맵_260802.md.
+
+## 54. 개선 3건 병렬 구축 — 법령 DIFF 자동화·해외 규제기관 모니터링·과방위 회의록 (2026-08-02)
+
+**배경.** 보도자료 자동 수집(#53) 완결 직후, 운영자가 로드맵 5건 중 3건의 동시 구현을 지시.
+③ 법령 DIFF는 UX까지 확정(리스트 → 클릭 → 총괄+SKT 영향 → 조문 전/후 비교표), ⑥맞춤 알림·⑦봇
+보고서는 보류(추후 결정). '보고서 초안 제안' 메뉴는 미사용으로 숨김(주석 처리 — 코드·데이터 보존,
+복원은 index.html 주석 해제 2곳).
+
+**병렬 실행 방식.** 에이전트 4개 동시(③④⑤ 백엔드 각 1 + 대시보드 전담 1) + 메인 오케스트레이션.
+같은 파일 동시 수정 금지 원칙에 따라 파일 소유권을 겹치지 않게 배정(app.js·index.html은 대시보드
+전담만). 설계 단계에서 탐색 에이전트 3개가 기존 코드 재사용 지점을 먼저 확정 — 특히 "신구 조문
+비교 데이터(current/pending/superseded + fetch_pending_articles RPC)가 이미 DB에 있다"는 발견이
+③의 구현을 크게 줄였다.
+
+**③ 법령 DIFF 자동화** — 신규 law_diffs 테이블 + law_diff_gen.py.
+- law_pending의 loaded(현행↔시행예정)·promoted(구현행↔신현행) 쌍에서 조문 단위 diff(3분류:
+  변경/신설/삭제, norm_article_key 파이썬 포팅) → Sonnet 1콜/법령(tools JSON 강제:
+  총괄 summary·SKT impact·urgency·조문별 impact) → upsert(law_name,new_doc,diff_kind) →
+  운영자 텔레그램 + heartbeat last_law_diff_run.
+- 핵심 설계: **전/후 원문을 jsonb에 복사 보존**(KEEP_VERSIONS 정리와 무관하게 상세 생존),
+  **pending→promoted 전환 시 AI 재호출 없이 kind만 갱신**(이중 과금 차단), 변경비율>70%는
+  전부개정 판정(조문 표 생략). PDF 수기 등재본(law_id 없음)은 대상 제외.
+- 첫 백필: 시행예정 13건 생성(전파법 20261022본 변경 27조문, 정보통신망법 20261001본 변경16+신설8
+  등), 실패 0, 제외 1(충전 기술기준 — 조번호 미파싱 등재본, 재적재 검토 대상).
+- 대시보드 DIFF 탭 개편: 상단 자동 감지 리스트+상세(총괄 카드+조문 표, _tokenDiff 하이라이트
+  재사용), 기존 수동 파일 비교는 하단 유지. QA에서 지방세법 분석이 "장·절 편제 정비일 뿐 실체
+  개정 없음"을 정확히 짚어냄.
+- 스케줄: 별도 작업 신설 없이 run_gov_crawler.bat 17시 체인에 부착(스케줄러 사고 표면 최소화).
+
+**④ 해외 규제기관 모니터링** — 신규 foreign_press.py. FCC·Ofcom·BEREC·日총무성·ITU.
+- 실측으로 확정한 소스 경로가 핵심 자산: **FCC는 fcc.gov의 /rss 경로들이 전부 가짜(HTML 반환)이고
+  진짜는 EDOCS API RSS**(api2.fcc.gov .../rss/docTypes/News_Release — Daily Digest 아님).
+  **Ofcom은 전 경로 Cloudflare 차단**(impersonate 5종 실측 전패) → 구글 뉴스 site: RSS 우회.
+  日총무성은 Shift_JIS HTML 파싱(월초엔 전월 페이지 보충), BEREC·ITU는 공식 RSS.
+- Haiku 1콜로 관련성 판정+한글 제목 번역+3문장 요약(기준문 app_config.foreign_relevance_criteria —
+  무선국 제도 '변경'은 포함하되 개별 인허가 처분 공고는 제외). **API 키 없으면 fail-closed**
+  (외국어 원문이라 키워드 폴백이 성립 안 함 — heartbeat에 사유 기록).
+- 첫 수집: 스캔 150 → 신규 51 → 관련 16건 등재(무관 35 — ITU 'AI for Good' 행사류가 정확히 걸러짐).
+  news_feed category='해외', 60일 롤링. 모니터링 탭 '해외' 통합 칩. 아침 브리핑 [해외 동향] 섹션은
+  파이썬 결정적 조립(입법예고 섹션 패턴, briefing 뒤쪽 배치 — 참고 등급이 국내 헤드라인을 밀지 않게).
+- 스케줄: 매일 05:30 radio_TEMP_foreign(임시 — 해외 사이트는 한국 IP 불요라 계정 복구 후
+  GitHub Actions 이관 대상).
+
+**⑤ 과방위 회의록** — 신규 assembly_minutes.py + register_kb_section 일반화.
+- API 실측이 관건이었다: 열린국회 위원회 회의록 목록 API는 **ncwgseseafwbuheph**(DAE_NUM·CONF_DATE·
+  COMM_NAME, 응답 row는 회의가 아니라 '안건' 단위 — CONFER_NUM으로 회의 그룹핑 필요).
+  **PDF_LINK_URL의 PDF는 pdftotext에서 중반부 글리프가 깨진다(폰트 문제, 실측)** — 대신
+  record.assembly.go.kr 뷰어 xml.do가 div.speaker[data-name][data-pos]>div.talk 구조로 발언자
+  단위 클린 텍스트를 줌(뷰어 1순위, PDF 폴백). 정당 정보는 미제공이라 직위(data-pos)로 표기.
+- 발언 선별 2단계(press_keywords 1차 + Haiku 2차, 회의당 40블록 상한) → 채택 발언+전후 1블록
+  (블록당 1,500자, 30개 상한) → 과방위_회의록_{YYYY}.md, doc_category='회의록',
+  섹션 '## YYMMDD 제N차 (안건)'. press_ingest.register_press는 register_kb_section을 호출하는
+  래퍼로 일반화(가짜 클라이언트 회귀 테스트로 기존 포맷 바이트 동일 확인).
+- 대시보드: 국회 법안 탭 하단 #assembly-minutes 목록(법안 렌더와 분리 — 필터 재렌더에 안 쓸리게),
+  상세는 openPressDetail 재사용. KB 문서 목록 블랙리스트에 '회의록' 추가(#50 유형 예방).
+- 운영자 지시로 22대 개원(2024)부터 전량 백필(2024→2025→2026 순차).
+
+**교훈.**
+- "이미 있는 데이터로 풀 수 있는가"를 먼저 묻는 것이 이번에도 이겼다 — ③은 법제처 연혁 API 없이
+  기존 status 3종 조문으로 완성.
+- 해외 사이트는 공식 RSS 경로부터가 실측 대상이다(fcc.gov의 가짜 RSS 경로, Ofcom 차단).
+- 국회 회의록 PDF는 신뢰하지 말 것 — 뷰어가 정본이다.
+
+**(#54 보강) 입법예고 단계 DIFF와 단계 우선 정렬.** 운영자가 "확정된 법은 따라야만 하고, 예고
+단계가 의견제출로 개입 가능한 유일한 구간"이라는 논리로 두 가지를 추가 지시했다: ① 입법예고
+개정안도 DIFF 분석(diff_kind='proposed' — 과기정통부 예고 첨부를 msit_extract로 뽑아 현행 조문과
+대비, 의견마감일 표시, 개정안 기준 경고문, 공포 시 확정본 DIFF로 자동 대체) ② 목록 정렬을
+입법예고→시행예정→시행완료 순으로(그 안에서 전파법·전기통신사업법·방발법 계열 우선 —
+DIFF_TIER). "시행 임박 확정 개정이 더 급할 수 있다"는 반론은 정렬이 아니라 알림(D-day·urgency)의
+몫으로 정리. 첫 실측: 전파법 시행령(변경6·신설7, high)·시행규칙(변경3) 예고 2건이 목록 최상단에
+생성됐고, 시행령 요약이 무선국자기적합확인 절차 신설(제42조의3)을 정확히 짚었다. 구현 중 잡은
+버그: 정렬된 목록과 상세 캐시의 인덱스 불일치(정렬 후 캐시 재대입으로 수리), fetch_articles 반환
+구조 오해(dict를 튜플로 언팩 — 프롬프트에 키 이름이 들어가는 무음 오염이 될 뻔, KeyError로 발견).

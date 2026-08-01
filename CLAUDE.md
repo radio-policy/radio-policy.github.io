@@ -69,6 +69,11 @@ python upload_law_pdf.py <file> "<name>" 고시   # upload law/notice/ITU-R to R
 python press_ingest.py --dry-run          # 6개 기관 수집 시험 (DB 무변경)
 python press_backfill.py --agency 방통위  # 특정 기관 백필/델타 (dedupe라 재실행 안전)
 # 키워드·AI 판정 기준문은 app_config(press_keywords/press_relevance_criteria)가 원본
+
+# 법령 DIFF·해외·회의록 (2026-08-02 신설 — #54)
+python law_diff_gen.py --dry-run --backfill   # 시행예정/승격 쌍의 조문 diff (실행은 17시 체인)
+python foreign_press.py --dry-run             # FCC·Ofcom·BEREC·日총무성·ITU (05:30 스케줄)
+python assembly_minutes.py --dry-run --limit 1  # 과방위 회의록 (17시 체인, 뷰어가 정본·PDF 폴백)
 ```
 
 There is no build step, linter, or test suite — the dashboard is static files served by GitHub Pages, and the crawlers are run directly. Validate JS changes with `node --check` on the changed function.

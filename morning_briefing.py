@@ -584,6 +584,49 @@ def _format_law_anc_section(items: list) -> str:
 
 
 # ═══════════════════════════════════════════════════════
+#  STEP 5.6 — 해외 규제기관 동향 조회 (foreign_press.py 수집분)
+# ═══════════════════════════════════════════════════════
+
+def fetch_overseas_items() -> list:
+    """최근 24h 신규 해외 동향(category='해외') 조회 — news_feed, 최대 3건.
+    피드 발행일(published_at)은 수집 시점보다 오래될 수 있어 created_at 기준."""
+    cutoff = (datetime.now(KST) - timedelta(hours=24)).isoformat()
+    try:
+        resp = sb.table('news_feed') \
+            .select('title,source,url,summary') \
+            .eq('category', '해외') \
+            .gte('created_at', cutoff) \
+            .order('created_at', desc=True) \
+            .limit(3) \
+            .execute()
+        items = resp.data or []
+        print(f'[해외 동향] 최근 24h 신규 {len(items)}건')
+        return items
+    except Exception as e:
+        print(f'[해외 동향 조회 오류] {e}')
+        return []
+
+
+def _format_overseas_section(items: list) -> str:
+    """해외 규제기관 동향 브리핑 섹션"""
+    lines = [f'🌐 [해외 동향] {len(items)}건']
+    for it in items:
+        title = it.get('title', '')
+        source = it.get('source', '')
+        url = it.get('url', '')
+        summary = (it.get('summary') or '').strip()
+        # 첫 문장만 (한글 평서문 '…다.' 우선, 없으면 '. ' 기준)
+        m = re.match(r'.+?다\.', summary)
+        first = m.group(0) if m else summary.split('. ')[0]
+        lines.append(f'• {title} — {source}')
+        if first:
+            lines.append(f'  → {first}')
+        if url:
+            lines.append(f'  🔗 {url}')
+    return '\n'.join(lines)
+
+
+# ═══════════════════════════════════════════════════════
 #  메인
 # ═══════════════════════════════════════════════════════
 
@@ -704,6 +747,12 @@ def main():
     if law_ancs:
         briefing_text = _format_law_anc_section(law_ancs) + '\n\n' + briefing_text
         print(f'[입법예고] {len(law_ancs)}건 브리핑 앞에 삽입')
+
+    # 해외 규제기관 동향 섹션을 브리핑 뒤에 삽입 ('참고' 등급 — 국내 뉴스를 밀지 않도록 말미)
+    overseas_items = fetch_overseas_items()
+    if overseas_items:
+        briefing_text = briefing_text + '\n\n' + _format_overseas_section(overseas_items)
+        print(f'[해외 동향] {len(overseas_items)}건 브리핑 뒤에 삽입')
 
     # 긴급(DB 기준) 기사 SKT 영향 분석 — 본문 확보 시에만 (폴백은 본문 빈약 → 생략)
     if not fallback_mode:

@@ -752,23 +752,22 @@ def _doc_max_index(sb, doc_name: str) -> int:
     return rows[0]['chunk_index'] if rows else -1
 
 
-def register_press(sb, agency: str, dt: datetime, title: str, body: str, url: str) -> bool:
-    """보도자료 1건을 연도별 MD 문서에 섹션으로 추가. 신규 등재 시 True."""
-    ymd6 = dt.strftime('%y%m%d')
-    doc_name = '%s_보도자료_%d.md' % (agency, dt.year)
+def register_kb_section(sb, doc_name: str, doc_category: str, ymd6: str, title: str,
+                        body: str, url: str, doc_header: str = '') -> bool:
+    """본문 1건을 doc_name 문서에 '## YYMMDD 제목' 섹션으로 추가. 신규 등재 시 True.
+    body 정제(절단·이스케이프)는 호출자 책임 — 여기서는 그대로 등재한다.
+    doc_header 는 문서가 처음 생성될 때만 앞에 붙는 프리앰블('# ...' 시작)."""
     if section_exists(sb, doc_name, ymd6, title):
         return False
     max_idx = _doc_max_index(sb, doc_name)
-    section = '## %s %s\n\n%s\n\n(원문: %s)\n\n' % (ymd6, title, _clean_body(body), url)
-    if max_idx < 0:
-        display = AGENCIES.get(agency, (agency,))[0]
-        section = ('# %s 보도자료 %d년\n\n> 출처: %s 보도자료 자동 수집\n\n---\n\n'
-                   % (agency, dt.year, display)) + section
+    section = '## %s %s\n\n%s\n\n(원문: %s)\n\n' % (ymd6, title, body, url)
+    if max_idx < 0 and doc_header:
+        section = doc_header + section
     rows = []
     for i, chunk in enumerate(_chunk_text(section)):
         rows.append({
             'doc_name':     doc_name,
-            'doc_category': '보도자료',
+            'doc_category': doc_category,
             'chunk_index':  max_idx + 1 + i,
             'content':      chunk,
             'is_approved':  True,
@@ -776,6 +775,16 @@ def register_press(sb, agency: str, dt: datetime, title: str, body: str, url: st
         })
     sb.table('document_chunks').insert(rows).execute()
     return True
+
+
+def register_press(sb, agency: str, dt: datetime, title: str, body: str, url: str) -> bool:
+    """보도자료 1건을 연도별 MD 문서에 섹션으로 추가. 신규 등재 시 True."""
+    doc_name = '%s_보도자료_%d.md' % (agency, dt.year)
+    display = AGENCIES.get(agency, (agency,))[0]
+    doc_header = ('# %s 보도자료 %d년\n\n> 출처: %s 보도자료 자동 수집\n\n---\n\n'
+                  % (agency, dt.year, display))
+    return register_kb_section(sb, doc_name, '보도자료', dt.strftime('%y%m%d'),
+                               title, _clean_body(body), url, doc_header)
 
 
 # ═══════════════════════════════════════════════════════

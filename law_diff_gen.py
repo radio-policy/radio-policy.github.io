@@ -1,0 +1,697 @@
+"""
+법령 개정 DIFF 생성기 — 시행예정본(pending) vs 현행 등재본의 조문 단위 비교 + AI 영향 분석.
+
+law_pending이 가리키는 (현행 watch_doc_name, 시행예정 doc_name) 쌍의 document_chunks를
+조문번호(article_no) 정규화 키로 조인해 3분류(modified/added/deleted)하고,
+변경 조문 전/후를 Claude Sonnet에 1콜/법령으로 넘겨 요약·영향·긴급도를 받아
+law_diffs에 upsert한다. 시행일이 도래해 promote_due가 승격한 건은
+기존 'pending' 분석 행을 diff_kind='promoted'로 전환만 한다(AI 재호출 없음).
+
+사용법:
+  python law_diff_gen.py                     # loaded 신규분 + 최근 3일 promoted 처리
+  python law_diff_gen.py --dry-run           # 수집·diff까지만(AI·DB·텔레그램 없음), 3분류 수치 출력
+  python law_diff_gen.py --law "정보통신망"    # 특정 법령만
+  python law_diff_gen.py --backfill          # 기존 law_diffs 행 무시하고 loaded 전건 재생성
+  python law_diff_gen.py --days 7            # promoted 소급 기간(기본 3일)
+
+필요 .env: SUPABASE_URL, SUPABASE_SERVICE_KEY, ANTHROPIC_API_KEY,
+          TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID(알림, 없으면 생략)
+"""
+
+import os
+import re
+import sys
+import json
+import argparse
+from datetime import datetime, timezone, timedelta
+
+# Windows 스케줄러/cp949 콘솔에서 이모지 print 크래시 방지 (배경역사 #19)
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
+import requests
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    pass
+
+from sb_client import make_client   # create_client 직접 사용 금지 — HTTP/1.1 강제 (지침)
+
+SB_URL = os.getenv('SUPABASE_URL')
+SB_KEY = os.getenv('SUPABASE_SERVICE_KEY')
+TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
+TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', '')
+
+MODEL = 'claude-sonnet-5'
+ARTICLE_CHARS = 3000        # 조문당 입력 절단
+TOTAL_CHARS = 30000         # 프롬프트 본문 총 절단
+FULL_REVISION_RATIO = 0.7   # 변경조문/전체조문이 이 비율 초과면 전부개정으로 간주
+DASHBOARD_URL = 'https://youjinwoong.github.io/radio-policy-ai/'
+KST = timezone(timedelta(hours=9))
+
+# docs/schema.sql:451 norm_article_key의 파이썬 포팅 — "제48조의3(침해사고 대응)" → "48조의3"
+ART_KEY_RE = re.compile(r'^제?\s*([0-9]+조(?:의[0-9]+)?)')
+# 새 판에서 "제n조 삭제" 형태로 남는 조문은 deleted 취급 (fetch_pending_articles와 동일 취지)
+DELETED_RE = re.compile(r'^제\s*[0-9]+조(?:의[0-9]+)?(?:\([^)]*\))?\s*삭제')
+
+ANALYSIS_TOOL = {
+    'name': 'report_law_diff',
+    'description': '법령 개정 조문 비교 결과에 대한 요약·영향·긴급도 보고',
+    'input_schema': {
+        'type': 'object',
+        'properties': {
+            'summary': {'type': 'string',
+                        'description': '이번 개정의 핵심 내용 요약(한국어 3~5문장)'},
+            'impact': {'type': 'string',
+                       'description': '통신사(SK텔레콤) 전파·통신 정책 관점의 영향 분석(한국어)'},
+            'urgency': {'type': 'string', 'enum': ['high', 'medium', 'low'],
+                        'description': 'high=즉시 대응 필요, medium=모니터링 필요, low=참고'},
+            'articles': {
+                'type': 'array',
+                'items': {
+                    'type': 'object',
+                    'properties': {
+                        'article_no': {'type': 'string',
+                                       'description': '입력에 표기된 조번호 그대로(예: 48조의3)'},
+                        'impact': {'type': 'string', 'description': '해당 조문 변경의 영향 한두 문장'},
+                    },
+                    'required': ['article_no', 'impact'],
+                },
+            },
+        },
+        'required': ['summary', 'impact', 'urgency', 'articles'],
+    },
+}
+
+
+# (c) 입법예고(proposed) 분석용 — after(개정 후 문안)를 개정안 원문에서 인용시킨다
+PROPOSED_TOOL = {
+    'name': 'report_proposed_diff',
+    'description': '입법예고 개정안과 현행 조문의 대비 분석 결과 보고',
+    'input_schema': {
+        'type': 'object',
+        'properties': {
+            'summary': {'type': 'string', 'description': '개정안 핵심 3~5문장'},
+            'impact': {'type': 'string', 'description': 'SK텔레콤 전파·통신 정책 관점 영향과 의견제출 검토 포인트'},
+            'urgency': {'type': 'string', 'enum': ['high', 'medium', 'low']},
+            'articles': {
+                'type': 'array',
+                'items': {
+                    'type': 'object',
+                    'properties': {
+                        'article_no': {'type': 'string', 'description': '조번호 (예: 24조의2)'},
+                        'change': {'type': 'string', 'enum': ['modified', 'added', 'deleted']},
+                        'after': {'type': 'string', 'description': '개정안 문안 원문 인용(요약 금지, 1500자 내). 삭제면 빈 문자열'},
+                        'impact': {'type': 'string', 'description': '해당 조문 변경의 영향 한두 문장'},
+                    },
+                    'required': ['article_no', 'change', 'after'],
+                },
+            },
+        },
+        'required': ['summary', 'impact', 'urgency', 'articles'],
+    },
+}
+
+_PROPOSED_NAME_RE = re.compile(
+    r'([가-힣0-9·\s]+?(?:법률|시행령|시행규칙|규정|규칙|고시|법))\s*일부\s*개정(?:령|법률|규칙)?\s*안')
+
+
+def _proposed_law_name(title):
+    """예고 제목에서 법령명 추출: '(과기정통부 공고 제2026-780호) 전파법 시행규칙 일부개정령안 입법예고'
+    → '전파법 시행규칙'. 실패 시 None."""
+    t = re.sub(r'[\[(（][^)\]）]{0,60}[\])）]\s*', '', title or '')
+    m = _PROPOSED_NAME_RE.search(t)
+    return re.sub(r'\s+', ' ', m.group(1)).strip() if m else None
+
+
+def _proposed_deadline(text):
+    """첨부 본문에서 의견제출 마감일(YYYYMMDD) 추출 — best effort."""
+    m = re.search(r'의견\s*제출[\s\S]{0,300}?(\d{4})\s*[.년]\s*(\d{1,2})\s*[.월]\s*(\d{1,2})',
+                  text or '')
+    if m:
+        try:
+            return '%04d%02d%02d' % (int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        except ValueError:
+            pass
+    return None
+
+
+def norm_key(article_no):
+    """조번호 정규화 — 제목·괄호를 떼고 'N조' / 'N조의M'만. 부칙·별표는 None."""
+    m = ART_KEY_RE.match(article_no or '')
+    return m.group(1) if m else None
+
+
+def send_telegram(msg: str):
+    """law_crawler.py:246 send_telegram 패턴 복제 (운영자 봇, HTML)."""
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        return
+    url = f'https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage'
+    try:
+        resp = requests.post(url, json={
+            'chat_id': TELEGRAM_CHAT_ID,
+            'text': msg,
+            'parse_mode': 'HTML',
+        }, timeout=10)
+        if resp.status_code != 200:
+            print(f'[텔레그램 오류] {resp.status_code}')
+    except Exception as e:
+        print(f'[텔레그램 오류] {e}')
+
+
+def _parse_ts(s):
+    """timestamptz 문자열 → datetime. 파싱 실패 시 None."""
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(str(s).replace('Z', '+00:00'))
+    except Exception:
+        return None
+
+
+# ── 조문 취득·DIFF ────────────────────────────────────────
+
+def fetch_articles(sb, doc_name):
+    """doc의 청크를 chunk_index 순으로 페이징 페치 → {정규화키: {'article_no', 'text'}}.
+
+    PostgREST는 요청당 1,000행에서 잘리므로 반드시 .order().range() 페이징(지침).
+    같은 조문이 여러 청크로 쪼개져 있으면 chunk_index 순으로 이어붙인다.
+    조번호가 정규화되지 않는 행(부칙·별표·장 제목)은 조문 diff 대상이 아니므로 제외.
+    """
+    rows, start, page = [], 0, 1000
+    while True:
+        r = (sb.table('document_chunks')
+             .select('chunk_index, content, article_no')
+             .eq('doc_name', doc_name)
+             .order('chunk_index').range(start, start + page - 1).execute())
+        batch = r.data or []
+        rows.extend(batch)
+        if len(batch) < page:
+            break
+        start += page
+    arts = {}
+    for row in rows:
+        key = norm_key(row.get('article_no'))
+        if not key:
+            continue
+        d = arts.setdefault(key, {'article_no': row['article_no'], 'parts': []})
+        if row.get('content'):
+            d['parts'].append(row['content'])
+    return {k: {'article_no': v['article_no'], 'text': '\n'.join(v['parts'])}
+            for k, v in arts.items()}
+
+
+def diff_articles(base, new):
+    """조번호 정규화 키 조인 → 3분류. 반환: [{key, article_no, change, before, after}]"""
+    changes = []
+    base_keys, new_keys = set(base), set(new)
+    for key in sorted(base_keys | new_keys, key=_key_sort):
+        b = base.get(key)
+        n = new.get(key)
+        if b and not n:
+            changes.append({'key': key, 'article_no': b['article_no'],
+                            'change': 'deleted', 'before': b['text'], 'after': ''})
+        elif n and not b:
+            # 새 판 본문이 "제n조 삭제"면 신설이 아니라 삭제 조문의 표식
+            if DELETED_RE.match(n['text'].strip()):
+                changes.append({'key': key, 'article_no': n['article_no'],
+                                'change': 'deleted', 'before': '', 'after': n['text']})
+            else:
+                changes.append({'key': key, 'article_no': n['article_no'],
+                                'change': 'added', 'before': '', 'after': n['text']})
+        else:
+            if DELETED_RE.match(n['text'].strip()) and not DELETED_RE.match(b['text'].strip()):
+                changes.append({'key': key, 'article_no': b['article_no'],
+                                'change': 'deleted', 'before': b['text'], 'after': n['text']})
+            elif re.sub(r'\s+', '', b['text']) != re.sub(r'\s+', '', n['text']):
+                changes.append({'key': key, 'article_no': n['article_no'],
+                                'change': 'modified', 'before': b['text'], 'after': n['text']})
+    return changes
+
+
+def _key_sort(key):
+    """'48조의3' → (48, 3) 숫자 정렬."""
+    m = re.match(r'([0-9]+)조(?:의([0-9]+))?', key)
+    return (int(m.group(1)), int(m.group(2) or 0)) if m else (10**9, 0)
+
+
+def count_stats(changes):
+    return {
+        'modified': sum(1 for c in changes if c['change'] == 'modified'),
+        'added': sum(1 for c in changes if c['change'] == 'added'),
+        'deleted': sum(1 for c in changes if c['change'] == 'deleted'),
+    }
+
+
+# ── Sonnet 분석 ───────────────────────────────────────────
+
+def build_prompt(law_name, enf_date, changes):
+    """변경 조문 전/후 텍스트 — 조문당 3,000자, 총 30,000자 절단.
+    added는 후만, deleted는 전만 싣는다(스펙)."""
+    label = {'modified': '변경', 'added': '신설', 'deleted': '삭제'}
+    head = (
+        f'당신은 대한민국 전파·통신 법령 분석 전문가다.\n'
+        f'「{law_name}」 개정(시행일 {enf_date})의 조문 단위 비교 결과가 아래에 있다.\n'
+        f'이를 바탕으로 report_law_diff 도구로 결과를 보고하라.\n'
+        f'- summary: 개정 핵심 3~5문장\n'
+        f'- impact: 통신사(SK텔레콤) 전파·통신 정책 관점 영향\n'
+        f'- urgency: high(즉시 대응)/medium(모니터링)/low(참고)\n'
+        f'- articles: 조문별 영향 한두 문장. article_no는 입력의 조번호(예: 48조의3) 그대로.\n\n'
+    )
+    parts, total = [], 0
+    for c in changes:
+        seg = f'### 제{c["key"]} [{label[c["change"]]}] — {c["article_no"]}\n'
+        if c['change'] == 'added':
+            seg += f'[개정 후]\n{c["after"][:ARTICLE_CHARS]}\n'
+        elif c['change'] == 'deleted':
+            seg += f'[개정 전]\n{(c["before"] or c["after"])[:ARTICLE_CHARS]}\n'
+        else:
+            seg += (f'[개정 전]\n{c["before"][:ARTICLE_CHARS]}\n'
+                    f'[개정 후]\n{c["after"][:ARTICLE_CHARS]}\n')
+        if total + len(seg) > TOTAL_CHARS:
+            parts.append('…(이하 분량 초과로 생략)')
+            break
+        parts.append(seg)
+        total += len(seg)
+    return head + '\n'.join(parts)
+
+
+def analyze_with_sonnet(client, law_name, enf_date, changes):
+    """Sonnet 1콜/법령 — tools로 JSON 스키마 강제. 파싱 실패 시 1회 재시도 후 None.
+
+    temperature 등 샘플링 파라미터는 넣지 않는다(Sonnet 5에서 400).
+    thinking을 명시적으로 끈다 — 적응형 추론 기본 ON이라 비스트리밍 응답의
+    첫 블록이 thinking일 수 있어, 끄고 tool_use 블록을 type으로 찾는다.
+    """
+    prompt = build_prompt(law_name, enf_date, changes)
+    for attempt in (1, 2):
+        try:
+            resp = client.messages.create(
+                model=MODEL,
+                max_tokens=8000,
+                thinking={'type': 'disabled'},
+                tools=[ANALYSIS_TOOL],
+                tool_choice={'type': 'tool', 'name': 'report_law_diff'},
+                messages=[{'role': 'user', 'content': prompt}],
+            )
+            block = next((b for b in resp.content if b.type == 'tool_use'), None)
+            data = dict(block.input) if block else None
+            if data and all(k in data for k in ('summary', 'impact', 'urgency')):
+                if data['urgency'] not in ('high', 'medium', 'low'):
+                    data['urgency'] = 'medium'
+                if not isinstance(data.get('articles'), list):
+                    data['articles'] = []
+                return data
+            print(f'  ! AI 응답 파싱 실패(시도 {attempt}) — tool_use 블록/필수 키 없음')
+        except Exception as e:
+            print(f'  ! AI 호출 실패(시도 {attempt}): {str(e)[:140]}')
+    return None
+
+
+def merge_article_impacts(changes, ai_articles):
+    """AI의 조문별 impact를 정규화 키로 우리 diff 배열에 병합."""
+    impacts = {}
+    for a in ai_articles or []:
+        key = norm_key(str(a.get('article_no', '')))
+        if key and a.get('impact'):
+            impacts[key] = a['impact']
+    return [{
+        'article_no': c['article_no'],
+        'change': c['change'],
+        'before': c['before'],
+        'after': c['after'],
+        'impact': impacts.get(c['key'], ''),
+    } for c in changes]
+
+
+# ── 후보 수집·저장 ─────────────────────────────────────────
+
+def existing_diff(sb, law_name, new_doc, kind):
+    rows = (sb.table('law_diffs').select('id, analyzed_at, diff_kind')
+            .eq('law_name', law_name).eq('new_doc', new_doc).eq('diff_kind', kind)
+            .limit(1).execute().data) or []
+    return rows[0] if rows else None
+
+
+def process_loaded(sb, ai_client, args, results):
+    """(a) sync_state='loaded' — (base=watch_doc_name, new=doc_name, kind='pending')."""
+    q = (sb.table('law_pending').select('*')
+         .eq('sync_state', 'loaded').not_.is_('doc_name', 'null'))
+    if args.law:
+        q = q.ilike('law_name', f'%{args.law}%')
+    rows = (q.order('law_name').order('enf_date').execute().data) or []
+    print(f'=== 시행예정(loaded) 후보 {len(rows)}건 ===')
+    for r in rows:
+        base_doc, new_doc = r.get('watch_doc_name'), r['doc_name']
+        name = r['law_name']
+        # 제외: PDF 등재 기준본(800자 청킹이라 article_no 부정확) 또는 law_id 없음
+        if not base_doc or base_doc.endswith('.pdf') or not r.get('law_id'):
+            why = 'base=PDF본' if (base_doc or '').endswith('.pdf') else 'law_id/기준본 없음'
+            print(f'  - 제외: {name} ({why})')
+            results['excluded'].append(f'{name}({why})')
+            continue
+        if not args.backfill:
+            ex = existing_diff(sb, name, new_doc, 'pending')
+            loaded_at = _parse_ts(r.get('loaded_at'))
+            analyzed_at = _parse_ts(ex.get('analyzed_at')) if ex else None
+            if ex and analyzed_at and (not loaded_at or analyzed_at >= loaded_at):
+                print(f'  - 기분석: {name} (analyzed {analyzed_at:%m-%d %H:%M})')
+                results['skipped'] += 1
+                continue
+        generate_one(sb, ai_client, args, r, base_doc, new_doc, 'pending', results)
+
+
+def process_promoted(sb, ai_client, args, results):
+    """(b) sync_state='promoted' & promoted_at >= now-N일 — kind='promoted'.
+
+    같은 (law_name,new_doc)의 'pending' 분석이 이미 있으면 Sonnet 재호출 없이
+    그 행을 diff_kind='promoted'로 UPDATE만 한다(내용은 동일 판이므로 유효).
+    """
+    since = (datetime.now(timezone.utc) - timedelta(days=args.days)).isoformat()
+    q = (sb.table('law_pending').select('*')
+         .eq('sync_state', 'promoted').gte('promoted_at', since)
+         .not_.is_('doc_name', 'null'))
+    if args.law:
+        q = q.ilike('law_name', f'%{args.law}%')
+    rows = (q.order('law_name').order('enf_date').execute().data) or []
+    print(f'=== 승격(promoted, 최근 {args.days}일) 후보 {len(rows)}건 ===')
+    now = datetime.now(timezone.utc).isoformat()
+    for r in rows:
+        base_doc, new_doc = r.get('watch_doc_name'), r['doc_name']
+        name = r['law_name']
+        if existing_diff(sb, name, new_doc, 'promoted'):
+            print(f'  - 기전환: {name}')
+            results['skipped'] += 1
+            continue
+        if existing_diff(sb, name, new_doc, 'pending'):
+            print(f'  ▶ {name}: pending 분석 재사용 → diff_kind=promoted 전환')
+            if not args.dry_run:
+                (sb.table('law_diffs')
+                 .update({'diff_kind': 'promoted', 'updated_at': now})
+                 .eq('law_name', name).eq('new_doc', new_doc)
+                 .eq('diff_kind', 'pending').execute())
+            results['converted'] += 1
+            continue
+        if not base_doc or base_doc.endswith('.pdf') or not r.get('law_id'):
+            why = 'base=PDF본' if (base_doc or '').endswith('.pdf') else 'law_id/기준본 없음'
+            print(f'  - 제외: {name} ({why})')
+            results['excluded'].append(f'{name}({why})')
+            continue
+        generate_one(sb, ai_client, args, r, base_doc, new_doc, 'promoted', results)
+
+
+def analyze_proposed(client, law_name, deadline, body, cur_arts):
+    """입법예고 개정안 1콜 분석. cur_arts={정규화키: (article_no, 본문)}."""
+    cur_parts, total = [], 0
+    for key, v in cur_arts.items():
+        seg = f'### 현행 제{key} — {v["article_no"]}\n{v["text"][:3000]}\n'
+        if total + len(seg) > 15000:
+            break
+        cur_parts.append(seg)
+        total += len(seg)
+    prompt = (
+        f'당신은 대한민국 전파·통신 법령 분석 전문가다.\n'
+        f'「{law_name}」 일부개정안이 입법예고되었다(의견제출 마감 {deadline or "미상"}).\n'
+        f'아래 [현행 조문]과 [개정안 전문]을 대조해 report_proposed_diff 도구로 보고하라.\n'
+        f'- articles의 after는 개정안 문안에서 해당 조문의 개정 후 내용을 원문 그대로 인용(요약 금지).\n'
+        f'- 개정안에 없는 조문을 만들어내지 말 것. 현행에 없는 신설 조문은 change=added.\n'
+        f'- impact에는 의견제출로 다퉈볼 지점이 있으면 명시.\n\n'
+        f'[현행 조문]\n' + '\n'.join(cur_parts) +
+        f'\n\n[개정안 전문(첨부 추출)]\n{body[:20000]}'
+    )
+    for attempt in (1, 2):
+        try:
+            resp = client.messages.create(
+                model=MODEL,
+                max_tokens=8000,
+                thinking={'type': 'disabled'},
+                tools=[PROPOSED_TOOL],
+                tool_choice={'type': 'tool', 'name': 'report_proposed_diff'},
+                messages=[{'role': 'user', 'content': prompt}],
+            )
+            block = next((b for b in resp.content if b.type == 'tool_use'), None)
+            data = dict(block.input) if block else None
+            if data and all(k in data for k in ('summary', 'impact', 'urgency')):
+                if data['urgency'] not in ('high', 'medium', 'low'):
+                    data['urgency'] = 'medium'
+                if not isinstance(data.get('articles'), list):
+                    data['articles'] = []
+                return data
+            print(f'  ! AI 응답 파싱 실패(시도 {attempt})')
+        except Exception as e:
+            print(f'  ! AI 호출 실패(시도 {attempt}): {str(e)[:140]}')
+    return None
+
+
+def process_proposed(sb, ai_client, args, results):
+    """(c) 입법예고(proposed) — 공포 전 의견제출 가능 단계 (운영자 지시 2026-08-02).
+
+    과기정통부 입법행정예고 게시물의 개정안 첨부(HWPX/PDF — press_ingest.msit_extract 재사용)를
+    추출해 현행 조문(law_watch 등재본)과 대비한다. 확정 전이라 대응 가치가 가장 높아
+    대시보드에서 최상위로 정렬된다. 공포되어 pending DIFF가 생기면 같은 법령의 proposed 행은
+    generate_one이 삭제(대체)한다.
+    """
+    import press_ingest
+    since = (datetime.now(timezone.utc) - timedelta(days=args.proposed_days)).isoformat()
+    q = (sb.table('news_feed').select('title,url,published_at')
+         .eq('source', '과기정통부 입법행정예고')
+         .gte('published_at', since).order('published_at', desc=True).limit(40))
+    rows = (q.execute().data) or []
+    print(f'=== 입법예고(proposed, 최근 {args.proposed_days}일) 후보 {len(rows)}건 ===')
+    for r in rows:
+        name = _proposed_law_name(r.get('title'))
+        if not name:
+            continue
+        if args.law and args.law not in name:
+            continue
+        url = r['url']
+        if not args.backfill and existing_diff(sb, name, url, 'proposed'):
+            results['skipped'] += 1
+            continue
+        print(f'\n▶ {name} [proposed]')
+        # 현행 등재본 조회 (law_watch)
+        w = (sb.table('law_watch').select('doc_name').eq('law_name', name)
+             .limit(1).execute().data) or []
+        if not w or not w[0].get('doc_name') or w[0]['doc_name'].endswith('.pdf'):
+            print(f'  - 제외: 현행 등재본 없음/PDF본 ({name})')
+            results['excluded'].append(f'{name}(현행 미등재)')
+            continue
+        base_doc = w[0]['doc_name']
+        try:
+            raw = press_ingest.msit_extract({'url': url})
+            body = press_ingest._clean_body(raw) if raw else ''
+        except Exception as e:
+            print(f'  ! 첨부 추출 오류: {str(e)[:80]}')
+            body = ''
+        if len(body) < 500:
+            print(f'  - 제외: 개정안 첨부 추출 실패({len(body)}자)')
+            results['excluded'].append(f'{name}(첨부 추출 실패)')
+            continue
+        deadline = _proposed_deadline(body)
+        keys = list(dict.fromkeys(re.findall(r'제\s*(\d+조(?:의\d+)?)', body)))[:40]
+        base = fetch_articles(sb, base_doc)
+        cur_arts = {k: base[k] for k in keys if k in base}
+        print(f'  첨부 {len(body):,}자 · 언급 조문 {len(keys)}개(현행 매칭 {len(cur_arts)}) '
+              f'· 의견마감 {deadline or "미상"}')
+        if args.dry_run:
+            results['dry'].append((name, 'proposed',
+                                   {'modified': len(cur_arts), 'added': 0, 'deleted': 0},
+                                   f'첨부 {len(body)}자'))
+            continue
+        ai = analyze_proposed(ai_client, name, deadline, body, cur_arts)
+        if ai is None:
+            results['failed'] += 1
+            continue
+        articles, stats = [], {'modified': 0, 'added': 0, 'deleted': 0}
+        for a in ai.get('articles', []):
+            key = norm_key(str(a.get('article_no', '')))
+            change = a.get('change') if a.get('change') in ('modified', 'added', 'deleted') else 'modified'
+            before = cur_arts[key]['text'] if key in cur_arts else ''
+            if not before and change == 'modified':
+                change = 'added'
+            stats[change] += 1
+            articles.append({
+                'article_no': a.get('article_no', ''),
+                'change': change,
+                'before': before,
+                'after': (a.get('after') or '')[:3000],
+                'impact': a.get('impact', ''),
+            })
+        now = datetime.now(timezone.utc).isoformat()
+        sb.table('law_diffs').upsert({
+            'law_name': name,
+            'enf_date': deadline,          # proposed는 의견마감일을 담는다(화면 라벨 구분)
+            'diff_kind': 'proposed',
+            'base_doc': base_doc,
+            'new_doc': url,
+            'summary': ai['summary'],
+            'impact': ai['impact'],
+            'urgency': ai['urgency'],
+            'articles': articles,
+            'stats': stats,
+            'model': MODEL,
+            'analyzed_at': now,
+            'updated_at': now,
+        }, on_conflict='law_name,new_doc,diff_kind').execute()
+        print(f'  ✓ 저장 (urgency={ai["urgency"]}, 조문 {len(articles)}개)')
+        results['created'].append((name, stats, ai['urgency']))
+
+
+def generate_one(sb, ai_client, args, row, base_doc, new_doc, kind, results):
+    """1개 쌍 처리: 청크 페치 → 조문 diff → (전부개정 판정) → Sonnet → upsert."""
+    name = row['law_name']
+    print(f'\n▶ {name} [{kind}]')
+    print(f'  기준: {base_doc[:70]}')
+    print(f'  신본: {new_doc[:70]}')
+    base = fetch_articles(sb, base_doc)
+    new = fetch_articles(sb, new_doc)
+    if not base or not new:
+        print(f'  ! 청크 없음(기준 {len(base)}조 / 신본 {len(new)}조) — 건너뜀')
+        results['excluded'].append(f'{name}(청크 없음)')
+        return
+    changes = diff_articles(base, new)
+    stats = count_stats(changes)
+    total = len(set(base) | set(new))
+    print(f'  조문 {len(base)}→{len(new)}개 · 변경 {stats["modified"]}'
+          f'·신설 {stats["added"]}·삭제 {stats["deleted"]} (전체 {total}조)')
+
+    if not changes:
+        print('  → 변경 조문 0건 — 행 미생성')
+        results['nochange'] += 1
+        return
+
+    full_revision = total and len(changes) / total > FULL_REVISION_RATIO
+    if full_revision:
+        print(f'  → 변경비율 {len(changes)/total:.0%} — 전부개정으로 판정(AI 생략)')
+
+    if args.dry_run:
+        print('  [dry-run] AI·DB 변경 없음')
+        results['dry'].append((name, kind, stats, '전부개정' if full_revision else ''))
+        return
+
+    now = datetime.now(timezone.utc).isoformat()
+    payload = {
+        'law_name': name,
+        'law_id': row.get('law_id'),
+        'mst': row.get('mst'),
+        'law_no': row.get('law_no'),
+        'enf_date': row.get('enf_date'),
+        'diff_kind': kind,
+        'base_doc': base_doc,
+        'new_doc': new_doc,
+        'stats': stats,
+        'model': MODEL,
+        'analyzed_at': now,
+        'updated_at': now,
+    }
+    if full_revision:
+        payload.update({
+            'summary': f'전부개정 — 조문 {total}개 중 {len(changes)}개가 바뀌어 조문 단위 '
+                       f'비교의 실익이 낮습니다. 원문 수동 비교를 권장합니다.',
+            'impact': '전부개정은 편제·조번호가 재구성되므로 국가법령정보센터 원문 대조가 필요합니다.',
+            'urgency': 'high',
+            'articles': [],
+        })
+    else:
+        ai = analyze_with_sonnet(ai_client, name, row.get('enf_date'), changes)
+        if ai is None:
+            print(f'  ! AI 분석 실패 — {name} 건너뜀')
+            results['failed'] += 1
+            return
+        payload.update({
+            'summary': ai['summary'],
+            'impact': ai['impact'],
+            'urgency': ai['urgency'],
+            'articles': merge_article_impacts(changes, ai.get('articles')),
+        })
+    sb.table('law_diffs').upsert(payload, on_conflict='law_name,new_doc,diff_kind').execute()
+    print(f'  ✓ 저장 (urgency={payload["urgency"]})')
+    results['created'].append((name, stats, payload['urgency']))
+    # 공포·적재되어 확정본(pending) DIFF가 생기면 같은 법령의 입법예고(proposed) 행은 대체 삭제
+    if kind == 'pending':
+        try:
+            sb.table('law_diffs').delete().eq('diff_kind', 'proposed') \
+                .eq('law_name', name).execute()
+        except Exception as e:
+            print(f'  (proposed 대체 삭제 실패 — 무시) {e}')
+
+
+# ── 메인 ──────────────────────────────────────────────────
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--dry-run', action='store_true',
+                    help='수집·diff까지만 수행(AI·DB·텔레그램 없음), 3분류 수치 출력')
+    ap.add_argument('--law', help='특정 법령명(부분 일치)만 처리')
+    ap.add_argument('--backfill', action='store_true',
+                    help='기존 law_diffs 행 무시하고 loaded 전건 재생성')
+    ap.add_argument('--days', type=int, default=3, help='promoted 소급 기간(일, 기본 3)')
+    ap.add_argument('--proposed-days', type=int, default=60,
+                    help='입법예고(proposed) 소급 기간(일, 기본 60)')
+    args = ap.parse_args()
+
+    if not (SB_URL and SB_KEY):
+        print('오류: .env에 SUPABASE_URL, SUPABASE_SERVICE_KEY 필요')
+        sys.exit(1)
+    sb = make_client(SB_URL, SB_KEY)
+
+    ai_client = None
+    if not args.dry_run:
+        if not os.getenv('ANTHROPIC_API_KEY'):
+            print('오류: .env에 ANTHROPIC_API_KEY 필요 (--dry-run은 불필요)')
+            sys.exit(1)
+        import anthropic
+        ai_client = anthropic.Anthropic()
+
+    results = {'created': [], 'converted': 0, 'skipped': 0, 'nochange': 0,
+               'failed': 0, 'excluded': [], 'dry': []}
+
+    process_proposed(sb, ai_client, args, results)   # 의견제출 가능 단계 — 최우선
+    process_loaded(sb, ai_client, args, results)
+    process_promoted(sb, ai_client, args, results)
+
+    print(f'\n=== 완료: 생성 {len(results["created"])} · 전환 {results["converted"]} · '
+          f'기존 {results["skipped"]} · 변경없음 {results["nochange"]} · '
+          f'실패 {results["failed"]} · 제외 {len(results["excluded"])} ===')
+    if results['excluded']:
+        print('제외 목록: ' + ', '.join(results['excluded']))
+    if args.dry_run and results['dry']:
+        print('\n[dry-run 3분류 수치]')
+        for name, kind, st, note in results['dry']:
+            extra = f' ({note})' if note else ''
+            print(f'  - {name} [{kind}]: 변경 {st["modified"]} · 신설 {st["added"]} · '
+                  f'삭제 {st["deleted"]}{extra}')
+
+    # 텔레그램 — 신규 생성 1건 이상일 때 1건 발송 (dry-run 제외)
+    if not args.dry_run and results['created']:
+        lines = [f'📋 <b>법령 DIFF {len(results["created"])}건</b>']
+        for name, st, urgency in results['created']:
+            lines.append(f'• {name} (변경{st["modified"]}·신설{st["added"]}'
+                         f'·삭제{st["deleted"]}, {urgency})')
+        if results['excluded']:
+            lines.append(f'※ 제외 {len(results["excluded"])}건')
+        lines.append(DASHBOARD_URL)
+        send_telegram('\n'.join(lines))
+
+    # heartbeat — 운영 상태 탭 추적용. 신규 0건이어도 기록, 실패해도 무시. (dry-run 제외)
+    if not args.dry_run:
+        try:
+            sb.table('system_health').upsert(
+                {'key': 'last_law_diff_run',
+                 'updated_at': datetime.now(timezone.utc).isoformat(),
+                 'note': 'created=%d converted=%d skipped=%d nochange=%d failed=%d excluded=%d'
+                         % (len(results['created']), results['converted'], results['skipped'],
+                            results['nochange'], results['failed'], len(results['excluded']))},
+                on_conflict='key').execute()
+            print('[heartbeat] system_health.last_law_diff_run 갱신')
+        except Exception as e:
+            print(f'[heartbeat 오류] {e}')
+
+
+if __name__ == '__main__':
+    main()

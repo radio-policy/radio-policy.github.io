@@ -29,7 +29,9 @@
       <div class="nav-label">자문</div>
       <div class="nav-item" onclick="go('chat',this)"><i class="ti ti-message-circle"></i>AI 자문</div>
       <div class="nav-item" onclick="go('lawmap',this)"><i class="ti ti-topology-star-3"></i>법령 관계도</div>
+      <!-- 보고서 초안 제안 — 미사용으로 숨김 2026-08-02, 복원 시 주석 해제 (#54)
       <div class="nav-item" onclick="go('reportdraft',this)"><i class="ti ti-file-text"></i>보고서 초안 제안</div>
+      -->
     </div>
     <div class="nav-group">
       <div class="nav-label">법안 동향 모니터링</div>
@@ -246,6 +248,23 @@
 
       <!-- 법령 DIFF 분석 -->
       <div class="panel" id="panel-diff">
+        <!-- 자동 감지 개정 목록 (law_diffs) — 2026-08-02 -->
+        <div style="margin-bottom:12px">
+          <div style="font-size:13px;font-weight:600;color:var(--text-primary);margin-bottom:4px">
+            <i class="ti ti-radar" style="color:var(--accent);margin-right:4px"></i>자동 감지된 법령 개정
+          </div>
+          <div style="font-size:11px;color:var(--text-secondary);line-height:1.6">
+            법령 동기화가 감지·분석한 개정 이력입니다. 항목을 클릭하면 총괄 요약과 조문별 변경 상세를 볼 수 있습니다.
+          </div>
+        </div>
+        <div id="diff-auto-list">
+          <div style="color:var(--text-secondary);padding:20px;text-align:center;font-size:12px">로딩 중...</div>
+        </div>
+        <div id="diff-auto-detail" style="display:none"></div>
+
+        <hr style="border:none;border-top:1px solid var(--border);margin:20px 0">
+        <div style="font-size:12px;font-weight:700;color:var(--text-secondary);margin-bottom:10px">수동 파일 비교</div>
+
         <div style="margin-bottom:16px">
           <div style="font-size:13px;font-weight:600;color:var(--text-primary);margin-bottom:4px">
             <i class="ti ti-arrows-diff" style="color:var(--accent);margin-right:4px"></i>법령 DIFF 분석
@@ -808,6 +827,14 @@
         <div id="assembly-list">
           <div style="color:var(--text-secondary);padding:20px;text-align:center;font-size:12px">불러오는 중...</div>
         </div>
+
+        <!-- 과방위 회의록 (document_chunks doc_category='회의록') — 2026-08-02 -->
+        <div id="assembly-minutes" style="margin-top:20px">
+          <div style="font-size:12px;font-weight:700;color:var(--text-secondary);margin-bottom:8px">과방위 회의록</div>
+          <div id="assembly-minutes-list">
+            <div style="color:var(--text-secondary);padding:12px;text-align:center;font-size:12px">불러오는 중...</div>
+          </div>
+        </div>
       </div>
 
     </div><!-- content -->
@@ -871,9 +898,11 @@
       <button class="mobile-submenu-item" onclick="go('lawmap',null);setBottomNav('bn-chat');closeMobileSubMenu('chat-sub')">
         <i class="ti ti-topology-star-3"></i>법령 관계도
       </button>
+      <!-- 보고서 초안 제안 — 미사용으로 숨김 2026-08-02, 복원 시 주석 해제 (#54)
       <button class="mobile-submenu-item" onclick="go('reportdraft',null);setBottomNav('bn-chat');closeMobileSubMenu('chat-sub')">
         <i class="ti ti-file-text"></i>보고서 초안 제안
       </button>
+      -->
     </div>
   </div>
 
@@ -1027,6 +1056,6 @@
 <script src="https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js"></script>
 <script>if(typeof pdfjsLib!=='undefined'){pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';}</script>
 <script src="system_prompt.js?v=20260612c"></script>
-<script src="app.js?v=20260802b"></script>
+<script src="app.js?v=20260803a"></script>
 </body>
 </html>

@@ -498,6 +498,31 @@ language sql stable as $$
   order by p.law_name, p.enf_date;
 $$;
 
+-- 3b-4) 법령 개정 DIFF — law_diff_gen.py가 조문 단위 비교 + AI 분석 결과를 저장 (2026-08-02)
+--       diff_kind='pending'은 시행예정본 vs 현행 등재본 비교, 'promoted'는 시행일 도래로
+--       승격된 판 — 같은 (law_name,new_doc)의 pending 분석 행을 AI 재호출 없이 전환한다.
+create table if not exists public.law_diffs (
+  id           bigserial primary key,
+  law_name     text not null,
+  law_id       text,
+  mst          text,
+  law_no       text,
+  enf_date     text,                        -- YYYYMMDD
+  diff_kind    text not null default 'pending',  -- pending | promoted
+  base_doc     text,                        -- 비교 기준(현행 등재본) doc_name
+  new_doc      text not null,               -- 비교 대상(시행예정/승격본) doc_name
+  summary      text,                        -- AI 요약 (전부개정 시 "수동 비교 권장" 프리셋)
+  impact       text,                        -- 통신사 정책 관점 영향 분석
+  urgency      text,                        -- high | medium | low
+  articles     jsonb,                       -- [{article_no, change('modified'|'added'|'deleted'), before, after, impact}]
+  stats        jsonb,                       -- {modified, added, deleted}
+  model        text,                        -- 분석에 쓴 모델명
+  analyzed_at  timestamptz,
+  created_at   timestamptz default now(),
+  updated_at   timestamptz default now(),
+  unique (law_name, new_doc, diff_kind)
+);
+
 
 -- ===========================================================================
 -- 4. 초기 단일행 시드 (캐시 테이블) — 없으면 코드가 기대하는 id=1 행 생성
