@@ -240,6 +240,11 @@ RADIO_KEYWORDS = [
     '정보통신망', '사이버', '이동통신', '기지국', '무선국',
 ]
 
+# 보도자료 수집 키워드는 app_config.press_keywords 가 원본(대시보드 '수집 키워드 관리'에서 편집).
+# main() 시작 시 DB에서 읽어 이 리스트를 제자리 갱신한다. 조회 실패 시 이 폴백 그대로(fail-open).
+# 적용 범위는 보도자료(목록 필터+본문 수집)뿐 — 입법예고·고시는 RADIO_KEYWORDS 유지.
+PRESS_KEYWORDS = RADIO_KEYWORDS + ['AI']
+
 def crawl_msit() -> list:
     items = []
     targets = [
@@ -263,10 +268,11 @@ def crawl_msit() -> list:
             bbs_seq = m_bbs.group(1) if m_bbs else ''
             q = parse_qs(urlparse(url).query)
             m_id, m_pid = q.get('mId', [''])[0], q.get('mPid', [''])[0]
+            kw_set = PRESS_KEYWORDS if label == '보도자료' else RADIO_KEYWORDS
             found = 0
             for i, (seq, raw_title) in enumerate(zip(ids, titles)):
                 title = unquote(raw_title).strip()
-                if not title or not any(k in title for k in RADIO_KEYWORDS):
+                if not title or not any(k in title for k in kw_set):
                     continue
                 items.append({
                     'title':        title,
@@ -307,46 +313,56 @@ def crawl_msit() -> list:
     return items
 
 
-# 중앙전파관리소(kmcc.go.kr). 오랫동안 함수명 crawl_kcc + 출처 '방통위'로 잘못 적혀 있었다.
-# 방통위는 kcc.go.kr 로 별도 존재하며 아래 crawl_kcc()가 담당한다. (2026-08-01 정정)
+# 중앙전파관리소는 www.crms.go.kr 이다 (2026-08-02 재정정 — 배경역사 #53).
+# 2026-08-01의 "kmcc.go.kr=중앙전파관리소" 정정은 오류였다: kmcc.go.kr 은
+# 방송미디어통신위원회(방통위 개편 후 새 도메인)로 kcc.go.kr 과 동일 게시판 미러다
+# (목록 상위 5건 완전 일치 실측). kmcc.go.kr 수집은 crawl_kcc()와 중복이라 제거하고
+# 이 함수는 진짜 전파관리소(crms.go.kr)를 긁는다. 행 링크는 javascript:view('view.do','seq',...).
 def crawl_kmcc() -> list:
     items = []
     targets = [
-        ('https://www.kmcc.go.kr/user.do?boardId=1113&page=A05030000&dc=K05030000', '보도자료'),
-        ('https://www.kmcc.go.kr/user.do?boardId=1112&page=A05020000&dc=K05020000', '공지사항'),
+        ('https://www.crms.go.kr/lay1/bbs/S1T30C34/A/77/list.do', '보도자료', 'S1T30C34/A/77'),
+        ('https://www.crms.go.kr/lay1/bbs/S1T30C31/A/10/list.do', '공지사항', 'S1T30C31/A/10'),
     ]
-    for url, label in targets:
+    for url, label, board in targets:
         try:
             res = fetch_with_retry(url, timeout=20)
             res.encoding = getattr(res, 'apparent_encoding', None) or 'utf-8'
             soup = BeautifulSoup(res.text, 'html.parser')
-            rows = soup.select('table tbody tr, ul.bbs_list li')[:15]
+            rows = soup.select('table tbody tr')[:15]
+            found = 0
             for row in rows:
-                title_tag = row.find('a')
-                if not title_tag:
+                a = row.find('a')
+                if not a:
                     continue
-                title = title_tag.get_text(strip=True)
+                title = a.get_text(' ', strip=True)
                 if not title or not any(k in title for k in RADIO_KEYWORDS):
                     continue
-                href = title_tag.get('href', '')
-                if href.startswith('/'):
-                    href = 'https://www.kmcc.go.kr' + href
-                date_tag = row.find(class_=re.compile(r'date|day|time'))
-                date_str = date_tag.get_text(strip=True) if date_tag else ''
+                m = re.search(r"view\('view\.do'\s*,\s*'(\d+)'", a.get('href', ''))
+                if not m:
+                    continue
+                date_str = ''
+                for td in row.find_all('td'):
+                    dm = re.match(r'\d{4}-\d{1,2}-\d{1,2}', td.get_text(strip=True))
+                    if dm:
+                        date_str = dm.group(0)
+                        break
                 items.append({
                     'title':        title,
                     'source':       '중앙전파관리소 ' + label,
                     'category':     detect_category(title),
-                    'url':          href,
+                    'url':          ('https://www.crms.go.kr/lay1/bbs/%s/view.do?article_seq=%s'
+                                     % (board, m.group(1))),
                     'is_read':      False,
                     'published_at': parse_date(date_str),
                     'urgency':      '보통',
                     'importance':   '보통',
                 })
+                found += 1
+            print('[중앙전파관리소] %s: 행 %d개 스캔, 매칭 %d건' % (label, len(rows), found))
         except Exception as e:
-            print('[KMCC 오류] %s: %s' % (label, e))
+            print('[중앙전파관리소 오류] %s: %s' % (label, e))
         time.sleep(1)
-    print('[중앙전파관리소] %d건' % len(items))
     return items
 
 
@@ -955,10 +971,18 @@ def main():
     existing_urls, existing_titles = get_existing_urls()
     print('[기존] %d건' % len(existing_urls))
 
+    # 보도자료 수집 키워드 갱신 (app_config 원본 — 실패 시 폴백 유지)
+    try:
+        import press_ingest
+        PRESS_KEYWORDS[:] = press_ingest.load_press_keywords(sb)
+        print('[press_keywords] %d개 로드' % len(PRESS_KEYWORDS))
+    except Exception as e:
+        print('[press_keywords 로드 실패 — 폴백 유지] %s' % e)
+
     all_items = []
     all_items += crawl_rra()
     all_items += crawl_msit()
-    all_items += crawl_kmcc()     # 중앙전파관리소 (예전엔 '방통위'로 잘못 표기돼 있었음)
+    all_items += crawl_kmcc()     # 중앙전파관리소 (crms.go.kr — kmcc.go.kr 아님, #53)
     all_items += crawl_kcc()      # 방송통신위원회 (신규)
     all_items += crawl_etri()     # ETRI 보도자료 (신규)
     all_items += crawl_kisdi()    # KISDI 보도자료·공지 (신규)
@@ -979,6 +1003,25 @@ def main():
         print('[heartbeat] system_health.last_gov_notice_run 갱신')
     except Exception as e:
         print('[heartbeat 오류] %s' % e)
+
+    # ── 보도자료 본문 수집 (6개 기관 → document_chunks, 배경역사 #53) ──
+    # news_feed 수집과 독립: 여기서 실패해도 위 고시·입법예고 결과에는 영향 없음.
+    try:
+        import press_ingest
+        new_press = press_ingest.run_daily(sb, keywords=PRESS_KEYWORDS)
+        if new_press > 0:
+            # 신규 청크의 NULL 임베딩 채움 (기존 스크립트 재사용, NULL만 대상이라 멱등)
+            import subprocess
+            r = subprocess.run(
+                [sys.executable, 'backfill_embeddings.py'],
+                cwd=os.path.dirname(os.path.abspath(__file__)),
+                capture_output=True, encoding='utf-8', errors='replace',
+                env={**os.environ, 'PYTHONIOENCODING': 'utf-8'},
+                timeout=1800,
+            )
+            print('[임베딩 백필] rc=%d %s' % (r.returncode, (r.stdout or '').strip()[-300:]))
+    except Exception as e:
+        print('[보도자료 수집 오류] %s' % e)
 
     print('=' * 50)
 

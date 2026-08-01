@@ -158,7 +158,21 @@ def main():
             continue
 
         try:
-            body, actual_date = crawler.fetch_article_body(resolved, source)
+            # 과기정통부 게시물(보도자료·입법예고·고시)은 상세 페이지가 스텁("첨부 참고")이라
+            # 첨부(HWPX/PDF)에서 전문을 추출한다 — press_ingest 추출기 재사용 (#53).
+            # 실패하면 기존 페이지 텍스트 경로로 폴백.
+            body, actual_date = None, None
+            if 'msit.go.kr/bbs/view.do' in resolved:
+                try:
+                    import press_ingest
+                    raw = press_ingest.msit_extract({'url': resolved})
+                    if raw and len(raw) >= 120:
+                        body = press_ingest._clean_body(raw)[:8000]
+                        print("📎 첨부 추출 ", end="")
+                except Exception:
+                    body = None
+            if not body:
+                body, actual_date = crawler.fetch_article_body(resolved, source)
             if not body:
                 print("⏭  본문 없음 (셀렉터 미매칭 또는 접근 차단)")
                 skip += 1

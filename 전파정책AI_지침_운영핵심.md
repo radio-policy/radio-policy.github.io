@@ -63,7 +63,8 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 | daily_briefings(삭제 없음·전량 보관, 목록도 무제한 표시) | 일일 브리핑 원문("⚠️ SKT 영향 분석:" 포함). 긴급도 수정 시 🔴 자동 동기화 |
 | law_amendments | 법령·고시·입법예고. law_type: law/bylaw/rules/admrul/lsAnc. lsAnc는 law_id=`lsAnc_op_{md5}` |
 | assembly_bills | 국회 법안. bill_id(UNIQUE)·법안명·단계·소관위·제안일·링크 |
-| document_chunks | 법령·고시·보도자료 RAG 청크. embedding(vector 1024, HNSW), article_no=조항번호+제목. file_path=업로드 원본 Storage 경로 |
+| document_chunks | 법령·고시·보도자료 RAG 청크. embedding(vector 1024, HNSW), article_no=조항번호+제목. file_path=업로드 원본 Storage 경로. **보도자료는 2026-08-02부터 자동 수집**: doc_name=`{기관}_보도자료_{YYYY}.md`(기관: 과기정통부/전파연구원/방통위/전파관리소/ETRI/KISDI), 섹션 헤더 `## YYMMDD 제목`, 마지막 줄 `(원문: URL)`, **700자 무겹침 청킹**(대시보드가 청크를 이어붙여 원문 복원하므로 overlap 금지) |
+| app_config | 키-값 설정. `system_prompt`(봇 자문 프롬프트), `press_keywords`(보도자료 수집 키워드 JSON 배열 — 대시보드 '수집 키워드 관리' 카드가 편집), `press_relevance_criteria`(매일 수집 AI 관련성 판정 기준문) 등. **claude_key는 anon 노출되는 브라우저용 — 서버측 재사용 금지** |
 | custom_knowledge | 팀 추가 지식(수동 입력). AI 자문 키워드 매칭 참조 |
 | chat_logs | AI 자문 이력. 삭제 가능. `sources`(text)는 **두 종류를 접두사로 구분해** 담는다 — 법령·문서명은 그대로, 수집 뉴스는 `[뉴스] 제목 (매체, 날짜)`. 화면·내보내기에서 `splitSources()`로 갈라 별도 표기(법령은 6개 초과분 `… 등 N개`). **뉴스는 본문 발췌로 실제 반영된 건만** 기록(제목 목록 30건은 근거 아님). 스키마 변경 없이 반영 여부를 사후 검증하려는 구조. (배경역사 #35) |
 | report_samples | 보고서 초안 제안 — 내 보고서 전문(형식·톤 학습용, 청킹 안 함). embedding(vector 1024, HNSW). report_type=정책검토/규제영향/동향보고/기타 |
@@ -443,6 +444,27 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **"이미 보유" 판정은 반드시 정확 일치로.** 법령명 앞 N자 부분일치로 스킵을 판단하면 "법"과 "법 시행령", "설비 상호접속기준"과 "상호접속·공동사용 및 정보제공 협정 인가대상 기간통신사업자"처럼 접두어만 같은 별개 문서를 같다고 오판해 통째로 건너뛴다(53건 중 5건 실제 발생, 그중 하나가 재난로밍 딥리서치의 미확인 사항을 해소해준 문서였다). 완전일치(법령명 전체 + 다음 글자가 `(`)로만 스킵 판정할 것.
 - 신규 법령은 OKF 요약도 함께 작성하는 것이 원칙이다(지침 §OKF 방침 — "초기 일괄 정비는 세션에서 무료 작성"). 조문 적재 → 정합성 점검 → OKF 작성(에이전트 분담 가능) → manifest 갱신 → `import_regulatory_kb.py --only` → **`build_law_citation_graph.py` 재구축**까지 한 세트로 처리한다(관계도 재구축을 빼먹으면 새 법령이 전체 인용망에 안 나타난다).
 
+## 정부 보도자료 자동 수집 (press_ingest, 2026-08-02 신설)
+
+6개 기관(과기정통부·전파연구원·방통위·전파관리소·ETRI·KISDI) 보도자료를 지식베이스에 영구 누적.
+2024-01~ 백필 완료(1,027건·5,962청크 — 세션 검토로 무관 222건 프루닝 후 수치). 상세 경위는 배경역사 #53.
+
+- **파일**: `press_ingest.py`(공용 모듈 — 기관 어댑터·추출기·등재·AI판정), `press_backfill.py`(일회성 백필),
+  `export_press_sections.py`(검토용 섹션 추출). gov_notice_crawler.py 말미가 매일 17시 `run_daily()` 호출
+  → 신규 있으면 `backfill_embeddings.py` 자동 실행.
+- **매일 수집 = 전수 + AI 판정**: 각 기관 목록 1~2페이지의 최근 15일분을 키워드 없이 전부 내려받아
+  Haiku가 제목+본문으로 관련성 판정(기준문=app_config.press_relevance_criteria). API 불가 시
+  키워드(app_config.press_keywords) 매칭으로 폴백(fail-open).
+- **백필/폴백 키워드는 제목 매칭**: press_keywords(2026-08-02 기준 33개, 대시보드에서 편집).
+- **본문 추출 경로(기관별 실측)**: 과기정통부=상세가 스텁이라 **첨부에서 추출**(fn_download 3-인자 파싱 →
+  `POST /ssm/file/fileDown.do` atchFileNo·fileOrd·fileBtn=A + **Referer 필수**; HWPX=ZIP의 Contents/section*.xml
+  태그 제거, PDF=pdftotext) / 방통위·전파관리소=본문+첨부 PDF 병합 / ETRI·KISDI·전파연구원=HTML(trafilatura).
+- **재실행 안전**: 섹션 헤더 dedupe(`## YYMMDD 제목` ilike) — 백필·델타를 몇 번 돌려도 중복 없음.
+- **대시보드**: KB '정부 보도자료' 탭(기관 탭 + 수집 키워드 카드 + 원문 보기 버튼), 모니터링 탭 기관 필터.
+  업로드 진입점은 제거(자동 수집 전환) — 수동 등재는 '추가 지식 입력'으로.
+- **프루닝 방식**: 무관 자료 삭제는 섹션-청크 경계가 어긋나므로 **문서 전문 백업 → 섹션 제외 재조립 →
+  재청킹 → 문서 단위 교체 → 재임베딩 → REINDEX** 순서로만 할 것(청크 직접 delete 금지).
+
 ## 점검 체크리스트 (요약 — 상세 경위는 배경역사 문서)
 
 - **이상 의심 시 1차 점검**: 대시보드 설정 밑 **"운영 상태"** 탭 — 크롤러 heartbeat·뉴스 입력·오늘 브리핑·입법예고·국회 한눈. (배경역사 #16)
@@ -468,6 +490,11 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **조문 검색에서 `.pdf`·`.md` 문서를 제외하는 필터를 빼지 말 것** — 「실행계획(안).pdf」 같은 자료도 `article_no`("6조")를 갖고 있어 조문번호 유무만으로는 안 걸러진다. `doc_category`로도 불가(‘기타’에 고시와 박사논문이 섞여 있음). (배경역사 #51)
 - **PostgREST 조회에 `limit`을 작게 주면서 정렬을 생략하지 말 것** — 정렬 없는 limit은 임의의 N건을 돌려준다. '폐업'으로 6건만 받았더니 위치정보법·지방세법이 자리를 채우고 정작 전기통신사업법 19조가 빠졌다. 넉넉히 받아 점수로 거를 것. (배경역사 #51)
 - **파일을 통째로 다시 쓸 때 원자적 쓰기(임시 파일 → 교체)를 쓸 것** — 여는 순간 truncate되므로 쓰기 중 예외가 나면 0바이트가 된다. 실제로 `telegram-webhook/index.ts`가 그렇게 날아갔다(배포본에서 복구). (배경역사 #51)
+- **kmcc.go.kr을 중앙전파관리소로 표기하지 말 것** — kmcc.go.kr은 방송미디어통신위원회(방통위 개편 후 새 도메인)로 kcc.go.kr과 동일 게시판 미러다(목록 상위 5건 완전 일치 실측). 진짜 중앙전파관리소는 **www.crms.go.kr**. 2026-08-01의 "kmcc=전파관리소" 정정 자체가 오정정이었다. (배경역사 #53)
+- **MSIT 첨부 다운로드는 fn_download('atchFileNo','fileOrd','확장자') 3-인자 파싱 + POST fileDown.do + Referer 헤더 필수** — 셋 중 하나만 빠져도 0바이트/빈 응답이 조용히 온다. 상세 페이지 본문은 스텁이므로 첨부 추출 없이는 보도자료·입법예고 전문을 얻을 수 없다. (배경역사 #53)
+- **보도자료 수집 키워드·AI 판정 기준문은 코드 상수가 아니라 DB(app_config)가 원본** — 코드의 FALLBACK은 조회 실패 시 비상용일 뿐이다. 기준을 바꿀 때 코드만 고치면 대시보드 편집분과 어긋난다. (배경역사 #53)
+- **PostgREST는 요청당 최대 1,000행에서 자른다 — `.limit(2000)`도 1,000에서 잘린다** — 무정렬이면 어떤 1,000건이 올지도 임의라 "최근 것만 사라지는" 형태로 증상이 난다(보도자료 목록·상세가 실제로 그랬다). 대량 조회는 반드시 `order + range` 페이징. (배경역사 #53)
+- **게시판 목록을 페이지 순회할 때 순환 방어를 넣을 것** — 마지막 페이지를 넘겨도 같은 내용을 반복 반환하는 게시판(ETRI)이 있고, URL에 페이지 번호가 박혀 'URL 신규' 판정으로는 못 거른다. 페이지의 제목 조합(fingerprint)이 재등장하면 종료. (배경역사 #53)
 - **Supabase 파이썬 클라이언트는 `sb_client.make_client` 사용, `create_client` 직접 호출 금지** — supabase-py 2.31 httpx HTTP/2 keepalive 끊김(RemoteProtocolError: Server disconnected) 회피(HTTP/1.1 강제+재시도). 신규 스크립트도 동일 적용. (배경역사 #15)
 - **워크플로 pip를 버전 무고정으로 되돌리지 말 것(`requirements.txt` 유지)** — 무고정 자동 최신화가 어느 날 갑자기 깨뜨림(HTTP/2 사고). 버전 올릴 땐 한 번에 하나씩 바꿔 Run으로 검증. (배경역사 #15)
 - **GitHub PAT 재생성·교체 시 Actions(R/W) 권한 확인 누락 금지 / pg_cron 'succeeded'를 트리거 성공으로 믿지 말 것** — fine-grained PAT 필수권한은 Contents(R/W)+Metadata(자동)+Actions(R/W). Actions가 빠지면 git push는 되지만 workflow_dispatch는 403, 그런데 net.http_post가 비동기라 cron 잡은 succeeded로 찍혀 모든 트리거가 무음으로 멈춤. 교체 검증은 `net._http_response.status_code`(204=성공)로. (배경역사 #18)
@@ -569,7 +596,7 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 
 1. 이메일 수신: Resend 도메인 미인증 → you.jinwoong@gmail.com만.
 2. 본문 수집: PC 꺼지면 RSS 요약만 → refetch_content.py 보완. trafilatura 로컬 필수(`pip install trafilatura`).
-3. Supabase 무료 슬롯 2개 모두 사용 중 — 신규 프로젝트 생성 금지.
+3. Supabase는 **Pro(유료) 플랜**(2026-08-02 운영자 확인 — DB 8GB·Storage 100GB 포함, 실측 DB ~600MB). 과거 "무료 500MB×2" 기술은 폐기. 신규 프로젝트는 여전히 불요(하나로 충분) — 다만 금지 사유가 '슬롯 부족'이 아니라 '분산 관리 비용'으로 바뀜. **실제 병목은 RAM(컴퓨트 2GB — shared_buffers 512MB)**: 벡터 인덱스가 캐시를 넘으면 검색이 급락한 전력(무료 시절)이 있으니 대량 적재 후엔 REINDEX로 인덱스를 컴팩트하게 유지할 것.
 4. 스포츠 기사 오탐: EXCLUDE_KEYWORDS+피드백 관리.
 5. 신규 업로드 문서·보고서: backfill 전까지 시맨틱 미적용("임베딩 대기"). 보고서는 backfill_report_embeddings.py(PC 의존).
 6. 60일 초과 삭제는 Supabase pg_cron(jobid 2, 매일 00:00 KST, created_at 기준 `DELETE ... AND locked=false`)이 PC 없이 자동 수행. refetch_content.py는 published_at 기준 보조 정리(PC 의존). 입법예고 수집만 PC 의존(17:00 로컬).
@@ -586,7 +613,7 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 | 항목 | 용도 | 비고 |
 |---|---|---|
 | GitHub Actions+Pages | 자동화+호스팅 | 무료 |
-| Supabase | DB+Edge(voyage-embed)+Storage | 무료 500MB×2, Storage 1GB |
+| Supabase | DB+Edge(voyage-embed)+Storage | **Pro(유료)** — DB 8GB·Storage 100GB 포함(2026-08-02 정정). 컴퓨트 Small(RAM 2GB)이 실제 병목 |
 | Voyage AI | 임베딩(voyage-4-lite, 1024) | 무료 2억 토큰 |
 | Anthropic API | AI 자문·보고서 초안(sonnet stream)+긴급도/요약/스타일증류(Haiku) | 키는 app_config(claude_key) |
 | Resend | 이메일 | 100/일 |

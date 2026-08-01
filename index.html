@@ -452,6 +452,9 @@
           <span class="tag" onclick="filterNewsByImportance(this,'참고')" style="border-color:#22c55e;color:#16a34a">🟢 참고</span>
         </div>
 
+        <!-- 정부 보도자료 기관 필터 (정부 탭에서만 표시 — app.js renderGovAgencyTabs가 채움) -->
+        <div class="tag-list" style="margin-bottom:12px;display:none" id="gov-agency-tabs"></div>
+
         <!-- 2열 레이아웃: 뉴스 목록(왼쪽) + 상세 패널(오른쪽) -->
         <div style="display:flex;gap:12px;align-items:flex-start" id="news-two-col">
           <!-- 왼쪽: 뉴스 목록 -->
@@ -487,18 +490,30 @@
       <!-- 보도자료 지식베이스 -->
       <div class="panel" id="panel-press">
         <div style="display:flex;gap:8px;margin-bottom:14px;align-items:center">
-          <span style="font-size:12px;color:var(--text-secondary)">출처: 과기정통부 보도자료 원본 파일 136개 · 2023~2026년</span>
+          <span style="font-size:12px;color:var(--text-secondary)" id="press-source-line">보도자료 수집 현황 로딩 중...</span>
           <span class="badge badge-teal">원본 파일 검색</span>
-          <button class="btn btn-primary" style="margin-left:auto;font-size:12px" onclick="openPdfUpload('press')"><i class="ti ti-upload"></i> 업로드 (PDF·Word·MD)</button>
+          <!-- 업로드 진입점 제거: 보도자료는 6개 기관 자동 수집으로 전환 (2026-08-02, #53).
+               수동 업로드는 '추가 지식 입력' 탭으로 일원화. -->
         </div>
-        <div style="font-size:11px;color:var(--text-muted);margin-bottom:12px;display:flex;align-items:center;gap:6px">
-          <i class="ti ti-info-circle" style="font-size:13px"></i>
-          보도자료 파일 업로드 지원 형식:
-          <span class="badge" style="background:#2a1a3a;color:#c084fc">MD</span>
-          <span class="badge" style="background:#3a2a1a;color:#fbbf24">Word</span>
-          <span class="badge" style="background:#1a2a3a;color:#60a5fa">PDF</span>
-          <span class="badge" style="background:#1a3a2a;color:#34d399">PPTX</span>
-          · PDF는 텍스트 기반만 · 여러 파일 동시 업로드 가능
+
+        <!-- 수집 키워드 관리 (접이식 — app_config key='press_keywords') -->
+        <div class="card" style="cursor:default;padding:0;margin-bottom:16px">
+          <div onclick="togglePressKeywordCard()" style="display:flex;align-items:center;gap:8px;padding:11px 16px;cursor:pointer;user-select:none">
+            <i class="ti ti-filter" style="font-size:15px;color:var(--text-secondary)"></i>
+            <span style="font-size:13px;font-weight:600;color:var(--text-primary)">수집 키워드 관리</span>
+            <span style="font-size:11px;color:var(--text-tertiary)">보도자료 자동 수집에 쓰는 키워드 편집</span>
+            <i id="pk-toggle-icon" class="ti ti-chevron-down" style="margin-left:auto;font-size:15px;color:var(--text-tertiary);transition:transform .2s"></i>
+          </div>
+          <div id="pk-body" style="display:none;padding:0 16px 14px;border-top:0.5px solid var(--border-tertiary)">
+            <div style="font-size:11px;color:var(--text-tertiary);margin:10px 0 8px">매일 수집(17시)은 AI가 제목+본문을 보고 관련성을 판정하며, 아래 키워드는 과거분 백필과 AI 장애 시 비상 필터로 쓰입니다. 저장 시 다음 수집부터 적용됩니다.</div>
+            <div id="pk-chips" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px"></div>
+            <div style="display:flex;gap:8px">
+              <input type="text" id="pk-new-input" placeholder="추가할 키워드 입력..." onkeydown="if(event.key==='Enter'){event.preventDefault();addPressKeyword();}" style="flex:1;padding:7px 12px;font-size:12px;border:0.5px solid var(--border-mid);border-radius:var(--radius-md);background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;outline:none"/>
+              <button class="btn" style="font-size:12px" onclick="addPressKeyword()">추가</button>
+              <button class="btn btn-primary" style="font-size:12px" onclick="savePressKeywords(this)">저장</button>
+            </div>
+            <div id="pk-msg" style="display:none;font-size:11px;margin-top:8px"></div>
+          </div>
         </div>
 
         <!-- 연도별 통계 -->
@@ -507,6 +522,17 @@
           <div class="stat"><div class="stat-label">2026년</div><div class="stat-val" id="ps-2026">—</div><div class="stat-sub">건</div></div>
           <div class="stat"><div class="stat-label">2025년</div><div class="stat-val" id="ps-2025">—</div><div class="stat-sub">건</div></div>
           <div class="stat"><div class="stat-label">2024년 이전</div><div class="stat-val" id="ps-old">—</div><div class="stat-sub">건</div></div>
+        </div>
+
+        <!-- 기관 필터 탭 -->
+        <div class="tag-list" style="margin-bottom:12px" id="press-agency-tabs">
+          <span class="tag selected" onclick="filterPressAgency(this,'전체')">전체</span>
+          <span class="tag" onclick="filterPressAgency(this,'과기정통부')">과기정통부</span>
+          <span class="tag" onclick="filterPressAgency(this,'전파연구원')">전파연구원</span>
+          <span class="tag" onclick="filterPressAgency(this,'방통위')">방통위</span>
+          <span class="tag" onclick="filterPressAgency(this,'전파관리소')">전파관리소</span>
+          <span class="tag" onclick="filterPressAgency(this,'ETRI')">ETRI</span>
+          <span class="tag" onclick="filterPressAgency(this,'KISDI')">KISDI</span>
         </div>
 
         <!-- 검색창 -->
@@ -1001,6 +1027,6 @@
 <script src="https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js"></script>
 <script>if(typeof pdfjsLib!=='undefined'){pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';}</script>
 <script src="system_prompt.js?v=20260612c"></script>
-<script src="app.js?v=20260801e"></script>
+<script src="app.js?v=20260802a"></script>
 </body>
 </html>

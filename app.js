@@ -1344,33 +1344,63 @@ async function onDeleteCustomFile(docName, btn) {
 
 // ── 보도자료 질의 판별·검색 (0313a8f에서 복원 — 08d29f1에서 유실) ──
 function isPressQuery(query) {
-  return /보도자료|보도|발표|공지|공고|과기정통부|국립전파연구원|전파연구원/.test(query);
+  return /보도자료|보도|발표|공지|공고|과기정통부|국립전파연구원|전파연구원|방송통신위원회|방통위|중앙전파관리소|전파관리소|ETRI|KISDI/.test(query);
 }
-function searchPressReleases(query) {
-  if (!pressData) return [];
+// 보도자료 검색 — pressData(제목·날짜·doc_name·agency만 보유)에서 제목 매칭으로 후보를
+// 고른 뒤, 본문은 document_chunks에서 doc_name+제목 일부 ilike로 실조회해 채운다.
+// (과거엔 원소에 content/id가 있다고 가정해 TypeError로 자문이 죽었음 — 데이터 소스가
+//  JSON→Supabase로 바뀐 잔재. 본문 조회 실패 항목은 결과에서 제외해 원천 차단.)
+async function searchPressReleases(query) {
+  if (!pressData || !sb) return [];
   var keywords = extractKeywords(query);
   if (keywords.length === 0) return [];
-  var results = [];
+  var scored = [];
   for (var i = 0; i < pressData.length; i++) {
     var item = pressData[i];
-    var combined = (item.title + ' ' + item.content).toLowerCase();
+    var title = (item.title || '').toLowerCase();
     var score = 0;
     for (var k = 0; k < keywords.length; k++) {
-      var kw = keywords[k].toLowerCase();
-      if (combined.includes(kw)) score++;
-      if (item.title.toLowerCase().includes(kw)) score++;  // 제목 가중치
+      if (title.includes(keywords[k].toLowerCase())) score++;
     }
-    if (score > 0) results.push({ item: item, score: score });
+    if (score > 0) scored.push({ item: item, score: score });
   }
-  results.sort((a, b) => b.score - a.score);
-  return results.slice(0, 4).map(function(r) {
+  scored.sort(function(a, b) { return b.score - a.score; });
+  var candidates = scored.slice(0, 4);
+
+  var settled = await Promise.all(candidates.map(async function(r) {
     var item = r.item;
-    // 관련 본문 발췌 (최대 800자)
-    var excerpt = item.content.slice(0, 800).trim();
+    try {
+      // 업로드 직후 메모리에 추가된 항목은 content를 이미 갖고 있다 — 그대로 사용
+      if (typeof item.content === 'string' && item.content.trim()) {
+        return { item: item, body: item.content };
+      }
+      if (!item.doc_name) return null;
+      // ilike 패턴·PostgREST 구문을 깨는 문자(%,_,쉼표,괄호) 전까지의 제목 앞부분으로 본문 조회
+      var m = (item.title || '').match(/^[^%_,()]+/);
+      var frag = m ? m[0].trim().substring(0, 20).trim() : '';
+      if (frag.length < 4) return null;
+      var cr = await sb.from('document_chunks')
+        .select('content')
+        .eq('doc_name', item.doc_name)
+        .ilike('content', '%' + frag + '%')
+        .limit(2);
+      if (cr.error || !cr.data || cr.data.length === 0) return null;
+      var body = cr.data.map(function(c) { return c.content || ''; }).join('\n').trim();
+      if (!body) return null;
+      return { item: item, body: body };
+    } catch(e) {
+      console.warn('보도자료 본문 조회 실패(항목 제외):', item.title, e);
+      return null;
+    }
+  }));
+
+  return settled.filter(function(x) { return x; }).map(function(x) {
+    var item = x.item;
+    var excerpt = x.body.slice(0, 800).trim();  // 관련 본문 발췌 (최대 800자)
     return {
-      id: 'press_' + item.id,
+      id: 'press_' + (item.doc_name || '') + '_' + item.date,
       doc_name: item.title,
-      doc_category: '과기정통부 보도자료',
+      doc_category: (item.agency && item.agency !== '기타' ? item.agency : '정부') + ' 보도자료',
       content: '[날짜: ' + item.date + ']\n' + excerpt
     };
   });
@@ -1398,7 +1428,7 @@ async function callClaude(userText, onDelta) {
 
   if (isPressQuery(userText)) {
     // 보도자료 질문: 원본 JSON에서 검색
-    var pressResults = searchPressReleases(userText);
+    var pressResults = await searchPressReleases(userText);
     if (pressResults.length > 0) {
       ragChunks = pressResults;
       lastRagSources = pressResults.map(function(c) { return c.doc_name; });
@@ -2129,7 +2159,48 @@ let currentNewsFilter = '전체';
 let currentNewsSourceType = 'gov'; // 'gov' | 'media' | 'all'
 let newsDataCache = [];      // 전체 로드된 뉴스 캐시
 let selectedNewsId = null;   // 현재 선택된 뉴스 id
-var GOV_SOURCE_PREFIXES = ['국립전파연구원', '과기정통부', '방통위'];
+// 6개 기관 자동 수집 확장(2026-08)에 맞춰 접두 추가 — '방송통신위원회 보도자료' 등은
+// 기존 '방통위' 접두와 별개 문자열이라 명시해야 정부 탭에 잡힌다.
+var GOV_SOURCE_PREFIXES = ['국립전파연구원', '과기정통부', '방통위', '방송통신위원회', '중앙전파관리소', 'ETRI', 'KISDI'];
+
+// ── 정부 보도자료 기관 필터 (모니터링 > 정부 보도자료·공지사항 상단 칩) ──
+var currentGovAgency = '전체';
+var GOV_AGENCY_TABS = ['전체', '과기정통부', '전파연구원', '방통위', '전파관리소', 'ETRI', 'KISDI', '기타'];
+
+// news_feed.source 접두 → 기관 슬러그 매핑 (클라이언트 필터 전용)
+function govAgencyOf(source) {
+  var s = source || '';
+  if (s.indexOf('과기정통부') === 0) return '과기정통부';
+  if (s.indexOf('국립전파연구원') === 0) return '전파연구원';
+  if (s.indexOf('방송통신위원회') === 0 || s.indexOf('방통위') === 0) return '방통위';
+  if (s.indexOf('중앙전파관리소') === 0) return '전파관리소';
+  if (s.indexOf('ETRI') === 0) return 'ETRI';
+  if (s.indexOf('KISDI') === 0) return 'KISDI';
+  return '기타';
+}
+
+function renderGovAgencyTabs(govData) {
+  var el = document.getElementById('gov-agency-tabs');
+  if (!el) return;
+  el.style.display = '';  // 인라인 none 제거 → .tag-list 클래스 규칙(데스크톱 flex/모바일 숨김) 적용
+  var counts = {};
+  (govData || []).forEach(function(n) { var a = govAgencyOf(n.source); counts[a] = (counts[a] || 0) + 1; });
+  el.innerHTML = GOV_AGENCY_TABS.map(function(a) {
+    var cnt = (a === '전체') ? (govData || []).length : (counts[a] || 0);
+    return '<span class="tag' + (currentGovAgency === a ? ' selected' : '') + '" ' +
+      'onclick="filterGovAgency(\'' + a + '\')">' + a + (cnt ? ' ' + cnt : '') + '</span>';
+  }).join('');
+}
+
+function hideGovAgencyTabs() {
+  var el = document.getElementById('gov-agency-tabs');
+  if (el) el.style.display = 'none';
+}
+
+function filterGovAgency(agency) {
+  currentGovAgency = agency;
+  renderNewsList();
+}
 
 function closeNewsDetail() {
   selectedNewsId = null;
@@ -2387,10 +2458,18 @@ function renderNewsList() {
     data = data.filter(function(n) {
       return GOV_SOURCE_PREFIXES.some(function(p) { return (n.source || '').startsWith(p); });
     });
+    // 기관 필터 칩 렌더(전체 정부 데이터 기준 건수) 후 선택 기관만 남긴다 — 재조회 없음
+    renderGovAgencyTabs(data);
+    if (currentGovAgency !== '전체') {
+      data = data.filter(function(n) { return govAgencyOf(n.source) === currentGovAgency; });
+    }
   } else if (currentNewsSourceType === 'media') {
+    hideGovAgencyTabs();
     data = data.filter(function(n) {
       return !GOV_SOURCE_PREFIXES.some(function(p) { return (n.source || '').startsWith(p); });
     });
+  } else {
+    hideGovAgencyTabs();
   }
 
   var sorted = data.slice().sort(function(a, b) {
@@ -2401,7 +2480,7 @@ function renderNewsList() {
   if (!listEl) return;
 
   if (sorted.length === 0) {
-    listEl.innerHTML = '<div style="color:var(--text-secondary);padding:24px;text-align:center;font-size:12px">해당 중요도의 뉴스가 없습니다.</div>';
+    listEl.innerHTML = '<div style="color:var(--text-secondary);padding:24px;text-align:center;font-size:12px">조건에 맞는 뉴스가 없습니다.</div>';
     return;
   }
 
@@ -4767,6 +4846,16 @@ function closeMobileSubMenu(id) {
 //  보도자료 — Supabase document_chunks 검색
 // ════════════════════════════════════════════
 let pressData = null;
+var currentPressAgency = '전체';  // 지식베이스 보도자료 기관 탭 상태
+var PRESS_AGENCY_TABS = ['전체', '과기정통부', '전파연구원', '방통위', '전파관리소', 'ETRI', 'KISDI'];
+
+// doc_name('{기관}_보도자료_{YYYY}.md')에서 기관 슬러그 추출 — 미지의 접두는 그대로 반환(깨지지 않게)
+function pressAgencyOf(docName) {
+  var name = docName || '';
+  var i = name.indexOf('_보도자료_');
+  if (i > 0) return name.substring(0, i);
+  return '기타';
+}
 
 async function loadPressJSON() {
   var listEl = document.getElementById('press-list');
@@ -4776,15 +4865,25 @@ async function loadPressJSON() {
 
   try {
     // 1) 보도자료 전체 청크 조회 — ## YYMMDD 패턴 포함 청크만 ({n} 대신 명시적 반복)
-    var resp = await sb
-      .from('document_chunks')
-      .select('doc_name, content')
-      .eq('doc_category', '보도자료')
-      .filter('content', '~', '## [0-9][0-9][0-9][0-9][0-9][0-9]')
-      .limit(2000);
-
-    var titleChunks = resp.data;
-    var queryErr    = resp.error;
+    // 주의: Supabase는 요청당 최대 1,000행이라 .limit(2000)도 1,000에서 잘린다(무정렬이면
+    // 어떤 1,000이 올지도 임의 → 최근분 누락). 백필로 6기관 1,100+섹션이 되면서 실제로
+    // 발생 — 반드시 order+range 페이징으로 전량 수집 (2026-08-02, #53)
+    var titleChunks = [];
+    var queryErr    = null;
+    var pageStart   = 0;
+    while (true) {
+      var resp = await sb
+        .from('document_chunks')
+        .select('doc_name, content')
+        .eq('doc_category', '보도자료')
+        .filter('content', '~', '## [0-9][0-9][0-9][0-9][0-9][0-9]')
+        .order('id')
+        .range(pageStart, pageStart + 999);
+      if (resp.error) { queryErr = resp.error; break; }
+      titleChunks = titleChunks.concat(resp.data || []);
+      if (!resp.data || resp.data.length < 1000) break;
+      pageStart += 1000;
+    }
 
     console.log('[보도자료] 쿼리 결과:', titleChunks ? titleChunks.length + '개 청크' : '없음', queryErr || '');
 
@@ -4802,14 +4901,20 @@ async function loadPressJSON() {
         .order('doc_name');
       var docNames = (docResp.data || []).map(function(r){ return r.doc_name; });
       for (var di = 0; di < docNames.length; di++) {
-        var cr = await sb
-          .from('document_chunks')
-          .select('doc_name, content')
-          .eq('doc_category', '보도자료')
-          .eq('doc_name', docNames[di])
-          .order('chunk_index')
-          .limit(500);
-        results = results.concat(cr.data || []);
+        // 문서 하나가 2,000청크를 넘을 수 있어(과기정통부) 여기도 range 페이징
+        var docStart = 0;
+        while (true) {
+          var cr = await sb
+            .from('document_chunks')
+            .select('doc_name, content')
+            .eq('doc_category', '보도자료')
+            .eq('doc_name', docNames[di])
+            .order('chunk_index')
+            .range(docStart, docStart + 999);
+          results = results.concat(cr.data || []);
+          if (!cr.data || cr.data.length < 1000) break;
+          docStart += 1000;
+        }
       }
       titleChunks = results;
       console.log('[보도자료] doc별 폴백 결과:', titleChunks.length + '개 청크');
@@ -4839,7 +4944,7 @@ async function loadPressJSON() {
         var key  = dateStr + '_' + rawTitle.substring(0, 30);
         if (titleMap[key]) return;
         titleMap[key] = true;
-        releases.push({ title: rawTitle, date: dateStr, doc_name: chunk.doc_name });
+        releases.push({ title: rawTitle, date: dateStr, doc_name: chunk.doc_name, agency: pressAgencyOf(chunk.doc_name) });
       });
     });
 
@@ -4865,7 +4970,12 @@ async function loadPressJSON() {
 
     // stat-sub 텍스트도 "건"으로 (HTML 기본값 유지되므로 생략 가능)
 
-    renderPressList(releases);
+    // 상단 출처 문구 동적 갱신 ("원본 파일 136개" 하드코딩 대체)
+    var srcLine = document.getElementById('press-source-line');
+    if (srcLine) srcLine.textContent = '보도자료 ' + cnt.total + '건 · 6개 기관 · 매일 17시 자동 수집';
+
+    // 기관 탭·검색어 필터를 반영해 렌더
+    filterPressList();
 
   } catch(err) {
     console.error('보도자료 로드 오류:', err);
@@ -4902,7 +5012,10 @@ function renderPressList(list) {
     items.forEach(function(item) {
       var dateLabel = item.date.substring(5);
       var safeTitle = item.title.replace(/&/g,'&amp;').replace(/"/g,'&quot;');
-      var safeDoc   = item.doc_name.replace(/&/g,'&amp;').replace(/"/g,'&quot;');
+      var safeDoc   = (item.doc_name || '').replace(/&/g,'&amp;').replace(/"/g,'&quot;');
+      var agencyTag = item.agency
+        ? '<span style="flex-shrink:0;font-size:10px;color:#8888aa;border:1px solid #33334a;border-radius:4px;padding:0 5px;margin-top:2px;white-space:nowrap">' + item.agency + '</span>'
+        : '';
       html += '<div class="press-item" ' +
         'style="display:flex;align-items:flex-start;gap:8px;padding:5px 8px;' +
         'border-radius:6px;cursor:pointer;background:#1a1a2a" ' +
@@ -4910,6 +5023,7 @@ function renderPressList(list) {
         'onmouseover="this.style.background=\'#22223a\'" ' +
         'onmouseout="this.style.background=\'#1a1a2a\'">' +
         '<span style="flex-shrink:0;font-size:11px;color:#6c757d;width:36px;margin-top:2px">' + dateLabel + '</span>' +
+        agencyTag +
         '<span style="font-size:13px;color:#d0d0e0;line-height:1.4">' + item.title + '</span>' +
         '</div>';
     });
@@ -4944,31 +5058,46 @@ async function openPressDetail(title, date, docName) {
   var yymmdd = date.replace(/-/g, '').substring(2);
 
   try {
-    var cr = await sb.from('document_chunks')
-      .select('chunk_index, content')
-      .eq('doc_name', docName)
-      .order('chunk_index')
-      .limit(500);
+    // 문서 하나가 2,000청크를 넘을 수 있어(과기정통부 백필) 500 limit → range 페이징 (#53)
+    var chunks = [];
+    var pageStart = 0;
+    while (true) {
+      var cr = await sb.from('document_chunks')
+        .select('chunk_index, content')
+        .eq('doc_name', docName)
+        .order('chunk_index')
+        .range(pageStart, pageStart + 999);
+      if (cr.error) break;
+      chunks = chunks.concat(cr.data || []);
+      if (!cr.data || cr.data.length < 1000) break;
+      pageStart += 1000;
+    }
 
-    if (!cr.data || cr.data.length === 0) {
+    if (chunks.length === 0) {
       bodyEl.innerHTML = '<div style="color:#f66;padding:20px">내용을 찾을 수 없습니다.</div>';
       return;
     }
 
-    // 전체 텍스트 합치기
-    var fullText = cr.data.map(function(c) { return c.content; }).join('\n');
+    // 전체 텍스트 합치기 (청킹은 개행 경계라 join('')이 원문 그대로 복원)
+    var fullText = chunks.map(function(c) { return c.content; }).join('');
 
     // ## YYMMDD 경계로 섹션 분리
     var sections = fullText.split(/(?=^## \d{6})/m);
 
-    // 해당 날짜 섹션 찾기
+    // 해당 날짜 + 제목이 함께 맞는 섹션 우선 (같은 날 여러 건이면 날짜만으론 오표시 — #53)
+    var titleKey = (title || '').replace(/\s+/g, '').substring(0, 12).toLowerCase();
     var targetSection = null;
+    var dateOnlyMatch = null;
     for (var i = 0; i < sections.length; i++) {
-      if (new RegExp('^## ' + yymmdd).test(sections[i])) {
+      if (!new RegExp('^## ' + yymmdd).test(sections[i])) continue;
+      if (!dateOnlyMatch) dateOnlyMatch = sections[i];
+      var headerLine = (sections[i].split('\n')[0] || '').replace(/\s+/g, '').toLowerCase();
+      if (titleKey && headerLine.indexOf(titleKey) !== -1) {
         targetSection = sections[i];
         break;
       }
     }
+    if (!targetSection) targetSection = dateOnlyMatch;
 
     if (!targetSection) {
       // 제목으로 검색 폴백
@@ -4989,6 +5118,14 @@ async function openPressDetail(title, date, docName) {
       .replace(/\n{3,}/g, '\n\n')
       .trim();
 
+    // 수집 시 저장해 둔 '(원문: URL)' 추출 — 본문에서는 빼고 상단 버튼으로 노출 (#53)
+    var srcUrl = null;
+    var srcMatch = cleaned.match(/\(원문:\s*(https?:[^\s)]+)\)/);
+    if (srcMatch) {
+      srcUrl = srcMatch[1];
+      cleaned = cleaned.replace(/\(원문:\s*https?:[^\s)]+\)\s*/g, '').trim();
+    }
+
     // 간단한 마크다운 → HTML 변환
     var html = cleaned
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -4998,6 +5135,13 @@ async function openPressDetail(title, date, docName) {
       .replace(/(<li[^>]*>.*<\/li>\n?)+/g, function(m){ return '<ul style="padding-left:20px;margin:6px 0">' + m + '</ul>'; })
       .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
       .replace(/\n/g, '<br>');
+
+    if (srcUrl) {
+      // 원문 페이지에는 첨부(HWPX/PDF)도 있어 그림·인포그래픽까지 확인 가능
+      html = '<div style="margin-bottom:12px"><a href="' + srcUrl.replace(/"/g, '&quot;')
+           + '" target="_blank" rel="noopener" class="btn" style="font-size:12px;text-decoration:none">'
+           + '<i class="ti ti-external-link"></i> 원문 보기 (기관 사이트 · 첨부 포함)</a></div>' + html;
+    }
 
     bodyEl.innerHTML = html;
 
@@ -5012,19 +5156,131 @@ function closePressDetail() {
 }
 
 async function filterPressList() {
-  var q = (document.getElementById('press-search-input') || {}).value || '';
   if (!pressData) return;
-  if (!q.trim()) { renderPressList(pressData); return; }
-  var lower = q.toLowerCase();
-  var filtered = pressData.filter(function(item) {
-    return item.title.toLowerCase().includes(lower) ||
-           item.doc_name.toLowerCase().includes(lower) ||
-           item.date.includes(lower);
-  });
-  renderPressList(filtered);
+  var list = pressData;
+  // 1) 기관 탭 필터
+  if (currentPressAgency !== '전체') {
+    list = list.filter(function(item) { return item.agency === currentPressAgency; });
+  }
+  // 2) 검색어 필터
+  var q = (document.getElementById('press-search-input') || {}).value || '';
+  if (q.trim()) {
+    var lower = q.toLowerCase();
+    list = list.filter(function(item) {
+      return item.title.toLowerCase().includes(lower) ||
+             (item.doc_name || '').toLowerCase().includes(lower) ||
+             item.date.includes(lower);
+    });
+  }
+  renderPressList(list);
+}
+
+// 지식베이스 보도자료 기관 탭 클릭
+function filterPressAgency(el, agency) {
+  currentPressAgency = agency;
+  document.querySelectorAll('#press-agency-tabs .tag').forEach(function(t) { t.classList.remove('selected'); });
+  if (el && el.classList) el.classList.add('selected');
+  filterPressList();
 }
 
 function loadPressFromSupabase() { loadPressJSON(); }
+
+// ── 수집 키워드 관리 (app_config key='press_keywords') ─────────────
+// 보도자료 크롤러가 매일 17시 수집 시 참조하는 키워드 목록을 대시보드에서 편집한다.
+var _pressKeywords = [];      // 편집 중인 키워드 배열
+var _pkLoaded = false;        // 최초 열림 시 1회만 로드
+
+function togglePressKeywordCard() {
+  var body = document.getElementById('pk-body');
+  var icon = document.getElementById('pk-toggle-icon');
+  if (!body) return;
+  var open = body.style.display === 'none';
+  body.style.display = open ? 'block' : 'none';
+  if (icon) icon.style.transform = open ? 'rotate(180deg)' : '';
+  if (open && !_pkLoaded) loadPressKeywords();
+}
+
+function _pkShowMsg(text, isError) {
+  var el = document.getElementById('pk-msg');
+  if (!el) return;
+  if (!text) { el.style.display = 'none'; el.textContent = ''; return; }
+  el.style.display = 'block';
+  el.textContent = text;
+  el.style.color = isError ? '#ef4444' : '#22c55e';
+}
+
+async function loadPressKeywords() {
+  var chipsEl = document.getElementById('pk-chips');
+  if (chipsEl) chipsEl.innerHTML = '<span style="font-size:12px;color:var(--text-tertiary)">불러오는 중...</span>';
+  _pkShowMsg('');
+  if (!sb) { _pkShowMsg('Supabase 미연결 — 키워드를 불러올 수 없습니다.', true); if (chipsEl) chipsEl.innerHTML = ''; return; }
+  try {
+    var resp = await sb.from('app_config').select('value').eq('key', 'press_keywords').limit(1);
+    if (resp.error) throw resp.error;
+    var raw = (resp.data && resp.data[0]) ? resp.data[0].value : null;
+    var arr = [];
+    if (raw) {
+      try { arr = JSON.parse(raw); } catch(pe) { console.warn('press_keywords JSON 파싱 실패:', pe); }
+    }
+    _pressKeywords = Array.isArray(arr) ? arr.filter(function(k) { return typeof k === 'string' && k.trim(); }) : [];
+    _pkLoaded = true;
+    renderPressKeywordChips();
+  } catch(e) {
+    if (chipsEl) chipsEl.innerHTML = '';
+    _pkShowMsg('키워드 불러오기 실패: ' + (e.message || e), true);
+  }
+}
+
+function renderPressKeywordChips() {
+  var el = document.getElementById('pk-chips');
+  if (!el) return;
+  if (!_pressKeywords.length) {
+    el.innerHTML = '<span style="font-size:12px;color:var(--text-tertiary)">등록된 키워드가 없습니다. 아래에서 추가하세요.</span>';
+    return;
+  }
+  el.innerHTML = _pressKeywords.map(function(kw, i) {
+    var safe = kw.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return '<span class="tag" style="cursor:default;display:inline-flex;align-items:center;gap:5px">' + safe +
+      '<span onclick="removePressKeyword(' + i + ')" title="삭제" ' +
+      'style="cursor:pointer;font-weight:700;opacity:.6;line-height:1">&times;</span></span>';
+  }).join('');
+}
+
+function addPressKeyword() {
+  var inp = document.getElementById('pk-new-input');
+  if (!inp) return;
+  var kw = (inp.value || '').trim();
+  if (!kw) return;
+  if (_pressKeywords.indexOf(kw) !== -1) { _pkShowMsg('이미 있는 키워드입니다: ' + kw, true); return; }
+  _pressKeywords.push(kw);
+  inp.value = '';
+  _pkShowMsg('');
+  renderPressKeywordChips();
+}
+
+function removePressKeyword(idx) {
+  _pressKeywords.splice(idx, 1);
+  _pkShowMsg('');
+  renderPressKeywordChips();
+}
+
+async function savePressKeywords(btn) {
+  if (!sb) { _pkShowMsg('Supabase 미연결 — 저장할 수 없습니다.', true); return; }
+  if (btn) btn.disabled = true;
+  _pkShowMsg('저장 중...');
+  try {
+    var resp = await sb.from('app_config').upsert(
+      { key: 'press_keywords', value: JSON.stringify(_pressKeywords) },
+      { onConflict: 'key' }
+    );
+    if (resp.error) throw resp.error;
+    _pkShowMsg('저장됨 — 다음 수집(매일 17시)부터 적용');
+  } catch(e) {
+    _pkShowMsg('저장 실패: ' + (e.message || e), true);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
 
 // ════════════════════════════════════════════
 //  기술 용어 자동 추출 (하루 1회, 백그라운드)
@@ -5657,6 +5913,8 @@ async function doPdfUpload() {
           id: 'upload_' + Date.now() + '_' + fi,
           title: thisDocName,
           date: pressDate,
+          doc_name: thisDocName,
+          agency: pressAgencyOf(thisDocName),
           content: text.slice(0, 3000)
         });
       }

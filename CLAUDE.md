@@ -29,7 +29,7 @@ SKT Comm Center 기술정책팀's radio/telecom **policy-monitoring automation s
 
 **Collection** — each crawler writes to a table and a `system_health` heartbeat:
 - `crawler.py` — news via Naver Search OpenAPI (falls back to Google RSS), Haiku urgency classification with feedback learning. Runs in GitHub Actions hourly.
-- `gov_notice_crawler.py` — government notices (RRA/MSIT/KCC) + 입법예고. **PC-local only** (Korean IP required; government sites block foreign IPs) — do NOT move to GitHub Actions.
+- `gov_notice_crawler.py` — government notices (RRA/MSIT/방통위/전파관리소/ETRI/KISDI) + 입법예고. **PC-local only** (Korean IP required; government sites block foreign IPs) — do NOT move to GitHub Actions. At the end it calls `press_ingest.run_daily()` — full-text press-release ingestion into the KB (6 agencies, 최근 15일 전수 수집 + Haiku 관련성 판정, keyword fallback) + auto embedding backfill. 주의: kmcc.go.kr은 전파관리소가 아니라 방송미디어통신위원회(구 방통위) 새 도메인이며, 전파관리소는 crms.go.kr (#53).
 - `law_crawler.py` (법제처 DRF API, endpoint `www.law.go.kr/DRF/lawSearch.do`), `assembly_crawler.py` (열린국회정보 API), `refetch_content.py` (body re-fetch via trafilatura, PC-local).
 
 **Briefing/alerts** — `morning_briefing.py` sends 06:00 KST email(with analysis)/Telegram(without). Zero-news days still send a "🕊️ no news" notice so silent failure isn't mistaken for breakage.
@@ -64,6 +64,11 @@ python resend_briefing.py [date]        # resend a briefing
 python backfill_embeddings.py           # document_chunks embeddings (NULL only)
 python backfill_report_embeddings.py    # report_samples embeddings (NULL only) — run after registering/promoting a report
 python upload_law_pdf.py <file> "<name>" 고시   # upload law/notice/ITU-R to RAG
+
+# 보도자료 (2026-08-02 자동화 — #53)
+python press_ingest.py --dry-run          # 6개 기관 수집 시험 (DB 무변경)
+python press_backfill.py --agency 방통위  # 특정 기관 백필/델타 (dedupe라 재실행 안전)
+# 키워드·AI 판정 기준문은 app_config(press_keywords/press_relevance_criteria)가 원본
 ```
 
 There is no build step, linter, or test suite — the dashboard is static files served by GitHub Pages, and the crawlers are run directly. Validate JS changes with `node --check` on the changed function.
@@ -85,7 +90,7 @@ There is no build step, linter, or test suite — the dashboard is static files 
 - **Call Python by full path** `C:\Users\SKTelecom\AppData\Local\Programs\Python\Python312\python.exe` in scheduler tasks, .bat files, and manual runs — a bare `python` resolves to Python 3.13 (installed 2026-06-30, no packages) and dies with `ModuleNotFoundError`. All packages live in 3.12 only. (#22)
 - **Clear `HTTP_PROXY`/`HTTPS_PROXY` before running crawlers manually from a Claude session** — the session shell injects a corporate proxy (150.2.127.249:9090) that breaks SSL verification for gov/news sites (0건 collected, but Supabase heartbeat still updates → looks like "ran fine, nothing new"). Machine/User env vars are clean, so scheduled (SYSTEM) runs are unaffected.
 - Ministry-personnel news (`is_ministry_personnel_news()` in `crawler.py`) is always collected — don't remove. Keyword lists: use `전파간섭`, not `혼신` (`이혼신고` false positive).
-- Supabase free slots (2) are both used — don't propose a new project. Emails only reach you.jinwoong@gmail.com (Resend domain unverified).
+- Supabase is on the **Pro (paid) plan** (2026-08-02 확인 — 8GB DB incl.; the real bottleneck is compute RAM 2GB, so REINDEX after bulk loads). Don't create additional projects. Emails only reach you.jinwoong@gmail.com (Resend domain unverified).
 
 ## First-response runbook
 
