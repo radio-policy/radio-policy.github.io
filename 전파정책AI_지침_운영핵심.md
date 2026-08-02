@@ -81,7 +81,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 | kb_chunks | kb_documents 본문 청크 + embedding(**voyage-law-2** 1024, HNSW). doc_id FK(cascade). 자문이 시맨틱+trgm으로 조회 |
 | law_graph_nodes | 법령 관계도 노드(name UNIQUE). node_type: topic(주제)/law/decree/rules/notice/etc. source: seed(세션 시드)/citation(인용망 스크립트)/ai(자문·즉석 생성). doc_name=document_chunks 연결(원문 보기). RLS+anon select/insert/update(delete는 service 전용) |
 | law_graph_edges | 법령 관계도 엣지(source_id→target_id, on delete cascade). relation_type: 근거(주제→법령)/인용(조문 인용)/하위법령(계열). source: seed/citation/family/ai. weight=인용·재확인 횟수(엣지 굵기). unique(source,target,relation_type). RLS 동일 |
-| telegram_subscribers | 구독자 봇 가입자(chat_id PK). topic_briefing/urgent/assembly(각각 on·off), days(daily/weekday), briefing_hour(6~12, **3종 공통 수신 시각**), **urgent_now**(긴급만 즉시 수신·야간 포함, 기본 false — 2026-08-02), last_briefing_sent_date·last_urgent_sent_at·last_assembly_sent_at(중복 발송 방지), ai_allowed(**기본 false** — AI 자문 승인 플래그), ai_count_date·ai_count(일일 20회 상한). active는 봇 차단(403) 자동 처리 전용이며 화면에 버튼은 없다. **RLS 켜고 정책 0개 = service_role 전용**(chat_id는 개인정보, 프런트 노출 금지 — 의도된 설계) |
+| telegram_subscribers | 구독자 봇 가입자(chat_id PK). topic_briefing/urgent/assembly(각각 on·off), days(daily/weekday), briefing_hour(6~12, **'받기 시작 시각'** — 브리핑은 이 시각 1회, 긴급·법안은 이후 매시 :25 배달), last_briefing_sent_date·last_urgent_sent_at·last_assembly_sent_at(중복 발송 방지), ai_allowed(**기본 false** — AI 자문 승인 플래그), ai_count_date·ai_count(일일 20회 상한). active는 봇 차단(403) 자동 처리 전용이며 화면에 버튼은 없다. **RLS 켜고 정책 0개 = service_role 전용**(chat_id는 개인정보, 프런트 노출 금지 — 의도된 설계) |
 | subscriber_queue | 긴급·법안 알림 큐(topic: urgent/assembly, html, created_at). 크롤러가 **발송 대신 적재**하고 send-subscriber-briefing이 각 구독자 수신 시각에 꺼내 보낸다. 억제·클러스터링(#44)·법안 상태변경 판정을 TS로 재구현하지 않으려는 구조. RLS 정책 0개 |
 
 ### Edge Function · RPC
@@ -264,10 +264,12 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 
 ```
 브리핑·긴급·법안   | 구독자가 고른 시각(6~12시)에 3종을 한 번에 발송 — 즉시 발송 없음
-긴급 즉시(선택)    | `urgent_now=true`인 구독자만 예외로 감지 즉시 발송(야간 포함).
-                   |   subscriber_notify.send_urgent_now()가 보내고 그 구독자의 last_urgent_sent_at을
-                   |   현재로 갱신 → 정시 발송에서 같은 건이 다시 나가지 않는다(중복 방지의 핵심).
-                   |   '평일만' 선택자는 주말 즉시 발송 제외. 기본값 false. (2026-08-02)
+                   | ※ 실동작 정정(2026-08-02, 배경역사 #59): 브리핑은 선택 시각에 1회지만
+                   |   **긴급·법안은 그 시각 이후 큐에 새로 들어오는 대로 매시 :25에 배달**된다
+                   |   (하루 한 번이 아님). 자정~선택 시각에는 발송 없음 → **발송 가능 시간대는
+                   |   '선택 시각 ~ 23:25'**. 설정·시작 안내에 이 사실을 명시했다.
+                   |   긴급 적재 시 subscriber_notify._trigger_delivery()가 발송 함수를 1회 호출해
+                   |   다음 :25를 기다리지 않는다(발송 함수가 수신 시각을 검사하므로 심야엔 무발송).
                    | 요일 선택(매일/평일만), 항목별 on·off. 항목 전부 끄면 수신 없음
 조문 조회 /law     | "OO법 N조" 원문 즉답 (LLM 없음, 비용 0)
 AI 자문 /ask       | 운영자 승인(chat_id별 1회) + 일일 20회 상한. 건당 100~400원
