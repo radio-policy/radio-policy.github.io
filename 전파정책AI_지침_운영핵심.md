@@ -33,7 +33,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 │                               #   ※ crawl_kcc()는 방통위(kcc.go.kr), crawl_kmcc()는 중앙전파관리소(kmcc.go.kr) — 도메인 한 글자 차이라 혼동 주의
 ├── law_crawler.py              # 법제처 DRF API 법령·고시 모니터링(11:00 KST). 엔드포인트 www.law.go.kr/DRF/lawSearch.do, OC=radiopolicyai
 ├── assembly_crawler.py         # 국회 법안 모니터링(열린국회정보 API, 22대) + 국회 입법예고 추적 패스(#56)
-├── law_diff_gen.py             # 법령 조문 DIFF 생성(행정부 예고/시행예정/시행 + 국회 예고 --assembly-only) (#54·#56)
+├── law_diff_gen.py             # 법령 조문 DIFF 생성(행정부 예고/시행예정/시행 + 국회 예고 --assembly-only) (#54·#56). **조문 매칭은 법제처 신구법대비표 API(oldAndNew/admrulOldAndNew) 정본 우선, 없으면(존재여부 N) difflib 폴백 — 영향분석·요약은 무변경. pending/promoted 경로만 (#63)**
 ├── foreign_press.py / assembly_minutes.py  # 해외 규제기관(05:30) / 과방위 회의록(17시 체인) (#54)
 ├── notify.py / embed_util.py   # 공용 유틸 — 텔레그램 전송(분할·재시도·429) / Voyage 임베딩. 새 코드는 반드시 재사용 (#58)
 ├── tests/test_smoke.py         # 스모크 테스트(표준 unittest·네트워크 0, 17케이스). `python -m unittest discover -s tests` (#58)

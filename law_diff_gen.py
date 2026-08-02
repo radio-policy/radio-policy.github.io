@@ -56,6 +56,9 @@ SB_URL = os.getenv('SUPABASE_URL')
 SB_KEY = os.getenv('SUPABASE_SERVICE_KEY')
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', '')
+# 법제처 DRF OC키 — 조문 매칭 정본(신구법대비표) 조회용. law_crawler와 동일 키.
+LAW_OC_KEY = os.getenv('LAW_OC_KEY', '')
+DRF_SERVICE = 'http://www.law.go.kr/DRF/lawService.do'
 
 MODEL = 'claude-sonnet-5'
 ARTICLE_CHARS = 3000        # 조문당 입력 절단
@@ -68,6 +71,11 @@ KST = timezone(timedelta(hours=9))
 ART_KEY_RE = re.compile(r'^제?\s*([0-9]+조(?:의[0-9]+)?)')
 # 새 판에서 "제n조 삭제" 형태로 남는 조문은 deleted 취급 (fetch_pending_articles와 동일 취지)
 DELETED_RE = re.compile(r'^제\s*[0-9]+조(?:의[0-9]+)?(?:\([^)]*\))?\s*삭제')
+
+# 신구법대비표(oldAndNew) 파싱용 — 조문 헤더('제N조(제목)…')로 그룹 경계를 잡는다.
+_OLDNEW_HEAD_RE = re.compile(r'^제\s*[0-9]+조(?:의[0-9]+)?')
+_OLDNEW_ARTNO_RE = re.compile(r'(제\s*[0-9]+조(?:의[0-9]+)?\s*(?:\([^)]*\))?)')
+_P_TAG_RE = re.compile(r'</?P>')   # 변경부 마킹 <P>…</P> — 태그만 제거, 내용은 보존
 
 ANALYSIS_TOOL = {
     'name': 'report_law_diff',
@@ -326,6 +334,153 @@ def _parse_ts(s):
         return datetime.fromisoformat(str(s).replace('Z', '+00:00'))
     except Exception:
         return None
+
+
+# ── 조문 매칭 정본: 법제처 신구법대비표(oldAndNew) ──────────
+#
+# 운영자 승인 방향(2026-08-02): "조문 매칭(구↔신 짝짓기)만 API 정본을 쓰고, SKT
+# 영향 분석·요약은 기존 유지, API가 비면 기존 difflib(청크 키 조인)로 폴백."
+# 즉 아래 함수는 diff_articles와 '동형'의 changes 리스트를 돌려주는 드롭인 대체다.
+# generate_one의 downstream(build_prompt·analyze_with_sonnet·merge_article_impacts·
+# upsert)과 articles jsonb 스키마(article_no·change·before·after·impact)는 무변경.
+
+_law_session = None
+
+
+def _drf_session():
+    """DRF 전용 requests 세션 — trust_env=False로 세션 주입 프록시를 무시한다.
+    (Claude 세션 수동실행 시 사내 프록시가 SSL을 깨는 문제 회피; 정부망은 프록시 불요)"""
+    global _law_session
+    if _law_session is None:
+        s = requests.Session()
+        s.trust_env = False
+        s.headers['User-Agent'] = 'Mozilla/5.0 (radio-policy-ai law_diff)'
+        _law_session = s
+    return _law_session
+
+
+def _clean_oldnew(text):
+    """대비표 조문줄 정리 — <P>…</P> 변경마킹 태그만 제거(내용 보존) + 공백 정돈."""
+    return _P_TAG_RE.sub('', text or '').strip()
+
+
+def _oldnew_list(node):
+    """구/신조문목록 노드 → 조문줄 리스트. 단건이면 dict라 [dict]로 정규화, 없으면 []."""
+    if not isinstance(node, dict):
+        return []
+    arts = node.get('조문')
+    if isinstance(arts, dict):
+        return [arts]
+    return arts if isinstance(arts, list) else []
+
+
+def _article_no_from_head(head):
+    """헤더 줄에서 '제N조(제목)'만 추출. 실패 시 앞 40자."""
+    m = _OLDNEW_ARTNO_RE.match(head or '')
+    return (m.group(1).strip() if m else (head or '')[:40]).strip()
+
+
+def _parse_oldnew(gu_list, sin_list):
+    """구/신 병렬 조문줄(같은 인덱스=같은 위치)을 '제N조' 헤더로 그룹핑해 조문 단위로
+    묶고, diff_articles와 동형의 changes 리스트로 반환.
+
+    반환: [{key, article_no, change, before, after}]
+      - modified: 구/신 양쪽에 헤더가 있고 문안이 다름
+      - added   : 구쪽 헤더가 '<신 설>'(헤더 아님) → 통째 신설 조문
+      - deleted : 신쪽이 헤더 아님(<삭 제>) 또는 '제N조 … 삭제' 표식
+    대비표는 '변경된 조문만' 싣기 때문에 그룹 = 변경 조문. 미변경 문단은
+    '(생  략)'/'(현행과 같음)'으로 축약돼 그대로 인용에 남는다(AI가 이해)."""
+    groups, cur = [], None
+    for g, s in zip(gu_list, sin_list):
+        gt = _clean_oldnew(g.get('content') if isinstance(g, dict) else g)
+        st = _clean_oldnew(s.get('content') if isinstance(s, dict) else s)
+        if _OLDNEW_HEAD_RE.match(gt) or _OLDNEW_HEAD_RE.match(st):
+            cur = {'gu': [], 'sin': []}
+            groups.append(cur)
+        if cur is None:      # 헤더 이전 잔여줄은 조문 단위 대상 아님 — 버림
+            continue
+        cur['gu'].append(gt)
+        cur['sin'].append(st)
+    changes = []
+    for grp in groups:
+        gu_head = grp['gu'][0] if grp['gu'] else ''
+        sin_head = grp['sin'][0] if grp['sin'] else ''
+        gu_is_head = bool(_OLDNEW_HEAD_RE.match(gu_head))
+        sin_is_head = bool(_OLDNEW_HEAD_RE.match(sin_head))
+        head_for_key = sin_head if sin_is_head else gu_head
+        key = norm_key(head_for_key)
+        if not key:
+            continue
+        gu_txt = '\n'.join(x for x in grp['gu'] if x)
+        sin_txt = '\n'.join(x for x in grp['sin'] if x)
+        article_no = _article_no_from_head(head_for_key)
+        if not gu_is_head and sin_is_head:
+            change, before, after = 'added', '', sin_txt
+        elif gu_is_head and not sin_is_head:
+            change, before, after = 'deleted', gu_txt, ''
+        elif DELETED_RE.match(re.sub(r'\s+', ' ', sin_txt).strip()):
+            change, before, after = 'deleted', gu_txt, sin_txt
+        else:
+            change, before, after = 'modified', gu_txt, sin_txt
+        changes.append({'key': key, 'article_no': article_no,
+                        'change': change, 'before': before, 'after': after})
+    return changes
+
+
+def fetch_oldnew_articles(mst, api_target):
+    """법제처 신구법대비표(oldAndNew/admrulOldAndNew)를 '조문 매칭 정본'으로 조회.
+
+    유효한 대비표가 있으면 diff_articles 동형의 changes 리스트, 아니면 None(→difflib 폴백).
+    폴백(None) 신호:
+      · OC키 없음 / mst 없음 / 요청·JSON 실패
+      · 신구법존재여부='N'(대비표 없음, 예: 타법개정 다수)
+      · 구/신조문목록 부재·불균형
+      · 신조문 MST가 요청 mst와 불일치(엉뚱한 개정본 응답 방지 — trap #2)
+      · 파싱 결과 0건
+    """
+    if not (LAW_OC_KEY and mst):
+        return None
+    is_admrul = (api_target == 'admrul')
+    target = 'admrulOldAndNew' if is_admrul else 'oldAndNew'
+    param_key = 'ID' if is_admrul else 'MST'
+    try:
+        r = _drf_session().get(DRF_SERVICE, params={
+            'OC': LAW_OC_KEY, 'target': target, 'type': 'JSON', param_key: str(mst),
+        }, timeout=20)
+        r.raise_for_status()
+        d = r.json()
+    except Exception as e:
+        print(f'    (신구법 API 실패 → difflib 폴백) {str(e)[:100]}')
+        return None
+    root = d.get('OldAndNewService') or d.get('AdmRulOldAndNewService')
+    if not isinstance(root, dict) or not root:
+        print('    (신구법 응답 형식 이상[대비표 없음] → difflib 폴백)')
+        return None
+    if str(root.get('신구법존재여부', '')).upper() == 'N':
+        print('    (신구법존재여부=N[대비표 없음] → difflib 폴백)')
+        return None
+    gu_list = _oldnew_list(root.get('구조문목록'))
+    sin_list = _oldnew_list(root.get('신조문목록'))
+    if not gu_list or not sin_list or len(gu_list) != len(sin_list):
+        print(f'    (신구법 조문목록 부재/불균형 구{len(gu_list)}/신{len(sin_list)} '
+              f'→ difflib 폴백)')
+        return None
+    ninfo = root.get('신조문_기본정보') or {}
+    oinfo = root.get('구조문_기본정보') or {}
+    new_mst = str(ninfo.get('법령일련번호') or ninfo.get('행정규칙일련번호') or '')
+    old_mst = str(oinfo.get('법령일련번호') or oinfo.get('행정규칙일련번호') or '')
+    if new_mst and new_mst != str(mst):
+        print(f'    (신구법 신본 MST {new_mst} ≠ 요청 {mst} → difflib 폴백)')
+        return None
+    changes = _parse_oldnew(gu_list, sin_list)
+    if not changes:
+        print('    (신구법 대비표 파싱 0건 → difflib 폴백)')
+        return None
+    st = count_stats(changes)
+    print(f'    ✓ 신구법대비표 정본 매칭 {len(changes)}건 '
+          f'(변경{st["modified"]}·신설{st["added"]}·삭제{st["deleted"]}) '
+          f'· 대비표 구본 MST={old_mst or "?"} → 신본 {new_mst or mst}')
+    return changes
 
 
 # ── 조문 취득·DIFF ────────────────────────────────────────
@@ -887,9 +1042,16 @@ def generate_one(sb, ai_client, args, row, base_doc, new_doc, kind, results):
         print(f'  ! 청크 없음(기준 {len(base)}조 / 신본 {len(new)}조) — 건너뜀')
         results['excluded'].append(f'{name}(청크 없음)')
         return
-    changes = diff_articles(base, new)
+    # 조문 매칭(구↔신 짝짓기)만 법제처 신구법대비표를 정본으로 쓴다. 대비표가 없거나
+    # (신구법존재여부=N 등) 실패하면 기존 difflib(청크 article_no 키 조인)로 폴백.
+    # 아래 SKT 영향 분석·요약(analyze_with_sonnet)·urgency·articles 스키마는 무변경.
+    changes = fetch_oldnew_articles(row.get('mst'), row.get('api_target'))
+    match_src = '신구법대비표(정본)' if changes is not None else 'difflib(청크)'
+    if changes is None:
+        changes = diff_articles(base, new)
     stats = count_stats(changes)
     total = len(set(base) | set(new))
+    print(f'  조문 매칭소스={match_src}')
     print(f'  조문 {len(base)}→{len(new)}개 · 변경 {stats["modified"]}'
           f'·신설 {stats["added"]}·삭제 {stats["deleted"]} (전체 {total}조)')
 
