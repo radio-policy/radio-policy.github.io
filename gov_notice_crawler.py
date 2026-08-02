@@ -252,6 +252,10 @@ def crawl_msit() -> list:
         ('https://www.msit.go.kr/bbs/list.do?sCode=user&mPid=208&mId=307', '보도자료'),
         ('https://www.msit.go.kr/bbs/list.do?sCode=user&mPid=103&mId=109', '입법행정예고'),
         ('https://www.msit.go.kr/bbs/list.do?sCode=user&mPid=103&mId=108', '훈령예규고시'),
+        # 공고(알림·소식>공지사항, mPid=121&mId=310): 주파수 할당·재할당 공고 원문이 실리는
+        # 게시판 (2026-08-02 실측 — 예: 제2023-729호 IMT용 주파수할당 공고, 제2023-1007호
+        # 5G 특화망용 주파수 할당 공고). RADIO_KEYWORDS 필터로 과학·우정 잡음 배제.
+        ('https://www.msit.go.kr/bbs/list.do?sCode=user&mPid=121&mId=310', '공고'),
     ]
     from urllib.parse import unquote, urlparse, parse_qs
     for url, label in targets:

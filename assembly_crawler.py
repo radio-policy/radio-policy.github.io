@@ -68,6 +68,15 @@ KEYWORDS = [
     '위성통신',
     '기간통신',
     '전파간섭',
+    # 통신 인접 법안 보완 (2026-08-02, #64) — 법령명 위주 검색이라 법 이름에 없으면 누락되던 것.
+    # 실측 22대 건수: 개인정보 85·인공지능 77·플랫폼 22·데이터 22·클라우드 1·메타버스 1.
+    # '정보통신'(203건)·'디지털'(38건 중 헬스케어 등 무관 다수)·'이용자보호'(0건)는 제외 — 소음/무효.
+    '개인정보',
+    '인공지능',
+    '플랫폼',
+    '데이터',
+    '클라우드',
+    '메타버스',
 ]
 
 # 상태 변경 시 알림을 보낼 중요 단계
@@ -347,6 +356,20 @@ def fetch_bill_summary(bill_no: str) -> str:
 
 
 # ── 관련성 판정 (Haiku 배치, 실패 시 키워드 폴백) ──────────────
+# 판정 안정화 (2026-08-02): 같은 법안이 실행마다 관련↔무관으로 뒤집힌 사고 후속.
+# ① 40건 단위 배치 분할(주의 분산 방지) ② 제안이유 포함(판정 재료 보강)
+# ③ 프롬프트에 결정성 지시(기준문 문자 그대로, 추측 금지, 애매하면 관련)
+# ④ 무관 판정 중 경계 후보만 1회 재투표(놓침 방지).
+# temperature류 파라미터는 지침 do-not — 넣지 말 것.
+
+JUDGE_BATCH_SIZE = 40          # 배치당 법안 수 (40~50 권장 — 1콜 전량 투입 금지)
+SUMMARY_JUDGE_CHARS = 400      # 판정 입력에 넣는 제안이유 절단 길이
+
+# 경계 재투표 선별: 통신 인접 상임위(과방위는 판정 전 자동 관련이라 제외됨)
+BORDERLINE_COMMITTEES = ('정무', '행정안전', '산업통상', '문화체육')
+# 경계 재투표 선별: 법안명·제안이유에 이 어휘가 있으면 재투표 대상
+BORDERLINE_TERMS = ('통신', '데이터', '플랫폼', '개인정보', '전파', '주파수',
+                    '방송', '정보통신', '디지털', '인공지능')
 
 NOTICE_JUDGE_TOOL = {
     'name': 'record_notice_relevance',
@@ -377,29 +400,56 @@ def load_notice_criteria() -> str:
     return ''
 
 
-def judge_notices_haiku(candidates: list[dict]):
-    """신규 입법예고 후보를 Haiku 1콜 배치 판정. 관련 BILL_NO 집합(set) 반환.
-    호출 불가/실패 시 None → 호출부에서 키워드 폴백(fail-open)."""
-    if anthropic is None or not ANTHROPIC_API_KEY:
-        print('  [경고] anthropic 미설치 또는 ANTHROPIC_API_KEY 없음')
-        return None
-    criteria = load_notice_criteria()
-    if not criteria:
-        print('  [경고] app_config.assembly_notice_criteria 없음 — Haiku 판정 생략')
-        return None
-    items = [{
-        'bill_no':   (n.get('BILL_NO') or ''),
-        'bill_name': (n.get('BILL_NAME') or '').strip(),
-        'committee': (n.get('CURR_COMMITTEE') or '').strip(),
-    } for n in candidates]
+def fetch_candidate_summaries(candidates: list[dict]) -> dict[str, str]:
+    """신규 판정 대상(candidates)만 제안이유·주요내용 조회 → {bill_no: 절단 텍스트}.
+    기존 추적분·기각 캐시분은 candidates에 없으므로 호출 수는 신규분만큼만 늘어난다.
+    개별 실패는 그 법안만 제목 판정으로 폴백(빈 값)."""
+    summaries: dict[str, str] = {}
+    for n in candidates:
+        bill_no = (n.get('BILL_NO') or '').strip()
+        if not bill_no:
+            continue
+        text = fetch_bill_summary(bill_no)   # 실패 시 '' (내부에서 로그)
+        if text:
+            summaries[bill_no] = ' '.join(text.split())[:SUMMARY_JUDGE_CHARS]
+        time.sleep(0.2)  # API rate limit (본 법안 루프 0.3s와 동일 취지)
+    return summaries
+
+
+def _notice_judge_items(batch: list[dict], summaries: dict[str, str]) -> list[dict]:
+    """판정 입력 항목 구성 — 제목+위원회+제안이유(있으면)."""
+    items = []
+    for n in batch:
+        bill_no = (n.get('BILL_NO') or '').strip()
+        item = {
+            'bill_no':   bill_no,
+            'bill_name': (n.get('BILL_NAME') or '').strip(),
+            'committee': (n.get('CURR_COMMITTEE') or '').strip(),
+        }
+        summary = summaries.get(bill_no, '')
+        if summary:
+            item['summary'] = summary
+        items.append(item)
+    return items
+
+
+def _judge_batch_haiku(client, criteria: str, batch: list[dict],
+                       summaries: dict[str, str]):
+    """배치 1개(≤JUDGE_BATCH_SIZE건)를 Haiku 1콜로 판정. 관련 BILL_NO set, 실패 시 None.
+    결정성: tool_choice로 판정 강제 + 기준문 문자 적용·추측 금지·애매하면 관련·건별 독립 판정.
+    (temperature류 파라미터 사용 금지 — 지침 do-not)"""
+    items = _notice_judge_items(batch, summaries)
     prompt = (
-        '아래는 국회 입법예고(의견등록 진행중) 법안 목록이다. 시스템 지시의 기준문에 따라 '
-        '관련된 법안의 bill_no만 골라 record_notice_relevance 도구로 기록하라. '
+        '아래는 국회 입법예고(의견등록 진행중) 법안 목록이다.\n'
+        '판정 규칙:\n'
+        '1. 각 법안을 목록 내 다른 법안·순서와 무관하게 한 건씩 독립적으로 판정하라.\n'
+        '2. 시스템 지시의 기준문을 문자 그대로 적용하라. 기준문에 없는 근거로 추측하지 말라.\n'
+        '3. 관련/무관이 애매하면 관련으로 판정하라(놓침보다 과잉 포함이 낫다).\n'
+        '관련으로 판정된 법안의 bill_no만 record_notice_relevance 도구로 기록하라. '
         '관련이 하나도 없으면 빈 배열을 기록하라.\n\n'
-        + json.dumps(items, ensure_ascii=False)
+        + json.dumps(items, ensure_ascii=False, indent=1)
     )
     try:
-        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
         resp = client.messages.create(
             model=HAIKU_MODEL,
             max_tokens=4000,
@@ -416,6 +466,63 @@ def judge_notices_haiku(candidates: list[dict]):
     except Exception as e:
         print(f'  [Haiku 판정 실패] {str(e)[:120]}')
         return None
+
+
+def _is_borderline(n: dict, summaries: dict[str, str]) -> bool:
+    """1차 무관 판정 후보 중 재투표 대상인지 — 통신 인접 상임위 또는 경계 어휘 포함."""
+    committee = (n.get('CURR_COMMITTEE') or '')
+    if any(c in committee for c in BORDERLINE_COMMITTEES):
+        return True
+    text = (n.get('BILL_NAME') or '') + ' ' + summaries.get((n.get('BILL_NO') or '').strip(), '')
+    return any(t in text for t in BORDERLINE_TERMS)
+
+
+def judge_notices_haiku(candidates: list[dict]):
+    """신규 입법예고 후보를 Haiku로 배치 판정(JUDGE_BATCH_SIZE건씩 독립 콜). 관련 BILL_NO set 반환.
+    판정 자체가 불가(키·기준문 없음)하면 None → 호출부에서 전체 키워드 폴백(fail-open).
+    개별 배치 실패는 그 배치만 키워드 폴백. 1차 무관 중 경계 후보는 1회 재투표(관련이면 채택)."""
+    if anthropic is None or not ANTHROPIC_API_KEY:
+        print('  [경고] anthropic 미설치 또는 ANTHROPIC_API_KEY 없음')
+        return None
+    criteria = load_notice_criteria()
+    if not criteria:
+        print('  [경고] app_config.assembly_notice_criteria 없음 — Haiku 판정 생략')
+        return None
+
+    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+
+    # ② 판정 재료 보강 — 신규 판정 대상만 제안이유 조회 (실패 건은 제목만으로 판정)
+    summaries = fetch_candidate_summaries(candidates)
+    print(f'  제안이유 확보: {len(summaries)}/{len(candidates)}건')
+
+    # ① 배치 분할 — 배치별 독립 판정, 실패 배치만 키워드 폴백
+    relevant: set = set()
+    n_batches = (len(candidates) + JUDGE_BATCH_SIZE - 1) // JUDGE_BATCH_SIZE
+    for i in range(0, len(candidates), JUDGE_BATCH_SIZE):
+        batch = candidates[i:i + JUDGE_BATCH_SIZE]
+        nos = _judge_batch_haiku(client, criteria, batch, summaries)
+        if nos is None:
+            print(f'  [배치 {i // JUDGE_BATCH_SIZE + 1}/{n_batches} 실패] 키워드 폴백({len(batch)}건)')
+            nos = keyword_match_notices(batch)
+        relevant |= nos
+
+    # ④ 경계 재투표 — 1차 무관 중 경계 후보만 1회 재판정, 관련이면 채택(놓침 방지)
+    borderline = [n for n in candidates
+                  if (n.get('BILL_NO') or '').strip() not in relevant
+                  and _is_borderline(n, summaries)]
+    if borderline:
+        print(f'  경계 재투표 대상: {len(borderline)}건')
+        rescued: set = set()
+        for i in range(0, len(borderline), JUDGE_BATCH_SIZE):
+            batch = borderline[i:i + JUDGE_BATCH_SIZE]
+            nos = _judge_batch_haiku(client, criteria, batch, summaries)
+            if nos:                       # 실패(None)면 1차 무관 유지 — 추가 폴백 없음
+                rescued |= nos
+        if rescued:
+            print(f'  경계 재투표 구제: {len(rescued)}건')
+        relevant |= rescued
+
+    return relevant
 
 
 def keyword_match_notices(candidates: list[dict]) -> set:

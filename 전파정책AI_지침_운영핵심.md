@@ -30,6 +30,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 ├── refetch_content.py          # 본문 재수집·요약·60일 초과 정리(Windows 스케줄러, 한국 IP) · heartbeat(last_refetch_run)
 ├── gov_notice_crawler.py       # 정부·기관 고시→news_feed + 입법예고(opinion.lawmaking.go.kr)→law_amendments(lsAnc) (17:00, 한국 IP) · heartbeat(last_gov_notice_run)
 │                               #   RRA(국립전파연구원)·MSIT(과기정통부)·KMCC(중앙전파관리소)·KCC(방통위)·ETRI·KISDI
+│                               #   ※ MSIT는 보도자료·입법행정예고·훈령예규고시 + **공고(공지사항 mPid=121&mId=310)**: 주파수 할당·재할당 공고 원문이 실리는 게시판(2026-08-02 추가). 사업공고(311)는 R&D 모집 잡음이라 제외
 │                               #   ※ crawl_kcc()는 방통위(kcc.go.kr), crawl_kmcc()는 중앙전파관리소(kmcc.go.kr) — 도메인 한 글자 차이라 혼동 주의
 ├── law_crawler.py              # 법제처 DRF API 법령·고시 모니터링(11:00 KST). 엔드포인트 www.law.go.kr/DRF/lawSearch.do, OC=radiopolicyai
 ├── assembly_crawler.py         # 국회 법안 모니터링(열린국회정보 API, 22대) + 국회 입법예고 추적 패스(#56)
@@ -561,9 +562,15 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **수집**: 열린국회 API `nknalejkafmvgzmpt`(진행중 입법예고) 1콜(pSize=1000) — 결과가 곧
   "의견등록 가능" 목록(마감일 NOTI_ED_DT 당일 포함). AGE 파라미터는 **무시됨**(넣지 말 것).
   국회 법안 크롤러(10:00) 본 루프 뒤에 패스로 부착. `--dry-run` 지원.
-- **관련성 = 의미 판정**: 기존 추적분·**과방위 소관은 자동 관련**, 나머지는 Haiku 배치 판정
-  (기준문 app_config `assembly_notice_criteria` — 운영자 수정 가능) + 실패 시 키워드 폴백(fail-open).
-  기각은 app_config `assembly_notice_rejected` 캐시로 재판정 방지(진행 목록에서 빠지면 자동 정리).
+- **관련성 = 의미 판정 (2026-08-02 안정화, #64)**: 기존 추적분·**과방위 소관은 자동 관련**, 나머지는
+  Haiku **배치(40건)** 판정 — ①제목+위원회+**제안이유(BPMBILLSUMMARY 400자)** ②tool_choice 강제+
+  "독립 판정·기준문 문자적용·애매하면 관련" 프롬프트로 **결정성 확보**(temperature류 금지) ③'무관'
+  중 통신 인접 상임위/경계 어휘 건만 **1회 재투표**(관련이면 채택). 판정 흔들림(같은 법안 dry-run
+  관련→실전 무관) 해소 — 재현성 2회 일치 실측. 기준문 app_config `assembly_notice_criteria`(경계 사례
+  5종 포함, 운영자 수정 가능) + 실패 시 키워드 폴백(fail-open). 기각 캐시 `assembly_notice_rejected`
+  (진행 목록에서 빠지면 자동 정리 — 판정 로직/기준문 변경 시 캐시 비우면 전건 재심사).
+- **검색 키워드(#64)**: 법령명 위주 13개 + 통신 인접 6개(개인정보·인공지능·플랫폼·데이터·클라우드·
+  메타버스). '정보통신'(203건)·'디지털'(헬스케어 등 무관 다수)·'이용자보호'(0건)는 제외.
 - **DB**: assembly_bills에 notice_end_dt('YYYY-MM-DD')·notice_url·notice_alert_stage(0/1/2).
   알림은 운영자 전용(시작 1회→stage1, D-3 1회→stage2 — **발송 성공 시에만 stage 갱신**해 실패 재시도).
   heartbeat `last_assembly_run`.
