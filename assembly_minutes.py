@@ -211,8 +211,12 @@ def pdf_fallback_blocks(pdf_url: str) -> list:
 #  관련 발언 선별 (1차 키워드 → 2차 Haiku)
 # ═══════════════════════════════════════════════════════════
 
-def select_relevant(blocks: list, keywords: list, judge, meeting_title: str) -> list:
-    """키워드 매칭 블록을 Haiku 로 확정한 뒤 전후 1블록 포함 인덱스 목록 반환."""
+def select_relevant(blocks: list, keywords: list, judge, meeting_title: str):
+    """키워드 매칭 블록을 Haiku 로 확정.
+    반환: (include, confirmed)
+      include   — 섹션 발췌용(확정 블록 + 전후 1블록) 인덱스 정렬 목록
+      confirmed — 판정 통과 '본' 발언 블록 인덱스(전후 문맥 제외).
+                  발언자별 적재(assembly_speeches)는 confirmed 만 사용해 중복 Haiku 콜을 피한다."""
     matched = [i for i, b in enumerate(blocks)
                if any(k in b['text'] for k in keywords)]
     confirmed = []
@@ -228,7 +232,7 @@ def select_relevant(blocks: list, keywords: list, judge, meeting_title: str) -> 
     include = set()
     for i in confirmed:
         include.update(j for j in (i - 1, i, i + 1) if 0 <= j < len(blocks))
-    return sorted(include)
+    return sorted(include), confirmed
 
 
 # ═══════════════════════════════════════════════════════════
@@ -290,6 +294,164 @@ def summarize_meeting(meeting_title: str, picked_texts: list) -> str:
     except Exception as e:
         print('  [요약 실패 — 생략] %s' % str(e)[:60])
         return ''
+
+
+# ═══════════════════════════════════════════════════════════
+#  발언자별 입장 추적 (assembly_speeches)
+# ═══════════════════════════════════════════════════════════
+
+# 발언자명 정규화 시 걷어낼 직위·존칭 토큰 (긴 것 우선 매칭)
+_TITLE_TOKENS = sorted([
+    '부위원장', '위원장', '소위원장', '위원장님', '간사', '위원', '의원',
+    '부총리', '장관', '차관', '청장', '국장', '실장', '과장', '본부장',
+    '단장', '원장', 'ㆍ원장', '이사장', '대표이사', '사장', '대표',
+    '참고인', '증인', '진술인', '공술인', '님',
+], key=len, reverse=True)
+
+
+def normalize_speaker(name: str) -> str:
+    """발언자명에서 직위·존칭·괄호부가정보를 제거해 매칭 가능한 이름만 남긴다.
+    예) '최민희 위원장'→'최민희', '위원장 최민희'→'최민희',
+        '홍길동(더불어민주당)'→'홍길동'.
+    정부측처럼 개인명이 없고 직위만 있는 경우(예 '과학기술정보통신부장관')는
+    정규화 결과가 비거나 너무 짧으면 원본을 그대로 둔다."""
+    raw = (name or '').strip()
+    n = re.sub(r'\s+', ' ', raw)
+    n = re.sub(r'\s*[\(（][^)）]*[\)）]', '', n).strip()   # 괄호 정당/부가정보 제거
+    # 앞쪽 직위 제거: "위원장 최민희", "장관 유상임"
+    for _ in range(2):
+        for t in _TITLE_TOKENS:
+            if n.startswith(t + ' '):
+                n = n[len(t) + 1:].strip()
+                break
+    # 뒤쪽 직위·존칭 제거: 공백 있는 형태 + 이름에 바로 붙은 형태 모두
+    for _ in range(2):
+        changed = False
+        for t in _TITLE_TOKENS:
+            if n.endswith(' ' + t):
+                n = n[:-(len(t) + 1)].strip()
+                changed = True
+                break
+            if n.endswith(t) and len(n) > len(t):
+                cand = n[:-len(t)].strip()
+                if 2 <= len(cand) <= 4:      # 한국인 성명 길이일 때만 붙은 직위로 간주
+                    n = cand
+                    changed = True
+                    break
+        if not changed:
+            break
+    return n if len(n) >= 2 else raw
+
+
+def summarize_speech(meeting_title: str, agenda: str, name: str,
+                     pos: str, text: str) -> str:
+    """발언 1건의 '내용'을 1~2문장으로 요약(Haiku 1콜). 정치적 입장 단정 금지.
+    실패·키 없음이면 원문 앞부분을 축약해 폴백(요지 완전 누락 방지)."""
+    api_key = os.environ.get('ANTHROPIC_API_KEY', '')
+    fallback = re.sub(r'\s+', ' ', text).strip()[:120]
+    if not api_key:
+        return fallback
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=api_key)
+        prompt = (
+            '아래는 국회 과방위 회의에서 나온 한 발언이다. 이 발언의 "내용"만 '
+            '1~2문장(120자 이내)으로 요약하라.\n'
+            '규칙:\n'
+            '- 발언에서 실제로 말한 내용·요구·질의만 기술한다.\n'
+            '- 발언자의 성향·정파성·의도를 단정하는 평가어(친기업/반기업/강경/'
+            '옹호/편향 등)를 절대 쓰지 말라.\n'
+            '- "촉구/질의/지적/요청/제안/우려 표명/반대/찬성 입장 표명" 같은 '
+            '발언 행위를 기술하는 것은 허용한다.\n'
+            '- 머리기호·따옴표·발언자명 없이 요지 문장만 출력한다.\n\n'
+            '회의: %s\n안건: %s\n발언자: %s(%s)\n발언 원문: %s'
+            % (meeting_title, agenda or '(미상)', name, pos or '', text[:2000])
+        )
+        resp = client.messages.create(
+            model='claude-haiku-4-5-20251001',
+            max_tokens=160,
+            messages=[{'role': 'user', 'content': prompt}],
+        )
+        txt = ''
+        for blk in resp.content:            # 적응형 추론 대비 — text 블록만
+            if getattr(blk, 'type', '') == 'text':
+                txt = (blk.text or '').strip()
+                break
+        txt = re.sub(r'^[#\-•*"\s]*(요약|요지\s*[::]?\s*)?', '', txt)
+        txt = txt.replace('\n', ' ').strip()
+        return txt[:250] if len(txt) >= 8 else fallback
+    except Exception as e:
+        print('  [발언 요지 실패 — 폴백] %s' % str(e)[:50])
+        return fallback
+
+
+def speeches_exist(sb, confer_num: str) -> bool:
+    """해당 회의의 발언 행이 이미 적재됐는지(재실행 dedupe·section과 독립)."""
+    try:
+        rows = sb.table('assembly_speeches').select('id') \
+            .eq('confer_num', str(confer_num)).limit(1).execute().data
+        return bool(rows)
+    except Exception as e:
+        print('  [speeches_exist 조회 실패(무시)] %s' % str(e)[:50])
+        return False
+
+
+def _primary_agenda(meeting: dict) -> str:
+    """회의의 대표 안건 1건(번호 접두 제거)."""
+    for a in meeting['agenda']:
+        mm = re.match(r'\d+\.\s*(.+)', a)
+        if mm:
+            return mm.group(1).strip()[:120]
+    if meeting['agenda']:
+        return re.sub(r'^[o○◦\s]+', '', meeting['agenda'][0]).strip()[:120]
+    return ''
+
+
+def build_speech_rows(meeting: dict, blocks: list, confirmed: list,
+                      keywords: list, source_url: str, dry: bool = False) -> list:
+    """confirmed 발언 블록을 발언자별 assembly_speeches 행으로 구성.
+    요지는 dry-run 이 아닐 때만 Haiku 로 생성(비용 방어)."""
+    agenda = _primary_agenda(meeting)
+    mdate = (meeting['conf_date'] or '').strip() or None
+    rows = []
+    seen = set()                    # (speaker, chunk_seq) 중복 방어
+    for i in confirmed[:MAX_EXCERPTS]:
+        b = blocks[i]
+        speaker = normalize_speaker(b['name'])
+        key = (speaker, i)
+        if key in seen:
+            continue
+        seen.add(key)
+        topic = ', '.join([k for k in keywords if k in b['text']][:5])
+        summary = '' if dry else summarize_speech(
+            meeting['title'], agenda, speaker, b['pos'], b['text'])
+        rows.append({
+            'speaker':      speaker,
+            'speaker_raw':  b['name'],
+            'position':     b['pos'] or None,
+            'party':        None,
+            'meeting_date': mdate,
+            'confer_num':   str(meeting['confer_num']),
+            'chunk_seq':    i,
+            'agenda':       agenda or None,
+            'topic':        topic or None,
+            'summary':      summary or None,
+            'source_url':   source_url,
+        })
+    return rows
+
+
+def upsert_speeches(sb, rows: list) -> int:
+    """assembly_speeches 적재(유니크 (confer_num,speaker,chunk_seq)로 재실행 안전)."""
+    if not rows:
+        return 0
+    try:
+        sb.table('assembly_speeches').upsert(
+            rows, on_conflict='confer_num,speaker,chunk_seq').execute()
+        return len(rows)
+    except Exception as e:
+        print('  [발언 적재 실패] %s' % str(e)[:120])
+        return 0
 
 
 def build_section_body(meeting: dict, detail: dict, blocks: list, picked: list,
@@ -357,15 +519,21 @@ def run(sb, api_key: str, year: int, limit: int = 0, dry: bool = False) -> dict:
                   '> 출처: 국회 과학기술정보방송통신위원회 회의록 자동 수집 '
                   '(열린국회정보 Open API + 국회회의록시스템)\n\n---\n\n' % year)
 
-    stats = {'new': 0, 'dup': 0, 'fail': 0}
+    stats = {'new': 0, 'dup': 0, 'fail': 0, 'sp': 0, 'proc': 0}
     for m in meetings:
-        if limit and stats['new'] >= limit:
+        # limit 은 '실제로 무언가 적재한(섹션 신규 or 발언 신규) 회의' 수를 센다.
+        # 발언 소급 적재 시 섹션은 이미 있어 stats['new'] 가 0이라도 한도가 걸리도록.
+        if limit and stats['proc'] >= limit:
             break
         if not m['conf_date'] or not m['dgr']:
             continue
         ymd6 = m['conf_date'].replace('-', '')[2:]
-        # dedupe: 회의일+회차 접두만으로 선확인 (안건 축약이 바뀌어도 중복 등재 방지)
-        if section_exists(sb, doc_name, ymd6, '제%s차 ' % m['dgr']):
+        # dedupe: 섹션(회의록 청크)과 발언(assembly_speeches)을 독립 확인.
+        # 섹션은 회의일+회차 접두로 선확인(안건 축약이 바뀌어도 중복 등재 방지).
+        # 둘 다 이미 있으면 스킵. 한쪽만 있으면 없는 쪽만 채운다(발언 소급 적재 가능).
+        sec_exists = section_exists(sb, doc_name, ymd6, '제%s차 ' % m['dgr'])
+        sp_exists = (not dry) and speeches_exist(sb, m['confer_num'])
+        if sec_exists and (dry or sp_exists):
             stats['dup'] += 1
             continue
         try:
@@ -382,7 +550,7 @@ def run(sb, api_key: str, year: int, limit: int = 0, dry: bool = False) -> dict:
             print('  [원문 없음·스킵] %s' % m['title'][:60])
             stats['fail'] += 1
             continue
-        picked = select_relevant(blocks, keywords, judge, m['title'])
+        picked, confirmed = select_relevant(blocks, keywords, judge, m['title'])
         detail = fetch_detail(api_key, m['conf_id'])
         title = _section_title(m)
         picked_texts = ['%s: %s' % (blocks[i]['name'], blocks[i]['text'][:800])
@@ -391,23 +559,41 @@ def run(sb, api_key: str, year: int, limit: int = 0, dry: bool = False) -> dict:
         body = build_section_body(m, detail, blocks, picked, summary)
         url = VIEWER_URL % m['confer_num']
         if dry:
+            sp_rows = build_speech_rows(m, blocks, confirmed, keywords, url, dry=True)
+            speakers = sorted({r['speaker'] for r in sp_rows})
             print('  [dry-run] ## %s %s | 원문=%s 블록 %d, 발췌 %d, %d자'
                   % (ymd6, title, src, len(blocks), len(picked), len(body)))
+            print('  발언자별 후보 %d건 / 발언자 %d명: %s'
+                  % (len(sp_rows), len(speakers), ', '.join(speakers)[:120]))
             print('  ----- 섹션 미리보기 -----')
             print('\n'.join('  | ' + ln for ln in body.split('\n')[:40]))
             print('  -------------------------')
             stats['new'] += 1
             continue
-        if register_kb_section(sb, doc_name, DOC_CATEGORY, ymd6, title, body, url,
-                               doc_header):
-            print('  [등재] %s %s (%s, 발췌 %d)' % (ymd6, title, src, len(picked)))
-            stats['new'] += 1
-        else:
-            stats['dup'] += 1
+        did_work = False
+        # ① 기존 회의록 섹션(document_chunks) — 없을 때만 등재 (경로 무변경)
+        if not sec_exists:
+            if register_kb_section(sb, doc_name, DOC_CATEGORY, ymd6, title, body, url,
+                                   doc_header):
+                print('  [등재] %s %s (%s, 발췌 %d)' % (ymd6, title, src, len(picked)))
+                stats['new'] += 1
+                did_work = True
+            else:
+                stats['dup'] += 1
+        # ② 발언자별 입장(assembly_speeches) — 없을 때만 적재 (추가 경로)
+        if not sp_exists:
+            n_sp = upsert_speeches(
+                sb, build_speech_rows(m, blocks, confirmed, keywords, url, dry=False))
+            if n_sp:
+                print('  [발언 적재] %s 발언 %d건' % (ymd6, n_sp))
+                stats['sp'] += n_sp
+                did_work = True
+        if did_work:
+            stats['proc'] += 1
         time.sleep(1)
 
-    note = 'year=%d new=%d dup=%d fail=%d' % (year, stats['new'], stats['dup'],
-                                              stats['fail'])
+    note = 'year=%d new=%d dup=%d fail=%d sp=%d' % (
+        year, stats['new'], stats['dup'], stats['fail'], stats['sp'])
     print('[과방위 회의록 완료] ' + note)
     if not dry:
         _heartbeat(sb, note)

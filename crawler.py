@@ -8,6 +8,7 @@
 
 import os
 import re
+import json
 import time
 import smtplib
 from datetime import datetime, timezone, timedelta
@@ -223,16 +224,31 @@ def classify_urgency(title: str, content: str = '') -> str:
 #  유틸 함수
 # ═══════════════════════════════════════════════════════
 
+def _fetch_all_rows(table: str, columns: str) -> list:
+    """PostgREST는 무제한 select도 최대 1,000행만 돌려준다 — 반드시 페이지네이션.
+    (2026-08-03 사고: news_feed가 1,086건이 되자 최신 86건이 잘려 '기존' 판정에서
+    빠졌고, 이미 알림한 긴급 기사를 신규로 착각해 재발송. 총량이 상한을 넘는 첫날
+    조용히 터지는 유형이라 전량 조회는 이 헬퍼만 쓸 것.)"""
+    rows, page, step = [], 0, 1000
+    while True:
+        res = sb.table(table).select(columns).range(page * step, (page + 1) * step - 1).execute()
+        chunk = res.data or []
+        rows.extend(chunk)
+        if len(chunk) < step:
+            return rows
+        page += 1
+
+
 def get_existing_urls() -> set:
     """Supabase에 이미 저장된 URL + 제목 목록 조회 (Google RSS 중복 방지)
     + 사용자가 대시보드에서 삭제한 기사(deleted_news)도 포함해 재수집 방지"""
-    res = sb.table('news_feed').select('url,title').execute()
-    urls   = {row['url']   for row in (res.data or []) if row.get('url')}
-    titles = {row['title'] for row in (res.data or []) if row.get('title')}
+    data = _fetch_all_rows('news_feed', 'url,title')
+    urls   = {row['url']   for row in data if row.get('url')}
+    titles = {row['title'] for row in data if row.get('title')}
     try:
-        dres = sb.table('deleted_news').select('url,title').execute()
-        urls   |= {row['url']   for row in (dres.data or []) if row.get('url')}
-        titles |= {row['title'] for row in (dres.data or []) if row.get('title')}
+        ddata = _fetch_all_rows('deleted_news', 'url,title')
+        urls   |= {row['url']   for row in ddata if row.get('url')}
+        titles |= {row['title'] for row in ddata if row.get('title')}
     except Exception as e:
         print(f'[삭제목록] deleted_news 조회 실패(무시): {e}')
     return urls, titles
@@ -413,8 +429,9 @@ def crawl_naver_news() -> tuple:
                 if not title or len(title) < 8:
                     continue
                 is_personnel = is_ministry_personnel_news(title)
-                if not is_personnel and not any(k in title for k in RADIO_KEYWORDS):
-                    continue
+                # 제목 RADIO_KEYWORDS 포함 여부로 걸러내던 게이트는 폐지(2026-08-03).
+                # 넓게 담고 관련성은 screen_news_items()의 Haiku 1차 선별이 판정한다.
+                # EXCLUDE_KEYWORDS(스포츠·선거·부동산 오탐)는 값싼 사전 차단이라 그대로 둔다.
                 if not is_personnel and any(k in title for k in EXCLUDE_KEYWORDS):
                     continue
                 if title in seen_titles:
@@ -440,6 +457,11 @@ def crawl_naver_news() -> tuple:
                     'is_read':      False,
                     'published_at': _naver_pubdate_to_iso(art.get('pubDate', '')),
                     'content':      None,
+                    # 선별 전용 임시 필드 — 네이버 API description(요약)을 판정 재료로만 쓴다.
+                    # content에 넣지 않는 이유: refetch_content.py가 'content 100자 미만'을
+                    # 본문 재수집 대상으로 삼는데 요약이 들어가면 재수집이 막힌다.
+                    # screen_news_items()가 판정 직후 이 키를 제거하므로 DB로는 흘러가지 않는다.
+                    '_screen_text': _strip_html_tags(art.get('description', ''))[:300],
                 })
         except Exception as e:
             print(f'[네이버 뉴스 오류] {kw}: {str(e)[:80]}')
@@ -490,8 +512,7 @@ def crawl_google_news_rss() -> list:
                 if not title or len(title) < 8:
                     continue
                 is_personnel = is_ministry_personnel_news(title)
-                if not is_personnel and not any(k in title for k in RADIO_KEYWORDS):
-                    continue
+                # 네이버 경로와 동일 — RADIO_KEYWORDS 포함 게이트 폐지, EXCLUDE는 유지 (2026-08-03)
                 if not is_personnel and any(k in title for k in EXCLUDE_KEYWORDS):
                     continue
                 if title in seen_titles:
@@ -552,6 +573,7 @@ def crawl_google_news_rss() -> list:
                     'is_read':      False,
                     'published_at': date_str,
                     'content':      content_text,
+                    '_screen_text': (content_text or '')[:300],   # 선별 재료 (판정 후 제거)
                 })
         except Exception as e:
             print(f'[Google RSS 오류] {kw}: {e}')
@@ -935,7 +957,35 @@ def crawl_kisdi() -> list:
 #  크롤러 — 범용 키워드 검색 (IT전문지·경제지·종합일간지)
 # ═══════════════════════════════════════════════════════
 
-NEWS_SEARCH_KEYWORDS = ['전파정책', '주파수', '5G주파수', '5G 주파수', '6G주파수', '6G 주파수', '전자파', '무선국', '이동통신', 'WRC-27', '6GHz', '공공와이파이', '공공 와이파이', '지하철 와이파이', '기지국', 'LTE', '3G', '이동통신 품질', '5G 기지국', 'LTE 기지국', '기지국 장애', '이동통신 장비', '과기정통부 인사', '과학기술정보통신부 인사', '과기정통부 승진', '과기정통부 인사이동', '방통위 인사']
+# ───────────────────────────────────────────────────────
+#  뉴스 검색어 — "넓게 수집 → Haiku 선별" 구조로 확대 (2026-08-03)
+#  기존 27개는 좁은 검색어라 '통신요금 인하', 'AI 기본법' 등 소관 이슈인데도
+#  제목에 전파 계열 단어가 없으면 아예 검색되지 않았다. 보도자료 쪽에서 이미 쓰는
+#  app_config.press_keywords(33개) 중 '뉴스 검색어로서 유효한 것'만 골라 병합한다.
+#  - 단독으로 쓰면 소음만 늘어나는 일반어(AI·요금·무선·사이버·단말·스펙트럼·기자재)는
+#    복합어로 좁혀 넣거나 제외했다. 예: AI → 'AI 기본법'·'AI 규제', 요금 → '통신요금'
+#  - 'WRC' 단독은 모터스포츠 랠리 오탐이라 기존 'WRC-27'만 유지.
+#  - '전파' 단독은 '감염 전파' 등 동사 용법이 많아 '전파법'·'전파사용료'로 대체.
+#  넓힌 만큼 관련성 판정은 제목 키워드가 아니라 screen_news_items()의 Haiku가 맡는다.
+# ───────────────────────────────────────────────────────
+NEWS_SEARCH_KEYWORDS = [
+    # ── 기존 27개 (유지) ──
+    '전파정책', '주파수', '5G주파수', '5G 주파수', '6G주파수', '6G 주파수',
+    '전자파', '무선국', '이동통신', 'WRC-27', '6GHz',
+    '공공와이파이', '공공 와이파이', '지하철 와이파이',
+    '기지국', 'LTE', '3G', '이동통신 품질', '5G 기지국', 'LTE 기지국',
+    '기지국 장애', '이동통신 장비',
+    '과기정통부 인사', '과학기술정보통신부 인사', '과기정통부 승진',
+    '과기정통부 인사이동', '방통위 인사',
+    # ── 확대분 (press_keywords 병합) ──
+    '5G', '6G', '주파수 할당', '전파법', '전파사용료',
+    '무선설비', '적합성평가', '방송통신기자재', 'ITU',
+    '전기통신사업법', '정보통신망법', '위치정보법', '통신정책',
+    '통신요금', '통신품질', '통신장애', '알뜰폰', '번호이동',
+    '단말기유통', '이용자보호', '스팸문자', '재난문자',
+    '위성통신', '사이버보안', 'AI 기본법', 'AI 규제',
+    '과기정통부',
+]
 
 # 언론사별 검색 설정 ─ (source, search_url, article_sel, date_sel, base_url)
 NEWS_SITE_CONFIGS = [
@@ -1295,13 +1345,197 @@ def fetch_article_body(url: str, source: str) -> tuple:
 
 
 # ═══════════════════════════════════════════════════════
+#  관련성 1차 선별 — Claude Haiku (2026-08-03)
+#
+#  검색어를 넓히면서 제목 키워드 게이트를 없앴으므로, 무관 기사가 그대로 들어와
+#  본문 수집(건당 1초 대기 + HTTP)과 긴급도 분류(건당 Haiku 1콜)를 낭비하게 된다.
+#  그래서 신규 기사만 모아 제목+요약으로 배치 판정하고, 통과분만 뒤 단계로 보낸다.
+#  보도자료(press_ingest)·국회 입법예고(assembly_crawler)가 쓰는 것과 같은 패턴이다.
+#
+#  fail-open 원칙: 키 없음·판정 실패 시 기존 RADIO_KEYWORDS 키워드 필터로 되돌아간다
+#  (선별이 죽었다고 수집 자체가 멈추면 무음 누락이 된다 — 배경역사 #39).
+# ═══════════════════════════════════════════════════════
+
+SCREEN_BATCH_SIZE = 35          # 1콜당 판정 기사 수 (제목+요약 300자 기준 ≈ 3~4K 입력토큰)
+SCREEN_MODEL = 'claude-haiku-4-5-20251001'
+
+# 판정 기준문 폴백 — 원본은 app_config.news_relevance_criteria
+NEWS_RELEVANCE_CRITERIA_FALLBACK = (
+    '다음 뉴스 기사가 SK텔레콤 Comm센터 기술정책팀(전파·통신 정책 모니터링) 업무와 '
+    '관련 있는지 판정한다.\n'
+    '관련 있음: 이동통신(5G·6G·주파수·기지국·단말·로밍·위성통신·통신장비), '
+    '전파(전자파·무선국·무선설비·적합성평가·전파사용료·전파간섭), '
+    '통신사업 정책·규제(전기통신사업법·통신요금·이용자보호·알뜰폰·스팸·번호이동·단말기유통), '
+    '통신품질·통신장애·통신재난·재난문자, 네트워크 인프라(데이터센터·클라우드 포함), '
+    '통신망 사이버보안·개인정보·위치정보, ITU·WRC 등 국제 전파·표준 동향, '
+    '유료방송·OTT·망 사용료 정책, AI 정책(AI 기본법·규제·국가전략·AI 데이터센터·AI 반도체), '
+    '과기정통부·방송미디어통신위원회·국립전파연구원·중앙전파관리소 등 소관 부처의 '
+    '통신·전파 정책 발표와 인사.\n'
+    '관련 없음: 스포츠·연예·부동산·주식 등 타 분야, 통신과 무관한 기업 실적·마케팅·제휴 홍보, '
+    '단말기 신제품 리뷰·개통 이벤트 등 소비자 판촉, 과학관 전시·공모전·행사 홍보, 채용 공고, '
+    '신약·바이오, 우주발사체·천문, 통신과 무관한 순수 과학 R&D 성과 홍보.\n'
+    '애매하면 관련으로 판정한다(놓침보다 과잉 포함이 낫다).'
+)
+
+NEWS_SCREEN_TOOL = {
+    'name': 'record_relevant_news',
+    'description': '기사 목록 중 기준문에 따라 관련으로 판정된 기사의 id 목록을 기록한다.',
+    'input_schema': {
+        'type': 'object',
+        'properties': {
+            'relevant_ids': {
+                'type': 'array',
+                'items': {'type': 'integer'},
+                'description': '관련 기사의 id 목록. 관련이 하나도 없으면 빈 배열.',
+            },
+        },
+        'required': ['relevant_ids'],
+    },
+}
+
+
+def load_news_criteria() -> str:
+    """app_config.news_relevance_criteria 판정 기준문 조회. 없거나 실패면 코드 폴백."""
+    try:
+        rows = sb.table('app_config').select('value') \
+            .eq('key', 'news_relevance_criteria').limit(1).execute().data
+        if rows and (rows[0].get('value') or '').strip():
+            return rows[0]['value'].strip()
+    except Exception as e:
+        print(f'[선별] 판정기준 조회 실패 — 코드 폴백 사용: {str(e)[:80]}')
+    return NEWS_RELEVANCE_CRITERIA_FALLBACK
+
+
+def _screen_text_of(item: dict) -> str:
+    """판정 재료 — 수집 시 담아 둔 요약(_screen_text), 없으면 content 앞부분."""
+    txt = (item.get('_screen_text') or item.get('content') or '')
+    return re.sub(r'\s+', ' ', txt).strip()[:300]
+
+
+def _keyword_relevant(item: dict) -> bool:
+    """폴백 판정 — 종전 수집 기준(제목에 RADIO_KEYWORDS 포함)과 동일."""
+    return any(k in (item.get('title') or '') for k in RADIO_KEYWORDS)
+
+
+def _screen_batch_haiku(client, criteria: str, batch: list):
+    """배치 1개(≤SCREEN_BATCH_SIZE건)를 Haiku 1콜로 판정. 관련 id(1-based) set, 실패 시 None.
+    결정성: tool_choice로 도구 호출 강제 + 기준문 문자 적용·건별 독립 판정 지시.
+    (temperature류 파라미터 사용 금지 — 지침 do-not)"""
+    payload = []
+    for idx, it in enumerate(batch, 1):
+        row = {'id': idx, 'title': (it.get('title') or '').strip()}
+        summary = _screen_text_of(it)
+        if summary:
+            row['summary'] = summary
+        payload.append(row)
+    prompt = (
+        '아래는 방금 수집한 뉴스 기사 목록이다.\n'
+        '판정 규칙:\n'
+        '1. 각 기사를 목록 내 다른 기사·순서와 무관하게 한 건씩 독립적으로 판정하라.\n'
+        '2. 시스템 지시의 기준문을 문자 그대로 적용하라. 기준문에 없는 근거로 추측하지 말라.\n'
+        '3. 관련/무관이 애매하면 관련으로 판정하라(놓침보다 과잉 포함이 낫다).\n'
+        '관련으로 판정된 기사의 id만 record_relevant_news 도구로 기록하라. '
+        '관련이 하나도 없으면 빈 배열을 기록하라.\n\n'
+        + json.dumps(payload, ensure_ascii=False)
+    )
+    try:
+        resp = client.messages.create(
+            model=SCREEN_MODEL,
+            max_tokens=1500,
+            system=criteria,
+            tools=[NEWS_SCREEN_TOOL],
+            tool_choice={'type': 'tool', 'name': 'record_relevant_news'},
+            messages=[{'role': 'user', 'content': prompt}],
+        )
+        for blk in resp.content:      # 적응형 추론 대비 — tool_use 블록만 취함
+            if getattr(blk, 'type', '') == 'tool_use':
+                ids = (blk.input or {}).get('relevant_ids') or []
+                out = set()
+                for x in ids:
+                    try:
+                        out.add(int(x))
+                    except (TypeError, ValueError):
+                        continue
+                return out
+        return None                   # 도구 호출 없음 → 실패 취급(호출부가 키워드 폴백)
+    except Exception as e:
+        print(f'  [선별 판정 오류] {str(e)[:120]}')
+        return None
+
+
+def screen_news_items(items: list) -> list:
+    """수집분에서 SKT 관련 기사만 남긴다. 반환 목록은 입력 순서를 유지한다.
+
+    - 소관 부처 인사 뉴스(is_ministry_personnel_news)는 판정 없이 무조건 통과 (지침 do-not).
+    - ANTHROPIC_API_KEY 없음/클라이언트 생성 실패 → 전량 키워드 폴백.
+    - 배치 단위 실패 → 그 배치만 키워드 폴백 (다른 배치 판정은 유지).
+    - 판정에만 쓰는 '_screen_text' 키는 여기서 전부 제거한다 (DB 컬럼이 아님).
+    """
+    if not items:
+        return []
+
+    keep = [False] * len(items)
+    personnel = 0
+    cand_idx = []
+    for n, it in enumerate(items):
+        if is_ministry_personnel_news(it.get('title', '')):
+            keep[n] = True            # 부처 인사 뉴스 — 항상 수집
+            personnel += 1
+        else:
+            cand_idx.append(n)
+
+    client = None
+    criteria = ''
+    if cand_idx and ANTHROPIC_API_KEY:
+        try:
+            criteria = load_news_criteria()
+            client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        except Exception as e:
+            print(f'[선별] Haiku 초기화 실패: {str(e)[:80]}')
+            client = None
+    if cand_idx and client is None:
+        print(f'[선별] AI 판정 불가 — RADIO_KEYWORDS 키워드 폴백 ({len(cand_idx)}건)')
+
+    n_batches = (len(cand_idx) + SCREEN_BATCH_SIZE - 1) // SCREEN_BATCH_SIZE
+    for i in range(0, len(cand_idx), SCREEN_BATCH_SIZE):
+        chunk = cand_idx[i:i + SCREEN_BATCH_SIZE]
+        batch = [items[n] for n in chunk]
+        ids = _screen_batch_haiku(client, criteria, batch) if client else None
+        if ids is None:
+            if client:
+                print(f'  [선별 배치 {i // SCREEN_BATCH_SIZE + 1}/{n_batches} 실패] '
+                      f'키워드 폴백({len(batch)}건)')
+            for n, it in zip(chunk, batch):
+                keep[n] = _keyword_relevant(it)
+        else:
+            for pos, n in enumerate(chunk, 1):
+                if pos in ids:
+                    keep[n] = True
+
+    passed  = [it for n, it in enumerate(items) if keep[n]]
+    dropped = [it for n, it in enumerate(items) if not keep[n]]
+    print(f'[선별] 수집 {len(items)}건 → 관련 {len(passed)}건 '
+          f'(제외 {len(dropped)}건, 인사 자동통과 {personnel}건)')
+    for it in dropped[:5]:            # 기준문 조정용 표본 — 제외 사유 감시
+        print(f'  [제외] {(it.get("title") or "")[:50]}')
+
+    for it in items:                  # 임시 키 제거 — DB 컬럼이 아니므로 반드시 정리
+        it.pop('_screen_text', None)
+    return passed
+
+
+# ═══════════════════════════════════════════════════════
 #  Supabase 저장
 # ═══════════════════════════════════════════════════════
 
 def save_new_items(items: list, existing_data: tuple) -> list:
-    """규칙1: 72시간 이내 & 날짜 확인된 신규 기사만 저장
+    """규칙1: 15일 이내 & 날짜 확인된 신규 기사만 저장
     existing_data: (existing_urls: set, existing_titles: set)
     URL + 제목 이중 중복 체크 (Google RSS 리다이렉트 URL 대응)
+
+    순서(2026-08-03 재배치): 중복 제거 → ①조기 날짜 필터 → ②Haiku 관련성 선별
+    → ③본문 수집 → ④날짜 필터 → ⑤긴급도 분류 → 저장.
+    본문 수집·긴급도 분류는 선별 통과분에만 돈다(둘 다 건당 비용이 큰 단계).
     """
     existing_urls, existing_titles = existing_data
     now_kst = datetime.now(KST)
@@ -1331,7 +1565,41 @@ def save_new_items(items: list, existing_data: tuple) -> list:
         print('[저장] 신규 항목 없음')
         return []
 
-    # ① 본문 수집 및 발행일 확정
+    # ① 조기 날짜 필터 — 발행일이 이미 확정된 오래된 기사는 선별·본문 수집 전에 뺀다.
+    #    (뒤의 ④ 필터와 기준은 같다. 판정·본문 토큰을 어차피 버릴 기사에 쓰지 않으려는 것)
+    #    발행일 불명분은 본문 수집이 날짜를 채울 수 있으므로 여기서 버리지 않는다.
+    fresh, stale_old = [], 0
+    for item in unique_new:
+        pub = item.get('published_at', '')
+        if pub:
+            try:
+                from dateutil import parser as _dtp0
+                pub_dt0 = _dtp0.parse(pub)
+                if pub_dt0.tzinfo is None:
+                    pub_dt0 = pub_dt0.replace(tzinfo=KST)
+                if pub_dt0 < cutoff_72h:
+                    stale_old += 1
+                    continue
+            except Exception:
+                pass      # 파싱 실패는 통과 — 뒤의 정식 필터가 처리
+        fresh.append(item)
+    if stale_old:
+        print(f'[필터] {stale_old}건 15일 초과 — 선별 전 제외')
+    unique_new = fresh
+    if not unique_new:
+        print('[저장] 유효한 신규 항목 없음')
+        return []
+
+    # ② 관련성 1차 선별 (Haiku) — 통과분만 본문 수집·긴급도 분류로 넘긴다.
+    #    제외분은 저장하지 않는다. 저장해 두면 대시보드·RAG·브리핑 모집단이 그대로 오염되고,
+    #    url UNIQUE 때문에 나중에 되살리기도 어렵다. 놓침이 걱정되면 기준문(app_config)을
+    #    고치는 쪽이 맞다 — 제외 표본은 위 로그에 남는다.
+    unique_new = screen_news_items(unique_new)
+    if not unique_new:
+        print('[저장] 선별 통과 항목 없음')
+        return []
+
+    # ③ 본문 수집 및 발행일 확정
     # GitHub Actions(미국 IP)에서는 한국 뉴스 사이트 차단 → RSS 요약만 저장
     # PC에서 실행 시 fetch_article_body로 전체 본문 수집
     if IS_GITHUB_ACTIONS:
@@ -1355,7 +1623,7 @@ def save_new_items(items: list, existing_data: tuple) -> list:
                     item['published_at'] = ''
                 time.sleep(1)
 
-    # ② 72시간 초과 또는 발행일 불명 제외 (규칙1)
+    # ④ 72시간 초과 또는 발행일 불명 제외 (규칙1)
     valid, skipped_unknown, skipped_old = [], 0, 0
     for item in unique_new:
         pub = item.get('published_at', '')
@@ -1383,7 +1651,7 @@ def save_new_items(items: list, existing_data: tuple) -> list:
         print('[저장] 유효한 신규 항목 없음')
         return []
 
-    # ③ 긴급도 분류
+    # ⑤ 긴급도 분류 — 선별 통과분에만 돈다 (건당 Haiku 1콜)
     for item in valid:
         val = classify_urgency(item.get('title', ''), item.get('content', '') or '')
         item['urgency'] = val

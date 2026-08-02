@@ -6,7 +6,7 @@
 <title>전파정책 전문가 AI — SKT Comm센터 기술정책팀</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <link rel="stylesheet" href="styles.css?v=20260803b">
+  <link rel="stylesheet" href="styles.css?v=20260803c">
 
 </head>
 <body>
@@ -422,7 +422,7 @@
         <div style="display:flex;gap:8px;margin-bottom:10px;align-items:center">
           <span style="font-size:11px;color:var(--text-secondary);flex:1">
             <b style="color:var(--text-primary)">자동 수집 뉴스</b>
-            <span style="opacity:.8"> — SKT 팀 관련성 기준 중요도 자동 분류</span>
+            <span style="opacity:.8"> — SKT 관련성 기준 중요도 자동 분류</span>
           </span>
         </div>
 
@@ -832,12 +832,27 @@
 
       <!-- 과방위 회의록 — 독립 메뉴로 승격 (2026-08-02 운영자 지시, #54) -->
       <div class="panel" id="panel-minutes">
-        <div style="display:flex;gap:8px;margin-bottom:14px;align-items:center">
+        <div style="display:flex;gap:8px;margin-bottom:10px;align-items:center">
           <span style="font-size:12px;color:var(--text-secondary)">과학기술정보방송통신위원회 회의록 · 통신·전파·AI 관련 발언 발췌 · 22대(2024~) · 매일 17:00 갱신</span>
+        </div>
+        <div style="display:flex;gap:6px;margin-bottom:14px">
+          <button id="minutes-tab-by-meeting" onclick="switchMinutesView('meeting')" style="cursor:pointer;font-size:12px;padding:5px 12px;border-radius:6px;border:1px solid var(--accent);background:var(--accent);color:#fff">회의별 보기</button>
+          <button id="minutes-tab-by-speaker" onclick="switchMinutesView('speaker')" style="cursor:pointer;font-size:12px;padding:5px 12px;border-radius:6px;border:1px solid var(--border);background:var(--bg-card);color:var(--text-secondary)">발언자별 보기</button>
         </div>
         <div id="assembly-minutes">
           <div id="assembly-minutes-list">
             <div style="color:var(--text-secondary);padding:12px;text-align:center;font-size:12px">불러오는 중...</div>
+          </div>
+        </div>
+        <div id="assembly-speakers" style="display:none">
+          <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
+            <label for="speaker-select" style="font-size:12px;color:var(--text-secondary)">발언자</label>
+            <select id="speaker-select" onchange="renderSpeakerSpeeches(this.value)" style="flex:1;min-width:160px;max-width:280px;padding:6px 10px;font-size:12px;border:1px solid var(--border);border-radius:6px;background:var(--bg-card);color:var(--text-primary)">
+              <option value="">불러오는 중...</option>
+            </select>
+          </div>
+          <div id="speaker-speeches">
+            <div style="color:var(--text-secondary);padding:12px;text-align:center;font-size:12px">발언자를 선택하세요</div>
           </div>
         </div>
       </div>
@@ -1065,6 +1080,6 @@
 <script src="https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js"></script>
 <script>if(typeof pdfjsLib!=='undefined'){pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';}</script>
 <script src="system_prompt.js?v=20260612c"></script>
-<script src="app.js?v=20260803o"></script>
+<script src="app.js?v=20260803p"></script>
 </body>
 </html>

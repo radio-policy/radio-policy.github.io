@@ -487,3 +487,6 @@ mark.kb-hit { background: rgba(245, 197, 24, .38); color: inherit; border-radius
 #kb-doc-body a { color: var(--accent); }
 /* 웹 표의 rowspan이 풀려 첫 칸에만 남은 '이어지는 행' — 통칸으로 깔고 살짝 들여쓴다 */
 #kb-doc-body td.md-cont, .msg-ai td.md-cont { padding-left: 24px; color: var(--text-secondary); }
+/* 국회 법안 제안이유 3줄 접기 — 클릭하면 펼침(.open). 데이터는 전문 유지, 표시만 제한 */
+.asm-sum { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; cursor: pointer; }
+.asm-sum.open { display: block; -webkit-line-clamp: unset; overflow: visible; }

@@ -6853,7 +6853,7 @@ function renderAssemblyBills(bills) {
       + '<span style="font-size:10px;color:var(--text-muted)">발의 ' + proposeDt + '</span>'
       + '<span style="margin-left:auto;font-size:10px;font-weight:600;color:' + sl.color + '">' + escHtml(sl.text) + '</span>'
       + '</div>'
-      + (b.summary ? '<div style="font-size:11px;color:var(--text-secondary);line-height:1.45;margin:6px 0 0">' + escHtml(b.summary) + '</div>' : '')
+      + (b.summary ? '<div class="asm-sum" title="클릭하면 전체 내용을 펼치거나 접습니다" onclick="event.stopPropagation();this.classList.toggle(\'open\')" style="font-size:11px;color:var(--text-secondary);line-height:1.45;margin:6px 0 0">' + escHtml(b.summary) + '</div>' : '')
       + (kws ? '<div style="margin-top:4px;font-size:10px;color:var(--text-muted)">키워드: ' + escHtml(kws) + '</div>' : '')
       + ((link || diffLink) ? '<div style="margin-top:4px;display:flex;gap:12px;align-items:center">' + link + diffLink + '</div>' : '')
       + '</div>';
@@ -7004,6 +7004,112 @@ function openAssemblyMinute(idx) {
   if (!mt) return;
   // 보도자료 상세 모달 재사용 — doc_name 기반 '## YYMMDD 제목' 섹션 조회라 회의록 형식과 동일
   openPressDetail(mt.title, mt.date, mt.doc_name);
+}
+
+// ── 발언자별 보기 (assembly_speeches, 2026-08-03) ──────────────
+// 회의별 보기(document_chunks 회의록)와 별개 경로. 발언자 단위 구조화 조회.
+var _speechesBySpeaker = null;   // { speaker: [rows...] }
+var _minutesView = 'meeting';
+
+function switchMinutesView(view) {
+  _minutesView = view;
+  var listEl = document.getElementById('assembly-minutes-list');
+  var spkEl = document.getElementById('assembly-speakers');
+  var tabM = document.getElementById('minutes-tab-by-meeting');
+  var tabS = document.getElementById('minutes-tab-by-speaker');
+  var on = 'cursor:pointer;font-size:12px;padding:5px 12px;border-radius:6px;border:1px solid var(--accent);background:var(--accent);color:#fff';
+  var off = 'cursor:pointer;font-size:12px;padding:5px 12px;border-radius:6px;border:1px solid var(--border);background:var(--bg-card);color:var(--text-secondary)';
+  if (view === 'speaker') {
+    if (listEl) listEl.style.display = 'none';
+    if (spkEl) spkEl.style.display = '';
+    if (tabM) tabM.style.cssText = off;
+    if (tabS) tabS.style.cssText = on;
+    loadSpeakers();
+  } else {
+    if (listEl) listEl.style.display = '';
+    if (spkEl) spkEl.style.display = 'none';
+    if (tabM) tabM.style.cssText = on;
+    if (tabS) tabS.style.cssText = off;
+  }
+}
+
+async function loadSpeakers(force) {
+  var sel = document.getElementById('speaker-select');
+  var out = document.getElementById('speaker-speeches');
+  if (!sel || !sb) return;
+  if (_speechesBySpeaker && !force) return;
+  sel.innerHTML = '<option value="">불러오는 중...</option>';
+  try {
+    var rows = [];
+    var pageStart = 0;
+    while (true) {
+      var resp = await sb.from('assembly_speeches')
+        .select('speaker, position, party, meeting_date, agenda, topic, summary, source_url')
+        .order('meeting_date', { ascending: false })
+        .range(pageStart, pageStart + 999);
+      if (resp.error) throw resp.error;
+      rows = rows.concat(resp.data || []);
+      if (!resp.data || resp.data.length < 1000) break;
+      pageStart += 1000;
+    }
+    var map = {};
+    rows.forEach(function(r) {
+      var k = (r.speaker || '').trim();
+      if (!k) return;
+      (map[k] = map[k] || []).push(r);
+    });
+    _speechesBySpeaker = map;
+    var names = Object.keys(map).sort(function(a, b) {
+      return map[b].length - map[a].length || a.localeCompare(b, 'ko');
+    });
+    if (names.length === 0) {
+      sel.innerHTML = '<option value="">수집된 발언이 없습니다 (수집기 가동 후 표시)</option>';
+      if (out) out.innerHTML = '<div style="color:var(--text-secondary);padding:12px;text-align:center;font-size:12px">수집된 발언이 없습니다</div>';
+      return;
+    }
+    sel.innerHTML = '<option value="">발언자 선택 (' + names.length + '명)</option>' +
+      names.map(function(n) {
+        return '<option value="' + escHtml(n) + '">' + escHtml(n) + ' (' + map[n].length + ')</option>';
+      }).join('');
+    if (out) out.innerHTML = '<div style="color:var(--text-secondary);padding:12px;text-align:center;font-size:12px">발언자를 선택하세요</div>';
+  } catch (e) {
+    sel.innerHTML = '<option value="">불러오기 실패</option>';
+    if (out) out.innerHTML = '<div style="color:#f66;padding:12px;text-align:center;font-size:12px">발언 불러오기 실패: ' + escHtml((e && e.message) || String(e)) + '</div>';
+  }
+}
+
+function renderSpeakerSpeeches(name) {
+  var out = document.getElementById('speaker-speeches');
+  if (!out) return;
+  if (!name || !_speechesBySpeaker || !_speechesBySpeaker[name]) {
+    out.innerHTML = '<div style="color:var(--text-secondary);padding:12px;text-align:center;font-size:12px">발언자를 선택하세요</div>';
+    return;
+  }
+  var rows = _speechesBySpeaker[name].slice().sort(function(a, b) {
+    return String(b.meeting_date || '').localeCompare(String(a.meeting_date || ''));
+  });
+  var head = '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px">' +
+    '<b style="color:var(--text-primary)">' + escHtml(name) + '</b>' +
+    (rows[0] && rows[0].position ? ' · ' + escHtml(rows[0].position) : '') +
+    (rows[0] && rows[0].party ? ' · ' + escHtml(rows[0].party) : '') +
+    ' · 발언 ' + rows.length + '건</div>';
+  var html = head + '<div class="card" style="cursor:default;padding:0;overflow:hidden">';
+  rows.forEach(function(r, i) {
+    html += '<div style="' + (i ? 'border-top:1px solid var(--border);' : '') + 'padding:10px 14px">' +
+      '<div style="display:flex;gap:10px;align-items:baseline;flex-wrap:wrap">' +
+        '<span style="font-size:11px;color:var(--text-muted);white-space:nowrap">' + escHtml(String(r.meeting_date || '').slice(0, 10)) + '</span>' +
+        (r.agenda ? '<span style="font-size:12px;color:var(--text-primary);line-height:1.4">' + escHtml(r.agenda) + '</span>' : '') +
+        (safeUrl(r.source_url) ? '<a href="' + safeUrl(r.source_url) + '" target="_blank" rel="noopener" style="margin-left:auto;font-size:10px;text-decoration:none;white-space:nowrap">원문 <i class="ti ti-external-link"></i></a>' : '') +
+      '</div>' +
+      (r.summary ? '<div style="font-size:11px;color:var(--text-secondary);line-height:1.6;margin-top:5px">' + escHtml(r.summary) + '</div>' : '') +
+      (r.topic ? '<div style="margin-top:5px">' + r.topic.split(',').map(function(t) {
+          t = t.trim(); if (!t) return '';
+          return '<span style="display:inline-block;font-size:10px;color:var(--accent-purple);background:rgba(139,92,246,.1);padding:0 6px;border-radius:3px;margin:0 4px 2px 0">' + escHtml(t) + '</span>';
+        }).join('') + '</div>' : '') +
+    '</div>';
+  });
+  html += '</div>';
+  out.innerHTML = html;
 }
 
 // ════════════════════════════════════════════

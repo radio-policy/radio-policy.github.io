@@ -28,7 +28,7 @@ SKT Comm Center 기술정책팀's radio/telecom **policy-monitoring automation s
 ```
 
 **Collection** — each crawler writes to a table and a `system_health` heartbeat:
-- `crawler.py` — news via Naver Search OpenAPI (falls back to Google RSS), Haiku urgency classification with feedback learning. Runs in GitHub Actions hourly.
+- `crawler.py` — news via Naver Search OpenAPI (falls back to Google RSS). 넓은 키워드 54개 수집 → Haiku 관련성 1차 선별(app_config `news_relevance_criteria`, 무관은 저장 안 함, 실패 시 키워드 폴백, 부처 인사는 무조건 통과) → 통과분만 본문 수집·Haiku 긴급도 분류(피드백 학습) (#66). Runs in GitHub Actions hourly.
 - `gov_notice_crawler.py` — government notices (RRA/MSIT/방통위/전파관리소/ETRI/KISDI) + 입법예고. **PC-local only** (Korean IP required; government sites block foreign IPs) — do NOT move to GitHub Actions. At the end it calls `press_ingest.run_daily()` — full-text press-release ingestion into the KB (6 agencies, 최근 15일 전수 수집 + Haiku 관련성 판정, keyword fallback) + auto embedding backfill. 주의: kmcc.go.kr은 전파관리소가 아니라 방송미디어통신위원회(구 방통위) 새 도메인이며, 전파관리소는 crms.go.kr (#53).
 - `law_crawler.py` (법제처 DRF API, endpoint `www.law.go.kr/DRF/lawSearch.do`), `assembly_crawler.py` (열린국회정보 API — 법안 수집 + **국회 입법예고 패스**: `nknalejkafmvgzmpt` 전량 수신 → Haiku 의미 판정(app_config `assembly_notice_criteria`) → 의견마감 배지·운영자 알림, #56), `refetch_content.py` (body re-fetch via trafilatura, PC-local). 국회 입법예고 법안의 조문 분석(신구조문대비표 → proposed DIFF, origin='assembly')은 `law_diff_gen.py --assembly-only`.
 
@@ -79,7 +79,7 @@ python press_backfill.py --agency 방통위  # 특정 기관 백필/델타 (dedu
 # 법령 DIFF·해외·회의록 (2026-08-02 신설 — #54)
 python law_diff_gen.py --dry-run --backfill   # 시행예정/승격 쌍의 조문 diff (실행은 17시 체인)
 python foreign_press.py --dry-run             # FCC·Ofcom·BEREC·日총무성·ITU (05:30 스케줄)
-python assembly_minutes.py --dry-run --limit 1  # 과방위 회의록 (17시 체인, 뷰어가 정본·PDF 폴백)
+python assembly_minutes.py --dry-run --limit 1  # 과방위 회의록 (17시 체인, 뷰어가 정본·PDF 폴백) + 발언자별 assembly_speeches 적재(#67)
 ```
 
 There is no build step, linter, or test suite — the dashboard is static files served by GitHub Pages, and the crawlers are run directly. Validate JS changes with `node --check` on the changed function.

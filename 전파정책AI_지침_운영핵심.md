@@ -23,7 +23,7 @@ SKT Comm센터 기술정책팀의 전파·통신 정책 모니터링 자동화 �
 C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 ├── sb_client.py                # Supabase 클라이언트 공용 생성기 — HTTP/2 끄고 HTTP/1.1+재시도(make_client). 모든 스크립트가 create_client 대신 사용(RemoteProtocolError 끊김 회피)
 ├── requirements.txt            # 의존성 버전 고정(lock, 61개). 모든 워크플로가 `pip install -r requirements.txt`로 설치 — 자동 최신화 사고 방지(배경역사 #15)
-├── crawler.py                  # 메인 크롤러(GitHub Actions 매시간) — 네이버 검색 OpenAPI(키 없으면 Google RSS 폴백), Haiku 긴급도 분류(피드백 학습), fetch_article_body 본문 수집, 긴급 재알림 억제(suppress_repeat_alerts, #44)
+├── crawler.py                  # 메인 크롤러(GitHub Actions 매시간) — 네이버 검색 OpenAPI(키 없으면 Google RSS 폴백), **키워드 54개 확대수집 → Haiku 1차 관련성 선별(app_config.news_relevance_criteria, 무관은 저장 안 함, fail-open 키워드 폴백, 부처 인사는 무조건 통과, #66)** → 통과분만 본문 수집·Haiku 긴급도 분류(피드백 학습), 긴급 재알림 억제(suppress_repeat_alerts, #44)
 ├── morning_briefing.py         # 모닝 브리핑 생성·발송(06:00 KST) — 🔴=DB 긴급도, 같은 사건 클러스터링(대표 1건+관련 N건, #44), SKT 영향 분석, 신규 입법예고 📢 섹션, 본문 0건 시 요약→제목 폴백(빈 브리핑 방지), 기사 0건 시 시각무관 1일1회 '🕊️무뉴스' 통지+placeholder(_handle_no_news)
 ├── news_dedup.py               # 같은 사건 재보도 판정 공용 유틸(제목 키워드, API 비용 0) — crawler·morning_briefing 공유. 임계 3·별-형 클러스터링 근거는 파일 주석 (#44)
 ├── regenerate_briefings.py     # 과거 브리핑을 클러스터링 적용본으로 재생성(수동). morning_briefing 함수 재사용, 입법예고 섹션 보존. **실행 전 daily_briefings_backup에 원본 백업 필수** (#46)
@@ -68,6 +68,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 | daily_briefings(삭제 없음·전량 보관, 목록도 무제한 표시) | 일일 브리핑 원문("⚠️ SKT 영향 분석:" 포함). 긴급도 수정 시 🔴 자동 동기화 |
 | law_amendments | 법령·고시·입법예고. law_type: law/bylaw/rules/admrul/lsAnc. lsAnc는 law_id=`lsAnc_op_{md5}` |
 | assembly_bills | 국회 법안. bill_id(UNIQUE)·법안명·단계·소관위·제안일·링크. **+국회 입법예고**(2026-08-02): notice_end_dt(의견마감 'YYYY-MM-DD')·notice_url(pal 상세)·notice_alert_stage(0미알림/1시작알림/2 D-3알림 — 발송 성공 시에만 갱신) |
+| assembly_speeches | 과방위 발언자별 발언(#67). speaker(정규화명)·speaker_raw·position·meeting_date·confer_num·chunk_seq·agenda·topic·summary(Haiku 요지, 성향 단정어 금지 가드)·source_url. unique(confer_num,speaker,chunk_seq). RLS anon select만. assembly_minutes.py가 document_chunks와 독립 dedupe로 적재 |
 | document_chunks | 법령·고시·보도자료 RAG 청크. embedding(vector 1024, HNSW), article_no=조항번호+제목. file_path=업로드 원본 Storage 경로. **보도자료는 2026-08-02부터 자동 수집**: doc_name=`{기관}_보도자료_{YYYY}.md`(기관: 과기정통부/전파연구원/방통위/전파관리소/ETRI/KISDI), 섹션 헤더 `## YYMMDD 제목`, 마지막 줄 `(원문: URL)`, **700자 무겹침 청킹**(대시보드가 청크를 이어붙여 원문 복원하므로 overlap 금지) |
 | app_config | 키-값 설정. `system_prompt`(봇 자문 프롬프트), `press_keywords`(보도자료 수집 키워드 JSON 배열 — 대시보드 '수집 키워드 관리' 카드가 편집), `press_relevance_criteria`(매일 수집 AI 관련성 판정 기준문), `assembly_notice_criteria`(국회 입법예고 Haiku 판정 기준문)·`assembly_notice_rejected`(기각 캐시 JSON — 자동 관리) 등. **claude_key는 anon 노출되는 브라우저용 — 서버측 재사용 금지** |
 | custom_knowledge | 팀 추가 지식(수동 입력). AI 자문 키워드 매칭 참조 |
@@ -556,6 +557,12 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
   press_ingest.**register_kb_section**(register_press의 일반화) 사용. 22대 개원(2024)부터 백필.
 - 대시보드: 국회 법안 탭 하단 목록 + openPressDetail 재사용. KB 목록 블랙리스트에 '회의록' 포함.
 - 17시 run_gov_crawler.bat 체인에서 매일 신규분 수집. heartbeat last_minutes_run.
+- **발언자별 입장 추적(2026-08-03, #67)**: 판정 통과 본 발언(전후 문맥 제외)을 `assembly_speeches`
+  테이블에 발언자별 적재 — speaker(정규화명)·position·meeting_date·agenda·summary(Haiku 요지)·
+  source_url. unique(confer_num, speaker, chunk_seq)로 재실행 안전. document_chunks 등재와 독립
+  dedupe(한쪽만 있으면 없는 쪽만 채움 → 소급 적재 가능). 대시보드 회의록 패널 "발언자별 보기" 토글.
+  **요지 프롬프트 가드: 발언 내용 요약만, 성향·정파성 단정 평가어 금지**(친기업/강경/편향 등) —
+  촉구·질의·지적 같은 발언 행위 동사만 허용. 22대 전 회의 백필 완료.
 
 ## 국회 입법예고 추적 (assembly_crawler 입법예고 패스 + law_diff_gen 국회 분석, 2026-08-02 신설 — 배경역사 #56)
 
