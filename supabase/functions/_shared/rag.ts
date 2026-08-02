@@ -4,7 +4,8 @@
 //  대시보드 app.js의 3중 하이브리드(키워드확장+ilike / trgm / 시맨틱)와 kb 요약 검색을
 //  핵심 경로만 TS로 이식했다. v1 단순화로 제외한 것(대시보드에만 있음):
 //  별표(annex) 추적 / 시행예정(pending) / custom_knowledge / 뉴스 컨텍스트 / law_graph·lawmap.
-//  임계값·가중치는 app.js와 동일하게 유지한다 (배경역사 #23 하이브리드 정규화 참조).
+//  임계값·가중치는 app.js와 동일하게 유지한다 (융합은 RRF — 종전 #23 합산식에서 교체.
+//  RRF·행위 표제어 가중·법령 위계 동점 규칙을 고치면 app.js searchKeywords/searchLawArticles도 같이).
 //
 //  키: ANTHROPIC_API_KEY·VOYAGE_API_KEY는 Edge Function Secrets에서만 읽는다.
 //  app_config(claude_key, anon 노출)를 서버에서 재사용하지 말 것 — 지침 do-not.
@@ -86,9 +87,10 @@ interface Chunk {
 async function searchChunks(sb: SupabaseClient, apiKey: string, query: string): Promise<Chunk[]> {
   const baseKeywords = extractKeywords(query);
   const expanded = await expandQueryKeywords(apiKey, query);
+  // 기본 → 법령 표제어(LAW_SYNONYMS) → LLM 확장 순 (app.js searchKeywords와 동일 유지)
   const keywords: string[] = [];
   const seenKw = new Set<string>();
-  for (const w of baseKeywords.concat(expanded)) {
+  for (const w of baseKeywords.concat(lawSynonymKeywords(query)).concat(expanded)) {
     const norm = w.replace(/\s+/g, '').toLowerCase();
     if (norm.length >= 2 && !seenKw.has(norm)) { seenKw.add(norm); keywords.push(w); }
   }
@@ -131,8 +133,11 @@ async function searchChunks(sb: SupabaseClient, apiKey: string, query: string): 
   merge(await trgmP as Chunk[], '_trgm_score', 'trgm_score');
   merge(await semP as Chunk[], '_semantic_score', 'similarity');
 
-  // 하이브리드 점수: 키워드 정규화 + trgm + 시맨틱×2 (app.js와 동일)
-  let maxKw = 0;
+  // ── RRF(Reciprocal Rank Fusion) 융합 (app.js searchKeywords와 동일 유지) ──
+  // 종전에는 키워드 정규화(0~1)+trgm+시맨틱×2를 그대로 합산해 척도가 다른 점수끼리 싸웠다
+  // (시맨틱 상위=논문이어도 합산 우승). 각 검색을 '순위'로 환산해 1/(K+순위) 합으로 융합하면
+  // 척도 문제가 사라진다(K=60 관례) — "몇 개의 검색에서 얼마나 상위였나"가 결정한다.
+  const synNormSet = new Set(lawSynonymKeywords(query).map((s) => s.toLowerCase()));
   for (const r of results) {
     let score = 0;
     for (const kw of keywords.slice(0, 10)) {
@@ -140,15 +145,39 @@ async function searchChunks(sb: SupabaseClient, apiKey: string, query: string): 
       const k = kw.toLowerCase();
       if ((r.content || '').toLowerCase().includes(k)) score += w;
       if ((r.doc_name || '').toLowerCase().includes(k)) score += w;
+      // 조문 표제어 일치 가점 — 질문 상투어('절차' 등)는 제외, LAW_SYNONYMS 출신 행위어는 가중
+      if ((r.article_no || '').toLowerCase().includes(k) && !GENERIC_QUERY_WORDS.includes(kw)) {
+        score += synNormSet.has(k) ? 4 : w * 2;
+      }
     }
-    r._score = score;
-    if (score > maxKw) maxKw = score;
+    r._score = score;          // RRF 순위 산출용 (절대값은 융합에 안 쓴다)
+    r._hybrid_score = 0;
   }
+  const RRF_K = 60;
+  const addRrf = (list: Chunk[]) => {
+    list.forEach((r, idx) => { r._hybrid_score = (r._hybrid_score || 0) + 1 / (RRF_K + idx + 1); });
+  };
+  addRrf(results.filter((r) => (r._score || 0) > 0).slice().sort((a, b) => (b._score || 0) - (a._score || 0)));
+  addRrf(results.filter((r) => (r._trgm_score || 0) > 0).slice().sort((a, b) => (b._trgm_score || 0) - (a._trgm_score || 0)));
+  addRrf(results.filter((r) => (r._semantic_score || 0) > 0).slice().sort((a, b) => (b._semantic_score || 0) - (a._semantic_score || 0)));
+  // 일반 가점·감점: 조문번호 있는 청크(법령·고시 원문) 가점, 파일 확장자 문서(논문·계획서류) 감점.
+  // 크기 0.5/(K+1) = 목록 1개 1위 기여의 절반 — 논문이 조문을 이기려면 한 목록 상위만큼 더 필요.
+  const FILE_DOC_RE = /\.(pdf|md|docx|hwp)$/i;
   for (const r of results) {
-    r._hybrid_score = (maxKw > 0 ? (r._score || 0) / maxKw : 0) + (r._trgm_score || 0) + (r._semantic_score || 0) * 2;
+    if (r.article_no) r._hybrid_score = (r._hybrid_score || 0) + 0.5 / (RRF_K + 1);
+    if (FILE_DOC_RE.test(r.doc_name || '')) r._hybrid_score = (r._hybrid_score || 0) - 0.5 / (RRF_K + 1);
   }
   results.sort((a, b) => (b._hybrid_score || 0) - (a._hybrid_score || 0));
-  return results.slice(0, 12);
+  // 문서당 청크 상한 — 같은 doc_name 최대 3청크만 상위에 (논문 1편이 상위 12개 독식 방지)
+  const perDoc: Record<string, number> = {};
+  const picked: Chunk[] = [];
+  for (const r of results) {
+    if (picked.length >= 12) break;
+    const dn = r.doc_name || '';
+    perDoc[dn] = (perDoc[dn] || 0) + 1;
+    if (perDoc[dn] <= 3) picked.push(r);
+  }
+  return picked;
 }
 
 // ── kb 요약 검색 (app.js searchKbSummaries 이식: trgm×5 + 시맨틱(law-2)×10 융합, 상위 5) ──
@@ -269,6 +298,29 @@ const LAW_SYNONYMS: Record<string, string[]> = {
   '반납': ['반납', '회수', '재할당'],
 };
 
+// 질문에 정책 동사가 있으면 대응하는 법령 표제어를 돌려준다 (app.js lawSynonymKeywords와 동일 유지)
+function lawSynonymKeywords(query: string): string[] {
+  const out: string[] = [];
+  for (const [k, syns] of Object.entries(LAW_SYNONYMS)) {
+    if (query.includes(k)) for (const s of syns) if (!out.includes(s)) out.push(s);
+  }
+  return out;
+}
+// 질문 상투어 — 조문 제목 가점·주제 매칭에서 제외 ('절차'가 「규제심사 절차」 같은
+// 무관 조문 제목에 걸려 상위를 차지하는 것 방지. app.js GENERIC_QUERY_WORDS와 동일 유지)
+const GENERIC_QUERY_WORDS = ['방법', '방안', '절차', '하는', '관련', '대한'];
+// 법령 위계 (동점 정렬용): 법률 > 대통령령 > 부령·총리령 > 고시·훈령 등 — app.js lawRank와 동일 유지
+function lawRank(docName: string | undefined): number {
+  const d = docName || '';
+  if (/\(법률\)/.test(d)) return 4;
+  if (/\(대통령령\)/.test(d)) return 3;
+  if (/(부령|총리령)\)/.test(d)) return 2;
+  return 1;
+}
+// 도메인 사전확률: 이 KB는 전파·통신 정책용이라, 행위·주제 점수가 같으면 전파·통신 계열
+// 법령이 국가재정법·위치정보법 같은 부수 수록 문서보다 근거일 확률이 높다 (질문과 무관한 상수 가점)
+const DOMAIN_DOC_RE = /전파|통신|무선|주파수/;
+
 export async function searchLawArticles(sb: SupabaseClient, query: string, limit = 5): Promise<LawHit[]> {
   const apiKey = env('ANTHROPIC_API_KEY');
   const base = extractKeywords(query);
@@ -280,11 +332,11 @@ export async function searchLawArticles(sb: SupabaseClient, query: string, limit
     const norm = w.replace(/\s+/g, '').toLowerCase();
     if (norm.length >= 2 && !seen.has(norm)) { seen.set(norm, true); keywords.push(w); }
   };
-  for (const w of base.concat(expanded)) push(w);
-  // 질문에 정책 동사가 있으면 대응하는 법령 표제어를 추가 투입 (LLM이 못 넘는 어휘 간극)
-  for (const [k, syns] of Object.entries(LAW_SYNONYMS)) {
-    if (query.includes(k)) syns.forEach(push);
-  }
+  // 기본 → 법령 표제어(LAW_SYNONYMS) → LLM 확장 순 — 표제어가 아래 slice(0,10) 상한에서
+  // 확장어에 밀려 잘리면 안 된다(어휘 간극은 LLM이 못 메운다). app.js searchLawArticles와 동일 순서.
+  base.forEach(push);
+  lawSynonymKeywords(query).forEach(push);
+  expanded.forEach(push);
   if (!keywords.length) return [];
 
   // .pdf/.md 등 파일 문서 제외 — '실행계획(안).pdf'도 '6조'라는 article_no를 갖고 있어
@@ -315,9 +367,16 @@ export async function searchLawArticles(sb: SupabaseClient, query: string, limit
     if (cur) cur._act = Math.max(cur._act, act);
     else acc.set(r.id, { ...r, _hits: 0, _act: act, _top: 0 });
   };
+  // 행위 가중은 어휘의 출처로 차등한다: LAW_SYNONYMS 출신(정책어→법령표제어로 '번역'된 말,
+  // 예: 종료→휴업·폐업)은 7, 그 외(질문 원어·LLM 확장)는 5. 원어가 조문 제목에 우연히
+  // 있는 경우('조난통신 종료 통보')는 대개 다른 제도라, 번역된 표제어보다 낮게 본다.
+  // (실측: 이 차등이 없으면 "3G 종료"에서 선박국 운용종료·조난통신 조문이
+  //  전기통신사업법 19조(사업의 휴업·폐업)·전파법 25조의2를 밀어낸다)
+  const synNorms = new Set(lawSynonymKeywords(query).map((s) => s.replace(/\s+/g, '').toLowerCase()));
   const jobs: Promise<void>[] = [];
   for (const kw of keywords.slice(0, 10)) {
-    jobs.push(hit('article_no', kw, 40).then((rows) => rows.forEach((r) => put(r, 5))));
+    const act = synNorms.has(kw.replace(/\s+/g, '').toLowerCase()) ? 7 : 5;
+    jobs.push(hit('article_no', kw, 40).then((rows) => rows.forEach((r) => put(r, act))));
     jobs.push(hit('content', kw, 10).then((rows) => rows.forEach((r) => put(r, 0))));
   }
   await Promise.all(jobs);
@@ -325,7 +384,7 @@ export async function searchLawArticles(sb: SupabaseClient, query: string, limit
   // 주제 일치는 부분문자열로 본다 — '기간통신사업'과 '전기통신사업법'은 앞글자가 달라
   // 접두 비교로는 안 잡히고 '통신사업'이라는 공통 조각으로만 이어진다.
   const topics = (query.match(/[가-힣A-Za-z0-9]{2,}/g) || [])
-    .filter((t) => !['방법', '방안', '절차', '하는', '관련', '대한'].includes(t));
+    .filter((t) => !GENERIC_QUERY_WORDS.includes(t));
   for (const h of acc.values()) {
     const hay = h.doc_name + ' ' + (h.article_no || '');
     let best = 0;
@@ -338,11 +397,21 @@ export async function searchLawArticles(sb: SupabaseClient, query: string, limit
       }
     }
     h._top = best;
-    h._hits = h._act * 2 + best;   // 행위를 우선하되 주제로 갈래를 좁힌다
+    // 행위를 우선하되 주제로 갈래를 좁히고, 동점은 도메인(전파·통신 계열) 문서를 앞세운다
+    h._hits = h._act * 2 + best + (DOMAIN_DOC_RE.test(h.doc_name) ? 1 : 0);
   }
+  // 정렬: 점수 → (동점이면) 법령 위계(법률>대통령령>부령>고시) → 문서명·조문번호(결정적 순서).
+  // 위계 동점 처리는 특정 법 우대가 아니라 일반 규칙 — 같은 점수면 상위 법령의 조문이 근거로 더 낫다.
+  const sorted = [...acc.values()].sort((a, b) => {
+    if (b._hits !== a._hits) return b._hits - a._hits;
+    const lr = lawRank(b.doc_name) - lawRank(a.doc_name);
+    if (lr !== 0) return lr;
+    if (a.doc_name !== b.doc_name) return a.doc_name < b.doc_name ? -1 : 1;
+    return (a.article_no || '') < (b.article_no || '') ? -1 : 1;
+  });
   // 같은 조문이 여러 청크로 쪼개져 있으면 대표 1건만 — 목록이 중복으로 채워지는 것 방지
   const byArticle = new Map<string, LawHit>();
-  for (const h of [...acc.values()].sort((a, b) => b._hits - a._hits)) {
+  for (const h of sorted) {
     const key = h.doc_name + '|' + (h.article_no || '');
     if (!byArticle.has(key)) byArticle.set(key, h);
   }

@@ -704,6 +704,7 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **저해상도 이미지의 OCR 결과를 검수 없이 KB에 등재하지 말 것** — 실측에서 전력선통신 고시의 주파수 표(567×378 BMP)는 OCR이 **수치를 오독**했고, 발표자료 PDF는 도형·장식을 글자로 잡았다. 자문이 틀린 수치를 근거로 답하는 것이 본문이 짧은 것보다 훨씬 해롭다 — 품질이 의심되면 **등재 반려하고 원인만 기록**한다. (배경역사 #60)
 - **텔레그램 전송·Voyage 임베딩 호출을 새로 복사해 쓰지 말 것** — 공용 유틸 `notify.send_telegram()`·`embed_util.get_embeddings()`를 쓴다(분할·재시도·429 처리가 한 곳에 있음). 예외는 `health_watchdog.py`뿐(Supabase·공용 유틸에 의존하지 않는 독립 감시자라 의도적 중복). 공용 로직을 건드리면 `python -m unittest discover -s tests` 통과 확인. (배경역사 #58)
 - **anon(브라우저 키)에 새 쓰기 권한을 열 때는 "화면이 실제로 하는 연산"인지 먼저 확인할 것** — 공개 Pages라 anon 권한은 전 세계 공개다. 특히 ①`app_config`의 `system_prompt` 행(봇 프롬프트 인젝션 경로), ②`document_chunks`의 `is_approved=true` 삽입(승인 게이트 우회 RAG 주입)은 다시 열지 말 것. 화면의 승인·비밀번호 절차는 app.js의 규칙일 뿐 DB의 규칙이 아니다. (배경역사 #57)
+- **[계정 복구 시 되돌릴 것] temp_gh_law.bat의 promote·watch 2줄 제거** — GitHub 정지 동안 `law_sync.py --promote`·`law_watch.py`가 안 돌아 시행 도래분(예: 8/11 국가재정법·8/20 방발법)이 승격 안 되고 자문이 옛 조문을 현행이라 답하는 무음 위험 → 임시로 PC 배치(temp_gh_law.bat)에 두 줄 추가(2026-08-02). **계정 복구 후 GitHub Actions(law_crawl.yml)가 되살아나면 이 두 줄을 삭제**해야 중복 실행이 안 생긴다(과제 #10). 멱등이라 피해는 작으나 로그 오염. (배경역사 #55 계열)
 - **국회 입법예고를 pal HTML 스크래핑으로 전환 금지** — OpenAPI `nknalejkafmvgzmpt`와 레코드 완전 일치 실측(379=379), HTML은 GET 페이징을 조용히 무시(POST+_csrf)라 유지보수 함정. 상세 함정 목록은 "국회 입법예고 추적" 절. (배경역사 #56)
 
 ## 알려진 제약사항

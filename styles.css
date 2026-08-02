@@ -239,7 +239,8 @@ textarea:focus { border-color: var(--accent); }
   .chat-area { flex: 1; overflow-y: auto; min-height: 0; }
   .chat-input-wrap input { font-size: 16px; } /* iOS 줌 방지 */
   .tag-list { display: none; } /* 모바일에선 태그 숨김 */
-  #news-filter-tabs { display: flex !important; } /* 뉴스 중요도 탭은 모바일에서도 표시 */
+  #news-filter-tabs, #press-agency-tabs { display: flex !important; } /* 뉴스 중요도·보도자료 기관 탭은 모바일에서도 표시 */
+  #gov-agency-tabs { display: flex; } /* 정부 기관 탭도 표시 — 단 JS(hideGovAgencyTabs)가 인라인 display:none으로 토글하므로 !important 금지 */
 
   /* 법령 패널 */
   .law-section { margin-bottom: 16px; }

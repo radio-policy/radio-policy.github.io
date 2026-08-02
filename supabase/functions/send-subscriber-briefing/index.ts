@@ -31,7 +31,7 @@ const env = (k: string) => (Deno.env.get(k) || '').trim();
 const BOT_TOKEN = env('SUBSCRIBER_BOT_TOKEN');
 const CRON_SECRET = env('CRON_SECRET');
 const NONEWS_PREFIX = '🕊️ (신규 뉴스 없음';   // morning_briefing.py _NONEWS_PREFIX 와 일치
-const QUEUE_LOOKBACK_H = 48;                  // 큐 조회 범위(시간) — 그 이전 건은 오래돼서 보내지 않음
+const QUEUE_LOOKBACK_H = 72;                  // 큐 조회 범위(시간) — 그 이전 건은 오래돼서 보내지 않음. 72h: '평일만' 구독자 금요일 밤 큐(금 23시→월 06:25 ≈ 55h) 이월 소실 방지
 
 const sb = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
 

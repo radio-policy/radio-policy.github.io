@@ -123,6 +123,44 @@ function extractKeywords(text) {
   return all.filter(function(v, i, a) { return a.indexOf(v) === i; }).slice(0, 5);
 }
 
+// ── 정책 어휘 → 법령 조문 표제어 대응표 (rag.ts LAW_SYNONYMS와 동일 유지 — 한쪽만 고치지 말 것) ──
+// LLM 확장만으로는 이 간극을 못 넘는다(실측: Haiku·Sonnet 모두 "3G 종료"에서 '휴업·폐업'을 못 냄).
+// 법은 '서비스 종료'라 쓰지 않는다 — 전기통신사업법은 '휴업·폐업', 전파법은 '폐지·운용휴지'다.
+var LAW_SYNONYMS = {
+  '종료': ['휴업', '폐업', '폐지', '휴지', '운용휴지'],
+  '중단': ['휴업', '휴지', '정지', '중지'],
+  '폐지': ['폐업', '폐지', '휴지'],
+  '개시': ['개설', '허가', '등록', '신고'],
+  '시작': ['개설', '허가', '등록'],
+  '변경': ['변경허가', '변경등록', '변경신고'],
+  '취소': ['취소', '정지', '철회'],
+  '반납': ['반납', '회수', '재할당'],
+};
+// 질문에 정책 동사가 있으면 대응하는 법령 표제어를 돌려준다 (검색 키워드에 추가 투입용)
+function lawSynonymKeywords(query) {
+  var out = [];
+  Object.keys(LAW_SYNONYMS).forEach(function(k) {
+    if ((query || '').indexOf(k) >= 0) {
+      LAW_SYNONYMS[k].forEach(function(s) { if (out.indexOf(s) === -1) out.push(s); });
+    }
+  });
+  return out;
+}
+// 질문 상투어 — 조문 제목 가점·주제 매칭에서 제외 ('절차'가 「규제심사 절차」 같은
+// 무관 조문 제목에 걸려 상위를 차지하는 것 방지. rag.ts와 동일 목록 유지)
+var GENERIC_QUERY_WORDS = ['방법', '방안', '절차', '하는', '관련', '대한'];
+// 법령 위계 (동점 정렬용): 법률 > 대통령령 > 부령·총리령 > 고시·훈령 등 — rag.ts와 동일 유지
+function lawRank(docName) {
+  var d = docName || '';
+  if (/\(법률\)/.test(d)) return 4;
+  if (/\(대통령령\)/.test(d)) return 3;
+  if (/(부령|총리령)\)/.test(d)) return 2;
+  return 1;
+}
+// 도메인 사전확률: 이 KB는 전파·통신 정책용이라, 행위·주제 점수가 같으면 전파·통신 계열
+// 법령이 국가재정법·위치정보법 같은 부수 수록 문서보다 근거일 확률이 높다 (질문과 무관한 상수 가점)
+var DOMAIN_DOC_RE = /전파|통신|무선|주파수/;
+
 // 뉴스 전용 키워드 추출 — 위 extractKeywords(법령 검색용)와 반드시 분리해서 쓴다.
 // 여기 불용어('통신사','영향','분석' 등)를 extractKeywords에 넣으면 법령 RAG 검색 품질이 함께 망가진다.
 // (사고: "같은 지하철인데 통신사 와이파이 속도…" 질문에서 키워드가 '같은/지하철인데/통신사'로 뽑혀
@@ -192,7 +230,15 @@ function newsTagsHtml(list) {
 }
 
 // 쿼리 확장 — Haiku로 동의어·법령 공식 용어 키워드 생성 (실패 시 빈 배열 → 기존 키워드만 사용)
-async function expandQueryKeywords(query) {
+// 같은 질문에 대해 searchKeywords·searchLawArticles가 동시에 부르므로 프라미스 캐시로 1회만 호출
+var _expandCache = { q: null, p: null };
+function expandQueryKeywords(query) {
+  if (_expandCache.q === query && _expandCache.p) return _expandCache.p;
+  _expandCache.q = query;
+  _expandCache.p = _expandQueryKeywordsRaw(query);
+  return _expandCache.p;
+}
+async function _expandQueryKeywordsRaw(query) {
   try {
     var { claudeKey } = getConfig();
     if (!claudeKey) return [];
@@ -235,10 +281,12 @@ async function searchKeywords(query, lawOnly) {
   if (lawOnly === undefined) lawOnly = false;
   var baseKeywords = extractKeywords(query);
   var expanded = await expandQueryKeywords(query);
-  // 기본 키워드 우선 + 확장 키워드 보강 (공백 제거·소문자 정규화로 중복 제거)
+  // 기본 키워드 → 법령 표제어(LAW_SYNONYMS) → 확장 키워드 순으로 합친다.
+  // 표제어를 확장보다 앞에 두는 이유: 아래 slice(0,10) 상한에서 LLM 확장어에 밀려
+  // '휴업·폐업' 같은 결정적 법령 어휘가 잘리면 안 되기 때문(어휘 간극은 LLM이 못 메운다).
   var keywords = [];
   var seenKw = new Set();
-  baseKeywords.concat(expanded).forEach(function(w) {
+  baseKeywords.concat(lawSynonymKeywords(query)).concat(expanded).forEach(function(w) {
     var norm = w.replace(/\s+/g, '').toLowerCase();
     if (norm.length >= 2 && !seenKw.has(norm)) { seenKw.add(norm); keywords.push(w); }
   });
@@ -347,10 +395,12 @@ async function searchKeywords(query, lawOnly) {
     console.log('시맨틱 검색:', semanticRows.length + '개 청크');
   }
 
-  // 하이브리드 점수(정규화): 키워드는 무제한 누적이라 결과 내 최대값으로 0~1 정규화,
-  // trgm·시맨틱은 원래 0~1 절대 척도라 그대로 사용하되 시맨틱(의미 유사도)에 2배 가중.
-  // 흔한 단어 물량이 의미 적합도를 압도하던 문제 교정 (배경역사 #23)
-  var maxKwScore = 0;
+  // ── RRF(Reciprocal Rank Fusion) 융합 ──
+  // 종전(배경역사 #23)에는 키워드 정규화(0~1)+trgm(0.12~0.5)+시맨틱×2(0.9~1.5)를 그대로
+  // 합산해 척도가 다른 점수끼리 싸웠다(시맨틱 상위=논문이어도 합산 우승). 각 검색을 '순위'로
+  // 환산해 1/(K+순위) 합으로 융합하면 척도 문제가 사라진다(K=60 관례) — 점수 크기가 아니라
+  // "몇 개의 검색에서 얼마나 상위였나"가 결정한다.
+  var synNormSet = new Set(lawSynonymKeywords(query).map(function(s) { return s.toLowerCase(); }));
   results.forEach(function(r) {
     var score = 0;
     for (var ki = 0; ki < Math.min(keywords.length, 10); ki++) {
@@ -358,19 +408,151 @@ async function searchKeywords(query, lawOnly) {
       var w = baseKeywords.includes(keywords[ki]) ? 2 : 1;
       if ((r.content || '').toLowerCase().includes(kw)) score += w;
       if ((r.doc_name || '').toLowerCase().includes(kw)) score += w;
+      // 조문 표제어 일치는 결정적 신호 (rag.ts searchLawArticles의 행위 가점 이식).
+      // 단 '절차' 같은 질문 상투어는 제외 — 「규제심사 절차」 같은 무관 조문이 올라온다(실측).
+      // 표제어 대응표(LAW_SYNONYMS) 출신 행위어는 더 크게: 법령이 실제 쓰는 어휘로 번역된 말이라
+      // 원어 그대로의 우연 일치('조난통신 종료')보다 신뢰도가 높다.
+      if ((r.article_no || '').toLowerCase().includes(kw) && GENERIC_QUERY_WORDS.indexOf(keywords[ki]) === -1) {
+        score += synNormSet.has(kw) ? 4 : w * 2;
+      }
     }
-    r._score = score;
-    if (score > maxKwScore) maxKwScore = score;
+    r._score = score;          // RRF 순위 산출용 (절대값은 융합에 안 쓴다)
+    r._hybrid_score = 0;
   });
+  var RRF_K = 60;
+  var addRrf = function(list) {
+    list.forEach(function(r, idx) { r._hybrid_score += 1 / (RRF_K + idx + 1); });
+  };
+  addRrf(results.filter(function(r) { return (r._score || 0) > 0; })
+    .slice().sort(function(a, b) { return b._score - a._score; }));
+  addRrf(results.filter(function(r) { return (r._trgm_score || 0) > 0; })
+    .slice().sort(function(a, b) { return b._trgm_score - a._trgm_score; }));
+  addRrf(results.filter(function(r) { return (r._semantic_score || 0) > 0; })
+    .slice().sort(function(a, b) { return b._semantic_score - a._semantic_score; }));
+  // 일반 가점·감점 (rag.ts /law 검색 계층 이식 — 특정 질문·특정 조문 하드코딩 아님):
+  //  · 조문번호(article_no) 있는 청크 = 법령·고시 원문 → 가점
+  //  · 파일 확장자 문서(.pdf/.md 등) = 논문·계획서류 → 감점
+  //    (doc_category '기타'에 고시와 박사논문이 섞여 카테고리로는 못 거른다 — rag.ts 실측 주석)
+  //  크기 0.5/(K+1) = 목록 1개 1위 기여의 절반: 논문이 조문을 이기려면 한 목록 상위만큼 더 필요.
+  var FILE_DOC_RE = /\.(pdf|md|docx|hwp)$/i;
   results.forEach(function(r) {
-    r._hybrid_score = (maxKwScore > 0 ? r._score / maxKwScore : 0)
-      + (r._trgm_score     || 0)
-      + (r._semantic_score || 0) * 2;
+    if (r.article_no) r._hybrid_score += 0.5 / (RRF_K + 1);
+    if (FILE_DOC_RE.test(r.doc_name || '')) r._hybrid_score -= 0.5 / (RRF_K + 1);
   });
   results.sort(function(a, b) { return b._hybrid_score - a._hybrid_score; });
 
-  console.log('3중 하이브리드 (키워드확장 ' + expanded.length + '개 + trgm + 시맨틱):', keywords.slice(0,10).join(', '), '->', results.length + '개 청크 (상위 12개 사용)');
-  return results.slice(0, 12);
+  // 문서당 청크 상한 — 같은 doc_name 최대 3청크만 상위에 (논문 1편이 상위 12개를 독식하는 것 방지)
+  var perDocCount = {};
+  var picked = [];
+  for (var pi = 0; pi < results.length && picked.length < 12; pi++) {
+    var dn = results[pi].doc_name || '';
+    perDocCount[dn] = (perDocCount[dn] || 0) + 1;
+    if (perDocCount[dn] <= 3) picked.push(results[pi]);
+  }
+
+  console.log('3중 하이브리드 RRF (키워드확장 ' + expanded.length + '개 + trgm + 시맨틱):', keywords.slice(0,10).join(', '), '->', results.length + '개 청크 (문서당 ≤3, 상위 ' + picked.length + '개 사용)');
+  return picked;
+}
+
+// ── 조문 정밀검색 (rag.ts searchLawArticles 이식 — 봇 /law·자문과 동일 계층) ──
+// RAG 하이브리드는 논문·보도자료도 섞여 정작 근거 조문을 놓치는 일이 있다(실측).
+// ① 키워드 확장 + 정책어휘→법령표제어 표(LAW_SYNONYMS)로 어휘 간극을 메우고
+// ② 조문번호(article_no) 있는 청크만 보고 ③ .pdf/.md 등 파일 문서를 제외한 뒤
+// ④ 행위(조문 표제어)와 주제(문서명)를 분리해 점수를 매긴다.
+// 점수 규칙은 rag.ts와 동일하게 유지할 것 — 한쪽만 고치면 봇과 대시보드 답이 갈라진다.
+async function searchLawArticles(query, limit) {
+  if (!sb) return [];
+  limit = limit || 5;
+  var base = extractKeywords(query);
+  var expanded = await expandQueryKeywords(query);
+
+  var seenNorm = new Set();
+  var keywords = [];
+  var push = function(w) {
+    var norm = w.replace(/\s+/g, '').toLowerCase();
+    if (norm.length >= 2 && !seenNorm.has(norm)) { seenNorm.add(norm); keywords.push(w); }
+  };
+  // 표제어(LAW_SYNONYMS)를 확장어보다 앞에 — 아래 slice(0,10) 상한에서 잘리면 안 된다
+  base.forEach(push);
+  lawSynonymKeywords(query).forEach(push);
+  expanded.forEach(push);
+  if (!keywords.length) return [];
+
+  // .pdf/.md 등 파일 문서 제외 — '실행계획(안).pdf'도 '6조'라는 article_no를 갖고 있어
+  // 조문번호 유무만으로는 못 거른다(실측). 법령·고시 문서명은 확장자로 끝나지 않는다.
+  var FILE_SUFFIX = ['%.pdf', '%.md', '%.docx', '%.hwp'];
+  var hitQ = function(col, kw, take) {
+    var q = sb.from('document_chunks')
+      .select('id, doc_name, article_no, content')
+      .eq('is_approved', true).eq('status', 'current')
+      .not('article_no', 'is', null)
+      .ilike(col, '%' + kw + '%');
+    FILE_SUFFIX.forEach(function(f) { q = q.not('doc_name', 'ilike', f); });
+    return q.limit(take)
+      .then(function(r) { return r.data || []; })
+      .catch(function(e) { console.warn('조문 정밀검색 오류:', kw, e); return []; });
+  };
+
+  // 점수는 '행위'와 '주제'를 분리해 매긴다(rag.ts 실측으로 도달한 구조).
+  //   행위 = 폐업·휴지 같은 조문 표제어 → 조문 제목에 걸리면 결정적(×5)
+  //   주제 = 기간통신사업·무선국 같은 대상 → 문서명·조문제목에 걸리면 가산
+  // ★ limit을 작게 주면 안 된다: PostgREST는 정렬 없이 임의의 N건을 돌려주므로
+  //   '폐업'으로 6건만 받으면 엉뚱한 법이 자리를 채우고 정작 근거 조문이 빠진다(실측: 6에서 누락, 40에서 포함).
+  var acc = new Map();
+  var putHit = function(r, act) {
+    var cur = acc.get(r.id);
+    if (cur) { if (act > cur._act) cur._act = act; }
+    else { acc.set(r.id, Object.assign({}, r, { _hits: 0, _act: act, _top: 0 })); }
+  };
+  // 행위 가중은 어휘의 출처로 차등한다: LAW_SYNONYMS 출신(정책어→법령표제어로 '번역'된 말,
+  // 예: 종료→휴업·폐업)은 7, 그 외(질문 원어·LLM 확장)는 5. 원어가 조문 제목에 우연히
+  // 있는 경우('조난통신 종료 통보')는 대개 다른 제도라, 번역된 표제어보다 낮게 본다.
+  var synNorms = new Set(lawSynonymKeywords(query).map(function(s) { return s.replace(/\s+/g, '').toLowerCase(); }));
+  var jobs = [];
+  keywords.slice(0, 10).forEach(function(kw) {
+    var act = synNorms.has(kw.replace(/\s+/g, '').toLowerCase()) ? 7 : 5;
+    jobs.push(hitQ('article_no', kw, 40).then(function(rows) { rows.forEach(function(r) { putHit(r, act); }); }));
+    jobs.push(hitQ('content', kw, 10).then(function(rows) { rows.forEach(function(r) { putHit(r, 0); }); }));
+  });
+  await Promise.all(jobs);
+
+  // 주제 일치는 부분문자열로 본다 — '기간통신사업'과 '전기통신사업법'은 앞글자가 달라
+  // 접두 비교로는 안 잡히고 '통신사업'이라는 공통 조각으로만 이어진다.
+  var topics = (query.match(/[가-힣A-Za-z0-9]{2,}/g) || [])
+    .filter(function(t) { return GENERIC_QUERY_WORDS.indexOf(t) === -1; });
+  acc.forEach(function(h) {
+    var hay = h.doc_name + ' ' + (h.article_no || '');
+    var best = 0;
+    for (var ti = 0; ti < topics.length; ti++) {
+      var t = topics[ti];
+      if (t.length <= 3) { if (hay.indexOf(t) >= 0 && t.length > best) best = t.length; continue; }
+      for (var i = 0; i < t.length; i++) {
+        for (var j = t.length; j - i >= 4; j--) {
+          if (hay.indexOf(t.slice(i, j)) >= 0) { if (j - i > best) best = j - i; break; }
+        }
+      }
+    }
+    h._top = best;
+    // 행위를 우선하되 주제로 갈래를 좁히고, 동점은 도메인(전파·통신 계열) 문서를 앞세운다
+    h._hits = h._act * 2 + best + (DOMAIN_DOC_RE.test(h.doc_name) ? 1 : 0);
+  });
+
+  // 정렬: 점수 → (동점이면) 법령 위계(법률>대통령령>부령>고시) → 문서명·조문번호(결정적 순서).
+  // 위계 동점 처리는 특정 법 우대가 아니라 일반 규칙 — 같은 점수면 상위 법령의 조문이 근거로 더 낫다.
+  var sorted = Array.from(acc.values()).sort(function(a, b) {
+    if (b._hits !== a._hits) return b._hits - a._hits;
+    var lr = lawRank(b.doc_name) - lawRank(a.doc_name);
+    if (lr !== 0) return lr;
+    if (a.doc_name !== b.doc_name) return a.doc_name < b.doc_name ? -1 : 1;
+    return (a.article_no || '') < (b.article_no || '') ? -1 : 1;
+  });
+  // 같은 조문이 여러 청크로 쪼개져 있으면 대표 1건만 — 목록이 중복으로 채워지는 것 방지
+  var byArticle = new Map();
+  sorted.forEach(function(h) {
+    var key = h.doc_name + '|' + (h.article_no || '');
+    if (!byArticle.has(key)) byArticle.set(key, h);
+  });
+  return Array.from(byArticle.values()).slice(0, limit);
 }
 
 async function fetchLawTrackContext() {
@@ -1417,6 +1599,8 @@ async function callClaude(userText, onDelta) {
   const newsP       = fetchRecentNewsContext(userText).catch(function(e) { console.warn('뉴스 컨텍스트 실패(건너뜀):', e); return ''; });
   const lawTrackP   = fetchLawTrackContext().catch(function(e) { console.warn('법령동향 실패(건너뜀):', e); return ''; });
   const kbP         = searchKbSummaries(userText).catch(function(e) { console.warn('법령요약 검색 실패(건너뜀):', e); return []; });
+  // 조문 정밀검색 (rag.ts answerAdvisory와 동일 계층) — RAG가 논문·보도자료에 밀려 놓친 근거 조문 보강
+  const lawArtP     = searchLawArticles(userText, 5).catch(function(e) { console.warn('조문 정밀검색 실패(건너뜀):', e); return []; });
   // 법령 관계도: 기존 주제명 목록(주제명 분열 방지용) — 실패해도 자문은 정상 진행
   const lawTopicsP  = sb
     ? sb.from('law_graph_nodes').select('name').eq('node_type', 'topic').limit(120)
@@ -1449,6 +1633,24 @@ async function callClaude(userText, onDelta) {
     }
   }
 
+  // 조문 보강 (rag.ts answerAdvisory와 동일 구조) — 정밀검색이 찾은 조문 중 위 RAG에
+  // 안 들어온 것을 덧붙인다. RAG는 논문·보도자료도 섞여 정작 근거 조문을 놓치는 일이 있다.
+  var lawHits = await lawArtP;
+  var haveIds = new Set(ragChunks.map(function(c) { return c.id; }));
+  var lawExtra = lawHits.filter(function(h) { return !haveIds.has(h.id); });
+  var lawArticleContext = '';
+  if (lawExtra.length) {
+    lawArticleContext = '\n\n---\n\n[조문 정밀검색 결과 — 질문 의도에 직접 대응하는 조문]\n' +
+      '위 RAG 결과에 없더라도 아래 조문이 질문의 핵심 근거일 가능성이 높습니다. 우선 확인하세요:\n\n' +
+      lawExtra.map(function(h, i) {
+        return '[조문 ' + (i + 1) + '] ' + h.doc_name + (h.article_no ? ' ' + h.article_no : '') + '\n' + h.content;
+      }).join('\n\n---\n\n');
+    lawExtra.forEach(function(h) {
+      if (h.doc_name && lastRagSources.indexOf(h.doc_name) === -1) lastRagSources.push(h.doc_name);
+    });
+    console.log('조문 정밀검색 보강:', lawExtra.map(function(h) { return h.doc_name + ' ' + (h.article_no || ''); }).join(', '));
+  }
+
   // 시스템 프롬프트에 컨텍스트 조합 (위에서 동시 시작한 검색 결과를 기존 순서 그대로 조립)
   const ragContext    = buildRagContext(ragChunks);
   const customContext = await customP;                            // 팀 내부 추가 지식
@@ -1473,7 +1675,7 @@ async function callClaude(userText, onDelta) {
     '- relations에는 이번 답변에서 실제 근거로 사용한 법령·고시만 포함 (최대 8개). law는 정식 명칭(예: "전파법", "전기통신사업법 시행령").\n' +
     '- 기존 주제명 목록에 같은 의미의 주제가 있으면 새 이름을 만들지 말고 그 이름을 그대로 재사용: ' + (lawTopics.length ? lawTopics.join(', ') : '(아직 없음)') + '\n' +
     '- 보고서 작성 요청, 문서 요약, 잡담, 법령 근거가 등장하지 않는 질문이면 이 블록을 출력하지 마세요.';
-  const systemWithRag = SYSTEM_PROMPT + webSearchGuide + lawmapGuide + ragContext + annexContext + pendingContext + kbContext + customContext + newsContext + lawTrackContext;
+  const systemWithRag = SYSTEM_PROMPT + webSearchGuide + lawmapGuide + ragContext + lawArticleContext + annexContext + pendingContext + kbContext + customContext + newsContext + lawTrackContext;
 
   chatHistory.push({ role: 'user', content: userText });
 
