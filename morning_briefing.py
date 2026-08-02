@@ -637,6 +637,84 @@ def _format_overseas_section(items: list) -> str:
 
 
 # ═══════════════════════════════════════════════════════
+#  STEP 5.7 — 국회 법안 동향 조회 (assembly_bills)
+# ═══════════════════════════════════════════════════════
+
+def fetch_assembly_items(sb) -> dict:
+    """국회 법안 동향 3종 조회 — assembly_bills
+    (a) 신규 발의: created_at 최근 24h
+    (b) 처리 변경: updated_at 최근 24h & prev_proc_result ≠ proc_result
+    (c) 의견등록 마감 임박: notice_end_dt 오늘(KST)~오늘+3"""
+    cutoff = (datetime.now(KST) - timedelta(hours=24)).isoformat()
+    today = datetime.now(KST).date()
+    cols = 'bill_name,proposer,committee,proc_result,prev_proc_result,notice_end_dt,notice_url'
+    result = {'new': [], 'changed': [], 'deadline': []}
+    try:
+        # (a) 신규 발의
+        resp = sb.table('assembly_bills') \
+            .select(cols) \
+            .gte('created_at', cutoff) \
+            .execute()
+        result['new'] = resp.data or []
+
+        # (b) 처리 변경 — 컬럼 간 비교는 PostgREST로 불가 → 후보 조회 후 Python 비교
+        resp = sb.table('assembly_bills') \
+            .select(cols) \
+            .gte('updated_at', cutoff) \
+            .not_.is_('prev_proc_result', 'null') \
+            .execute()
+        result['changed'] = [
+            r for r in (resp.data or [])
+            if r.get('prev_proc_result') and r.get('prev_proc_result') != r.get('proc_result')
+        ]
+
+        # (c) 의견등록 마감 임박 (오늘~D+3, 'YYYY-MM-DD' 문자열 비교)
+        resp = sb.table('assembly_bills') \
+            .select(cols) \
+            .gte('notice_end_dt', today.strftime('%Y-%m-%d')) \
+            .lte('notice_end_dt', (today + timedelta(days=3)).strftime('%Y-%m-%d')) \
+            .execute()
+        result['deadline'] = resp.data or []
+
+        print(f"[국회 법안] 신규 {len(result['new'])}건 / "
+              f"처리변경 {len(result['changed'])}건 / 마감임박 {len(result['deadline'])}건")
+    except Exception as e:
+        print(f'[국회 법안 조회 오류] {e}')
+        return {'new': [], 'changed': [], 'deadline': []}
+    return result
+
+
+def _format_assembly_section(items: dict) -> str:
+    """국회 법안 동향 브리핑 섹션"""
+    today = datetime.now(KST).date()
+    lines = ['🏛️ [국회 법안 동향]']
+    for it in items.get('new', []):
+        bill = it.get('bill_name', '')
+        proposer = it.get('proposer', '')
+        lines.append(f'• [신규 발의] {bill} — {proposer}')
+        if it.get('notice_url'):
+            lines.append(f"  🔗 {it['notice_url']}")
+    for it in items.get('changed', []):
+        bill = it.get('bill_name', '')
+        prev = it.get('prev_proc_result', '')
+        now = it.get('proc_result', '')
+        lines.append(f'• [처리 변경] {bill}: {prev} → {now}')
+        if it.get('notice_url'):
+            lines.append(f"  🔗 {it['notice_url']}")
+    for it in items.get('deadline', []):
+        bill = it.get('bill_name', '')
+        nd = it.get('notice_end_dt') or ''
+        try:
+            d_day = (datetime.strptime(nd, '%Y-%m-%d').date() - today).days
+            lines.append(f'• [의견등록 마감 임박] {bill} ~{nd[5:]} (D-{d_day})')
+        except ValueError:
+            lines.append(f'• [의견등록 마감 임박] {bill} ~{nd}')
+        if it.get('notice_url'):
+            lines.append(f"  🔗 {it['notice_url']}")
+    return '\n'.join(lines)
+
+
+# ═══════════════════════════════════════════════════════
 #  메인
 # ═══════════════════════════════════════════════════════
 
@@ -752,6 +830,14 @@ def main():
         briefing_text = (f'{_FALLBACK_PREFIX} — 기사 {label} 기반 간이 브리핑입니다. '
                          f'전체 본문은 PC 본문수집(refetch) 후 자동 갱신됩니다.)\n\n' + briefing_text)
         print(f'[폴백] {fallback_mode} 기반 간이 브리핑 생성')
+
+    # 국회 법안 동향 섹션 — 먼저 앞에 붙여, 아래 입법예고 삽입 후 [신규 입법예고] 바로 뒤에 오도록
+    # (입법예고 0건이면 그 자리인 맨 앞) 3종 모두 0건이면 섹션 미삽입
+    assembly_items = fetch_assembly_items(sb)
+    if any(assembly_items.values()):
+        briefing_text = _format_assembly_section(assembly_items) + '\n\n' + briefing_text
+        total = sum(len(v) for v in assembly_items.values())
+        print(f'[국회 법안] {total}건 브리핑에 삽입')
 
     # 신규 입법예고 섹션을 브리핑 앞에 삽입 (🔴 → 이메일 빨간 박스)
     if law_ancs:

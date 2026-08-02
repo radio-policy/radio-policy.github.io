@@ -2119,6 +2119,7 @@ function smartRefresh() {
   };
   var fn = map[id];
   if (fn) fn();
+  if (typeof refreshOpsLight === 'function') refreshOpsLight();   // 상단바 상태등도 함께 갱신
 }
 
 async function refreshDashboard() {
@@ -3823,6 +3824,7 @@ async function runDiffAnalysis() {
 //  law_diffs 테이블에 쌓인 분석 결과를 읽기만 한다.
 // ════════════════════════════════════════════
 var _lawDiffsCache = null;
+var _lawDiffsLoadPromise = null;   // go('diff')가 잡아두는 로드 Promise — 국회 법안 화면에서 DIFF 딥링크 시 await 용
 
 // enf_date 'YYYYMMDD' → 'YYYY-MM-DD'
 function _fmtEnfDate(d) {
@@ -3830,9 +3832,24 @@ function _fmtEnfDate(d) {
   return /^\d{8}$/.test(s) ? s.slice(0, 4) + '-' + s.slice(4, 6) + '-' + s.slice(6, 8) : s;
 }
 
-function _lawDiffKindBadge(kind) {
-  if (kind === 'proposed')
+// 오늘 날짜(KST) 'YYYY-MM-DD'
+function _todayKstStr() {
+  return new Date(Date.now() + 9 * 3600000).toISOString().slice(0, 10);
+}
+
+// 국회 입법예고(origin='assembly' proposed)의 의견마감(enf_date) 경과 여부
+function _lawDiffCommentExpired(r) {
+  if (!r || r.diff_kind !== 'proposed' || r.origin !== 'assembly') return false;
+  var d = _fmtEnfDate(r.enf_date);
+  return /^\d{4}-\d{2}-\d{2}$/.test(d) && d < _todayKstStr();
+}
+
+function _lawDiffKindBadge(kind, origin) {
+  if (kind === 'proposed') {
+    if (origin === 'assembly')
+      return '<span style="font-size:10px;background:rgba(239,68,68,.12);color:#dc2626;padding:1px 7px;border-radius:4px;white-space:nowrap;font-weight:700">의견제출 가능 · 국회</span>';
     return '<span style="font-size:10px;background:rgba(239,68,68,.12);color:#dc2626;padding:1px 7px;border-radius:4px;white-space:nowrap;font-weight:700">입법예고 · 의견제출 가능</span>';
+  }
   return kind === 'promoted'
     ? '<span style="font-size:10px;background:rgba(34,197,94,.12);color:#16a34a;padding:1px 7px;border-radius:4px;white-space:nowrap">개정 시행</span>'
     : '<span style="font-size:10px;background:rgba(59,130,246,.12);color:#2563eb;padding:1px 7px;border-radius:4px;white-space:nowrap">시행예정 개정</span>';
@@ -3852,7 +3869,7 @@ async function loadLawDiffs(force) {
     listEl.innerHTML = '<div style="color:var(--text-secondary);padding:20px;text-align:center;font-size:12px">로딩 중...</div>';
     try {
       var resp = await sb.from('law_diffs')
-        .select('law_name, law_no, enf_date, diff_kind, summary, impact, urgency, articles, stats, analyzed_at')
+        .select('law_name, law_no, enf_date, diff_kind, origin, new_doc, summary, impact, urgency, articles, stats, analyzed_at')
         .order('analyzed_at', { ascending: false })
         .limit(50);
       if (resp.error) throw resp.error;
@@ -3886,6 +3903,9 @@ async function loadLawDiffs(force) {
     var k = (KIND_ORDER[x.diff_kind] !== undefined ? KIND_ORDER[x.diff_kind] : 9)
           - (KIND_ORDER[y.diff_kind] !== undefined ? KIND_ORDER[y.diff_kind] : 9);
     if (k !== 0) return k;
+    // proposed 그룹 내: 국회(origin='assembly') 행 중 의견마감 경과분은 하위로
+    var e = (_lawDiffCommentExpired(x) ? 1 : 0) - (_lawDiffCommentExpired(y) ? 1 : 0);
+    if (e !== 0) return e;
     var t = _lawDiffTier(x.law_name) - _lawDiffTier(y.law_name);
     if (t !== 0) return t;
     return (y.analyzed_at || '').localeCompare(x.analyzed_at || '');
@@ -3901,7 +3921,7 @@ async function loadLawDiffs(force) {
       '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">' +
         urgDot +
         '<span style="flex:1;font-size:12px;font-weight:600;color:var(--text-primary);line-height:1.4">' + escHtml(r.law_name || '') + '</span>' +
-        _lawDiffKindBadge(r.diff_kind) +
+        _lawDiffKindBadge(r.diff_kind, r.origin) +
       '</div>' +
       '<div style="display:flex;gap:10px;flex-wrap:wrap;font-size:10px;color:var(--text-muted)">' +
         '<span>변경 ' + (st.modified || 0) + ' · 신설 ' + (st.added || 0) + ' · 삭제 ' + (st.deleted || 0) + '</span>' +
@@ -3942,7 +3962,7 @@ function openLawDiff(idx) {
   // ① 총괄 카드 — 기존 diff-ai-result 카드 스타일 재사용
   html += '<div class="card" style="cursor:default;padding:16px;margin-bottom:12px">' +
     '<div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;padding-bottom:10px;border-bottom:1px solid var(--border)">' +
-      _lawDiffKindBadge(row.diff_kind) +
+      _lawDiffKindBadge(row.diff_kind, row.origin) +
       (row.enf_date ? '<span style="font-size:11px;color:var(--text-secondary)">' + _lawDiffDateLabel(row.diff_kind) + ' ' + escHtml(_fmtEnfDate(row.enf_date)) + '</span>' : '') +
       (row.analyzed_at ? '<span style="margin-left:auto;font-size:10px;color:var(--text-muted)">분석 ' + escHtml(String(row.analyzed_at).slice(0, 10)) + '</span>' : '') +
     '</div>' +
@@ -4991,19 +5011,35 @@ async function loadOpsStatus() {
   }
 }
 
+// ── 메뉴 개편(2026-08-03): 페이지 → 좌측 네비 data-nav 매핑. 탭·모바일에서 navEl 없이
+//    go()가 호출돼도 좌측 네비 활성 표시가 새 계층에 맞게 동기화되도록 한다.
+var PAGE_TO_NAV = {
+  news: 'monitor', overseas: 'monitor',
+  briefing: 'briefing', terms: 'terms',
+  chat: 'chat', reportdraft: 'chat', lawmap: 'lawmap',
+  assembly: 'assembly', minutes: 'minutes',
+  lawtrack: 'lawrev', diff: 'lawrev',
+  law: 'kb', press: 'kb', guide: 'kb', itu: 'kb', custom: 'kb'
+};
+
 function go(page, navEl, sourceType) {
   document.querySelectorAll('.panel').forEach(function(p) { p.classList.remove('active'); });
   document.querySelectorAll('.nav-item').forEach(function(n) { n.classList.remove('active'); });
   var panel = document.getElementById('panel-' + page);
   if (panel) panel.classList.add('active');
-  if (navEl && navEl.classList) navEl.classList.add('active');
+  var navTarget = (navEl && navEl.classList) ? navEl
+    : (PAGE_TO_NAV[page] ? document.querySelector('.nav-item[data-nav="' + PAGE_TO_NAV[page] + '"]') : null);
+  if (navTarget && navTarget.classList) navTarget.classList.add('active');
 
   // 뉴스 소스 타입 설정
   if (page === 'news' && sourceType !== undefined) currentNewsSourceType = sourceType;
 
+  // 상위 그룹 탭 바 (통합 모니터링 / 법령 개정 추적 / 지식베이스)
+  renderGroupTabs(page);
+
   // 상단 바 제목 업데이트
   var newsTitle = currentNewsSourceType === 'gov' ? '정부 보도자료·공지사항 (최근 60일)' : (currentNewsSourceType === 'media' ? '뉴스 (최근 60일)' : '보도자료·뉴스 (최근 60일)');
-  var titles = {home:'대시보드', chat:'AI 자문', reportdraft:'보고서 초안 제안', diff:'법령 DIFF 분석', law:'국내 법령·고시', guide:'실무 안내', lawmap:'법령 관계도', itu:'ITU-R 문서', press:'정부 보도자료', terms:'기술 용어', news:newsTitle, briefing:'Daily Briefing', assembly:'국회 법안', minutes:'과방위 회의록', overseas:'해외 규제동향 (최근 60일)', lawtrack:'행정부 입법예고·법령 개정', settings:'설정', opsstatus:'운영 상태'};
+  var titles = {home:'대시보드', chat:'AI 자문', reportdraft:'보고서 초안 제안', diff:'법령 개정 추적 — 조문 DIFF', law:'지식베이스 — 법령·고시', guide:'지식베이스 — 실무 안내', lawmap:'법령 관계도', itu:'지식베이스 — ITU-R', press:'지식베이스 — 보도자료', custom:'지식베이스 — 추가지식', terms:'기술 용어', news:newsTitle, briefing:'Daily Briefing', assembly:'국회 법안', minutes:'과방위 회의록', overseas:'해외 규제동향 (최근 60일)', lawtrack:'법령 개정 추적 — 입법예고·개정 현황', settings:'설정', opsstatus:'운영 상태'};
   var ttEl = document.getElementById('topbar-title');
   if (ttEl && titles[page]) ttEl.textContent = titles[page];
 
@@ -5024,8 +5060,83 @@ function go(page, navEl, sourceType) {
   if (page === 'minutes') loadAssemblyMinutes();
   if (page === 'overseas') loadOverseasNews();
   if (page === 'lawtrack') loadLawTrack();
-  if (page === 'diff') loadLawDiffs();
+  if (page === 'diff') _lawDiffsLoadPromise = loadLawDiffs();   // 국회 법안 → DIFF 딥링크가 await할 수 있게 Promise 보관
   if (page === 'opsstatus') loadOpsStatus();
+}
+
+// ════════════════════════════════════════════
+//  상위 그룹 탭 바 — 메뉴 개편(2026-08-03) 공용 컴포넌트
+//  기존 패널·로드 함수는 무수정: 탭 클릭 = 기존 go() 라우팅 호출
+// ════════════════════════════════════════════
+var PANEL_GROUP_OF = { news:'monitor', overseas:'monitor', lawtrack:'lawrev', diff:'lawrev', law:'kb', press:'kb', guide:'kb', itu:'kb', custom:'kb' };
+var GROUP_TABS = {
+  monitor: [
+    { key: 'media',    label: '뉴스',              on: "go('news',null,'media')" },
+    { key: 'gov',      label: '정부 보도자료·공지', on: "go('news',null,'gov')" },
+    { key: 'overseas', label: '해외 규제동향',      on: "go('overseas',null)" }
+  ],
+  lawrev: [
+    { key: 'lawtrack', label: '입법예고·개정 현황', on: "go('lawtrack',null)" },
+    { key: 'diff',     label: '조문 DIFF',          on: "go('diff',null)" }
+  ],
+  kb: [
+    { key: 'law',    label: '법령·고시', on: "go('law',null)" },
+    { key: 'press',  label: '보도자료',  on: "go('press',null)" },
+    { key: 'guide',  label: '실무 안내', on: "go('guide',null)" },
+    { key: 'itu',    label: 'ITU-R',    on: "go('itu',null)" },
+    { key: 'custom', label: '추가지식',  on: "go('custom',null)" }
+  ]
+};
+
+function _activeGroupTabKey(group, page) {
+  if (group === 'monitor') return page === 'overseas' ? 'overseas' : (currentNewsSourceType === 'gov' ? 'gov' : 'media');
+  return page;
+}
+
+function renderGroupTabs(page) {
+  var group = PANEL_GROUP_OF[page];
+  if (!group) return;
+  var panel = document.getElementById('panel-' + page);
+  if (!panel) return;
+  var bar = (panel.firstElementChild && panel.firstElementChild.classList.contains('group-tabbar'))
+    ? panel.firstElementChild : null;
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.className = 'group-tabbar';
+    bar.style.cssText = 'display:flex;gap:2px;margin-bottom:14px;border-bottom:1px solid var(--border);overflow-x:auto';
+    panel.insertBefore(bar, panel.firstChild);
+  }
+  var act = _activeGroupTabKey(group, page);
+  bar.innerHTML = GROUP_TABS[group].map(function(t) {
+    var on = t.key === act;
+    return '<div onclick="' + t.on + '" style="padding:7px 14px;font-size:12px;cursor:pointer;white-space:nowrap;margin-bottom:-1px;'
+      + (on ? 'color:var(--accent);border-bottom:2px solid var(--accent);font-weight:600'
+            : 'color:var(--text-secondary);border-bottom:2px solid transparent')
+      + '">' + t.label + '</div>';
+  }).join('');
+}
+
+// ════════════════════════════════════════════
+//  상단바 상태등 — loadOpsStatus의 system_health 판정을 재사용한 경량 버전
+//  임계는 loadOpsStatus와 동일 규약: crawl 1.5h / gov_notice 25h. 초과·부재 시 빨강.
+// ════════════════════════════════════════════
+async function refreshOpsLight() {
+  var els = document.querySelectorAll('.ops-light');
+  if (!els.length || !sb) return;
+  var ok = null;
+  try {
+    var resp = await sb.from('system_health').select('key,updated_at');
+    if (resp.error) throw resp.error;
+    var hb = {};
+    (resp.data || []).forEach(function(row) { hb[row.key] = row.updated_at; });
+    var hoursAgo = function(iso) { return iso ? (Date.now() - new Date(iso).getTime()) / 3600000 : Infinity; };
+    ok = hoursAgo(hb['last_crawl_run']) < 1.5 && hoursAgo(hb['last_gov_notice_run']) < 25;
+  } catch (e) { ok = null; }
+  els.forEach(function(el) {
+    if (ok === null) { el.innerHTML = '⚪ <span>확인중</span>'; el.title = '상태 조회 실패 — 클릭해 운영 상태 확인'; return; }
+    el.innerHTML = ok ? '🟢 <span>정상</span>' : '🔴 <span>점검</span>';
+    el.title = ok ? '크롤러 하트비트 정상 — 클릭하면 운영 상태' : '하트비트 지연 감지 — 클릭해 운영 상태 확인';
+  });
 }
 
 function setBottomNav(activeId) {
@@ -6171,6 +6282,7 @@ async function doPdfUpload() {
 // ════════════════════════════════════════════
 let assemblyBillsCache = null;
 let assemblyFilterMode = '전체';
+var _asmDiffCache = null;   // law_diffs 경량 캐시(law_name/diff_kind/origin/new_doc) — '조문 DIFF 보기' 링크 판정용
 
 async function loadAssemblyBills(forceRefresh) {
   if (!sb) return;
@@ -6180,19 +6292,87 @@ async function loadAssemblyBills(forceRefresh) {
   if (!assemblyBillsCache || forceRefresh) {
     listEl.innerHTML = '<div style="color:var(--text-secondary);padding:20px;text-align:center;font-size:12px">불러오는 중...</div>';
     try {
-      var resp = await sb
-        .from('assembly_bills')
-        .select('*')
-        .eq('age', 22)
-        .order('updated_at', { ascending: false });
-      if (resp.error) throw resp.error;
-      assemblyBillsCache = resp.data || [];
+      var results = await Promise.all([
+        sb.from('assembly_bills')
+          .select('*')
+          .eq('age', 22)
+          .order('updated_at', { ascending: false }),
+        // 경량 병행 조회 — 실패해도 법안 목록 자체는 뜨도록 에러는 무시하고 링크만 생략
+        sb.from('law_diffs').select('law_name,diff_kind,origin,new_doc').limit(200)
+      ]);
+      if (results[0].error) throw results[0].error;
+      assemblyBillsCache = results[0].data || [];
+      if (!results[1].error) _asmDiffCache = results[1].data || [];
     } catch(e) {
       listEl.innerHTML = '<div style="color:#f66;padding:20px;text-align:center;font-size:12px">불러오기 실패: ' + e.message + '</div>';
       return;
     }
   }
   renderAssemblyBills(assemblyBillsCache);
+}
+
+// 의견등록 가능 판정 — notice_end_dt(YYYY-MM-DD)가 오늘(KST) 이후. 통계 계산부와
+// assemblyMatchesFilter 양쪽에서 같은 함수를 써 판정이 갈리지 않게 한다.
+function _billCommentOpen(b) {
+  return !!(b && b.notice_end_dt && String(b.notice_end_dt).slice(0, 10) >= _todayKstStr());
+}
+
+// 법령명 비교용 정규화 — 공백·가운뎃점 제거
+function _normLawName(s) { return String(s || '').replace(/[\s·]/g, ''); }
+
+// '전파법 일부개정법률안' → '전파법' (정규화 후). 매칭 실패 시 null.
+function _billToLawName(billName) {
+  var m = String(billName || '').match(/([가-힣0-9·\s]+?(?:법률|시행령|시행규칙|규정|규칙|고시|법))\s*(?:일부|전부)?\s*개정(?:법률)?\s*안/);
+  return m ? _normLawName(m[1]) : null;
+}
+
+// 통과 판정 — assemblyStatusLabel/통계와 같은 기준(가결·본회의 통과·공포·정부이송)
+function _billIsPassed(p) {
+  p = p || '';
+  return p.includes('가결') || p === '본회의 통과' || p === '공포' || p === '정부이송';
+}
+
+// 이 법안 카드에 '조문 DIFF 보기' 링크를 붙일 수 있는가 — _asmDiffCache 기준
+// (a) 의견등록 법안: origin='assembly' proposed & new_doc==bill_no
+// (b) 통과 법안: 법안명→법령명 추출 후 pending/promoted law_name 매칭
+function _billDiffLink(b) {
+  if (!_asmDiffCache || !_asmDiffCache.length || !b) return null;
+  var i, d;
+  if (_billCommentOpen(b) && b.bill_no) {
+    var billNo = String(b.bill_no);
+    for (i = 0; i < _asmDiffCache.length; i++) {
+      d = _asmDiffCache[i];
+      if (d.origin === 'assembly' && d.diff_kind === 'proposed' && String(d.new_doc || '') === billNo)
+        return { type: 'bill', key: billNo };
+    }
+  }
+  if (_billIsPassed(b.proc_result)) {
+    var ln = _billToLawName(b.bill_name);
+    if (ln) {
+      for (i = 0; i < _asmDiffCache.length; i++) {
+        d = _asmDiffCache[i];
+        if ((d.diff_kind === 'pending' || d.diff_kind === 'promoted') && _normLawName(d.law_name) === ln)
+          return { type: 'law', key: ln };
+      }
+    }
+  }
+  return null;
+}
+
+// 법안 카드 → 법령 DIFF 상세로 딥링크. go('diff')가 _lawDiffsLoadPromise를 잡아두므로
+// 로드 완료를 기다렸다가 정렬된 _lawDiffsCache에서 인덱스를 찾아 연다(실패 시 목록만 표시).
+async function openDiffFromAssembly(type, key) {
+  go('diff', null);
+  try { if (_lawDiffsLoadPromise) await _lawDiffsLoadPromise; } catch (e) {}
+  var rows = _lawDiffsCache || [];
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    if (type === 'bill') {
+      if (r.origin === 'assembly' && r.diff_kind === 'proposed' && String(r.new_doc || '') === key) { openLawDiff(i); return; }
+    } else {
+      if ((r.diff_kind === 'pending' || r.diff_kind === 'promoted') && _normLawName(r.law_name) === key) { openLawDiff(i); return; }
+    }
+  }
 }
 
 function filterAssembly(el, mode) {
@@ -6221,6 +6401,7 @@ function assemblyMatchesFilter(bill) {
   var p = bill.proc_result || '접수';
   if (assemblyFilterMode === '전체') return true;
   if (assemblyFilterMode === '최근') { var d = _parseProposeDt(bill.propose_dt); return !!d && d >= new Date(Date.now() - 7 * 86400000); }
+  if (assemblyFilterMode === '의견') return _billCommentOpen(bill);
   if (assemblyFilterMode === '접수') return !bill.proc_result || p === '접수';
   if (assemblyFilterMode === '통과') return p.includes('가결') || p === '본회의 통과' || p === '공포' || p === '정부이송';
   if (assemblyFilterMode === '폐기') return p.includes('폐기') || p === '부결' || p === '철회';
@@ -6236,6 +6417,7 @@ function renderAssemblyBills(bills) {
   var weekAgo = new Date(now - 7 * 86400000);
   var totalCount   = bills.length;
   var newCount     = bills.filter(function(b) { var d = _parseProposeDt(b.propose_dt); return d && d >= weekAgo; }).length;
+  var commentCount = bills.filter(function(b) { return _billCommentOpen(b); }).length;   // assemblyMatchesFilter('의견')와 동일 판정
   var activeCount  = bills.filter(function(b) { var p = b.proc_result || ''; return !p || p === '접수'; }).length;
   var passedCount  = bills.filter(function(b) { var p = b.proc_result || ''; return p.includes('가결') || p === '본회의 통과' || p === '공포' || p === '정부이송'; }).length;
   var discardedCount = bills.filter(function(b) { var p = b.proc_result || ''; return p.includes('폐기') || p === '부결' || p === '철회'; }).length;
@@ -6243,6 +6425,7 @@ function renderAssemblyBills(bills) {
   var setVal = function(id, v) { var el = document.getElementById(id); if (el) el.textContent = v; };
   setVal('asm-total',  totalCount);
   setVal('asm-new',    newCount);
+  setVal('asm-comment', commentCount);
   setVal('asm-active', activeCount);
   setVal('asm-passed', passedCount);
   setVal('asm-discarded', discardedCount);
@@ -6255,6 +6438,9 @@ function renderAssemblyBills(bills) {
   });
 
   var filtered = bills.filter(assemblyMatchesFilter).slice().sort(function(a, b) {
+    // 의견등록 가능 행은 최상단 — 그 이후는 기존 발의일 최신순 유지
+    var ca = _billCommentOpen(a) ? 1 : 0, cb = _billCommentOpen(b) ? 1 : 0;
+    if (ca !== cb) return cb - ca;
     var da = _parseProposeDt(a.propose_dt), db = _parseProposeDt(b.propose_dt);
     return (db ? db.getTime() : 0) - (da ? da.getTime() : 0);
   });
@@ -6281,11 +6467,30 @@ function renderAssemblyBills(bills) {
       ? '<a href="' + escHtml(linkUrl) + '" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="color:var(--accent);font-size:11px;text-decoration:none;white-space:nowrap"><i class="ti ti-external-link" style="font-size:11px"></i> 의안보기</a>'
       : '';
 
+    // 의견등록 가능 pill — proposed 배지 색 관례(rgba 빨강 배경). notice_url 있으면 새창 링크.
+    var commentPill = '';
+    if (_billCommentOpen(b)) {
+      var endStr = String(b.notice_end_dt).slice(0, 10);
+      var dRemain = Math.round((new Date(endStr + 'T00:00:00Z').getTime() - new Date(_todayKstStr() + 'T00:00:00Z').getTime()) / 86400000);
+      var pillTxt = '🗳️ 의견등록 ~' + endStr.slice(5) + ' · D-' + dRemain;
+      var pillStyle = 'font-size:10px;background:rgba(239,68,68,.12);color:#dc2626;padding:1px 7px;border-radius:99px;flex-shrink:0;font-weight:700;white-space:nowrap';
+      commentPill = b.notice_url
+        ? '<a href="' + escHtml(b.notice_url) + '" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="' + pillStyle + ';text-decoration:none">' + pillTxt + '</a>'
+        : '<span style="' + pillStyle + '">' + pillTxt + '</span>';
+    }
+
+    // 조문 DIFF 보기 — 카드 onclick(의안 새창)과 충돌하지 않게 stopPropagation
+    var dl = _billDiffLink(b);
+    var diffLink = dl
+      ? '<a href="javascript:void(0)" onclick="event.stopPropagation();openDiffFromAssembly(\'' + dl.type + '\',\'' + String(dl.key).replace(/['"\\]/g, '') + '\')" style="color:#dc2626;font-size:11px;text-decoration:none;white-space:nowrap"><i class="ti ti-arrows-diff" style="font-size:11px"></i> 조문 DIFF 보기</a>'
+      : '';
+
     html += '<div style="' + borderTop + 'padding:12px 14px' + (linkUrl ? ';cursor:pointer' : '') + '"'
       + (linkUrl ? ' onclick="window.open(\'' + escHtml(linkUrl) + '\',\'_blank\',\'noopener\')"' : '')
       + '>'
       + '<div style="display:flex;align-items:flex-start;gap:8px;margin-bottom:4px">'
       + '<span style="flex:1;font-size:12px;font-weight:600;color:var(--text-primary);line-height:1.4">' + escHtml(b.bill_name) + '</span>'
+      + commentPill
       + (isNew ? '<span style="font-size:10px;background:#dcfce7;color:#16a34a;padding:1px 6px;border-radius:99px;flex-shrink:0">신규</span>' : '')
       + '</div>'
       + '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
@@ -6298,7 +6503,7 @@ function renderAssemblyBills(bills) {
       + '</div>'
       + (b.summary ? '<div style="font-size:11px;color:var(--text-secondary);line-height:1.45;margin:6px 0 0">' + escHtml(b.summary) + '</div>' : '')
       + (kws ? '<div style="margin-top:4px;font-size:10px;color:var(--text-muted)">키워드: ' + escHtml(kws) + '</div>' : '')
-      + (link ? '<div style="margin-top:4px">' + link + '</div>' : '')
+      + ((link || diffLink) ? '<div style="margin-top:4px;display:flex;gap:12px;align-items:center">' + link + diffLink + '</div>' : '')
       + '</div>';
   });
   html += '</div>';
@@ -8022,6 +8227,7 @@ document.addEventListener('DOMContentLoaded', function() {
   updateStatusDots();
   loadSettingsUI();
   loadPressJSON();
-  loadRemoteConfig().then(function() { currentNewsSourceType = 'media'; loadNews(); });
+  loadRemoteConfig().then(function() { currentNewsSourceType = 'media'; loadNews(); renderGroupTabs('news'); });
+  refreshOpsLight();   // 상단바 상태등 — 페이지 로드 시 1회 (이후 smartRefresh마다 갱신)
   setTimeout(autoExtractTermsIfNeeded, 60000);
 });

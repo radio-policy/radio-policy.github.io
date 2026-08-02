@@ -120,7 +120,11 @@ create table if not exists public.assembly_bills (
   prev_proc_result text,
   created_at       timestamptz default now(),
   updated_at       timestamptz default now(),
-  summary          text
+  summary          text,
+  -- 국회 입법예고 추적 (2026-08-02, 배경역사 #56)
+  notice_end_dt    text,                     -- 의견등록 마감일 'YYYY-MM-DD' (진행중 API NOTI_ED_DT)
+  notice_url       text,                     -- pal.assembly.go.kr 상세 링크
+  notice_alert_stage smallint default 0      -- 0=미알림 1=시작알림됨 2=D-3알림됨 (발송 성공 시에만 갱신)
 );
 comment on table public.assembly_bills is '국회 의안 모니터링 — 전파/통신 관련 법안 추적';
 
@@ -508,7 +512,8 @@ create table if not exists public.law_diffs (
   mst          text,
   law_no       text,
   enf_date     text,                        -- YYYYMMDD
-  diff_kind    text not null default 'pending',  -- pending | promoted
+  diff_kind    text not null default 'pending',  -- proposed(입법예고 단계) | pending | promoted
+  origin       text default 'gov',           -- 'gov'=행정부 입법예고/법제처 | 'assembly'=국회 입법예고(new_doc=의안번호, enf_date=의견마감일)
   base_doc     text,                        -- 비교 기준(현행 등재본) doc_name
   new_doc      text not null,               -- 비교 대상(시행예정/승격본) doc_name
   summary      text,                        -- AI 요약 (전부개정 시 "수동 비교 권장" 프리셋)

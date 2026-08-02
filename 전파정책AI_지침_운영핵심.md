@@ -62,9 +62,9 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 | feedback_rules | 피드백 증류 규칙 캐시(단일 행 id=1). 20건↑ 증류, 10건마다 재증류 |
 | daily_briefings(삭제 없음·전량 보관, 목록도 무제한 표시) | 일일 브리핑 원문("⚠️ SKT 영향 분석:" 포함). 긴급도 수정 시 🔴 자동 동기화 |
 | law_amendments | 법령·고시·입법예고. law_type: law/bylaw/rules/admrul/lsAnc. lsAnc는 law_id=`lsAnc_op_{md5}` |
-| assembly_bills | 국회 법안. bill_id(UNIQUE)·법안명·단계·소관위·제안일·링크 |
+| assembly_bills | 국회 법안. bill_id(UNIQUE)·법안명·단계·소관위·제안일·링크. **+국회 입법예고**(2026-08-02): notice_end_dt(의견마감 'YYYY-MM-DD')·notice_url(pal 상세)·notice_alert_stage(0미알림/1시작알림/2 D-3알림 — 발송 성공 시에만 갱신) |
 | document_chunks | 법령·고시·보도자료 RAG 청크. embedding(vector 1024, HNSW), article_no=조항번호+제목. file_path=업로드 원본 Storage 경로. **보도자료는 2026-08-02부터 자동 수집**: doc_name=`{기관}_보도자료_{YYYY}.md`(기관: 과기정통부/전파연구원/방통위/전파관리소/ETRI/KISDI), 섹션 헤더 `## YYMMDD 제목`, 마지막 줄 `(원문: URL)`, **700자 무겹침 청킹**(대시보드가 청크를 이어붙여 원문 복원하므로 overlap 금지) |
-| app_config | 키-값 설정. `system_prompt`(봇 자문 프롬프트), `press_keywords`(보도자료 수집 키워드 JSON 배열 — 대시보드 '수집 키워드 관리' 카드가 편집), `press_relevance_criteria`(매일 수집 AI 관련성 판정 기준문) 등. **claude_key는 anon 노출되는 브라우저용 — 서버측 재사용 금지** |
+| app_config | 키-값 설정. `system_prompt`(봇 자문 프롬프트), `press_keywords`(보도자료 수집 키워드 JSON 배열 — 대시보드 '수집 키워드 관리' 카드가 편집), `press_relevance_criteria`(매일 수집 AI 관련성 판정 기준문), `assembly_notice_criteria`(국회 입법예고 Haiku 판정 기준문)·`assembly_notice_rejected`(기각 캐시 JSON — 자동 관리) 등. **claude_key는 anon 노출되는 브라우저용 — 서버측 재사용 금지** |
 | custom_knowledge | 팀 추가 지식(수동 입력). AI 자문 키워드 매칭 참조 |
 | chat_logs | AI 자문 이력. 삭제 가능. `sources`(text)는 **두 종류를 접두사로 구분해** 담는다 — 법령·문서명은 그대로, 수집 뉴스는 `[뉴스] 제목 (매체, 날짜)`. 화면·내보내기에서 `splitSources()`로 갈라 별도 표기(법령은 6개 초과분 `… 등 N개`). **뉴스는 본문 발췌로 실제 반영된 건만** 기록(제목 목록 30건은 근거 아님). 스키마 변경 없이 반영 여부를 사후 검증하려는 구조. (배경역사 #35) |
 | report_samples | 보고서 초안 제안 — 내 보고서 전문(형식·톤 학습용, 청킹 안 함). embedding(vector 1024, HNSW). report_type=정책검토/규제영향/동향보고/기타 |
@@ -212,7 +212,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 - URL: https://youjinwoong.github.io/radio-policy-ai/
 - **수정 배포 시 index.html 캐시 버스터 `app.js?v=`·`styles.css?v=` 갱신 필수 (현재 `app.js?v=20260729a` / `styles.css?v=20260723b`)** — CSS 고칠 때 styles.css 버스터도 갱신해야 사용자 브라우저가 새로 받음
 - 아이콘은 Tabler Icons webfont(ti ti-*) — 존재하는 이름만(없으면 빈칸 렌더).
-- 메뉴: [모니터링] 보도자료·뉴스 / Daily Briefing / 기술 용어 · [자문] AI 자문 / 보고서 초안 제안 / **법령 관계도(lawmap)** · [법안 동향] 국회 법안 / 행정부 입법예고·법령 개정 / 법령 DIFF 분석 · [지식 베이스] 국내 법령·고시(조문 원문) / **실무 안내(kb 요약·실무 203건)** / ITU-R / 정부 보도자료 / 추가 지식 입력 / 설정 / 운영 상태(크롤·브리핑·heartbeat 한눈 점검) — ※ lawmap은 질문·AI 생성 성격이라 자문 그룹에 배치(데스크톱). 모바일은 자문 서브메뉴가 없어 지식베이스 서브메뉴(law-sub)로 접근(pageTobn=bn-law).
+- 메뉴 (2026-08-02 개편, 17→9 — 배경역사 #56): [모니터링] **통합 모니터링**(패널 상단 탭: 뉴스|정부 보도자료·공지|해외 규제동향) / Daily Briefing / 기술 용어 · [AI 도우미] AI 자문 / 법령 관계도 · [법안 동향] 국회 법안 / 과방위 회의록 / **법령 개정 추적**(탭: 입법예고·개정 현황|조문 DIFF — 기존 lawtrack·diff 패널 무수정 재사용) · [지식베이스] **지식베이스**(탭: 법령·고시|보도자료|실무 안내|ITU-R|추가지식). **설정=상단 톱니 아이콘, 운영 상태=상단 상태등**(🟢/🔴 하트비트 종합, 클릭 시 패널 — refreshOpsLight). 탭 바는 기존 go() 라우팅을 호출하는 상위 컴포넌트(renderGroupTabs)라 패널·로드 함수는 무수정. 모바일 하단 5버튼 유지, 딥링크(pageTobn) 기존 값 유효. 보고서 초안 메뉴는 계속 주석 숨김.
 - 뉴스 중요도: 화면 라벨 "🔴 중요/🟡 보통/🟢 참고", 내부값·DB·코드는 '긴급/보통/참고'. 수정 시 news_feed 갱신+importance_feedback 기록+당일 브리핑 🔴 동기화. 잠금=60일 삭제 제외, 삭제=영구+deleted_news 기록.
 
 ## 알림 채널
@@ -226,6 +226,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 신규 입법예고 즉시 | 텔레그램(건별)·이메일(Resend 묶음)  (gov_notice_crawler 17:00)
 법령·고시 신규/개정| 텔레그램  (첫 실행 베이스라인은 생략)
 국회 법안 단계변경 | 텔레그램
+국회 입법예고 시작/D-3 | 텔레그램 **운영자 전용**(구독자 큐 미적재 — assembly_crawler 입법예고 패스, stage 컬럼 dedupe)
 ```
 
 **② 구독자 봇 채널** (2026-08-01 신설 — `정책AI 도우미` @radio_policy_law_ai_bot, `SUBSCRIBER_BOT_TOKEN`)
@@ -262,7 +263,8 @@ git add [파일명] && git commit -m "설명" && git push origin main
 # 크롤러 수동 실행
 python crawler.py            # 뉴스("[네이버 뉴스] N건 수집" N>0 확인). NAVER_CLIENT_ID/SECRET 필요
 python law_crawler.py        # 법령·고시(LAW_OC_KEY)
-python assembly_crawler.py   # 국회 법안(ASSEMBLY_API_KEY)
+python assembly_crawler.py   # 국회 법안(ASSEMBLY_API_KEY) + 입법예고 패스(--dry-run 지원)
+python law_diff_gen.py --assembly-only  # 국회 입법예고 조문 분석만 단독 실행
 python gov_notice_crawler.py # 정부 고시·입법예고(한국 IP). "[입법예고] N페이지:M행 스캔, 누적 매칭 K건"
 python refetch_content.py    # 본문 재수집(한국 IP, trafilatura)
 python resend_briefing.py [날짜]              # 브리핑 재발송
@@ -503,12 +505,34 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - 대시보드: 국회 법안 탭 하단 목록 + openPressDetail 재사용. KB 목록 블랙리스트에 '회의록' 포함.
 - 17시 run_gov_crawler.bat 체인에서 매일 신규분 수집. heartbeat last_minutes_run.
 
+## 국회 입법예고 추적 (assembly_crawler 입법예고 패스 + law_diff_gen 국회 분석, 2026-08-02 신설 — 배경역사 #56)
+
+- **수집**: 열린국회 API `nknalejkafmvgzmpt`(진행중 입법예고) 1콜(pSize=1000) — 결과가 곧
+  "의견등록 가능" 목록(마감일 NOTI_ED_DT 당일 포함). AGE 파라미터는 **무시됨**(넣지 말 것).
+  국회 법안 크롤러(10:00) 본 루프 뒤에 패스로 부착. `--dry-run` 지원.
+- **관련성 = 의미 판정**: 기존 추적분·**과방위 소관은 자동 관련**, 나머지는 Haiku 배치 판정
+  (기준문 app_config `assembly_notice_criteria` — 운영자 수정 가능) + 실패 시 키워드 폴백(fail-open).
+  기각은 app_config `assembly_notice_rejected` 캐시로 재판정 방지(진행 목록에서 빠지면 자동 정리).
+- **DB**: assembly_bills에 notice_end_dt('YYYY-MM-DD')·notice_url·notice_alert_stage(0/1/2).
+  알림은 운영자 전용(시작 1회→stage1, D-3 1회→stage2 — **발송 성공 시에만 stage 갱신**해 실패 재시도).
+  heartbeat `last_assembly_run`.
+- **예고 단계 조문 분석(③′)**: law_diff_gen `--assembly-only`/기본 체인 — 의견등록 가능+관련 법안의
+  의안 원문 PDF(pal 상세→FileGate)에서 **신구조문대비표** 추출 → Sonnet 1콜 → law_diffs에
+  diff_kind='proposed'+**origin='assembly'**·new_doc=의안번호·enf_date=의견마감일로 등재.
+  가결(공포 후 pending DIFF가 대체)·폐기·철회 시 자동 삭제. PDF 실패 시 BPMBILLSUMMARY 텍스트로
+  총괄·영향만(articles=[]) — 무리한 우회 금지.
+- **함정 (하지 말 것)**: ①pal HTML 스크래핑으로 전환 금지 — API와 레코드 완전 일치 실측(379=379),
+  HTML은 GET 페이징을 조용히 무시(POST+_csrf 필요)라 유지보수 함정. ②FileGate는 302가 아니라
+  "moved" HTML을 반환 — href 추적 1~2회 필요(sender 번호 하드코딩 금지). ③신구조문대비표 표제의
+  가운뎃점은 **U+318D(ㆍ)** — `[·ㆍ.]` 클래스로 매칭할 것. ④위원회 서버 필터로 좁히지 말 것
+  (정보통신망법이 정무위 배정 사례 — 전량 수신 후 로컬 판정).
+
 ## 점검 체크리스트 (요약 — 상세 경위는 배경역사 문서)
 
 - **이상 의심 시 1차 점검**: 대시보드 설정 밑 **"운영 상태"** 탭 — 크롤러 heartbeat·뉴스 입력·오늘 브리핑·입법예고·국회 한눈. (배경역사 #16)
 - **브리핑 미수신**: Actions(morning_briefing.yml) 확인→실패 시 "Run workflow" / 성공인데 미수신→`resend_briefing.py` / 09:40 후도 미수신→`briefing_backup_log.txt`. 본문 0건이어도 요약/제목 폴백으로 빈 브리핑은 안 나옴(배경역사 #16). **트리거·PAT·크롤러 heartbeat 다 정상인데 미생성이면 24h 내 신규 기사 0건을 의심** — 그날은 '🕊️ 신규 뉴스 없음' 통지+placeholder가 정상 동작(고장 아님). daily_crawl 로그 `[네이버 뉴스] N건`으로 'NAVER 키 만료(폴백만)' vs '진짜 뉴스 없음'(N>0·실패0) 가름. (배경역사 #17)
 - **트리거 전부 무음 정지(크롤·브리핑·국회·법령 동시 미동작)인데 cron 잡은 다 succeeded**: PAT 권한/만료 의심. cron 잡 상태(net.http_post 비동기라 항상 succeeded)가 아니라 `net._http_response.status_code`로 dispatch 응답 확인 — 403=Actions 권한 부족, 401=토큰 무효, 204=성공. PAT 재생성했다면 Actions(R/W) 권한 누락 여부 확인. (배경역사 #18)
-- **heartbeat(운영상태)는 멈췄는데 스케줄러 작업은 '준비/실행됨'이면 PC 꺼짐이 아니라 스크립트 크래시/오류**: 작업 스케줄러에서 *마지막 실행 결과* 확인(0x0 정상 / 0xC000013A 강제종료=크래시 / 0x1 일반오류) + 스크립트 로그(`refetch_log.txt`·`gov_crawler_log.txt`). 흔한 원인=cp949 이모지 print 크래시 또는 작업 동작 경로가 옛 폴더. 본문수집/입법예고가 같이 멈췄으면 1순위 의심. (배경역사 #19)
+- **heartbeat(운영상태)는 멈췄는데 스케줄러 작업은 '준비/실행됨'이면 PC 꺼짐이 아니라 스크립트 크래시/오류**: 작업 스케줄러에서 *마지막 실행 결과* 확인(0x0 정상 / 0xC000013A 강제종료=크래시 / 0x1 일반오류) + 스크립트 로그(`refetch_log.txt`·`gov_crawler_log.txt`). 흔한 원인=cp949 이모지 print 크래시 또는 작업 동작 경로가 옛 폴더. 본문수집/입법예고가 같이 멈췄으면 1순위 의심. (배경역사 #19) **0xC000013A가 시작 직후(수 초 내)면 스크립트가 아니라 전원을 의심** — 노트북 AC↔배터리 전환 시 schtasks 기본값 "배터리 전환 시 중지"가 작업을 Ctrl+C로 죽인다(로그에 `^C`만 남음). Kernel-Power 이벤트 105·506/507 확인. 저장소 실행 작업은 전부 AllowStartIfOnBatteries·DontStopIfGoingOnBatteries·StartWhenAvailable 적용 완료(브리핑은 WakeToRun 추가) — **새 스케줄 작업을 만들 때도 이 3종 설정 필수**. (배경역사 #55)
 - **뉴스 미축적**: daily_crawl.yml 로그 "[네이버 뉴스] N건". N=0→NAVER 키 누락·만료(폴백만 돔) / N>0인데 신규0→cron 드롭, "Run workflow".
 - **크롤·브리핑이 ~20초 만에 동시 실패(`RemoteProtocolError: Server disconnected`)**: supabase-py HTTP/2 끊김 → `sb_client.make_client`(HTTP/1.1)로 해결됨. 재발 시 `create_client` 직접 호출 파일 없는지 확인. 크롤은 성공인데 news 0·브리핑 빔이면 본문 미수집 → PC `python refetch_content.py` 실행 후 브리핑 재실행. (배경역사 #15)
 - **입법예고 미수집**: DB law_type='lsAnc' 건수·MAX(created_at) 확인. `gov_notice_crawler.py` 로그. PC 의존(17:00).
@@ -633,6 +657,9 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **관계도 전체 뷰 적응형 임계 필터·주제 포커스 계열 한정 확장(lawmapNeighborhood) 제거 금지** — 인용 이웃으로 2촌 확장하면 허브 법령(전파법)을 거쳐 600+노드로 폭발해 렌더 불능. 직접 이웃+하위법령 1단계가 정답. (배경역사 #28)
 - **관계도 AI 생성·보강의 병합 원칙(기존 노드·엣지 삭제 없음, 신규만 upsert, 재확인 weight+1) 훼손 금지** — "한 번 생성=초안, 계속 보강" 구조의 핵심. 덮어쓰기로 바꾸면 검수된 관계가 유실됨. (배경역사 #28)
 - **관계도 전체 뷰의 고시 접기(`_lawMapShowNotice=false` 기본)를 '항상 전부 표시'로 되돌리지 말 것 / 접을 때 고아 주제 구제 로직을 빼지 말 것** — 법령이 늘며 전체 뷰 노드의 과반(96/178)이 고시가 돼 중앙이 뭉갰다(겹침 50쌍·최소간격 3px). 고시는 '법률→시행령→고시' 말단이라 조망에선 잔가지이고 주제·법령 클릭 시 그대로 다 보인다. **단 근거가 고시뿐인 주제(충전단자 표준화·MRA·인빌딩 무선통신보조설비)는 통째로 숨기면 엣지 없는 단독 버블이 되므로**(#28에서 이미 고친 회귀), 그런 주제의 직결 고시 8개는 예외로 남긴다. 접힌 사실은 `고시 N개 펼치기` 토글로 화면에 드러낼 것(정보 삭제가 아니라 접기임을 알려야 오해가 없다). 결과 90노드·256엣지·겹침 8쌍. (배경역사 #36)
+
+- **Windows 스케줄 작업을 만들 때 배터리 보호설정 해제 없이 등록 금지** — schtasks 기본값(배터리 전환 시 중지·배터리 시 시작 안 함)이 노트북 전원 흔들림에 작업을 시작 3초 만에 Ctrl+C로 죽인다(06:05 브리핑이 이렇게 무음 실패). AllowStartIfOnBatteries·DontStopIfGoingOnBatteries·StartWhenAvailable 3종 필수, 무인 새벽 작업은 WakeToRun 검토. (배경역사 #55)
+- **국회 입법예고를 pal HTML 스크래핑으로 전환 금지** — OpenAPI `nknalejkafmvgzmpt`와 레코드 완전 일치 실측(379=379), HTML은 GET 페이징을 조용히 무시(POST+_csrf)라 유지보수 함정. 상세 함정 목록은 "국회 입법예고 추적" 절. (배경역사 #56)
 
 ## 알려진 제약사항
 

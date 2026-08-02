@@ -7,12 +7,17 @@ law_pending이 가리키는 (현행 watch_doc_name, 시행예정 doc_name) 쌍�
 law_diffs에 upsert한다. 시행일이 도래해 promote_due가 승격한 건은
 기존 'pending' 분석 행을 diff_kind='promoted'로 전환만 한다(AI 재호출 없음).
 
+국회 입법예고(origin='assembly')도 같은 테이블에 담는다 — assembly_bills 중
+의견제출이 진행 중(notice_end_dt >= 오늘)인 의안의 원문 PDF에서 신·구조문대비표를
+추출해 분석하고, 가결·폐기·철회된 의안의 행은 같은 패스에서 삭제한다.
+
 사용법:
   python law_diff_gen.py                     # loaded 신규분 + 최근 3일 promoted 처리
   python law_diff_gen.py --dry-run           # 수집·diff까지만(AI·DB·텔레그램 없음), 3분류 수치 출력
   python law_diff_gen.py --law "정보통신망"    # 특정 법령만
   python law_diff_gen.py --backfill          # 기존 law_diffs 행 무시하고 loaded 전건 재생성
   python law_diff_gen.py --days 7            # promoted 소급 기간(기본 3일)
+  python law_diff_gen.py --assembly-only     # 국회 입법예고(assembly) 패스만 단독 실행
 
 필요 .env: SUPABASE_URL, SUPABASE_SERVICE_KEY, ANTHROPIC_API_KEY,
           TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID(알림, 없으면 생략)
@@ -22,7 +27,11 @@ import os
 import re
 import sys
 import json
+import shutil
 import argparse
+import tempfile
+import subprocess
+from urllib.parse import urljoin
 from datetime import datetime, timezone, timedelta
 
 # Windows 스케줄러/cp949 콘솔에서 이모지 print 크래시 방지 (배경역사 #19)
@@ -139,6 +148,160 @@ def _proposed_deadline(text):
         except ValueError:
             pass
     return None
+
+
+# (d) 국회 입법예고(origin='assembly') 분석용 — 신·구조문대비표가 전/후를 모두
+#     담고 있어 before도 모델 인용으로 받는다 (프런트 articles 계약: before/after).
+ASSEMBLY_TOOL = {
+    'name': 'report_assembly_diff',
+    'description': '국회 발의 개정안(신·구조문대비표)의 대비 분석 결과 보고',
+    'input_schema': {
+        'type': 'object',
+        'properties': {
+            'summary': {'type': 'string', 'description': '개정안 핵심 3~5문장'},
+            'impact': {'type': 'string',
+                       'description': 'SK텔레콤 전파·통신 정책 관점 영향과 의견제출 검토 포인트'},
+            'urgency': {'type': 'string', 'enum': ['high', 'medium', 'low']},
+            'articles': {
+                'type': 'array',
+                'items': {
+                    'type': 'object',
+                    'properties': {
+                        'article_no': {'type': 'string', 'description': '조번호 (예: 24조의2)'},
+                        'change': {'type': 'string', 'enum': ['modified', 'added', 'deleted']},
+                        'before': {'type': 'string',
+                                   'description': '대비표 현행 문안 원문 인용(1500자 내). 신설이면 빈 문자열'},
+                        'after': {'type': 'string',
+                                  'description': '대비표 개정안 문안 인용(1500자 내). 삭제면 빈 문자열'},
+                        'impact': {'type': 'string', 'description': '해당 조문 변경의 영향 한두 문장'},
+                    },
+                    'required': ['article_no', 'change', 'after'],
+                },
+            },
+        },
+        'required': ['summary', 'impact', 'urgency', 'articles'],
+    },
+}
+
+# 국회 입법예고 시스템(pal) 상세 — lgsltPaId는 열린국회정보 BILL_ID(PRC_…)와 동일 (2026-08-02 실측)
+PAL_VIEW_URL = ('https://pal.assembly.go.kr/napal/lgsltpa/lgsltpaOngoing/view.do'
+                '?lgsltPaId=%s')
+BILL_SUMMARY_API = 'https://open.assembly.go.kr/portal/openapi/BPMBILLSUMMARY'
+PAL_HEADERS = {
+    'User-Agent': ('Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                   'AppleWebKit/537.36 (KHTML, like Gecko) '
+                   'Chrome/124.0.0.0 Safari/537.36'),
+    'Accept-Language': 'ko-KR,ko;q=0.9',
+}
+# pal 상세 HTML의 의안 원문 PDF 링크: likms FileGate?bookId={UUID}&type=1 (type=0은 HWP) — 실측
+_BOOKID_RE = re.compile(r'FileGate\?bookId=([0-9A-Fa-f\-]{16,})&(?:amp;)?type=1')
+# 의안 PDF의 대비표 표제는 '신ㆍ구조문대비표'(가운뎃점 U+318D) — ·/./공백 변형 허용 (실측)
+_COMPARE_TABLE_RE = re.compile(r'신\s*[·ㆍ.]?\s*구\s*조문\s*대비표')
+_BILL_DONE_KEYWORDS = ('가결', '폐기', '철회')   # proc_result에 포함되면 수명 종료
+
+
+def _find_pdftotext():
+    """press_ingest._find_pdftotext 패턴 복제 (import 시 무거운 모듈 연쇄 로드 회피)."""
+    p = shutil.which('pdftotext')
+    if p:
+        return p
+    for cand in (
+        os.environ.get('PDFTOTEXT', ''),
+        r'C:\Program Files\poppler\Library\bin\pdftotext.exe',
+        r'C:\Program Files\poppler-24.08.0\Library\bin\pdftotext.exe',
+        r'C:\tools\poppler\Library\bin\pdftotext.exe',
+    ):
+        if cand and os.path.exists(cand):
+            return cand
+    return ''
+
+
+_PDFTOTEXT = _find_pdftotext()
+
+
+def _pdf_to_text(data):
+    """press_ingest._pdf_to_text 패턴 복제 — pdftotext 임시파일 경유, 실패 시 ''."""
+    if not _PDFTOTEXT or not data:
+        return ''
+    tmp = None
+    try:
+        fd, tmp = tempfile.mkstemp(suffix='.pdf')
+        with os.fdopen(fd, 'wb') as f:
+            f.write(data)
+        out = subprocess.run(
+            [_PDFTOTEXT, '-enc', 'UTF-8', tmp, '-'],
+            capture_output=True, timeout=60,
+        )
+        return out.stdout.decode('utf-8', errors='replace') if out.returncode == 0 else ''
+    except Exception:
+        return ''
+    finally:
+        if tmp and os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except Exception:
+                pass
+
+
+def _fetch_bill_pdf_text(bill_id):
+    """pal 상세 → likms FileGate PDF 다운로드 → pdftotext. 실패 시 '' (fail-soft).
+
+    FileGate는 302가 아니라 'The document has been moved' HTML(sender49 등 href)을
+    돌려주므로(2026-08-02 실측) bookId가 든 href를 최대 2회 추적한다.
+    """
+    if not bill_id or not _PDFTOTEXT:
+        return ''
+    try:
+        r = requests.get(PAL_VIEW_URL % bill_id, headers=PAL_HEADERS, timeout=30)
+        r.raise_for_status()
+        m = _BOOKID_RE.search(r.text)
+        if not m:
+            return ''
+        url = ('https://likms.assembly.go.kr/filegate/servlet/FileGate'
+               '?bookId=%s&type=1' % m.group(1))
+        for _ in range(2):
+            resp = requests.get(url, headers=PAL_HEADERS, timeout=60)
+            data = resp.content
+            if data[:4] == b'%PDF':
+                return _pdf_to_text(data)
+            hop = re.search(r'href="([^"]*bookId=[^"]*)"',
+                            data.decode('utf-8', errors='replace'))
+            if not hop:
+                return ''
+            url = urljoin(url, hop.group(1).replace('&amp;', '&'))
+        return ''
+    except Exception as e:
+        print(f'  ! 의안 PDF 취득 실패: {str(e)[:80]}')
+        return ''
+
+
+def _extract_compare_table(text):
+    """PDF 전문에서 신·구조문대비표 구간(표제부터 끝까지) 추출. 없으면 ''."""
+    m = _COMPARE_TABLE_RE.search(text or '')
+    return text[m.start():].strip() if m else ''
+
+
+def _fetch_bill_summary(bill_no):
+    """폴백: 열린국회정보 BPMBILLSUMMARY(제안이유·주요내용).
+    summarize_assembly_bills.fetch_summary 패턴 복제. 실패·내용없음 시 ''."""
+    key = os.getenv('ASSEMBLY_API_KEY', '')
+    if not (key and bill_no):
+        return ''
+    try:
+        resp = requests.get(BILL_SUMMARY_API,
+                            params={'KEY': key, 'Type': 'json', 'pIndex': 1,
+                                    'pSize': 5, 'BILL_NO': bill_no}, timeout=15)
+        wrap = resp.json().get('BPMBILLSUMMARY')
+        if not isinstance(wrap, list):
+            return ''
+        for it in wrap:
+            if isinstance(it, dict) and 'row' in it:
+                rows = it['row']
+                return (rows[0].get('SUMMARY') or '').strip() if rows else ''
+        return ''
+    except Exception as e:
+        print(f'  ! 제안이유 API 실패: {str(e)[:80]}')
+        return ''
 
 
 def norm_key(article_no):
@@ -542,6 +705,185 @@ def process_proposed(sb, ai_client, args, results):
         results['created'].append((name, stats, ai['urgency']))
 
 
+def analyze_assembly(client, bill_name, deadline, body, has_table):
+    """국회 발의안 1콜 분석. has_table=True면 신·구조문대비표 기반 조문 분석,
+    False면 제안이유·주요내용 기반 총괄(articles 빈 배열)만."""
+    if has_table:
+        prompt = (
+            f'당신은 대한민국 전파·통신 법령 분석 전문가다.\n'
+            f'국회에 발의된 「{bill_name}」이 입법예고 중이다(의견제출 마감 {deadline or "미상"}).\n'
+            f'아래는 의안 원문의 신·구조문대비표(왼쪽 현행 / 오른쪽 개정안)다. '
+            f'report_assembly_diff 도구로 보고하라.\n'
+            f'- articles: 대비표에 나온 조문만. before/after는 대비표의 현행/개정안 문안을 인용하되, '
+            f'개정안 칸의 줄표(-----)는 "현행과 같음" 표기이므로 현행 문안으로 채워 완전한 문장으로 구성.\n'
+            f'- 신설 조문은 change=added·before 빈 문자열, 삭제 조문은 change=deleted·after 빈 문자열.\n'
+            f'- 대비표에 없는 조문을 만들어내지 말 것.\n'
+            f'- impact에는 의견제출로 다퉈볼 지점이 있으면 명시.\n\n'
+            f'[신·구조문대비표]\n{body[:20000]}'
+        )
+    else:
+        prompt = (
+            f'당신은 대한민국 전파·통신 법령 분석 전문가다.\n'
+            f'국회에 발의된 「{bill_name}」이 입법예고 중이다(의견제출 마감 {deadline or "미상"}).\n'
+            f'조문 대비표는 확보하지 못했고 아래 제안이유·주요내용만 있다. '
+            f'report_assembly_diff 도구로 보고하되 articles는 빈 배열로 두고 '
+            f'summary·impact·urgency만 채워라.\n'
+            f'- impact에는 의견제출로 다퉈볼 지점이 있으면 명시.\n\n'
+            f'[제안이유·주요내용]\n{body[:20000]}'
+        )
+    for attempt in (1, 2):
+        try:
+            resp = client.messages.create(
+                model=MODEL,
+                max_tokens=8000,
+                thinking={'type': 'disabled'},
+                tools=[ASSEMBLY_TOOL],
+                tool_choice={'type': 'tool', 'name': 'report_assembly_diff'},
+                messages=[{'role': 'user', 'content': prompt}],
+            )
+            block = next((b for b in resp.content if b.type == 'tool_use'), None)
+            data = dict(block.input) if block else None
+            if data and all(k in data for k in ('summary', 'impact', 'urgency')):
+                if data['urgency'] not in ('high', 'medium', 'low'):
+                    data['urgency'] = 'medium'
+                if not isinstance(data.get('articles'), list):
+                    data['articles'] = []
+                return data
+            print(f'  ! AI 응답 파싱 실패(시도 {attempt})')
+        except Exception as e:
+            print(f'  ! AI 호출 실패(시도 {attempt}): {str(e)[:140]}')
+    return None
+
+
+def _existing_assembly_diff(sb, bill_no):
+    rows = (sb.table('law_diffs').select('id')
+            .eq('origin', 'assembly').eq('new_doc', bill_no)
+            .eq('diff_kind', 'proposed').limit(1).execute().data) or []
+    return rows[0] if rows else None
+
+
+def _cleanup_assembly_diffs(sb, dry):
+    """수명 관리: origin='assembly' 전 행을 assembly_bills와 bill_no로 대조 —
+    proc_result에 가결/폐기/철회가 포함되면 삭제(대안반영폐기 포함). 반환: 삭제 수."""
+    rows = (sb.table('law_diffs').select('id, law_name, new_doc')
+            .eq('origin', 'assembly').execute().data) or []
+    if not rows:
+        return 0
+    bill_nos = sorted({r['new_doc'] for r in rows if r.get('new_doc')})
+    bills = (sb.table('assembly_bills').select('bill_no, proc_result')
+             .in_('bill_no', bill_nos).execute().data) or []
+    proc = {str(b.get('bill_no')): (b.get('proc_result') or '') for b in bills}
+    removed = 0
+    for r in rows:
+        pr = proc.get(str(r.get('new_doc')), '')
+        if not any(k in pr for k in _BILL_DONE_KEYWORDS):
+            continue
+        if dry:
+            print(f'  [dry-run] 수명종료 삭제 대상: {r["law_name"]} '
+                  f'의안 {r["new_doc"]} ({pr})')
+        else:
+            sb.table('law_diffs').delete().eq('id', r['id']).execute()
+            print(f'  수명종료 삭제: {r["law_name"]} 의안 {r["new_doc"]} ({pr})')
+        removed += 1
+    return removed
+
+
+def process_assembly(sb, ai_client, args, results):
+    """(d) 국회 입법예고(origin='assembly') — 의견제출 진행 중 의안의 조문 분석.
+
+    원문 취득 fail-soft 체인: pal 상세의 PDF(신·구조문대비표 구간) →
+    PDF는 있으나 대비표 미검출이면 PDF 전문 → BPMBILLSUMMARY 제안이유·주요내용.
+    대비표가 아니면 articles 없이 총괄·영향만 담는다. 저장 자리는 gov proposed와
+    완전히 동일: enf_date=의견마감일(YYYYMMDD, 화면 _lawDiffDateLabel 계약),
+    diff_kind='proposed', new_doc=bill_no, base_doc='국회의안 '+bill_no.
+    """
+    today = datetime.now(KST).strftime('%Y%m%d')
+    rows = (sb.table('assembly_bills')
+            .select('bill_id, bill_no, bill_name, notice_end_dt, proc_result')
+            .not_.is_('notice_end_dt', 'null').execute().data) or []
+    active = []
+    for r in rows:
+        d8 = re.sub(r'\D', '', r.get('notice_end_dt') or '')[:8]
+        if len(d8) == 8 and d8 >= today and r.get('bill_no'):
+            r['_deadline'] = d8
+            active.append(r)
+    print(f'=== 국회 입법예고(assembly) 후보 {len(active)}건 ===')
+    for r in active:
+        bill_no = str(r['bill_no'])
+        bill_name = (r.get('bill_name') or '').strip()
+        # 일부개정안은 _proposed_law_name 재사용, 그 외(제정·전부개정)는 발의자 괄호만 제거
+        name = _proposed_law_name(bill_name) or \
+            re.sub(r'\([^)]*\)\s*$', '', bill_name).strip()
+        if not name:
+            continue
+        if args.law and args.law not in name:
+            continue
+        if not args.backfill and _existing_assembly_diff(sb, bill_no):
+            results['skipped'] += 1
+            continue
+        print(f'\n▶ {name} [assembly] 의안 {bill_no} · 의견마감 {r["_deadline"]}')
+        text = _fetch_bill_pdf_text(r.get('bill_id') or '')
+        table = _extract_compare_table(text)
+        if table:
+            body, mode = table, '대비표'
+        elif text:
+            body, mode = text, 'PDF전문(대비표 미검출)'
+        else:
+            body, mode = _fetch_bill_summary(bill_no), '제안이유(API)'
+        if len(body) < 100:
+            print(f'  - 제외: 원문 취득 실패({mode}, {len(body)}자)')
+            results['excluded'].append(f'{name}(의안 원문 취득 실패)')
+            continue
+        print(f'  원문={mode} {len(body):,}자')
+        if args.dry_run:
+            results['dry'].append((name, 'assembly',
+                                   {'modified': 0, 'added': 0, 'deleted': 0},
+                                   f'{mode} {len(body)}자'))
+            continue
+        ai = analyze_assembly(ai_client, bill_name, r['_deadline'], body,
+                              has_table=(mode == '대비표'))
+        if ai is None:
+            results['failed'] += 1
+            continue
+        articles, stats = [], {'modified': 0, 'added': 0, 'deleted': 0}
+        if mode == '대비표':
+            for a in ai.get('articles', []):
+                change = a.get('change') if a.get('change') in \
+                    ('modified', 'added', 'deleted') else 'modified'
+                stats[change] += 1
+                articles.append({
+                    'article_no': a.get('article_no', ''),
+                    'change': change,
+                    'before': (a.get('before') or '')[:3000],
+                    'after': (a.get('after') or '')[:3000],
+                    'impact': a.get('impact', ''),
+                })
+        now = datetime.now(timezone.utc).isoformat()
+        sb.table('law_diffs').upsert({
+            'law_name': name,
+            'enf_date': r['_deadline'],    # proposed는 의견마감일을 담는다(gov와 동일 자리)
+            'diff_kind': 'proposed',
+            'origin': 'assembly',
+            'base_doc': '국회의안 ' + bill_no,
+            'new_doc': bill_no,
+            'summary': ai['summary'],
+            'impact': ai['impact'],
+            'urgency': ai['urgency'],
+            'articles': articles,
+            'stats': stats,
+            'model': MODEL,
+            'analyzed_at': now,
+            'updated_at': now,
+        }, on_conflict='law_name,new_doc,diff_kind').execute()
+        print(f'  ✓ 저장 (urgency={ai["urgency"]}, 조문 {len(articles)}개)')
+        results['created'].append((name, stats, ai['urgency']))
+        results['assembly'] += 1
+    # 수명 관리 — 가결·폐기·철회된 의안의 분석 행 정리 (dry면 print만)
+    removed = _cleanup_assembly_diffs(sb, args.dry_run)
+    if removed:
+        print(f'  국회 예고 분석 수명종료 정리 {removed}건')
+
+
 def generate_one(sb, ai_client, args, row, base_doc, new_doc, kind, results):
     """1개 쌍 처리: 청크 페치 → 조문 diff → (전부개정 판정) → Sonnet → upsert."""
     name = row['law_name']
@@ -633,6 +975,8 @@ def main():
     ap.add_argument('--days', type=int, default=3, help='promoted 소급 기간(일, 기본 3)')
     ap.add_argument('--proposed-days', type=int, default=60,
                     help='입법예고(proposed) 소급 기간(일, 기본 60)')
+    ap.add_argument('--assembly-only', action='store_true',
+                    help='국회 입법예고(assembly) 패스만 단독 실행')
     args = ap.parse_args()
 
     if not (SB_URL and SB_KEY):
@@ -649,11 +993,15 @@ def main():
         ai_client = anthropic.Anthropic()
 
     results = {'created': [], 'converted': 0, 'skipped': 0, 'nochange': 0,
-               'failed': 0, 'excluded': [], 'dry': []}
+               'failed': 0, 'excluded': [], 'dry': [], 'assembly': 0}
 
-    process_proposed(sb, ai_client, args, results)   # 의견제출 가능 단계 — 최우선
-    process_loaded(sb, ai_client, args, results)
-    process_promoted(sb, ai_client, args, results)
+    if args.assembly_only:
+        process_assembly(sb, ai_client, args, results)
+    else:
+        process_proposed(sb, ai_client, args, results)   # 의견제출 가능 단계 — 최우선
+        process_assembly(sb, ai_client, args, results)   # 국회 입법예고 — 같은 단계
+        process_loaded(sb, ai_client, args, results)
+        process_promoted(sb, ai_client, args, results)
 
     print(f'\n=== 완료: 생성 {len(results["created"])} · 전환 {results["converted"]} · '
           f'기존 {results["skipped"]} · 변경없음 {results["nochange"]} · '
@@ -673,6 +1021,8 @@ def main():
         for name, st, urgency in results['created']:
             lines.append(f'• {name} (변경{st["modified"]}·신설{st["added"]}'
                          f'·삭제{st["deleted"]}, {urgency})')
+        if results['assembly']:
+            lines.append(f'🏛 국회 예고 분석 {results["assembly"]}건')
         if results['excluded']:
             lines.append(f'※ 제외 {len(results["excluded"])}건')
         lines.append(DASHBOARD_URL)
@@ -684,9 +1034,11 @@ def main():
             sb.table('system_health').upsert(
                 {'key': 'last_law_diff_run',
                  'updated_at': datetime.now(timezone.utc).isoformat(),
-                 'note': 'created=%d converted=%d skipped=%d nochange=%d failed=%d excluded=%d'
+                 'note': 'created=%d converted=%d skipped=%d nochange=%d failed=%d '
+                         'excluded=%d assembly=%d'
                          % (len(results['created']), results['converted'], results['skipped'],
-                            results['nochange'], results['failed'], len(results['excluded']))},
+                            results['nochange'], results['failed'], len(results['excluded']),
+                            results['assembly'])},
                 on_conflict='key').execute()
             print('[heartbeat] system_health.last_law_diff_run 갱신')
         except Exception as e:

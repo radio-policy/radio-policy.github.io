@@ -18,40 +18,32 @@
       <div class="title"><i class="ti ti-antenna"></i>정책 AI도우미 <i class="ti ti-compass"></i></div>
       <div class="subtitle">SKT Comm센터 · 기술정책팀</div>
     </div>
+    <!-- 메뉴 개편 2026-08-03: 17→9 항목. 하위 화면(정부 보도자료·해외 / lawtrack·diff /
+         지식베이스 5종)은 각 패널 상단의 그룹 탭 바(app.js renderGroupTabs)로 이동.
+         설정·운영 상태는 상단바 우측 톱니·상태등으로 이동. -->
     <div class="nav-group">
       <div class="nav-label">모니터링</div>
-      <div class="nav-item" onclick="go('news',this,'gov')"><i class="ti ti-speakerphone"></i>정부 보도자료·공지사항</div>
-      <div class="nav-item" onclick="go('overseas',this)"><i class="ti ti-world"></i>해외 규제동향</div>
-      <div class="nav-item active" onclick="go('news',this,'media')"><i class="ti ti-news"></i>뉴스</div>
-      <div class="nav-item" onclick="go('briefing',this)"><i class="ti ti-coffee"></i>Daily Briefing</div>
-      <div class="nav-item" onclick="go('terms',this)"><i class="ti ti-book"></i>기술 용어</div>
+      <div class="nav-item active" data-nav="monitor" onclick="go('news',this,'media')"><i class="ti ti-news"></i>통합 모니터링</div>
+      <div class="nav-item" data-nav="briefing" onclick="go('briefing',this)"><i class="ti ti-coffee"></i>Daily Briefing</div>
+      <div class="nav-item" data-nav="terms" onclick="go('terms',this)"><i class="ti ti-book"></i>기술 용어</div>
     </div>
     <div class="nav-group">
-      <div class="nav-label">자문</div>
-      <div class="nav-item" onclick="go('chat',this)"><i class="ti ti-message-circle"></i>AI 자문</div>
-      <div class="nav-item" onclick="go('lawmap',this)"><i class="ti ti-topology-star-3"></i>법령 관계도</div>
+      <div class="nav-label">AI 도우미</div>
+      <div class="nav-item" data-nav="chat" onclick="go('chat',this)"><i class="ti ti-message-circle"></i>AI 자문</div>
+      <div class="nav-item" data-nav="lawmap" onclick="go('lawmap',this)"><i class="ti ti-topology-star-3"></i>법령 관계도</div>
       <!-- 보고서 초안 제안 — 미사용으로 숨김 2026-08-02, 복원 시 주석 해제 (#54)
       <div class="nav-item" onclick="go('reportdraft',this)"><i class="ti ti-file-text"></i>보고서 초안 제안</div>
       -->
     </div>
     <div class="nav-group">
-      <div class="nav-label">법안 동향 모니터링</div>
-      <div class="nav-item" onclick="go('assembly',this)"><i class="ti ti-building-bank"></i>국회 법안</div>
-      <div class="nav-item" onclick="go('minutes',this)"><i class="ti ti-microphone-2"></i>과방위 회의록</div>
-      <div class="nav-item" onclick="go('lawtrack',this)"><i class="ti ti-file-certificate"></i>행정부 입법예고·법령 개정</div>
-      <div class="nav-item" onclick="go('diff',this)"><i class="ti ti-arrows-diff"></i>법령 DIFF 분석</div>
+      <div class="nav-label">법안 동향</div>
+      <div class="nav-item" data-nav="assembly" onclick="go('assembly',this)"><i class="ti ti-building-bank"></i>국회 법안</div>
+      <div class="nav-item" data-nav="minutes" onclick="go('minutes',this)"><i class="ti ti-microphone-2"></i>과방위 회의록</div>
+      <div class="nav-item" data-nav="lawrev" onclick="go('lawtrack',this)"><i class="ti ti-file-certificate"></i>법령 개정 추적</div>
     </div>
     <div class="nav-group">
-      <div class="nav-label">지식 베이스</div>
-      <div class="nav-item" onclick="go('law',this)"><i class="ti ti-file-text"></i>국내 법령·고시</div>
-      <div class="nav-item" onclick="go('press',this)"><i class="ti ti-speakerphone"></i>정부 보도자료</div>
-      <div class="nav-item" onclick="go('guide',this)"><i class="ti ti-clipboard-text"></i>실무 안내</div>
-      <div class="nav-item" onclick="go('itu',this)"><i class="ti ti-world"></i>ITU-R 문서</div>
-      <div class="nav-item" onclick="go('custom',this)"><i class="ti ti-pencil-plus"></i>추가 지식 입력</div>
-    </div>
-    <div class="nav-group">
-      <div class="nav-item" onclick="go('settings',this)"><i class="ti ti-settings"></i>설정</div>
-      <div class="nav-item" onclick="go('opsstatus',this)"><i class="ti ti-activity"></i>운영 상태</div>
+      <div class="nav-label">지식베이스</div>
+      <div class="nav-item" data-nav="kb" onclick="go('law',this)"><i class="ti ti-books"></i>지식베이스</div>
     </div>
     <div class="sidebar-bottom">
       <div class="version">v0.2 — 실제 연동</div>
@@ -65,8 +57,11 @@
   <div class="main">
     <div class="topbar">
       <span class="topbar-title" id="topbar-title">뉴스</span>
-      <div class="topbar-actions">
+      <div class="topbar-actions" style="align-items:center">
+        <!-- 상태등·톱니 — .btn이 아닌 인라인 요소라 모바일(.topbar-actions .btn 숨김 규칙)에서도 보인다 -->
+        <span class="ops-light" onclick="go('opsstatus',null)" title="운영 상태" style="cursor:pointer;font-size:11px;display:inline-flex;align-items:center;gap:3px;color:var(--text-secondary);padding:4px 6px;white-space:nowrap">⚪ <span>확인중</span></span>
         <button class="btn" onclick="smartRefresh()"><i class="ti ti-refresh"></i>새로고침</button>
+        <button onclick="go('settings',null)" title="설정" style="background:none;border:none;cursor:pointer;color:var(--text-secondary);font-size:16px;padding:4px;line-height:1"><i class="ti ti-settings"></i></button>
       </div>
     </div>
 
@@ -813,9 +808,10 @@
         </div>
 
         <!-- 통계 -->
-        <div class="stat-row" style="grid-template-columns:repeat(5,1fr);margin-bottom:16px" id="assembly-stats">
+        <div class="stat-row" style="grid-template-columns:repeat(6,1fr);margin-bottom:16px" id="assembly-stats">
           <div class="stat-card" style="cursor:pointer" data-mode="전체" onclick="filterAssembly(this,'전체')"><div class="stat-value" id="asm-total">—</div><div class="stat-label">전체 법안</div></div>
           <div class="stat-card" style="cursor:pointer" data-mode="최근" onclick="filterAssembly(this,'최근')"><div class="stat-value" id="asm-new">—</div><div class="stat-label">최근 발의(7일)</div></div>
+          <div class="stat-card" style="cursor:pointer" data-mode="의견" onclick="filterAssembly(this,'의견')"><div class="stat-value" id="asm-comment" style="color:#dc2626">—</div><div class="stat-label">의견등록 가능</div></div>
           <div class="stat-card" style="cursor:pointer" data-mode="접수" onclick="filterAssembly(this,'접수')"><div class="stat-value" id="asm-active">—</div><div class="stat-label">계류 중</div></div>
           <div class="stat-card" style="cursor:pointer" data-mode="통과" onclick="filterAssembly(this,'통과')"><div class="stat-value" id="asm-passed">—</div><div class="stat-label">통과</div></div>
           <div class="stat-card" style="cursor:pointer" data-mode="폐기" onclick="filterAssembly(this,'폐기')"><div class="stat-value" id="asm-discarded">—</div><div class="stat-label">폐기·철회</div></div>
@@ -864,7 +860,8 @@
     <button class="bottom-nav-item" id="bn-bills" onclick="showMobileSubMenu('bills-sub')">
       <i class="ti ti-building-bank"></i><span>법안 동향</span>
     </button>
-    <button class="bottom-nav-item" id="bn-law" onclick="showMobileSubMenu('law-sub')">
+    <!-- 메뉴 개편 2026-08-03: 지식베이스 5종은 패널 상단 탭으로 통합 → 서브메뉴 없이 바로 이동 -->
+    <button class="bottom-nav-item" id="bn-law" onclick="go('law',null);setBottomNav('bn-law')">
       <i class="ti ti-books"></i><span>지식베이스</span>
     </button>
     <button class="bottom-nav-item" id="bn-more" onclick="showMobileSubMenu('more-sub')">
@@ -879,14 +876,9 @@
     <div class="mobile-submenu-backdrop" onclick="closeMobileSubMenu('monitor-sub')"></div>
     <div class="mobile-submenu-sheet">
       <div class="mobile-submenu-title">모니터링</div>
-      <button class="mobile-submenu-item" onclick="go('news',null,'gov');setBottomNav('bn-monitor');closeMobileSubMenu('monitor-sub')">
-        <i class="ti ti-speakerphone"></i>정부 보도자료·공지사항
-      </button>
-      <button class="mobile-submenu-item" onclick="go('overseas',null);setBottomNav('bn-monitor');closeMobileSubMenu('monitor-sub')">
-        <i class="ti ti-world"></i>해외 규제동향
-      </button>
+      <!-- 메뉴 개편 2026-08-03: 정부 보도자료·공지/해외 규제동향은 통합 모니터링 패널 상단 탭으로 이동 -->
       <button class="mobile-submenu-item" onclick="go('news',null,'media');setBottomNav('bn-monitor');closeMobileSubMenu('monitor-sub')">
-        <i class="ti ti-news"></i>뉴스
+        <i class="ti ti-news"></i>통합 모니터링
       </button>
       <button class="mobile-submenu-item" onclick="go('briefing',null);setBottomNav('bn-monitor');closeMobileSubMenu('monitor-sub')">
         <i class="ti ti-coffee"></i>Daily Briefing
@@ -909,11 +901,9 @@
       <button class="mobile-submenu-item" onclick="go('minutes',null);setBottomNav('bn-bills');closeMobileSubMenu('bills-sub')">
         <i class="ti ti-microphone-2"></i>과방위 회의록
       </button>
+      <!-- 메뉴 개편 2026-08-03: lawtrack·diff는 '법령 개정 추적' 한 항목(패널 상단 탭 2개)으로 통합 -->
       <button class="mobile-submenu-item" onclick="go('lawtrack',null);setBottomNav('bn-bills');closeMobileSubMenu('bills-sub')">
-        <i class="ti ti-file-certificate"></i>행정부 입법예고·법령 개정
-      </button>
-      <button class="mobile-submenu-item" onclick="go('diff',null);setBottomNav('bn-bills');closeMobileSubMenu('bills-sub')">
-        <i class="ti ti-arrows-diff"></i>법령 DIFF 분석
+        <i class="ti ti-file-certificate"></i>법령 개정 추적
       </button>
     </div>
   </div>
@@ -936,28 +926,7 @@
     </div>
   </div>
 
-  <!-- 모바일 서브메뉴: 지식베이스 -->
-  <div id="law-sub" class="mobile-submenu" style="display:none">
-    <div class="mobile-submenu-backdrop" onclick="closeMobileSubMenu('law-sub')"></div>
-    <div class="mobile-submenu-sheet">
-      <div class="mobile-submenu-title">지식베이스</div>
-      <button class="mobile-submenu-item" onclick="go('law',null);setBottomNav('bn-law');closeMobileSubMenu('law-sub')">
-        <i class="ti ti-file-text"></i>국내 법령·고시
-      </button>
-      <button class="mobile-submenu-item" onclick="go('press',null);setBottomNav('bn-law');closeMobileSubMenu('law-sub')">
-        <i class="ti ti-speakerphone"></i>정부 보도자료
-      </button>
-      <button class="mobile-submenu-item" onclick="go('guide',null);setBottomNav('bn-law');closeMobileSubMenu('law-sub')">
-        <i class="ti ti-clipboard-text"></i>실무 안내
-      </button>
-      <button class="mobile-submenu-item" onclick="go('itu',null);setBottomNav('bn-law');closeMobileSubMenu('law-sub')">
-        <i class="ti ti-world"></i>ITU-R 문서
-      </button>
-      <button class="mobile-submenu-item" onclick="go('custom',null);setBottomNav('bn-law');closeMobileSubMenu('law-sub')">
-        <i class="ti ti-pencil-plus"></i>추가 지식 입력
-      </button>
-    </div>
-  </div>
+  <!-- 모바일 서브메뉴: 지식베이스 — 메뉴 개편 2026-08-03로 제거(패널 상단 탭으로 통합, bn-law 바로 이동) -->
 
   <!-- 모바일 서브메뉴: 더보기 -->
   <div id="more-sub" class="mobile-submenu" style="display:none">
@@ -966,6 +935,9 @@
       <div class="mobile-submenu-title">더보기</div>
       <button class="mobile-submenu-item" onclick="go('settings',null);setBottomNav('bn-more');closeMobileSubMenu('more-sub')">
         <i class="ti ti-settings"></i>설정
+      </button>
+      <button class="mobile-submenu-item" onclick="go('opsstatus',null);setBottomNav('bn-more');closeMobileSubMenu('more-sub')">
+        <i class="ti ti-activity"></i>운영 상태
       </button>
     </div>
   </div>
@@ -1086,6 +1058,6 @@
 <script src="https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js"></script>
 <script>if(typeof pdfjsLib!=='undefined'){pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';}</script>
 <script src="system_prompt.js?v=20260612c"></script>
-<script src="app.js?v=20260803g"></script>
+<script src="app.js?v=20260803h"></script>
 </body>
 </html>
