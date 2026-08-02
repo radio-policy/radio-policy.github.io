@@ -104,6 +104,41 @@ const START_TEXT =
 // ── 조문 원문 조회 (비용 0) ──
 const ARTICLE_RE = /^(.{2,40}?)\s*제?\s*(\d+)\s*조(?:\s*의\s*(\d+))?\s*$/;
 
+// 약칭 → 정식 법령명. /law는 doc_name ilike 부분일치인데, "정보통신망법"처럼 정식명에
+// 그 문자열이 통째로 들어 있지 않은 통칭은 전멸한다(첫 조회 실패 = 이탈). 조회 전에 치환한다.
+// 키는 공백 제거형으로 저장 — 입력도 공백 제거 후 대조 ("개인정보 보호법"류 표기 흔들림 흡수).
+const LAW_ALIASES: Record<string, string> = {
+  '정보통신망법': '정보통신망 이용촉진 및 정보보호 등에 관한 법률',
+  '망법': '정보통신망 이용촉진 및 정보보호 등에 관한 법률',
+  '전기통신법': '전기통신사업법',            // 약칭 유입 대비 (정식명은 전기통신사업법)
+  '개인정보보호법': '개인정보 보호법',        // 정식명은 띄어쓰기 포함
+  '위치정보법': '위치정보의 보호 및 이용 등에 관한 법률',
+  '단통법': '이동통신단말장치 유통구조 개선에 관한 법률',
+  '단말기유통법': '이동통신단말장치 유통구조 개선에 관한 법률',
+  '방발법': '방송통신발전 기본법',
+  '방송통신발전법': '방송통신발전 기본법',
+  '정보통신기반보호법': '정보통신기반 보호법',  // 정식명은 띄어쓰기 포함
+  '통비법': '통신비밀보호법',
+  '방통위설치법': '방송통신위원회의 설치 및 운영에 관한 법률',
+  '방통위법': '방송통신위원회의 설치 및 운영에 관한 법률',
+  'ICT특별법': '정보통신 진흥 및 융합 활성화 등에 관한 특별법',
+  '정보통신융합법': '정보통신 진흥 및 융합 활성화 등에 관한 특별법',
+  '지능정보화법': '지능정보화 기본법',
+  'IPTV법': '인터넷 멀티미디어 방송사업법',
+  '클라우드법': '클라우드컴퓨팅 발전 및 이용자 보호에 관한 법률',
+};
+
+// "정보통신망법 시행령"처럼 접미사가 붙어도 본체만 치환하고 접미사는 보존한다
+// (시행령/시행규칙 조회의 기존 동작을 깨지 않기 위함 — 치환 후에도 ilike 부분일치는 그대로).
+function resolveLawName(docName: string): string {
+  const m = docName.match(/^(.*?)\s*(시행령|시행규칙)?$/);
+  const base = (m?.[1] ?? docName).replace(/\s+/g, '');
+  const suffix = m?.[2] ? ' ' + m[2] : '';
+  // 라틴 약칭(ICT·IPTV)은 대소문자 표기가 흔들린다 — 대문자 정규화로 한 번 더 대조 (한글은 toUpperCase 무영향)
+  const official = LAW_ALIASES[base] ?? LAW_ALIASES[base.toUpperCase()];
+  return official ? official + suffix : docName;
+}
+
 async function handleLawQuery(chatId: number, q: string): Promise<void> {
   const query = q.trim();
   if (!query) {
@@ -126,7 +161,8 @@ async function handleLawQuery(chatId: number, q: string): Promise<void> {
     `<code>/ask ${escapeHtml(query)}</code>`);
 }
 
-async function handleArticleLookup(chatId: number, docName: string, artNo: string, subNo?: string): Promise<void> {
+async function handleArticleLookup(chatId: number, rawDocName: string, artNo: string, subNo?: string): Promise<void> {
+  const docName = resolveLawName(rawDocName);   // 약칭이면 정식명으로 치환 후 조회 (미등재 안내·법령센터 링크도 정식명 기준)
   const wanted = `제${artNo}조` + (subNo ? `의${subNo}` : '');
   const { data } = await sb.from('document_chunks')
     .select('id, doc_name, article_no, content, notice_no, effective_date, chunk_index')
@@ -196,6 +232,11 @@ async function handleAsk(chatId: number, from: { username?: string; first_name?:
 
   // webhook 200을 먼저 돌려보내고 백그라운드에서 RAG+Sonnet 실행 (텔레그램 재시도 방지)
   return (async () => {
+    // 생성이 45~53초 걸리는데 텔레그램 typing 표시는 ~5초면 꺼진다 — 15초 간격으로 재전송해
+    // "먹통 아님"을 계속 보여준다. 완료/실패 시 finally에서 반드시 중지.
+    const typing = () => { tg('sendChatAction', { chat_id: chatId, action: 'typing' }); };
+    typing();
+    const typingTimer = setInterval(typing, 15_000);
     try {
       // 시스템 프롬프트는 app_config에서 읽는다 (원본은 루트 system_prompt.js — sync_system_prompt.py로 업로드).
       // 함수에 번들하지 않으므로 프롬프트 수정 시 재배포가 필요 없다.
@@ -210,7 +251,25 @@ async function handleAsk(chatId: number, from: { username?: string; first_name?:
       await sb.from('chat_logs').insert({ question: q, answer, category: '텔레그램', sources: sources.join(', ') });
     } catch (e) {
       console.error('[자문 실패]', e);
-      await sendTelegramHtml(BOT_TOKEN, chatId, '⚠️ 자문 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.');
+      // 쿼터 환불 — 선차감은 유지하되(동시성 안전) 실패 경로에서 -1 복원.
+      // 실측(8/1): 5차감/2성공 — 환불이 없으면 실패가 일일 상한 20회를 갉아먹는다.
+      try {
+        const cur = await getSub(chatId);
+        if (cur && cur.ai_count_date === today && cur.ai_count > 0) {
+          await upsertSub(chatId, { ai_count: cur.ai_count - 1 });
+        }
+      } catch (re) { console.error('[쿼터 환불 실패]', re); }
+      // 실패도 로그로 남겨 실패율 추적 가능하게 (성공과 같은 category='텔레그램', answer에 실패 표식)
+      try {
+        await sb.from('chat_logs').insert({
+          question: q,
+          answer: '[자문 실패] ' + String((e as Error)?.message ?? e).slice(0, 500),
+          category: '텔레그램', sources: '',
+        });
+      } catch (le) { console.error('[실패 로그 기록 실패]', le); }
+      await sendTelegramHtml(BOT_TOKEN, chatId, '⚠️ 자문 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.\n(이번 실패는 오늘 사용 횟수에서 차감되지 않습니다)');
+    } finally {
+      clearInterval(typingTimer);
     }
   })();
 }

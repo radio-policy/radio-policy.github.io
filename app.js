@@ -807,15 +807,16 @@ function renderTerms(items) {
   el.innerHTML = items.map(function(t) {
     var cc = catColor[t.category] || 'badge-amber';
     var reviewed = t.is_reviewed ? '<span style="color:var(--green);font-size:10px">✓ 검토완료</span>' : '';
+    // 용어 데이터는 AI가 외부 뉴스에서 추출해 DB에 저장한 값 — innerHTML 삽입 전 escHtml (#61)
     return '<div class="card" style="cursor:pointer;padding:12px 14px" onclick="openTermsModal(&quot;' + t.id + '&quot;)">' +
       '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">' +
-        '<span style="font-size:14px;font-weight:600;color:var(--text-primary)">' + t.term + '</span>' +
-        (t.term_en ? '<span style="font-size:11px;color:var(--text-tertiary)">(' + t.term_en + ')</span>' : '') +
-        '<span class="badge ' + cc + '" style="margin-left:auto">' + (t.category||'기타') + '</span>' +
+        '<span style="font-size:14px;font-weight:600;color:var(--text-primary)">' + escHtml(t.term) + '</span>' +
+        (t.term_en ? '<span style="font-size:11px;color:var(--text-tertiary)">(' + escHtml(t.term_en) + ')</span>' : '') +
+        '<span class="badge ' + cc + '" style="margin-left:auto">' + escHtml(t.category||'기타') + '</span>' +
       '</div>' +
-      '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:6px">' + (t.definition || '(설명 없음)') + '</div>' +
+      '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:6px">' + escHtml(t.definition || '(설명 없음)') + '</div>' +
       '<div style="display:flex;align-items:center;justify-content:space-between">' +
-        '<span style="font-size:11px;color:var(--text-tertiary)">' + (t.source||'') + '</span>' +
+        '<span style="font-size:11px;color:var(--text-tertiary)">' + escHtml(t.source||'') + '</span>' +
         reviewed +
       '</div>' +
     '</div>';
@@ -852,28 +853,29 @@ function mdToHtml(text) {
 function renderTermsModalHtml(t) {
   var catColor = {주파수:'badge-purple', 네트워크:'badge-teal', 위성:'badge-blue', 단말:'badge-amber', 규제:'badge-red', 기타:'badge-amber'};
   var cc = catColor[t.category] || 'badge-amber';
+  // 용어명을 onclick JS 문자열에 직접 넣지 않고 data-속성으로 전달 (속성 탈출 XSS 차단, #61)
   var related = (t.related_terms||[]).map(function(r) {
-    return '<span class="badge badge-amber" style="cursor:pointer" onclick="closeTermsModal();document.getElementById(&quot;terms-search-input&quot;).value=&quot;' + r + '&quot;;filterTerms(&quot;' + r + '&quot;)">' + r + '</span>';
+    return '<span class="badge badge-amber" style="cursor:pointer" data-term="' + escHtml(r) + '" onclick="closeTermsModal();var v=this.getAttribute(\'data-term\');document.getElementById(\'terms-search-input\').value=v;filterTerms(v)">' + escHtml(r) + '</span>';
   }).join(' ');
 
   var headerHtml =
     '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px">' +
-      '<span style="font-size:20px;font-weight:700;color:var(--text-primary)">' + t.term + '</span>' +
-      (t.term_en ? '<span style="font-size:13px;color:var(--text-secondary)">' + t.term_en + '</span>' : '') +
-      '<span class="badge ' + cc + '">' + (t.category||'기타') + '</span>' +
+      '<span style="font-size:20px;font-weight:700;color:var(--text-primary)">' + escHtml(t.term) + '</span>' +
+      (t.term_en ? '<span style="font-size:13px;color:var(--text-secondary)">' + escHtml(t.term_en) + '</span>' : '') +
+      '<span class="badge ' + cc + '">' + escHtml(t.category||'기타') + '</span>' +
     '</div>' +
-    (t.source ? '<div style="font-size:11px;color:var(--text-tertiary);margin-bottom:10px">📌 출처: ' + t.source + '</div>' : '<div style="margin-bottom:10px"></div>');
+    (t.source ? '<div style="font-size:11px;color:var(--text-tertiary);margin-bottom:10px">📌 출처: ' + escHtml(t.source) + '</div>' : '<div style="margin-bottom:10px"></div>');
 
   // 한 줄 정의
   var defHtml = t.definition
-    ? '<div style="font-size:13px;font-weight:500;margin-bottom:14px;padding:10px 14px;background:var(--bg-secondary);border-radius:var(--radius-md);border-left:3px solid var(--accent)">' + t.definition + '</div>'
+    ? '<div style="font-size:13px;font-weight:500;margin-bottom:14px;padding:10px 14px;background:var(--bg-secondary);border-radius:var(--radius-md);border-left:3px solid var(--accent)">' + escHtml(t.definition) + '</div>'
     : '';
 
   var footerHtml =
     (related ? '<div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border)"><span style="font-size:11px;color:var(--text-secondary);margin-right:6px">관련 용어</span>' + related + '</div>' : '') +
     '<div style="display:flex;gap:8px;margin-top:14px">' +
       '<button class="btn" style="font-size:11px;padding:4px 10px" onclick="generateTermDetail(&quot;' + t.id + '&quot;)" id="gen-btn-' + t.id + '">↺ 재생성</button>' +
-      '<button class="btn" onclick="askQ(&quot;' + t.term + ' 기술에 대해 자세히 설명해줘&quot;)">AI 자문에서 질문</button>' +
+      '<button class="btn" data-term="' + escHtml(t.term) + '" onclick="askQ(this.getAttribute(\'data-term\') + \' 기술에 대해 자세히 설명해줘\')">AI 자문에서 질문</button>' +
     '</div>';
 
   if (t.description) {
@@ -2330,9 +2332,12 @@ async function loadNews() {
   try {
     // 전량 페이지네이션 조회 — PostgREST 서버 max-rows가 1000이라 limit만 키워선 잘린다(#28).
     // 60일 보존이라 행수가 수천 건까지 자라며, 상한 없이 전부 가져온다(안전 상한 10,000행).
+    // 목록 표시에 필요한 컬럼만 조회 — content(기사 본문)는 행당 수 KB로 초기 전송량의 대부분이라 제외.
+    // 상세 열람 시 showNewsDetail이 해당 1건만 온디맨드 조회하며, RAG 자문은 별도 쿼리로 content를 직접 가져온다 (#61).
+    var NEWS_LIST_COLS = 'id,title,source,category,url,is_read,published_at,created_at,summary,importance,urgency,locked,briefed_date,content_fetched_at';
     var all = [];
     for (var off = 0; off < 10000; off += 1000) {
-      var page = await sb.from('news_feed').select('*')
+      var page = await sb.from('news_feed').select(NEWS_LIST_COLS)
         .order('published_at', { ascending: false, nullsFirst: false })
         .range(off, off + 999);
       if (page.error) throw page.error;
@@ -2340,7 +2345,7 @@ async function loadNews() {
       if ((page.data || []).length < 1000) break;
     }
     // 잠금 기사 별도 조회·병합 유지(배경역사 #38) — 전량 조회가 어떤 이유로든 잘려도 잠금 기사는 항상 포함
-    var lockedResp = await sb.from('news_feed').select('*').eq('locked', true).limit(500);
+    var lockedResp = await sb.from('news_feed').select(NEWS_LIST_COLS).eq('locked', true).limit(500);
     var seen = new Set();
     newsDataCache = [];
     all.concat(lockedResp.data || []).forEach(function(n) {
@@ -2443,8 +2448,10 @@ function _renderSingleItem(n) {
   var rule = IMPORTANCE_RULES[n._importance] || IMPORTANCE_RULES['참고'];
   var date = new Date(n.published_at || n.created_at).toLocaleDateString('ko-KR', {year:'numeric', month:'2-digit', day:'2-digit'});
   var isSelected = String(n.id) === String(selectedNewsId);
-  var urlIcon = n.url
-    ? ' <a href="' + n.url + '" target="_blank" onclick="event.stopPropagation()" style="color:var(--accent);font-size:11px;vertical-align:middle"><i class="ti ti-external-link"></i></a>'
+  // 외부 API 유래 필드(title/summary/source/url)는 innerHTML 삽입 전 반드시 escHtml/safeUrl (XSS 차단, #61)
+  var safeU = safeUrl(n.url);
+  var urlIcon = safeU
+    ? ' <a href="' + safeU + '" target="_blank" onclick="event.stopPropagation()" style="color:var(--accent);font-size:11px;vertical-align:middle"><i class="ti ti-external-link"></i></a>'
     : '';
   var lockIcon = ' <span onclick="event.stopPropagation();toggleNewsLock(\'' + n.id + '\')" ' +
     'title="' + (n.locked ? '잠금 해제 (해제 시 60일 경과 후 삭제됨)' : '잠금 (60일이 지나도 삭제되지 않음)') + '" ' +
@@ -2460,10 +2467,10 @@ function _renderSingleItem(n) {
       '<div class="news-item-header" style="display:flex;align-items:center;gap:5px;margin-bottom:3px;flex-wrap:wrap">' +
         '<span style="font-size:10px;font-weight:700;color:' + rule.color + ';background:' + rule.bg + ';padding:1px 7px;border-radius:4px;flex-shrink:0">' + rule.label + '</span>' +
         '<span style="font-size:11px;color:var(--text-tertiary);flex-shrink:0">' + date + '</span>' +
-        (n.source ? '<span class="news-item-source" style="font-size:10px;color:var(--text-tertiary);margin-left:auto;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:90px">' + n.source + '</span>' : '') +
+        (n.source ? '<span class="news-item-source" style="font-size:10px;color:var(--text-tertiary);margin-left:auto;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:90px">' + escHtml(n.source) + '</span>' : '') +
       '</div>' +
-      '<div class="news-title" style="font-size:13px;line-height:1.5;word-break:break-word;overflow-wrap:break-word">' + n.title + urlIcon + lockIcon + delIcon + '</div>' +
-      (n.summary ? '<div class="news-meta" style="margin-top:3px;font-size:11px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;color:var(--text-tertiary)">' + n.summary.slice(0, 80) + (n.summary.length > 80 ? '…' : '') + '</div>' : '') +
+      '<div class="news-title" style="font-size:13px;line-height:1.5;word-break:break-word;overflow-wrap:break-word">' + escHtml(n.title) + urlIcon + lockIcon + delIcon + '</div>' +
+      (n.summary ? '<div class="news-meta" style="margin-top:3px;font-size:11px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;color:var(--text-tertiary)">' + escHtml(n.summary.slice(0, 80)) + (n.summary.length > 80 ? '…' : '') + '</div>' : '') +
     '</div>' +
   '</div>';
 }
@@ -2517,7 +2524,7 @@ function renderNewsList() {
       html += '<div style="border:0.5px solid var(--border-secondary);border-radius:var(--radius-md);margin:4px 0;overflow:hidden">' +
         '<div onclick="toggleNewsGroup(\'' + gid + '\')" style="display:flex;align-items:center;gap:8px;padding:9px 12px;background:var(--bg-secondary);cursor:pointer;user-select:none">' +
           '<i class="ti ti-news" style="font-size:14px;color:var(--text-tertiary);flex-shrink:0"></i>' +
-          '<span style="font-size:13px;font-weight:500;color:var(--text-primary);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + gtitle + '</span>' +
+          '<span style="font-size:13px;font-weight:500;color:var(--text-primary);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escHtml(gtitle) + '</span>' +
           '<span style="font-size:11px;padding:1px 7px;border-radius:8px;flex-shrink:0;' + badgeColor + '">' + group.length + '건</span>' +
           '<span style="font-size:11px;color:var(--text-tertiary);flex-shrink:0">' + date + '</span>' +
           '<i id="ng-icon-' + gid + '" class="ti ti-chevron-down" style="font-size:14px;color:var(--text-tertiary);flex-shrink:0;transition:transform .2s;' + (isOpen ? 'transform:rotate(180deg)' : '') + '"></i>' +
@@ -2525,15 +2532,16 @@ function renderNewsList() {
         '<div id="ng-body-' + gid + '" style="display:' + (isOpen ? 'block' : 'none') + ';padding:0 12px;border-top:0.5px solid var(--border-tertiary)">' +
           group.map(function(n) {
             var rule = IMPORTANCE_RULES[n._importance] || IMPORTANCE_RULES['참고'];
-            var urlIcon = n.url ? ' <a href="' + n.url + '" target="_blank" onclick="event.stopPropagation()" style="color:var(--accent);font-size:11px"><i class="ti ti-external-link"></i></a>' : '';
+            var safeU = safeUrl(n.url);
+            var urlIcon = safeU ? ' <a href="' + safeU + '" target="_blank" onclick="event.stopPropagation()" style="color:var(--accent);font-size:11px"><i class="ti ti-external-link"></i></a>' : '';
             return '<div onclick="showNewsDetail(\'' + n.id + '\')" style="display:flex;align-items:flex-start;gap:8px;padding:8px 0;border-bottom:0.5px solid var(--border-tertiary);cursor:pointer">' +
               '<div class="news-dot ' + (n.is_read ? 'dot-read' : 'dot-new') + '" style="flex-shrink:0;margin-top:4px"></div>' +
               '<span style="font-size:12px;font-weight:700;color:' + rule.color + ';background:' + rule.bg + ';padding:1px 6px;border-radius:4px;flex-shrink:0">' + rule.label + '</span>' +
               '<div style="flex:1;min-width:0;overflow:hidden">' +
-                '<div style="font-size:13px;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + n.title + urlIcon + '</div>' +
-                (n.summary ? '<div style="margin-top:2px;font-size:11px;color:var(--text-tertiary);overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical">' + n.summary.slice(0, 80) + (n.summary.length > 80 ? '…' : '') + '</div>' : '') +
+                '<div style="font-size:13px;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escHtml(n.title) + urlIcon + '</div>' +
+                (n.summary ? '<div style="margin-top:2px;font-size:11px;color:var(--text-tertiary);overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical">' + escHtml(n.summary.slice(0, 80)) + (n.summary.length > 80 ? '…' : '') + '</div>' : '') +
               '</div>' +
-              '<span style="font-size:11px;color:var(--text-tertiary);flex-shrink:0;margin-left:8px">' + (n.source||'') + '</span>' +
+              '<span style="font-size:11px;color:var(--text-tertiary);flex-shrink:0;margin-left:8px">' + escHtml(n.source||'') + '</span>' +
               '<span onclick="event.stopPropagation();deleteNewsItem(\'' + n.id + '\')" title="기사 삭제" style="cursor:pointer;font-size:11px;color:var(--text-tertiary);opacity:.5;flex-shrink:0;margin-left:6px"><i class="ti ti-trash"></i></span>' +
             '</div>';
           }).join('') +
@@ -2686,7 +2694,7 @@ async function syncBriefingUrgency(newsId, newVal) {
   }
 }
 
-function showNewsDetail(newsId) {
+async function showNewsDetail(newsId) {
   selectedNewsId = newsId;
   var n = newsDataCache.find(function(x) { return String(x.id) === String(newsId); });
   if (!n) return;
@@ -2696,8 +2704,9 @@ function showNewsDetail(newsId) {
 
   var rule   = IMPORTANCE_RULES[n._importance] || IMPORTANCE_RULES['참고'];
   var date   = (n.published_at || n.created_at || '').slice(0, 10);
-  var urlBtn = n.url
-    ? '<a href="' + n.url + '" target="_blank" class="btn" style="font-size:11px;padding:4px 10px;text-decoration:none;white-space:nowrap"><i class="ti ti-external-link"></i> 원문 보기</a>'
+  var safeU  = safeUrl(n.url);
+  var urlBtn = safeU
+    ? '<a href="' + safeU + '" target="_blank" class="btn" style="font-size:11px;padding:4px 10px;text-decoration:none;white-space:nowrap"><i class="ti ti-external-link"></i> 원문 보기</a>'
     : '';
   var lockBtn = '<button class="btn" id="lock-btn-' + n.id + '" onclick="toggleNewsLock(\'' + n.id + '\')" ' +
     'title="잠금 시 60일이 지나도 삭제되지 않고 AI 자문에서 계속 참조됩니다" ' +
@@ -2721,8 +2730,8 @@ function showNewsDetail(newsId) {
         '<div style="margin-left:auto;display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">' + lockBtn + delBtn + urlBtn + '</div>' +
       '</div>' +
       impSel +
-      '<div style="font-size:13px;font-weight:600;color:var(--text-primary);line-height:1.55;margin-bottom:4px">' + n.title + '</div>' +
-      '<div style="font-size:11px;color:var(--text-secondary)">' + (n.source || '') + '</div>' +
+      '<div style="font-size:13px;font-weight:600;color:var(--text-primary);line-height:1.55;margin-bottom:4px">' + escHtml(n.title) + '</div>' +
+      '<div style="font-size:11px;color:var(--text-secondary)">' + escHtml(n.source || '') + '</div>' +
     '</div>' +
 
     // 주요 내용 요약 — AI 자동 생성 (스피너로 시작)
@@ -2747,9 +2756,9 @@ function showNewsDetail(newsId) {
       '</div>' +
     '</div>' +
 
-    // AI 자문 연동
+    // AI 자문 연동 — 제목을 onclick JS 문자열에 직접 넣지 않고 data-속성으로 전달 (속성 탈출 XSS 차단, #61)
     '<div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border)">' +
-      '<button onclick="askQ(\'' + n.title.replace(/'/g, "\\'").slice(0,50) + ' SKT 영향 분석해줘\')" class="btn btn-primary" style="width:100%;font-size:12px;justify-content:center">' +
+      '<button data-nt="' + escHtml(n.title.slice(0, 50)) + '" onclick="askQ(this.getAttribute(\'data-nt\') + \' SKT 영향 분석해줘\')" class="btn btn-primary" style="width:100%;font-size:12px;justify-content:center">' +
         '<i class="ti ti-message-2"></i> AI 자문에서 상세 분석' +
       '</button>' +
     '</div>';
@@ -2762,6 +2771,15 @@ function showNewsDetail(newsId) {
   // 읽음 처리
   if (sb) { sb.from('news_feed').update({ is_read: true }).eq('id', n.id).then(function() {}); }
   n.is_read = true;
+
+  // content는 목록 조회(select)에서 제외했으므로(초기 전송량 절감, #61) 상세 열람 시 해당 1건만 온디맨드 조회.
+  // RAG 자문은 별도 쿼리(select에 content 포함)로 본문을 직접 가져오므로 캐시 슬림화와 무관.
+  if (sb && n.content === undefined) {
+    try {
+      var cResp = await sb.from('news_feed').select('content').eq('id', n.id).maybeSingle();
+      n.content = (cResp && cResp.data && cResp.data.content) || '';
+    } catch(e) { n.content = ''; }
+  }
 
   // 요약 + 영향도 분석 자동 실행
   summarizeNews(n.id);
@@ -4253,6 +4271,13 @@ async function analyzeBriefingItemEl(el, titleText) {
     var cached = (typeof newsDataCache !== 'undefined') && newsDataCache.find(function(x) {
       return x.title && titleText && x.title.replace(/\s+/g,'').includes(titleText.replace(/\s+/g,'').slice(0,20));
     });
+    // 캐시는 content 없이 로드되므로(#61) 필요 시 해당 1건만 온디맨드 조회
+    if (cached && cached.content === undefined && sb) {
+      try {
+        var cr0 = await sb.from('news_feed').select('content').eq('id', cached.id).maybeSingle();
+        cached.content = (cr0 && cr0.data && cr0.data.content) || '';
+      } catch(e0) { cached.content = ''; }
+    }
     var bodySnippet = cached ? (cached.body || cached.content || '').replace(/\s+/g,' ').trim().slice(0, 2000) : '';
     var userContent = '제목: ' + titleText +
       (cached ? '\n출처: ' + (cached.source||'') + '\n날짜: ' + (cached.published_at||'').slice(0,10) : '') +
@@ -5264,7 +5289,9 @@ async function loadPressJSON() {
         .from('document_chunks')
         .select('doc_name, content')
         .eq('doc_category', '보도자료')
-        .filter('content', '~', '## [0-9][0-9][0-9][0-9][0-9][0-9]')
+        // PostgREST의 정규식 연산자는 'match'(~에 해당) — '~'를 그대로 넘기면 PGRST100 파싱 실패로
+        // 항상 폴백(전량 6,000+청크·4MB+)에 빠진다. 실측: match는 1,035청크·2요청으로 축소 (#61)
+        .filter('content', 'match', '## [0-9][0-9][0-9][0-9][0-9][0-9]')
         .order('id')
         .range(pageStart, pageStart + 999);
       if (resp.error) { queryErr = resp.error; break; }
@@ -5399,20 +5426,21 @@ function renderPressList(list) {
     html += '<div style="display:flex;flex-direction:column;gap:4px">';
     items.forEach(function(item) {
       var dateLabel = item.date.substring(5);
-      var safeTitle = item.title.replace(/&/g,'&amp;').replace(/"/g,'&quot;');
-      var safeDoc   = (item.doc_name || '').replace(/&/g,'&amp;').replace(/"/g,'&quot;');
+      // onclick 인자: JS 문자열 이스케이프(\\, \') 후 속성 전체를 HTML 이스케이프 — 외부 유래 제목의 속성 탈출·스크립트 주입 차단 (#61)
+      var jsTitle = escHtml(String(item.title).replace(/\\/g,'\\\\').replace(/'/g,"\\'"));
+      var jsDoc   = escHtml(String(item.doc_name || '').replace(/\\/g,'\\\\').replace(/'/g,"\\'"));
       var agencyTag = item.agency
-        ? '<span style="flex-shrink:0;font-size:10px;color:#8888aa;border:1px solid #33334a;border-radius:4px;padding:0 5px;margin-top:2px;white-space:nowrap">' + item.agency + '</span>'
+        ? '<span style="flex-shrink:0;font-size:10px;color:#8888aa;border:1px solid #33334a;border-radius:4px;padding:0 5px;margin-top:2px;white-space:nowrap">' + escHtml(item.agency) + '</span>'
         : '';
       html += '<div class="press-item" ' +
         'style="display:flex;align-items:flex-start;gap:8px;padding:5px 8px;' +
         'border-radius:6px;cursor:pointer;background:#1a1a2a" ' +
-        'onclick="openPressDetail(\'' + safeTitle.replace(/'/g,"\\'") + '\',\'' + item.date + '\',\'' + safeDoc.replace(/'/g,"\\'") + '\')" ' +
+        'onclick="openPressDetail(\'' + jsTitle + '\',\'' + item.date + '\',\'' + jsDoc + '\')" ' +
         'onmouseover="this.style.background=\'#22223a\'" ' +
         'onmouseout="this.style.background=\'#1a1a2a\'">' +
         '<span style="flex-shrink:0;font-size:11px;color:#6c757d;width:36px;margin-top:2px">' + dateLabel + '</span>' +
         agencyTag +
-        '<span style="font-size:13px;color:#d0d0e0;line-height:1.4">' + item.title + '</span>' +
+        '<span style="font-size:13px;color:#d0d0e0;line-height:1.4">' + escHtml(item.title) + '</span>' +
         '</div>';
     });
     html += '</div></div>';
@@ -5525,8 +5553,8 @@ async function openPressDetail(title, date, docName) {
       .replace(/\n/g, '<br>');
 
     if (srcUrl) {
-      // 원문 페이지에는 첨부(HWPX/PDF)도 있어 그림·인포그래픽까지 확인 가능
-      html = '<div style="margin-bottom:12px"><a href="' + srcUrl.replace(/"/g, '&quot;')
+      // 원문 페이지에는 첨부(HWPX/PDF)도 있어 그림·인포그래픽까지 확인 가능 (스킴은 위 정규식이 https?:로 한정)
+      html = '<div style="margin-bottom:12px"><a href="' + escHtml(srcUrl)
            + '" target="_blank" rel="noopener" class="btn" style="font-size:12px;text-decoration:none">'
            + '<i class="ti ti-external-link"></i> 원문 보기 (기관 사이트 · 첨부 포함)</a></div>' + html;
     }
@@ -5899,14 +5927,14 @@ async function renderCustomKnowledgeList(filterText) {
         '</div>';
       }
       var tagsHtml = (item.tags || []).map(function(t) {
-        return '<span style="background:var(--bg-tertiary);border-radius:4px;padding:1px 6px;font-size:10px;color:var(--text-secondary)">' + t + '</span>';
+        return '<span style="background:var(--bg-tertiary);border-radius:4px;padding:1px 6px;font-size:10px;color:var(--text-secondary)">' + escHtml(t) + '</span>';
       }).join(' ');
       var date = (item.created_at || '').slice(0, 10);
       return '<div style="display:flex;align-items:flex-start;gap:10px;padding:10px 0;border-bottom:0.5px solid var(--border-light)">' +
         '<div style="flex:1;min-width:0">' +
           '<div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">' +
-            '<span style="font-size:10px;background:var(--accent);color:#fff;border-radius:4px;padding:1px 6px">' + (item.category || '일반') + '</span>' +
-            '<span style="font-size:12px;font-weight:600;color:var(--text-primary)">' + item.title + '</span>' +
+            '<span style="font-size:10px;background:var(--accent);color:#fff;border-radius:4px;padding:1px 6px">' + escHtml(item.category || '일반') + '</span>' +
+            '<span style="font-size:12px;font-weight:600;color:var(--text-primary)">' + escHtml(item.title) + '</span>' +
           '</div>' +
           '<div style="font-size:11px;color:var(--text-tertiary)">' + date + (tagsHtml ? ' · ' + tagsHtml : '') + '</div>' +
         '</div>' +
@@ -6592,6 +6620,12 @@ function renderAssemblyBills(bills) {
 function escHtml(str) {
   if (!str) return '';
   return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// 외부·DB 유래 URL을 href 속성에 넣기 전 정화 — http/https만 허용('javascript:' 등 스킴 차단) + HTML 이스케이프
+function safeUrl(u) {
+  var s = String(u == null ? '' : u).trim();
+  return /^https?:\/\//i.test(s) ? escHtml(s) : '';
 }
 
 // ════════════════════════════════════════════
@@ -8301,7 +8335,8 @@ document.addEventListener('DOMContentLoaded', function() {
   initSupabase();
   updateStatusDots();
   loadSettingsUI();
-  loadPressJSON();
+  // loadPressJSON()은 진입 시 호출하지 않는다 — 보도자료 탭 진입(go('press') → loadPressFromSupabase)과
+  // smartRefresh(panel-press)에서 로드된다. 첫 화면(뉴스)에서 불필요한 대량 조회 제거 (#61)
   loadRemoteConfig().then(function() { currentNewsSourceType = 'media'; loadNews(); renderGroupTabs('news'); });
   refreshOpsLight();   // 상단바 상태등 — 페이지 로드 시 1회 (이후 smartRefresh마다 갱신)
   setTimeout(autoExtractTermsIfNeeded, 60000);

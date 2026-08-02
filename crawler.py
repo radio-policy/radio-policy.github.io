@@ -1818,24 +1818,52 @@ def send_telegram(urgent_items: list):
         return
 
     now_str = datetime.now(KST).strftime('%Y.%m.%d %H:%M KST')
-    lines = [f'🚨 *[전파정책 AI] 긴급 기사 {len(urgent_items)}건* — {now_str}\n']
+    # HTML 조립 — 기사 원제목의 * _ [ ] ( 등이 Markdown 파싱을 깨서 400으로
+    # 통째 소실되던 것을 이스케이프된 HTML로 방지 (morning_briefing.py와 동일 방식)
+    import html as _html
+
+    def _esc(s: str) -> str:
+        return _html.escape(str(s), quote=False)
+
+    lines = [f'🚨 <b>[전파정책 AI] 긴급 기사 {len(urgent_items)}건</b> — {now_str}\n']
     for i, item in enumerate(urgent_items, 1):
         title = item.get('title', '')
         source = item.get('source', '')
         url = item.get('url', '')
         rel = item.get('_related', 0)
         rel_txt = f' (관련 보도 {rel}건)' if rel else ''
-        lines.append(f'*{i}. {title}*{rel_txt}')
-        lines.append(f'   출처: {source}')
-        lines.append(f'   🔗 {url}\n')
+        lines.append(f'<b>{i}. {_esc(title)}</b>{_esc(rel_txt)}')
+        lines.append(f'   출처: {_esc(source)}')
+        if url:
+            # href 속성값: & → &amp;, " → &quot; (quote=True)
+            lines.append(f'   🔗 <a href="{_html.escape(str(url), quote=True)}">기사 보기</a>\n')
+        else:
+            lines.append('')
 
-    lines.append('📊 대시보드: https://youjinwoong.github.io/radio-policy-ai/')
+    lines.append('📊 <a href="https://youjinwoong.github.io/radio-policy-ai/">대시보드</a>')
     text = '\n'.join(lines)
 
     # 전송부는 notify 위임 (개선⑪) — 실패 로그는 notify가 출력
-    if notify.send_telegram(text, chat_id=TELEGRAM_CHAT_ID, parse_mode='Markdown',
-                            disable_web_page_preview=True):
+    ok = notify.send_telegram(text, chat_id=TELEGRAM_CHAT_ID, parse_mode='HTML',
+                              disable_web_page_preview=True)
+    if not ok:
+        # HTML 파싱 실패(400 등) 시 평문으로 재시도 — 포맷 때문에 긴급 알림 자체를
+        # 잃지 않도록(fail-open, morning_briefing.py send_telegram과 동일 패턴)
+        print('[텔레그램] 긴급 HTML 발송 실패 → 평문 재시도')
+        plain_lines = [f'🚨 [전파정책 AI] 긴급 기사 {len(urgent_items)}건 — {now_str}\n']
+        for i, item in enumerate(urgent_items, 1):
+            rel = item.get('_related', 0)
+            rel_txt = f' (관련 보도 {rel}건)' if rel else ''
+            plain_lines.append(f"{i}. {item.get('title', '')}{rel_txt}")
+            plain_lines.append(f"   출처: {item.get('source', '')}")
+            plain_lines.append(f"   🔗 {item.get('url', '')}\n")
+        plain_lines.append('📊 대시보드: https://youjinwoong.github.io/radio-policy-ai/')
+        ok = notify.send_telegram('\n'.join(plain_lines), chat_id=TELEGRAM_CHAT_ID,
+                                  disable_web_page_preview=True)
+    if ok:
         print(f'[텔레그램] 긴급 {len(urgent_items)}건 발송 완료')
+    else:
+        print(f'[텔레그램] 긴급 {len(urgent_items)}건 발송 실패 (HTML·평문 모두)')
 
 
 # ═══════════════════════════════════════════════════════
