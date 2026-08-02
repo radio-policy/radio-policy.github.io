@@ -610,6 +610,170 @@ async function fetchLawTrackContext() {
   }
 }
 
+// ── 국회 동향 컨텍스트 (참고용 보조 블록) ──────────────────────────────
+//
+// 운영자 요구: 자문 답변에 "국회에서 이런 논의도 진행되고 있다" 정도를 참고로 붙인다.
+// 조문·기사처럼 '근거' 계층이 아니라 '배경' 계층이므로 컨텍스트 맨 뒤에 소량만 붙이고,
+// 프롬프트에서 확정 법령처럼 서술하지 못하게 막는다(system_prompt.js [국회 동향 활용 원칙]).
+//
+// 비용 0 — 임베딩 호출을 추가하지 않는다. assembly_speeches(~1.1천건)·assembly_bills(~230건)는
+// 규모가 작고 summary가 이미 정제돼 있어 ilike 텍스트 검색만으로 상위 적중이 나온다(실측).
+// trgm·pgvector로 올리면 질의 임베딩 1회가 더 붙는데 정확도 이득이 없다.
+//
+// 정확도 장치 3가지 (전부 실측으로 정한 값 — 완화하면 'AI'(발언 절반이 적중)처럼
+// 흔한 말 하나에 무관 발언이 4건 딸려 온다):
+//  ① topic은 회의록 요약 시 붙인 통제 어휘 태그다("주파수, 이동통신"). 태그가 질문 문장에
+//     그대로 들어 있으면(역방향 포함) 강한 신호로 +3.
+//  ② 적중 키워드가 1개뿐이면, 그 키워드가 topic에 걸렸고 전체의 ~4% 이하에서만 나오는
+//     희소어일 때만 통과시킨다(앵커). '알뜰폰'(17건)·'전자파'(4건)는 통과, 'AI'(582건)는 탈락.
+//  ③ 법안은 키워드 점수 3점 이상(법안명 적중 또는 요약 3회 적중)을 먼저 쓰고, 하나도 없을
+//     때만 '키워드 2개 동시 적중'으로 완화한다 — 뉴스 컨텍스트의 strong/fallback과 같은 원칙.
+var ASM_RARE_MAX = 40;      // assembly_speeches 약 1,100건 기준 희소어 상한(≈4%)
+
+async function fetchAssemblyTrendContext(query) {
+  if (!sb || !query) return '';
+  try {
+    // 뉴스와 같은 키워드 추출기를 쓴다 — 회의록 요지·법안 요약은 법령 조문이 아니라
+    // 뉴스에 가까운 서술문이라, 법령용 extractKeywords의 좁은 불용어로는 잡음이 남는다.
+    var kws = extractNewsKeywords(query).slice(0, 5)
+      .map(function(k) { return String(k).replace(/[%_,.*()]/g, ' ').trim(); })
+      .filter(function(k) { return k.length >= 2; });
+    if (!kws.length) return '';
+    var qLower = String(query).toLowerCase();
+
+    // 키워드당 1회씩만 조회(최신순 상한). count:'exact'로 희소도(②)를 같은 요청에서 받는다.
+    var spP = kws.map(function(k) {
+      return sb.from('assembly_speeches')
+        .select('speaker,position,meeting_date,agenda,topic,summary', { count: 'exact' })
+        .or('topic.ilike.*' + k + '*,agenda.ilike.*' + k + '*,summary.ilike.*' + k + '*')
+        .order('meeting_date', { ascending: false }).limit(25)
+        .then(function(r) { return { kw: k, rows: r.data || [], total: r.count || 0 }; })
+        .catch(function() { return { kw: k, rows: [], total: 0 }; });
+    });
+    var blP = kws.map(function(k) {
+      return sb.from('assembly_bills')
+        .select('bill_name,proposer,committee,proc_result,propose_dt,summary,notice_end_dt')
+        .or('bill_name.ilike.*' + k + '*,summary.ilike.*' + k + '*')
+        .order('propose_dt', { ascending: false, nullsFirst: true }).limit(15)
+        .then(function(r) { return { kw: k, rows: r.data || [] }; })
+        .catch(function() { return { kw: k, rows: [] }; });
+    });
+    var spRes = await Promise.all(spP);
+    var blRes = await Promise.all(blP);
+
+    var rare = {};
+    spRes.forEach(function(r) { rare[r.kw] = r.total; });
+
+    // ── 발언 채점 ──
+    var spMap = {};
+    spRes.forEach(function(r) {
+      r.rows.forEach(function(s) {
+        var key = (s.meeting_date || '') + '|' + (s.speaker || '') + '|' + String(s.summary || '').slice(0, 40);
+        if (!spMap[key]) spMap[key] = s;
+      });
+    });
+    var speeches = Object.keys(spMap).map(function(key) {
+      var s = spMap[key];
+      // ilike는 대소문자 무시라 JS 재검증도 소문자로 맞춘다('AI' 질의가 0점이 되는 것 방지)
+      var topic = String(s.topic || '').toLowerCase();
+      var agenda = String(s.agenda || '').toLowerCase();
+      var sm = String(s.summary || '').toLowerCase();
+      var score = 0, mk = 0, anchor = false;
+      kws.forEach(function(k) {
+        var lk = k.toLowerCase();
+        var inT = topic.indexOf(lk) >= 0, inA = agenda.indexOf(lk) >= 0, inS = sm.indexOf(lk) >= 0;
+        if (!inT && !inA && !inS) return;
+        mk++;
+        score += inT ? 3 : (inA ? 2 : 1);
+        if (inT && rare[k] && rare[k] <= ASM_RARE_MAX) anchor = true;   // ②
+      });
+      var tagHit = topic.split(',').some(function(t) {                  // ①
+        t = t.trim();
+        return t.length >= 2 && qLower.indexOf(t) >= 0;
+      });
+      if (tagHit) score += 3;
+      return { row: s, score: score, ok: (mk >= 2 || anchor) && score >= 4 };
+    }).filter(function(x) { return x.ok; })
+      .sort(function(a, b) {
+        if (b.score !== a.score) return b.score - a.score;
+        return String(b.row.meeting_date || '').localeCompare(String(a.row.meeting_date || ''));
+      }).slice(0, 4);
+
+    // ── 법안 채점 ──
+    var blMap = {};
+    blRes.forEach(function(r) {
+      r.rows.forEach(function(b) {
+        var key = (b.bill_name || '') + '|' + (b.proposer || '') + '|' + (b.propose_dt || '');
+        if (!blMap[key]) blMap[key] = b;
+      });
+    });
+    var today = new Date().toISOString().slice(0, 10);
+    var bills = Object.keys(blMap).map(function(key) {
+      var b = blMap[key];
+      var name = String(b.bill_name || '').toLowerCase();
+      var sm = String(b.summary || '').toLowerCase();
+      var score = 0, mk = 0;
+      kws.forEach(function(k) {
+        var lk = k.toLowerCase();
+        var inN = name.indexOf(lk) >= 0, inS = sm.indexOf(lk) >= 0;
+        if (!inN && !inS) return;
+        mk++;
+        score += inN ? 3 : 1;
+      });
+      // 의견등록이 아직 열려 있는 건은 실무 행동거리가 있으므로 우대 — 단, 순위 가점일 뿐
+      // 통과 기준(③)에는 넣지 않는다. 넣으면 무관 법안이 마감일만으로 올라온다(실측).
+      return { row: b, score: score, mk: mk, open: !!(b.notice_end_dt && b.notice_end_dt >= today) };
+    });
+    var strongB = bills.filter(function(x) { return x.score >= 3; });
+    var pickB = (strongB.length ? strongB : bills.filter(function(x) { return x.mk >= 2; }))
+      .sort(function(a, b) {
+        var sa = a.score + (a.open ? 2 : 0), sbv = b.score + (b.open ? 2 : 0);
+        if (sbv !== sa) return sbv - sa;
+        // propose_dt가 null인 건은 입법예고 접수분(최신) — 뒤로 밀지 않는다
+        return String(b.row.propose_dt || '9999').localeCompare(String(a.row.propose_dt || '9999'));
+      }).slice(0, strongB.length ? 3 : 2);
+
+    if (!speeches.length && !pickB.length) {
+      console.log('[국회 동향] 키워드(' + kws.join(', ') + ') → 관련 논의 없음(블록 생략)');
+      return '';
+    }
+
+    var lines = [];
+    if (speeches.length) {
+      lines.push('▸ 과방위 회의 발언');
+      speeches.forEach(function(x) {
+        var s = x.row;
+        lines.push('  · [' + String(s.meeting_date || '').slice(0, 10) + '] ' + (s.speaker || '') +
+          (s.position ? '(' + s.position + ')' : '') + ': ' +
+          String(s.summary || '').replace(/\s+/g, ' ').trim().slice(0, 220) +
+          (s.agenda ? ' [안건: ' + String(s.agenda).replace(/\s+/g, ' ').trim().slice(0, 40) + ']' : ''));
+      });
+    }
+    if (pickB.length) {
+      lines.push((speeches.length ? '' : '') + '▸ 관련 국회 법안');
+      pickB.forEach(function(x) {
+        var b = x.row;
+        var meta = [b.proposer, b.propose_dt ? '발의 ' + b.propose_dt : '', b.proc_result]
+          .filter(Boolean).join(' / ');
+        lines.push('  · ' + (b.bill_name || '') + (meta ? ' (' + meta + ')' : '') +
+          (b.summary ? ': ' + String(b.summary).replace(/\s+/g, ' ').trim().slice(0, 200) : '') +
+          (x.open ? '\n    ※ 국회 입법예고 의견등록 가능 — 마감 ' + b.notice_end_dt : ''));
+      });
+    }
+    console.log('[국회 동향] 키워드(' + kws.join(', ') + ') → 발언 ' + speeches.length +
+      '건, 법안 ' + pickB.length + '건');
+
+    return '\n\n---\n\n[국회 동향 — 참고용 배경]\n' +
+      '아래는 과방위 회의록(발언 요지)과 국회 법안 DB에서 이번 질문과 관련돼 보이는 항목을 추린 것입니다.\n' +
+      '확정된 법령 내용이 아니라 "국회에서 이런 논의가 진행되고 있다"는 참고 배경입니다. ' +
+      '답변의 근거는 위 조문·법령요약·기사를 우선하고, 이 블록은 필요할 때만 답변 말미에 짧게 덧붙이세요.\n\n' +
+      lines.join('\n');
+  } catch (e) {
+    console.warn('국회 동향 컨텍스트 실패(건너뜀):', e);
+    return '';
+  }
+}
+
 function buildRagContext(chunks) {
   if (!chunks || chunks.length === 0) return '';
   const items = chunks.map(function(c, i) {
@@ -1613,6 +1777,8 @@ async function callClaude(userText, onDelta) {
   const customP     = searchCustomKnowledge(userText).catch(function(e) { console.warn('추가지식 검색 실패(건너뜀):', e); return ''; });
   const newsP       = fetchRecentNewsContext(userText).catch(function(e) { console.warn('뉴스 컨텍스트 실패(건너뜀):', e); return ''; });
   const lawTrackP   = fetchLawTrackContext().catch(function(e) { console.warn('법령동향 실패(건너뜀):', e); return ''; });
+  // 국회 동향(과방위 발언 + 법안) — 근거가 아니라 참고 배경이므로 컨텍스트 맨 뒤에 붙인다
+  const assemblyP   = fetchAssemblyTrendContext(userText).catch(function(e) { console.warn('국회 동향 실패(건너뜀):', e); return ''; });
   const kbP         = searchKbSummaries(userText).catch(function(e) { console.warn('법령요약 검색 실패(건너뜀):', e); return []; });
   // 조문 정밀검색 (rag.ts answerAdvisory와 동일 계층) — RAG가 논문·보도자료에 밀려 놓친 근거 조문 보강
   const lawArtP     = searchLawArticles(userText, 5).catch(function(e) { console.warn('조문 정밀검색 실패(건너뜀):', e); return []; });
@@ -1673,6 +1839,7 @@ async function callClaude(userText, onDelta) {
   // 본문 발췌로 실제 반영된 뉴스만 출처에 합친다 (제목 목록 30건은 근거가 아니라 동향 참고용)
   if (lastNewsSources.length) lastRagSources = lastRagSources.concat(lastNewsSources);
   const lawTrackContext = await lawTrackP;                        // 최근 법령 개정·입법예고 동향
+  const assemblyContext = await assemblyP;                        // 국회 동향(발언·법안) — 참고 배경
   const kbContext     = buildKbContext(await kbP);                // 법령·규제 요약 지식베이스(regulatory-kb, 현행본)
   if (lastKbSources.length) lastRagSources = lastRagSources.concat(lastKbSources);
   const pendingContext = await buildPendingContext(ragChunks);    // 인용 조문의 시행예정 개정본(Phase 3)
@@ -1697,7 +1864,7 @@ async function callClaude(userText, onDelta) {
   // 가변부(lawmapGuide는 lawTopics 목록이 변함 + RAG·뉴스 등 질문마다 다른 컨텍스트)는
   // 캐시 블록 '뒤'에 둬야 적중한다 — 가변 요소를 고정부 앞·중간에 끼우지 말 것.
   const systemStable   = SYSTEM_PROMPT + webSearchGuide;
-  const systemVariable = lawmapGuide + ragContext + lawArticleContext + annexContext + pendingContext + kbContext + customContext + newsContext + lawTrackContext;
+  const systemVariable = lawmapGuide + ragContext + lawArticleContext + annexContext + pendingContext + kbContext + customContext + newsContext + lawTrackContext + assemblyContext;
   const systemWithRag = [
     { type: 'text', text: systemStable, cache_control: { type: 'ephemeral' } },
     { type: 'text', text: systemVariable }
@@ -8704,7 +8871,9 @@ document.addEventListener('DOMContentLoaded', function() {
   loadSettingsUI();
   // loadPressJSON()은 진입 시 호출하지 않는다 — 보도자료 탭 진입(go('press') → loadPressFromSupabase)과
   // smartRefresh(panel-press)에서 로드된다. 첫 화면(뉴스)에서 불필요한 대량 조회 제거 (#61)
-  loadRemoteConfig().then(function() { currentNewsSourceType = 'media'; loadNews(); renderGroupTabs('news'); });
+  // 원격 설정(Claude 키 등)이 도착한 뒤 상태등을 다시 그린다 — 8703의 1회 호출은 키 로드 전이라
+  // 정상 동작 중에도 'Claude API 미설정'으로 굳는다(신규 사용자가 설정 누락으로 오해).
+  loadRemoteConfig().then(function() { updateStatusDots(); currentNewsSourceType = 'media'; loadNews(); renderGroupTabs('news'); });
   refreshOpsLight();   // 상단바 상태등 — 페이지 로드 시 1회 (이후 smartRefresh마다 갱신)
   setTimeout(autoExtractTermsIfNeeded, 60000);
 });
