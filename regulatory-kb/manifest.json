@@ -1,7 +1,7 @@
 {
   "schema": "regulatory-kb-manifest/v1",
   "updated": "2026-07-31",
-  "entry_count": 217,
+  "entry_count": 231,
   "dedup_key_rule": "정규화 제목(버전 수식어 '(구버전)' 등 제거) + '|' + law_type. 같은 dedup_key = 같은 법령(버전만 다를 수 있음).",
   "on_readd_rule": {
     "same_law_number": "동일 법령번호 재추가 → 기존 path에 덮어쓰기(idempotent). 신규 파일 생성 금지.",
@@ -2182,6 +2182,146 @@
       "enforcement_date": "",
       "concept_type": "Guideline",
       "path": "references/itu-r/M.2101-공유양립성-모델링.md",
+      "status": "current"
+    },
+    {
+      "title": "인공지능 발전과 신뢰 기반 조성 등에 관한 기본법",
+      "law_type": "법률",
+      "law_number": "제21311호",
+      "enforcement_date": "2026-07-21",
+      "concept_type": "Law",
+      "path": "laws/ai-framework-act/ai_framework_act.md",
+      "status": "current",
+      "dedup_key": "인공지능 발전과 신뢰 기반 조성 등에 관한 기본법|법률"
+    },
+    {
+      "title": "인공지능 발전과 신뢰 기반 조성 등에 관한 기본법 시행령",
+      "law_type": "대통령령",
+      "law_number": "제36506호",
+      "enforcement_date": "2026-07-21",
+      "concept_type": "Regulation",
+      "path": "laws/ai-framework-act/enforcement_decree.md",
+      "status": "current",
+      "dedup_key": "인공지능 발전과 신뢰 기반 조성 등에 관한 기본법 시행령|대통령령"
+    },
+    {
+      "title": "인공지능제품ㆍ서비스 확인 절차 운영에 관한 고시",
+      "law_type": "과학기술정보통신부고시",
+      "law_number": "제2026-50호",
+      "enforcement_date": "2026-07-21",
+      "concept_type": "Notice",
+      "path": "laws/ai-framework-act/notices/ai_product_verification.md",
+      "status": "current",
+      "dedup_key": "인공지능제품ㆍ서비스 확인 절차 운영에 관한 고시|과학기술정보통신부고시"
+    },
+    {
+      "dedup_key": "지능정보화 기본법|법률",
+      "title": "지능정보화 기본법",
+      "law_type": "법률",
+      "law_number": "제20672호",
+      "enforcement_date": "2026-01-22",
+      "concept_type": "Law",
+      "path": "laws/intelligent-informatization-act/지능정보화_기본법.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "지능정보화 기본법 시행령|대통령령",
+      "title": "지능정보화 기본법 시행령",
+      "law_type": "대통령령",
+      "law_number": "제36005호",
+      "enforcement_date": "2026-01-22",
+      "concept_type": "Regulation",
+      "path": "laws/intelligent-informatization-act/지능정보화_기본법_시행령.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "지능정보화 기본법 시행규칙|과학기술정보통신부령",
+      "title": "지능정보화 기본법 시행규칙",
+      "law_type": "과학기술정보통신부령",
+      "law_number": "제00141호",
+      "enforcement_date": "2025-01-01",
+      "concept_type": "Regulation",
+      "path": "laws/intelligent-informatization-act/지능정보화_기본법_시행규칙.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "데이터 산업진흥 및 이용촉진에 관한 기본법|법률",
+      "title": "데이터 산업진흥 및 이용촉진에 관한 기본법",
+      "law_type": "법률",
+      "law_number": "제21066호",
+      "enforcement_date": "2025-10-01",
+      "concept_type": "Law",
+      "path": "laws/data-industry-act/데이터_산업진흥_및_이용촉진에_관한_기본법.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "데이터 산업진흥 및 이용촉진에 관한 기본법 시행령|대통령령",
+      "title": "데이터 산업진흥 및 이용촉진에 관한 기본법 시행령",
+      "law_type": "대통령령",
+      "law_number": "제35939호",
+      "enforcement_date": "2025-12-23",
+      "concept_type": "Regulation",
+      "path": "laws/data-industry-act/데이터_산업진흥_및_이용촉진에_관한_기본법_시행령.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "데이터 산업진흥 및 이용촉진에 관한 기본법 시행규칙|과학기술정보통신부령",
+      "title": "데이터 산업진흥 및 이용촉진에 관한 기본법 시행규칙",
+      "law_type": "과학기술정보통신부령",
+      "law_number": "제00102호",
+      "enforcement_date": "2023-01-03",
+      "concept_type": "Regulation",
+      "path": "laws/data-industry-act/데이터_산업진흥_및_이용촉진에_관한_기본법_시행규칙.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "클라우드컴퓨팅 발전 및 이용자 보호에 관한 법률|법률",
+      "title": "클라우드컴퓨팅 발전 및 이용자 보호에 관한 법률",
+      "law_type": "법률",
+      "law_number": "제21066호",
+      "enforcement_date": "2025-10-01",
+      "concept_type": "Law",
+      "path": "laws/cloud-computing-act/클라우드컴퓨팅_발전_및_이용자_보호에_관한_법률.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "클라우드컴퓨팅 발전 및 이용자 보호에 관한 법률 시행령|대통령령",
+      "title": "클라우드컴퓨팅 발전 및 이용자 보호에 관한 법률 시행령",
+      "law_type": "대통령령",
+      "law_number": "제35947호",
+      "enforcement_date": "2026-01-02",
+      "concept_type": "Regulation",
+      "path": "laws/cloud-computing-act/클라우드컴퓨팅_발전_및_이용자_보호에_관한_법률_시행령.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "클라우드컴퓨팅 발전 및 이용자 보호에 관한 법률 시행규칙|과학기술정보통신부령",
+      "title": "클라우드컴퓨팅 발전 및 이용자 보호에 관한 법률 시행규칙",
+      "law_type": "과학기술정보통신부령",
+      "law_number": "제00105호",
+      "enforcement_date": "2023-01-12",
+      "concept_type": "Regulation",
+      "path": "laws/cloud-computing-act/클라우드컴퓨팅_발전_및_이용자_보호에_관한_법률_시행규칙.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "클라우드컴퓨팅서비스 보안인증에 관한 고시|과학기술정보통신부고시",
+      "title": "클라우드컴퓨팅서비스 보안인증에 관한 고시",
+      "law_type": "과학기술정보통신부고시",
+      "law_number": "제2023-4호",
+      "enforcement_date": "2023-01-31",
+      "concept_type": "Notice",
+      "path": "laws/cloud-computing-act/클라우드컴퓨팅서비스_보안인증에_관한_고시.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "클라우드컴퓨팅서비스 품질·성능에 관한 기준|과학기술정보통신부고시",
+      "title": "클라우드컴퓨팅서비스 품질·성능에 관한 기준",
+      "law_type": "과학기술정보통신부고시",
+      "law_number": "제2017-7호",
+      "enforcement_date": "2017-08-24",
+      "concept_type": "Notice",
+      "path": "laws/cloud-computing-act/클라우드컴퓨팅서비스_품질_성능에_관한_기준.md",
       "status": "current"
     }
   ]
