@@ -45,6 +45,7 @@
   - 인증: GitHub Secrets + Actions 자동 GITHUB_TOKEN(actions:read). stdlib만(pip 불필요).
 - **상호 보완**: 내부(Supabase)·외부(GitHub) 독립이라 한쪽 인프라가 죽어도 다른 쪽이 감지. 둘 다 죽으면 사각.
 - ⚠️ 텔레그램 토큰은 Vault `telegram_bot_token` 한 곳에서 관리(회수·교체 시 Vault만 갱신). 기존 `check_briefing_health`만 아직 토큰 하드코딩 — 추후 Vault 이관 권장.
+- ➡️ **2026-08-02 보강: 내부 감시를 `watchdog_scan()`으로 확장(§62 참조).** 위 내부 워치독(check_news_health)이 뉴스·브리핑 2종만 보던 사각을 system_health 10키 전수 감시로 메움 — GitHub 계정 정지로 외부 워치독이 감시대상과 함께 죽어 뉴스 크롤러 15시간 무알림이 실제로 발생한 사고가 계기.
 
 ---
 
@@ -1676,3 +1677,77 @@ current 문서 중 본문 500자 미만은 **7건뿐**이었다. OCR은 소품 �
 **KB 품질 카드.** `kb_quality_low_docs`·`kb_quality_article_parse` 뷰(anon select) + 운영 상태 탭
 카드: 본문 부실 하위 목록(500자 미만 빨강)·조문 인식률 하위(50% 미만 빨강)·임베딩 누락 수.
 하트비트 표시를 지연시키지 않도록 fire-and-forget 로드. 실데이터 렌더 확인(임베딩 누락 0건).
+
+---
+
+## #61 (2026-08-02) check_briefing_health 봇 토큰 평문 → Vault 이전
+
+**문제.** 브리핑 실패 감시 함수 `check_briefing_health`(pg_cron jobid 1) 본문에 텔레그램 봇
+토큰·chat_id가 **평문 하드코딩**돼 있었다. 곧 봇 토큰을 재발급할 예정인데(노출 이력), 이 함수만
+코드가 안 고쳐지면 **"브리핑이 안 나갔다"를 알려줄 감시 알림 자체가 조용히 죽는다**(감시자가
+감시를 못 하는 상태). 바로 옆 `check_news_health`는 이미 Vault를 쓰는 올바른 방식이라, 그 패턴을 복제.
+
+**조치.** Vault에 이미 있는 시크릿 `telegram_bot_token`을 `vault.decrypted_secrets`에서 조회하도록
+교체(값이 없으면 return 가드). 브리핑 존재 판정·경고 문구·chat_id는 무변경, 토큰 획득부만 평문→Vault.
+Vault 토큰의 봇 ID 프리픽스가 기존 하드코딩값과 일치함을 확인(무단 스왑 아님). `select
+check_briefing_health();` 1회 실행 → 예외 없이 완료(오늘 브리핑 존재라 발송 분기 미진입, 안전).
+**이후 봇 토큰 재발급 시 Vault `telegram_bot_token` 하나만 갱신하면 두 헬스체크 + watchdog_scan(#62)이
+모두 자동 반영된다.** (남은 평문 토큰: 없음 — check_briefing/news/watchdog 3함수 전수 확인.)
+
+## #62 (2026-08-02) 워치독 이원화 완성 — 감시자가 감시대상과 함께 죽는 사각 제거 + heartbeat 전수 감시
+
+**계기(실제 사고).** 이날 GitHub 계정이 정지되면서, GitHub Actions에서 돌던 **외부 워치독
+`health_watchdog.py`가 감시대상 플랫폼(GitHub)과 함께 죽었다.** 뉴스 크롤러가 약 15시간 멈췄는데도
+아무 알림이 오지 않았다 — "감시자가 감시대상과 같은 배를 탄" 단일 장애. 게다가 살아있는 내부 감시
+(§3의 `check_news_health`)는 **뉴스·브리핑 2종만** 봤다. 그 사이 파이프라인은 10종으로 늘어(뉴스·
+정부고시·보도자료·법령DIFF·국회·회의록·해외·ITU·본문재수집·구독발송) system_health에 10개
+heartbeat 키가 쌓이는데, 대부분이 무감시 상태였다.
+
+**설계 — Supabase 내부 `watchdog_scan()` 신설(§3의 이원화를 실질 완성).** GitHub과 무관하게
+Supabase pg_cron만으로 도는 순수 DB 함수. system_health 10키를 **키마다 다른 임계값**으로 훑는다
+(주기가 제각각이라 단일 임계는 오탐·누락 양쪽을 낳음):
+
+| key | 정상 주기 | 임계 | 근거 |
+|---|---|---|---|
+| last_crawl_run | 매시(뉴스) | 3h | check_news_health의 crawler_ok<3h 관례 재사용 |
+| last_gov_notice_run | 매일 17:00 KST(PC) | 26h | 하루 1회+여유(외부 워치독 26h 관례) |
+| last_press_ingest | 17시 체인 | 26h | gov 크롤러 말미 run_daily 체인 |
+| last_law_diff_run | 17시 체인 | 26h | 동일 체인 |
+| last_assembly_run | 매일 10:30 | 26h | 하루 1회 |
+| last_minutes_run | 17시 체인 | 26h | 동일 체인 |
+| last_foreign_press_run | 매일 05:30 | 30h | 단일 트리거/일 + 변동 여유 |
+| last_itu_watch_run | 매월 1일 | 960h(40일) | 월 1회, 한 달 건너뜀 일부 허용 |
+| last_refetch_run | 매시(본문, PC) | 26h | PC 변동 커 보수적. 코어 생사 신호는 last_crawl_run이 이미 커버 |
+| last_subscriber_briefing_run | 매시 :25 | 3h | 매시 |
+
+임계는 **실측 나이 + 실제 주기 + 여유**로 잡았다. 신설 시점 최대가 last_crawl_run 62%·foreign 61%
+로 어느 키도 임계 근처가 아니어서(gov 22%·itu 3%) 오탐 0을 dry-run으로 확인했다.
+
+**무음 의미실패 탐지.** "돌긴 돌았는데 실패"를 잡으려 note를 정규식으로 본다. 단 **`new=0`은 정책
+크롤러에선 정상**(신규 없음이 대부분)이라 신호에서 제외 — `fail=N`/`failed=N`/`실패 N`이 **N>0일
+때만** 경고(`fail=0`·`failed=0`·`실패 0`은 매칭 안 되게 `[1-9]` 앵커). 10키 현재 note 전수에
+오탐 없음 확인. (예: foreign가 API 키 부재로 fail-closed면 note에 fail>0로 남아 잡힌다.)
+
+**재알림 억제.** 하루 3회 스캔이라 같은 이상을 매번 쏘면 소음이 된다. 이상 키+유형(`key:late`/
+`key:missing`/`key:fail`)을 정렬·md5로 시그니처화해 system_health의 `watchdog_alert_state` 키
+note에 저장. **직전 시그니처와 다를 때만 1건 요약 발송**, 동일하면 억제, 정상 복귀 시 `ok`로 리셋
+(다음 재발은 다시 알림). 트랜잭션 롤백 테스트로 3단계(발송→억제→복귀 리셋) 검증.
+
+**발송 경로.** A 담당이 정리 중인 `check_news_health`와 동일하게 Vault `telegram_bot_token` →
+`net.http_post` → chat 344506450, **1건 요약**. A와의 충돌 방지를 위해 `watchdog_scan`은 **신규
+함수**로만 만들고 check_news_health/check_briefing_health 정의는 건드리지 않았다.
+
+**pg_cron.** jobid 16 `watchdog-scan-3x`, `10 0,6,12 * * *`(UTC) = **09:10·15:10·21:10 KST**.
+기존 잡의 :00/:35와 겹치지 않게 :10로 오프셋(net.http_post 몰림 방지). 프로덕션은 실발송
+`watchdog_scan(false)`, 함수 기본값은 `p_dry_run=true`라 수동 점검 `select watchdog_scan();`은
+발송 없이 이상 목록만 반환한다.
+
+**검증.** ① dry-run 실측 → "이상 없음"(오탐 0). ② 롤백 트랜잭션에서 last_crawl_run 10h 백데이트 +
+foreign note `fail=4` 주입 → 지연·실패 둘 다 정확히 포착, 실발송 없이 롤백. ③ 억제 3단계 통과.
+정규식 회귀(`fail=3`✓ `failed=0`✗ `fail=0`✗ `실패 2`✓ `실패 0`✗).
+
+**남은 한계(후속).** 두 워치독 모두 감시자와 감시대상이 **다른** 플랫폼이 되어 이번 사고 유형은 막았지만,
+**Supabase 자체가 통째로 다운되면 watchdog_scan도 함께 죽어** 감시 불가다(외부 health_watchdog.py가
+"Supabase 접속 불가"로 일부 커버하나, 그것도 GitHub이 살아있을 때만). 완전한 3중화는 **Supabase·
+GitHub 어디에도 의존하지 않는 외부 제3지점(예: 무료 cron·별도 호스트에서 두 heartbeat를 폴링)**이
+필요 — 후속 과제로 남긴다.

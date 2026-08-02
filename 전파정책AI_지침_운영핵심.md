@@ -148,10 +148,19 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 | 7 | briefing-trigger-0620 | `20 21 * * *` | 06:20 | 위 백업 재시도 |
 | 12 | news-health-check | `0 12 * * *` | 21:00 | 무음 실패 알람(내부) check_news_health() |
 | 13 | watchdog-trigger | `35 12 * * *` | 21:35 | 외부 워치독 백업 dispatch |
+| 16 | watchdog-scan-3x | `10 0,6,12 * * *` | 09:10·15:10·21:10 | **내부 워치독 전수 감시** `watchdog_scan(false)` — system_health 10키 키별 임계+note 실패신호, 재알림 억제, 이상 시 1건 요약(Vault `telegram_bot_token`). :10은 :00/:35 잡과 겹치지 않게 오프셋 |
 | — | subscriber-briefing-hourly | `25 * * * *` | 매시 :25 | 구독자 정시 발송 → send-subscriber-briefing. `:25`는 06:05~06:20 브리핑 생성 창을 피한 값. 대상이 없으면 no-op이라 매시 돌아도 부담 없음. Vault `subscriber_cron_secret` 사용 |
 
 - 공용 디스패치 함수 `dispatch_github_workflow(p_workflow)` + `trigger_briefing_if_missing()`. 인증: GitHub PAT을 Supabase Vault `github_pat`에 저장. 텔레그램 토큰은 Vault `telegram_bot_token`.
 - ⚠️ PAT 만료/회수 시 모든 트리거가 조용히 멈춤 → Vault `github_pat` 갱신. **PAT 재생성 시 권한 3종(Contents R/W·Metadata·Actions R/W) 반드시 확인 — Actions 누락 시 workflow_dispatch가 403인데 pg_cron은 'succeeded'로 찍혀 무음 실패. 교체 검증은 cron 잡 상태가 아니라 `net._http_response.status_code`(204=성공)로 한다.** (설계 배경·드롭 경위·#18 사고는 배경역사 문서 참조)
+
+### 워치독 이원화 (GitHub health_watchdog + Supabase watchdog_scan) — 배경역사 #62
+
+감시자가 감시대상 플랫폼과 함께 죽는 사각을 없애기 위해 워치독을 **다른 두 플랫폼**에 둔다. 2026-08-02 GitHub 계정 정지로 외부 워치독이 GitHub과 함께 죽어 뉴스 크롤러가 15시간 무알림이던 사고가 계기.
+
+- **외부** `health_watchdog.py`(GitHub Actions, Supabase 독립) — 뉴스·브리핑 신선도 + daily_crawl·morning_briefing·law_crawl·assembly_crawl 4종 워크플로우 성공 이력 + "Supabase 접속 불가" 자체 감지.
+- **내부** `watchdog_scan(p_dry_run boolean default true)`(pg_cron jobid 16, 하루 3회, GitHub 독립) — `system_health` **10키 전수** 감시. 키마다 다른 임계(매시류 3h / 하루1회류 26h / foreign 30h / itu 40일). note에 `fail=N`·`failed=N`·`실패 N`이 N>0면 "돌았지만 실패"로 별도 경고(**`new=0`은 정책 크롤러 정상값이라 신호 아님**). 이상 키+유형을 md5 시그니처화해 `system_health.watchdog_alert_state`에 저장 → 직전과 다를 때만 1건 요약 발송(재알림 억제), 정상 복귀 시 `ok`로 리셋. 발송은 Vault `telegram_bot_token`→`net.http_post`→chat 344506450. 기본 인자가 dry라 **수동 점검 `select watchdog_scan();`은 발송 없이 이상 목록만 반환**(실발송은 cron의 `watchdog_scan(false)`).
+- ⚠️ **남은 사각**: 둘 다 감시자↔감시대상이 다른 플랫폼이 됐지만, **Supabase 자체가 다운되면 watchdog_scan도 함께 죽는다**(외부가 "접속 불가"로 일부만 커버, 그것도 GitHub 생존 시). 완전 3중화(Supabase·GitHub 무의존 외부 제3지점 폴링)는 후속 과제.
 
 ## 보고서 초안 제안 (자문 메뉴)
 
@@ -609,6 +618,8 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **모닝 브리핑 빈-브리핑 폴백(요약→제목)·`already_sent_today` 폴백 교체 허용 로직 제거 금지** — PC 꺼진 날 빈 브리핑 방지 + 본문 채워지면 정식본 자동 교체 핵심. (배경역사 #16)
 - **기사 0건 무뉴스 통지(`_handle_no_news`)·`_NONEWS_PREFIX` placeholder·시각무관 1일1회 발송을 '09시 이전 무음 종료'로 되돌리지 말 것** — 무음 누락 오인 방지. placeholder는 기사 들어오면 정식본 자동 교체(폴백과 동일 패턴), 중복은 placeholder 존재로 1일1회 차단. `already_sent_today`의 `_NONEWS_PREFIX` 교체 허용도 유지. (배경역사 #17)
 - **워치독을 'DB 신선도만' 보던 방식으로 되돌리지 말 것 / 크롤러 heartbeat(`system_health` 3종: last_crawl_run·last_gov_notice_run·last_refetch_run) 쓰기·`system_health` 테이블 삭제 금지** — '고장 vs 없음(주말·드문 입법예고)' 구분·오경보 방지·운영상태 탭 핵심. (배경역사 #16)
+- **내부 워치독을 뉴스·브리핑만 보던 방식으로 되돌리지 말 것 / `watchdog_scan()`·pg_cron jobid 16·`system_health.watchdog_alert_state` 키 삭제 금지** — 감시자(GitHub)가 감시대상과 함께 죽어 뉴스 15시간 무알림이던 사고(#62)의 재발 방지책. system_health 10키를 GitHub 독립적으로 전수 감시한다. 임계·note 실패신호(`fail=N>0`) 로직 수정 시 `new=0`을 실패로 오탐하지 말 것(정책 크롤러는 신규 없음이 정상). (배경역사 #62)
+- **`watchdog_scan`에서 `check_news_health`·`check_briefing_health`를 병합·수정하지 말 것** — 세 함수는 의도적으로 분리(A 담당이 check_* Vault화 진행). watchdog_scan은 신규 함수로만 유지. (배경역사 #62)
 - **운영 상태 탭(`panel-opsstatus`·`loadOpsStatus`)·system_health anon select 정책 제거 금지** — 이상 시 1차 점검 화면. (배경역사 #16)
 - **사이드바 `.sidebar { overflow-y:auto }` 제거 금지** — 메뉴가 많아 화면보다 길어지면 설정·운영 상태 등 하단 항목이 잘림. (배경역사 #16)
 - **PC 로컬 스크립트(refetch_content.py·gov_notice_crawler.py 등)의 stdout/stderr UTF-8 강제(`sys.stdout.reconfigure(encoding="utf-8")`) 제거 금지** — 스케줄러는 출력이 cp949로 잡혀 이모지 print가 `UnicodeEncodeError`로 무음 크래시(heartbeat 못 씀→간이 브리핑). 수동 터미널(UTF-8)은 멀쩡해 오진 유발. 신규 PC 스크립트도 동일 적용. (배경역사 #19)

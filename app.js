@@ -1675,7 +1675,18 @@ async function callClaude(userText, onDelta) {
     '- relations에는 이번 답변에서 실제 근거로 사용한 법령·고시만 포함 (최대 8개). law는 정식 명칭(예: "전파법", "전기통신사업법 시행령").\n' +
     '- 기존 주제명 목록에 같은 의미의 주제가 있으면 새 이름을 만들지 말고 그 이름을 그대로 재사용: ' + (lawTopics.length ? lawTopics.join(', ') : '(아직 없음)') + '\n' +
     '- 보고서 작성 요청, 문서 요약, 잡담, 법령 근거가 등장하지 않는 질문이면 이 블록을 출력하지 마세요.';
-  const systemWithRag = SYSTEM_PROMPT + webSearchGuide + lawmapGuide + ragContext + lawArticleContext + annexContext + pendingContext + kbContext + customContext + newsContext + lawTrackContext;
+  // ── 프롬프트 캐싱(Anthropic prompt caching): 텍스트는 기존 연결 순서 그대로, 캐시 표시만 추가 ──
+  // 고정부(SYSTEM_PROMPT + webSearchGuide — 둘 다 정적 문자열)를 별도 블록으로 분리해
+  // cache_control:{type:'ephemeral'}를 붙인다. tools→system 순으로 렌더되므로 이 브레이크포인트가
+  // web_search 도구 정의 + 고정 지침을 함께 캐시한다(후속 질문 입력비용 ~90% 절감).
+  // 가변부(lawmapGuide는 lawTopics 목록이 변함 + RAG·뉴스 등 질문마다 다른 컨텍스트)는
+  // 캐시 블록 '뒤'에 둬야 적중한다 — 가변 요소를 고정부 앞·중간에 끼우지 말 것.
+  const systemStable   = SYSTEM_PROMPT + webSearchGuide;
+  const systemVariable = lawmapGuide + ragContext + lawArticleContext + annexContext + pendingContext + kbContext + customContext + newsContext + lawTrackContext;
+  const systemWithRag = [
+    { type: 'text', text: systemStable, cache_control: { type: 'ephemeral' } },
+    { type: 'text', text: systemVariable }
+  ];
 
   chatHistory.push({ role: 'user', content: userText });
 

@@ -235,7 +235,9 @@ function buildKbContext(rows: KbRow[]): string {
 // ── Sonnet 호출: 스트리밍으로 받아 서버에서 누적 ──
 // (스트리밍 유지 이유: 비스트리밍 회귀 금지 가드레일과 일관 + Sonnet5 적응형 추론의
 //  content[0]=thinking 함정 회피 — 스트림에서는 text_delta만 골라 누적하면 안전)
-async function callSonnet(apiKey: string, system: string, question: string): Promise<string> {
+// system은 문자열 또는 블록 배열을 그대로 API에 전달 (블록 배열 = 프롬프트 캐싱용, answerAdvisory 참조)
+type SystemBlock = { type: 'text'; text: string; cache_control?: { type: 'ephemeral' } };
+async function callSonnet(apiKey: string, system: string | SystemBlock[], question: string): Promise<string> {
   const res = await fetch(ANTHROPIC_URL, {
     method: 'POST',
     headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
@@ -546,8 +548,16 @@ export async function answerAdvisory(sb: SupabaseClient, systemPrompt: string, q
     '- 웹 검색은 위 참조 자료에 없는 사실 확인에만 보조적으로 사용.\n' +
     '- 제도(조문)와 현재 추진 상황(기사)이 둘 다 관련되면 반드시 함께 답하세요. ' +
     '절차만 answer하고 최신 동향을 빠뜨리면 실무에 쓸 수 없습니다.';
-  const system = systemPrompt + telegramGuide
-    + buildRagContext(chunks) + lawContext + buildKbContext(kb) + news.text;
+  // ── 프롬프트 캐싱(Anthropic prompt caching): 텍스트는 기존 연결 순서 그대로, 캐시 표시만 추가 ──
+  // 고정부(app_config.system_prompt + telegramGuide — 프롬프트 편집 전까지 불변)를 별도 블록으로
+  // 분리해 cache_control:{type:'ephemeral'} 부착 → tools(web_search)+고정 지침이 함께 캐시된다.
+  // 가변부(질문마다 바뀌는 RAG·조문·요약·뉴스)는 캐시 블록 '뒤'에 둬야 적중한다.
+  const systemStable = systemPrompt + telegramGuide;
+  const systemVariable = buildRagContext(chunks) + lawContext + buildKbContext(kb) + news.text;
+  const system: SystemBlock[] = [
+    { type: 'text', text: systemStable, cache_control: { type: 'ephemeral' } },
+  ];
+  if (systemVariable) system.push({ type: 'text', text: systemVariable }); // 빈 text 블록은 API가 거부
 
   const answer = await callSonnet(apiKey, system, question);
 
