@@ -6,7 +6,7 @@
 <title>전파정책 전문가 AI — SKT Comm센터 기술정책팀</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <link rel="stylesheet" href="styles.css?v=20260803a">
+  <link rel="stylesheet" href="styles.css?v=20260803b">
 
 </head>
 <body>
@@ -23,27 +23,27 @@
          설정·운영 상태는 상단바 우측 톱니·상태등으로 이동. -->
     <div class="nav-group">
       <div class="nav-label">모니터링</div>
-      <div class="nav-item active" data-nav="monitor" onclick="go('news',this,'media')"><i class="ti ti-news"></i>통합 모니터링</div>
-      <div class="nav-item" data-nav="briefing" onclick="go('briefing',this)"><i class="ti ti-coffee"></i>Daily Briefing</div>
-      <div class="nav-item" data-nav="terms" onclick="go('terms',this)"><i class="ti ti-book"></i>기술 용어</div>
+      <div class="nav-item active" tabindex="0" role="button" data-nav="monitor" onclick="go('news',this,'media')"><i class="ti ti-news"></i>통합 모니터링</div>
+      <div class="nav-item" tabindex="0" role="button" data-nav="briefing" onclick="go('briefing',this)"><i class="ti ti-coffee"></i>Daily Briefing</div>
+      <div class="nav-item" tabindex="0" role="button" data-nav="terms" onclick="go('terms',this)"><i class="ti ti-book"></i>기술 용어</div>
     </div>
     <div class="nav-group">
       <div class="nav-label">AI 도우미</div>
-      <div class="nav-item" data-nav="chat" onclick="go('chat',this)"><i class="ti ti-message-circle"></i>AI 자문</div>
-      <div class="nav-item" data-nav="lawmap" onclick="go('lawmap',this)"><i class="ti ti-topology-star-3"></i>법령 관계도</div>
+      <div class="nav-item" tabindex="0" role="button" data-nav="chat" onclick="go('chat',this)"><i class="ti ti-message-circle"></i>AI 자문</div>
+      <div class="nav-item" tabindex="0" role="button" data-nav="lawmap" onclick="go('lawmap',this)"><i class="ti ti-topology-star-3"></i>법령 관계도</div>
       <!-- 보고서 초안 제안 — 미사용으로 숨김 2026-08-02, 복원 시 주석 해제 (#54)
       <div class="nav-item" onclick="go('reportdraft',this)"><i class="ti ti-file-text"></i>보고서 초안 제안</div>
       -->
     </div>
     <div class="nav-group">
       <div class="nav-label">법안 동향</div>
-      <div class="nav-item" data-nav="assembly" onclick="go('assembly',this)"><i class="ti ti-building-bank"></i>국회 법안</div>
-      <div class="nav-item" data-nav="minutes" onclick="go('minutes',this)"><i class="ti ti-microphone-2"></i>과방위 회의록</div>
-      <div class="nav-item" data-nav="lawrev" onclick="go('lawtrack',this)"><i class="ti ti-file-certificate"></i>법령 개정 추적</div>
+      <div class="nav-item" tabindex="0" role="button" data-nav="assembly" onclick="go('assembly',this)"><i class="ti ti-building-bank"></i>국회 법안</div>
+      <div class="nav-item" tabindex="0" role="button" data-nav="minutes" onclick="go('minutes',this)"><i class="ti ti-microphone-2"></i>과방위 회의록</div>
+      <div class="nav-item" tabindex="0" role="button" data-nav="lawrev" onclick="go('lawtrack',this)"><i class="ti ti-file-certificate"></i>법령 개정 추적</div>
     </div>
     <div class="nav-group">
       <div class="nav-label">지식베이스</div>
-      <div class="nav-item" data-nav="kb" onclick="go('law',this)"><i class="ti ti-books"></i>지식베이스</div>
+      <div class="nav-item" tabindex="0" role="button" data-nav="kb" onclick="go('law',this)"><i class="ti ti-books"></i>지식베이스</div>
     </div>
     <div class="sidebar-bottom">
       <div class="version">v0.2 — 실제 연동</div>
@@ -463,6 +463,13 @@
           <span class="tag" onclick="filterNewsByImportance(this,'긴급')" style="border-color:#ef4444;color:#ef4444">🔴 중요</span>
           <span class="tag" onclick="filterNewsByImportance(this,'보통')" style="border-color:#f59e0b;color:#d97706">🟡 보통</span>
           <span class="tag" onclick="filterNewsByImportance(this,'참고')" style="border-color:#22c55e;color:#16a34a">🟢 참고</span>
+        </div>
+
+        <!-- 뉴스 검색 (클라이언트 필터 — newsDataCache, 중요도 필터와 AND 결합) -->
+        <div style="margin-bottom:12px">
+          <input type="text" id="news-search-input" placeholder="뉴스 검색 — 제목·요약·출처..." aria-label="뉴스 검색"
+                 style="width:100%;max-width:360px;padding:8px 12px;font-size:12px;border:0.5px solid var(--border-mid);border-radius:var(--radius-md);background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;outline:none"
+                 oninput="onNewsSearchInput(this.value)"/>
         </div>
 
         <!-- 정부 보도자료 기관 필터 (정부 탭에서만 표시 — app.js renderGovAgencyTabs가 채움) -->
@@ -1058,6 +1065,6 @@
 <script src="https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js"></script>
 <script>if(typeof pdfjsLib!=='undefined'){pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';}</script>
 <script src="system_prompt.js?v=20260612c"></script>
-<script src="app.js?v=20260803m"></script>
+<script src="app.js?v=20260803n"></script>
 </body>
 </html>

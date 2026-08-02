@@ -2382,6 +2382,7 @@ let currentNewsFilter = '전체';
 let currentNewsSourceType = 'gov'; // 'gov' | 'media' | 'all'
 let newsDataCache = [];      // 전체 로드된 뉴스 캐시
 let selectedNewsId = null;   // 현재 선택된 뉴스 id
+let currentNewsSearch = '';  // 뉴스 검색어 (클라이언트 필터 — 중요도와 AND 결합)
 // 6개 기관 자동 수집 확장(2026-08)에 맞춰 접두 추가 — '방송통신위원회 보도자료' 등은
 // 기존 '방통위' 접두와 별개 문자열이라 명시해야 정부 탭에 잡힌다.
 var GOV_SOURCE_PREFIXES = ['국립전파연구원', '과기정통부', '방통위', '방송통신위원회', '중앙전파관리소', 'ETRI', 'KISDI'];
@@ -2708,6 +2709,15 @@ function renderNewsList() {
     hideGovAgencyTabs();
   }
 
+  // 검색어 필터 (제목·요약·출처, 대소문자 무시) — 중요도·소스 필터와 AND 결합.
+  // 기관 칩 건수(renderGovAgencyTabs)에는 영향을 주지 않도록 맨 마지막에 적용한다.
+  if (currentNewsSearch) {
+    var q = currentNewsSearch.toLowerCase();
+    data = data.filter(function(n) {
+      return ((n.title || '') + '\n' + (n.summary || '') + '\n' + (n.source || '')).toLowerCase().indexOf(q) !== -1;
+    });
+  }
+
   var sorted = data.slice().sort(function(a, b) {
     return new Date(b.published_at || b.created_at) - new Date(a.published_at || a.created_at);
   });
@@ -2716,7 +2726,8 @@ function renderNewsList() {
   if (!listEl) return;
 
   if (sorted.length === 0) {
-    listEl.innerHTML = '<div style="color:var(--text-secondary);padding:24px;text-align:center;font-size:12px">조건에 맞는 뉴스가 없습니다.</div>';
+    listEl.innerHTML = '<div style="color:var(--text-secondary);padding:24px;text-align:center;font-size:12px">' +
+      (currentNewsSearch ? '검색 결과 없음 — “' + escHtml(currentNewsSearch) + '”' : '조건에 맞는 뉴스가 없습니다.') + '</div>';
     return;
   }
 
@@ -2771,6 +2782,16 @@ function renderNewsList() {
   }
 
   listEl.innerHTML = html;
+}
+
+// 뉴스 검색 입력 핸들러 — 200ms 디바운스 후 클라이언트 필터 재렌더 (서버 왕복 없음)
+var _newsSearchTimer = null;
+function onNewsSearchInput(value) {
+  clearTimeout(_newsSearchTimer);
+  _newsSearchTimer = setTimeout(function() {
+    currentNewsSearch = (value || '').trim();
+    renderNewsList();
+  }, 200);
 }
 
 function filterNewsByImportance(el, importance) {
@@ -5422,7 +5443,7 @@ function renderGroupTabs(page) {
   var act = _activeGroupTabKey(group, page);
   bar.innerHTML = GROUP_TABS[group].map(function(t) {
     var on = t.key === act;
-    return '<div onclick="' + t.on + '" style="padding:7px 14px;font-size:12px;cursor:pointer;white-space:nowrap;margin-bottom:-1px;'
+    return '<div onclick="' + t.on + '" tabindex="0" role="button" aria-pressed="' + (on ? 'true' : 'false') + '" style="padding:7px 14px;font-size:12px;cursor:pointer;white-space:nowrap;margin-bottom:-1px;'
       + (on ? 'color:var(--accent);border-bottom:2px solid var(--accent);font-weight:600'
             : 'color:var(--text-secondary);border-bottom:2px solid transparent')
       + '">' + t.label + '</div>';
@@ -8544,6 +8565,18 @@ function renderMiniLawMap(topic, relations) {
 // ════════════════════════════════════════════
 //  앱 초기화 (DOCX 업로드 지원 — mammoth)
 // ════════════════════════════════════════════
+// 키보드 접근 — 사이드바 .nav-item·그룹탭(.group-tabbar > div)을 Enter/Space로 실행.
+// 전역 위임 리스너 1개(동적 생성 그룹탭도 커버). Space는 preventDefault로 페이지 스크롤 방지.
+document.addEventListener('keydown', function(e) {
+  if (e.key !== 'Enter' && e.key !== ' ') return;
+  var t = e.target;
+  if (!t || typeof t.matches !== 'function') return;
+  if (t.matches('.nav-item, .group-tabbar > div')) {
+    e.preventDefault();
+    t.click();
+  }
+});
+
 document.addEventListener('DOMContentLoaded', function() {
   initSupabase();
   updateStatusDots();
