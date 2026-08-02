@@ -122,13 +122,21 @@ def parse_doc_name(doc_name: str):
 
 
 def fetch_all_doc_rows():
-    """전체 (doc_name, doc_category) 페이지네이션 조회 — PostgREST 기본 1000행 제한 회피"""
+    """전체 (doc_name, doc_category) 페이지네이션 조회 — PostgREST 기본 1000행 제한 회피
+
+    ⚠️ .order('id') 필수. 정렬 없이 range() 페이지네이션을 하면 Postgres가 페이지마다
+    다른 순서로 행을 돌려줄 수 있어 일부 문서가 통째로 누락된다(중복 수신도 발생).
+    실제로 정보통신망법 하위 고시 3건 적재 후, 같은 스크립트를 두 번 돌렸는데 매번
+    다른 문서의 인용 엣지가 0건으로 빠졌다(2026-08-03). law_watch.fetch_all_doc_rows는
+    이미 같은 이유로 .order('id')를 쓴다.
+    """
     rows = []
     page = 1000
     offset = 0
     while True:
         r = (sb.table('document_chunks')
              .select('doc_name, doc_category')
+             .order('id')
              .range(offset, offset + page - 1)
              .execute())
         batch = r.data or []
@@ -157,7 +165,11 @@ def fetch_target_docs(all_rows):
 
 
 def fetch_chunks(doc_names):
-    """대상 문서들의 청크 본문 (페이지네이션)"""
+    """대상 문서들의 청크 본문 (페이지네이션)
+
+    ⚠️ fetch_all_doc_rows와 같은 이유로 .order('id') 필수 — 정렬 없는 range()는
+    페이지 경계에서 청크를 누락시켜 해당 문서의 인용 엣지가 통째로 사라진다.
+    """
     chunks = []
     page = 1000
     offset = 0
@@ -170,6 +182,7 @@ def fetch_chunks(doc_names):
             r = (sb.table('document_chunks')
                  .select('doc_name, content')
                  .in_('doc_name', batch)
+                 .order('id')
                  .range(offset, offset + page - 1)
                  .execute())
             rows = r.data or []
@@ -414,7 +427,8 @@ def main(dry_run=False):
     existing = {}
     offset = 0
     while True:
-        r = sb.table('law_graph_nodes').select('id, name, doc_name').range(offset, offset + 999).execute()
+        # .order('id') 필수 — 누락되면 기존 노드를 못 찾아 중복 노드를 새로 만든다
+        r = sb.table('law_graph_nodes').select('id, name, doc_name').order('id').range(offset, offset + 999).execute()
         rows = r.data or []
         for row in rows:
             existing[row['name']] = row
@@ -634,7 +648,8 @@ def main(dry_run=False):
     used_ids = set()
     offset = 0
     while True:
-        er = sb.table('law_graph_edges').select('source_id, target_id').range(offset, offset + 999).execute()
+        # .order('id') 필수 — 엣지를 하나라도 놓치면 멀쩡한 노드가 '고아'로 오판돼 삭제된다
+        er = sb.table('law_graph_edges').select('source_id, target_id').order('id').range(offset, offset + 999).execute()
         rows = er.data or []
         for row in rows:
             used_ids.add(row['source_id'])

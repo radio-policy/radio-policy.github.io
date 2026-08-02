@@ -1,7 +1,7 @@
 {
   "schema": "regulatory-kb-manifest/v1",
   "updated": "2026-07-31",
-  "entry_count": 231,
+  "entry_count": 234,
   "dedup_key_rule": "정규화 제목(버전 수식어 '(구버전)' 등 제거) + '|' + law_type. 같은 dedup_key = 같은 법령(버전만 다를 수 있음).",
   "on_readd_rule": {
     "same_law_number": "동일 법령번호 재추가 → 기존 path에 덮어쓰기(idempotent). 신규 파일 생성 금지.",
@@ -2322,6 +2322,36 @@
       "enforcement_date": "2017-08-24",
       "concept_type": "Notice",
       "path": "laws/cloud-computing-act/클라우드컴퓨팅서비스_품질_성능에_관한_기준.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보보호 및 개인정보보호 관리체계 인증 등에 관한 고시|고시",
+      "title": "정보보호 및 개인정보보호 관리체계 인증 등에 관한 고시",
+      "law_type": "고시",
+      "law_number": "제2024-8,2024-30호",
+      "enforcement_date": "2024-07-24",
+      "concept_type": "Notice",
+      "path": "laws/network-act/정보보호_및_개인정보보호_관리체계_인증_등에_관한_고시.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보보호 공시에 관한 고시|고시",
+      "title": "정보보호 공시에 관한 고시",
+      "law_type": "고시",
+      "law_number": "제2024-1호",
+      "enforcement_date": "2024-01-03",
+      "concept_type": "Notice",
+      "path": "laws/network-act/정보보호_공시에_관한_고시.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "집적정보 통신시설 보호지침|고시",
+      "title": "집적정보 통신시설 보호지침",
+      "law_type": "고시",
+      "law_number": "제2024-19호",
+      "enforcement_date": "2024-06-01",
+      "concept_type": "Guideline",
+      "path": "laws/network-act/집적정보_통신시설_보호지침.md",
       "status": "current"
     }
   ]
