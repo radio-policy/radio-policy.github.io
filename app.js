@@ -276,6 +276,13 @@ async function getQueryEmbedding(query, model) {
   } catch(e) { console.warn('시맨틱 임베딩 실패 (폴백):', e); return null; }
 }
 
+// 문서당 청크 상한 (doc_category별 차등 — rag.ts searchChunks와 동일 유지, 한쪽만 고치면 봇/대시보드 답이 갈라진다):
+// '추가지식' = 운영자가 일부러 넣은 논문·근거메모 → 8청크까지 깊게 참고 (일괄 3에서는 표지·방법론만
+// 잡히고 핵심 결론이 컷 밖으로 밀리는 실측). 그 외(보도자료·뉴스·회의록 등) = 3 (한 문서 독식 방지).
+var PERDOC_LIMIT = { '추가지식': 8, 'default': 3 };
+// 전체 상위 컷 12→15: 추가지식 1편이 8을 차지해도 다른 문서 몫이 7 남게 (종전 최악 9에서 소폭 감소에 그침).
+var TOTAL_CHUNK_CUT = 15;
+
 async function searchKeywords(query, lawOnly) {
   if (!sb) return [];
   if (lawOnly === undefined) lawOnly = false;
@@ -441,16 +448,24 @@ async function searchKeywords(query, lawOnly) {
   });
   results.sort(function(a, b) { return b._hybrid_score - a._hybrid_score; });
 
-  // 문서당 청크 상한 — 같은 doc_name 최대 3청크만 상위에 (논문 1편이 상위 12개를 독식하는 것 방지)
+  // 문서당 청크 상한 — doc_category별 차등 (PERDOC_LIMIT): 추가지식 ≤8, 그 외 ≤3 (독식 방지)
   var perDocCount = {};
   var picked = [];
-  for (var pi = 0; pi < results.length && picked.length < 12; pi++) {
+  for (var pi = 0; pi < results.length && picked.length < TOTAL_CHUNK_CUT; pi++) {
     var dn = results[pi].doc_name || '';
+    var cap = PERDOC_LIMIT[results[pi].doc_category] || PERDOC_LIMIT['default'];
     perDocCount[dn] = (perDocCount[dn] || 0) + 1;
-    if (perDocCount[dn] <= 3) picked.push(results[pi]);
+    if (perDocCount[dn] <= cap) picked.push(results[pi]);
   }
+  // 문서별 채택 수 로그 (카테고리 상한 검증용)
+  var pickedPerDoc = {};
+  picked.forEach(function(r) {
+    var k = (r.doc_category || '?') + ' | ' + (r.doc_name || '');
+    pickedPerDoc[k] = (pickedPerDoc[k] || 0) + 1;
+  });
+  console.log('문서별 채택:', pickedPerDoc);
 
-  console.log('3중 하이브리드 RRF (키워드확장 ' + expanded.length + '개 + trgm + 시맨틱):', keywords.slice(0,10).join(', '), '->', results.length + '개 청크 (문서당 ≤3, 상위 ' + picked.length + '개 사용)');
+  console.log('3중 하이브리드 RRF (키워드확장 ' + expanded.length + '개 + trgm + 시맨틱):', keywords.slice(0,10).join(', '), '->', results.length + '개 청크 (추가지식 ≤8·그 외 ≤3, 상위 ' + picked.length + '개 사용)');
   return picked;
 }
 

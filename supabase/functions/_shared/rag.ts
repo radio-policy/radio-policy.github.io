@@ -83,7 +83,14 @@ interface Chunk {
   _score?: number; _trgm_score?: number; _semantic_score?: number; _hybrid_score?: number;
 }
 
-// ── 3중 하이브리드 조문 검색 (app.js searchKeywords 이식, 상위 12개) ──
+// 문서당 청크 상한 (doc_category별 차등 — app.js searchKeywords와 동일 유지, 한쪽만 고치면 봇/대시보드 답이 갈라진다):
+// '추가지식' = 운영자가 일부러 넣은 논문·근거메모 → 8청크까지 깊게 참고 (일괄 3에서는 표지·방법론만
+// 잡히고 핵심 결론이 컷 밖으로 밀리는 실측). 그 외(보도자료·뉴스·회의록 등) = 3 (한 문서 독식 방지).
+const PERDOC_LIMIT: Record<string, number> = { '추가지식': 8, 'default': 3 };
+// 전체 상위 컷 12→15: 추가지식 1편이 8을 차지해도 다른 문서 몫이 7 남게 (종전 최악 9에서 소폭 감소에 그침).
+const TOTAL_CHUNK_CUT = 15;
+
+// ── 3중 하이브리드 조문 검색 (app.js searchKeywords 이식, 상위 15개) ──
 async function searchChunks(sb: SupabaseClient, apiKey: string, query: string): Promise<Chunk[]> {
   const baseKeywords = extractKeywords(query);
   const expanded = await expandQueryKeywords(apiKey, query);
@@ -168,14 +175,15 @@ async function searchChunks(sb: SupabaseClient, apiKey: string, query: string): 
     if (FILE_DOC_RE.test(r.doc_name || '')) r._hybrid_score = (r._hybrid_score || 0) - 0.5 / (RRF_K + 1);
   }
   results.sort((a, b) => (b._hybrid_score || 0) - (a._hybrid_score || 0));
-  // 문서당 청크 상한 — 같은 doc_name 최대 3청크만 상위에 (논문 1편이 상위 12개 독식 방지)
+  // 문서당 청크 상한 — doc_category별 차등 (PERDOC_LIMIT): 추가지식 ≤8, 그 외 ≤3 (독식 방지)
   const perDoc: Record<string, number> = {};
   const picked: Chunk[] = [];
   for (const r of results) {
-    if (picked.length >= 12) break;
+    if (picked.length >= TOTAL_CHUNK_CUT) break;
     const dn = r.doc_name || '';
+    const cap = PERDOC_LIMIT[r.doc_category || ''] || PERDOC_LIMIT['default'];
     perDoc[dn] = (perDoc[dn] || 0) + 1;
-    if (perDoc[dn] <= 3) picked.push(r);
+    if (perDoc[dn] <= cap) picked.push(r);
   }
   return picked;
 }
