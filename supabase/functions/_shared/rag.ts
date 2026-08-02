@@ -524,6 +524,138 @@ async function buildNewsContext(sb: SupabaseClient, query: string): Promise<{ te
   } catch (e) { console.warn('뉴스 컨텍스트 실패(건너뜀):', e); return { text: '', sources: [] }; }
 }
 
+// ── 국회 동향 컨텍스트 (app.js fetchAssemblyTrendContext 이식 — 대시보드와 동일 규칙 유지) ──
+//
+// 조문·기사가 '근거' 층이라면 이건 '배경' 층이다. 운영자 요구는 "국회에서 이런 논의도
+// 진행되고 있다" 정도의 참고 정보이므로, 컨텍스트 맨 뒤에 소량만 붙이고 프롬프트에서
+// 확정 법령처럼 서술하지 못하게 막는다(app_config.system_prompt [국회 동향 활용 원칙]).
+//
+// 비용 0 — 질의 임베딩을 추가로 만들지 않는다. assembly_speeches(~1.1천건)·assembly_bills(~230건)는
+// 규모가 작고 summary가 정제돼 있어 ilike만으로 상위 적중이 나온다(실측). 점수 규칙 3가지는
+// app.js 주석 참조(topic 태그 역방향 +3 / 희소 topic 앵커 / 법안 strong→fallback).
+const ASM_RARE_MAX = 40;   // assembly_speeches 약 1,100건 기준 희소어 상한(≈4%)
+
+interface SpeechRow {
+  speaker?: string; position?: string; meeting_date?: string;
+  agenda?: string; topic?: string; summary?: string;
+}
+interface BillRow {
+  bill_name?: string; proposer?: string; committee?: string; proc_result?: string;
+  propose_dt?: string | null; summary?: string; notice_end_dt?: string | null;
+}
+
+async function buildAssemblyTrendContext(sb: SupabaseClient, query: string): Promise<string> {
+  try {
+    const kws = extractNewsKeywords(query).slice(0, 5)
+      .map((k) => String(k).replace(/[%_,.*()]/g, ' ').trim())
+      .filter((k) => k.length >= 2);
+    if (!kws.length) return '';
+    const qLower = query.toLowerCase();
+
+    const spRes = await Promise.all(kws.map((k) =>
+      sb.from('assembly_speeches')
+        .select('speaker,position,meeting_date,agenda,topic,summary', { count: 'exact' })
+        .or('topic.ilike.*' + k + '*,agenda.ilike.*' + k + '*,summary.ilike.*' + k + '*')
+        .order('meeting_date', { ascending: false }).limit(25)
+        .then((r) => ({ kw: k, rows: (r.data || []) as SpeechRow[], total: r.count || 0 }))
+        .catch(() => ({ kw: k, rows: [] as SpeechRow[], total: 0 }))));
+    const blRes = await Promise.all(kws.map((k) =>
+      sb.from('assembly_bills')
+        .select('bill_name,proposer,committee,proc_result,propose_dt,summary,notice_end_dt')
+        .or('bill_name.ilike.*' + k + '*,summary.ilike.*' + k + '*')
+        .order('propose_dt', { ascending: false, nullsFirst: true }).limit(15)
+        .then((r) => ({ kw: k, rows: (r.data || []) as BillRow[] }))
+        .catch(() => ({ kw: k, rows: [] as BillRow[] }))));
+
+    const rare: Record<string, number> = {};
+    for (const r of spRes) rare[r.kw] = r.total;
+
+    const spMap = new Map<string, SpeechRow>();
+    for (const r of spRes) for (const s of r.rows) {
+      const key = (s.meeting_date || '') + '|' + (s.speaker || '') + '|' + String(s.summary || '').slice(0, 40);
+      if (!spMap.has(key)) spMap.set(key, s);
+    }
+    const speeches = [...spMap.values()].map((s) => {
+      // ilike는 대소문자 무시라 JS 재검증도 소문자로 맞춘다('AI' 질의가 0점이 되는 것 방지)
+      const topic = String(s.topic || '').toLowerCase();
+      const agenda = String(s.agenda || '').toLowerCase();
+      const sm = String(s.summary || '').toLowerCase();
+      let score = 0, mk = 0, anchor = false;
+      for (const k of kws) {
+        const lk = k.toLowerCase();
+        const inT = topic.includes(lk), inA = agenda.includes(lk), inS = sm.includes(lk);
+        if (!inT && !inA && !inS) continue;
+        mk++;
+        score += inT ? 3 : (inA ? 2 : 1);
+        if (inT && rare[k] && rare[k] <= ASM_RARE_MAX) anchor = true;
+      }
+      if (topic.split(',').some((t) => t.trim().length >= 2 && qLower.includes(t.trim()))) score += 3;
+      return { row: s, score, ok: (mk >= 2 || anchor) && score >= 4 };
+    }).filter((x) => x.ok)
+      .sort((a, b) => b.score !== a.score ? b.score - a.score
+        : String(b.row.meeting_date || '').localeCompare(String(a.row.meeting_date || '')))
+      .slice(0, 4);
+
+    const blMap = new Map<string, BillRow>();
+    for (const r of blRes) for (const b of r.rows) {
+      const key = (b.bill_name || '') + '|' + (b.proposer || '') + '|' + (b.propose_dt || '');
+      if (!blMap.has(key)) blMap.set(key, b);
+    }
+    const today = new Date().toISOString().slice(0, 10);
+    const bills = [...blMap.values()].map((b) => {
+      const name = String(b.bill_name || '').toLowerCase();
+      const sm = String(b.summary || '').toLowerCase();
+      let score = 0, mk = 0;
+      for (const k of kws) {
+        const lk = k.toLowerCase();
+        const inN = name.includes(lk), inS = sm.includes(lk);
+        if (!inN && !inS) continue;
+        mk++;
+        score += inN ? 3 : 1;
+      }
+      // 의견등록 열린 건은 순위 가점만 — 통과 기준에 넣으면 무관 법안이 마감일만으로 올라온다
+      return { row: b, score, mk, open: !!(b.notice_end_dt && b.notice_end_dt >= today) };
+    });
+    const strongB = bills.filter((x) => x.score >= 3);
+    const pickB = (strongB.length ? strongB : bills.filter((x) => x.mk >= 2))
+      .sort((a, b) => {
+        const sa = a.score + (a.open ? 2 : 0), sbv = b.score + (b.open ? 2 : 0);
+        if (sbv !== sa) return sbv - sa;
+        return String(b.row.propose_dt || '9999').localeCompare(String(a.row.propose_dt || '9999'));
+      }).slice(0, strongB.length ? 3 : 2);
+
+    if (!speeches.length && !pickB.length) return '';
+
+    const lines: string[] = [];
+    if (speeches.length) {
+      lines.push('▸ 과방위 회의 발언');
+      for (const x of speeches) {
+        const s = x.row;
+        lines.push('  · [' + String(s.meeting_date || '').slice(0, 10) + '] ' + (s.speaker || '') +
+          (s.position ? '(' + s.position + ')' : '') + ': ' +
+          String(s.summary || '').replace(/\s+/g, ' ').trim().slice(0, 220) +
+          (s.agenda ? ' [안건: ' + String(s.agenda).replace(/\s+/g, ' ').trim().slice(0, 40) + ']' : ''));
+      }
+    }
+    if (pickB.length) {
+      lines.push('▸ 관련 국회 법안');
+      for (const x of pickB) {
+        const b = x.row;
+        const meta = [b.proposer, b.propose_dt ? '발의 ' + b.propose_dt : '', b.proc_result]
+          .filter(Boolean).join(' / ');
+        lines.push('  · ' + (b.bill_name || '') + (meta ? ' (' + meta + ')' : '') +
+          (b.summary ? ': ' + String(b.summary).replace(/\s+/g, ' ').trim().slice(0, 200) : '') +
+          (x.open ? '\n    ※ 국회 입법예고 의견등록 가능 — 마감 ' + b.notice_end_dt : ''));
+      }
+    }
+    return '\n\n---\n\n[국회 동향 — 참고용 배경]\n' +
+      '아래는 과방위 회의록(발언 요지)과 국회 법안 DB에서 이번 질문과 관련돼 보이는 항목을 추린 것입니다.\n' +
+      '확정된 법령 내용이 아니라 "국회에서 이런 논의가 진행되고 있다"는 참고 배경입니다. ' +
+      '답변의 근거는 위 조문·법령요약·기사를 우선하고, 이 블록은 필요할 때만 답변 말미에 짧게 덧붙이세요.\n\n' +
+      lines.join('\n');
+  } catch (e) { console.warn('국회 동향 컨텍스트 실패(건너뜀):', e); return ''; }
+}
+
 export interface AdvisoryResult { answer: string; sources: string[] }
 
 // ── 자문 실행 (진입점) ──
@@ -531,12 +663,13 @@ export async function answerAdvisory(sb: SupabaseClient, systemPrompt: string, q
   const apiKey = env('ANTHROPIC_API_KEY');
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY 미설정');
 
-  // 4갈래를 동시에: 조문 RAG / 법령요약 / 조문 정밀검색(/law와 동일) / 뉴스 동향
+  // 5갈래를 동시에: 조문 RAG / 법령요약 / 조문 정밀검색(/law와 동일) / 뉴스 동향 / 국회 동향(참고 배경)
   const kbP = searchKbSummaries(sb, question);
   const newsP = buildNewsContext(sb, question);
   const lawP = searchLawArticles(sb, question, 5);
+  const asmP = buildAssemblyTrendContext(sb, question);
   const chunks = await searchChunks(sb, apiKey, question);
-  const [kb, news, lawHits] = [await kbP, await newsP, await lawP];
+  const [kb, news, lawHits, asm] = [await kbP, await newsP, await lawP, await asmP];
 
   // 조문 보강 — searchLawArticles(키워드 확장 + 조문 단위 필터)가 찾은 조문 중
   // 위 RAG에 안 들어온 것을 덧붙인다. RAG는 논문·보도자료도 섞여 정작 근거 조문을 놓치는 일이 있다.
@@ -561,7 +694,8 @@ export async function answerAdvisory(sb: SupabaseClient, systemPrompt: string, q
   // 분리해 cache_control:{type:'ephemeral'} 부착 → tools(web_search)+고정 지침이 함께 캐시된다.
   // 가변부(질문마다 바뀌는 RAG·조문·요약·뉴스)는 캐시 블록 '뒤'에 둬야 적중한다.
   const systemStable = systemPrompt + telegramGuide;
-  const systemVariable = buildRagContext(chunks) + lawContext + buildKbContext(kb) + news.text;
+  // 국회 동향은 '근거'가 아니라 '배경'이라 맨 뒤 — 조문·요약·기사보다 앞에 두지 말 것
+  const systemVariable = buildRagContext(chunks) + lawContext + buildKbContext(kb) + news.text + asm;
   const system: SystemBlock[] = [
     { type: 'text', text: systemStable, cache_control: { type: 'ephemeral' } },
   ];
