@@ -30,6 +30,7 @@ import requests
 import anthropic
 from supabase import Client
 from sb_client import make_client
+import notify   # 텔레그램 전송 공용 유틸 (개선⑪) — 전송부만 위임
 
 # ── 환경변수 ──────────────────────────────────────────────
 SUPABASE_URL       = os.environ['SUPABASE_URL']
@@ -420,23 +421,17 @@ def send_telegram(briefing_text: str):
         text = text[:text.rfind('\n')] if '\n' in text else text
         text += '\n\n...(전문은 대시보드 참조)'
     text += '\n\n📊 <a href="https://youjinwoong.github.io/radio-policy-ai/">대시보드</a>'
-    api = f'https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage'
-    body = {'chat_id': TELEGRAM_CHAT_ID, 'text': text, 'parse_mode': 'HTML',
-            'disable_web_page_preview': True}
-    try:
-        resp = requests.post(api, json=body, timeout=15)
-        if resp.status_code == 400:
-            # HTML 파싱 실패 시 평문으로 재시도 — 포맷 때문에 브리핑 자체를 잃지 않도록(fail-open)
-            print(f'[텔레그램] HTML 400 → 평문 재시도: {resp.text[:150]}')
-            plain = re.sub(r'<[^>]+>', '', text)
-            resp = requests.post(api, json={'chat_id': TELEGRAM_CHAT_ID, 'text': plain,
-                                            'disable_web_page_preview': True}, timeout=15)
-        if resp.status_code == 200:
-            print('[텔레그램] 발송 완료')
-        else:
-            print(f'[텔레그램 오류] HTTP {resp.status_code}: {resp.text[:200]}')
-    except Exception as e:
-        print(f'[텔레그램 오류] {e}')
+    # 전송부는 notify 위임 (개선⑪) — 400 등 4xx는 notify가 재시도 없이 False 반환
+    ok = notify.send_telegram(text, chat_id=TELEGRAM_CHAT_ID, parse_mode='HTML',
+                              disable_web_page_preview=True)
+    if not ok:
+        # HTML 파싱 실패(400 등) 시 평문으로 재시도 — 포맷 때문에 브리핑 자체를 잃지 않도록(fail-open)
+        print('[텔레그램] HTML 발송 실패 → 평문 재시도')
+        plain = re.sub(r'<[^>]+>', '', text)
+        ok = notify.send_telegram(plain, chat_id=TELEGRAM_CHAT_ID,
+                                  disable_web_page_preview=True)
+    if ok:
+        print('[텔레그램] 발송 완료')
 
 
 def _briefing_to_html(text: str) -> str:

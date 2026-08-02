@@ -15,6 +15,7 @@ load_dotenv()
 
 import requests
 from sb_client import make_client
+import notify   # 텔레그램 전송 공용 유틸 (개선⑪) — 전송부만 위임
 
 SUPABASE_URL       = os.environ['SUPABASE_URL']
 SUPABASE_KEY       = os.environ['SUPABASE_SERVICE_KEY']
@@ -62,21 +63,19 @@ else:
         text = text[:text.rfind('\n')]          # 태그 중간 절단 방지
         text += '\n\n...(전문은 대시보드 참조)'
     text += '\n\n📊 <a href="https://youjinwoong.github.io/radio-policy-ai/">대시보드</a>'
-    api = f'https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage'
-    try:
-        r = requests.post(api, json={'chat_id': TELEGRAM_CHAT_ID, 'text': text,
-                                     'parse_mode': 'HTML', 'disable_web_page_preview': True}, timeout=15)
-        if r.status_code == 400:
-            import re as _re
-            print(f"  ⚠️ HTML 400 → 평문 재시도: {r.text[:150]}")
-            r = requests.post(api, json={'chat_id': TELEGRAM_CHAT_ID, 'text': _re.sub(r'<[^>]+>', '', text),
-                                         'disable_web_page_preview': True}, timeout=15)
-        if r.status_code == 200:
-            print(f"  ✅ 발송 완료")
-        else:
-            print(f"  ❌ HTTP {r.status_code}: {r.text[:300]}")
-    except Exception as e:
-        print(f"  ❌ 오류: {e}")
+    # 전송부는 notify 위임 (개선⑪) — HTTP 상세 오류는 notify가 출력
+    ok = notify.send_telegram(text, chat_id=TELEGRAM_CHAT_ID, parse_mode='HTML',
+                              disable_web_page_preview=True)
+    if not ok:
+        # HTML 파싱 실패(400 등) 시 평문 재시도 — 포맷 때문에 재발송 자체를 잃지 않도록
+        import re as _re
+        print("  ⚠️ HTML 발송 실패 → 평문 재시도")
+        ok = notify.send_telegram(_re.sub(r'<[^>]+>', '', text), chat_id=TELEGRAM_CHAT_ID,
+                                  disable_web_page_preview=True)
+    if ok:
+        print(f"  ✅ 발송 완료")
+    else:
+        print(f"  ❌ 발송 실패")
 print()
 
 # ── 이메일 발송 (Resend) ──

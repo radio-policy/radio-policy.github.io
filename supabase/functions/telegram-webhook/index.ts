@@ -52,7 +52,7 @@ async function tg(method: string, payload: Record<string, unknown>): Promise<Rec
 interface Sub {
   chat_id: number; username: string | null; first_name: string | null; active: boolean;
   topic_briefing: boolean; topic_urgent: boolean; topic_assembly: boolean;
-  days: string; briefing_hour: number;
+  days: string; briefing_hour: number; urgent_now: boolean;
   ai_allowed: boolean; ai_count_date: string | null; ai_count: number;
 }
 async function getSub(chatId: number): Promise<Sub | null> {
@@ -77,6 +77,9 @@ function settingsKeyboard(s: Sub) {
     [{ text: `${chk(s.topic_briefing)} 📡 모닝 브리핑`, callback_data: 't:briefing' },
      { text: `${chk(s.topic_urgent)} 🚨 긴급 뉴스`, callback_data: 't:urgent' }],
     [{ text: `${chk(s.topic_assembly)} 🏛️ 법안 동향`, callback_data: 't:assembly' }],
+    // 긴급만 예외적으로 '즉시(야간 포함)' 선택 가능 — 켜면 크롤러가 감지 즉시 보내고,
+    // 그 건은 정시 발송에서 빠진다(중복 없음). 끄면 기존대로 받는 시각에 모아서 온다.
+    [{ text: `${chk(s.urgent_now)} ⏰ 긴급은 즉시 받기 (야간 포함)`, callback_data: 'u:now' }],
     [{ text: '— 아래는 하나만 선택 —', callback_data: 'noop' }],
     [{ text: `${sel(s.days === 'daily')} 매일 받기`, callback_data: 'd:daily' },
      { text: `${sel(s.days === 'weekday')} 평일만`, callback_data: 'd:weekday' }],
@@ -286,7 +289,7 @@ async function handleCallback(cb: { id: string; data?: string; from: { id: numbe
   const sub: Sub = cur ?? {
     chat_id: chatId, username: null, first_name: null, active: true,
     topic_briefing: true, topic_urgent: true, topic_assembly: true,
-    days: 'daily', briefing_hour: 7,
+    days: 'daily', briefing_hour: 7, urgent_now: false,
     ai_allowed: false, ai_count_date: null, ai_count: 0,
   };
 
@@ -294,6 +297,10 @@ async function handleCallback(cb: { id: string; data?: string; from: { id: numbe
   if (data === 't:briefing') { patch.topic_briefing = !sub.topic_briefing; ack = patch.topic_briefing ? '모닝 브리핑 ON' : '모닝 브리핑 OFF'; }
   else if (data === 't:urgent') { patch.topic_urgent = !sub.topic_urgent; ack = patch.topic_urgent ? '긴급 뉴스 ON' : '긴급 뉴스 OFF'; }
   else if (data === 't:assembly') { patch.topic_assembly = !sub.topic_assembly; ack = patch.topic_assembly ? '법안 동향 ON' : '법안 동향 OFF'; }
+  else if (data === 'u:now') {
+    patch.urgent_now = !sub.urgent_now;
+    ack = patch.urgent_now ? '긴급 뉴스를 즉시 받습니다 (야간 포함)' : '긴급 뉴스도 받는 시각에 모아서 받습니다';
+  }
   else if (data === 'd:daily') { patch.days = 'daily'; ack = '매일 받기로 변경'; }
   else if (data === 'd:weekday') { patch.days = 'weekday'; ack = '평일(월~금)만 받기로 변경'; }
   else if (data.startsWith('h:')) {

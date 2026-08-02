@@ -50,6 +50,13 @@ try:
 except ImportError:
     anthropic = None
 
+try:
+    import pytesseract
+    from PIL import Image
+except ImportError:
+    pytesseract = None
+    Image = None
+
 KST = timezone(timedelta(hours=9))
 
 HEADERS = {
@@ -67,6 +74,9 @@ RETRY_DELAY = 5
 CHUNK_SIZE = 700          # 기존 수동 업로드분과 동일 (실측)
 BODY_MAX = 15000          # 항목당 본문 상한 (비정상 거대 문서 방어)
 BODY_MIN = 120            # 이보다 짧으면 추출 실패로 간주
+OCR_TRIGGER = 500         # PDF 텍스트층이 이보다 짧으면 이미지-전용 의심 → OCR 시도
+OCR_ACCEPT = 1000         # OCR 결과가 이 이상일 때만 본문으로 채택
+OCR_MAX_PAGES = 8         # OCR 대상 최대 페이지 (150dpi 이미지화)
 
 # app_config 조회 실패 시 폴백 (gov_notice_crawler.RADIO_KEYWORDS + 'AI')
 FALLBACK_KEYWORDS = [
@@ -241,6 +251,75 @@ def _find_pdftotext() -> str:
 PDFTOTEXT = _find_pdftotext()
 
 
+def _find_pdftoppm() -> str:
+    """PDF→이미지 변환기(Poppler). pdftotext 와 같은 폴더에 있는 게 보통."""
+    p = shutil.which('pdftoppm')
+    if p:
+        return p
+    if PDFTOTEXT:
+        cand = os.path.join(os.path.dirname(PDFTOTEXT), 'pdftoppm.exe')
+        if os.path.exists(cand):
+            return cand
+    return ''
+
+
+def _find_tesseract() -> str:
+    p = shutil.which('tesseract')
+    if p:
+        return p
+    for cand in (
+        os.environ.get('TESSERACT_EXE', ''),
+        r'C:\Program Files\Tesseract-OCR\tesseract.exe',
+        r'C:\Program Files (x86)\Tesseract-OCR\tesseract.exe',
+    ):
+        if cand and os.path.exists(cand):
+            return cand
+    return ''
+
+
+PDFTOPPM = _find_pdftoppm()
+TESSERACT = _find_tesseract()
+
+
+def _pdf_ocr_text(data: bytes, max_pages: int = OCR_MAX_PAGES, dpi: int = 150) -> str:
+    """이미지-전용 PDF의 OCR 폴백 (2026-08-02 개선⑫).
+    pdftoppm 으로 앞 max_pages 페이지를 150dpi PNG 로 변환 후 tesseract(kor+eng).
+    tesseract/pytesseract/pdftoppm 부재 또는 실패 시 '' 반환 — fail-soft."""
+    if pytesseract is None or not TESSERACT or not PDFTOPPM:
+        return ''
+    tmpdir = None
+    try:
+        tmpdir = tempfile.mkdtemp(prefix='press_ocr_')
+        pdf_path = os.path.join(tmpdir, 'in.pdf')
+        with open(pdf_path, 'wb') as f:
+            f.write(data)
+        out = subprocess.run(
+            [PDFTOPPM, '-png', '-r', str(dpi), '-l', str(max_pages),
+             pdf_path, os.path.join(tmpdir, 'pg')],
+            capture_output=True, timeout=180,
+        )
+        if out.returncode != 0:
+            return ''
+        pytesseract.pytesseract.tesseract_cmd = TESSERACT
+        parts = []
+        for name in sorted(os.listdir(tmpdir)):
+            if not name.lower().endswith('.png'):
+                continue
+            try:
+                with Image.open(os.path.join(tmpdir, name)) as img:
+                    txt = pytesseract.image_to_string(img, lang='kor+eng')
+                if txt and txt.strip():
+                    parts.append(txt.replace('\x0c', '').strip())
+            except Exception:
+                continue
+        return '\n\n'.join(parts).strip()
+    except Exception:
+        return ''
+    finally:
+        if tmpdir and os.path.isdir(tmpdir):
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+
 def _pdf_to_text(data: bytes) -> str:
     if not PDFTOTEXT:
         return ''
@@ -316,11 +395,19 @@ def _clean_body(text: str) -> str:
 
 
 def _sniff_and_extract(data: bytes, filename: str = '') -> str:
-    """바이트 시그니처로 PDF/HWPX 판별 후 추출. 구형 HWP(OLE)는 스킵('')."""
+    """바이트 시그니처로 PDF/HWPX 판별 후 추출. 구형 HWP(OLE)는 스킵('').
+    PDF 텍스트층이 OCR_TRIGGER 미만이면 이미지-전용으로 보고 OCR 폴백(개선⑫)."""
     if not data or len(data) < 8:
         return ''
     if data[:4] == b'%PDF':
-        return _pdf_to_text(data)
+        txt = _pdf_to_text(data)
+        if len((txt or '').strip()) < OCR_TRIGGER:
+            ocr = _pdf_ocr_text(data)
+            if len(ocr) >= OCR_ACCEPT:
+                print('  [OCR 추출] 텍스트층 %d자 → OCR %d자 채택 (%s)'
+                      % (len((txt or '').strip()), len(ocr), filename or 'pdf'))
+                return ocr
+        return txt
     if data[:2] == b'PK':
         return _hwpx_to_text(data)
     if data[:8] == b'\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1':
@@ -411,13 +498,16 @@ def msit_extract(item: dict) -> str:
         else:
             pri = 2
         cands.append((pri, m.group(1), m.group(2), fname))
+    best = ''
     for pri, no, ordn, fname in sorted(cands):
         data = _post_download(MSIT_DOWN, {'atchFileNo': no, 'fileOrd': ordn, 'fileBtn': 'A'},
                               referer=item['url'])
         body = _sniff_and_extract(data, fname)
-        if body and len(body) >= BODY_MIN:
-            return body
-    return ''
+        if body and len(body) > len(best):
+            best = body
+        if len(best) >= OCR_TRIGGER:   # 충분한 본문 확보 — 다음 첨부 불필요
+            return best
+    return best if len(best) >= BODY_MIN else ''
 
 
 # ── 전파연구원 (RRA) — euc-kr ────────────────────────

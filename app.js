@@ -3844,6 +3844,21 @@ function _lawDiffCommentExpired(r) {
   return /^\d{4}-\d{2}-\d{2}$/.test(d) && d < _todayKstStr();
 }
 
+// 목록 행에 붙는 한 줄 요약 — 총괄 요약(summary)의 앞 문장을 잘라 쓴다(국회 법안 목록의 요약 줄과 같은 취지).
+function _lawDiffBriefLine(r) {
+  var s = (r.summary || '').replace(/\s+/g, ' ').trim();
+  if (!s) return '';
+  s = s.replace(/^(이|이번|본)\s*(개정안|전부개정안|개정)은\s*/, '');   // 매 항목 반복되는 상투어 제거
+  if (s.length > 120) {
+    var cut = s.slice(0, 120);
+    var p = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('며 '), cut.lastIndexOf(', '));
+    s = (p > 60 ? cut.slice(0, p + 1) : cut) + '…';
+  }
+  return '<div style="margin-top:6px;font-size:11px;line-height:1.5;color:var(--text-secondary)">' +
+         '<span style="background:#ede9fe;color:#5b21b6;padding:1px 5px;border-radius:4px;font-size:10px;font-weight:600;margin-right:5px">요약</span>' +
+         escHtml(s) + '</div>';
+}
+
 function _lawDiffKindBadge(kind, origin) {
   if (kind === 'proposed') {
     if (origin === 'assembly')
@@ -3927,6 +3942,7 @@ async function loadLawDiffs(force) {
         '<span>변경 ' + (st.modified || 0) + ' · 신설 ' + (st.added || 0) + ' · 삭제 ' + (st.deleted || 0) + '</span>' +
         (r.enf_date ? '<span>' + _lawDiffDateLabel(r.diff_kind) + ' ' + escHtml(_fmtEnfDate(r.enf_date)) + '</span>' : '') +
       '</div>' +
+      _lawDiffBriefLine(r) +
     '</div>';
   }).join('');
 }
@@ -5005,9 +5021,68 @@ async function loadOpsStatus() {
         '<span style="font-size:11px;color:#9ca3af;margin-left:auto">' + new Date().toLocaleString('ko-KR') + ' 기준</span>' +
       '</div>' +
       '<div style="background:#fff;border:1px solid #eee;border-radius:8px;padding:4px 14px">' + rows + '</div>' +
+      '<div id="ops-kb-quality" style="background:#fff;border:1px solid #eee;border-radius:8px;padding:12px 14px;margin-top:12px">' +
+        '<div style="font-weight:700;font-size:13px;margin-bottom:6px">📚 KB 품질</div>' +
+        '<p style="color:#9ca3af;font-size:12px;margin:0">불러오는 중…</p>' +
+      '</div>' +
       '<p style="font-size:11px;color:#9ca3af;margin-top:10px">※ ✅ 정상 · ⚠️ 점검 권장. "뉴스 마지막 입력"은 새 기사가 없으면 자연히 벌어집니다(크롤러가 정상이면 문제 아님).</p>';
+    loadKbQualityCard();   // 별도 비동기 — 하트비트 표시를 늦추지 않음
   } catch (e) {
     el.innerHTML = '<p style="color:#dc2626">불러오기 실패: ' + (e && e.message ? e.message : e) + '</p>';
+  }
+}
+
+// ── KB 품질 카드 (개선⑫) — 뷰 kb_quality_low_docs·kb_quality_article_parse + 임베딩 누락 count
+//    실패해도 이 카드에만 "조회 실패"를 표기하고 운영 상태 패널 전체는 살린다.
+async function loadKbQualityCard() {
+  var card = document.getElementById('ops-kb-quality');
+  if (!card || !sb) return;
+  var head = '<div style="font-weight:700;font-size:13px;margin-bottom:6px">📚 KB 품질</div>';
+  try {
+    var r = await Promise.all([
+      sb.from('kb_quality_low_docs').select('doc_name,doc_category,chars,chunks'),
+      sb.from('kb_quality_article_parse').select('doc_name,total_chunks,parsed_chunks,parse_pct'),
+      sb.from('document_chunks').select('id', { count: 'exact', head: true }).is('embedding', null).eq('status', 'current')
+    ]);
+    if (r[0].error || r[1].error || r[2].error) throw (r[0].error || r[1].error || r[2].error);
+    var lowRows = r[0].data || [];
+    var parseRows = r[1].data || [];
+    var embMissing = (typeof r[2].count === 'number') ? r[2].count : null;
+
+    var lowBad = lowRows.filter(function(d) { return (d.chars || 0) < 2000; });
+    var parseBad = parseRows.filter(function(d) { return (d.parse_pct == null ? 0 : d.parse_pct) < 90; });
+    // 뷰가 하위 15행 상한이라 상한 도달 시 실제 건수는 더 많을 수 있음 → '+' 표기
+    var lowN = lowBad.length + (lowBad.length >= 15 ? '+' : '');
+    var parseN = parseBad.length + (parseBad.length >= 15 ? '+' : '');
+
+    function kbLine(name, right, danger) {
+      return '<div style="display:flex;gap:8px;justify-content:space-between;padding:4px 0;border-bottom:1px solid #f5f5f5;font-size:12px">' +
+             '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#374151">' + escHtml(name) + '</span>' +
+             '<span style="white-space:nowrap;font-weight:600;color:' + (danger ? '#dc2626' : '#6b7280') + '">' + right + '</span></div>';
+    }
+
+    var html = head;
+    html += '<div style="font-size:12px;color:#374151;margin-bottom:10px">본문 부실(2천자 미만) <b>' + lowN + '건</b> · 조문 인식 90% 미만 <b>' + parseN + '건</b> · 임베딩 누락 <b>' + (embMissing != null ? embMissing : '—') + '건</b></div>';
+
+    html += '<div style="font-weight:600;font-size:12px;color:#6b7280;margin:8px 0 2px">📉 본문 부실 하위</div>';
+    if (!lowRows.length) html += '<div style="font-size:12px;color:#9ca3af;padding:4px 0">해당 없음</div>';
+    lowRows.slice(0, 8).forEach(function(d) {
+      var chars = d.chars || 0;
+      html += kbLine(d.doc_name + (d.doc_category ? ' (' + d.doc_category + ')' : ''),
+                     chars.toLocaleString('ko-KR') + '자 · ' + (d.chunks || 0) + '청크', chars < 500);
+    });
+
+    html += '<div style="font-weight:600;font-size:12px;color:#6b7280;margin:10px 0 2px">📑 조문 인식률 하위 (법령류)</div>';
+    if (!parseRows.length) html += '<div style="font-size:12px;color:#9ca3af;padding:4px 0">해당 없음</div>';
+    parseRows.slice(0, 8).forEach(function(d) {
+      var pct = Math.round(d.parse_pct == null ? 0 : d.parse_pct);
+      html += kbLine(d.doc_name, pct + '% (' + (d.parsed_chunks || 0) + '/' + (d.total_chunks || 0) + ')', pct < 50);
+    });
+
+    html += '<p style="font-size:11px;color:#9ca3af;margin:8px 0 0">※ 빨간 항목 = 본문 500자 미만 / 조문 인식 50% 미만 — 원문 재수집·재분할 권장.</p>';
+    card.innerHTML = html;
+  } catch (e) {
+    card.innerHTML = head + '<p style="color:#dc2626;font-size:12px;margin:0">조회 실패' + (e && e.message ? ' — ' + escHtml(e.message) : '') + '</p>';
   }
 }
 

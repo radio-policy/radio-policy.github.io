@@ -50,6 +50,7 @@ except Exception:
     pass
 
 from sb_client import make_client   # create_client 직접 사용 금지 — HTTP/1.1 강제 (지침)
+import notify   # 텔레그램 전송 공용 유틸 (개선⑪) — 전송부만 위임
 
 SB_URL = os.getenv('SUPABASE_URL')
 SB_KEY = os.getenv('SUPABASE_SERVICE_KEY')
@@ -311,20 +312,10 @@ def norm_key(article_no):
 
 
 def send_telegram(msg: str):
-    """law_crawler.py:246 send_telegram 패턴 복제 (운영자 봇, HTML)."""
+    """운영자 봇, HTML — 전송부는 notify 위임 (개선⑪, 실패 로그는 notify가 출력)."""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         return
-    url = f'https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage'
-    try:
-        resp = requests.post(url, json={
-            'chat_id': TELEGRAM_CHAT_ID,
-            'text': msg,
-            'parse_mode': 'HTML',
-        }, timeout=10)
-        if resp.status_code != 200:
-            print(f'[텔레그램 오류] {resp.status_code}')
-    except Exception as e:
-        print(f'[텔레그램 오류] {e}')
+    notify.send_telegram(msg, chat_id=TELEGRAM_CHAT_ID, parse_mode='HTML')
 
 
 def _parse_ts(s):

@@ -37,6 +37,7 @@ except ImportError:
 
 from supabase import Client
 from sb_client import make_client
+import notify   # 텔레그램 전송 공용 유틸 (개선⑪) — 전송부만 위임
 
 # ── 환경변수 ─────────────────────────────────────────────────
 SUPABASE_URL        = os.environ['SUPABASE_URL']
@@ -216,14 +217,8 @@ def send_telegram(msg: str):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print('[텔레그램] 환경변수 미설정 — 건너뜀')
         return
-    url  = f'https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage'
-    resp = requests.post(url, json={
-        'chat_id': TELEGRAM_CHAT_ID,
-        'text': msg,
-        'parse_mode': 'HTML',
-    }, timeout=10)
-    if resp.status_code != 200:
-        print(f'[텔레그램 오류] {resp.status_code}: {resp.text[:100]}')
+    # 전송부는 notify 위임 (개선⑪) — 실패 로그는 notify가 출력
+    notify.send_telegram(msg, chat_id=TELEGRAM_CHAT_ID, parse_mode='HTML')
     # 구독자 봇: 큐에 적재 → 각자 고른 수신 시각에 모아서 발송 (메시지가 이미 HTML이라 그대로 재사용)
     try:
         from subscriber_notify import queue_for_subscribers
@@ -461,34 +456,13 @@ def save_rejected_cache(cache: dict):
 # ── 운영자 전용 알림 (send_telegram 사용 금지 — 구독자 큐 적재 없음) ──
 
 def send_operator_alert(lines: list[str]) -> bool:
-    """운영자 봇으로만 발송. 여러 건은 한 메시지로 묶고 4096자 한도 전에 분할."""
+    """운영자 봇으로만 발송. 여러 건은 한 메시지로 묶고 4096자 한도 전에 분할.
+
+    분할(3800자)·전송·재시도는 notify 위임 (개선⑪). 구독자 큐 적재 없음 — 유지."""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print('[텔레그램] 환경변수 미설정 — 입법예고 알림 건너뜀')
         return False
-    chunks, cur = [], ''
-    for line in lines:
-        if cur and len(cur) + len(line) + 2 > 3800:  # 4096자 절단 유의
-            chunks.append(cur)
-            cur = line
-        else:
-            cur = f'{cur}\n\n{line}' if cur else line
-    if cur:
-        chunks.append(cur)
-    ok  = True
-    url = f'https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage'
-    for chunk in chunks:
-        try:
-            resp = requests.post(url, json={
-                'chat_id': TELEGRAM_CHAT_ID,
-                'text': chunk,
-            }, timeout=10)
-            if resp.status_code != 200:
-                print(f'[텔레그램 오류] {resp.status_code}: {resp.text[:100]}')
-                ok = False
-        except Exception as e:
-            print(f'[텔레그램 예외] {e}')
-            ok = False
-    return ok
+    return notify.send_telegram('\n\n'.join(lines), chat_id=TELEGRAM_CHAT_ID)
 
 
 def notice_heartbeat(note: str):

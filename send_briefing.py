@@ -18,6 +18,7 @@ except ImportError:
 
 import requests
 from sb_client import make_client
+import notify   # 텔레그램 전송 공용 유틸 (개선⑪) — 전송부만 위임
 
 # ── 환경변수 ─────────────────────────────────────────
 SUPABASE_URL  = os.environ.get('SUPABASE_URL', '')
@@ -119,7 +120,7 @@ def send_email(briefing_text: str):
 
 
 def send_telegram(briefing_text: str):
-    """텔레그램 발송"""
+    """텔레그램 발송 — 4000자 절단 가공은 여기, 전송부는 notify 위임 (개선⑪)"""
     if not BOT_TOKEN or not CHAT_ID:
         print('[텔레그램] 환경변수 미설정 — 건너뜀')
         return
@@ -127,22 +128,8 @@ def send_telegram(briefing_text: str):
     if len(briefing_text) > 4000:
         text += '\n\n...(전문은 대시보드 참조)'
     text += '\n\n📊 https://youjinwoong.github.io/radio-policy-ai/'
-    try:
-        resp = requests.post(
-            f'https://api.telegram.org/bot{BOT_TOKEN}/sendMessage',
-            json={
-                'chat_id': CHAT_ID,
-                'text': text,
-                'disable_web_page_preview': True,
-            },
-            timeout=15
-        )
-        if resp.status_code == 200:
-            print('[텔레그램] 발송 완료')
-        else:
-            print(f'[텔레그램 오류] HTTP {resp.status_code}: {resp.text[:100]}')
-    except Exception as e:
-        print(f'[텔레그램 오류] {e}')
+    if notify.send_telegram(text, chat_id=CHAT_ID, disable_web_page_preview=True):
+        print('[텔레그램] 발송 완료')
 
 
 if __name__ == '__main__':

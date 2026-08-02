@@ -32,7 +32,11 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 │                               #   RRA(국립전파연구원)·MSIT(과기정통부)·KMCC(중앙전파관리소)·KCC(방통위)·ETRI·KISDI
 │                               #   ※ crawl_kcc()는 방통위(kcc.go.kr), crawl_kmcc()는 중앙전파관리소(kmcc.go.kr) — 도메인 한 글자 차이라 혼동 주의
 ├── law_crawler.py              # 법제처 DRF API 법령·고시 모니터링(11:00 KST). 엔드포인트 www.law.go.kr/DRF/lawSearch.do, OC=radiopolicyai
-├── assembly_crawler.py         # 국회 법안 모니터링(열린국회정보 API, 22대)
+├── assembly_crawler.py         # 국회 법안 모니터링(열린국회정보 API, 22대) + 국회 입법예고 추적 패스(#56)
+├── law_diff_gen.py             # 법령 조문 DIFF 생성(행정부 예고/시행예정/시행 + 국회 예고 --assembly-only) (#54·#56)
+├── foreign_press.py / assembly_minutes.py  # 해외 규제기관(05:30) / 과방위 회의록(17시 체인) (#54)
+├── notify.py / embed_util.py   # 공용 유틸 — 텔레그램 전송(분할·재시도·429) / Voyage 임베딩. 새 코드는 반드시 재사용 (#58)
+├── tests/test_smoke.py         # 스모크 테스트(표준 unittest·네트워크 0, 17케이스). `python -m unittest discover -s tests` (#58)
 ├── upload_law_pdf.py           # PDF/MD/PPTX→document_chunks RAG 업로드(조문 헤더 청킹)
 ├── import_regulatory_kb.py     # regulatory-kb OKF 번들(법령 요약 104건)→kb_documents/kb_chunks 1회 적재. manifest.json 정본 순회, voyage-law-2 임베딩(stdlib만). (배경역사 #21)
 ├── add_law.py                  # 법령 추가 통합(Ⓑ): PDF 1개→①조문 document_chunks ②Haiku 요약 OKF→regulatory-kb+manifest+kb_* 동시. MAINTENANCE.md dedup 규칙 적용
@@ -77,7 +81,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 | kb_chunks | kb_documents 본문 청크 + embedding(**voyage-law-2** 1024, HNSW). doc_id FK(cascade). 자문이 시맨틱+trgm으로 조회 |
 | law_graph_nodes | 법령 관계도 노드(name UNIQUE). node_type: topic(주제)/law/decree/rules/notice/etc. source: seed(세션 시드)/citation(인용망 스크립트)/ai(자문·즉석 생성). doc_name=document_chunks 연결(원문 보기). RLS+anon select/insert/update(delete는 service 전용) |
 | law_graph_edges | 법령 관계도 엣지(source_id→target_id, on delete cascade). relation_type: 근거(주제→법령)/인용(조문 인용)/하위법령(계열). source: seed/citation/family/ai. weight=인용·재확인 횟수(엣지 굵기). unique(source,target,relation_type). RLS 동일 |
-| telegram_subscribers | 구독자 봇 가입자(chat_id PK). topic_briefing/urgent/assembly(각각 on·off), days(daily/weekday), briefing_hour(6~12, **3종 공통 수신 시각**), last_briefing_sent_date·last_urgent_sent_at·last_assembly_sent_at(중복 발송 방지), ai_allowed(**기본 false** — AI 자문 승인 플래그), ai_count_date·ai_count(일일 20회 상한). active는 봇 차단(403) 자동 처리 전용이며 화면에 버튼은 없다. **RLS 켜고 정책 0개 = service_role 전용**(chat_id는 개인정보, 프런트 노출 금지 — 의도된 설계) |
+| telegram_subscribers | 구독자 봇 가입자(chat_id PK). topic_briefing/urgent/assembly(각각 on·off), days(daily/weekday), briefing_hour(6~12, **3종 공통 수신 시각**), **urgent_now**(긴급만 즉시 수신·야간 포함, 기본 false — 2026-08-02), last_briefing_sent_date·last_urgent_sent_at·last_assembly_sent_at(중복 발송 방지), ai_allowed(**기본 false** — AI 자문 승인 플래그), ai_count_date·ai_count(일일 20회 상한). active는 봇 차단(403) 자동 처리 전용이며 화면에 버튼은 없다. **RLS 켜고 정책 0개 = service_role 전용**(chat_id는 개인정보, 프런트 노출 금지 — 의도된 설계) |
 | subscriber_queue | 긴급·법안 알림 큐(topic: urgent/assembly, html, created_at). 크롤러가 **발송 대신 적재**하고 send-subscriber-briefing이 각 구독자 수신 시각에 꺼내 보낸다. 억제·클러스터링(#44)·법안 상태변경 판정을 TS로 재구현하지 않으려는 구조. RLS 정책 0개 |
 
 ### Edge Function · RPC
@@ -97,12 +101,39 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 
 ### Storage
 
-- **uploads (private)**: 추가지식·보고서 원본 보관. anon insert/select/delete. 다운로드는 createSignedUrl(60초). public화 금지.
+- **uploads (private)**: 추가지식·보고서 원본 보관. anon insert/select/delete(화면 업로드·삭제가 직접 쓰므로 유지 — 로그인 미도입 방침). 다운로드는 createSignedUrl(60초). public화 금지.
 
-### RLS
+### RLS (2026-08-02 전면 재정비 — 개선⑩ 1단계, 배경역사 #57)
 
-- document_chunks·report_samples·report_style_rules·report_feedback·report_directives: RLS 활성 + anon select/insert/update/delete 정책. custom_knowledge·feedback_rules·news_feed: RLS 비활성.
-- law_graph_nodes·law_graph_edges: RLS 활성 + anon select/insert/update (**delete는 service_role 전용** — 대시보드는 병합만 하고 삭제는 스크립트·세션만).
+**원칙: 로그인은 도입하지 않는다(운영자 방침 — 팀원 누구나 로그인 없이 전 기능 사용). 대신
+"대시보드 화면이 실제로 하는 연산"만 anon에 허용하고 나머지는 전부 service_role 전용으로 잠근다.**
+공개 GitHub Pages + anon 키 구조라 **anon에 열린 권한 = 전 세계에 열린 권한**임을 전제로 설계.
+
+| 분류 | 테이블 | anon 허용 |
+|---|---|---|
+| 읽기 전용 | law_amendments·assembly_bills·law_diffs·law_watch·law_pending·feedback_rules·system_health·kb_documents·kb_chunks | select만 |
+| 화면 기능 | news_feed | select·update·**delete**(기사 삭제 버튼) — insert 없음 |
+| | daily_briefings | select·update(긴급도 수정 시 본문 동기화) |
+| | deleted_news·chat_logs | select·insert (**append-only**) |
+| | importance_feedback·tech_terms | select·insert·update |
+| | custom_knowledge | select·insert·update·delete (팀원 기여 창구) |
+| | law_graph_nodes·law_graph_edges | select·insert·update (delete는 service 전용 — 병합만) |
+| 조건부 | **app_config** | select 전체 / insert·update는 **`key in ('claude_key','press_keywords')` 행만** |
+| | **document_chunks** | select / insert는 **`is_approved=false` 강제**(승인 대기로만 들어옴) |
+| service 전용 | telegram_subscribers·subscriber_queue·alert_suppress_log·changes·documents·system_status | 정책 0개 |
+| 쓰기 회수 | report_samples·report_style_rules·report_feedback·report_directives | select만 (보고서 메뉴 숨김 상태 — ⑦ 부활 시 재개방) |
+
+- **app_config 행 제한의 이유**: `system_prompt`는 telegram-webhook Edge Function이 봇 자문
+  시스템 프롬프트로 그대로 읽어간다. anon이 이 행을 바꿀 수 있으면 대시보드 키 하나로 봇의 지시문을
+  교체하는 **크로스 채널 프롬프트 인젝션**이 성립한다. 화면이 쓰는 2개 키만 남기고 봉쇄.
+- **document_chunks `is_approved=false` 강제의 이유**: 화면 업로드는 원래 승인 대기로 저장되지만
+  그건 app.js의 규칙일 뿐이라, API 직접 호출로 `is_approved=true` 문서를 꽂으면 승인 대기줄에
+  나타나지도 않고 자문 근거로 즉시 쓰인다(RAG 코퍼스 주입). DB 차원에서 차단.
+- **PostgREST 응답 주의**: 정책에 걸린 UPDATE는 401이 아니라 **"0행 수정" 204**로 돌아온다.
+  차단 여부는 응답 코드가 아니라 **실제 값이 바뀌었는지**로 확인할 것.
+- 신규 테이블을 만들면 **RLS를 켜고 정책 0개(=service 전용)로 시작**해, 화면이 실제로 필요로 하는
+  연산만 하나씩 여는 순서를 지킨다.
+- 2단계(Supabase Auth 로그인 도입, 운영 기능을 authenticated로 이관)는 **운영자 판단으로 보류**.
 
 ### pg_cron 스케줄 잡 (DB 내부 스케줄러, UTC 기준 / KST=UTC+9). `select * from cron.job`로 조회.
 
@@ -233,6 +264,10 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 
 ```
 브리핑·긴급·법안   | 구독자가 고른 시각(6~12시)에 3종을 한 번에 발송 — 즉시 발송 없음
+긴급 즉시(선택)    | `urgent_now=true`인 구독자만 예외로 감지 즉시 발송(야간 포함).
+                   |   subscriber_notify.send_urgent_now()가 보내고 그 구독자의 last_urgent_sent_at을
+                   |   현재로 갱신 → 정시 발송에서 같은 건이 다시 나가지 않는다(중복 방지의 핵심).
+                   |   '평일만' 선택자는 주말 즉시 발송 제외. 기본값 false. (2026-08-02)
                    | 요일 선택(매일/평일만), 항목별 on·off. 항목 전부 끄면 수신 없음
 조문 조회 /law     | "OO법 N조" 원문 즉답 (LLM 없음, 비용 0)
 AI 자문 /ask       | 운영자 승인(chat_id별 1회) + 일일 20회 상한. 건당 100~400원
@@ -461,6 +496,11 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **본문 추출 경로(기관별 실측)**: 과기정통부=상세가 스텁이라 **첨부에서 추출**(fn_download 3-인자 파싱 →
   `POST /ssm/file/fileDown.do` atchFileNo·fileOrd·fileBtn=A + **Referer 필수**; HWPX=ZIP의 Contents/section*.xml
   태그 제거, PDF=pdftotext) / 방통위·전파관리소=본문+첨부 PDF 병합 / ETRI·KISDI·전파연구원=HTML(trafilatura).
+- **OCR 폴백(2026-08-02, 개선⑫ — 배경역사 #60)**: PDF 첨부의 텍스트층이 **500자 미만**이면
+  pdftoppm(150dpi, 최대 8쪽) → tesseract `kor+eng` OCR을 시도하고 **1,000자 이상 나올 때만 채택**
+  (로그에 `[OCR 추출]` 표기, 본문에는 표기 없음). 도구 부재·실패 시 조용히 기존 동작(fail-soft).
+  과기정통부 첨부 선택도 "120자만 넘으면 첫 첨부 채택" → "500자 확보까지 다음 첨부 계속"으로 보강.
+  설치본: Tesseract 5.4.0(`C:\Program Files\Tesseract-OCR`) + kor.traineddata 수동 배치, pytesseract.
 - **재실행 안전**: 섹션 헤더 dedupe(`## YYMMDD 제목` ilike) — 백필·델타를 몇 번 돌려도 중복 없음.
 - **대시보드**: KB '정부 보도자료' 탭(기관 탭 + 수집 키워드 카드 + 원문 보기 버튼), 모니터링 탭 기관 필터.
   업로드 진입점은 제거(자동 수집 전환) — 수동 등재는 '추가 지식 입력'으로.
@@ -659,6 +699,9 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **관계도 전체 뷰의 고시 접기(`_lawMapShowNotice=false` 기본)를 '항상 전부 표시'로 되돌리지 말 것 / 접을 때 고아 주제 구제 로직을 빼지 말 것** — 법령이 늘며 전체 뷰 노드의 과반(96/178)이 고시가 돼 중앙이 뭉갰다(겹침 50쌍·최소간격 3px). 고시는 '법률→시행령→고시' 말단이라 조망에선 잔가지이고 주제·법령 클릭 시 그대로 다 보인다. **단 근거가 고시뿐인 주제(충전단자 표준화·MRA·인빌딩 무선통신보조설비)는 통째로 숨기면 엣지 없는 단독 버블이 되므로**(#28에서 이미 고친 회귀), 그런 주제의 직결 고시 8개는 예외로 남긴다. 접힌 사실은 `고시 N개 펼치기` 토글로 화면에 드러낼 것(정보 삭제가 아니라 접기임을 알려야 오해가 없다). 결과 90노드·256엣지·겹침 8쌍. (배경역사 #36)
 
 - **Windows 스케줄 작업을 만들 때 배터리 보호설정 해제 없이 등록 금지** — schtasks 기본값(배터리 전환 시 중지·배터리 시 시작 안 함)이 노트북 전원 흔들림에 작업을 시작 3초 만에 Ctrl+C로 죽인다(06:05 브리핑이 이렇게 무음 실패). AllowStartIfOnBatteries·DontStopIfGoingOnBatteries·StartWhenAvailable 3종 필수, 무인 새벽 작업은 WakeToRun 검토. (배경역사 #55)
+- **저해상도 이미지의 OCR 결과를 검수 없이 KB에 등재하지 말 것** — 실측에서 전력선통신 고시의 주파수 표(567×378 BMP)는 OCR이 **수치를 오독**했고, 발표자료 PDF는 도형·장식을 글자로 잡았다. 자문이 틀린 수치를 근거로 답하는 것이 본문이 짧은 것보다 훨씬 해롭다 — 품질이 의심되면 **등재 반려하고 원인만 기록**한다. (배경역사 #60)
+- **텔레그램 전송·Voyage 임베딩 호출을 새로 복사해 쓰지 말 것** — 공용 유틸 `notify.send_telegram()`·`embed_util.get_embeddings()`를 쓴다(분할·재시도·429 처리가 한 곳에 있음). 예외는 `health_watchdog.py`뿐(Supabase·공용 유틸에 의존하지 않는 독립 감시자라 의도적 중복). 공용 로직을 건드리면 `python -m unittest discover -s tests` 통과 확인. (배경역사 #58)
+- **anon(브라우저 키)에 새 쓰기 권한을 열 때는 "화면이 실제로 하는 연산"인지 먼저 확인할 것** — 공개 Pages라 anon 권한은 전 세계 공개다. 특히 ①`app_config`의 `system_prompt` 행(봇 프롬프트 인젝션 경로), ②`document_chunks`의 `is_approved=true` 삽입(승인 게이트 우회 RAG 주입)은 다시 열지 말 것. 화면의 승인·비밀번호 절차는 app.js의 규칙일 뿐 DB의 규칙이 아니다. (배경역사 #57)
 - **국회 입법예고를 pal HTML 스크래핑으로 전환 금지** — OpenAPI `nknalejkafmvgzmpt`와 레코드 완전 일치 실측(379=379), HTML은 GET 페이징을 조용히 무시(POST+_csrf)라 유지보수 함정. 상세 함정 목록은 "국회 입법예고 추적" 절. (배경역사 #56)
 
 ## 알려진 제약사항

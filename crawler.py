@@ -27,6 +27,7 @@ from requests.adapters import HTTPAdapter
 from bs4 import BeautifulSoup
 from supabase import Client
 from sb_client import make_client
+import notify   # 텔레그램 전송 공용 유틸 (개선⑪) — 전송부만 위임
 import anthropic
 
 # ── 환경변수 ────────────────────────────────────────────
@@ -1738,20 +1739,10 @@ def send_morning_telegram(items: list, briefing_text: str = ''):
         lines.append('📊 https://youjinwoong.github.io/radio-policy-ai/')
         text = '\n'.join(lines)
 
-    api_url = f'https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage'
-    try:
-        resp = requests.post(api_url, json={
-            'chat_id': TELEGRAM_CHAT_ID,
-            'text': text,
-            'parse_mode': 'Markdown',
-            'disable_web_page_preview': True,
-        }, timeout=15)
-        if resp.status_code == 200:
-            print(f'[텔레그램 모닝] {len(items)}건 발송 완료')
-        else:
-            print(f'[텔레그램 모닝 오류] HTTP {resp.status_code}: {resp.text[:200]}')
-    except Exception as e:
-        print(f'[텔레그램 모닝 오류] {e}')
+    # 전송부는 notify 위임 (개선⑪) — 실패 로그는 notify가 출력
+    if notify.send_telegram(text, chat_id=TELEGRAM_CHAT_ID, parse_mode='Markdown',
+                            disable_web_page_preview=True):
+        print(f'[텔레그램 모닝] {len(items)}건 발송 완료')
 
 
 def suppress_repeat_alerts(urgent_items: list) -> list:
@@ -1841,20 +1832,10 @@ def send_telegram(urgent_items: list):
     lines.append('📊 대시보드: https://youjinwoong.github.io/radio-policy-ai/')
     text = '\n'.join(lines)
 
-    api_url = f'https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage'
-    try:
-        resp = requests.post(api_url, json={
-            'chat_id': TELEGRAM_CHAT_ID,
-            'text': text,
-            'parse_mode': 'Markdown',
-            'disable_web_page_preview': True,
-        }, timeout=15)
-        if resp.status_code == 200:
-            print(f'[텔레그램] 긴급 {len(urgent_items)}건 발송 완료')
-        else:
-            print(f'[텔레그램 오류] HTTP {resp.status_code}: {resp.text[:200]}')
-    except Exception as e:
-        print(f'[텔레그램 오류] {e}')
+    # 전송부는 notify 위임 (개선⑪) — 실패 로그는 notify가 출력
+    if notify.send_telegram(text, chat_id=TELEGRAM_CHAT_ID, parse_mode='Markdown',
+                            disable_web_page_preview=True):
+        print(f'[텔레그램] 긴급 {len(urgent_items)}건 발송 완료')
 
 
 # ═══════════════════════════════════════════════════════

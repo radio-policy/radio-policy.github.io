@@ -102,20 +102,13 @@ def sb_insert_chunks(doc_id, contents, embeddings):
 
 
 def voyage_embed(texts):
-    body = {"model": VOYAGE_MODEL, "input": texts, "input_type": "document"}
-    headers = {"Authorization": f"Bearer {VOYAGE_KEY}", "Content-Type": "application/json"}
-    for attempt in range(5):
-        try:
-            _, data = _req("POST", VOYAGE_URL, headers, body, timeout=90)
-            return [d["embedding"] for d in data["data"]]
-        except urllib.error.HTTPError as e:
-            wait = 30 if e.code == 429 else 5 * (attempt + 1)
-            print(f"\n  Voyage HTTP {e.code} (재시도 {attempt+1}/5, {wait}s)")
-            time.sleep(wait)
-        except Exception as e:
-            print(f"\n  Voyage 오류 (재시도 {attempt+1}/5): {e}")
-            time.sleep(5)
-    raise RuntimeError("Voyage 임베딩 실패(재시도 소진)")
+    # embed_util 위임 (개선⑪): 429 Retry-After 우선 대기·재시도 5회, 소진 시 RuntimeError(기존과 동일).
+    # api_key를 명시 전달 — 이 스크립트는 .env를 수동 파싱하므로 os.environ에 없을 수 있다.
+    import embed_util
+    return embed_util.get_embeddings(
+        texts, input_type="document", model=VOYAGE_MODEL,
+        dim=1024, api_key=VOYAGE_KEY, timeout=90,
+    )
 
 
 # ── 파싱 ──────────────────────────────────────────────────

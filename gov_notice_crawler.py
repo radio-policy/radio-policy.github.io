@@ -38,6 +38,7 @@ except ImportError:
 from bs4 import BeautifulSoup
 from supabase import Client
 from sb_client import make_client
+import notify   # 텔레그램 전송 공용 유틸 (개선⑪) — 전송부만 위임
 
 try:
     import anthropic
@@ -656,18 +657,9 @@ def _notify_opinion_items(new_items: list):
                 '• 예고기간: ' + (it['period'] or '—') + '\n'
                 '• 링크: ' + it['link_url']
             )
-            try:
-                resp = requests.post(
-                    'https://api.telegram.org/bot%s/sendMessage' % TELEGRAM_BOT_TOKEN,
-                    json={'chat_id': TELEGRAM_CHAT_ID, 'text': msg, 'parse_mode': 'HTML'},
-                    timeout=10,
-                )
-                if resp.status_code == 200:
-                    print('  [텔레그램] "%s" 발송' % it['title'][:30])
-                else:
-                    print('  [텔레그램 오류] HTTP %d' % resp.status_code)
-            except Exception as e:
-                print('  [텔레그램 오류] %s' % e)
+            # 전송부는 notify 위임 (개선⑪) — 실패 로그는 notify가 출력
+            if notify.send_telegram(msg, chat_id=TELEGRAM_CHAT_ID, parse_mode='HTML'):
+                print('  [텔레그램] "%s" 발송' % it['title'][:30])
             time.sleep(0.5)
 
     if RESEND_API_KEY and new_items:

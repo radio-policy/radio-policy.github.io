@@ -42,6 +42,12 @@ SKT Comm Center 기술정책팀's radio/telecom **policy-monitoring automation s
 
 **Scheduling is dual** — Supabase **pg_cron is the primary trigger** (GitHub cron drops jobs unreliably); GitHub Actions cron is backup. An external `health_watchdog.py` (independent of Supabase) distinguishes "broken" from "no news." See the pg_cron job table in the 지침.
 
+**Shared utilities (2026-08-02, #58)** — new code MUST reuse these instead of re-implementing:
+`notify.send_telegram(text, *, chat_id, parse_mode, disable_web_page_preview)` for Telegram (handles
+3800-char splitting, retries, 429 Retry-After; `health_watchdog.py` stays deliberately independent) and
+`embed_util.get_embeddings(texts, ...)` for Voyage embeddings. Smoke tests live in `tests/test_smoke.py`
+(stdlib unittest, no network) — run `python -m unittest discover -s tests` after touching shared logic.
+
 **Shared DB client** — every Python script MUST create its Supabase client via `sb_client.make_client(url, key)`, never `create_client` directly. This forces HTTP/1.1 (supabase-py 2.31 negotiates HTTP/2, which the endpoint drops → `RemoteProtocolError: Server disconnected`). Applies to new scripts too.
 
 ## Commands

@@ -45,6 +45,8 @@ except Exception:
     pass
 
 import sb_client
+import notify as tg_notify   # 텔레그램 전송 공용 유틸 (개선⑪) — 전송부만 위임
+                             # (이 파일에 동명 함수 notify()가 있어 별칭으로 import)
 
 SB_URL = os.getenv("SUPABASE_URL")
 SB_KEY = os.getenv("SUPABASE_SERVICE_KEY")
@@ -332,13 +334,10 @@ def notify(lines):
         print("  (텔레그램 미설정 — 알림 생략)")
         return
     text = "\n".join(lines)[:3900]
-    try:
-        requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-                      json={'chat_id': TG_CHAT, 'text': text,
-                            'parse_mode': 'HTML', 'disable_web_page_preview': True},
-                      timeout=20)
-    except Exception as e:
-        print(f"  ! 알림 실패: {str(e)[:80]}")
+    # 전송부는 notify 위임 (개선⑪) — 상세 실패 사유는 notify가 출력
+    if not tg_notify.send_telegram(text, chat_id=TG_CHAT, parse_mode='HTML',
+                                   disable_web_page_preview=True):
+        print("  ! 알림 실패")
 
 
 def main():

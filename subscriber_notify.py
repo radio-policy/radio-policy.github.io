@@ -15,11 +15,14 @@
   - fail-open: 큐 적재 실패가 크롤링·기존 운영자 알림을 절대 죽이지 않는다(예외를 밖으로 안 던짐).
   - 호출 위치 주의: 긴급 뉴스는 반드시 suppress_repeat_alerts()+클러스터링을 **거친 뒤** 호출한다.
 """
+import os
 import html as _html
+from datetime import datetime, timezone, timedelta
 
 DASHBOARD_URL = 'https://youjinwoong.github.io/radio-policy-ai/'
 
 _VALID_TOPICS = ('urgent', 'assembly')
+_KST = timezone(timedelta(hours=9))
 
 
 def esc(s) -> str:
@@ -37,10 +40,61 @@ def queue_for_subscribers(sb, topic: str, html_text: str) -> bool:
     try:
         sb.table('subscriber_queue').insert({'topic': topic, 'html': html_text[:3500]}).execute()
         print(f'[구독자 큐] {topic} 적재 완료 — 각 구독자의 수신 시각에 발송됨')
-        return True
     except Exception as e:
         print(f'[구독자 큐] 적재 실패(무시): {e}')
         return False
+    if topic == 'urgent':
+        send_urgent_now(sb, html_text)   # 즉시 수신 선택자에게만 바로 발송 (fail-open)
+    return True
+
+
+def send_urgent_now(sb, html_text: str) -> int:
+    """긴급 뉴스 '즉시 수신(야간 포함)'을 켠 구독자에게 지금 바로 발송. 반환=발송 성공 수.
+
+    큐 적재는 그대로 두고, 발송한 구독자의 last_urgent_sent_at만 현재로 밀어
+    정시 발송(send-subscriber-briefing)에서 같은 건이 다시 나가지 않게 한다.
+    구독자 봇 토큰이 없거나 조회에 실패해도 크롤러를 죽이지 않는다(fail-open).
+    """
+    token = os.environ.get('SUBSCRIBER_BOT_TOKEN', '')
+    if not token:
+        return 0
+    try:
+        rows = (sb.table('telegram_subscribers')
+                  .select('chat_id,days')
+                  .eq('active', True).eq('topic_urgent', True).eq('urgent_now', True)
+                  .execute().data or [])
+    except Exception as e:
+        print(f'[긴급 즉시] 대상 조회 실패(무시): {e}')
+        return 0
+    if not rows:
+        return 0
+
+    import requests
+    is_weekend = datetime.now(_KST).weekday() >= 5
+    now_iso = datetime.now(timezone.utc).isoformat()
+    body = '🚨 <b>긴급 — 즉시 알림</b>\n\n' + html_text[:3500]
+    sent = 0
+    for r in rows:
+        if is_weekend and (r.get('days') or 'daily') == 'weekday':
+            continue          # '평일만' 선택자는 주말에 즉시 발송도 하지 않는다
+        try:
+            resp = requests.post(
+                f'https://api.telegram.org/bot{token}/sendMessage',
+                json={'chat_id': r['chat_id'], 'text': body, 'parse_mode': 'HTML',
+                      'disable_web_page_preview': True},
+                timeout=15)
+            if resp.status_code != 200:
+                print(f'  [긴급 즉시] {r["chat_id"]} 발송 실패 HTTP {resp.status_code}')
+                continue
+            # 발송분은 정시 발송에서 제외 — 실패 시엔 갱신하지 않아 정시에 정상 수신된다
+            sb.table('telegram_subscribers').update(
+                {'last_urgent_sent_at': now_iso}).eq('chat_id', r['chat_id']).execute()
+            sent += 1
+        except Exception as e:
+            print(f'  [긴급 즉시] {r.get("chat_id")} 예외(무시): {e}')
+    if sent:
+        print(f'[긴급 즉시] {sent}명에게 즉시 발송 (정시 재발송 제외 처리 완료)')
+    return sent
 
 
 def format_urgent_html(urgent_items: list) -> str:

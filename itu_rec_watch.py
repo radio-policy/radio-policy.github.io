@@ -37,6 +37,7 @@ except ImportError:
 
 from supabase import Client
 from sb_client import make_client
+import notify   # 텔레그램 전송 공용 유틸 (개선⑪) — 전송부만 위임
 
 # ── 환경변수 ──────────────────────────────────────────────
 SUPABASE_URL       = os.environ['SUPABASE_URL']
@@ -163,17 +164,8 @@ def fetch_current_edition(rec: str):
 def send_telegram(msg: str):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         return
-    url = f'https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage'
-    try:
-        resp = requests.post(url, json={
-            'chat_id': TELEGRAM_CHAT_ID,
-            'text': msg,
-            'parse_mode': 'HTML',
-        }, timeout=10)
-        if resp.status_code != 200:
-            print(f'[텔레그램 오류] {resp.status_code}')
-    except Exception as e:
-        print(f'[텔레그램 오류] {e}')
+    # 전송부는 notify 위임 (개선⑪) — 실패 로그는 notify가 출력
+    notify.send_telegram(msg, chat_id=TELEGRAM_CHAT_ID, parse_mode='HTML')
 
 
 def notify_revised(revised: list):

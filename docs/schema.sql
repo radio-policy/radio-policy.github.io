@@ -615,3 +615,24 @@ alter table public.kb_chunks enable row level security;
 --  운영자 저장소(repo)·Vault에 종속된 기능이라 이 배포본에서는 제외했습니다.
 --  필요하면 강사가 별도 안내합니다.
 -- ============================================================================
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- KB 품질 지표 뷰 (2026-08-02, 개선⑫ — 운영 상태 탭 'KB 품질' 카드가 조회)
+--   저품질 등재(본문 부실·조문 미파싱)를 우연이 아니라 상시로 드러내기 위한 것.
+-- ═══════════════════════════════════════════════════════════════════════════
+create or replace view public.kb_quality_low_docs as
+select doc_name, doc_category, sum(length(content))::int as chars, count(*)::int as chunks
+from public.document_chunks where status='current'
+group by doc_name, doc_category order by chars asc limit 15;
+
+create or replace view public.kb_quality_article_parse as
+select doc_name, count(*)::int as total_chunks,
+  (count(*) filter (where article_no is not null and article_no <> ''))::int as parsed_chunks,
+  round(100.0*(count(*) filter (where article_no is not null and article_no <> ''))/count(*),1) as parse_pct
+from public.document_chunks
+where status='current'
+  and doc_category not in ('보도자료','기타','회의록','해외동향','추가지식','ITU-R')
+group by doc_name having count(*) >= 3
+order by parse_pct asc limit 15;
+
+grant select on public.kb_quality_low_docs, public.kb_quality_article_parse to anon, authenticated;

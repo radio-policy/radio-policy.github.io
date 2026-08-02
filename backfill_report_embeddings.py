@@ -23,6 +23,8 @@ import time
 import requests
 from dotenv import load_dotenv
 
+import embed_util   # Voyage 임베딩 공용 유틸 (개선⑪) — 호출부만 위임
+
 load_dotenv()
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -61,17 +63,12 @@ def fetch_pending(limit=200):
 
 
 def get_voyage_embeddings(texts):
-    resp = requests.post(
-        "https://api.voyageai.com/v1/embeddings",
-        headers={
-            "Authorization": f"Bearer {VOYAGE_API_KEY}",
-            "Content-Type": "application/json",
-        },
-        json={"model": VOYAGE_MODEL, "input": texts, "input_type": "document"},
-        timeout=60,
+    # embed_util 위임 (개선⑪): 429 Retry-After 대기·재시도 5회 내장, 소진 시 RuntimeError
+    # → main()의 기존 재시도 루프에서는 generic except 분기로 잡힌다
+    return embed_util.get_embeddings(
+        texts, input_type="document", model=VOYAGE_MODEL,
+        dim=EMBED_DIM, api_key=VOYAGE_API_KEY,
     )
-    resp.raise_for_status()
-    return [item["embedding"] for item in resp.json()["data"]]
 
 
 def update_embedding(row_id, embedding):
