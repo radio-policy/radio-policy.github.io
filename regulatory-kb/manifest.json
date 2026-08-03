@@ -1,7 +1,7 @@
 {
   "schema": "regulatory-kb-manifest/v1",
   "updated": "2026-07-31",
-  "entry_count": 234,
+  "entry_count": 248,
   "dedup_key_rule": "정규화 제목(버전 수식어 '(구버전)' 등 제거) + '|' + law_type. 같은 dedup_key = 같은 법령(버전만 다를 수 있음).",
   "on_readd_rule": {
     "same_law_number": "동일 법령번호 재추가 → 기존 path에 덮어쓰기(idempotent). 신규 파일 생성 금지.",
@@ -2352,6 +2352,146 @@
       "enforcement_date": "2024-06-01",
       "concept_type": "Guideline",
       "path": "laws/network-act/집적정보_통신시설_보호지침.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "전자상거래 등에서의 소비자보호에 관한 법률|법률",
+      "title": "전자상거래 등에서의 소비자보호에 관한 법률",
+      "law_type": "법률",
+      "law_number": "제21312호",
+      "enforcement_date": "2026-07-21",
+      "concept_type": "Law",
+      "path": "laws/ecommerce-act/전자상거래_등에서의_소비자보호에_관한_법률.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "전자상거래 등에서의 소비자보호에 관한 법률 시행령|대통령령",
+      "title": "전자상거래 등에서의 소비자보호에 관한 법률 시행령",
+      "law_type": "대통령령",
+      "law_number": "제36507호",
+      "enforcement_date": "2026-07-21",
+      "concept_type": "Regulation",
+      "path": "laws/ecommerce-act/전자상거래_등에서의_소비자보호에_관한_법률_시행령.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "전자상거래 등에서의 소비자보호에 관한 법률 시행규칙|총리령",
+      "title": "전자상거래 등에서의 소비자보호에 관한 법률 시행규칙",
+      "law_type": "총리령",
+      "law_number": "제02136호",
+      "enforcement_date": "2026-07-21",
+      "concept_type": "Regulation",
+      "path": "laws/ecommerce-act/전자상거래_등에서의_소비자보호에_관한_법률_시행규칙.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "전자상거래 등에서의 소비자보호 지침|공정거래위원회고시",
+      "title": "전자상거래 등에서의 소비자보호 지침",
+      "law_type": "공정거래위원회고시",
+      "law_number": "제2025-8호",
+      "enforcement_date": "2025-10-24",
+      "concept_type": "Notice",
+      "path": "laws/ecommerce-act/전자상거래_등에서의_소비자보호_지침.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "전자상거래 등에서의 상품 등의 정보제공에 관한 고시|공정거래위원회고시",
+      "title": "전자상거래 등에서의 상품 등의 정보제공에 관한 고시",
+      "law_type": "공정거래위원회고시",
+      "law_number": "제2022-15호",
+      "enforcement_date": "2023-01-01",
+      "concept_type": "Notice",
+      "path": "laws/ecommerce-act/전자상거래_등에서의_상품_등의_정보제공에_관한_고시.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "표시ㆍ광고의 공정화에 관한 법률|법률",
+      "title": "표시ㆍ광고의 공정화에 관한 법률",
+      "law_type": "법률",
+      "law_number": "제20712호",
+      "enforcement_date": "2025-01-21",
+      "concept_type": "Law",
+      "path": "laws/fair-labeling-act/표시_광고의_공정화에_관한_법률.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "표시ㆍ광고의 공정화에 관한 법률 시행령|대통령령",
+      "title": "표시ㆍ광고의 공정화에 관한 법률 시행령",
+      "law_type": "대통령령",
+      "law_number": "제36416호",
+      "enforcement_date": "2026-07-01",
+      "concept_type": "Regulation",
+      "path": "laws/fair-labeling-act/표시_광고의_공정화에_관한_법률_시행령.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "중요한 표시·광고사항 고시|공정거래위원회고시",
+      "title": "중요한 표시·광고사항 고시",
+      "law_type": "공정거래위원회고시",
+      "law_number": "제2025-9호",
+      "enforcement_date": "2025-11-12",
+      "concept_type": "Notice",
+      "path": "laws/fair-labeling-act/중요한_표시_광고사항_고시.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "부당한 표시·광고행위의 유형 및 기준 지정고시|공정거래위원회고시",
+      "title": "부당한 표시·광고행위의 유형 및 기준 지정고시",
+      "law_type": "공정거래위원회고시",
+      "law_number": "제2019-11호",
+      "enforcement_date": "2019-12-12",
+      "concept_type": "Notice",
+      "path": "laws/fair-labeling-act/부당한_표시_광고행위의_유형_및_기준_지정고시.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "기만적인 표시·광고 심사지침|공정거래위원회예규",
+      "title": "기만적인 표시·광고 심사지침",
+      "law_type": "공정거래위원회예규",
+      "law_number": "제488호",
+      "enforcement_date": "2025-10-30",
+      "concept_type": "Notice",
+      "path": "laws/fair-labeling-act/기만적인_표시_광고_심사지침.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "주된 표시·광고에 딸린 제한사항의 효과적 전달에 관한 가이드라인|공정거래위원회예규",
+      "title": "주된 표시·광고에 딸린 제한사항의 효과적 전달에 관한 가이드라인",
+      "law_type": "공정거래위원회예규",
+      "law_number": "제314호",
+      "enforcement_date": "2018-12-27",
+      "concept_type": "Notice",
+      "path": "laws/fair-labeling-act/주된_표시_광고에_딸린_제한사항의_효과적_전달에_관한_가이드라인.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "약관의 규제에 관한 법률|법률",
+      "title": "약관의 규제에 관한 법률",
+      "law_type": "법률",
+      "law_number": "제20239호",
+      "enforcement_date": "2024-08-07",
+      "concept_type": "Law",
+      "path": "laws/standard-terms-act/약관의_규제에_관한_법률.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "약관의 규제에 관한 법률 시행령|대통령령",
+      "title": "약관의 규제에 관한 법률 시행령",
+      "law_type": "대통령령",
+      "law_number": "제33961호",
+      "enforcement_date": "2023-12-21",
+      "concept_type": "Regulation",
+      "path": "laws/standard-terms-act/약관의_규제에_관한_법률_시행령.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "약관심사지침|공정거래위원회예규",
+      "title": "약관심사지침",
+      "law_type": "공정거래위원회예규",
+      "law_number": "제375호",
+      "enforcement_date": "2021-09-22",
+      "concept_type": "Notice",
+      "path": "laws/standard-terms-act/약관심사지침.md",
       "status": "current"
     }
   ]

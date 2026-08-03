@@ -211,12 +211,20 @@ def _drf_get(url, params, timeout=30, max_retry=3, delay=2):
                 raise
 
 
+def _mid_dot(s: str) -> str:
+    """가운뎃점 이형 통일 — law_watch.norm_name과 같은 규칙."""
+    return (s or '').replace('ㆍ', '·').replace('‧', '·').replace('•', '·')
+
+
 def resolve_law_id(name: str, _cache={}):
     """법령명 → 법제처 법령ID. lawSearch(target=law) 정확 매칭(공백 무시), 없으면 None.
     thdCmp는 ID(법령ID, 예: 전파법 001732)를 요구하므로 노드 이름으로 ID를 확보한다."""
     if not LAW_OC_KEY:
         return None
-    key = name.replace(' ', '')
+    # 가운뎃점 이형(ㆍ‧•)까지 통일해야 한다 — 노드 이름은 norm_name()이 '·'로 바꿔 저장하는데
+    # 법제처 응답은 'ㆍ'를 쓰는 법령이 있어, 공백만 지워 비교하면 그런 법률은 영구히 'ID없음'이 된다
+    # (실측: 표시ㆍ광고의 공정화에 관한 법률 → thdcmp 정본 대신 family 추측으로 남았다). 2026-08-03
+    key = _mid_dot(name).replace(' ', '')
     if key in _cache:
         return _cache[key]
     params = {'OC': LAW_OC_KEY, 'target': 'law', 'type': 'JSON',
@@ -234,7 +242,7 @@ def resolve_law_id(name: str, _cache={}):
     for it in items:
         nm = (it.get('법령명한글') or '').strip()
         # 법률만 대상(시행령/시행규칙이 substring 매칭으로 끼는 것 방지)
-        if nm.replace(' ', '') == key and (it.get('법령구분명') or '') == '법률':
+        if _mid_dot(nm).replace(' ', '') == key and (it.get('법령구분명') or '') == '법률':
             law_id = str(it.get('법령ID') or '').strip()
             break
     _cache[key] = law_id or None
