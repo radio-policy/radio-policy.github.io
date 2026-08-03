@@ -2730,7 +2730,8 @@ async function loadNews() {
     // 60일 보존이라 행수가 수천 건까지 자라며, 상한 없이 전부 가져온다(안전 상한 10,000행).
     // 목록 표시에 필요한 컬럼만 조회 — content(기사 본문)는 행당 수 KB로 초기 전송량의 대부분이라 제외.
     // 상세 열람 시 showNewsDetail이 해당 1건만 온디맨드 조회하며, RAG 자문은 별도 쿼리로 content를 직접 가져온다 (#61).
-    var NEWS_LIST_COLS = 'id,title,source,category,url,is_read,published_at,created_at,summary,importance,urgency,locked,briefed_date,content_fetched_at';
+    // tags는 _groupNews의 묶기 조건에 쓰인다 — 빠지면 undefined가 돼 태그 조건이 조용히 무력화된다
+    var NEWS_LIST_COLS = 'id,title,source,category,url,is_read,published_at,created_at,summary,importance,urgency,locked,briefed_date,content_fetched_at,tags';
     var all = [];
     for (var off = 0; off < 10000; off += 1000) {
       var page = await sb.from('news_feed').select(NEWS_LIST_COLS)
@@ -2806,11 +2807,19 @@ function _groupNews(items) {
         if (used[j]) continue;
         var d2 = (items[j].published_at || items[j].created_at || '').slice(0, 10);
         if (d1 !== d2) continue;
-        // 그룹 내 어느 기사와 유사하면 추가
-        var matchAny = group.some(function(g) {
-          return _titleSimilarity(g.title, items[j].title) >= 0.15;
-        });
-        if (matchAny) {
+        // 대표 기사(group[0])와 유사할 때만 추가 — 예전엔 '그룹 안 어느 하나와라도' 였는데
+        // 그러면 A~B, B~C로 한 다리 건너 계속 이어붙어(연쇄 병합) 무관한 기사가 한 덩어리가 된다.
+        // 2026-08-03 실측: 통신 뉴스가 '통신3사·요금제·출시' 같은 흔한 단어를 공유해
+        // 번호이동·자급제 요금제·안테나 공급·5G 광고 위법이 91건 한 그룹으로 묶였다.
+        // 분야 태그가 있으면 겹치는 것만 묶는다(둘 중 하나라도 미판정이면 제목 유사도만으로 판단).
+        var seed = group[0];
+        var simOk = _titleSimilarity(seed.title, items[j].title) >= 0.15;
+        var tagOk = true;
+        var ts = seed.tags, tj = items[j].tags;
+        if (Array.isArray(ts) && ts.length && Array.isArray(tj) && tj.length) {
+          tagOk = ts.some(function(t) { return tj.includes(t); });
+        }
+        if (simOk && tagOk) {
           group.push(items[j]);
           used[j] = true;
           changed = true;
