@@ -22,6 +22,7 @@ import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
 import { createClient, type SupabaseClient } from 'jsr:@supabase/supabase-js@2';
 import { escapeHtml, splitByLines, mdToTelegramHtml, sendTelegramHtml } from '../_shared/telegram_format.ts';
 import { answerAdvisory } from '../_shared/rag.ts';
+import { NEWS_TAGS, TAG_SLUGS } from '../_shared/news_tags.ts';
 
 // env는 반드시 trim — Supabase 콘솔에 값을 붙여넣을 때 줄바꿈이 딸려 들어가는 일이 잦고,
 // 그러면 시크릿 비교가 조용히 어긋나거나(401) API 헤더가 깨진다. 공백은 시크릿에 의미가 없다.
@@ -54,6 +55,9 @@ interface Sub {
   topic_briefing: boolean; topic_urgent: boolean; topic_assembly: boolean;
   days: string; briefing_hour: number;
   ai_allowed: boolean; ai_count_date: string | null; ai_count: number;
+  // 관심분야. **빈 배열 = 전체 수신**(캐논 하나). 6개를 다 켜면 []로 정규화하므로,
+  // 나중에 7번째 태그가 생겨도 기존 '전체' 구독자가 자동으로 받는다.
+  tags: string[];
 }
 async function getSub(chatId: number): Promise<Sub | null> {
   const { data } = await sb.from('telegram_subscribers').select('*').eq('chat_id', chatId).maybeSingle();
@@ -73,10 +77,22 @@ function settingsKeyboard(s: Sub) {
   const chk = (on: boolean) => on ? '✅' : '⬜';   // 체크박스(다중 선택)
   const sel = (on: boolean) => on ? '🔵' : '⚪';   // 라디오(택일)
   const hh = (v: number) => String(v).padStart(2, '0');
+  // 관심분야: 빈 배열 = 전체 수신이므로 화면에는 6개 모두 ✅로 보여준다(캐논은 하나, 표시도 하나).
+  const tagOn = (slug: string) => !s.tags?.length || s.tags.includes(slug);
+  const tagRows: Array<Array<{ text: string; callback_data: string }>> = [];
+  for (let i = 0; i < NEWS_TAGS.length; i += 2) {
+    tagRows.push(NEWS_TAGS.slice(i, i + 2).map((t) => ({
+      text: `${chk(tagOn(t.slug))} ${t.label}`, callback_data: `g:${t.slug}`,
+    })));
+  }
   return { inline_keyboard: [
     [{ text: `${chk(s.topic_briefing)} 📡 모닝 브리핑`, callback_data: 't:briefing' },
-     { text: `${chk(s.topic_urgent)} 🚨 긴급 뉴스`, callback_data: 't:urgent' }],
+     { text: `${chk(s.topic_urgent)} 📡 주요 뉴스`, callback_data: 't:urgent' }],
     [{ text: `${chk(s.topic_assembly)} 🏛️ 법안 동향`, callback_data: 't:assembly' }],
+    // ── 관심분야 ── 모닝 브리핑은 팀이 같은 그림을 보는 자리라 전원 동일하게 두고,
+    // 하루 여러 번 오는 '주요 뉴스'에만 적용한다.
+    [{ text: '— 관심분야 (📡 주요 뉴스에만 적용) —', callback_data: 'noop' }],
+    ...tagRows,
     [{ text: '— 아래는 하나만 선택 —', callback_data: 'noop' }],
     [{ text: `${sel(s.days === 'daily')} 매일 받기`, callback_data: 'd:daily' },
      { text: `${sel(s.days === 'weekday')} 평일만`, callback_data: 'd:weekday' }],
@@ -94,7 +110,7 @@ function settingsKeyboard(s: Sub) {
 
 const START_TEXT =
   '✅ <b>구독 완료!</b>\n\n' +
-  '선택한 요일·시각에 <b>모닝 브리핑</b>이 도착하고, <b>긴급 뉴스·법안 동향</b>은 그 시각 이후 새로 생기는 대로 전달됩니다.\n' +
+  '선택한 요일·시각에 <b>모닝 브리핑</b>이 도착하고, <b>주요 뉴스·법안 동향</b>은 그 시각 이후 새로 생기는 대로 전달됩니다.\n' +
   '🌙 <b>23시가 지나면 다음 날 선택 시각까지 발송하지 않습니다</b> (심야 무발송).\n' +
   '아래 버튼으로 콘텐츠·요일·수신 시각을 바로 바꿀 수 있어요. (언제든 /settings)\n' +
   '항목을 모두 끄면 알림이 오지 않습니다.\n\n' +
@@ -349,12 +365,36 @@ async function handleCallback(cb: { id: string; data?: string; from: { id: numbe
     topic_briefing: true, topic_urgent: true, topic_assembly: true,
     days: 'daily', briefing_hour: 7,
     ai_allowed: false, ai_count_date: null, ai_count: 0,
+    tags: [],   // 빈 배열 = 전체 수신 (DB 기본값과 동일)
   };
 
   const patch: Record<string, unknown> = {};
   if (data === 't:briefing') { patch.topic_briefing = !sub.topic_briefing; ack = patch.topic_briefing ? '모닝 브리핑 ON' : '모닝 브리핑 OFF'; }
-  else if (data === 't:urgent') { patch.topic_urgent = !sub.topic_urgent; ack = patch.topic_urgent ? '긴급 뉴스 ON' : '긴급 뉴스 OFF'; }
+  else if (data === 't:urgent') { patch.topic_urgent = !sub.topic_urgent; ack = patch.topic_urgent ? '주요 뉴스 ON' : '주요 뉴스 OFF'; }
   else if (data === 't:assembly') { patch.topic_assembly = !sub.topic_assembly; ack = patch.topic_assembly ? '법안 동향 ON' : '법안 동향 OFF'; }
+  else if (data.startsWith('g:')) {
+    // ── 관심분야 토글 ── 불리언 토글과 달리 배열 연산이라 3단계다.
+    //  ① 빈 배열(=전체 수신)이면 먼저 6개 전체로 전개한다 — 그래야 "하나만 끄기"가 성립한다.
+    //  ② 토글.
+    //  ③ 결과가 6개면 다시 []로 정규화 — 캐논을 하나만 두면 나중에 태그가 늘어도 '전체' 구독자가 자동 수신.
+    const slug = data.slice(2);
+    if (!TAG_SLUGS.includes(slug)) { await tg('answerCallbackQuery', { callback_query_id: cb.id }); return; }
+    const known = (sub.tags || []).filter((t) => TAG_SLUGS.includes(t));   // 폐기된 slug는 조용히 정리
+    const cur = (sub.tags || []).length ? known : [...TAG_SLUGS];
+    const next = cur.includes(slug) ? cur.filter((t) => t !== slug) : [...cur, slug];
+    if (!next.length) {
+      // 0개는 '아무것도 안 받음'인데 그건 토픽 OFF와 같은 상태다. 같은 결과를 두 가지 상태로
+      // 표현하면 "어느 쪽으로 껐는지" 헷갈린다(구독 해지 버튼을 뺀 것과 같은 이유).
+      await tg('answerCallbackQuery', {
+        callback_query_id: cb.id, show_alert: true,
+        text: '관심분야는 최소 1개가 켜져 있어야 합니다.\n전부 끄려면 📡 주요 뉴스를 끄세요.',
+      });
+      return;
+    }
+    patch.tags = next.length === TAG_SLUGS.length ? [] : TAG_SLUGS.filter((t) => next.includes(t));
+    const label = NEWS_TAGS.find((t) => t.slug === slug)!.label;
+    ack = next.includes(slug) ? `${label} 받기` : `${label} 제외`;
+  }
   else if (data === 'd:daily') { patch.days = 'daily'; ack = '매일 받기로 변경'; }
   else if (data === 'd:weekday') { patch.days = 'weekday'; ack = '평일(월~금)만 받기로 변경'; }
   else if (data.startsWith('h:')) {
@@ -412,7 +452,7 @@ Deno.serve(async (req: Request) => {
       let sub = await getSub(chatId);
       if (!sub) { await upsertSub(chatId, { username: from.username || null, first_name: from.first_name || null }); sub = (await getSub(chatId))!; }
       await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML',
-        text: '⚙️ <b>수신 설정</b>\n버튼을 눌러 바로 변경할 수 있습니다.\n✅⬜ = 여러 개 선택 · 🔵⚪ = 하나만 선택\n<i>항목을 모두 끄면 알림이 오지 않습니다.</i>\n\n🌙 <b>발송 시간대</b> — 모닝 브리핑은 선택한 시각에 1회, 긴급·법안은 그 시각 이후 새로 생기는 대로 전달됩니다. <b>23시가 지나면 다음 날 선택 시각까지 발송하지 않습니다.</b>',
+        text: '⚙️ <b>수신 설정</b>\n버튼을 눌러 바로 변경할 수 있습니다.\n✅⬜ = 여러 개 선택 · 🔵⚪ = 하나만 선택\n<i>항목을 모두 끄면 알림이 오지 않습니다.</i>\n\n🌙 <b>발송 시간대</b> — 모닝 브리핑은 선택한 시각에 1회, 주요 뉴스·법안은 그 시각 이후 새로 생기는 대로 전달됩니다. <b>23시가 지나면 다음 날 선택 시각까지 발송하지 않습니다.</b>',
         reply_markup: settingsKeyboard(sub) });
     } else if (text === '/stop') {
       // 메뉴에서는 뺐지만 하위호환으로 남긴다 — '모든 항목 끄기'로 동작(설정·시각은 보존)

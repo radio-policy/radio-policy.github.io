@@ -24,6 +24,7 @@
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { briefingToTelegramHtml, splitByLines, sendTelegramHtml, DASHBOARD_URL, escapeHtml } from '../_shared/telegram_format.ts';
+import { pickChips } from '../_shared/news_tags.ts';
 
 // env는 반드시 trim — 콘솔 붙여넣기 시 줄바꿈이 섞이면 시크릿 비교가 조용히 어긋난다(401)
 const env = (k: string) => (Deno.env.get(k) || '').trim();
@@ -57,8 +58,11 @@ interface Sub {
   last_briefing_sent_date: string | null;
   last_urgent_sent_at: string | null;
   last_assembly_sent_at: string | null;
+  // 관심분야. **빈 배열 = 전체 수신**(캐논). NOT NULL DEFAULT '{}' 이라 기존 구독자는 자동 하위호환.
+  tags: string[];
 }
-interface QueueRow { id: number; topic: string; html: string; created_at: string }
+// news_url NOT NULL = 기사 단위 행(신규), NULL = 구버전 묶음 행·법안 알림
+interface QueueRow { id: number; topic: string; html: string; created_at: string; news_url: string | null; tags: string[] | null }
 
 // ── 큐 병합 유틸 (순수 함수 — 로컬 Node 단위검증 가능) ───────────────────────────
 // 문제(2026-08-03 06:24 실수신): subscriber_queue의 각 행 html에는 "🚨 긴급 전파정책 뉴스 N건"
@@ -155,6 +159,58 @@ export function mergeQueueBlocks(htmls: string[]): string {
 }
 // ── 큐 병합 유틸 끝 ─────────────────────────────────────────────────────────────
 
+// ── 기사 단위 큐 유틸 (순수 함수 — 로컬 Node 단위검증 가능) ────────────────────
+// 위 병합 유틸이 "완성된 HTML을 역파싱"하는 방식이었다면, 여기서는 큐가 태그를 **데이터로**
+// 들고 오고 Edge가 헤더·번호·칩을 조립한다. 헤더 건수와 칩은 구독자마다 달라서 Python이
+// 미리 구울 수 없다.
+
+// 구독자 관심분야로 발송분을 고른다.
+//  - 구독자 tags 가 빈 배열 → 전체 수신 (기존 구독자 하위호환의 근거)
+//  - 기사 tags 가 null/빈 배열 → **전원 통과(fail-open)**. 태그 판정이 실패했다고 해서
+//    기사가 조용히 사라지면 안 된다. 누락은 되돌릴 수 없지만 노이즈는 눈에 보인다.
+export function matchTags(rows: QueueRow[], subTags: string[] | null): QueueRow[] {
+  const s = (subTags || []).filter((t) => !!t);
+  if (!s.length) return rows;
+  return rows.filter((r) => {
+    const a = r.tags || [];
+    if (!a.length) return true;                       // fail-open
+    return a.some((t) => s.includes(t));
+  });
+}
+
+// 워터마크 전진 지점 = 평가한 행들의 max(created_at).
+// nowIso를 쓰면 안 되는 이유: 큐 읽기와 워터마크 쓰기 사이에 크롤러가 _trigger_delivery()로
+// 새 행을 넣으면 nowIso가 그보다 미래라 그 기사가 **영구 소실**된다.
+export function maxCreatedAt(rows: QueueRow[]): string | null {
+  let best: string | null = null;
+  let bestMs = -Infinity;
+  for (const r of rows) {
+    const ms = new Date(r.created_at).getTime();
+    if (ms > bestMs) { bestMs = ms; best = r.created_at; }
+  }
+  return best;
+}
+
+// 기사 단위 행 렌더러. **html은 절대 파싱하지 않는다 — 순수 append만 한다.**
+// (역파싱이 바로 위 95줄짜리 병합 유틸을 낳은 실수다.)
+// 헤더 N = 태그 필터 + 중복 제거를 모두 거친 뒤의 건수. 중복 제거 키는 news_url.
+export function renderNewsItems(rows: QueueRow[], subTags: string[] | null): string {
+  const seen = new Set<string>();
+  const picked: QueueRow[] = [];
+  for (const r of rows) {
+    const k = (r.news_url || '').trim();
+    if (k) { if (seen.has(k)) continue; seen.add(k); }
+    picked.push(r);
+  }
+  if (!picked.length) return '';
+  const body = picked.map((r, i) => {
+    const chips = pickChips(r.tags ?? null, subTags ?? null, 2);
+    return `${i + 1}. ${r.html}` + (chips.length ? `\n   🏷 ${chips.join(' · ')}` : '');
+  }).join('\n\n');
+  return `📡 <b>통신·전파 정책 주요 뉴스 ${picked.length}건</b>\n\n${body}`;
+}
+// ── 기사 단위 큐 유틸 끝 ────────────────────────────────────────────────────────
+
 Deno.serve(async (req: Request) => {
   if (!CRON_SECRET || req.headers.get('x-cron-secret') !== CRON_SECRET) {
     return new Response('unauthorized', { status: 401 });
@@ -166,7 +222,9 @@ Deno.serve(async (req: Request) => {
   try {
     // ── 수신 시각이 도래한 구독자 ──
     let q = sb.from('telegram_subscribers')
-      .select('chat_id, days, topic_briefing, topic_urgent, topic_assembly, briefing_hour, last_briefing_sent_date, last_urgent_sent_at, last_assembly_sent_at')
+      // ⚠ select('*')가 아니라 **명시 목록**이다. 컬럼을 빠뜨리면 값이 undefined가 되어
+      //   "전체 수신"으로 조용히 퇴화하고 타입 검사도 못 잡는다. 컬럼 추가 시 여기부터 고칠 것.
+      .select('chat_id, days, topic_briefing, topic_urgent, topic_assembly, briefing_hour, last_briefing_sent_date, last_urgent_sent_at, last_assembly_sent_at, tags')
       .eq('active', true).lte('briefing_hour', hour);
     if (!isWeekday) q = q.eq('days', 'daily');   // 주말은 '매일' 설정자만
     const subs = ((await q).data || []) as Sub[];
@@ -197,41 +255,71 @@ Deno.serve(async (req: Request) => {
     // ── 큐(긴급·법안) — 최근 48시간분만 한 번 읽고 구독자별로 시점 필터 ──
     const sinceIso = new Date(Date.now() - QUEUE_LOOKBACK_H * 3600 * 1000).toISOString();
     const { data: qdata } = await sb.from('subscriber_queue')
-      .select('id, topic, html, created_at').gte('created_at', sinceIso).order('created_at');
+      .select('id, topic, html, created_at, news_url, tags').gte('created_at', sinceIso).order('created_at');
     const queue = (qdata || []) as QueueRow[];
 
-    const pickQueue = (topic: string, lastSent: string | null): QueueRow[] => {
+    // ── 큐 선별 2단 분리 ──
+    // 1단 eligible : 토픽 ON && 워터마크 이후 = **평가 대상**(태그 무관).
+    //                워터마크는 이 집합 기준으로 전진한다 — 태그 필터로 발송이 0건이 되어도
+    //                큐가 고이지 않아야 나중에 태그를 켜는 순간 72h 백로그가 쏟아지지 않는다(#44 재발 방지).
+    // 2단 delivered: eligible ∩ 태그 매칭 = 실제 발송분 (matchTags).
+    // 토픽이 OFF면 eligible도 비어야 한다 → 워터마크 전진 금지(껐다 켜면 그 사이 건을 받는 현행 유지).
+    const pickEligible = (on: boolean, topic: string, lastSent: string | null): QueueRow[] => {
+      if (!on) return [];
       // 첫 발송(기록 없음)은 오늘 00:00(KST) 이후 건만 — 가입 직후 이틀치가 쏟아지는 것 방지
       const fromMs = lastSent ? new Date(lastSent).getTime() : dayStartMs;
       return queue.filter((r) => r.topic === topic && new Date(r.created_at).getTime() > fromMs);
     };
 
-    const nowIso = new Date().toISOString();
     for (const s of subs) {
       const msgs: string[] = [];
 
       if (s.topic_briefing && briefingParts && s.last_briefing_sent_date !== date) {
         msgs.push(...briefingParts);
       }
-      const urgent = s.topic_urgent ? pickQueue('urgent', s.last_urgent_sent_at) : [];
-      const assembly = s.topic_assembly ? pickQueue('assembly', s.last_assembly_sent_at) : [];
-      for (const grp of [urgent, assembly]) {
+      // 1단 — 평가 대상(워터마크 전진의 근거)
+      const urgentEligible = pickEligible(s.topic_urgent, 'urgent', s.last_urgent_sent_at);
+      const assemblyEligible = pickEligible(s.topic_assembly, 'assembly', s.last_assembly_sent_at);
+      // 2단 — 실제 발송분. 법안 동향(assembly)은 기사 단위 개념이 없어 태그 필터를 적용하지 않는다.
+      const urgent = matchTags(urgentEligible, s.tags);
+      const assembly = assemblyEligible;
+
+      const groups: Array<{ topic: string; rows: QueueRow[] }> = [
+        { topic: 'urgent', rows: urgent },
+        { topic: 'assembly', rows: assembly },
+      ];
+      for (const { topic, rows: grp } of groups) {
         if (!grp.length) continue;
-        // 같은 토픽의 여러 건은 한 메시지로 합치되, 길면 분할 (알림 개수 폭증 방지 — #44 취지)
-        // 각 행 html에 제목이 이미 들어 있으므로 단순 연결이 아니라 제목 1개로 재조립한다.
-        const raws = grp.map((r) => r.html);
-        let body: string;
-        try {
-          body = mergeQueueBlocks(raws);
-        } catch (e) {
-          // 병합 실패로 알림이 통째로 빠지는 일은 없어야 한다 → 예전 방식(단순 연결)으로 그대로 발송
-          console.error('[큐 병합 실패 — 원문 연결로 발송]', e);
-          body = raws.join(QUEUE_SEP);
+        // ── 이중 경로 판별 ──
+        //  news_url NOT NULL = 기사 단위 행 → 신규 렌더러(헤더 1회 + 번호 + 칩, 순수 append)
+        //  news_url NULL     = 구버전 묶음 행(html에 제목이 이미 포함) → mergeQueueBlocks(존치)
+        //  topic='assembly'  = 항상 legacy (법안 알림은 기사 단위가 아니다)
+        const isNews = topic === 'urgent';
+        const modern = isNews ? grp.filter((r) => !!r.news_url) : [];
+        const legacy = isNews ? grp.filter((r) => !r.news_url) : grp;
+
+        const parts: string[] = [];
+        if (modern.length) parts.push(renderNewsItems(modern, s.tags));
+        if (legacy.length) {
+          // 같은 토픽의 여러 건은 한 메시지로 합치되, 길면 분할 (알림 개수 폭증 방지 — #44 취지)
+          // 각 행 html에 제목이 이미 들어 있으므로 단순 연결이 아니라 제목 1개로 재조립한다.
+          const raws = legacy.map((r) => r.html);
+          try {
+            parts.push(mergeQueueBlocks(raws));
+          } catch (e) {
+            // 병합 실패로 알림이 통째로 빠지는 일은 없어야 한다 → 예전 방식(단순 연결)으로 그대로 발송
+            console.error('[큐 병합 실패 — 원문 연결로 발송]', e);
+            parts.push(raws.join(QUEUE_SEP));
+          }
         }
+        const body = parts.filter((t) => !!t.trim()).join(QUEUE_SEP);
+        if (!body.trim()) continue;
         for (const part of splitByLines(body)) msgs.push(part);
       }
-      if (!msgs.length) continue;   // 보낼 게 없으면 조용히 통과
 
+      // ⚠ 여기서 `if (!msgs.length) continue`를 하면 안 된다.
+      //   태그 필터로 발송이 0건이어도 워터마크는 전진해야 하므로 아래 patch 경로를 반드시 지난다.
+      //   (보낼 게 없으면 아래 루프가 0회 돌 뿐이고, 텔레그램 호출도 발생하지 않는다.)
       let ok = true;
       for (const m of msgs) {
         const r = await sendTelegramHtml(BOT_TOKEN, s.chat_id, m);
@@ -244,13 +332,16 @@ Deno.serve(async (req: Request) => {
       }
 
       if (ok) {
-        // 실제로 보낸 항목만 '발송함'으로 기록 — 실패 시 다음 정각에 다시 시도된다
+        // 발송에 성공했을 때만 기록 — 실패 시 patch를 건너뛰어 다음 정각에 다시 시도된다(현행 유지).
         const patch: Record<string, unknown> = {};
         if (s.topic_briefing && briefingParts && s.last_briefing_sent_date !== date) patch.last_briefing_sent_date = date;
-        if (urgent.length) patch.last_urgent_sent_at = nowIso;
-        if (assembly.length) patch.last_assembly_sent_at = nowIso;
+        // 워터마크는 delivered가 아니라 **eligible** 기준, nowIso가 아니라 **max(created_at)**.
+        const uMark = maxCreatedAt(urgentEligible);
+        const aMark = maxCreatedAt(assemblyEligible);
+        if (uMark) patch.last_urgent_sent_at = uMark;
+        if (aMark) patch.last_assembly_sent_at = aMark;
         if (Object.keys(patch).length) await sb.from('telegram_subscribers').update(patch).eq('chat_id', s.chat_id);
-        sent++;
+        if (msgs.length) sent++;   // 실제로 보낸 사람만 집계 (워터마크만 전진한 경우는 제외)
       } else failed++;
     }
 
