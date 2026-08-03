@@ -1377,19 +1377,38 @@ NEWS_RELEVANCE_CRITERIA_FALLBACK = (
     '애매하면 관련으로 판정한다(놓침보다 과잉 포함이 낫다).'
 )
 
+# 분야 태그 6종 — ASCII slug(토큰 절약). 한글 라벨 매핑은 Edge 쪽이 담당하며
+# 원본은 supabase/functions/_shared/news_tags.ts 다. 여기는 사본이므로 같이 고칠 것.
+# 태그 목록을 app_config로 빼지 않는 이유: Haiku 프롬프트·Edge 칩·웹훅 버튼 3곳이
+# 동시에 바뀌어야 유효한데, 한 곳만 DB로 튜닝 가능하게 하면 드리프트만 생긴다.
+NEWS_TAGS = ('spectrum', 'market', 'regulation', 'security', 'ai', 'legislation')
+MAX_TAGS_PER_ITEM = 3           # 경계 기사도 3개면 충분 — 그 이상은 사실상 미판정
+
 NEWS_SCREEN_TOOL = {
     'name': 'record_relevant_news',
-    'description': '기사 목록 중 기준문에 따라 관련으로 판정된 기사의 id 목록을 기록한다.',
+    'description': '기사 목록 중 기준문에 따라 관련으로 판정된 기사의 id와 분야 태그를 기록한다.',
     'input_schema': {
         'type': 'object',
         'properties': {
-            'relevant_ids': {
+            'relevant': {
                 'type': 'array',
-                'items': {'type': 'integer'},
-                'description': '관련 기사의 id 목록. 관련이 하나도 없으면 빈 배열.',
+                'description': '관련 기사 목록. 관련이 하나도 없으면 빈 배열.',
+                'items': {
+                    'type': 'object',
+                    'properties': {
+                        'id': {'type': 'integer', 'description': '관련 기사의 id.'},
+                        'tags': {
+                            'type': 'array',
+                            'description': '분야 태그 0~3개. 확실하지 않으면 빈 배열.',
+                            'items': {'type': 'string', 'enum': list(NEWS_TAGS)},
+                        },
+                    },
+                    # tags는 일부러 required에서 뺀다 — 모델이 빼먹어도 관련성 판정은 살아야 한다.
+                    'required': ['id'],
+                },
             },
         },
-        'required': ['relevant_ids'],
+        'required': ['relevant'],
     },
 }
 
@@ -1418,7 +1437,11 @@ def _keyword_relevant(item: dict) -> bool:
 
 
 def _screen_batch_haiku(client, criteria: str, batch: list):
-    """배치 1개(≤SCREEN_BATCH_SIZE건)를 Haiku 1콜로 판정. 관련 id(1-based) set, 실패 시 None.
+    """배치 1개(≤SCREEN_BATCH_SIZE건)를 Haiku 1콜로 판정.
+    반환: {관련 id(1-based): 분야 태그 list}. 실패 시 None.
+    None은 '판정 실패' 신호이고 호출부의 키워드 폴백이 여기 물려 있다 — 의미를 바꾸지 말 것.
+    태그는 NEWS_TAGS 화이트리스트 교집합·최대 MAX_TAGS_PER_ITEM개로 자른다
+    (모델이 없는 slug를 지어내도 DB·Edge로 새어 나가지 않게).
     결정성: tool_choice로 도구 호출 강제 + 기준문 문자 적용·건별 독립 판정 지시.
     (temperature류 파라미터 사용 금지 — 지침 do-not)"""
     payload = []
@@ -1434,14 +1457,28 @@ def _screen_batch_haiku(client, criteria: str, batch: list):
         '1. 각 기사를 목록 내 다른 기사·순서와 무관하게 한 건씩 독립적으로 판정하라.\n'
         '2. 시스템 지시의 기준문을 문자 그대로 적용하라. 기준문에 없는 근거로 추측하지 말라.\n'
         '3. 관련/무관이 애매하면 관련으로 판정하라(놓침보다 과잉 포함이 낫다).\n'
-        '관련으로 판정된 기사의 id만 record_relevant_news 도구로 기록하라. '
-        '관련이 하나도 없으면 빈 배열을 기록하라.\n\n'
+        '4. 관련으로 판정한 기사에는 분야 태그를 붙여라. 태그는 아래 6종뿐이다.\n'
+        '   - spectrum: 주파수 할당·재할당, 무선국·기지국, 전자파, 비면허 대역, '
+        '통신망 구축·투자·품질·장애, 해저케이블, 규제 대상 통신시설(집적정보통신시설 보호조치·IDC 장애)\n'
+        '   - market: 요금제, 알뜰폰·도매대가, 번호이동, 단말 유통·보조금, 결합상품\n'
+        '   - regulation: 과징금·시정명령, 인허가·심사, 표시·광고, 약관, 이용자보호\n'
+        '   - security: 해킹·유출, ISMS, 개인정보위 처분, 위치정보, 통신시설 보호조치\n'
+        '   - ai: AI 기본법·규제, 국가 AI 전략, AI 데이터센터 정책(전력 특례·입지 규제 등)\n'
+        '   - legislation: 법안 발의·처리, 입법예고, 과방위 논의\n'
+        '   태그는 기사 제목에 나온 단어가 아니라 기사가 다루는 사안을 기준으로 고른다. '
+        '한 기사가 여러 사안을 다루면 해당 태그를 모두 붙인다(최대 3개). '
+        '6종 중 어느 것도 확실하지 않으면 tags를 비워 둔다 — 억지로 채우지 말라.\n'
+        '관련으로 판정된 기사만 record_relevant_news 도구의 relevant 배열에 '
+        '{id, tags} 형태로 기록하라. 관련이 하나도 없으면 빈 배열을 기록하라.\n\n'
         + json.dumps(payload, ensure_ascii=False)
     )
     try:
         resp = client.messages.create(
             model=SCREEN_MODEL,
-            max_tokens=1500,
+            # 3000: 35건 전건 태그 시 출력 ≈1,000토큰. 여유 1.5배로는 부족하다 —
+            # 초과하면 tool_use가 미완성으로 잘려 None(판정 실패) → 배치 전체 키워드 폴백,
+            # 즉 조용한 리콜 손실이 된다. 입력이 아니라 출력 한도라 비용 영향도 없다.
+            max_tokens=3000,
             system=criteria,
             tools=[NEWS_SCREEN_TOOL],
             tool_choice={'type': 'tool', 'name': 'record_relevant_news'},
@@ -1449,13 +1486,25 @@ def _screen_batch_haiku(client, criteria: str, batch: list):
         )
         for blk in resp.content:      # 적응형 추론 대비 — tool_use 블록만 취함
             if getattr(blk, 'type', '') == 'tool_use':
-                ids = (blk.input or {}).get('relevant_ids') or []
-                out = set()
-                for x in ids:
+                rows = (blk.input or {}).get('relevant') or []
+                out = {}
+                for row in rows:
+                    # 모델이 {id, tags} 대신 정수만 뱉어도 관련성 판정은 살린다(태그만 비움).
+                    if isinstance(row, dict):
+                        raw_id, raw_tags = row.get('id'), row.get('tags')
+                    else:
+                        raw_id, raw_tags = row, None
                     try:
-                        out.add(int(x))
+                        rid = int(raw_id)
                     except (TypeError, ValueError):
                         continue
+                    tags = []
+                    for t in (raw_tags or []):
+                        if t in NEWS_TAGS and t not in tags:
+                            tags.append(t)
+                        if len(tags) >= MAX_TAGS_PER_ITEM:
+                            break
+                    out[rid] = tags
                 return out
         return None                   # 도구 호출 없음 → 실패 취급(호출부가 키워드 폴백)
     except Exception as e:
@@ -1470,6 +1519,8 @@ def screen_news_items(items: list) -> list:
     - ANTHROPIC_API_KEY 없음/클라이언트 생성 실패 → 전량 키워드 폴백.
     - 배치 단위 실패 → 그 배치만 키워드 폴백 (다른 배치 판정은 유지).
     - 판정에만 쓰는 '_screen_text' 키는 여기서 전부 제거한다 (DB 컬럼이 아님).
+    - 분야 태그(news_feed.tags)를 같이 매긴다. 판정을 못 받은 경로(인사 자동통과·키워드
+      폴백·모델이 tags 생략)는 빈 배열 []이며, 그 보장은 함수 끝의 setdefault 한 곳에 건다.
     """
     if not items:
         return []
@@ -1500,8 +1551,8 @@ def screen_news_items(items: list) -> list:
     for i in range(0, len(cand_idx), SCREEN_BATCH_SIZE):
         chunk = cand_idx[i:i + SCREEN_BATCH_SIZE]
         batch = [items[n] for n in chunk]
-        ids = _screen_batch_haiku(client, criteria, batch) if client else None
-        if ids is None:
+        verdict = _screen_batch_haiku(client, criteria, batch) if client else None
+        if verdict is None:
             if client:
                 print(f'  [선별 배치 {i // SCREEN_BATCH_SIZE + 1}/{n_batches} 실패] '
                       f'키워드 폴백({len(batch)}건)')
@@ -1509,8 +1560,10 @@ def screen_news_items(items: list) -> list:
                 keep[n] = _keyword_relevant(it)
         else:
             for pos, n in enumerate(chunk, 1):
-                if pos in ids:
+                tags = verdict.get(pos)     # None = 이 배치에서 무관 판정
+                if tags is not None:
                     keep[n] = True
+                    items[n]['tags'] = tags
 
     passed  = [it for n, it in enumerate(items) if keep[n]]
     dropped = [it for n, it in enumerate(items) if not keep[n]]
@@ -1519,8 +1572,16 @@ def screen_news_items(items: list) -> list:
     for it in dropped[:5]:            # 기준문 조정용 표본 — 제외 사유 감시
         print(f'  [제외] {(it.get("title") or "")[:50]}')
 
-    for it in items:                  # 임시 키 제거 — DB 컬럼이 아니므로 반드시 정리
+    # 임시 키 제거(_screen_text는 DB 컬럼이 아니다) + tags 기본값 보장.
+    # ★ tags setdefault는 반드시 이 한 지점에만 둘 것 ★
+    #   PostgREST 벌크 upsert는 리스트 안 모든 객체의 키 집합이 같아야 한다. save_new_items가
+    #   valid 리스트를 통째로 넘기므로, 태그 없는 경로(키워드 폴백 / 부처 인사 자동통과 /
+    #   모델이 tags 생략) 중 하나라도 키가 빠지면 upsert 전체가 터져 뉴스 수집이 전면 중단된다.
+    #   통과 기사는 전부 이 루프를 지나므로 여기가 유일한 방어선이다.
+    #   '기타' 태그를 만들지 말 것 — 구독자가 그것을 끌 수 있게 되어 판정 실패 기사가 조용히 사라진다.
+    for it in items:
         it.pop('_screen_text', None)
+        it.setdefault('tags', [])
     return passed
 
 

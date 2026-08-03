@@ -17,6 +17,7 @@
 """
 import os
 import html as _html
+from datetime import datetime, timedelta, timezone
 
 DASHBOARD_URL = 'https://youjinwoong.github.io/radio-policy-ai/'
 
@@ -35,8 +36,24 @@ def queue_for_subscribers(sb, topic: str, html_text: str) -> bool:
         return False
     if not html_text or not html_text.strip():
         return False
+    body = html_text[:3500]
+    # 최근 10분 내 같은 내용이 이미 큐에 있으면 건너뛴다 — 원인이 무엇이든 중복 발송을 막는 안전망.
+    # (2026-08-03: 크롤러를 수동 실행한 시각이 정기 실행 :50과 겹쳐 두 인스턴스가 동시에 돌았다.
+    #  각자 시작 시점에 '기존 URL 목록'을 읽었는데 둘 다 저장 전이라 같은 기사를 서로 새 것으로
+    #  판단 → 큐에 24초 간격으로 동일 내용 2행 → 각자 _trigger_delivery까지 호출해 2번 발송됐다.
+    #  발송 측 병합(mergeQueueBlocks)은 '한 번의 발송 안에서만' 중복을 없애므로 못 막는다.)
     try:
-        sb.table('subscriber_queue').insert({'topic': topic, 'html': html_text[:3500]}).execute()
+        since = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+        dup = (sb.table('subscriber_queue').select('id')
+               .eq('topic', topic).eq('html', body)
+               .gte('created_at', since).limit(1).execute().data)
+        if dup:
+            print(f'[구독자 큐] {topic} 중복 적재 생략 — 10분 내 동일 내용 존재(id={dup[0]["id"]})')
+            return False
+    except Exception as e:
+        print(f'[구독자 큐] 중복 확인 실패(계속 진행): {e}')   # 확인 실패가 적재를 막으면 안 된다
+    try:
+        sb.table('subscriber_queue').insert({'topic': topic, 'html': body}).execute()
         print(f'[구독자 큐] {topic} 적재 완료 — 각 구독자의 수신 시각에 발송됨')
     except Exception as e:
         print(f'[구독자 큐] 적재 실패(무시): {e}')
