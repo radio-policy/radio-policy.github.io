@@ -37,7 +37,10 @@ def main():
     with open(logpath, mode, encoding="utf-8") as lf:
         lf.write("=== %s launch %s\n" % (datetime.datetime.now().isoformat(), script))
         lf.flush()
-        r = subprocess.run([PY, script] + sys.argv[3:],
+        # -u(무버퍼): 중간에 강제 종료돼도 그때까지의 출력이 파일에 남는다.
+        # (2026-08-03 크롤러가 7~11분 돌다 외부 종료됐는데 버퍼가 통째로 날아가
+        #  어디서 멈췄는지 알 수 없었다 — 진단 불가 상태를 만들지 말 것.)
+        r = subprocess.run([PY, "-u", script] + sys.argv[3:],
                            stdout=lf, stderr=subprocess.STDOUT,
                            creationflags=CREATE_NO_WINDOW)
         lf.write("=== exit %s at %s\n" % (r.returncode, datetime.datetime.now().isoformat()))

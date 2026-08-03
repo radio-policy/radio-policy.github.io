@@ -146,7 +146,7 @@ class TestMorningBriefingAssemblySection(unittest.TestCase):
         self.assertEqual(lines[0], '🏛️ [국회 법안 동향]')
         self.assertIn('• [신규 발의] 전파법 일부개정법률안 — 홍길동의원 등 10인', lines)
         self.assertIn('• [처리 변경] 전기통신사업법 일부개정법률안: 접수 → 소관위 심사중', lines)
-        self.assertIn('• [의견등록 마감 임박] 정보통신망법 일부개정법률안 ~%s (D-3)' % nd[5:], lines)
+        self.assertIn('• [의견등록 ~%s (D-3)] 정보통신망법 일부개정법률안' % nd[5:], lines)
         self.assertIn('  🔗 https://pal.assembly.go.kr/x', lines)
 
 

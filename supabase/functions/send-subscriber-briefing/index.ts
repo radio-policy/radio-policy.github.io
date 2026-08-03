@@ -60,6 +60,101 @@ interface Sub {
 }
 interface QueueRow { id: number; topic: string; html: string; created_at: string }
 
+// ── 큐 병합 유틸 (순수 함수 — 로컬 Node 단위검증 가능) ───────────────────────────
+// 문제(2026-08-03 06:24 실수신): subscriber_queue의 각 행 html에는 "🚨 긴급 전파정책 뉴스 N건"
+// 제목이 **이미 포함된 완성 블록**이 들어 있다(subscriber_notify.format_urgent_html).
+// 미발송 행을 구분선으로 단순 연결하면 제목이 행 수만큼 반복되고 번호도 매 행 1부터 다시 시작한다.
+// → 같은 형태(같은 제목 틀)의 행끼리 제목 1개 + 번호 1..N으로 다시 조립하고, 같은 기사는 하나만 남긴다.
+// 원칙: 형식이 예상과 다르면 그 행은 손대지 않고 원문 그대로 둔다(fail-soft).
+// 병합이 어긋나도 알림 자체가 빠지는 일은 절대 없어야 한다(호출측에서도 try/catch로 한 겹 더 감쌈).
+const QUEUE_SEP = '\n\n───\n\n';
+const HEADER_COUNT_RE = /^(.*?)(\d+)(건.*)$/;   // "🚨 <b>긴급 전파정책 뉴스 4건</b>" → 앞/건수/뒤
+const ITEM_START_RE = /^\s*\d+\.\s/;            // "1. <a href=...>제목</a>"
+
+interface CountedBlock { key: string; prefix: string; suffix: string; items: string[] }
+interface MergeGroup { prefix: string; suffix: string; items: string[]; seen: Set<string> }
+
+function trimBlankLines(lines: string[]): string[] {
+  let a = 0, b = lines.length;
+  while (a < b && !lines[a].trim()) a++;
+  while (b > a && !lines[b - 1].trim()) b--;
+  return lines.slice(a, b);
+}
+
+// 한 큐 행을 "제목(N건) + 번호 항목들"로 분해. 조금이라도 어긋나면 null → 호출측이 원문 유지.
+function parseCountedBlock(html: string): CountedBlock | null {
+  const lines = (html || '').replace(/\r/g, '').split('\n');
+  let h = 0;
+  while (h < lines.length && !lines[h].trim()) h++;
+  if (h >= lines.length) return null;                 // 빈 행
+  const header = lines[h];
+  if (ITEM_START_RE.test(header)) return null;        // 제목 없이 항목부터 시작 → 병합 대상 아님
+  const m = header.match(HEADER_COUNT_RE);
+  if (!m) return null;                                // "N건" 제목 형식이 아님(법안 알림 등) → 원문 유지
+
+  const items: string[] = [];
+  let buf: string[] | null = null;
+  for (let i = h + 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (ITEM_START_RE.test(line)) {
+      if (buf) items.push(trimBlankLines(buf).join('\n'));
+      buf = [line];
+    } else if (buf) {
+      buf.push(line);
+    } else if (line.trim()) {
+      return null;                                    // 제목과 첫 항목 사이에 예상 못한 본문 → 원문 유지
+    }
+  }
+  if (buf) items.push(trimBlankLines(buf).join('\n'));
+  if (!items.length) return null;                     // 항목이 없음 → 원문 유지
+  if (parseInt(m[2], 10) !== items.length) return null; // 제목 건수 ≠ 항목 수 → 오탐 가능 → 원문 유지
+  return { key: m[1] + '\u0000' + m[3], prefix: m[1], suffix: m[3], items };
+}
+
+// 중복 판정 키: 번호와 HTML 태그를 걷어낸 항목 텍스트(제목+출처). URL만 다른 같은 기사도 같은 키가 된다.
+function itemKey(item: string): string {
+  return item.replace(ITEM_START_RE, '')
+    .replace(/<[^>]+>/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function renderMergeGroup(g: MergeGroup): string {
+  const body = g.items.map((it, i) => it.replace(ITEM_START_RE, `${i + 1}. `)).join('\n\n');
+  return `${g.prefix}${g.items.length}${g.suffix}\n\n${body}`;
+}
+
+// 같은 토픽의 큐 행 html 목록 → 발송용 한 덩어리 텍스트.
+// 제목 틀이 같은 행끼리만 합치므로, 형태가 다른 알림(법안 등)은 지금까지처럼 구분선으로 분리된다.
+export function mergeQueueBlocks(htmls: string[]): string {
+  const slots: Array<string | MergeGroup> = [];
+  const byKey = new Map<string, MergeGroup>();
+  for (const raw of htmls) {
+    let p: CountedBlock | null = null;
+    try { p = parseCountedBlock(raw); } catch { p = null; }   // 파싱 예외도 fail-soft
+    if (!p) { slots.push(raw); continue; }
+    let g = byKey.get(p.key);
+    if (!g) {
+      g = { prefix: p.prefix, suffix: p.suffix, items: [], seen: new Set<string>() };
+      byKey.set(p.key, g);
+      slots.push(g);                                  // 첫 등장 위치에 병합 블록을 고정(순서 보존)
+    }
+    for (const it of p.items) {
+      const k = itemKey(it);
+      if (k) {
+        if (g.seen.has(k)) continue;                  // 동일 기사 중복 제거(큐에 남은 과거 중복 방어)
+        g.seen.add(k);
+      }
+      g.items.push(it);
+    }
+  }
+  return slots
+    .map((s) => (typeof s === 'string' ? s : renderMergeGroup(s)))
+    .filter((t) => !!t.trim())
+    .join(QUEUE_SEP);
+}
+// ── 큐 병합 유틸 끝 ─────────────────────────────────────────────────────────────
+
 Deno.serve(async (req: Request) => {
   if (!CRON_SECRET || req.headers.get('x-cron-secret') !== CRON_SECRET) {
     return new Response('unauthorized', { status: 401 });
@@ -123,7 +218,17 @@ Deno.serve(async (req: Request) => {
       for (const grp of [urgent, assembly]) {
         if (!grp.length) continue;
         // 같은 토픽의 여러 건은 한 메시지로 합치되, 길면 분할 (알림 개수 폭증 방지 — #44 취지)
-        for (const part of splitByLines(grp.map((r) => r.html).join('\n\n───\n\n'))) msgs.push(part);
+        // 각 행 html에 제목이 이미 들어 있으므로 단순 연결이 아니라 제목 1개로 재조립한다.
+        const raws = grp.map((r) => r.html);
+        let body: string;
+        try {
+          body = mergeQueueBlocks(raws);
+        } catch (e) {
+          // 병합 실패로 알림이 통째로 빠지는 일은 없어야 한다 → 예전 방식(단순 연결)으로 그대로 발송
+          console.error('[큐 병합 실패 — 원문 연결로 발송]', e);
+          body = raws.join(QUEUE_SEP);
+        }
+        for (const part of splitByLines(body)) msgs.push(part);
       }
       if (!msgs.length) continue;   // 보낼 게 없으면 조용히 통과
 

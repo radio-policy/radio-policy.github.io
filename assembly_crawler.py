@@ -94,7 +94,9 @@ NOTICE_API   = 'https://open.assembly.go.kr/portal/openapi/nknalejkafmvgzmpt'
 # 제안이유·주요내용 보조 API (BILL_NO로 조회)
 SUMMARY_API  = 'https://open.assembly.go.kr/portal/openapi/BPMBILLSUMMARY'
 HAIKU_MODEL  = 'claude-haiku-4-5-20251001'  # crawler.py와 동일 모델
-NOTICE_DEADLINE_DAYS = 3  # 의견등록 마감 D-3 이내 알림
+# (미사용) 과거 의견등록 마감 D-3 재알림 임계값.
+# 운영자 지시(2026-08-03)로 입법예고 알림은 최초 감지 1회만 — 재알림 경로 삭제. 이력용으로만 남김.
+NOTICE_DEADLINE_DAYS = 3
 
 
 # ═══════════════════════════════════════════════════════════
@@ -658,7 +660,6 @@ def run_notice_pass(dry_run: bool = False):
     alert_lines    = []   # 운영자 메시지(여러 건 한 메시지로 묶음)
     stage_updates  = {}   # bill_id → 새 notice_alert_stage (발송 성공 시에만 반영)
     new_rows       = 0
-    d3_count       = 0
 
     for n in relevant:
         bill_id   = n['BILL_ID']
@@ -710,18 +711,19 @@ def run_notice_pass(dry_run: bool = False):
                 sb.table('assembly_bills').insert(row).execute()
             new_rows += 1
 
-        # 알림 스테이지: 0 → 시작 알림(stage 1) → 마감 D-3 이내 알림(stage 2)
+        # 알림 스테이지: 0 → 최초 감지 알림(stage 1). 여기서 끝.
+        # 운영자 지시(2026-08-03): 입법예고 알림은 최초 1회만.
+        #   기존 stage 1→2(마감 D-3 재알림)는 같은 법안을 두 번 울려 제거했다.
+        #   컬럼 notice_alert_stage 와 기존 값 2는 이력으로 남기고, 2로 올리는 경로만 삭제.
+        #   마감일 정보는 최초 알림의 '(~end_dt)'와 브리핑 태그 '[의견등록 ~08-06 (D-3)]'로 전달된다.
         if stage == 0:
-            line = f'🗳️ 국회 입법예고 시작: {name} (~{end_dt or "?"}, {committee or "—"})'
+            days_left = _days_to_deadline(end_dt, today)
+            dday = f', D-{days_left}' if days_left is not None else ''
+            line = f'🗳️ 국회 입법예고 시작: {name} (~{end_dt or "?"}{dday}, {committee or "—"})'
             if url:
                 line += f'\n{url}'
             alert_lines.append(line)
             stage = 1
-        days_left = _days_to_deadline(end_dt, today)
-        if stage < 2 and days_left is not None and 0 <= days_left <= NOTICE_DEADLINE_DAYS:
-            alert_lines.append(f'⏰ 의견등록 마감 D-{days_left}: {name}')
-            stage = 2
-            d3_count += 1
         if stage != prev_stage:
             stage_updates[bill_id] = stage
 
@@ -742,7 +744,8 @@ def run_notice_pass(dry_run: bool = False):
     else:
         print('  알림 대상 없음')
 
-    note = f'notices active={len(notices)} rel={len(relevant)} new={new_rows} d3={d3_count}'
+    # d3= 항목 제거 — D-3 재알림 폐지(운영자 지시 2026-08-03). alerts=최초 감지 알림 건수
+    note = f'notices active={len(notices)} rel={len(relevant)} new={new_rows} alerts={len(alert_lines)}'
     if dry_run:
         print(f'  (dry-run) heartbeat 생략: {note}')
     else:

@@ -410,10 +410,11 @@ def _briefing_to_telegram_html(text: str) -> str:
     return '\n'.join(out)
 
 
-def send_telegram(briefing_text: str):
+def send_telegram(briefing_text: str) -> bool:
+    """발송 성공 여부를 반환 (입법예고 1회 노출 마킹이 이 결과에 의존 — 2026-08-03)"""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print('[텔레그램] 환경변수 미설정 — 건너뜀')
-        return
+        return False
     html_text = _briefing_to_telegram_html(briefing_text)
     text = html_text[:4000]
     if len(html_text) > 4000:
@@ -432,6 +433,7 @@ def send_telegram(briefing_text: str):
                                   disable_web_page_preview=True)
     if ok:
         print('[텔레그램] 발송 완료')
+    return bool(ok)
 
 
 def _briefing_to_html(text: str) -> str:
@@ -472,7 +474,8 @@ def _briefing_to_html(text: str) -> str:
     return '\n'.join(out)
 
 
-def send_email(briefing_text: str, news_count: int):
+def send_email(briefing_text: str, news_count: int) -> bool:
+    """발송 성공 여부를 반환 (입법예고 1회 노출 마킹이 이 결과에 의존 — 2026-08-03)"""
     today = datetime.now(KST).strftime('%Y.%m.%d')
     subject = f'☀️ [전파정책 AI] {today} 모닝 브리핑 — {news_count}건'
     body_html = f'''
@@ -491,15 +494,16 @@ def send_email(briefing_text: str, news_count: int):
     # 도메인 미인증 상태: you.jinwoong@gmail.com으로만 발송 가능
     resend_to = ['you.jinwoong@gmail.com']
     if RESEND_API_KEY:
-        _send_via_resend(subject, body_html, resend_to)
+        return _send_via_resend(subject, body_html, resend_to)
     elif all([EMAIL_FROM, EMAIL_PASS, EMAIL_TO]):
         # 폴백: Gmail SMTP (PC 로컬 실행 시)
-        _send_via_gmail(subject, body_html, all_to)
+        return _send_via_gmail(subject, body_html, all_to)
     else:
         print('[이메일] RESEND_API_KEY 또는 Gmail 환경변수 미설정 — 건너뜀')
+        return False
 
 
-def _send_via_resend(subject: str, body_html: str, all_to: list):
+def _send_via_resend(subject: str, body_html: str, all_to: list) -> bool:
     """Resend API로 이메일 발송 — 미국 IP 차단 없음"""
     payload = {
         'from': '전파정책 AI <onboarding@resend.dev>',
@@ -519,13 +523,14 @@ def _send_via_resend(subject: str, body_html: str, all_to: list):
         )
         if resp.status_code in (200, 201):
             print(f'[이메일/Resend] {", ".join(all_to)} 발송 완료')
-        else:
-            print(f'[이메일/Resend 오류] HTTP {resp.status_code}: {resp.text[:200]}')
+            return True
+        print(f'[이메일/Resend 오류] HTTP {resp.status_code}: {resp.text[:200]}')
     except Exception as e:
         print(f'[이메일/Resend 오류] {e}')
+    return False
 
 
-def _send_via_gmail(subject: str, body_html: str, all_to: list):
+def _send_via_gmail(subject: str, body_html: str, all_to: list) -> bool:
     """Gmail SMTP — PC 로컬 실행 전용 폴백"""
     msg = MIMEMultipart('alternative')
     msg['Subject'] = subject
@@ -537,8 +542,10 @@ def _send_via_gmail(subject: str, body_html: str, all_to: list):
             smtp.login(EMAIL_FROM, EMAIL_PASS)
             smtp.sendmail(EMAIL_FROM, all_to, msg.as_string())
         print(f'[이메일/Gmail] {", ".join(all_to)} 발송 완료')
+        return True
     except Exception as e:
         print(f'[이메일/Gmail 오류] {e}')
+    return False
 
 
 # ═══════════════════════════════════════════════════════
@@ -639,11 +646,19 @@ def fetch_assembly_items(sb) -> dict:
     """국회 법안 동향 3종 조회 — assembly_bills
     (a) 신규 발의: created_at 최근 24h
     (b) 처리 변경: updated_at 최근 24h & prev_proc_result ≠ proc_result
-    (c) 의견등록 마감 임박: notice_end_dt 오늘(KST)~오늘+3"""
+    (c) 의견등록: 진행 중(notice_end_dt >= 오늘) & 아직 브리핑에 안 실린 것(notice_briefed_at IS NULL)
+
+    운영자 지시(2026-08-03): 입법예고는 "처음 감지될 때 딱 한 번"만 싣는다.
+      - 기존 'D-3 창(오늘~오늘+3)' 조건은 같은 법안을 D-3·D-2·D-1·당일 4일 연속 노출시켜 제거.
+      - 감지 시점이 마감 3일 전이든 12일 전이든 최초 1회. 대신 표기에 마감일·잔여일수를 넣는다.
+      - 실제 표시분은 briefed_ids 로 돌려주고, main()이 **발송 성공 후에만** notice_briefed_at 을 채운다.
+        (발송 실패 시 미리 채우면 그 법안은 영영 안 실린다 — 순서 주의)
+    반환 dict의 'briefed_ids'는 출력 목록이 아니라 사후 마킹 대상 id 목록."""
     cutoff = (datetime.now(KST) - timedelta(hours=24)).isoformat()
     today = datetime.now(KST).date()
-    cols = 'bill_name,proposer,committee,proc_result,prev_proc_result,notice_end_dt,notice_url'
-    result = {'new': [], 'changed': [], 'deadline': []}
+    cols = ('bill_id,bill_name,proposer,committee,proc_result,prev_proc_result,'
+            'notice_end_dt,notice_url,notice_briefed_at')
+    result = {'new': [], 'changed': [], 'deadline': [], 'briefed_ids': []}
     try:
         # (a) 신규 발의
         resp = sb.table('assembly_bills') \
@@ -663,20 +678,72 @@ def fetch_assembly_items(sb) -> dict:
             if r.get('prev_proc_result') and r.get('prev_proc_result') != r.get('proc_result')
         ]
 
-        # (c) 의견등록 마감 임박 (오늘~D+3, 'YYYY-MM-DD' 문자열 비교)
+        # (c) 의견등록 진행 중 & 미노출 ('YYYY-MM-DD' 문자열 비교)
         resp = sb.table('assembly_bills') \
             .select(cols) \
             .gte('notice_end_dt', today.strftime('%Y-%m-%d')) \
-            .lte('notice_end_dt', (today + timedelta(days=3)).strftime('%Y-%m-%d')) \
+            .is_('notice_briefed_at', 'null') \
             .execute()
-        result['deadline'] = resp.data or []
+        notices = resp.data or []
+        # 표시 여부와 무관하게 이번 브리핑에 노출되는 전량이 마킹 대상 (병합된 건 포함)
+        result['briefed_ids'] = [r['bill_id'] for r in notices if r.get('bill_id')]
+
+        # (a)신규 발의 ∩ (c)의견등록 → 한 줄로 병합, (c) 목록에서는 제외 (중복 출력 방지)
+        # 운영자 지시(2026-08-03): 같은 법안이 두 섹션에 동시에 실리던 문제
+        merged = set()
+        for it in result['new']:
+            hit = None
+            for r in notices:
+                if (it.get('bill_id') and it['bill_id'] == r.get('bill_id')) or \
+                   (it.get('bill_name') and it['bill_name'] == r.get('bill_name')):
+                    hit = r
+                    break
+            if hit:
+                it['notice_end_dt'] = hit.get('notice_end_dt') or it.get('notice_end_dt')
+                it['notice_url'] = it.get('notice_url') or hit.get('notice_url')
+                it['notice_merged'] = True
+                merged.add(id(hit))
+        result['deadline'] = [r for r in notices if id(r) not in merged]
 
         print(f"[국회 법안] 신규 {len(result['new'])}건 / "
-              f"처리변경 {len(result['changed'])}건 / 마감임박 {len(result['deadline'])}건")
+              f"처리변경 {len(result['changed'])}건 / "
+              f"의견등록 신규노출 {len(result['briefed_ids'])}건"
+              f"(병합 {len(merged)}건 → 단독 표시 {len(result['deadline'])}건)")
     except Exception as e:
         print(f'[국회 법안 조회 오류] {e}')
-        return {'new': [], 'changed': [], 'deadline': []}
+        return {'new': [], 'changed': [], 'deadline': [], 'briefed_ids': []}
     return result
+
+
+def mark_notice_briefed(sb, bill_ids: list) -> int:
+    """브리핑에 실린 입법예고 건의 notice_briefed_at 을 now()로 마킹 — 다음 날부터 (c)에서 제외.
+    **반드시 발송 성공 후에만 호출**할 것(운영자 지시 2026-08-03): 발송 실패인데 마킹하면 영영 안 실린다."""
+    ids = [b for b in (bill_ids or []) if b]
+    if not ids:
+        return 0
+    stamp = datetime.now(KST).isoformat()
+    done = 0
+    for bill_id in ids:
+        try:
+            sb.table('assembly_bills').update({'notice_briefed_at': stamp}) \
+                .eq('bill_id', bill_id).execute()
+            done += 1
+        except Exception as e:
+            print(f'[입법예고 마킹 오류] {bill_id}: {e}')
+    print(f'[입법예고] 1회 노출 마킹 {done}/{len(ids)}건 — 내일부터 재등장 없음')
+    return done
+
+
+def _notice_tag(notice_end_dt: str, today) -> str:
+    """'의견등록 ~08-06 (D-3)' — 1회만 노출하므로 마감일·잔여일수를 태그에 담는다(운영자 지시 2026-08-03)."""
+    nd = (notice_end_dt or '').strip()
+    if not nd:
+        return '의견등록'
+    try:
+        d_day = (datetime.strptime(nd, '%Y-%m-%d').date() - today).days
+        return f'의견등록 ~{nd[5:]} (D-{d_day})'
+    except ValueError:
+        return f'의견등록 ~{nd}'
 
 
 def _format_assembly_section(items: dict) -> str:
@@ -686,7 +753,10 @@ def _format_assembly_section(items: dict) -> str:
     for it in items.get('new', []):
         bill = it.get('bill_name', '')
         proposer = it.get('proposer', '')
-        lines.append(f'• [신규 발의] {bill} — {proposer}')
+        tag = '신규 발의'
+        if it.get('notice_merged'):   # (a)+(c) 병합 — 한 줄로 합쳐 중복 출력 방지
+            tag += ' · ' + _notice_tag(it.get('notice_end_dt'), today)
+        lines.append(f'• [{tag}] {bill} — {proposer}')
         if it.get('notice_url'):
             lines.append(f"  🔗 {it['notice_url']}")
     for it in items.get('changed', []):
@@ -698,12 +768,9 @@ def _format_assembly_section(items: dict) -> str:
             lines.append(f"  🔗 {it['notice_url']}")
     for it in items.get('deadline', []):
         bill = it.get('bill_name', '')
-        nd = it.get('notice_end_dt') or ''
-        try:
-            d_day = (datetime.strptime(nd, '%Y-%m-%d').date() - today).days
-            lines.append(f'• [의견등록 마감 임박] {bill} ~{nd[5:]} (D-{d_day})')
-        except ValueError:
-            lines.append(f'• [의견등록 마감 임박] {bill} ~{nd}')
+        proposer = (it.get('proposer') or '').strip()
+        tail = f' — {proposer}' if proposer else ''
+        lines.append(f"• [{_notice_tag(it.get('notice_end_dt'), today)}] {bill}{tail}")
         if it.get('notice_url'):
             lines.append(f"  🔗 {it['notice_url']}")
     return '\n'.join(lines)
@@ -829,9 +896,10 @@ def main():
     # 국회 법안 동향 섹션 — 먼저 앞에 붙여, 아래 입법예고 삽입 후 [신규 입법예고] 바로 뒤에 오도록
     # (입법예고 0건이면 그 자리인 맨 앞) 3종 모두 0건이면 섹션 미삽입
     assembly_items = fetch_assembly_items(sb)
-    if any(assembly_items.values()):
+    assembly_shown = ('new', 'changed', 'deadline')   # briefed_ids는 마킹용이라 표시 판단에서 제외
+    if any(assembly_items.get(k) for k in assembly_shown):
         briefing_text = _format_assembly_section(assembly_items) + '\n\n' + briefing_text
-        total = sum(len(v) for v in assembly_items.values())
+        total = sum(len(assembly_items.get(k) or []) for k in assembly_shown)
         print(f'[국회 법안] {total}건 브리핑에 삽입')
 
     # 신규 입법예고 섹션을 브리핑 앞에 삽입 (🔴 → 이메일 빨간 박스)
@@ -860,8 +928,17 @@ def main():
 
     # 발송 — 텔레그램은 4000자 제한 때문에 영향 분석 줄 제외
     telegram_text = '\n'.join(l for l in display_text.split('\n') if 'SKT 영향 분석' not in l)
-    send_telegram(telegram_text)
-    send_email(display_text, len(items))
+    ok_tg = send_telegram(telegram_text)
+    ok_mail = send_email(display_text, len(items))
+
+    # 입법예고 1회 노출 확정 — 발송 성공 뒤에만 마킹(운영자 지시 2026-08-03).
+    # 어느 한 채널이라도 나갔으면 운영자는 이미 봤으므로 마킹, 둘 다 실패면 다음 실행에서 재노출.
+    briefed_ids = assembly_items.get('briefed_ids') or []
+    if briefed_ids:
+        if ok_tg or ok_mail:
+            mark_notice_briefed(sb, briefed_ids)
+        else:
+            print(f'[입법예고] 발송 실패 — notice_briefed_at 미갱신 {len(briefed_ids)}건(다음 실행 재노출)')
 
     print(f'{"="*50}')
     print('[모닝 브리핑 완료]')
