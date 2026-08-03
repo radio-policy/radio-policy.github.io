@@ -106,11 +106,16 @@ def main():
     sb = make_client(SUPABASE_URL, SUPABASE_KEY)
 
     # ── 60일 초과 기사 일괄 정리 (locked=true 기사는 보존) ──────────
+    # 해외(category='해외')는 제외한다 — 해외 규제기관은 발행일이 오래된 문서를 뒤늦게 공개하는 게
+    # 정상이라(BEREC 6~7월 문서가 8월에 신규 수집됨) 발행일 기준으로 지우면 수집 즉시 삭제된다.
+    # 실제로 2026-08-03 05:30 수집분 4건이 06:05 브리핑에 실린 뒤 이 규칙에 지워졌다.
+    # foreign_press는 "발행일이 오래돼도 우리에게 새로우면 수집"인데 여기는 정반대로 동작했다. (#75)
     try:
         cutoff = (datetime.now(KST) - timedelta(days=60)).isoformat()
         purged = sb.table("news_feed").delete() \
             .lt("published_at", cutoff) \
             .eq("locked", False) \
+            .neq("category", "해외") \
             .execute()
         n_purged = len(purged.data or [])
         if n_purged:
@@ -119,7 +124,8 @@ def main():
         print(f"[오래된 기사 정리 오류] {e}")
 
     # content=NULL 또는 100자 미만(제목만 저장된 경우) 기사 재수집
-    resp = sb.table("news_feed").select("id,title,source,url,content,published_at,summary,locked") \
+    # category는 60일 삭제 예외 판정(해외 제외, #75)에 쓰인다 — 빼면 조용히 None이 돼 예외가 안 먹는다
+    resp = sb.table("news_feed").select("id,title,source,url,content,published_at,summary,locked,category") \
         .order("published_at", desc=True).limit(500).execute()
     all_articles = resp.data or []
 
@@ -193,7 +199,9 @@ def main():
                     if pub_dt.tzinfo is None:
                         pub_dt = pub_dt.replace(tzinfo=KST)
                     age_days = (datetime.now(KST) - pub_dt).days
-                    if age_days > 60 and not article.get("locked"):
+                    # 해외는 발행일이 오래된 게 정상이라 제외 — 위 일괄 정리와 같은 이유 (#75)
+                    if (age_days > 60 and not article.get("locked")
+                            and article.get("category") != '해외'):
                         sb.table("news_feed").delete().eq("id", article["id"]).execute()
                         print(f"🗑  실제 발행일 {actual_date[:10]} ({age_days}일 전) — 60일 초과 삭제")
                         ok += 1
