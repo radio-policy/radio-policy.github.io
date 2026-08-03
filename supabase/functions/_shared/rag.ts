@@ -471,7 +471,50 @@ export async function answerLawQuery(sb: SupabaseClient, query: string): Promise
     .filter((c) => c.article_no && !haveIds.has(c.id) && !/\.(pdf|md|docx|hwp)$/i.test(c.doc_name || ''))
     .slice(0, 6)
     .map((c) => ({ id: c.id, doc_name: c.doc_name, article_no: c.article_no, content: c.content, _hits: 0 }));
-  const merged = hits.concat(semExtra);
+  semExtra.forEach((h) => haveIds.add(h.id));
+
+  // ③ 요약층 다리 — 요약층(kb)이 짚은 법령의 **실제 조문**을 이름으로 직접 끌어온다.
+  // 왜 필요한가(2026-08-03 실측): 조문 원문 임베딩은 voyage-4-lite인데 한국어 법령에서 변별력이
+  // 약하다. "5G 커버리지 맵 공개"에서 정답인 「전기통신역무 선택에 필요한 정보 제공 기준」 제5조는
+  // 유사도 0.418로, 무관한 별표·부칙(0.50~0.54) 수십 건에 밀려 40위 밖이었다. 반면 요약층은
+  // 법률 특화 voyage-law-2를 써서 같은 질문에 이 고시를 정확히 짚었다.
+  // → 잘 맞히는 검색이 지목한 법령의 조문을 확정적으로 가져오면, 검색 운에 기대지 않아도 된다.
+  // (HNSW는 ef_search 기본값 탓에 300건을 요청해도 ~40건만 훑는다 — 임계·건수를 올려도 못 넘는다.)
+  const kbTitles = [...new Set(kb.map((r) => (r.title || '').trim()))].filter((t) => t.length >= 4).slice(0, 3);
+  const bridged: LawHit[] = [];
+  if (kbTitles.length) {
+    const qWords = extractKeywords(query).map((w) => w.toLowerCase());
+    const perTitle = await Promise.all(kbTitles.map((t) =>
+      sb.from('document_chunks')
+        .select('id, doc_name, article_no, content')
+        .eq('is_approved', true).eq('status', 'current')
+        .not('article_no', 'is', null)
+        .ilike('doc_name', t + '%')     // 요약 제목은 정식 법령명의 앞부분 (뒤에 (부처)(호수)(시행일)이 붙는다)
+        .limit(40)
+        .then((r) => (r.data || []) as LawHit[]).catch(() => [] as LawHit[])));
+    const BRIDGE_TOTAL_CAP = 14;   // 전체 상한 — 프롬프트 폭주 방지 (조문당 800자 → 최대 ~11K자)
+    for (const rows of perTitle) {
+      const fresh = rows.filter((r) => !haveIds.has(r.id) && !/^(부칙|별표|서식)/.test(r.article_no || ''));
+      // 조문이 적은 고시·훈령이면 **통째로** 넣는다. 점수로 4개만 고르다가 정작 핵심인
+      // 제6조(지도 형태로 홈페이지 게시)가 5순위로 잘렸다 — '목적'·'정의' 같은 상투 조문이
+      // 전기통신·정보·제공 같은 흔한 단어로 점수를 먼저 가져가기 때문이다(실측).
+      // 요약층이 이미 "이 법령이 답"이라고 지목한 뒤이므로, 작은 법령은 고르지 말고 다 보여준다.
+      const picked = fresh.length <= 10
+        ? fresh
+        : fresh.map((r) => {
+            const hay = ((r.article_no || '') + ' ' + (r.content || '')).toLowerCase();
+            let s = 0;
+            for (const w of qWords) if (w.length >= 2 && hay.includes(w)) s++;
+            return { r, s };
+          }).sort((a, b) => b.s - a.s).slice(0, 5).map((x) => x.r);
+      for (const r of picked) {
+        if (bridged.length >= BRIDGE_TOTAL_CAP) break;
+        haveIds.add(r.id); bridged.push(r);
+      }
+    }
+  }
+
+  const merged = hits.concat(semExtra, bridged);
   if (!merged.length && !kb.length) return null;   // 검색 0건 — 호출자가 미등재 안내
 
   const ctxParts: string[] = [];
