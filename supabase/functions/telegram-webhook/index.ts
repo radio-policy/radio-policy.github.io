@@ -21,7 +21,7 @@
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
 import { createClient, type SupabaseClient } from 'jsr:@supabase/supabase-js@2';
 import { escapeHtml, splitByLines, mdToTelegramHtml, sendTelegramHtml } from '../_shared/telegram_format.ts';
-import { answerAdvisory } from '../_shared/rag.ts';
+import { answerAdvisory, answerLawQuery } from '../_shared/rag.ts';
 import { NEWS_TAGS, TAG_SLUGS } from '../_shared/news_tags.ts';
 
 // env는 반드시 trim — Supabase 콘솔에 값을 붙여넣을 때 줄바꿈이 딸려 들어가는 일이 잦고,
@@ -55,6 +55,7 @@ interface Sub {
   topic_briefing: boolean; topic_urgent: boolean; topic_assembly: boolean;
   days: string; briefing_hour: number;
   ai_allowed: boolean; ai_count_date: string | null; ai_count: number;
+  law_count_date?: string | null; law_count?: number;   // 자연어 /law 일일 상한 (2026-08-03)
   // 관심분야. **빈 배열 = 전체 수신**(캐논 하나). 6개를 다 켜면 []로 정규화하므로,
   // 나중에 7번째 태그가 생겨도 기존 '전체' 구독자가 자동으로 받는다.
   tags: string[];
@@ -118,8 +119,8 @@ const START_TEXT =
   '🌙 <b>23시가 지나면 다음 날 선택 시각까지 발송하지 않습니다</b> (심야 무발송).\n' +
   '아래 버튼으로 콘텐츠·요일·수신 시각을 바로 바꿀 수 있어요. (언제든 /settings)\n' +
   '항목을 모두 끄면 알림이 오지 않습니다.\n\n' +
-  '📖 <b>조문 조회</b> — <code>/law 전기통신사업법 19조</code> (즉답, 원문 그대로)\n' +
-  '🤖 <b>AI 자문</b> — <code>/ask 질문</code> (운영자 최초 1회 승인 필요)';
+  '📖 <b>법령 검색</b> — <code>/law 3G 종료 관련 법령</code> (궁금한 주제 → 관련 법령·조항과 이유. 조문 번호를 알면 <code>/law 전기통신사업법 19조</code> 로 원문 즉답)\n' +
+  '🤖 <b>AI 자문</b> — <code>/ask 질문</code> (동향·시사점까지 종합, 운영자 최초 1회 승인 필요)';
 
 // ── 조문 원문 조회 (비용 0) ──
 const ARTICLE_RE = /^(.{2,40}?)\s*제?\s*(\d+)\s*조(?:\s*의\s*(\d+))?\s*$/;
@@ -159,26 +160,58 @@ function resolveLawName(docName: string): string {
   return official ? official + suffix : docName;
 }
 
-async function handleLawQuery(chatId: number, q: string): Promise<void> {
+const LAW_DAILY_LIMIT = 10;  // 자연어 /law 일일 상한 — 승인 불필요(팀 조회 기능), 운영자 지정 10회 (Haiku 건당 ~$0.01)
+
+async function handleLawQuery(chatId: number, q: string): Promise<Promise<void> | void> {
   const query = q.trim();
   if (!query) {
     await sendTelegramHtml(BOT_TOKEN, chatId,
-      '사용법: <code>/law 전기통신사업법 19조</code>\n' +
-      '조문 번호를 알 때 원문을 바로 꺼냅니다. 내용을 묻는 질문은 <code>/ask</code> 를 쓰세요.');
+      '사용법: <code>/law 3G 종료 관련 법령</code> — 궁금한 주제를 그대로 쓰면 관련 법령·조항과 이유를 찾아 드립니다.\n' +
+      '조문 번호를 알 때는 <code>/law 전기통신사업법 19조</code> 처럼 쓰면 원문이 바로 나옵니다.');
     return;
   }
   const m = query.match(ARTICLE_RE);
   if (m) { await handleArticleLookup(chatId, m[1].trim(), m[2], m[3]); return; }
 
-  // 자연어 질문은 /ask로 보낸다.
-  // 키워드 검색을 네 차례 고쳤지만(불용어·확장·조문필터·가중치) 질의 형태에 따라 계속 무너졌다
-  // — 특히 '3G'처럼 한글이 아닌 주제어에서. 반면 /ask는 같은 질문에 조문과 최신 동향을 함께 답한다.
-  // /law는 "OO법 N조" 원문 즉답(2~3초·비용 0·원문 그대로)만 담당한다.
-  await sendTelegramHtml(BOT_TOKEN, chatId,
-    'ℹ️ <b>/law</b> 는 조문 번호를 알 때 원문을 바로 꺼내는 기능입니다.\n' +
-    '예: <code>/law 전기통신사업법 19조</code>\n\n' +
-    '내용을 묻는 질문은 AI 자문이 훨씬 정확합니다. 아래를 눌러 복사한 뒤 보내세요:\n\n' +
-    `<code>/ask ${escapeHtml(query)}</code>`);
+  // 자연어 질의 → 법령 한정 답변 (2026-08-03 개편 — 운영자: "몇조가 뭐냐고 묻는 게 아니라
+  // 궁금한 사항이 어떤 법과 관련돼 있는지 알고 싶은 게 대부분").
+  // /ask와의 경계: 법령 내용만 — 뉴스·동향·시사점은 /ask 몫. 승인 불필요, 일일 상한만.
+  const sub = await getSub(chatId);
+  if (sub) {
+    const today = todayKst();
+    const used = sub.law_count_date === today ? (sub.law_count || 0) : 0;
+    if (used >= LAW_DAILY_LIMIT) {
+      await sendTelegramHtml(BOT_TOKEN, chatId, `⏳ 오늘 법령 검색 한도(${LAW_DAILY_LIMIT}회)를 모두 사용했습니다. 내일 다시 이용해 주세요.`);
+      return;
+    }
+    await upsertSub(chatId, { law_count_date: today, law_count: used + 1 });
+  }
+  await sendTelegramHtml(BOT_TOKEN, chatId, '🔎 관련 법령을 찾고 있습니다... (약 20초)');
+
+  // /ask와 같은 패턴 — webhook 200을 먼저 돌려보내고 백그라운드 실행 (텔레그램 재시도 방지)
+  return (async () => {
+    const typing = () => { tg('sendChatAction', { chat_id: chatId, action: 'typing' }); };
+    typing();
+    const typingTimer = setInterval(typing, 15_000);
+    try {
+      const answer = await answerLawQuery(sb, query);
+      if (!answer) {
+        await sendTelegramHtml(BOT_TOKEN, chatId,
+          `🔎 "<b>${escapeHtml(query.slice(0, 60))}</b>" — 등재된 법령·고시에서 관련 조문을 찾지 못했습니다.\n` +
+          '이 시스템 DB는 전파·통신 분야 법령 위주입니다.\n' +
+          `🔗 <a href="https://www.law.go.kr/lsSc.do?query=${encodeURIComponent(query.slice(0, 50))}">국가법령정보센터에서 검색</a>`);
+        return;
+      }
+      let html = mdToTelegramHtml(answer);
+      html += '\n\n<i>📖 조문 원문은 <code>/law 법령명 N조</code> 로 바로 볼 수 있습니다 · 동향·시사점까지 필요하면 /ask</i>';
+      for (const part of splitByLines(html)) await sendTelegramHtml(BOT_TOKEN, chatId, part);
+    } catch (e) {
+      console.error('[법령 검색 실패]', e);
+      await sendTelegramHtml(BOT_TOKEN, chatId, '⚠️ 법령 검색 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.');
+    } finally {
+      clearInterval(typingTimer);
+    }
+  })();
 }
 
 async function handleArticleLookup(chatId: number, rawDocName: string, artNo: string, subNo?: string): Promise<void> {
@@ -263,12 +296,24 @@ async function handleAsk(chatId: number, from: { username?: string; first_name?:
       const { data: cfg } = await sb.from('app_config').select('value').eq('key', 'system_prompt').maybeSingle();
       const systemPrompt = (cfg?.value as string) || '';
       if (!systemPrompt) throw new Error('app_config.system_prompt 미등록 — python sync_system_prompt.py 실행 필요');
-      const { answer, sources } = await answerAdvisory(sb, systemPrompt, q);
+      const { answer, sources, webSources } = await answerAdvisory(sb, systemPrompt, q);
       let html = mdToTelegramHtml(answer);
-      if (sources.length) html += '\n\n<i>📚 참조: ' + escapeHtml(sources.slice(0, 6).join(', ')) + '</i>';
+      // 출처 표기 두 갈래 (2026-08-03 "참고가 전부 법령" 사고):
+      //  🌐 = 모델이 본문에 실제 인용한 웹 문서(진짜 근거) — 수치·현황은 대개 여기서 온다
+      //  📚 = 검색돼 프롬프트에 들어간 내부 자료 — 전부 반영됐다는 뜻이 아니므로 그렇게 적는다
+      if (webSources.length) {
+        const items = webSources.slice(0, 5).map((w) => {
+          let host = ''; try { host = new URL(w.url).hostname.replace(/^www\./, ''); } catch { /* URL 파싱 실패 시 제목만 */ }
+          return `<a href="${escapeHtml(w.url)}">${escapeHtml(w.title.slice(0, 60))}</a>${host ? ' (' + escapeHtml(host) + ')' : ''}`;
+        });
+        html += '\n\n<i>🌐 웹 출처: ' + items.join(' · ') + '</i>';
+      }
+      if (sources.length) html += '\n<i>📚 검색된 내부 자료(전부 반영된 것은 아님): ' + escapeHtml(sources.slice(0, 6).join(', ')) + '</i>';
       for (const part of splitByLines(html)) await sendTelegramHtml(BOT_TOKEN, chatId, part);
       // 기존 chat_logs에 기록 (source 컬럼이 없어 category로 구분 — 스키마 변경 없음)
-      await sb.from('chat_logs').insert({ question: q, answer, category: '텔레그램', sources: sources.join(', ') });
+      // 웹 출처는 '[웹] 제목 (url)' 접두사로 함께 남긴다 — splitSources() 관례(접두사 구분)와 동일
+      const logSources = webSources.map((w) => `[웹] ${w.title} (${w.url})`).concat(sources).join(', ');
+      await sb.from('chat_logs').insert({ question: q, answer, category: '텔레그램', sources: logSources });
     } catch (e) {
       console.error('[자문 실패]', e);
       // 쿼터 환불 — 선차감은 유지하되(동시성 안전) 실패 경로에서 -1 복원.
@@ -477,9 +522,10 @@ Deno.serve(async (req: Request) => {
     } else if (text === '/admin') {
       await handleAdmin(chatId);
     } else if (text.startsWith('/law') || text.startsWith('/법령')) {
-      await handleLawQuery(chatId, text.replace(/^\/(law|법령)\s*/, ''));
+      const bg = await handleLawQuery(chatId, text.replace(/^\/(law|법령)\s*/, ''));
+      if (bg) (globalThis as { EdgeRuntime?: { waitUntil: (p: Promise<void>) => void } }).EdgeRuntime?.waitUntil(bg);
     } else if (ARTICLE_RE.test(text) && !text.startsWith('/')) {
-      await handleLawQuery(chatId, text);   // 평문 "전기통신사업법 19조" 자동 인식
+      await handleLawQuery(chatId, text);   // 평문 "전기통신사업법 19조" 자동 인식 (조번호 패턴 = 즉답 경로만)
     } else if (text.startsWith('/ask')) {
       const bg = await handleAsk(chatId, from, text.replace(/^\/ask\s*/, ''));
       if (bg) (globalThis as { EdgeRuntime?: { waitUntil: (p: Promise<void>) => void } }).EdgeRuntime?.waitUntil(bg);
@@ -487,7 +533,7 @@ Deno.serve(async (req: Request) => {
       const bg = await handleAsk(chatId, from, text);   // 평문 질문 → 자문 경로 (승인 게이트가 비용 방어)
       if (bg) (globalThis as { EdgeRuntime?: { waitUntil: (p: Promise<void>) => void } }).EdgeRuntime?.waitUntil(bg);
     } else {
-      await sendTelegramHtml(BOT_TOKEN, chatId, '알 수 없는 명령입니다.\n/settings 설정 · /law 조문조회 · /ask AI자문');
+      await sendTelegramHtml(BOT_TOKEN, chatId, '알 수 없는 명령입니다.\n/settings 설정 · /law 법령검색 · /ask AI자문');
     }
   } catch (e) {
     // 어떤 오류도 200으로 마감 — 비200이면 텔레그램이 같은 업데이트를 재전송해 무한 반복된다

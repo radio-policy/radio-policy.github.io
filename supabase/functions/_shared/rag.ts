@@ -245,7 +245,11 @@ function buildKbContext(rows: KbRow[]): string {
 //  content[0]=thinking 함정 회피 — 스트림에서는 text_delta만 골라 누적하면 안전)
 // system은 문자열 또는 블록 배열을 그대로 API에 전달 (블록 배열 = 프롬프트 캐싱용, answerAdvisory 참조)
 type SystemBlock = { type: 'text'; text: string; cache_control?: { type: 'ephemeral' } };
-async function callSonnet(apiKey: string, system: string | SystemBlock[], question: string): Promise<string> {
+// 웹 검색 인용 — 스트림의 citations_delta에서 수집한 실제 근거 URL.
+// (2026-08-03 이전에는 text_delta만 담고 인용을 버려서, 웹에서 온 수치·현황의 출처가
+//  어디에도 안 남았다 — footer에는 내부 RAG 문서명만 나열돼 "참고가 전부 법령" 사고.)
+export interface WebRef { url: string; title: string }
+async function callSonnet(apiKey: string, system: string | SystemBlock[], question: string): Promise<{ text: string; webRefs: WebRef[] }> {
   const res = await fetch(ANTHROPIC_URL, {
     method: 'POST',
     headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
@@ -263,6 +267,8 @@ async function callSonnet(apiKey: string, system: string | SystemBlock[], questi
     throw new Error((err as { error?: { message?: string } }).error?.message || `Anthropic HTTP ${res.status}`);
   }
   let text = '';
+  const webRefs: WebRef[] = [];
+  const seenUrls = new Set<string>();
   const reader = res.body!.getReader();
   const decoder = new TextDecoder();
   let buf = '';
@@ -278,11 +284,20 @@ async function callSonnet(apiKey: string, system: string | SystemBlock[], questi
         try {
           const d = JSON.parse(line.slice(5).trim());
           if (d.type === 'content_block_delta' && d.delta?.type === 'text_delta') text += d.delta.text;
+          // 웹 검색 인용 수집 — 모델이 본문에 실제로 갖다 쓴 웹 문서만 citation으로 온다
+          // (검색만 하고 안 쓴 결과는 안 옴 = "실제 근거"의 목록으로 신뢰 가능)
+          else if (d.type === 'content_block_delta' && d.delta?.type === 'citations_delta') {
+            const c = d.delta.citation;
+            if (c?.url && !seenUrls.has(c.url)) {
+              seenUrls.add(c.url);
+              webRefs.push({ url: c.url, title: (c.title || '').trim() || c.url });
+            }
+          }
         } catch { /* keep-alive 등 무시 */ }
       }
     }
   }
-  return text;
+  return { text, webRefs };
 }
 
 // ── /law 키워드 검색 전용 (LLM 답변 없이 조문만 찾아 준다) ──
@@ -426,6 +441,63 @@ export async function searchLawArticles(sb: SupabaseClient, query: string, limit
     if (!byArticle.has(key)) byArticle.set(key, h);
   }
   return [...byArticle.values()].slice(0, limit);
+}
+
+// ── /law 자연어 모드 — 법령 한정 답변 (2026-08-03) ──
+// "궁금한 사항이 어떤 법과 관련돼 있는지"가 팀의 실제 질문 형태(운영자)라, 조문번호 즉답과
+// 별개로 자연어 질의를 받는다. /ask와의 경계: **법령 내용만** — 뉴스·국회동향·웹검색·시사점을
+// 넣지 않는다(그건 /ask의 몫). 그래서 answerAdvisory를 재사용하지 않고 조문 검색 + 요약층만
+// 모아 Haiku(법령 나열·관련 이유 설명은 좁은 일이라 Sonnet 불필요, 건당 ~$0.01)로 답한다.
+export async function answerLawQuery(sb: SupabaseClient, query: string): Promise<string | null> {
+  const apiKey = env('ANTHROPIC_API_KEY');
+  if (!apiKey) return null;
+  const [hits, kb] = await Promise.all([
+    searchLawArticles(sb, query, 8),
+    searchKbSummaries(sb, query).catch(() => [] as KbRow[]),
+  ]);
+  if (!hits.length && !kb.length) return null;   // 검색 0건 — 호출자가 미등재 안내
+
+  const ctxParts: string[] = [];
+  if (hits.length) {
+    ctxParts.push('[검색된 조문]\n' + hits.map((h, i) =>
+      `[조문 ${i + 1}] ${h.doc_name}${h.article_no ? ' ' + h.article_no : ''}\n${(h.content || '').slice(0, 800)}`
+    ).join('\n\n---\n\n'));
+  }
+  if (kb.length) {
+    ctxParts.push('[법령 요약(실무 맥락 보강용 — 조문 인용은 위 원문 우선)]\n' + kb.slice(0, 3).map((r) =>
+      `· ${(r.title || '').trim()}\n${(r.content || '').slice(0, 500)}`
+    ).join('\n\n'));
+  }
+
+  const system =
+    '당신은 한국 전파·통신 분야 법령 검색 도우미입니다. 아래 검색 결과만 근거로, 질문이 어떤 법령·조항과 관련되는지 정리하세요.\n\n' +
+    '형식:\n' +
+    '- 관련도 높은 순으로 3~6개 항목. 각 항목은 **법령명 제N조(제목)** 한 줄 + 왜 이 질문과 관련되는지 1~2문장. 필요하면 조문 핵심 문구를 짧게 직접 인용.\n' +
+    '- 마지막에 한 줄 요약(어느 법이 중심인지)을 붙여도 좋습니다.\n\n' +
+    '규칙:\n' +
+    '- 검색 결과에 없는 법령명·조항 번호를 만들어내지 마세요. 검색 결과가 질문과 맞지 않으면 "등재 법령에서 직접 관련 조문을 찾지 못했습니다"라고 말하고, 걸린 것 중 가까운 것만 언급하세요.\n' +
+    '- 시사점·전략 제언·최신 동향·뉴스·해외 사례는 쓰지 마세요 — 법령 내용만 다룹니다(그런 질문은 /ask 몫).\n' +
+    '- 텔레그램 전송용: 표·코드블록 금지, 굵게(**)와 불릿(-)만, 전체 1,800자 이내.\n\n' +
+    '---\n\n' + ctxParts.join('\n\n---\n\n');
+
+  const res = await fetch(ANTHROPIC_URL, {
+    method: 'POST',
+    headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 1500,
+      system,
+      messages: [{ role: 'user', content: query }],
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { error?: { message?: string } }).error?.message || `Anthropic HTTP ${res.status}`);
+  }
+  const data = await res.json() as { content?: { type: string; text?: string }[] };
+  // content[0]이 text가 아닐 수 있으므로 find로 고른다 (Sonnet5 적응형 추론에서 실제로 겪은 함정 — Haiku도 같은 방어)
+  const text = (data.content || []).find((b) => b.type === 'text')?.text || '';
+  return text.trim() || null;
 }
 
 // ── 뉴스 컨텍스트 (app.js fetchRecentNewsContext 이식) ──
@@ -656,7 +728,10 @@ async function buildAssemblyTrendContext(sb: SupabaseClient, query: string): Pro
   } catch (e) { console.warn('국회 동향 컨텍스트 실패(건너뜀):', e); return ''; }
 }
 
-export interface AdvisoryResult { answer: string; sources: string[] }
+// sources = 검색돼 프롬프트에 들어간 **내부 자료 목록**(전부 답변에 반영됐다는 뜻이 아님).
+// webSources = 모델이 본문에 실제 인용한 웹 문서(citations 기반) — 이쪽이 "진짜 근거"다.
+// 표기할 때 두 목록의 성격 차이를 뭉개지 말 것 (2026-08-03 "참고가 전부 법령" 사고).
+export interface AdvisoryResult { answer: string; sources: string[]; webSources: WebRef[] }
 
 // ── 자문 실행 (진입점) ──
 export async function answerAdvisory(sb: SupabaseClient, systemPrompt: string, question: string): Promise<AdvisoryResult> {
@@ -701,12 +776,12 @@ export async function answerAdvisory(sb: SupabaseClient, systemPrompt: string, q
   ];
   if (systemVariable) system.push({ type: 'text', text: systemVariable }); // 빈 text 블록은 API가 거부
 
-  const answer = await callSonnet(apiKey, system, question);
+  const { text: answer, webRefs } = await callSonnet(apiKey, system, question);
 
   const sources: string[] = [];
   for (const c of chunks) if (c.doc_name && !sources.includes(c.doc_name)) sources.push(c.doc_name);
   for (const h of extra) if (h.doc_name && !sources.includes(h.doc_name)) sources.push(h.doc_name);
   for (const r of kb) { const t = '[요약] ' + (r.title || '').trim(); if (r.title && !sources.includes(t)) sources.push(t); }
   for (const s of news.sources) if (!sources.includes(s)) sources.push(s);
-  return { answer, sources };
+  return { answer, sources, webSources: webRefs };
 }
