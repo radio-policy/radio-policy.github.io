@@ -105,3 +105,86 @@ def format_urgent_html(urgent_items: list) -> str:
         lines.append(f'{i}. {head}{rel_txt}')
         lines.append(f'   <i>{esc(item.get("source", ""))}</i>\n')
     return '\n'.join(lines)
+
+
+# ═══════════════════════════════════════════════════════
+#  기사 단위 큐 (2026-08-03) — 구독 관심분야 태그 필터의 전제
+# ═══════════════════════════════════════════════════════
+#  기존 방식은 "발송 묶음 1건 = 큐 1행"이라 ①기사 식별자가 없고 ②한 행이 서로 다른 태그의
+#  기사 N건을 품어서 태그 필터가 원천 불가능했다. → 기사당 1행으로 바꾸고, 태그를 **데이터로**
+#  넘긴다. 헤더 건수와 칩은 구독자마다 다르므로 Python이 미리 구우면 안 된다 —
+#  send-subscriber-briefing/index.ts 의 renderNewsItems()가 `{i}. {html}` + 🏷 칩 줄을
+#  **순수 append**로 조립한다(html을 역파싱하지 않는다).
+#
+#  이중 경로: 발송 함수는 news_url이 NOT NULL이면 신규 렌더러, NULL이면 기존 mergeQueueBlocks
+#  (구버전 묶음 행·법안 알림)로 간다. 그래서 news_url은 **빈 문자열이라도 NULL이면 안 된다.**
+#  format_urgent_html/queue_for_subscribers는 롤백 대비 + assembly 경로용으로 존치.
+
+
+def format_news_item(item) -> str:
+    """기사 1건의 HTML — 헤더·번호·칩 **없이** 제목 링크 + (관련 보도 N건) + 출처만.
+
+    format_urgent_html의 항목 조립부와 같은 모양을 유지할 것. 앞의 번호와 뒤의 칩 줄은
+    발송 측(Edge)이 붙인다.
+    """
+    rel = item.get('_related', 0)
+    rel_txt = f' <i>(관련 보도 {rel}건)</i>' if rel else ''
+    title, url = esc(item.get('title', '')), esc(item.get('url', ''))
+    head = f'<a href="{url}">{title}</a>' if url else f'<b>{title}</b>'
+    return f'{head}{rel_txt}\n   <i>{esc(item.get("source", ""))}</i>'
+
+
+def queue_news_items(sb, items: list) -> bool:
+    """긴급 기사 목록 → subscriber_queue에 **기사당 1행**으로 한 번에 적재. 반환=성공 여부.
+
+    어떤 예외도 밖으로 던지지 않는다(fail-open) — 큐 적재 실패가 크롤링·운영자 알림을 죽이면 안 된다.
+    """
+    if not items:
+        return False
+
+    # 최근 10분 내 같은 기사(news_url)가 이미 큐에 있으면 그 기사만 제외한다.
+    # (queue_for_subscribers의 '10분 내 동일 내용 생략'과 같은 취지 — 크롤러 두 인스턴스가
+    #  동시에 돌아 같은 기사를 각자 새 것으로 판단한 사고(2026-08-03) 방어. 묶음이 아니라
+    #  기사 단위이므로 **중복분만 빼고 나머지는 넣는다** — 전체를 버리면 새 기사가 유실된다.)
+    dup_urls = set()
+    try:
+        since = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+        recent = (sb.table('subscriber_queue').select('news_url')
+                  .eq('topic', 'urgent').gte('created_at', since).execute().data) or []
+        dup_urls = {r.get('news_url') for r in recent if r.get('news_url')}
+    except Exception as e:
+        print(f'[구독자 큐] 중복 확인 실패(계속 진행): {e}')   # 확인 실패가 적재를 막으면 안 된다
+
+    rows, skipped, seen = [], 0, set()
+    for it in items:
+        url = str(it.get('url') or '').strip()
+        if url:
+            if url in dup_urls or url in seen:
+                skipped += 1
+                continue
+            seen.add(url)
+        body = format_news_item(it)
+        if not body.strip():
+            continue
+        tags = it.get('tags')
+        if not isinstance(tags, list):
+            tags = []
+        # ★ 모든 행의 키 집합이 완전히 같아야 한다 ★ — PostgREST 벌크 insert는 객체 하나라도
+        #   키가 다르면 전체가 실패한다. news_url은 빈 문자열이라도 NOT NULL(신·구형 판별자).
+        rows.append({'topic': 'urgent', 'news_url': url,
+                     'tags': [str(t) for t in tags], 'html': body[:3500]})
+
+    if skipped:
+        print(f'[구독자 큐] 10분 내 중복 기사 {skipped}건 제외')
+    if not rows:
+        print('[구독자 큐] 적재할 신규 기사 없음')
+        return False
+
+    try:
+        sb.table('subscriber_queue').insert(rows).execute()
+        print(f'[구독자 큐] urgent {len(rows)}건 기사 단위 적재 완료 — 각 구독자의 수신 시각에 발송됨')
+    except Exception as e:
+        print(f'[구독자 큐] 적재 실패(무시): {e}')
+        return False
+    _trigger_delivery()   # 다음 정시(:25)를 기다리지 않고 바로 배달 시도
+    return True

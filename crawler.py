@@ -2519,9 +2519,13 @@ def main():
         send_urgent_email(urgent_items)
         # 구독자 봇: 즉시 발송이 아니라 큐에 적재 → 각자 고른 수신 시각에 모아서 발송된다.
         # 반드시 억제·클러스터링을 거친 urgent_items로만 호출할 것(#44).
+        # 기사당 1행으로 적재한다(2026-08-03) — 태그를 데이터로 넘겨야 구독자 관심분야 필터가
+        # 성립하고, 헤더·번호·칩은 구독자마다 달라 발송 측(Edge)이 조립한다.
+        # 운영자 알림(send_telegram/send_urgent_email)보다 **뒤에** 두고 try/except로 격리하는
+        # 현재 순서를 유지할 것 — 큐 장애가 유일한 감시 채널인 운영자 수신을 끊으면 안 된다.
         try:
-            from subscriber_notify import queue_for_subscribers, format_urgent_html
-            queue_for_subscribers(sb, 'urgent', format_urgent_html(urgent_items))
+            from subscriber_notify import queue_news_items
+            queue_news_items(sb, urgent_items)
         except Exception as e:
             print(f'[구독자 큐 적재 실패(무시)] {e}')
     else:

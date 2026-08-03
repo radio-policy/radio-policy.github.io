@@ -562,16 +562,30 @@ def save_rejected_cache(cache: dict):
         print(f'  [기각 캐시 저장 실패] {e}')
 
 
-# ── 운영자 전용 알림 (send_telegram 사용 금지 — 구독자 큐 적재 없음) ──
+# ── 입법예고 알림 (운영자 + 구독자 '법안 동향' 토픽) ──
 
 def send_operator_alert(lines: list[str]) -> bool:
-    """운영자 봇으로만 발송. 여러 건은 한 메시지로 묶고 4096자 한도 전에 분할.
+    """운영자 봇 발송 + 구독자 큐('assembly') 적재. 반환=운영자 발송 성공 여부.
 
-    분할(3800자)·전송·재시도는 notify 위임 (개선⑪). 구독자 큐 적재 없음 — 유지."""
+    2026-08-03 변경: 원래 운영자 전용이었으나, 「법안 동향」을 켠 구독자가 정작 **의견을 낼 수 있는
+    유일한 시점**(입법예고, 10~25일)을 못 받는 상태였다. 구독봇을 만들 때(8/1) 법안 발의·처리 변경만
+    연결했고 입법예고는 나중에 만든 기능이라 빠진 것 — 의도된 설계가 아니라 누락이었다.
+    별도 토픽을 만들지 않고 'assembly'에 합친다(운영자 판단: 토픽 수를 늘리지 않는다).
+
+    분할(3800자)·전송·재시도는 notify 위임 (개선⑪).
+    """
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print('[텔레그램] 환경변수 미설정 — 입법예고 알림 건너뜀')
         return False
-    return notify.send_telegram('\n\n'.join(lines), chat_id=TELEGRAM_CHAT_ID)
+    msg = '\n\n'.join(lines)
+    ok = notify.send_telegram(msg, chat_id=TELEGRAM_CHAT_ID)
+    # 구독자 큐는 fail-open — 적재가 실패해도 운영자 발송 결과(=stage 갱신 판단)에 영향 주지 않는다
+    try:
+        from subscriber_notify import queue_for_subscribers
+        queue_for_subscribers(sb, 'assembly', msg)
+    except Exception as e:
+        print(f'[구독자 큐 적재 실패(무시)] {e}')
+    return ok
 
 
 def notice_heartbeat(note: str):

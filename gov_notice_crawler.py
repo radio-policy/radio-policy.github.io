@@ -664,6 +664,14 @@ def _notify_opinion_items(new_items: list):
             # 전송부는 notify 위임 (개선⑪) — 실패 로그는 notify가 출력
             if notify.send_telegram(msg, chat_id=TELEGRAM_CHAT_ID, parse_mode='HTML'):
                 print('  [텔레그램] "%s" 발송' % it['title'][:30])
+            # 구독자 '법안 동향' 토픽에도 적재 (2026-08-03) — 입법예고는 의견을 낼 수 있는 유일한
+            # 시점(예고기간 10~25일)인데 그동안 운영자에게만 갔다. 국회 입법예고와 같은 처리.
+            # fail-open: 큐 실패가 수집·운영자 알림을 죽이지 않는다.
+            try:
+                from subscriber_notify import queue_for_subscribers
+                queue_for_subscribers(sb, 'assembly', msg)
+            except Exception as e:
+                print('  [구독자 큐 적재 실패(무시)] %s' % e)
             time.sleep(0.5)
 
     if RESEND_API_KEY and new_items:
