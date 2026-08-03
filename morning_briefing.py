@@ -415,12 +415,11 @@ def send_telegram(briefing_text: str) -> bool:
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print('[텔레그램] 환경변수 미설정 — 건너뜀')
         return False
-    html_text = _briefing_to_telegram_html(briefing_text)
-    text = html_text[:4000]
-    if len(html_text) > 4000:
-        # 태그 중간에서 잘리면 400이 나므로 마지막 완결 줄까지만 남긴다
-        text = text[:text.rfind('\n')] if '\n' in text else text
-        text += '\n\n...(전문은 대시보드 참조)'
+    # 4000자에서 자르지 않는다 — notify.send_telegram이 3800자 개행 경계로 나눠 순차 발송한다.
+    # (2026-08-03: 잘라 보내던 탓에 운영자만 [해외 동향]·[기술 용어] 섹션을 통째로 못 받고 있었다.
+    #  구독자 봇은 분할 발송이라 전문을 받는데 운영자가 더 적게 받는 역전 상태였다.)
+    # 브리핑 HTML은 태그가 줄을 넘지 않으므로 개행 경계 분할이 안전하다.
+    text = _briefing_to_telegram_html(briefing_text)
     text += '\n\n📊 <a href="https://youjinwoong.github.io/radio-policy-ai/">대시보드</a>'
     # 전송부는 notify 위임 (개선⑪) — 400 등 4xx는 notify가 재시도 없이 False 반환
     ok = notify.send_telegram(text, chat_id=TELEGRAM_CHAT_ID, parse_mode='HTML',

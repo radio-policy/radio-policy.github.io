@@ -536,16 +536,25 @@ def run(sb, api_key: str, year: int, limit: int = 0, dry: bool = False) -> dict:
         if sec_exists and (dry or sp_exists):
             stats['dup'] += 1
             continue
+        # 뷰어가 '빈 결과'가 아니라 '예외'로 실패해도 PDF 폴백까지 가야 한다.
+        # (2026-08-03: 2024-10-25 국정감사 회의록이 뷰어에서 400을 뱉는데, 예외가 폴백 앞에서
+        #  가로채는 바람에 PDF가 멀쩡한데도 영구 실패로 남았다.)
+        blocks, src, viewer_err = [], '뷰어', None
         try:
             blocks = fetch_speech_blocks(m['confer_num'])
-            src = '뷰어'
-            if not blocks:
+        except Exception as e:
+            viewer_err = str(e)[:80]
+        if not blocks:
+            try:
                 blocks = pdf_fallback_blocks(m['pdf_url'])
                 src = 'PDF폴백'
-        except Exception as e:
-            print('  [원문 실패] %s: %s' % (m['title'][:50], str(e)[:80]))
-            stats['fail'] += 1
-            continue
+            except Exception as e:
+                print('  [원문 실패] %s: 뷰어=%s / PDF=%s'
+                      % (m['title'][:50], viewer_err or '빈결과', str(e)[:60]))
+                stats['fail'] += 1
+                continue
+            if blocks and viewer_err:
+                print('  [뷰어 실패→PDF 폴백] %s (%s)' % (m['title'][:44], viewer_err[:40]))
         if not blocks:
             print('  [원문 없음·스킵] %s' % m['title'][:60])
             stats['fail'] += 1

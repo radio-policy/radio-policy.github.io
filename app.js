@@ -5475,13 +5475,17 @@ async function loadOpsStatus() {
 
 // ── KB 품질 카드 (개선⑫) — 뷰 kb_quality_low_docs·kb_quality_article_parse + 임베딩 누락 count
 //    실패해도 이 카드에만 "조회 실패"를 표기하고 운영 상태 패널 전체는 살린다.
+//    2026-08-03: 뷰가 '문서 종류별 하한(min_chars)'과 '법령류만 조문 검사'를 이미 적용하므로
+//    여기서 다시 2천자 같은 획일 기준으로 거르지 않는다. 뷰가 돌려준 행 = 이미 걸러진 후보.
+var KB_LOW_ROWS = [];   // '확인함' 버튼이 doc_name을 인덱스로 참조 (따옴표 이스케이프 사고 방지)
+
 async function loadKbQualityCard() {
   var card = document.getElementById('ops-kb-quality');
   if (!card || !sb) return;
   var head = '<div style="font-weight:700;font-size:13px;margin-bottom:6px">📚 KB 품질</div>';
   try {
     var r = await Promise.all([
-      sb.from('kb_quality_low_docs').select('doc_name,doc_category,chars,chunks'),
+      sb.from('kb_quality_low_docs').select('doc_name,doc_category,chars,chunks,doc_kind,min_chars'),
       sb.from('kb_quality_article_parse').select('doc_name,total_chunks,parsed_chunks,parse_pct'),
       sb.from('document_chunks').select('id', { count: 'exact', head: true }).is('embedding', null).eq('status', 'current')
     ]);
@@ -5489,41 +5493,66 @@ async function loadKbQualityCard() {
     var lowRows = r[0].data || [];
     var parseRows = r[1].data || [];
     var embMissing = (typeof r[2].count === 'number') ? r[2].count : null;
+    KB_LOW_ROWS = lowRows;
 
-    var lowBad = lowRows.filter(function(d) { return (d.chars || 0) < 2000; });
     var parseBad = parseRows.filter(function(d) { return (d.parse_pct == null ? 0 : d.parse_pct) < 90; });
     // 뷰가 하위 15행 상한이라 상한 도달 시 실제 건수는 더 많을 수 있음 → '+' 표기
-    var lowN = lowBad.length + (lowBad.length >= 15 ? '+' : '');
+    var lowN = lowRows.length + (lowRows.length >= 15 ? '+' : '');
     var parseN = parseBad.length + (parseBad.length >= 15 ? '+' : '');
 
-    function kbLine(name, right, danger) {
-      return '<div style="display:flex;gap:8px;justify-content:space-between;padding:4px 0;border-bottom:1px solid #f5f5f5;font-size:12px">' +
+    function kbLine(name, right, danger, ackIdx) {
+      return '<div style="display:flex;gap:8px;align-items:center;justify-content:space-between;padding:4px 0;border-bottom:1px solid #f5f5f5;font-size:12px">' +
              '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#374151">' + escHtml(name) + '</span>' +
-             '<span style="white-space:nowrap;font-weight:600;color:' + (danger ? '#dc2626' : '#6b7280') + '">' + right + '</span></div>';
+             '<span style="white-space:nowrap;font-weight:600;color:' + (danger ? '#dc2626' : '#6b7280') + '">' + right + '</span>' +
+             (ackIdx == null ? '' :
+               '<button class="btn" style="font-size:10px;padding:1px 6px;white-space:nowrap" ' +
+               'title="사람이 확인해 문제없다고 판단 — 목록에서 제외" ' +
+               'onclick="ackKbDoc(' + ackIdx + ')">확인함</button>') +
+             '</div>';
     }
 
     var html = head;
-    html += '<div style="font-size:12px;color:#374151;margin-bottom:10px">본문 부실(2천자 미만) <b>' + lowN + '건</b> · 조문 인식 90% 미만 <b>' + parseN + '건</b> · 임베딩 누락 <b>' + (embMissing != null ? embMissing : '—') + '건</b></div>';
+    html += '<div style="font-size:12px;color:#374151;margin-bottom:10px">본문 부실(종류별 하한 미달) <b>' + lowN + '건</b> · 조문 인식 90% 미만 <b>' + parseN + '건</b> · 임베딩 누락 <b>' + (embMissing != null ? embMissing : '—') + '건</b></div>';
 
     html += '<div style="font-weight:600;font-size:12px;color:#6b7280;margin:8px 0 2px">📉 본문 부실 하위</div>';
     if (!lowRows.length) html += '<div style="font-size:12px;color:#9ca3af;padding:4px 0">해당 없음</div>';
-    lowRows.slice(0, 8).forEach(function(d) {
+    lowRows.slice(0, 8).forEach(function(d, i) {
       var chars = d.chars || 0;
+      var lim = d.min_chars || 2000;
       html += kbLine(d.doc_name + (d.doc_category ? ' (' + d.doc_category + ')' : ''),
-                     chars.toLocaleString('ko-KR') + '자 · ' + (d.chunks || 0) + '청크', chars < 500);
+                     chars.toLocaleString('ko-KR') + '자 / 하한 ' + lim.toLocaleString('ko-KR') +
+                     (d.doc_kind ? ' · ' + d.doc_kind : ''),
+                     chars < lim * 0.5, i);
     });
 
-    html += '<div style="font-weight:600;font-size:12px;color:#6b7280;margin:10px 0 2px">📑 조문 인식률 하위 (법령류)</div>';
+    html += '<div style="font-weight:600;font-size:12px;color:#6b7280;margin:10px 0 2px">📑 조문 인식률 하위 (법령·고시류만)</div>';
     if (!parseRows.length) html += '<div style="font-size:12px;color:#9ca3af;padding:4px 0">해당 없음</div>';
     parseRows.slice(0, 8).forEach(function(d) {
       var pct = Math.round(d.parse_pct == null ? 0 : d.parse_pct);
-      html += kbLine(d.doc_name, pct + '% (' + (d.parsed_chunks || 0) + '/' + (d.total_chunks || 0) + ')', pct < 50);
+      html += kbLine(d.doc_name, pct + '% (' + (d.parsed_chunks || 0) + '/' + (d.total_chunks || 0) + ')', pct < 50, null);
     });
 
-    html += '<p style="font-size:11px;color:#9ca3af;margin:8px 0 0">※ 빨간 항목 = 본문 500자 미만 / 조문 인식 50% 미만 — 원문 재수집·재분할 권장.</p>';
+    html += '<p style="font-size:11px;color:#9ca3af;margin:8px 0 0">※ 하한은 문서 종류별(법령 2,000 · 고시/공고 300 · 보도자료(.md) 800 · PDF·HWP 업로드 2,000자)로 다릅니다. ' +
+            '빨간 항목 = 하한의 절반 미만 / 조문 인식 50% 미만 — 원문 재수집·재분할 권장. 조문 검사는 법제처 명명규칙 문서(공고 제외)에만 적용합니다.</p>';
     card.innerHTML = html;
   } catch (e) {
     card.innerHTML = head + '<p style="color:#dc2626;font-size:12px;margin:0">조회 실패' + (e && e.message ? ' — ' + escHtml(e.message) : '') + '</p>';
+  }
+}
+
+// '확인함' — 사람이 보고 문제없다고 판단한 문서를 kb_quality_ack 에 등재해 목록에서 제외한다.
+// 되돌리려면 SQL 로 delete from kb_quality_ack where doc_name = '…' (대시보드에서는 삭제 불가).
+async function ackKbDoc(idx) {
+  var d = KB_LOW_ROWS[idx];
+  if (!d || !sb) return;
+  if (!confirm('“' + d.doc_name + '”\n\n문제없음으로 확인 처리하여 KB 품질 목록에서 제외할까요?')) return;
+  try {
+    var res = await sb.from('kb_quality_ack')
+      .insert({ doc_name: d.doc_name, note: '대시보드 확인함 (' + (d.chars || 0) + '자, ' + (d.doc_kind || '') + ')' });
+    if (res.error) throw res.error;
+    loadKbQualityCard();
+  } catch (e) {
+    alert('확인함 처리 실패: ' + (e && e.message ? e.message : e));
   }
 }
 
