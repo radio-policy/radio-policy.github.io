@@ -24,7 +24,8 @@
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { briefingToTelegramHtml, splitByLines, sendTelegramHtml, DASHBOARD_URL, escapeHtml } from '../_shared/telegram_format.ts';
-import { pickChips } from '../_shared/news_tags.ts';
+// news_tags.ts(pickChips)는 더 이상 여기서 쓰지 않는다 — 칩은 운영자 알림 전용이 됐다.
+// 태그 자체는 여전히 '누가 이 기사를 받을지' 필터로 쓴다(아래 pickEligible).
 
 // env는 반드시 trim — 콘솔 붙여넣기 시 줄바꿈이 섞이면 시크릿 비교가 조용히 어긋난다(401)
 const env = (k: string) => (Deno.env.get(k) || '').trim();
@@ -194,6 +195,11 @@ export function maxCreatedAt(rows: QueueRow[]): string | null {
 // 기사 단위 행 렌더러. **html은 절대 파싱하지 않는다 — 순수 append만 한다.**
 // (역파싱이 바로 위 95줄짜리 병합 유틸을 낳은 실수다.)
 // 헤더 N = 태그 필터 + 중복 제거를 모두 거친 뒤의 건수. 중복 제거 키는 news_url.
+// 태그 칩은 **구독자에게 보이지 않는다**(운영자 지시 2026-08-03). 태그는 여전히 '무엇을 받을지'를
+// 정하는 필터로 쓰이지만, 판정이 맞았는지는 팀원이 아니라 운영자가 감시한다 — 그래서 칩은
+// 운영자 알림(crawler.py의 운영자 경로)에만 붙는다. 구독자 화면에 틀린 칩이 보이면 판정 오류가
+// 그대로 팀원 눈에 노출되고, 팀원은 고칠 방법이 없어 신뢰만 깎인다.
+// subTags 인자는 시그니처 유지를 위해 남겨 둔다(호출부·테스트 불변).
 export function renderNewsItems(rows: QueueRow[], subTags: string[] | null): string {
   const seen = new Set<string>();
   const picked: QueueRow[] = [];
@@ -203,10 +209,7 @@ export function renderNewsItems(rows: QueueRow[], subTags: string[] | null): str
     picked.push(r);
   }
   if (!picked.length) return '';
-  const body = picked.map((r, i) => {
-    const chips = pickChips(r.tags ?? null, subTags ?? null, 2);
-    return `${i + 1}. ${r.html}` + (chips.length ? `\n   🏷 ${chips.join(' · ')}` : '');
-  }).join('\n\n');
+  const body = picked.map((r, i) => `${i + 1}. ${r.html}`).join('\n\n');
   return `📡 <b>통신·전파 정책 주요 뉴스 ${picked.length}건</b>\n\n${body}`;
 }
 // ── 기사 단위 큐 유틸 끝 ────────────────────────────────────────────────────────

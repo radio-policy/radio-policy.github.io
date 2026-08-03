@@ -23,7 +23,7 @@ SKT Comm센터 기술정책팀의 전파·통신 정책 모니터링 자동화 �
 C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 ├── sb_client.py                # Supabase 클라이언트 공용 생성기 — HTTP/2 끄고 HTTP/1.1+재시도(make_client). 모든 스크립트가 create_client 대신 사용(RemoteProtocolError 끊김 회피)
 ├── requirements.txt            # 의존성 버전 고정(lock, 61개). 모든 워크플로가 `pip install -r requirements.txt`로 설치 — 자동 최신화 사고 방지(배경역사 #15)
-├── crawler.py                  # 메인 크롤러(GitHub Actions 매시간) — 네이버 검색 OpenAPI(키 없으면 Google RSS 폴백), **키워드 54개 확대수집 → Haiku 1차 관련성 선별(app_config.news_relevance_criteria, 무관은 저장 안 함, fail-open 키워드 폴백, 부처 인사는 무조건 통과, #66)** → 통과분만 본문 수집·Haiku 긴급도 분류(피드백 학습), 긴급 재알림 억제(suppress_repeat_alerts, #44)
+├── crawler.py                  # 메인 크롤러(GitHub Actions 매시간) — 네이버 검색 OpenAPI(키 없으면 Google RSS 폴백), **키워드 54개 확대수집 → 무관 판정 캐시 대조(news_screen_cache, #78) → Haiku 1차 관련성 선별(app_config.news_relevance_criteria, 무관은 저장 안 함+캐시 기록, fail-open 키워드 폴백, 부처 인사는 무조건 통과, #66)** — 선별이 분야 태그(#76)·사건 라벨(event, #77)도 함께 매김 → 통과분만 본문 수집·Haiku 긴급도 분류(피드백 학습), 긴급 재알림 억제(suppress_repeat_alerts, #44). 운영자 긴급 알림에 태그 표시(구독자에겐 비표시)
 ├── morning_briefing.py         # 모닝 브리핑 생성·발송(06:00 KST) — 🔴=DB 긴급도, 같은 사건 클러스터링(대표 1건+관련 N건, #44), SKT 영향 분석, 신규 입법예고 📢 섹션, 본문 0건 시 요약→제목 폴백(빈 브리핑 방지), 기사 0건 시 시각무관 1일1회 '🕊️무뉴스' 통지+placeholder(_handle_no_news)
 ├── news_dedup.py               # 같은 사건 재보도 판정 공용 유틸(제목 키워드, API 비용 0) — crawler·morning_briefing 공유. 임계 3·별-형 클러스터링 근거는 파일 주석 (#44)
 ├── regenerate_briefings.py     # 과거 브리핑을 클러스터링 적용본으로 재생성(수동). morning_briefing 함수 재사용, 입법예고 섹션 보존. **실행 전 daily_briefings_backup에 원본 백업 필수** (#46)
@@ -61,8 +61,9 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 
 | 테이블 | 설명 |
 |---|---|
-| news_feed | 뉴스 본문·요약·긴급도(**60일 유지** — 2026-07-31 확대, 자문 뉴스 검색 60일 창과 정합). locked=true면 자동삭제 제외+AI 자문 상시 참조. 내부값 긴급/보통/참고. **url UNIQUE**(idx_news_feed_url_unique) — 저장은 반드시 `upsert(on_conflict='url', ignore_duplicates=True)`로 (plain insert는 중복 1건에 배치 전체 실패, #23) |
+| news_feed | 뉴스 본문·요약·긴급도(**60일 유지** — 2026-07-31 확대, 자문 뉴스 검색 60일 창과 정합. **해외 category는 예외** #75). locked=true면 자동삭제 제외+AI 자문 상시 참조. 내부값 긴급/보통/참고. **tags text[]**(분야 태그 5종, #76)·**event text**(사건 라벨 — 대시보드 클러스터링 기준, #77). **url UNIQUE**(idx_news_feed_url_unique) — 저장은 반드시 `upsert(on_conflict='url', ignore_duplicates=True)`로 (plain insert는 중복 1건에 배치 전체 실패, #23) |
 | deleted_news | 삭제 기사 url·title 블록리스트(재수집 방지). 영구 |
+| news_screen_cache | **선별 무관 판정 캐시**(#78): url PK·title_hash·criteria_hash·judged_at. 무관 기사는 저장이 안 돼 매시간 재판정됐다(시간당 ~470건 중 신규 ~70건 = 선별 비용 85% 낭비). 제목이 바뀌거나 기준문(news_relevance_criteria)이 바뀌면 지문 불일치로 자동 재판정. **AI 판정분만 캐시**(키워드 폴백 탈락은 안 함), 20일 TTL 크롤러가 청소, 전 단계 fail-open. RLS 켜고 정책 0 = service 전용 |
 | importance_feedback | 긴급도 수동 수정 내역(news_id당 1행). 분류 학습 데이터. 영구 |
 | feedback_rules | 피드백 증류 규칙 캐시(단일 행 id=1). 20건↑ 증류, 10건마다 재증류 |
 | daily_briefings(삭제 없음·전량 보관, 목록도 무제한 표시) | 일일 브리핑 원문("⚠️ SKT 영향 분석:" 포함). 긴급도 수정 시 🔴 자동 동기화 |

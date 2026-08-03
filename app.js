@@ -2730,8 +2730,9 @@ async function loadNews() {
     // 60일 보존이라 행수가 수천 건까지 자라며, 상한 없이 전부 가져온다(안전 상한 10,000행).
     // 목록 표시에 필요한 컬럼만 조회 — content(기사 본문)는 행당 수 KB로 초기 전송량의 대부분이라 제외.
     // 상세 열람 시 showNewsDetail이 해당 1건만 온디맨드 조회하며, RAG 자문은 별도 쿼리로 content를 직접 가져온다 (#61).
-    // tags는 _groupNews의 묶기 조건에 쓰인다 — 빠지면 undefined가 돼 태그 조건이 조용히 무력화된다
-    var NEWS_LIST_COLS = 'id,title,source,category,url,is_read,published_at,created_at,summary,importance,urgency,locked,briefed_date,content_fetched_at,tags';
+    // tags·event는 _groupNews의 묶기 조건에 쓰인다 — 빠지면 undefined가 돼 조건이 조용히 무력화된다
+    // (태그 조건은 항상 통과, 사건 라벨은 영영 제목 유사도로 폴백. 컬럼 추가 시 여기부터 볼 것)
+    var NEWS_LIST_COLS = 'id,title,source,category,url,is_read,published_at,created_at,summary,importance,urgency,locked,briefed_date,content_fetched_at,tags,event';
     var all = [];
     for (var off = 0; off < 10000; off += 1000) {
       var page = await sb.from('news_feed').select(NEWS_LIST_COLS)
@@ -2791,6 +2792,44 @@ function _titleSimilarity(t1, t2) {
   return shared.length / Math.max(k1.length, k2.length);
 }
 
+// ── 사건 라벨(news_feed.event) 유사도 ───────────────────
+// 라벨은 Haiku 선별이 기사마다 붙이는 "사건 한 줄"이다(예: 'SKT 1~7월 번호이동 순증 1위').
+// 완전 일치로 비교하지 않는 이유: 선별은 35건씩 배치로 돌아서, 같은 사건이라도 배치가 다르면
+// 표현이 어긋난다('SKT …' vs 'SK텔레콤 …', 수치를 넣은 것과 뺀 것). 그래서 글자 2-gram으로 잰다 —
+// 단어 단위로 세면 'SKT'와 'SK텔레콤'이 완전 남남이 되고, 라벨이 짧아 표본도 부족하다.
+function _eventBigrams(s) {
+  var t = String(s || '').toLowerCase().replace(/[^0-9a-z가-힣]/g, '');
+  var out = [];
+  for (var i = 0; i + 1 < t.length; i++) out.push(t.slice(i, i + 2));
+  return out;
+}
+
+// 겹침 계수(교집합 / 짧은 쪽 길이). Dice(2·교집합/합)를 쓰지 않는 이유는 실측 때문이다 —
+// 같은 사건이라도 한 라벨은 수치를 담고 다른 라벨은 안 담아 길이가 두 배씩 벌어지는데,
+// Dice는 그 길이 차이를 유사도 하락으로 계산해 버린다. 2026-08-03 실측에서 Dice는
+// 같은 사건 최저 0.41 / 다른 사건 최고 0.42로 구간이 겹쳐 임계를 그을 자리가 없었고,
+// 겹침 계수는 같은 사건 최저 0.47 / 다른 사건 최고 0.43으로 갈라졌다.
+function _eventSimilarity(e1, e2) {
+  var a = _eventBigrams(e1), b = _eventBigrams(e2);
+  if (!a.length || !b.length) return 0;
+  var bag = {};
+  b.forEach(function(g){ bag[g] = (bag[g] || 0) + 1; });
+  var hit = 0;
+  a.forEach(function(g){ if (bag[g] > 0) { bag[g]--; hit++; } });
+  return hit / Math.min(a.length, b.length);
+}
+
+// 0.45: 2026-08-03 실측(1,438건·라벨 845건)으로 정했다. 임계를 낮춰 가며 실제로 붙은 라벨 쌍을
+// 눈으로 전수 확인한 결과, 틀린 병합은 0.43 이하에서만 나왔다 —
+// 「토스모바일 요금제 출시」↔「우리WON모바일 요금제 출시」 0.31,
+// 「KT 개인정보 유출 과징금」↔「KT 5G 과장광고 소송 패소」 0.42(이번에 없애려는 다른 사건 연쇄가 바로 이것),
+// 「이동통신3사 AI 요금제」↔「통신 3사 여름휴가 혜택」 0.31.
+// 반대로 같은 사건인데 배치가 갈려 표현이 어긋난 쌍의 최저값이 0.47이었다
+// (운영자가 지목한 「SKT 1~7월 번호이동 순증 15.7만명…」↔「SK텔레콤 번호이동 순증 1위」가 0.67).
+// 0.43~0.47 사이가 비어 있어 그 골짜기 안에 0.45로 그었다.
+// 제목 유사도 임계(0.15)와 값을 비교하지 말 것 — 제목 쪽은 키워드 비율, 이쪽은 글자 2-gram 겹침으로 척도가 다르다.
+var EVENT_SIM_THRESHOLD = 0.45;
+
 function _groupNews(items) {
   var used = {};
   var groups = [];
@@ -2812,8 +2851,14 @@ function _groupNews(items) {
         // 2026-08-03 실측: 통신 뉴스가 '통신3사·요금제·출시' 같은 흔한 단어를 공유해
         // 번호이동·자급제 요금제·안테나 공급·5G 광고 위법이 91건 한 그룹으로 묶였다.
         // 분야 태그가 있으면 겹치는 것만 묶는다(둘 중 하나라도 미판정이면 제목 유사도만으로 판단).
+        // 양쪽 다 사건 라벨이 있으면 라벨끼리 비교한다 — 같은 사건을 다룬 기사는 언론사마다
+        // 제목 표현이 달라 단어 겹침으로는 잘 안 잡히지만, 라벨은 사실만 남긴 문장이라 수렴한다.
+        // 한쪽이라도 라벨이 없으면(미판정·키워드 폴백·구 데이터) 종전대로 제목 유사도로 판단한다.
         var seed = group[0];
-        var simOk = _titleSimilarity(seed.title, items[j].title) >= 0.15;
+        var ev1 = (seed.event || '').trim(), ev2 = (items[j].event || '').trim();
+        var simOk = (ev1 && ev2)
+          ? _eventSimilarity(ev1, ev2) >= EVENT_SIM_THRESHOLD
+          : _titleSimilarity(seed.title, items[j].title) >= 0.15;
         var tagOk = true;
         var ts = seed.tags, tj = items[j].tags;
         if (Array.isArray(ts) && ts.length && Array.isArray(tj) && tj.length) {
@@ -2832,6 +2877,17 @@ function _groupNews(items) {
 }
 
 function _groupTitle(items) {
+  // 사건 라벨이 있으면 그룹에서 가장 많이 나온 라벨을 그룹 이름으로 쓴다.
+  // 아래 단어 빈도 방식은 「요금제 출시 우리은행 관련」처럼 조각난 이름을 만들었다.
+  // 동률이면 먼저 나온 것 — 목록이 최신순이라 대표 기사의 라벨이 뽑힌다.
+  var evFreq = {}, bestEv = '', bestN = 0;
+  items.forEach(function(n){
+    var e = (n.event || '').trim();
+    if (!e) return;
+    evFreq[e] = (evFreq[e] || 0) + 1;
+    if (evFreq[e] > bestN) { bestN = evFreq[e]; bestEv = e; }
+  });
+  if (bestEv) return bestEv;
   var allKw = [];
   items.forEach(function(n){ allKw = allKw.concat(_extractKeywords(n.title)); });
   var freq = {};

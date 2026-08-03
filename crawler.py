@@ -1383,10 +1383,11 @@ NEWS_RELEVANCE_CRITERIA_FALLBACK = (
 # 동시에 바뀌어야 유효한데, 한 곳만 DB로 튜닝 가능하게 하면 드리프트만 생긴다.
 NEWS_TAGS = ('spectrum', 'market', 'regulation', 'security', 'ai')
 MAX_TAGS_PER_ITEM = 3           # 경계 기사도 3개면 충분 — 그 이상은 사실상 미판정
+MAX_EVENT_LEN = 40              # 사건 라벨 상한 — 지시는 12~25자, 넘치면 잘라 DB·그룹핑을 지킨다
 
 NEWS_SCREEN_TOOL = {
     'name': 'record_relevant_news',
-    'description': '기사 목록 중 기준문에 따라 관련으로 판정된 기사의 id와 분야 태그를 기록한다.',
+    'description': '기사 목록 중 기준문에 따라 관련으로 판정된 기사의 id와 분야 태그, 사건 라벨을 기록한다.',
     'input_schema': {
         'type': 'object',
         'properties': {
@@ -1402,8 +1403,12 @@ NEWS_SCREEN_TOOL = {
                             'description': '분야 태그 0~3개. 확실하지 않으면 빈 배열.',
                             'items': {'type': 'string', 'enum': list(NEWS_TAGS)},
                         },
+                        'event': {
+                            'type': 'string',
+                            'description': '기사가 다루는 사건 한 줄(12~25자). 뚜렷하지 않으면 빈 문자열.',
+                        },
                     },
-                    # tags는 일부러 required에서 뺀다 — 모델이 빼먹어도 관련성 판정은 살아야 한다.
+                    # tags·event는 일부러 required에서 뺀다 — 모델이 빼먹어도 관련성 판정은 살아야 한다.
                     'required': ['id'],
                 },
             },
@@ -1431,6 +1436,51 @@ def _screen_text_of(item: dict) -> str:
     return re.sub(r'\s+', ' ', txt).strip()[:300]
 
 
+# ── 무관 판정 캐시 (2026-08-03, 비용 절감 ①) ──────────────────────────────────
+#  무관 판정된 기사는 저장되지 않아 다음 실행의 '기존 URL' 대조에서 빠지고, 네이버 검색에
+#  같은 기사가 ~15일 남아 매시간 재판정됐다(실측: 시간당 판정 ~470건 중 신규는 ~70건 =
+#  선별 비용의 85%가 재판정). URL+제목 지문을 news_screen_cache에 남겨 건너뛴다.
+#  · 제목 지문 — 언론사가 제목을 고치면([속보]→[종합], 오타 수정) 재판정한다.
+#    지문에 요약문은 넣지 않는다: 네이버 요약은 검색어 주변 발췌라 검색어마다 달라진다.
+#  · 기준문 지문 — 기준문이 바뀌면 캐시가 자동 무효(옛 기준의 판정이 새 기준을 가리면 안 됨).
+#  · AI가 실제로 판정한 무관만 캐시한다. 키워드 폴백의 탈락분은 캐시하지 않는다 —
+#    폴백은 'AI가 죽었을 때의 임시 판정'이라 AI가 살아나면 다시 판정받아야 한다.
+#  · 모든 단계 fail-open: 캐시가 죽으면 전량 판정으로 돌아간다(돈만 더 쓰고 기사는 안 놓침).
+SCREEN_CACHE_TTL_DAYS = 20     # 네이버 노출 기간(~15일) + 여유. 지나면 재등장 자체가 없다.
+
+
+def _screen_hash(s: str) -> str:
+    """공백 정규화 후 sha256 앞 16자 — 제목·기준문 지문 공용."""
+    import hashlib
+    norm = re.sub(r'\s+', ' ', (s or '')).strip()
+    return hashlib.sha256(norm.encode('utf-8')).hexdigest()[:16]
+
+
+def _load_screen_cache(criteria_hash: str) -> dict:
+    """{url: title_hash} — 현재 기준문으로 판정된 행만. 실패 시 빈 dict(전량 판정으로 진행)."""
+    try:
+        rows = _fetch_all_rows('news_screen_cache', 'url,title_hash,criteria_hash')
+        return {r['url']: r['title_hash'] for r in rows
+                if r.get('criteria_hash') == criteria_hash}
+    except Exception as e:
+        print(f'[선별 캐시] 로드 실패(전량 판정으로 진행): {str(e)[:80]}')
+        return {}
+
+
+def _save_screen_cache(rows: list) -> None:
+    """무관 판정분 기록 + TTL 청소. 실패해도 선별 결과에는 영향 없음(fail-open)."""
+    if rows:
+        try:
+            sb.table('news_screen_cache').upsert(rows, on_conflict='url').execute()
+        except Exception as e:
+            print(f'[선별 캐시] 기록 실패(무시): {str(e)[:80]}')
+    try:
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=SCREEN_CACHE_TTL_DAYS)).isoformat()
+        sb.table('news_screen_cache').delete().lt('judged_at', cutoff).execute()
+    except Exception as e:
+        print(f'[선별 캐시] 청소 실패(무시): {str(e)[:80]}')
+
+
 def _keyword_relevant(item: dict) -> bool:
     """폴백 판정 — 종전 수집 기준(제목에 RADIO_KEYWORDS 포함)과 동일."""
     return any(k in (item.get('title') or '') for k in RADIO_KEYWORDS)
@@ -1438,10 +1488,14 @@ def _keyword_relevant(item: dict) -> bool:
 
 def _screen_batch_haiku(client, criteria: str, batch: list):
     """배치 1개(≤SCREEN_BATCH_SIZE건)를 Haiku 1콜로 판정.
-    반환: {관련 id(1-based): 분야 태그 list}. 실패 시 None.
+    반환: {관련 id(1-based): {'tags': list, 'event': str}}. 실패 시 None.
     None은 '판정 실패' 신호이고 호출부의 키워드 폴백이 여기 물려 있다 — 의미를 바꾸지 말 것.
+    (반환값이 dict로 넓어져도 이 None 규약은 그대로다. 값이 빈 dict인 것과 None은 다르다 —
+     빈 dict는 '관련이지만 태그·사건 미판정', None은 '이 배치 판정 실패'.)
     태그는 NEWS_TAGS 화이트리스트 교집합·최대 MAX_TAGS_PER_ITEM개로 자른다
     (모델이 없는 slug를 지어내도 DB·Edge로 새어 나가지 않게).
+    사건 라벨(event)은 대시보드 뉴스 그룹핑용이다 — 같은 사건을 다룬 기사끼리 표현이 수렴하도록
+    쓰게 하고, 공백 정규화·MAX_EVENT_LEN 절단만 적용한다. 판정에는 관여하지 않는다.
     결정성: tool_choice로 도구 호출 강제 + 기준문 문자 적용·건별 독립 판정 지시.
     (temperature류 파라미터 사용 금지 — 지침 do-not)"""
     payload = []
@@ -1467,17 +1521,26 @@ def _screen_batch_haiku(client, criteria: str, batch: list):
         '   태그는 기사 제목에 나온 단어가 아니라 기사가 다루는 사안을 기준으로 고른다. '
         '한 기사가 여러 사안을 다루면 해당 태그를 모두 붙인다(최대 3개). '
         '5종 중 어느 것도 확실하지 않으면 tags를 비워 둔다 — 억지로 채우지 말라.\n'
+        '5. 관련으로 판정한 기사에는 그 기사가 다루는 사건을 event에 한 줄로 적어라.\n'
+        '   - 12~25자. 언론사 수사·따옴표·기자 해석을 빼고 사실만 쓴다.\n'
+        '   - 같은 사건을 다룬 다른 기사와 표현이 같아지도록 '
+        '「핵심 주체 + 행위 + 수치」 순으로 쓴다. 예: SKT 1~7월 번호이동 순증 1위\n'
+        '   - 기사 제목을 그대로 베끼지 말라. 제목이 달라도 사건이 같으면 같은 문장이 나와야 한다.\n'
+        '   - 사건이 뚜렷하지 않으면(전망·해설·기획 기사 등) event를 빈 문자열로 둔다. '
+        '억지로 만들지 말라.\n'
         '관련으로 판정된 기사만 record_relevant_news 도구의 relevant 배열에 '
-        '{id, tags} 형태로 기록하라. 관련이 하나도 없으면 빈 배열을 기록하라.\n\n'
+        '{id, tags, event} 형태로 기록하라. 관련이 하나도 없으면 빈 배열을 기록하라.\n\n'
         + json.dumps(payload, ensure_ascii=False)
     )
     try:
         resp = client.messages.create(
             model=SCREEN_MODEL,
-            # 3000: 35건 전건 태그 시 출력 ≈1,000토큰. 여유 1.5배로는 부족하다 —
+            # 5000: 35건 전건 태그 시 출력 ≈1,000토큰이었고, 여기에 사건 라벨(event)이 붙어
+            # 건당 한글 25자 ≈ 35토큰 + 키/따옴표 ≈ 5토큰 → 35건이면 +1,400토큰. 합계 ≈2,400.
+            # 3000이면 여유가 1.25배뿐이라 라벨이 길어진 배치에서 잘릴 수 있어 5000으로 올렸다.
             # 초과하면 tool_use가 미완성으로 잘려 None(판정 실패) → 배치 전체 키워드 폴백,
             # 즉 조용한 리콜 손실이 된다. 입력이 아니라 출력 한도라 비용 영향도 없다.
-            max_tokens=3000,
+            max_tokens=5000,
             system=criteria,
             tools=[NEWS_SCREEN_TOOL],
             tool_choice={'type': 'tool', 'name': 'record_relevant_news'},
@@ -1488,11 +1551,13 @@ def _screen_batch_haiku(client, criteria: str, batch: list):
                 rows = (blk.input or {}).get('relevant') or []
                 out = {}
                 for row in rows:
-                    # 모델이 {id, tags} 대신 정수만 뱉어도 관련성 판정은 살린다(태그만 비움).
+                    # 모델이 {id, tags, event} 대신 정수만 뱉어도 관련성 판정은 살린다
+                    # (태그·사건 라벨만 비움).
                     if isinstance(row, dict):
-                        raw_id, raw_tags = row.get('id'), row.get('tags')
+                        raw_id = row.get('id')
+                        raw_tags, raw_event = row.get('tags'), row.get('event')
                     else:
-                        raw_id, raw_tags = row, None
+                        raw_id, raw_tags, raw_event = row, None, None
                     try:
                         rid = int(raw_id)
                     except (TypeError, ValueError):
@@ -1503,7 +1568,10 @@ def _screen_batch_haiku(client, criteria: str, batch: list):
                             tags.append(t)
                         if len(tags) >= MAX_TAGS_PER_ITEM:
                             break
-                    out[rid] = tags
+                    event = ''
+                    if isinstance(raw_event, str):
+                        event = re.sub(r'\s+', ' ', raw_event).strip()[:MAX_EVENT_LEN]
+                    out[rid] = {'tags': tags, 'event': event}
                 return out
         return None                   # 도구 호출 없음 → 실패 취급(호출부가 키워드 폴백)
     except Exception as e:
@@ -1543,8 +1611,9 @@ def screen_news_items(items: list) -> list:
     - ANTHROPIC_API_KEY 없음/클라이언트 생성 실패 → 전량 키워드 폴백.
     - 배치 단위 실패 → 그 배치만 키워드 폴백 (다른 배치 판정은 유지).
     - 판정에만 쓰는 '_screen_text' 키는 여기서 전부 제거한다 (DB 컬럼이 아님).
-    - 분야 태그(news_feed.tags)를 같이 매긴다. 판정을 못 받은 경로(인사 자동통과·키워드
-      폴백·모델이 tags 생략)는 빈 배열 []이며, 그 보장은 함수 끝의 setdefault 한 곳에 건다.
+    - 분야 태그(news_feed.tags)와 사건 라벨(news_feed.event)을 같이 매긴다. 판정을 못 받은
+      경로(인사 자동통과·키워드 폴백·모델이 생략)는 각각 []·''이며, 그 보장은 함수 끝의
+      setdefault 두 줄 한 곳에 건다.
     """
     if not items:
         return []
@@ -1571,6 +1640,26 @@ def screen_news_items(items: list) -> list:
     if cand_idx and client is None:
         print(f'[선별] AI 판정 불가 — RADIO_KEYWORDS 키워드 폴백 ({len(cand_idx)}건)')
 
+    # 캐시 대조 — 같은 URL·같은 제목·같은 기준문으로 이미 무관 판정된 기사는 판정에서 뺀다.
+    # client 없는 폴백 모드에서는 캐시를 쓰지 않는다(기준문을 못 읽었고, 키워드 판정은 공짜).
+    cache_skip = 0
+    criteria_hash = ''
+    screen_cache = {}
+    if cand_idx and client:
+        criteria_hash = _screen_hash(criteria)
+        screen_cache = _load_screen_cache(criteria_hash)
+        if screen_cache:
+            remain = []
+            for n in cand_idx:
+                url = (items[n].get('url') or '').strip()
+                if url and screen_cache.get(url) == _screen_hash(items[n].get('title') or ''):
+                    cache_skip += 1       # keep[n]은 False 그대로 = 이전 판정 유지
+                else:
+                    remain.append(n)
+            cand_idx = remain
+
+    judged = len(cand_idx)
+    rejected_rows = []                    # 이번에 AI가 무관 판정한 기사 → 캐시에 기록
     n_batches = (len(cand_idx) + SCREEN_BATCH_SIZE - 1) // SCREEN_BATCH_SIZE
     for i in range(0, len(cand_idx), SCREEN_BATCH_SIZE):
         chunk = cand_idx[i:i + SCREEN_BATCH_SIZE]
@@ -1584,27 +1673,53 @@ def screen_news_items(items: list) -> list:
                 keep[n] = _keyword_relevant(it)
         else:
             for pos, n in enumerate(chunk, 1):
-                tags = verdict.get(pos)     # None = 이 배치에서 무관 판정
-                if tags is not None:
+                got = verdict.get(pos)      # None = 이 배치에서 무관 판정
+                if got is not None:
                     keep[n] = True
-                    items[n]['tags'] = tags
+                    items[n]['tags'] = got.get('tags') or []
+                    items[n]['event'] = got.get('event') or ''
+                else:
+                    url = (items[n].get('url') or '').strip()
+                    if url:
+                        # ★ 모든 행의 키 집합 동일 ★ (PostgREST 벌크 upsert 요건)
+                        rejected_rows.append({
+                            'url': url,
+                            'title_hash': _screen_hash(items[n].get('title') or ''),
+                            'criteria_hash': criteria_hash,
+                        })
+
+    if client:
+        _save_screen_cache(rejected_rows)
 
     passed  = [it for n, it in enumerate(items) if keep[n]]
     dropped = [it for n, it in enumerate(items) if not keep[n]]
-    print(f'[선별] 수집 {len(items)}건 → 관련 {len(passed)}건 '
-          f'(제외 {len(dropped)}건, 인사 자동통과 {personnel}건)')
+    print(f'[선별] 수집 {len(items)}건 → 캐시 건너뜀 {cache_skip}건 → 판정 {judged}건 '
+          f'→ 관련 {len(passed)}건 (제외 {len(dropped)}건, 인사 자동통과 {personnel}건)')
+
+    # 캐시가 데워졌는데(300행+) 판정이 150건을 넘으면 캐시가 조용히 깨진 것 — 청구서가 아니라
+    # 당일에 알기 위한 경보. 첫 실행(캐시 비어 있음)은 전량 판정이 정상이라 울리지 않는다.
+    if len(screen_cache) >= 300 and judged > 150:
+        try:
+            notify.send_telegram(
+                f'⚠️ [선별 캐시] 판정 {judged}건 — 정상(~70건)의 2배 이상입니다. '
+                f'캐시 적중이 깨졌을 수 있습니다(기준문 변경 직후라면 정상). '
+                f'수집 {len(items)}건, 캐시 건너뜀 {cache_skip}건.',
+                chat_id=TELEGRAM_CHAT_ID)
+        except Exception:
+            pass
     for it in dropped[:5]:            # 기준문 조정용 표본 — 제외 사유 감시
         print(f'  [제외] {(it.get("title") or "")[:50]}')
 
-    # 임시 키 제거(_screen_text는 DB 컬럼이 아니다) + tags 기본값 보장.
-    # ★ tags setdefault는 반드시 이 한 지점에만 둘 것 ★
+    # 임시 키 제거(_screen_text는 DB 컬럼이 아니다) + tags·event 기본값 보장.
+    # ★ tags·event setdefault는 반드시 이 한 지점에만 둘 것 ★
     #   PostgREST 벌크 upsert는 리스트 안 모든 객체의 키 집합이 같아야 한다. save_new_items가
-    #   valid 리스트를 통째로 넘기므로, 태그 없는 경로(키워드 폴백 / 부처 인사 자동통과 /
-    #   모델이 tags 생략) 중 하나라도 키가 빠지면 upsert 전체가 터져 뉴스 수집이 전면 중단된다.
+    #   valid 리스트를 통째로 넘기므로, 태그·사건 라벨 없는 경로(키워드 폴백 / 부처 인사 자동통과 /
+    #   모델이 tags·event 생략) 중 하나라도 키가 빠지면 upsert 전체가 터져 뉴스 수집이 전면 중단된다.
     #   통과 기사는 전부 이 루프를 지나므로 여기가 유일한 방어선이다.
     #   '기타' 태그를 만들지 말 것 — 구독자가 그것을 끌 수 있게 되어 판정 실패 기사가 조용히 사라진다.
     for it in items:
         it.setdefault('tags', [])         # 반드시 안전망보다 먼저 — 태그가 없는 기사가 바로 보정 대상이다
+        it.setdefault('event', '')        # 사건 라벨 미판정은 빈 문자열(대시보드는 이때 제목 유사도로 되돌아간다)
         _spectrum_safety_net(it)          # 판정 누락 보정 — 아래 함수 주석 참조
         it.pop('_screen_text', None)      # 보정이 _screen_text를 읽으므로 제거는 마지막
     return passed
@@ -2062,6 +2177,29 @@ def generate_daily_briefing(items: list, new_terms: list) -> str:
 #  텔레그램 알림 (긴급 기사 전용)
 # ═══════════════════════════════════════════════════════
 
+#  분야 태그 한글 라벨 — **운영자 알림 전용** (운영자 지시 2026-08-03).
+#  구독자(팀원) 메시지에는 칩을 붙이지 않는다: 태그가 틀렸을 때 팀원은 고칠 방법이 없어
+#  신뢰만 깎이고, 판정 품질은 운영자가 감시하는 것이 맞다. 태그는 구독자 쪽에서 여전히
+#  '누구에게 보낼지' 필터로만 쓰인다(send-subscriber-briefing).
+#  라벨 원본은 supabase/functions/_shared/news_tags.ts — 사본이므로 같이 고칠 것.
+#  · 최대 3개를 자르지 않고 **전부** 보여준다(구독자용 pickChips는 2개 상한). 과다 부착도
+#    운영자가 봐야 할 품질 신호이기 때문이다.
+#  · 태그가 없으면 '미판정' — 안전망(_spectrum_safety_net)까지 지나고도 빈 것이라
+#    프롬프트를 손봐야 한다는 뜻이므로 조용히 넘기면 안 된다.
+TAG_LABELS_KO = {
+    'spectrum': '주파수·망', 'market': '요금·시장', 'regulation': '규제·제재',
+    'security': '보안·정보', 'ai': 'AI',
+}
+
+
+def tag_labels(tags) -> str:
+    """태그 slug 목록 → 운영자 알림용 한글 문자열. 빈 값이면 '미판정'."""
+    if not isinstance(tags, list) or not tags:
+        return '미판정'
+    # 모르는 slug는 그대로 노출한다 — 조용히 버리면 사본 드리프트를 못 알아챈다.
+    return ' · '.join(TAG_LABELS_KO.get(str(t), str(t)) for t in tags)
+
+
 def send_morning_telegram(items: list, briefing_text: str = ''):
     """아침 8시 일일 브리핑 Telegram 발송 — briefing_text 있으면 AI 브리핑 전송"""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
@@ -2164,7 +2302,7 @@ def suppress_repeat_alerts(urgent_items: list) -> list:
 
 
 def send_telegram(urgent_items: list):
-    """긴급 기사를 Telegram Bot으로 즉시 알림"""
+    """긴급 기사를 Telegram Bot으로 즉시 알림 (운영자 전용 — 분야 태그를 함께 표시)"""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print('[텔레그램] 환경변수 미설정 (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID) — 건너뜀')
         return
@@ -2188,6 +2326,7 @@ def send_telegram(urgent_items: list):
         rel_txt = f' (관련 보도 {rel}건)' if rel else ''
         lines.append(f'<b>{i}. {_esc(title)}</b>{_esc(rel_txt)}')
         lines.append(f'   출처: {_esc(source)}')
+        lines.append(f'   🏷 {_esc(tag_labels(item.get("tags")))}')
         if url:
             # href 속성값: & → &amp;, " → &quot; (quote=True)
             lines.append(f'   🔗 <a href="{_html.escape(str(url), quote=True)}">기사 보기</a>\n')
@@ -2210,6 +2349,7 @@ def send_telegram(urgent_items: list):
             rel_txt = f' (관련 보도 {rel}건)' if rel else ''
             plain_lines.append(f"{i}. {item.get('title', '')}{rel_txt}")
             plain_lines.append(f"   출처: {item.get('source', '')}")
+            plain_lines.append(f"   🏷 {tag_labels(item.get('tags'))}")
             plain_lines.append(f"   🔗 {item.get('url', '')}\n")
         plain_lines.append('📊 대시보드: https://youjinwoong.github.io/radio-policy-ai/')
         ok = notify.send_telegram('\n'.join(plain_lines), chat_id=TELEGRAM_CHAT_ID,
