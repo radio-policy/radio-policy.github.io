@@ -641,6 +641,16 @@ def _format_overseas_section(items: list) -> str:
 #  STEP 5.7 — 국회 법안 동향 조회 (assembly_bills)
 # ═══════════════════════════════════════════════════════
 
+# '신규 발의'로 인정할 발의일 상한. 수집이 며칠 밀렸다 몰아 도는 경우를 흡수할 만큼은 넉넉하되,
+# 1~2년 전 법안이 신규로 실리지는 않을 만큼 짧게. 주말·연휴 공백(최대 3~4일)을 감안해 7일.
+NEW_BILL_MAX_AGE_DAYS = 7
+
+# 의견등록(입법예고)을 '갓 시작한 것'으로 볼 잔여 기간 하한.
+# 국회법상 입법예고 기간은 10일 이상 → 시작 당일에 잡히면 잔여가 9~10일이다.
+# 9일로 두면 주말 하루 밀린 정도는 흡수하고, 절반 이상 지난 예고는 걸러진다.
+NOTICE_MIN_REMAIN_DAYS = 9
+
+
 def fetch_assembly_items(sb) -> dict:
     """국회 법안 동향 3종 조회 — assembly_bills
     (a) 신규 발의: created_at 최근 24h
@@ -659,10 +669,17 @@ def fetch_assembly_items(sb) -> dict:
             'notice_end_dt,notice_url,notice_briefed_at')
     result = {'new': [], 'changed': [], 'deadline': [], 'briefed_ids': []}
     try:
-        # (a) 신규 발의
+        # (a) 신규 발의 — **우리가 오늘 처음 적재했고(created_at) + 실제로도 최근 발의(propose_dt)**
+        #   두 조건을 모두 본다. created_at만 보면 수집이 며칠 밀렸다가 한 번에 도는 순간
+        #   과거 법안 수백 건이 "신규 발의"로 쏟아진다.
+        #   (2026-08-03 실측 사고: GitHub Actions 정지로 31시간 밀린 뒤 수동 실행하자
+        #    203건이 한꺼번에 적재됐고 발의일이 2024-05-31~2026-07-21로 전부 과거였다.
+        #    운영자 텔레그램에 개별 알림 수십 통이 쏟아졌다.)
+        propose_floor = (datetime.now(KST) - timedelta(days=NEW_BILL_MAX_AGE_DAYS)).strftime('%Y-%m-%d')
         resp = sb.table('assembly_bills') \
-            .select(cols) \
+            .select(cols + ',propose_dt') \
             .gte('created_at', cutoff) \
+            .gte('propose_dt', propose_floor) \
             .execute()
         result['new'] = resp.data or []
 
@@ -677,10 +694,17 @@ def fetch_assembly_items(sb) -> dict:
             if r.get('prev_proc_result') and r.get('prev_proc_result') != r.get('proc_result')
         ]
 
-        # (c) 의견등록 진행 중 & 미노출 ('YYYY-MM-DD' 문자열 비교)
+        # (c) 의견등록 — 진행 중 & 미노출 & **갓 시작한 것만** ('YYYY-MM-DD' 문자열 비교)
+        #   국회 API(nknalejkafmvgzmpt)는 마감일(NOTI_ED_DT)만 주고 시작일을 안 준다.
+        #   그래서 '남은 기간'으로 역산한다 — 국회법상 입법예고 기간은 10일 이상이므로,
+        #   갓 시작한 건이면 잔여가 10일 가까이 남아 있고, 뒤늦게 발견한 건은 잔여가 짧다.
+        #   (2026-08-03 사고: 수집이 31시간 밀린 뒤 몰아 돌자 이미 절반 이상 지난 예고 7건이
+        #    "신규 의견등록"으로 브리핑에 잡혔다. 운영자 지시 — 오늘 발생한 것이 아니면 제외.)
+        #   정상 운영(매일 수집)에서는 시작 당일에 잡히므로 잔여 ≈ 10일이라 그대로 실린다.
+        notice_floor = (datetime.now(KST) + timedelta(days=NOTICE_MIN_REMAIN_DAYS)).strftime('%Y-%m-%d')
         resp = sb.table('assembly_bills') \
             .select(cols) \
-            .gte('notice_end_dt', today.strftime('%Y-%m-%d')) \
+            .gte('notice_end_dt', notice_floor) \
             .is_('notice_briefed_at', 'null') \
             .execute()
         notices = resp.data or []

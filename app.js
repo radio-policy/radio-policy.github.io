@@ -99,6 +99,9 @@ let lastRagSources = [];
 let lastLawmapData = null;        // 직전 자문 답변의 <lawmap> 블록 파싱 결과 (법령 관계도 자동 축적용)
 let lastNewsSources = [];         // 직전 자문에 '본문 발췌로 실제 들어간' 수집 뉴스 (출처 표시·검증용)
 let lastKbSources = [];           // 직전 자문에 들어간 요약·실무 문서(kb_chunks) — 동일 목적
+// 직전 자문에서 모델이 본문에 실제 인용한 웹 문서('[웹] 제목 (url)' 형식).
+// 검색만 하고 안 쓴 결과는 citations로 오지 않으므로 내부 RAG 목록과 달리 "진짜 근거"다.
+let lastWebSources = [];
 
 function extractKeywords(text) {
   // 한국어 조사·어미·불용어 제거
@@ -194,20 +197,24 @@ function extractNewsKeywords(text) {
 
 // ── 자문 출처 표기 ──────────────────────────────────────────
 // chat_logs.sources는 text 1개 컬럼이라, 종류별 접두사로 구분해 같은 배열에 담는다 (스키마 변경 없음).
-// 조문 원문(document_chunks)은 접두사 없음 / 뉴스 / 요약·실무(kb_chunks) / 별표 4종.
+// 조문 원문(document_chunks)은 접두사 없음 / 뉴스 / 요약·실무(kb_chunks) / 별표 / 웹 5종.
 var NEWS_SRC_PREFIX = '[뉴스] ';
 var KB_SRC_PREFIX = '[요약] ';
 var ANNEX_SRC_PREFIX = '[별표] ';
+// 웹 검색 인용 — 형식은 '[웹] 제목 (https://...)'. 접두사가 없으면 laws로 떨어져
+// "참조 법령·문서" 배지에 웹 제목이 섞이므로, 반드시 이 분기를 타야 한다. (2026-08-03)
+var WEB_SRC_PREFIX = '[웹] ';
 function splitSources(arr) {
-  var laws = [], news = [], kb = [], annex = [];
+  var laws = [], news = [], kb = [], annex = [], web = [];
   (arr || []).forEach(function(s) {
     if (typeof s !== 'string' || !s) return;
-    if (s.indexOf(NEWS_SRC_PREFIX) === 0) { if (news.indexOf(s) === -1) news.push(s); }
+    if (s.indexOf(WEB_SRC_PREFIX) === 0) { if (web.indexOf(s) === -1) web.push(s); }
+    else if (s.indexOf(NEWS_SRC_PREFIX) === 0) { if (news.indexOf(s) === -1) news.push(s); }
     else if (s.indexOf(KB_SRC_PREFIX) === 0) { if (kb.indexOf(s) === -1) kb.push(s); }
     else if (s.indexOf(ANNEX_SRC_PREFIX) === 0) { if (annex.indexOf(s) === -1) annex.push(s); }
     else if (laws.indexOf(s) === -1) laws.push(s);
   });
-  return { laws: laws, news: news, kb: kb, annex: annex };
+  return { laws: laws, news: news, kb: kb, annex: annex, web: web };
 }
 function stripNewsPrefix(s) { return s.indexOf(NEWS_SRC_PREFIX) === 0 ? s.slice(NEWS_SRC_PREFIX.length) : s; }
 function stripKbPrefix(s) { return s.indexOf(KB_SRC_PREFIX) === 0 ? s.slice(KB_SRC_PREFIX.length) : s; }
@@ -227,6 +234,39 @@ function sourceTagsHtml(list, limit) {
 }
 function newsTagsHtml(list) {
   return list.map(function(s) { return '<span class="rag-tag">' + chEsc(stripNewsPrefix(s)) + '</span>'; }).join(' ');
+}
+
+// ── 웹 출처(🌐) — 모델이 본문에 실제 인용한 문서만 citations로 오므로 "진짜 근거" 목록이다 ──
+// 📚 내부 자료는 '검색돼 프롬프트에 들어간' 목록일 뿐 전부 반영됐다는 뜻이 아니어서 라벨을 나눈다.
+// (2026-08-03: 일본 28GHz 질문에 총무성 수치가 나왔는데 참조는 전부 국내 법령이던 사고)
+var INTERNAL_SRC_LABEL = '📚 검색된 내부 자료(전부 반영된 것은 아님)';
+// '[웹] 제목 (https://...)' 파싱 — URL이 없거나 깨졌으면 링크 없이 제목만 (표기가 죽지 않게)
+function parseWebSource(s) {
+  var body = (s || '').indexOf(WEB_SRC_PREFIX) === 0 ? s.slice(WEB_SRC_PREFIX.length) : (s || '');
+  var m = body.match(/^([\s\S]*?)\s*\((https?:\/\/[^\s)]+)\)\s*$/);
+  return m ? { title: m[1] || m[2], url: m[2] } : { title: body, url: '' };
+}
+function webSourceHost(url) {
+  try { return url ? new URL(url).hostname.replace(/^www\./, '') : ''; } catch(e) { return ''; }
+}
+// 제목 + 도메인, 새 탭 링크. href는 safeUrl()로 정화(javascript: 차단 + 이스케이프).
+function webTagsHtml(list, limit) {
+  return (list || []).slice(0, limit || 5).map(function(s) {
+    var w = parseWebSource(s);
+    var href = safeUrl(w.url);
+    var host = webSourceHost(w.url);
+    var label = chEsc(w.title.slice(0, 60)) +
+      (host ? ' <span style="opacity:.7">(' + chEsc(host) + ')</span>' : '');
+    return href
+      ? '<a class="rag-tag" href="' + href + '" target="_blank" rel="noopener" style="text-decoration:none">' + label + '</a>'
+      : '<span class="rag-tag">' + label + '</span>';
+  }).join(' ');
+}
+// 웹 출처 배지 줄 — 0건이면 빈 문자열(빈 줄 노이즈 금지)
+function webSourcesRowHtml(list, style) {
+  if (!list || !list.length) return '';
+  return '<div class="rag-sources"' + (style ? ' style="' + style + '"' : '') +
+    '>🌐 웹 출처: ' + webTagsHtml(list, 5) + '</div>';
 }
 
 // 쿼리 확장 — Haiku로 동의어·법령 공식 용어 키워드 생성 (실패 시 빈 배열 → 기존 키워드만 사용)
@@ -1791,6 +1831,7 @@ async function callClaude(userText, onDelta) {
 
   // RAG: 관련 문서 청크 검색 (보도자료는 원본 JSON, 법령은 Supabase)
   lastRagSources = [];
+  lastWebSources = [];
   var ragChunks = [];
 
   if (isPressQuery(userText)) {
@@ -1905,8 +1946,13 @@ async function callClaude(userText, onDelta) {
   var cited = [];
   var seenUrl = new Set();
   var stopReason = null;
+  // 인용 수집은 부가 정보 — 여기서 터져도 답변 표시는 살아야 하므로 통째로 삼킨다(fail-open)
   function addCitation(c) {
-    if (c && c.url && !seenUrl.has(c.url)) { seenUrl.add(c.url); cited.push({ url: c.url, title: c.title || c.url }); }
+    try {
+      if (!c || !c.url || seenUrl.has(c.url)) return;
+      seenUrl.add(c.url);
+      cited.push({ url: String(c.url), title: String(c.title || c.url) });
+    } catch(e) { /* 인용 1건 실패는 무시 */ }
   }
 
   try {
@@ -1964,12 +2010,13 @@ async function callClaude(userText, onDelta) {
   aiText = aiText.replace(/<lawmap>[\s\S]*?<\/lawmap>/g, '').replace(/<lawmap>[\s\S]*$/, '').replace(/\s+$/, '');
 
   chatHistory.push({ role: 'assistant', content: aiText });
-  // 웹 검색 출처 표시
-  if (cited.length > 0) {
-    aiText += '\n\n---\n\n**🌐 웹 검색 출처:**\n\n' + cited.slice(0, 5).map(function(c) {
-      return '- [' + c.title.replace(/[\[\]]/g, '') + '](' + c.url + ')';
-    }).join('\n');
-  }
+  // 웹 출처는 본문에 붙이지 않고 lastWebSources로 넘겨 화면에서 🌐 배지로 따로 보여준다.
+  // 저장 형식은 '[웹] 제목 (url)' — chat_logs.sources의 접두사 관례(splitSources)와 동일.
+  try {
+    lastWebSources = cited.slice(0, 5).map(function(c) {
+      return WEB_SRC_PREFIX + c.title.replace(/[\r\n]+/g, ' ') + ' (' + c.url + ')';
+    });
+  } catch(e) { lastWebSources = []; console.warn('웹 출처 정리 실패(답변은 정상):', e); }
   // 길이 제한으로 잘린 경우 안내 (히스토리에는 원문만 저장 → "계속" 입력 시 이어서 생성)
   if (stopReason === 'max_tokens') {
     aiText += '\n\n---\n\n> ⚠️ 답변이 길이 제한으로 잘렸습니다. **"계속"**이라고 입력하면 이어서 답변합니다.';
@@ -2209,8 +2256,14 @@ function _chatContentHtml() {
   var d = _chatDetail || {};
   // 내보내기(PDF·Word)는 화면과 달리 6개 제한 없이 전부 남긴다 — 문서는 근거를 온전히 보존해야 함
   var xs = splitSources(d.sources);
+  // 웹 출처는 문서로 나가도 URL이 살아 있어야 근거를 다시 확인할 수 있다(내보내기는 개수 제한 없음)
   var srcHtml =
-    (xs.laws.length ? '<p class="ex-src"><b>참조 법령·문서:</b> ' + xs.laws.map(chEsc).join(', ') + '</p>' : '') +
+    (xs.web.length ? '<p class="ex-src"><b>🌐 웹 출처(본문 인용):</b> ' + xs.web.map(function(s) {
+      var w = parseWebSource(s);
+      var href = safeUrl(w.url);
+      return href ? '<a href="' + href + '">' + chEsc(w.title) + '</a> (' + href + ')' : chEsc(w.title);
+    }).join(', ') + '</p>' : '') +
+    (xs.laws.length ? '<p class="ex-src"><b>' + chEsc(INTERNAL_SRC_LABEL) + ' — 법령·문서:</b> ' + xs.laws.map(chEsc).join(', ') + '</p>' : '') +
     (xs.annex.length ? '<p class="ex-src"><b>참조 별표:</b> ' + xs.annex.map(function(s) { return chEsc(stripAnnexPrefix(s)); }).join(', ') + '</p>' : '') +
     (xs.kb.length ? '<p class="ex-src"><b>참조 요약·실무:</b> ' + xs.kb.map(function(s) { return chEsc(stripKbPrefix(s)); }).join(', ') + '</p>' : '') +
     (xs.news.length ? '<p class="ex-src"><b>참조 뉴스:</b> ' + xs.news.map(function(s) { return chEsc(stripNewsPrefix(s)); }).join(', ') + '</p>' : '');
@@ -2227,7 +2280,13 @@ function exportChatMd() {
   md += '- 일시: ' + chDate(d.created_at) + '\n\n---\n\n';
   md += (d.answer || '') + '\n';
   var ms = splitSources(d.sources);
-  if (ms.laws.length) md += '\n---\n\n**참조 법령·문서:** ' + ms.laws.join(', ') + '\n';
+  if (ms.web.length) {
+    md += '\n---\n\n**🌐 웹 출처(본문 인용):**\n' + ms.web.map(function(s) {
+      var w = parseWebSource(s);
+      return w.url ? '- [' + w.title.replace(/[\[\]]/g, '') + '](' + w.url + ')' : '- ' + w.title;
+    }).join('\n') + '\n';
+  }
+  if (ms.laws.length) md += '\n---\n\n**' + INTERNAL_SRC_LABEL + ' — 법령·문서:** ' + ms.laws.join(', ') + '\n';
   if (ms.annex.length) md += '\n**참조 별표:** ' + ms.annex.map(stripAnnexPrefix).join(', ') + '\n';
   if (ms.kb.length) md += '\n**참조 요약·실무:** ' + ms.kb.map(stripKbPrefix).join(', ') + '\n';
   if (ms.news.length) md += '\n**참조 뉴스:** ' + ms.news.map(stripNewsPrefix).join(', ') + '\n';
@@ -2300,6 +2359,12 @@ async function viewChatHistoryItem(id) {
     }
     var sp = splitSources(Array.isArray(srcs) ? srcs : []);
     var srcHtml = '';
+    // 🌐 실제 인용한 웹 문서가 먼저 — 📚 내부 자료는 "검색된" 목록임을 라벨로 밝힌다
+    srcHtml += webSourcesRowHtml(sp.web, 'margin-top:12px');
+    if (sp.laws.length + sp.annex.length + sp.kb.length + sp.news.length > 0) {
+      srcHtml += '<div class="rag-sources" style="margin-top:8px;font-size:10px;opacity:.75">' +
+        chEsc(INTERNAL_SRC_LABEL) + '</div>';
+    }
     if (sp.laws.length > 0) {
       srcHtml += '<div class="rag-sources" style="margin-top:12px"><i class="ti ti-book"></i> 참조 법령·문서: ' +
         sourceTagsHtml(sp.laws, 6) + '</div>';
@@ -2316,7 +2381,7 @@ async function viewChatHistoryItem(id) {
       srcHtml += '<div class="rag-sources" style="margin-top:6px"><i class="ti ti-news"></i> 참조 뉴스: ' +
         newsTagsHtml(sp.news) + '</div>';
     }
-    _chatDetail = { question: row.question || '', answer: row.answer || '', category: row.category || '일반', created_at: row.created_at, sources: sp.laws.concat(sp.annex, sp.kb, sp.news) };
+    _chatDetail = { question: row.question || '', answer: row.answer || '', category: row.category || '일반', created_at: row.created_at, sources: sp.web.concat(sp.laws, sp.annex, sp.kb, sp.news) };
     body.innerHTML =
       '<button class="btn" onclick="openChatHistory()" style="margin-bottom:12px"><i class="ti ti-arrow-left"></i>목록으로</button>' +
       '<button class="btn" onclick="deleteChatHistoryItem(\'' + id + '\', null)" style="margin-bottom:12px;margin-left:8px;color:#d04545"><i class="ti ti-trash"></i>삭제</button>' +
@@ -2401,8 +2466,26 @@ async function sendChat() {
     msgEl.innerHTML = '<div class="msg-name">전파정책 전문가 AI</div>' + renderMd(answer);
     chatArea.scrollTop = chatArea.scrollHeight;
 
+    // 출처 표기 두 갈래 (2026-08-03 "참고가 전부 법령" 사고):
+    //  🌐 = 모델이 본문에 실제 인용한 웹 문서 = 진짜 근거. 수치·해외 현황은 대개 여기서 온다.
+    //  📚 = 검색돼 프롬프트에 들어간 내부 자료. 전부 반영됐다는 뜻이 아니므로 그렇게 적는다.
+    const _webSrc = lastWebSources || [];
+    if (_webSrc.length > 0) {
+      const wbDiv = document.createElement('div');
+      wbDiv.className = 'rag-sources';
+      wbDiv.innerHTML = '🌐 웹 출처: ' + webTagsHtml(_webSrc, 5);
+      msgEl.appendChild(wbDiv);
+    }
+
     // RAG 출처 표시 — 법령·문서와 뉴스는 근거 성격이 달라 한 배지에 섞지 않는다
     const _advSrc = splitSources(lastRagSources);
+    if (_advSrc.laws.length + _advSrc.annex.length + _advSrc.kb.length + _advSrc.news.length > 0) {
+      const inDiv = document.createElement('div');
+      inDiv.className = 'rag-sources';
+      inDiv.style.cssText = 'font-size:10px;opacity:.75';
+      inDiv.textContent = INTERNAL_SRC_LABEL;
+      msgEl.appendChild(inDiv);
+    }
     if (_advSrc.laws.length > 0) {
       const srcDiv = document.createElement('div');
       srcDiv.className = 'rag-sources';
@@ -2468,7 +2551,8 @@ async function sendChat() {
           question: text,
           answer: answer,
           category: detectCategory(text),
-          sources: lastRagSources
+          // 웹 출처를 앞에 붙여 함께 남긴다 — 이력·내보내기에서 splitSources()가 갈라 쓴다
+          sources: (lastWebSources || []).concat(lastRagSources)
         });
       } catch(e) { console.warn('자문 이력(chat_logs) 저장 실패(답변은 정상):', e); }
       refreshDashboard();
@@ -7924,7 +8008,14 @@ async function callReportDraft(userText, reportType, onDelta, opts) {
   var aiText = '';
   var cited = [];
   var seenUrl = new Set();
-  function addCitation(c){ if (c && c.url && !seenUrl.has(c.url)) { seenUrl.add(c.url); cited.push({ url:c.url, title:c.title||c.url }); } }
+  // 자문과 동일하게 fail-open — 인용 수집이 터져도 초안 본문은 그대로 나와야 한다
+  function addCitation(c){
+    try {
+      if (!c || !c.url || seenUrl.has(c.url)) return;
+      seenUrl.add(c.url);
+      cited.push({ url:String(c.url), title:String(c.title||c.url) });
+    } catch(e) { /* 인용 1건 실패는 무시 */ }
+  }
   var reader = res.body.getReader();
   var decoder = new TextDecoder('utf-8');
   var buf = '';
@@ -7957,10 +8048,29 @@ async function callReportDraft(userText, reportType, onDelta, opts) {
       }
     }
   }
-  if (cited.length > 0) {
-    cited.slice(0,5).forEach(function(c){ lastReportDraftSources.push(c.title); });
-  }
+  // 웹 인용은 '[웹] 제목 (url)'로 남긴다. 제목만 넣으면 내부 자료와 구분이 안 되고 URL이 사라져,
+  // 보고서에 실린 수치를 나중에 검증할 수 없다 — 초안은 임원 보고로 나가므로 특히 문제. (2026-08-03)
+  try {
+    cited.slice(0,5).forEach(function(c){
+      lastReportDraftSources.push(WEB_SRC_PREFIX + c.title.replace(/[\r\n]+/g, ' ') + ' (' + c.url + ')');
+    });
+  } catch(e) { console.warn('웹 출처 정리 실패(초안은 정상):', e); }
   return aiText;
+}
+
+// 초안 하단 출처 — 자문 화면과 같은 원칙으로 두 갈래. 웹 출처가 0건이면 🌐 줄 자체를 넣지 않는다.
+function reportSourcesHtml(list) {
+  var sp = splitSources(list || []);
+  var internal = sp.laws.concat(sp.annex, sp.kb, sp.news)
+    .filter(function(v, i, a) { return a.indexOf(v) === i; }).slice(0, 10);
+  if (!sp.web.length && !internal.length) return '';
+  var html = '<div style="margin-top:14px;padding-top:10px;border-top:0.5px solid var(--border-light);font-size:11px;color:var(--text-muted)">';
+  if (sp.web.length) html += '<div>🌐 웹 출처: ' + webTagsHtml(sp.web, 5) + '</div>';
+  if (internal.length) {
+    html += '<div' + (sp.web.length ? ' style="margin-top:6px"' : '') + '>' +
+      escHtml(INTERNAL_SRC_LABEL) + ': ' + internal.map(escHtml).join(' · ') + '</div>';
+  }
+  return html + '</div>';
 }
 
 // 초안 생성 UI 오케스트레이션
@@ -7991,14 +8101,7 @@ async function onGenerateDraft() {
       if (outEl) outEl.innerHTML = renderMd(partial);
     });
     lastReportDraftText = text;
-    if (outEl) {
-      var srcHtml = '';
-      if (lastReportDraftSources.length > 0) {
-        var uniq = lastReportDraftSources.filter(function(v,i,a){ return a.indexOf(v)===i; }).slice(0,10);
-        srcHtml = '<div style="margin-top:14px;padding-top:10px;border-top:0.5px solid var(--border-light);font-size:11px;color:var(--text-muted)">참고: ' + uniq.map(escHtml).join(' · ') + '</div>';
-      }
-      outEl.innerHTML = renderMd(text) + srcHtml;
-    }
+    if (outEl) outEl.innerHTML = renderMd(text) + reportSourcesHtml(lastReportDraftSources);
     if (actionsEl) actionsEl.style.display = 'flex';
     if (reviseRow) reviseRow.style.display = 'flex';
   } catch(e) {
@@ -8042,14 +8145,7 @@ async function onReviseDraft(scope) {
       if (outEl) outEl.innerHTML = renderMd(partial);
     }, { reviseInstruction: instruction, priorDraft: prior });
     lastReportDraftText = text;
-    if (outEl) {
-      var srcHtml = '';
-      if (lastReportDraftSources.length > 0) {
-        var uniq = lastReportDraftSources.filter(function(v,i,a){ return a.indexOf(v)===i; }).slice(0,10);
-        srcHtml = '<div style="margin-top:14px;padding-top:10px;border-top:0.5px solid var(--border-light);font-size:11px;color:var(--text-muted)">참고: ' + uniq.map(escHtml).join(' · ') + '</div>';
-      }
-      outEl.innerHTML = renderMd(text) + srcHtml;
-    }
+    if (outEl) outEl.innerHTML = renderMd(text) + reportSourcesHtml(lastReportDraftSources);
     if (inp) inp.value = '';
     if (actionsEl) actionsEl.style.display = 'flex';
     if (note && scope !== 'always') note.textContent = '✏️ 지시대로 수정했습니다. 이어서 더 고치거나 채택하세요.';
