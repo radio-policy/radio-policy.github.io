@@ -91,8 +91,12 @@ function settingsKeyboard(s: Sub) {
     [{ text: `${chk(s.topic_assembly)} 🏛️ 법안 동향`, callback_data: 't:assembly' }],
     // ── 관심분야 ── 모닝 브리핑은 팀이 같은 그림을 보는 자리라 전원 동일하게 두고,
     // 하루 여러 번 오는 '주요 뉴스'에만 적용한다.
-    [{ text: '— 관심분야 (📡 주요 뉴스에만 적용) —', callback_data: 'noop' }],
-    ...tagRows,
+    // 주요 뉴스가 꺼져 있으면 태그 버튼을 아예 감춘다 — 눌러도 아무 효과가 없는 죽은 버튼을
+    // 남겨두면 "껐는데 왜 켜져 보이나"로 혼동된다(운영자 지적 2026-08-03). 선택값은 DB에
+    // 그대로 남아 있어 주요 뉴스를 다시 켜면 원래 상태로 돌아온다.
+    ...(s.topic_urgent
+      ? [[{ text: '— 관심분야 (📡 주요 뉴스에만 적용) —', callback_data: 'noop' }], ...tagRows]
+      : [[{ text: '— 관심분야는 📡 주요 뉴스를 켜면 표시됩니다 —', callback_data: 'noop' }]]),
     [{ text: '— 아래는 하나만 선택 —', callback_data: 'noop' }],
     [{ text: `${sel(s.days === 'daily')} 매일 받기`, callback_data: 'd:daily' },
      { text: `${sel(s.days === 'weekday')} 평일만`, callback_data: 'd:weekday' }],
@@ -379,6 +383,15 @@ async function handleCallback(cb: { id: string; data?: string; from: { id: numbe
     //  ③ 결과가 6개면 다시 []로 정규화 — 캐논을 하나만 두면 나중에 태그가 늘어도 '전체' 구독자가 자동 수신.
     const slug = data.slice(2);
     if (!TAG_SLUGS.includes(slug)) { await tg('answerCallbackQuery', { callback_query_id: cb.id }); return; }
+    // 주요 뉴스가 꺼져 있으면 태그 버튼은 화면에 없다. 그래도 옛 화면(스크롤 위 예전 메시지)에서
+    // 누를 수 있으므로 서버에서도 막는다 — 안 막으면 "껐는데 설정이 바뀌는" 상태가 된다.
+    if (!sub.topic_urgent) {
+      await tg('answerCallbackQuery', {
+        callback_query_id: cb.id, show_alert: true,
+        text: '📡 주요 뉴스가 꺼져 있어 관심분야는 적용되지 않습니다.\n먼저 주요 뉴스를 켜 주세요.',
+      });
+      return;
+    }
     const known = (sub.tags || []).filter((t) => TAG_SLUGS.includes(t));   // 폐기된 slug는 조용히 정리
     const cur = (sub.tags || []).length ? known : [...TAG_SLUGS];
     const next = cur.includes(slug) ? cur.filter((t) => t !== slug) : [...cur, slug];
