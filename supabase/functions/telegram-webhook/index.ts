@@ -56,6 +56,7 @@ interface Sub {
   days: string; briefing_hour: number;
   ai_allowed: boolean; ai_count_date: string | null; ai_count: number;
   law_count_date?: string | null; law_count?: number;   // 자연어 /law 일일 상한 (2026-08-03)
+  end_hour: number;      // 수신 종료 시각(18~22) — 종전 하드코딩 '23시 이후 무발송'을 대체 (2026-08-03)
   // 관심분야. **빈 배열 = 전체 수신**(캐논 하나). 6개를 다 켜면 []로 정규화하므로,
   // 나중에 7번째 태그가 생겨도 기존 '전체' 구독자가 자동으로 받는다.
   tags: string[];
@@ -101,12 +102,18 @@ function settingsKeyboard(s: Sub) {
     [{ text: '— 아래는 하나만 선택 —', callback_data: 'noop' }],
     [{ text: `${sel(s.days === 'daily')} 매일 받기`, callback_data: 'd:daily' },
      { text: `${sel(s.days === 'weekday')} 평일만`, callback_data: 'd:weekday' }],
-    // 수신 시각 = '이 시각부터' 받기 시작한다는 뜻. 브리핑은 이 시각에 1회, 긴급·법안은 이후
-    // 새로 들어오는 대로 매시 :25에 전달되며 23시를 넘기면 다음날 이 시각까지 발송이 없다.
-    [{ text: `받기 시작 시각 — 현재 ${hh(s.briefing_hour)}시 (심야 무발송)`, callback_data: 'noop' }],
-    [6, 7, 8, 9, 10, 12].map((v) => ({
+    // 수신 창 = 시작~종료. 브리핑은 시작 시각에 1회, 주요 뉴스·법안은 그 뒤 새로 생기는 대로
+    // 매시 :25에 전달되고, 종료 시각을 넘기면 다음 날 시작 시각까지 발송이 없다.
+    // (종전에는 종료가 '23시'로 코드에 박혀 있었다 — 구독자가 고르게 바꿈, 2026-08-03)
+    [{ text: `받기 시작 시각 — 현재 ${hh(s.briefing_hour)}시`, callback_data: 'noop' }],
+    [6, 7, 8, 9, 10].map((v) => ({
       text: `${sel(s.briefing_hour === v)}${hh(v)}`,
       callback_data: `h:${v}`,
+    })),
+    [{ text: `받기 종료 시각 — 현재 ${hh(s.end_hour)}시 (이후 무발송)`, callback_data: 'noop' }],
+    [18, 19, 20, 21, 22].map((v) => ({
+      text: `${sel(s.end_hour === v)}${hh(v)}`,
+      callback_data: `e:${v}`,
     })),
     // '구독 해지' 버튼은 두지 않는다 — 항목 3개를 모두 끄면 결과가 같은데
     // 상태만 두 가지가 되어 "어느 쪽으로 껐는지" 헷갈렸다.
@@ -116,7 +123,7 @@ function settingsKeyboard(s: Sub) {
 const START_TEXT =
   '✅ <b>구독 완료!</b>\n\n' +
   '선택한 요일·시각에 <b>모닝 브리핑</b>이 도착하고, <b>주요 뉴스·법안 동향</b>은 그 시각 이후 새로 생기는 대로 전달됩니다.\n' +
-  '🌙 <b>23시가 지나면 다음 날 선택 시각까지 발송하지 않습니다</b> (심야 무발송).\n' +
+  '🌙 <b>받기 종료 시각을 넘기면 다음 날 시작 시각까지 발송하지 않습니다.</b>\n' +
   '아래 버튼으로 콘텐츠·요일·수신 시각을 바로 바꿀 수 있어요. (언제든 /settings)\n' +
   '항목을 모두 끄면 알림이 오지 않습니다.\n\n' +
   '📖 <b>법령 검색</b> — <code>/law 3G 종료 관련 법령</code> (궁금한 주제 → 관련 법령·조항과 이유. 조문 번호를 알면 <code>/law 전기통신사업법 19조</code> 로 원문 즉답)\n' +
@@ -455,6 +462,11 @@ async function handleCallback(cb: { id: string; data?: string; from: { id: numbe
   }
   else if (data === 'd:daily') { patch.days = 'daily'; ack = '매일 받기로 변경'; }
   else if (data === 'd:weekday') { patch.days = 'weekday'; ack = '평일(월~금)만 받기로 변경'; }
+  else if (data.startsWith('e:')) {
+    // 종료 시각도 발송 기록을 건드리지 않는다 (h: 와 같은 이유 — 아래 주석 참조)
+    patch.end_hour = Number(data.slice(2));
+    ack = `받는 종료 시각 ${String(patch.end_hour).padStart(2, '0')}시로 변경`;
+  }
   else if (data.startsWith('h:')) {
     // 발송 기록(last_briefing_sent_date)은 건드리지 않는다 (2026-08-03 재발송 사고).
     // 지우면 "이미 받은 날 + 새 시각이 이미 지남" 조합에서 다음 :25에 오늘분이 또 온다.
@@ -513,7 +525,7 @@ Deno.serve(async (req: Request) => {
       let sub = await getSub(chatId);
       if (!sub) { await upsertSub(chatId, { username: from.username || null, first_name: from.first_name || null }); sub = (await getSub(chatId))!; }
       await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML',
-        text: '⚙️ <b>수신 설정</b>\n버튼을 눌러 바로 변경할 수 있습니다.\n✅⬜ = 여러 개 선택 · 🔵⚪ = 하나만 선택\n<i>항목을 모두 끄면 알림이 오지 않습니다.</i>\n\n🌙 <b>발송 시간대</b> — 모닝 브리핑은 선택한 시각에 1회, 주요 뉴스·법안은 그 시각 이후 새로 생기는 대로 전달됩니다. <b>23시가 지나면 다음 날 선택 시각까지 발송하지 않습니다.</b>',
+        text: '⚙️ <b>수신 설정</b>\n버튼을 눌러 바로 변경할 수 있습니다.\n✅⬜ = 여러 개 선택 · 🔵⚪ = 하나만 선택\n<i>항목을 모두 끄면 알림이 오지 않습니다.</i>\n\n🌙 <b>발송 시간대</b> — 모닝 브리핑은 <b>시작 시각</b>에 1회, 주요 뉴스·법안은 그 뒤 새로 생기는 대로 전달됩니다. <b>종료 시각을 넘기면 다음 날 시작 시각까지 발송하지 않습니다.</b>',
         reply_markup: settingsKeyboard(sub) });
     } else if (text === '/stop') {
       // 메뉴에서는 뺐지만 하위호환으로 남긴다 — '모든 항목 끄기'로 동작(설정·시각은 보존)

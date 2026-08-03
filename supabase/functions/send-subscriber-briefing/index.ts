@@ -56,6 +56,7 @@ interface Sub {
   days: string;
   topic_briefing: boolean; topic_urgent: boolean; topic_assembly: boolean;
   briefing_hour: number;
+  end_hour: number;      // 수신 종료 시각(18~22) — 이 시각을 넘기면 다음 날 시작 시각까지 무발송
   last_briefing_sent_date: string | null;
   last_urgent_sent_at: string | null;
   last_assembly_sent_at: string | null;
@@ -227,8 +228,11 @@ Deno.serve(async (req: Request) => {
     let q = sb.from('telegram_subscribers')
       // ⚠ select('*')가 아니라 **명시 목록**이다. 컬럼을 빠뜨리면 값이 undefined가 되어
       //   "전체 수신"으로 조용히 퇴화하고 타입 검사도 못 잡는다. 컬럼 추가 시 여기부터 고칠 것.
-      .select('chat_id, days, topic_briefing, topic_urgent, topic_assembly, briefing_hour, last_briefing_sent_date, last_urgent_sent_at, last_assembly_sent_at, tags')
-      .eq('active', true).lte('briefing_hour', hour);
+      .select('chat_id, days, topic_briefing, topic_urgent, topic_assembly, briefing_hour, end_hour, last_briefing_sent_date, last_urgent_sent_at, last_assembly_sent_at, tags')
+      // 수신 창: briefing_hour(오전 6~10) ≤ 지금 ≤ end_hour(오후 6~10).
+      // end_hour는 종전에 코드에 박혀 있던 '23시 이후 무발송'을 구독자가 고르게 바꾼 것.
+      // 창을 벗어난 시간대의 큐는 버리지 않는다 — 워터마크가 안 움직이므로 다음 날 시작 시각에 전달된다.
+      .eq('active', true).lte('briefing_hour', hour).gte('end_hour', hour);
     if (!isWeekday) q = q.eq('days', 'daily');   // 주말은 '매일' 설정자만
     const subs = ((await q).data || []) as Sub[];
     if (!subs.length) {

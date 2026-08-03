@@ -451,16 +451,26 @@ export async function searchLawArticles(sb: SupabaseClient, query: string, limit
 export async function answerLawQuery(sb: SupabaseClient, query: string): Promise<string | null> {
   const apiKey = env('ANTHROPIC_API_KEY');
   if (!apiKey) return null;
-  // 조문 검색을 **두 갈래**로 돌린다 (2026-08-03 사고).
-  //  ① searchLawArticles = 키워드 ilike — 질문 어휘가 조문에 그대로 있을 때 정확하다.
-  //  ② searchChunks = 3중 하이브리드(키워드+trgm+임베딩) — 어휘가 어긋나도 뜻으로 찾는다.
-  // ①만 쓰다가 "5G 커버리지 맵 공개" 질문에서 「전기통신역무 선택에 필요한 정보 제공 기준」을
-  // 통째로 놓쳤다. 그 고시는 '커버리지'라는 말을 한 번도 쓰지 않고 '이용가능 지역'·'지도 등의
-  // 형태'라고 쓴다 — 실무 용어와 법령 용어의 간극은 글자 일치로는 절대 못 넘는다.
-  // (같은 질문에서 요약층(kb)은 임베딩 검색이라 제대로 찾아냈다 = 자료가 아니라 검색이 문제였다.)
+  // 조문 검색을 **세 갈래**로 돌린다 (2026-08-03 사고에서 도달한 구조).
+  //  ① 키워드(searchLawArticles) — 질문 어휘가 조문에 그대로 있을 때 정확하다.
+  //  ② 의미(match_law_articles_semantic) — 어휘가 어긋나도 뜻으로 찾는다. **조문만** 대상.
+  //  ③ 요약층 다리 — 요약층(voyage-law-2)이 짚은 법령의 조문을 이름으로 확정 조회.
+  // 발단: "5G 커버리지 맵 공개" 질문에서 「전기통신역무 선택에 필요한 정보 제공 기준」을 통째로
+  // 놓쳤다. 그 고시는 '커버리지'라는 말을 한 번도 쓰지 않고 '이용가능 지역'·'지도 등의 형태'라고
+  // 쓴다 — 실무 용어와 법령 용어의 간극은 글자 일치로 절대 못 넘는다. 그런데 ②만 더해도 안 됐고,
+  // 임베딩 모델을 voyage-law-2로 바꿔도 7위까지만 올라왔다(실측 A/B). 진짜 원인은 **검색 대상**
+  // 이었다 — 부칙·별표·서식이 상위를 독식하고 있었다. ②를 조문 전용으로 좁혀 대부분 해결되고,
+  // 남는 사각지대는 ③이 덮는다.
   const [hits, semantic, kb] = await Promise.all([
     searchLawArticles(sb, query, 8),
-    searchChunks(sb, apiKey, query).catch(() => [] as Chunk[]),
+    // /law 전용 의미 검색 — 조문만 대상(match_law_articles_semantic). 범용 searchChunks를
+    // 쓰면 검색 공간의 2/3가 조문이 아니라(보도자료·회의록·논문 40.6%, 별표 17.9%, 부칙 5.5%,
+    // 서식 2.9%) 조문이 밀려난다. 실측: 이 RPC로 바꾸자 "기지국 개설 허가 절차"의 정답
+    // (전파법 21조)이 5위→1위, "개인정보 유출 신고"가 시행령 40조·법 34조로 1·2위가 됐다.
+    getQueryEmbedding(query).then((emb) => emb
+      ? sb.rpc('match_law_articles_semantic', { query_embedding: emb, match_threshold: 0.0, match_count: 8, only_current: true })
+          .then((r) => (r.data || []) as Chunk[])
+      : [] as Chunk[]).catch(() => [] as Chunk[]),
     searchKbSummaries(sb, query).catch(() => [] as KbRow[]),
   ]);
 
