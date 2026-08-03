@@ -451,15 +451,32 @@ export async function searchLawArticles(sb: SupabaseClient, query: string, limit
 export async function answerLawQuery(sb: SupabaseClient, query: string): Promise<string | null> {
   const apiKey = env('ANTHROPIC_API_KEY');
   if (!apiKey) return null;
-  const [hits, kb] = await Promise.all([
+  // 조문 검색을 **두 갈래**로 돌린다 (2026-08-03 사고).
+  //  ① searchLawArticles = 키워드 ilike — 질문 어휘가 조문에 그대로 있을 때 정확하다.
+  //  ② searchChunks = 3중 하이브리드(키워드+trgm+임베딩) — 어휘가 어긋나도 뜻으로 찾는다.
+  // ①만 쓰다가 "5G 커버리지 맵 공개" 질문에서 「전기통신역무 선택에 필요한 정보 제공 기준」을
+  // 통째로 놓쳤다. 그 고시는 '커버리지'라는 말을 한 번도 쓰지 않고 '이용가능 지역'·'지도 등의
+  // 형태'라고 쓴다 — 실무 용어와 법령 용어의 간극은 글자 일치로는 절대 못 넘는다.
+  // (같은 질문에서 요약층(kb)은 임베딩 검색이라 제대로 찾아냈다 = 자료가 아니라 검색이 문제였다.)
+  const [hits, semantic, kb] = await Promise.all([
     searchLawArticles(sb, query, 8),
+    searchChunks(sb, apiKey, query).catch(() => [] as Chunk[]),
     searchKbSummaries(sb, query).catch(() => [] as KbRow[]),
   ]);
-  if (!hits.length && !kb.length) return null;   // 검색 0건 — 호출자가 미등재 안내
+
+  // 의미 검색분에서 **조문만** 남긴다 — article_no가 없는 것(보도자료 등)과 파일 문서(논문·계획서)는
+  // /law의 답이 아니다. 그 필터는 searchLawArticles가 쓰는 기준과 같게 유지한다.
+  const haveIds = new Set(hits.map((h) => h.id));
+  const semExtra: LawHit[] = (semantic || [])
+    .filter((c) => c.article_no && !haveIds.has(c.id) && !/\.(pdf|md|docx|hwp)$/i.test(c.doc_name || ''))
+    .slice(0, 6)
+    .map((c) => ({ id: c.id, doc_name: c.doc_name, article_no: c.article_no, content: c.content, _hits: 0 }));
+  const merged = hits.concat(semExtra);
+  if (!merged.length && !kb.length) return null;   // 검색 0건 — 호출자가 미등재 안내
 
   const ctxParts: string[] = [];
-  if (hits.length) {
-    ctxParts.push('[검색된 조문]\n' + hits.map((h, i) =>
+  if (merged.length) {
+    ctxParts.push('[검색된 조문]\n' + merged.map((h, i) =>
       `[조문 ${i + 1}] ${h.doc_name}${h.article_no ? ' ' + h.article_no : ''}\n${(h.content || '').slice(0, 800)}`
     ).join('\n\n---\n\n'));
   }
