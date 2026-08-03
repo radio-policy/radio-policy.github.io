@@ -411,9 +411,12 @@ async function handleCallback(cb: { id: string; data?: string; from: { id: numbe
   else if (data === 'd:daily') { patch.days = 'daily'; ack = '매일 받기로 변경'; }
   else if (data === 'd:weekday') { patch.days = 'weekday'; ack = '평일(월~금)만 받기로 변경'; }
   else if (data.startsWith('h:')) {
-    // 시각 변경 시 오늘 발송 기록 초기화 — 새 시각이 아직 안 지났으면 오늘분부터 새 시각에 수신
+    // 발송 기록(last_briefing_sent_date)은 건드리지 않는다 (2026-08-03 재발송 사고).
+    // 지우면 "이미 받은 날 + 새 시각이 이미 지남" 조합에서 다음 :25에 오늘분이 또 온다.
+    // 안 지우면: 오늘 아직 안 받았으면 기록이 원래 오늘이 아니라 새 시각에 자연 수신,
+    // 이미 받았으면 내일부터 새 시각 — 어느 쪽도 초기화가 필요 없다.
     patch.briefing_hour = Number(data.slice(2));
-    patch.last_briefing_sent_date = null;
+    // ack에 "내일부터"라고 못 박지 않는다 — 오늘분을 아직 안 받은 사람은 오늘 새 시각에 받는다.
     ack = `받는 시각 ${String(patch.briefing_hour).padStart(2, '0')}시로 변경`;
   }
   // 예전 메시지에 남아 있는 해지/재개 버튼 호환 — 항목 일괄 끄기/켜기로 해석한다
