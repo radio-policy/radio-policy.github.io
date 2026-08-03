@@ -6,11 +6,20 @@
   '기타' 카테고리의 보도자료(.md)와 ITU-R·보도자료·추가지식 카테고리는 자동 제외됨)
 - 인용 추출: ① 「법령명」(제N조) 괄호 인용 ② 시행령/시행규칙 본문의 "법 제N조"/"영 제N조" 자기계열 참조
 - 계열 엣지: 문서명 구조에서 유도 (X → X 시행령 → X 시행규칙), relation_type='하위법령', source='family'
-- 위임 엣지(정본): 법제처 3단비교 API(thdCmp knd=2, 위임조문삼단비교)로 "법률→시행령",
-  "시행령→시행규칙", "법률→시행규칙" 위임 관계를 조문 근거와 함께 확정. relation_type='하위법령',
-  source='thdcmp', weight=4(정본 우선). 문서명 추측(family)과 달리 타계열 위임(전파법→무선설비규칙 등)도 포착.
-  thdcmp가 정본화한 노드쌍은 family에서 억제(중복 방지), family는 thdcmp 미커버 폴백으로만 유지.
-- 멱등: source in ('citation','family') 엣지는 함께 삭제 후 재구축, source='thdcmp'는 별도로 삭제 후 재구축.
+- 위임 엣지(정본, 최우선): `law_delegations` 테이블을 읽어 relation_type='하위법령',
+  **source='delegation'**, weight=5 로 적재. 이 표에는 두 출처가 섞여 있고 둘 다 조문 근거를 갖는다.
+    · 법제처 3단비교(sync_law_delegations.py) — 법률↔시행령↔시행규칙 조문 대응
+    · 고시 본문 역추출(sync_notice_delegations.py) — 3단비교 범위 밖인 **고시·훈령·예규**의 수권 근거
+  ⚠️ `law_graph_edges_source_check` CHECK 제약에 'delegation'이 들어 있어야 적재된다(2026-08-03 확장).
+     배경역사 #65에서 제약 확장을 빠뜨린 채 억제 로직만 돌아 엣지가 통째로 비는 공백 사고가 났다.
+- 위임 엣지(보조): 법제처 3단비교 API 직접 호출(thdCmp knd=2). source='thdcmp', weight=4.
+  law_delegations가 아직 안 담은 관계(시행령→시행규칙 재위임 등)를 메운다.
+- 우선순위: delegation > thdcmp > family. 상위가 덮은 노드쌍은 하위 출처에서 억제한다
+  (엣지 UNIQUE 키가 (source_id, target_id, relation_type)이라 같은 쌍에 둘을 넣을 수 없다).
+  family(문서명 추측)는 어느 정본도 못 덮은 폴백으로만 남는다.
+- 멱등: source in ('citation','family','thdcmp','delegation') 엣지를 한꺼번에 삭제 후 우선순위 순으로 재구축.
+  **delegation을 가장 먼저 적재하고 성공을 확인한 뒤** 나머지 억제를 적용한다(#65 공백 사고 방지 —
+  적재가 실패하면 억제를 포기해 family/thdcmp가 원래대로 채워진다).
   노드는 삭제하지 않음 (⚠️ 노드를 지우면 cascade로 seed/ai 엣지까지 소실되므로 절대 삭제 금지)
 
 실행(PC, Python 3.12 전체 경로):
@@ -345,6 +354,47 @@ def build_thdcmp_delegations(law_bases):
     return delegations, report
 
 
+# ══════════════════════════════════════════════════════════
+#  law_delegations — 조문 단위 위임 대응표를 노드쌍으로 집계
+# ══════════════════════════════════════════════════════════
+
+def fetch_law_delegations():
+    """law_delegations 전량 → {(parent, child): {'count', 'samples', 'kinds'}}
+
+    설명(description)에는 **요약만** 넣는다. 배경역사 #65처럼 "앞 5개만 남기고 나머지를 버리는"
+    구조가 아니다 — 조문 근거 원본은 law_delegations에 통째로 남아 있고, description은 그 표로
+    가는 이정표일 뿐이다. 그래서 아래 samples는 잘려도 정보 손실이 아니다.
+
+    ⚠️ .order('id') 필수 — 정렬 없는 range() 페이지네이션은 행을 누락시킨다."""
+    pairs = defaultdict(lambda: {'count': 0, 'samples': [], 'kinds': set()})
+    page, offset = 1000, 0
+    while True:
+        r = (sb.table('law_delegations')
+             .select('parent_law, parent_article, child_law, child_article, child_kind')
+             .order('id')
+             .range(offset, offset + page - 1)
+             .execute())
+        rows = r.data or []
+        for row in rows:
+            src = norm_name(row.get('parent_law') or '')
+            dst = norm_name(row.get('child_law') or '')
+            if not src or not dst or src == dst:
+                continue
+            e = pairs[(src, dst)]
+            e['count'] += 1
+            e['kinds'].add(row.get('child_kind') or '')
+            c_art = row.get('child_article') or ''
+            # child_article='전체'는 문서 단위 연결(고시 본문 역추출) — 조문 대응이 아니라 수권 근거다
+            s = (f'제{row.get("parent_article")}' if c_art == '전체'
+                 else f'제{row.get("parent_article")} → 제{c_art}')
+            if s not in e['samples'] and len(e['samples']) < 5:
+                e['samples'].append(s)
+        if len(rows) < page:
+            break
+        offset += page
+    return pairs
+
+
 def main(dry_run=False):
     print('=== 법령 인용망 추출 시작 ===' + ('  [DRY-RUN — DB 무변경]' if dry_run else ''))
     all_rows = fetch_all_doc_rows()
@@ -493,6 +543,51 @@ def main(dry_run=False):
     thd_pair_ids = {(lookup_id(s), lookup_id(d)) for s, d in thd_ok_pairs
                     if lookup_id(s) and lookup_id(d)}
 
+    # ── law_delegations(조문 단위 위임 대응표) → 최우선 위임 엣지 ──────────
+    # 양끝 인정 기준은 thdcmp와 동일(옵션 B): "이미 있는 노드" 또는 "이번 실행에서 원문·인용
+    # 경로가 어차피 만드는 노드"만 채택하고, delegation 경로가 노드를 새로 만들지는 않는다.
+    #   · 자식(child_law)은 항상 우리가 보유한 문서명이라 docs에 있고,
+    #   · 부모(parent_law)는 고시 본문의 「법령명」 인용에서 나왔으므로 cited_names에 있다
+    #     → 실질적으로 "노드가 없으면 만든다"와 같은 결과가 되면서, 3단비교가 뱉는 무관 법령
+    #       (각 부처 직제, 법원·헌재 규칙 등)으로 관계도가 오염되는 것은 막는다.
+    #   · 예외 하나: **자식이 우리가 보유한 문서(docs)** 인데 부모 노드만 없는 경우는 만든다.
+    #     우리가 들고 있는 고시의 수권 법령은 정의상 관심 범위 안이고, 그게 없으면 그 고시가
+    #     또 떠 버린다(실측: 정보보호산업의 진흥에 관한 법률 시행령 → 정보보호 공시에 관한 고시).
+    deleg_raw = fetch_law_delegations()
+
+    def deleg_pair_ok(src, dst):
+        if dst in docs and CITABLE_SUFFIX_RE.search(src):
+            return True
+        return node_known(src) and node_known(dst)
+
+    deleg_ok_pairs, deleg_skip_pairs = [], []
+    deleg_new_nodes = set()
+    for (src, dst) in deleg_raw:
+        if deleg_pair_ok(src, dst):
+            deleg_ok_pairs.append((src, dst))
+            if not node_known(src):
+                deleg_new_nodes.add(src)
+            if not node_known(dst):
+                deleg_new_nodes.add(dst)
+        else:
+            missing = ', '.join(n for n in (src, dst) if not node_known(n))
+            deleg_skip_pairs.append((src, dst, missing))
+    deleg_pre_ids = {(lookup_id(s), lookup_id(d)) for s, d in deleg_ok_pairs
+                     if lookup_id(s) and lookup_id(d)}
+    deleg_notice = [(s, d) for s, d in deleg_ok_pairs
+                    if any(k in ('고시', '훈령', '예규', '지침', '공고')
+                           for k in deleg_raw[(s, d)]['kinds'])]
+    print('\n── law_delegations 위임 엣지 ─────────────────────')
+    print(f'  대응표 노드쌍: {len(deleg_raw)}건 → 채택 {len(deleg_ok_pairs)}건'
+          f' / 노드 미존재 스킵 {len(deleg_skip_pairs)}건'
+          f'  (그중 고시·훈령 계열 {len(deleg_notice)}건)')
+    print(f'  delegation이 새로 만들 노드: {len(deleg_new_nodes)}건'
+          + ('  → ' + ', '.join(sorted(deleg_new_nodes)) if deleg_new_nodes else ''))
+    print(f'  기존 family 쌍 {len(family_pair_ids)}건 중 delegation이 정본화 {len(deleg_pre_ids & family_pair_ids)}건'
+          f' / thdcmp 쌍 {len(thd_pair_ids)}건 중 대체 {len(deleg_pre_ids & thd_pair_ids)}건')
+    for src, dst, missing in sorted(deleg_skip_pairs)[:20]:
+        print(f'    [스킵] {src} → {dst}  (노드 없음: {missing})')
+
     ok_laws = [l for l, r in thd_report.items() if r[0].startswith('ID=')]
     fail_laws = [(l, r) for l, r in thd_report.items() if not r[0].startswith('ID=')]
     covered = thd_pair_ids & family_pair_ids           # thdcmp가 정본화하는 기존 family 쌍
@@ -524,7 +619,8 @@ def main(dry_run=False):
         print(f'    [스킵] {src} → {dst}  (노드 없음: {missing})')
 
     if dry_run:
-        print('\n[DRY-RUN] DB 무변경 — 노드/엣지 쓰기 없이 종료 (신규 노드 0건)')
+        print(f'\n[DRY-RUN] DB 무변경 — 노드/엣지 쓰기 없이 종료'
+              f' (thdcmp 신규 노드 0건 / delegation 신규 노드 {len(deleg_new_nodes)}건)')
         print('=== 완료(dry-run) ===')
         return
 
@@ -563,6 +659,31 @@ def main(dry_run=False):
             node_ids[name] = ensure_node(name, guess_type_by_name(name))
     print(f'노드 확보: {len(node_ids)}건 (전체 노드 {len(existing)}건)')
 
+    # ── delegation(law_delegations) 위임 쌍 → 노드ID 확정 ──────
+    # description은 **요약**이다. 조문 근거 전체는 law_delegations에 남아 있으므로
+    # 여기서 앞 몇 개만 보여도 정보가 사라지지 않는다(배경역사 #65의 "앞 5개만 남기고 버림"과 다름).
+    deleg_edges = []     # (sid, did, desc)
+    _seen_deleg = set()
+    for (src, dst) in deleg_ok_pairs:
+        sid, did = node_ids.get(src) or lookup_id(src), node_ids.get(dst) or lookup_id(dst)
+        # 위 채택 단계에서 "만들기로" 판정된 노드만 여기서 생성한다(dry-run 보고와 1:1)
+        if not sid and src in deleg_new_nodes:
+            sid = node_ids[src] = ensure_node(src, guess_type_by_name(src))
+        if not did and dst in deleg_new_nodes:
+            did = node_ids[dst] = ensure_node(dst, guess_type_by_name(dst))
+        if not sid or not did or sid == did or (sid, did) in _seen_deleg:
+            continue
+        _seen_deleg.add((sid, did))
+        info = deleg_raw[(src, dst)]
+        kinds = '·'.join(sorted(k for k in info['kinds'] if k))
+        head = f'위임 근거 {info["count"]}건' + (f'({kinds})' if kinds else '')
+        basis = ', '.join(info['samples'])
+        more = ' 외' if info['count'] > len(info['samples']) else ''
+        deleg_edges.append((sid, did,
+                            f'{head} — {basis}{more} · 전체는 law_delegations 참조'))
+    print(f'delegation 위임 엣지 대상: {len(deleg_edges)}건'
+          f' / 노드 미존재 스킵 {len(deleg_skip_pairs)}건  (delegation이 생성한 신규 노드: 0건)')
+
     # ── thdcmp 위임 쌍 → 노드ID 확정 ───────────────────────────
     # ⚠️ thdcmp 경로는 노드를 절대 새로 만들지 않는다(운영자 결정, 옵션 B).
     #    3단비교는 우리 관심 밖 법령(각 부처 직제, 법원·헌재 개인정보 규칙, 관세법 시행규칙 등)까지
@@ -591,8 +712,11 @@ def main(dry_run=False):
           + (f' / ID 미확보 {thd_no_id}건' if thd_no_id else '')
           + '  (thdcmp가 생성한 신규 노드: 0건)')
 
-    # ── 기존 citation/family 엣지 삭제 후 재구축 (멱등) ──
-    sb.table('law_graph_edges').delete().in_('source', ['citation', 'family']).execute()
+    # ── 자동 생성 엣지 일괄 삭제 후 우선순위 순으로 재구축 (멱등) ──
+    # 엣지 UNIQUE 키가 (source_id, target_id, relation_type)이라 같은 노드쌍에 '하위법령'을
+    # 두 출처로 넣을 수 없다 → 네 출처를 한 번에 지우고 delegation > thdcmp > family 순으로 채운다.
+    sb.table('law_graph_edges').delete().in_(
+        'source', ['citation', 'family', 'thdcmp', 'delegation']).execute()
 
     inserted = 0
     batch = []
@@ -603,6 +727,42 @@ def main(dry_run=False):
             sb.table('law_graph_edges').insert(batch).execute()
             inserted += len(batch)
             batch = []
+
+    # ── ① delegation(최우선) 먼저 적재 ─────────────────────────
+    # ⚠️ 순서가 핵심이다. 배경역사 #65는 "억제부터 하고 적재가 실패"해서 엣지가 통째로 빈 사고였다.
+    #    그래서 (a) 정본을 먼저 넣고 (b) **DB에서 실제로 들어간 쌍을 다시 읽어** 그것만 억제 근거로
+    #    삼는다. 적재가 깨지면 억제도 그만큼 사라져 family/thdcmp가 원래대로 관계를 메운다.
+    deleg_inserted = 0
+    for sid, did, desc in deleg_edges:
+        batch.append({'source_id': sid, 'target_id': did, 'relation_type': '하위법령',
+                      'description': desc, 'source': 'delegation', 'weight': 5})
+        if len(batch) >= 200:
+            try:
+                flush()
+            except Exception as e:
+                print(f'  ! delegation 엣지 배치 적재 실패(계속): {e}')
+                batch = []
+    try:
+        flush()
+    except Exception as e:
+        print(f'  ! delegation 엣지 배치 적재 실패(계속): {e}')
+        batch = []
+
+    deleg_pair_ids = set()
+    offset = 0
+    while True:
+        r = (sb.table('law_graph_edges').select('source_id, target_id')
+             .eq('source', 'delegation').order('id').range(offset, offset + 999).execute())
+        rows = r.data or []
+        for row in rows:
+            deleg_pair_ids.add((row['source_id'], row['target_id']))
+        if len(rows) < 1000:
+            break
+        offset += 1000
+    deleg_inserted = len(deleg_pair_ids)
+    print(f'delegation 위임 엣지 적재: DB 실측 {deleg_inserted}건 / 대상 {len(deleg_edges)}건')
+    if deleg_inserted < len(deleg_edges):
+        print('  ⚠️ 일부 미적재 — 그만큼 억제하지 않으므로 family/thdcmp가 해당 쌍을 메운다')
 
     seen_pairs = set()
     for (src, dst), info in cites.items():
@@ -627,8 +787,8 @@ def main(dry_run=False):
         sid, did = node_ids.get(parent), node_ids.get(child)
         if not sid or not did or (sid, did, '하위법령') in seen_pairs:
             continue
-        # thdcmp가 정본화한 쌍은 family를 억제(정본 우선). family는 미커버 폴백만.
-        if (sid, did) in thd_pair_ids:
+        # delegation·thdcmp가 정본화한 쌍은 family를 억제(정본 우선). family는 미커버 폴백만.
+        if (sid, did) in deleg_pair_ids or (sid, did) in thd_pair_ids:
             continue
         seen_pairs.add((sid, did, '하위법령'))
         family_kept += 1
@@ -640,16 +800,21 @@ def main(dry_run=False):
 
     print(f'엣지 적재: {inserted}건 (citation + family {family_kept}건 재구축 완료)')
 
-    # ── thdCmp 위임 엣지: source='thdcmp'만 삭제 후 재구축 (family·citation과 멱등 분리) ──
-    sb.table('law_graph_edges').delete().eq('source', 'thdcmp').execute()
+    # ── thdCmp 위임 엣지(보조): delegation이 이미 덮은 쌍은 건너뛴다 ──
+    # (삭제는 위의 일괄 삭제에 포함돼 있다 — 여기서 다시 지우면 방금 넣은 것도 날아간다)
     batch = []
+    thd_kept = 0
     for sid, did, desc in thd_edges:
+        if (sid, did) in deleg_pair_ids:
+            continue
+        thd_kept += 1
         batch.append({'source_id': sid, 'target_id': did, 'relation_type': '하위법령',
                       'description': desc, 'source': 'thdcmp', 'weight': 4})
         if len(batch) >= 200:
             flush()
     flush()
-    print(f'thdcmp 위임 엣지 적재: {len(thd_edges)}건 (source=thdcmp, family {len(thd_pair_ids)}쌍 정본화)')
+    print(f'thdcmp 위임 엣지 적재: {thd_kept}건 (대상 {len(thd_edges)}건 중'
+          f' delegation이 정본화한 {len(thd_edges) - thd_kept}건 억제)')
 
     # ── 고아 노드 정리: source='citation'이고 어떤 엣지에도 안 쓰이는 노드만 삭제 ──
     # (seed/ai 노드는 절대 건드리지 않음. 엣지 0개인 노드라 cascade 영향도 없음)

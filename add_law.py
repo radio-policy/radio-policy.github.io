@@ -39,7 +39,16 @@ import import_regulatory_kb as ikb
 ROOT = Path(__file__).parent
 BUNDLE = ROOT / "regulatory-kb"
 MANIFEST = BUNDLE / "manifest.json"
-ANTHROPIC_MODEL = "claude-haiku-4-5"
+# OKF 요약은 Haiku가 아니라 Sonnet 5로 뽑는다 (2026-08-03).
+#  · 법령 요약은 「~할 수 있다/하여야 한다」, 위임 범위, 예외 단서처럼 한 글자 차이로 뜻이 뒤집히는
+#    작업이라 모델 체급이 실제 품질로 이어진다. 가장 싼 체급으로 돌리고 있던 게 오히려 이상했다.
+#  · 비용은 문서당 약 $0.03 → $0.07. 법령 등재는 주 몇 건이라 총액이 무의미한 수준이다.
+#  · Fable 5는 기각 — 장시간 자율 에이전트용이고 사고를 끌 수 없어 문서당 $0.33~0.58,
+#    게다가 30일 데이터 보존이 강제된다. 요약이라는 좁은 일에 맞지 않는다.
+ANTHROPIC_MODEL = "claude-sonnet-5"
+# Sonnet 5는 사고(thinking)가 기본으로 켜져 있고 max_tokens가 **사고+본문 합계**를 제한한다.
+# 종전 4096을 그대로 두면 요약이 중간에 잘린다 — 실측 본문이 3,600~4,300자라 여유가 없다.
+ANTHROPIC_MAX_TOKENS = 16000
 
 # OKF concept_type → upload_law_pdf.py 조문 카테고리(VALID_CATEGORIES) 매핑
 _CAT_MAP = {"Law": "법령", "Regulation": "법령", "Notice": "고시",
@@ -77,7 +86,7 @@ def anthropic_summarize(law_text, meta):
             f"concept_type={meta['concept_type']} / competent_authority={meta.get('authority','')}\n\n"
             f"[원문 발췌]\n{law_text[:18000]}")
     body = {
-        "model": ANTHROPIC_MODEL, "max_tokens": 4096,
+        "model": ANTHROPIC_MODEL, "max_tokens": ANTHROPIC_MAX_TOKENS,
         "system": sys_prompt,
         "messages": [{"role": "user", "content": user}],
     }

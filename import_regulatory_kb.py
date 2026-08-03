@@ -159,6 +159,51 @@ def chunk_body(body, title):
     return out
 
 
+# ── 적재 게이트 ────────────────────────────────────────────
+#  OKF 본문이 **문장 중간에서 끊긴 채** 적재되는 사고가 반복됐다 (2026-08-03 표본점검에서
+#  248건 중 24건 발견, 그중 23건이 8/2~8/3 배치에 집중). 원인은 모델 max_tokens가 아니라
+#  "잘린 파일을 아무도 안 막는다"는 것 — 여기에 검증이 전혀 없어서 잘린 문서가 임베딩까지
+#  그대로 통과했다. 내용은 정확한데 실무 체크리스트·Citations가 통째로 없는 문서가 자문 근거로
+#  쓰이고 있었다.
+#  ★ 문서 종류마다 정상적인 '끝나는 모양'이 다르다 ★ — 이걸 무시하고 '# Citations' 하나로
+#  판정하면 멀쩡한 문서가 무더기로 거부된다(실측: 업무안내 38건 + ITU-R 9건 = 47건 오탐).
+#    laws/…       OKF 법령 요약 → '# Citations' 섹션으로 끝난다
+#    procedures/… 중앙전파관리소 업무안내 → 공공누리 고지 문구로 끝난다(크롤 산출물)
+#    references/… ITU-R 권고 → '관련: ITU-R M.xxxx' 나열로 끝난다
+#  그래서 종류를 먼저 가리고, 종류별 종료 표지를 본다. 어느 쪽이든 **말미 완결성**은 공통으로 본다.
+#  닫는 괄호 ) ] 는 **완결 신호**다 — 처음에 이걸 '미완결'로 넣었다가 정상 문서 6건을 오탐했다
+#  (`[1] 전기통신사업법 시행령(대통령령)(제36281호)(20260428).pdf` 같은 Citations 줄).
+#  글자·숫자로 끝나는 것만 잘린 것으로 본다.
+_INCOMPLETE_TAIL = re.compile(r'[가-힣A-Za-z0-9]$')
+
+
+def check_body_complete(path: str, body: str):
+    """반환: (ok, 사유). 잘린 본문을 적재 전에 잡는다 — 통과 못 하면 그 문서만 건너뛴다."""
+    b = (body or "").strip()
+    if len(b) < 200:
+        return False, f"본문이 너무 짧음({len(b)}자)"
+
+    p = (path or "").replace("\\", "/")
+    if "# Citations" in b:
+        # 종료 표지에 도달했으면 완결이다. 말미 검사를 더 하면 안 된다 —
+        # Citations 줄은 `…(제36281호)(20260428).pdf`, `…document_chunks) 기준`처럼
+        # 파일명·명사로 끝나는 게 정상이라 어떤 말미 규칙을 써도 오탐이 난다(실측 6건).
+        return True, ""
+    if p.startswith("laws/"):
+        # OKF 법령 요약은 Citations로 끝나는 게 규약이다. 없으면 끝까지 생성되지 않은 것.
+        return False, "'# Citations' 섹션 없음 — 문서가 끝까지 생성되지 않았을 가능성"
+
+    # Citations를 쓰지 않는 계열(procedures/ 업무안내, references/ ITU-R, glossary/)은
+    # 말미 완결성만 본다.
+    lines = b.rstrip().splitlines()
+    tail = lines[-1].strip() if lines else ""
+    # 표(|)·목록(-, *)·헤더(#)·인용(>)으로 끝나는 건 정상 형식이므로 말미 검사에서 제외.
+    # 체크리스트('- [ ] …')로 끝나는 문서가 실제로 있어 목록 기호를 반드시 포함해야 한다.
+    if tail and not tail.startswith(("|", "-", "*", "#", ">")) and _INCOMPLETE_TAIL.search(tail):
+        return False, f"마지막 줄이 문장 중간에서 끊김: …{tail[-40:]!r}"
+    return True, ""
+
+
 # ── 메인 ──────────────────────────────────────────────────
 
 def build_doc_row(entry, fm, body):
