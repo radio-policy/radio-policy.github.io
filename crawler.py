@@ -1381,7 +1381,7 @@ NEWS_RELEVANCE_CRITERIA_FALLBACK = (
 # 원본은 supabase/functions/_shared/news_tags.ts 다. 여기는 사본이므로 같이 고칠 것.
 # 태그 목록을 app_config로 빼지 않는 이유: Haiku 프롬프트·Edge 칩·웹훅 버튼 3곳이
 # 동시에 바뀌어야 유효한데, 한 곳만 DB로 튜닝 가능하게 하면 드리프트만 생긴다.
-NEWS_TAGS = ('spectrum', 'market', 'regulation', 'security', 'ai', 'legislation')
+NEWS_TAGS = ('spectrum', 'market', 'regulation', 'security', 'ai')
 MAX_TAGS_PER_ITEM = 3           # 경계 기사도 3개면 충분 — 그 이상은 사실상 미판정
 
 NEWS_SCREEN_TOOL = {
@@ -1464,10 +1464,9 @@ def _screen_batch_haiku(client, criteria: str, batch: list):
         '   - regulation: 과징금·시정명령, 인허가·심사, 표시·광고, 약관, 이용자보호\n'
         '   - security: 해킹·유출, ISMS, 개인정보위 처분, 위치정보, 통신시설 보호조치\n'
         '   - ai: AI 기본법·규제, 국가 AI 전략, AI 데이터센터 정책(전력 특례·입지 규제 등)\n'
-        '   - legislation: 법안 발의·처리, 입법예고, 과방위 논의\n'
         '   태그는 기사 제목에 나온 단어가 아니라 기사가 다루는 사안을 기준으로 고른다. '
         '한 기사가 여러 사안을 다루면 해당 태그를 모두 붙인다(최대 3개). '
-        '6종 중 어느 것도 확실하지 않으면 tags를 비워 둔다 — 억지로 채우지 말라.\n'
+        '5종 중 어느 것도 확실하지 않으면 tags를 비워 둔다 — 억지로 채우지 말라.\n'
         '관련으로 판정된 기사만 record_relevant_news 도구의 relevant 배열에 '
         '{id, tags} 형태로 기록하라. 관련이 하나도 없으면 빈 배열을 기록하라.\n\n'
         + json.dumps(payload, ensure_ascii=False)
