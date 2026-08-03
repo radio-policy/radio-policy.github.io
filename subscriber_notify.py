@@ -91,7 +91,12 @@ def format_urgent_html(urgent_items: list) -> str:
 
     브리핑과 같은 규칙: 별도 링크 줄을 두지 않고 기사 제목 자체를 하이퍼링크로 만든다.
     """
-    lines = [f'🚨 <b>긴급 전파정책 뉴스 {len(urgent_items)}건</b>\n']
+    # 제목 변경(2026-08-03): '긴급 전파정책 뉴스' → '통신·전파 정책 주요 뉴스'.
+    #  ① 수집 범위가 요금·규제·보안·AI까지 넓어져 '전파정책'이 내용을 못 담는다.
+    #  ② 대시보드는 같은 등급을 '🔴 중요'로 부르는데 텔레그램만 '긴급'이라 표기가 갈려 있었다.
+    #     실제 성격도 '당장 대응'보다 '중요'에 가깝고, 매일 받는 팀원에게 '긴급'은 피로하다.
+    # 발송 측 HEADER_COUNT_RE는 (앞부분)(숫자)(건…) 형태라 문구가 바뀌어도 병합이 유지된다.
+    lines = [f'📡 <b>통신·전파 정책 주요 뉴스 {len(urgent_items)}건</b>\n']
     for i, item in enumerate(urgent_items, 1):
         rel = item.get('_related', 0)
         rel_txt = f' <i>(관련 보도 {rel}건)</i>' if rel else ''

@@ -1511,6 +1511,31 @@ def _screen_batch_haiku(client, criteria: str, batch: list):
         return None
 
 
+# 주파수 안전망 — 이 네 단어가 제목·요약에 있으면 spectrum을 '추가'한다.
+# 태그 판정은 여전히 Haiku가 하고, 이건 바닥(안전망)이지 대체가 아니다:
+#   · 추가만 한다. Haiku가 붙인 태그는 절대 지우지 않는다.
+#   · 네 단어로만 좁힌다. 늘리면 결국 키워드 대응표가 되고, 그러면 "기지국 개설허가"와
+#     "기지국 투자 축소"가 같은 태그를 받는 문제로 되돌아간다(그걸 피하려고 LLM 판정을 쓴다).
+# 도입 근거(2026-08-03 실측): 「과기정통부, 이동통신 무선국 검사 간소화한다」가 3회 연속 태그 0개로
+# 나왔다. 요약에 무선국·기지국·안테나·전파법이 다 있는데도 AI가 '행정절차 개정'으로 읽어
+# "확실하지 않으면 비워 둬라" 지시에 따라 비운 것. 같은 사안의 다른 기사들은 정상 판정돼서
+# 프롬프트 문제라기보다 경계 사례로 보이나, 전파법은 이 팀의 핵심 법이라 놓치면 손해가 크다.
+_SPECTRUM_ANCHORS = ('전파법', '무선국', '주파수 할당', '주파수 재할당', '전자파')
+
+
+def _spectrum_safety_net(item: dict) -> None:
+    """앵커 단어가 있는데 spectrum이 빠졌으면 추가한다(추가 전용). 발동 시 로그를 남긴다 —
+    로그가 잦아지면 안전망이 아니라 프롬프트를 고쳐야 한다는 신호다."""
+    tags = item.get('tags')
+    if not isinstance(tags, list) or 'spectrum' in tags:
+        return
+    text = f"{item.get('title', '')} {item.get('_screen_text', '')}"
+    hit = next((a for a in _SPECTRUM_ANCHORS if a in text), None)
+    if hit:
+        tags.append('spectrum')
+        print(f"  [태그 보정] '{hit}' → spectrum 추가: {str(item.get('title'))[:44]}")
+
+
 def screen_news_items(items: list) -> list:
     """수집분에서 SKT 관련 기사만 남긴다. 반환 목록은 입력 순서를 유지한다.
 
@@ -1579,8 +1604,9 @@ def screen_news_items(items: list) -> list:
     #   통과 기사는 전부 이 루프를 지나므로 여기가 유일한 방어선이다.
     #   '기타' 태그를 만들지 말 것 — 구독자가 그것을 끌 수 있게 되어 판정 실패 기사가 조용히 사라진다.
     for it in items:
-        it.pop('_screen_text', None)
-        it.setdefault('tags', [])
+        it.setdefault('tags', [])         # 반드시 안전망보다 먼저 — 태그가 없는 기사가 바로 보정 대상이다
+        _spectrum_safety_net(it)          # 판정 누락 보정 — 아래 함수 주석 참조
+        it.pop('_screen_text', None)      # 보정이 _screen_text를 읽으므로 제거는 마지막
     return passed
 
 
