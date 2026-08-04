@@ -329,7 +329,37 @@ function lawSynonymKeywords(query: string): string[] {
   for (const [k, syns] of Object.entries(LAW_SYNONYMS)) {
     if (query.includes(k)) for (const s of syns) if (!out.includes(s)) out.push(s);
   }
+  for (const [re, terms] of PRACTICE_TERMS) {
+    if (re.test(query)) for (const t of terms) if (!out.includes(t)) out.push(t);
+  }
   return out;
+}
+
+// ── 실무 용어 → 법령 용어 (2026-08-04, #83) ──────────────────────────────────
+//  임베딩 모델은 한국어 법령으로 학습돼 **업계에서만 쓰는 외래어를 조문에 연결하지 못한다.**
+//  실측(match_law_articles_semantic, voyage-4-lite):
+//    "리파밍 관련 법 조항이 어떤게 있지?" → 1위 약관규제법 제30조 0.441 (전부 잡음)
+//    "주파수 회수 또는 주파수 재배치"      → 1위 전파법 제6조의2   0.543 (정답)
+//  즉 검색 엔진은 멀쩡한데 **질문의 어휘가 법령에 없는 것**이 원인이다. 「5G 커버리지 맵」이
+//  안 잡히던 사건(#79)과 같은 계열 — 실무 용어와 법령 용어의 간극은 글자·의미 어느 쪽으로도
+//  못 넘는다. 그래서 **검색 전에 질의 문자열 자체를 법령 용어로 보강**한다.
+//  · 확신하는 대응만 넣는다. 틀린 대응은 엉뚱한 조문을 1위로 올려 없는 것보다 나쁘다.
+//  · 원 질의는 지우지 않고 뒤에 덧붙인다(원 표현이 맞는 경우를 잃지 않도록).
+const PRACTICE_TERMS: Array<[RegExp, string[]]> = [
+  [/리파밍|리파-밍|re-?farming/i,      ['주파수회수', '주파수재배치', '주파수 회수', '주파수 재배치']],
+  [/커버리지|coverage/i,               ['이용가능 지역', '서비스 제공 지역']],
+  [/주파수\s*경매|경매/,               ['대가에 의한 주파수할당', '주파수할당']],
+  [/알뜰폰|MVNO/i,                     ['도매제공', '도매제공의무사업자']],
+  [/재할당/,                           ['주파수할당', '이용기간']],
+];
+
+/** 의미 검색용 질의 — 실무 용어가 있으면 법령 용어를 덧붙인다. 없으면 원문 그대로. */
+export function expandQueryForSemantic(query: string): string {
+  const add: string[] = [];
+  for (const [re, terms] of PRACTICE_TERMS) {
+    if (re.test(query)) for (const t of terms) if (!add.includes(t)) add.push(t);
+  }
+  return add.length ? `${query} ${add.join(' ')}` : query;
 }
 // 질문 상투어 — 조문 제목 가점·주제 매칭에서 제외 ('절차'가 「규제심사 절차」 같은
 // 무관 조문 제목에 걸려 상위를 차지하는 것 방지. app.js GENERIC_QUERY_WORDS와 동일 유지)
@@ -467,11 +497,13 @@ export async function answerLawQuery(sb: SupabaseClient, query: string): Promise
     // 쓰면 검색 공간의 2/3가 조문이 아니라(보도자료·회의록·논문 40.6%, 별표 17.9%, 부칙 5.5%,
     // 서식 2.9%) 조문이 밀려난다. 실측: 이 RPC로 바꾸자 "기지국 개설 허가 절차"의 정답
     // (전파법 21조)이 5위→1위, "개인정보 유출 신고"가 시행령 40조·법 34조로 1·2위가 됐다.
-    getQueryEmbedding(query).then((emb) => emb
+    // 질의를 법령 용어로 보강해 임베딩한다(#83) — 「리파밍」처럼 조문에 없는 업계 용어는
+    // 원문 그대로 넣으면 유사도가 잡음 수준(0.44)에 묻힌다. expandQueryForSemantic 주석 참조.
+    getQueryEmbedding(expandQueryForSemantic(query)).then((emb) => emb
       ? sb.rpc('match_law_articles_semantic', { query_embedding: emb, match_threshold: 0.0, match_count: 8, only_current: true })
           .then((r) => (r.data || []) as Chunk[])
       : [] as Chunk[]).catch(() => [] as Chunk[]),
-    searchKbSummaries(sb, query).catch(() => [] as KbRow[]),
+    searchKbSummaries(sb, expandQueryForSemantic(query)).catch(() => [] as KbRow[]),
   ]);
 
   // 의미 검색분에서 **조문만** 남긴다 — article_no가 없는 것(보도자료 등)과 파일 문서(논문·계획서)는

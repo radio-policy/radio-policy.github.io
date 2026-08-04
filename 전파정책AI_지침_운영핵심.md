@@ -64,6 +64,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 | news_feed | 뉴스 본문·요약·긴급도(**60일 유지** — 2026-07-31 확대, 자문 뉴스 검색 60일 창과 정합. **해외 category는 예외** #75). locked=true면 자동삭제 제외+AI 자문 상시 참조. 내부값 긴급/보통/참고. **tags text[]**(분야 태그 5종, #76)·**event text**(사건 라벨 — 대시보드 클러스터링 기준, #77). **url UNIQUE**(idx_news_feed_url_unique) — 저장은 반드시 `upsert(on_conflict='url', ignore_duplicates=True)`로 (plain insert는 중복 1건에 배치 전체 실패, #23) |
 | deleted_news | 삭제 기사 url·title 블록리스트(재수집 방지). 영구 |
 | news_screen_cache | **선별 무관 판정 캐시**(#78): url PK·title_hash·criteria_hash·judged_at. 무관 기사는 저장이 안 돼 매시간 재판정됐다(시간당 ~470건 중 신규 ~70건 = 선별 비용 85% 낭비). 제목이 바뀌거나 기준문(news_relevance_criteria)이 바뀌면 지문 불일치로 자동 재판정. **AI 판정분만 캐시**(키워드 폴백 탈락은 안 함), 20일 TTL 크롤러가 청소, 전 단계 fail-open. RLS 켜고 정책 0 = service 전용 |
+| telegram_updates | **텔레그램 웹훅 재전송 차단**(#83): update_id PK·chat_id·received_at. 텔레그램은 웹훅이 60초 안에 200을 못 받으면 **같은 update_id로 재전송**한다 — /law·/ask는 답변 생성이 1~2분이라 재전송이 겹치면 같은 질문에 답이 여러 번 나간다(2026-08-04 실측: 웹훅 실행 45~56초 상시). 최초 1건만 통과 → **중복은 막고 새 질문(다른 update_id)은 통과**. dedup 조회 실패 시 통과(fail-open — 중복이 무응답보다 낫다). 청소는 1% 확률(update_id % 100)로만. RLS 켜고 정책 0 = service 전용 |
 | importance_feedback | 긴급도 수동 수정 내역(news_id당 1행). 분류 학습 데이터. 영구 |
 | feedback_rules | 피드백 증류 규칙 캐시(단일 행 id=1). 20건↑ 증류, 10건마다 재증류 |
 | daily_briefings(삭제 없음·전량 보관, 목록도 무제한 표시) | 일일 브리핑 원문("⚠️ SKT 영향 분석:" 포함). 긴급도 수정 시 🔴 자동 동기화 |
@@ -101,7 +102,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 | match_report_samples (RPC) | 보고서 샘플 시맨틱 검색(코사인). filter_type으로 유형 한정 |
 | telegram-webhook (Edge) | 구독자 봇 수신부. `/start`·`/settings` 인라인 키보드, `/law "OO법 N조"` 조문 원문 즉답, `/ask` AI 자문(승인제), `/admin`(운영자). **verify_jwt off** 대신 `X-Telegram-Bot-Api-Secret-Token` 검증. 오류가 나도 200을 반환한다 — 비200이면 텔레그램이 같은 업데이트를 무한 재전송한다 |
 | send-subscriber-briefing (Edge) | 구독자 정시 발송. pg_cron이 매시 호출 → 브리핑(daily_briefings)+긴급·법안(subscriber_queue)을 **수신 시각이 도래한 구독자에게 한 번에** 보낸다. `briefing_hour <= 현재KST시` catch-up이라 브리핑이 늦게 생성돼도 다음 정각에 따라잡는다. `x-cron-secret` 검증 |
-| supabase/functions/_shared/ | 두 함수 공용 모듈. `telegram_format.ts`(HTML 이스케이프·분할·발송, 400시 plain 폴백), `rag.ts`(자문 RAG — 조문+법령요약+조문정밀검색+수집뉴스 → Sonnet) |
+| supabase/functions/_shared/ | 두 함수 공용 모듈. `telegram_format.ts`(HTML 이스케이프·분할·발송, 400시 plain 폴백), `rag.ts`(자문 RAG — 조문+법령요약+조문정밀검색+수집뉴스 → Sonnet). **실무 용어 → 법령 용어 보강 `PRACTICE_TERMS`/`expandQueryForSemantic`(#83)** — 「리파밍」·「커버리지」처럼 **법령에 한 번도 안 나오는 업계 용어**는 원문 그대로 임베딩하면 유사도가 잡음 수준에 묻힌다(실측: 리파밍 1위가 약관규제법 0.441 → 보강 후 전파법 제6조의2 0.541). 원 질의는 지우지 않고 **뒤에 덧붙이며**, 확신하는 대응만 넣는다(틀린 대응은 엉뚱한 조문을 1위로 올려 없느니만 못함). 키워드 검색(`lawSynonymKeywords`)에도 같이 먹인다 |
 
 ### Storage
 

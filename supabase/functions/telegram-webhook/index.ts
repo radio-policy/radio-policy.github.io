@@ -498,6 +498,35 @@ async function handleCallback(cb: { id: string; data?: string; from: { id: numbe
   ]);
 }
 
+// ── 재전송 차단 (#83) ──────────────────────────────────────────────────────
+//  텔레그램은 웹훅이 60초 안에 200을 못 받으면 **같은 update_id로 재전송**한다.
+//  /law·/ask는 답변 생성이 1~2분이라, 응답이 늦으면 같은 질문에 답이 여러 번 나갔다
+//  (2026-08-04 실측: 웹훅 실행 45~56초가 상시 — 60초 문턱 바로 아래에서 돌고 있었다).
+//  update_id는 업데이트마다 고유하므로 최초 1건만 통과시키면
+//  **재전송은 막히고 새 질문(다른 update_id)은 그대로 지나간다.**
+//  insert 실패(테이블 없음·DB 장애)는 통과시킨다 — 중복 몇 건이 무응답보다 낫다(fail-open).
+async function claimUpdate(updateId: unknown, chatId?: number): Promise<boolean> {
+  if (typeof updateId !== 'number') return true;      // update_id 없으면 판별 불가 → 통과
+  try {
+    const { data, error } = await sb.from('telegram_updates')
+      .upsert({ update_id: updateId, chat_id: chatId ?? null }, { onConflict: 'update_id', ignoreDuplicates: true })
+      .select('update_id');
+    if (error) { console.error('[dedup] 조회 실패(통과 처리)', error); return true; }
+    return (data?.length ?? 0) > 0;                   // 0행 = 이미 처리된 재전송
+  } catch (e) {
+    console.error('[dedup] 예외(통과 처리)', e);
+    return true;
+  }
+}
+
+// 2일 지난 기록 청소 — 1% 확률로만 돌려 매 요청 부담을 없앤다
+function sweepUpdates(updateId: unknown): void {
+  if (typeof updateId !== 'number' || updateId % 100 !== 0) return;
+  const cutoff = new Date(Date.now() - 2 * 86400_000).toISOString();
+  sb.from('telegram_updates').delete().lt('received_at', cutoff)
+    .then(() => {}, (e: unknown) => console.error('[dedup] 청소 실패(무시)', e));
+}
+
 // ── 메인 ──
 Deno.serve(async (req: Request) => {
   if (req.headers.get('x-telegram-bot-api-secret-token') !== WEBHOOK_SECRET || !WEBHOOK_SECRET) {
@@ -505,6 +534,14 @@ Deno.serve(async (req: Request) => {
   }
   let update: Record<string, unknown>;
   try { update = await req.json(); } catch { return new Response('bad request', { status: 400 }); }
+
+  const chatIdForClaim = ((update.message as { chat?: { id?: number } } | undefined)?.chat?.id)
+    ?? ((update.callback_query as { message?: { chat?: { id?: number } } } | undefined)?.message?.chat?.id);
+  if (!(await claimUpdate(update.update_id, chatIdForClaim))) {
+    console.log('[dedup] 재전송 무시:', update.update_id);
+    return new Response('ok');                        // 이미 처리한 업데이트 — 조용히 종료
+  }
+  sweepUpdates(update.update_id);
 
   try {
     if (update.callback_query) {
