@@ -95,6 +95,52 @@ CONFLICT_COLS = 'parent_law,parent_article,child_law,child_article'
 UPSERT_BATCH = 200
 DOC_ARTICLE = '전체'      # child_article 고정값 — 문서 단위 연결(docstring 참조)
 
+# ── 수기 확정 위임 근거 (2026-08-04, #82) ─────────────────────────────────────
+#  정규식은 고시 **제1조에 박힌** 위임 문구만 뽑는다. 그런데 제1조가 아예 없거나(협정문·분배표·
+#  공고), 제1조에 근거를 안 쓰는 문서가 31건 있었고 그만큼 관계도에서 고립돼 있었다.
+#  이 표는 그중 **상위 법령 조문에서 역방향으로 확인된 것만** 담는다 — 상위 조문이
+#  "…을 정하여 고시한다" 형태로 이 문서를 직접 지목하는 경우다(예: 전기통신사업법 제62조제2항이
+#  「중요한 전기통신설비」를 지목). 조사 결과 확정 15 / 추정 12 / 없음 4 중 **확정만** 채택했다.
+#  · 추정(포괄 위임 "법·영에서 위임한 사항"류)은 넣지 않는다 — 조문을 특정할 수 없어
+#    잘못된 조문에 엣지가 걸리면 없는 관계보다 나쁘다.
+#  · 「무선통신보조설비의 화재안전기술기준(NFTC 505)」은 근거가 확정(소방시설법 제2조)이나
+#    상위 법령이 이 KB에 없어 제외했다. 소방시설법을 적재하면 되살릴 것.
+#  · 「이용약관 인가대상 기간통신서비스와 기간통신사업자」는 2020년 유보신고제 전환으로
+#    전기통신사업법에 '이용약관 인가' 조문이 사라졌는데 고시는 인가 문언을 유지하고 있다.
+#    조문 대응이 불명이라 **의도적으로 비워 둔다** — 운영자 확인 대상.
+#  정규식이 근거를 뽑아내면 그쪽이 이긴다(아래 적용부 참조). 원문이 개정돼 제1조에 근거가
+#  생기면 이 표는 자동으로 비켜선다.
+MANUAL_BASIS = {
+    '기만적인 표시·광고 심사지침':
+        [('표시ㆍ광고의 공정화에 관한 법률', '3조')],
+    '긴급구조를 위한 소방기관의 위치정보 이용ㆍ관리 지침':
+        [('위치정보의 보호 및 이용 등에 관한 법률', '29조')],
+    '대한민국 과학기술정보통신부와 인도네시아 통신디지털부 (舊 통신정보부) 간의 방송통신기자재등의 적합성평가에 대한 상호인정협정':
+        [('전파법', '58조의8')],
+    '대한민국 방송통신위원회와 베트남 정보통신부간의 방송통신기자재등에 대한 상호인정협정':
+        [('전파법', '58조의8')],
+    '대한민국 주파수 분배표':
+        [('전파법', '9조')],
+    '전기안전 및 전자파적합성 시험·인증 통합 처리지침':
+        [('전파법', '58조의2')],
+    '전기통신사업 회계분리기준':
+        [('전기통신사업 회계정리 및 보고에 관한 규정', '17조')],
+    '전기통신설비 의무제공대상 기간통신사업자':
+        [('전기통신사업법 시행령', '39조')],
+    '전기통신설비의 상호접속ㆍ공동사용 및 정보제공 협정의 인가대상 기간통신사업자':
+        [('전기통신사업법 시행령', '39조')],
+    '전력선통신설비가 다른 통신에 방해를 주지 아니하도록 그 운용을 금지하는 주파수대역':
+        [('전파법', '58조')],
+    '주요정보통신기반시설 취약점 분석ㆍ평가 기준':
+        [('정보통신기반 보호법', '9조')],
+    '중요한 전기통신설비':
+        [('전기통신사업법', '62조')],
+    '특별재난지역 전파사용료 감면대상 무선국 기준':
+        [('전파법', '67조')],
+    '한국방송통신전파진흥원이 검사업무를 하는 무선국':
+        [('전파법 시행령', '123조')],
+}
+
 # 대상: 문서명 법종 괄호가 이 어미로 끝나는 것 (실측 표기: (국립전파연구원고시)/(과학기술정보통신부훈령)/(공정거래위원회예규))
 TARGET_KINDS = ('고시', '훈령', '예규', '지침', '공고')
 
@@ -492,7 +538,7 @@ def main():
     first_arts = fetch_first_articles(rep_doc.values())
 
     rows_by_child = {}
-    no_basis, fallback_used, dropped_all = [], [], []
+    no_basis, fallback_used, dropped_all, manual_used = [], [], [], []
     for base in sorted(targets):
         dn = rep_doc[base]
         text = first_arts.get(dn) or ''
@@ -503,18 +549,28 @@ def main():
             strict = True
             if text:
                 fallback_used.append(base)
+        ctx, found, why = '', [], ''
         if not text:
-            no_basis.append((base, '본문 없음'))
-            continue
-        ctx = basis_context(text, strict=strict)
-        if not ctx:
-            no_basis.append((base, '제1조 없음·목적 문구 미확인(폴백 포기)'))
-            continue
-        found, dropped = extract_basis(ctx, resolver, token_re)
-        for d in dropped:
-            dropped_all.append((base, d))
+            why = '본문 없음'
+        else:
+            ctx = basis_context(text, strict=strict)
+            if not ctx:
+                why = '제1조 없음·목적 문구 미확인(폴백 포기)'
+            else:
+                found, dropped = extract_basis(ctx, resolver, token_re)
+                for d in dropped:
+                    dropped_all.append((base, d))
+                if not found:
+                    why = '근거 문구 없음'
+        # 정규식이 실패했을 때만 수기 확정표를 쓴다 — 원문이 개정돼 제1조에 근거가 생기면
+        # 위 추출이 이기고 이 표는 자동으로 비켜선다(수기 값이 원문을 가리지 않게).
+        if not found and base in MANUAL_BASIS:
+            found = [(pname, part, True) for pname, part in MANUAL_BASIS[base]]
+            ctx = ctx or '(수기 확정 — MANUAL_BASIS, 상위 조문 역방향 확인)'
+            manual_used.append(base)
+            why = ''
         if not found:
-            no_basis.append((base, '근거 문구 없음'))
+            no_basis.append((base, why))
             continue
         kind = targets[base]['kind']
         kind_tok = next((k for k in TARGET_KINDS if kind.endswith(k)), '고시')
@@ -561,6 +617,10 @@ def main():
         for base in sorted(rows_by_child)[:args.sample]:
             arts = ', '.join(f'{r["parent_law"]} 제{r["parent_article"]}' for r in rows_by_child[base])
             print(f'    · {base}\n        → {arts}')
+        if manual_used:
+            print(f'\n  ── 수기 확정표 적용 {len(manual_used)}건 (MANUAL_BASIS) ──')
+            for b in manual_used:
+                print(f'    · {b}')
         if no_basis:
             print(f'\n  ── 근거 미추출 {len(no_basis)}건 ──')
             for b, why in no_basis[:40]:

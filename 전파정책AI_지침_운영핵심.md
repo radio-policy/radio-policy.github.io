@@ -23,11 +23,11 @@ SKT Comm센터 기술정책팀의 전파·통신 정책 모니터링 자동화 �
 C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 ├── sb_client.py                # Supabase 클라이언트 공용 생성기 — HTTP/2 끄고 HTTP/1.1+재시도(make_client). 모든 스크립트가 create_client 대신 사용(RemoteProtocolError 끊김 회피)
 ├── requirements.txt            # 의존성 버전 고정(lock, 61개). 모든 워크플로가 `pip install -r requirements.txt`로 설치 — 자동 최신화 사고 방지(배경역사 #15)
-├── crawler.py                  # 메인 크롤러(GitHub Actions 매시간) — 네이버 검색 OpenAPI(키 없으면 Google RSS 폴백), **키워드 54개 확대수집 → 무관 판정 캐시 대조(news_screen_cache, #78) → Haiku 1차 관련성 선별(app_config.news_relevance_criteria, 무관은 저장 안 함+캐시 기록, fail-open 키워드 폴백, 부처 인사는 무조건 통과, #66)** — 선별이 분야 태그(#76)·사건 라벨(event, #77)도 함께 매김 → 통과분만 본문 수집·Haiku 긴급도 분류(피드백 학습), 긴급 재알림 억제(suppress_repeat_alerts, #44). 운영자 긴급 알림에 태그 표시(구독자에겐 비표시)
+├── crawler.py                  # 메인 크롤러(GitHub Actions 매시간) — 네이버 검색 OpenAPI(키 없으면 Google RSS 폴백), **키워드 54개 확대수집 → 무관 판정 캐시 대조(news_screen_cache, #78) → Haiku 1차 관련성 선별(app_config.news_relevance_criteria, 무관은 저장 안 함+캐시 기록, fail-open 키워드 폴백, 부처 인사는 무조건 통과, #66)** — 선별이 분야 태그(#76)·사건 라벨(event, #77)도 함께 매김 → 통과분만 본문 수집. **긴급도는 선별 콜이 함께 판정(#82)** — 별도 Haiku 콜 없음. 선별이 urgency를 빼먹은 건만 classify_urgency로 개별 판정(폴백 존치), 긴급 재알림 억제(suppress_repeat_alerts, #44). 운영자 긴급 알림에 태그 표시(구독자에겐 비표시)
 ├── morning_briefing.py         # 모닝 브리핑 생성·발송(06:00 KST) — 🔴=DB 긴급도, 같은 사건 클러스터링(대표 1건+관련 N건, #44), SKT 영향 분석, 신규 입법예고 📢 섹션, 본문 0건 시 요약→제목 폴백(빈 브리핑 방지), 기사 0건 시 시각무관 1일1회 '🕊️무뉴스' 통지+placeholder(_handle_no_news)
 ├── news_dedup.py               # 같은 사건 재보도 판정 공용 유틸(제목 키워드, API 비용 0) — crawler·morning_briefing 공유. 임계 3·별-형 클러스터링 근거는 파일 주석 (#44)
 ├── regenerate_briefings.py     # 과거 브리핑을 클러스터링 적용본으로 재생성(수동). morning_briefing 함수 재사용, 입법예고 섹션 보존. **실행 전 daily_briefings_backup에 원본 백업 필수** (#46)
-├── refetch_content.py          # 본문 재수집·요약·60일 초과 정리(Windows 스케줄러, 한국 IP) · heartbeat(last_refetch_run)
+├── refetch_content.py          # 본문 재수집·요약(**'참고' 등급은 생략 — 온디맨드, #82**)·60일 초과 정리(Windows 스케줄러, 한국 IP) · heartbeat(last_refetch_run)
 ├── gov_notice_crawler.py       # 정부·기관 고시→news_feed + 입법예고(opinion.lawmaking.go.kr)→law_amendments(lsAnc) (17:00, 한국 IP) · heartbeat(last_gov_notice_run)
 │                               #   RRA(국립전파연구원)·MSIT(과기정통부)·KMCC(중앙전파관리소)·KCC(방통위)·ETRI·KISDI
 │                               #   ※ MSIT는 보도자료·입법행정예고·훈령예규고시 + **공고(공지사항 mPid=121&mId=310)**: 주파수 할당·재할당 공고 원문이 실리는 게시판(2026-08-02 추가). 사업공고(311)는 R&D 모집 잡음이라 제외
@@ -39,7 +39,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 ├── notify.py / embed_util.py   # 공용 유틸 — 텔레그램 전송(분할·재시도·429) / Voyage 임베딩. 새 코드는 반드시 재사용 (#58)
 ├── tests/test_smoke.py         # 스모크 테스트(표준 unittest·네트워크 0, 17케이스). `python -m unittest discover -s tests` (#58)
 ├── upload_law_pdf.py           # PDF/MD/PPTX→document_chunks RAG 업로드(조문 헤더 청킹)
-├── import_regulatory_kb.py     # regulatory-kb OKF 번들(법령 요약 104건)→kb_documents/kb_chunks 1회 적재. manifest.json 정본 순회, voyage-law-2 임베딩(stdlib만). (배경역사 #21)
+├── import_regulatory_kb.py     # regulatory-kb OKF 번들(법령 요약 **248문서·5,528청크**)→kb_documents/kb_chunks 적재. manifest.json 정본 순회, voyage-law-2 임베딩(stdlib만). (배경역사 #21)
 ├── add_law.py                  # 법령 추가 통합(Ⓑ): PDF 1개→①조문 document_chunks ②Haiku 요약 OKF→regulatory-kb+manifest+kb_* 동시. MAINTENANCE.md dedup 규칙 적용
 ├── regulatory-kb/              # OKF 법령 요약 번들(manifest.json 정본 + laws/·procedures/·glossary/). kb_* 적재 원천
 ├── backfill_embeddings.py      # Voyage 임베딩 백필(document_chunks NULL만)
@@ -84,7 +84,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 | kb_chunks | kb_documents 본문 청크 + embedding(**voyage-law-2** 1024, HNSW). doc_id FK(cascade). 자문이 시맨틱+trgm으로 조회 |
 | law_graph_nodes | 법령 관계도 노드(name UNIQUE). node_type: topic(주제)/law/decree/rules/notice/etc. source: seed(세션 시드)/citation(인용망 스크립트)/ai(자문·즉석 생성). doc_name=document_chunks 연결(원문 보기). RLS+anon select/insert/update(delete는 service 전용) |
 | law_graph_edges | 법령 관계도 엣지(source_id→target_id, on delete cascade). relation_type: 근거(주제→법령)/인용(조문 인용)/하위법령(계열). source: seed/citation/family/**thdcmp**/**delegation**/ai. weight=인용·재확인 횟수(엣지 굵기). unique(source,target,relation_type). RLS 동일. **delegation(2026-08-03, #81)** = `law_delegations` 표 기반 위임 엣지(weight=5, 최우선) — 조문 근거 원본은 표에 있으므로 description은 요약만. 우선순위 delegation > thdcmp(4) > family(3), 상위 출처가 정본화한 노드쌍은 하위 출처 억제(**적재 성공을 DB에서 재확인한 뒤** 억제 — #65 공백 사고 순서). **thdcmp(2026-08-02, #65)** = 법제처 3단비교 API(`lawService.do?target=thdCmp&knd=2`) 정본 위임 — weight=4. **CHECK 제약에 source 값을 추가해야 적재됨**(신규 source 태그 도입 시 `law_graph_edges_source_check` 확장 필수 — #65에서 누락으로 적재 실패 후 수정) |
-| law_delegations | **법령 위임 대응표**(#80·#81): parent_law·parent_article ↔ child_law·child_article, unique 4키. 출처 2계열 — ①법제처 3단비교 정본(`sync_law_delegations.py`, 법률↔시행령·시행규칙 조문 단위 1,586행) ②고시 제1조 역추출(`sync_notice_delegations.py`, 정규식·AI 미사용, child_article='전체' 230행). /law가 상·하위 조문 동시 제시에, 관계도가 delegation 엣지 생성에 사용. 재적재 안전(upsert + 성공 확인 후 stale 정리). 고시→상위 연결은 3단비교 범위 밖이라 역추출이 유일 경로 |
+| law_delegations | **법령 위임 대응표**(#80·#81): parent_law·parent_article ↔ child_law·child_article, unique 4키. 출처 2계열 — ①법제처 3단비교 정본(`sync_law_delegations.py`, 법률↔시행령·시행규칙 조문 단위 1,586행) ②고시 제1조 역추출(`sync_notice_delegations.py`, 정규식·AI 미사용, child_article='전체' 230행). /law가 상·하위 조문 동시 제시에, 관계도가 delegation 엣지 생성에 사용. 재적재 안전(upsert + 성공 확인 후 stale 정리). 고시→상위 연결은 3단비교 범위 밖이라 역추출이 유일 경로. **③수기 확정표 `MANUAL_BASIS`(#82, 14건)** — 제1조가 없거나 근거를 안 쓰는 문서(협정문·분배표·공고)를 **상위 법령 조문에서 역방향 확인**(「…을 정하여 고시한다」가 그 문서를 지목)해 채움. **확정만 넣고 포괄 위임('법·영에서 위임한 사항'류)은 제외** — 잘못된 조문 엣지는 없는 관계보다 나쁘다. 정규식이 성공하면 그쪽이 이기므로 원문 개정 시 자동으로 비켜선다. DB 직접 삽입 금지(17시 prune_stale이 지움) |
 | telegram_subscribers | 구독자 봇 가입자(chat_id PK). topic_briefing/urgent/assembly(각각 on·off), days(daily/weekday), briefing_hour(6~12, **'받기 시작 시각'** — 브리핑은 이 시각 1회, 긴급·법안은 이후 매시 :25 배달), last_briefing_sent_date·last_urgent_sent_at·last_assembly_sent_at(중복 발송 방지), ai_allowed(**기본 false** — AI 자문 승인 플래그), ai_count_date·ai_count(일일 20회 상한). active는 봇 차단(403) 자동 처리 전용이며 화면에 버튼은 없다. **RLS 켜고 정책 0개 = service_role 전용**(chat_id는 개인정보, 프런트 노출 금지 — 의도된 설계) |
 | subscriber_queue | 긴급·법안 알림 큐(topic: urgent/assembly, html, created_at). 크롤러가 **발송 대신 적재**하고 send-subscriber-briefing이 각 구독자 수신 시각에 꺼내 보낸다. 억제·클러스터링(#44)·법안 상태변경 판정을 TS로 재구현하지 않으려는 구조. RLS 정책 0개 |
 

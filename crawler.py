@@ -64,12 +64,9 @@ HEADERS = {
 #  긴급 분류 — Claude Haiku AI 판단
 # ═══════════════════════════════════════════════════════
 
-_URGENCY_SYSTEM = """당신은 SK텔레콤 Comm센터 기술정책팀의 전파정책 모니터링 AI입니다.
-기사 제목과 본문을 읽고 SKT 관점에서 대응 우선순위를 판단합니다.
-
-아래 기준으로 셋 중 하나만 출력하세요 (다른 말 없이 단어만):
-
-즉시대응 (반드시 부정적·문제적 논조인 기사만):
+# 긴급도 판정 기준 본문 — 개별 판정(_URGENCY_SYSTEM)과 선별 콜 통합(_SCREEN_URGENCY_RULES)이
+# 같은 문장을 써야 등급이 갈리지 않으므로 한 곳에 둔다. 어느 한쪽만 고치지 말 것.
+_URGENCY_CRITERIA = """즉시대응 (반드시 부정적·문제적 논조인 기사만):
 - 이동통신 품질·기지국·공공 와이파이 관련 불만/민원/장애/사고/비판 기사
 - 전파·전자파·주파수 관련 불만·규제강화·위반·행정처분 기사
 - 과징금·허가취소·영업정지 등 통신사에 직접 피해를 주는 기사
@@ -82,6 +79,19 @@ _URGENCY_SYSTEM = """당신은 SK텔레콤 Comm센터 기술정책팀의 전파�
 
 동향파악:
 - 위 두 기준에 해당하지 않는 해외 동향·업계 트렌드·참고용 기사"""
+
+_URGENCY_SYSTEM = """당신은 SK텔레콤 Comm센터 기술정책팀의 전파정책 모니터링 AI입니다.
+기사 제목과 본문을 읽고 SKT 관점에서 대응 우선순위를 판단합니다.
+
+아래 기준으로 셋 중 하나만 출력하세요 (다른 말 없이 단어만):
+
+""" + _URGENCY_CRITERIA
+
+# 선별 콜에 얹는 형태 — 관련으로 판정한 기사에만 등급을 매기게 한다.
+_SCREEN_URGENCY_RULES = (
+    '\n\n[대응 우선순위(urgency) 판정 기준 — 관련으로 판정한 기사에만 적용]\n'
+    + _URGENCY_CRITERIA
+)
 
 _AI_PRIORITY_MAP = {'즉시대응': '긴급', '금주검토': '보통', '동향파악': '참고'}
 _REVERSE_PRIORITY = {'긴급': '즉시대응', '보통': '금주검토', '참고': '동향파악'}
@@ -1387,7 +1397,8 @@ MAX_EVENT_LEN = 40              # 사건 라벨 상한 — 지시는 12~25자, �
 
 NEWS_SCREEN_TOOL = {
     'name': 'record_relevant_news',
-    'description': '기사 목록 중 기준문에 따라 관련으로 판정된 기사의 id와 분야 태그, 사건 라벨을 기록한다.',
+    'description': '기사 목록 중 기준문에 따라 관련으로 판정된 기사의 id와 분야 태그, 사건 라벨, '
+                   '대응 우선순위를 기록한다.',
     'input_schema': {
         'type': 'object',
         'properties': {
@@ -1407,8 +1418,14 @@ NEWS_SCREEN_TOOL = {
                             'type': 'string',
                             'description': '기사가 다루는 사건 한 줄(12~25자). 뚜렷하지 않으면 빈 문자열.',
                         },
+                        'urgency': {
+                            'type': 'string',
+                            'description': 'SKT 대응 우선순위. 시스템 지시의 판정 기준을 그대로 적용한다.',
+                            'enum': ['즉시대응', '금주검토', '동향파악'],
+                        },
                     },
-                    # tags·event는 일부러 required에서 뺀다 — 모델이 빼먹어도 관련성 판정은 살아야 한다.
+                    # tags·event·urgency는 일부러 required에서 뺀다 — 모델이 빼먹어도 관련성 판정은
+                    # 살아야 한다. urgency가 없는 기사는 save_new_items가 classify_urgency로 개별 판정.
                     'required': ['id'],
                 },
             },
@@ -1486,9 +1503,24 @@ def _keyword_relevant(item: dict) -> bool:
     return any(k in (item.get('title') or '') for k in RADIO_KEYWORDS)
 
 
+_screen_system_cache = {}
+
+
+def _screen_system(criteria: str) -> str:
+    """선별 콜 system = 관련성 기준문 + 긴급도 기준 + 담당자 피드백 블록.
+
+    피드백은 제목별 유사사례 없이 배치 공통으로 만든다 — 선별은 한 콜에 여러 기사를 판정하므로
+    특정 제목에 맞출 수 없다(개별 판정 대비 개인화가 약해지는 지점. 등급 분포가 흔들리면 여기부터 본다).
+    실행당 1회만 조립한다 — get_feedback_examples는 메모리 연산이지만 _get_distilled_rules가
+    DB·API를 탈 수 있다."""
+    if criteria not in _screen_system_cache:
+        _screen_system_cache[criteria] = criteria + _SCREEN_URGENCY_RULES + get_feedback_examples('')
+    return _screen_system_cache[criteria]
+
+
 def _screen_batch_haiku(client, criteria: str, batch: list):
     """배치 1개(≤SCREEN_BATCH_SIZE건)를 Haiku 1콜로 판정.
-    반환: {관련 id(1-based): {'tags': list, 'event': str}}. 실패 시 None.
+    반환: {관련 id(1-based): {'tags': list, 'event': str, 'urgency': str}}. 실패 시 None.
     None은 '판정 실패' 신호이고 호출부의 키워드 폴백이 여기 물려 있다 — 의미를 바꾸지 말 것.
     (반환값이 dict로 넓어져도 이 None 규약은 그대로다. 값이 빈 dict인 것과 None은 다르다 —
      빈 dict는 '관련이지만 태그·사건 미판정', None은 '이 배치 판정 실패'.)
@@ -1528,8 +1560,11 @@ def _screen_batch_haiku(client, criteria: str, batch: list):
         '   - 기사 제목을 그대로 베끼지 말라. 제목이 달라도 사건이 같으면 같은 문장이 나와야 한다.\n'
         '   - 사건이 뚜렷하지 않으면(전망·해설·기획 기사 등) event를 빈 문자열로 둔다. '
         '억지로 만들지 말라.\n'
+        '6. 관련으로 판정한 기사에는 대응 우선순위를 urgency에 적어라. '
+        '시스템 지시의 「대응 우선순위 판정 기준」과 담당자 피드백을 그대로 적용하고, '
+        '즉시대응·금주검토·동향파악 중 하나만 쓴다.\n'
         '관련으로 판정된 기사만 record_relevant_news 도구의 relevant 배열에 '
-        '{id, tags, event} 형태로 기록하라. 관련이 하나도 없으면 빈 배열을 기록하라.\n\n'
+        '{id, tags, event, urgency} 형태로 기록하라. 관련이 하나도 없으면 빈 배열을 기록하라.\n\n'
         + json.dumps(payload, ensure_ascii=False)
     )
     try:
@@ -1541,7 +1576,7 @@ def _screen_batch_haiku(client, criteria: str, batch: list):
             # 초과하면 tool_use가 미완성으로 잘려 None(판정 실패) → 배치 전체 키워드 폴백,
             # 즉 조용한 리콜 손실이 된다. 입력이 아니라 출력 한도라 비용 영향도 없다.
             max_tokens=5000,
-            system=criteria,
+            system=_screen_system(criteria),
             tools=[NEWS_SCREEN_TOOL],
             tool_choice={'type': 'tool', 'name': 'record_relevant_news'},
             messages=[{'role': 'user', 'content': prompt}],
@@ -1556,8 +1591,9 @@ def _screen_batch_haiku(client, criteria: str, batch: list):
                     if isinstance(row, dict):
                         raw_id = row.get('id')
                         raw_tags, raw_event = row.get('tags'), row.get('event')
+                        raw_urgency = row.get('urgency')
                     else:
-                        raw_id, raw_tags, raw_event = row, None, None
+                        raw_id, raw_tags, raw_event, raw_urgency = row, None, None, None
                     try:
                         rid = int(raw_id)
                     except (TypeError, ValueError):
@@ -1571,7 +1607,11 @@ def _screen_batch_haiku(client, criteria: str, batch: list):
                     event = ''
                     if isinstance(raw_event, str):
                         event = re.sub(r'\s+', ' ', raw_event).strip()[:MAX_EVENT_LEN]
-                    out[rid] = {'tags': tags, 'event': event}
+                    # 등급 어휘(즉시대응 등) → DB 값(긴급/보통/참고). 모르는 값은 빈 문자열 =
+                    # 미판정으로 두고 save_new_items가 개별 판정한다(임의 등급을 만들지 않는다).
+                    urgency = _AI_PRIORITY_MAP.get((raw_urgency or '').strip(), '') \
+                        if isinstance(raw_urgency, str) else ''
+                    out[rid] = {'tags': tags, 'event': event, 'urgency': urgency}
                 return out
         return None                   # 도구 호출 없음 → 실패 취급(호출부가 키워드 폴백)
     except Exception as e:
@@ -1678,6 +1718,8 @@ def screen_news_items(items: list) -> list:
                     keep[n] = True
                     items[n]['tags'] = got.get('tags') or []
                     items[n]['event'] = got.get('event') or ''
+                    if got.get('urgency'):        # 미판정은 키를 만들지 않는다 — 개별 판정 폴백 대상
+                        items[n]['urgency'] = got['urgency']
                 else:
                     url = (items[n].get('url') or '').strip()
                     if url:
@@ -1717,11 +1759,12 @@ def screen_news_items(items: list) -> list:
     #   모델이 tags·event 생략) 중 하나라도 키가 빠지면 upsert 전체가 터져 뉴스 수집이 전면 중단된다.
     #   통과 기사는 전부 이 루프를 지나므로 여기가 유일한 방어선이다.
     #   '기타' 태그를 만들지 말 것 — 구독자가 그것을 끌 수 있게 되어 판정 실패 기사가 조용히 사라진다.
-    for it in items:
+    for it in passed:                     # 통과분만 — 탈락 기사에 안전망을 돌리면 보정 로그가 무관 기사로 오염된다
         it.setdefault('tags', [])         # 반드시 안전망보다 먼저 — 태그가 없는 기사가 바로 보정 대상이다
         it.setdefault('event', '')        # 사건 라벨 미판정은 빈 문자열(대시보드는 이때 제목 유사도로 되돌아간다)
         _spectrum_safety_net(it)          # 판정 누락 보정 — 아래 함수 주석 참조
-        it.pop('_screen_text', None)      # 보정이 _screen_text를 읽으므로 제거는 마지막
+    for it in items:
+        it.pop('_screen_text', None)      # 제거는 전체 대상 — 반환 규약(판정 전용 키는 여기서 전부 제거) 유지
     return passed
 
 
@@ -1852,11 +1895,20 @@ def save_new_items(items: list, existing_data: tuple) -> list:
         print('[저장] 유효한 신규 항목 없음')
         return []
 
-    # ⑤ 긴급도 분류 — 선별 통과분에만 돈다 (건당 Haiku 1콜)
+    # ⑤ 긴급도 — 선별 콜(screen_news_items)이 이미 매긴 값을 쓰고, 빠진 것만 개별 판정한다.
+    #    통합 전에는 여기서 전건을 건당 1콜로 돌렸다(하루 ~600콜 = 비용의 큰 축).
+    #    폴백 경로(키워드 선별·인사 자동통과·모델이 urgency 생략)는 여전히 여기로 온다 — 지우지 말 것.
+    _URGENCY_VALUES = set(_AI_PRIORITY_MAP.values())
+    fallback_n = 0
     for item in valid:
-        val = classify_urgency(item.get('title', ''), item.get('content', '') or '')
+        val = item.get('urgency')
+        if val not in _URGENCY_VALUES:
+            val = classify_urgency(item.get('title', ''), item.get('content', '') or '')
+            fallback_n += 1
         item['urgency'] = val
         item['importance'] = val
+    if fallback_n:
+        print(f'[긴급도] 선별 미판정 {fallback_n}건 개별 판정')
 
     try:
         # upsert(on_conflict=url, ignore_duplicates): 크롤러 동시 실행 시

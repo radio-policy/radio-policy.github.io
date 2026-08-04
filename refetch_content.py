@@ -125,7 +125,8 @@ def main():
 
     # content=NULL 또는 100자 미만(제목만 저장된 경우) 기사 재수집
     # category는 60일 삭제 예외 판정(해외 제외, #75)에 쓰인다 — 빼면 조용히 None이 돼 예외가 안 먹는다
-    resp = sb.table("news_feed").select("id,title,source,url,content,published_at,summary,locked,category") \
+    # urgency는 '참고' 등급 요약 생략 판정(#82)에 쓴다 — 빼면 조용히 None이 돼 전건 요약으로 되돌아간다
+    resp = sb.table("news_feed").select("id,title,source,url,content,published_at,summary,locked,category,urgency") \
         .order("published_at", desc=True).limit(500).execute()
     all_articles = resp.data or []
 
@@ -217,15 +218,20 @@ def main():
             else:
                 print(f"✅ ({len(body)}자)", end="")
 
-            # 본문 수집 직후 요약 자동 생성
-            summary = crawler.generate_summary(
-                article.get("title", ""),
-                article.get("source", ""),
-                article.get("published_at", ""),
-                body
-            )
-            if summary:
-                update_data["summary"] = summary
+            # 본문 수집 직후 요약 자동 생성 — 단 '참고' 등급은 건너뛴다(2026-08-03, 비용 절감 ②).
+            #   '참고'가 수집분의 ~75%인데 대시보드 읽힘률은 1% 미만이라 대부분 버려진다.
+            #   요약을 실제로 쓰는 곳: 대시보드 목록 미리보기·상세뿐. 06시 브리핑은 content를 직접
+            #   읽고(morning_briefing.py), 텔레그램 알림은 제목·링크만 쓴다 — 둘 다 영향 없음.
+            #   대시보드는 summary가 없으면 클릭 시 그 자리에서 생성해 DB에 되쓴다(app.js).
+            if (article.get("urgency") or "") != "참고":
+                summary = crawler.generate_summary(
+                    article.get("title", ""),
+                    article.get("source", ""),
+                    article.get("published_at", ""),
+                    body
+                )
+                if summary:
+                    update_data["summary"] = summary
 
             sb.table("news_feed").update(update_data).eq("id", article["id"]).execute()
             print()
@@ -240,12 +246,15 @@ def main():
     print(f"\n완료! 성공 {ok}건 · 실패 {fail}건 · 미매칭 {skip}건 · 상대경로 {invalid}건")
 
     # ── 뉴스 요약 백필 ───────────────────────────────────
-    # 본문은 있지만 요약이 없는 기사를 자동으로 채워 대시보드 첫 클릭 대기 제거
+    # 본문은 있지만 요약이 없는 기사를 자동으로 채워 대시보드 첫 클릭 대기 제거.
+    # '참고' 등급은 제외한다(#82) — 위 신규분 생략과 짝이다. 여기를 빼먹으면 생략한 요약을
+    # 이 백필이 시간당 30건씩 도로 만들어 절감이 0이 된다.
     try:
         sum_resp = sb.table("news_feed") \
             .select("id,title,source,published_at,content") \
             .is_("summary", "null") \
             .not_.is_("content", "null") \
+            .neq("urgency", "참고") \
             .order("published_at", desc=True) \
             .limit(30).execute()
         no_summary = [a for a in (sum_resp.data or []) if len((a.get("content") or "").strip()) >= 100]

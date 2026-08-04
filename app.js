@@ -2989,6 +2989,17 @@ function toggleNewsGroup(gid) {
   if (icon) icon.style.transform = _newsGroupOpen[gid] ? 'rotate(180deg)' : '';
 }
 
+// 목록 행 미리보기 — summary가 원칙이고, 없으면 사건 라벨(event)로 대체한다.
+// '참고' 등급은 요약을 미리 만들지 않으므로(비용 절감 #82 — refetch_content.py) 폴백이 없으면
+// 목록의 4분의 3이 제목만 남아 비어 보인다. 클릭하면 그 자리에서 요약이 생성된다(loadNewsSummary).
+// content로 폴백하지 않는 이유: 목록 쿼리(NEWS_LIST_COLS)에 본문을 넣으면 페이지당 수백 KB가 더 실린다.
+function newsPreviewHtml(n, cls, style) {
+  var t = (n.summary || '').trim() || (n.event || '').trim();
+  if (!t) return '';
+  return '<div' + (cls ? ' class="' + cls + '"' : '') + ' style="' + style + '">'
+       + escHtml(t.slice(0, 80)) + (t.length > 80 ? '…' : '') + '</div>';
+}
+
 function _renderSingleItem(n) {
   var rule = IMPORTANCE_RULES[n._importance] || IMPORTANCE_RULES['참고'];
   var date = new Date(n.published_at || n.created_at).toLocaleDateString('ko-KR', {year:'numeric', month:'2-digit', day:'2-digit'});
@@ -3015,7 +3026,7 @@ function _renderSingleItem(n) {
         (n.source ? '<span class="news-item-source" style="font-size:10px;color:var(--text-tertiary);margin-left:auto;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:90px">' + escHtml(n.source) + '</span>' : '') +
       '</div>' +
       '<div class="news-title" style="font-size:13px;line-height:1.5;word-break:break-word;overflow-wrap:break-word">' + escHtml(n.title) + urlIcon + lockIcon + delIcon + '</div>' +
-      (n.summary ? '<div class="news-meta" style="margin-top:3px;font-size:11px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;color:var(--text-tertiary)">' + escHtml(n.summary.slice(0, 80)) + (n.summary.length > 80 ? '…' : '') + '</div>' : '') +
+      newsPreviewHtml(n, 'news-meta', 'margin-top:3px;font-size:11px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;color:var(--text-tertiary)') +
     '</div>' +
   '</div>';
 }
@@ -3094,7 +3105,7 @@ function renderNewsList() {
               '<span style="font-size:12px;font-weight:700;color:' + rule.color + ';background:' + rule.bg + ';padding:1px 6px;border-radius:4px;flex-shrink:0">' + rule.label + '</span>' +
               '<div style="flex:1;min-width:0;overflow:hidden">' +
                 '<div style="font-size:13px;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escHtml(n.title) + urlIcon + '</div>' +
-                (n.summary ? '<div style="margin-top:2px;font-size:11px;color:var(--text-tertiary);overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical">' + escHtml(n.summary.slice(0, 80)) + (n.summary.length > 80 ? '…' : '') + '</div>' : '') +
+                newsPreviewHtml(n, '', 'margin-top:2px;font-size:11px;color:var(--text-tertiary);overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical') +
               '</div>' +
               '<span style="font-size:11px;color:var(--text-tertiary);flex-shrink:0;margin-left:8px">' + escHtml(n.source||'') + '</span>' +
               '<span onclick="event.stopPropagation();deleteNewsItem(\'' + n.id + '\')" title="기사 삭제" style="cursor:pointer;font-size:11px;color:var(--text-tertiary);opacity:.5;flex-shrink:0;margin-left:6px"><i class="ti ti-trash"></i></span>' +
