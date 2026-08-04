@@ -1897,18 +1897,21 @@ def save_new_items(items: list, existing_data: tuple) -> list:
 
     # ⑤ 긴급도 — 선별 콜(screen_news_items)이 이미 매긴 값을 쓰고, 빠진 것만 개별 판정한다.
     #    통합 전에는 여기서 전건을 건당 1콜로 돌렸다(하루 ~600콜 = 비용의 큰 축).
-    #    폴백 경로(키워드 선별·인사 자동통과·모델이 urgency 생략)는 여전히 여기로 온다 — 지우지 말 것.
-    _URGENCY_VALUES = set(_AI_PRIORITY_MAP.values())
-    fallback_n = 0
+    #    ⚠️ 2026-08-04 되돌림 — 선별 콜 통합(#82)은 **긴급률을 9.9% → 0.7%로 무너뜨렸다.**
+    #    같은 기사로 확인된 A/B: 「SKT 5G 과장광고 과징금, 대법원 간다」가 8/3(개별)은 긴급,
+    #    8/4(통합)은 보통. 원인은 판정 재료와 개인화 두 가지다:
+    #      ① 선별은 파이프라인상 **본문 수집 전**이라 네이버 요약 300자(_screen_text)만 본다.
+    #         「공정위가 상고했다」 같은 핵심이 요약에서 잘린다. 본문(중앙값 1,329자)은 여기서만 쓴다.
+    #         → 선별에 본문을 주려면 무관 기사 500건의 본문까지 매시간 긁어야 해서 캐시 절감이 무너진다.
+    #      ② 개별 판정은 get_feedback_examples(title)로 **제목별 유사 사례 5건**을 넣지만,
+    #         배치 판정은 여러 기사를 한 번에 보므로 공통 사례만 쓴다.
+    #    월 $33을 아끼려다 긴급 알림(이 시스템의 존재 이유)을 잃는 거래라 원복했다.
+    #    선별 콜은 urgency를 여전히 뱉지만(스키마 유지) **여기서 쓰지 않는다** — 프롬프트 보강으로
+    #    통합을 되살릴 실험 여지를 남겨 둔 것. 되살릴 땐 반드시 긴급률을 배포 전(9.9%)과 비교할 것.
     for item in valid:
-        val = item.get('urgency')
-        if val not in _URGENCY_VALUES:
-            val = classify_urgency(item.get('title', ''), item.get('content', '') or '')
-            fallback_n += 1
+        val = classify_urgency(item.get('title', ''), item.get('content', '') or '')
         item['urgency'] = val
         item['importance'] = val
-    if fallback_n:
-        print(f'[긴급도] 선별 미판정 {fallback_n}건 개별 판정')
 
     try:
         # upsert(on_conflict=url, ignore_duplicates): 크롤러 동시 실행 시
