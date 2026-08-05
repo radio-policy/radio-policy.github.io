@@ -1922,9 +1922,15 @@ async function callClaude(userText, onDelta) {
       lawExtra.map(function(h, i) {
         return '[조문 ' + (i + 1) + '] ' + h.doc_name + (h.article_no ? ' ' + h.article_no : '') + '\n' + h.content;
       }).join('\n\n---\n\n');
+    // 출처 목록 **앞쪽**에 놓는다(#89) — 참조 문서 배지는 6개만 보여주므로(sourceTagsHtml(..., 6)),
+    // RAG 15개를 먼저 채우면 정작 답변이 인용한 조문이 잘려 나간다. 봇에서 실제로 그랬다:
+    // 전파법 제21조제2항을 [원문 확인됨]으로 인용해 놓고 출처에는 지방세법 시행령·논문·세미나
+    // 자료만 보였다. rag.ts answerAdvisory의 sources 조립 순서와 동일 유지.
+    var lawSrcHead = [];
     lawExtra.forEach(function(h) {
-      if (h.doc_name && lastRagSources.indexOf(h.doc_name) === -1) lastRagSources.push(h.doc_name);
+      if (h.doc_name && lawSrcHead.indexOf(h.doc_name) === -1) lawSrcHead.push(h.doc_name);
     });
+    lastRagSources = lawSrcHead.concat(lastRagSources.filter(function(s) { return lawSrcHead.indexOf(s) === -1; }));
     console.log('조문 정밀검색 보강:', lawExtra.map(function(h) { return h.doc_name + ' ' + (h.article_no || ''); }).join(', '));
   }
 

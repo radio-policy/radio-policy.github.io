@@ -934,9 +934,13 @@ export async function answerAdvisory(sb: SupabaseClient, systemPrompt: string, q
 
   const { text: answer, webRefs } = await callSonnet(apiKey, system, question);
 
+  // 출처 순서: **조문 정밀검색분(extra)을 먼저** — 텔레그램 footer는 앞 6개만 보여주므로(#89),
+  // RAG 15개를 먼저 채우면 정작 답변이 인용한 조문이 잘려 나간다. 실제로 「기지국 개설 허가 절차」
+  // 답변이 전파법 제21조제2항을 [원문 확인됨]으로 인용했는데 출처에는 지방세법 시행령·논문·
+  // 세미나 자료만 보였다 — 근거는 맞는데 어디서 왔는지 확인할 수가 없었다.
   const sources: string[] = [];
-  for (const c of chunks) if (c.doc_name && !sources.includes(c.doc_name)) sources.push(c.doc_name);
   for (const h of extra) if (h.doc_name && !sources.includes(h.doc_name)) sources.push(h.doc_name);
+  for (const c of chunks) if (c.doc_name && !sources.includes(c.doc_name)) sources.push(c.doc_name);
   for (const r of kb) { const t = '[요약] ' + (r.title || '').trim(); if (r.title && !sources.includes(t)) sources.push(t); }
   for (const s of news.sources) if (!sources.includes(s)) sources.push(s);
   return { answer, sources, webSources: webRefs };
