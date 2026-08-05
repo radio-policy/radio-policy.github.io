@@ -56,6 +56,7 @@ interface Sub {
   days: string; briefing_hour: number;
   ai_allowed: boolean; ai_count_date: string | null; ai_count: number;
   law_count_date?: string | null; law_count?: number;   // 자연어 /law 일일 상한 (2026-08-03)
+  unlimited?: boolean;   // 일일 한도 면제(#86) — /ask·/law 상한을 건너뛴다. 카운터는 계속 올려 사용량은 관찰 가능
   end_hour: number;      // 수신 종료 시각(18~22) — 종전 하드코딩 '23시 이후 무발송'을 대체 (2026-08-03)
   // 관심분야. **빈 배열 = 전체 수신**(캐논 하나). 6개를 다 켜면 []로 정규화하므로,
   // 나중에 7번째 태그가 생겨도 기존 '전체' 구독자가 자동으로 받는다.
@@ -127,7 +128,11 @@ const START_TEXT =
   '아래 버튼으로 콘텐츠·요일·수신 시각을 바로 바꿀 수 있어요. (언제든 /settings)\n' +
   '항목을 모두 끄면 알림이 오지 않습니다.\n\n' +
   '📖 <b>법령 검색</b> — <code>/law 3G 종료 관련 법령</code> (궁금한 주제 → 관련 법령·조항과 이유. 조문 번호를 알면 <code>/law 전기통신사업법 19조</code> 로 원문 즉답)\n' +
-  '🤖 <b>AI 자문</b> — <code>/ask 질문</code> (동향·시사점까지 종합, 운영자 최초 1회 승인 필요)';
+  '🤖 <b>AI 자문</b> — <code>/ask 질문</code> (동향·시사점까지 종합, 운영자 최초 1회 승인 필요)\n' +
+  // 대시보드 자문은 chatHistory를 누적해 대화가 이어지지만 봇은 질문 1건만 보낸다(rag.ts).
+  // 웹을 써 본 사람일수록 "그건 언제 시행되나?" 식 후속 질문을 던지므로 가입 시점에 미리 알린다.
+  // (답변 하단에도 같은 취지의 한 줄이 붙는다 — 첫 질문 전/후 양쪽에서 닿게)
+  '   <i>질문마다 필요한 내용을 다 담아 주세요 — 앞의 질문은 기억하지 않습니다.</i>';
 
 // ── 조문 원문 조회 (비용 0) ──
 const ARTICLE_RE = /^(.{2,40}?)\s*제?\s*(\d+)\s*조(?:\s*의\s*(\d+))?\s*$/;
@@ -187,7 +192,7 @@ async function handleLawQuery(chatId: number, q: string): Promise<Promise<void> 
   if (sub) {
     const today = todayKst();
     const used = sub.law_count_date === today ? (sub.law_count || 0) : 0;
-    if (used >= LAW_DAILY_LIMIT) {
+    if (!sub.unlimited && used >= LAW_DAILY_LIMIT) {   // unlimited 면제(#86)
       await sendTelegramHtml(BOT_TOKEN, chatId, `⏳ 오늘 법령 검색 한도(${LAW_DAILY_LIMIT}회)를 모두 사용했습니다. 내일 다시 이용해 주세요.`);
       return;
     }
@@ -280,10 +285,10 @@ async function handleAsk(chatId: number, from: { username?: string; first_name?:
     }
     return;
   }
-  // 일일 상한
+  // 일일 상한 — unlimited=true인 구독자는 면제(#86). 카운터는 계속 올린다(사용량 관찰용).
   const today = todayKst();
   const used = sub.ai_count_date === today ? sub.ai_count : 0;
-  if (used >= AI_DAILY_LIMIT) {
+  if (!sub.unlimited && used >= AI_DAILY_LIMIT) {
     await sendTelegramHtml(BOT_TOKEN, chatId, `⏳ 오늘 자문 한도(${AI_DAILY_LIMIT}회)를 모두 사용했습니다. 내일 다시 이용해 주세요.`);
     return;
   }
@@ -316,6 +321,11 @@ async function handleAsk(chatId: number, from: { username?: string; first_name?:
         html += '\n\n<i>🌐 웹 출처: ' + items.join(' · ') + '</i>';
       }
       if (sources.length) html += '\n<i>📚 검색된 내부 자료(전부 반영된 것은 아님): ' + escapeHtml(sources.slice(0, 6).join(', ')) + '</i>';
+      // 대화 미유지 고지(#86) — 봇은 질문 1건만 모델에 보낸다(rag.ts `messages: [{role:'user'}]`).
+      // 대시보드 자문은 chatHistory를 누적해 이어지므로, 웹을 써 본 사람일수록 "그건 언제 시행되나?"
+      // 같은 후속 질문을 던지고 엉뚱한 답을 받는다. 답을 읽은 직후 = 후속 질문을 쓰기 직전이라
+      // 이 자리가 가장 잘 닿는다. /law에는 붙이지 않는다(애초에 한 건씩 찾는 용도).
+      html += '\n<i>💡 이어지는 질문은 기억하지 않습니다 — 질문마다 필요한 내용을 다 담아 주세요.</i>';
       for (const part of splitByLines(html)) await sendTelegramHtml(BOT_TOKEN, chatId, part);
       // 기존 chat_logs에 기록 (source 컬럼이 없어 category로 구분 — 스키마 변경 없음)
       // 웹 출처는 '[웹] 제목 (url)' 접두사로 함께 남긴다 — splitSources() 관례(접두사 구분)와 동일

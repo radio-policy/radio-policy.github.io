@@ -147,6 +147,67 @@ def _proposed_law_name(title):
     return re.sub(r'\s+', ' ', m.group(1)).strip() if m else None
 
 
+# ── KB 등재 법령 대조 (#87) ────────────────────────────────────────────────
+#  국회 입법예고는 전 상임위 법안이 들어온다. 관련성 판정은 크롤러의 AI(assembly_notice_criteria)가
+#  하는데 기준이 넓어("플랫폼 규제는 소관위원회 불문 관련", "애매하면 채택") 대부업·스토킹방지·
+#  헬스케어·이러닝 같은 법안까지 통과한다. DIFF는 건당 Sonnet 호출(2만 자 입력)이라 가장 비싼
+#  단계인데 그 절반 이상이 무관 법안에 쓰이고 있었다(실측 17건 중 11건).
+#
+#  **판단이 아니라 대조로 거른다** — "이 법안이 우리 KB에 등재된 법을 고치는가".
+#  AI 판정보다 정확하고 비용이 0이며, 운영자가 KB에 넣고 빼는 것으로 대상을 직접 통제한다.
+#  KB에 없으면 안 본다 — 필요하면 그 법을 KB에 등재하면 다음 실행부터 자동 포함된다
+#  (그러면 /law·자문 검색에서도 함께 잡히므로 예외 목록보다 이쪽이 일관된다).
+#
+#  ⚠️ 정규화 없이 문자열 비교하면 실패한다. 「대·중소기업」의 가운뎃점이 DB는 'ㆍ', 국회는 '·'로
+#     오고 띄어쓰기도 흔들린다. 실측: 정규화 전 6건 중 전자상거래법·방미통위설치법이 잘못 제외됐다.
+_KB_LAW_KEYS = None
+
+
+def _norm_law_name(s):
+    """법령명 대조 키 — 가운뎃점 3종·공백·마침표를 지운다."""
+    return re.sub(r'[ㆍ·・.\s]', '', s or '')
+
+
+def _kb_law_keys(sb):
+    """KB(document_chunks 현행본)에 있는 법령명 키 집합. 실행당 1회 조회 후 캐시.
+
+    시행령·시행규칙만 등재된 경우도 모법 개정안을 받도록 접미사를 떼어 함께 넣는다.
+    조회 실패 시 None을 돌려주고, 호출부는 **필터를 걸지 않는다**(fail-open) —
+    대조를 못 한다고 분석을 통째로 멈추면 놓치는 쪽이 더 비싸다."""
+    global _KB_LAW_KEYS
+    if _KB_LAW_KEYS is not None:
+        return _KB_LAW_KEYS
+    try:
+        keys, off = set(), 0
+        while True:
+            rows = (sb.table('document_chunks').select('doc_name')
+                    .eq('status', 'current').range(off, off + 999).execute().data) or []
+            for r in rows:
+                m = re.match(r'^(.+?)\(', r.get('doc_name') or '')
+                if not m:
+                    continue
+                nm = m.group(1).strip()
+                keys.add(_norm_law_name(nm))
+                base = re.sub(r'\s*(시행령|시행규칙|시행에 관한.*)$', '', nm).strip()
+                if base:
+                    keys.add(_norm_law_name(base))
+            off += 1000
+            if len(rows) < 1000 or off > 40000:
+                break
+        _KB_LAW_KEYS = keys
+        print(f'  [KB 대조] 등재 법령 키 {len(keys)}개 로드')
+    except Exception as e:
+        print(f'  [KB 대조] 조회 실패 — 필터 미적용으로 진행: {str(e)[:80]}')
+        _KB_LAW_KEYS = None
+    return _KB_LAW_KEYS
+
+
+def _bill_target_law(bill_name):
+    """의안명에서 대상 법령명 추출: '전파법 일부개정법률안' → '전파법'."""
+    nm = re.sub(r'\s*(일부개정법률안|전부개정법률안|폐지법률안|법률안|개정안)\s*$', '', bill_name or '').strip()
+    return re.sub(r'\([^)]*\)\s*$', '', nm).strip()
+
+
 def _proposed_deadline(text):
     """첨부 본문에서 의견제출 마감일(YYYYMMDD) 추출 — best effort."""
     m = re.search(r'의견\s*제출[\s\S]{0,300}?(\d{4})\s*[.년]\s*(\d{1,2})\s*[.월]\s*(\d{1,2})',
@@ -953,6 +1014,22 @@ def process_assembly(sb, ai_client, args, results):
         if len(d8) == 8 and d8 >= today and r.get('bill_no'):
             r['_deadline'] = d8
             active.append(r)
+    # KB 등재 법령만 남긴다(#87) — 대조 실패(None)면 필터 미적용
+    kb_keys = _kb_law_keys(sb)
+    if kb_keys:
+        kept, skipped_kb = [], []
+        for r in active:
+            tgt = _bill_target_law(r.get('bill_name') or '')
+            if _norm_law_name(tgt) in kb_keys:
+                kept.append(r)
+            else:
+                skipped_kb.append(tgt or (r.get('bill_name') or '?'))
+        active = kept
+        if skipped_kb:
+            # 제외분을 반드시 남긴다 — 필요한 법이 빠졌으면 KB에 등재해 되살릴 수 있어야 한다
+            print(f'  [KB 대조] 미등재로 제외 {len(skipped_kb)}건: ' +
+                  ', '.join(str(x)[:26] for x in skipped_kb[:8]) +
+                  (' …' if len(skipped_kb) > 8 else ''))
     print(f'=== 국회 입법예고(assembly) 후보 {len(active)}건 ===')
     for r in active:
         bill_no = str(r['bill_no'])

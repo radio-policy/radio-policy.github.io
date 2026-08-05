@@ -1,7 +1,7 @@
 {
   "schema": "regulatory-kb-manifest/v1",
   "updated": "2026-07-31",
-  "entry_count": 248,
+  "entry_count": 250,
   "dedup_key_rule": "정규화 제목(버전 수식어 '(구버전)' 등 제거) + '|' + law_type. 같은 dedup_key = 같은 법령(버전만 다를 수 있음).",
   "on_readd_rule": {
     "same_law_number": "동일 법령번호 재추가 → 기존 path에 덮어쓰기(idempotent). 신규 파일 생성 금지.",
@@ -2492,6 +2492,26 @@
       "enforcement_date": "2021-09-22",
       "concept_type": "Notice",
       "path": "laws/standard-terms-act/약관심사지침.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "전기통신금융사기 피해 방지 및 피해금 환급에 관한 특별법|법률",
+      "title": "전기통신금융사기 피해 방지 및 피해금 환급에 관한 특별법",
+      "law_type": "법률",
+      "law_number": "제21320호",
+      "enforcement_date": "2026-08-04",
+      "concept_type": "Law",
+      "path": "laws/telecom-fraud-act/전기통신금융사기_피해_방지_및_피해금_환급에_관한_특별법.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "전기통신금융사기 피해 방지 및 피해금 환급에 관한 특별법 시행령|대통령령",
+      "title": "전기통신금융사기 피해 방지 및 피해금 환급에 관한 특별법 시행령",
+      "law_type": "대통령령",
+      "law_number": "제36552호",
+      "enforcement_date": "2026-08-04",
+      "concept_type": "Regulation",
+      "path": "laws/telecom-fraud-act/전기통신금융사기_피해_방지_및_피해금_환급에_관한_특별법_시행령.md",
       "status": "current"
     }
   ]
