@@ -19,6 +19,7 @@
   재구성하면 당시 시점과 달라질 수 있어, 원본에서 잘라내 새 본문 앞에 다시 붙인다.
 """
 import os
+import re
 import sys
 from datetime import datetime, timedelta, timezone
 
@@ -57,8 +58,10 @@ def fetch_day_items(day: datetime) -> list:
 
 def split_law_section(content: str) -> tuple:
     """원본에서 앞머리 📢 입법예고 섹션을 분리한다. 반환: (입법예고부, 나머지)"""
-    marker = '📡 전파정책 모닝 브리핑'
-    idx = content.find(marker)
+    # 제목이 바뀌어도 깨지지 않게 패턴으로 찾는다 (2026-08-05: '전파정책' → '통신·전파 정책').
+    # 과거 저장분은 옛 제목이라, 문자열 고정 매칭이면 옛 브리핑에서 입법예고 분리가 통째로 실패한다.
+    m = re.search(r'📡[^\n]*모닝 브리핑', content)
+    idx = m.start() if m else -1
     if idx > 0:                       # 브리핑 본문 앞에 뭔가 있었다 = 입법예고 섹션
         return content[:idx].rstrip() + '\n\n', content[idx:]
     return '', content

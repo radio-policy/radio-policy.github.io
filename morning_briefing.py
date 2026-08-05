@@ -51,6 +51,29 @@ sb: Client = make_client(SUPABASE_URL, SUPABASE_KEY)
 #  STEP 1 — 본문 확인된 기사 조회
 # ═══════════════════════════════════════════════════════
 
+def load_briefing_excluded() -> set:
+    """브리핑에서 뺄 기사 URL 집합 — app_config.briefing_excluded_urls (JSON 배열).
+
+    필요한 이유(#85): 오탐 기사를 브리핑에서만 빼는 수단이 없었다.
+      · 삭제 → 대시보드·자문 검색에서도 사라져 과하다
+      · published_at 조작 → 사실 왜곡
+      · urgency 하향 → 브리핑은 24h 전체를 보므로 그래도 들어간다
+    발단은 「여수 죽림터널 라디오 중계기 고장」 — 도로터널 FM 방송 설비(관리 지자체, 근거
+    국토부 예규)라 통신·SKT 접점이 없는데 긴급으로 잡혔다.
+    app_config를 쓰는 이유: 컬럼 추가 없이 되고, 목록을 눈으로 확인·수정할 수 있다.
+    조회 실패는 빈 집합으로 넘긴다(fail-open) — 제외가 안 되는 것이 브리핑이 안 나가는 것보다 낫다."""
+    try:
+        rows = sb.table('app_config').select('value') \
+            .eq('key', 'briefing_excluded_urls').limit(1).execute().data
+        if rows and rows[0].get('value'):
+            urls = json.loads(rows[0]['value'])
+            if isinstance(urls, list):
+                return {str(u).strip() for u in urls if str(u).strip()}
+    except Exception as e:
+        print(f'[제외목록] 조회 실패(무시): {str(e)[:80]}')
+    return set()
+
+
 def fetch_items_with_content() -> list:
     """최근 24h 기사 중 content 있는 것만 반환 (id 포함)"""
     cutoff = (datetime.now(KST) - timedelta(hours=24)).isoformat()
@@ -66,6 +89,12 @@ def fetch_items_with_content() -> list:
         # 한 사건이었고 다른 뉴스가 브리핑에서 통째로 밀려났다(배경역사 #44).
         # 넉넉히 300건을 받아 클러스터링으로 줄이는 방식으로 변경.
         items = [it for it in (resp.data or []) if it.get('content') and len(it['content'].strip()) > 50]
+        excluded = load_briefing_excluded()
+        if excluded:
+            before = len(items)
+            items = [it for it in items if (it.get('url') or '').strip() not in excluded]
+            if before != len(items):
+                print(f'[제외목록] 브리핑에서 {before - len(items)}건 제외')
         print(f'[조회] 본문 확인 기사 {len(items)}건 / 24h 내')
         return items
     except Exception as e:
@@ -166,7 +195,7 @@ def cluster_briefing_items(items: list, for_date: datetime = None) -> list:
 #  STEP 2 — 브리핑 생성
 # ═══════════════════════════════════════════════════════
 
-_BRIEFING_SYSTEM = """당신은 SK텔레콤 Comm센터 기술정책팀의 전파정책 모닝 브리핑 작성 AI입니다.
+_BRIEFING_SYSTEM = """당신은 SK텔레콤 Comm센터 기술정책팀의 통신·전파 정책 모닝 브리핑 작성 AI입니다.
 제공된 뉴스 목록과 각 기사의 본문을 바탕으로 간결하고 실용적인 브리핑을 작성하세요.
 
 작성 규칙:
@@ -183,7 +212,7 @@ _BRIEFING_SYSTEM = """당신은 SK텔레콤 Comm센터 기술정책팀의 전파
   ※ 입력에서 🔴인 기사를 [주요 뉴스]에 선별하면 🔴를 그대로 유지하고, 🟡·🟢 기사에 새로 🔴를 붙이지 말 것
 
 출력 형식 (아래 형식 그대로):
-📡 전파정책 모닝 브리핑 — {날짜}
+📡 통신·전파 정책 모닝 브리핑 — {날짜}
 
 [주요 뉴스]
 • 제목 — 출처 [ID:기사id]
@@ -846,7 +875,7 @@ def _handle_no_news():
     # 대시보드 공백 방지용 placeholder 저장 (upsert)
     placeholder = (
         f'{_NONEWS_PREFIX} — 자동 placeholder, 기사 입력 시 정식본으로 교체됩니다.)\n\n'
-        f'📡 전파정책 모닝 브리핑 — {today_str}\n\n'
+        f'📡 통신·전파 정책 모닝 브리핑 — {today_str}\n\n'
         f'[안내]\n'
         f'• 최근 24시간 내 신규 수집 기사가 없습니다.\n'
         f'• 크롤러는 정상 작동 중이며(시스템 고장 아님), 신규 기사가 들어오면 정식 브리핑으로 자동 교체됩니다.\n\n'
