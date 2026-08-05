@@ -872,18 +872,40 @@ export async function answerAdvisory(sb: SupabaseClient, systemPrompt: string, q
   const apiKey = env('ANTHROPIC_API_KEY');
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY 미설정');
 
-  // 5갈래를 동시에: 조문 RAG / 법령요약 / 조문 정밀검색(/law와 동일) / 뉴스 동향 / 국회 동향(참고 배경)
+  // 6갈래를 동시에: 조문 RAG / 법령요약 / 조문 정밀검색(키워드) / 조문 의미검색 / 뉴스 동향 / 국회 동향(참고 배경)
   const kbP = searchKbSummaries(sb, question);
   const newsP = buildNewsContext(sb, question);
   const lawP = searchLawArticles(sb, question, 5);
+  // 조문 **의미** 검색 (#89) — /law에는 있는데 자문에만 없던 갈래. 어휘가 어긋나면 키워드는 못 넘는다.
+  // 실측(자문 경로): 「기지국 개설 허가 절차」의 키워드 5개는 해상무선통신망 제12조·전파관리 세칙
+  // 제27조(민원)로 새고 정답인 전파법 21조(무선국 개설허가 등의 절차)를 못 찾았다. 「주파수 재할당
+  // 대가 산정 기준」은 전파법 10·11·12·13·15조가 연번으로 자리를 채워 정작 「대가 산정」 조문
+  // (세부사항 9조·시행령 14조·법 16조)이 하나도 없었다. 이 갈래가 셋 다 찾아온다.
+  const lawSemP = getQueryEmbedding(expandQueryForSemantic(question)).then((emb) => emb
+    ? sb.rpc('match_law_articles_semantic', { query_embedding: emb, match_threshold: 0.0, match_count: 8, only_current: true })
+        .then((r) => (r.data || []) as Chunk[])
+    : [] as Chunk[]).catch(() => [] as Chunk[]);
   const asmP = buildAssemblyTrendContext(sb, question);
   const chunks = await searchChunks(sb, apiKey, question);
-  const [kb, news, lawHits, asm] = [await kbP, await newsP, await lawP, await asmP];
+  const [kb, news, lawHits, lawSem, asm] = [await kbP, await newsP, await lawP, await lawSemP, await asmP];
 
   // 조문 보강 — searchLawArticles(키워드 확장 + 조문 단위 필터)가 찾은 조문 중
   // 위 RAG에 안 들어온 것을 덧붙인다. RAG는 논문·보도자료도 섞여 정작 근거 조문을 놓치는 일이 있다.
   const have = new Set(chunks.map((c) => c.id));
   const extra = lawHits.filter((h) => !have.has(h.id));
+  // 의미검색분을 뒤에 잇는다. 필터는 /law의 semExtra와 같게 유지 — **조문만**(별표·부칙·서식은
+  // 이미 위 RAG가 훑는 대상이고, 별표는 통째로 길어 컨텍스트를 잡아먹는다), 파일 문서 제외.
+  const seenArt = new Set(extra.map((h) => h.doc_name + '|' + (h.article_no || '')));
+  extra.forEach((h) => have.add(h.id));
+  for (const c of lawSem) {
+    if (extra.length >= 10) break;                        // 키워드 5 + 의미 5 상한
+    const key = c.doc_name + '|' + (c.article_no || '');
+    if (!/^\d+조/.test(c.article_no || '')) continue;      // 조문만
+    if (have.has(c.id) || seenArt.has(key)) continue;      // RAG·키워드분과 중복 제거
+    if (/\.(pdf|md|docx|hwp)$/i.test(c.doc_name || '')) continue;
+    have.add(c.id); seenArt.add(key);
+    extra.push({ id: c.id, doc_name: c.doc_name, article_no: c.article_no, content: c.content, _hits: 0 } as LawHit);
+  }
   const lawContext = extra.length
     ? '\n\n---\n\n[조문 정밀검색 결과 — 질문 의도에 직접 대응하는 조문]\n' +
       '위 RAG 결과에 없더라도 아래 조문이 질문의 핵심 근거일 가능성이 높습니다. 우선 확인하세요:\n\n' +

@@ -139,12 +139,41 @@ var LAW_SYNONYMS = {
   '취소': ['취소', '정지', '철회'],
   '반납': ['반납', '회수', '재할당'],
 };
+// ── 실무 용어 → 법령 용어 (rag.ts PRACTICE_TERMS와 동일 유지 — #83) ──────────────
+//  임베딩 모델은 한국어 법령으로 학습돼 **업계에서만 쓰는 외래어를 조문에 연결하지 못한다.**
+//  실측: 「리파밍」을 원문 그대로 임베딩하면 1위가 약관규제법(0.441)이고, 법령 용어로
+//  보강하면 전파법 제6조의2(0.541)가 올라온다. LAW_SYNONYMS와 달리 이건 '동사'가 아니라
+//  '용어' 대응이라 표를 따로 둔다. 확신하는 대응만 넣을 것 — 틀린 대응은 엉뚱한 조문을
+//  1위로 올려 없느니만 못하다.
+//  (2026-08-05 #89: 봇 rag.ts에만 있고 대시보드에는 없어 같은 질문에 다른 답이 나왔다.)
+var PRACTICE_TERMS = [
+  [/리파밍|리파-밍|re-?farming/i, ['주파수회수', '주파수재배치', '주파수 회수', '주파수 재배치']],
+  [/커버리지|coverage/i,          ['이용가능 지역', '서비스 제공 지역']],
+  [/주파수\s*경매|경매/,           ['대가에 의한 주파수할당', '주파수할당']],
+  [/알뜰폰|MVNO/i,                ['도매제공', '도매제공의무사업자']],
+  [/재할당/,                      ['주파수할당', '이용기간']],
+];
+// 시맨틱 검색용 질의 보강 — 원 질의는 지우지 않고 **뒤에 덧붙인다**(rag.ts expandQueryForSemantic와 동일)
+function expandQueryForSemantic(query) {
+  var add = [];
+  PRACTICE_TERMS.forEach(function(pair) {
+    if (pair[0].test(query || '')) {
+      pair[1].forEach(function(t) { if (add.indexOf(t) === -1) add.push(t); });
+    }
+  });
+  return add.length ? (query + ' ' + add.join(' ')) : query;
+}
 // 질문에 정책 동사가 있으면 대응하는 법령 표제어를 돌려준다 (검색 키워드에 추가 투입용)
 function lawSynonymKeywords(query) {
   var out = [];
   Object.keys(LAW_SYNONYMS).forEach(function(k) {
     if ((query || '').indexOf(k) >= 0) {
       LAW_SYNONYMS[k].forEach(function(s) { if (out.indexOf(s) === -1) out.push(s); });
+    }
+  });
+  PRACTICE_TERMS.forEach(function(pair) {
+    if (pair[0].test(query || '')) {
+      pair[1].forEach(function(t) { if (out.indexOf(t) === -1) out.push(t); });
     }
   });
   return out;
@@ -1822,6 +1851,18 @@ async function callClaude(userText, onDelta) {
   const kbP         = searchKbSummaries(userText).catch(function(e) { console.warn('법령요약 검색 실패(건너뜀):', e); return []; });
   // 조문 정밀검색 (rag.ts answerAdvisory와 동일 계층) — RAG가 논문·보도자료에 밀려 놓친 근거 조문 보강
   const lawArtP     = searchLawArticles(userText, 5).catch(function(e) { console.warn('조문 정밀검색 실패(건너뜀):', e); return []; });
+  // 조문 **의미** 검색 (#89) — 봇 /law에는 있는데 자문(봇·대시보드 양쪽)에만 없던 갈래.
+  // 어휘가 어긋나면 키워드로는 못 넘는다. 실측: 「기지국 개설 허가 절차」의 키워드 5개는
+  // 해상무선통신망 제12조·전파관리 세칙 제27조(민원)로 새고 정답인 전파법 21조를 못 찾았고,
+  // 「주파수 재할당 대가 산정 기준」은 전파법 10·11·12·13·15조가 연번으로 자리를 채워
+  // 정작 「대가 산정」 조문이 하나도 없었다. rag.ts answerAdvisory와 동일 유지.
+  const lawSemP     = getQueryEmbedding(expandQueryForSemantic(userText))
+    .then(function(emb) {
+      if (!emb || !sb) return [];
+      return sb.rpc('match_law_articles_semantic', { query_embedding: emb, match_threshold: 0.0, match_count: 8, only_current: true })
+        .then(function(r) { return r.data || []; });
+    })
+    .catch(function(e) { console.warn('조문 의미검색 실패(건너뜀):', e); return []; });
   // 법령 관계도: 기존 주제명 목록(주제명 분열 방지용) — 실패해도 자문은 정상 진행
   const lawTopicsP  = sb
     ? sb.from('law_graph_nodes').select('name').eq('node_type', 'topic').limit(120)
@@ -1860,6 +1901,20 @@ async function callClaude(userText, onDelta) {
   var lawHits = await lawArtP;
   var haveIds = new Set(ragChunks.map(function(c) { return c.id; }));
   var lawExtra = lawHits.filter(function(h) { return !haveIds.has(h.id); });
+  // 의미검색분을 뒤에 잇는다. 필터는 /law의 semExtra와 같게 유지 — **조문만**(별표·부칙·서식은
+  // 이미 위 RAG가 훑는 대상이고, 별표는 통째로 길어 컨텍스트를 잡아먹는다), 파일 문서 제외.
+  var lawSem = await lawSemP;
+  var seenArt = new Set(lawExtra.map(function(h) { return h.doc_name + '|' + (h.article_no || ''); }));
+  lawExtra.forEach(function(h) { haveIds.add(h.id); });
+  for (var li = 0; li < lawSem.length && lawExtra.length < 10; li++) {   // 키워드 5 + 의미 5 상한
+    var lc = lawSem[li];
+    var lkey = lc.doc_name + '|' + (lc.article_no || '');
+    if (!/^\d+조/.test(lc.article_no || '')) continue;
+    if (haveIds.has(lc.id) || seenArt.has(lkey)) continue;
+    if (/\.(pdf|md|docx|hwp)$/i.test(lc.doc_name || '')) continue;
+    haveIds.add(lc.id); seenArt.add(lkey);
+    lawExtra.push(lc);
+  }
   var lawArticleContext = '';
   if (lawExtra.length) {
     lawArticleContext = '\n\n---\n\n[조문 정밀검색 결과 — 질문 의도에 직접 대응하는 조문]\n' +
