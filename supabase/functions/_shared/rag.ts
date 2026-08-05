@@ -167,12 +167,27 @@ async function searchChunks(sb: SupabaseClient, apiKey: string, query: string): 
   addRrf(results.filter((r) => (r._score || 0) > 0).slice().sort((a, b) => (b._score || 0) - (a._score || 0)));
   addRrf(results.filter((r) => (r._trgm_score || 0) > 0).slice().sort((a, b) => (b._trgm_score || 0) - (a._trgm_score || 0)));
   addRrf(results.filter((r) => (r._semantic_score || 0) > 0).slice().sort((a, b) => (b._semantic_score || 0) - (a._semantic_score || 0)));
-  // 일반 가점·감점: 조문번호 있는 청크(법령·고시 원문) 가점, 파일 확장자 문서(논문·계획서류) 감점.
+  // 일반 가점·감점: 파일 확장자 문서(논문·계획서류) 감점 + **article_no 종류별 등급**(#90).
   // 크기 0.5/(K+1) = 목록 1개 1위 기여의 절반 — 논문이 조문을 이기려면 한 목록 상위만큼 더 필요.
+  // 종전에는 article_no가 있으면 종류 불문 같은 가점이었다. 그런데 실DB에서 article_no 보유
+  // 18,349개 중 **조문은 41%(7,587)뿐**이고 별표 5,538·부칙 1,704·별지 1,421·붙임 1,191·
+  // 서식 908이 조문과 동급 가점을 받고 있었다 — 「주파수 재할당 대가」 15자리를 별표 7개가
+  // 먹고(그중 전자파적합성 별표 5는 가정용 전기기기라 완전 무관), 「개인정보 유출」은 부칙이
+  // 2자리를 차지했다. 등급을 나눈 A/B 실측: 75자리 중 8자리 교체, **악화 사례 0건**.
+  // 별표·붙임은 **배제가 아니라 가점만 뗀다**(#88과 같은 원칙) — 진짜 정본인 별표
+  // (전파법 시행령 별표 2·3 = 주파수할당대가 산정기준)는 시맨틱·키워드 점수로 여전히 올라온다.
   const FILE_DOC_RE = /\.(pdf|md|docx|hwp)$/i;
+  const UNIT = 0.5 / (RRF_K + 1);
+  const articleBonus = (art?: string): number => {
+    if (!art) return 0;                                   // 보도자료·회의록 — 가점 없음(감점도 없음)
+    if (/^\d+조/.test(art)) return UNIT;                  // 조문
+    if (/^(별표|붙임)/.test(art)) return 0;                // 표·부속 — 중립
+    if (/^(부칙|서식|별지)/.test(art)) return -UNIT;       // 개정 이력·서식 — 운영자: "우선순위가 아니다"
+    return 0;
+  };
   for (const r of results) {
-    if (r.article_no) r._hybrid_score = (r._hybrid_score || 0) + 0.5 / (RRF_K + 1);
-    if (FILE_DOC_RE.test(r.doc_name || '')) r._hybrid_score = (r._hybrid_score || 0) - 0.5 / (RRF_K + 1);
+    r._hybrid_score = (r._hybrid_score || 0) + articleBonus(r.article_no);
+    if (FILE_DOC_RE.test(r.doc_name || '')) r._hybrid_score = (r._hybrid_score || 0) - UNIT;
   }
   results.sort((a, b) => (b._hybrid_score || 0) - (a._hybrid_score || 0));
   // 문서당 청크 상한 — doc_category별 차등 (PERDOC_LIMIT): 추가지식 ≤8, 그 외 ≤3 (독식 방지)
@@ -227,6 +242,121 @@ function buildRagContext(chunks: Chunk[]): string {
   });
   return '\n\n---\n\n[RAG 검색 결과 — 질문과 관련된 실제 법령·고시 원문]\n아래 내용은 질문과 의미적으로 유사한 문서 청크를 검색한 결과입니다. 반드시 아래 원문을 최우선으로 인용하고, 조항 번호와 내용이 일치하는지 확인하여 답변하세요:\n\n' + items.join('\n\n---\n\n');
 }
+// ── 별표 동반 인출 (app.js buildAnnexContext 이식 — #90) ─────────────────────
+// 법령 조문은 실제 숫자를 안 담고 별표로 넘긴다: 전파법 시행령 제14조는 "별표 3에 따라
+// 산정한다"고만 하고 산식은 별표 3에 있다. 조문만 근거로 주면 봇은 「별표 3에 따라
+// 산정합니다」로 끝나고 정작 물어본 금액·요율·기준을 답하지 못한다.
+// 대시보드에는 이 경로가 있었는데(315개 별표가 이 경로로 닿는다) **봇에는 아예 없었다.**
+// app.js와 동일 유지 — 한쪽만 고치지 말 것. 상한 값도 같게 둔다.
+const ANNEX_MAX_UNITS = 2;     // 질문당 별표 개수
+const ANNEX_MAX_CHUNKS = 6;    // 별표당 청크 (별표 하나가 최대 812청크라 상한 필수)
+
+interface AnnexRow { chunk_index: number; article_no?: string; content?: string }
+
+async function buildAnnexContext(sb: SupabaseClient, chunks: Chunk[], question: string): Promise<{ text: string; sources: string[] }> {
+  const sources: string[] = [];
+  if (!chunks || !chunks.length) return { text: '', sources };
+  try {
+    // 1) 검색된 '조문' 청크에서 별표 인용을 뽑는다. 별표·별지 청크 자신은 제외(자기 참조 방지).
+    //    「다른 법령」 별표 N 형태는 건너뛴다 — 같은 문서의 같은 번호 별표를 붙이면
+    //    엉뚱한 표가 들어간다(전체 인용 978건 중 90건이 타 법령 인용).
+    const wanted: Array<{ doc_name: string; no: string }> = [];
+    const seen = new Set<string>();
+    const reCite = /(「[^」]{2,40}」[^\n]{0,20}?)?별표\s*제?\s*(\d+(?:의\d+)?)/g;
+    for (const c of chunks) {
+      if (/^(별표|별지)/.test(c.article_no || '')) continue;
+      reCite.lastIndex = 0;
+      let m: RegExpExecArray | null;
+      while ((m = reCite.exec(String(c.content || '')))) {
+        if (m[1]) continue;                       // 타 법령 인용 — 건너뜀
+        const key = c.doc_name + '|' + m[2];
+        if (seen.has(key)) continue;
+        seen.add(key);
+        wanted.push({ doc_name: c.doc_name, no: m[2] });
+      }
+    }
+    // 인용이 없어도 그냥 끝내면 안 된다 — 아래 2)의 '표 머리 보충'이 필요한 경우가
+    // 바로 이 경우다(별표 조각만 검색되고 조문은 안 잡힌 질문).
+    const units = wanted.slice(0, ANNEX_MAX_UNITS);   // chunks가 순위순이라 앞쪽이 상위 조문
+
+    const qWords = extractKeywords(question || '');
+    const blocks: string[] = [];
+    for (const w of units) {
+      const r = await sb.from('document_chunks')
+        .select('chunk_index,article_no,content')
+        .eq('doc_name', w.doc_name).eq('status', 'current')
+        .like('article_no', '별표 ' + w.no + '(%')
+        .order('chunk_index', { ascending: true });
+      const all = (r.data || []) as AnnexRow[];
+      if (r.error || !all.length) continue;
+
+      // 첫 청크는 무조건 넣는다 — 표의 열 이름이 여기에만 있어서,
+      // 가운데 청크만 넣으면 '1만원 │― │―'처럼 무슨 숫자인지 알 수 없다.
+      const picked: AnnexRow[] = [all[0]];
+      const rest = all.slice(1)
+        .map((c) => ({ c, hit: qWords.reduce((a, kw) => a + (String(c.content || '').includes(kw) ? 1 : 0), 0) }))
+        .sort((a, b) => (b.hit !== a.hit ? b.hit - a.hit : a.c.chunk_index - b.c.chunk_index));
+      for (const x of rest.slice(0, ANNEX_MAX_CHUNKS - 1)) picked.push(x.c);
+      picked.sort((a, b) => a.chunk_index - b.chunk_index);
+
+      const title = all[0].article_no || ('별표 ' + w.no);
+      const omitted = all.length - picked.length;
+      blocks.push('[' + w.doc_name + ' ' + title + ']'
+        + (omitted > 0 ? `\n※ 이 별표는 전체 ${all.length}개 조각 중 질문과 가까운 ${picked.length}개만 실었습니다. 표의 일부만 보이면 그렇게 밝히세요.` : '')
+        + '\n' + picked.map((c) => c.content || '').join('\n'));
+      sources.push(w.doc_name.split('(')[0].trim() + ' ' + title.split('(')[0].trim());
+    }
+
+    // 2) 별표 청크가 검색으로 직접 잡혔는데 '첫 조각'이 빠진 경우 그것만 보충한다.
+    //    표의 열 이름은 첫 조각에만 있어서, 가운데 조각만 들어가면 모델은
+    //    '│1만원 │― │―│' 같은 숫자열만 보고 무슨 항목인지 모른다.
+    //    대상은 **검색 상위 5위 안에 든 별표**로 좁힌다(하위권은 어차피 근거로 안 쓰인다).
+    //    '첫 조각이 빠진 것'만 먼저 추린 뒤에 개수 상한을 건다 — 먼저 자르면 이미 충족된
+    //    별표가 자리를 차지해 정작 필요한 것이 잘린다.
+    const needHead = new Map<string, Chunk>();
+    for (const c of chunks.slice(0, 5)) {
+      if (!/^별표/.test(c.article_no || '')) continue;
+      const k = c.doc_name + '|' + String(c.article_no).split('(')[0];
+      if (!needHead.has(k)) needHead.set(k, c);
+    }
+    const headBlocks: string[] = [];
+    for (const hc of needHead.values()) {
+      if (headBlocks.length >= 2) break;
+      const prefix = String(hc.article_no).split('(')[0];
+      const hr = await sb.from('document_chunks')
+        .select('chunk_index,article_no,content')
+        .eq('doc_name', hc.doc_name).eq('status', 'current')
+        .like('article_no', prefix + '(%')
+        .order('chunk_index', { ascending: true }).limit(1);
+      const rows = (hr.data || []) as AnnexRow[];
+      if (hr.error || !rows.length) continue;
+      const first = rows[0];
+      // 이미 검색 결과에 첫 조각이 들어 있으면 중복이므로 건너뛴다
+      if (chunks.some((c) => c.doc_name === hc.doc_name && c.chunk_index === first.chunk_index)) continue;
+      // 1)에서 이 별표를 통째로 실었다면 머리도 이미 들어갔다
+      if (sources.includes(hc.doc_name.split('(')[0].trim() + ' ' + prefix)) continue;
+      headBlocks.push('[' + hc.doc_name + ' ' + (first.article_no || prefix) + ' — 표 머리(열 이름)]\n' + (first.content || ''));
+      sources.push(hc.doc_name.split('(')[0].trim() + ' ' + prefix + ' 머리');
+    }
+    if (headBlocks.length) {
+      blocks.push('※ 아래는 위 검색 결과에 열 이름 없이 일부만 실린 표의 머리 부분입니다. 숫자가 어느 항목인지 여기서 확인하세요.\n\n'
+        + headBlocks.join('\n\n'));
+    }
+
+    if (!blocks.length) return { text: '', sources: [] };
+    return {
+      text: '\n\n---\n\n[인용 조문이 가리키는 별표 원문]\n'
+        + '위 조문이 "별표 N에 따른다"고 한 그 별표를 함께 싣습니다. **금액·기준·요율은 조문이 아니라 이 별표가 정본**이므로 여기서 인용하세요. '
+        + '단, 질문이 묻는 항목이 이 별표에 없으면 없다고 답하고 임의로 유추하지 마세요.\n\n'
+        + blocks.join('\n\n---\n\n'),
+      sources,
+    };
+  } catch (e) {
+    console.warn('별표 동반 인출 실패(건너뜀):', e);
+    return { text: '', sources: [] };
+  }
+}
+
 function buildKbContext(rows: KbRow[]): string {
   if (!rows.length) return '';
   const items = rows.map((r, i) => {
@@ -912,10 +1042,19 @@ export async function answerAdvisory(sb: SupabaseClient, systemPrompt: string, q
       extra.map((h, i) => `[조문 ${i + 1}] ${h.doc_name}${h.article_no ? ' ' + h.article_no : ''}\n${h.content}`).join('\n\n---\n\n')
     : '';
 
+  // 별표 동반 인출(#90) — 조문이 「별표 N에 따른다」고 넘긴 그 표를 함께 싣는다.
+  // 입력은 RAG + 조문 정밀검색분. RAG만 넘기면 조문 섹션에만 있는 조문(예: 전파법 시행령
+  // 제14조 「별표 3에 따라 산정한다」)의 인용을 놓친다. chunks를 앞에 둬야 상한 2개가
+  // 상위 RAG 조문에 먼저 돌아간다. app.js 호출부와 동일 유지 — 한쪽만 고치지 말 것.
+  const annex = await buildAnnexContext(sb, (chunks as Chunk[]).concat(extra as unknown as Chunk[]), question);
+
   const telegramGuide = '\n\n---\n\n[텔레그램 답변 형식 지침]\n' +
     '이 답변은 텔레그램 메시지로 전송됩니다. 다음을 지키세요:\n' +
     '- 전체 3,000자 이내로 간결하게. 핵심 결론 먼저, 근거 조문 다음.\n' +
     '- 마크다운 표·코드블록 금지. 굵게(**)·불릿(-)·짧은 단락만 사용.\n' +
+    // 별표는 괘선 문자(┌─┬─┐)로 그린 표다(실측 괘선 비율 39~44%). 텔레그램은 고정폭 폰트가
+    // 아니라 그대로 옮기면 정렬이 무너져 읽을 수 없다. 위 「마크다운 표 금지」로는 안 걸린다.
+    '- 별표의 표를 그대로 옮기지 마세요. 해당 항목의 값만 문장으로 인용하세요.\n' +
     '- 조항 인용 원칙(원문 확인됨/학습 데이터 기반 구분)은 그대로 유지.\n' +
     '- 웹 검색은 위 참조 자료에 없는 사실 확인에만 보조적으로 사용.\n' +
     '- 제도(조문)와 현재 추진 상황(기사)이 둘 다 관련되면 반드시 함께 답하세요. ' +
@@ -926,7 +1065,7 @@ export async function answerAdvisory(sb: SupabaseClient, systemPrompt: string, q
   // 가변부(질문마다 바뀌는 RAG·조문·요약·뉴스)는 캐시 블록 '뒤'에 둬야 적중한다.
   const systemStable = systemPrompt + telegramGuide;
   // 국회 동향은 '근거'가 아니라 '배경'이라 맨 뒤 — 조문·요약·기사보다 앞에 두지 말 것
-  const systemVariable = buildRagContext(chunks) + lawContext + buildKbContext(kb) + news.text + asm;
+  const systemVariable = buildRagContext(chunks) + lawContext + annex.text + buildKbContext(kb) + news.text + asm;
   const system: SystemBlock[] = [
     { type: 'text', text: systemStable, cache_control: { type: 'ephemeral' } },
   ];
@@ -938,8 +1077,10 @@ export async function answerAdvisory(sb: SupabaseClient, systemPrompt: string, q
   // RAG 15개를 먼저 채우면 정작 답변이 인용한 조문이 잘려 나간다. 실제로 「기지국 개설 허가 절차」
   // 답변이 전파법 제21조제2항을 [원문 확인됨]으로 인용했는데 출처에는 지방세법 시행령·논문·
   // 세미나 자료만 보였다 — 근거는 맞는데 어디서 왔는지 확인할 수가 없었다.
+  // 별표는 조문 다음·RAG 앞 — 금액·요율을 물은 답변의 정본이 별표이므로 잘리면 안 된다(#90).
   const sources: string[] = [];
   for (const h of extra) if (h.doc_name && !sources.includes(h.doc_name)) sources.push(h.doc_name);
+  for (const s of annex.sources) { const t = '[별표] ' + s; if (!sources.includes(t)) sources.push(t); }
   for (const c of chunks) if (c.doc_name && !sources.includes(c.doc_name)) sources.push(c.doc_name);
   for (const r of kb) { const t = '[요약] ' + (r.title || '').trim(); if (r.title && !sources.includes(t)) sources.push(t); }
   for (const s of news.sources) if (!sources.includes(s)) sources.push(s);

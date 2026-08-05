@@ -510,10 +510,25 @@ async function searchKeywords(query, lawOnly) {
   //  · 파일 확장자 문서(.pdf/.md 등) = 논문·계획서류 → 감점
   //    (doc_category '기타'에 고시와 박사논문이 섞여 카테고리로는 못 거른다 — rag.ts 실측 주석)
   //  크기 0.5/(K+1) = 목록 1개 1위 기여의 절반: 논문이 조문을 이기려면 한 목록 상위만큼 더 필요.
+  //  ★ article_no는 **종류별 등급**이다(#90, rag.ts와 동일 유지 — 한쪽만 고치지 말 것).
+  //    종전에는 종류 불문 같은 가점이었는데, 실DB에서 article_no 보유 18,349개 중 조문은
+  //    41%(7,587)뿐이고 별표 5,538·부칙 1,704·별지 1,421·붙임 1,191·서식 908이 동급이었다.
+  //    「주파수 재할당 대가」 15자리를 별표 7개가 먹고, 「개인정보 유출」은 부칙이 2자리를
+  //    차지했다. A/B 실측: 75자리 중 8자리 교체, 악화 0건.
+  //    별표·붙임은 **배제가 아니라 가점만 뗀다**(#88과 같은 원칙) — 진짜 정본인 별표는
+  //    시맨틱·키워드 점수로 여전히 올라온다.
   var FILE_DOC_RE = /\.(pdf|md|docx|hwp)$/i;
+  var RRF_UNIT = 0.5 / (RRF_K + 1);
+  function articleBonus(art) {
+    if (!art) return 0;                                 // 보도자료·회의록 — 가점 없음(감점도 없음)
+    if (/^\d+조/.test(art)) return RRF_UNIT;            // 조문
+    if (/^(별표|붙임)/.test(art)) return 0;              // 표·부속 — 중립
+    if (/^(부칙|서식|별지)/.test(art)) return -RRF_UNIT; // 개정 이력·서식
+    return 0;
+  }
   results.forEach(function(r) {
-    if (r.article_no) r._hybrid_score += 0.5 / (RRF_K + 1);
-    if (FILE_DOC_RE.test(r.doc_name || '')) r._hybrid_score -= 0.5 / (RRF_K + 1);
+    r._hybrid_score += articleBonus(r.article_no);
+    if (FILE_DOC_RE.test(r.doc_name || '')) r._hybrid_score -= RRF_UNIT;
   });
   results.sort(function(a, b) { return b._hybrid_score - a._hybrid_score; });
 
@@ -1945,7 +1960,11 @@ async function callClaude(userText, onDelta) {
   const kbContext     = buildKbContext(await kbP);                // 법령·규제 요약 지식베이스(regulatory-kb, 현행본)
   if (lastKbSources.length) lastRagSources = lastRagSources.concat(lastKbSources);
   const pendingContext = await buildPendingContext(ragChunks);    // 인용 조문의 시행예정 개정본(Phase 3)
-  const annexContext  = await buildAnnexContext(ragChunks, userText);  // 인용 조문이 가리키는 별표 원문 (배경역사 #43)
+  // 인용 조문이 가리키는 별표 원문 (배경역사 #43). 입력은 RAG + 조문 정밀검색분(#90) —
+  // ragChunks만 넘기면 조문 섹션에만 있는 조문(예: 전파법 시행령 제14조 「별표 3에 따라
+  // 산정한다」)의 인용을 놓친다. ragChunks를 앞에 둬야 상한 2개가 상위 RAG 조문에 먼저 간다.
+  // rag.ts answerAdvisory 호출부와 동일 유지 — 한쪽만 고치지 말 것.
+  const annexContext  = await buildAnnexContext(ragChunks.concat(lawExtra || []), userText);
   if (lastAnnexSources.length) lastRagSources = lastRagSources.concat(lastAnnexSources.map(function(s) { return ANNEX_SRC_PREFIX + s; }));
   // 배지용 스냅샷 — lastPendingNotice는 보고서 초안 경로와 공유하는 전역이라,
   // 자문 스트리밍(수 분) 중 보고서를 생성하면 답변 완료 시점엔 다른 값이 들어 있다.
