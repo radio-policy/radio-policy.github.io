@@ -226,6 +226,33 @@ async function handleLawQuery(chatId: number, q: string): Promise<Promise<void> 
   })();
 }
 
+// ── 조문 원문을 텔레그램에서 읽히게 다듬는다 (#92 후속) ─────────────────────────
+// `/law`는 원문을 **그대로** 보여주는 명령이라, OCR로 되살린 조문(#91)의 마크다운 표가
+// 날것으로 노출됐다 — `|---|---|` 구분선, `<br>`, 보존용 HTML 주석까지 화면에 찍혔다.
+// 자문(`/ask`)은 모델이 읽고 문장으로 풀어 주므로 문제가 없었고, 그래서 못 봤다.
+// 표를 텔레그램에서 표로 보여줄 방법은 없다(고정폭 폰트가 아니다) — **노이즈만 걷어내고
+// 행 단위로 읽히게** 한다. 원문 자체는 DB에 그대로 두고 표시할 때만 손댄다.
+// ★ 치환 순서가 중요하다: **표 행을 먼저** 처리한 뒤 `<br>`을 푼다.
+//   `<br>`을 먼저 개행으로 바꾸면 한 행이 여러 줄로 쪼개져 표 행 정규식이 더는 맞지 않는다.
+export function plainifyArticle(text: string): string {
+  return (text || '')
+    .replace(/<!--[\s\S]*?-->/g, '')            // 원본 이미지 보존 주석 — 사람이 볼 것이 아니다
+    .replace(/\*\*(.+?)\*\*/g, '$1')            // 굵게 표시는 이스케이프되면 별표만 남는다
+    .replace(/^\s*\|[\s|:-]*\|\s*$/gm, '')      // 마크다운 표 구분선(|---|---|) 행 삭제
+    .replace(/^[ \t]*\|(.*)\|[ \t]*$/gm, (_m, row) => {
+      const cells = String(row).split('|').map((c: string) => c.trim()).filter((c: string) => c);
+      if (cells.length <= 1) return cells.join('');
+      const [head, ...vals] = cells;
+      // 항목 셀이 여러 줄짜리(<br> 포함)면 값을 아래 줄에 '→'로 붙인다 — 끝에 매달리면 안 읽힌다
+      return /<br\s*\/?>/i.test(head)
+        ? `${head}<br>   → ${vals.join('  ·  ')}`
+        : cells.join('  ·  ');
+    })
+    .replace(/<br\s*\/?>/gi, '\n   ')            // 셀 안 줄바꿈 → 들여쓴 새 줄
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 async function handleArticleLookup(chatId: number, rawDocName: string, artNo: string, subNo?: string): Promise<void> {
   const docName = resolveLawName(rawDocName);   // 약칭이면 정식명으로 치환 후 조회 (미등재 안내·법령센터 링크도 정식명 기준)
   // ⚠️ DB의 article_no는 **「12조(교육과목 및 시간)」처럼 '제'가 없는 형식**이다(#92).
@@ -264,7 +291,7 @@ async function handleArticleLookup(chatId: number, rawDocName: string, artNo: st
   if (head.notice_no) meta.push(head.notice_no);
   let body = `📖 <b>${escapeHtml(head.doc_name)} ${escapeHtml(head.article_no || wanted)}</b>\n`;
   if (meta.length) body += `<i>${escapeHtml(meta.join(' · '))}</i>\n`;
-  body += '\n' + escapeHtml(picked.map((r) => r.content).join('\n'));
+  body += '\n' + escapeHtml(plainifyArticle(picked.map((r) => r.content).join('\n')));
   if (names.length > 1) body += `\n\n<i>같은 조가 있는 다른 문서: ${escapeHtml(names.slice(1).join(', '))} — "${escapeHtml(names[1])} ${wanted}"처럼 문서명을 정확히 지정해 다시 검색하세요.</i>`;
   for (const part of splitByLines(body)) await sendTelegramHtml(BOT_TOKEN, chatId, part);
 }
