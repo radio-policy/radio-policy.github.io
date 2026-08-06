@@ -2336,8 +2336,28 @@ def suppress_repeat_alerts(urgent_items: list) -> list:
 
         # 같은 실행분 내 유사 기사 묶기 — 사건 첫날 첫 실행에 재보도 수십 건이
         # 한꺼번에 들어오면 한 통에 수십 줄이 되는 것을 대표 1건으로 줄인다
-        reps = []
+        groups = []                      # [(대표, [묶인 것들])] — 아래 2차 묶기와 형태를 맞춘다
         for rep, members in cluster_star(passed):
+            groups.append((rep, list(members)))
+
+        # ── 2차: 키워드로 못 묶인 대표들을 Haiku가 의미로 다시 묶는다 (#92) ──
+        # 매체마다 관점이 달라 제목에 공통 단어가 거의 없는 사건이 있다(공정위 불공정약관 4건:
+        # 쌍별 공유 키워드 최대 1개). 어휘로는 못 넘으므로 여기서만 의미 판정을 쓴다.
+        # 실패하면 1차 결과를 그대로 쓴다(fail-open) — 판정이 죽어서 알림이 죽으면 안 된다.
+        if len(groups) >= 2 and ANTHROPIC_API_KEY:
+            from news_dedup import group_same_event
+            merged_idx = group_same_event([g[0].get('title') or '' for g in groups], ANTHROPIC_API_KEY)
+            if merged_idx and len(merged_idx) < len(groups):
+                regrouped = []
+                for idxs in merged_idx:
+                    head = groups[idxs[0]]
+                    others = [m for i in idxs[1:] for m in ([groups[i][0]] + groups[i][1])]
+                    regrouped.append((head[0], head[1] + others))
+                print(f'[긴급 억제] 의미 판정으로 {len(groups)}묶음 → {len(merged_idx)}묶음')
+                groups = regrouped
+
+        reps = []
+        for rep, members in groups:
             rep['_related'] = len(members)
             reps.append(rep)
 

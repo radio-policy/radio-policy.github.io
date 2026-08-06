@@ -228,17 +228,25 @@ async function handleLawQuery(chatId: number, q: string): Promise<Promise<void> 
 
 async function handleArticleLookup(chatId: number, rawDocName: string, artNo: string, subNo?: string): Promise<void> {
   const docName = resolveLawName(rawDocName);   // 약칭이면 정식명으로 치환 후 조회 (미등재 안내·법령센터 링크도 정식명 기준)
-  const wanted = `제${artNo}조` + (subNo ? `의${subNo}` : '');
+  // ⚠️ DB의 article_no는 **「12조(교육과목 및 시간)」처럼 '제'가 없는 형식**이다(#92).
+  // 실측: `article_no like '제%조%'` 0건 / `~ '^\d+조'` 7,587건. 종전에는 `제${artNo}조`로
+  // 조회해 **번호 직접 조회가 한 번도 동작하지 않았다** — 안내문에는 "조문 원문이 바로 나옵니다"라고
+  // 적혀 있었고, 자연어 질의는 AI 검색 경로라 멀쩡해서 아무도 눈치채지 못했다.
+  // 표기가 바뀔 가능성에 대비해 **두 형식을 모두** 조회한다(현재 DB에는 뒤쪽만 존재).
+  const wantedDb = `${artNo}조` + (subNo ? `의${subNo}` : '');   // DB 저장 형식
+  const wanted = `제${wantedDb}`;                                 // 사람이 읽는 표기(메시지용)
   const { data } = await sb.from('document_chunks')
     .select('id, doc_name, article_no, content, notice_no, effective_date, chunk_index')
     .eq('is_approved', true).eq('status', 'current')
-    .ilike('doc_name', `%${docName}%`).ilike('article_no', `${wanted}%`)
+    .ilike('doc_name', `%${docName}%`)
+    .or(`article_no.ilike.${wantedDb}%,article_no.ilike.제${wantedDb}%`)
     .order('chunk_index').limit(30);
-  // "제19조" 요청 시 "제19조의2"가 딸려오는 것 방지 — 의N 요청이 아니면 '의'로 이어지는 조는 제외
+  // "19조" 요청 시 "19조의2"가 딸려오는 것 방지 — 의N 요청이 아니면 '의'로 이어지는 조는 제외.
+  // 비교 전에 앞의 '제'를 벗겨 두 형식을 같은 자리에서 다룬다.
   const rows = ((data || []) as { id: number; doc_name: string; article_no: string; content: string; notice_no?: string; effective_date?: string }[])
     .filter((r) => {
-      const a = (r.article_no || '').split('(')[0].replace(/\s/g, '');
-      return subNo ? a.startsWith(wanted) : (a === wanted || a.startsWith(wanted + '('));
+      const a = (r.article_no || '').split('(')[0].replace(/\s/g, '').replace(/^제/, '');
+      return subNo ? a.startsWith(wantedDb) : (a === wantedDb || a.startsWith(wantedDb + '('));
     });
   if (!rows.length) {
     await sendTelegramHtml(BOT_TOKEN, chatId,
