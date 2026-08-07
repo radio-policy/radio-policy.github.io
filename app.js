@@ -8475,17 +8475,24 @@ function fillLawMapTopicSelect() {
   if (cur && topics.some(function(t) { return t.id === cur; })) sel.value = cur;
 }
 
-// 중심 노드의 포커스 서브그래프: 직접 이웃 + 계열(하위법령) 1단계 확장
-// ※ 인용 이웃으로 2촌 확장하면 허브 법령(전파법 등)을 거쳐 수백 노드로 폭발 → 계열 엣지로만 확장
+// 중심 노드의 포커스 서브그래프.
+//  · 주제(topic) 포커스: **직접 연결(근거 엣지)만** — 계열 확장 없음 (2026-08-07, #93).
+//    종전에는 계열 1단을 확장해 직접 3개짜리 주제(주파수 재할당)가 52노드 헤어볼로 그려졌다
+//    (전파법이 이웃에 들어오는 순간 그 아래 고시 49개가 통째로 딸려옴 — 실측 주제 평균 +50).
+//    직접 이웃끼리의 계열 선(전파법—시행령)은 아래 엣지 필터가 keep 내부를 다 살리므로 그대로 보인다.
+//  · 법령 노드 포커스: 직접 이웃 + 계열(하위법령) 1단 확장 유지 — 전파법 클릭 시 시행령·고시
+//    계열을 보는 용도는 살아 있다. ※ 인용 이웃으로 2촌 확장하면 허브 법령을 거쳐 수백 노드로 폭발.
 function lawmapNeighborhood(centerId) {
   var keep = new Set([centerId]);
+  var centerNode = _lawMapNodes.find(function(n) { return n.id === centerId; });
+  var isTopic = !!(centerNode && centerNode.node_type === 'topic');
   var direct = _lawMapEdges.filter(function(e) { return e.source_id === centerId || e.target_id === centerId; });
   // 허브 노드(피인용 수백 건) 포커스 시 강한 엣지 상위 80개만
   if (direct.length > 80) {
     direct = direct.slice().sort(function(a, b) { return (b.weight || 1) - (a.weight || 1); }).slice(0, 80);
   }
   direct.forEach(function(e) { keep.add(e.source_id); keep.add(e.target_id); });
-  _lawMapEdges.forEach(function(e) {
+  if (!isTopic) _lawMapEdges.forEach(function(e) {
     if (e.relation_type !== '하위법령') return;
     if (keep.has(e.source_id)) keep.add(e.target_id);
     else if (keep.has(e.target_id)) keep.add(e.source_id);
