@@ -148,6 +148,8 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 
 ### pg_cron 스케줄 잡 (DB 내부 스케줄러, UTC 기준 / KST=UTC+9). `select * from cron.job`로 조회.
 
+⚠️ **GitHub 디스패치 잡 4개는 계정 정지 기간 동안 비활성(2026-08-10)** — `crawl-trigger-hourly`·`assembly-crawl-trigger`·`law-crawl-trigger`·`watchdog-trigger`. 계정 정지로 전부 422("Actions has been disabled for this user")를 받으면서도 매시간 호출이 나가고 있었다 — 심사 중인 계정에 자동화 트래픽이 계속 찍히는 것은 불리하고 어차피 전부 실패라 무용. 수집은 PC 스케줄러(`radio_TEMP_*`)가 전담 중. **계정 복구 후 재활성**: `select cron.alter_job(jobid, active := true) from cron.job where jobname in ('crawl-trigger-hourly','assembly-crawl-trigger','law-crawl-trigger','watchdog-trigger');` — 그리고 `radio_TEMP_*` 임시 작업 정리와 함께 티켓 #4621561 후속 댓글의 "자동화 중단" 약속과 일관되게 순서를 지킬 것(복구 확인 → 재활성).
+
 | jobid | jobname | UTC | KST | 역할 |
 |---|---|---|---|---|
 | 1 | briefing-health-check | `0 1 * * *` | 10:00 | 브리핑 상태 점검(경고 전용) |
