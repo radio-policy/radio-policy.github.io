@@ -517,6 +517,16 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **매일 수집 = 전수 + AI 판정**: 각 기관 목록 1~2페이지의 최근 15일분을 키워드 없이 전부 내려받아
   Haiku가 제목+본문으로 관련성 판정(기준문=app_config.press_relevance_criteria). API 불가 시
   키워드(app_config.press_keywords) 매칭으로 폴백(fail-open).
+- ⚠️ **보도자료 기준문과 뉴스 기준문(news_relevance_criteria)을 주기적으로 대조할 것(#95).** 각자 진화하다
+  어긋난다 — 실제로 **뉴스는 「부처 인사」를 무조건 통과**시키는데(코드의 `is_ministry_personnel_news()`까지
+  이중 보장) **보도자료 기준문에는 인사 항목이 아예 없어** 과기정통부 인사 발표가 조용히 누락됐다.
+  「코드가 두 벌이라 한쪽만 낡는다」(#88·#92)의 **데이터 판본**이다.
+- ⚠️ **기준문에는 도메인 지식을 명시할 것(#95).** 「독자 AI 파운데이션 모델 4개 정예팀」 성과 보도가
+  「순수 R&D 성과 홍보」로 걸러졌는데, **SK텔레콤이 그 정예팀 중 하나**라 실제로는 업무 직결이었다.
+  이런 사실은 일반 상식으로 유추되지 않으므로 기준문에 박아야 한다 — 운영자만 아는 것은 물어볼 것.
+- **누락분 표적 백필**: 전량 재수집(`press_backfill.py --agency …`)은 2024년부터 순회라 매우 느리다(7분+
+  미완). 몇 건만 되살릴 때는 목록에서 제목으로 찾아 `press_ingest._collect_one()`에 직접 넘긴다.
+  ★ **기준문을 먼저 고치고 백필할 것** — 순서를 바꾸면 갱신 전 기준으로 다시 걸러진다.
 - **백필/폴백 키워드는 제목 매칭**: press_keywords(2026-08-02 기준 33개, 대시보드에서 편집).
 - **본문 추출 경로(기관별 실측)**: 과기정통부=상세가 스텁이라 **첨부에서 추출**(fn_download 3-인자 파싱 →
   `POST /ssm/file/fileDown.do` atchFileNo·fileOrd·fileBtn=A + **Referer 필수**; HWPX=ZIP의 Contents/section*.xml
