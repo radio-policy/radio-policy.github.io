@@ -74,6 +74,9 @@ RETRY_DELAY = 5
 CHUNK_SIZE = 700          # 기존 수동 업로드분과 동일 (실측)
 BODY_MAX = 15000          # 항목당 본문 상한 (비정상 거대 문서 방어)
 BODY_MIN = 120            # 이보다 짧으면 추출 실패로 간주
+# 배치 판정(#96) 최소 건수 — 이보다 적으면 제출·폴링 왕복이 절감액보다 비싸다.
+# (신규 1~2건뿐인 날이 흔하다. 그런 날은 기존 개별 판정이 더 빠르고 싸다.)
+BATCH_MIN_ITEMS = 5
 OCR_TRIGGER = 500         # PDF 텍스트층이 이보다 짧으면 이미지-전용 의심 → OCR 시도
 OCR_ACCEPT = 1000         # OCR 결과가 이 이상일 때만 본문으로 채택
 OCR_MAX_PAGES = 8         # OCR 대상 최대 페이지 (150dpi 이미지화)
@@ -122,34 +125,113 @@ def make_ai_judge(sb, keywords: list):
             resp = client.messages.create(
                 model='claude-haiku-4-5-20251001',
                 max_tokens=60,
-                messages=[{
-                    'role': 'user',
-                    'content': (
-                        criteria
-                        + '\n\n제목: ' + title
-                        + '\n본문 발췌: ' + (body or '')[:1500]
-                        + '\n\n첫 단어를 "관련" 또는 "무관"으로 시작하고, '
-                          '이어서 | 뒤에 15자 이내 사유를 붙여라. 예: 관련|주파수 할당 정책'
-                    ),
-                }],
+                # 프롬프트는 배치 경로와 **같은 함수**에서 만든다 — 두 경로가 갈라지면
+                # 같은 기사가 실행 방식에 따라 다르게 판정된다(#88·#92의 '코드 두 벌' 재발).
+                messages=[{'role': 'user', 'content': _judge_prompt(criteria, title, body)}],
             )
             txt = ''
             for blk in resp.content:   # 적응형 추론 대비 — text 블록만 취함
                 if getattr(blk, 'type', '') == 'text':
                     txt = (blk.text or '').strip()
                     break
-            if txt.startswith('관련'):
-                return True, txt[:40]
-            if txt.startswith('무관'):
-                return False, txt[:40]
-            # 형식 이탈 → 키워드 폴백
-            ok = any(k in title or k in (body or '') for k in keywords)
-            return ok, '형식이탈-키워드폴백'
+            return _parse_verdict(txt, title, body, keywords, '형식이탈-키워드폴백')
         except Exception as e:
             ok = any(k in title or k in (body or '') for k in keywords)
             return ok, 'AI실패-키워드폴백:%s' % str(e)[:30]
 
     return judge
+
+
+def _judge_prompt(criteria: str, title: str, body: str) -> str:
+    """관련성 판정 사용자 메시지. 일반/배치가 **같은 문구**를 써야 판정이 갈리지 않는다."""
+    return (criteria
+            + '\n\n제목: ' + title
+            + '\n본문 발췌: ' + (body or '')[:1500]
+            + '\n\n첫 단어를 "관련" 또는 "무관"으로 시작하고, '
+              '이어서 | 뒤에 15자 이내 사유를 붙여라. 예: 관련|주파수 할당 정책')
+
+
+def _parse_verdict(txt: str, title: str, body: str, keywords: list, tag: str):
+    """판정 텍스트 → (관련 여부, 사유). 형식 이탈 시 키워드 폴백(#39 무음 누락 방지)."""
+    txt = (txt or '').strip()
+    if txt.startswith('관련'):
+        return True, txt[:40]
+    if txt.startswith('무관'):
+        return False, txt[:40]
+    ok = any(k in title or k in (body or '') for k in keywords)
+    return ok, tag
+
+
+def batch_judge_all(sb, items_bodies: list, keywords: list, wait_sec: int = 900) -> dict:
+    """관련성 판정을 **Message Batches API**로 한 번에 — 토큰 요금 50% (2026-08-13, #96).
+
+    보도자료는 지식베이스행이라 즉시성이 필요 없다(17시 체인). 반면 **뉴스 긴급도 판정에는
+    쓰지 않는다** — 배치는 계약상 24시간까지 걸릴 수 있어(대부분 1시간 내) 긴급 알림이
+    몇 시간 늦는 꼬리가 생긴다. 그 위험을 월 6천 원과 바꾸지 않는다.
+
+    ★ 자료 손실 경로는 없다: 배치에 태우는 것은 **원문이 아니라 '이거 관련 있어?'라는 질문**이고,
+      제목·본문·URL은 제출 전에 이미 확보돼 있다. 만료·실패한 건은 결과 dict에서 빠지고
+      호출부가 그 건만 일반 API로 다시 묻는다(만료분은 과금되지 않으므로 이중 지불도 아니다).
+
+    인자: items_bodies = [(key, title, body), ...]
+    반환: {key: (bool 관련, str 사유)} — **답을 받은 건만** 담는다. 못 받은 key는 키가 없다.
+    """
+    api_key = os.environ.get('ANTHROPIC_API_KEY', '')
+    if not api_key or anthropic is None or not items_bodies:
+        return {}
+    criteria = load_press_criteria(sb)
+    client = anthropic.Anthropic(api_key=api_key)
+    reqs = [{
+        'custom_id': str(key),
+        'params': {
+            'model': 'claude-haiku-4-5-20251001',
+            'max_tokens': 60,
+            'messages': [{'role': 'user', 'content': _judge_prompt(criteria, title, body)}],
+        },
+    } for key, title, body in items_bodies]
+
+    try:
+        batch = client.messages.batches.create(requests=reqs)
+    except Exception as e:
+        print('[보도자료 배치] 제출 실패 → 개별 판정으로 진행: %s' % str(e)[:80])
+        return {}
+
+    print('[보도자료 배치] %d건 제출 (id=%s) — 최대 %d분 대기' % (len(reqs), batch.id, wait_sec // 60))
+    deadline = time.time() + wait_sec
+    while time.time() < deadline:
+        time.sleep(15)
+        try:
+            cur = client.messages.batches.retrieve(batch.id)
+        except Exception as e:
+            print('[보도자료 배치] 상태 조회 실패(계속 대기): %s' % str(e)[:60])
+            continue
+        if cur.processing_status == 'ended':
+            break
+    else:
+        # 창 안에 안 끝났다 — 배치는 서버에서 계속 돌지만 여기서는 개별 판정으로 넘어간다.
+        # (이 배치의 결과는 버려진다. 만료분은 과금되지 않고, 완료분 소액만 낭비다.)
+        print('[보도자료 배치] %d분 내 미완료 → 개별 판정으로 폴백' % (wait_sec // 60))
+        return {}
+
+    out = {}
+    body_map = {str(k): (t, b) for k, t, b in items_bodies}
+    try:
+        for r in client.messages.batches.results(batch.id):
+            if r.result.type != 'succeeded':
+                continue                      # errored/expired/canceled → 호출부가 개별 재판정
+            txt = ''
+            for blk in r.result.message.content:
+                if getattr(blk, 'type', '') == 'text':
+                    txt = (blk.text or '').strip()
+                    break
+            t, b = body_map.get(r.custom_id, ('', ''))
+            out[r.custom_id] = _parse_verdict(txt, t, b, keywords, '형식이탈-키워드폴백')
+    except Exception as e:
+        print('[보도자료 배치] 결과 수신 실패 → 개별 판정으로 폴백: %s' % str(e)[:80])
+        return {}
+
+    print('[보도자료 배치] 판정 수신 %d/%d건 (미수신분은 개별 판정)' % (len(out), len(reqs)))
+    return out
 
 
 def load_press_keywords(sb) -> list:
@@ -894,7 +976,9 @@ def _heartbeat(sb, note: str):
 
 def _collect_one(sb, slug: str, item: dict, extract_fn, stats: dict, dry: bool = False,
                  judge=None) -> bool:
-    body = None
+    # 배치 선판정(#96)이 이미 뽑아둔 본문이 있으면 재추출하지 않는다 —
+    # 정부 사이트에 같은 첨부를 두 번 받으러 가지 않기 위함.
+    body = item.get('_body')
     # 목록에 날짜가 없는 기관(KISDI 메인 폴백)은 상세 추출이 날짜를 채우므로 추출을 먼저
     if not item.get('date'):
         try:
@@ -967,9 +1051,39 @@ def run_daily(sb, keywords: list = None, max_per_agency: int = 15, dry: bool = F
         # AI 판정 모드면 전수, 폴백 모드면 제목 키워드 매칭분만
         candidates = recent if judge else [it for it in recent
                                            if any(k in it['title'] for k in kw)]
-        for it in candidates[:max_per_agency]:
-            _collect_one(sb, slug, it, extract_fn, stats, dry=dry, judge=judge)
-            time.sleep(1)
+        candidates = candidates[:max_per_agency]
+
+        # ── 배치 선판정 (#96): 신규 후보의 본문을 먼저 뽑아 한 번에 물어 토큰 50% 절감 ──
+        # 이미 등재된 건(section_exists)은 애초에 판정이 필요 없으니 배치에서도 뺀다.
+        # 답을 받은 건만 pre에 담기고, 못 받은 건은 아래 judge 래퍼가 개별 판정으로 넘어간다.
+        pre = {}
+        if judge and len(candidates) >= BATCH_MIN_ITEMS:
+            pending = []
+            for it in candidates:
+                dt0 = it.get('date') or datetime.now(KST)
+                if section_exists(sb, '%s_보도자료_%d.md' % (slug, dt0.year),
+                                  dt0.strftime('%y%m%d'), it['title']):
+                    continue                       # 중복 — _collect_one이 dup로 집계
+                try:
+                    b = extract_fn(it)
+                except Exception:
+                    continue                       # 추출 실패 — _collect_one이 fail로 집계
+                if b and len(b) >= BODY_MIN:
+                    it['_body'] = b                # 재추출 방지용 (아래 래퍼에서 씀)
+                    pending.append((it['url'], it['title'], b))
+            if len(pending) >= BATCH_MIN_ITEMS:
+                pre = batch_judge_all(sb, pending, kw)
+
+        def judge_with_pre(title, body, _it_url=None):
+            """배치 결과가 있으면 그것을, 없으면 개별 판정(기존 경로)을 쓴다."""
+            hit = pre.get(_it_url)
+            return hit if hit is not None else judge(title, body)
+
+        for it in candidates:
+            u = it.get('url')
+            _collect_one(sb, slug, it, extract_fn, stats, dry=dry,
+                         judge=(lambda t, b, _u=u: judge_with_pre(t, b, _u)) if judge else None)
+            time.sleep(0 if u in pre else 1)   # 배치로 이미 판정된 건은 쉴 이유가 없다
         print('[보도자료][%s] 스캔 %d, 최근 %d, 신규 %d, 중복 %d, 무관 %d, 실패 %d'
               % (slug, len(items), len(recent), stats['new'], stats['dup'],
                  stats['skip'], stats['fail']))
