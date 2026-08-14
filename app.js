@@ -152,6 +152,8 @@ var PRACTICE_TERMS = [
   [/주파수\s*경매|경매/,           ['대가에 의한 주파수할당', '주파수할당']],
   [/알뜰폰|MVNO/i,                ['도매제공', '도매제공의무사업자']],
   [/재할당/,                      ['주파수할당', '이용기간']],
+  // 세대 서비스 종료(2G·3G…) → 주파수 처리 조문 보강 (rag.ts와 동일 유지 — 2026-08-07)
+  [/(2G|3G|4G|5G|LTE|WCDMA|세대)\s*(이동통신|서비스)?\s*종료/i, ['주파수회수', '주파수할당의 취소', '이용기간']],
 ];
 // 시맨틱 검색용 질의 보강 — 원 질의는 지우지 않고 **뒤에 덧붙인다**(rag.ts expandQueryForSemantic와 동일)
 function expandQueryForSemantic(query) {
@@ -7462,26 +7464,145 @@ function openAssemblyMinute(idx) {
 var _speechesBySpeaker = null;   // { speaker: [rows...] }
 var _minutesView = 'meeting';
 
+// 발언자 이름 정규화. String.prototype.normalize 가 없는 환경도 죽지 않게 감싼다.
+function _nfc(s) {
+  s = s || '';
+  try { return s.normalize ? s.normalize('NFC') : s; } catch (e) { return s; }
+}
+
+// 국정감사 agenda 는 피감기관을 괄호 안에 전부 나열해 121자까지 간다(DB에 이미 절단 저장된 것도 있음).
+// 목록에서는 앞 2개만 남기고 접는다. 닫는 괄호가 있어 개수를 셀 수 있을 때만 '외 N개 기관',
+// 절단본(…로 끝나 셀 수 없음)은 '등'. 전문은 호출부에서 title 툴팁으로 붙인다.
+function _shortAgenda(a) {
+  a = String(a || '');
+  if (a.length <= 48) return a;
+  var i = a.indexOf('(');
+  if (i < 0) return a.slice(0, 46) + '…';
+  var prefix = a.slice(0, i).trim();
+  var rest = a.slice(i + 1).trim();
+  var closed = rest.slice(-1) === ')';
+  var inner = closed ? rest.slice(0, -1) : rest.replace(/[…\.\s]+$/, '');
+  var parts = inner.split(/[·ㆍ・,]/).map(function(s) { return s.trim(); })
+                   .filter(function(s) { return s; });
+  if (parts.length <= 2) return a.length <= 60 ? a : a.slice(0, 58) + '…';
+  var tail = closed ? ' 외 ' + (parts.length - 2) + '개 기관' : ' 등';
+  return prefix + ' (' + parts.slice(0, 2).join('·') + tail + ')';
+}
+
 function switchMinutesView(view) {
   _minutesView = view;
   var listEl = document.getElementById('assembly-minutes-list');
   var spkEl = document.getElementById('assembly-speakers');
+  var schEl = document.getElementById('assembly-search');
   var tabM = document.getElementById('minutes-tab-by-meeting');
   var tabS = document.getElementById('minutes-tab-by-speaker');
+  var tabQ = document.getElementById('minutes-tab-search');
   var on = 'cursor:pointer;font-size:12px;padding:5px 12px;border-radius:6px;border:1px solid var(--accent);background:var(--accent);color:#fff';
   var off = 'cursor:pointer;font-size:12px;padding:5px 12px;border-radius:6px;border:1px solid var(--border);background:var(--bg-card);color:var(--text-secondary)';
-  if (view === 'speaker') {
-    if (listEl) listEl.style.display = 'none';
-    if (spkEl) spkEl.style.display = '';
-    if (tabM) tabM.style.cssText = off;
-    if (tabS) tabS.style.cssText = on;
-    loadSpeakers();
-  } else {
-    if (listEl) listEl.style.display = '';
-    if (spkEl) spkEl.style.display = 'none';
-    if (tabM) tabM.style.cssText = on;
-    if (tabS) tabS.style.cssText = off;
+  if (listEl) listEl.style.display = view === 'meeting' ? '' : 'none';
+  if (spkEl) spkEl.style.display = view === 'speaker' ? '' : 'none';
+  if (schEl) schEl.style.display = view === 'search' ? '' : 'none';
+  if (tabM) tabM.style.cssText = view === 'meeting' ? on : off;
+  if (tabS) tabS.style.cssText = view === 'speaker' ? on : off;
+  if (tabQ) tabQ.style.cssText = view === 'search' ? on : off;
+  if (view === 'speaker') loadSpeakers();
+  if (view === 'search') { var q = document.getElementById('asm-search-q'); if (q) q.focus(); }
+}
+
+// ── 국회 발언 원문 검색 (2026-08-14 #98) ──────────────────────
+// DB(assembly_speeches)는 22대·판정 통과분·요지만 담아 "2019년 김성수 의원 무선국" 같은 질의에
+// 답하지 못한다. 이 탭은 국회회의록시스템을 **실시간**으로 조회한다(축적 데이터 무관).
+// 국회 사이트는 CORS 헤더를 주지 않으므로 반드시 assembly-search Edge Function 을 경유한다.
+// 검색·자연어 파싱 로직은 함수 쪽 _shared/assembly_search.ts 한 곳에만 둔다(텔레그램 assem 과 공유).
+function _asmHighlight(snippet) {
+  // 국회 검색이 붙여주는 <!HS>…<!HE> 강조 마커 → <mark>. 반드시 이스케이프 **뒤에** 치환한다.
+  return escHtml(snippet || '')
+    .split('&lt;!HS&gt;').join('<mark style="background:rgba(250,204,21,.28);color:inherit;padding:0 2px;border-radius:2px">')
+    .split('&lt;!HE&gt;').join('</mark>');
+}
+
+async function searchAssemblySpeech() {
+  var input = document.getElementById('asm-search-q');
+  var out = document.getElementById('asm-search-result');
+  if (!input || !out || !sb) return;
+  var text = (input.value || '').trim();
+  if (!text) {
+    out.innerHTML = '<div style="color:var(--text-secondary);padding:12px;text-align:center;font-size:12px">찾고 싶은 발언을 입력하세요</div>';
+    return;
   }
+  out.innerHTML = '<div style="color:var(--text-secondary);padding:20px;text-align:center;font-size:12px">국회 회의록에서 찾는 중...</div>';
+  var data;
+  try {
+    var resp = await sb.functions.invoke('assembly-search', { body: { text: text, limit: 10 } });
+    if (resp.error) throw resp.error;
+    data = resp.data || {};
+    if (data.error) throw new Error(data.error);
+  } catch (e) {
+    out.innerHTML = '<div style="color:#f66;padding:16px;text-align:center;font-size:12px">검색 실패: ' +
+      escHtml((e && e.message) || String(e)) + '</div>';
+    return;
+  }
+
+  // 해석 결과를 먼저 보여준다 — 자연어 파싱이 빗나갔을 때 사용자가 바로 알아채고 고쳐 쓸 수 있게.
+  var p = data.parsed || {};
+  var chips = [];
+  chips.push(p.speaker ? escHtml(p.speaker) + ' 의원' : '발언자 무관');
+  if (p.query) chips.push('“' + escHtml(p.query) + '”');
+  if (p.year) chips.push(escHtml(String(p.year)) + '년');
+  // 대수는 **실제 검색 범위를 좁힌다**(회기 S_TH/E_TH). 칩에 안 그리면 먹혔는지 무시됐는지 알 수 없다.
+  if (p.dae) chips.push(escHtml(String(p.dae)) + '대 국회');
+  // 지원 범위(20대~) 밖 대수는 검색어에서 걷어내되 걷어냈다는 사실을 알린다 — 안 그러면
+  // '제19대'가 검색어로 나가 무관한 192건이 잡히거나, 조용히 무시돼 19대 자료로 오해한다.
+  if (p.daeOut) chips.push('⚠️ ' + escHtml(String(p.daeOut)) + '대는 범위 밖(20대~)');
+  if (p.kinds && p.kinds.length) chips.push(escHtml(p.kinds.join('·')));
+  // 재시도로 조건을 푼 결과는 '그럴듯한 대량 오답'일 수 있다 — 건수를 신뢰의 근거로 읽지 않게 알린다.
+  if (data.retried) chips.push('↻ 조건을 풀어 다시 검색함');
+  var head = '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:10px">' +
+    chips.map(function(c) {
+      return '<span style="font-size:11px;color:var(--text-secondary);background:var(--bg-secondary);border:0.5px solid var(--border-mid);padding:2px 8px;border-radius:999px">' + c + '</span>';
+    }).join('') +
+    '<span style="margin-left:auto;font-size:11px;color:var(--text-muted)">전체 ' + (data.total || 0) + '건' +
+    ((data.hits || []).length && data.total > data.hits.length ? ' · 최근 ' + data.hits.length + '건 표시' : '') + '</span></div>';
+
+  var hits = data.hits || [];
+  if (!hits.length) {
+    out.innerHTML = head +
+      '<div style="color:var(--text-secondary);padding:16px;text-align:center;font-size:12px;line-height:1.7">결과가 없습니다.<br>' +
+      '<span style="font-size:11px;color:var(--text-muted)">회의록에 나온 낱말 그대로여야 찾힙니다(예: 전파사용료, 무선국 검사). 연도·이름을 빼고 다시 시도해 보세요.</span></div>';
+    return;
+  }
+
+  var KIND_COLOR = { '국정감사': '#dc2626', '상임위': '#2563eb' };
+  out.innerHTML = head + hits.map(function(h) {
+    var c = KIND_COLOR[h.kind] || 'var(--text-muted)';
+    var cmit = (h.committee || '').replace('과학기술정보방송통신위원회', '과방위').replace('미래창조과학방송통신위원회', '미방위');
+    return '<div class="card" style="cursor:default;padding:12px 14px;margin-bottom:8px">' +
+      '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap">' +
+        '<span style="font-size:10px;font-weight:700;color:' + c + ';border:1px solid ' + c + ';padding:0 6px;border-radius:4px;white-space:nowrap">' + escHtml(h.kind || '') + '</span>' +
+        '<span style="font-size:11px;color:var(--text-muted)">' + escHtml(h.date || '') + '</span>' +
+        '<span style="font-size:11px;color:var(--text-secondary)">' + escHtml(cmit) + '</span>' +
+        '<span style="font-size:12px;font-weight:600;color:var(--text-primary)">' + escHtml(h.speaker || '') + '</span>' +
+        (h.url ? '<a href="' + escHtml(h.url) + '" target="_blank" rel="noopener" style="margin-left:auto;font-size:10px;text-decoration:none;white-space:nowrap">회의록 원문 <i class="ti ti-external-link"></i></a>' : '') +
+      '</div>' +
+      // 문맥(발언 전문 + 앞뒤 블록)이 붙어 오면 스니펫(206자 절단본) 대신 그걸 보여준다.
+      // 검색 스니펫만으로는 잘린 데다 발언자 필터 탓에 **정부측 답변이 통째로 빠진다**.
+      (h.context && h.context.length
+        ? '<div style="border-left:2px solid var(--border-mid);padding-left:10px;margin-top:2px">' +
+            h.context.map(function(b) {
+              var who = escHtml(b.name + (b.pos ? '(' + b.pos + ')' : ''));
+              return '<div style="margin-bottom:8px">' +
+                '<div style="font-size:11px;font-weight:' + (b.isTarget ? '700;color:var(--text-primary)' : '600;color:var(--text-muted)') + ';margin-bottom:2px">' +
+                  (b.isTarget ? '▶ ' : '') + who + '</div>' +
+                '<div style="font-size:12px;line-height:1.7;white-space:pre-wrap;color:' +
+                  (b.isTarget ? 'var(--text-primary)' : 'var(--text-secondary)') + '">' + escHtml(b.text) + '</div>' +
+              '</div>';
+            }).join('') +
+          '</div>'
+        : '<div style="font-size:12px;color:var(--text-secondary);line-height:1.7">' + _asmHighlight(h.snippet) + '</div>') +
+      (h.auditOrgs ? '<div style="font-size:10px;color:var(--text-muted);margin-top:6px">피감기관: ' + escHtml(h.auditOrgs.slice(0, 120)) + (h.auditOrgs.length > 120 ? '…' : '') + '</div>' : '') +
+    '</div>';
+  }).join('') +
+  '<div style="font-size:10px;color:var(--text-muted);text-align:center;padding:6px">출처: 국회회의록시스템 실시간 검색 · 과방위 상임위·국정감사(20대~현재)</div>';
 }
 
 async function loadSpeakers(force) {
@@ -7505,7 +7626,10 @@ async function loadSpeakers(force) {
     }
     var map = {};
     rows.forEach(function(r) {
-      var k = (r.speaker || '').trim();
+      // NFC 정규화 필수 — 회의록 원문의 한자 이름에 CJK 호환 한자가 섞여 있다.
+      // 예: 金(U+F90A)成泰 vs 金(U+91D1)成泰 → 정규화 없이는 같은 사람이 드롭다운에 두 번 뜬다.
+      // NFC로 호환 한자가 통합되므로 NFKC까지 갈 필요는 없다(실측 확인).
+      var k = _nfc(r.speaker).trim();
       if (!k) return;
       (map[k] = map[k] || []).push(r);
     });
@@ -7532,6 +7656,7 @@ async function loadSpeakers(force) {
 function renderSpeakerSpeeches(name) {
   var out = document.getElementById('speaker-speeches');
   if (!out) return;
+  name = _nfc(name);   // 맵 키가 NFC라 조회 키도 맞춰야 한다
   if (!name || !_speechesBySpeaker || !_speechesBySpeaker[name]) {
     out.innerHTML = '<div style="color:var(--text-secondary);padding:12px;text-align:center;font-size:12px">발언자를 선택하세요</div>';
     return;
@@ -7549,7 +7674,7 @@ function renderSpeakerSpeeches(name) {
     html += '<div style="' + (i ? 'border-top:1px solid var(--border);' : '') + 'padding:10px 14px">' +
       '<div style="display:flex;gap:10px;align-items:baseline;flex-wrap:wrap">' +
         '<span style="font-size:11px;color:var(--text-muted);white-space:nowrap">' + escHtml(String(r.meeting_date || '').slice(0, 10)) + '</span>' +
-        (r.agenda ? '<span style="font-size:12px;color:var(--text-primary);line-height:1.4">' + escHtml(r.agenda) + '</span>' : '') +
+        (r.agenda ? '<span title="' + escHtml(r.agenda) + '" style="font-size:12px;color:var(--text-primary);line-height:1.4">' + escHtml(_shortAgenda(r.agenda)) + '</span>' : '') +
         (safeUrl(r.source_url) ? '<a href="' + safeUrl(r.source_url) + '" target="_blank" rel="noopener" style="margin-left:auto;font-size:10px;text-decoration:none;white-space:nowrap">원문 <i class="ti ti-external-link"></i></a>' : '') +
       '</div>' +
       (r.summary ? '<div style="font-size:11px;color:var(--text-secondary);line-height:1.6;margin-top:5px">' + escHtml(r.summary) + '</div>' : '') +

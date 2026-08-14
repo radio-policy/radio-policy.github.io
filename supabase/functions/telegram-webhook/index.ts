@@ -23,6 +23,7 @@ import { createClient, type SupabaseClient } from 'jsr:@supabase/supabase-js@2';
 import { escapeHtml, splitByLines, mdToTelegramHtml, sendTelegramHtml } from '../_shared/telegram_format.ts';
 import { answerAdvisory, answerLawQuery } from '../_shared/rag.ts';
 import { NEWS_TAGS, TAG_SLUGS } from '../_shared/news_tags.ts';
+import { parseAssemQuery, searchAssemblyWithFallback, attachContext, shortCommittee, type AssemQuery, type AssemKind } from '../_shared/assembly_search.ts';
 
 // env는 반드시 trim — Supabase 콘솔에 값을 붙여넣을 때 줄바꿈이 딸려 들어가는 일이 잦고,
 // 그러면 시크릿 비교가 조용히 어긋나거나(401) API 헤더가 깨진다. 공백은 시크릿에 의미가 없다.
@@ -56,6 +57,7 @@ interface Sub {
   days: string; briefing_hour: number;
   ai_allowed: boolean; ai_count_date: string | null; ai_count: number;
   law_count_date?: string | null; law_count?: number;   // 자연어 /law 일일 상한 (2026-08-03)
+  law_allowed: boolean;  // 자연어 /law 승인 여부 (2026-08-14) — 신규 가입자는 false, 그 전 가입자는 소급 허용
   unlimited?: boolean;   // 일일 한도 면제(#86) — /ask·/law 상한을 건너뛴다. 카운터는 계속 올려 사용량은 관찰 가능
   end_hour: number;      // 수신 종료 시각(18~22) — 종전 하드코딩 '23시 이후 무발송'을 대체 (2026-08-03)
   // 관심분야. **빈 배열 = 전체 수신**(캐논 하나). 6개를 다 켜면 []로 정규화하므로,
@@ -66,6 +68,19 @@ async function getSub(chatId: number): Promise<Sub | null> {
   const { data } = await sb.from('telegram_subscribers').select('*').eq('chat_id', chatId).maybeSingle();
   return data as Sub | null;
 }
+/** 명령 사용 이력 기록 (2026-08-14). 실패해도 본 기능을 막지 않는다 — 통계는 부가 기능이다. */
+async function logUsage(
+  chatId: number, command: string, query = '', ok = true, note = '',
+): Promise<void> {
+  try {
+    await sb.from('telegram_usage').insert({
+      chat_id: chatId, command, ok,
+      query: query.slice(0, 200) || null,
+      result_note: note.slice(0, 120) || null,
+    });
+  } catch (e) { console.error('[usage 로그 실패(무시)]', e); }
+}
+
 async function upsertSub(chatId: number, patch: Record<string, unknown>): Promise<void> {
   await sb.from('telegram_subscribers')
     .upsert({ chat_id: chatId, ...patch, updated_at: new Date().toISOString() }, { onConflict: 'chat_id' });
@@ -127,7 +142,10 @@ const START_TEXT =
   '🌙 <b>받기 종료 시각을 넘기면 다음 날 시작 시각까지 발송하지 않습니다.</b>\n' +
   '아래 버튼으로 콘텐츠·요일·수신 시각을 바로 바꿀 수 있어요. (언제든 /settings)\n' +
   '항목을 모두 끄면 알림이 오지 않습니다.\n\n' +
-  '📖 <b>법령 검색</b> — <code>/law 3G 종료 관련 법령</code> (궁금한 주제 → 관련 법령·조항과 이유. 조문 번호를 알면 <code>/law 전기통신사업법 19조</code> 로 원문 즉답)\n' +
+  '📖 <b>법령 검색</b> — <code>/law 3G 종료 관련 법령</code> (궁금한 주제 → 관련 법령·조항과 이유. <b>운영자 최초 1회 승인 필요</b>)\n' +
+  '   <i>조문 번호를 알면 승인 없이 바로 — <code>/law 전기통신사업법 19조</code></i>\n' +
+  '🏛 <b>국회 발언 검색</b> — <code>assem 2019년 국정감사에서 김성수 의원이 무선국 관련 발언 찾아줘</code>\n' +
+  '   <i>과방위 상임위·국정감사 회의록 원문에서 찾습니다(20대 국회~현재).</i>\n' +
   '🤖 <b>AI 자문</b> — <code>/ask 질문</code> (동향·시사점까지 종합, 운영자 최초 1회 승인 필요)\n' +
   // 대시보드 자문은 chatHistory를 누적해 대화가 이어지지만 봇은 질문 1건만 보낸다(rag.ts).
   // 웹을 써 본 사람일수록 "그건 언제 시행되나?" 식 후속 질문을 던지므로 가입 시점에 미리 알린다.
@@ -172,6 +190,162 @@ function resolveLawName(docName: string): string {
   return official ? official + suffix : docName;
 }
 
+// ── /assem 국회 발언 검색 (국회회의록시스템 실시간 검색, AI 비용 0) ──
+// 검색 로직·위원회 코드는 _shared/assembly_search.ts 한 곳에만 둔다(대시보드와 공유).
+const ASSEM_MAX_HITS = 5;       // 한 번에 보여줄 발언 수
+
+/** 검색 스니펫의 <!HS>…<!HE> 강조 마커를 텔레그램 <b>로. 이스케이프 뒤에 치환해야 안전하다. */
+function assemSnippet(raw: string): string {
+  return escapeHtml(raw || '')
+    .replaceAll('&lt;!HS&gt;', '<b>').replaceAll('&lt;!HE&gt;', '</b>');
+}
+
+/** '더 보기' 버튼에 실어 보낼 검색 조건. 텔레그램 callback_data 는 **64바이트 상한**이라
+ *  한글(3바이트)이 길면 담기지 않는다 — 그럴 땐 버튼을 달지 않는다(대신 결과에 안내를 남긴다). */
+function assemCallbackData(q: AssemQuery, offset: number): string | null {
+  const kinds = (q.kinds || []).map((k) => (k === '국정감사' ? 'a' : 's')).join('');
+  const d = `as|${offset}|${q.year || ''}|${kinds}|${q.speaker || ''}|${q.query}`;
+  return new TextEncoder().encode(d).length <= 64 ? d : null;
+}
+
+function parseAssemCallback(data: string): { q: AssemQuery; offset: number } | null {
+  const p = data.split('|');
+  if (p[0] !== 'as' || p.length < 6) return null;
+  const kinds = p[3]
+    ? ([...p[3]].map((c) => (c === 'a' ? '국정감사' : '상임위')) as AssemKind[])
+    : undefined;
+  return {
+    offset: Number(p[1]) || 0,
+    q: {
+      speaker: p[4] || '',
+      query: p.slice(5).join('|'),
+      year: p[2] ? Number(p[2]) : undefined,
+      kinds,
+    },
+  };
+}
+
+async function handleAssemSearch(chatId: number, arg: string): Promise<void> {
+  const text = arg.trim();
+  if (!text) {
+    await sendTelegramHtml(BOT_TOKEN, chatId,
+      '사용법: <code>assem 2019년 국정감사에서 김성수 의원이 무선국 관련해서 발언한 내용을 찾아줘</code>\n' +
+      '평소 말하듯 쓰시면 의원명·연도·회의 구분을 알아서 골라냅니다. ' +
+      '<code>assem 김성수 무선국</code> 처럼 짧게 써도 됩니다.\n' +
+      '<i>범위: 20대 국회(2016)~현재, 과방위(20대 전반기 미방위 포함)의 상임위·국정감사 회의록.</i>');
+    return;
+  }
+
+  let parsed: AssemQuery;
+  try {
+    parsed = await parseAssemQuery(text, Deno.env.get('ANTHROPIC_API_KEY') || '');
+  } catch (e) {
+    console.error('[assem 파싱 실패]', e);
+    await sendTelegramHtml(BOT_TOKEN, chatId, '⚠️ 질의 해석에 실패했습니다. 잠시 후 다시 시도해 주세요.');
+    await logUsage(chatId, 'assem', text, false, '파싱 실패');
+    return;
+  }
+  if (!parsed.query) {
+    await sendTelegramHtml(BOT_TOKEN, chatId,
+      '🔍 무엇을 찾을지 알아내지 못했습니다.\n<code>assem 김성수 의원 무선국</code> 처럼 ' +
+      '<b>찾을 낱말</b>을 넣어 주세요.');
+    await logUsage(chatId, 'assem', text, false, '핵심어 미추출');
+    return;
+  }
+  await sendAssemResults(chatId, parsed, 0);
+}
+
+/** 검색 실행 + 결과 전송. '더 보기'(offset>0)도 같은 함수를 탄다. */
+async function sendAssemResults(chatId: number, q: AssemQuery, offset: number): Promise<void> {
+  let result;
+  let parsed = q;
+  try {
+    result = await searchAssemblyWithFallback(q, ASSEM_MAX_HITS, 20_000, offset);
+    parsed = result.parsed;   // 재시도로 해석이 바뀌었으면 조건 표시도 실제 쓰인 해석으로 맞춘다
+    // 첫 묶음의 1건만 뷰어 원문으로 전문 + 정부측 답변까지 붙인다(+2~3초, AI 비용 0).
+    // 텔레그램은 메시지 길이 제한이 있어 대시보드보다 짧게 자른다(블록당 600자, 뒤 3블록).
+    if (offset === 0) await attachContext(result, 1, 1, 3, 600);
+  } catch (e) {
+    console.error('[assem 검색 실패]', e);
+    await sendTelegramHtml(BOT_TOKEN, chatId, '⚠️ 국회 회의록 시스템 조회에 실패했습니다. 잠시 후 다시 시도해 주세요.');
+    return;
+  }
+
+  // 해석 결과를 그대로 보여준다 — 자연어 파싱이 빗나갔을 때 사용자가 바로 알아채고 고쳐 쓸 수 있게.
+  const cond = [
+    parsed.speaker ? `${parsed.speaker} 의원` : '발언자 무관',
+    `“${parsed.query}”`,
+    parsed.year ? `${parsed.year}년` : '',
+    parsed.dae ? `${parsed.dae}대 국회` : '',   // 대수는 실제 검색 범위를 좁힌다 — 안 찍으면 먹혔는지 알 수 없다
+    parsed.daeOut ? `⚠️${parsed.daeOut}대는 범위 밖(20대~)` : '',
+    parsed.kinds?.length ? parsed.kinds.join('·') : '',
+  ].filter(Boolean).join(' · ');
+
+  if (!result.hits.length) {
+    await sendTelegramHtml(BOT_TOKEN, chatId,
+      `🔍 ${escapeHtml(cond)} — 결과가 없습니다.\n` +
+      '<i>회의록 원문에 나온 낱말 그대로여야 찾힙니다(예: 전파사용료, 무선국 검사). ' +
+      '이름 표기나 연도를 빼고 다시 시도해 보세요.</i>');
+    return;
+  }
+
+  if (offset === 0) {
+    await logUsage(chatId, 'assem',
+      [parsed.speaker, parsed.query, parsed.year, parsed.dae ? `${parsed.dae}대` : '']
+        .filter(Boolean).join(' '),
+      true, `${result.total}건`);
+  }
+  const from = offset + 1;
+  const to = offset + result.hits.length;
+  let html = `🔍 <b>${escapeHtml(cond)}</b> — 전체 <b>${result.total}</b>건` +
+    (result.total > result.hits.length ? ` (최신순 ${from}~${to}번째)` : '') + '\n';
+  // 재시도로 조건을 푼 결과라면 반드시 알린다 — 건수가 크면 사용자는 그걸 신뢰의 근거로 읽는다.
+  if (result.retried) html += `<i>원래 조건으로는 결과가 없어 <b>${escapeHtml(parsed.query)}</b>(으)로 다시 찾은 결과입니다.</i>\n`;
+  for (const h of result.hits) {
+    html += `\n📅 <b>${escapeHtml(h.date)}</b> · ${escapeHtml(h.kind)} · ${escapeHtml(shortCommittee(h.committee).slice(0, 30))}\n` +
+      `👤 ${escapeHtml(h.speaker)}\n`;
+    if (h.context?.length) {
+      // 문맥이 있으면 스니펫(206자 절단본) 대신 전문·앞뒤를 보여준다 — 질의와 답변이 짝지어 보이게.
+      for (const b of h.context) {
+        const who = escapeHtml(b.name + (b.pos ? `(${b.pos})` : ''));
+        const body = escapeHtml(b.text).replaceAll('\n', '\n');
+        html += b.isTarget
+          ? `\n▶ <b>${who}</b>\n${body}\n`
+          : `\n▸ <i>${who}</i>\n${body}\n`;
+      }
+    } else {
+      html += `${assemSnippet(h.snippet)}\n`;
+    }
+    html += (h.url ? `<a href="${h.url}">회의록 원문 보기</a>\n` : '');
+  }
+  html += '\n<i>출처: 국회회의록시스템 실시간 검색 (20대~현재 과방위 상임위·국정감사)</i>';
+
+  const parts = splitByLines(html);
+  for (const part of parts.slice(0, -1)) await sendTelegramHtml(BOT_TOKEN, chatId, part);
+
+  // 마지막 메시지에만 '더 보기' 버튼을 붙인다. 국회 검색 페이지 상한(120건)까지만 넘긴다.
+  const nextOffset = offset + result.hits.length;
+  const more = result.total > nextOffset && nextOffset < 120
+    ? assemCallbackData(parsed, nextOffset) : null;
+  const last = parts[parts.length - 1];
+  if (more) {
+    await tg('sendMessage', {
+      chat_id: chatId, parse_mode: 'HTML', text: last, disable_web_page_preview: true,
+      reply_markup: { inline_keyboard: [[{
+        text: `▼ 다음 ${Math.min(ASSEM_MAX_HITS, result.total - nextOffset)}건 더 보기 (${nextOffset}/${result.total})`,
+        callback_data: more,
+      }]] },
+    });
+  } else {
+    await sendTelegramHtml(BOT_TOKEN, chatId, last);
+    if (result.total > nextOffset) {
+      await sendTelegramHtml(BOT_TOKEN, chatId,
+        `<i>결과가 ${result.total}건으로 많습니다. 연도나 의원명을 붙여 좁혀 보세요 — 예: ` +
+        `<code>assem 2024년 ${escapeHtml(parsed.query)}</code></i>`);
+    }
+  }
+}
+
 const LAW_DAILY_LIMIT = 10;  // 자연어 /law 일일 상한 — 승인 불필요(팀 조회 기능), 운영자 지정 10회 (Haiku 건당 ~$0.01)
 
 async function handleLawQuery(chatId: number, q: string): Promise<Promise<void> | void> {
@@ -187,8 +361,30 @@ async function handleLawQuery(chatId: number, q: string): Promise<Promise<void> 
 
   // 자연어 질의 → 법령 한정 답변 (2026-08-03 개편 — 운영자: "몇조가 뭐냐고 묻는 게 아니라
   // 궁금한 사항이 어떤 법과 관련돼 있는지 알고 싶은 게 대부분").
-  // /ask와의 경계: 법령 내용만 — 뉴스·동향·시사점은 /ask 몫. 승인 불필요, 일일 상한만.
+  // /ask와의 경계: 법령 내용만 — 뉴스·동향·시사점은 /ask 몫.
+  // 승인제 + 일일 상한 (2026-08-14): Haiku 건당 ~25원이라 인원이 늘면 비용이 선형으로 늘어난다.
+  // **신규 가입자만** 승인 대상 — 그 전 가입자는 마이그레이션에서 law_allowed=true 로 소급 허용했다.
+  // 조문번호 직답(위 ARTICLE_RE 분기)은 DB 조회뿐이라 이 게이트를 타지 않는다.
   const sub = await getSub(chatId);
+  // fail-closed. `sub && !sub.law_allowed`로 두면 **구독 행이 없는 계정**(=/start를 거치지 않고 곧장
+  // /law를 보낸 경우)이 게이트·일일 한도·사용 로깅을 전부 우회한다. /ask와 같은 `!sub?.x` 형태로 맞춘다.
+  if (!sub?.law_allowed) {
+    await sendTelegramHtml(BOT_TOKEN, chatId,
+      '🔒 법령 검색은 운영자 승인이 필요합니다(최초 1회만).\n승인 요청을 보냈습니다 — 승인되면 다시 질문해 주세요.\n' +
+      '<i>조문 번호를 아는 경우엔 승인 없이도 쓸 수 있습니다 — 예: <code>/law 전기통신사업법 19조</code></i>');
+    await logUsage(chatId, 'law', query, false, '승인대기');
+    if (OPERATOR_CHAT_ID) {
+      await tg('sendMessage', {
+        chat_id: OPERATOR_CHAT_ID, parse_mode: 'HTML',
+        text: `📖 <b>법령 검색 권한 요청</b>\n${escapeHtml(sub?.first_name || '')} (@${escapeHtml(sub?.username || '없음')}, <code>${chatId}</code>)\n첫 질문: ${escapeHtml(query.slice(0, 200))}`,
+        reply_markup: { inline_keyboard: [[
+          { text: '✅ 승인', callback_data: `law:ok:${chatId}` },
+          { text: '❌ 거부', callback_data: `law:no:${chatId}` },
+        ]] },
+      });
+    }
+    return;
+  }
   if (sub) {
     const today = todayKst();
     const used = sub.law_count_date === today ? (sub.law_count || 0) : 0;
@@ -197,6 +393,7 @@ async function handleLawQuery(chatId: number, q: string): Promise<Promise<void> 
       return;
     }
     await upsertSub(chatId, { law_count_date: today, law_count: used + 1 });
+    await logUsage(chatId, 'law', query);
   }
   await sendTelegramHtml(BOT_TOKEN, chatId, '🔎 관련 법령을 찾고 있습니다... (약 20초)');
 
@@ -254,6 +451,7 @@ export function plainifyArticle(text: string): string {
 }
 
 async function handleArticleLookup(chatId: number, rawDocName: string, artNo: string, subNo?: string): Promise<void> {
+  await logUsage(chatId, 'law_article', `${rawDocName} ${artNo}조${subNo ? '의' + subNo : ''}`);
   const docName = resolveLawName(rawDocName);   // 약칭이면 정식명으로 치환 후 조회 (미등재 안내·법령센터 링크도 정식명 기준)
   // ⚠️ DB의 article_no는 **「12조(교육과목 및 시간)」처럼 '제'가 없는 형식**이다(#92).
   // 실측: `article_no like '제%조%'` 0건 / `~ '^\d+조'` 7,587건. 종전에는 `제${artNo}조`로
@@ -328,6 +526,7 @@ async function handleAsk(chatId: number, from: { username?: string; first_name?:
     return;
   }
   await upsertSub(chatId, { ai_count_date: today, ai_count: used + 1 });
+  await logUsage(chatId, 'ask', q);
   await sendTelegramHtml(BOT_TOKEN, chatId, '🤔 법령·자료를 검토하고 있습니다... (1~2분 소요)');
 
   // webhook 200을 먼저 돌려보내고 백그라운드에서 RAG+Sonnet 실행 (텔레그램 재시도 방지)
@@ -394,16 +593,21 @@ async function handleAsk(chatId: number, from: { username?: string; first_name?:
 // ── 운영자 /admin ──
 async function handleAdmin(chatId: number): Promise<void> {
   if (chatId !== OPERATOR_CHAT_ID) return;   // 운영자 외 무응답
-  const { data } = await sb.from('telegram_subscribers').select('chat_id, first_name, username, active, ai_allowed').order('created_at');
-  const rows = (data || []) as { chat_id: number; first_name?: string; username?: string; active: boolean; ai_allowed: boolean }[];
+  const { data } = await sb.from('telegram_subscribers').select('chat_id, first_name, username, active, ai_allowed, law_allowed').order('created_at');
+  const rows = (data || []) as { chat_id: number; first_name?: string; username?: string; active: boolean; ai_allowed: boolean; law_allowed: boolean }[];
   const total = rows.length, act = rows.filter((r) => r.active).length;
   const allowed = rows.filter((r) => r.ai_allowed);
-  let text = `🛠 <b>구독자 현황</b> — 총 ${total}명 (활성 ${act})\n\n<b>AI 자문 승인자</b> (${allowed.length}명)`;
-  if (!allowed.length) text += '\n(없음)';
-  const kb = allowed.map((r) => ([{
-    text: `🚫 회수: ${r.first_name || ''} @${r.username || r.chat_id}`,
-    callback_data: `ai:rv:${r.chat_id}`,
-  }]));
+  const lawAllowed = rows.filter((r) => r.law_allowed);
+  const label = (r: { first_name?: string; username?: string; chat_id: number }) =>
+    `${r.first_name || ''} @${r.username || r.chat_id}`;
+  let text = `🛠 <b>구독자 현황</b> — 총 ${total}명 (활성 ${act})\n\n` +
+    `<b>AI 자문 승인자</b> (${allowed.length}명)${allowed.length ? '' : '\n(없음)'}\n` +
+    `<b>법령 검색 승인자</b> (${lawAllowed.length}명)${lawAllowed.length ? '' : '\n(없음)'}`;
+  // 두 권한을 한 화면에서 회수할 수 있게 버튼을 나눠 붙인다(라벨에 어느 권한인지 표기).
+  const kb = [
+    ...allowed.map((r) => ([{ text: `🚫 자문 회수: ${label(r)}`, callback_data: `ai:rv:${r.chat_id}` }])),
+    ...lawAllowed.map((r) => ([{ text: `🚫 법령 회수: ${label(r)}`, callback_data: `law:rv:${r.chat_id}` }])),
+  ];
   await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text, reply_markup: { inline_keyboard: kb } });
 }
 
@@ -413,6 +617,38 @@ async function handleCallback(cb: { id: string; data?: string; from: { id: numbe
   const chatId = cb.message?.chat.id || cb.from.id;
   const msgId = cb.message?.message_id;
   let ack = '저장했습니다';
+
+  if (data.startsWith('as|')) {
+    // 국회 발언 검색 '더 보기' — 다음 묶음을 새 메시지로 보낸다(원 메시지는 그대로 둔다).
+    const p = parseAssemCallback(data);
+    await tg('answerCallbackQuery', { callback_query_id: cb.id, text: p ? '불러오는 중…' : '만료된 버튼' });
+    if (p) await sendAssemResults(chatId, p.q, p.offset);
+    return;
+  }
+
+  if (data.startsWith('law:')) {
+    // 법령 검색 승인/거부/회수 — 운영자 채팅에서 온 콜백만 유효 (2026-08-14)
+    const [, action, target] = data.split(':');
+    const targetId = Number(target);
+    if (cb.from.id !== OPERATOR_CHAT_ID) { await tg('answerCallbackQuery', { callback_query_id: cb.id, text: '권한 없음' }); return; }
+    if (action === 'ok') {
+      await upsertSub(targetId, { law_allowed: true });
+      await sendTelegramHtml(BOT_TOKEN, targetId, '✅ 법령 검색 권한이 승인되었습니다!\n<code>/law 3G 종료 관련 법령</code> 처럼 이용하세요.');
+      ack = '승인 완료';
+    } else if (action === 'no') {
+      await sendTelegramHtml(BOT_TOKEN, targetId, '❌ 법령 검색 권한 요청이 거부되었습니다.\n(조문 번호 직답과 국회 발언 검색은 계속 사용 가능)');
+      ack = '거부 처리';
+    } else if (action === 'rv') {
+      await upsertSub(targetId, { law_allowed: false });
+      await sendTelegramHtml(BOT_TOKEN, targetId, '🔒 법령 검색 권한이 회수되었습니다.');
+      ack = '회수 완료';
+    }
+    // 승인/거부 요청 메시지의 버튼만 지운다. 회수(rv)는 /admin 목록에서 눌리는데, 여기서 키보드를
+    // 통째로 비우면 남은 다른 사람의 회수 버튼까지 사라져 /admin을 다시 쳐야 한다.
+    if (msgId && action !== 'rv') await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: [] } });
+    await tg('answerCallbackQuery', { callback_query_id: cb.id, text: ack });
+    return;
+  }
 
   if (data.startsWith('ai:')) {
     // 승인/거부/회수 — 운영자 채팅에서 온 콜백만 유효
@@ -601,6 +837,7 @@ Deno.serve(async (req: Request) => {
 
     if (text === '/start' || text.startsWith('/start ')) {
       await upsertSub(chatId, { username: from.username || null, first_name: from.first_name || null, active: true });
+      await logUsage(chatId, 'start', from.username || from.first_name || '');
       const sub = (await getSub(chatId))!;
       await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: START_TEXT, disable_web_page_preview: true, reply_markup: settingsKeyboard(sub) });
     } else if (text === '/settings' || text === '/설정') {
@@ -615,6 +852,10 @@ Deno.serve(async (req: Request) => {
       await sendTelegramHtml(BOT_TOKEN, chatId, '🔕 모든 알림을 껐습니다.\n/settings 에서 원하는 항목만 다시 켤 수 있습니다.\n(조문 조회·AI 자문은 계속 사용 가능)');
     } else if (text === '/admin') {
       await handleAdmin(chatId);
+    } else if (/^\/?(assem|어셈|발언검색)(\s|$)/i.test(text)) {
+      // 슬래시 없이 'assem …' 로도 받는다 — 운영자가 쓰는 형태가 그렇다(2026-08-14 지시).
+      // 평문 catch-all(/ask)보다 **먼저** 걸러야 자문 경로로 새지 않는다.
+      await handleAssemSearch(chatId, text.replace(/^\/?(assem|어셈|발언검색)\s*/i, ''));
     } else if (text.startsWith('/law') || text.startsWith('/법령')) {
       const bg = await handleLawQuery(chatId, text.replace(/^\/(law|법령)\s*/, ''));
       if (bg) (globalThis as { EdgeRuntime?: { waitUntil: (p: Promise<void>) => void } }).EdgeRuntime?.waitUntil(bg);
@@ -627,7 +868,7 @@ Deno.serve(async (req: Request) => {
       const bg = await handleAsk(chatId, from, text);   // 평문 질문 → 자문 경로 (승인 게이트가 비용 방어)
       if (bg) (globalThis as { EdgeRuntime?: { waitUntil: (p: Promise<void>) => void } }).EdgeRuntime?.waitUntil(bg);
     } else {
-      await sendTelegramHtml(BOT_TOKEN, chatId, '알 수 없는 명령입니다.\n/settings 설정 · /law 법령검색 · /ask AI자문');
+      await sendTelegramHtml(BOT_TOKEN, chatId, '알 수 없는 명령입니다.\n/settings 설정 · /law 법령검색 · /ask AI자문 · assem 국회 발언검색');
     }
   } catch (e) {
     // 어떤 오류도 200으로 마감 — 비200이면 텔레그램이 같은 업데이트를 재전송해 무한 반복된다

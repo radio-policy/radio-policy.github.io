@@ -86,8 +86,10 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 | law_graph_nodes | 법령 관계도 노드(name UNIQUE). node_type: topic(주제)/law/decree/rules/notice/etc. source: seed(세션 시드)/citation(인용망 스크립트)/ai(자문·즉석 생성). doc_name=document_chunks 연결(원문 보기). RLS+anon select/insert/update(delete는 service 전용) |
 | law_graph_edges | 법령 관계도 엣지(source_id→target_id, on delete cascade). relation_type: 근거(주제→법령)/인용(조문 인용)/하위법령(계열). source: seed/citation/family/**thdcmp**/**delegation**/ai. weight=인용·재확인 횟수(엣지 굵기). unique(source,target,relation_type). RLS 동일. **delegation(2026-08-03, #81)** = `law_delegations` 표 기반 위임 엣지(weight=5, 최우선) — 조문 근거 원본은 표에 있으므로 description은 요약만. 우선순위 delegation > thdcmp(4) > family(3), 상위 출처가 정본화한 노드쌍은 하위 출처 억제(**적재 성공을 DB에서 재확인한 뒤** 억제 — #65 공백 사고 순서). **thdcmp(2026-08-02, #65)** = 법제처 3단비교 API(`lawService.do?target=thdCmp&knd=2`) 정본 위임 — weight=4. **CHECK 제약에 source 값을 추가해야 적재됨**(신규 source 태그 도입 시 `law_graph_edges_source_check` 확장 필수 — #65에서 누락으로 적재 실패 후 수정) |
 | law_delegations | **법령 위임 대응표**(#80·#81): parent_law·parent_article ↔ child_law·child_article, unique 4키. 출처 2계열 — ①법제처 3단비교 정본(`sync_law_delegations.py`, 법률↔시행령·시행규칙 조문 단위 1,586행) ②고시 제1조 역추출(`sync_notice_delegations.py`, 정규식·AI 미사용, child_article='전체' 230행). /law가 상·하위 조문 동시 제시에, 관계도가 delegation 엣지 생성에 사용. 재적재 안전(upsert + 성공 확인 후 stale 정리). 고시→상위 연결은 3단비교 범위 밖이라 역추출이 유일 경로. **③수기 확정표 `MANUAL_BASIS`(#82, 14건)** — 제1조가 없거나 근거를 안 쓰는 문서(협정문·분배표·공고)를 **상위 법령 조문에서 역방향 확인**(「…을 정하여 고시한다」가 그 문서를 지목)해 채움. **확정만 넣고 포괄 위임('법·영에서 위임한 사항'류)은 제외** — 잘못된 조문 엣지는 없는 관계보다 나쁘다. 정규식이 성공하면 그쪽이 이기므로 원문 개정 시 자동으로 비켜선다. DB 직접 삽입 금지(17시 prune_stale이 지움) |
-| telegram_subscribers | 구독자 봇 가입자(chat_id PK). topic_briefing/urgent/assembly(각각 on·off), days(daily/weekday), briefing_hour(6~12, **'받기 시작 시각'** — 브리핑은 이 시각 1회, 긴급·법안은 이후 매시 :25 배달), last_briefing_sent_date·last_urgent_sent_at·last_assembly_sent_at(중복 발송 방지), ai_allowed(**기본 false** — AI 자문 승인 플래그), ai_count_date·ai_count(일일 20회 상한). active는 봇 차단(403) 자동 처리 전용이며 화면에 버튼은 없다. **RLS 켜고 정책 0개 = service_role 전용**(chat_id는 개인정보, 프런트 노출 금지 — 의도된 설계) **unlimited boolean(#85)** — true면 /ask·/law 일일 상한 면제(카운터는 계속 올려 사용량 관찰). 구독자 속성이라 app_config가 아니라 이 행에 둔다. getSub이 select('*')라 컬럼만 추가하면 코드가 자동으로 읽는다. ⚠️ 비용 상한이 사라지므로 신뢰 인원에게만 |
+| telegram_subscribers | 구독자 봇 가입자(chat_id PK). topic_briefing/urgent/assembly(각각 on·off), days(daily/weekday), briefing_hour(6~12, **'받기 시작 시각'** — 브리핑은 이 시각 1회, 긴급·법안은 이후 매시 :25 배달), last_briefing_sent_date·last_urgent_sent_at·last_assembly_sent_at(중복 발송 방지), ai_allowed(**기본 false** — AI 자문 승인 플래그), ai_count_date·ai_count(일일 20회 상한), **law_allowed(#100, 기본 false — `/law` 자연어 승인 플래그)**, law_count_date·law_count(일일 10회 상한). active는 봇 차단(403) 자동 처리 전용이며 화면에 버튼은 없다. **RLS 켜고 정책 0개 = service_role 전용**(chat_id는 개인정보, 프런트 노출 금지 — 의도된 설계) **unlimited boolean(#85)** — true면 /ask·/law 일일 상한 면제(카운터는 계속 올려 사용량 관찰). 구독자 속성이라 app_config가 아니라 이 행에 둔다. getSub이 select('*')라 컬럼만 추가하면 코드가 자동으로 읽는다. ⚠️ 비용 상한이 사라지므로 신뢰 인원에게만 |
 | subscriber_queue | 긴급·법안 알림 큐(topic: urgent/assembly, html, created_at). 크롤러가 **발송 대신 적재**하고 send-subscriber-briefing이 각 구독자 수신 시각에 꺼내 보낸다. 억제·클러스터링(#44)·법안 상태변경 판정을 TS로 재구현하지 않으려는 구조. RLS 정책 0개 |
+| telegram_usage (#100) | 봇 사용 이력(chat_id·command·query 200자·ok·result_note·created_at, 180일 보관). 종전엔 `ai_count`/`law_count` 숫자뿐이라 **무엇을 물었는지가 없었다.** `logUsage()`가 assem·law·law_article·ask·start에서 기록하며 **fail-open**(로깅 실패가 본 기능을 막으면 본말전도). 실패 경로도 `ok=false`+사유로 남긴다 — "검색했는데 안 나왔다"가 통계에서 빠지면 기준문 손볼 근거가 사라진다. **RLS 켜고 정책 0개 = service_role 전용** ⚠️ 생성 마이그레이션에서 RLS를 빠뜨려 공개 anon 키로 chat_id·질의 원문이 열려 있었다 — **텔레그램 계열 테이블을 새로 만들 때 RLS를 같은 마이그레이션에 반드시 넣을 것** |
+| assembly_speeches (#99) | 회의록 발언자별 행(confer_num·speaker·topic·summary). 국감분은 `confer_num='audit-{MNTS_ID}'` 네임스페이스(상임위 `CONFER_NUM`과 값이 겹칠 수 있다). **원문(raw)은 저장하지 않는다** — summary가 잘못 생성되면 재요약이 불가능하니 **생성 시점의 검증이 유일한 방어선**이다(실제로 LLM 영문 거절문이 그대로 저장돼 화면에 노출된 적이 있다) |
 
 ### Edge Function · RPC
 
@@ -103,6 +105,8 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 | **`/law` 번호 조회는 DB 표기가 「N조」다(#92)** | `document_chunks.article_no`는 **`12조(교육과목 및 시간)`처럼 '제'가 없다** — 실측 「제N조」 0건 / 「N조」 7,587건. `handleArticleLookup`이 `제${artNo}조`로 조회해 **번호 직접 조회가 한 번도 동작하지 않았다.** 자연어 질의는 AI 검색 경로라 멀쩡해서 안 들켰고, 안내문에는 「조문 원문이 바로 나옵니다」라고 적혀 있었다. 지금은 `.or('article_no.ilike.N조%,article_no.ilike.제N조%')`로 두 형식을 모두 받고 비교 전에 앞의 '제'를 벗긴다. ⚠️ **문서에 「된다」고 쓰기 전에 그 경로로 한 번 돌려 볼 것** — 인접 경로가 되면 전체가 되는 줄 알기 쉽다 |
 | **뉴스 2차 묶기 = Haiku 의미 판정(#92)** | 키워드 클러스터링(`cluster_star`, 공유 3개)으로 못 묶인 **대표들만** `news_dedup.group_same_event()`로 다시 묶는다. 매체마다 관점이 달라 제목 어휘가 안 겹치는 사건이 있다(공정위 불공정약관 4건: 쌍별 공유 **최대 1개**). 프롬프트의 **「하나의 처분·발표를 여러 각도에서 쓴 것은 같은 사건」 문장이 결정적** — 이 문장 없이는 2묶음, 넣으면 실전 조건(다른 사건 혼재)에서 정확히 1묶음. **오묶음 실측 0건.** ⚠️ **클러스터링에만 쓰고 억제(`is_followup`)에는 쓰지 말 것** — 묶기가 틀리면 「(관련 보도 N건)」으로 남지만 **억제가 틀리면 알림이 사라져 되돌릴 수 없다.** ⚠️ **임계값 3→2 금지**(#44: KT 해킹 과징금과 5G 과장광고가 한 사건이 된다). 응답 번호가 1~N과 불일치하면 **부분 신뢰 없이 통째로 버린다**(fail-open). 비용은 실행당 최대 1회·수백 토큰. `extract_keywords`는 한글 토큰에도 **조사를 뗀다**(종전엔 금액에만 떼서 「약관」≠「약관에」였다) |
 | telegram-webhook (Edge) | 구독자 봇 수신부. `/start`·`/settings` 인라인 키보드, `/law "OO법 N조"` 조문 원문 즉답, `/ask` AI 자문(승인제), `/admin`(운영자). **verify_jwt off** 대신 `X-Telegram-Bot-Api-Secret-Token` 검증. 오류가 나도 200을 반환한다 — 비200이면 텔레그램이 같은 업데이트를 무한 재전송한다 |
+| assembly-search (Edge, #98) | 대시보드 "원문 검색" 탭용 CORS JSON 엔드포인트. 국회회의록시스템을 **실시간 검색**한다(DB 무관). `telegram-webhook`과 **`_shared/assembly_search.ts`를 공유**하되 두 함수가 **각각 번들**하므로 그 파일을 고치면 **반드시 둘 다 배포**할 것 — 한쪽만 하면 텔레그램과 웹이 같은 질문에 다르게 답한다 |
+| admin-daily-report (Edge, #100) | 매일 **09:00 KST**(pg_cron `0 0 * * *` UTC) 운영자에게 구독자 목록·권한(자문/법령)·수신 설정·관심분야·명령 사용 통계를 텔레그램으로 보낸다. Vault `admin_report_cron_secret` → `x-cron-secret`, **`--no-verify-jwt` 배포 필수**. 180일 초과 `telegram_usage` 정리도 같은 잡이 겸한다. ⚠️ **'최근 발송 브리핑'은 일부러 뺐다** — 매일 같은 날짜가 찍혀 신호가 되지 못한다(운영자 지시). 리포트에는 **변하는 것만** 싣는다 |
 | send-subscriber-briefing (Edge) | 구독자 정시 발송. pg_cron이 매시 호출 → 브리핑(daily_briefings)+긴급·법안(subscriber_queue)을 **수신 시각이 도래한 구독자에게 한 번에** 보낸다. `briefing_hour <= 현재KST시` catch-up이라 브리핑이 늦게 생성돼도 다음 정각에 따라잡는다. `x-cron-secret` 검증 |
 | supabase/functions/_shared/ | 두 함수 공용 모듈. `telegram_format.ts`(HTML 이스케이프·분할·발송, 400시 plain 폴백), **`/law` 조문 검색은 배제가 아니라 가중치(#88)** — `match_law_articles_semantic`이 종전 `article_no !~ '^(부칙|서식|별표|별지)'` 로 완전 배제하던 것을 정렬 가중치로 바꿨다. 조문 +0.08 / 별표·붙임 0 / 부칙·서식·별지 −0.05 / 파일문서 −0.10. **배제하면 영영 도달할 수 없다** — 「전파법 시행일은?」의 답은 부칙에 있고, 조문이 안 가리키는 별표가 463개 중 65개다. 실측상 조문이 이미 별표보다 유사도가 높아(0.570 vs 0.531) 하드 필터가 불필요했다. `similarity` 반환값은 원본(가중치 미반영) — 정렬에만 적용. **ORDER BY의 `+ 0.0` 제거 금지**(HNSW 무력화 = 전수 정밀 스캔. 없으면 상위 40건만 훑어 가중치가 무의미). **가중치로 부칙을 열었으면 프롬프트도 함께 고칠 것(#88 후속)** — 열어만 두면 「못 찾음」이 **「자신 있게 틀린 답」**으로 바뀐다(실제로 전파법 시행일을 부칙 제20067호를 근거로 2024.7.23이라 답했다. 현행은 2026.1.2). 조치 ①**`/law` 컨텍스트에 시행일을 분리 표기** — `answerLawQuery`는 `buildRagContext`를 쓰지 않고 자체 포맷을 써서 시행일 항목이 통째로 없었다. `doc_name`을 파싱해 `전파법 [법률 | 제21065호 | 시행일 2026-01-02]` + 조항 별행으로 나눈다(종전엔 괄호 숫자 넷이 나란히 붙어 어느 게 시행일인지 구분할 근거가 없었다). ②프롬프트 규칙 — 시행일은 **메타 기준**으로 답하고 부칙은 **개정 하나하나의 이력**이라 법 전체의 시행일이 아님을 명시(전파법 부칙만 19개). **자문과 `/law`가 같은 일을 다른 코드로 하고 있어 한쪽만 개선돼 있던 것이 원인** — 한쪽을 고치면 반드시 다른 쪽을 확인할 것. `rag.ts`(자문 RAG — 조문+법령요약+조문정밀검색+수집뉴스 → Sonnet). **실무 용어 → 법령 용어 보강 `PRACTICE_TERMS`/`expandQueryForSemantic`(#83)** — 「리파밍」·「커버리지」처럼 **법령에 한 번도 안 나오는 업계 용어**는 원문 그대로 임베딩하면 유사도가 잡음 수준에 묻힌다(실측: 리파밍 1위가 약관규제법 0.441 → 보강 후 전파법 제6조의2 0.541). 원 질의는 지우지 않고 **뒤에 덧붙이며**, 확신하는 대응만 넣는다(틀린 대응은 엉뚱한 조문을 1위로 올려 없느니만 못함). 키워드 검색(`lawSynonymKeywords`)에도 같이 먹인다. **`app.js`에도 같은 표를 둔다(#89)** — 봇에만 있어 대시보드에서는 「리파밍」이 보강되지 않고 있었다 | 
 | **자문 조문 갈래는 키워드+의미 2벌(#89)** | `answerAdvisory`(rag.ts)·대시보드 자문(app.js) 모두 **키워드(`searchLawArticles` 5개) + 의미(`match_law_articles_semantic` 5개, 상한 10)**를 「조문 정밀검색 결과」 한 섹션에 이어 붙인다. 필터는 `/law`의 `semExtra`와 동일 — **조문만(`^\d+조`)**, 파일 문서 제외, RAG·키워드분 중복 제거. **RAG 15자리(`TOTAL_CHUNK_CUT`)는 건드리지 않는다** — 보도자료·회의록 근거가 밀려나지 않게 하는 약속이다. **키워드만으로는 어휘 간극을 못 넘는다**: 「기지국 개설 허가 절차」는 낱말 「기지국」에 끌려 해상무선통신망 규정으로 새고 정답 전파법 21조를 못 찾았고, 「주파수 재할당 대가 산정 기준」은 전파법 10·11·12·13·15조가 연번으로 자리를 채워 「대가 산정」 조문이 하나도 없었다(정렬 동점이 문서명·조문번호 순이라 생기는 현상). 비용은 자문 1회당 ≈8원. ⚠️ **`match_threshold` 0.45는 병목이 아니다 — 낮추지 말 것**(0.45/0.35/0.25/0.0 실측에서 8자리 중 7~8을 이미 채웠고, 낮추면 해외규제동향·논문 조각만 들어온다). ⚠️ **`article_no` 가점은 아직 평평하다**(`rag.ts`·`app.js` 각 1줄, 종류 불문 `+0.5/(K+1)`) — 조문은 `article_no` 보유분의 41%뿐이라 별표·부칙이 동급 가점을 받는다. 등급화는 이 갈래 추가 뒤 **재측정하고 정할 것**(가중치는 후보 안의 순서만 바꿔, 후보에 조문이 없으면 무력하다). ⚠️ **출처 목록은 조문(extra)을 맨 앞에 놓을 것** — 텔레그램 footer(`sources.slice(0,6)`)도 대시보드 배지(`sourceTagsHtml(..., 6)`)도 **앞 6개만 보여준다.** RAG 15개를 먼저 채우면 답변이 인용한 조문이 잘려 나간다(실제로 전파법 제21조제2항을 [원문 확인됨]으로 인용해 놓고 출처에는 지방세법 시행령·논문·세미나 자료만 보였다). **컨텍스트에 잘 넣는 것과 사용자가 확인할 수 있는 것은 다른 문제** — 상위 N만 보여주는 자리는 그 N의 순서까지 함께 설계한다 |
@@ -162,6 +166,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 | 12 | news-health-check | `0 12 * * *` | 21:00 | 무음 실패 알람(내부) check_news_health() |
 | 13 | watchdog-trigger | `35 12 * * *` | 21:35 | 외부 워치독 백업 dispatch |
 | 16 | watchdog-scan-3x | `10 0,6,12 * * *` | 09:10·15:10·21:10 | **내부 워치독 전수 감시** `watchdog_scan(false)` — system_health 10키 키별 임계+note 실패신호, 재알림 억제, 이상 시 1건 요약(Vault `telegram_bot_token`). :10은 :00/:35 잡과 겹치지 않게 오프셋 |
+| 18 | admin-daily-report | `0 0 * * *` | 09:00 | **운영자 일일 리포트**(#100) — 구독자 목록·권한·수신 설정·명령 사용 통계. `trigger_admin_report()` → Vault `admin_report_cron_secret` |
 | — | subscriber-briefing-hourly | `25 * * * *` | 매시 :25 | 구독자 정시 발송 → send-subscriber-briefing. `:25`는 06:05~06:20 브리핑 생성 창을 피한 값. 대상이 없으면 no-op이라 매시 돌아도 부담 없음. Vault `subscriber_cron_secret` 사용 |
 
 - 공용 디스패치 함수 `dispatch_github_workflow(p_workflow)` + `trigger_briefing_if_missing()`. 인증: GitHub PAT을 Supabase Vault `github_pat`에 저장. 텔레그램 토큰은 Vault `telegram_bot_token`.
@@ -599,6 +604,58 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
   dedupe(한쪽만 있으면 없는 쪽만 채움 → 소급 적재 가능). 대시보드 회의록 패널 "발언자별 보기" 토글.
   **요지 프롬프트 가드: 발언 내용 요약만, 성향·정파성 단정 평가어 금지**(친기업/강경/편향 등) —
   촉구·질의·지적 같은 발언 행위 동사만 허용. 22대 전 회의 백필 완료.
+- **국정감사 회의록 (2026-08-14 추가, 배경역사 #97 — 22대 전용)**: 위 Open API는 **CLASS_NAME='상임위원회'만**
+  돌려줘 국감이 통째로 빠져 있었다(2019년 과방위 41건 전수 조회에도 국감 0건, `CLASS_NAME=국정감사` 질의도 0건).
+  10월에 잡히는 건 "국정감사 증인 출석요구의 건"을 처리한 짧은 전체회의일 뿐 감사 본체가 아니다.
+  국감은 **국회회의록시스템 검색 API로만** 잡힌다 — POST `record.assembly.go.kr/assembly/mnts/search/search.do`:
+  - **`collection='record5'` + `CLASS_CD='5'` 필수.** `collection='record'`(상임위)로 보내면 200 + 빈 `{}`가 와서
+    '결과 없음'과 구분되지 않는다(파라미터 오류 실측 시 첫 함정).
+  - **`CMIT_CD`는 검색폼 `#com5List`에서 자동 탐지** — 22대 과방위=**22-5-AG**, 20대는 20-5-AB-0. 코드가
+    대(代)마다 재배정되므로 하드코딩 금지(상수는 폴백용).
+  - `S_TH`/`E_TH`='24' — **검색폼 대수코드(24=제22대)는 Open API `DAE_NUM`='22'와 별개 체계**. 혼동 주의.
+  - **`startDate`/`endDate`에 연도 범위를 반드시 넣을 것**('YYYY-MM-DD'). 안 주면 22대 전체(1,500+ 히트)를
+    최신순으로만 훑어 재작년 국감이 페이지 상한 밖으로 밀려 **조용히 0건**이 된다(실측 — 2024년 전량 누락).
+  - 열거 질의어는 `'국정감사'` 전수 페이징(`startCount`=1-base, 페이지당 10건 고정). '산회'로 히트를 줄이려 했으나
+    2024년 10건 중 2건·2025년 9건 중 0건만 잡혔다 — 산회 선포가 발언 블록으로 안 남는 회의가 많다.
+  - **뷰어 id는 `MNTS_ID`** (Open API CONFER_NUM과 다른 체계 — 2019 국감 41178 vs 상임위 44269).
+    값 충돌을 막으려 `assembly_speeches.confer_num`은 **`audit-{MNTS_ID}`**로 네임스페이스.
+  - 섹션 제목 `국정감사 (첫 기관 외 N개 기관)`, **dedupe 접두는 '국정감사' 고정**(기관 목록이 바뀌어도 안 흔들림).
+  - 국감 회의록은 1,700~2,100블록이라 판정 상한 80·수록 상한 50(상임위는 40·30).
+  - CLI: `--audit-only`(소급 백필) / `--no-audit`. 22대 개원 이전 연도는 자동 스킵.
+- **뷰어는 간헐적으로 페이지를 덜 보낸다 — `fetch_speech_blocks()`는 best-of-N (2026-08-14, #99)**:
+  같은 id 51996이 어떤 때는 3,449블록, 어떤 때는 432/363블록으로 왔다. 한 번만 받으면 그 시점에 걸린 회의가
+  **잘린 채 등재**되고 `section_exists()`가 헤더만 보고 dup 처리해 **영구히 갱신되지 않는다**(실제로 이 모양의
+  사고가 났다). 최소 2회 받아 큰 쪽을 쓰고, 직전 최대치의 90% 이상이 다시 나오면 신뢰하고 멈춘다
+  (`VIEWER_RETRIES`·`VIEWER_SHORT_RATIO`). ⚠️ **이 재시도를 빼지 말 것.**
+- **빈 껍데기 섹션은 dup으로 보지 않는다 (#99)**: 판정이 전부 탈락하면 `(키워드 관련 발언 없음 …)`만 있는
+  섹션이 등재되는데, 종전엔 그것도 dup이라 **발언은 12건 있는데 섹션은 영영 껍데기**로 남았다.
+  `shell_section_range()`가 껍데기를 찾아 다음 실행에서 자동 복구한다. ⚠️ 단 **새로 만든 본문도 껍데기면
+  그대로 둔다** — 안 그러면 매 실행마다 delete+insert 로 chunk_index 를 갈아엎고 재임베딩을 유발한다.
+- **답변 판정에는 길이 문턱을 적용하지 않는다 (#99)**: `_qa_lines()`가 `MIN_SUBSTANTIVE_LEN=60`을 답변에도
+  적용해 "예, 협의하겠습니다" 급 **짧은 확답이 전부 절차성으로 버려졌다**(↳ 부착률 30.4%, 같은 의원 ▶ 연속 31%).
+  길이 조건만 빼고 절차성 정규식은 유지 → **77.4% / 9.5%**. **짧은 확답이 그날의 실질 성과인 경우가 많다**
+  ("무선국 면허세는 행안부와 협의해 낮추겠다").
+- **국회 발언 원문 검색 (2026-08-14, 배경역사 #98 — 축적 데이터와 무관한 실시간 경로)**:
+  DB(`assembly_speeches`)는 22대·판정 통과분·**요지만** 담아 "2019년 김성수 의원 무선국" 류 질의에
+  답하지 못한다. 그래서 국회회의록시스템을 **실시간 검색**하는 경로를 따로 뒀다. AI 요약을 하지 않아
+  **비용 0**(자연어 파싱만 규칙 실패 시 Haiku 1콜).
+  - **로직은 `supabase/functions/_shared/assembly_search.ts` 한 곳에만** 둔다. 텔레그램(`assem`)과
+    대시보드(`assembly-search` 함수)가 이 파일을 공유 — 두 벌이 되면 같은 질문에 다른 답이 난다(#88·#92).
+  - **범위 = 과방위 상임위 + 국정감사뿐**(운영자 지시). 본회의·타 상임위는 넣지 않는다(문맥 밖 + 동명이인 오답).
+    **20대 전반기 명칭 미래창조과학방송통신위원회를 반드시 포함**(빼면 2016~2018년 통째 누락).
+  - 검색 파라미터 함정은 위 국감 항목과 동일(`collection=record2/record5`, `CMIT_CD` 대별 재배정,
+    `S_TH/E_TH`는 폼 대수코드). `CMIT_CD`는 **콤마 다중 지정 가능**이라 20~22대·상임위·국감을 한 번에 조회한다.
+    페이징 `startCount`(1-base, 10건/페이지), 쿠키 불필요.
+  - **텔레그램**: 슬래시 없이 `assem 2019년 국정감사에서 김성수 의원이 무선국 관련 발언 찾아줘`.
+    평문 catch-all(/ask)보다 **먼저** 분기해야 자문 경로로 새지 않는다. 승인·한도 없음(비용이 없으므로).
+  - **대시보드**: 과방위 회의록 → **원문 검색(20대~)** 탭. 브라우저에서 국회 사이트를 직접 부르면
+    **CORS로 막히므로** `assembly-search` Edge Function 경유가 필수다.
+  - 형태소 분석이 없는 **원문 문자열 검색**이다 — 회의록에 나온 낱말 그대로여야 잡힌다. 파서가 검색어를
+    2개까지만 넘기는 이유(AND 검색이라 낱말이 늘수록 0건).
+- **자사(SK텔레콤) 언급은 주제 불문 무조건 수록 (2026-08-14, #97)**: 키워드·Haiku 판정을 건너뛰고 확정하며
+  **수록 상한에서도 우선권**을 준다(`cap_indices`) — 상한을 앞에서 자르면 회의 후반의 자사 발언이 통째로
+  날아간다(실측: 2024-10-08 확정 93개 > 상한 50). 인식어 SK텔레콤/SK 텔레콤/에스케이텔레콤/SKT.
+  상임위·국감 두 경로에 공통 적용. `topic`은 키워드가 없으면 'SK텔레콤 언급'.
 
 ## 국회 입법예고 추적 (assembly_crawler 입법예고 패스 + law_diff_gen 국회 분석, 2026-08-02 신설 — 배경역사 #56)
 
@@ -678,6 +735,13 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **모닝 브리핑 빈-브리핑 폴백(요약→제목)·`already_sent_today` 폴백 교체 허용 로직 제거 금지** — PC 꺼진 날 빈 브리핑 방지 + 본문 채워지면 정식본 자동 교체 핵심. (배경역사 #16)
 - **기사 0건 무뉴스 통지(`_handle_no_news`)·`_NONEWS_PREFIX` placeholder·시각무관 1일1회 발송을 '09시 이전 무음 종료'로 되돌리지 말 것** — 무음 누락 오인 방지. placeholder는 기사 들어오면 정식본 자동 교체(폴백과 동일 패턴), 중복은 placeholder 존재로 1일1회 차단. `already_sent_today`의 `_NONEWS_PREFIX` 교체 허용도 유지. (배경역사 #17)
 - **워치독을 'DB 신선도만' 보던 방식으로 되돌리지 말 것 / 크롤러 heartbeat(`system_health` 3종: last_crawl_run·last_gov_notice_run·last_refetch_run) 쓰기·`system_health` 테이블 삭제 금지** — '고장 vs 없음(주말·드문 입법예고)' 구분·오경보 방지·운영상태 탭 핵심. (배경역사 #16)
+- **권한 게이트를 `if (sub && !sub.권한)` 형태로 쓰지 말 것 — 반드시 `if (!sub?.권한)`(fail-closed)** — 구독 행이 없는 계정(=`/start`를 거치지 않고 곧장 명령을 보낸 경우)이 게이트·일일 한도·사용 로깅을 **전부 우회**한다. `/law` 승인제를 넣을 때 실제로 이 형태로 나갔다. (#100)
+- **새 제약(승인제·한도)을 도입할 때 기존 사용자 소급 허용을 빠뜨리지 말 것** — 잘 쓰던 사람이 어느 날 막히면 그게 곧 장애 신고다. `law_allowed`는 마이그레이션에서 기존 5명을 `true`로 소급했다. 그리고 **조이는 기준은 "기능"이 아니라 "돈이 드는 경로"**다 — 같은 `/law`이라도 조문번호 직답(DB 조회만)은 승인 없이 연다. (#100)
+- **LLM 응답을 검증 없이 DB에 저장하지 말 것** — `assembly_speeches.summary`에 영문 거절문("I appreciate you sharing this task…")이 그대로 들어가 화면에 노출됐다. **원문(raw)을 저장하지 않는 테이블은 재요약이 불가능해 생성 시점 검증이 유일한 방어선**이다. 한글 비율·거절 패턴을 확인하고 실패면 규칙 폴백을 쓴다. (#99)
+- **폴백을 만들 때 폴백 결과물의 품질까지 설계할 것** — 무료 모드 폴백이 `원문[:120]`이라 2,877건이 문장 중간에서 잘렸다. "AI 없이도 돌아감"은 만족했지만 "AI 없이도 쓸 만함"은 아니었다. **적재 실패율 0은 품질 지표가 아니다 — 화면을 열어 사람이 읽어봐야 드러난다.** (#99)
+- **자연어 파싱 결과를 화면에 안 보여주고 검색 범위만 조용히 좁히지 말 것** — assem의 대수(`22대`) 필터가 실제로 동작하는데 조건 칩에 안 찍혀 **먹혔는지 무시됐는지 알 수 없었다.** 규칙→AI 보조 파서를 이어 붙일 때 **AI 경로에서 규칙이 뽑은 필드를 떨어뜨리는지** 반드시 확인할 것(`dae`가 실제로 유실됐다). (#100)
+- **장시간 배치를 백그라운드로 띄우기 전에 같은 작업이 이미 도는지 확인할 것** — 회의록 재작성 프로세스를 두 개 동시에 띄워 섹션 5건이 중복 등재됐다. **로그만 보면 둘 다 정상으로 보인다.** 더 비싼 건 그 뒤였다 — **중복을 지우면서 이웃 섹션 꼬리 청크까지 함께 지워** 3개 섹션이 본문 한가운데서 잘렸다(28,000자·7,700자·9,100자 유실). **중복 정리 DELETE는 반드시 `chunk_index` 범위를 명시하고, 지울 행 수·범위를 먼저 출력해 확인한 뒤 실행할 것.** 섹션 개수만 세면 98/98로 멀쩡해 보여 드러나지 않는다 — 검증은 `(max(chunk_index)-min(chunk_index)+1)-count(*) <> 0`(결번)으로 한다. (#99)
+- **한국어 키워드를 단순 `in` 매칭으로 판정하지 말 것 — 앞뒤 글자를 함께 볼 것** — 한국어·약어는 단어 경계가 없어 오탐이 쌓인다. 실측: `AI`가 **KAIST·KAIT·KAI**에 걸려 topic 1위(1,399회)를 부풀렸고(오탐 199건), `무선`이 `실무선에서`에, `6G`가 `35.6GW`에 걸렸다. 오탐은 태깅만 망치는 게 아니라 **`relevance_score()`의 우선순위까지 왜곡해** 무관한 블록을 수록 상한 안으로 밀어 넣는다. 다만 **실측으로 확인된 오탐만 막을 것** — `요금소`·`전파상`은 말뭉치에 0회였고, `유무선`·`전파사용`·`AIDC`는 정상이라 살렸다. (기존 사례: `혼신`은 `이혼신고`에 걸려 아예 `전파간섭`으로 바꿨다) (#99)
 - **내부 워치독을 뉴스·브리핑만 보던 방식으로 되돌리지 말 것 / `watchdog_scan()`·pg_cron jobid 16·`system_health.watchdog_alert_state` 키 삭제 금지** — 감시자(GitHub)가 감시대상과 함께 죽어 뉴스 15시간 무알림이던 사고(#62)의 재발 방지책. system_health 10키를 GitHub 독립적으로 전수 감시한다. 임계·note 실패신호(`fail=N>0`) 로직 수정 시 `new=0`을 실패로 오탐하지 말 것(정책 크롤러는 신규 없음이 정상). (배경역사 #62)
 - **`watchdog_scan`에서 `check_news_health`·`check_briefing_health`를 병합·수정하지 말 것** — 세 함수는 의도적으로 분리(A 담당이 check_* Vault화 진행). watchdog_scan은 신규 함수로만 유지. (배경역사 #62)
 - **운영 상태 탭(`panel-opsstatus`·`loadOpsStatus`)·system_health anon select 정책 제거 금지** — 이상 시 1차 점검 화면. (배경역사 #16)
