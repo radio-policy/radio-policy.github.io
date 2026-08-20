@@ -75,6 +75,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 | app_config | 키-값 설정. `system_prompt`(봇 자문 프롬프트), `press_keywords`(보도자료 수집 키워드 JSON 배열 — 대시보드 '수집 키워드 관리' 카드가 편집), `press_relevance_criteria`(매일 수집 AI 관련성 판정 기준문), `assembly_notice_criteria`(국회 입법예고 Haiku 판정 기준문)·`assembly_notice_rejected`(기각 캐시 JSON — 자동 관리) 등. **claude_key는 anon 노출되는 브라우저용 — 서버측 재사용 금지** |
 | custom_knowledge | 팀 추가 지식(수동 입력). AI 자문 키워드 매칭 참조 |
 | chat_logs | AI 자문 이력. **2026-08-20(#103)부터 네 경로 공통 정본 답변 로그** — 대시보드 자문·텔레그램 /ask·/law 자연어·/law 조문 직조회. `channel`(만족도 집계 축)·`chat_id`(텔레그램 이용자)·`chunk_ids`(jsonb, 그때 실제로 프롬프트에 들어간 근거 청크 id — 불만족 분석 재료) 컬럼 추가. 자문 이력 목록은 `category='텔레그램-조문조회'`만 제외(기계적 원문 출력이라 성격이 다름 — 피드백 탭에서는 보인다). 삭제 가능. `sources`(text)는 **두 종류를 접두사로 구분해** 담는다 — 법령·문서명은 그대로, 수집 뉴스는 `[뉴스] 제목 (매체, 날짜)`. 화면·내보내기에서 `splitSources()`로 갈라 별도 표기(법령은 6개 초과분 `… 등 N개`). **뉴스는 본문 발췌로 실제 반영된 건만** 기록(제목 목록 30건은 근거 아님). 스키마 변경 없이 반영 여부를 사후 검증하려는 구조. (배경역사 #35) |
+| teams / profiles / advisory_usage | 대시보드 계정 체계(#104). `teams`=3팀(경쟁제도팀·기술정책팀·AI정책팀, 팀 합산 일일 한도). `profiles`=auth.users 1:1(이름·팀·role(admin/leader/member)·개인 한도·unlimited·**approved**(관리자 승인 전 AI 잠김)·active). 가입 시 트리거가 승인대기 프로필 자동 생성. `advisory_usage`=(user_id, day, kind) 일일 사용량, kind는 advisory(한도 대상)/general(백스톱 300). 쓰기는 service_role RPC 전용 |
 | answer_feedback | 답변 만족도 👍👎(#103). **세 경로 공통 한 테이블** — `channel`(telegram_ask/telegram_law/dashboard)로 구분해 경로별 불만족률 비교. `log_id` 유니크 FK→chat_logs(재투표는 upsert로 갱신, 로그 삭제 시 set null이라 평점·경로는 보존). `rating` 1/-1, `reason`은 대시보드 👎 사유(텔레그램은 버튼만 → null). **RLS 켜짐 + anon 정책 없음** — 쓰기는 `submit_answer_feedback` RPC, 읽기는 `admin_list_answer_feedback`(관리자 비밀번호). 화면: AI 자문 > '답변 피드백' 탭 |
 | report_samples | 보고서 초안 제안 — 내 보고서 전문(형식·톤 학습용, 청킹 안 함). embedding(vector 1024, HNSW). report_type=정책검토/규제영향/동향보고/기타 |
 | report_style_rules | 보고서 스타일 가이드 캐시(단일 행 id=1). sample_count·feedback_count로 자동 재증류 임계(+2) 추적 |
@@ -96,6 +97,8 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 
 | 이름 | 역할 |
 |---|---|
+| **claude-proxy (Edge)** | 대시보드의 **모든** Anthropic 호출(14곳)을 대신 수행(#104). ①`auth.getUser()`로 로그인 검증(**verify_jwt는 anon 키도 통과시켜 관문이 못 됨**) ②`profiles.approved` 확인 ③`charge_ai_usage`로 한도 차감(`body.stream===true`면 자문, 아니면 일반) ④모델 화이트리스트·max_tokens 상한 검사 후 **body를 그대로 전달**(cache_control·tools·thinking 보존) ⑤스트리밍은 `TransformStream`+`waitUntil(pipeTo)`로 통과. 키는 Edge Secret `ANTHROPIC_API_KEY`에만 존재 |
+| charge_ai_usage / refund_ai_usage / get_my_quota (RPC) | 자문 한도(#104). 앞 둘은 **service_role 전용**(클라이언트 조작 방지) — 원자적 증가 + 팀 합산 advisory lock, 선차감 후 초과면 롤백. `get_my_quota`는 화면 표시용 본인 조회 |
 | voyage-embed (Edge) | 질의 임베딩. VOYAGE_API_KEY는 Supabase Secrets(브라우저 노출 금지). **body.model로 모델 선택(하위호환)**: 미지정=voyage-4-lite(document_chunks 조문), `voyage-law-2`(kb_chunks 법령요약). 저장·질의 모델 반드시 일치 |
 | match_kb_chunks_semantic / search_kb_chunks_trgm (RPC) | 법령요약(kb_chunks) 시맨틱/trgm 검색. 기본 `only_current=true`(구버전 제외). insert_kb_chunks(RPC)는 적재 시 청크 일괄 삽입(text→vector) |
 | list_kb_documents (RPC) | 지식 베이스 문서 목록(doc_name 그룹핑) |
@@ -132,7 +135,8 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 | 화면 기능 | news_feed | select·update·**delete**(기사 삭제 버튼) — insert 없음 |
 | | daily_briefings | select·update(긴급도 수정 시 본문 동기화) |
 | | deleted_news | select·insert (**append-only**) |
-| | **chat_logs** | **insert만** — SELECT 정책 없음(2026-08-20, 자문 이력 운영자 전용화). 읽기는 `admin_list_chat_logs`/`admin_get_chat_log`(비밀번호), 건수는 `chat_logs_month_count()` |
+| | **chat_logs** | anon은 **insert만**. 읽기는 **로그인 계정의 RLS 스코프**(#104) — 본인 / 팀장=자기 팀 / admin=전체(텔레그램 행은 user_id가 없어 admin만). 건수는 `chat_logs_month_count()` |
+| 로그인 필요 | **profiles·teams·advisory_usage·answer_feedback** | anon 정책 없음. authenticated에 역할별 SELECT(본인/팀/admin), profiles·teams UPDATE는 admin만. AI 호출은 `claude-proxy`가 JWT를 검증한다 (#104) |
 | | importance_feedback·tech_terms | select·insert·update |
 | | custom_knowledge | select·insert·update·delete (팀원 기여 창구) |
 | | law_graph_nodes·law_graph_edges | select·insert·update (delete는 service 전용 — 병합만) |
@@ -855,6 +859,13 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **자문 프롬프트의 시제 가드·현지어 검색 지시를 지우지 말 것** — 모델은 오늘 날짜를 알면서도 **학습 시점 기준의 '예정'을 자동 보정하지 않는다**. 일본 도코모 3G 종료(2026-03-31, 이미 5개월 전)를 8월 답변에서 "종료 예정"이라 쓰고 KDDI(2022)·소프트뱅크(2024) 종료는 누락했다. 또 해외 주제를 한국어·영어로만 검색하면 공식 자료가 아니라 블로그가 걸린다(일본 관련 출처 3건이 전부 취미 블로그·MVNO FAQ·2021년 기사였고, 일본어로 치니 도코모 공식 공지가 즉시 나왔다). `system_prompt.js` [세부 지침]의 두 줄(시제 검증 / 해외 주제 검색)이 그 방어다. **프롬프트는 `system_prompt.js`가 단일 원본이며 대시보드·봇 공통이다 — 수정 후 반드시 `python sync_system_prompt.py` 실행**(안 하면 봇만 옛 프롬프트) **+ `index.html`의 `system_prompt.js?v=` 캐시버스터 갱신**(안 하면 대시보드만 옛 프롬프트). (배경역사 #101)
 - **국회 입법예고를 pal HTML 스크래핑으로 전환 금지** — OpenAPI `nknalejkafmvgzmpt`와 레코드 완전 일치 실측(379=379), HTML은 GET 페이징을 조용히 무시(POST+_csrf)라 유지보수 함정. 상세 함정 목록은 "국회 입법예고 추적" 절. (배경역사 #56)
 - **`answer_feedback`에 anon 정책을 주지 말 것** — 대시보드는 공개 페이지라 정책을 열면 남의 질문·평점·불만 사유가 그대로 노출된다. 쓰기는 `submit_answer_feedback` RPC(누구나 실행, 조회 불가), 읽기는 `admin_list_answer_feedback`(관리자 비밀번호) 전용. 텔레그램 Edge Function은 service role이라 정책과 무관. (배경역사 #103)
+- **`app_config`에 `claude_key` 행을 다시 만들지 말 것 — 브라우저는 더 이상 Anthropic 키를 갖지 않는다** (#104). 그 행은 anon SELECT가 열려 있어 **인터넷 누구나 PostgREST 한 번으로 키를 꺼내 갈 수 있었다**. 모든 AI 호출은 `claudeFetch()` → `claude-proxy` Edge Function을 거치고 키는 Edge Secret에만 있다. 설정 탭의 키 입력란도 되살리지 말 것. (배경역사 #104)
+- **`claude-proxy`의 `auth.getUser(token)` 검사를 제거하지 말 것 — `verify_jwt`는 관문이 아니다.** 대시보드 `verify_jwt`를 켜도 **anon 키를 유효한 JWT로 통과**시킨다(실측). 실제 관문은 함수 안의 `getUser()`이며, 이것이 anon 키 호출을 401로 막는다. (배경역사 #104)
+- **자문 한도 판별을 `body.stream` 대신 클라이언트 헤더로 바꾸지 말 것** — 헤더는 위조할 수 있어 한도를 우회하는 길이 된다. 스트리밍 여부는 서버가 요청 본문에서 직접 관찰하는 값이고, 스트리밍을 쓰는 것이 정확히 자문·보고서초안(비용 큰 둘)이다. 경량 호출은 한도 없이 백스톱 300회/일만. (배경역사 #104)
+- **프록시의 스트리밍 응답을 `new Response(upstream.body)`로 바로 반환하지 말 것** — 런타임이 응답 완료 시점에 함수를 정리해 긴 답변이 중간에 끊긴다(EarlyDrop). `TransformStream` + `EdgeRuntime.waitUntil(upstream.body.pipeTo(writable))`로 붙잡아야 한다. Edge 실행 한도는 유료 400초(자문 실측 45초~2분). (배경역사 #104)
+- **한도 카운터를 텔레그램식 read-modify-write로 만들지 말 것** — 대시보드는 탭 여러 개가 동시에 요청한다. `charge_ai_usage`처럼 `insert … on conflict do update … returning`(원자적 증가) + 팀 합산은 `pg_advisory_xact_lock`으로 직렬화할 것. 차감·환불 RPC의 EXECUTE는 **service_role 전용**(클라이언트가 한도를 조작하지 못하게). (배경역사 #104)
+- **GoTrue "Confirm email"을 켜지 말 것** — 이 시스템은 메일을 보낼 수 없다(Resend 도메인 미인증). 켜면 가입이 확인 메일 대기로 막다른길이 되고 발송 한도(429)로 실패한다. 현재 `mailer_autoconfirm=true`(확인 없이 즉시 가입). 가입 자체는 열어 두되 **승인 전에는 AI 기능이 잠긴다**(profiles.approved). (배경역사 #104)
+- **승인 가능한 admin 계정이 없는 공백을 만들지 말 것** — 승인은 admin만 할 수 있으므로, admin이 0명이면 아무도 승인받을 수 없다. 계정 체계를 손볼 때는 항상 admin 1명 이상을 먼저 확보할 것. (배경역사 #104)
 - **`chat_logs`에 anon SELECT 정책을 되살리지 말 것 — 자문 이력도 운영자 전용이다** (2026-08-20 운영자 지시). 질문·답변 전문이 남는 테이블이라 화면만 가려서는 anon 키로 그대로 읽힌다. 읽기는 `admin_list_chat_logs`/`admin_get_chat_log`(비밀번호) 전용이고, 건수만 필요한 곳은 내용을 반환하지 않는 `chat_logs_month_count()`를 쓴다. **SELECT 정책이 없으므로 대시보드의 insert에 `.select()`(RETURNING)를 붙이면 실패한다** — 👍👎용 id는 `crypto.randomUUID()`로 클라이언트에서 만들어 넣는다. INSERT 정책은 유지(자문 기록이 남아야 함). (배경역사 #103)
 - **만족도 👍👎를 의무로 만들지 말 것** — 안 눌러도 답변·쿼터에 영향이 없어야 하고 재촉 문구도 넣지 않는다. 불만족률은 **투표된 건만 분모**로 센다(무투표는 행 자체가 없음). (배경역사 #103)
 - **피드백 버튼은 분할 답변의 마지막 조각에만 붙일 것** — `splitByLines`로 1~3개 메시지가 되는데 전 조각에 달면 한 답변에 투표창이 여러 개 생긴다. `sendAnswerWithFeedback()` 사용. `callback_data`는 64바이트 상한이라 질문을 실을 수 없으므로 `fb:<rating>:<log_id>` 형태를 유지할 것. (배경역사 #103)

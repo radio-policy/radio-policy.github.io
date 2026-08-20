@@ -273,6 +273,38 @@ create table if not exists public.chat_logs (
   created_at timestamptz default now()
 );
 
+-- 1-19b) 계정·팀·한도 (#104) -------------------------------------------------
+-- 열람은 공개 유지, **AI 생성 기능만** 로그인 뒤로. 가입 신청 → 관리자 승인(approved) 구조.
+-- 한도는 개인·팀 이중이며, 팀 합산이 소진되면 개인 잔여가 있어도 차단된다.
+create table if not exists public.teams (
+  id          smallserial primary key,
+  name        text not null unique,          -- 경쟁제도팀 / 기술정책팀 / AI정책팀
+  daily_limit int  not null default 30,      -- 팀 합산 일일 자문 한도
+  unlimited   boolean not null default false,
+  created_at  timestamptz not null default now()
+);
+create table if not exists public.profiles (
+  user_id     uuid primary key references auth.users(id) on delete cascade,
+  name        text not null default '',
+  team_id     smallint references public.teams(id),
+  role        text not null default 'member' check (role in ('admin','leader','member')),
+  daily_limit int  not null default 10,
+  unlimited   boolean not null default false,
+  approved    boolean not null default false,  -- 승인 전에는 AI 기능 잠김(가입 트리거가 false로 생성)
+  active      boolean not null default true,
+  created_at  timestamptz not null default now()
+);
+create table if not exists public.advisory_usage (
+  user_id uuid not null references auth.users(id) on delete cascade,
+  day     date not null,                       -- KST 일자 = 리셋 기준(별도 크론 없음)
+  kind    text not null check (kind in ('advisory','general')),
+  count   int  not null default 0,
+  primary key (user_id, day, kind)
+);
+-- 관련 함수: handle_new_user(트리거) / is_admin·is_leader·my_team(정책 헬퍼, definer)
+--            charge_ai_usage·refund_ai_usage(**service_role 전용**) / get_my_quota(표시용)
+--            admin_delete_chat_log_v2(역할 기반)
+
 -- 1-20) 답변 만족도 (#103) ---------------------------------------------------
 -- 세 경로 공통. log_id 유니크 + upsert라 재투표는 행이 늘지 않고 마지막 값으로 갱신된다.
 -- channel을 비정규화해 함께 두는 이유: 자문 이력이 삭제돼도(FK는 set null) 경로별 통계는 남아야 한다.

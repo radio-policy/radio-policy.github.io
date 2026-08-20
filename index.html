@@ -60,6 +60,9 @@
       <div class="topbar-actions" style="align-items:center">
         <!-- 상태등·톱니 — .btn이 아닌 인라인 요소라 모바일(.topbar-actions .btn 숨김 규칙)에서도 보인다 -->
         <span class="ops-light" onclick="go('opsstatus',null)" title="운영 상태" style="cursor:pointer;font-size:11px;display:inline-flex;align-items:center;gap:3px;color:var(--text-secondary);padding:4px 6px;white-space:nowrap">⚪ <span>확인중</span></span>
+        <!-- 계정 — 인라인 요소로 두어 모바일에서도 보이게 (.btn 숨김 규칙 회피) -->
+        <span id="acct-label" onclick="openLoginModal()" title="계정" style="cursor:pointer;font-size:11px;display:inline-flex;align-items:center;gap:3px;color:var(--text-secondary);padding:4px 6px;white-space:nowrap"><i class="ti ti-user"></i>로그인</span>
+        <span id="acct-logout" onclick="doLogout()" title="로그아웃" style="display:none;cursor:pointer;font-size:11px;color:var(--text-tertiary);padding:4px 4px"><i class="ti ti-logout"></i></span>
         <button class="btn" onclick="smartRefresh()"><i class="ti ti-refresh"></i>새로고침</button>
         <button onclick="go('settings',null)" title="설정" style="background:none;border:none;cursor:pointer;color:var(--text-secondary);font-size:16px;padding:4px;line-height:1"><i class="ti ti-settings"></i></button>
       </div>
@@ -115,9 +118,10 @@
             </div>
           </div>
           <div class="chat-input-wrap" style="margin-top:12px">
-            <input type="text" id="chat-input" placeholder="질문을 입력하세요... (예: 3.5GHz 재할당 조건은?)" onkeydown="if(event.key==='Enter' && !event.shiftKey) sendChat()" />
-            <button class="btn btn-primary" id="send-btn" onclick="sendChat()"><i class="ti ti-send"></i>전송</button>
+            <input type="text" id="chat-input" placeholder="로그인 후 이용할 수 있습니다" disabled onkeydown="if(event.key==='Enter' && !event.shiftKey) sendChat()" />
+            <button class="btn btn-primary" id="send-btn" onclick="sendChat()" disabled><i class="ti ti-send"></i>전송</button>
           </div>
+          <div id="quota-line" style="font-size:11px;color:var(--text-tertiary);margin-top:5px;text-align:right"></div>
         </div>
       </div>
 
@@ -730,6 +734,20 @@
             <button class="btn" onclick="lockAdmin()" style="font-size:12px"><i class="ti ti-lock"></i> 설정 잠금</button>
           </div>
 
+          <!-- 계정 관리 (관리자 계정으로 로그인했을 때만 표시) -->
+          <div class="card" data-admin-only style="display:none;margin-bottom:12px;cursor:default">
+            <div class="section-title" style="margin-bottom:6px">
+              <i class="ti ti-users"></i>계정 관리
+              <span id="acct-pending-badge" style="font-size:11px;color:#b45309;font-weight:600;margin-left:6px"></span>
+              <button class="btn" style="font-size:11px;padding:3px 10px;margin-left:auto" onclick="loadAccountAdmin()"><i class="ti ti-refresh"></i>새로고침</button>
+            </div>
+            <div style="font-size:11px;color:var(--text-tertiary);margin-bottom:10px">
+              가입 신청을 <strong>승인해야 AI 기능을 쓸 수 있습니다</strong>. 승인 시 팀·역할·일일 한도를 지정하세요.
+              팀장은 자기 팀 전체의 자문 이력을, 팀원은 본인 것만 볼 수 있습니다.
+            </div>
+            <div id="account-admin-body"><div style="padding:14px;text-align:center;color:var(--text-secondary);font-size:12px">불러오는 중...</div></div>
+          </div>
+
           <!-- 지식베이스 승인 대기 -->
           <div class="card" style="margin-bottom:12px;cursor:default">
             <div class="section-title" style="margin-bottom:6px">
@@ -762,8 +780,10 @@
               <input class="input-field" id="inp-sb-url" type="text" placeholder="https://xxxxxxxxxxxx.supabase.co" />
               <span class="input-label">Supabase Publishable Key</span>
               <input class="input-field" id="inp-sb-key" type="password" placeholder="sb_publishable_..." />
-              <span class="input-label">Claude API Key</span>
-              <input class="input-field" id="inp-claude-key" type="password" placeholder="sk-ant-..." />
+              <div style="font-size:11px;color:var(--text-tertiary);margin-top:8px;line-height:1.6">
+                Claude API 키는 여기서 관리하지 않습니다 — 서버(Edge Secret)에만 보관되며 모든 AI 호출은
+                <code style="font-size:10.5px">claude-proxy</code>가 대신 수행합니다.
+              </div>
             </div>
             <div style="display:flex;gap:8px">
               <button class="btn btn-primary" onclick="saveApiKeys()"><i class="ti ti-device-floppy"></i>저장 및 연결</button>
@@ -992,6 +1012,34 @@
   </div>
 
 <!-- 보도자료 상세 모달 -->
+<!-- 로그인 / 가입 신청 (2026-08-20) — 열람은 로그인 없이 가능하고, AI 생성 기능만 이 관문을 거친다 -->
+<div id="login-modal" data-tab="login" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:1600;align-items:center;justify-content:center;padding:20px" onclick="if(event.target===this)closeLoginModal()">
+  <div style="background:var(--bg-primary);border-radius:var(--radius-lg);width:100%;max-width:380px;border:0.5px solid var(--border-light);overflow:hidden">
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:0.5px solid var(--border-light)">
+      <div id="login-title" style="font-size:14px;font-weight:600;color:var(--text-primary)"><i class="ti ti-user"></i> 로그인</div>
+      <button class="btn" onclick="closeLoginModal()"><i class="ti ti-x"></i>닫기</button>
+    </div>
+    <div style="padding:16px 18px;display:flex;flex-direction:column;gap:9px">
+      <div id="login-name-row" style="display:none">
+        <label style="font-size:11px;color:var(--text-secondary)">이름</label>
+        <input type="text" id="login-name" placeholder="홍길동" style="width:100%;padding:8px 10px;font-size:13px;border:0.5px solid var(--border-mid);border-radius:var(--radius-md);background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;outline:none">
+      </div>
+      <div>
+        <label style="font-size:11px;color:var(--text-secondary)">이메일</label>
+        <input type="email" id="login-email" autocomplete="username" style="width:100%;padding:8px 10px;font-size:13px;border:0.5px solid var(--border-mid);border-radius:var(--radius-md);background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;outline:none">
+      </div>
+      <div>
+        <label style="font-size:11px;color:var(--text-secondary)">비밀번호</label>
+        <input type="password" id="login-pw" autocomplete="current-password" onkeydown="if(event.key==='Enter')submitLogin()" style="width:100%;padding:8px 10px;font-size:13px;border:0.5px solid var(--border-mid);border-radius:var(--radius-md);background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;outline:none">
+      </div>
+      <button class="btn btn-primary" id="login-submit" onclick="submitLogin()" style="width:100%;justify-content:center;margin-top:4px">로그인</button>
+      <div id="login-note" style="font-size:11px;color:var(--text-secondary);min-height:15px"></div>
+      <div id="login-switch" style="font-size:11px;color:var(--text-tertiary);text-align:center">계정이 없으신가요? <a href="#" onclick="switchLoginTab('signup');return false">가입 신청</a></div>
+      <div style="font-size:10px;color:var(--text-tertiary);text-align:center;line-height:1.5;border-top:0.5px solid var(--border-light);padding-top:8px">뉴스·브리핑·법안·지식베이스 열람은 로그인 없이 이용할 수 있습니다.<br>AI 자문 등 생성 기능만 승인된 계정이 필요합니다.</div>
+    </div>
+  </div>
+</div>
+
 <div id="chat-history-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:1500;align-items:center;justify-content:center;padding:20px" onclick="if(event.target===this)closeChatHistory()">
   <div style="background:var(--bg-primary);border-radius:var(--radius-lg);width:100%;max-width:760px;max-height:85vh;display:flex;flex-direction:column;overflow:hidden;border:0.5px solid var(--border-light)">
     <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:0.5px solid var(--border-light);flex-shrink:0">
@@ -1107,6 +1155,6 @@
 <script src="https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js"></script>
 <script>if(typeof pdfjsLib!=='undefined'){pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';}</script>
 <script src="system_prompt.js?v=20260819a"></script>
-<script src="app.js?v=20260820c"></script>
+<script src="app.js?v=20260820d"></script>
 </body>
 </html>

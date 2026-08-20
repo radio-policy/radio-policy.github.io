@@ -48,31 +48,19 @@ const SKT_IMPACT_SYSTEM_PROMPT =
 //  Config (localStorage + Supabase app_config)
 // ════════════════════════════════════════════
 const CFG_KEY = 'radio_policy_config';
-let _remoteClaudeKey = null; // Supabase에서 로드한 Claude 키 캐시
 
 function getConfig() {
   try {
-    var cfg = JSON.parse(localStorage.getItem(CFG_KEY) || '{}');
-    // localStorage에 Claude 키 없으면 Supabase에서 로드한 값 사용
-    if (!cfg.claudeKey && _remoteClaudeKey) cfg.claudeKey = _remoteClaudeKey;
-    return cfg;
+    return JSON.parse(localStorage.getItem(CFG_KEY) || '{}');
   } catch(e) { return {}; }
 }
 function saveConfig(c) { localStorage.setItem(CFG_KEY, JSON.stringify(c)); }
 
-// Supabase app_config에서 Claude 키 로드 (페이지 시작 시 1회 실행)
-async function loadRemoteConfig() {
-  if (!sb) return;
-  try {
-    var { data } = await sb.from('app_config').select('key,value');
-    if (!data) return;
-    data.forEach(function(row) {
-      if (row.key === 'claude_key' && row.value) {
-        _remoteClaudeKey = row.value;
-      }
-    });
-  } catch(e) { console.warn('app_config 로드 실패:', e); }
-}
+// Claude 키는 더 이상 브라우저로 내려오지 않는다 (2026-08-20, #104).
+// 종전에는 app_config.claude_key를 anon으로 읽어 브라우저가 api.anthropic.com을 직접 호출했는데,
+// 그 테이블은 anon 조회가 열려 있어 **인터넷 누구나 키를 꺼내 갈 수 있는 상태**였다.
+// 이제 모든 AI 호출은 claudeFetch() → claude-proxy Edge Function을 거치고, 키는 서버에만 있다.
+async function loadRemoteConfig() { /* claude_key 로드 폐지 — claude-proxy가 대신한다 */ }
 
 // ════════════════════════════════════════════
 //  Supabase
@@ -90,6 +78,325 @@ function initSupabase() {
     sb = window.supabase.createClient(sbUrl, sbKey);
     return true;
   } catch(e) { return false; }
+}
+
+// ════════════════════════════════════════════
+//  계정·권한 (2026-08-20, #104)
+//  열람(뉴스·브리핑·법안·지식베이스)은 로그인 없이 그대로 열려 있다.
+//  로그인 뒤로 가는 것은 **AI가 그 자리에서 생성하는 기능**뿐이다(비용·보안 통제).
+//  역할: member(본인 이력) / leader(팀 이력) / admin(전체 + 계정 관리)
+// ════════════════════════════════════════════
+var currentUser = null;      // auth.users 행
+var currentProfile = null;   // profiles 행 (+ teams 조인)
+
+/** AI 기능 사용 가능 여부. **fail-closed** — 값이 없으면 무조건 잠근다. */
+function aiReady() {
+  return !!(currentUser && currentProfile && currentProfile.approved && currentProfile.active);
+}
+function isAdminUser()  { return !!(currentProfile && currentProfile.role === 'admin'  && currentProfile.approved && currentProfile.active); }
+function isLeaderUser() { return !!(currentProfile && currentProfile.role === 'leader' && currentProfile.approved && currentProfile.active); }
+
+/** 왜 막혔는지 한 문장으로 — 로그인 안 함 / 승인 대기 / 비활성 구분 */
+function aiGateMsg() {
+  if (!currentUser) return 'AI 기능은 로그인 후 이용할 수 있습니다. 우측 상단에서 로그인해 주세요.';
+  if (!currentProfile) return '계정 정보를 불러오지 못했습니다. 새로고침 후 다시 시도해 주세요.';
+  if (!currentProfile.active) return '비활성화된 계정입니다. 관리자에게 문의해 주세요.';
+  if (!currentProfile.approved) return '관리자 승인 대기 중입니다. 승인 후 이용할 수 있습니다.';
+  return 'AI 기능을 이용할 수 없습니다.';
+}
+
+async function loadMyProfile() {
+  currentProfile = null;
+  if (!sb || !currentUser) return;
+  try {
+    var r = await sb.from('profiles')
+      .select('user_id,name,role,approved,active,daily_limit,unlimited,team_id,teams(name,daily_limit,unlimited)')
+      .eq('user_id', currentUser.id).maybeSingle();
+    if (r.error) { console.warn('프로필 조회 실패:', r.error); return; }
+    currentProfile = r.data || null;
+  } catch (e) { console.warn('프로필 조회 실패:', e); }
+}
+
+async function refreshAuthState() {
+  if (!sb) return;
+  try {
+    var s = await sb.auth.getSession();
+    currentUser = (s.data && s.data.session) ? s.data.session.user : null;
+  } catch (e) { currentUser = null; }
+  await loadMyProfile();
+  applyAuthUI();
+}
+
+/**
+ * 모든 AI 호출의 단일 출입구 — claude-proxy 경유.
+ * 인자는 기존 fetch의 init 객체 그대로 받는다(`body`는 이미 JSON 문자열).
+ * URL과 인증 헤더만 이쪽에서 갈아끼우므로 각 호출부는 헤더 한 줄만 지우면 되고,
+ * 반환도 Response 그대로라 res.ok / res.json() / res.body.getReader() 파싱이 전부 그대로 산다.
+ * (프록시가 Anthropic 응답 바이트를 그대로 흘려보낸다 — SSE 파서 무수정)
+ */
+// ── 로그인 UI ────────────────────────────────────────────────
+function openLoginModal(tab) {
+  var m = document.getElementById('login-modal');
+  if (!m) return;
+  m.style.display = 'flex';
+  switchLoginTab(tab || 'login');
+  var f = document.getElementById('login-email');
+  if (f) setTimeout(function() { f.focus(); }, 50);
+}
+function closeLoginModal() {
+  var m = document.getElementById('login-modal');
+  if (m) m.style.display = 'none';
+  var n = document.getElementById('login-note');
+  if (n) { n.textContent = ''; n.style.color = ''; }
+}
+function switchLoginTab(tab) {
+  var isSignup = tab === 'signup';
+  document.getElementById('login-name-row').style.display = isSignup ? 'block' : 'none';
+  document.getElementById('login-submit').textContent = isSignup ? '가입 신청' : '로그인';
+  document.getElementById('login-title').textContent = isSignup ? '가입 신청' : '로그인';
+  document.getElementById('login-switch').innerHTML = isSignup
+    ? '이미 계정이 있으신가요? <a href="#" onclick="switchLoginTab(\'login\');return false">로그인</a>'
+    : '계정이 없으신가요? <a href="#" onclick="switchLoginTab(\'signup\');return false">가입 신청</a>';
+  document.getElementById('login-modal').setAttribute('data-tab', isSignup ? 'signup' : 'login');
+  var n = document.getElementById('login-note');
+  if (n) { n.textContent = ''; n.style.color = ''; }
+}
+function _loginNote(msg, kind) {
+  var n = document.getElementById('login-note');
+  if (!n) return;
+  n.textContent = msg;
+  n.style.color = kind === 'err' ? 'var(--danger, #c0392b)' : 'var(--text-secondary)';
+}
+async function submitLogin() {
+  if (!sb) return _loginNote('Supabase 연결이 없습니다.', 'err');
+  var isSignup = document.getElementById('login-modal').getAttribute('data-tab') === 'signup';
+  var email = document.getElementById('login-email').value.trim();
+  var pw = document.getElementById('login-pw').value;
+  var name = (document.getElementById('login-name').value || '').trim();
+  if (!email || !pw) return _loginNote('이메일과 비밀번호를 입력해 주세요.', 'err');
+  var btn = document.getElementById('login-submit');
+  btn.disabled = true;
+  try {
+    if (isSignup) {
+      if (pw.length < 8) { _loginNote('비밀번호는 8자 이상이어야 합니다.', 'err'); return; }
+      var su = await sb.auth.signUp({ email: email, password: pw, options: { data: { name: name } } });
+      if (su.error) { _loginNote(su.error.message, 'err'); return; }
+      await refreshAuthState();
+      _loginNote('가입 신청이 접수되었습니다. 관리자 승인 후 AI 기능을 이용할 수 있습니다.');
+      setTimeout(closeLoginModal, 2500);
+    } else {
+      var si = await sb.auth.signInWithPassword({ email: email, password: pw });
+      if (si.error) { _loginNote('로그인 실패: ' + si.error.message, 'err'); return; }
+      await refreshAuthState();
+      closeLoginModal();
+      if (!aiReady()) alert(aiGateMsg());
+    }
+  } catch (e) {
+    _loginNote(String(e && e.message || e), 'err');
+  } finally {
+    btn.disabled = false;
+  }
+}
+async function doLogout() {
+  if (!sb) return;
+  try { await sb.auth.signOut(); } catch (e) { /* 세션이 이미 없을 수 있다 */ }
+  currentUser = null; currentProfile = null;
+  applyAuthUI();
+}
+
+/** 로그인 상태를 화면 전체에 반영 — 상단바 표시, 자문 입력창 잠금, 관리자 전용 요소 */
+function applyAuthUI() {
+  var label = document.getElementById('acct-label');
+  if (label) {
+    if (!currentUser) label.textContent = '로그인';
+    else {
+      var nm = (currentProfile && currentProfile.name) || currentUser.email || '';
+      var team = currentProfile && currentProfile.teams ? currentProfile.teams.name : '';
+      var role = currentProfile ? ({ admin: '관리자', leader: '팀장', member: '' })[currentProfile.role] : '';
+      label.textContent = nm + (team ? ' · ' + team : '') + (role ? ' · ' + role : '') +
+        (currentProfile && !currentProfile.approved ? ' (승인 대기)' : '');
+    }
+  }
+  var out = document.getElementById('acct-logout');
+  if (out) out.style.display = currentUser ? '' : 'none';
+
+  // 자문 입력창 게이트
+  var input = document.getElementById('chat-input');
+  var btn = document.getElementById('send-btn');
+  if (input && btn) {
+    var ok = aiReady();
+    input.disabled = !ok;
+    btn.disabled = !ok;
+    input.placeholder = ok
+      ? '궁금한 사항을 입력하세요'
+      : (!currentUser ? '로그인 후 이용할 수 있습니다' :
+         (currentProfile && !currentProfile.approved ? '관리자 승인 대기 중입니다' : 'AI 기능을 이용할 수 없습니다'));
+  }
+  // 관리자 전용 영역
+  document.querySelectorAll('[data-admin-only]').forEach(function(el) {
+    el.style.display = isAdminUser() ? '' : 'none';
+  });
+  updateStatusDots();
+  refreshQuotaLine();
+}
+
+/** 입력창 아래 잔여 한도 표시 */
+async function refreshQuotaLine() {
+  var el = document.getElementById('quota-line');
+  if (!el) return;
+  if (!aiReady() || !sb) { el.textContent = ''; return; }
+  try {
+    var r = await sb.rpc('get_my_quota');
+    if (r.error || !r.data || !r.data.ok) { el.textContent = ''; return; }
+    var q = r.data;
+    if (q.unlimited) { el.textContent = '오늘 자문 ' + q.used + '회 (한도 없음)'; return; }
+    var txt = '오늘 자문 ' + q.used + '/' + q.limit;
+    if (q.team_name && q.team_limit != null && !q.team_unlimited) {
+      txt += ' · ' + q.team_name + ' ' + q.team_used + '/' + q.team_limit;
+    }
+    el.textContent = txt;
+  } catch (e) { el.textContent = ''; }
+}
+
+// ── 계정 관리 (관리자 전용) ─────────────────────────────────
+var _acctTeams = [];
+
+async function loadAccountAdmin() {
+  var el = document.getElementById('account-admin-body');
+  if (!el || !sb) return;
+  if (!isAdminUser()) { el.innerHTML = '<div style="font-size:12px;color:var(--text-tertiary)">관리자 계정으로 로그인해야 합니다.</div>'; return; }
+  el.innerHTML = '<div style="font-size:12px;color:var(--text-tertiary);padding:10px">불러오는 중...</div>';
+  try {
+    var tRes = await sb.from('teams').select('id,name,daily_limit,unlimited').order('id');
+    var pRes = await sb.from('profiles')
+      .select('user_id,name,role,approved,active,daily_limit,unlimited,team_id')
+      .order('created_at', { ascending: false });
+    if (tRes.error) throw tRes.error;
+    if (pRes.error) throw pRes.error;
+    _acctTeams = tRes.data || [];
+    renderAccountAdmin(_acctTeams, pRes.data || []);
+  } catch (e) {
+    el.innerHTML = '<div style="font-size:12px;color:var(--text-tertiary)">조회 실패: ' + chEsc(e.message || String(e)) + '</div>';
+  }
+}
+
+function _teamOptions(sel) {
+  return '<option value="">(팀 없음)</option>' + _acctTeams.map(function(t) {
+    return '<option value="' + t.id + '"' + (String(sel) === String(t.id) ? ' selected' : '') + '>' + chEsc(t.name) + '</option>';
+  }).join('');
+}
+function _roleOptions(sel) {
+  return [['member','팀원'],['leader','팀장'],['admin','관리자']].map(function(r) {
+    return '<option value="' + r[0] + '"' + (sel === r[0] ? ' selected' : '') + '>' + r[1] + '</option>';
+  }).join('');
+}
+
+function renderAccountAdmin(teams, profs) {
+  var el = document.getElementById('account-admin-body');
+  var pending = profs.filter(function(p) { return !p.approved && p.active; });
+  var badge = document.getElementById('acct-pending-badge');
+  if (badge) badge.textContent = pending.length ? pending.length + '건 대기' : '';
+
+  var inputCss = 'padding:3px 6px;font-size:11px;border:0.5px solid var(--border-mid);border-radius:4px;background:var(--bg-secondary);color:var(--text-primary);font-family:inherit';
+  var html = '';
+
+  html += '<div style="font-size:12px;font-weight:600;margin:4px 0 6px">가입 승인 대기 (' + pending.length + ')</div>';
+  html += pending.length ? pending.map(function(p) {
+    return '<div class="card" style="margin-bottom:6px;padding:10px 12px;cursor:default">' +
+      '<div style="font-size:12px;font-weight:500;margin-bottom:6px">' + chEsc(p.name || '(이름 없음)') + '</div>' +
+      '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">' +
+        '<select id="ap-team-' + p.user_id + '" style="' + inputCss + '">' + _teamOptions(p.team_id) + '</select>' +
+        '<select id="ap-role-' + p.user_id + '" style="' + inputCss + '">' + _roleOptions(p.role) + '</select>' +
+        '<label style="font-size:11px;color:var(--text-secondary)">일일 한도 <input id="ap-lim-' + p.user_id + '" type="number" min="0" value="' + p.daily_limit + '" style="' + inputCss + ';width:56px"></label>' +
+        '<button class="btn btn-primary" style="font-size:11px;padding:3px 10px" onclick="approveAccount(\'' + p.user_id + '\')"><i class="ti ti-check"></i>승인</button>' +
+        '<button class="btn" style="font-size:11px;padding:3px 10px" onclick="rejectAccount(\'' + p.user_id + '\')">거절</button>' +
+      '</div></div>';
+  }).join('') : '<div style="font-size:11px;color:var(--text-tertiary);padding:4px 0 10px">대기 중인 신청이 없습니다.</div>';
+
+  var members = profs.filter(function(p) { return p.approved || !p.active; });
+  html += '<div style="font-size:12px;font-weight:600;margin:14px 0 6px">구성원 (' + members.length + ')</div>';
+  html += members.length ? members.map(function(p) {
+    return '<div class="card" style="margin-bottom:6px;padding:10px 12px;cursor:default;' + (p.active ? '' : 'opacity:.55') + '">' +
+      '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">' +
+        '<span style="font-size:12px;font-weight:500;min-width:80px">' + chEsc(p.name || '(이름 없음)') + '</span>' +
+        '<select id="mb-team-' + p.user_id + '" style="' + inputCss + '">' + _teamOptions(p.team_id) + '</select>' +
+        '<select id="mb-role-' + p.user_id + '" style="' + inputCss + '">' + _roleOptions(p.role) + '</select>' +
+        '<label style="font-size:11px;color:var(--text-secondary)">한도 <input id="mb-lim-' + p.user_id + '" type="number" min="0" value="' + p.daily_limit + '" style="' + inputCss + ';width:56px"></label>' +
+        '<label style="font-size:11px;color:var(--text-secondary)"><input id="mb-unl-' + p.user_id + '" type="checkbox"' + (p.unlimited ? ' checked' : '') + '> 무제한</label>' +
+        '<label style="font-size:11px;color:var(--text-secondary)"><input id="mb-act-' + p.user_id + '" type="checkbox"' + (p.active ? ' checked' : '') + '> 활성</label>' +
+        '<button class="btn" style="font-size:11px;padding:3px 10px" onclick="saveMemberRow(\'' + p.user_id + '\')">저장</button>' +
+      '</div></div>';
+  }).join('') : '<div style="font-size:11px;color:var(--text-tertiary)">구성원이 없습니다.</div>';
+
+  html += '<div style="font-size:12px;font-weight:600;margin:14px 0 6px">팀 (합산 일일 한도)</div>';
+  html += teams.map(function(t) {
+    return '<div class="card" style="margin-bottom:6px;padding:10px 12px;cursor:default">' +
+      '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">' +
+        '<input id="tm-name-' + t.id + '" value="' + chEsc(t.name) + '" style="' + inputCss + ';width:130px">' +
+        '<label style="font-size:11px;color:var(--text-secondary)">팀 한도 <input id="tm-lim-' + t.id + '" type="number" min="0" value="' + t.daily_limit + '" style="' + inputCss + ';width:56px"></label>' +
+        '<label style="font-size:11px;color:var(--text-secondary)"><input id="tm-unl-' + t.id + '" type="checkbox"' + (t.unlimited ? ' checked' : '') + '> 무제한</label>' +
+        '<button class="btn" style="font-size:11px;padding:3px 10px" onclick="saveTeamRow(' + t.id + ')">저장</button>' +
+      '</div></div>';
+  }).join('');
+
+  el.innerHTML = html;
+}
+
+async function _acctUpdate(userId, patch, okMsg) {
+  var r = await sb.from('profiles').update(patch).eq('user_id', userId).select('user_id');
+  if (r.error) { alert('저장 실패: ' + r.error.message); return false; }
+  if (!r.data || !r.data.length) { alert('변경된 계정이 없습니다(권한 또는 대상 확인).'); return false; }
+  if (okMsg) console.log(okMsg);
+  await loadAccountAdmin();
+  return true;
+}
+async function approveAccount(userId) {
+  var team = document.getElementById('ap-team-' + userId).value;
+  await _acctUpdate(userId, {
+    approved: true, active: true,
+    team_id: team ? Number(team) : null,
+    role: document.getElementById('ap-role-' + userId).value,
+    daily_limit: Number(document.getElementById('ap-lim-' + userId).value || 10)
+  }, '승인 완료');
+}
+async function rejectAccount(userId) {
+  if (!confirm('이 신청을 거절할까요? (계정은 비활성 상태가 됩니다)')) return;
+  await _acctUpdate(userId, { approved: false, active: false }, '거절');
+}
+async function saveMemberRow(userId) {
+  var team = document.getElementById('mb-team-' + userId).value;
+  await _acctUpdate(userId, {
+    team_id: team ? Number(team) : null,
+    role: document.getElementById('mb-role-' + userId).value,
+    daily_limit: Number(document.getElementById('mb-lim-' + userId).value || 10),
+    unlimited: document.getElementById('mb-unl-' + userId).checked,
+    active: document.getElementById('mb-act-' + userId).checked
+  }, '구성원 저장');
+}
+async function saveTeamRow(teamId) {
+  var r = await sb.from('teams').update({
+    name: document.getElementById('tm-name-' + teamId).value.trim(),
+    daily_limit: Number(document.getElementById('tm-lim-' + teamId).value || 30),
+    unlimited: document.getElementById('tm-unl-' + teamId).checked
+  }).eq('id', teamId).select('id');
+  if (r.error) { alert('팀 저장 실패: ' + r.error.message); return; }
+  await loadAccountAdmin();
+}
+
+async function claudeFetch(init) {
+  if (!sb) throw new Error('Supabase 연결이 없습니다.');
+  var s = await sb.auth.getSession();
+  var session = s.data && s.data.session;
+  if (!session) throw new Error('로그인이 필요합니다. 우측 상단에서 로그인해 주세요.');
+  var base = (getConfig().sbUrl || DEFAULT_SB_URL).replace(/\/+$/, '');
+  return fetch(base + '/functions/v1/claude-proxy', {
+    method: 'POST',
+    headers: {
+      'Authorization': 'Bearer ' + session.access_token,
+      'content-type': 'application/json'
+    },
+    body: (init && typeof init.body === 'string') ? init.body : JSON.stringify((init && init.body) || init)
+  });
 }
 
 // ════════════════════════════════════════════
@@ -315,11 +622,9 @@ function expandQueryKeywords(query) {
 }
 async function _expandQueryKeywordsRaw(query) {
   try {
-    var { claudeKey } = getConfig();
-    if (!claudeKey) return [];
-    var res = await fetch('https://api.anthropic.com/v1/messages', {
+    if (!aiReady()) return [];
+    var res = await claudeFetch({
       method: 'POST',
-      headers: { 'x-api-key': claudeKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json', 'anthropic-dangerous-direct-browser-access': 'true' },
       body: JSON.stringify({
         model: 'claude-haiku-4-5-20251001',
         max_tokens: 200,
@@ -1148,8 +1453,7 @@ function normalizeTerm(s) { return (s||'').toLowerCase().replace(/\s+/g, ''); }
 async function extractTermsFromNews() {
   var btn = document.getElementById('extract-terms-btn');
   if (!sb) { alert('Supabase 연결이 필요합니다.'); return; }
-  var { claudeKey } = getConfig();
-  if (!claudeKey) { alert('Claude API 키가 필요합니다.'); return; }
+  if (!aiReady()) { alert(aiGateMsg()); return; }
   if (btn) { btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader"></i> 추출 중...'; }
 
   try {
@@ -1173,9 +1477,8 @@ async function extractTermsFromNews() {
       '형식: [{"term":"약어","term_en":"영문 전체 이름","category":"주파수|네트워크|위성|단말|규제|기타","definition":"한 줄 정의(50자 이내)","source":"출처"}]\n' +
       '새 용어가 없으면 [] 출력.';
 
-    var res = await fetch('https://api.anthropic.com/v1/messages', {
+    var res = await claudeFetch({
       method:'POST',
-      headers:{'x-api-key':claudeKey,'anthropic-version':'2023-06-01','content-type':'application/json','anthropic-dangerous-direct-browser-access':'true'},
       // thinking:disabled — Sonnet 5는 thinking 미지정 시 적응형 추론이 켜져 응답 첫 블록이 빈 thinking 블록이 됨.
       //  → content[0].text가 undefined라 크래시했고, 숨은 thinking 토큰이 max_tokens(1500)를 잠식해 JSON도 잘렸음.
       body:JSON.stringify({model:'claude-sonnet-5',max_tokens:1500,thinking:{type:'disabled'},system:systemMsg,messages:[{role:'user',content:userMsg}]})
@@ -1371,7 +1674,7 @@ function closeTermsModal() {
 // 자동 생성(신규 추출 직후)과 수동 생성(모달 열기)이 같은 프롬프트를 쓰도록
 // DOM을 건드리지 않는 순수 함수로 뽑았다. 반환: {description, diagram_html, related_terms}
 // 실패 시 예외를 던진다 — 호출부가 화면 표시 여부를 정한다. (배경역사 #46)
-async function _fetchTermDetail(t, claudeKey) {
+async function _fetchTermDetail(t) {
   var termLabel = t.term + (t.term_en ? ' (' + t.term_en + ')' : '');
   var systemMsg = '당신은 이동통신·전파 정책 전문가입니다. 반드시 지정된 XML 태그 형식으로만 답변하세요.';
   var userMsg = '기술 용어 [' + termLabel + '] 에 대해 아래 형식으로 정확히 답변하세요.\n' +
@@ -1391,9 +1694,8 @@ async function _fetchTermDetail(t, claudeKey) {
     '- 개념 흐름이나 계층 구조를 한눈에 파악할 수 있게\n' +
     '</diagram>\n\n' +
     '<related>관련용어1,관련용어2,관련용어3</related>';
-  var res = await fetch('https://api.anthropic.com/v1/messages', {
+  var res = await claudeFetch({
     method:'POST',
-    headers:{'x-api-key':claudeKey,'anthropic-version':'2023-06-01','content-type':'application/json','anthropic-dangerous-direct-browser-access':'true'},
     body:JSON.stringify({model:'claude-sonnet-5',max_tokens:6000,system:systemMsg,messages:[{role:'user',content:userMsg}]})
   });
   var data = await res.json();
@@ -1423,10 +1725,9 @@ async function generateTermDetail(id) {
   if (!t) return;
   var btn = document.getElementById('gen-btn-' + id);
   if (btn) { btn.disabled = true; btn.textContent = '생성 중...'; }
-  var { claudeKey } = getConfig();
-  if (!claudeKey) { alert('Claude API 키가 필요합니다.'); if(btn){btn.disabled=false;btn.textContent='🤖 Claude로 상세 설명·다이어그램 생성';} return; }
+  if (!aiReady()) { alert(aiGateMsg()); if(btn){btn.disabled=false;btn.textContent='🤖 Claude로 상세 설명·다이어그램 생성';} return; }
   try {
-    var parsed = await _fetchTermDetail(t, claudeKey);
+    var parsed = await _fetchTermDetail(t);
 
     // Supabase 업데이트
     if (sb) {
@@ -1860,8 +2161,7 @@ async function searchPressReleases(query) {
 }
 
 async function callClaude(userText, onDelta) {
-  const { claudeKey } = getConfig();
-  if (!claudeKey) throw new Error('Claude API 키가 설정되지 않았습니다. 설정 탭에서 입력해주세요.');
+  if (!aiReady()) throw new Error(aiGateMsg());
 
   // 보조 컨텍스트 검색 4종을 먼저 동시에 시작 (조문 RAG와 병렬 실행 — 프롬프트 조합 순서는 아래에서 고정)
   const customP     = searchCustomKnowledge(userText).catch(function(e) { console.warn('추가지식 검색 실패(건너뜀):', e); return ''; });
@@ -2008,14 +2308,8 @@ async function callClaude(userText, onDelta) {
 
   chatHistory.push({ role: 'user', content: userText });
 
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
+  const res = await claudeFetch({
     method: 'POST',
-    headers: {
-      'x-api-key': claudeKey,
-      'anthropic-version': '2023-06-01',
-      'content-type': 'application/json',
-      'anthropic-dangerous-direct-browser-access': 'true'
-    },
     body: JSON.stringify({
       model: 'claude-sonnet-5',
       // Sonnet 5 토크나이저(동일 텍스트 +30% 토큰)·적응형 추론 여유분 반영해 상향
@@ -2279,20 +2573,26 @@ function chDate(iso) {
   return d.getFullYear() + '-' + p(d.getMonth()+1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
 }
 
-// 운영자 전용 (2026-08-20) — 자문 이력에는 질문·답변 전문이 남는데 대시보드는 공개 페이지다.
-// 화면만 가리면 anon 키로 chat_logs를 그대로 읽을 수 있으므로 **DB에서 막고** 비밀번호 RPC로만 연다.
-// 목록 RPC가 조문 직조회(/law 19조 같은 기계적 원문 출력)를 서버에서 이미 제외한다.
+// 열람 범위는 **RLS가 정한다** (2026-08-20, #104): 본인 / 팀장=자기 팀 / 관리자=전체.
+// 텔레그램 행은 user_id가 없어 관리자에게만 보인다. 화면에서 거르는 게 아니라 DB가 안 내주므로
+// 여기서 별도 필터를 두지 않는다. 조문 직조회(기계적 원문 출력)만 성격이 달라 목록에서 뺀다.
 async function openChatHistory() {
   var modal = document.getElementById('chat-history-modal');
   var body = document.getElementById('chat-history-body');
   modal.style.display = 'flex';
   body.innerHTML = '<div style="color:var(--text-tertiary);font-size:12px">불러오는 중...</div>';
   if (!sb) { body.innerHTML = '<div style="color:var(--text-tertiary);font-size:12px">Supabase 연결 없음</div>'; return; }
-  var pwd = _ensureAdminPwd();
-  if (!pwd) { body.innerHTML = '<div style="color:var(--text-tertiary);font-size:12px">자문 이력은 운영자 전용입니다 — 관리자 비밀번호가 필요합니다.</div>'; return; }
+  if (!currentUser) {
+    body.innerHTML = '<div style="color:var(--text-tertiary);font-size:12px">자문 이력은 로그인 후 볼 수 있습니다. 우측 상단에서 로그인해 주세요.</div>';
+    return;
+  }
   try {
-    var resp = await sb.rpc('admin_list_chat_logs', { p_pwd: pwd, p_limit: 100 });
-    if (resp.error) { _handleAdminRpcError(resp.error, '자문 이력 조회'); body.innerHTML = '<div style="color:var(--text-tertiary);font-size:12px">조회하지 못했습니다. 다시 시도해 주세요.</div>'; return; }
+    var resp = await sb.from('chat_logs')
+      .select('id, question, category, created_at, user_id')
+      .neq('category', '텔레그램-조문조회')
+      .order('created_at', { ascending: false })
+      .limit(100);
+    if (resp.error) { body.innerHTML = '<div style="color:var(--text-tertiary);font-size:12px">조회 실패: ' + chEsc(resp.error.message) + '</div>'; return; }
     var data = resp.data || [];
     if (data.length === 0) {
       body.innerHTML = '<div style="color:var(--text-tertiary);font-size:12px">저장된 자문 이력이 없습니다.</div>';
@@ -2306,7 +2606,9 @@ async function openChatHistory() {
             '<span class="rag-tag">' + chEsc(item.category || '일반') + '</span>' + chDate(item.created_at) +
           '</div>' +
         '</div>' +
-        '<button class="btn" title="이력 삭제" style="padding:4px 8px;flex-shrink:0;color:var(--text-tertiary)" onclick="event.stopPropagation();deleteChatHistoryItem(\'' + item.id + '\', this)"><i class="ti ti-trash"></i></button>' +
+        (isAdminUser()
+          ? '<button class="btn" title="이력 삭제" style="padding:4px 8px;flex-shrink:0;color:var(--text-tertiary)" onclick="event.stopPropagation();deleteChatHistoryItem(\'' + item.id + '\', this)"><i class="ti ti-trash"></i></button>'
+          : '') +
       '</div>';
     }).join('');
     body.scrollTop = 0;
@@ -2445,11 +2747,12 @@ async function viewChatHistoryItem(id) {
   var body = document.getElementById('chat-history-body');
   body.innerHTML = '<div style="color:var(--text-tertiary);font-size:12px">불러오는 중...</div>';
   try {
-    var pwd = _ensureAdminPwd();
-    if (!pwd) { body.innerHTML = '<div style="color:var(--text-tertiary);font-size:12px">자문 이력은 운영자 전용입니다 — 관리자 비밀번호가 필요합니다.</div>'; return; }
-    var resp = await sb.rpc('admin_get_chat_log', { p_pwd: pwd, p_id: id });
-    if (resp.error) { _handleAdminRpcError(resp.error, '자문 상세 조회'); body.innerHTML = '<div style="color:var(--text-tertiary);font-size:12px">조회하지 못했습니다.</div>'; return; }
-    var row = (resp.data || [])[0];
+    // RLS가 역할별로 걸러 준다 — 볼 권한이 없으면 행이 아예 오지 않는다
+    var resp = await sb.from('chat_logs')
+      .select('question, answer, category, created_at, sources')
+      .eq('id', id).maybeSingle();
+    if (resp.error) { body.innerHTML = '<div style="color:var(--text-tertiary);font-size:12px">조회 실패: ' + chEsc(resp.error.message) + '</div>'; return; }
+    var row = resp.data;
     if (!row) throw new Error('이력을 찾을 수 없습니다(삭제되었을 수 있습니다).');
     var srcs = row.sources;
     if (typeof srcs === 'string') {
@@ -2502,13 +2805,12 @@ function closeChatHistory() {
 // 자문 이력 삭제 — 목록 카드의 휴지통 버튼(btn 전달) / 상세 보기의 삭제 버튼(btn=null)
 async function deleteChatHistoryItem(id, btn) {
   if (!confirm('이 자문 이력을 삭제할까요?')) return;
-  var pwd = _ensureAdminPwd();
-  if (!pwd) return;
+  if (!isAdminUser()) { alert('이력 삭제는 관리자만 할 수 있습니다.'); return; }
   try {
-    // chat_logs도 RLS 켜짐 + DELETE 정책 없음 → 직접 delete()는 조용히 실패한다.
-    // 서버 검증 RPC + 삭제 행수 확인. (#48)
-    var resp = await sb.rpc('admin_delete_chat_log', { p_id: id, p_pwd: pwd });
-    if (resp.error) { _handleAdminRpcError(resp.error, '삭제'); return; }
+    // chat_logs는 RLS 켜짐 + DELETE 정책 없음 → 직접 delete()는 조용히 0건이 된다.
+    // 역할 검증 RPC + 삭제 행수 확인. (#48)
+    var resp = await sb.rpc('admin_delete_chat_log_v2', { p_id: id });
+    if (resp.error) { alert('삭제 실패: ' + resp.error.message); return; }
     if (!resp.data) { alert('삭제된 이력이 없습니다. 이미 삭제된 항목일 수 있습니다.'); return; }
     if (btn && btn.closest) {
       var card = btn.closest('.card');
@@ -2536,6 +2838,8 @@ async function sendChat() {
   const btn = document.getElementById('send-btn');
   const text = input.value.trim();
   if (!text || isSending) return;
+  // 로그인·승인 관문 (2026-08-20) — 예시 질문 클릭 경로(askQ)도 여기로 수렴한다
+  if (!aiReady()) { openLoginModal(); return; }
 
   isSending = true;
   input.disabled = true;
@@ -2657,7 +2961,9 @@ async function sendChat() {
           // 웹 출처를 앞에 붙여 함께 남긴다 — 이력·내보내기에서 splitSources()가 갈라 쓴다
           sources: (lastWebSources || []).concat(lastRagSources),
           channel: 'dashboard',
-          chunk_ids: lastAdvChunkIds
+          chunk_ids: lastAdvChunkIds,
+          // RLS의 INSERT 정책이 user_id = auth.uid()를 강제한다 — 빠뜨리면 기록 자체가 거부된다
+          user_id: currentUser ? currentUser.id : null
         });
         if (ins.error) throw ins.error;
         if (logId) msgEl.appendChild(buildFeedbackWidget(logId));
@@ -2669,9 +2975,11 @@ async function sendChat() {
     appendMsg('ai', '⚠️ ' + e.message);
   } finally {
     isSending = false;
-    input.disabled = false;
-    btn.disabled = false;
-    input.focus();
+    // 무조건 풀지 않는다 — 그러면 오류 한 번에 로그인 관문이 열려버린다
+    input.disabled = !aiReady();
+    btn.disabled = !aiReady();
+    if (aiReady()) input.focus();
+    refreshQuotaLine();
   }
 }
 
@@ -2735,13 +3043,13 @@ var _fbOnlyBad = false;
 async function loadFeedbackList() {
   var el = document.getElementById('feedback-body');
   if (!el || !sb) return;
-  var pwd = _ensureAdminPwd();
-  if (!pwd) { el.innerHTML = '<div style="color:var(--text-tertiary);font-size:12px">운영자 비밀번호를 입력해야 피드백을 볼 수 있습니다.</div>'; return; }
+  if (!isAdminUser()) { el.innerHTML = '<div style="color:var(--text-tertiary);font-size:12px">답변 피드백은 관리자 전용입니다.</div>'; return; }
   el.innerHTML = '<div style="color:var(--text-tertiary);font-size:12px">불러오는 중...</div>';
-  var res = await sb.rpc('admin_list_answer_feedback', { p_pwd: pwd });
+  var res = await sb.from('answer_feedback')
+    .select('id, channel, rating, reason, chat_id, created_at, updated_at, log_id, chat_logs(question, answer, category, sources, chunk_ids)')
+    .order('created_at', { ascending: false }).limit(500);
   if (res.error) {
-    _handleAdminRpcError(res.error, '피드백 조회');
-    el.innerHTML = '<div style="color:var(--text-tertiary);font-size:12px">조회하지 못했습니다. 상단 탭을 다시 눌러 재시도하세요.</div>';
+    el.innerHTML = '<div style="color:var(--text-tertiary);font-size:12px">조회 실패: ' + chEsc(res.error.message) + '</div>';
     return;
   }
   _fbRows = res.data || [];
@@ -2779,12 +3087,12 @@ function renderFeedbackList() {
 
   var list = rows.length ? rows.map(function(r) {
     var bad = r.rating < 0;
-    return '<div class="card" style="margin-bottom:8px;padding:12px 14px;cursor:pointer" onclick="toggleFeedbackDetail(' + r.fb_id + ',this)">' +
+    return '<div class="card" style="margin-bottom:8px;padding:12px 14px;cursor:pointer" onclick="toggleFeedbackDetail(' + r.id + ',this)">' +
       '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">' +
         '<i class="ti ti-thumb-' + (bad ? 'down' : 'up') + '" style="color:' + (bad ? 'var(--danger,#c0392b)' : 'var(--accent)') + '"></i>' +
         '<span class="rag-tag">' + chEsc(FB_CHANNEL_LABEL[r.channel] || r.channel) + '</span>' +
-        '<span style="font-size:13px;font-weight:500;flex:1;min-width:0">' + chEsc((r.question || '(원본 삭제됨)').slice(0, 120)) + '</span>' +
-        '<span style="font-size:11px;color:var(--text-tertiary)">' + chDate(r.fb_created_at) + '</span>' +
+        '<span style="font-size:13px;font-weight:500;flex:1;min-width:0">' + chEsc(((r.chat_logs && r.chat_logs.question) || '(원본 삭제됨)').slice(0, 120)) + '</span>' +
+        '<span style="font-size:11px;color:var(--text-tertiary)">' + chDate(r.created_at) + '</span>' +
       '</div>' +
       (r.reason ? '<div style="font-size:12px;color:var(--text-secondary);margin-top:5px">사유: ' + chEsc(r.reason) + '</div>' : '') +
       '<div class="fb-detail" style="display:none;margin-top:10px;border-top:1px solid var(--border);padding-top:10px"></div>' +
@@ -2811,11 +3119,12 @@ async function toggleFeedbackDetail(fbId, cardEl) {
   if (!box) return;
   if (box.style.display !== 'none') { box.style.display = 'none'; return; }
   box.style.display = 'block';
-  var row = _fbRows.filter(function(r) { return r.fb_id === fbId; })[0];
+  var row = _fbRows.filter(function(r) { return r.id === fbId; })[0];
   if (!row) return;
   if (box.getAttribute('data-loaded') === '1') return;
   box.innerHTML = '<div style="font-size:12px;color:var(--text-tertiary)">근거 불러오는 중...</div>';
-  var ids = Array.isArray(row.chunk_ids) ? row.chunk_ids : [];
+  var log = row.chat_logs || {};
+  var ids = Array.isArray(log.chunk_ids) ? log.chunk_ids : [];
   var chunks = [];
   if (ids.length && sb) {
     try {
@@ -2825,7 +3134,7 @@ async function toggleFeedbackDetail(fbId, cardEl) {
   }
   box.innerHTML =
     '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:4px">답변 전문</div>' +
-    '<div class="msg-ai" style="font-size:13px">' + renderMd(row.answer || '(원본 삭제됨)') + '</div>' +
+    '<div class="msg-ai" style="font-size:13px">' + renderMd(log.answer || '(원본 삭제됨)') + '</div>' +
     '<div style="font-size:12px;color:var(--text-secondary);margin:10px 0 4px">검색 근거 (' + ids.length + '건)</div>' +
     (chunks.length
       ? chunks.map(function(c) {
@@ -3703,9 +4012,8 @@ async function summarizeNews(newsId) {
       '요약 생성 중...' +
     '</div>';
 
-  var { claudeKey } = getConfig();
-  if (!claudeKey) {
-    box.innerHTML = '<span style="color:var(--text-tertiary);font-size:11px">Claude API 키 필요 — 설정에서 입력해 주세요.</span>';
+  if (!aiReady()) {
+    box.innerHTML = '<span style="color:var(--text-tertiary);font-size:11px">' + chEsc(aiGateMsg()) + '</span>';
     return;
   }
 
@@ -3718,9 +4026,8 @@ async function summarizeNews(newsId) {
       '제목: ' + n.title + '\n출처: ' + (n.source || '') + '\n날짜: ' + (n.published_at || '').slice(0, 10) +
       '\n\n본문:\n' + bodySnippet;
 
-    var res = await fetch('https://api.anthropic.com/v1/messages', {
+    var res = await claudeFetch({
       method: 'POST',
-      headers: { 'x-api-key': claudeKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json', 'anthropic-dangerous-direct-browser-access': 'true' },
       body: JSON.stringify({
         model: 'claude-haiku-4-5-20251001',
         max_tokens: 500,
@@ -3749,8 +4056,7 @@ async function summarizeNews(newsId) {
 async function analyzeNewsImpact(newsId) {
   var n = newsDataCache.find(function(x) { return String(x.id) === String(newsId); });
   if (!n) return;
-  var { claudeKey } = getConfig();
-  if (!claudeKey) { alert('Claude API 키가 필요합니다.'); return; }
+  if (!aiReady()) { alert(aiGateMsg()); return; }
 
   var box = document.getElementById('impact-box-' + newsId);
 
@@ -3771,9 +4077,8 @@ async function analyzeNewsImpact(newsId) {
       (n.summary ? '\n요약: ' + n.summary : '') +
       (bodySnippet ? '\n\n본문:\n' + bodySnippet : '');
 
-    var res = await fetch('https://api.anthropic.com/v1/messages', {
+    var res = await claudeFetch({
       method: 'POST',
-      headers: { 'x-api-key': claudeKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json', 'anthropic-dangerous-direct-browser-access': 'true' },
       body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 800, system: sysMsg, messages: [{ role: 'user', content: userMsg }] })
     });
     var data = await res.json();
@@ -4568,8 +4873,7 @@ function _renderDiffView(diffResult) {
 // ── 메인 분석 함수 ────────────────────────────────────────
 async function runDiffAnalysis() {
   if (!diffState.before || !diffState.after) return;
-  var { claudeKey } = getConfig();
-  if (!claudeKey) { alert('Claude API 키가 설정에 없습니다.'); return; }
+  if (!aiReady()) { alert(aiGateMsg()); return; }
 
   var btn       = document.getElementById('diff-analyze-btn');
   var resultEl  = document.getElementById('diff-result');
@@ -4617,9 +4921,8 @@ async function runDiffAnalysis() {
         '[개정 후]\n' + diffState.after.text.slice(0, 8000);
     }
 
-    var res = await fetch('https://api.anthropic.com/v1/messages', {
+    var res = await claudeFetch({
       method: 'POST',
-      headers: { 'x-api-key': claudeKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json', 'anthropic-dangerous-direct-browser-access': 'true' },
       // thinking:disabled — Sonnet 5 적응형 추론이 응답 첫 블록을 빈 thinking 블록으로 만들어 content[0].text가 비어 파싱 실패했음(무음 오류).
       body: JSON.stringify({ model: 'claude-sonnet-5', max_tokens: 4000, thinking: { type: 'disabled' }, system: sysMsg, messages: [{ role: 'user', content: userMsg }] })
     });
@@ -5129,9 +5432,8 @@ function renderBriefingNewsItem(block, importance, briefingIdx, itemIdx) {
 // 긴급 항목 AI 영향도 분석 — DOM 요소를 직접 참조로 받음 (ID 탐색 없음)
 async function analyzeBriefingItemEl(el, titleText) {
   if (!el) return;
-  var { claudeKey } = getConfig();
-  if (!claudeKey) {
-    el.innerHTML = '<span style="font-size:11px;color:var(--text-secondary)">Claude API 키가 설정되지 않아 분석을 건너뜁니다.</span>';
+  if (!aiReady()) {
+    el.innerHTML = '<span style="font-size:11px;color:var(--text-secondary)">' + chEsc(aiGateMsg()) + '</span>';
     return;
   }
   try {
@@ -5153,10 +5455,8 @@ async function analyzeBriefingItemEl(el, titleText) {
       (cached ? '\n출처: ' + (cached.source||'') + '\n날짜: ' + (cached.published_at||'').slice(0,10) : '') +
       (bodySnippet ? '\n\n본문:\n' + bodySnippet : '');
 
-    var res = await fetch('https://api.anthropic.com/v1/messages', {
+    var res = await claudeFetch({
       method: 'POST',
-      headers: { 'x-api-key': claudeKey, 'anthropic-version': '2023-06-01',
-                 'content-type': 'application/json', 'anthropic-dangerous-direct-browser-access': 'true' },
       body: JSON.stringify({
         model: 'claude-haiku-4-5-20251001', max_tokens: 800,
         system: sysMsg,
@@ -5361,9 +5661,9 @@ function loadSettingsFields() {
   const cfg = getConfig();
   if (cfg.sbUrl) document.getElementById('inp-sb-url').value = cfg.sbUrl;
   if (cfg.sbKey) document.getElementById('inp-sb-key').value = cfg.sbKey;
-  if (cfg.claudeKey) document.getElementById('inp-claude-key').value = cfg.claudeKey;
   loadPendingApprovals();
   loadLawWatch();
+  if (isAdminUser()) loadAccountAdmin();
 }
 
 // ── 지식베이스 승인 대기 (업로드 파일 게이트) ──
@@ -5598,8 +5898,7 @@ function _okfChunkBody(body, title) {
 }
 
 async function generateOkfForDoc(docName, category, pwd) {
-  var cfg = getConfig();
-  if (!cfg.claudeKey) throw new Error('Claude API 키 미설정');
+  if (!aiReady()) throw new Error(aiGateMsg());
   // 1) 조문 청크에서 원문 발췌 (add_law.py와 동일하게 앞부분 최대 18000자)
   var resp = await sb.from('document_chunks')
     .select('chunk_index, content').eq('doc_name', docName)
@@ -5620,9 +5919,8 @@ async function generateOkfForDoc(docName, category, pwd) {
   var userMsg = '[메타] title=' + meta.title + ' / law_type=' + meta.law_type +
     ' / law_number=' + meta.law_number + ' / enforcement_date=' + meta.enf +
     ' / concept_type=' + conceptType + ' / competent_authority=\n\n[원문 발췌]\n' + lawText;
-  var res = await fetch('https://api.anthropic.com/v1/messages', {
+  var res = await claudeFetch({
     method: 'POST',
-    headers: { 'x-api-key': cfg.claudeKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json', 'anthropic-dangerous-direct-browser-access': 'true' },
     body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 4096, system: sysPrompt,
       messages: [{ role: 'user', content: userMsg }] })
   });
@@ -5734,23 +6032,18 @@ function loadSettingsUI() {
 async function saveApiKeys() {
   const sbUrl = document.getElementById('inp-sb-url').value.trim();
   const sbKey = document.getElementById('inp-sb-key').value.trim();
-  const claudeKey = document.getElementById('inp-claude-key').value.trim();
-  if (!sbUrl || !sbKey || !claudeKey) {
-    showApiAlert('warn', 'Supabase URL, Supabase Key, Claude API Key는 필수입니다.');
+  if (!sbUrl || !sbKey) {
+    showApiAlert('warn', 'Supabase URL과 Key는 필수입니다.');
     return;
   }
-  saveConfig({ sbUrl: sbUrl, sbKey: sbKey, claudeKey: claudeKey });
-  _remoteClaudeKey = claudeKey;
+  saveConfig({ sbUrl: sbUrl, sbKey: sbKey });
   sb = null;
   initSupabase();
+  await refreshAuthState();
   updateStatusDots();
-  // Supabase app_config에도 Claude 키 저장 (다른 사용자도 자동 사용)
-  try {
-    await sb.from('app_config').upsert({ key: 'claude_key', value: claudeKey });
-    showApiAlert('ok', '저장 완료 — 모든 사용자에게 AI 자문이 활성화됩니다.');
-  } catch(e) {
-    showApiAlert('ok', '로컬 저장 완료 (Supabase 동기화는 실패했습니다).');
-  }
+  // Claude 키는 더 이상 여기서 다루지 않는다 — 서버(Edge Secret)에만 존재하고
+  // 모든 AI 호출은 claude-proxy가 대신한다. (#104)
+  showApiAlert('ok', '저장 완료.');
 }
 
 async function testConnection() {
@@ -5765,16 +6058,10 @@ async function testConnection() {
   } else {
     results.push('Supabase URL/Key 미설정');
   }
-  if (cfg.claudeKey) {
+  if (aiReady()) {
     try {
-      const res = await fetch('https://api.anthropic.com/v1/messages', {
+      const res = await claudeFetch({
         method: 'POST',
-        headers: {
-          'x-api-key': cfg.claudeKey,
-          'anthropic-version': '2023-06-01',
-          'content-type': 'application/json',
-          'anthropic-dangerous-direct-browser-access': 'true'
-        },
         body: JSON.stringify({ model: 'claude-sonnet-5', max_tokens: 10, messages: [{ role: 'user', content: 'ping' }] })
       });
       results.push(res.ok ? 'Claude API 연결 성공' : 'Claude API X (HTTP ' + res.status + ')');
@@ -5809,7 +6096,7 @@ function showApiAlert(type, msg) {
 function updateStatusDots() {
   const cfg = getConfig();
   const sbOk = !!sb;
-  const aiOk = !!cfg.claudeKey;
+  const aiOk = aiReady();
   const ragOk = sbOk;
 
   const sbDot = document.getElementById('sb-dot');
@@ -6114,7 +6401,10 @@ function renderGroupTabs(page) {
     panel.insertBefore(bar, panel.firstChild);
   }
   var act = _activeGroupTabKey(group, page);
-  bar.innerHTML = GROUP_TABS[group].map(function(t) {
+  // 답변 피드백은 관리자 전용이라 비관리자에겐 탭 자체를 노출하지 않는다
+  bar.innerHTML = GROUP_TABS[group].filter(function(t) {
+    return t.key !== 'feedback' || isAdminUser();
+  }).map(function(t) {
     var on = t.key === act;
     return '<div onclick="' + t.on + '" tabindex="0" role="button" aria-pressed="' + (on ? 'true' : 'false') + '" style="padding:7px 14px;font-size:12px;cursor:pointer;white-space:nowrap;margin-bottom:-1px;'
       + (on ? 'color:var(--accent);border-bottom:2px solid var(--accent);font-weight:600'
@@ -6611,13 +6901,13 @@ async function savePressKeywords(btn) {
 // ── 신규 용어 상세 자동 채움 (배경역사 #46) ──────────────────────
 // 순차 실행한다 — 동시에 던지면 API 레이트리밋에 걸리고, 어차피 백그라운드라
 // 빠를 이유가 없다. 한 건이 실패해도 나머지는 계속 채운다(부분 성공 허용).
-async function backfillTermDetails(rows, claudeKey) {
-  if (!sb || !claudeKey || !rows || !rows.length) return;
+async function backfillTermDetails(rows) {
+  if (!sb || !aiReady() || !rows || !rows.length) return;
   var ok = 0;
   for (var i = 0; i < rows.length; i++) {
     var row = rows[i];
     try {
-      var parsed = await _fetchTermDetail(row, claudeKey);
+      var parsed = await _fetchTermDetail(row);
       if (!parsed.description) continue;      // 빈 응답이면 덮어쓰지 않는다
       var up = await sb.from('tech_terms').update({
         description:   parsed.description,
@@ -6651,8 +6941,7 @@ async function autoExtractTermsIfNeeded() {
   var lastRun = localStorage.getItem('last_terms_extraction');
   if (lastRun === today) return; // 오늘 이미 실행함
   if (!sb) return;
-  var { claudeKey } = getConfig();
-  if (!claudeKey) return;
+  if (!aiReady()) return;
 
   try {
     var cutoff = new Date();
@@ -6676,14 +6965,8 @@ async function autoExtractTermsIfNeeded() {
       '뉴스 목록:\n' + newsList + '\n\n' +
       'JSON 배열로만 출력 (신규 용어만, 없으면 []): [{"term":"...","term_en":"...","category":"...","definition":"...","source":"..."}]';
 
-    var res = await fetch('https://api.anthropic.com/v1/messages', {
+    var res = await claudeFetch({
       method: 'POST',
-      headers: {
-        'x-api-key': claudeKey,
-        'anthropic-version': '2023-06-01',
-        'content-type': 'application/json',
-        'anthropic-dangerous-direct-browser-access': 'true'
-      },
       body: JSON.stringify({
         model: 'claude-haiku-4-5-20251001',
         max_tokens: 1000,
@@ -6726,7 +7009,7 @@ async function autoExtractTermsIfNeeded() {
 
     // 신규 용어의 상세 설명·개념도를 곧바로 채운다 — 운영자가 클릭할 때까지
     // 비워 두면 열어 볼 때마다 수십 초를 기다려야 한다. (배경역사 #46)
-    if (newRows.length) await backfillTermDetails(newRows, claudeKey);
+    if (newRows.length) await backfillTermDetails(newRows);
 
     // 과거에 생성이 실패했거나 자동화 이전에 들어온 빈 용어도 같이 메운다.
     // 하루 5건으로 제한 — 한 번에 몰아 돌리면 API 비용·시간이 튄다.
@@ -6740,7 +7023,7 @@ async function autoExtractTermsIfNeeded() {
       });
       if (pending.length) {
         console.log('[기술 용어] 미완성 ' + pending.length + '건 보충 생성');
-        await backfillTermDetails(pending, claudeKey);
+        await backfillTermDetails(pending);
       }
     } catch(e) { console.warn('[기술 용어] 미완성 보충 조회 실패:', e); }
   } catch(e) {
@@ -8294,8 +8577,7 @@ async function distillReportStyle(force) {
     return '〔불만족 초안 ' + (i+1) + '〕 ' + (f.draft||'').slice(0,700);
   }).join('\n\n');
 
-  var claudeKey = getConfig().claudeKey;
-  if (!claudeKey) return saved.rules || '';
+  if (!aiReady()) return saved.rules || '';
   var userMsg =
     '다음 자료로 "보고서 작성 규칙"을 만들어줘. 8~14줄, 지시문 형태로만 출력(설명 금지).\n\n' +
     '[A. 기준 예시 보고서 — 기본 구조·톤]\n' + (joined || '(없음)') +
@@ -8303,9 +8585,8 @@ async function distillReportStyle(force) {
     (negBlock ? '\n\n[C. 사용자가 별로라고 평가한 초안 — 이런 패턴은 "피하라"로 명시]\n' + negBlock : '') +
     '\n\n항목: ① 전체 구조(섹션 순서/제목 방식) ② 문단·문장 톤(격식/길이/어미) ③ 자주 쓰는 표현·머리말 ④ 도입·결론 처리 ⑤ 위 교정에서 드러난 사용자 선호(최우선).';
   try {
-    var res = await fetch('https://api.anthropic.com/v1/messages', {
+    var res = await claudeFetch({
       method:'POST',
-      headers:{ 'x-api-key':claudeKey, 'anthropic-version':'2023-06-01', 'content-type':'application/json', 'anthropic-dangerous-direct-browser-access':'true' },
       body: JSON.stringify({
         model:'claude-haiku-4-5-20251001', max_tokens:800,
         system:'당신은 문서 편집 전문가입니다. 기준 예시의 공통 형식을 잡되, 사용자의 교정 사례(초안→최종본 차이)에서 드러난 선호를 최우선으로 반영해 재사용 가능한 작성 규칙으로 일반화합니다.',
@@ -8324,8 +8605,7 @@ async function distillReportStyle(force) {
 
 // 수동 "스타일 재학습" 버튼
 async function onRelearnStyle() {
-  var claudeKey = getConfig().claudeKey;
-  if (!claudeKey) { alert('Claude API 키가 설정되지 않았습니다.'); return; }
+  if (!aiReady()) { alert(aiGateMsg()); return; }
   var btn = document.getElementById('report-relearn-btn');
   if (btn) { btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader"></i> 학습 중...'; }
   var rules = await distillReportStyle(true);
@@ -8342,8 +8622,7 @@ async function onRelearnStyle() {
 //  opts.reviseInstruction: 기존 초안(opts.priorDraft)을 말로 수정하는 다회 대화 모드
 async function callReportDraft(userText, reportType, onDelta, opts) {
   opts = opts || {};
-  var claudeKey = getConfig().claudeKey;
-  if (!claudeKey) throw new Error('Claude API 키가 설정되지 않았습니다.');
+  if (!aiReady()) throw new Error(aiGateMsg());
 
   // ① 형식: 스타일 가이드 + 유사 샘플 1~2편
   var styleRules = await distillReportStyle(false);
@@ -8410,9 +8689,8 @@ async function callReportDraft(userText, reportType, onDelta, opts) {
     messages = [{ role:'user', content: '다음 주제로 보고서 초안을 작성해줘:\n' + userText }];
   }
 
-  var res = await fetch('https://api.anthropic.com/v1/messages', {
+  var res = await claudeFetch({
     method:'POST',
-    headers:{ 'x-api-key':claudeKey, 'anthropic-version':'2023-06-01', 'content-type':'application/json', 'anthropic-dangerous-direct-browser-access':'true' },
     body: JSON.stringify({
       model:'claude-sonnet-5', max_tokens:24000, stream:true,
       system: system,
@@ -8503,7 +8781,7 @@ async function onGenerateDraft() {
   var btn = document.getElementById('report-gen-btn');
   var userText = (reqEl && reqEl.value || '').trim();
   if (!userText) { alert('어떤 보고서를 만들지 입력하세요. 예: 주파수 재할당 관련 정책검토 보고서 초안 만들어줘'); return; }
-  if (!getConfig().claudeKey) { alert('Claude API 키가 설정되지 않았습니다.'); return; }
+  if (!aiReady()) { alert(aiGateMsg()); return; }
   var reportType = (typeEl && typeEl.value) || '';
   if (reportType === '전체') reportType = '';
   if (btn) { btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader"></i> 생성 중...'; }
@@ -8538,7 +8816,7 @@ async function onReviseDraft(scope) {
   var inp = document.getElementById('report-revise-input');
   var instruction = (inp && inp.value || '').trim();
   if (!instruction) { alert('어떻게 고칠지 입력하세요. 예: 결론을 앞으로 빼고 3문단으로 줄여줘'); return; }
-  if (!getConfig().claudeKey) { alert('Claude API 키가 설정되지 않았습니다.'); return; }
+  if (!aiReady()) { alert(aiGateMsg()); return; }
   var outEl = document.getElementById('report-draft-output');
   var actionsEl = document.getElementById('report-draft-actions');
   var reviseRow = document.getElementById('report-revise-row');
@@ -9037,10 +9315,9 @@ var LAWMAP_GEN_SYSTEM = '당신은 한국 전파·통신 법령 체계 전문가
 
 async function callLawmapAI(userMsg) {
   var cfg = getConfig();
-  if (!cfg.claudeKey) throw new Error('Claude API 키가 설정되지 않았습니다 (설정 탭에서 입력)');
-  var res = await fetch('https://api.anthropic.com/v1/messages', {
+  if (!aiReady()) throw new Error(aiGateMsg());
+  var res = await claudeFetch({
     method: 'POST',
-    headers: { 'x-api-key': cfg.claudeKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json', 'anthropic-dangerous-direct-browser-access': 'true' },
     // thinking:disabled — Sonnet 5 적응형 추론이 첫 블록을 thinking으로 만들어 비스트리밍 파싱이 깨지는 함정 회피 (지침 do-not)
     body: JSON.stringify({ model: 'claude-sonnet-5', max_tokens: 2500, thinking: { type: 'disabled' }, system: LAWMAP_GEN_SYSTEM, messages: [{ role: 'user', content: userMsg }] })
   });
@@ -9504,9 +9781,15 @@ document.addEventListener('DOMContentLoaded', function() {
   loadSettingsUI();
   // loadPressJSON()은 진입 시 호출하지 않는다 — 보도자료 탭 진입(go('press') → loadPressFromSupabase)과
   // smartRefresh(panel-press)에서 로드된다. 첫 화면(뉴스)에서 불필요한 대량 조회 제거 (#61)
-  // 원격 설정(Claude 키 등)이 도착한 뒤 상태등을 다시 그린다 — 8703의 1회 호출은 키 로드 전이라
-  // 정상 동작 중에도 'Claude API 미설정'으로 굳는다(신규 사용자가 설정 누락으로 오해).
-  loadRemoteConfig().then(function() { updateStatusDots(); currentNewsSourceType = 'media'; loadNews(); renderGroupTabs('news'); });
+  currentNewsSourceType = 'media'; loadNews(); renderGroupTabs('news');
+  // 로그인 상태를 먼저 확정해야 AI 기능 게이트가 올바로 잠긴다(fail-closed).
+  // 세션 복원 전에는 aiReady()가 false이므로, 자동 AI 기능도 이 시점 전에는 돌지 않는다.
+  refreshAuthState();
+  if (sb) {
+    sb.auth.onAuthStateChange(function() {
+      refreshAuthState();
+    });
+  }
   refreshOpsLight();   // 상단바 상태등 — 페이지 로드 시 1회 (이후 smartRefresh마다 갱신)
   setTimeout(autoExtractTermsIfNeeded, 60000);
 });
