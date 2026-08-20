@@ -105,16 +105,18 @@ function aiGateMsg() {
   return 'AI 기능을 이용할 수 없습니다.';
 }
 
+/** 반환: 'ok'(행 있음) / 'missing'(조회는 됐는데 행 없음) / 'error'(조회 자체 실패) */
 async function loadMyProfile() {
   currentProfile = null;
-  if (!sb || !currentUser) return;
+  if (!sb || !currentUser) return 'missing';
   try {
     var r = await sb.from('profiles')
       .select('user_id,name,role,approved,active,daily_limit,unlimited,team_id,teams(name,daily_limit,unlimited)')
       .eq('user_id', currentUser.id).maybeSingle();
-    if (r.error) { console.warn('프로필 조회 실패:', r.error); return; }
+    if (r.error) { console.warn('프로필 조회 실패:', r.error); return 'error'; }
     currentProfile = r.data || null;
-  } catch (e) { console.warn('프로필 조회 실패:', e); }
+    return currentProfile ? 'ok' : 'missing';
+  } catch (e) { console.warn('프로필 조회 실패:', e); return 'error'; }
 }
 
 async function refreshAuthState() {
@@ -123,7 +125,14 @@ async function refreshAuthState() {
     var s = await sb.auth.getSession();
     currentUser = (s.data && s.data.session) ? s.data.session.user : null;
   } catch (e) { currentUser = null; }
-  await loadMyProfile();
+  var st = await loadMyProfile();
+  // getSession()은 localStorage의 토큰을 그대로 돌려주므로, 계정이 지워진 뒤에도
+  // '로그인한 것처럼' 보인다. 프로필 행이 확실히 없으면(조회 실패가 아니라 0행) 세션을 정리한다.
+  // 조회 오류('error')는 일시적 네트워크 문제일 수 있어 로그아웃시키지 않는다.
+  if (currentUser && st === 'missing') {
+    try { await sb.auth.signOut(); } catch (e) { /* 이미 만료된 세션 */ }
+    currentUser = null; currentProfile = null;
+  }
   applyAuthUI();
 }
 
