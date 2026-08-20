@@ -206,11 +206,26 @@ async function submitLogin() {
     btn.disabled = false;
   }
 }
+/** 계정 라벨 클릭 — 로그인 전이면 로그인창, 로그인 후엔 내 계정 상태를 알려준다 */
+function onAccountClick() {
+  if (!currentUser) { openLoginModal(); return; }
+  var p = currentProfile || {};
+  var role = ({ admin: '관리자', leader: '팀장', member: '팀원' })[p.role] || p.role || '';
+  var lines = [
+    (p.name || currentUser.email),
+    '이메일: ' + currentUser.email,
+    '소속: ' + ((p.teams && p.teams.name) || '(팀 미지정)') + ' · ' + role,
+    '상태: ' + (p.approved ? (p.active ? '이용 가능' : '비활성') : '관리자 승인 대기')
+  ];
+  if (confirm(lines.join('\n') + '\n\n로그아웃할까요?')) doLogout();
+}
+
 async function doLogout() {
   if (!sb) return;
   try { await sb.auth.signOut(); } catch (e) { /* 세션이 이미 없을 수 있다 */ }
   currentUser = null; currentProfile = null;
   applyAuthUI();
+  applySettingsLock();
 }
 
 /** 로그인 상태를 화면 전체에 반영 — 상단바 표시, 자문 입력창 잠금, 관리자 전용 요소 */
@@ -245,6 +260,7 @@ function applyAuthUI() {
   document.querySelectorAll('[data-admin-only]').forEach(function(el) {
     el.style.display = isAdminUser() ? '' : 'none';
   });
+  applySettingsLock();   // 설정 잠금도 로그인 상태를 따라간다(이중 잠금 없음)
   updateStatusDots();
   refreshQuotaLine();
 }
@@ -3210,13 +3226,13 @@ async function refreshDashboard() {
     document.getElementById('stat-news-sub').textContent = '미확인 뉴스';
 
     // 최근 자문 미리보기도 질문 전문이 그대로 보이므로 이력과 같은 관문을 둔다(2026-08-20).
-    // 이번 세션에서 이미 비밀번호를 넣었으면(_adminPwd) 바로 보여주고, 아니면 잠금 안내만.
+    // 관리자 계정이면 바로 보여주고, 아니면 잠금 안내만.
     // ※ #recent-logs·#stat-consult는 메뉴 개편(2026-08-03)으로 홈 패널이 사라지며 DOM에서
     //   빠진 상태다 — 아래는 홈을 되살릴 때를 위한 방어이고 현재는 실행되지 않는다.
     const container = document.getElementById('recent-logs');
     let logs = [];
-    if (_adminPwd) {
-      const lr = await sb.rpc('admin_list_chat_logs', { p_pwd: _adminPwd, p_limit: 3 });
+    if (isAdminUser()) {
+      const lr = await sb.rpc('admin_list_chat_logs', { p_pwd: '', p_limit: 3 });
       if (!lr.error) logs = lr.data || [];
     } else if (container) {
       container.innerHTML = '<div class="card" style="cursor:pointer" onclick="openChatHistory()">' +
@@ -5599,68 +5615,36 @@ function toggleBriefing(id) {
 }
 
 // ════════════════════════════════════════════
-//  관리자 인증 (AI 페르소나 보호)
+//  관리자 인증 — 계정 권한 기반 (2026-08-20, #104)
 // ════════════════════════════════════════════
-// 관리자 비밀번호는 평문 대신 SHA-256 해시로만 보관 (공개 소스에서 비번 노출 방지).
-// 비밀번호 변경 시: 브라우저 콘솔에서 아래 한 줄을 실행해 새 해시를 만들고 이 값을 교체하세요.
-//   crypto.subtle.digest('SHA-256', new TextEncoder().encode('새비밀번호')).then(b=>console.log([...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,'0')).join('')))
-const ADMIN_PWD_HASH = '164eab12762d42b09780eba6401d395a945355e42fc95a60b42ac509891cfa7e';
-const ADMIN_MAX_ATTEMPTS = 5;          // 연속 실패 허용 횟수
-const ADMIN_LOCKOUT_MS = 60 * 1000;    // 초과 시 입력 잠금 시간(60초)
-var _adminPwd = '';                    // 잠금 해제 시 메모리에만 보관(소스/저장소에는 없음) — 승인·삭제 RPC 서버검증용
+// 종전에는 화면에 별도 관리자 비밀번호(SHA-256 해시 비교)를 두었으나, 로그인 계정에 admin
+// 역할이 생기면서 같은 사람에게 두 번 인증을 요구하는 이중 잠금이 됐다. 해시 비교는 서버의
+// admin_ok()로 옮겼고(비밀번호 또는 admin 계정 중 하나면 통과), 화면은 역할만 본다.
 
-async function _sha256Hex(str) {
-  var buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
-  return Array.from(new Uint8Array(buf)).map(function(b){ return b.toString(16).padStart(2, '0'); }).join('');
-}
-
-async function checkAdminPwd() {
-  var inputEl = document.getElementById('admin-pwd-input');
-  var errEl = document.getElementById('admin-pwd-error');
-  var input = inputEl.value;
-  var now = Date.now();
-
-  // 잠금 상태면 차단하고 남은 시간 안내
-  var lockUntil = parseInt(sessionStorage.getItem('admin_lock_until') || '0', 10);
-  if (lockUntil > now) {
-    var sec = Math.ceil((lockUntil - now) / 1000);
-    if (errEl) { errEl.textContent = '시도 횟수를 초과했습니다. ' + sec + '초 후 다시 시도하세요.'; errEl.style.display = 'block'; }
-    inputEl.value = '';
-    return;
+// 설정 화면 잠금은 **계정 권한**이 정한다 (2026-08-20, #104 5단계).
+// 종전에는 별도 관리자 비밀번호를 물었는데, 로그인 계정에 admin 역할이 생긴 뒤로는
+// 같은 사람에게 두 번 인증을 요구하는 이중 잠금이 됐다. 관리 RPC도 admin_ok()로
+// '비밀번호 또는 admin 계정'을 받으므로, 화면에서 비밀번호를 물을 이유가 없다.
+function applySettingsLock() {
+  var locked = document.getElementById('settings-locked');
+  var unlocked = document.getElementById('settings-unlocked');
+  if (!locked || !unlocked) return;
+  var ok = isAdminUser();
+  locked.style.display = ok ? 'none' : 'flex';
+  unlocked.style.display = ok ? 'block' : 'none';
+  var msg = document.getElementById('settings-lock-msg');
+  if (msg) {
+    msg.textContent = !currentUser
+      ? '설정은 관리자 계정으로 로그인해야 볼 수 있습니다.'
+      : (currentProfile && !currentProfile.approved
+          ? '관리자 승인 대기 중입니다.'
+          : '이 계정에는 관리자 권한이 없습니다.');
   }
-
-  var hash = await _sha256Hex(input);
-  if (hash === ADMIN_PWD_HASH) {
-    sessionStorage.setItem('admin_auth', '1');
-    _adminPwd = input;   // 승인·삭제 RPC 서버검증용 (메모리에만)
-    sessionStorage.removeItem('admin_fail_count');
-    sessionStorage.removeItem('admin_lock_until');
-    document.getElementById('settings-locked').style.display = 'none';
-    document.getElementById('settings-unlocked').style.display = 'block';
-    document.getElementById('system-prompt-display').value = SYSTEM_PROMPT;
+  if (ok) {
+    var spd = document.getElementById('system-prompt-display');
+    if (spd) spd.value = SYSTEM_PROMPT;
     loadSettingsFields();
-    if (errEl) errEl.style.display = 'none';
-    inputEl.value = '';
-  } else {
-    var fails = parseInt(sessionStorage.getItem('admin_fail_count') || '0', 10) + 1;
-    inputEl.value = '';
-    if (fails >= ADMIN_MAX_ATTEMPTS) {
-      sessionStorage.setItem('admin_lock_until', String(now + ADMIN_LOCKOUT_MS));
-      sessionStorage.setItem('admin_fail_count', '0');
-      if (errEl) { errEl.textContent = ADMIN_MAX_ATTEMPTS + '회 연속 실패 — ' + (ADMIN_LOCKOUT_MS / 1000) + '초간 입력이 잠깁니다.'; errEl.style.display = 'block'; }
-    } else {
-      sessionStorage.setItem('admin_fail_count', String(fails));
-      if (errEl) { errEl.textContent = '비밀번호가 올바르지 않습니다. (남은 시도 ' + (ADMIN_MAX_ATTEMPTS - fails) + '회)'; errEl.style.display = 'block'; }
-    }
   }
-}
-
-function lockAdmin() {
-  sessionStorage.removeItem('admin_auth');
-  _adminPwd = '';
-  document.getElementById('settings-locked').style.display = 'flex';
-  document.getElementById('settings-unlocked').style.display = 'none';
-  document.getElementById('admin-pwd-input').value = '';
 }
 
 // ════════════════════════════════════════════
@@ -5798,17 +5782,17 @@ async function loadLawWatch() {
 }
 
 // 잠금 해제 후 새로고침 등으로 메모리 비번이 비면 다시 입력받음
+// 관리 RPC는 이제 admin_ok(p_pwd)로 '비밀번호 또는 admin 계정'을 받는다.
+// admin 계정으로 로그인돼 있으면 비밀번호 없이 통과하므로 빈 문자열을 넘긴다.
 function _ensureAdminPwd() {
-  if (_adminPwd) return _adminPwd;
-  var p = prompt('보안 확인을 위해 관리자 비밀번호를 다시 입력하세요:');
-  if (p) _adminPwd = p;
-  return _adminPwd;
+  if (isAdminUser()) return '';
+  alert('관리자 계정으로 로그인해야 합니다.');
+  return null;
 }
 
 function _handleAdminRpcError(err, action) {
   if (err && /AUTH_FAILED/.test(err.message || '')) {
-    _adminPwd = '';
-    alert('비밀번호 인증에 실패했습니다. 다시 시도해주세요.');
+    alert('관리자 권한이 없습니다. 관리자 계정으로 로그인해 주세요.');
   } else {
     alert(action + ' 실패: ' + (err && err.message ? err.message : err));
   }
@@ -5970,7 +5954,7 @@ async function generateOkfForDoc(docName, category, pwd) {
     p_competent_authority: sf.fm.competent_authority || '', p_path: path,
     p_description: sf.fm.description || '', p_body_md: sf.body
   });
-  if (r1.error) { if (/AUTH_FAILED/.test(r1.error.message || '')) _adminPwd = ''; throw new Error(r1.error.message); }
+  if (r1.error) { throw new Error(r1.error.message); }
   var vecs = embeddings.map(function(e) { return '[' + e.join(',') + ']'; });
   var r2b = await sb.rpc('admin_insert_kb_chunks', { p_pwd: pwd, p_doc_id: r1.data, p_contents: chunks, p_embeddings: vecs });
   if (r2b.error) throw new Error(r2b.error.message);
@@ -6030,13 +6014,7 @@ async function rejectDoc(idx) {
   await loadPendingApprovals();
 }
 
-function loadSettingsUI() {
-  // 이미 인증된 경우 잠금 해제 상태 유지, 아니면 잠금 화면 표시
-  var isAuth = sessionStorage.getItem('admin_auth') === '1';
-  document.getElementById('settings-locked').style.display   = isAuth ? 'none'  : 'flex';
-  document.getElementById('settings-unlocked').style.display = isAuth ? 'block' : 'none';
-  if (isAuth) loadSettingsFields();
-}
+function loadSettingsUI() { applySettingsLock(); }
 
 async function saveApiKeys() {
   const sbUrl = document.getElementById('inp-sb-url').value.trim();
