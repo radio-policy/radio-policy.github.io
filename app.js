@@ -2279,21 +2279,20 @@ function chDate(iso) {
   return d.getFullYear() + '-' + p(d.getMonth()+1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
 }
 
+// 운영자 전용 (2026-08-20) — 자문 이력에는 질문·답변 전문이 남는데 대시보드는 공개 페이지다.
+// 화면만 가리면 anon 키로 chat_logs를 그대로 읽을 수 있으므로 **DB에서 막고** 비밀번호 RPC로만 연다.
+// 목록 RPC가 조문 직조회(/law 19조 같은 기계적 원문 출력)를 서버에서 이미 제외한다.
 async function openChatHistory() {
   var modal = document.getElementById('chat-history-modal');
   var body = document.getElementById('chat-history-body');
   modal.style.display = 'flex';
   body.innerHTML = '<div style="color:var(--text-tertiary);font-size:12px">불러오는 중...</div>';
   if (!sb) { body.innerHTML = '<div style="color:var(--text-tertiary);font-size:12px">Supabase 연결 없음</div>'; return; }
+  var pwd = _ensureAdminPwd();
+  if (!pwd) { body.innerHTML = '<div style="color:var(--text-tertiary);font-size:12px">자문 이력은 운영자 전용입니다 — 관리자 비밀번호가 필요합니다.</div>'; return; }
   try {
-    // 조문 직조회(/law 전기통신사업법 19조)는 AI 답변이 아니라 DB 원문 출력이라 자문 이력에서 뺀다
-    // — 저장·피드백 분석은 그대로 되고(피드백 탭에서는 보인다) 이력만 자문 성격으로 유지 (2026-08-20)
-    var resp = await sb.from('chat_logs')
-      .select('id, question, category, created_at')
-      .neq('category', '텔레그램-조문조회')
-      .order('created_at', { ascending: false })
-      .limit(100);
-    if (resp.error) throw resp.error;
+    var resp = await sb.rpc('admin_list_chat_logs', { p_pwd: pwd, p_limit: 100 });
+    if (resp.error) { _handleAdminRpcError(resp.error, '자문 이력 조회'); body.innerHTML = '<div style="color:var(--text-tertiary);font-size:12px">조회하지 못했습니다. 다시 시도해 주세요.</div>'; return; }
     var data = resp.data || [];
     if (data.length === 0) {
       body.innerHTML = '<div style="color:var(--text-tertiary);font-size:12px">저장된 자문 이력이 없습니다.</div>';
@@ -2446,11 +2445,12 @@ async function viewChatHistoryItem(id) {
   var body = document.getElementById('chat-history-body');
   body.innerHTML = '<div style="color:var(--text-tertiary);font-size:12px">불러오는 중...</div>';
   try {
-    var resp = await sb.from('chat_logs')
-      .select('question, answer, category, created_at, sources')
-      .eq('id', id).single();
-    if (resp.error) throw resp.error;
-    var row = resp.data;
+    var pwd = _ensureAdminPwd();
+    if (!pwd) { body.innerHTML = '<div style="color:var(--text-tertiary);font-size:12px">자문 이력은 운영자 전용입니다 — 관리자 비밀번호가 필요합니다.</div>'; return; }
+    var resp = await sb.rpc('admin_get_chat_log', { p_pwd: pwd, p_id: id });
+    if (resp.error) { _handleAdminRpcError(resp.error, '자문 상세 조회'); body.innerHTML = '<div style="color:var(--text-tertiary);font-size:12px">조회하지 못했습니다.</div>'; return; }
+    var row = (resp.data || [])[0];
+    if (!row) throw new Error('이력을 찾을 수 없습니다(삭제되었을 수 있습니다).');
     var srcs = row.sources;
     if (typeof srcs === 'string') {
       try { srcs = JSON.parse(srcs); } catch(e) { srcs = srcs ? [srcs] : []; }
@@ -2645,9 +2645,12 @@ async function sendChat() {
 
     if (sb) {
       try {
-        // .select('id')로 행 id를 회수한다 — 👍👎 위젯이 이 id로 평점을 매단다.
-        // (기록이 실패하면 위젯만 생략하고 답변은 그대로 둔다 — 조용한 실패 금지: .error 확인)
+        // id를 **클라이언트에서 만들어** 넣는다 — 👍👎 위젯이 이 id로 평점을 매다는데,
+        // chat_logs는 운영자 전용이라 anon SELECT 정책이 없어 `.select('id')`(RETURNING)를
+        // 쓸 수 없다. insert 정책만으로 되는 방식으로 맞춘다. (2026-08-20)
+        var logId = (crypto.randomUUID ? crypto.randomUUID() : null);
         var ins = await sb.from('chat_logs').insert({
+          id: logId || undefined,
           question: text,
           answer: answer,
           category: detectCategory(text),
@@ -2655,9 +2658,9 @@ async function sendChat() {
           sources: (lastWebSources || []).concat(lastRagSources),
           channel: 'dashboard',
           chunk_ids: lastAdvChunkIds
-        }).select('id').single();
+        });
         if (ins.error) throw ins.error;
-        if (ins.data && ins.data.id) msgEl.appendChild(buildFeedbackWidget(ins.data.id));
+        if (logId) msgEl.appendChild(buildFeedbackWidget(logId));
       } catch(e) { console.warn('자문 이력(chat_logs) 저장 실패(답변은 정상):', e); }
       refreshDashboard();
     }
@@ -2876,9 +2879,8 @@ async function refreshDashboard() {
     const now = new Date();
     const firstDay = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
 
-    const { count: consultCount } = await sb.from('chat_logs')
-      .select('*', { count: 'exact', head: true })
-      .gte('created_at', firstDay);
+    // 건수는 숫자만 나가는 RPC로 — chat_logs 본문은 운영자 전용이라 anon 직접 조회가 막혀 있다
+    const { data: consultCount } = await sb.rpc('chat_logs_month_count');
 
     const { count: newsCount } = await sb.from('news_feed')
       .select('*', { count: 'exact', head: true })
@@ -2889,13 +2891,23 @@ async function refreshDashboard() {
     document.getElementById('stat-news').textContent = newsCount ?? 0;
     document.getElementById('stat-news-sub').textContent = '미확인 뉴스';
 
-    const { data: logs } = await sb.from('chat_logs')
-      .select('id, question, category, created_at')
-      .order('created_at', { ascending: false })
-      .limit(3);
+    // 최근 자문 미리보기도 질문 전문이 그대로 보이므로 이력과 같은 관문을 둔다(2026-08-20).
+    // 이번 세션에서 이미 비밀번호를 넣었으면(_adminPwd) 바로 보여주고, 아니면 잠금 안내만.
+    // ※ #recent-logs·#stat-consult는 메뉴 개편(2026-08-03)으로 홈 패널이 사라지며 DOM에서
+    //   빠진 상태다 — 아래는 홈을 되살릴 때를 위한 방어이고 현재는 실행되지 않는다.
+    const container = document.getElementById('recent-logs');
+    let logs = [];
+    if (_adminPwd) {
+      const lr = await sb.rpc('admin_list_chat_logs', { p_pwd: _adminPwd, p_limit: 3 });
+      if (!lr.error) logs = lr.data || [];
+    } else if (container) {
+      container.innerHTML = '<div class="card" style="cursor:pointer" onclick="openChatHistory()">' +
+        '<div class="card-header"><span class="card-title" style="font-size:12px">' +
+        '<i class="ti ti-lock"></i> 최근 자문 — 운영자 전용</span></div>' +
+        '<div class="card-meta">클릭해 관리자 비밀번호로 열기</div></div>';
+    }
 
-    if (logs && logs.length > 0) {
-      const container = document.getElementById('recent-logs');
+    if (logs && logs.length > 0 && container) {
       container.innerHTML = logs.map(l => {
         const date = new Date(l.created_at).toLocaleDateString('ko-KR', {month:'2-digit',day:'2-digit'});
         const catColor = { '주파수':'badge-purple','전자파':'badge-blue','ITU-R':'badge-blue','적합성평가':'badge-teal','기술기준':'badge-teal','일반':'badge-amber' };
@@ -5746,7 +5758,8 @@ async function testConnection() {
   const results = [];
   if (sb) {
     try {
-      const { error } = await sb.from('chat_logs').select('id').limit(1);
+      // chat_logs는 anon 조회가 막혀 있어(운영자 전용) 연결 확인용으로 못 쓴다 — 건수 RPC로 대체
+      const { error } = await sb.rpc('chat_logs_month_count');
       results.push(error ? 'Supabase X (' + error.message + ')' : 'Supabase 연결 성공');
     } catch(e) { results.push('Supabase X (' + e.message + ')'); }
   } else {

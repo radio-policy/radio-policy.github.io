@@ -131,7 +131,8 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 | 읽기 전용 | law_amendments·assembly_bills·law_diffs·law_watch·law_pending·feedback_rules·system_health·kb_documents·kb_chunks | select만 |
 | 화면 기능 | news_feed | select·update·**delete**(기사 삭제 버튼) — insert 없음 |
 | | daily_briefings | select·update(긴급도 수정 시 본문 동기화) |
-| | deleted_news·chat_logs | select·insert (**append-only**) |
+| | deleted_news | select·insert (**append-only**) |
+| | **chat_logs** | **insert만** — SELECT 정책 없음(2026-08-20, 자문 이력 운영자 전용화). 읽기는 `admin_list_chat_logs`/`admin_get_chat_log`(비밀번호), 건수는 `chat_logs_month_count()` |
 | | importance_feedback·tech_terms | select·insert·update |
 | | custom_knowledge | select·insert·update·delete (팀원 기여 창구) |
 | | law_graph_nodes·law_graph_edges | select·insert·update (delete는 service 전용 — 병합만) |
@@ -854,6 +855,7 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **자문 프롬프트의 시제 가드·현지어 검색 지시를 지우지 말 것** — 모델은 오늘 날짜를 알면서도 **학습 시점 기준의 '예정'을 자동 보정하지 않는다**. 일본 도코모 3G 종료(2026-03-31, 이미 5개월 전)를 8월 답변에서 "종료 예정"이라 쓰고 KDDI(2022)·소프트뱅크(2024) 종료는 누락했다. 또 해외 주제를 한국어·영어로만 검색하면 공식 자료가 아니라 블로그가 걸린다(일본 관련 출처 3건이 전부 취미 블로그·MVNO FAQ·2021년 기사였고, 일본어로 치니 도코모 공식 공지가 즉시 나왔다). `system_prompt.js` [세부 지침]의 두 줄(시제 검증 / 해외 주제 검색)이 그 방어다. **프롬프트는 `system_prompt.js`가 단일 원본이며 대시보드·봇 공통이다 — 수정 후 반드시 `python sync_system_prompt.py` 실행**(안 하면 봇만 옛 프롬프트) **+ `index.html`의 `system_prompt.js?v=` 캐시버스터 갱신**(안 하면 대시보드만 옛 프롬프트). (배경역사 #101)
 - **국회 입법예고를 pal HTML 스크래핑으로 전환 금지** — OpenAPI `nknalejkafmvgzmpt`와 레코드 완전 일치 실측(379=379), HTML은 GET 페이징을 조용히 무시(POST+_csrf)라 유지보수 함정. 상세 함정 목록은 "국회 입법예고 추적" 절. (배경역사 #56)
 - **`answer_feedback`에 anon 정책을 주지 말 것** — 대시보드는 공개 페이지라 정책을 열면 남의 질문·평점·불만 사유가 그대로 노출된다. 쓰기는 `submit_answer_feedback` RPC(누구나 실행, 조회 불가), 읽기는 `admin_list_answer_feedback`(관리자 비밀번호) 전용. 텔레그램 Edge Function은 service role이라 정책과 무관. (배경역사 #103)
+- **`chat_logs`에 anon SELECT 정책을 되살리지 말 것 — 자문 이력도 운영자 전용이다** (2026-08-20 운영자 지시). 질문·답변 전문이 남는 테이블이라 화면만 가려서는 anon 키로 그대로 읽힌다. 읽기는 `admin_list_chat_logs`/`admin_get_chat_log`(비밀번호) 전용이고, 건수만 필요한 곳은 내용을 반환하지 않는 `chat_logs_month_count()`를 쓴다. **SELECT 정책이 없으므로 대시보드의 insert에 `.select()`(RETURNING)를 붙이면 실패한다** — 👍👎용 id는 `crypto.randomUUID()`로 클라이언트에서 만들어 넣는다. INSERT 정책은 유지(자문 기록이 남아야 함). (배경역사 #103)
 - **만족도 👍👎를 의무로 만들지 말 것** — 안 눌러도 답변·쿼터에 영향이 없어야 하고 재촉 문구도 넣지 않는다. 불만족률은 **투표된 건만 분모**로 센다(무투표는 행 자체가 없음). (배경역사 #103)
 - **피드백 버튼은 분할 답변의 마지막 조각에만 붙일 것** — `splitByLines`로 1~3개 메시지가 되는데 전 조각에 달면 한 답변에 투표창이 여러 개 생긴다. `sendAnswerWithFeedback()` 사용. `callback_data`는 64바이트 상한이라 질문을 실을 수 없으므로 `fb:<rating>:<log_id>` 형태를 유지할 것. (배경역사 #103)
 - **답변을 기록하는 insert에서 `.select('id')`를 빼지 말 것** — 👍👎가 그 id로 평점을 매단다. `handleAsk`는 이 때문에 **기록이 전송보다 앞에 있고**, 실패 경로의 `[자문 실패]` 기록은 `logged` 가드로 이중 기록을 막는다 — 순서를 되돌리면 버튼이 사라지고 가드를 빼면 행이 겹친다. (배경역사 #103)
