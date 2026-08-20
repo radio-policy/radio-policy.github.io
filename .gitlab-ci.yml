@@ -1,0 +1,14 @@
+# GitLab Pages — 대시보드 정적 배포 전용.
+# 크롤러는 여기서 돌리지 않는다: 매시간 수집만으로 무료 CI 한도(400분/월)를 넘긴다.
+# 수집은 PC 작업 스케줄러 + Supabase pg_cron 담당.
+pages:
+  stage: deploy
+  image: alpine:latest
+  script:
+    - mkdir -p public
+    - cp index.html styles.css app.js system_prompt.js public/
+  artifacts:
+    paths:
+      - public
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
