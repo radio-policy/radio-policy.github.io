@@ -74,7 +74,8 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 | document_chunks | 법령·고시·보도자료 RAG 청크. embedding(vector 1024, HNSW), article_no=조항번호+제목. file_path=업로드 원본 Storage 경로. **보도자료는 2026-08-02부터 자동 수집**: doc_name=`{기관}_보도자료_{YYYY}.md`(기관: 과기정통부/전파연구원/방통위/전파관리소/ETRI/KISDI), 섹션 헤더 `## YYMMDD 제목`, 마지막 줄 `(원문: URL)`, **700자 무겹침 청킹**(대시보드가 청크를 이어붙여 원문 복원하므로 overlap 금지) |
 | app_config | 키-값 설정. `system_prompt`(봇 자문 프롬프트), `press_keywords`(보도자료 수집 키워드 JSON 배열 — 대시보드 '수집 키워드 관리' 카드가 편집), `press_relevance_criteria`(매일 수집 AI 관련성 판정 기준문), `assembly_notice_criteria`(국회 입법예고 Haiku 판정 기준문)·`assembly_notice_rejected`(기각 캐시 JSON — 자동 관리) 등. **claude_key는 anon 노출되는 브라우저용 — 서버측 재사용 금지** |
 | custom_knowledge | 팀 추가 지식(수동 입력). AI 자문 키워드 매칭 참조 |
-| chat_logs | AI 자문 이력. 삭제 가능. `sources`(text)는 **두 종류를 접두사로 구분해** 담는다 — 법령·문서명은 그대로, 수집 뉴스는 `[뉴스] 제목 (매체, 날짜)`. 화면·내보내기에서 `splitSources()`로 갈라 별도 표기(법령은 6개 초과분 `… 등 N개`). **뉴스는 본문 발췌로 실제 반영된 건만** 기록(제목 목록 30건은 근거 아님). 스키마 변경 없이 반영 여부를 사후 검증하려는 구조. (배경역사 #35) |
+| chat_logs | AI 자문 이력. **2026-08-20(#103)부터 네 경로 공통 정본 답변 로그** — 대시보드 자문·텔레그램 /ask·/law 자연어·/law 조문 직조회. `channel`(만족도 집계 축)·`chat_id`(텔레그램 이용자)·`chunk_ids`(jsonb, 그때 실제로 프롬프트에 들어간 근거 청크 id — 불만족 분석 재료) 컬럼 추가. 자문 이력 목록은 `category='텔레그램-조문조회'`만 제외(기계적 원문 출력이라 성격이 다름 — 피드백 탭에서는 보인다). 삭제 가능. `sources`(text)는 **두 종류를 접두사로 구분해** 담는다 — 법령·문서명은 그대로, 수집 뉴스는 `[뉴스] 제목 (매체, 날짜)`. 화면·내보내기에서 `splitSources()`로 갈라 별도 표기(법령은 6개 초과분 `… 등 N개`). **뉴스는 본문 발췌로 실제 반영된 건만** 기록(제목 목록 30건은 근거 아님). 스키마 변경 없이 반영 여부를 사후 검증하려는 구조. (배경역사 #35) |
+| answer_feedback | 답변 만족도 👍👎(#103). **세 경로 공통 한 테이블** — `channel`(telegram_ask/telegram_law/dashboard)로 구분해 경로별 불만족률 비교. `log_id` 유니크 FK→chat_logs(재투표는 upsert로 갱신, 로그 삭제 시 set null이라 평점·경로는 보존). `rating` 1/-1, `reason`은 대시보드 👎 사유(텔레그램은 버튼만 → null). **RLS 켜짐 + anon 정책 없음** — 쓰기는 `submit_answer_feedback` RPC, 읽기는 `admin_list_answer_feedback`(관리자 비밀번호). 화면: AI 자문 > '답변 피드백' 탭 |
 | report_samples | 보고서 초안 제안 — 내 보고서 전문(형식·톤 학습용, 청킹 안 함). embedding(vector 1024, HNSW). report_type=정책검토/규제영향/동향보고/기타 |
 | report_style_rules | 보고서 스타일 가이드 캐시(단일 행 id=1). sample_count·feedback_count로 자동 재증류 임계(+2) 추적 |
 | report_feedback | 보고서 피드백 — request·draft·final(채택·교정본)·rating(1/-1). 편집-diff 학습 데이터. 영구 |
@@ -98,6 +99,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 | voyage-embed (Edge) | 질의 임베딩. VOYAGE_API_KEY는 Supabase Secrets(브라우저 노출 금지). **body.model로 모델 선택(하위호환)**: 미지정=voyage-4-lite(document_chunks 조문), `voyage-law-2`(kb_chunks 법령요약). 저장·질의 모델 반드시 일치 |
 | match_kb_chunks_semantic / search_kb_chunks_trgm (RPC) | 법령요약(kb_chunks) 시맨틱/trgm 검색. 기본 `only_current=true`(구버전 제외). insert_kb_chunks(RPC)는 적재 시 청크 일괄 삽입(text→vector) |
 | list_kb_documents (RPC) | 지식 베이스 문서 목록(doc_name 그룹핑) |
+| submit_answer_feedback / admin_list_answer_feedback (RPC) | 답변 만족도(#103). 전자는 anon 실행 가능한 투표 제출(security definer) — `channel`은 프런트 값을 믿지 않고 서버가 chat_logs에서 읽고, `log_id` 충돌 시 upsert(사유는 coalesce로 보존). 후자는 기존 admin RPC와 같은 sha256 비밀번호 검증 후 피드백+원본 질문·답변·근거를 조인해 최근 500건 반환 |
 | admin_delete_custom_file / admin_delete_chat_log (RPC) | 대시보드 삭제용(비밀번호 검증, security definer). **삭제된 행 수를 반환**하며 프런트는 0이면 실패로 처리한다. `document_chunks`·`chat_logs`는 RLS가 켜져 있고 DELETE 정책이 없어 프런트 직접 `delete()`가 오류 없이 0건으로 끝났다(#48) |
 | list_kb_guide_docs (RPC) | `실무 안내` 탭 목록(현행본 203건). **body_md는 안 돌려준다** — 203건 합계 681kB라 브라우저로 내려받으면 안 되고, `has_table`(표 포함 여부)·`chunks`(청크 수)만 서버에서 계산해 준다. 본문은 클릭 시 그 문서 1건만 조회 |
 | search_chunks_trgm / match_chunks_semantic (RPC) | trgm / pgvector 시맨틱 검색 |
@@ -136,6 +138,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 | 조건부 | **app_config** | select 전체 / insert·update는 **`key in ('claude_key','press_keywords')` 행만** |
 | | **document_chunks** | select / insert는 **`is_approved=false` 강제**(승인 대기로만 들어옴) |
 | service 전용 | telegram_subscribers·subscriber_queue·alert_suppress_log·changes·documents·system_status | 정책 0개 |
+| | **answer_feedback** | 정책 0개 — 쓰기는 `submit_answer_feedback` RPC(anon 실행 가능, 조회 불가), 읽기는 `admin_list_answer_feedback`(비밀번호). 공개 페이지에 남의 평점·불만 사유를 노출하지 않으려는 구조 (#103) |
 | 쓰기 회수 | report_samples·report_style_rules·report_feedback·report_directives | select만 (보고서 메뉴 숨김 상태 — ⑦ 부활 시 재개방) |
 
 - **app_config 행 제한의 이유**: `system_prompt`는 telegram-webhook Edge Function이 봇 자문
@@ -850,6 +853,12 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **[계정 복구 시 되돌릴 것] temp_gh_law.bat의 promote·watch 2줄 제거** — GitHub 정지 동안 `law_sync.py --promote`·`law_watch.py`가 안 돌아 시행 도래분(예: 8/11 국가재정법·8/20 방발법)이 승격 안 되고 자문이 옛 조문을 현행이라 답하는 무음 위험 → 임시로 PC 배치(temp_gh_law.bat)에 두 줄 추가(2026-08-02). **계정 복구 후 GitHub Actions(law_crawl.yml)가 되살아나면 이 두 줄을 삭제**해야 중복 실행이 안 생긴다(과제 #10). 멱등이라 피해는 작으나 로그 오염. (배경역사 #55 계열)
 - **자문 프롬프트의 시제 가드·현지어 검색 지시를 지우지 말 것** — 모델은 오늘 날짜를 알면서도 **학습 시점 기준의 '예정'을 자동 보정하지 않는다**. 일본 도코모 3G 종료(2026-03-31, 이미 5개월 전)를 8월 답변에서 "종료 예정"이라 쓰고 KDDI(2022)·소프트뱅크(2024) 종료는 누락했다. 또 해외 주제를 한국어·영어로만 검색하면 공식 자료가 아니라 블로그가 걸린다(일본 관련 출처 3건이 전부 취미 블로그·MVNO FAQ·2021년 기사였고, 일본어로 치니 도코모 공식 공지가 즉시 나왔다). `system_prompt.js` [세부 지침]의 두 줄(시제 검증 / 해외 주제 검색)이 그 방어다. **프롬프트는 `system_prompt.js`가 단일 원본이며 대시보드·봇 공통이다 — 수정 후 반드시 `python sync_system_prompt.py` 실행**(안 하면 봇만 옛 프롬프트) **+ `index.html`의 `system_prompt.js?v=` 캐시버스터 갱신**(안 하면 대시보드만 옛 프롬프트). (배경역사 #101)
 - **국회 입법예고를 pal HTML 스크래핑으로 전환 금지** — OpenAPI `nknalejkafmvgzmpt`와 레코드 완전 일치 실측(379=379), HTML은 GET 페이징을 조용히 무시(POST+_csrf)라 유지보수 함정. 상세 함정 목록은 "국회 입법예고 추적" 절. (배경역사 #56)
+- **`answer_feedback`에 anon 정책을 주지 말 것** — 대시보드는 공개 페이지라 정책을 열면 남의 질문·평점·불만 사유가 그대로 노출된다. 쓰기는 `submit_answer_feedback` RPC(누구나 실행, 조회 불가), 읽기는 `admin_list_answer_feedback`(관리자 비밀번호) 전용. 텔레그램 Edge Function은 service role이라 정책과 무관. (배경역사 #103)
+- **만족도 👍👎를 의무로 만들지 말 것** — 안 눌러도 답변·쿼터에 영향이 없어야 하고 재촉 문구도 넣지 않는다. 불만족률은 **투표된 건만 분모**로 센다(무투표는 행 자체가 없음). (배경역사 #103)
+- **피드백 버튼은 분할 답변의 마지막 조각에만 붙일 것** — `splitByLines`로 1~3개 메시지가 되는데 전 조각에 달면 한 답변에 투표창이 여러 개 생긴다. `sendAnswerWithFeedback()` 사용. `callback_data`는 64바이트 상한이라 질문을 실을 수 없으므로 `fb:<rating>:<log_id>` 형태를 유지할 것. (배경역사 #103)
+- **답변을 기록하는 insert에서 `.select('id')`를 빼지 말 것** — 👍👎가 그 id로 평점을 매단다. `handleAsk`는 이 때문에 **기록이 전송보다 앞에 있고**, 실패 경로의 `[자문 실패]` 기록은 `logged` 가드로 이중 기록을 막는다 — 순서를 되돌리면 버튼이 사라지고 가드를 빼면 행이 겹친다. (배경역사 #103)
+- **`chat_logs`에 새 경로를 적재할 때 `channel`을 빠뜨리지 말 것** — 경로별 불만족률 비교가 이 컬럼 하나에 달려 있다. 값은 `telegram_ask`/`telegram_law`/`dashboard` 셋뿐이고, /law 두 하위경로는 `category`('텔레그램-법령검색'·'텔레그램-조문조회')로 구분한다. 자문 이력 목록(`openChatHistory`)은 조문 직조회만 제외하므로 새 category를 만들면 노출 여부를 함께 결정할 것. (배경역사 #103)
+- **`report_feedback`에 anon INSERT 정책을 열지 말 것 — 공개 대시보드에서는 보고서 기능을 쓰지 않는다** (2026-08-20 운영자 방침: 보고서 초안 제안은 **사내 시스템 전용**, `docs/사내이식_계획.md`). 현재 정책은 SELECT만 있어 프런트 insert(app.js:8419·8456)가 조용히 실패하는 상태이고 행 수도 0인데, 메뉴 자체가 숨김이라 실사용 영향이 없다. 안 쓰는 기능을 위해 공개 페이지에 쓰기 구멍을 내는 쪽이 더 나쁘다. **사내 이식 시 그쪽 인증 체계에서 정식 처리**할 것 — 그때 `.error` 확인(선례 app.js:7920)도 함께 넣어야 같은 조용한 실패가 재발하지 않는다. #48 계열. (배경역사 #103)
 
 ## 알려진 제약사항
 

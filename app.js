@@ -102,6 +102,10 @@ let lastKbSources = [];           // 직전 자문에 들어간 요약·실무 �
 // 직전 자문에서 모델이 본문에 실제 인용한 웹 문서('[웹] 제목 (url)' 형식).
 // 검색만 하고 안 쓴 결과는 citations로 오지 않으므로 내부 RAG 목록과 달리 "진짜 근거"다.
 let lastWebSources = [];
+// 직전 자문의 근거 청크 id(document_chunks.id). 만족도 👎를 나중에 분석할 때
+// 문서명만으로는 "같은 법령의 어느 조문이 걸렸나"를 되짚을 수 없어 id를 따로 남긴다.
+// rag.ts answerAdvisory의 chunkIds와 같은 역할 — 한쪽만 고치지 말 것.
+let lastAdvChunkIds = [];
 
 function extractKeywords(text) {
   // 한국어 조사·어미·불용어 제거
@@ -1890,6 +1894,7 @@ async function callClaude(userText, onDelta) {
   // RAG: 관련 문서 청크 검색 (보도자료는 원본 JSON, 법령은 Supabase)
   lastRagSources = [];
   lastWebSources = [];
+  lastAdvChunkIds = [];
   var ragChunks = [];
 
   if (isPressQuery(userText)) {
@@ -1950,6 +1955,14 @@ async function callClaude(userText, onDelta) {
     lastRagSources = lawSrcHead.concat(lastRagSources.filter(function(s) { return lawSrcHead.indexOf(s) === -1; }));
     console.log('조문 정밀검색 보강:', lawExtra.map(function(h) { return h.doc_name + ' ' + (h.article_no || ''); }).join(', '));
   }
+
+  // 근거 청크 id 스냅샷 — 출처 목록과 같은 순서(조문 정밀검색분 먼저, 그다음 RAG).
+  // 보도자료 의사청크는 id가 'press_…' 문자열이라 document_chunks 조회가 불가능하므로 제외한다
+  // (문서명은 lastRagSources에 그대로 남는다).
+  lastAdvChunkIds = [];
+  (lawExtra || []).concat(ragChunks).forEach(function(c) {
+    if (c && typeof c.id === 'number' && lastAdvChunkIds.indexOf(c.id) === -1) lastAdvChunkIds.push(c.id);
+  });
 
   // 시스템 프롬프트에 컨텍스트 조합 (위에서 동시 시작한 검색 결과를 기존 순서 그대로 조립)
   const ragContext    = buildRagContext(ragChunks);
@@ -2273,8 +2286,11 @@ async function openChatHistory() {
   body.innerHTML = '<div style="color:var(--text-tertiary);font-size:12px">불러오는 중...</div>';
   if (!sb) { body.innerHTML = '<div style="color:var(--text-tertiary);font-size:12px">Supabase 연결 없음</div>'; return; }
   try {
+    // 조문 직조회(/law 전기통신사업법 19조)는 AI 답변이 아니라 DB 원문 출력이라 자문 이력에서 뺀다
+    // — 저장·피드백 분석은 그대로 되고(피드백 탭에서는 보인다) 이력만 자문 성격으로 유지 (2026-08-20)
     var resp = await sb.from('chat_logs')
       .select('id, question, category, created_at')
+      .neq('category', '텔레그램-조문조회')
       .order('created_at', { ascending: false })
       .limit(100);
     if (resp.error) throw resp.error;
@@ -2629,13 +2645,19 @@ async function sendChat() {
 
     if (sb) {
       try {
-        await sb.from('chat_logs').insert({
+        // .select('id')로 행 id를 회수한다 — 👍👎 위젯이 이 id로 평점을 매단다.
+        // (기록이 실패하면 위젯만 생략하고 답변은 그대로 둔다 — 조용한 실패 금지: .error 확인)
+        var ins = await sb.from('chat_logs').insert({
           question: text,
           answer: answer,
           category: detectCategory(text),
           // 웹 출처를 앞에 붙여 함께 남긴다 — 이력·내보내기에서 splitSources()가 갈라 쓴다
-          sources: (lastWebSources || []).concat(lastRagSources)
-        });
+          sources: (lastWebSources || []).concat(lastRagSources),
+          channel: 'dashboard',
+          chunk_ids: lastAdvChunkIds
+        }).select('id').single();
+        if (ins.error) throw ins.error;
+        if (ins.data && ins.data.id) msgEl.appendChild(buildFeedbackWidget(ins.data.id));
       } catch(e) { console.warn('자문 이력(chat_logs) 저장 실패(답변은 정상):', e); }
       refreshDashboard();
     }
@@ -2648,6 +2670,169 @@ async function sendChat() {
     btn.disabled = false;
     input.focus();
   }
+}
+
+// ════════════════════════════════════════════
+//  답변 만족도 👍👎 (2026-08-20)
+//  세 경로(텔레그램 /ask·/law, 대시보드)의 평점을 answer_feedback 한 테이블에 channel로 모은다.
+//  · **선택 사항**이다 — 안 눌러도 답변에 아무 영향이 없다. 재촉 문구를 넣지 말 것.
+//  · 제출은 submit_answer_feedback RPC로만. answer_feedback은 RLS로 anon 직접 접근이 막혀 있다
+//    (대시보드는 공개 페이지라 남의 평점·사유가 보이면 안 된다 — 조회는 운영자 RPC 전용).
+//    channel은 서버가 chat_logs에서 읽으므로 프런트가 위조할 수 없다.
+//  · 재투표 허용 — 서버가 log_id로 upsert하므로 마지막 값만 남는다.
+// ════════════════════════════════════════════
+var FB_CHANNEL_LABEL = { telegram_ask: '텔레그램 자문', telegram_law: '텔레그램 법령', dashboard: '대시보드' };
+
+function buildFeedbackWidget(logId) {
+  var wrap = document.createElement('div');
+  wrap.className = 'rag-sources';
+  wrap.innerHTML =
+    '<span>이 답변이 도움이 되었나요?</span> ' +
+    '<button class="btn fb-btn" data-r="1" title="도움됨" aria-label="도움됨"><i class="ti ti-thumb-up"></i></button> ' +
+    '<button class="btn fb-btn" data-r="-1" title="아쉬움" aria-label="아쉬움"><i class="ti ti-thumb-down"></i></button> ' +
+    '<span class="fb-note" style="color:var(--text-tertiary)">(선택)</span>' +
+    '<div class="fb-reason" style="display:none;gap:6px;margin-top:6px">' +
+      '<input type="text" class="fb-reason-input" placeholder="아쉬운 점 한 줄 (건너뛰어도 저장됩니다)" style="flex:1">' +
+      '<button class="btn fb-reason-save">저장</button>' +
+    '</div>';
+  wrap.querySelectorAll('.fb-btn').forEach(function(b) {
+    b.addEventListener('click', function() { submitAnswerFeedback(logId, Number(b.getAttribute('data-r')), wrap); });
+  });
+  wrap.querySelector('.fb-reason-save').addEventListener('click', function() {
+    submitAnswerFeedback(logId, -1, wrap, wrap.querySelector('.fb-reason-input').value.trim());
+  });
+  return wrap;
+}
+
+async function submitAnswerFeedback(logId, rating, wrap, reason) {
+  if (!sb || !logId) return;
+  var note = wrap.querySelector('.fb-note');
+  try {
+    var res = await sb.rpc('submit_answer_feedback', {
+      p_log_id: logId, p_rating: rating, p_reason: (reason || null)
+    });
+    if (res.error) throw res.error;
+    note.textContent = rating > 0 ? '👍 반영되었습니다 — 감사합니다' : '👎 반영되었습니다 — 개선에 참고하겠습니다';
+    // 👎를 처음 누른 경우에만 사유 입력을 편다(대시보드 전용 채널 — 텔레그램은 버튼만).
+    wrap.querySelector('.fb-reason').style.display = (rating < 0 && !reason) ? 'flex' : 'none';
+    wrap.querySelectorAll('.fb-btn').forEach(function(b) {
+      b.style.color = (Number(b.getAttribute('data-r')) === rating) ? 'var(--accent)' : '';
+    });
+  } catch (e) {
+    console.warn('만족도 저장 실패:', e);
+    note.textContent = '저장 실패 — 잠시 후 다시 눌러 주세요';
+  }
+}
+
+// ── 피드백 목록 (운영자 전용) ──
+var _fbRows = [];
+var _fbChannel = '';      // '' = 전체
+var _fbOnlyBad = false;
+
+async function loadFeedbackList() {
+  var el = document.getElementById('feedback-body');
+  if (!el || !sb) return;
+  var pwd = _ensureAdminPwd();
+  if (!pwd) { el.innerHTML = '<div style="color:var(--text-tertiary);font-size:12px">운영자 비밀번호를 입력해야 피드백을 볼 수 있습니다.</div>'; return; }
+  el.innerHTML = '<div style="color:var(--text-tertiary);font-size:12px">불러오는 중...</div>';
+  var res = await sb.rpc('admin_list_answer_feedback', { p_pwd: pwd });
+  if (res.error) {
+    _handleAdminRpcError(res.error, '피드백 조회');
+    el.innerHTML = '<div style="color:var(--text-tertiary);font-size:12px">조회하지 못했습니다. 상단 탭을 다시 눌러 재시도하세요.</div>';
+    return;
+  }
+  _fbRows = res.data || [];
+  renderFeedbackList();
+}
+
+function setFbChannel(v) { _fbChannel = v; renderFeedbackList(); }
+function toggleFbOnlyBad() { _fbOnlyBad = !_fbOnlyBad; renderFeedbackList(); }
+
+function renderFeedbackList() {
+  var el = document.getElementById('feedback-body');
+  if (!el) return;
+  // 경로별 집계 — 분모는 **투표된 건**만. 안 누른 답변은 애초에 행이 없다(선택 사항이므로).
+  var stat = {};
+  _fbRows.forEach(function(r) {
+    var s = stat[r.channel] || (stat[r.channel] = { up: 0, down: 0 });
+    if (r.rating > 0) s.up++; else s.down++;
+  });
+  var cards = ['telegram_ask', 'telegram_law', 'dashboard'].map(function(ch) {
+    var s = stat[ch] || { up: 0, down: 0 };
+    var tot = s.up + s.down;
+    var pct = tot ? Math.round(s.down * 100 / tot) : 0;
+    return '<div class="card" style="padding:12px 14px">' +
+      '<div style="font-size:12px;color:var(--text-secondary)">' + FB_CHANNEL_LABEL[ch] + '</div>' +
+      '<div style="font-size:18px;font-weight:600;margin-top:4px">' + tot + '건' +
+      (tot ? ' <span style="font-size:12px;font-weight:400;color:var(--danger,#c0392b)">불만족 ' + pct + '%</span>' : '') +
+      '</div></div>';
+  }).join('');
+
+  var rows = _fbRows.filter(function(r) {
+    if (_fbChannel && r.channel !== _fbChannel) return false;
+    if (_fbOnlyBad && r.rating > 0) return false;
+    return true;
+  });
+
+  var list = rows.length ? rows.map(function(r) {
+    var bad = r.rating < 0;
+    return '<div class="card" style="margin-bottom:8px;padding:12px 14px;cursor:pointer" onclick="toggleFeedbackDetail(' + r.fb_id + ',this)">' +
+      '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">' +
+        '<i class="ti ti-thumb-' + (bad ? 'down' : 'up') + '" style="color:' + (bad ? 'var(--danger,#c0392b)' : 'var(--accent)') + '"></i>' +
+        '<span class="rag-tag">' + chEsc(FB_CHANNEL_LABEL[r.channel] || r.channel) + '</span>' +
+        '<span style="font-size:13px;font-weight:500;flex:1;min-width:0">' + chEsc((r.question || '(원본 삭제됨)').slice(0, 120)) + '</span>' +
+        '<span style="font-size:11px;color:var(--text-tertiary)">' + chDate(r.fb_created_at) + '</span>' +
+      '</div>' +
+      (r.reason ? '<div style="font-size:12px;color:var(--text-secondary);margin-top:5px">사유: ' + chEsc(r.reason) + '</div>' : '') +
+      '<div class="fb-detail" style="display:none;margin-top:10px;border-top:1px solid var(--border);padding-top:10px"></div>' +
+    '</div>';
+  }).join('') : '<div style="color:var(--text-tertiary);font-size:12px">해당 조건의 피드백이 없습니다.</div>';
+
+  el.innerHTML =
+    '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:14px">' + cards + '</div>' +
+    '<div style="display:flex;gap:8px;margin-bottom:10px;align-items:center">' +
+      '<select onchange="setFbChannel(this.value)" style="font-size:12px">' +
+        ['', 'telegram_ask', 'telegram_law', 'dashboard'].map(function(v) {
+          return '<option value="' + v + '"' + (v === _fbChannel ? ' selected' : '') + '>' + (v ? FB_CHANNEL_LABEL[v] : '전체 경로') + '</option>';
+        }).join('') +
+      '</select>' +
+      '<button class="btn" onclick="toggleFbOnlyBad()" style="font-size:12px' + (_fbOnlyBad ? ';color:var(--accent)' : '') + '"><i class="ti ti-thumb-down"></i> 불만족만</button>' +
+      '<span style="font-size:11px;color:var(--text-tertiary);margin-left:auto">' + rows.length + '건 표시</span>' +
+    '</div>' + list;
+}
+
+// 행을 펼쳐 답변 전문 + 그때 실제로 검색된 근거 청크를 보여준다 — 👎의 원인이 검색인지
+// 생성인지 가르는 자리라, 문서명이 아니라 조문 단위로 확인해야 한다.
+async function toggleFeedbackDetail(fbId, cardEl) {
+  var box = cardEl.querySelector('.fb-detail');
+  if (!box) return;
+  if (box.style.display !== 'none') { box.style.display = 'none'; return; }
+  box.style.display = 'block';
+  var row = _fbRows.filter(function(r) { return r.fb_id === fbId; })[0];
+  if (!row) return;
+  if (box.getAttribute('data-loaded') === '1') return;
+  box.innerHTML = '<div style="font-size:12px;color:var(--text-tertiary)">근거 불러오는 중...</div>';
+  var ids = Array.isArray(row.chunk_ids) ? row.chunk_ids : [];
+  var chunks = [];
+  if (ids.length && sb) {
+    try {
+      var r = await sb.from('document_chunks').select('id, doc_name, article_no, content').in('id', ids.slice(0, 30));
+      if (!r.error) chunks = r.data || [];
+    } catch (e) { console.warn('근거 청크 조회 실패:', e); }
+  }
+  box.innerHTML =
+    '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:4px">답변 전문</div>' +
+    '<div class="msg-ai" style="font-size:13px">' + renderMd(row.answer || '(원본 삭제됨)') + '</div>' +
+    '<div style="font-size:12px;color:var(--text-secondary);margin:10px 0 4px">검색 근거 (' + ids.length + '건)</div>' +
+    (chunks.length
+      ? chunks.map(function(c) {
+          return '<details style="margin-bottom:4px"><summary class="rag-tag" style="cursor:pointer">' +
+            chEsc(c.doc_name || '') + ' ' + chEsc(c.article_no || '') + '</summary>' +
+            '<div style="font-size:12px;color:var(--text-secondary);white-space:pre-wrap;margin:4px 0 0 4px">' +
+            chEsc((c.content || '').slice(0, 1200)) + '</div></details>';
+        }).join('')
+      : '<div style="font-size:12px;color:var(--text-tertiary)">기록된 근거 청크가 없습니다(기능 도입 전 답변이거나 웹·뉴스 근거).</div>');
+  box.setAttribute('data-loaded', '1');
 }
 
 function askQ(q) {
@@ -5818,7 +6003,7 @@ async function ackKbDoc(idx) {
 var PAGE_TO_NAV = {
   news: 'monitor', overseas: 'monitor',
   briefing: 'briefing', terms: 'terms',
-  chat: 'chat', reportdraft: 'chat', lawmap: 'lawmap',
+  chat: 'chat', reportdraft: 'chat', lawmap: 'lawmap', feedback: 'chat',
   assembly: 'assembly', minutes: 'minutes',
   lawtrack: 'lawrev', diff: 'lawrev',
   law: 'kb', press: 'kb', guide: 'kb', itu: 'kb', custom: 'kb'
@@ -5841,12 +6026,12 @@ function go(page, navEl, sourceType) {
 
   // 상단 바 제목 업데이트
   var newsTitle = currentNewsSourceType === 'gov' ? '정부 보도자료·공지사항 (최근 60일)' : (currentNewsSourceType === 'media' ? '뉴스 (최근 60일)' : '보도자료·뉴스 (최근 60일)');
-  var titles = {home:'대시보드', chat:'AI 자문', reportdraft:'보고서 초안 제안', diff:'법령 개정 추적 — 조문 DIFF', law:'지식베이스 — 법령·고시', guide:'지식베이스 — 실무 안내', lawmap:'법령 관계도', itu:'지식베이스 — ITU-R', press:'지식베이스 — 보도자료', custom:'지식베이스 — 추가지식', terms:'기술 용어', news:newsTitle, briefing:'Daily Briefing', assembly:'국회 법안', minutes:'과방위 회의록', overseas:'해외 규제동향 (최근 60일)', lawtrack:'법령 개정 추적 — 입법예고·개정 현황', settings:'설정', opsstatus:'운영 상태'};
+  var titles = {home:'대시보드', chat:'AI 자문', reportdraft:'보고서 초안 제안', diff:'법령 개정 추적 — 조문 DIFF', law:'지식베이스 — 법령·고시', guide:'지식베이스 — 실무 안내', lawmap:'법령 관계도', itu:'지식베이스 — ITU-R', press:'지식베이스 — 보도자료', custom:'지식베이스 — 추가지식', terms:'기술 용어', news:newsTitle, briefing:'Daily Briefing', assembly:'국회 법안', minutes:'과방위 회의록', overseas:'해외 규제동향 (최근 60일)', lawtrack:'법령 개정 추적 — 입법예고·개정 현황', settings:'설정', opsstatus:'운영 상태', feedback:'AI 자문 — 답변 피드백'};
   var ttEl = document.getElementById('topbar-title');
   if (ttEl && titles[page]) ttEl.textContent = titles[page];
 
   // 모바일 하단 네비 동기화
-  var pageTobn = {home:'bn-more', chat:'bn-chat', reportdraft:'bn-chat', lawmap:'bn-chat', law:'bn-law', guide:'bn-law', itu:'bn-law', press:'bn-law', custom:'bn-law', terms:'bn-monitor', news:'bn-monitor', briefing:'bn-monitor', assembly:'bn-bills', minutes:'bn-bills', overseas:'bn-monitor', lawtrack:'bn-bills', diff:'bn-bills', settings:'bn-more', opsstatus:'bn-more'};
+  var pageTobn = {home:'bn-more', chat:'bn-chat', reportdraft:'bn-chat', lawmap:'bn-chat', feedback:'bn-chat', law:'bn-law', guide:'bn-law', itu:'bn-law', press:'bn-law', custom:'bn-law', terms:'bn-monitor', news:'bn-monitor', briefing:'bn-monitor', assembly:'bn-bills', minutes:'bn-bills', overseas:'bn-monitor', lawtrack:'bn-bills', diff:'bn-bills', settings:'bn-more', opsstatus:'bn-more'};
   if (pageTobn[page]) setBottomNav(pageTobn[page]);
 
   if (page === 'news') loadNews();
@@ -5864,14 +6049,21 @@ function go(page, navEl, sourceType) {
   if (page === 'lawtrack') loadLawTrack();
   if (page === 'diff') _lawDiffsLoadPromise = loadLawDiffs();   // 국회 법안 → DIFF 딥링크가 await할 수 있게 Promise 보관
   if (page === 'opsstatus') loadOpsStatus();
+  if (page === 'feedback') loadFeedbackList();
 }
 
 // ════════════════════════════════════════════
 //  상위 그룹 탭 바 — 메뉴 개편(2026-08-03) 공용 컴포넌트
 //  기존 패널·로드 함수는 무수정: 탭 클릭 = 기존 go() 라우팅 호출
 // ════════════════════════════════════════════
-var PANEL_GROUP_OF = { news:'monitor', overseas:'monitor', lawtrack:'lawrev', diff:'lawrev', law:'kb', press:'kb', guide:'kb', itu:'kb', custom:'kb' };
+var PANEL_GROUP_OF = { news:'monitor', overseas:'monitor', lawtrack:'lawrev', diff:'lawrev', law:'kb', press:'kb', guide:'kb', itu:'kb', custom:'kb', chat:'advisory', feedback:'advisory' };
 var GROUP_TABS = {
+  // 답변 피드백은 운영자 전용 화면이라 사이드바(9항목)에 올리지 않고 AI 자문의 하위 탭으로 둔다
+  // — 메뉴 개편(2026-08-03) 원칙: 하위 화면은 그룹 탭 바로.
+  advisory: [
+    { key: 'chat',     label: 'AI 자문',    on: "go('chat',null)" },
+    { key: 'feedback', label: '답변 피드백', on: "go('feedback',null)" }
+  ],
   monitor: [
     { key: 'media',    label: '뉴스',              on: "go('news',null,'media')" },
     { key: 'gov',      label: '정부 보도자료·공지', on: "go('news',null,'gov')" },

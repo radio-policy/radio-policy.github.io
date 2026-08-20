@@ -611,7 +611,9 @@ export async function searchLawArticles(sb: SupabaseClient, query: string, limit
 // 별개로 자연어 질의를 받는다. /ask와의 경계: **법령 내용만** — 뉴스·국회동향·웹검색·시사점을
 // 넣지 않는다(그건 /ask의 몫). 그래서 answerAdvisory를 재사용하지 않고 조문 검색 + 요약층만
 // 모아 Haiku(법령 나열·관련 이유 설명은 좁은 일이라 Sonnet 불필요, 건당 ~$0.01)로 답한다.
-export async function answerLawQuery(sb: SupabaseClient, query: string): Promise<string | null> {
+// 반환에 chunkIds를 함께 실어 보낸다 — 호출자(telegram-webhook)가 chat_logs에 근거를 남겨
+// 만족도 👎 분석 때 "어느 조문을 집었길래 틀렸나"를 되짚을 수 있게 한다(2026-08-20).
+export async function answerLawQuery(sb: SupabaseClient, query: string): Promise<{ answer: string; chunkIds: number[] } | null> {
   const apiKey = env('ANTHROPIC_API_KEY');
   if (!apiKey) return null;
   // 조문 검색을 **세 갈래**로 돌린다 (2026-08-03 사고에서 도달한 구조).
@@ -767,7 +769,10 @@ export async function answerLawQuery(sb: SupabaseClient, query: string): Promise
   const data = await res.json() as { content?: { type: string; text?: string }[] };
   // content[0]이 text가 아닐 수 있으므로 find로 고른다 (Sonnet5 적응형 추론에서 실제로 겪은 함정 — Haiku도 같은 방어)
   const text = (data.content || []).find((b) => b.type === 'text')?.text || '';
-  return text.trim() || null;
+  if (!text.trim()) return null;
+  const chunkIds: number[] = [];
+  for (const h of merged) if (typeof h.id === 'number' && !chunkIds.includes(h.id)) chunkIds.push(h.id);
+  return { answer: text.trim(), chunkIds };
 }
 
 // ── 뉴스 컨텍스트 (app.js fetchRecentNewsContext 이식) ──
@@ -1001,7 +1006,10 @@ async function buildAssemblyTrendContext(sb: SupabaseClient, query: string): Pro
 // sources = 검색돼 프롬프트에 들어간 **내부 자료 목록**(전부 답변에 반영됐다는 뜻이 아님).
 // webSources = 모델이 본문에 실제 인용한 웹 문서(citations 기반) — 이쪽이 "진짜 근거"다.
 // 표기할 때 두 목록의 성격 차이를 뭉개지 말 것 (2026-08-03 "참고가 전부 법령" 사고).
-export interface AdvisoryResult { answer: string; sources: string[]; webSources: WebRef[] }
+// chunkIds = 프롬프트에 들어간 청크의 document_chunks.id. 만족도 👎를 받았을 때
+// "그때 무엇을 근거로 답했나"를 되짚으려면 문서명(sources)만으로는 부족하다 — 같은 법령에서
+// 어느 조문이 걸렸는지가 검색 품질의 실제 단서다.
+export interface AdvisoryResult { answer: string; sources: string[]; webSources: WebRef[]; chunkIds: number[] }
 
 // ── 자문 실행 (진입점) ──
 export async function answerAdvisory(sb: SupabaseClient, systemPrompt: string, question: string): Promise<AdvisoryResult> {
@@ -1090,5 +1098,10 @@ export async function answerAdvisory(sb: SupabaseClient, systemPrompt: string, q
   for (const c of chunks) if (c.doc_name && !sources.includes(c.doc_name)) sources.push(c.doc_name);
   for (const r of kb) { const t = '[요약] ' + (r.title || '').trim(); if (r.title && !sources.includes(t)) sources.push(t); }
   for (const s of news.sources) if (!sources.includes(s)) sources.push(s);
-  return { answer, sources, webSources: webRefs };
+  // 근거 청크 id — sources와 같은 순서(조문 정밀검색분 먼저, 그다음 RAG). 숫자 id만 남긴다.
+  const chunkIds: number[] = [];
+  for (const h of (extra as unknown as Chunk[]).concat(chunks as Chunk[])) {
+    if (typeof h.id === 'number' && !chunkIds.includes(h.id)) chunkIds.push(h.id);
+  }
+  return { answer, sources, webSources: webRefs, chunkIds };
 }

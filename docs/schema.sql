@@ -258,14 +258,38 @@ create table if not exists public.app_config (
 );
 
 -- 1-19) AI 자문 이력 ---------------------------------------------------------
+-- 2026-08-20(#103)부터 **네 경로 공통 정본 답변 로그**다: 대시보드 자문 + 텔레그램 /ask +
+-- /law 자연어 + /law 조문 직조회. channel은 만족도 집계 축, chunk_ids는 그때 실제로
+-- 프롬프트에 들어간 근거(document_chunks.id) — 불만족 건 사후 분석의 재료.
 create table if not exists public.chat_logs (
   id         uuid primary key default gen_random_uuid(),
   question   text not null,
   answer     text not null,
   category   text,
   sources    text,
+  channel    text,      -- telegram_ask | telegram_law | dashboard
+  chat_id    bigint,    -- 텔레그램 이용자 (대시보드는 null)
+  chunk_ids  jsonb,     -- 근거 청크 id 배열
   created_at timestamptz default now()
 );
+
+-- 1-20) 답변 만족도 (#103) ---------------------------------------------------
+-- 세 경로 공통. log_id 유니크 + upsert라 재투표는 행이 늘지 않고 마지막 값으로 갱신된다.
+-- channel을 비정규화해 함께 두는 이유: 자문 이력이 삭제돼도(FK는 set null) 경로별 통계는 남아야 한다.
+-- **RLS 켜고 anon 정책을 주지 않는다** — 대시보드는 공개 페이지라 남의 평점·사유가 노출되면 안 된다.
+-- 쓰기는 submit_answer_feedback RPC, 읽기는 admin_list_answer_feedback(비밀번호) 전용.
+create table if not exists public.answer_feedback (
+  id         bigint generated always as identity primary key,
+  log_id     uuid unique references public.chat_logs(id) on delete set null,
+  channel    text not null check (channel in ('telegram_ask','telegram_law','dashboard')),
+  rating     smallint not null check (rating in (1,-1)),
+  reason     text,      -- 대시보드 👎 사유 한 줄 (텔레그램은 버튼만이라 null)
+  chat_id    bigint,    -- 텔레그램 투표자
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists idx_answer_feedback_channel on public.answer_feedback (channel, rating);
+alter table public.answer_feedback enable row level security;
 
 
 -- ===========================================================================

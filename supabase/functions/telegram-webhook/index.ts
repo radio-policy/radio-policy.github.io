@@ -50,6 +50,41 @@ async function tg(method: string, payload: Record<string, unknown>): Promise<Rec
   } catch (e) { console.error(`[tg ${method}]`, e); return null; }
 }
 
+// ── 답변 만족도 👍👎 (2026-08-20) ───────────────────────────────────────────
+// 세 경로(/ask · /law · 대시보드)의 평점을 answer_feedback 한 테이블에 channel로 구분해 모은다.
+// **선택 사항**이다 — 안 눌러도 답변·쿼터에 아무 영향이 없고, 재촉 문구도 붙이지 않는다.
+// callback_data는 64바이트 상한(assemCallbackData 주석 참조)이라 질문을 실을 수 없다.
+// 'fb:-1:' + uuid(36) = 42바이트로 통과 → 나머지는 log_id로 DB에서 되짚는다.
+const fbKeyboard = (logId: string) => ({
+  inline_keyboard: [[
+    { text: '👍 도움됨', callback_data: `fb:1:${logId}` },
+    { text: '👎 아쉬움', callback_data: `fb:-1:${logId}` },
+  ]],
+});
+
+/** 답변을 chat_logs에 적재하고 id를 회수한다. 실패해도 답변 전송은 계속한다(버튼만 빠진다). */
+async function logAnswer(row: Record<string, unknown>): Promise<string | null> {
+  try {
+    const { data, error } = await sb.from('chat_logs').insert(row).select('id').single();
+    if (error) { console.error('[chat_logs 기록 실패]', error); return null; }
+    return (data as { id: string } | null)?.id ?? null;
+  } catch (e) { console.error('[chat_logs 기록 실패]', e); return null; }
+}
+
+/**
+ * 분할 전송 + **마지막 메시지에만** 👍👎.
+ * 답변은 splitByLines로 1~3개 메시지가 되는데, 매 조각에 버튼을 달면 같은 답변에 투표창이
+ * 여러 개 생긴다(assembly '더 보기'가 마지막에만 붙이는 것과 같은 이유).
+ * sendTelegramHtml의 extra는 400 plain 폴백에도 그대로 실려 버튼이 살아남는다.
+ */
+async function sendAnswerWithFeedback(chatId: number, html: string, logId: string | null): Promise<void> {
+  const parts = splitByLines(html);
+  for (let i = 0; i < parts.length; i++) {
+    const last = i === parts.length - 1;
+    await sendTelegramHtml(BOT_TOKEN, chatId, parts[i], last && logId ? { reply_markup: fbKeyboard(logId) } : {});
+  }
+}
+
 // ── 구독자 행 ──
 interface Sub {
   chat_id: number; username: string | null; first_name: string | null; active: boolean;
@@ -403,17 +438,23 @@ async function handleLawQuery(chatId: number, q: string): Promise<Promise<void> 
     typing();
     const typingTimer = setInterval(typing, 15_000);
     try {
-      const answer = await answerLawQuery(sb, query);
-      if (!answer) {
+      const result = await answerLawQuery(sb, query);
+      if (!result) {
         await sendTelegramHtml(BOT_TOKEN, chatId,
           `🔎 "<b>${escapeHtml(query.slice(0, 60))}</b>" — 등재된 법령·고시에서 관련 조문을 찾지 못했습니다.\n` +
           '이 시스템 DB는 전파·통신 분야 법령 위주입니다.\n' +
           `🔗 <a href="https://www.law.go.kr/lsSc.do?query=${encodeURIComponent(query.slice(0, 50))}">국가법령정보센터에서 검색</a>`);
         return;
       }
-      let html = mdToTelegramHtml(answer);
+      let html = mdToTelegramHtml(result.answer);
       html += '\n\n<i>📖 조문 원문은 <code>/law 법령명 N조</code> 로 바로 볼 수 있습니다 · 동향·시사점까지 필요하면 /ask</i>';
-      for (const part of splitByLines(html)) await sendTelegramHtml(BOT_TOKEN, chatId, part);
+      // /law 답변도 chat_logs에 남긴다(2026-08-20 신설) — 종전에는 전송만 하고 사라져
+      // 만족도 👎를 받아도 "무엇을 답했는지"를 되짚을 수가 없었다.
+      const logId = await logAnswer({
+        question: query, answer: result.answer, category: '텔레그램-법령검색', sources: '',
+        channel: 'telegram_law', chat_id: chatId, chunk_ids: result.chunkIds,
+      });
+      await sendAnswerWithFeedback(chatId, html, logId);
     } catch (e) {
       console.error('[법령 검색 실패]', e);
       await sendTelegramHtml(BOT_TOKEN, chatId, '⚠️ 법령 검색 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.');
@@ -489,9 +530,17 @@ async function handleArticleLookup(chatId: number, rawDocName: string, artNo: st
   if (head.notice_no) meta.push(head.notice_no);
   let body = `📖 <b>${escapeHtml(head.doc_name)} ${escapeHtml(head.article_no || wanted)}</b>\n`;
   if (meta.length) body += `<i>${escapeHtml(meta.join(' · '))}</i>\n`;
-  body += '\n' + escapeHtml(plainifyArticle(picked.map((r) => r.content).join('\n')));
+  const plain = plainifyArticle(picked.map((r) => r.content).join('\n'));
+  body += '\n' + escapeHtml(plain);
   if (names.length > 1) body += `\n\n<i>같은 조가 있는 다른 문서: ${escapeHtml(names.slice(1).join(', '))} — "${escapeHtml(names[1])} ${wanted}"처럼 문서명을 정확히 지정해 다시 검색하세요.</i>`;
-  for (const part of splitByLines(body)) await sendTelegramHtml(BOT_TOKEN, chatId, part);
+  // LLM이 없는 경로지만 기록·투표는 받는다(2026-08-20) — 여기서의 👎는 답변 품질이 아니라
+  // **검색이 맞는 조문을 집었는가**(약칭 해석·조 번호 매칭·plainify 가독성)의 신호다.
+  const logId = await logAnswer({
+    question: `${docName} ${wanted}`, answer: plain,
+    category: '텔레그램-조문조회', sources: head.doc_name || '',
+    channel: 'telegram_law', chat_id: chatId, chunk_ids: picked.map((r) => r.id),
+  });
+  await sendAnswerWithFeedback(chatId, body, logId);
 }
 
 // ── AI 자문 (승인제 + 일일 상한 + 백그라운드 실행) ──
@@ -536,13 +585,14 @@ async function handleAsk(chatId: number, from: { username?: string; first_name?:
     const typing = () => { tg('sendChatAction', { chat_id: chatId, action: 'typing' }); };
     typing();
     const typingTimer = setInterval(typing, 15_000);
+    let logged = false;   // chat_logs에 성공 행을 남겼는지 — 실패 로그 중복 방지용
     try {
       // 시스템 프롬프트는 app_config에서 읽는다 (원본은 루트 system_prompt.js — sync_system_prompt.py로 업로드).
       // 함수에 번들하지 않으므로 프롬프트 수정 시 재배포가 필요 없다.
       const { data: cfg } = await sb.from('app_config').select('value').eq('key', 'system_prompt').maybeSingle();
       const systemPrompt = (cfg?.value as string) || '';
       if (!systemPrompt) throw new Error('app_config.system_prompt 미등록 — python sync_system_prompt.py 실행 필요');
-      const { answer, sources, webSources } = await answerAdvisory(sb, systemPrompt, q);
+      const { answer, sources, webSources, chunkIds } = await answerAdvisory(sb, systemPrompt, q);
       let html = mdToTelegramHtml(answer);
       // 출처 표기 두 갈래 (2026-08-03 "참고가 전부 법령" 사고):
       //  🌐 = 모델이 본문에 실제 인용한 웹 문서(진짜 근거) — 수치·현황은 대개 여기서 온다
@@ -560,11 +610,16 @@ async function handleAsk(chatId: number, from: { username?: string; first_name?:
       // 같은 후속 질문을 던지고 엉뚱한 답을 받는다. 답을 읽은 직후 = 후속 질문을 쓰기 직전이라
       // 이 자리가 가장 잘 닿는다. /law에는 붙이지 않는다(애초에 한 건씩 찾는 용도).
       html += '\n<i>💡 이어지는 질문은 기억하지 않습니다 — 질문마다 필요한 내용을 다 담아 주세요.</i>';
-      for (const part of splitByLines(html)) await sendTelegramHtml(BOT_TOKEN, chatId, part);
-      // 기존 chat_logs에 기록 (source 컬럼이 없어 category로 구분 — 스키마 변경 없음)
+      // 기록을 **전송보다 먼저** 한다(2026-08-20) — 답변에 붙일 👍👎 버튼의 callback_data에
+      // chat_logs.id가 필요하기 때문. 기록이 실패하면 버튼 없이 답변만 나간다(fail-open).
       // 웹 출처는 '[웹] 제목 (url)' 접두사로 함께 남긴다 — splitSources() 관례(접두사 구분)와 동일
       const logSources = webSources.map((w) => `[웹] ${w.title} (${w.url})`).concat(sources).join(', ');
-      await sb.from('chat_logs').insert({ question: q, answer, category: '텔레그램', sources: logSources });
+      const logId = await logAnswer({
+        question: q, answer, category: '텔레그램', sources: logSources,
+        channel: 'telegram_ask', chat_id: chatId, chunk_ids: chunkIds,
+      });
+      logged = true;   // 성공 행을 남겼다 — 이후 전송이 실패해도 아래 실패 로그를 겹쳐 쓰지 않는다
+      await sendAnswerWithFeedback(chatId, html, logId);
     } catch (e) {
       console.error('[자문 실패]', e);
       // 쿼터 환불 — 선차감은 유지하되(동시성 안전) 실패 경로에서 -1 복원.
@@ -576,13 +631,17 @@ async function handleAsk(chatId: number, from: { username?: string; first_name?:
         }
       } catch (re) { console.error('[쿼터 환불 실패]', re); }
       // 실패도 로그로 남겨 실패율 추적 가능하게 (성공과 같은 category='텔레그램', answer에 실패 표식)
-      try {
-        await sb.from('chat_logs').insert({
-          question: q,
-          answer: '[자문 실패] ' + String((e as Error)?.message ?? e).slice(0, 500),
-          category: '텔레그램', sources: '',
-        });
-      } catch (le) { console.error('[실패 로그 기록 실패]', le); }
+      // logged 가드 — 기록이 전송보다 앞서므로, 전송 단계에서 터지면 성공 행과 실패 행이 겹쳐 남는다.
+      if (!logged) {
+        try {
+          await sb.from('chat_logs').insert({
+            question: q,
+            answer: '[자문 실패] ' + String((e as Error)?.message ?? e).slice(0, 500),
+            category: '텔레그램', sources: '',
+            channel: 'telegram_ask', chat_id: chatId,
+          });
+        } catch (le) { console.error('[실패 로그 기록 실패]', le); }
+      }
       await sendTelegramHtml(BOT_TOKEN, chatId, '⚠️ 자문 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.\n(이번 실패는 오늘 사용 횟수에서 차감되지 않습니다)');
     } finally {
       clearInterval(typingTimer);
@@ -623,6 +682,47 @@ async function handleCallback(cb: { id: string; data?: string; from: { id: numbe
     const p = parseAssemCallback(data);
     await tg('answerCallbackQuery', { callback_query_id: cb.id, text: p ? '불러오는 중…' : '만료된 버튼' });
     if (p) await sendAssemResults(chatId, p.q, p.offset);
+    return;
+  }
+
+  if (data.startsWith('fb:')) {
+    // 답변 만족도 👍👎 (2026-08-20). 누구나 자기가 받은 답변에 투표할 수 있다(운영자 제한 없음).
+    // channel은 클라이언트 말을 믿지 않고 chat_logs에서 서버가 직접 읽는다 — 버튼 문자열은 위조 가능.
+    const [, r, logId] = data.split(':');
+    const rating = Number(r);
+    if ((rating !== 1 && rating !== -1) || !logId) {
+      await tg('answerCallbackQuery', { callback_query_id: cb.id, text: '만료된 버튼입니다' });
+      return;
+    }
+    const { data: log } = await sb.from('chat_logs').select('channel').eq('id', logId).maybeSingle();
+    if (!log) {
+      // 운영자가 자문 이력을 지운 경우 — 되돌릴 수 없으니 버튼만 걷어내고 안내한다
+      if (msgId) await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: [] } });
+      await tg('answerCallbackQuery', { callback_query_id: cb.id, text: '원본 답변이 삭제되어 저장할 수 없습니다' });
+      return;
+    }
+    const { error } = await sb.from('answer_feedback').upsert({
+      log_id: logId,
+      channel: (log as { channel?: string }).channel || 'telegram_ask',
+      rating, chat_id: cb.from.id, updated_at: new Date().toISOString(),
+    }, { onConflict: 'log_id' });
+    if (error) {
+      console.error('[피드백 저장 실패]', error);
+      await tg('answerCallbackQuery', { callback_query_id: cb.id, text: '저장에 실패했습니다 — 잠시 후 다시 눌러 주세요' });
+      return;
+    }
+    // 버튼을 결과 라벨로 바꿔 '반영됐다'를 남긴다. 재투표는 upsert라 멱등 — 오래된 키보드에서
+    // 다시 눌러도 마지막 값으로 덮어쓸 뿐 행이 늘지 않는다.
+    if (msgId) {
+      await tg('editMessageReplyMarkup', {
+        chat_id: chatId, message_id: msgId,
+        reply_markup: { inline_keyboard: [[{
+          text: rating > 0 ? '👍 반영되었습니다 — 감사합니다' : '👎 반영되었습니다 — 개선에 참고하겠습니다',
+          callback_data: 'noop',
+        }]] },
+      });
+    }
+    await tg('answerCallbackQuery', { callback_query_id: cb.id, text: '피드백이 저장되었습니다' });
     return;
   }
 
