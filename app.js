@@ -2088,8 +2088,7 @@ async function onDownloadCustomFile(filePath, downloadName) {
 
 async function onDeleteCustomFile(docName, btn) {
   if (!confirm('업로드 파일 "' + docName + '"의 모든 청크를 삭제하시겠습니까?')) return;
-  var pwd = _ensureAdminPwd();
-  if (!pwd) return;
+  if (!_ensureAdminPwd()) return;
   if (btn) btn.disabled = true;
   try {
     // 원본 파일 보관 경로 조회 → Storage 객체도 함께 삭제
@@ -2105,7 +2104,7 @@ async function onDeleteCustomFile(docName, btn) {
     // document_chunks는 RLS가 켜져 있고 DELETE 정책이 없다. 프런트에서 직접
     // delete()하면 PostgREST가 오류 없이 '0건 삭제 성공'으로 응답해 조용히 실패한다
     // (운영자가 삭제 버튼을 눌러도 아무 일도 안 일어나던 원인). 서버 검증 RPC로 처리. (#48)
-    var res = await sb.rpc('admin_delete_custom_file', { p_doc_name: docName, p_pwd: pwd });
+    var res = await sb.rpc('admin_delete_custom_file', { p_doc_name: docName });
     if (res.error) { _handleAdminRpcError(res.error, '삭제'); if (btn) btn.disabled = false; return; }
     // 반환된 삭제 행수가 0이면 실패다 — 이 가드가 없으면 같은 무성 실패가 재발한다
     if (!res.data) {
@@ -3232,7 +3231,7 @@ async function refreshDashboard() {
     const container = document.getElementById('recent-logs');
     let logs = [];
     if (isAdminUser()) {
-      const lr = await sb.rpc('admin_list_chat_logs', { p_pwd: '', p_limit: 3 });
+      const lr = await sb.rpc('admin_list_chat_logs', { p_limit: 3 });
       if (!lr.error) logs = lr.data || [];
     } else if (container) {
       container.innerHTML = '<div class="card" style="cursor:pointer" onclick="openChatHistory()">' +
@@ -5781,11 +5780,11 @@ async function loadLawWatch() {
   }
 }
 
-// 잠금 해제 후 새로고침 등으로 메모리 비번이 비면 다시 입력받음
-// 관리 RPC는 이제 admin_ok(p_pwd)로 '비밀번호 또는 admin 계정'을 받는다.
-// admin 계정으로 로그인돼 있으면 비밀번호 없이 통과하므로 빈 문자열을 넘긴다.
+// 관리 조작 전 권한 확인. 관리 RPC는 서버에서 is_admin()만 보므로(비밀번호 인자 폐지, #104)
+// 여기서는 "관리자인가"만 확인하고, 통과 시 이어지는 호출에 아무 비밀 값도 넘기지 않는다.
+// 이름은 호출부가 많아 유지 — 반환값(truthy/null)이 기존 분기와 그대로 맞물린다.
 function _ensureAdminPwd() {
-  if (isAdminUser()) return '';
+  if (isAdminUser()) return true;
   alert('관리자 계정으로 로그인해야 합니다.');
   return null;
 }
@@ -5801,17 +5800,16 @@ function _handleAdminRpcError(err, action) {
 async function approveDoc(idx) {
   var doc = _pendingDocs[idx];
   if (!doc || !sb) return;
-  var pwd = _ensureAdminPwd();
-  if (!pwd) return;
+  if (!_ensureAdminPwd()) return;
   // RLS로 직접 UPDATE가 막히므로 서버 검증 RPC로 처리
-  var res = await sb.rpc('admin_set_kb_approval', { p_doc_name: doc.doc_name, p_approved: true, p_pwd: pwd });
+  var res = await sb.rpc('admin_set_kb_approval', { p_doc_name: doc.doc_name, p_approved: true });
   if (res.error) { _handleAdminRpcError(res.error, '승인'); return; }
   _kbDocsLoaded = false;   // KB 목록 재조회 유도
   await loadPendingApprovals();
   var msgs = [];
   // 승인 직후 임베딩 자동 생성 — 실패해도 승인은 유지되고 '임베딩 대기'로 남음(PC 백필 가능)
   try {
-    var n = await embedDocChunks(doc.doc_name, pwd);
+    var n = await embedDocChunks(doc.doc_name);
     if (n > 0) msgs.push('의미검색 임베딩 ' + n + '건 자동 생성');
   } catch(e) {
     console.warn('자동 임베딩 실패(임베딩 대기 유지 — PC에서 backfill_embeddings.py로 보완):', e);
@@ -5820,7 +5818,7 @@ async function approveDoc(idx) {
   // 법령·고시는 OKF 요약(kb_documents)까지 자동 생성 — 실패해도 승인·임베딩은 유지 (add_law.py로 보완 가능)
   if (doc.doc_category === '법령' || doc.doc_category === '고시') {
     try {
-      var okf = await generateOkfForDoc(doc.doc_name, doc.doc_category, pwd);
+      var okf = await generateOkfForDoc(doc.doc_name, doc.doc_category);
       msgs.push('OKF 요약 자동 생성: ' + okf.chunks + '청크 (' + okf.path + ')');
       msgs.push('※ Haiku 초안 — 번들 파일은 PC에서 sync_kb_to_bundle.py 실행 시 저장됨');
     } catch(e) {
@@ -5890,7 +5888,7 @@ function _okfChunkBody(body, title) {
             .map(function(c) { return '[' + title + '] ' + c; });
 }
 
-async function generateOkfForDoc(docName, category, pwd) {
+async function generateOkfForDoc(docName, category) {
   if (!aiReady()) throw new Error(aiGateMsg());
   // 1) 조문 청크에서 원문 발췌 (add_law.py와 동일하게 앞부분 최대 18000자)
   var resp = await sb.from('document_chunks')
@@ -5948,7 +5946,7 @@ async function generateOkfForDoc(docName, category, pwd) {
   // 4) admin RPC로 kb_documents/kb_chunks 적재 (동일 path 덮어쓰기 + 구버전 supersede는 RPC가 처리)
   var path = 'laws/web-upload/' + _okfSlug(title) + '.md';
   var r1 = await sb.rpc('admin_upsert_kb_document', {
-    p_pwd: pwd, p_dedup_key: _okfNormTitle(title) + '|' + lawType, p_title: title,
+    p_dedup_key: _okfNormTitle(title) + '|' + lawType, p_title: title,
     p_concept_type: conceptType, p_family: 'web-upload', p_law_type: lawType,
     p_law_number: lawNumber, p_enforcement_date: enfDate,
     p_competent_authority: sf.fm.competent_authority || '', p_path: path,
@@ -5956,13 +5954,13 @@ async function generateOkfForDoc(docName, category, pwd) {
   });
   if (r1.error) { throw new Error(r1.error.message); }
   var vecs = embeddings.map(function(e) { return '[' + e.join(',') + ']'; });
-  var r2b = await sb.rpc('admin_insert_kb_chunks', { p_pwd: pwd, p_doc_id: r1.data, p_contents: chunks, p_embeddings: vecs });
+  var r2b = await sb.rpc('admin_insert_kb_chunks', { p_doc_id: r1.data, p_contents: chunks, p_embeddings: vecs });
   if (r2b.error) throw new Error(r2b.error.message);
   return { title: title, chunks: chunks.length, path: path };
 }
 
 // 승인된 문서의 embedding NULL 청크를 Edge Function(voyage-embed)으로 채움 (배경역사 #23)
-async function embedDocChunks(docName, pwd) {
+async function embedDocChunks(docName) {
   var resp = await sb.from('document_chunks')
     .select('id, content')
     .eq('doc_name', docName)
@@ -5988,7 +5986,7 @@ async function embedDocChunks(docName, pwd) {
   for (var j = 0; j < rows.length; j += 50) {
     var ids  = rows.slice(j, j + 50).map(function(r) { return r.id; });
     var vecs = embeddings.slice(j, j + 50).map(function(e) { return '[' + e.join(',') + ']'; });
-    var r2 = await sb.rpc('admin_update_chunk_embeddings', { p_ids: ids, p_embeddings: vecs, p_pwd: pwd });
+    var r2 = await sb.rpc('admin_update_chunk_embeddings', { p_ids: ids, p_embeddings: vecs });
     if (r2.error) throw new Error(r2.error.message);
   }
   return rows.length;
@@ -5998,8 +5996,7 @@ async function rejectDoc(idx) {
   var doc = _pendingDocs[idx];
   if (!doc || !sb) return;
   if (!confirm('"' + doc.doc_name + '" 문서를 삭제할까요?\n청크가 모두 제거되며 되돌릴 수 없습니다.')) return;
-  var pwd = _ensureAdminPwd();
-  if (!pwd) return;
+  if (!_ensureAdminPwd()) return;
   // 원본 파일(Storage uploads) 정리 (best-effort)
   try {
     var fp = await sb.from('document_chunks').select('file_path').eq('doc_name', doc.doc_name).not('file_path', 'is', null).limit(1);
@@ -6008,7 +6005,7 @@ async function rejectDoc(idx) {
     }
   } catch(se) { console.warn('원본 파일 삭제 실패:', se); }
   // RLS로 직접 DELETE가 막히므로 서버 검증 RPC로 처리
-  var res = await sb.rpc('admin_delete_kb_document', { p_doc_name: doc.doc_name, p_pwd: pwd });
+  var res = await sb.rpc('admin_delete_kb_document', { p_doc_name: doc.doc_name });
   if (res.error) { _handleAdminRpcError(res.error, '삭제'); return; }
   _kbDocsLoaded = false;
   await loadPendingApprovals();
@@ -7479,10 +7476,9 @@ async function doPdfUpload() {
       );
       // RLS로 프런트 직접 delete가 막혀 조용히 0건 처리된다 — 그대로 두면 같은 이름으로
       // 재업로드할 때 옛 청크가 남아 중복 누적된다. 관리자 RPC로 지운다. (#48)
-      // 비밀번호가 없으면(취소) 정리를 건너뛰되, 중복 위험을 알린다.
-      var _cleanPwd = _ensureAdminPwd();
-      if (_cleanPwd) {
-        var _del = await sb.rpc('admin_delete_kb_document', { p_doc_name: thisDocName, p_pwd: _cleanPwd });
+      // 관리자 권한이 없으면 정리를 건너뛰되, 중복 위험을 알린다.
+      if (isAdminUser()) {
+        var _del = await sb.rpc('admin_delete_kb_document', { p_doc_name: thisDocName });
         if (_del.error) console.warn('기존 청크 정리 실패(중복 누적 가능):', _del.error.message);
       } else {
         console.warn('기존 청크 정리 건너뜀 — 같은 문서명이 이미 있으면 청크가 중복될 수 있습니다.');
