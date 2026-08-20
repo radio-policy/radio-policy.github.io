@@ -16,7 +16,7 @@ This repo's operating knowledge lives in two hand-maintained Korean documents, n
 
 SKT Comm Center 기술정책팀's radio/telecom **policy-monitoring automation system**, run by a single operator. Crawlers gather government notices, laws, national-assembly bills, and news into Supabase; a morning briefing goes out daily; a GitHub Pages dashboard offers RAG-based AI advisory and report-draft generation.
 
-- Dashboard: https://youjinwoong.github.io/radio-policy-ai/ (GitHub Pages)
+- Dashboard: https://radio-policy.gitlab.io/ (GitHub Pages)
 - Supabase project `zwkjedumfuhodckmtxxn` (ap-northeast-1 / Tokyo)
 
 ## Architecture (big picture)

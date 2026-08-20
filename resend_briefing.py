@@ -62,7 +62,7 @@ else:
     if len(html_text) > 3900:
         text = text[:text.rfind('\n')]          # 태그 중간 절단 방지
         text += '\n\n...(전문은 대시보드 참조)'
-    text += '\n\n📊 <a href="https://youjinwoong.github.io/radio-policy-ai/">대시보드</a>'
+    text += '\n\n📊 <a href="https://radio-policy.gitlab.io/">대시보드</a>'
     # 전송부는 notify 위임 (개선⑪) — HTTP 상세 오류는 notify가 출력
     ok = notify.send_telegram(text, chat_id=TELEGRAM_CHAT_ID, parse_mode='HTML',
                               disable_web_page_preview=True)
@@ -101,7 +101,7 @@ else:
 <p style="color:#888;font-size:12px">재발송 | {briefing_date}</p>
 {''.join(html_lines)}
 <hr><p style="font-size:11px;color:#aaa">
-<a href="https://youjinwoong.github.io/radio-policy-ai/">대시보드 바로가기</a></p>
+<a href="https://radio-policy.gitlab.io/">대시보드 바로가기</a></p>
 </body></html>"""
     try:
         r = requests.post(

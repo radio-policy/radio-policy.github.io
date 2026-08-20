@@ -192,7 +192,7 @@ git read-tree HEAD && git add <파일> && git commit -m "..." && git push origin
 
 ## 7. 참고 링크
 
-- 대시보드: https://youjinwoong.github.io/radio-policy-ai/
+- 대시보드: https://radio-policy.gitlab.io/
 - GitHub: https://github.com/youjinwoong/radio-policy-ai
 - Supabase: https://zwkjedumfuhodckmtxxn.supabase.co
 - 담당: 유진웅 (you.jinwoong@gmail.com)

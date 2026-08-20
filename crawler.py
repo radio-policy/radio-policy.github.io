@@ -2269,7 +2269,7 @@ def send_morning_telegram(items: list, briefing_text: str = ''):
         text = briefing_text[:4000]
         if len(briefing_text) > 4000:
             text += '\n\n...(전문은 대시보드 참조)'
-        text += '\n\n📊 https://youjinwoong.github.io/radio-policy-ai/'
+        text += '\n\n📊 https://radio-policy.gitlab.io/'
     else:
         # 폴백: 원시 목록 발송
         now_str = datetime.now(KST).strftime('%Y.%m.%d')
@@ -2283,7 +2283,7 @@ def send_morning_telegram(items: list, briefing_text: str = ''):
                 for item in group[:5]:
                     lines.append(f'  · {item.get("title", "")} ({item.get("source", "")})')
                 lines.append('')
-        lines.append('📊 https://youjinwoong.github.io/radio-policy-ai/')
+        lines.append('📊 https://radio-policy.gitlab.io/')
         text = '\n'.join(lines)
 
     # 전송부는 notify 위임 (개선⑪) — 실패 로그는 notify가 출력
@@ -2408,7 +2408,7 @@ def send_telegram(urgent_items: list):
         else:
             lines.append('')
 
-    lines.append('📊 <a href="https://youjinwoong.github.io/radio-policy-ai/">대시보드</a>')
+    lines.append('📊 <a href="https://radio-policy.gitlab.io/">대시보드</a>')
     text = '\n'.join(lines)
 
     # 전송부는 notify 위임 (개선⑪) — 실패 로그는 notify가 출력
@@ -2426,7 +2426,7 @@ def send_telegram(urgent_items: list):
             plain_lines.append(f"   출처: {item.get('source', '')}")
             plain_lines.append(f"   🏷 {tag_labels(item.get('tags'))}")
             plain_lines.append(f"   🔗 {item.get('url', '')}\n")
-        plain_lines.append('📊 대시보드: https://youjinwoong.github.io/radio-policy-ai/')
+        plain_lines.append('📊 대시보드: https://radio-policy.gitlab.io/')
         ok = notify.send_telegram('\n'.join(plain_lines), chat_id=TELEGRAM_CHAT_ID,
                                   disable_web_page_preview=True)
     if ok:
@@ -2466,7 +2466,7 @@ def send_urgent_email(urgent_items: list):
 <hr>
 <p style="color:#999;font-size:12px">
 이 메일은 긴급 기사 감지 시 자동 발송됩니다. SKT Comm센터 기술정책팀<br>
-대시보드: <a href="https://youjinwoong.github.io/radio-policy-ai/">https://youjinwoong.github.io/radio-policy-ai/</a>
+대시보드: <a href="https://radio-policy.gitlab.io/">https://radio-policy.gitlab.io/</a>
 </p>
 </body></html>'''
 
@@ -2530,7 +2530,7 @@ def send_email(new_items: list, briefing_text: str = ''):
 <p style="color:#666">{today} | 오늘은 새로운 항목이 없습니다.</p>
 <hr>
 <p style="color:#999;font-size:12px">
-대시보드: <a href="https://youjinwoong.github.io/radio-policy-ai/">바로가기</a>
+대시보드: <a href="https://radio-policy.gitlab.io/">바로가기</a>
 </p>
 </body></html>'''
     elif briefing_text:
@@ -2582,7 +2582,7 @@ def send_email(new_items: list, briefing_text: str = ''):
 <hr style="margin-top:24px">
 <p style="color:#999;font-size:11px">
 이 메일은 자동 발송됩니다. SKT Comm센터 기술정책팀<br>
-대시보드: <a href="https://youjinwoong.github.io/radio-policy-ai/">https://youjinwoong.github.io/radio-policy-ai/</a>
+대시보드: <a href="https://radio-policy.gitlab.io/">https://radio-policy.gitlab.io/</a>
 </p>
 </body></html>'''
     else:
@@ -2621,7 +2621,7 @@ def send_email(new_items: list, briefing_text: str = ''):
 <hr>
 <p style="color:#999;font-size:12px">
 이 메일은 자동 발송됩니다. 문의: SKT Comm센터 기술정책팀<br>
-대시보드: <a href="https://youjinwoong.github.io/radio-policy-ai/">https://youjinwoong.github.io/radio-policy-ai/</a>
+대시보드: <a href="https://radio-policy.gitlab.io/">https://radio-policy.gitlab.io/</a>
 </p>
 </body></html>'''
 

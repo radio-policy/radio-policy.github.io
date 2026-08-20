@@ -7,7 +7,7 @@
 ## 프로젝트 개요
 
 SKT Comm센터 기술정책팀의 전파·통신 정책 모니터링 자동화 시스템입니다.
-- 대시보드: https://youjinwoong.github.io/radio-policy-ai/
+- 대시보드: https://radio-policy.gitlab.io/
 - GitHub: https://github.com/youjinwoong/radio-policy-ai
 - 담당자: 유진웅 (you.jinwoong@gmail.com)
 
@@ -319,7 +319,7 @@ cron: 06:00 / 06:30(2차) — morning_briefing.py
 ### ⑥ 대시보드 (GitHub Pages)
 
 ```
-URL: https://youjinwoong.github.io/radio-policy-ai/
+URL: https://radio-policy.gitlab.io/
 ※ app.js/system_prompt.js/index.html 수정 배포 시 index.html 캐시 버스터(?v=) 갱신 필수
    (현재 app.js?v=20260616e)
 ※ 대시보드(홈) 메뉴는 2026-06-12 제거됨 — 기본 화면은 보도자료·뉴스, 사이드바 맨 아래 설정만

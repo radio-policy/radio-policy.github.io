@@ -449,7 +449,7 @@ def send_telegram(briefing_text: str) -> bool:
     #  구독자 봇은 분할 발송이라 전문을 받는데 운영자가 더 적게 받는 역전 상태였다.)
     # 브리핑 HTML은 태그가 줄을 넘지 않으므로 개행 경계 분할이 안전하다.
     text = _briefing_to_telegram_html(briefing_text)
-    text += '\n\n📊 <a href="https://youjinwoong.github.io/radio-policy-ai/">대시보드</a>'
+    text += '\n\n📊 <a href="https://radio-policy.gitlab.io/">대시보드</a>'
     # 전송부는 notify 위임 (개선⑪) — 400 등 4xx는 notify가 재시도 없이 False 반환
     ok = notify.send_telegram(text, chat_id=TELEGRAM_CHAT_ID, parse_mode='HTML',
                               disable_web_page_preview=True)
@@ -512,7 +512,7 @@ def send_email(briefing_text: str, news_count: int) -> bool:
 <hr style="margin-top:24px">
 <p style="color:#999;font-size:11px">
 이 메일은 자동 발송됩니다. SKT Comm센터 기술정책팀<br>
-대시보드: <a href="https://youjinwoong.github.io/radio-policy-ai/">https://youjinwoong.github.io/radio-policy-ai/</a>
+대시보드: <a href="https://radio-policy.gitlab.io/">https://radio-policy.gitlab.io/</a>
 </p>
 </body></html>'''
     extra_to = 'lampman@sktelecom.com'

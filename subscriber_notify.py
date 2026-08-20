@@ -19,7 +19,7 @@ import os
 import html as _html
 from datetime import datetime, timedelta, timezone
 
-DASHBOARD_URL = 'https://youjinwoong.github.io/radio-policy-ai/'
+DASHBOARD_URL = 'https://radio-policy.gitlab.io/'
 
 _VALID_TOPICS = ('urgent', 'assembly')
 

@@ -126,4 +126,4 @@ export async function sendTelegramHtml(
   return false;
 }
 
-export const DASHBOARD_URL = 'https://youjinwoong.github.io/radio-policy-ai/';
+export const DASHBOARD_URL = 'https://radio-policy.gitlab.io/';

@@ -13,7 +13,7 @@
 ## 프로젝트 개요
 
 SKT Comm센터 기술정책팀의 전파·통신 정책 모니터링 자동화 시스템.
-- 대시보드: https://youjinwoong.github.io/radio-policy-ai/
+- 대시보드: https://radio-policy.gitlab.io/
 - GitHub: https://github.com/youjinwoong/radio-policy-ai
 - 담당자: 유진웅 (you.jinwoong@gmail.com)
 
@@ -268,7 +268,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 
 ## 대시보드 (GitHub Pages)
 
-- URL: https://youjinwoong.github.io/radio-policy-ai/
+- URL: https://radio-policy.gitlab.io/
 - **수정 배포 시 index.html 캐시 버스터 `app.js?v=`·`styles.css?v=` 갱신 필수 (현재 `app.js?v=20260729a` / `styles.css?v=20260723b`)** — CSS 고칠 때 styles.css 버스터도 갱신해야 사용자 브라우저가 새로 받음
 - 아이콘은 Tabler Icons webfont(ti ti-*) — 존재하는 이름만(없으면 빈칸 렌더).
 - 메뉴 (2026-08-02 개편, 17→9 — 배경역사 #56): [모니터링] **통합 모니터링**(패널 상단 탭: 뉴스|정부 보도자료·공지|해외 규제동향) / Daily Briefing / 기술 용어 · [AI 도우미] AI 자문 / 법령 관계도 · [법안 동향] 국회 법안 / 과방위 회의록 / **법령 개정 추적**(탭: 입법예고·개정 현황|조문 DIFF — 기존 lawtrack·diff 패널 무수정 재사용) · [지식베이스] **지식베이스**(탭: 법령·고시|보도자료|실무 안내|ITU-R|추가지식). **설정=상단 톱니 아이콘, 운영 상태=상단 상태등**(🟢/🔴 하트비트 종합, 클릭 시 패널 — refreshOpsLight). 탭 바는 기존 go() 라우팅을 호출하는 상위 컴포넌트(renderGroupTabs)라 패널·로드 함수는 무수정. 모바일 하단 5버튼 유지, 딥링크(pageTobn) 기존 값 유효. 보고서 초안 메뉴는 계속 주석 숨김.

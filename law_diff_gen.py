@@ -64,7 +64,7 @@ MODEL = 'claude-sonnet-5'
 ARTICLE_CHARS = 3000        # 조문당 입력 절단
 TOTAL_CHARS = 30000         # 프롬프트 본문 총 절단
 FULL_REVISION_RATIO = 0.7   # 변경조문/전체조문이 이 비율 초과면 전부개정으로 간주
-DASHBOARD_URL = 'https://youjinwoong.github.io/radio-policy-ai/'
+DASHBOARD_URL = 'https://radio-policy.gitlab.io/'
 KST = timezone(timedelta(hours=9))
 
 # docs/schema.sql:451 norm_article_key의 파이썬 포팅 — "제48조의3(침해사고 대응)" → "48조의3"
