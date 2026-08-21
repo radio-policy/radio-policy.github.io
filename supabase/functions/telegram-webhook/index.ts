@@ -22,7 +22,9 @@ import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
 import { createClient, type SupabaseClient } from 'jsr:@supabase/supabase-js@2';
 import { escapeHtml, splitByLines, mdToTelegramHtml, sendTelegramHtml } from '../_shared/telegram_format.ts';
 import { answerAdvisory, answerLawQuery } from '../_shared/rag.ts';
-import { NEWS_TAGS, TAG_SLUGS } from '../_shared/news_tags.ts';
+import { NEWS_TAGS, TAG_SLUGS, matchTags } from '../_shared/news_tags.ts';
+import { groupBySameEvent } from '../_shared/news_group.ts';
+import { parseMoreCallback, encodeMoreCallback, formatRange, MORE_PAGE_SIZE } from '../_shared/news_more.ts';
 import { parseAssemQuery, searchAssemblyWithFallback, attachContext, shortCommittee, type AssemQuery, type AssemKind } from '../_shared/assembly_search.ts';
 
 // env는 반드시 trim — Supabase 콘솔에 값을 붙여넣을 때 줄바꿈이 딸려 들어가는 일이 잦고,
@@ -670,6 +672,74 @@ async function handleAdmin(chatId: number): Promise<void> {
   await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text, reply_markup: { inline_keyboard: kb } });
 }
 
+// ── 주요 뉴스 '더 보기' (2026-08-21) ──
+// 발송이 커버한 (from, to] 구간의 🟡보통 기사를 news_feed에서 직접 읽어 보여준다.
+//  · 순수 조회 — subscriber_queue·워터마크(last_urgent_sent_at)를 건드리지 않는다(#44 경로 회피).
+//  · 태그 필터는 주요 뉴스와 같은 규칙(matchTags) — 같은 구독자가 채널마다 다른 기사를 받으면 안 된다.
+//  · 같은 사건은 라벨 2-gram 유사도로 묶는다(news_group.ts — 원본은 app.js:3491, 임계 0.45 실측 근거는 그쪽 주석).
+async function sendMoreNews(cbId: string, chatId: number, fromMs: number, toMs: number, offset: number): Promise<void> {
+  const range = formatRange(fromMs, toMs);
+  try {
+    // 구독자 관심분야 — 미등록 chat_id(운영자 테스트 등)는 전체 수신 취급
+    const { data: sub } = await sb.from('telegram_subscribers')
+      .select('tags').eq('chat_id', chatId).maybeSingle();
+
+    const { data: rows } = await sb.from('news_feed')
+      .select('title, url, source, event, tags, published_at, created_at')
+      .gt('created_at', new Date(fromMs).toISOString())
+      .lte('created_at', new Date(toMs).toISOString())
+      .eq('urgency', '보통')
+      // 2차 정렬 키 필수 — published_at이 같은 행이 흔한데(같은 사건 동시 보도) 1차 키만
+      // 두면 조회마다 순서가 흔들려 그룹 시드가 바뀌고 페이지 경계가 밀린다.
+      .order('published_at', { ascending: false })
+      .order('created_at', { ascending: false });
+
+    const visible = matchTags(rows || [], (sub?.tags as string[] | null) || null);
+    const groups = groupBySameEvent(visible);
+
+    if (!groups.length || offset >= groups.length) {
+      await tg('answerCallbackQuery', { callback_query_id: cbId, text: `${range}에는 추가 뉴스가 없습니다` });
+      return;
+    }
+    await tg('answerCallbackQuery', { callback_query_id: cbId, text: '불러오는 중…' });
+
+    const page = groups.slice(offset, offset + MORE_PAGE_SIZE);
+    // 'N건'은 기사 수가 아니라 **묶음(사건) 수**다. '(관련 보도 N건)'과 합이 안 맞아 보이지
+    // 않도록 '사건'이라고 못박는다.
+    const lines: string[] = [`🟡 <b>${escapeHtml(range)} 뉴스 — 사건 ${groups.length}건</b>\n`];
+    for (let i = 0; i < page.length; i++) {
+      const g = page[i];
+      const relTxt = g.related ? ` <i>(관련 보도 ${g.related}건)</i>` : '';
+      const title = escapeHtml(g.head.title);
+      const head = g.head.url ? `<a href="${escapeHtml(g.head.url)}">${title}</a>` : `<b>${title}</b>`;
+      lines.push(`${offset + i + 1}. ${head}${relTxt}\n   <i>${escapeHtml(g.head.source || '')}</i>\n`);
+    }
+    lines.push('<i>※ 위 주요 뉴스와 같은 시간대의 기사입니다. 이후 소식은 다음 발송에 포함됩니다.</i>');
+    const body = lines.join('\n');
+
+    // 남은 게 있으면 다음 페이지 버튼(같은 구간, offset만 전진)을 마지막 조각에 붙인다
+    const nextOffset = offset + page.length;
+    const moreData = nextOffset < groups.length ? encodeMoreCallback(fromMs, toMs, nextOffset) : null;
+    const parts = splitByLines(body);
+    for (let pi = 0; pi < parts.length; pi++) {
+      const isLast = pi === parts.length - 1;
+      const extra = isLast && moreData
+        ? { reply_markup: { inline_keyboard: [[{
+            // 진행 표기 (N/M)을 붙이지 않는다 — 바로 위 헤더의 날짜 표기(8/19 …)와 같은
+            // 슬래시 꼴이라 날짜로 오독된다.
+            text: `▼ 다음 ${Math.min(MORE_PAGE_SIZE, groups.length - nextOffset)}건 더 보기`,
+            callback_data: moreData,
+          }]] } }
+        : {};
+      await sendTelegramHtml(BOT_TOKEN, chatId, parts[pi], extra);
+    }
+  } catch (e) {
+    // 조회 실패가 웹훅 전체를 죽이면 안 된다 — 토스트로만 알리고 끝낸다(fail-open)
+    console.error('[더 보기] 조회 실패', e);
+    await tg('answerCallbackQuery', { callback_query_id: cbId, text: '조회에 실패했습니다 — 잠시 후 다시 눌러 주세요' });
+  }
+}
+
 // ── callback_query 처리 ──
 async function handleCallback(cb: { id: string; data?: string; from: { id: number }; message?: { chat: { id: number }; message_id: number } }): Promise<void> {
   const data = cb.data || '';
@@ -682,6 +752,18 @@ async function handleCallback(cb: { id: string; data?: string; from: { id: numbe
     const p = parseAssemCallback(data);
     await tg('answerCallbackQuery', { callback_query_id: cb.id, text: p ? '불러오는 중…' : '만료된 버튼' });
     if (p) await sendAssemResults(chatId, p.q, p.offset);
+    return;
+  }
+
+  if (data.startsWith('mn|')) {
+    // 주요 뉴스 '더 보기'(2026-08-21) — 그 발송이 커버한 (from, to] 구간의 🟡보통 기사를
+    // news_feed에서 **읽기만** 해서 보여준다. subscriber_queue·워터마크는 절대 건드리지
+    // 않는다(#44 재알림 사고 경로). 버튼은 눌린 시각이 아니라 각인된 구간을 보여주므로,
+    // 구간을 헤더에 그대로 적어 오래된 버튼을 누른 사람이 고장으로 오해하지 않게 한다.
+    const q = parseMoreCallback(data);
+    if (!q) { await tg('answerCallbackQuery', { callback_query_id: cb.id, text: '만료된 버튼' }); return; }
+    // 0건이면 새 메시지 없이 토스트만 — 그래서 콜백 응답은 sendMoreNews가 조회 후에 직접 한다.
+    await sendMoreNews(cb.id, chatId, q.fromMs, q.toMs, q.offset);
     return;
   }
 

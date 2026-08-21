@@ -69,7 +69,10 @@ LAW_SERVICE_URL = 'http://www.law.go.kr/DRF/lawService.do'
 TYPE_PAREN_RE = re.compile(r'\(([^()]*?(법률|대통령령|총리령|부령|고시|훈령|공고|예규|위원회규칙|연구원규칙))\)')
 
 # 「법령명」 (선택: 제N조) — 조문 속 타 법령 인용의 표준 표기
-BRACKET_CITE_RE = re.compile(r'「([^」]{2,45})」(?:\s*(제\d+조(?:의\d+)?))?')
+# ⚠️ 문자 클래스에 '「'를 넣어 **여는 괄호를 다시 만나면 매칭을 끊는다**. 예전 `[^」]`는
+#    닫는 」를 놓친 앞쪽 「부터 다음 」까지를 통째로 삼켜, 앞 문장이 이름에 붙은 스텁을
+#    만들었다("「방송통신발전 기본법", "과학기술정보통신부장관은 「훈령·예규 등의 …").
+BRACKET_CITE_RE = re.compile(r'「([^「」]{2,45})」(?:\s*(제\d+조(?:의\d+)?))?')
 
 # 시행령·시행규칙 본문의 자기계열 참조
 SELF_LAW_RE = re.compile(r'(?<![가-힣])법\s*제(\d+)조(?:의(\d+))?')
@@ -78,16 +81,59 @@ SELF_DECREE_RE = re.compile(r'(?<![가-힣])영\s*제(\d+)조(?:의(\d+))?')
 # 인용 대상으로 인정하는 명칭 어미 (「」 안의 비법령 인용어 걸러냄 — 예: 「마을 간이무선국」)
 CITABLE_SUFFIX_RE = re.compile(r'(법|법률|시행령|시행규칙|규칙|규정|고시|기준|세칙|분배표|협정)$')
 
+# PDF 표(신구조문대비표·별표·과태료표)의 세로 칸막이·괘선 문자.
+# 국가법령정보센터 PDF를 텍스트로 뽑으면 표의 셀 경계가 이 문자로 남는데, 「와 」가
+# 서로 다른 셀에 걸리면 인용 정규식이 칸막이째로 법령명을 삼킨다.
+#   실측: "전파 │ │법", "개인정보 보 │ │호법", "전기┃ ┃통신사업법",
+#         "감염병의 예방 및 관 │ │ │한 법률"(← '리에 관'이 통째로 소실)
+TABLE_RULE_CHARS = '│┃┆┇┊┋╎╏┌┐└┘├┤┬┴┼─━┏┓┗┛┣┫┳┻╋'
+TABLE_RULE_RE = re.compile('[' + TABLE_RULE_CHARS + ']')
+
+# 가운뎃점 이형 — 법령명의 점 문자는 판본·추출기마다 다르다. 정본은 '·'(U+00B7).
+#   ㆍ(U+318D) ‧(U+2027) •(U+2022) ᆞ(U+119E) ․(U+2024) ・(U+30FB) ･(U+FF65) ∙(U+2219) ⋅(U+22C5)
+MID_DOT_CHARS = 'ㆍ‧•ᆞ․・･∙⋅'
+MID_DOT_TRANS = str.maketrans({c: '·' for c in MID_DOT_CHARS})
+
 # 부칙·개정문 상용구가 기계적으로 인용하는 절차 규정 — 관계도 가치 없음
+# (비교는 nrm_key로 한다 — "훈령․예규 …"처럼 점 이형으로 들어오면 원문 비교는 빠져나간다)
 CITE_BLOCKLIST = {
     '훈령·예규 등의 발령 및 관리에 관한 규정',
 }
 
 
 def norm_name(name: str) -> str:
-    """가운뎃점 이형(ㆍ‧•) 통일 + 공백 정리 — 같은 법령의 중복 노드 방지"""
-    name = name.replace('ㆍ', '·').replace('‧', '·').replace('•', '·')
+    """가운뎃점 이형 통일 + 표 괘선 제거 + 공백 정리 — 같은 법령의 중복 노드 방지"""
+    name = (name or '').translate(MID_DOT_TRANS)
+    name = TABLE_RULE_RE.sub(' ', name)
     return re.sub(r'\s+', ' ', name).strip()
+
+
+def nrm_key(name: str) -> str:
+    """노드 동일성 키 — 공백 무시 + 가운뎃점 이형 통일 + 괘선 제거.
+    '전 파법'/'전파법', '체육시설의 설치ᆞ이용…'/'…설치·이용…'을 같은 노드로 본다."""
+    return norm_name(name).replace(' ', '')
+
+
+def _blocklist_keys():
+    return {re.sub(r'\s+', '', s.translate(MID_DOT_TRANS)) for s in CITE_BLOCKLIST}
+
+
+def is_dirty_name(name: str) -> bool:
+    """저장된 노드 이름에 PDF 추출 흔적(괘선·점 이형)이 남아 있는가?"""
+    s = name or ''
+    return bool(TABLE_RULE_RE.search(s)) or any(c in s for c in MID_DOT_CHARS)
+
+
+def is_corrupt_citation(raw: str) -> bool:
+    """「」 안이 PDF 표의 셀 경계를 넘어간 인용인가? → True면 인용 자체를 버린다.
+
+    괘선이 들어 있으면 칸막이 건너편 셀의 글자가 섞였거나, 반대로 이쪽 셀에서 잘려나갔다
+    ("감염병의 예방 및 관 │ │ │한 법률" ← '리에 관' 소실). **괘선만 지워서는 원래 이름을
+    복원할 수 없으므로 스텁 노드를 만들지 않는다** — 같은 법령의 온전한 인용은 표 밖
+    본문에서 거의 항상 다시 잡히고, 안 잡히면 '없는 관계'가 '틀린 관계'보다 낫다.
+    ':'는 서식·표 항목("기반시설 지정번호(공문번호) : 보호법")이 섞여 들어온 신호다.
+    """
+    return bool(TABLE_RULE_RE.search(raw or '')) or ':' in (raw or '')
 
 
 def node_type_of(base_name: str, type_token: str) -> str:
@@ -422,6 +468,8 @@ def main(dry_run=False):
     # edge_key = (src_base, dst_name) → {'count': n, 'samples': [조문...]}
     cites = defaultdict(lambda: {'count': 0, 'samples': []})
     cited_names = set()
+    corrupt_skipped = defaultdict(int)   # 표 괘선으로 깨져 버린 인용(스텁 노드 방지) 집계
+    CITE_BLOCKLIST_KEYS = _blocklist_keys()
 
     for ch in chunks:
         src = base_of_doc.get(ch['doc_name'])
@@ -431,11 +479,16 @@ def main(dry_run=False):
 
         # ① 「법령명」 인용
         for m in BRACKET_CITE_RE.finditer(content):
-            name = norm_name(m.group(1))
+            raw = m.group(1)
+            # 표 셀 경계를 넘어간 인용은 이름이 깨져 있다 → 스텁을 만들지 말고 버린다
+            if is_corrupt_citation(raw):
+                corrupt_skipped[norm_name(raw)] += 1
+                continue
+            name = norm_name(raw)
             art = m.group(2) or ''
             if not CITABLE_SUFFIX_RE.search(name):
                 continue
-            if name in CITE_BLOCKLIST:
+            if nrm_key(name) in CITE_BLOCKLIST_KEYS:
                 continue  # 부칙 상용구 인용 제외
             if name == src:
                 continue  # 자기 자신 인용(개정문 등) 제외
@@ -463,6 +516,12 @@ def main(dry_run=False):
                 cited_names.add(parent_decree)
 
     print(f'인용 엣지(원시): {len(cites)}건, 피인용 명칭: {len(cited_names)}건')
+    if corrupt_skipped:
+        _tot = sum(corrupt_skipped.values())
+        print(f'표 괘선으로 깨진 인용 폐기: {_tot}건 / 고유 명칭 {len(corrupt_skipped)}개'
+              '  (스텁 노드 미생성 — 배경역사 참조)')
+        for _nm, _c in sorted(corrupt_skipped.items(), key=lambda kv: -kv[1])[:15]:
+            print(f'    [폐기] {_nm}  ×{_c}')
 
     # ── 계열(상하위법) 엣지: 이름 구조에서 유도 ─────────────
     family_edges = []  # (parent_base, child_base)
@@ -494,18 +553,23 @@ def main(dry_run=False):
             break
         offset += 1000
 
-    # 공백 무시 색인 — PDF 추출이 단어 중간에 공백을 끼워 넣어("전 파법") 변형 노드가
-    # 양산되는 것을 방지. 같은 nrm이면 doc_name 보유 노드를 정본으로 재사용.
+    # 동일성 색인 — 공백 무시 + 가운뎃점 이형 통일(nrm_key). PDF 추출이 단어 중간에 공백을
+    # 끼워 넣거나("전 파법") 점 문자를 바꿔("체육시설의 설치ᆞ이용…") 변형 노드를 양산하는
+    # 것을 방지. 같은 키면 doc_name 보유 노드를, 그다음 이름이 깨끗한 노드를 정본으로 재사용.
     existing_nrm = {}
     for _nm, _row in existing.items():
-        _key = _nm.replace(' ', '')
+        _key = nrm_key(_nm)
         _prev = existing_nrm.get(_key)
-        if _prev is None or (_row.get('doc_name') and not _prev.get('doc_name')):
+        if (_prev is None
+                or (_row.get('doc_name') and not _prev.get('doc_name'))
+                or (not _prev.get('doc_name')
+                    and is_dirty_name(_prev.get('name') or '')
+                    and not is_dirty_name(_nm))):
             existing_nrm[_key] = _row
 
     def lookup_id(name):
         """읽기전용 노드 조회(생성 안 함) — dry-run·family 억제 비교용"""
-        row = existing.get(name) or existing_nrm.get(name.replace(' ', ''))
+        row = existing.get(name) or existing_nrm.get(nrm_key(name))
         return row['id'] if row else None
 
     def node_known(name):
@@ -625,20 +689,29 @@ def main(dry_run=False):
         return
 
     def ensure_node(name, ntype, doc_name=None):
-        row = existing.get(name) or existing_nrm.get(name.replace(' ', ''))
+        row = existing.get(name) or existing_nrm.get(nrm_key(name))
         if row:
             patch = {}
             if doc_name and not row.get('doc_name'):
                 patch['doc_name'] = doc_name
-            # 공백무시로 재사용된 노드가 과거 인용 스텁의 손상된 이름을 그대로 물고 있을 수 있다
+            # 동일성 색인으로 재사용된 노드가 과거 인용 스텁의 손상된 이름을 그대로 물고 있을 수 있다
             # ("정보통신기반 보호법 시행령"의 인용 스텁이 "정보통신기 반 보호법 시행령"으로 잘못
             # 생성된 뒤, 실제 문서가 들어와도 doc_name만 채워지고 name은 안 고쳐져 영구 오타가 됨).
-            # doc_name을 갖고 들어온 쪽(=실제 원문 파싱 결과)이 항상 정본이므로 name도 맞춘다.
-            if doc_name and row.get('name') != name:
-                patch['name'] = name
+            #  ① doc_name을 갖고 들어온 쪽(=실제 원문 파싱 결과)은 언제나 정본이다(배경역사 #33).
+            #  ② doc_name이 없어도 저장된 이름에만 괘선·점 이형이 있고 들어온 이름이 깨끗하면
+            #     그쪽이 정본이다("체육시설의 설치ᆞ이용…" → "체육시설의 설치·이용…").
+            cur = row.get('name') or ''
+            if cur != name and (doc_name or (is_dirty_name(cur) and not is_dirty_name(name))):
+                # 정본 이름을 이미 다른 노드가 점유하고 있으면 UNIQUE(name) 위반 → 개명 포기
+                other = existing.get(name)
+                if not other or other['id'] == row['id']:
+                    patch['name'] = name
             if patch:
                 try:
                     sb.table('law_graph_nodes').update(patch).eq('id', row['id']).execute()
+                    if 'name' in patch:
+                        existing.pop(cur, None)
+                        existing[name] = row
                     row.update(patch)
                 except Exception:
                     pass
@@ -648,7 +721,7 @@ def main(dry_run=False):
         }).execute()
         row = ins.data[0]
         existing[name] = row
-        existing_nrm[name.replace(' ', '')] = row
+        existing_nrm[nrm_key(name)] = row
         return row['id']
 
     node_ids = {}

@@ -36,3 +36,19 @@ export function pickChips(articleTags: string[] | null, subTags: string[] | null
   const picked = s.length ? a.filter((t) => s.includes(t)) : a;
   return picked.slice(0, max).map((t) => CHIP.get(t)!);
 }
+
+// 구독자 관심분야로 발송분을 고른다.
+//  - 구독자 tags 가 빈 배열 → 전체 수신 (기존 구독자 하위호환의 근거)
+//  - 기사 tags 가 null/빈 배열 → **전원 통과(fail-open)**. 태그 판정이 실패했다고 해서
+//    기사가 조용히 사라지면 안 된다. 누락은 되돌릴 수 없지만 노이즈는 눈에 보인다.
+// send-subscriber-briefing(큐 행)과 telegram-webhook('더 보기'의 news_feed 행)이 **같은 규칙**을
+// 써야 하므로 여기 둔다. 한쪽만 고치면 같은 구독자가 채널에 따라 다른 기사를 받는다.
+export function matchTags<T extends { tags?: string[] | null }>(rows: T[], subTags: string[] | null): T[] {
+  const s = (subTags || []).filter((t) => !!t);
+  if (!s.length) return rows;
+  return rows.filter((r) => {
+    const a = r.tags || [];
+    if (!a.length) return true;                       // fail-open
+    return a.some((t) => s.includes(t));
+  });
+}

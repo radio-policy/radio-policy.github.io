@@ -26,6 +26,8 @@ import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { briefingToTelegramHtml, splitByLines, sendTelegramHtml, DASHBOARD_URL, escapeHtml } from '../_shared/telegram_format.ts';
 // news_tags.ts(pickChips)는 더 이상 여기서 쓰지 않는다 — 칩은 운영자 알림 전용이 됐다.
 // 태그 자체는 여전히 '누가 이 기사를 받을지' 필터로 쓴다(아래 pickEligible).
+import { matchTags } from '../_shared/news_tags.ts';
+import { moreButton } from '../_shared/news_more.ts';
 
 // env는 반드시 trim — 콘솔 붙여넣기 시 줄바꿈이 섞이면 시크릿 비교가 조용히 어긋난다(401)
 const env = (k: string) => (Deno.env.get(k) || '').trim();
@@ -166,19 +168,9 @@ export function mergeQueueBlocks(htmls: string[]): string {
 // 들고 오고 Edge가 헤더·번호·칩을 조립한다. 헤더 건수와 칩은 구독자마다 달라서 Python이
 // 미리 구울 수 없다.
 
-// 구독자 관심분야로 발송분을 고른다.
-//  - 구독자 tags 가 빈 배열 → 전체 수신 (기존 구독자 하위호환의 근거)
-//  - 기사 tags 가 null/빈 배열 → **전원 통과(fail-open)**. 태그 판정이 실패했다고 해서
-//    기사가 조용히 사라지면 안 된다. 누락은 되돌릴 수 없지만 노이즈는 눈에 보인다.
-export function matchTags(rows: QueueRow[], subTags: string[] | null): QueueRow[] {
-  const s = (subTags || []).filter((t) => !!t);
-  if (!s.length) return rows;
-  return rows.filter((r) => {
-    const a = r.tags || [];
-    if (!a.length) return true;                       // fail-open
-    return a.some((t) => s.includes(t));
-  });
-}
+// matchTags는 _shared/news_tags.ts로 옮겼다(2026-08-21) — '더 보기'(telegram-webhook)가
+// news_feed 행에 **같은 규칙**을 적용해야 해서다. 재수출은 기존 참조 호환용.
+export { matchTags };
 
 // 워터마크 전진 지점 = 평가한 행들의 max(created_at).
 // nowIso를 쓰면 안 되는 이유: 큐 읽기와 워터마크 쓰기 사이에 크롤러가 _trigger_delivery()로
@@ -279,10 +271,12 @@ Deno.serve(async (req: Request) => {
     };
 
     for (const s of subs) {
-      const msgs: string[] = [];
+      // 메시지에 reply_markup을 실을 수 있게 {text, extra} 쌍으로 든다 — 주요 뉴스 마지막
+      // 조각에만 '더 보기' 버튼이 붙는다(2026-08-21).
+      const msgs: Array<{ text: string; extra?: Record<string, unknown> }> = [];
 
       if (s.topic_briefing && briefingParts && s.last_briefing_sent_date !== date) {
-        msgs.push(...briefingParts);
+        for (const p of briefingParts) msgs.push({ text: p });
       }
       // 1단 — 평가 대상(워터마크 전진의 근거)
       const urgentEligible = pickEligible(s.topic_urgent, 'urgent', s.last_urgent_sent_at);
@@ -321,7 +315,19 @@ Deno.serve(async (req: Request) => {
         }
         const body = parts.filter((t) => !!t.trim()).join(QUEUE_SEP);
         if (!body.trim()) continue;
-        for (const part of splitByLines(body)) msgs.push(part);
+        const chunks = splitByLines(body);
+        for (let ci = 0; ci < chunks.length; ci++) {
+          // '더 보기'는 주요 뉴스의 **마지막 조각에만** 붙인다. 구간은 이 발송이 실제로 커버한
+          // (from, to] — 워터마크 전진값과 같은 값이라 앞뒤 버튼의 구간이 빈틈없이 맞물린다.
+          const isLastNewsChunk = isNews && ci === chunks.length - 1;
+          const extra = isLastNewsChunk
+            ? moreButton(
+                s.last_urgent_sent_at ? new Date(s.last_urgent_sent_at).getTime() : dayStartMs,
+                maxCreatedAt(urgentEligible),
+              )
+            : undefined;
+          msgs.push({ text: chunks[ci], extra });
+        }
       }
 
       // ⚠ 여기서 `if (!msgs.length) continue`를 하면 안 된다.
@@ -329,7 +335,7 @@ Deno.serve(async (req: Request) => {
       //   (보낼 게 없으면 아래 루프가 0회 돌 뿐이고, 텔레그램 호출도 발생하지 않는다.)
       let ok = true;
       for (const m of msgs) {
-        const r = await sendTelegramHtml(BOT_TOKEN, s.chat_id, m);
+        const r = await sendTelegramHtml(BOT_TOKEN, s.chat_id, m.text, m.extra ?? {});
         if (r === 'blocked') {
           await sb.from('telegram_subscribers').update({ active: false }).eq('chat_id', s.chat_id);
           ok = false; break;

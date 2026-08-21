@@ -1,7 +1,7 @@
 {
   "schema": "regulatory-kb-manifest/v1",
   "updated": "2026-07-31",
-  "entry_count": 250,
+  "entry_count": 251,
   "dedup_key_rule": "정규화 제목(버전 수식어 '(구버전)' 등 제거) + '|' + law_type. 같은 dedup_key = 같은 법령(버전만 다를 수 있음).",
   "on_readd_rule": {
     "same_law_number": "동일 법령번호 재추가 → 기존 path에 덮어쓰기(idempotent). 신규 파일 생성 금지.",
@@ -2512,6 +2512,16 @@
       "enforcement_date": "2026-08-04",
       "concept_type": "Regulation",
       "path": "laws/telecom-fraud-act/전기통신금융사기_피해_방지_및_피해금_환급에_관한_특별법_시행령.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "이동통신용 무선설비 예비전원설비 설치 가이드라인|과학기술정보통신부 가이드라인",
+      "title": "이동통신용 무선설비 예비전원설비 설치 가이드라인",
+      "law_type": "과학기술정보통신부 가이드라인",
+      "law_number": "",
+      "enforcement_date": "",
+      "concept_type": "Guideline",
+      "path": "laws/telecom-facility-standards/이동통신용_무선설비_예비전원설비_설치_가이드라인.md",
       "status": "current"
     }
   ]
