@@ -141,14 +141,24 @@ def _fb_tokens(s: str) -> set:
     return set(re.findall(r'[가-힣A-Za-z0-9]{2,}', (s or '').lower()))
 
 
+DISTILL_MIN_FEEDBACK = 50   # 증류 착수 최소 표본. 아래 주석 참조 — 20건에서 실패했다.
+
+
 def _get_distilled_rules() -> str:
-    """피드백 20건 이상이면 Haiku로 일반화 규칙 증류 → feedback_rules 테이블 캐시.
-    마지막 증류 이후 10건 이상 추가됐을 때만 재생성 (실행당 최대 1회 API 호출)."""
+    """피드백이 DISTILL_MIN_FEEDBACK건 이상이면 Haiku로 일반화 규칙 증류 → feedback_rules 캐시.
+    마지막 증류 이후 10건 이상 추가됐을 때만 재생성 (실행당 최대 1회 API 호출).
+
+    ⚠️ 임계값을 20 → 50으로 올렸다(2026-08-21, 배경역사 #109). 20건에서 처음 돌자마자
+    쓸 수 없는 규칙이 나왔다: ①**각 항목에 등급이 안 적혀** "올려라"인지 "내려라"인지 알 수
+    없는 목록이었고 ②「통신 기술 고도화(AI·5G)」와 「정부 공모전·홍보 등 일반 정보성」이
+    같은 목록에 섞여 서로 모순됐다(운영자는 전자를 올리고 후자를 내렸다).
+    그 규칙이 판정 프롬프트의 **최우선 기준**으로 들어가 오분류를 키웠다.
+    임계값을 내리지 말 것 — 표본이 적으면 규칙이 없느니만 못하다."""
     global _distilled_rules_cache
     if _distilled_rules_cache is not None:
         return _distilled_rules_cache
     rows = _load_feedback_rows()
-    if len(rows) < 20 or not ANTHROPIC_API_KEY:
+    if len(rows) < DISTILL_MIN_FEEDBACK or not ANTHROPIC_API_KEY:
         _distilled_rules_cache = ''
         return ''
     saved = None
@@ -165,8 +175,14 @@ def _get_distilled_rules() -> str:
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
         resp = client.messages.create(
             model='claude-haiku-4-5-20251001', max_tokens=600,
-            system='다음은 뉴스 긴급도 분류(즉시대응/금주검토/동향파악)에 대한 담당자 수정 사례입니다. '
-                   '사례들을 일반화한 분류 규칙 5~10개를 불릿(-)으로 간결히 요약하세요. 규칙 외 다른 말 금지.',
+            # ⚠️ "규칙을 요약하라"만 시키면 **등급이 빠진 목록**이 나온다(#109 실패 사례).
+            #    규칙은 판정 프롬프트에 최우선 기준으로 들어가므로 방향이 없으면 해롭다.
+            system='다음은 뉴스 긴급도 분류(즉시대응/금주검토/동향파악)에 대한 담당자 수정 사례입니다.\n'
+                   '사례를 일반화한 분류 규칙 5~10개를 불릿(-)으로 쓰세요.\n'
+                   '**각 규칙은 반드시 "<조건> → <즉시대응|금주검토|동향파악>" 형식으로 등급을 명시**하세요. '
+                   '등급 없는 규칙은 쓸모가 없습니다.\n'
+                   '서로 모순되는 규칙을 함께 쓰지 마세요 — 사례가 엇갈리면 그 주제는 규칙에서 빼세요.\n'
+                   '사례에서 확인되지 않는 일반론은 쓰지 마세요. 규칙 외 다른 말 금지.',
             messages=[{'role': 'user', 'content': sample}],
         )
         rules = resp.content[0].text.strip()
