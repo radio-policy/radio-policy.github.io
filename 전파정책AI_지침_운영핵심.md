@@ -161,7 +161,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 
 ### pg_cron 스케줄 잡 (DB 내부 스케줄러, UTC 기준 / KST=UTC+9). `select * from cron.job`로 조회.
 
-⚠️ **GitHub 디스패치 잡 4개는 계정 정지 기간 동안 비활성(2026-08-10)** — `crawl-trigger-hourly`·`assembly-crawl-trigger`·`law-crawl-trigger`·`watchdog-trigger`. 계정 정지로 전부 422("Actions has been disabled for this user")를 받으면서도 매시간 호출이 나가고 있었다 — 심사 중인 계정에 자동화 트래픽이 계속 찍히는 것은 불리하고 어차피 전부 실패라 무용. 수집은 PC 스케줄러(`radio_TEMP_*`)가 전담 중. **계정 복구 후 재활성**: `select cron.alter_job(jobid, active := true) from cron.job where jobname in ('crawl-trigger-hourly','assembly-crawl-trigger','law-crawl-trigger','watchdog-trigger');` — 그리고 `radio_TEMP_*` 임시 작업 정리와 함께 티켓 #4621561 후속 댓글의 "자동화 중단" 약속과 일관되게 순서를 지킬 것(복구 확인 → 재활성).
+✅ **GitHub 계정 복구 완료(2026-08-25) — 디스패치 잡 전부 재활성.** 8/1 정지로 비활성했던 4개(`crawl-trigger-hourly`·`assembly-crawl-trigger`·`law-crawl-trigger`·`watchdog-trigger`)를 되살렸고, `foreign-press-trigger`(jobid 19)를 신설했다. **주의: GitHub 자체 cron(`schedule:`)은 복구 후에도 깨어나지 않았다** — 플래그 해제 8시간 뒤까지 `schedule` 이벤트 0건(10:17·11:17 슬롯 모두 미발화). 반면 pg_cron→`workflow_dispatch` 경로는 11:47 정시 자동 발화·성공을 실측했다. **주 트리거는 pg_cron이며 GitHub cron에 의존하지 말 것**(원래 설계와 동일). GitHub cron이 나중에 깨어나도 이미 판정한 기사는 건너뛰므로 데이터 피해는 없으나 로그가 이중화된다 — 복귀 후 확인해 살아났으면 워크플로의 `schedule:` 줄 제거를 검토한다. PC 임시작업(`radio_TEMP_*` 5개)은 **아직 켜둔 채 병행 중** — 이중 실행이지만 캐시 건너뜀 때문에 추가 비용은 배치 자투리 수준(월 3~6천원). 안정 확인 후 정리한다.
 
 | jobid | jobname | UTC | KST | 역할 |
 |---|---|---|---|---|
@@ -174,6 +174,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 | 7 | briefing-trigger-0620 | `20 21 * * *` | 06:20 | 위 백업 재시도 |
 | 12 | news-health-check | `0 12 * * *` | 21:00 | 무음 실패 알람(내부) check_news_health() |
 | 13 | watchdog-trigger | `35 12 * * *` | 21:35 | 외부 워치독 백업 dispatch |
+| 19 | foreign-press-trigger | `30 20 * * *` | 05:30 | **해외 규제동향 트리거(2026-08-25 신설)** → foreign_press.yml dispatch. FCC·Ofcom·BEREC·日총무성·ITU는 한국 IP가 불필요해 Actions에서 돈다 — 그전까지 PC 임시작업만 담당해 PC가 꺼지면 그날치가 통째로 빠졌다. 06:05 브리핑보다 앞서야 그날치가 실린다 |
 | 16 | watchdog-scan-3x | `10 0,6,12 * * *` | 09:10·15:10·21:10 | **내부 워치독 전수 감시** `watchdog_scan(false)` — system_health 10키 키별 임계+note 실패신호, 재알림 억제, 이상 시 1건 요약(Vault `telegram_bot_token`). :10은 :00/:35 잡과 겹치지 않게 오프셋 |
 | 18 | admin-daily-report | `0 0 * * *` | 09:00 | **운영자 일일 리포트**(#100) — 구독자 목록·권한·수신 설정·명령 사용 통계. `trigger_admin_report()` → Vault `admin_report_cron_secret` |
 | — | subscriber-briefing-hourly | `25 * * * *` | 매시 :25 | 구독자 정시 발송 → send-subscriber-briefing. `:25`는 06:05~06:20 브리핑 생성 창을 피한 값. 대상이 없으면 no-op이라 매시 돌아도 부담 없음. Vault `subscriber_cron_secret` 사용 |
