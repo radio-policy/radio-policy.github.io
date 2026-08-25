@@ -1,0 +1,33 @@
+name: 해외 규제동향 수집 (FCC·Ofcom·BEREC·日총무성·ITU)
+
+# 해외 사이트만 훑으므로 한국 IP가 필요 없다 — 정부공고(gov_notice_crawler)와 달리
+# GitHub Actions에서 돌 수 있다. 2026-08-25 신설: 그전까지 PC 임시작업
+# (radio_TEMP_foreign)만 담당해 PC가 꺼지면 그날 수집이 통째로 빠졌다.
+on:
+  schedule:
+    # 매일 20:30 UTC = 05:30 KST — 06:05 모닝 브리핑보다 앞서야 그날치가 실린다
+    - cron: '30 20 * * *'
+  workflow_dispatch:
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run foreign press collector
+        env:
+          SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          ANTHROPIC_API_KEY:    ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python foreign_press.py
