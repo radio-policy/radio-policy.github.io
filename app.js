@@ -3195,6 +3195,7 @@ function smartRefresh() {
     'panel-lawmap':   function() { loadLawMap(true); },
     'panel-assembly': function() { loadAssemblyBills(true); },
     'panel-minutes':  function() { loadAssemblyMinutes(true); },
+    'panel-people':   function() { loadPeople(true); },   // 상세 유지 로직은 loadPeople 내부에서 처리
     'panel-overseas': function() { loadOverseasNews(true); },
     // 상세를 보던 중이면 갱신 후에도 그 화면을 유지한다(새로고침 때문에 목록으로 튕기지 않게)
     'panel-issuemap': function() {
@@ -6302,7 +6303,7 @@ var PAGE_TO_NAV = {
   news: 'monitor', overseas: 'monitor', issuemap: 'issuemap',
   briefing: 'briefing', terms: 'terms',
   chat: 'chat', reportdraft: 'chat', lawmap: 'lawmap', feedback: 'chat',
-  assembly: 'assembly', minutes: 'minutes',
+  assembly: 'assembly', minutes: 'minutes', people: 'people',
   lawtrack: 'lawrev', diff: 'lawrev',
   law: 'kb', press: 'kb', guide: 'kb', itu: 'kb', custom: 'kb'
 };
@@ -6324,12 +6325,12 @@ function go(page, navEl, sourceType) {
 
   // 상단 바 제목 업데이트
   var newsTitle = currentNewsSourceType === 'gov' ? '정부 보도자료·공지사항 (최근 60일)' : (currentNewsSourceType === 'media' ? '뉴스 (최근 60일)' : '보도자료·뉴스 (최근 60일)');
-  var titles = {home:'대시보드', chat:'AI 자문', reportdraft:'보고서 초안 제안', diff:'법령 개정 추적 — 조문 DIFF', law:'지식베이스 — 법령·고시', guide:'지식베이스 — 실무 안내', lawmap:'법령 관계도', itu:'지식베이스 — ITU-R', press:'지식베이스 — 보도자료', custom:'지식베이스 — 추가지식', terms:'기술 용어', news:newsTitle, briefing:'Daily Briefing', assembly:'국회 법안', minutes:'과방위 회의록', overseas:'해외 규제동향 (최근 60일)', issuemap:'이슈맵', lawtrack:'법령 개정 추적 — 입법예고·개정 현황', settings:'설정', opsstatus:'운영 상태', feedback:'AI 자문 — 답변 피드백'};
+  var titles = {home:'대시보드', chat:'AI 자문', reportdraft:'보고서 초안 제안', diff:'법령 개정 추적 — 조문 DIFF', law:'지식베이스 — 법령·고시', guide:'지식베이스 — 실무 안내', lawmap:'법령 관계도', itu:'지식베이스 — ITU-R', press:'지식베이스 — 보도자료', custom:'지식베이스 — 추가지식', terms:'기술 용어', news:newsTitle, briefing:'Daily Briefing', assembly:'국회 법안', minutes:'과방위 회의록', people:'인물 — 과방위 발언·발의 이력', overseas:'해외 규제동향 (최근 60일)', issuemap:'이슈맵', lawtrack:'법령 개정 추적 — 입법예고·개정 현황', settings:'설정', opsstatus:'운영 상태', feedback:'AI 자문 — 답변 피드백'};
   var ttEl = document.getElementById('topbar-title');
   if (ttEl && titles[page]) ttEl.textContent = titles[page];
 
   // 모바일 하단 네비 동기화
-  var pageTobn = {home:'bn-more', chat:'bn-chat', reportdraft:'bn-chat', lawmap:'bn-chat', feedback:'bn-chat', law:'bn-law', guide:'bn-law', itu:'bn-law', press:'bn-law', custom:'bn-law', terms:'bn-monitor', news:'bn-monitor', briefing:'bn-monitor', assembly:'bn-bills', minutes:'bn-bills', overseas:'bn-monitor', issuemap:'bn-monitor', lawtrack:'bn-bills', diff:'bn-bills', settings:'bn-more', opsstatus:'bn-more'};
+  var pageTobn = {home:'bn-more', chat:'bn-chat', reportdraft:'bn-chat', lawmap:'bn-chat', feedback:'bn-chat', law:'bn-law', guide:'bn-law', itu:'bn-law', press:'bn-law', custom:'bn-law', terms:'bn-monitor', news:'bn-monitor', briefing:'bn-monitor', assembly:'bn-bills', minutes:'bn-bills', people:'bn-bills', overseas:'bn-monitor', issuemap:'bn-monitor', lawtrack:'bn-bills', diff:'bn-bills', settings:'bn-more', opsstatus:'bn-more'};
   if (pageTobn[page]) setBottomNav(pageTobn[page]);
 
   if (page === 'news') loadNews();
@@ -6343,6 +6344,7 @@ function go(page, navEl, sourceType) {
   if (page === 'lawmap') loadLawMap();
   if (page === 'assembly') loadAssemblyBills();
   if (page === 'minutes') loadAssemblyMinutes();
+  if (page === 'people') loadPeople();
   if (page === 'overseas') loadOverseasNews();
   if (page === 'issuemap') loadIssueMap();
   if (page === 'lawtrack') loadLawTrack();
@@ -8900,6 +8902,265 @@ async function linkNewsToIssue(newsId) {
     if (lb) { lb.innerHTML = '<i class="ti ti-lock"></i> 잠금됨'; lb.style.color = 'var(--accent)'; }
   } catch (e) {
     alert('연결 실패: ' + ((e && e.message) || e));
+  }
+}
+
+// ════════════════════════════════════════════
+//  인물 프로필 — 과방위 의원·정부/참고인 발언 이력 (2026-08-27)
+//  원천: people(명부·AI 요약 캐시) + assembly_speeches + assembly_bills + news_feed(엄격 매칭)
+//  열람은 공개, AI 요약 갱신만 로그인(aiReady) — 계정 정책(#104)과 동일.
+//  뉴스는 "이름+직함" 정확 구문 매칭만 — 동명이인 오염 방지(운영자 지시: 복잡하면 제외 원칙).
+// ════════════════════════════════════════════
+var _peopleCache = null;
+var _peopleView = 'list';       // list | detail
+var selectedPersonId = null;
+var _peopleTab = '의원';        // 의원 | 정부·참고인
+var _peopleQuery = '';
+var _personSpeeches = [];       // 상세에서 쟁점 칩 필터용
+var _personTopicFilter = '';
+
+async function loadPeople(force) {
+  var el = document.getElementById('people-body');
+  if (!el || !sb) return;
+  if (_peopleCache && !force) {
+    if (_peopleView === 'detail' && selectedPersonId) showPersonDetail(selectedPersonId);
+    else renderPeopleList();
+    return;
+  }
+  try {
+    var r = await sb.from('people').select('*').order('speech_count', { ascending: false });
+    if (r.error) throw r.error;
+    _peopleCache = r.data || [];
+    if (_peopleView === 'detail' && selectedPersonId) showPersonDetail(selectedPersonId);
+    else renderPeopleList();
+  } catch (e) {
+    el.innerHTML = '<div style="color:#c0392b;padding:20px;font-size:12px">인물 목록을 불러오지 못했습니다: ' + escHtml((e && e.message) || e) + '</div>';
+  }
+}
+
+function peopleSetTab(t) { _peopleTab = t; renderPeopleList(); }
+function peopleSearch(v) { _peopleQuery = String(v || '').trim(); renderPeopleList(); }
+
+function _personCard(p) {
+  var sub = [p.party, p.position, p.terms].filter(Boolean).join(' · ');
+  return '<div style="border:1px solid var(--border);border-radius:10px;padding:11px 14px;cursor:pointer;background:var(--bg-secondary)" onclick="showPersonDetail(' + p.id + ')">' +
+    '<div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap">' +
+      '<b style="font-size:13.5px">' + escHtml(p.name) + '</b>' +
+      '<span style="font-size:11px;color:var(--text-secondary)">' + escHtml(sub) + '</span>' +
+      (p.stance_summary ? '<span style="font-size:10px;color:var(--accent)">AI 요약</span>' : '') +
+    '</div>' +
+    '<div style="font-size:11px;color:var(--text-tertiary);margin-top:3px">발언 ' + (p.speech_count || 0) + '건 · ' +
+      escHtml(String(p.first_speech || '').slice(0, 7)) + ' ~ ' + escHtml(String(p.last_speech || '').slice(0, 7)) + '</div>' +
+  '</div>';
+}
+
+function renderPeopleList() {
+  var el = document.getElementById('people-body');
+  if (!el) return;
+  _peopleView = 'list'; selectedPersonId = null;
+  var all = _peopleCache || [];
+  var q = _peopleQuery;
+  var inTab = all.filter(function(p) { return p.kind === _peopleTab && (!q || p.name.indexOf(q) >= 0 || String(p.position || '').indexOf(q) >= 0); });
+  var cur = inTab.filter(function(p) { return p.is_22; });
+  var past = inTab.filter(function(p) { return !p.is_22; })
+    .sort(function(a, b) { return String(b.last_speech || '').localeCompare(String(a.last_speech || '')); });
+  function tabBtn(t, label) {
+    var on = _peopleTab === t;
+    return '<button class="btn" onclick="peopleSetTab(\'' + t + '\')" style="font-size:12px;padding:4px 14px;' +
+      (on ? 'background:var(--accent);color:#fff;border-color:var(--accent)' : '') + '">' + label + '</button>';
+  }
+  var h = '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">' +
+    tabBtn('의원', '의원') + tabBtn('정부·참고인', '정부·참고인') +
+    '<input type="text" placeholder="이름·직함 검색" value="' + escHtml(q) + '" oninput="peopleSearch(this.value)" ' +
+      'style="margin-left:auto;font-size:12px;padding:5px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-secondary);color:var(--text-primary);width:150px">' +
+    '</div>' +
+    '<div style="font-size:11px;color:var(--text-tertiary);margin-bottom:10px">과방위 회의록 발언자 기준(발언 4건 이상) · 현역 = 22대(2024-06~) 발언 존재 · 정당은 활동 당시 소속</div>';
+  h += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:8px">' +
+    (cur.length ? cur.map(_personCard).join('') : '<div style="font-size:12px;color:var(--text-tertiary);padding:12px">해당 없음</div>') + '</div>';
+  if (past.length) {
+    h += '<details style="margin-top:14px"><summary style="cursor:pointer;font-size:12px;color:var(--text-secondary)">지난 대수 인물 ' + past.length + '명</summary>' +
+      '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:8px;margin-top:8px">' + past.map(_personCard).join('') + '</div></details>';
+  }
+  el.innerHTML = h;
+  _issueScrollTop(el);
+}
+
+function _personJobWord(p) {
+  // 뉴스 엄격 매칭용 직함 단어 — 의원은 '의원', 정부는 직함에서 추출. 없으면 뉴스 섹션 생략.
+  if (p.kind === '의원') return '의원';
+  var pos = String(p.position || '');
+  var m = ['장관', '차관', '위원장', '실장', '국장', '처장', '원장', '사장'].find(function(w) { return pos.indexOf(w) >= 0; });
+  return m || '';
+}
+
+async function showPersonDetail(id) {
+  var el = document.getElementById('people-body');
+  var p = (_peopleCache || []).find(function(x) { return String(x.id) === String(id); });
+  if (!el || !p || !sb) return;
+  _peopleView = 'detail'; selectedPersonId = p.id; _personTopicFilter = '';
+  var sub = [p.party, p.position, p.terms].filter(Boolean).join(' · ');
+  el.innerHTML =
+    '<button class="btn" onclick="renderPeopleList()" style="font-size:12px;padding:4px 12px;margin-bottom:10px"><i class="ti ti-arrow-left"></i> 인물 목록</button>' +
+    '<div style="border:1px solid var(--border);border-radius:12px;padding:14px 16px;background:var(--bg-secondary);margin-bottom:10px">' +
+      '<div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">' +
+        '<b style="font-size:17px">' + escHtml(p.name) + '</b>' +
+        '<span style="font-size:12px;color:var(--text-secondary)">' + escHtml(sub) + '</span>' +
+        '<span style="font-size:11px;color:var(--text-tertiary)">발언 ' + (p.speech_count || 0) + '건 · ' + escHtml(String(p.first_speech || '')) + ' ~ ' + escHtml(String(p.last_speech || '')) + '</span>' +
+      '</div>' +
+    '</div>' +
+    '<div id="person-stance"></div>' +
+    '<div id="person-topics"></div>' +
+    '<div id="person-speeches"><div style="font-size:12px;color:var(--text-tertiary);padding:10px">발언 이력 불러오는 중...</div></div>' +
+    '<div id="person-bills"></div>' +
+    '<div id="person-news"></div>';
+  _issueScrollTop(el);
+  renderPersonStance(p);
+
+  // 발언·법안·뉴스 병렬 로드
+  var jobs = [
+    sb.from('assembly_speeches').select('meeting_date,agenda,topic,summary,position,source_url')
+      .eq('speaker', p.speaker_key).order('meeting_date', { ascending: false }).limit(300),
+  ];
+  var jw = _personJobWord(p);
+  var billsIdx = -1, newsIdx = -1;
+  if (p.kind === '의원') {
+    billsIdx = jobs.length;
+    jobs.push(sb.from('assembly_bills').select('bill_no,bill_name,proposer,proc_result,propose_dt,link_url')
+      .or('proposer.ilike.' + p.name + '의원*,proposer.eq.' + p.name)
+      .order('propose_dt', { ascending: false }).limit(50));
+  }
+  if (jw) {
+    newsIdx = jobs.length;
+    var pat = '*' + p.name + ' ' + jw + '*';
+    jobs.push(sb.from('news_feed').select('id,title,url,source,published_at')
+      .or('title.ilike.' + pat + ',summary.ilike.' + pat)
+      .order('published_at', { ascending: false }).limit(8));
+  }
+  var rs = await Promise.all(jobs.map(function(j) { return j.then(function(r) { return r; }, function(e) { return { error: e }; }); }));
+  _personSpeeches = (rs[0] && rs[0].data) || [];
+  renderPersonTopics(p);
+  renderPersonSpeeches(p);
+  if (billsIdx >= 0) renderPersonBills(p, (rs[billsIdx] && rs[billsIdx].data) || []);
+  if (newsIdx >= 0) renderPersonNews(p, (rs[newsIdx] && rs[newsIdx].data) || []);
+}
+
+function _personSec(title, hint) {
+  return '<div style="font-size:12.5px;font-weight:700;margin:14px 0 6px;display:flex;align-items:baseline;gap:8px">' + title +
+    (hint ? '<span style="font-weight:400;font-size:11px;color:var(--text-tertiary)">' + hint + '</span>' : '') + '</div>';
+}
+
+function renderPersonStance(p) {
+  var box = document.getElementById('person-stance');
+  if (!box) return;
+  var canGen = typeof aiReady === 'function' ? aiReady() : false;
+  box.innerHTML = _personSec('쟁점별 입장 요약', p.stance_updated_at ? 'AI 생성 · ' + String(p.stance_updated_at).slice(0, 10) : 'AI 생성') +
+    '<div style="border:1px solid var(--border);border-radius:10px;padding:12px 14px;background:var(--bg-secondary)">' +
+    (p.stance_summary
+      ? '<div class="md-body" style="font-size:12.5px">' + renderMd(p.stance_summary) + '</div>'
+      : '<div style="font-size:12px;color:var(--text-tertiary)">아직 생성되지 않았습니다.</div>') +
+    '<div style="margin-top:8px;font-size:11px;color:var(--text-tertiary)">상임위 질의는 비판조가 관행이므로 실제 입장은 원문 발언으로 확인하세요.' +
+    (canGen ? ' <button class="btn" onclick="refreshPersonStance(' + p.id + ')" style="font-size:11px;padding:2px 10px;margin-left:6px">요약 ' + (p.stance_summary ? '갱신' : '생성') + '</button>' : ' (갱신은 로그인 후 가능)') +
+    '</div></div>';
+}
+
+function personTopicFilter(t) { _personTopicFilter = (_personTopicFilter === t) ? '' : t; var p = (_peopleCache || []).find(function(x) { return x.id === selectedPersonId; }); if (p) { renderPersonTopics(p); renderPersonSpeeches(p); } }
+
+function renderPersonTopics(p) {
+  var box = document.getElementById('person-topics');
+  if (!box) return;
+  var cnt = {};
+  _personSpeeches.forEach(function(s) { var t = (s.topic || '').trim(); if (t) cnt[t] = (cnt[t] || 0) + 1; });
+  var top = Object.keys(cnt).sort(function(a, b) { return cnt[b] - cnt[a]; }).slice(0, 10);
+  if (!top.length) { box.innerHTML = ''; return; }
+  box.innerHTML = _personSec('주요 쟁점', '클릭하면 발언 필터') +
+    '<div style="display:flex;gap:6px;flex-wrap:wrap">' + top.map(function(t) {
+      var on = _personTopicFilter === t;
+      return '<button class="btn" onclick="personTopicFilter(\'' + escHtml(t).replace(/'/g, "\\'") + '\')" style="font-size:11px;padding:3px 10px;' +
+        (on ? 'background:var(--accent);color:#fff;border-color:var(--accent)' : '') + '">' + escHtml(t) + ' ' + cnt[t] + '</button>';
+    }).join('') + '</div>';
+}
+
+function renderPersonSpeeches(p) {
+  var box = document.getElementById('person-speeches');
+  if (!box) return;
+  var list = _personSpeeches;
+  if (_personTopicFilter) list = list.filter(function(s) { return (s.topic || '').trim() === _personTopicFilter; });
+  var CAP = 100;
+  var shown = list.slice(0, CAP);
+  box.innerHTML = _personSec('발언 이력', list.length + '건' + (_personTopicFilter ? ' — ' + escHtml(_personTopicFilter) : '') + ' · 과방위 회의록 발췌') +
+    (shown.length ? '<div style="display:flex;flex-direction:column;gap:6px">' + shown.map(function(s) {
+      return '<div style="border:1px solid var(--border);border-radius:8px;padding:8px 12px;font-size:12px;background:var(--bg-secondary)">' +
+        '<span style="color:var(--text-tertiary)">' + escHtml(s.meeting_date || '') + '</span>' +
+        (s.topic ? ' · <span style="color:var(--accent)">' + escHtml(s.topic) + '</span>' : '') +
+        (s.agenda ? ' · <span style="color:var(--text-tertiary)">' + escHtml(String(s.agenda).slice(0, 40)) + '</span>' : '') +
+        '<div style="margin-top:3px;color:var(--text-primary)">' + escHtml(s.summary || '') +
+        (s.source_url ? ' <a href="' + safeUrl(s.source_url) + '" target="_blank" rel="noopener" style="font-size:11px">원문</a>' : '') + '</div></div>';
+    }).join('') + (list.length > CAP ? '<div style="font-size:11px;color:var(--text-tertiary);padding:4px">외 ' + (list.length - CAP) + '건 — 쟁점 칩으로 좁혀 보세요</div>' : '') + '</div>'
+    : '<div style="font-size:12px;color:var(--text-tertiary);padding:8px">발언 기록이 없습니다.</div>');
+}
+
+function renderPersonBills(p, bills) {
+  var box = document.getElementById('person-bills');
+  if (!box) return;
+  if (!bills.length) { box.innerHTML = ''; return; }
+  box.innerHTML = _personSec('대표발의 법안', bills.length + '건 · 통신·전파 관련 수집분') +
+    '<div style="display:flex;flex-direction:column;gap:6px">' + bills.map(function(b) {
+      var res = b.proc_result || '계류';
+      var col = /가결|공포/.test(res) ? '#1f8a50' : (/폐기|철회|부결/.test(res) ? '#c0392b' : 'var(--text-secondary)');
+      return '<div style="border:1px solid var(--border);border-radius:8px;padding:8px 12px;font-size:12px;background:var(--bg-secondary)">' +
+        (b.link_url ? '<a href="' + safeUrl(b.link_url) + '" target="_blank" rel="noopener">' + escHtml(b.bill_name) + '</a>' : escHtml(b.bill_name)) +
+        '<div style="margin-top:2px;font-size:11px;color:var(--text-tertiary)">' + escHtml(b.propose_dt || '') +
+        ' · <span style="color:' + col + '">' + escHtml(res) + '</span></div></div>';
+    }).join('') + '</div>';
+}
+
+function renderPersonNews(p, rows) {
+  var box = document.getElementById('person-news');
+  if (!box) return;
+  if (!rows.length) { box.innerHTML = ''; return; }
+  box.innerHTML = _personSec('뉴스 언급', '"' + escHtml(p.name + ' ' + _personJobWord(p)) + '" 정확 구문 일치만 · 최근 60일 + 잠금 기사') +
+    '<div style="display:flex;flex-direction:column;gap:6px">' + rows.map(function(n) {
+      return '<div style="border:1px solid var(--border);border-radius:8px;padding:8px 12px;font-size:12px;background:var(--bg-secondary)">' +
+        '<span style="color:var(--text-tertiary)">' + escHtml(String(n.published_at || '').slice(0, 10)) + '</span> · ' +
+        (n.url ? '<a href="' + safeUrl(n.url) + '" target="_blank" rel="noopener">' + escHtml(n.title) + '</a>' : escHtml(n.title)) +
+        (n.source ? ' <span style="font-size:11px;color:var(--text-tertiary)">' + escHtml(n.source) + '</span>' : '') + '</div>';
+    }).join('') + '</div>';
+}
+
+async function refreshPersonStance(id) {
+  var p = (_peopleCache || []).find(function(x) { return String(x.id) === String(id); });
+  if (!p || !sb) return;
+  if (typeof aiReady === 'function' && !aiReady()) { alert(typeof aiGateMsg === 'function' ? aiGateMsg() : '로그인이 필요합니다.'); return; }
+  var box = document.getElementById('person-stance');
+  if (box) box.innerHTML = _personSec('쟁점별 입장 요약', '') +
+    '<div style="font-size:12px;color:var(--text-secondary);padding:12px 14px;border:1px solid var(--border);border-radius:10px">' +
+    '<span style="display:inline-block;width:13px;height:13px;border:2px solid var(--accent);border-top-color:transparent;border-radius:50%;animation:spin 0.8s linear infinite;vertical-align:-2px;margin-right:6px"></span>요약 생성 중...</div>';
+  try {
+    var r = await sb.from('assembly_speeches').select('meeting_date,topic,summary')
+      .eq('speaker', p.speaker_key).order('meeting_date', { ascending: false }).limit(90);
+    var rows = (r.data || []).map(function(s) { return (s.meeting_date || '') + ' [' + (s.topic || '기타') + '] ' + (s.summary || ''); }).join('\n');
+    var userMsg = '다음은 ' + p.name + ' (' + [p.party, p.position].filter(Boolean).join(' ') + ')의 과방위 발언 요약 목록이다.\n\n' + rows +
+      '\n\n위 발언만을 근거로, 통신·전파 정책 관점의 쟁점별 입장 요약을 작성하라.\n' +
+      '- 쟁점 3~6개를 골라 "**쟁점명** — 입장 2~3문장 (근거 발언 날짜)" 형식의 불릿으로.\n' +
+      '- 상임위 질의는 비판조가 관행임을 감안해 단정을 피하고, 발언에 없는 입장은 쓰지 마라.\n' +
+      '- SKT/통신사에 직접 관련된 발언이 있으면 별도 불릿으로 표시하라.';
+    var res = await claudeFetch({
+      method: 'POST',
+      body: JSON.stringify({ model: 'claude-sonnet-5', max_tokens: 1000, messages: [{ role: 'user', content: userMsg }] })
+    });
+    var data = await res.json();
+    if (data.error) throw new Error(data.error.message || 'API 오류');
+    var text = (data.content || []).map(function(c) { return c && c.text ? c.text : ''; }).join('').trim();
+    if (!text) throw new Error('빈 응답');
+    var now = new Date().toISOString();
+    var u = await sb.from('people').update({ stance_summary: text, stance_updated_at: now, updated_at: now }).eq('id', p.id);
+    if (u.error) throw u.error;
+    p.stance_summary = text; p.stance_updated_at = now;
+    renderPersonStance(p);
+  } catch (e) {
+    if (box) box.innerHTML = _personSec('쟁점별 입장 요약', '') +
+      '<div style="font-size:12px;color:#c0392b;padding:10px">생성 실패: ' + escHtml((e && e.message) || e) + '</div>';
+    setTimeout(function() { renderPersonStance(p); }, 2500);
   }
 }
 

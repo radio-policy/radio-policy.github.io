@@ -40,6 +40,8 @@
       <div class="nav-label">법안 동향</div>
       <div class="nav-item" tabindex="0" role="button" data-nav="assembly" onclick="go('assembly',this)"><i class="ti ti-building-bank"></i>국회 법안</div>
       <div class="nav-item" tabindex="0" role="button" data-nav="minutes" onclick="go('minutes',this)"><i class="ti ti-microphone-2"></i>과방위 회의록</div>
+      <!-- 인물 프로필 — 의원·정부 발언 이력 (2026-08-27) -->
+      <div class="nav-item" tabindex="0" role="button" data-nav="people" onclick="go('people',this)"><i class="ti ti-users"></i>인물</div>
       <div class="nav-item" tabindex="0" role="button" data-nav="lawrev" onclick="go('lawtrack',this)"><i class="ti ti-file-certificate"></i>법령 개정 추적</div>
     </div>
     <div class="nav-group">
@@ -906,6 +908,13 @@
         </div>
       </div>
 
+      <!-- 인물 프로필 — 과방위 의원·정부/참고인 발언·발의 이력 (2026-08-27) -->
+      <div class="panel" id="panel-people">
+        <div id="people-body">
+          <div style="color:var(--text-secondary);padding:20px;text-align:center;font-size:12px">불러오는 중...</div>
+        </div>
+      </div>
+
       <!-- 이슈맵 — 중요 이슈의 경과·관련 법령·SKT 영향을 한 화면에 (2026-08-26) -->
       <div class="panel" id="panel-issuemap">
         <div id="issuemap-body">
@@ -972,6 +981,10 @@
       </button>
       <button class="mobile-submenu-item" onclick="go('minutes',null);setBottomNav('bn-bills');closeMobileSubMenu('bills-sub')">
         <i class="ti ti-microphone-2"></i>과방위 회의록
+      </button>
+      <!-- 인물 프로필 (2026-08-27) -->
+      <button class="mobile-submenu-item" onclick="go('people',null);setBottomNav('bn-bills');closeMobileSubMenu('bills-sub')">
+        <i class="ti ti-users"></i>인물
       </button>
       <!-- 메뉴 개편 2026-08-03: lawtrack·diff는 '법령 개정 추적' 한 항목(패널 상단 탭 2개)으로 통합 -->
       <button class="mobile-submenu-item" onclick="go('lawtrack',null);setBottomNav('bn-bills');closeMobileSubMenu('bills-sub')">
@@ -1158,6 +1171,6 @@
 <script src="https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js"></script>
 <script>if(typeof pdfjsLib!=='undefined'){pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';}</script>
 <script src="system_prompt.js?v=20260819a"></script>
-<script src="app.js?v=20260826s"></script>
+<script src="app.js?v=20260827a"></script>
 </body>
 </html>
