@@ -948,6 +948,10 @@
       <button class="mobile-submenu-item" onclick="go('news',null,'media');setBottomNav('bn-monitor');closeMobileSubMenu('monitor-sub')">
         <i class="ti ti-news"></i>통합 모니터링
       </button>
+      <!-- 이슈맵 (2026-08-26) — 사이드바는 독립 메뉴지만 모바일은 슬롯이 없어 모니터링 서브메뉴에 둔다 -->
+      <button class="mobile-submenu-item" onclick="go('issuemap',null);setBottomNav('bn-monitor');closeMobileSubMenu('monitor-sub')">
+        <i class="ti ti-sitemap"></i>이슈맵
+      </button>
       <button class="mobile-submenu-item" onclick="go('briefing',null);setBottomNav('bn-monitor');closeMobileSubMenu('monitor-sub')">
         <i class="ti ti-coffee"></i>Daily Briefing
       </button>
@@ -1154,6 +1158,6 @@
 <script src="https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js"></script>
 <script>if(typeof pdfjsLib!=='undefined'){pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';}</script>
 <script src="system_prompt.js?v=20260819a"></script>
-<script src="app.js?v=20260826l"></script>
+<script src="app.js?v=20260826m"></script>
 </body>
 </html>
