@@ -74,6 +74,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 | law_amendments | 법령·고시·입법예고. law_type: law/bylaw/rules/admrul/lsAnc. lsAnc는 law_id=`lsAnc_op_{md5}` |
 | assembly_bills | 국회 법안. bill_id(UNIQUE)·법안명·단계·소관위·제안일·링크. **+국회 입법예고**(2026-08-02): notice_end_dt(의견마감 'YYYY-MM-DD')·notice_url(pal 상세)·notice_alert_stage(0미알림/1시작알림/2 D-3알림 — 발송 성공 시에만 갱신) |
 | assembly_speeches | 과방위 발언자별 발언(#67). speaker(정규화명)·speaker_raw·position·meeting_date·confer_num·chunk_seq·agenda·topic·summary(Haiku 요지, 성향 단정어 금지 가드)·source_url. unique(confer_num,speaker,chunk_seq). RLS anon select만. assembly_minutes.py가 document_chunks와 독립 dedupe로 적재 |
+| people | **인물 프로필**(#112): speaker_key(assembly_speeches.speaker 일치 키)·name(표시명)·kind(의원/정부·참고인)·party(활동 당시)·position·terms·is_22(현역 판정=22대 발언 존재)·speech_count·stance_summary(AI 쟁점별 입장 요약 캐시)·stance_updated_at. 발언 4건 이상만 시드. RLS: select/update 공개(issues 관례) |
 | document_chunks | 법령·고시·보도자료 RAG 청크. embedding(vector 1024, HNSW), article_no=조항번호+제목. file_path=업로드 원본 Storage 경로. **보도자료는 2026-08-02부터 자동 수집**: doc_name=`{기관}_보도자료_{YYYY}.md`(기관: 과기정통부/전파연구원/방통위/전파관리소/ETRI/KISDI), 섹션 헤더 `## YYMMDD 제목`, 마지막 줄 `(원문: URL)`, **700자 무겹침 청킹**(대시보드가 청크를 이어붙여 원문 복원하므로 overlap 금지) |
 | app_config | 키-값 설정. `system_prompt`(봇 자문 프롬프트), `press_keywords`(보도자료 수집 키워드 JSON 배열 — 대시보드 '수집 키워드 관리' 카드가 편집), `press_relevance_criteria`(매일 수집 AI 관련성 판정 기준문), `assembly_notice_criteria`(국회 입법예고 Haiku 판정 기준문)·`assembly_notice_rejected`(기각 캐시 JSON — 자동 관리) 등. **claude_key는 anon 노출되는 브라우저용 — 서버측 재사용 금지** |
 | custom_knowledge | 팀 추가 지식(수동 입력). AI 자문 키워드 매칭 참조 |
@@ -734,6 +735,17 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **document_chunks에 벡터를 일괄 insert하지 말 것** — 4만 행+HNSW에서 12행 일괄도 statement timeout(57014). `issue_case_ingest.py`처럼 3건씩 분할.
 - **news_feed의 `event` 라벨로 사건을 묶지 말 것** — 같은 사건이 유사 라벨 6~7개로 갈라지고(펨토셀 실측), 본문에 스친 주제가 라벨로 붙는다(2분기 실적 기사 수십 건에 "통합요금제 출시" 라벨). 묶음은 `news_dedup.cluster_star`(제목 키워드, 임계 3)로.
 - **이슈 휴면 판정은 `issue_links.created_at`(링크가 추가된 시각) 기준** — `last_activity_at`(콘텐츠 날짜)로 하면 과거 기사를 보강한 당일 이슈가 "N일 무활동"으로 오판된다(실측).
+- **이슈의 관련 법령은 law_topic 주제 큐레이션이 정본** (2026-08-26 운영자 지시 "통짜 파생 말고 관련된 것만") — `issue_links(item_type='law_topic', item_id=주제 노드명)`이 있으면 상세 화면이 관계도 주제 노드의 엣지(조문 단위 역할 설명)를 보여주고, 통짜 하위법령 파생은 주제가 없을 때만 폴백. 주제 노드·엣지는 `source='ai'`로 넣으면 매일 17시 관계도 재구축에도 보존된다(빌더는 자기 소스 유형만 재생성). 승인/기각 버튼은 화면(isAdminUser)·서버(webhook JWT→role='admin') 모두 관리자 전용.
+
+## 인물 프로필 (people, 2026-08-27 신설 — 배경역사 #112)
+
+과방위 **의원 + 정부·참고인**(장차관·기관장·기업 증인)의 발언 이력을 인물 축으로 재집계한 사이드바 메뉴(법안 동향 그룹). 딥리서치(Quorum 의원 프로필·코딧 의원 페이지·국회도서관 아르고스 패턴)에서 채택, 일문일답 5건으로 범위 확정.
+
+- **원천**: `people`(명부·AI 요약 캐시) + `assembly_speeches`(발언, speaker_key 정확 일치) + `assembly_bills`(대표발의, `proposer ilike '이름의원%'` — '김현의원*'은 '김현정의원'과 매칭되지 않음) + `news_feed`(뉴스 언급).
+- **뉴스 언급은 "이름+직함" 정확 구문 매칭만**("김현 의원", "류제명 차관") — 동명이인 오염 방지. 운영자 원칙: "명확히 알 수 있으면 넣고, 복잡하면 제외". 직함 단어를 못 뽑는 인물은 뉴스 섹션 생략.
+- **현역 판정은 명단 시드가 아니라 "22대(2024-06~) 발언 존재"(is_22)** — 후반기 과방위 개편(2026-06-30, 국힘 사임계 등)처럼 명단이 유동적이어서, 신규 위원은 발언이 쌓이면 자동 등장하는 구조로 설계. 정당(party)은 활동 당시 소속을 시드로만 기록(현재 소속 아님).
+- **AI 쟁점별 입장 요약**: 최초 전원(22대 활동 31명)은 세션에서 생성(비용 0), 이후 갱신은 프로필의 [요약 갱신] 버튼(로그인 → claude-proxy, 쿼터 차감, people에 캐시). 질의는 비판조가 관행이므로 요약은 단정을 피하고 발언 날짜를 근거로 붙인다.
+- 명부 대상: 발언 4건 이상(140명). 한자 표기 발언자는 name(표시명)/speaker_key(원문 키) 분리(金炳旭→김병욱).
 
 ## 점검 체크리스트 (요약 — 상세 경위는 배경역사 문서)
 
@@ -748,6 +760,8 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **보고서 초안 미생성·학습**: Claude 키 / report_samples 2편↑·"스타일 재학습" / embedding NULL→`backfill_report_embeddings.py` / report_directives 행 / 임계 +2건.
 
 ## 하지 말아야 할 것 (규칙 + 한 줄 이유 / 상세는 배경역사 문서)
+
+- **세션 주도의 일회성 AI 대량 작업을 Edge Function 수동 호출로 돌리지 말 것** — 함수 내부가 Anthropic API를 불러 별도 과금된다. 이슈맵 과거뉴스 백필을 `news-archive-search` 반복 호출로 처리했다가 크레딧 재결제 주기가 3~5일→1일로 줄어 운영자 재지적(2026-08-26, #111). 세션 백필은 세션이 직접 검색·판정·INSERT(비용 0), Edge 경로는 무인 자동화(승인 훅·대시보드 버튼) 전용.
 
 - **"조용한 실패"를 만들지 말 것 — 2026-08-03에만 4건, 이후로도 계속 나온다.** 에러 없이 결과만 틀리는 코드는 며칠씩 발견되지 않는다. 실측 사례: ①뉴스 1,000건 초과 시 조회가 잘려 이미 알림한 기사를 재발송 ②`.range()` 페이징에 `.order()`가 없어 관계도 노드가 매 실행 오삭제 ③refetch가 해외 기사를 수집 즉시 삭제 ④뉴스 클러스터가 연쇄 병합으로 91건 한 덩어리 ⑤**RLS 정책에 `authenticated`가 빠져 로그인 사용자에게만 10개 테이블이 0행**(#108 — 관계도 빈 화면, AI 자문 법령요약 갈래 소실). **판정·필터·삭제 로직을 만들면 "틀렸을 때 무엇이 보이는가"를 먼저 정하고, 안 보이면 로그를 남길 것.**
 - **조회 컬럼 목록(`select(...)`)에서 조건에 쓰는 컬럼을 빠뜨리지 말 것** — 값이 `undefined`/`None`이 되어 **조건이 조용히 무력화**된다(에러도 안 난다). 2026-08-03 하루에 세 번 발생: 구독자 `tags`(전원 전체수신으로 퇴화), refetch `category`(해외 예외 미작동), 뉴스 목록 `tags`(클러스터 태그 조건 무력화). `select('*')`가 아닌 **명시 목록**을 쓰는 곳은 조건 추가 시 반드시 함께 갱신.
