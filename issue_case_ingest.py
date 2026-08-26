@@ -44,6 +44,7 @@ VOYAGE_API_KEY = os.getenv("VOYAGE_API_KEY")
 CHUNK_SIZE = 700          # press_ingest.CHUNK_SIZE와 동일 — 어긋나면 검색 품질이 갈린다
 DOC_CATEGORY = "이슈사례"
 EMBED_BATCH = 64
+INSERT_BATCH = 3          # HNSW 인덱스 갱신 부하 — 크게 잡으면 statement timeout(57014)
 
 
 def chunk_text(text: str, size: int = CHUNK_SIZE) -> list:
@@ -131,7 +132,11 @@ def main() -> int:
         "is_approved":  True,
         "status":       "current",
     } for i, c in enumerate(chunks)]
-    sb.table("document_chunks").insert(rows).execute()
+    # document_chunks는 4만 행 + HNSW 인덱스라 벡터를 한 번에 많이 넣으면 statement timeout이 난다
+    # (컴퓨트 RAM 2GB). 작게 나눠 넣는다.
+    for i in range(0, len(rows), INSERT_BATCH):
+        sb.table("document_chunks").insert(rows[i:i + INSERT_BATCH]).execute()
+        print("  등재 %d/%d" % (min(i + INSERT_BATCH, len(rows)), len(rows)))
     print("  등재 완료: %d청크" % len(rows))
 
     if args.issue:

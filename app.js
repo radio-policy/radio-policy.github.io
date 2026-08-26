@@ -7980,9 +7980,12 @@ function showIssueDetail(issueId) {
   var i = (_issueCache || []).find(function(x) { return String(x.id) === String(issueId); });
   if (!i) return;
   selectedIssueId = i.id;
-  var links = (i._links || []).slice().sort(function(a, b) {
+  var all = (i._links || []).slice().sort(function(a, b) {
     return String(b.item_date || '').localeCompare(String(a.item_date || ''));
   });
+  // 과거 사례는 '이 이슈에서 일어난 사건'이 아니라 참조 자료다 — 연대기와 섞지 않고 별도 섹션으로.
+  var cases = all.filter(function(l) { return l.item_type === 'kb_case'; });
+  var links = all.filter(function(l) { return l.item_type !== 'kb_case'; });
   var admin = isAdminUser();
 
   var h = '<div style="margin-bottom:14px">' +
@@ -8066,9 +8069,23 @@ function showIssueDetail(issueId) {
   }
   h += '</div>';
 
-  // P2 이후 자리 — 관계도 / 법령 칩 / 이해관계자 / 영향 요약 / 유사사례
+  // 과거 유사 사례 — 60일 뉴스로는 볼 수 없는 옛 사건. 세션 웹리서치로 작성해 KB에 적재한 문서.
+  if (cases.length) {
+    h += '<div style="margin-bottom:18px">' +
+      '<div style="font-size:10px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.6px;margin-bottom:9px">● 과거 유사 사례</div>' +
+      '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:8px">' +
+      cases.map(function(l) {
+        return '<div onclick="openIssueCase(\'' + escHtml(l.item_id) + '\')" style="background:var(--bg-secondary);border-radius:var(--radius-md);padding:10px 12px;cursor:pointer">' +
+          '<div style="font-size:12px;font-weight:600;color:var(--text-primary);line-height:1.5">' + escHtml(l.title || l.item_id) + '</div>' +
+          '<div style="font-size:11px;color:var(--text-tertiary);margin-top:3px">지식베이스 · 웹 리서치 보강' +
+            (admin ? ' <span onclick="event.stopPropagation();unlinkIssueItem(' + l.id + ')" title="연결 해제" style="cursor:pointer">✕</span>' : '') + '</div>' +
+        '</div>';
+      }).join('') + '</div></div>';
+  }
+
+  // P2 이후 자리 — 관계도 / 법령 칩 / 이해관계자 / 영향 요약 / 유사사례 시맨틱 검색
   h += '<div style="font-size:11px;color:var(--text-tertiary);padding:12px 14px;background:var(--bg-secondary);border-radius:var(--radius-md);line-height:1.8">' +
-    '이슈 관계도 · 관련 법령 · 이해관계자 · SKT 영향 요약 · 과거 유사 사례는 다음 단계에서 추가됩니다.</div>';
+    '이슈 관계도 · 관련 법령 · 이해관계자 · SKT 영향 요약은 다음 단계에서 추가됩니다.</div>';
 
   var el = document.getElementById('issuemap-body');
   if (el) { el.innerHTML = h; el.scrollTop = 0; }
@@ -8157,6 +8174,26 @@ async function openIssueLinkItem(linkId) {
     go('law', null);
   } else if (link.item_type === 'minutes') {
     go('minutes', null);
+  }
+}
+
+// 과거 사례 문서 열람 — document_chunks에 흩어진 청크를 이어붙여 원문 복원 (무겹침 청킹 전제)
+async function openIssueCase(docName) {
+  if (!sb) return;
+  var el = document.getElementById('issuemap-body');
+  try {
+    var r = await sb.from('document_chunks').select('content,chunk_index')
+      .eq('doc_name', docName).order('chunk_index', { ascending: true });
+    if (r.error) throw r.error;
+    var md = (r.data || []).map(function(c) { return c.content; }).join('');
+    if (!md) { alert('사례 본문을 찾지 못했습니다.'); return; }
+    el.innerHTML = '<div style="margin-bottom:14px">' +
+        '<span onclick="showIssueDetail(' + selectedIssueId + ')" tabindex="0" role="button" style="font-size:11px;color:var(--accent);cursor:pointer"><i class="ti ti-arrow-left"></i> 이슈로 돌아가기</span>' +
+      '</div>' +
+      '<div style="font-size:12px;color:var(--text-primary);line-height:1.85;white-space:pre-wrap;word-break:break-word">' + escHtml(md) + '</div>';
+    el.scrollTop = 0;
+  } catch (e) {
+    alert('사례 열람 실패: ' + ((e && e.message) || e));
   }
 }
 
