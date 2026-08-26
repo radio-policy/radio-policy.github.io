@@ -3945,10 +3945,16 @@ async function showNewsDetail(newsId) {
     '</div>' +
 
     // AI 자문 연동 — 제목을 onclick JS 문자열에 직접 넣지 않고 data-속성으로 전달 (속성 탈출 XSS 차단, #61)
-    '<div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border)">' +
-      '<button data-nt="' + escHtml(n.title.slice(0, 50)) + '" onclick="askQ(this.getAttribute(\'data-nt\') + \' SKT 영향 분석해줘\')" class="btn btn-primary" style="width:100%;font-size:12px;justify-content:center">' +
+    '<div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border);display:flex;gap:6px;flex-wrap:wrap">' +
+      '<button data-nt="' + escHtml(n.title.slice(0, 50)) + '" onclick="askQ(this.getAttribute(\'data-nt\') + \' SKT 영향 분석해줘\')" class="btn btn-primary" style="flex:1;min-width:180px;font-size:12px;justify-content:center">' +
         '<i class="ti ti-message-2"></i> AI 자문에서 상세 분석' +
       '</button>' +
+      // 이슈맵 연동 (2026-08-26) — 연결 시 자동 잠금되어 60일 정리에서 제외된다
+      (currentProfile
+        ? '<button id="issue-link-btn-' + n.id + '" onclick="linkNewsToIssue(\'' + n.id + '\')" class="btn" ' +
+          'title="이 기사를 이슈에 연결합니다. 연결된 기사는 잠금되어 60일이 지나도 보관됩니다" ' +
+          'style="font-size:12px;padding:0 14px;white-space:nowrap"><i class="ti ti-sitemap"></i> 이슈에 연결</button>'
+        : '') +
     '</div>';
 
   var panel   = document.getElementById('news-detail-panel');
@@ -6310,12 +6316,12 @@ function go(page, navEl, sourceType) {
 
   // 상단 바 제목 업데이트
   var newsTitle = currentNewsSourceType === 'gov' ? '정부 보도자료·공지사항 (최근 60일)' : (currentNewsSourceType === 'media' ? '뉴스 (최근 60일)' : '보도자료·뉴스 (최근 60일)');
-  var titles = {home:'대시보드', chat:'AI 자문', reportdraft:'보고서 초안 제안', diff:'법령 개정 추적 — 조문 DIFF', law:'지식베이스 — 법령·고시', guide:'지식베이스 — 실무 안내', lawmap:'법령 관계도', itu:'지식베이스 — ITU-R', press:'지식베이스 — 보도자료', custom:'지식베이스 — 추가지식', terms:'기술 용어', news:newsTitle, briefing:'Daily Briefing', assembly:'국회 법안', minutes:'과방위 회의록', overseas:'해외 규제동향 (최근 60일)', lawtrack:'법령 개정 추적 — 입법예고·개정 현황', settings:'설정', opsstatus:'운영 상태', feedback:'AI 자문 — 답변 피드백'};
+  var titles = {home:'대시보드', chat:'AI 자문', reportdraft:'보고서 초안 제안', diff:'법령 개정 추적 — 조문 DIFF', law:'지식베이스 — 법령·고시', guide:'지식베이스 — 실무 안내', lawmap:'법령 관계도', itu:'지식베이스 — ITU-R', press:'지식베이스 — 보도자료', custom:'지식베이스 — 추가지식', terms:'기술 용어', news:newsTitle, briefing:'Daily Briefing', assembly:'국회 법안', minutes:'과방위 회의록', overseas:'해외 규제동향 (최근 60일)', issuemap:'이슈맵', lawtrack:'법령 개정 추적 — 입법예고·개정 현황', settings:'설정', opsstatus:'운영 상태', feedback:'AI 자문 — 답변 피드백'};
   var ttEl = document.getElementById('topbar-title');
   if (ttEl && titles[page]) ttEl.textContent = titles[page];
 
   // 모바일 하단 네비 동기화
-  var pageTobn = {home:'bn-more', chat:'bn-chat', reportdraft:'bn-chat', lawmap:'bn-chat', feedback:'bn-chat', law:'bn-law', guide:'bn-law', itu:'bn-law', press:'bn-law', custom:'bn-law', terms:'bn-monitor', news:'bn-monitor', briefing:'bn-monitor', assembly:'bn-bills', minutes:'bn-bills', overseas:'bn-monitor', lawtrack:'bn-bills', diff:'bn-bills', settings:'bn-more', opsstatus:'bn-more'};
+  var pageTobn = {home:'bn-more', chat:'bn-chat', reportdraft:'bn-chat', lawmap:'bn-chat', feedback:'bn-chat', law:'bn-law', guide:'bn-law', itu:'bn-law', press:'bn-law', custom:'bn-law', terms:'bn-monitor', news:'bn-monitor', briefing:'bn-monitor', assembly:'bn-bills', minutes:'bn-bills', overseas:'bn-monitor', issuemap:'bn-monitor', lawtrack:'bn-bills', diff:'bn-bills', settings:'bn-more', opsstatus:'bn-more'};
   if (pageTobn[page]) setBottomNav(pageTobn[page]);
 
   if (page === 'news') loadNews();
@@ -6330,6 +6336,7 @@ function go(page, navEl, sourceType) {
   if (page === 'assembly') loadAssemblyBills();
   if (page === 'minutes') loadAssemblyMinutes();
   if (page === 'overseas') loadOverseasNews();
+  if (page === 'issuemap') loadIssueMap();
   if (page === 'lawtrack') loadLawTrack();
   if (page === 'diff') _lawDiffsLoadPromise = loadLawDiffs();   // 국회 법안 → DIFF 딥링크가 await할 수 있게 Promise 보관
   if (page === 'opsstatus') loadOpsStatus();
@@ -6340,7 +6347,7 @@ function go(page, navEl, sourceType) {
 //  상위 그룹 탭 바 — 메뉴 개편(2026-08-03) 공용 컴포넌트
 //  기존 패널·로드 함수는 무수정: 탭 클릭 = 기존 go() 라우팅 호출
 // ════════════════════════════════════════════
-var PANEL_GROUP_OF = { news:'monitor', overseas:'monitor', lawtrack:'lawrev', diff:'lawrev', law:'kb', press:'kb', guide:'kb', itu:'kb', custom:'kb', chat:'advisory', feedback:'advisory' };
+var PANEL_GROUP_OF = { news:'monitor', overseas:'monitor', issuemap:'monitor', lawtrack:'lawrev', diff:'lawrev', law:'kb', press:'kb', guide:'kb', itu:'kb', custom:'kb', chat:'advisory', feedback:'advisory' };
 var GROUP_TABS = {
   // 답변 피드백은 운영자 전용 화면이라 사이드바(9항목)에 올리지 않고 AI 자문의 하위 탭으로 둔다
   // — 메뉴 개편(2026-08-03) 원칙: 하위 화면은 그룹 탭 바로.
@@ -6351,7 +6358,8 @@ var GROUP_TABS = {
   monitor: [
     { key: 'media',    label: '뉴스',              on: "go('news',null,'media')" },
     { key: 'gov',      label: '정부 보도자료·공지', on: "go('news',null,'gov')" },
-    { key: 'overseas', label: '해외 규제동향',      on: "go('overseas',null)" }
+    { key: 'overseas', label: '해외 규제동향',      on: "go('overseas',null)" },
+    { key: 'issuemap', label: '이슈맵',            on: "go('issuemap',null)" }
   ],
   lawrev: [
     { key: 'lawtrack', label: '입법예고·개정 현황', on: "go('lawtrack',null)" },
@@ -6367,7 +6375,10 @@ var GROUP_TABS = {
 };
 
 function _activeGroupTabKey(group, page) {
-  if (group === 'monitor') return page === 'overseas' ? 'overseas' : (currentNewsSourceType === 'gov' ? 'gov' : 'media');
+  if (group === 'monitor') {
+    if (page === 'overseas' || page === 'issuemap') return page;
+    return currentNewsSourceType === 'gov' ? 'gov' : 'media';
+  }
   return page;
 }
 
@@ -7788,6 +7799,427 @@ function renderAssemblyBills(bills) {
     + filtered.length + '건 표시 (전체 ' + totalCount + '건)</div>';
 
   listEl.innerHTML = html;
+}
+
+// ════════════════════════════════════════════
+//  이슈맵 — 중요 이슈의 경과·관련 법령·SKT 영향을 한 화면에 (2026-08-26, P1)
+//  단계는 발생 → 현안 → 해소 3단계. 휴면(30일 무활동)·🔥(7일 기사 수)은 단계가 아니라 배지.
+//  이슈에 연결된 뉴스는 locked=true가 되어 60일 정리(refetch_content.py)에서 제외된다.
+// ════════════════════════════════════════════
+var ISSUE_STAGES = {
+  '발생': { color:'#3b82f6', bg:'rgba(59,130,246,0.10)',  label:'발생' },
+  '현안': { color:'#8b5cf6', bg:'rgba(139,92,246,0.12)',  label:'현안' },
+  '해소': { color:'#10b981', bg:'rgba(16,185,129,0.10)',  label:'해소' }
+};
+var ISSUE_CATEGORIES = ['주파수', '규제·CR', '사업·서비스', '보안·개인정보', '기타'];
+var ISSUE_ITEM_TYPES = {
+  news:        { icon:'ti-news',            label:'뉴스' },
+  law:         { icon:'ti-scale',           label:'법령' },
+  bill:        { icon:'ti-building-bank',   label:'법안' },
+  diff:        { icon:'ti-file-diff',       label:'조문 DIFF' },
+  press_chunk: { icon:'ti-speakerphone',    label:'보도자료' },
+  minutes:     { icon:'ti-microphone',      label:'회의록' },
+  briefing:    { icon:'ti-mail',            label:'브리핑' },
+  kb_case:     { icon:'ti-history',         label:'과거사례' },
+  stakeholder: { icon:'ti-users',           label:'이해관계자' }
+};
+var _issueCache = null;        // [{...issue, _links:[...]}]
+var _issueFilter = { stage: null, category: null };
+var selectedIssueId = null;
+
+function _issueStageBadge(stage, dormant) {
+  var s = ISSUE_STAGES[stage] || ISSUE_STAGES['발생'];
+  var h = '<span style="font-size:11px;font-weight:700;color:' + s.color + ';background:' + s.bg +
+    ';padding:2px 9px;border-radius:10px;white-space:nowrap">' + s.label + '</span>';
+  if (dormant) {
+    h += '<span title="30일 이상 새 항목 연결이 없어 휴면 상태입니다 (새 항목이 연결되면 자동 해제)" ' +
+      'style="font-size:11px;color:var(--text-tertiary);background:rgba(128,128,128,0.12);padding:2px 8px;border-radius:10px;white-space:nowrap">💤 휴면</span>';
+  }
+  return h;
+}
+
+// 최근 7일 사이 연결된 뉴스 건수 — 이슈의 현재 열기(🔥). 단계와 무관한 별도 신호.
+function _issueHotCount(iss) {
+  var cut = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
+  return (iss._links || []).filter(function(l) {
+    return l.item_type === 'news' && l.item_date && l.item_date >= cut;
+  }).length;
+}
+
+async function loadIssueMap(force) {
+  var el = document.getElementById('issuemap-body');
+  if (!el || !sb) return;
+  if (!_issueCache || force) {
+    el.innerHTML = '<div style="color:var(--text-secondary);padding:20px;text-align:center;font-size:12px">불러오는 중...</div>';
+    try {
+      var resp = await sb.from('issues')
+        .select('id,title,definition,category,state,stage,dormant,resolution_kind,proposal_reason,source,impact_summary,last_activity_at,created_at')
+        .order('last_activity_at', { ascending: false });
+      if (resp.error) throw resp.error;
+      var issues = resp.data || [];
+      var lResp = await sb.from('issue_links')
+        .select('id,issue_id,item_type,item_id,item_date,title,note,added_by')
+        .order('item_date', { ascending: false });
+      if (lResp.error) throw lResp.error;
+      var byIssue = {};
+      (lResp.data || []).forEach(function(l) { (byIssue[l.issue_id] = byIssue[l.issue_id] || []).push(l); });
+      issues.forEach(function(i) { i._links = byIssue[i.id] || []; });
+      _issueCache = issues;
+    } catch (e) {
+      el.innerHTML = '<div style="color:#f66;padding:20px;text-align:center;font-size:12px">불러오기 실패: ' + escHtml((e && e.message) || String(e)) + '</div>';
+      return;
+    }
+  }
+  renderIssueMapList();
+}
+
+function renderIssueMapList() {
+  var el = document.getElementById('issuemap-body');
+  if (!el) return;
+  var all = _issueCache || [];
+  var proposed = all.filter(function(i) { return i.state === 'proposed'; });
+  var actives  = all.filter(function(i) { return i.state === 'active' && !i.dormant && i.stage !== '해소'; });
+  var closed   = all.filter(function(i) { return i.state === 'active' && (i.dormant || i.stage === '해소'); });
+
+  if (_issueFilter.stage)    actives = actives.filter(function(i) { return i.stage === _issueFilter.stage; });
+  if (_issueFilter.category) actives = actives.filter(function(i) { return i.category === _issueFilter.category; });
+
+  var h = '';
+
+  // ── 필터 칩 + 수동 등록 ──
+  var counts = {};
+  (_issueCache || []).filter(function(i) { return i.state === 'active' && !i.dormant && i.stage !== '해소'; })
+    .forEach(function(i) { counts[i.stage] = (counts[i.stage] || 0) + 1; });
+  h += '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:14px">';
+  h += _issueChip('전체', !_issueFilter.stage && !_issueFilter.category, "setIssueFilter(null,null)");
+  Object.keys(ISSUE_STAGES).forEach(function(s) {
+    if (s === '해소') return;
+    h += _issueChip(s + ' ' + (counts[s] || 0), _issueFilter.stage === s, "setIssueFilter('" + s + "',undefined)");
+  });
+  ISSUE_CATEGORIES.forEach(function(c) {
+    h += _issueChip(c, _issueFilter.category === c, "setIssueFilter(undefined,'" + c + "')");
+  });
+  h += '<button class="btn" onclick="createIssueManual()" style="margin-left:auto;font-size:11px;padding:4px 10px;white-space:nowrap"><i class="ti ti-plus"></i> 수동 등록</button>';
+  h += '</div>';
+
+  // ── 제안 대기 (관리자 전용) ──
+  if (isAdminUser() && proposed.length) {
+    h += '<div style="background:rgba(239,158,39,0.10);border-radius:var(--radius-md);padding:12px 14px;margin-bottom:14px">' +
+      '<div style="font-size:12px;font-weight:700;color:#b8791a;margin-bottom:9px"><i class="ti ti-bell"></i> 제안된 이슈 ' + proposed.length + '건 — 승인 대기</div>';
+    proposed.forEach(function(i) {
+      var reason = '';
+      var pr = i.proposal_reason || {};
+      if (pr.cluster_size) reason = '기사 ' + pr.cluster_size + '건' + (pr.days ? ' · ' + pr.days + '일' : '') + (pr.urgent_count ? ' · 긴급 ' + pr.urgent_count : '');
+      else if (pr.signal)  reason = String(pr.signal);
+      h += '<div style="display:flex;align-items:center;gap:8px;background:var(--bg-secondary);border-radius:var(--radius-md);padding:8px 12px;margin-bottom:6px;flex-wrap:wrap">' +
+        '<span style="font-size:12px;flex:1;min-width:160px">' + escHtml(i.title) +
+          (reason ? ' <span style="font-size:11px;color:var(--text-tertiary)">— ' + escHtml(reason) + '</span>' : '') + '</span>' +
+        '<button class="btn" onclick="decideIssue(' + i.id + ',\'approve\')" style="font-size:11px;padding:3px 12px">승인</button>' +
+        '<button class="btn" onclick="decideIssue(' + i.id + ',\'reject\')" style="font-size:11px;padding:3px 12px;color:var(--text-secondary)">기각</button>' +
+      '</div>';
+    });
+    h += '</div>';
+  }
+
+  // ── 활성 이슈 카드 ──
+  if (!actives.length) {
+    h += '<div style="color:var(--text-secondary);padding:28px 20px;text-align:center;font-size:12px;line-height:1.8">' +
+      (all.length ? '조건에 맞는 이슈가 없습니다.' :
+        '등록된 이슈가 없습니다.<br>뉴스 상세에서 <b>이슈에 연결</b>하거나 <b>수동 등록</b>으로 첫 이슈를 만들어 보세요.') + '</div>';
+  } else {
+    h += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px">';
+    actives.forEach(function(i) { h += _issueCardHtml(i); });
+    h += '</div>';
+  }
+
+  // ── 휴면·해소 (접힘) ──
+  if (closed.length) {
+    h += '<details style="margin-top:16px;border-top:1px solid var(--border);padding-top:12px">' +
+      '<summary style="font-size:12px;color:var(--text-secondary);cursor:pointer">휴면·해소 ' + closed.length + '건 보기</summary>' +
+      '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;margin-top:10px">' +
+      closed.map(_issueCardHtml).join('') + '</div></details>';
+  }
+
+  el.innerHTML = h;
+}
+
+function _issueChip(label, on, onclick) {
+  return '<span onclick="' + onclick + '" tabindex="0" role="button" style="font-size:11px;padding:4px 11px;border-radius:12px;cursor:pointer;white-space:nowrap;' +
+    (on ? 'background:var(--accent);color:#fff' : 'background:var(--bg-secondary);color:var(--text-secondary);border:1px solid var(--border)') +
+    '">' + escHtml(label) + '</span>';
+}
+
+function setIssueFilter(stage, category) {
+  if (stage !== undefined)    _issueFilter.stage = (_issueFilter.stage === stage) ? null : stage;
+  if (category !== undefined) _issueFilter.category = (_issueFilter.category === category) ? null : category;
+  renderIssueMapList();
+}
+
+function _issueCardHtml(i) {
+  var links = i._links || [];
+  var hot   = _issueHotCount(i);
+  var nLaw  = links.filter(function(l) { return l.item_type === 'law' || l.item_type === 'diff'; }).length;
+  var nCase = links.filter(function(l) { return l.item_type === 'kb_case'; }).length;
+  var last  = (i.last_activity_at || '').slice(5, 10).replace('-', '/');
+  return '<div onclick="showIssueDetail(' + i.id + ')" style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius-md);padding:12px 14px;cursor:pointer">' +
+    '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;flex-wrap:wrap">' +
+      _issueStageBadge(i.stage, i.dormant) +
+      (i.category ? '<span style="font-size:11px;color:var(--text-tertiary)">' + escHtml(i.category) + '</span>' : '') +
+      (hot >= 3 ? '<span style="margin-left:auto;font-size:11px;color:#ef4444;white-space:nowrap">🔥 7일 ' + hot + '건</span>' : '') +
+    '</div>' +
+    '<div style="font-size:13px;font-weight:600;color:var(--text-primary);line-height:1.5;margin-bottom:4px">' + escHtml(i.title) + '</div>' +
+    (i.definition ? '<div style="font-size:11px;color:var(--text-secondary);line-height:1.6;margin-bottom:8px">' + escHtml(i.definition) + '</div>' : '') +
+    '<div style="font-size:11px;color:var(--text-tertiary)">연결 ' + links.length + '건' +
+      (nLaw ? ' · 법령 ' + nLaw : '') + (nCase ? ' · 유사사례 ' + nCase : '') +
+      (last ? ' · 최근 ' + last : '') + '</div>' +
+  '</div>';
+}
+
+// ── 이슈 상세 ────────────────────────────────────────────────
+function showIssueDetail(issueId) {
+  var i = (_issueCache || []).find(function(x) { return String(x.id) === String(issueId); });
+  if (!i) return;
+  selectedIssueId = i.id;
+  var links = (i._links || []).slice().sort(function(a, b) {
+    return String(b.item_date || '').localeCompare(String(a.item_date || ''));
+  });
+  var admin = isAdminUser();
+
+  var h = '<div style="margin-bottom:14px">' +
+    '<span onclick="renderIssueMapList()" tabindex="0" role="button" style="font-size:11px;color:var(--accent);cursor:pointer"><i class="ti ti-arrow-left"></i> 이슈 목록</span>' +
+  '</div>';
+
+  // 헤더
+  h += '<div style="border-left:3px solid ' + ((ISSUE_STAGES[i.stage] || ISSUE_STAGES['발생']).color) + ';padding-left:12px;margin-bottom:16px">' +
+    '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;flex-wrap:wrap">' +
+      _issueStageBadge(i.stage, i.dormant) +
+      (i.category ? '<span style="font-size:11px;color:var(--text-tertiary)">' + escHtml(i.category) + '</span>' : '') +
+      (i.resolution_kind ? '<span style="font-size:11px;color:var(--text-tertiary)">· 종결: ' + escHtml(i.resolution_kind) + '</span>' : '') +
+      '<span style="margin-left:auto;font-size:11px;color:var(--text-tertiary)">연결 ' + links.length + '건</span>' +
+    '</div>' +
+    '<div style="font-size:15px;font-weight:700;color:var(--text-primary);line-height:1.5;margin-bottom:4px">' + escHtml(i.title) + '</div>' +
+    (i.definition ? '<div style="font-size:12px;color:var(--text-secondary);line-height:1.7">' + escHtml(i.definition) + '</div>' : '') +
+  '</div>';
+
+  // 관리자 조작 — 단계 변경
+  if (admin) {
+    h += '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:16px">' +
+      '<span style="font-size:11px;color:var(--text-tertiary)">단계 변경</span>';
+    Object.keys(ISSUE_STAGES).forEach(function(s) {
+      h += _issueChip(s, i.stage === s, "setIssueStage(" + i.id + ",'" + s + "')");
+    });
+    h += '</div>';
+  }
+
+  // 연대기 타임라인
+  h += '<div style="margin-bottom:18px">' +
+    '<div style="font-size:10px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.6px;margin-bottom:9px">● 연대기 타임라인</div>';
+  if (!links.length) {
+    h += '<div style="font-size:12px;color:var(--text-secondary);padding:14px;background:var(--bg-secondary);border-radius:var(--radius-md);line-height:1.7">' +
+      '아직 연결된 항목이 없습니다. 뉴스 상세 화면의 <b>이슈에 연결</b> 버튼으로 기사를 붙이면 여기에 시간순으로 쌓입니다.</div>';
+  } else {
+    // 같은 날 같은 사건의 보도가 수십 건씩 쌓이므로 (날짜+종류)로 묶어 대표 1건 + '외 N건'으로 접는다.
+    // 묶지 않으면 연대기가 아니라 기사 목록이 되어 경과 파악이 불가능해진다.
+    h += '<div style="border-left:2px solid var(--border);padding-left:14px">';
+    var groups = [], gkey = {};
+    links.forEach(function(l) {
+      var k = (l.item_date || '?') + '|' + l.item_type;
+      if (!gkey[k]) { gkey[k] = { date:l.item_date, type:l.item_type, items:[] }; groups.push(gkey[k]); }
+      gkey[k].items.push(l);
+    });
+    var lastYear = null;
+    groups.forEach(function(g) {
+      var t = ISSUE_ITEM_TYPES[g.type] || { icon:'ti-point', label:g.type };
+      var d = (g.date || '').slice(5).replace('-', '/');
+      // 보도자료 아카이브는 2년치라 연도가 섞인다 — 연도가 바뀌는 지점에 구분선
+      var yr = (g.date || '').slice(0, 4);
+      if (yr && yr !== lastYear) {
+        lastYear = yr;
+        h += '<div style="font-size:11px;font-weight:700;color:var(--text-secondary);margin:0 0 8px;padding-top:2px">' + yr + '년</div>';
+      }
+      // 대표는 제목이 가장 긴 것 — 요약형 단신보다 내용이 담긴 제목이 뽑힌다
+      var head = g.items.slice().sort(function(a, b) { return (b.title || '').length - (a.title || '').length; })[0];
+      var rest = g.items.filter(function(l) { return l.id !== head.id; });
+      h += '<div style="margin-bottom:12px">' +
+        '<div style="font-size:11px;color:var(--text-tertiary);margin-bottom:2px">' +
+          (d ? d + ' · ' : '') + '<i class="ti ' + t.icon + '"></i> ' + escHtml(t.label) +
+          (g.type === 'news' ? ' <i class="ti ti-lock" title="이슈 연결로 영구 보관됩니다"></i>' : '') +
+          (head.added_by === 'auto' ? ' <span style="color:var(--text-tertiary)">· 자동</span>' : '') +
+        '</div>' +
+        '<div style="font-size:12px;color:var(--text-primary);line-height:1.6">' +
+          '<span onclick="openIssueLinkItem(' + head.id + ')" style="cursor:pointer">' + escHtml(head.title || head.item_id) + '</span>' +
+          (admin ? ' <span onclick="unlinkIssueItem(' + head.id + ')" title="연결 해제" style="cursor:pointer;color:var(--text-tertiary);font-size:11px">✕</span>' : '') +
+        '</div>' +
+        (head.note ? '<div style="font-size:11px;color:var(--text-secondary);line-height:1.6;margin-top:2px">' + escHtml(head.note) + '</div>' : '');
+      if (rest.length) {
+        h += '<details style="margin-top:3px"><summary style="font-size:11px;color:var(--text-tertiary);cursor:pointer">외 ' + rest.length + '건</summary>' +
+          rest.map(function(l) {
+            return '<div style="font-size:11px;color:var(--text-secondary);line-height:1.7;margin-top:3px">' +
+              '<span onclick="openIssueLinkItem(' + l.id + ')" style="cursor:pointer">· ' + escHtml(l.title || l.item_id) + '</span>' +
+              (admin ? ' <span onclick="unlinkIssueItem(' + l.id + ')" title="연결 해제" style="cursor:pointer;color:var(--text-tertiary)">✕</span>' : '') +
+            '</div>';
+          }).join('') + '</details>';
+      }
+      h += '</div>';
+    });
+    h += '</div>';
+  }
+  h += '</div>';
+
+  // P2 이후 자리 — 관계도 / 법령 칩 / 이해관계자 / 영향 요약 / 유사사례
+  h += '<div style="font-size:11px;color:var(--text-tertiary);padding:12px 14px;background:var(--bg-secondary);border-radius:var(--radius-md);line-height:1.8">' +
+    '이슈 관계도 · 관련 법령 · 이해관계자 · SKT 영향 요약 · 과거 유사 사례는 다음 단계에서 추가됩니다.</div>';
+
+  var el = document.getElementById('issuemap-body');
+  if (el) { el.innerHTML = h; el.scrollTop = 0; }
+}
+
+async function setIssueStage(issueId, stage) {
+  if (!sb || !isAdminUser()) return;
+  var i = (_issueCache || []).find(function(x) { return String(x.id) === String(issueId); });
+  if (!i || i.stage === stage) return;
+  if (stage === '해소' && !confirm('이 이슈를 해소로 전환합니다.\n(해소된 이슈는 이후 사례 아카이브로 적재됩니다)')) return;
+  var prev = i.stage;
+  i.stage = stage;
+  showIssueDetail(issueId);
+  try {
+    var patch = { stage: stage, updated_at: new Date().toISOString() };
+    if (stage === '해소' && !i.resolution_kind) patch.resolution_kind = '자연 소멸';
+    var r = await sb.from('issues').update(patch).eq('id', issueId);
+    if (r.error) throw r.error;
+    if (patch.resolution_kind) i.resolution_kind = patch.resolution_kind;
+  } catch (e) {
+    i.stage = prev;
+    showIssueDetail(issueId);
+    alert('단계 변경 실패: ' + ((e && e.message) || e));
+  }
+}
+
+// 제안 승인/기각 — P4에서 서버측 승인 파이프(기사 일괄 연결·과거 뉴스 보강)로 확장 예정
+async function decideIssue(issueId, action) {
+  if (!sb || !isAdminUser()) return;
+  var i = (_issueCache || []).find(function(x) { return String(x.id) === String(issueId); });
+  if (!i) return;
+  if (action === 'reject' && !confirm('이 제안을 기각합니다. (같은 이슈가 다시 제안되지 않습니다)')) return;
+  try {
+    var patch = action === 'approve'
+      ? { state:'active', last_activity_at:new Date().toISOString(), updated_at:new Date().toISOString() }
+      : { state:'rejected', updated_at:new Date().toISOString() };
+    var r = await sb.from('issues').update(patch).eq('id', issueId);
+    if (r.error) throw r.error;
+    Object.assign(i, patch);
+    renderIssueMapList();
+  } catch (e) {
+    alert('처리 실패: ' + ((e && e.message) || e));
+  }
+}
+
+async function createIssueManual() {
+  if (!sb) return;
+  if (!currentProfile) { alert('이슈 등록은 로그인 후 이용할 수 있습니다.'); return; }
+  var title = prompt('이슈 제목 (예: SKT 3G 서비스 종료 추진)');
+  if (!title || !title.trim()) return;
+  var def = prompt('한 줄 정의 — 무엇이 쟁점인가? (생략 가능)') || null;
+  var cat = prompt('카테고리 — ' + ISSUE_CATEGORIES.join(' / '), '기타');
+  if (cat && ISSUE_CATEGORIES.indexOf(cat) < 0) cat = '기타';
+  try {
+    var r = await sb.from('issues').insert({
+      title: title.trim(), definition: def, category: cat || '기타',
+      state: 'active', stage: '발생', source: 'manual'
+    }).select('id').single();
+    if (r.error) throw r.error;
+    _issueCache = null;
+    await loadIssueMap(true);
+    showIssueDetail(r.data.id);
+  } catch (e) {
+    alert('등록 실패: ' + ((e && e.message) || e));
+  }
+}
+
+// 타임라인 항목 클릭 — 뉴스는 원문, 그 외는 해당 화면으로
+async function openIssueLinkItem(linkId) {
+  var link = null;
+  (_issueCache || []).forEach(function(i) {
+    (i._links || []).forEach(function(l) { if (String(l.id) === String(linkId)) link = l; });
+  });
+  if (!link || !sb) return;
+  if (link.item_type === 'news') {
+    try {
+      var r = await sb.from('news_feed').select('url').eq('id', link.item_id).maybeSingle();
+      var u = safeUrl(r && r.data && r.data.url);
+      if (u) window.open(u, '_blank', 'noopener');
+    } catch (e) { /* 원문 없음 — 무시 */ }
+  } else if (link.item_type === 'diff') {
+    go('diff', null);
+  } else if (link.item_type === 'bill') {
+    go('assembly', null);
+  } else if (link.item_type === 'law' || link.item_type === 'kb_case') {
+    go('law', null);
+  } else if (link.item_type === 'minutes') {
+    go('minutes', null);
+  }
+}
+
+async function unlinkIssueItem(linkId) {
+  if (!sb || !isAdminUser()) return;
+  if (!confirm('이 항목의 연결을 해제합니다.')) return;
+  var owner = null, link = null;
+  (_issueCache || []).forEach(function(i) {
+    (i._links || []).forEach(function(l) { if (String(l.id) === String(linkId)) { owner = i; link = l; } });
+  });
+  if (!owner) return;
+  try {
+    var r = await sb.from('issue_links').delete().eq('id', linkId);
+    if (r.error) throw r.error;
+    // 다른 이슈에 연결돼 있지 않은 기사면 잠금 해제 여부를 묻는다 (60일 정리 대상으로 되돌림)
+    if (link.item_type === 'news') {
+      var still = (_issueCache || []).some(function(i) {
+        return i.id !== owner.id && (i._links || []).some(function(l) { return l.item_type === 'news' && l.item_id === link.item_id; });
+      });
+      if (!still && confirm('이 기사의 잠금도 해제할까요?\n해제하면 60일이 지난 뒤 자동 정리 대상이 됩니다.')) {
+        await sb.from('news_feed').update({ locked: false }).eq('id', link.item_id);
+      }
+    }
+    owner._links = (owner._links || []).filter(function(l) { return String(l.id) !== String(linkId); });
+    showIssueDetail(owner.id);
+  } catch (e) {
+    alert('연결 해제 실패: ' + ((e && e.message) || e));
+  }
+}
+
+// ── 뉴스 상세 → 이슈에 연결 ──────────────────────────────────
+async function linkNewsToIssue(newsId) {
+  var n = newsDataCache.find(function(x) { return String(x.id) === String(newsId); });
+  if (!n || !sb) return;
+  if (!_issueCache) { await loadIssueMap(true); }
+  var actives = (_issueCache || []).filter(function(i) { return i.state === 'active' && i.stage !== '해소'; });
+  if (!actives.length) { alert('먼저 이슈맵 탭에서 이슈를 등록해 주세요.'); return; }
+  var msg = '연결할 이슈 번호를 입력하세요\n\n' + actives.map(function(i, idx) {
+    return (idx + 1) + '. [' + i.stage + '] ' + i.title;
+  }).join('\n');
+  var pick = prompt(msg);
+  if (!pick) return;
+  var iss = actives[parseInt(pick, 10) - 1];
+  if (!iss) return;
+  try {
+    var r = await sb.from('issue_links').insert({
+      issue_id: iss.id, item_type: 'news', item_id: String(n.id),
+      item_date: (n.published_at || n.created_at || '').slice(0, 10) || null,
+      title: n.title, added_by: 'operator'
+    });
+    if (r.error && r.error.code !== '23505') throw r.error;   // 23505=이미 연결됨
+    // 이슈에 연결된 기사는 영구 보관 (60일 정리 제외)
+    if (!n.locked) { await sb.from('news_feed').update({ locked: true }).eq('id', n.id); n.locked = true; }
+    await sb.from('issues').update({ last_activity_at: new Date().toISOString() }).eq('id', iss.id);
+    _issueCache = null;
+    renderNewsList();
+    var btn = document.getElementById('issue-link-btn-' + n.id);
+    if (btn) btn.innerHTML = '<i class="ti ti-check"></i> ' + escHtml(iss.title.slice(0, 18)) + ' 연결됨';
+    var lb = document.getElementById('lock-btn-' + n.id);
+    if (lb) { lb.innerHTML = '<i class="ti ti-lock"></i> 잠금됨'; lb.style.color = 'var(--accent)'; }
+  } catch (e) {
+    alert('연결 실패: ' + ((e && e.message) || e));
+  }
 }
 
 function escHtml(str) {
