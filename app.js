@@ -7991,9 +7991,13 @@ function showIssueDetail(issueId) {
   var all = (i._links || []).slice().sort(function(a, b) {
     return String(b.item_date || '').localeCompare(String(a.item_date || ''));
   });
-  // 과거 사례는 '이 이슈에서 일어난 사건'이 아니라 참조 자료다 — 연대기와 섞지 않고 별도 섹션으로.
+  // 과거 사례·이해관계자·법령은 '이 이슈에서 일어난 사건'이 아니라 참조 정보다
+  // — 연대기(시간축)와 섞지 않고 각자 섹션으로 뺀다.
   var cases = all.filter(function(l) { return l.item_type === 'kb_case'; });
-  var links = all.filter(function(l) { return l.item_type !== 'kb_case'; });
+  var stakeholders = all.filter(function(l) { return l.item_type === 'stakeholder'; });
+  var links = all.filter(function(l) {
+    return l.item_type !== 'kb_case' && l.item_type !== 'stakeholder' && l.item_type !== 'law';
+  });
   var admin = isAdminUser();
 
   var h = '<div style="margin-bottom:12px">' +
@@ -8110,6 +8114,19 @@ function showIssueDetail(issueId) {
   h += _issueCardClose();
   h += '</div>';   // 2열 그리드 닫기
 
+  // ── 이해관계자 카드 — 찬반 라벨 없이 '누가 어떤 입장·행동인지' 요지 문장만 (성향 단정어 금지 가드와 동일 철학) ──
+  if (stakeholders.length) {
+    h += _issueCardOpen() + _issueSecTitle('ti-users', '이해관계자', '입장 요지 — 해석은 원문으로') +
+      '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:8px">' +
+      stakeholders.map(function(l) {
+        return '<div style="background:var(--bg-secondary);border-radius:var(--radius-md);padding:10px 12px">' +
+          '<div style="font-size:12px;font-weight:600;color:var(--text-primary)">' + escHtml(l.title || l.item_id) +
+            (admin ? ' <span onclick="unlinkIssueItem(' + l.id + ')" title="제거" style="cursor:pointer;color:var(--text-tertiary);font-size:11px">✕</span>' : '') + '</div>' +
+          (l.note ? '<div style="font-size:11px;color:var(--text-secondary);line-height:1.65;margin-top:3px">' + escHtml(l.note) + '</div>' : '') +
+        '</div>';
+      }).join('') + '</div>' + _issueCardClose();
+  }
+
   // ── SKT 영향 요약 카드 — 무슨 일 / 왜 중요 / 무엇을 해야 3문 + 근거 [n] ──
   h += _issueCardOpen() +
     '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">' +
@@ -8136,9 +8153,6 @@ function showIssueDetail(issueId) {
       }).join('') + '</div>' + _issueCardClose();
   }
 
-  // 남은 단계 안내 — 이해관계자 칩과 유사사례 시맨틱 검색은 아직
-  h += '<div style="font-size:11px;color:var(--text-tertiary);padding:10px 14px;line-height:1.8">' +
-    '이해관계자 칩(회의록 발언자·관할 기관)과 과거 사례 자동 검색은 다음 단계에서 추가됩니다.</div>';
 
   var el = document.getElementById('issuemap-body');
   if (el) { el.innerHTML = h; el.scrollTop = 0; }
@@ -8292,6 +8306,20 @@ async function openIssueLinkItem(linkId) {
               }).join('')
             : '');
       }
+    } else if (link.item_type === 'law') {
+      // item_id = kb_documents.dedup_key — 법령 OKF 요약(적용범위·실무 체크리스트)을 그대로 보여준다
+      var kb = await sb.from('kb_documents').select('title,law_type,law_number,enforcement_date,competent_authority,description,body_md')
+        .eq('dedup_key', link.item_id).maybeSingle();
+      var kd = kb && kb.data;
+      body = kd
+        ? '<div style="font-size:11px;color:var(--text-tertiary);margin-bottom:6px">' + escHtml(kd.law_type || '') +
+            (kd.law_number ? ' · ' + escHtml(kd.law_number) : '') +
+            (kd.enforcement_date ? ' · 시행 ' + escHtml(kd.enforcement_date) : '') +
+            (kd.competent_authority ? ' · ' + escHtml(kd.competent_authority) : '') + '</div>' +
+          '<div style="font-size:15px;font-weight:700;line-height:1.5;margin-bottom:10px">' + escHtml(kd.title) + '</div>' +
+          (kd.description ? '<div style="font-size:12px;color:var(--text-secondary);line-height:1.7;margin-bottom:10px">' + escHtml(kd.description) + '</div>' : '') +
+          (kd.body_md ? '<div class="md-body" style="font-size:12px;color:var(--text-primary);line-height:1.85;word-break:break-word">' + renderMd(kd.body_md) + '</div>' : '')
+        : '<div style="font-size:12px;color:var(--text-secondary)">법령 요약을 찾지 못했습니다 — 지식베이스 탭에서 검색해 보세요.</div>';
     } else if (link.item_type === 'bill') {
       var b = await sb.from('assembly_bills').select('bill_name,proposer,committee,proc_result,propose_dt,summary,link_url')
         .eq('bill_no', link.item_id).maybeSingle();
