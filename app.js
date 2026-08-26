@@ -8652,7 +8652,9 @@ var ISSUE_MAP_COLORS = {
 // '뉴스 N건'처럼 묶음 1개로 표현한다. 좌우 3개씩 세로 배치 — 라벨이 길어 방사형보다 읽기 쉽다.
 function renderIssueMiniMap(iss, links) {
   var byType = {};
-  (links || []).forEach(function(l) { (byType[l.item_type] = byType[l.item_type] || []).push(l); });
+  // law_topic은 상세의 '관계도 주제' 블록이 전담 — 미니맵에 원시 노드로 노출하지 않는다
+  (links || []).filter(function(l) { return l.item_type !== 'law_topic'; })
+    .forEach(function(l) { (byType[l.item_type] = byType[l.item_type] || []).push(l); });
   var nodes = [];
   // 법령·DIFF·사례는 개별 노드(이름 자체가 정보), 나머지는 종류별 묶음 1개
   ['law', 'diff', 'kb_case', 'bill'].forEach(function(tp) {
