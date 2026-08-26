@@ -8260,7 +8260,7 @@ async function openIssueLinkItem(linkId) {
         });
         text = text.replace(/\n##\s[\s\S]*$/, '');   // 다음 섹션 머리가 딸려왔으면 잘라낸다
         body = '<div style="font-size:11px;color:var(--text-tertiary);margin-bottom:8px">' + escHtml(c0.data.doc_name) + '</div>' +
-          '<div style="font-size:12px;color:var(--text-primary);line-height:1.85;white-space:pre-wrap;word-break:break-word">' + escHtml(text) + '</div>';
+          '<div class="md-body" style="font-size:12px;color:var(--text-primary);line-height:1.85;word-break:break-word">' + renderMd(text) + '</div>';
       }
     } else if (link.item_type === 'diff') {
       var d = await sb.from('law_diffs').select('law_name,law_no,enf_date,diff_kind,origin,summary,impact,urgency,articles,stats')
@@ -8338,6 +8338,22 @@ function _issueCardOpen(inGrid) {
   return '<div style="background:var(--bg-primary);border:1px solid var(--border);border-radius:12px;padding:14px 16px;' +
     (inGrid ? 'height:100%;box-sizing:border-box' : 'margin-bottom:12px') + '">';
 }
+// 묶음 노드의 기간 표기. 보도자료 아카이브는 2년치라 연도를 빼면 뉴스(올해)와 구분이 안 된다.
+function _issueDateRange(sortedDates) {
+  if (!sortedDates || !sortedDates.length) return '';
+  var thisYear = String(new Date().getFullYear());
+  function fmt(d, withYear) {
+    var y = d.slice(0, 4), md = d.slice(5).replace('-', '/');
+    return withYear ? y.slice(2) + '년 ' + md : md;
+  }
+  var a = sortedDates[0], b = sortedDates[sortedDates.length - 1];
+  var ya = a.slice(0, 4), yb = b.slice(0, 4);
+  if (a === b) return fmt(a, ya !== thisYear);
+  // 해를 걸치면 일자까지 쓰면 노드 라벨이 잘린다 — 연.월로 줄인다
+  if (ya !== yb) return ya.slice(2) + '.' + a.slice(5, 7) + ' ~ ' + yb.slice(2) + '.' + b.slice(5, 7);
+  return (ya !== thisYear ? ya.slice(2) + '년 ' : '') + fmt(a, false) + ' ~ ' + fmt(b, false);
+}
+
 // SVG는 자동 줄바꿈이 없어 라벨을 미리 줄여야 한다. 괄호 보충설명을 먼저 떼고, 그래도 길면 말줄임.
 function _issueMapLabel(s, max) {
   var t = String(s == null ? '' : s).trim();
@@ -8398,7 +8414,7 @@ function renderIssueMiniMap(iss, links) {
     var t = ISSUE_ITEM_TYPES[tp] || { label:tp };
     var arr = byType[tp];
     var ds = arr.map(function(l) { return l.item_date; }).filter(Boolean).sort();
-    var span = ds.length ? (ds[0].slice(5).replace('-', '/') + (ds.length > 1 ? ' ~ ' + ds[ds.length - 1].slice(5).replace('-', '/') : '')) : '';
+    var span = _issueDateRange(ds);
     nodes.push({ type:tp, label:t.label + ' ' + arr.length + '건', sub:span, link:null, group:tp });
   });
   if (!nodes.length) return '';
@@ -8558,10 +8574,12 @@ async function openIssueCase(docName) {
     if (r.error) throw r.error;
     var md = (r.data || []).map(function(c) { return c.content; }).join('');
     if (!md) { alert('사례 본문을 찾지 못했습니다.'); return; }
-    el.innerHTML = '<div style="margin-bottom:14px">' +
-        '<span onclick="showIssueDetail(' + selectedIssueId + ')" tabindex="0" role="button" style="font-size:11px;color:var(--accent);cursor:pointer"><i class="ti ti-arrow-left"></i> 이슈로 돌아가기</span>' +
-      '</div>' +
-      '<div style="font-size:12px;color:var(--text-primary);line-height:1.85;white-space:pre-wrap;word-break:break-word">' + escHtml(md) + '</div>';
+    // 마크다운으로 쓴 문서다 — 표·헤딩·목록을 renderMd로 살린다(그냥 뿌리면 파이프 표가 깨져 보인다)
+    el.innerHTML = _issueBackBar() +
+      _issueCardOpen() +
+        '<div class="md-body" style="font-size:12px;color:var(--text-primary);line-height:1.85;word-break:break-word">' +
+          renderMd(md) + '</div>' +
+      _issueCardClose();
     el.scrollTop = 0;
   } catch (e) {
     alert('사례 열람 실패: ' + ((e && e.message) || e));

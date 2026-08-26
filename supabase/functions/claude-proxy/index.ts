@@ -32,9 +32,13 @@ const env = (k: string) => (Deno.env.get(k) || '').trim();
 const ANTHROPIC_KEY = env('ANTHROPIC_API_KEY');
 const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
 
-// 대시보드 정본(GitLab Pages) + 로컬 검증용. 그 외 출처는 CORS로 막는다.
+// 대시보드 정본(GitLab Pages) + 예비(GitHub Pages 미러) + 로컬 검증용. 그 외 출처는 CORS로 막는다.
+// ★ 두 Pages는 같은 커밋에서 상시 동일하게 유지되므로 둘 다 허용해야 한다. GitHub 주소가 빠져
+//   있던 동안 그쪽으로 접속하면 preflight만 통과하고 POST가 막혀 AI 기능 전체가 죽었다
+//   (증상은 화면에 "Failed to fetch" 한 줄뿐이라 원인 찾기가 어렵다). 2026-08-26 발견·수정.
 const ALLOWED_ORIGINS = [
   'https://radio-policy.gitlab.io',
+  'https://youjinwoong.github.io',
   'http://localhost:8000',
   'http://127.0.0.1:8000',
 ];
