@@ -3,3 +3,13 @@ PROJECT_지침.md
 refetch_log.txt
 __pycache__/
 *.pyc
+
+# 로그·임시 산출물 — 스케줄러가 루트에 다시 만들어도 git에는 안 잡히게 (2026-08-27 청소)
+*.log
+*.err
+*_log.txt
+temp_*
+document_chunks_export.jsonl
+document_chunks_sample.jsonl
+okf_probe*.json
+archive/logs_260827/
