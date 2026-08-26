@@ -226,8 +226,10 @@ Deno.serve(async (req) => {
       const r = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+        // 관련성 판정은 Sonnet(운영자 승인 2026-08-26) — 오연결 시 무관 기사 최대 30건이
+        // 영구 잠금되는 고부담 판정. 승인·보강 시에만 호출되어 빈도가 낮다.
         body: JSON.stringify({
-          model: 'claude-haiku-4-5-20251001', max_tokens: 800,
+          model: 'claude-sonnet-5', max_tokens: 800, thinking: { type: 'disabled' },
           system: sys, messages: [{ role: 'user', content: usr }],
         }),
       });

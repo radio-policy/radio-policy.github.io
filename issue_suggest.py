@@ -263,8 +263,12 @@ def _haiku_relate_batch(pairs, groups):
                          + (f' (같은 묶음: {extra})' if extra else '')
                          + f'\n   이슈: [{iss["id"]}] {iss["title"]}'
                          + (f' — {iss.get("definition") or ""}' if iss.get('definition') else ''))
+        # 관련 판정은 Sonnet(운영자 승인 2026-08-26) — 결과가 영구 잠금·이슈 오염으로 이어지는
+        # 고부담 판정이고 시간당 1콜이라 비용 미미. 대량 1차 선별(크롤러)과 다른 비용 구조.
+        # Sonnet 5는 temperature를 거부하고 적응형 추론이 기본 ON — thinking을 명시적으로 끈다
+        # (판정은 짧은 결정이라 추론 불필요, 켜두면 지연·비용만 늘고 content 파싱이 꼬인다)
         resp = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY).messages.create(
-            model='claude-haiku-4-5-20251001', max_tokens=400, temperature=0,
+            model='claude-sonnet-5', max_tokens=400, thinking={'type': 'disabled'},
             system=('통신·전파 정책 이슈 관리 보조자다. 각 항목의 기사가 짝지어진 이슈에 '
                     '**직접 속하는지**(같은 사건·같은 절차의 후속 보도인지) 판정한다. '
                     '같은 회사·같은 업계·같은 분야라는 이유만으로는 아니오다. 애매하면 아니오다. '
@@ -314,10 +318,21 @@ def _suggest_from_news(sb, issues, dry):
         nk = _norm_key(group[0]['title'])
         nk_state, best_active, sim_a, sim_p, sim_r = _match_states(issues, nk, vecs[ci])
 
+        # ⓪ 어휘 직결 — 대표 제목과 active 이슈 제목의 공유 키워드 ≥3이면 판정 없이 연결.
+        #    cluster_star와 같은 원칙의 결정적 규칙. AI 경계 판정이 놓친 명백한 후속
+        #    ("SK텔레콤·KT, 3G 서비스 종료 추진" ↔ 이슈 "SKT 3G 서비스 종료 추진",
+        #     공유 4개)이 중복 제안으로 새는 것을 막는다(2026-08-26 실사고).
+        lex_hit = None
+        kw_rep = extract_keywords(group[0]['title'])
+        for iss in issues:
+            if iss['state'] == 'active' and len(kw_rep & extract_keywords(iss['title'])) >= 3:
+                lex_hit = iss
+                break
+
         # ① 연결 판정 — 발제 기준과 무관하게 **모든** 클러스터 대상(개선 3):
         #    낱개 후속 기사도 기간과 무관하게 이슈에 붙어야 연대기가 자란다.
-        if (nk_state and nk_state[0] == 'active') or sim_a >= SIM_MERGE:
-            target = nk_state[1] if (nk_state and nk_state[0] == 'active') else best_active
+        if lex_hit is not None or (nk_state and nk_state[0] == 'active') or sim_a >= SIM_MERGE:
+            target = lex_hit or (nk_state[1] if (nk_state and nk_state[0] == 'active') else best_active)
             n = 0 if dry else _link_news(sb, target['id'], group)
             print(f'[연결] "{group[0]["title"][:28]}" → [{target["id"]}] ({len(group)}건, sim {sim_a:.2f})')
             continue
