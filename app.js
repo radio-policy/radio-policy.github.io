@@ -8004,11 +8004,12 @@ async function showIssueDetail(issueId) {
     } catch (e) { /* 긴급도 없이도 렌더는 계속 — 대표 선정만 제목 길이 폴백 */ }
   }
   var urgencyOf = function(l) { return (i._urgency && i._urgency[String(l.item_id)]) || ''; };
+  var topicLinks = all.filter(function(l) { return l.item_type === 'law_topic'; });
 
   // 관련 법령의 하위법령(시행령·시행규칙·고시) — 법령 관계도의 위임 엣지에서 파생(운영자 지시 2026-08-26:
   // "이슈에 법만 넣어도 관련 법령에는 시행령도 보여야"). 이슈당 1회 조회 후 캐시.
   // law_graph는 매일 17시 재구축되는 산출물이라 읽기만 한다.
-  if (!i._sublaws && sb) {
+  if (!i._sublaws && sb && !topicLinks.length) {   // 주제 큐레이션이 있으면 통짜 파생은 만들지 않는다
     i._sublaws = {};
     try {
       var lawNames = all.filter(function(l) { return l.item_type === 'law'; })
@@ -8045,9 +8046,40 @@ async function showIssueDetail(issueId) {
   var cases = all.filter(function(l) { return l.item_type === 'kb_case'; });
   var stakeholders = all.filter(function(l) { return l.item_type === 'stakeholder'; });
   var links = all.filter(function(l) {
-    return l.item_type !== 'kb_case' && l.item_type !== 'stakeholder' && l.item_type !== 'law';
+    return l.item_type !== 'kb_case' && l.item_type !== 'stakeholder' && l.item_type !== 'law'
+      && l.item_type !== 'law_topic';
   });
   var admin = isAdminUser();
+
+  // 관계도 주제 큐레이션 가져오기(운영자 지시 2026-08-26) — 법령 관계도가 3단 구조·참조관계를
+  // 그리듯, 이슈도 주제 노드의 관계(조문 단위 역할 설명)를 그대로 쓴다. 주제가 연결된 이슈는
+  // 이것이 '관련 법령'의 본문이 되고, 통짜 하위법령 파생(전파법 밑 고시 37건 같은)은 생략된다.
+  if (topicLinks.length && !i._topicRel && sb) {
+    i._topicRel = [];
+    try {
+      for (var ti = 0; ti < topicLinks.length; ti++) {
+        var tn = await sb.from('law_graph_nodes').select('id,name,description')
+          .eq('name', topicLinks[ti].item_id).eq('node_type', 'topic').maybeSingle();
+        if (!tn.data) continue;
+        var te = await sb.from('law_graph_edges').select('source_id,target_id,description')
+          .or('source_id.eq.' + tn.data.id + ',target_id.eq.' + tn.data.id);
+        var otherIds = (te.data || []).map(function(e) {
+          return e.source_id === tn.data.id ? e.target_id : e.source_id;
+        });
+        var rels = [];
+        if (otherIds.length) {
+          var on = await sb.from('law_graph_nodes').select('id,name,node_type').in('id', otherIds);
+          var omap = {};
+          (on.data || []).forEach(function(n) { omap[n.id] = n; });
+          (te.data || []).forEach(function(e) {
+            var o = omap[e.source_id === tn.data.id ? e.target_id : e.source_id];
+            if (o) rels.push({ law: o.name, ntype: o.node_type, desc: e.description || '' });
+          });
+        }
+        i._topicRel.push({ name: tn.data.name, desc: tn.data.description || '', rels: rels });
+      }
+    } catch (e) { i._topicRel = null; /* 실패 시 통짜 파생으로 폴백 */ }
+  }
 
   var h = '<div style="margin-bottom:12px">' +
     '<span onclick="renderIssueMapList()" tabindex="0" role="button" style="font-size:11px;color:var(--accent);cursor:pointer"><i class="ti ti-arrow-left"></i> 이슈 목록</span>' +
@@ -8165,8 +8197,24 @@ async function showIssueDetail(issueId) {
           (st.badge ? ' · ' + escHtml(st.badge) : '') + '</span>';
       }).join('') + '</div>';
 
-    // 하위법령 파생 표시 — 법률만 연결해도 시행령·시행규칙이 딸려 보인다(법령 관계도 위임 엣지 재사용).
-    // 고시·행정규칙은 법률당 수십 개라 칩 대신 건수만 — 전부 보려면 법령 관계도로.
+    // ① 주제 큐레이션(우선) — 관계도의 주제 노드가 가진 조문 단위 관계를 그대로 렌더.
+    //    "전파법 전체의 고시 37건"이 아니라 "이 제도와 관련된 법령과 그 역할"이 나온다.
+    (i._topicRel || []).forEach(function(tp) {
+      h += '<div style="margin-top:10px;padding:10px 12px;background:var(--bg-secondary);border-radius:var(--radius-md)">' +
+        '<div style="font-size:11px;color:var(--text-tertiary);margin-bottom:6px"><i class="ti ti-topology-star-3"></i> 관계도 주제: <b style="color:var(--text-secondary)">' + escHtml(tp.name) + '</b>' +
+          ' · <span data-t="' + escHtml(tp.name) + '" onclick="goLawmapTopic(this.getAttribute(\'data-t\'))" style="color:var(--accent);cursor:pointer;text-decoration:underline">관계도에서 보기</span></div>' +
+        (tp.desc ? '<div style="font-size:11px;color:var(--text-secondary);line-height:1.6;margin-bottom:7px">' + escHtml(tp.desc) + '</div>' : '') +
+        tp.rels.map(function(r) {
+          var col = { law:'#2ea060', decree:'#1f9e9e', rules:'#1f9e9e', notice:'#e08a3c' }[r.ntype] || '#888780';
+          return '<div style="font-size:11px;line-height:1.7;margin-bottom:4px">' +
+            '<span data-law="' + escHtml(r.law) + '" onclick="openLawByName(this.getAttribute(\'data-law\'))" ' +
+              'style="color:' + col + ';font-weight:600;cursor:pointer">' + escHtml(r.law) + '</span>' +
+            (r.desc ? ' <span style="color:var(--text-secondary)">— ' + escHtml(r.desc) + '</span>' : '') + '</div>';
+        }).join('') + '</div>';
+    });
+
+    // ② 통짜 하위법령 파생(폴백) — 주제 큐레이션이 없는 이슈에서만.
+    //    고시·행정규칙은 법률당 수십 개라 칩 대신 건수만 — 전부 보려면 법령 관계도로.
     Object.keys(i._sublaws || {}).forEach(function(parent) {
       var s = i._sublaws[parent];
       var subs = (s.decree || []).concat(s.rules || []);
@@ -8490,6 +8538,20 @@ async function openLawByName(name) {
   } catch (e) {
     el.innerHTML = _issueBackBar() + '<div style="font-size:12px;color:#d04545;padding:20px">불러오기 실패: ' + escHtml((e && e.message) || String(e)) + '</div>';
   }
+}
+
+// 이슈 → 법령 관계도의 해당 주제 포커스로 이동. 관계도 데이터 로드를 기다렸다가 선택한다.
+async function goLawmapTopic(name) {
+  go('lawmap', null);
+  for (var t = 0; t < 40; t++) {           // 최대 ~8초 대기 (첫 진입 시 vis-network+데이터 로드)
+    if (_lawMapNodes && _lawMapNodes.length) break;
+    await new Promise(function(r) { setTimeout(r, 200); });
+  }
+  var node = (_lawMapNodes || []).find(function(n) { return n.node_type === 'topic' && n.name === name; });
+  if (!node) return;
+  var sel = document.getElementById('lawmap-topic-select');
+  if (sel) sel.value = node.id;
+  lawMapSelectTopic(node.id);
 }
 
 // 관계도의 묶음 노드(뉴스 N건 등) 클릭 — 해당 종류만 모아 보여준다
