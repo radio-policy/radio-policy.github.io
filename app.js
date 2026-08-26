@@ -3196,6 +3196,14 @@ function smartRefresh() {
     'panel-assembly': function() { loadAssemblyBills(true); },
     'panel-minutes':  function() { loadAssemblyMinutes(true); },
     'panel-overseas': function() { loadOverseasNews(true); },
+    // 상세를 보던 중이면 갱신 후에도 그 화면을 유지한다(새로고침 때문에 목록으로 튕기지 않게)
+    'panel-issuemap': function() {
+      var keep = selectedIssueId;
+      var wasDetail = _issueView === 'detail';
+      Promise.resolve(loadIssueMap(true)).then(function() {
+        if (wasDetail && keep) showIssueDetail(keep);
+      });
+    },
     'panel-lawtrack': function() { loadLawTrack(true); },
     'panel-diff':     function() { loadLawDiffs(true); },
     'panel-opsstatus': function() { typeof loadOpsStatus === 'function' && loadOpsStatus(); },
@@ -6291,7 +6299,7 @@ async function ackKbDoc(idx) {
 // ── 메뉴 개편(2026-08-03): 페이지 → 좌측 네비 data-nav 매핑. 탭·모바일에서 navEl 없이
 //    go()가 호출돼도 좌측 네비 활성 표시가 새 계층에 맞게 동기화되도록 한다.
 var PAGE_TO_NAV = {
-  news: 'monitor', overseas: 'monitor',
+  news: 'monitor', overseas: 'monitor', issuemap: 'issuemap',
   briefing: 'briefing', terms: 'terms',
   chat: 'chat', reportdraft: 'chat', lawmap: 'lawmap', feedback: 'chat',
   assembly: 'assembly', minutes: 'minutes',
@@ -6347,7 +6355,7 @@ function go(page, navEl, sourceType) {
 //  상위 그룹 탭 바 — 메뉴 개편(2026-08-03) 공용 컴포넌트
 //  기존 패널·로드 함수는 무수정: 탭 클릭 = 기존 go() 라우팅 호출
 // ════════════════════════════════════════════
-var PANEL_GROUP_OF = { news:'monitor', overseas:'monitor', issuemap:'monitor', lawtrack:'lawrev', diff:'lawrev', law:'kb', press:'kb', guide:'kb', itu:'kb', custom:'kb', chat:'advisory', feedback:'advisory' };
+var PANEL_GROUP_OF = { news:'monitor', overseas:'monitor', lawtrack:'lawrev', diff:'lawrev', law:'kb', press:'kb', guide:'kb', itu:'kb', custom:'kb', chat:'advisory', feedback:'advisory' };
 var GROUP_TABS = {
   // 답변 피드백은 운영자 전용 화면이라 사이드바(9항목)에 올리지 않고 AI 자문의 하위 탭으로 둔다
   // — 메뉴 개편(2026-08-03) 원칙: 하위 화면은 그룹 탭 바로.
@@ -6358,8 +6366,7 @@ var GROUP_TABS = {
   monitor: [
     { key: 'media',    label: '뉴스',              on: "go('news',null,'media')" },
     { key: 'gov',      label: '정부 보도자료·공지', on: "go('news',null,'gov')" },
-    { key: 'overseas', label: '해외 규제동향',      on: "go('overseas',null)" },
-    { key: 'issuemap', label: '이슈맵',            on: "go('issuemap',null)" }
+    { key: 'overseas', label: '해외 규제동향',      on: "go('overseas',null)" }
   ],
   lawrev: [
     { key: 'lawtrack', label: '입법예고·개정 현황', on: "go('lawtrack',null)" },
@@ -6375,10 +6382,7 @@ var GROUP_TABS = {
 };
 
 function _activeGroupTabKey(group, page) {
-  if (group === 'monitor') {
-    if (page === 'overseas' || page === 'issuemap') return page;
-    return currentNewsSourceType === 'gov' ? 'gov' : 'media';
-  }
+  if (group === 'monitor') return page === 'overseas' ? 'overseas' : (currentNewsSourceType === 'gov' ? 'gov' : 'media');
   return page;
 }
 
@@ -7826,6 +7830,7 @@ var ISSUE_ITEM_TYPES = {
 var _issueCache = null;        // [{...issue, _links:[...]}]
 var _issueFilter = { stage: null, category: null };
 var selectedIssueId = null;
+var _issueView = 'list';   // list | detail — 새로고침 후 화면 복원용
 
 function _issueStageBadge(stage, dormant) {
   var s = ISSUE_STAGES[stage] || ISSUE_STAGES['발생'];
@@ -7853,12 +7858,12 @@ async function loadIssueMap(force) {
     el.innerHTML = '<div style="color:var(--text-secondary);padding:20px;text-align:center;font-size:12px">불러오는 중...</div>';
     try {
       var resp = await sb.from('issues')
-        .select('id,title,definition,category,state,stage,dormant,resolution_kind,proposal_reason,source,impact_summary,last_activity_at,created_at')
+        .select('id,title,definition,category,state,stage,dormant,resolution_kind,proposal_reason,source,impact_summary,impact_history,last_activity_at,created_at')
         .order('last_activity_at', { ascending: false });
       if (resp.error) throw resp.error;
       var issues = resp.data || [];
       var lResp = await sb.from('issue_links')
-        .select('id,issue_id,item_type,item_id,item_date,title,note,added_by')
+        .select('id,issue_id,item_type,item_id,item_date,title,note,added_by,created_at')
         .order('item_date', { ascending: false });
       if (lResp.error) throw lResp.error;
       var byIssue = {};
@@ -7876,6 +7881,7 @@ async function loadIssueMap(force) {
 function renderIssueMapList() {
   var el = document.getElementById('issuemap-body');
   if (!el) return;
+  _issueView = 'list';
   var all = _issueCache || [];
   var proposed = all.filter(function(i) { return i.state === 'proposed'; });
   var actives  = all.filter(function(i) { return i.state === 'active' && !i.dormant && i.stage !== '해소'; });
@@ -7980,6 +7986,7 @@ function showIssueDetail(issueId) {
   var i = (_issueCache || []).find(function(x) { return String(x.id) === String(issueId); });
   if (!i) return;
   selectedIssueId = i.id;
+  _issueView = 'detail';
   var all = (i._links || []).slice().sort(function(a, b) {
     return String(b.item_date || '').localeCompare(String(a.item_date || ''));
   });
@@ -7988,41 +7995,49 @@ function showIssueDetail(issueId) {
   var links = all.filter(function(l) { return l.item_type !== 'kb_case'; });
   var admin = isAdminUser();
 
-  var h = '<div style="margin-bottom:14px">' +
+  var h = '<div style="margin-bottom:12px">' +
     '<span onclick="renderIssueMapList()" tabindex="0" role="button" style="font-size:11px;color:var(--accent);cursor:pointer"><i class="ti ti-arrow-left"></i> 이슈 목록</span>' +
   '</div>';
 
-  // 헤더
-  h += '<div style="border-left:3px solid ' + ((ISSUE_STAGES[i.stage] || ISSUE_STAGES['발생']).color) + ';padding-left:12px;margin-bottom:16px">' +
-    '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;flex-wrap:wrap">' +
+  // ── 헤더 카드 ──
+  h += _issueCardOpen() +
+    '<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;flex-wrap:wrap">' +
       _issueStageBadge(i.stage, i.dormant) +
-      (i.category ? '<span style="font-size:11px;color:var(--text-tertiary)">' + escHtml(i.category) + '</span>' : '') +
+      (i.category ? '<span style="font-size:11px;color:var(--text-secondary);background:var(--bg-secondary);padding:2px 9px;border-radius:10px">' + escHtml(i.category) + '</span>' : '') +
       (i.resolution_kind ? '<span style="font-size:11px;color:var(--text-tertiary)">· 종결: ' + escHtml(i.resolution_kind) + '</span>' : '') +
-      '<span style="margin-left:auto;font-size:11px;color:var(--text-tertiary)">연결 ' + links.length + '건</span>' +
+      '<span style="margin-left:auto;font-size:11px;color:var(--text-tertiary)"><i class="ti ti-clock"></i> 최근 ' +
+        escHtml((i.last_activity_at || '').slice(5, 10).replace('-', '/')) + ' · 연결 ' + links.length + '건</span>' +
     '</div>' +
-    '<div style="font-size:15px;font-weight:700;color:var(--text-primary);line-height:1.5;margin-bottom:4px">' + escHtml(i.title) + '</div>' +
+    '<div style="font-size:17px;font-weight:700;color:var(--text-primary);line-height:1.45;margin-bottom:5px">' + escHtml(i.title) + '</div>' +
     (i.definition ? '<div style="font-size:12px;color:var(--text-secondary);line-height:1.7">' + escHtml(i.definition) + '</div>' : '') +
-  '</div>';
+    (admin ? '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">' +
+      '<span style="font-size:11px;color:var(--text-tertiary)">단계 변경</span>' +
+      Object.keys(ISSUE_STAGES).map(function(s) {
+        return _issueChip(s, i.stage === s, "setIssueStage(" + i.id + ",'" + s + "')");
+      }).join('') + '</div>' : '') +
+  _issueCardClose();
 
-  // 관리자 조작 — 단계 변경
-  if (admin) {
-    h += '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:16px">' +
-      '<span style="font-size:11px;color:var(--text-tertiary)">단계 변경</span>';
-    Object.keys(ISSUE_STAGES).forEach(function(s) {
-      h += _issueChip(s, i.stage === s, "setIssueStage(" + i.id + ",'" + s + "')");
-    });
-    h += '</div>';
+  // ── 이슈 관계도 카드 — 이슈 중심 1-hop만. 전역 인용망(hairball)은 그리지 않는다. ──
+  var mapSvg = renderIssueMiniMap(i, all);
+  if (mapSvg) {
+    h += _issueCardOpen() +
+      _issueSecTitle('ti-sitemap', '이슈 관계도', '직접 연결만 표시, 노드 클릭 시 상세') +
+      mapSvg +
+    _issueCardClose();
   }
 
-  // 연대기 타임라인
-  h += '<div style="margin-bottom:18px">' +
-    '<div style="font-size:10px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.6px;margin-bottom:9px">● 연대기 타임라인</div>';
+  // ── 타임라인 + 관련 법령 2열 ──
+  h += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px;margin-bottom:12px">';
+
+  // 연대기 타임라인 카드
+  h += _issueCardOpen(true) + _issueSecTitle('ti-timeline', '연대기 타임라인', '');
   if (!links.length) {
     h += '<div style="font-size:12px;color:var(--text-secondary);padding:14px;background:var(--bg-secondary);border-radius:var(--radius-md);line-height:1.7">' +
       '아직 연결된 항목이 없습니다. 뉴스 상세 화면의 <b>이슈에 연결</b> 버튼으로 기사를 붙이면 여기에 시간순으로 쌓입니다.</div>';
   } else {
     // 같은 날 같은 사건의 보도가 수십 건씩 쌓이므로 (날짜+종류)로 묶어 대표 1건 + '외 N건'으로 접는다.
     // 묶지 않으면 연대기가 아니라 기사 목록이 되어 경과 파악이 불가능해진다.
+    // 내부 스크롤을 두지 않는다 — 페이지를 그대로 내려 읽는 편이 연대기 파악에 낫다(운영자 지시).
     h += '<div style="border-left:2px solid var(--border);padding-left:14px">';
     var groups = [], gkey = {};
     links.forEach(function(l) {
@@ -8067,12 +8082,42 @@ function showIssueDetail(issueId) {
     });
     h += '</div>';
   }
-  h += '</div>';
+  h += _issueCardClose();
 
-  // 과거 유사 사례 — 60일 뉴스로는 볼 수 없는 옛 사건. 세션 웹리서치로 작성해 KB에 적재한 문서.
+  // 관련 법령 카드 — 그래프가 아니라 칩. 개정 진행 상황을 배지로 함께 보여준다.
+  var lawLinks = all.filter(function(l) { return l.item_type === 'law' || l.item_type === 'diff'; });
+  h += _issueCardOpen(true) + _issueSecTitle('ti-scale', '관련 법령', '');
+  if (!lawLinks.length) {
+    h += '<div style="font-size:12px;color:var(--text-secondary);line-height:1.7">연결된 법령이 없습니다.</div>';
+  } else {
+    h += '<div style="display:flex;flex-wrap:wrap;gap:6px">' +
+      lawLinks.map(function(l) {
+        var st = _issueLawState(l);
+        var name = String(l.title || l.item_id).replace(/\s*\((proposed|pending|promoted)\)\s*$/, '');
+        return '<span onclick="openIssueLinkItem(' + l.id + ')" style="font-size:11px;padding:5px 11px;border-radius:12px;cursor:pointer;white-space:nowrap;' +
+          'background:' + st.bg + ';color:' + st.color + '">' + (st.badge ? '<i class="ti ti-alert-triangle"></i> ' : '') + escHtml(name) +
+          (st.badge ? ' · ' + escHtml(st.badge) : '') + '</span>';
+      }).join('') + '</div>';
+  }
+  h += _issueCardClose();
+  h += '</div>';   // 2열 그리드 닫기
+
+  // ── SKT 영향 요약 카드 — 무슨 일 / 왜 중요 / 무엇을 해야 3문 + 근거 [n] ──
+  h += _issueCardOpen() +
+    '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">' +
+      '<span style="font-size:13px;font-weight:600;color:var(--text-primary)"><i class="ti ti-building-broadcast-tower"></i> SKT 영향 요약</span>' +
+      (i.impact_summary && i.impact_summary.generated_at
+        ? '<span style="font-size:11px;color:var(--text-tertiary)">' + escHtml((i.impact_summary.model || '').replace(/-\d{8}$/, '')) + ' · ' + escHtml(String(i.impact_summary.generated_at).slice(0, 10)) + '</span>'
+        : '') +
+      (currentProfile ? '<button class="btn" onclick="generateIssueImpact(' + i.id + ')" style="margin-left:auto;font-size:11px;padding:3px 11px">' +
+        (i.impact_summary ? '<i class="ti ti-refresh"></i> 다시 생성' : '<i class="ti ti-sparkles"></i> 생성') + '</button>' : '') +
+    '</div>' +
+    '<div id="issue-impact-box">' + _issueImpactHtml(i, all) + '</div>' +
+  _issueCardClose();
+
+  // ── 과거 유사 사례 카드 — 60일 뉴스로는 볼 수 없는 옛 사건. 세션 웹리서치로 KB에 적재한 문서. ──
   if (cases.length) {
-    h += '<div style="margin-bottom:18px">' +
-      '<div style="font-size:10px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.6px;margin-bottom:9px">● 과거 유사 사례</div>' +
+    h += _issueCardOpen() + _issueSecTitle('ti-history', '과거 유사 사례', '') +
       '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:8px">' +
       cases.map(function(l) {
         return '<div onclick="openIssueCase(\'' + escHtml(l.item_id) + '\')" style="background:var(--bg-secondary);border-radius:var(--radius-md);padding:10px 12px;cursor:pointer">' +
@@ -8080,12 +8125,12 @@ function showIssueDetail(issueId) {
           '<div style="font-size:11px;color:var(--text-tertiary);margin-top:3px">지식베이스 · 웹 리서치 보강' +
             (admin ? ' <span onclick="event.stopPropagation();unlinkIssueItem(' + l.id + ')" title="연결 해제" style="cursor:pointer">✕</span>' : '') + '</div>' +
         '</div>';
-      }).join('') + '</div></div>';
+      }).join('') + '</div>' + _issueCardClose();
   }
 
-  // P2 이후 자리 — 관계도 / 법령 칩 / 이해관계자 / 영향 요약 / 유사사례 시맨틱 검색
-  h += '<div style="font-size:11px;color:var(--text-tertiary);padding:12px 14px;background:var(--bg-secondary);border-radius:var(--radius-md);line-height:1.8">' +
-    '이슈 관계도 · 관련 법령 · 이해관계자 · SKT 영향 요약은 다음 단계에서 추가됩니다.</div>';
+  // 남은 단계 안내 — 이해관계자 칩과 유사사례 시맨틱 검색은 아직
+  h += '<div style="font-size:11px;color:var(--text-tertiary);padding:10px 14px;line-height:1.8">' +
+    '이해관계자 칩(회의록 발언자·관할 기관)과 과거 사례 자동 검색은 다음 단계에서 추가됩니다.</div>';
 
   var el = document.getElementById('issuemap-body');
   if (el) { el.innerHTML = h; el.scrollTop = 0; }
@@ -8153,27 +8198,353 @@ async function createIssueManual() {
   }
 }
 
-// 타임라인 항목 클릭 — 뉴스는 원문, 그 외는 해당 화면으로
-async function openIssueLinkItem(linkId) {
-  var link = null;
+// 항목 클릭 — 다른 탭으로 튕기지 않고 이슈맵 안에서 상세를 연다(맥락 유지가 이슈맵의 요지).
+function _findIssueLink(linkId) {
+  var found = null;
   (_issueCache || []).forEach(function(i) {
-    (i._links || []).forEach(function(l) { if (String(l.id) === String(linkId)) link = l; });
+    (i._links || []).forEach(function(l) { if (String(l.id) === String(linkId)) found = l; });
   });
+  return found;
+}
+
+function _issueBackBar(label) {
+  return '<div style="margin-bottom:12px">' +
+    '<span onclick="showIssueDetail(' + selectedIssueId + ')" tabindex="0" role="button" style="font-size:11px;color:var(--accent);cursor:pointer">' +
+      '<i class="ti ti-arrow-left"></i> ' + escHtml(label || '이슈로 돌아가기') + '</span></div>';
+}
+
+async function openIssueLinkItem(linkId) {
+  var link = _findIssueLink(linkId);
   if (!link || !sb) return;
-  if (link.item_type === 'news') {
-    try {
-      var r = await sb.from('news_feed').select('url').eq('id', link.item_id).maybeSingle();
-      var u = safeUrl(r && r.data && r.data.url);
-      if (u) window.open(u, '_blank', 'noopener');
-    } catch (e) { /* 원문 없음 — 무시 */ }
-  } else if (link.item_type === 'diff') {
-    go('diff', null);
-  } else if (link.item_type === 'bill') {
-    go('assembly', null);
-  } else if (link.item_type === 'law' || link.item_type === 'kb_case') {
-    go('law', null);
-  } else if (link.item_type === 'minutes') {
-    go('minutes', null);
+  if (link.item_type === 'kb_case') { openIssueCase(link.item_id); return; }
+
+  var el = document.getElementById('issuemap-body');
+  if (!el) return;
+  el.innerHTML = _issueBackBar() + '<div style="color:var(--text-secondary);font-size:12px;padding:20px">불러오는 중...</div>';
+  var t = ISSUE_ITEM_TYPES[link.item_type] || { label: link.item_type, icon:'ti-point' };
+  var body = '';
+
+  try {
+    if (link.item_type === 'news') {
+      var r = await sb.from('news_feed').select('title,source,url,summary,content,published_at,urgency,category')
+        .eq('id', link.item_id).maybeSingle();
+      var n = r && r.data;
+      if (!n) { body = '<div style="font-size:12px;color:var(--text-secondary)">기사를 찾지 못했습니다(삭제되었을 수 있습니다).</div>'; }
+      else {
+        var u = safeUrl(n.url);
+        body = '<div style="font-size:11px;color:var(--text-tertiary);margin-bottom:6px">' +
+            escHtml((n.published_at || '').slice(0, 10)) + ' · ' + escHtml(n.source || '') +
+            (n.urgency ? ' · ' + escHtml(n.urgency) : '') + '</div>' +
+          '<div style="font-size:15px;font-weight:700;color:var(--text-primary);line-height:1.5;margin-bottom:10px">' + escHtml(n.title) + '</div>' +
+          (n.summary ? '<div style="font-size:12px;color:var(--text-primary);line-height:1.8;background:var(--bg-secondary);border-radius:var(--radius-md);padding:10px 12px;margin-bottom:10px">' + escHtml(n.summary) + '</div>' : '') +
+          (n.content ? '<div style="font-size:12px;color:var(--text-secondary);line-height:1.85;white-space:pre-wrap">' + escHtml(String(n.content).slice(0, 2500)) + '</div>' : '') +
+          '<div style="margin-top:12px;display:flex;gap:6px;flex-wrap:wrap">' +
+            (u ? '<a href="' + u + '" target="_blank" rel="noopener" class="btn" style="font-size:11px;padding:4px 12px;text-decoration:none"><i class="ti ti-external-link"></i> 원문 보기</a>' : '') +
+            '<button class="btn" data-nt="' + escHtml(String(n.title).slice(0, 50)) + '" onclick="askQ(this.getAttribute(\'data-nt\') + \' SKT 영향 분석해줘\')" style="font-size:11px;padding:4px 12px"><i class="ti ti-message-2"></i> AI 자문에서 분석</button>' +
+          '</div>';
+      }
+    } else if (link.item_type === 'press_chunk' || link.item_type === 'minutes') {
+      // 청크 1건이 아니라 그 섹션 전체를 보여준다 — 다음 '## ' 섹션을 만나기 전까지 이어붙임
+      var c0 = await sb.from('document_chunks').select('doc_name,chunk_index,content').eq('id', link.item_id).maybeSingle();
+      if (!c0 || !c0.data) { body = '<div style="font-size:12px;color:var(--text-secondary)">본문을 찾지 못했습니다.</div>'; }
+      else {
+        var rest = await sb.from('document_chunks').select('chunk_index,content')
+          .eq('doc_name', c0.data.doc_name)
+          .gt('chunk_index', c0.data.chunk_index)
+          .order('chunk_index', { ascending: true }).limit(6);
+        var text = c0.data.content;
+        (rest && rest.data ? rest.data : []).some(function(c) {
+          if (/^##\s/m.test(c.content) && /^##\s/.test(c.content.trimStart())) return true;
+          text += c.content;
+          return /\n##\s/.test(c.content);
+        });
+        text = text.replace(/\n##\s[\s\S]*$/, '');   // 다음 섹션 머리가 딸려왔으면 잘라낸다
+        body = '<div style="font-size:11px;color:var(--text-tertiary);margin-bottom:8px">' + escHtml(c0.data.doc_name) + '</div>' +
+          '<div style="font-size:12px;color:var(--text-primary);line-height:1.85;white-space:pre-wrap;word-break:break-word">' + escHtml(text) + '</div>';
+      }
+    } else if (link.item_type === 'diff') {
+      var d = await sb.from('law_diffs').select('law_name,law_no,enf_date,diff_kind,origin,summary,impact,urgency,articles,stats')
+        .eq('id', link.item_id).maybeSingle();
+      var dd = d && d.data;
+      if (!dd) { body = '<div style="font-size:12px;color:var(--text-secondary)">개정 정보를 찾지 못했습니다.</div>'; }
+      else {
+        body = '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px">' +
+            _lawDiffKindBadge(dd.diff_kind, dd.origin) +
+            '<span style="font-size:11px;color:var(--text-tertiary)">시행 ' + escHtml(dd.enf_date || '-') + (dd.law_no ? ' · ' + escHtml(dd.law_no) : '') + '</span></div>' +
+          '<div style="font-size:15px;font-weight:700;color:var(--text-primary);line-height:1.5;margin-bottom:10px">' + escHtml(dd.law_name) + '</div>' +
+          (dd.summary ? '<div style="font-size:12px;color:var(--text-primary);line-height:1.8;margin-bottom:10px">' + escHtml(dd.summary) + '</div>' : '') +
+          (dd.impact ? '<div style="font-size:12px;color:var(--text-primary);line-height:1.8;background:var(--bg-secondary);border-radius:var(--radius-md);padding:10px 12px;margin-bottom:10px">' +
+            '<b>SKT 영향</b><br>' + escHtml(dd.impact) + '</div>' : '') +
+          ((dd.articles && dd.articles.length)
+            ? '<div style="font-size:11px;color:var(--text-secondary);margin-bottom:6px">조문 ' + dd.articles.length + '건</div>' +
+              dd.articles.slice(0, 12).map(function(a) {
+                return '<div style="border-left:2px solid var(--border);padding-left:10px;margin-bottom:8px">' +
+                  '<div style="font-size:12px;font-weight:600;color:var(--text-primary)">' + escHtml(a.article_no || '') + ' <span style="font-weight:400;color:var(--text-tertiary)">' + escHtml(a.change || '') + '</span></div>' +
+                  (a.impact ? '<div style="font-size:11px;color:var(--text-secondary);line-height:1.7;margin-top:2px">' + escHtml(a.impact) + '</div>' : '') + '</div>';
+              }).join('')
+            : '');
+      }
+    } else if (link.item_type === 'bill') {
+      var b = await sb.from('assembly_bills').select('bill_name,proposer,committee,proc_result,propose_dt,summary,link_url')
+        .eq('bill_no', link.item_id).maybeSingle();
+      var bb = b && b.data;
+      body = bb
+        ? '<div style="font-size:11px;color:var(--text-tertiary);margin-bottom:6px">' + escHtml(bb.propose_dt || '') + ' · ' + escHtml(bb.committee || '') +
+            (bb.proc_result ? ' · ' + escHtml(bb.proc_result) : '') + '</div>' +
+          '<div style="font-size:15px;font-weight:700;line-height:1.5;margin-bottom:8px">' + escHtml(bb.bill_name) + '</div>' +
+          '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px">' + escHtml(bb.proposer || '') + '</div>' +
+          (bb.summary ? '<div style="font-size:12px;color:var(--text-primary);line-height:1.8">' + escHtml(bb.summary) + '</div>' : '') +
+          (safeUrl(bb.link_url) ? '<div style="margin-top:12px"><a href="' + safeUrl(bb.link_url) + '" target="_blank" rel="noopener" class="btn" style="font-size:11px;padding:4px 12px;text-decoration:none"><i class="ti ti-external-link"></i> 의안정보</a></div>' : '')
+        : '<div style="font-size:12px;color:var(--text-secondary)">법안 정보를 찾지 못했습니다.</div>';
+    } else {
+      body = '<div style="font-size:12px;color:var(--text-secondary);line-height:1.8">' + escHtml(link.title || link.item_id) + '</div>';
+    }
+  } catch (e) {
+    body = '<div style="font-size:12px;color:#d04545">불러오기 실패: ' + escHtml((e && e.message) || String(e)) + '</div>';
+  }
+
+  el.innerHTML = _issueBackBar() +
+    _issueCardOpen() +
+      '<div style="font-size:11px;color:var(--text-tertiary);margin-bottom:8px"><i class="ti ' + t.icon + '"></i> ' + escHtml(t.label) + '</div>' +
+      body +
+    _issueCardClose();
+  el.scrollTop = 0;
+}
+
+// 관계도의 묶음 노드(뉴스 N건 등) 클릭 — 해당 종류만 모아 보여준다
+function showIssueTypeList(issueId, type) {
+  var iss = (_issueCache || []).find(function(x) { return String(x.id) === String(issueId); });
+  if (!iss) return;
+  var t = ISSUE_ITEM_TYPES[type] || { label:type, icon:'ti-point' };
+  var rows = (iss._links || []).filter(function(l) { return l.item_type === type; })
+    .sort(function(a, b) { return String(b.item_date || '').localeCompare(String(a.item_date || '')); });
+  var el = document.getElementById('issuemap-body');
+  if (!el) return;
+  el.innerHTML = _issueBackBar() +
+    _issueCardOpen() +
+      _issueSecTitle(t.icon, t.label + ' ' + rows.length + '건', escHtml(iss.title)) +
+      rows.map(function(l) {
+        return '<div onclick="openIssueLinkItem(' + l.id + ')" style="padding:8px 0;border-bottom:1px solid var(--border);cursor:pointer">' +
+          '<div style="font-size:11px;color:var(--text-tertiary)">' + escHtml((l.item_date || '').replace(/-/g, '/')) + '</div>' +
+          '<div style="font-size:12px;color:var(--text-primary);line-height:1.6">' + escHtml(l.title || l.item_id) + '</div></div>';
+      }).join('') +
+    _issueCardClose();
+  el.scrollTop = 0;
+}
+
+// ── 상세 화면 카드 셸 ───────────────────────────────────────
+function _issueCardOpen(inGrid) {
+  // 그리드 칸 안에서는 카드가 칸 높이를 채우고, 바깥 여백은 그리드 gap이 담당한다
+  return '<div style="background:var(--bg-primary);border:1px solid var(--border);border-radius:12px;padding:14px 16px;' +
+    (inGrid ? 'height:100%;box-sizing:border-box' : 'margin-bottom:12px') + '">';
+}
+// SVG는 자동 줄바꿈이 없어 라벨을 미리 줄여야 한다. 괄호 보충설명을 먼저 떼고, 그래도 길면 말줄임.
+function _issueMapLabel(s, max) {
+  var t = String(s == null ? '' : s).trim();
+  var noParen = t.replace(/\s*[(（].*$/, '');
+  if (noParen.length >= 4) t = noParen;
+  return t.length > max ? t.slice(0, max - 1) + '…' : t;
+}
+function _issueCardClose() { return '</div>'; }
+function _issueSecTitle(icon, label, hint) {
+  return '<div style="font-size:13px;font-weight:600;color:var(--text-primary);margin-bottom:10px">' +
+    '<i class="ti ' + icon + '"></i> ' + escHtml(label) +
+    (hint ? ' <span style="font-size:11px;font-weight:400;color:var(--text-tertiary)">— ' + escHtml(hint) + '</span>' : '') +
+  '</div>';
+}
+
+// ── 관련 법령 칩의 개정 진행 배지 ──────────────────────────
+// diff 링크의 title에 diff_kind가 들어 있다(예: "전파법 시행령 개정 (proposed)").
+// 별도 조회 없이 그 표기를 배지로 바꾼다 — 상세 조회는 칩 클릭 시 DIFF 화면이 담당.
+function _issueLawState(l) {
+  var t = String(l.title || '');
+  if (/proposed/.test(t))  return { badge:'개정안 발의', color:'#b8791a', bg:'rgba(239,158,39,0.14)' };
+  if (/pending/.test(t))   return { badge:'시행 예정',   color:'#b8791a', bg:'rgba(239,158,39,0.14)' };
+  if (/promoted/.test(t))  return { badge:'시행됨',     color:'#0f7a4f', bg:'rgba(16,185,129,0.12)' };
+  return { badge:'', color:'#0f7a4f', bg:'rgba(16,185,129,0.12)' };
+}
+
+// ── 이슈 관계도 (정적 SVG 방사형 — renderMiniLawMap과 같은 방식, vis-network 불필요) ──
+// 노드는 연결 항목을 종류별로 묶은 것. 개별 기사 40건을 노드로 뿌리면 hairball이 되므로
+// '뉴스 N건'처럼 묶음 1개로 표현한다.
+// 색은 fill/stroke/text 3벌 — 라이트·다크 양쪽에서 읽히도록 옅은 배경 + 진한 글자로 고정한다.
+var ISSUE_MAP_COLORS = {
+  issue:       { bg:'rgba(139,92,246,0.16)', bd:'#8b5cf6', tx:'#7c4ddb' },
+  law:         { bg:'rgba(46,160,96,0.14)',  bd:'#2ea060', tx:'#1f8a50' },
+  diff:        { bg:'rgba(31,158,158,0.14)', bd:'#1f9e9e', tx:'#16807f' },
+  bill:        { bg:'rgba(91,127,245,0.14)', bd:'#5b7ff5', tx:'#4a6ee0' },
+  kb_case:     { bg:'rgba(216,90,48,0.14)',  bd:'#d85a30', tx:'#c04a24' },
+  press_chunk: { bg:'rgba(224,138,60,0.14)', bd:'#e08a3c', tx:'#c07226' },
+  minutes:     { bg:'rgba(213,72,106,0.14)', bd:'#d5486a', tx:'#bd3a59' },
+  news:        { bg:'rgba(128,128,128,0.14)',bd:'#888780', tx:'#6c6b66' },
+  briefing:    { bg:'rgba(128,128,128,0.14)',bd:'#888780', tx:'#6c6b66' }
+};
+// 노드는 연결 항목을 종류별로 묶은 것. 개별 기사 40건을 노드로 뿌리면 hairball이 되므로
+// '뉴스 N건'처럼 묶음 1개로 표현한다. 좌우 3개씩 세로 배치 — 라벨이 길어 방사형보다 읽기 쉽다.
+function renderIssueMiniMap(iss, links) {
+  var byType = {};
+  (links || []).forEach(function(l) { (byType[l.item_type] = byType[l.item_type] || []).push(l); });
+  var nodes = [];
+  // 법령·DIFF·사례는 개별 노드(이름 자체가 정보), 나머지는 종류별 묶음 1개
+  ['law', 'diff', 'kb_case', 'bill'].forEach(function(tp) {
+    (byType[tp] || []).slice(0, 3).forEach(function(l) {
+      var nm = String(l.title || l.item_id).replace(/\s*\((proposed|pending|promoted)\)\s*$/, '');
+      var st = (tp === 'diff' || tp === 'law') ? _issueLawState(l) : null;
+      nodes.push({ type:tp, label:nm, sub:(st && st.badge) || (ISSUE_ITEM_TYPES[tp] || {}).label || tp, link:l });
+    });
+    delete byType[tp];
+  });
+  Object.keys(byType).forEach(function(tp) {
+    var t = ISSUE_ITEM_TYPES[tp] || { label:tp };
+    var arr = byType[tp];
+    var ds = arr.map(function(l) { return l.item_date; }).filter(Boolean).sort();
+    var span = ds.length ? (ds[0].slice(5).replace('-', '/') + (ds.length > 1 ? ' ~ ' + ds[ds.length - 1].slice(5).replace('-', '/') : '')) : '';
+    nodes.push({ type:tp, label:t.label + ' ' + arr.length + '건', sub:span, link:null, group:tp });
+  });
+  if (!nodes.length) return '';
+  nodes = nodes.slice(0, 6);
+
+  var BW = 168, BH = 46, W = 700;
+  var left = nodes.filter(function(n, k) { return k % 2 === 0; });
+  var right = nodes.filter(function(n, k) { return k % 2 === 1; });
+  var rows = Math.max(left.length, right.length);
+  var H = Math.max(rows * (BH + 26) + 20, 150);
+  var cx = W / 2, cy = H / 2;
+  var CW = 176, CH = 56;
+
+  function place(list, x) {
+    var startY = (H - (list.length * (BH + 26) - 26)) / 2;
+    return list.map(function(n, k) { return { n:n, x:x, y:startY + k * (BH + 26) }; });
+  }
+  var pts = place(left, 8).concat(place(right, W - BW - 8));
+
+  var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;height:auto;display:block" role="img">' +
+    '<title>' + lmEsc(iss.title) + ' 이슈 관계도</title>';
+  // 연결선 먼저 (노드 아래로)
+  pts.forEach(function(p) {
+    var nodeCx = p.x + BW / 2, nodeCy = p.y + BH / 2;
+    var fromX = nodeCx < cx ? p.x + BW : p.x;
+    var toX   = nodeCx < cx ? cx - CW / 2 : cx + CW / 2;
+    svg += '<line x1="' + fromX + '" y1="' + nodeCy + '" x2="' + toX + '" y2="' + cy + '" stroke="rgba(128,128,128,.45)" stroke-width="1.2"/>';
+  });
+  pts.forEach(function(p) {
+    var c = ISSUE_MAP_COLORS[p.n.type] || ISSUE_MAP_COLORS.news;
+    var clickable = p.n.link ? ' onclick="openIssueLinkItem(' + p.n.link.id + ')" style="cursor:pointer"'
+      : (p.n.group ? ' onclick="showIssueTypeList(' + iss.id + ',\'' + p.n.group + '\')" style="cursor:pointer"' : '');
+    svg += '<g' + clickable + '>' +
+      '<rect x="' + p.x + '" y="' + p.y + '" width="' + BW + '" height="' + BH + '" rx="9" fill="' + c.bg + '" stroke="' + c.bd + '" stroke-width="1.2"/>' +
+      '<text x="' + (p.x + BW / 2) + '" y="' + (p.y + (p.n.sub ? 20 : 28)) + '" text-anchor="middle" font-size="12" font-weight="600" fill="' + c.tx + '">' +
+        lmEsc(_issueMapLabel(p.n.label, 15)) + '</text>' +
+      (p.n.sub ? '<text x="' + (p.x + BW / 2) + '" y="' + (p.y + 35) + '" text-anchor="middle" font-size="10" fill="' + c.tx + '" fill-opacity=".8">' +
+        lmEsc(_issueMapLabel(p.n.sub, 20)) + '</text>' : '') +
+    '</g>';
+  });
+  var ic = ISSUE_MAP_COLORS.issue;
+  svg += '<rect x="' + (cx - CW / 2) + '" y="' + (cy - CH / 2) + '" width="' + CW + '" height="' + CH + '" rx="11" fill="' + ic.bg + '" stroke="' + ic.bd + '" stroke-width="1.6"/>' +
+    '<text x="' + cx + '" y="' + (cy - 2) + '" text-anchor="middle" font-size="13" font-weight="700" fill="' + ic.tx + '">' +
+      lmEsc(_issueMapLabel(iss.title, 15)) + '</text>' +
+    '<text x="' + cx + '" y="' + (cy + 15) + '" text-anchor="middle" font-size="10" fill="' + ic.tx + '" fill-opacity=".8">이슈 · ' + lmEsc(iss.stage) + '</text>' +
+  '</svg>';
+  return svg;
+}
+
+// ── SKT 영향 요약 ───────────────────────────────────────────
+// 근거 밖 서술을 막기 위해 연결 항목을 [n] 번호 목록으로 주고, 문장마다 [n] 인용을 강제한다.
+function _issueImpactHtml(iss, links) {
+  var s = iss.impact_summary;
+  if (!s || !s.what) {
+    return '<div style="font-size:12px;color:var(--text-secondary);padding:12px 14px;background:var(--bg-secondary);border-radius:var(--radius-md);line-height:1.7">' +
+      (currentProfile ? '아직 생성되지 않았습니다. [생성]을 누르면 연결된 항목만을 근거로 3문 요약을 만듭니다.'
+                      : '로그인하면 연결된 항목을 근거로 한 3문 요약을 생성할 수 있습니다.') + '</div>';
+  }
+  var stale = false;
+  try {
+    var newest = (links || []).map(function(l) { return l.created_at || ''; }).sort().pop() || '';
+    stale = newest && s.generated_at && newest > s.generated_at;
+  } catch (e) { /* 비교 불가 시 배지 생략 */ }
+  var srcMap = {};
+  (s.sources || []).forEach(function(x) { srcMap[String(x.n)] = x; });
+  function withCites(txt) {
+    return escHtml(String(txt || '')).replace(/\[(\d+)\]/g, function(m, n) {
+      var src = srcMap[n];
+      if (!src) return '<span style="color:var(--text-tertiary)">' + m + '</span>';
+      return '<span onclick="openIssueLinkItem(' + Number(src.link_id || 0) + ')" title="' + escHtml(src.title || '') +
+        '" style="color:var(--accent);cursor:pointer;font-size:11px">' + m + '</span>';
+    });
+  }
+  return (stale ? '<div style="font-size:11px;color:#b8791a;margin-bottom:6px">⚠ 요약 생성 이후 새 항목이 연결됐습니다 — 다시 생성하면 반영됩니다.</div>' : '') +
+    '<div style="font-size:12px;color:var(--text-primary);padding:12px 14px;background:var(--bg-secondary);border-radius:var(--radius-md);line-height:1.8">' +
+      '<div style="margin-bottom:6px"><b>무슨 일</b> — ' + withCites(s.what) + '</div>' +
+      '<div style="margin-bottom:6px"><b>왜 중요</b> — ' + withCites(s.why) + '</div>' +
+      '<div><b>무엇을 해야</b> — ' + withCites(s.action) + '</div>' +
+    '</div>';
+}
+
+async function generateIssueImpact(issueId) {
+  var iss = (_issueCache || []).find(function(x) { return String(x.id) === String(issueId); });
+  if (!iss || !sb) return;
+  if (!aiReady()) { alert(aiGateMsg()); return; }
+  var box = document.getElementById('issue-impact-box');
+  if (box) box.innerHTML = '<div style="display:flex;align-items:center;gap:8px;color:var(--text-secondary);font-size:12px;padding:12px 14px">' +
+    '<span style="display:inline-block;width:14px;height:14px;border:2px solid var(--accent);border-top-color:transparent;border-radius:50%;animation:spin 0.8s linear infinite"></span>영향 요약 생성 중...</div>';
+
+  // 근거 목록 — 종류별로 골라 담되 뉴스는 최신 12건까지(같은 사건 반복이라 더 넣어도 정보량이 안 는다)
+  var links = (iss._links || []).slice().sort(function(a, b) {
+    return String(b.item_date || '').localeCompare(String(a.item_date || ''));
+  });
+  var picked = [], newsCount = 0;
+  links.forEach(function(l) {
+    if (l.item_type === 'news') { if (newsCount >= 12) return; newsCount++; }
+    picked.push(l);
+  });
+  picked = picked.slice(0, 30);
+  var srcList = picked.map(function(l, k) {
+    var t = ISSUE_ITEM_TYPES[l.item_type] || { label:l.item_type };
+    return '[' + (k + 1) + '] ' + t.label + (l.item_date ? ' ' + l.item_date : '') + ': ' + (l.title || l.item_id);
+  }).join('\n');
+
+  var userMsg = '다음은 정책 이슈 하나와 그 이슈에 연결된 자료 목록이다.\n\n' +
+    '이슈: ' + iss.title + '\n' +
+    (iss.definition ? '정의: ' + iss.definition + '\n' : '') +
+    '현재 단계: ' + iss.stage + '\n\n' +
+    '연결 자료:\n' + srcList + '\n\n' +
+    '위 목록만을 근거로 SKT 기술정책팀을 위한 3문 요약을 작성하라.\n' +
+    '- <what>무슨 일이 벌어졌는가</what>\n' +
+    '- <why>왜 SKT에 중요한가</why>\n' +
+    '- <action>무엇을 해야 하는가</action>\n' +
+    '각 항목은 2~3문장. **모든 문장 끝에 근거 번호 [n]을 붙여라.** ' +
+    '목록에 없는 사실은 쓰지 말고, 목록 밖 번호를 인용하지 마라. 목록으로 알 수 없는 것은 쓰지 않는다.';
+
+  try {
+    var res = await claudeFetch({
+      method: 'POST',
+      body: JSON.stringify({ model: 'claude-sonnet-5', max_tokens: 1200,
+        system: SKT_IMPACT_SYSTEM_PROMPT, messages: [{ role:'user', content: userMsg }] })
+    });
+    var data = await res.json();
+    if (data.error) throw new Error(data.error.message || 'API 오류');
+    var text = (data.content || []).map(function(c) { return c && c.text ? c.text : ''; }).join('');
+    function pick(tag) { var m = text.match(new RegExp('<' + tag + '>([\\s\\S]*?)</' + tag + '>')); return m ? m[1].trim() : ''; }
+    var what = pick('what'), why = pick('why'), action = pick('action');
+    if (!what && !why && !action) throw new Error('형식에 맞는 응답을 받지 못했습니다');
+
+    // 인용 번호를 실제 링크로 되짚을 수 있게 sources에 link_id를 함께 저장한다
+    var sources = picked.map(function(l, k) {
+      return { n: k + 1, type: l.item_type, link_id: l.id, title: l.title || l.item_id };
+    });
+    var summary = { what:what, why:why, action:action, sources:sources,
+                    model:'claude-sonnet-5', generated_at:new Date().toISOString() };
+    var hist = (iss.impact_history || []).slice();
+    if (iss.impact_summary && iss.impact_summary.what) hist.unshift(iss.impact_summary);
+    hist = hist.slice(0, 5);
+
+    var up = await sb.from('issues').update({ impact_summary: summary, impact_history: hist, updated_at: new Date().toISOString() }).eq('id', iss.id);
+    if (up.error) throw up.error;
+    iss.impact_summary = summary;
+    iss.impact_history = hist;
+    showIssueDetail(iss.id);
+  } catch (e) {
+    if (box) box.innerHTML = '<div style="font-size:12px;color:#d04545;padding:12px 14px;background:var(--bg-secondary);border-radius:var(--radius-md)">생성 실패: ' + escHtml((e && e.message) || String(e)) + '</div>';
   }
 }
 
