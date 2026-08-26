@@ -43,7 +43,12 @@ CLUSTER_MIN_ARTICLES = 5     # ⓐ 기준: 기사 수 & 서로 다른 날짜 수
 CLUSTER_MIN_DAYS = 2
 URGENT_MIN = 3               # 또는: 긴급 기사 수 & 날짜 수
 URGENT_MIN_DAYS = 3
-SIM_MERGE = 0.80             # 이 이상이면 신규 제안 대신 기존 이슈에 연결
+SIM_MERGE = 0.80             # 이 이상이면 확신 연결(Haiku 불요) — 신규 제안 금지
+SIM_RELATED = 0.60           # 0.60~0.80은 '관련 후보' — Haiku가 이슈 정의 기준으로 최종 판정.
+                             # "유사"가 아니라 "관련"을 잡는다(운영자 교정 2026-08-26):
+                             # 표현이 달라도 관련인 기사(예: 3G 이슈의 '심사 착수' 보도)를 놓치지 않게
+SIM_PROPOSED_DUP = 0.72      # 제안끼리의 교차 문턱 — 짧은 제목은 유사도가 낮게 나와 0.80로는
+                             # 같은 주제 제안이 한 실행에 여럿 통과했다(실측: '모두의 AI' 2건)
 MAX_PROPOSALS_PER_RUN = 5    # 1회 실행당 제안 상한 — 첫 가동·급증 시 텔레그램 폭주 방지.
                              # 넘친 후보는 버리는 게 아니라 다음 시간 실행에서 재평가된다.
 DORMANT_DAYS = 30
@@ -179,11 +184,22 @@ def _propose(sb, issues, title, definition, category, norm_key, reason, dry,
     if _proposed_this_run >= MAX_PROPOSALS_PER_RUN:
         print(f'[제안 상한 도달 — 이월] {title}')
         return False
+    vec = _embed([f'{title} {definition or ""}'], input_type='document')[0]
+    # 같은 실행에서 방금 만든 제안과의 교차 검사 — 스캔 단계(②)는 기존 제안만 보므로
+    # 여기서 재검사하지 않으면 한 실행에 같은 주제 제안이 여럿 통과한다(실측: LGU+ 2건).
+    for i in issues:
+        if i['state'] == 'proposed' and i.get('embedding') \
+                and _cosine(vec, i['embedding']) >= SIM_PROPOSED_DUP:
+            print(f'[제안 중복 — 건너뜀] {title}  (≈ [{i["id"]}] {i["title"][:20]})')
+            return False
     _proposed_this_run += 1
     print(f'[제안] {title}  ({reason.get("kind")}, stage_hint={stage_hint})')
     if dry:
+        # dry에서도 가짜 항목을 쌓아 교차 검사가 live와 같게 동작하게 한다
+        issues.append({'id': f'dry{_proposed_this_run}', 'title': title, 'state': 'proposed',
+                       'stage': stage_hint, 'norm_key': norm_key, 'embedding': vec,
+                       'dormant': False, 'stage_log': []})
         return True
-    vec = _embed([f'{title} {definition or ""}'], input_type='document')[0]
     row = sb.table('issues').insert({
         'title': title, 'definition': definition, 'category': category,
         'state': 'proposed', 'stage': stage_hint, 'norm_key': norm_key,
@@ -208,21 +224,67 @@ def _propose(sb, issues, title, definition, category, norm_key, reason, dry,
     return True
 
 
-def _dedup_target(issues, norm_key, vec):
-    """(skip 사유, 연결할 active 이슈) 판정."""
+def _match_states(issues, norm_key, vec):
+    """상태별 최적 매칭. active를 다른 상태와 분리해 계산한다 —
+    기각 이슈가 best로 잡히면 후속 기사가 어디에도 안 붙는 구멍(운영자 승인 개선 2)."""
+    nk_state = None
     for i in issues:
         if norm_key and i.get('norm_key') == norm_key:
-            return ('norm_key=' + i['state'], i if i['state'] == 'active' else None)
-    best, best_sim = None, 0.0
+            nk_state = (i['state'], i)
+            break
+    best_active, sim_active = None, 0.0
+    sim_proposed, sim_rejected = 0.0, 0.0
     for i in issues:
         if not i.get('embedding'):
             continue
         sim = _cosine(vec, i['embedding'])
-        if sim > best_sim:
-            best, best_sim = i, sim
-    if best and best_sim >= SIM_MERGE:
-        return (f'sim={best_sim:.2f}:{best["state"]}', best if best['state'] == 'active' else None)
-    return (None, None)
+        if i['state'] == 'active':
+            if sim > sim_active:
+                best_active, sim_active = i, sim
+        elif i['state'] == 'proposed':
+            sim_proposed = max(sim_proposed, sim)
+        elif i['state'] == 'rejected':
+            sim_rejected = max(sim_rejected, sim)
+    return nk_state, best_active, sim_active, sim_proposed, sim_rejected
+
+
+def _haiku_relate_batch(pairs, groups):
+    """경계(0.60~0.80) 후보를 Haiku 1콜로 일괄 판정.
+    pairs: [(cluster_idx, rep_title, candidate_issue)] → 관련 확정된 cluster_idx 집합.
+    실패 시 빈 집합(보수적 — 관련이 아니라고 보고 다음 시간에 재평가)."""
+    if not pairs or not ANTHROPIC_API_KEY:
+        return set()
+    try:
+        import anthropic
+        lines = []
+        for k, (ci, title, iss) in enumerate(pairs):
+            extra = ' / '.join(r['title'][:40] for r in groups[ci][1:3])
+            lines.append(f'{k + 1}. 기사: "{title}"'
+                         + (f' (같은 묶음: {extra})' if extra else '')
+                         + f'\n   이슈: [{iss["id"]}] {iss["title"]}'
+                         + (f' — {iss.get("definition") or ""}' if iss.get('definition') else ''))
+        resp = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY).messages.create(
+            model='claude-haiku-4-5-20251001', max_tokens=400, temperature=0,
+            system=('통신·전파 정책 이슈 관리 보조자다. 각 항목의 기사가 짝지어진 이슈에 '
+                    '**직접 속하는지**(같은 사건·같은 절차의 후속 보도인지) 판정한다. '
+                    '같은 회사·같은 업계·같은 분야라는 이유만으로는 아니오다. 애매하면 아니오다. '
+                    # 자유 텍스트에서 숫자를 줍는 파싱은 "1번은 아님" 같은 부정문의 숫자까지 주워
+                    # 오연결을 만든다(실측: 무관 클러스터 31건이 잘못 붙을 뻔) — JSON으로 고정.
+                    'JSON 하나만 출력한다: {"belong": [속하는 항목 번호]} — 없으면 {"belong": []}. '
+                    '다른 말 금지.'),
+            messages=[{'role': 'user', 'content': '\n'.join(lines)}])
+        text = ''.join(b.text for b in resp.content if getattr(b, 'text', None))
+        m = re.search(r'\{[\s\S]*\}', text)
+        nums = (json.loads(m.group(0)).get('belong') or []) if m else []
+        keep = set()
+        for n in nums:
+            k = int(n) - 1
+            if 0 <= k < len(pairs):
+                keep.add(pairs[k][0])
+        return keep
+    except Exception as e:
+        print(f'  [관련 판정 실패(보류)] {e}')
+        return set()
 
 
 def _suggest_from_news(sb, issues, dry):
@@ -234,24 +296,68 @@ def _suggest_from_news(sb, issues, dry):
     if not rows:
         return
     clusters = cluster_star(rows)   # 임계 3 유지 — 3→2 금지 가드레일(#44)
-    for rep, members in clusters:
-        group = [rep] + members
+    groups = [[rep] + members for rep, members in clusters]
+
+    # 대표 제목 임베딩은 배치 1콜 — 클러스터가 100개여도 호출은 한 번
+    reps = [g[0]['title'] for g in groups]
+    vecs = _embed(reps)
+
+    borderline = []   # (cluster_idx, rep_title, candidate_issue) — Haiku 관련 판정 대기
+    to_propose = []   # (cluster_idx, nk) — 발제 기준 통과 & 어디에도 안 붙은 클러스터
+    already = {str(r['item_id']) for r in (sb.table('issue_links').select('item_id')
+               .eq('item_type', 'news').execute().data or [])}
+
+    for ci, group in enumerate(groups):
+        # 전부 이미 연결된 클러스터는 볼 것 없음 (매시 재스캔의 공회전 방지)
+        if all(str(r['id']) in already for r in group):
+            continue
+        nk = _norm_key(group[0]['title'])
+        nk_state, best_active, sim_a, sim_p, sim_r = _match_states(issues, nk, vecs[ci])
+
+        # ① 연결 판정 — 발제 기준과 무관하게 **모든** 클러스터 대상(개선 3):
+        #    낱개 후속 기사도 기간과 무관하게 이슈에 붙어야 연대기가 자란다.
+        if (nk_state and nk_state[0] == 'active') or sim_a >= SIM_MERGE:
+            target = nk_state[1] if (nk_state and nk_state[0] == 'active') else best_active
+            n = 0 if dry else _link_news(sb, target['id'], group)
+            print(f'[연결] "{group[0]["title"][:28]}" → [{target["id"]}] ({len(group)}건, sim {sim_a:.2f})')
+            continue
+        if best_active is not None and sim_a >= SIM_RELATED:
+            borderline.append((ci, group[0]['title'], best_active))
+            # 관련 판정 결과를 기다린다 — 판정에서 떨어지면 아래 제안 후보로도 안 간다
+            # (관련도 아니고 제안 기준도 못 넘는 어중간한 클러스터는 다음 시간에 재평가)
+            continue
+
+        # ② 제안 판정 — 발제 기준 + 제안·기각과의 중복 억제
+        if nk_state and nk_state[0] in ('proposed', 'rejected'):
+            continue
+        if sim_p >= SIM_PROPOSED_DUP or sim_r >= SIM_MERGE:
+            continue
         days = {(r.get('published_at') or '')[:10] for r in group if r.get('published_at')}
         urgent = sum(1 for r in group if r.get('urgency') == '긴급')
-        hit_a = len(group) >= CLUSTER_MIN_ARTICLES and len(days) >= CLUSTER_MIN_DAYS
-        hit_b = urgent >= URGENT_MIN and len(days) >= URGENT_MIN_DAYS
-        if not (hit_a or hit_b):
+        if (len(group) >= CLUSTER_MIN_ARTICLES and len(days) >= CLUSTER_MIN_DAYS) or \
+           (urgent >= URGENT_MIN and len(days) >= URGENT_MIN_DAYS):
+            # 발제 기준을 넘어도 기존 이슈와 조금이라도 닮았으면(≥0.35) 먼저 관련 판정을 받는다 —
+            # 짧은 제목은 유사도가 실제 관련성보다 낮게 나와(실측: 3G 후속 0.6 미만),
+            # 이 판정 없이는 같은 이슈의 후속이 별도 제안으로 새어 나간다.
+            if best_active is not None and sim_a >= 0.35:
+                borderline.append((ci, group[0]['title'], best_active))
+            to_propose.append((ci, nk))
+
+    # ③ 경계 후보 일괄 관련 판정(Haiku 1콜) → 확정분 연결
+    related = _haiku_relate_batch(borderline, groups)
+    for ci, title, iss in borderline:
+        if ci in related:
+            n = 0 if dry else _link_news(sb, iss['id'], groups[ci])
+            print(f'[연결·관련판정] "{title[:28]}" → [{iss["id"]}] ({len(groups[ci])}건)')
+
+    # ④ 제안 생성 — 관련 판정으로 기존 이슈에 붙은 클러스터는 제외
+    for ci, nk in to_propose:
+        if ci in related:
             continue
-        nk = _norm_key(rep['title'])
-        vec = _embed([rep['title']])[0]
-        skip, target = _dedup_target(issues, nk, vec)
-        if target is not None:
-            n = 0 if dry else _link_news(sb, target['id'], group)
-            print(f'[기존 이슈 연결] "{rep["title"][:30]}" → [{target["id"]}] {target["title"][:20]} ({n}건)')
-            continue
-        if skip:
-            continue
-        prof = _haiku_profile(rep['title'], [m['title'] for m in members])
+        group = groups[ci]
+        days = {(r.get('published_at') or '')[:10] for r in group if r.get('published_at')}
+        urgent = sum(1 for r in group if r.get('urgency') == '긴급')
+        prof = _haiku_profile(group[0]['title'], [m['title'] for m in group[1:]])
         if not prof:
             continue
         titles_all = ' '.join(r['title'] for r in group)
@@ -262,6 +368,19 @@ def _suggest_from_news(sb, issues, dry):
                       'days': len(days), 'sample_news_ids': [str(r['id']) for r in group[:10]],
                       'detail': f'기사 {len(group)}건 · {len(days)}일 · 긴급 {urgent}'},
                  dry, stage_hint=hint, news_rows=group)
+
+
+def _reg_dedup(issues, norm_key, vec):
+    """규제 계열(법령명 — 고정 명칭이라 고정밀)의 중복 판정. active 우선(개선 2)."""
+    nk_state, best_active, sim_a, sim_p, sim_r = _match_states(issues, norm_key, vec)
+    if nk_state and nk_state[0] == 'active':
+        return ('norm_key', nk_state[1])
+    if sim_a >= SIM_MERGE:
+        return (f'sim={sim_a:.2f}', best_active)
+    if (nk_state and nk_state[0] in ('proposed', 'rejected')) \
+            or sim_p >= SIM_PROPOSED_DUP or sim_r >= SIM_MERGE:
+        return ('dup', None)
+    return (None, None)
 
 
 def _suggest_from_regs(sb, issues, dry):
@@ -277,7 +396,7 @@ def _suggest_from_regs(sb, issues, dry):
         title = f'{d["law_name"]} 개정'
         nk = _norm_key(title)
         vec = _embed([title + ' ' + (d.get('summary') or '')[:200]])[0]
-        skip, target = _dedup_target(issues, nk, vec)
+        skip, target = _reg_dedup(issues, nk, vec)
         if target is not None:
             if not dry:
                 sb.table('issue_links').upsert({
@@ -304,7 +423,7 @@ def _suggest_from_regs(sb, issues, dry):
             continue
         nk = _norm_key(b['bill_name'])
         vec = _embed([b['bill_name']])[0]
-        skip, target = _dedup_target(issues, nk, vec)
+        skip, target = _reg_dedup(issues, nk, vec)
         if target is not None:
             if not dry:
                 sb.table('issue_links').upsert({

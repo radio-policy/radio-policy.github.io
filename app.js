@@ -7983,7 +7983,7 @@ function _issueCardHtml(i) {
 }
 
 // ── 이슈 상세 ────────────────────────────────────────────────
-function showIssueDetail(issueId) {
+async function showIssueDetail(issueId) {
   var i = (_issueCache || []).find(function(x) { return String(x.id) === String(issueId); });
   if (!i) return;
   selectedIssueId = i.id;
@@ -7991,6 +7991,19 @@ function showIssueDetail(issueId) {
   var all = (i._links || []).slice().sort(function(a, b) {
     return String(b.item_date || '').localeCompare(String(a.item_date || ''));
   });
+  // 타임라인 대표 선정을 긴급도 우선으로 하기 위한 긴급도 맵(이슈당 1회 조회 후 캐시).
+  // issue_links에는 긴급도가 없다 — title 캐시처럼 복사하지 않은 이유는 수정 시 동기화 부담.
+  if (!i._urgency && sb) {
+    var newsIds = all.filter(function(l) { return l.item_type === 'news'; }).map(function(l) { return l.item_id; });
+    i._urgency = {};
+    try {
+      if (newsIds.length) {
+        var ur = await sb.from('news_feed').select('id,urgency').in('id', newsIds);
+        (ur.data || []).forEach(function(r) { i._urgency[String(r.id)] = r.urgency; });
+      }
+    } catch (e) { /* 긴급도 없이도 렌더는 계속 — 대표 선정만 제목 길이 폴백 */ }
+  }
+  var urgencyOf = function(l) { return (i._urgency && i._urgency[String(l.item_id)]) || ''; };
   // 과거 사례·이해관계자·법령은 '이 이슈에서 일어난 사건'이 아니라 참조 정보다
   // — 연대기(시간축)와 섞지 않고 각자 섹션으로 뺀다.
   var cases = all.filter(function(l) { return l.item_type === 'kb_case'; });
@@ -8067,8 +8080,13 @@ function showIssueDetail(issueId) {
         lastYear = yr;
         h += '<div style="font-size:11px;font-weight:700;color:var(--text-secondary);margin:0 0 8px;padding-top:2px">' + yr + '년</div>';
       }
-      // 대표는 제목이 가장 긴 것 — 요약형 단신보다 내용이 담긴 제목이 뽑힌다
-      var head = g.items.slice().sort(function(a, b) { return (b.title || '').length - (a.title || '').length; })[0];
+      // 대표: 긴급도 우선(긴급>보통>그외) → 제목 길이 — 하루치 보도 중 가장 무게 있는 기사가 경과의 한 줄이 된다
+      var head = g.items.slice().sort(function(a, b) {
+        var ua = urgencyOf(a) === '긴급' ? 2 : (urgencyOf(a) === '보통' ? 1 : 0);
+        var ub = urgencyOf(b) === '긴급' ? 2 : (urgencyOf(b) === '보통' ? 1 : 0);
+        if (ua !== ub) return ub - ua;
+        return (b.title || '').length - (a.title || '').length;
+      })[0];
       var rest = g.items.filter(function(l) { return l.id !== head.id; });
       h += '<div style="margin-bottom:12px">' +
         '<div style="font-size:11px;color:var(--text-tertiary);margin-bottom:2px">' +
