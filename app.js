@@ -8185,13 +8185,24 @@ async function showIssueDetail(issueId) {
   h += _issueCardClose();
 
   // 관련 법령 카드 — 그래프가 아니라 칩. 개정 진행 상황을 배지로 함께 보여준다.
+  // 주제 큐레이션이 있으면 주제의 법령 목록이 '관련 법령'의 정본(운영자 지시 2026-08-27:
+  // "관련된 게 1개가 아니라 3개") — 주제와 겹치는 직접 연결 칩은 숨겨 중복·불일치를 없앤다.
+  // DIFF 링크는 개정 진행 배지가 별도 정보라 항상 칩으로 남긴다.
   var lawLinks = all.filter(function(l) { return l.item_type === 'law' || l.item_type === 'diff'; });
+  var _topicLawNames = {};
+  (i._topicRel || []).forEach(function(tp) { tp.rels.forEach(function(r) { _topicLawNames[r.law] = 1; }); });
+  var chipLinks = lawLinks.filter(function(l) {
+    if (l.item_type === 'diff') return true;
+    var nm = String(l.title || l.item_id).replace(/\s*[(（].*$/, '').trim();
+    return !_topicLawNames[nm];
+  });
+  var hasTopic = (i._topicRel || []).length > 0;
   h += _issueCardOpen(true) + _issueSecTitle('ti-scale', '관련 법령', '');
-  if (!lawLinks.length) {
+  if (!lawLinks.length && !hasTopic) {
     h += '<div style="font-size:12px;color:var(--text-secondary);line-height:1.7">연결된 법령이 없습니다.</div>';
   } else {
-    h += '<div style="display:flex;flex-wrap:wrap;gap:6px">' +
-      lawLinks.map(function(l) {
+    if (chipLinks.length) h += '<div style="display:flex;flex-wrap:wrap;gap:6px">' +
+      chipLinks.map(function(l) {
         var st = _issueLawState(l);
         var name = String(l.title || l.item_id).replace(/\s*\((proposed|pending|promoted)\)\s*$/, '');
         return '<span onclick="openIssueLinkItem(' + l.id + ')" style="font-size:11px;padding:5px 11px;border-radius:12px;cursor:pointer;white-space:nowrap;' +
