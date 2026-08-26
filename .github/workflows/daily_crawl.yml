@@ -39,4 +39,5 @@ jobs:
           RESEND_API_KEY:       ${{ secrets.RESEND_API_KEY }}
           NAVER_CLIENT_ID:      ${{ secrets.NAVER_CLIENT_ID }}
           NAVER_CLIENT_SECRET:  ${{ secrets.NAVER_CLIENT_SECRET }}
+          VOYAGE_API_KEY:       ${{ secrets.VOYAGE_API_KEY }}   # 이슈맵 제안 파이프 임베딩 (2026-08-26)
         run: python crawler.py

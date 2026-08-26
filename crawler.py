@@ -2803,6 +2803,14 @@ def main():
     except Exception as e:
         print(f'[heartbeat 오류] {e}')
 
+    # ── 이슈맵 자동 제안 파이프 (2026-08-26, P4) ──
+    # fail-open 격리: 제안 파이프의 어떤 실패도 크롤러 본연의 수집·통지에 영향을 주면 안 된다.
+    try:
+        from issue_suggest import run_suggest
+        run_suggest(sb)
+    except Exception as e:
+        print(f'[이슈 제안 파이프 실패(무시)] {e}')
+
     print(f'{"="*50}')
     print('[완료]')
 

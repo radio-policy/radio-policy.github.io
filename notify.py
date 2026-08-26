@@ -58,10 +58,13 @@ def split_message(text: str, limit: int = SPLIT_LIMIT) -> list:
 
 
 def send_telegram(text: str, *, chat_id=None, parse_mode=None,
-                  disable_web_page_preview: bool = False) -> bool:
+                  disable_web_page_preview: bool = False,
+                  reply_markup: dict | None = None) -> bool:
     """텔레그램 발송. 전 조각 성공 시 True, 하나라도 실패(또는 env 미설정) 시 False.
 
     예외를 전파하지 않는다 — 알림 실패가 크롤러 본연의 수집을 죽이면 안 된다.
+    reply_markup(인라인 키보드 등, 2026-08-26 이슈맵 승인 버튼용)은 **마지막 조각에만**
+    붙인다 — 분할 발송 시 버튼이 조각마다 복제되면 중복 클릭을 유발한다.
     """
     token = os.getenv('TELEGRAM_BOT_TOKEN', '')
     chat_id = chat_id or os.getenv('TELEGRAM_CHAT_ID', '')
@@ -73,12 +76,15 @@ def send_telegram(text: str, *, chat_id=None, parse_mode=None,
 
     url = f'https://api.telegram.org/bot{token}/sendMessage'
     ok = True
-    for chunk in split_message(text):
+    chunks = split_message(text)
+    for i, chunk in enumerate(chunks):
         payload = {'chat_id': chat_id, 'text': chunk}
         if parse_mode:
             payload['parse_mode'] = parse_mode
         if disable_web_page_preview:
             payload['disable_web_page_preview'] = True
+        if reply_markup and i == len(chunks) - 1:
+            payload['reply_markup'] = reply_markup
 
         sent = False
         for attempt in range(1, MAX_RETRY + 1):

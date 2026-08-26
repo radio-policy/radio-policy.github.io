@@ -68,6 +68,9 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 | importance_feedback | 긴급도 수동 수정 내역(news_id당 1행). 분류 학습 데이터. 영구 |
 | feedback_rules | 피드백 증류 규칙 캐시(단일 행 id=1). 20건↑ 증류, 10건마다 재증류 |
 | daily_briefings(삭제 없음·전량 보관, 목록도 무제한 표시) | 일일 브리핑 원문("⚠️ SKT 영향 분석:" 포함). 긴급도 수정 시 🔴 자동 동기화 |
+| issues | **이슈맵 본체**(#110): state(proposed/active/rejected/archived)·stage(발생/현안/해소)·dormant·stage_log·resolution_kind·norm_key·embedding(voyage-4-lite)·impact_summary/history. 영구 보관, 삭제 없음. RLS: 조회 공개·쓰기 authenticated |
+| issue_links | 이슈-항목 다형 연결(#110): item_type(news/law/bill/diff/press_chunk/minutes/briefing/kb_case/stakeholder)+item_id+title 캐시+item_date. **연결된 news는 자동 locked** — 이슈가 뉴스 보존 기준. unique(issue,type,id) |
+| news_embeddings | 뉴스 임베딩(#110): news_id FK **on delete cascade**(60일 삭제와 자동 연동)+vector(1024) HNSW. RPC match_news_semantic. 백필 스크립트는 후속 |
 | law_amendments | 법령·고시·입법예고. law_type: law/bylaw/rules/admrul/lsAnc. lsAnc는 law_id=`lsAnc_op_{md5}` |
 | assembly_bills | 국회 법안. bill_id(UNIQUE)·법안명·단계·소관위·제안일·링크. **+국회 입법예고**(2026-08-02): notice_end_dt(의견마감 'YYYY-MM-DD')·notice_url(pal 상세)·notice_alert_stage(0미알림/1시작알림/2 D-3알림 — 발송 성공 시에만 갱신) |
 | assembly_speeches | 과방위 발언자별 발언(#67). speaker(정규화명)·speaker_raw·position·meeting_date·confer_num·chunk_seq·agenda·topic·summary(Haiku 요지, 성향 단정어 금지 가드)·source_url. unique(confer_num,speaker,chunk_seq). RLS anon select만. assembly_minutes.py가 document_chunks와 독립 dedupe로 적재 |
@@ -715,6 +718,22 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
   "moved" HTML을 반환 — href 추적 1~2회 필요(sender 번호 하드코딩 금지). ③신구조문대비표 표제의
   가운뎃점은 **U+318D(ㆍ)** — `[·ㆍ.]` 클래스로 매칭할 것. ④위원회 서버 필터로 좁히지 말 것
   (정보통신망법이 정무위 배정 사례 — 전량 수신 후 로컬 판정).
+
+## 이슈맵 (2026-08-26 신설 — 배경역사 #110, 상세는 docs/이슈맵_구현스펙_260826.md)
+
+중요 이슈의 경과·관련 법령·이해관계자·SKT 영향을 한 화면에 모으는 사이드바 메뉴. **이슈가 뉴스 보존의 기준** — 이슈에 연결된 기사는 자동 `locked=true`(60일 삭제 제외). 60일 밖의 과거는 `news-archive-search`(네이버+구글 재수집, Haiku 판정 자동 연결)와 세션 웹 리서치(`issue_case_ingest.py` → doc_category='이슈사례')로 복원한다.
+
+- **단계 3개(발생→현안→해소) + 배지(🔥 7일 기사 수 / 💤 휴면)**. 전환은 자동(현안 신호: 법안·DIFF 연결/제재·처분/침해·장애/소송·판결), **해소만 수동**(사례화 부수효과·결론 해석은 사람 몫). 운영자 개입은 승인/기각·해소 두 번뿐.
+- **자동 제안**: `issue_suggest.py`가 crawler.py 말미에서 매시 실행(fail-open 격리). 뉴스 클러스터(기사≥5&2일 or 긴급≥3&3일) + 무보도 규제(law_diffs high·핵심 입법예고) 2계열. 중복 억제: norm_key / 임베딩 ≥0.80 자동 연결 / rejected 재제안 금지. 1회 상한 5건(초과 이월). 제안·현안 전환·종결 제안은 **운영자봇** 텔레그램(구독자봇 금지).
+- **승인·기각·해소 파이프는 Edge `operator-webhook` 한 벌** — 텔레그램 인라인 버튼(`iss|action|id`)과 대시보드가 같은 함수를 호출한다. 승인 시 과거 뉴스 재수집을 백그라운드 실행, 기각 시 다른 이슈에 안 걸린 기사만 잠금 해제.
+- 이슈·연결·잠금 기사는 **영구 보관, 삭제 기능 없음**(잘못 만든 이슈는 기각/보관). 해소 시 종결유형(resolution_kind) 기록, 휴면 90일이면 "자연 소멸 종결?" 제안.
+
+이슈맵 관련 하지-말-것:
+- **`operator-webhook`은 `--no-verify-jwt`로 배포할 것** — 텔레그램은 Authorization 헤더가 없어 verify_jwt가 켜지면 게이트웨이에서 전부 차단된다(버튼 무반응인데 함수 로그에 아무것도 없으면 이것부터 의심). 관문은 `X-Telegram-Bot-Api-Secret-Token`+chat_id 검증이다.
+- **CORS 허용 목록은 `claude-proxy`·`news-archive-search`·`operator-webhook` 세 함수를 함께 고칠 것** — 한쪽만 고치면 그 주소에서 해당 기능만 조용히 죽는다. GitHub Pages 주소 누락으로 AI 기능 전체가 "Failed to fetch"였던 사고(#110)의 재발 방지. 증상 판별: Edge 로그에 OPTIONS 204만 있고 POST가 없으면 브라우저가 CORS로 본요청을 차단한 것.
+- **document_chunks에 벡터를 일괄 insert하지 말 것** — 4만 행+HNSW에서 12행 일괄도 statement timeout(57014). `issue_case_ingest.py`처럼 3건씩 분할.
+- **news_feed의 `event` 라벨로 사건을 묶지 말 것** — 같은 사건이 유사 라벨 6~7개로 갈라지고(펨토셀 실측), 본문에 스친 주제가 라벨로 붙는다(2분기 실적 기사 수십 건에 "통합요금제 출시" 라벨). 묶음은 `news_dedup.cluster_star`(제목 키워드, 임계 3)로.
+- **이슈 휴면 판정은 `issue_links.created_at`(링크가 추가된 시각) 기준** — `last_activity_at`(콘텐츠 날짜)로 하면 과거 기사를 보강한 당일 이슈가 "N일 무활동"으로 오판된다(실측).
 
 ## 점검 체크리스트 (요약 — 상세 경위는 배경역사 문서)
 

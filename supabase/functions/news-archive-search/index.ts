@@ -145,12 +145,16 @@ Deno.serve(async (req) => {
   if (!token) return errJson(401, '로그인이 필요합니다.', cors);
 
   const sb = createClient(env('SUPABASE_URL'), env('SUPABASE_SERVICE_ROLE_KEY'));
-  const { data: userData } = await sb.auth.getUser(token);
-  const user = userData?.user;
-  if (!user) return errJson(401, '로그인이 필요합니다. 다시 로그인해 주세요.', cors);
-  // profiles의 기본키는 id가 아니라 user_id다 — id로 조회하면 컬럼 없음 오류가 난다
-  const { data: prof } = await sb.from('profiles').select('approved,active').eq('user_id', user.id).maybeSingle();
-  if (!prof?.approved || prof?.active === false) return errJson(403, '승인된 계정만 이용할 수 있습니다.', cors);
+  // 내부 호출(operator-webhook의 승인 파이프)은 service-role 키를 Bearer로 보낸다 —
+  // 이 키는 서버에만 있으므로 사용자 검증을 갈음한다. 그 외에는 로그인+승인 필수.
+  if (token !== env('SUPABASE_SERVICE_ROLE_KEY')) {
+    const { data: userData } = await sb.auth.getUser(token);
+    const user = userData?.user;
+    if (!user) return errJson(401, '로그인이 필요합니다. 다시 로그인해 주세요.', cors);
+    // profiles의 기본키는 id가 아니라 user_id다 — id로 조회하면 컬럼 없음 오류가 난다
+    const { data: prof } = await sb.from('profiles').select('approved,active').eq('user_id', user.id).maybeSingle();
+    if (!prof?.approved || prof?.active === false) return errJson(403, '승인된 계정만 이용할 수 있습니다.', cors);
+  }
 
   let body: Record<string, unknown>;
   try { body = await req.json(); } catch { return errJson(400, '요청 형식이 올바르지 않습니다.', cors); }

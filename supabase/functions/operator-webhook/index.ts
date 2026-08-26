@@ -1,0 +1,200 @@
+// ============================================================================
+//  Supabase Edge Function : operator-webhook  (이슈맵 — 운영자봇 버튼 + 승인 파이프)
+//
+//  두 입구, 한 파이프:
+//   ① 텔레그램 운영자봇 콜백 — issue_suggest.py가 보낸 [승인][기각][해소] 인라인 버튼.
+//      운영자봇은 지금까지 push 전용이었고 이 함수가 첫 웹훅이다(setWebhook 필요).
+//   ② 대시보드 POST {action, issue_id} — admin 로그인 사용자. 같은 파이프를 호출해
+//      텔레그램과 대시보드의 동작이 어긋나지 않게 한다(로직 한 벌 원칙).
+//
+//  검증:
+//   - 텔레그램: X-Telegram-Bot-Api-Secret-Token == OPERATOR_WEBHOOK_SECRET
+//     + callback 발신 chat_id == OPERATOR_CHAT_ID (운영자 1인 전용)
+//     + telegram_updates로 update_id 중복 차단(#83 패턴 재사용)
+//   - 대시보드: Bearer JWT → auth.getUser → profiles(user_id).role='admin' & approved
+//
+//  승인 시 과거 뉴스 자동 보강: news-archive-search를 service-role Bearer로 내부 호출
+//  (fire-and-forget — 보강 실패가 승인 자체를 막으면 안 된다).
+//
+//  Secrets: TELEGRAM_BOT_TOKEN(운영자봇) / OPERATOR_CHAT_ID / OPERATOR_WEBHOOK_SECRET
+//           SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY
+// ============================================================================
+
+import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
+import { createClient } from 'jsr:@supabase/supabase-js@2';
+
+const env = (k: string) => (Deno.env.get(k) || '').trim();
+const BOT = env('TELEGRAM_BOT_TOKEN');
+const TG = `https://api.telegram.org/bot${BOT}`;
+
+const ALLOWED_ORIGINS = [
+  'https://radio-policy.gitlab.io',
+  'https://youjinwoong.github.io',
+  'http://localhost:8000',
+  'http://127.0.0.1:8000',
+];
+
+function corsHeaders(origin: string | null): Record<string, string> {
+  const allow = origin && ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0];
+  return {
+    'Access-Control-Allow-Origin': allow,
+    'Access-Control-Allow-Headers': 'authorization, content-type',
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Vary': 'Origin',
+  };
+}
+
+function json(status: number, body: unknown, cors: Record<string, string>) {
+  return new Response(JSON.stringify(body), {
+    status, headers: { ...cors, 'content-type': 'application/json' },
+  });
+}
+
+/** 승인·기각·해소 파이프 — 텔레그램/대시보드 공용. 반환: 사람용 결과 문구. */
+async function runAction(sb: ReturnType<typeof createClient>, action: string, issueId: number): Promise<string> {
+  const { data: issue } = await sb.from('issues')
+    .select('id,title,state,stage,stage_log,resolution_kind').eq('id', issueId).maybeSingle();
+  if (!issue) return '이슈를 찾지 못했습니다.';
+  const now = new Date().toISOString();
+  const log = (issue.stage_log as unknown[]) || [];
+
+  if (action === 'approve') {
+    if (issue.state === 'active') return `이미 승인된 이슈입니다: ${issue.title}`;
+    if (issue.state !== 'proposed') return `승인할 수 없는 상태(${issue.state})입니다.`;
+    await sb.from('issues').update({
+      state: 'active', last_activity_at: now, updated_at: now,
+    }).eq('id', issueId);
+    // 근거 기사는 제안 시점에 이미 연결·잠금돼 있다. 과거 뉴스 보강만 백그라운드로.
+    const enrich = fetch(`${env('SUPABASE_URL')}/functions/v1/news-archive-search`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${env('SUPABASE_SERVICE_ROLE_KEY')}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ issue_id: issueId }),
+    }).then((r) => r.json()).then((j) =>
+      console.log('[보강]', issueId, JSON.stringify(j).slice(0, 200)),
+    ).catch((e) => console.error('[보강 실패(무시)]', e));
+    EdgeRuntime.waitUntil(enrich);
+    return `✅ 승인됨 — ${issue.title}\n과거 뉴스 보강을 백그라운드로 시작했습니다. 관련 법령 확정은 대시보드에서.`;
+  }
+
+  if (action === 'reject') {
+    if (issue.state === 'rejected') return `이미 기각된 이슈입니다: ${issue.title}`;
+    if (issue.state !== 'proposed') return `기각할 수 없는 상태(${issue.state})입니다.`;
+    // 제안 시 자동 연결·잠금했던 기사 정리: 링크 제거 + 다른 이슈에 안 걸린 기사만 잠금 해제
+    const { data: links } = await sb.from('issue_links').select('item_id')
+      .eq('issue_id', issueId).eq('item_type', 'news');
+    const ids = (links || []).map((l: { item_id: string }) => l.item_id);
+    await sb.from('issue_links').delete().eq('issue_id', issueId);
+    for (const nid of ids) {
+      const { data: still } = await sb.from('issue_links').select('id')
+        .eq('item_type', 'news').eq('item_id', nid).limit(1);
+      if (!still?.length) await sb.from('news_feed').update({ locked: false }).eq('id', nid);
+    }
+    await sb.from('issues').update({ state: 'rejected', updated_at: now }).eq('id', issueId);
+    return `❌ 기각됨 — ${issue.title}\n같은 주제는 다시 제안되지 않습니다.`;
+  }
+
+  if (action === 'resolve') {
+    if (issue.stage === '해소') return `이미 해소된 이슈입니다: ${issue.title}`;
+    await sb.from('issues').update({
+      stage: '해소', resolution_kind: issue.resolution_kind || '자연 소멸', dormant: false,
+      stage_log: [...log, { at: now, from: issue.stage, to: '해소', signal: '운영자 종결(자연 소멸)' }],
+      updated_at: now,
+    }).eq('id', issueId);
+    return `🕊️ 해소 처리됨 — ${issue.title} (자연 소멸)\n사례 아카이브 적재는 세션에서 "이슈 ${issueId} 사례화해줘"로 요청하세요.`;
+  }
+
+  if (action === 'keep') {
+    return `유지합니다 — ${issue.title} (30일 뒤 다시 확인)`;
+  }
+  return `알 수 없는 동작: ${action}`;
+}
+
+Deno.serve(async (req) => {
+  const cors = corsHeaders(req.headers.get('origin'));
+  if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors });
+  if (req.method !== 'POST') return json(405, { error: { message: 'POST만 허용' } }, cors);
+
+  const sb = createClient(env('SUPABASE_URL'), env('SUPABASE_SERVICE_ROLE_KEY'));
+  const tgSecret = req.headers.get('x-telegram-bot-api-secret-token');
+
+  // ── 입구 ①: 텔레그램 콜백 ──
+  if (tgSecret) {
+    if (tgSecret !== env('OPERATOR_WEBHOOK_SECRET')) return json(403, { ok: false }, cors);
+    const update = await req.json().catch(() => null);
+    if (!update) return json(200, { ok: true }, cors);   // 텔레그램에는 항상 200 (재전송 폭주 방지)
+
+    // update_id 중복 차단 — 재전송된 같은 update는 무시 (#83 패턴)
+    const uid = Number(update.update_id || 0);
+    if (uid) {
+      const { error: dupErr } = await sb.from('telegram_updates').insert({ update_id: uid });
+      if (dupErr) return json(200, { ok: true, dup: true }, cors);
+    }
+
+    const cb = update.callback_query;
+    if (!cb) return json(200, { ok: true }, cors);       // 명령 등은 처리하지 않는 봇 — 버튼 전용
+    const chatId = String(cb.message?.chat?.id ?? '');
+    const answer = (text: string) =>
+      fetch(`${TG}/answerCallbackQuery`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ callback_query_id: cb.id, text: text.slice(0, 190) }),
+      }).catch(() => {});
+
+    if (chatId !== env('OPERATOR_CHAT_ID')) {
+      await answer('권한이 없습니다.');
+      return json(200, { ok: true }, cors);
+    }
+    const m = String(cb.data || '').match(/^iss\|(approve|reject|resolve|keep)\|(\d+)$/);
+    if (!m) { await answer('알 수 없는 버튼입니다.'); return json(200, { ok: true }, cors); }
+
+    let result = '';
+    try {
+      result = await runAction(sb, m[1], Number(m[2]));
+    } catch (e) {
+      console.error('[액션 실패]', e);
+      result = '처리 중 오류가 발생했습니다 — 대시보드에서 시도해 주세요.';
+    }
+    await answer(result.split('\n')[0]);
+    // 원 메시지를 결과로 갱신 — 버튼 제거(중복 클릭 방지)
+    if (cb.message?.message_id && m[1] !== 'keep') {
+      const orig = String(cb.message.text || '');
+      await fetch(`${TG}/editMessageText`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: chatId, message_id: cb.message.message_id,
+          text: `${orig}\n\n— ${result}`,
+        }),
+      }).catch(() => {});
+    }
+    return json(200, { ok: true }, cors);
+  }
+
+  // ── 입구 ②: 대시보드 (admin JWT) ──
+  const auth = req.headers.get('authorization') || '';
+  const token = auth.toLowerCase().startsWith('bearer ') ? auth.slice(7).trim() : '';
+  if (!token) return json(401, { error: { message: '로그인이 필요합니다.' } }, cors);
+  const { data: userData } = await sb.auth.getUser(token);
+  const user = userData?.user;
+  if (!user) return json(401, { error: { message: '로그인이 필요합니다.' } }, cors);
+  const { data: prof } = await sb.from('profiles').select('role,approved,active')
+    .eq('user_id', user.id).maybeSingle();
+  if (prof?.role !== 'admin' || !prof?.approved || prof?.active === false) {
+    return json(403, { error: { message: '관리자만 처리할 수 있습니다.' } }, cors);
+  }
+
+  const body = await req.json().catch(() => null);
+  const action = String(body?.action || '');
+  const issueId = Number(body?.issue_id || 0);
+  if (!['approve', 'reject', 'resolve', 'keep'].includes(action) || !issueId) {
+    return json(400, { error: { message: 'action/issue_id가 올바르지 않습니다.' } }, cors);
+  }
+  try {
+    const result = await runAction(sb, action, issueId);
+    return json(200, { ok: true, result }, cors);
+  } catch (e) {
+    console.error('[액션 실패]', e);
+    return json(500, { error: { message: '처리 중 오류가 발생했습니다.' } }, cors);
+  }
+});

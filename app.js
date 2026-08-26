@@ -8179,20 +8179,26 @@ async function setIssueStage(issueId, stage) {
   }
 }
 
-// 제안 승인/기각 — P4에서 서버측 승인 파이프(기사 일괄 연결·과거 뉴스 보강)로 확장 예정
+// 제안 승인/기각/해소 — 서버측 파이프(operator-webhook) 호출. 텔레그램 버튼과 같은 로직
+// 한 벌을 쓰므로 두 경로의 동작이 어긋나지 않는다. 승인 시 과거 뉴스 보강도 서버가 수행.
 async function decideIssue(issueId, action) {
   if (!sb || !isAdminUser()) return;
-  var i = (_issueCache || []).find(function(x) { return String(x.id) === String(issueId); });
-  if (!i) return;
   if (action === 'reject' && !confirm('이 제안을 기각합니다. (같은 이슈가 다시 제안되지 않습니다)')) return;
   try {
-    var patch = action === 'approve'
-      ? { state:'active', last_activity_at:new Date().toISOString(), updated_at:new Date().toISOString() }
-      : { state:'rejected', updated_at:new Date().toISOString() };
-    var r = await sb.from('issues').update(patch).eq('id', issueId);
-    if (r.error) throw r.error;
-    Object.assign(i, patch);
-    renderIssueMapList();
+    var s = await sb.auth.getSession();
+    var session = s.data && s.data.session;
+    if (!session) throw new Error('로그인이 필요합니다.');
+    var base = (getConfig().sbUrl || DEFAULT_SB_URL).replace(/\/+$/, '');
+    var res = await fetch(base + '/functions/v1/operator-webhook', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + session.access_token, 'content-type': 'application/json' },
+      body: JSON.stringify({ action: action, issue_id: issueId })
+    });
+    var data = await res.json();
+    if (data.error) throw new Error(data.error.message || '처리 실패');
+    _issueCache = null;
+    await loadIssueMap(true);
+    if (data.result) alert(data.result);
   } catch (e) {
     alert('처리 실패: ' + ((e && e.message) || e));
   }
