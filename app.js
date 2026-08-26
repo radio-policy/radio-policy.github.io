@@ -8031,7 +8031,14 @@ function showIssueDetail(issueId) {
   h += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px;margin-bottom:12px">';
 
   // 연대기 타임라인 카드
-  h += _issueCardOpen(true) + _issueSecTitle('ti-timeline', '연대기 타임라인', '');
+  h += _issueCardOpen(true) +
+    '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">' +
+      '<span style="font-size:13px;font-weight:600;color:var(--text-primary)"><i class="ti ti-timeline"></i> 연대기 타임라인</span>' +
+      (currentProfile ? '<button class="btn" id="issue-archive-btn" onclick="enrichIssueArchive(' + i.id + ')" ' +
+        'title="네이버·구글에서 60일 이전 기사를 다시 찾아 이슈에 붙입니다" ' +
+        'style="margin-left:auto;font-size:11px;padding:3px 11px"><i class="ti ti-history-toggle"></i> 과거 뉴스 보강</button>' : '') +
+    '</div>' +
+    '<div id="issue-archive-result"></div>';
   if (!links.length) {
     h += '<div style="font-size:12px;color:var(--text-secondary);padding:14px;background:var(--bg-secondary);border-radius:var(--radius-md);line-height:1.7">' +
       '아직 연결된 항목이 없습니다. 뉴스 상세 화면의 <b>이슈에 연결</b> 버튼으로 기사를 붙이면 여기에 시간순으로 쌓입니다.</div>';
@@ -8310,6 +8317,47 @@ async function openIssueLinkItem(linkId) {
       body +
     _issueCardClose();
   el.scrollTop = 0;
+}
+
+// ── 과거 뉴스 외부 재수집 ────────────────────────────────────
+// news_feed는 60일 롤링이라 그 이전 보도가 없다. 네이버·구글에서 다시 찾아 붙인다.
+// 연결 여부는 서버(Haiku)가 판정하고, 여기서는 결과와 '제외 N건'을 보여줘 감사할 수 있게 한다.
+async function enrichIssueArchive(issueId) {
+  if (!sb) return;
+  var btn = document.getElementById('issue-archive-btn');
+  var box = document.getElementById('issue-archive-result');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader"></i> 검색 중...'; }
+  if (box) box.innerHTML = '<div style="font-size:11px;color:var(--text-secondary);padding:8px 0">네이버·구글에서 과거 기사를 찾는 중입니다...</div>';
+  try {
+    var s = await sb.auth.getSession();
+    var session = s.data && s.data.session;
+    if (!session) throw new Error('로그인이 필요합니다.');
+    var base = (getConfig().sbUrl || DEFAULT_SB_URL).replace(/\/+$/, '');
+    var res = await fetch(base + '/functions/v1/news-archive-search', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + session.access_token, 'content-type': 'application/json' },
+      body: JSON.stringify({ issue_id: issueId })
+    });
+    var data = await res.json();
+    if (data.error) throw new Error(data.error.message || '보강 실패');
+    var n = (data.linked || []).length;
+    if (box) {
+      box.innerHTML = '<div style="font-size:11px;color:' + (n ? 'var(--text-secondary)' : 'var(--text-tertiary)') + ';padding:8px 10px;background:var(--bg-secondary);border-radius:var(--radius-md);margin-bottom:10px;line-height:1.7">' +
+        (n ? '과거 기사 <b>' + n + '건</b>을 연결했습니다(잠금 보관).' : '새로 붙일 과거 기사를 찾지 못했습니다.') +
+        ' <span style="color:var(--text-tertiary)">후보 ' + (data.candidates || 0) + '건 검토 · 제외 ' + ((data.excluded || []).length) + '건</span>' +
+        ((data.excluded || []).length
+          ? '<details style="margin-top:4px"><summary style="font-size:11px;color:var(--text-tertiary);cursor:pointer">제외된 기사 보기</summary>' +
+            data.excluded.map(function(e) {
+              return '<div style="font-size:11px;color:var(--text-tertiary);margin-top:3px">· ' + escHtml(e.title) + (e.date ? ' (' + escHtml(e.date) + ')' : '') + '</div>';
+            }).join('') + '</details>'
+          : '') + '</div>';
+    }
+    if (n) { _issueCache = null; await loadIssueMap(true); showIssueDetail(issueId); }
+  } catch (e) {
+    if (box) box.innerHTML = '<div style="font-size:11px;color:#d04545;padding:8px 0">보강 실패: ' + escHtml((e && e.message) || String(e)) + '</div>';
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="ti ti-history-toggle"></i> 과거 뉴스 보강'; }
+  }
 }
 
 // 관계도의 묶음 노드(뉴스 N건 등) 클릭 — 해당 종류만 모아 보여준다
