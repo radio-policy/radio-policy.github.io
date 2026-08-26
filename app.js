@@ -8173,7 +8173,7 @@ async function showIssueDetail(issueId) {
 
 
   var el = document.getElementById('issuemap-body');
-  if (el) { el.innerHTML = h; el.scrollTop = 0; }
+  if (el) { el.innerHTML = h; _issueScrollTop(el); }
 }
 
 async function setIssueStage(issueId, stage) {
@@ -8368,7 +8368,7 @@ async function openIssueLinkItem(linkId) {
       '<div style="font-size:11px;color:var(--text-tertiary);margin-bottom:8px"><i class="ti ' + t.icon + '"></i> ' + escHtml(t.label) + '</div>' +
       body +
     _issueCardClose();
-  el.scrollTop = 0;
+  _issueScrollTop(el);
 }
 
 // ── 과거 뉴스 외부 재수집 ────────────────────────────────────
@@ -8430,10 +8430,20 @@ function showIssueTypeList(issueId, type) {
           '<div style="font-size:12px;color:var(--text-primary);line-height:1.6">' + escHtml(l.title || l.item_id) + '</div></div>';
       }).join('') +
     _issueCardClose();
-  el.scrollTop = 0;
+  _issueScrollTop(el);
 }
 
 // ── 상세 화면 카드 셸 ───────────────────────────────────────
+// 화면 전환 시 맨 위로 — 실제 스크롤러는 .content(overflow-y:auto)다.
+// #issuemap-body는 스크롤 컨테이너가 아니라서 el.scrollTop=0은 아무 일도 하지 않았다
+// (목록을 내려 보다 카드를 클릭하면 상세가 중간부터 보이는 버그, 2026-08-26).
+function _issueScrollTop(el) {
+  if (el) el.scrollTop = 0;
+  var c = el && el.closest ? el.closest('.content') : null;
+  if (c) c.scrollTop = 0;
+  window.scrollTo(0, 0);
+}
+
 function _issueCardOpen(inGrid) {
   // 그리드 칸 안에서는 카드가 칸 높이를 채우고, 바깥 여백은 그리드 gap이 담당한다
   return '<div style="background:var(--bg-primary);border:1px solid var(--border);border-radius:12px;padding:14px 16px;' +
@@ -8681,7 +8691,7 @@ async function openIssueCase(docName) {
         '<div class="md-body" style="font-size:12px;color:var(--text-primary);line-height:1.85;word-break:break-word">' +
           renderMd(md) + '</div>' +
       _issueCardClose();
-    el.scrollTop = 0;
+    _issueScrollTop(el);
   } catch (e) {
     alert('사례 열람 실패: ' + ((e && e.message) || e));
   }
