@@ -7816,14 +7816,15 @@ var ISSUE_STAGES = {
   '해소': { color:'#10b981', bg:'rgba(16,185,129,0.10)',  label:'해소' }
 };
 var ISSUE_CATEGORIES = ['주파수', '규제·CR', '사업·서비스', '보안·개인정보', '기타'];
+// 라벨은 출처를 명시한다 — '뉴스'와 '보도자료'만으로는 언론 보도인지 정부 발표인지 구분되지 않는다
 var ISSUE_ITEM_TYPES = {
-  news:        { icon:'ti-news',            label:'뉴스' },
+  news:        { icon:'ti-news',            label:'언론기사' },
   law:         { icon:'ti-scale',           label:'법령' },
   bill:        { icon:'ti-building-bank',   label:'법안' },
   diff:        { icon:'ti-file-diff',       label:'조문 DIFF' },
-  press_chunk: { icon:'ti-speakerphone',    label:'보도자료' },
-  minutes:     { icon:'ti-microphone',      label:'회의록' },
-  briefing:    { icon:'ti-mail',            label:'브리핑' },
+  press_chunk: { icon:'ti-speakerphone',    label:'정부 보도자료' },
+  minutes:     { icon:'ti-microphone',      label:'국회 회의록' },
+  briefing:    { icon:'ti-mail',            label:'내부 브리핑' },
   kb_case:     { icon:'ti-history',         label:'과거사례' },
   stakeholder: { icon:'ti-users',           label:'이해관계자' }
 };
