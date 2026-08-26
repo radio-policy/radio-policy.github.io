@@ -8004,6 +8004,42 @@ async function showIssueDetail(issueId) {
     } catch (e) { /* 긴급도 없이도 렌더는 계속 — 대표 선정만 제목 길이 폴백 */ }
   }
   var urgencyOf = function(l) { return (i._urgency && i._urgency[String(l.item_id)]) || ''; };
+
+  // 관련 법령의 하위법령(시행령·시행규칙·고시) — 법령 관계도의 위임 엣지에서 파생(운영자 지시 2026-08-26:
+  // "이슈에 법만 넣어도 관련 법령에는 시행령도 보여야"). 이슈당 1회 조회 후 캐시.
+  // law_graph는 매일 17시 재구축되는 산출물이라 읽기만 한다.
+  if (!i._sublaws && sb) {
+    i._sublaws = {};
+    try {
+      var lawNames = all.filter(function(l) { return l.item_type === 'law'; })
+        .map(function(l) { return String(l.title || '').replace(/\s*[(（].*$/, '').trim(); })
+        .filter(function(v, k, arr) { return v && arr.indexOf(v) === k; });
+      if (lawNames.length) {
+        var nres = await sb.from('law_graph_nodes').select('id,name').in('name', lawNames);
+        var idOf = {};
+        (nres.data || []).forEach(function(n) { idOf[n.id] = n.name; });
+        var ids = Object.keys(idOf);
+        if (ids.length) {
+          var eres = await sb.from('law_graph_edges').select('source_id,target_id')
+            .in('source_id', ids).eq('relation_type', '하위법령');
+          var tids = (eres.data || []).map(function(e) { return e.target_id; });
+          if (tids.length) {
+            var tres = await sb.from('law_graph_nodes').select('id,name,node_type').in('id', tids);
+            var tmap = {};
+            (tres.data || []).forEach(function(n) { tmap[n.id] = n; });
+            (eres.data || []).forEach(function(e) {
+              var parent = idOf[e.source_id], child = tmap[e.target_id];
+              if (!parent || !child) return;
+              var s = i._sublaws[parent] = i._sublaws[parent] || { decree: [], rules: [], noticeCount: 0 };
+              if (child.node_type === 'decree') s.decree.push(child.name);
+              else if (child.node_type === 'rules') s.rules.push(child.name);
+              else s.noticeCount++;   // 고시·행정규칙은 수십 개라 칩 대신 건수+관계도 링크
+            });
+          }
+        }
+      }
+    } catch (e) { /* 파생 조회 실패 시 기본 칩만 렌더 */ }
+  }
   // 과거 사례·이해관계자·법령은 '이 이슈에서 일어난 사건'이 아니라 참조 정보다
   // — 연대기(시간축)와 섞지 않고 각자 섹션으로 뺀다.
   var cases = all.filter(function(l) { return l.item_type === 'kb_case'; });
@@ -8128,6 +8164,23 @@ async function showIssueDetail(issueId) {
           'background:' + st.bg + ';color:' + st.color + '">' + (st.badge ? '<i class="ti ti-alert-triangle"></i> ' : '') + escHtml(name) +
           (st.badge ? ' · ' + escHtml(st.badge) : '') + '</span>';
       }).join('') + '</div>';
+
+    // 하위법령 파생 표시 — 법률만 연결해도 시행령·시행규칙이 딸려 보인다(법령 관계도 위임 엣지 재사용).
+    // 고시·행정규칙은 법률당 수십 개라 칩 대신 건수만 — 전부 보려면 법령 관계도로.
+    Object.keys(i._sublaws || {}).forEach(function(parent) {
+      var s = i._sublaws[parent];
+      var subs = (s.decree || []).concat(s.rules || []);
+      if (!subs.length && !s.noticeCount) return;
+      h += '<div style="margin-top:8px;padding-left:10px;border-left:2px solid var(--border);font-size:11px;color:var(--text-tertiary)">' +
+        escHtml(parent) + '의 하위법령 · ' +
+        subs.slice(0, 4).map(function(nm) {
+          return '<span data-law="' + escHtml(nm) + '" onclick="openLawByName(this.getAttribute(\'data-law\'))" ' +
+            'style="color:#16807f;background:rgba(31,158,158,0.12);padding:2px 9px;border-radius:10px;cursor:pointer;white-space:nowrap;display:inline-block;margin:2px 3px 0 0">' +
+            escHtml(nm) + '</span>';
+        }).join('') +
+        (s.noticeCount ? ' <span onclick="go(\'lawmap\',null)" style="cursor:pointer;text-decoration:underline">고시·행정규칙 ' + s.noticeCount + '건 — 법령 관계도에서</span>' : '') +
+      '</div>';
+    });
   }
   h += _issueCardClose();
   h += '</div>';   // 2열 그리드 닫기
@@ -8335,14 +8388,7 @@ async function openIssueLinkItem(linkId) {
       var kb = await sb.from('kb_documents').select('title,law_type,law_number,enforcement_date,competent_authority,description,body_md')
         .eq('dedup_key', link.item_id).maybeSingle();
       var kd = kb && kb.data;
-      body = kd
-        ? '<div style="font-size:11px;color:var(--text-tertiary);margin-bottom:6px">' + escHtml(kd.law_type || '') +
-            (kd.law_number ? ' · ' + escHtml(kd.law_number) : '') +
-            (kd.enforcement_date ? ' · 시행 ' + escHtml(kd.enforcement_date) : '') +
-            (kd.competent_authority ? ' · ' + escHtml(kd.competent_authority) : '') + '</div>' +
-          '<div style="font-size:15px;font-weight:700;line-height:1.5;margin-bottom:10px">' + escHtml(kd.title) + '</div>' +
-          (kd.description ? '<div style="font-size:12px;color:var(--text-secondary);line-height:1.7;margin-bottom:10px">' + escHtml(kd.description) + '</div>' : '') +
-          (kd.body_md ? '<div class="md-body" style="font-size:12px;color:var(--text-primary);line-height:1.85;word-break:break-word">' + renderMd(kd.body_md) + '</div>' : '')
+      body = kd ? _renderKbLawBody(kd)
         : '<div style="font-size:12px;color:var(--text-secondary)">법령 요약을 찾지 못했습니다 — 지식베이스 탭에서 검색해 보세요.</div>';
     } else if (link.item_type === 'bill') {
       var b = await sb.from('assembly_bills').select('bill_name,proposer,committee,proc_result,propose_dt,summary,link_url')
@@ -8409,6 +8455,40 @@ async function enrichIssueArchive(issueId) {
     if (box) box.innerHTML = '<div style="font-size:11px;color:#d04545;padding:8px 0">보강 실패: ' + escHtml((e && e.message) || String(e)) + '</div>';
   } finally {
     if (btn) { btn.disabled = false; btn.innerHTML = '<i class="ti ti-history-toggle"></i> 과거 뉴스 보강'; }
+  }
+}
+
+// KB 법령 요약 렌더 — openIssueLinkItem(law)과 openLawByName(하위법령 파생 칩)이 공유
+function _renderKbLawBody(kd) {
+  return '<div style="font-size:11px;color:var(--text-tertiary);margin-bottom:6px">' + escHtml(kd.law_type || '') +
+      (kd.law_number ? ' · ' + escHtml(kd.law_number) : '') +
+      (kd.enforcement_date ? ' · 시행 ' + escHtml(kd.enforcement_date) : '') +
+      (kd.competent_authority ? ' · ' + escHtml(kd.competent_authority) : '') + '</div>' +
+    '<div style="font-size:15px;font-weight:700;line-height:1.5;margin-bottom:10px">' + escHtml(kd.title) + '</div>' +
+    (kd.description ? '<div style="font-size:12px;color:var(--text-secondary);line-height:1.7;margin-bottom:10px">' + escHtml(kd.description) + '</div>' : '') +
+    (kd.body_md ? '<div class="md-body" style="font-size:12px;color:var(--text-primary);line-height:1.85;word-break:break-word">' + renderMd(kd.body_md) + '</div>' : '');
+}
+
+// 하위법령 파생 칩 클릭 — 이름으로 KB 요약을 찾아 이슈맵 안에서 연다. 없으면 법령 관계도로.
+async function openLawByName(name) {
+  if (!sb || !name) return;
+  var el = document.getElementById('issuemap-body');
+  if (!el) return;
+  el.innerHTML = _issueBackBar() + '<div style="color:var(--text-secondary);font-size:12px;padding:20px">불러오는 중...</div>';
+  try {
+    var r = await sb.from('kb_documents')
+      .select('title,law_type,law_number,enforcement_date,competent_authority,description,body_md')
+      .eq('status', 'current').ilike('title', name + '%').limit(1);
+    var kd = r.data && r.data[0];
+    el.innerHTML = _issueBackBar() + _issueCardOpen() +
+      '<div style="font-size:11px;color:var(--text-tertiary);margin-bottom:8px"><i class="ti ti-scale"></i> 하위법령</div>' +
+      (kd ? _renderKbLawBody(kd)
+          : '<div style="font-size:12px;color:var(--text-secondary);line-height:1.8">' + escHtml(name) + ' — KB 요약이 아직 없습니다. ' +
+            '<span onclick="go(\'lawmap\',null)" style="color:var(--accent);cursor:pointer;text-decoration:underline">법령 관계도에서 보기</span></div>') +
+      _issueCardClose();
+    _issueScrollTop(el);
+  } catch (e) {
+    el.innerHTML = _issueBackBar() + '<div style="font-size:12px;color:#d04545;padding:20px">불러오기 실패: ' + escHtml((e && e.message) || String(e)) + '</div>';
   }
 }
 
