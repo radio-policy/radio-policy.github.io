@@ -25,6 +25,7 @@ import json
 import os
 import re
 import sys
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 
 try:
@@ -192,6 +193,16 @@ def _propose(sb, issues, title, definition, category, norm_key, reason, dry,
                 and _cosine(vec, i['embedding']) >= SIM_PROPOSED_DUP:
             print(f'[제안 중복 — 건너뜀] {title}  (≈ [{i["id"]}] {i["title"][:20]})')
             return False
+    # 생성 제목 재검사 — 매칭은 지저분한 클러스터 대표 제목으로 하지만, 여기서 만든 제목·정의는
+    # 깨끗해서 유사도가 제대로 나온다(실측: 제안 25가 대표 기준으론 경계, 생성 기준 0.887).
+    # 병합선을 넘으면 제안 대신 그 이슈로 연결한다.
+    for i in issues:
+        if i['state'] == 'active' and i.get('embedding') \
+                and _cosine(vec, i['embedding']) >= SIM_MERGE:
+            print(f'[제안→병합 재검사] "{title}" ≈ active [{i["id"]}] {i["title"][:20]} — 제안 대신 연결')
+            if not dry and news_rows:
+                _link_news(sb, i['id'], news_rows, added_by='auto')
+            return False
     _proposed_this_run += 1
     print(f'[제안] {title}  ({reason.get("kind")}, stage_hint={stage_hint})')
     if dry:
@@ -319,13 +330,39 @@ def _suggest_from_news(sb, issues, dry):
 
     borderline = []   # (cluster_idx, rep_title, candidate_issue) — Haiku 관련 판정 대기
     to_propose = []   # (cluster_idx, nk) — 발제 기준 통과 & 어디에도 안 붙은 클러스터
-    already = {str(r['item_id']) for r in (sb.table('issue_links').select('item_id')
-               .eq('item_type', 'news').execute().data or [])}
+    # 기사→연결 이슈 지도. PostgREST 1,000행 절단 대비 페이징(가드레일 — 링크가 이미 700행대).
+    linked_to = {}
+    _ofs = 0
+    while True:
+        _page = (sb.table('issue_links').select('item_id,issue_id').eq('item_type', 'news')
+                 .order('id').range(_ofs, _ofs + 999).execute().data or [])
+        for r in _page:
+            linked_to.setdefault(str(r['item_id']), set()).add(r['issue_id'])
+        if len(_page) < 1000:
+            break
+        _ofs += 1000
+    already = set(linked_to)
+    active_ids = {i['id'] for i in issues if i['state'] == 'active'}
 
     for ci, group in enumerate(groups):
         # 전부 이미 연결된 클러스터는 볼 것 없음 (매시 재스캔의 공회전 방지)
         if all(str(r['id']) in already for r in group):
             continue
+        # 과반 겹침 가드 — 멤버 과반이 이미 같은 active 이슈에 연결돼 있으면 그 이슈의
+        # 후속 흐름이다. 임베딩(짧은 제목이라 0.6대로 낮게 나옴)·AI 판정보다 앞서는 결정적
+        # 신호라 제안 경로를 원천 차단하고 미연결분만 그 이슈로 붙인다.
+        # (무임승차 거품 하루 4건 실측: 제안 25·29·32·33, 2026-08-27)
+        _cnt = Counter(iid for r in group for iid in linked_to.get(str(r['id']), ()) if iid in active_ids)
+        if _cnt:
+            _top_iss, _top_n = _cnt.most_common(1)[0]
+            # 겹침 최소 2건 — 2건짜리 클러스터의 1건 겹침(1/2)까지 무판정 연결하면 과확장
+            if _top_n >= 2 and _top_n * 2 >= len(group):
+                _fresh = [r for r in group if _top_iss not in linked_to.get(str(r['id']), ())]
+                if _fresh and not dry:
+                    _link_news(sb, _top_iss, _fresh)
+                print(f'[연결·과반겹침] "{group[0]["title"][:28]}" → [{_top_iss}] '
+                      f'(겹침 {_top_n}/{len(group)}, 신규 {len(_fresh)}건)')
+                continue
         nk = _norm_key(group[0]['title'])
         nk_state, best_active, sim_a, sim_p, sim_r = _match_states(issues, nk, vecs[ci])
 
