@@ -291,12 +291,23 @@ def _haiku_relate_batch(pairs, groups):
         return set()
 
 
+# 주간 모음·브리핑류 기사 — 통신 3사 이름이 늘 나열돼 회사명만으로 클러스터 임계(3)를
+# 충족하는 오염원. 실측: "[위클리오늘] 이동통신 소식_LG유플러스, SK텔레콤, KT"가 별이 되어
+# 진짜 3G 기사를 끌어들인 채 "3G 종료" 중복 제안을 만들었다(이슈 29, 2026-08-27).
+# 이슈 제안 입력에서만 제외 — 뉴스 목록·브리핑에는 그대로 남는다.
+_DIGEST_RE = re.compile(r'위클리|주간\s*브리핑|\[통신 브리핑\]|소식_|뉴스\s*모음')
+
+def _is_digest(title):
+    return bool(_DIGEST_RE.search(title or ''))
+
+
 def _suggest_from_news(sb, issues, dry):
     since = _iso(_now() - timedelta(days=7))
     rows = sb.table('news_feed') \
         .select('id,title,published_at,urgency') \
         .gte('published_at', since).in_('urgency', ['긴급', '보통']) \
         .order('published_at', desc=True).limit(1000).execute().data or []
+    rows = [r for r in rows if not _is_digest(r.get('title'))]
     if not rows:
         return
     clusters = cluster_star(rows)   # 임계 3 유지 — 3→2 금지 가드레일(#44)
