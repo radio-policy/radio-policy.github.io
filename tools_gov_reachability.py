@@ -54,7 +54,8 @@ TARGETS = [
 ]
 
 
-def probe(name: str, url: str, selector: str) -> bool:
+def probe(name: str, url: str, selector: str):
+    """(성공여부, 실패사유) 반환. 실패사유는 Actions 주석에 실어 원격에서 읽는다."""
     try:
         if IMPERSONATE:
             res = requests.get(url, impersonate='chrome110', timeout=25)
@@ -67,12 +68,15 @@ def probe(name: str, url: str, selector: str) -> bool:
         else:
             rows = len(BeautifulSoup(res.text, 'html.parser').select(selector))
         ok = res.status_code == 200 and rows > 0
-        print('  %-22s HTTP %-3s  행 %-4d  %s'
-              % (name, res.status_code, rows, 'OK' if ok else '의심 — 차단 또는 구조 변경'))
-        return ok
+        print('  %-22s HTTP %-3s  본문 %-7d 행 %-4d  %s'
+              % (name, res.status_code, len(res.text), rows,
+                 'OK' if ok else '의심 — 차단 또는 구조 변경'))
+        if ok:
+            return True, ''
+        return False, 'HTTP %s/본문%dB/행%d' % (res.status_code, len(res.text), rows)
     except Exception as e:
         print('  %-22s 실패: %s' % (name, str(e)[:90]))
-        return False
+        return False, type(e).__name__
 
 
 def main() -> int:
@@ -88,10 +92,11 @@ def main() -> int:
         # 사이에 time.sleep(1)을 둔다(gov_notice_crawler.py:904).
         if i:
             time.sleep(1)
-        results.append((t[0], probe(*t)))
-    ok_n = sum(1 for _, ok in results if ok)
+        ok, why = probe(*t)
+        results.append((t[0], ok, why))
+    ok_n = sum(1 for _, ok, _w in results if ok)
     total = len(results)
-    failed = [name for name, ok in results if not ok]
+    failed = ['%s(%s)' % (name, why) for name, ok, why in results if not ok]
 
     print('=' * 62)
     print('결과: %d/%d 정상' % (ok_n, total))
