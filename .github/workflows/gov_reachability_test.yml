@@ -1,0 +1,27 @@
+name: 정부 사이트 접속 진단 (수동 전용)
+
+# 목적: GitHub Actions의 데이터센터 IP에서 정부·기관 사이트에 닿는지 확인.
+# gov_notice_crawler.py를 Actions로 옮길 수 있는지 판단하는 근거를 만든다.
+# 읽기 전용(GET만) — DB·알림·시크릿을 쓰지 않으므로 몇 번을 돌려도 부작용이 없다.
+# schedule 없음: workflow_dispatch로만 실행.
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install curl_cffi beautifulsoup4
+
+      - name: Probe government sites
+        run: python tools_gov_reachability.py
