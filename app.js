@@ -5104,6 +5104,10 @@ function _lawDiffKindBadge(kind, origin) {
       return '<span style="font-size:10px;background:rgba(239,68,68,.12);color:#dc2626;padding:1px 7px;border-radius:4px;white-space:nowrap;font-weight:700">의견제출 가능 · 국회</span>';
     return '<span style="font-size:10px;background:rgba(239,68,68,.12);color:#dc2626;padding:1px 7px;border-radius:4px;white-space:nowrap;font-weight:700">입법예고 · 의견제출 가능</span>';
   }
+  // 'replaced'(2026-09-01) = 개정 감지분 자동 교체. 이미 KB의 현행 조문이 바뀐 뒤라
+  // 사후 확인용이며, 'promoted'(예정본이 시행됨)와 구분해 보여준다.
+  if (kind === 'replaced')
+    return '<span style="font-size:10px;background:rgba(245,158,11,.15);color:#b45309;padding:1px 7px;border-radius:4px;white-space:nowrap">현행화 교체</span>';
   return kind === 'promoted'
     ? '<span style="font-size:10px;background:rgba(34,197,94,.12);color:#16a34a;padding:1px 7px;border-radius:4px;white-space:nowrap">개정 시행</span>'
     : '<span style="font-size:10px;background:rgba(59,130,246,.12);color:#2563eb;padding:1px 7px;border-radius:4px;white-space:nowrap">시행예정 개정</span>';
@@ -5152,7 +5156,8 @@ async function loadLawDiffs(force) {
   }
   // 단계 우선 정렬 (운영자 지시): 입법예고(의견제출로 개입 가능 — 유일한 대응 구간) →
   // 시행예정(공포됨·준비) → 시행 완료(확정·후속만). 그 안에서 관련도 → 최신순.
-  var KIND_ORDER = { proposed: 0, pending: 1, promoted: 2 };
+  // replaced(현행화 교체)는 이미 반영된 변경이라 promoted 다음 — 의견제출 가능분이 항상 위
+  var KIND_ORDER = { proposed: 0, pending: 1, promoted: 2, replaced: 3 };
   rows = rows.slice().sort(function(x, y) {
     var k = (KIND_ORDER[x.diff_kind] !== undefined ? KIND_ORDER[x.diff_kind] : 9)
           - (KIND_ORDER[y.diff_kind] !== undefined ? KIND_ORDER[y.diff_kind] : 9);
@@ -7942,7 +7947,7 @@ function renderIssueMapList() {
       if (pr.cluster_size) reason = '기사 ' + pr.cluster_size + '건' + (pr.days ? ' · ' + pr.days + '일' : '') + (pr.urgent_count ? ' · 긴급 ' + pr.urgent_count : '');
       else if (pr.signal)  reason = String(pr.signal);
       h += '<div style="display:flex;align-items:center;gap:8px;background:var(--bg-secondary);border-radius:var(--radius-md);padding:8px 12px;margin-bottom:6px;flex-wrap:wrap">' +
-        '<span style="font-size:12px;flex:1;min-width:160px">' + escHtml(i.title) +
+        '<span style="font-size:12px;flex:1;min-width:160px"><span style="color:var(--text-tertiary);font-size:11px">#' + i.id + '</span> ' + escHtml(i.title) +
           (reason ? ' <span style="font-size:11px;color:var(--text-tertiary)">— ' + escHtml(reason) + '</span>' : '') + '</span>' +
         '<button class="btn" onclick="decideIssue(' + i.id + ',\'approve\')" style="font-size:11px;padding:3px 12px">승인</button>' +
         '<button class="btn" onclick="decideIssue(' + i.id + ',\'reject\')" style="font-size:11px;padding:3px 12px;color:var(--text-secondary)">기각</button>' +
