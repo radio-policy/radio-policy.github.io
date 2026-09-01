@@ -13,8 +13,11 @@
 //     + telegram_updates로 update_id 중복 차단(#83 패턴 재사용)
 //   - 대시보드: Bearer JWT → auth.getUser → profiles(user_id).role='admin' & approved
 //
-//  승인 시 과거 뉴스 자동 보강: news-archive-search를 service-role Bearer로 내부 호출
-//  (fire-and-forget — 보강 실패가 승인 자체를 막으면 안 된다).
+//  승인 시 자동 보강 2단(fire-and-forget — 실패가 승인 자체를 막으면 안 된다):
+//   ① news-archive-search — 과거 뉴스 재수집(네이버+구글)
+//   ② enrichIssue — Sonnet 3콜: 영향 요약·이해관계자 초안·기존 법령 주제 매칭
+//      (운영자 승인 2026-09-01: "승인하면 3G·5G 이슈처럼" — 신규 주제 생성·사례 문서는
+//       조문·사실 검증이 필요해 세션 몫. 무인 반복 경로라 API가 맞은 경로다.)
 //
 //  Secrets: TELEGRAM_BOT_TOKEN(운영자봇) / OPERATOR_CHAT_ID / OPERATOR_WEBHOOK_SECRET
 //           SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY
@@ -50,6 +53,102 @@ function json(status: number, body: unknown, cors: Record<string, string>) {
   });
 }
 
+// ── 승인 후 자동 보강 — Sonnet 3콜 (영향 요약 / 이해관계자 초안 / 기존 주제 매칭) ──
+async function sonnet(system: string, user: string, maxTokens: number): Promise<string> {
+  const r = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'x-api-key': env('ANTHROPIC_API_KEY'),
+      'anthropic-version': '2023-06-01',
+      'content-type': 'application/json',
+    },
+    // Sonnet 5는 temperature를 거부하고 적응형 추론이 기본 ON — 기계적 생성이라 끈다
+    body: JSON.stringify({ model: 'claude-sonnet-5', max_tokens: maxTokens,
+      thinking: { type: 'disabled' }, system,
+      messages: [{ role: 'user', content: user }] }),
+  });
+  const j = await r.json();
+  if (j.error) throw new Error(j.error.message || 'API 오류');
+  return (j.content || []).filter((b: { type: string }) => b.type === 'text')
+    .map((b: { text: string }) => b.text).join('').trim();
+}
+
+async function enrichIssue(sb: ReturnType<typeof createClient>, issueId: number): Promise<string> {
+  const { data: iss } = await sb.from('issues')
+    .select('id,title,definition,impact_summary').eq('id', issueId).maybeSingle();
+  if (!iss) return '이슈 없음';
+  const { data: links } = await sb.from('issue_links').select('id,item_type,item_date,title')
+    .eq('issue_id', issueId).order('item_date', { ascending: false }).limit(200);
+  const news = (links || []).filter((l: { item_type: string }) => l.item_type === 'news').slice(0, 30);
+  if (!news.length) return '연결 기사 없음';
+  const srcList = news.map((l: { item_date: string; title: string }, k: number) =>
+    `[${k + 1}] ${l.item_date || ''} ${l.title || ''}`).join('\n');
+  const ctx = `이슈: ${iss.title}\n정의: ${iss.definition || ''}\n연결 기사:\n${srcList}`;
+  const done: string[] = [];
+
+  // ① 영향 요약 (기존값 있으면 보존 — 세션 생성분을 덮지 않는다)
+  if (!iss.impact_summary) {
+    try {
+      const t = await sonnet(
+        'SKT Comm센터 기술정책팀 보좌역. 목록의 사실만 사용하고 모든 문장 끝에 근거 번호 [n]을 붙인다. 태그 밖 다른 말 금지.',
+        ctx + '\n\n<what>무슨 일이 벌어졌는가(2~3문장)</what><why>왜 SKT에 중요한가(2~3문장)</why><action>무엇을 해야 하는가(2~3문장)</action> 형식으로만 출력.', 1000);
+      const pick = (tag: string) => (t.match(new RegExp('<' + tag + '>([\\s\\S]*?)</' + tag + '>')) || [])[1]?.trim() || '';
+      const what = pick('what'), why = pick('why'), action = pick('action');
+      if (what || why) {
+        await sb.from('issues').update({ impact_summary: {
+          what, why, action,
+          sources: news.map((l: { id: number; title: string }, k: number) =>
+            ({ n: k + 1, type: 'news', link_id: l.id, title: l.title })),
+          model: 'claude-sonnet-5-auto', generated_at: new Date().toISOString(),
+        } }).eq('id', issueId);
+        done.push('영향요약');
+      }
+    } catch (e) { console.error('[보강:영향]', issueId, e); }
+  }
+
+  // ② 이해관계자 초안 (없을 때만)
+  const { count: stk } = await sb.from('issue_links').select('id', { count: 'exact', head: true })
+    .eq('issue_id', issueId).eq('item_type', 'stakeholder');
+  if (!stk) {
+    try {
+      const t = await sonnet('통신정책 이슈의 이해관계자 추출기. JSON 하나만 출력한다.',
+        ctx + '\n\n주요 이해관계자 3~6개를 {"stakeholders":[{"name":"기관·회사명","stance":"기사에서 확인되는 입장 요지 1문장"}]} JSON으로만. 기사로 확인되는 것만 넣는다.', 700);
+      const m = t.match(/\{[\s\S]*\}/);
+      const arr = m ? (JSON.parse(m[0]).stakeholders || []) : [];
+      for (const st of arr.slice(0, 6)) {
+        if (!st?.name) continue;
+        await sb.from('issue_links').insert({
+          issue_id: issueId, item_type: 'stakeholder',
+          item_id: String(st.name).slice(0, 60), title: String(st.name).slice(0, 60),
+          note: `${st.stance || ''} (자동 생성 초안)`, added_by: 'auto' });
+      }
+      if (arr.length) done.push(`이해관계자 ${Math.min(arr.length, 6)}`);
+    } catch (e) { console.error('[보강:이해관계자]', issueId, e); }
+  }
+
+  // ③ 기존 법령 주제 매칭 (신규 주제 생성은 하지 않는다 — 조문 검증은 세션 몫)
+  const { count: tp } = await sb.from('issue_links').select('id', { count: 'exact', head: true })
+    .eq('issue_id', issueId).eq('item_type', 'law_topic');
+  if (!tp) {
+    try {
+      const { data: topics } = await sb.from('law_graph_nodes').select('name').eq('node_type', 'topic');
+      const names = (topics || []).map((x: { name: string }) => x.name);
+      if (names.length) {
+        const t = await sonnet('통신 법령 주제 매칭기. JSON 하나만 출력한다.',
+          `이슈: ${iss.title} — ${iss.definition || ''}\n주제 목록: ${names.join(' | ')}\n\n이 이슈에 직접 해당하는 주제가 목록에 있으면 {"topic":"목록의 정확한 주제명"} 없으면 {"topic":null} JSON만. 애매하면 null.`, 200);
+        const m = t.match(/\{[\s\S]*\}/);
+        const topic = m ? JSON.parse(m[0]).topic : null;
+        if (topic && names.includes(topic)) {
+          await sb.from('issue_links').insert({
+            issue_id: issueId, item_type: 'law_topic', item_id: topic, title: topic,
+            note: '법령 관계도 주제 연결 (자동 매칭)', added_by: 'auto' });
+          done.push(`주제:${topic}`);
+        }
+      }
+    } catch (e) { console.error('[보강:주제]', issueId, e); }
+  }
+  return done.length ? done.join(' · ') : '추가 보강 없음(기존값 보존)';
+}
 /** 승인·기각·해소 파이프 — 텔레그램/대시보드 공용. 반환: 사람용 결과 문구. */
 async function runAction(sb: ReturnType<typeof createClient>, action: string, issueId: number): Promise<string> {
   const { data: issue } = await sb.from('issues')
@@ -76,7 +175,12 @@ async function runAction(sb: ReturnType<typeof createClient>, action: string, is
       console.log('[보강]', issueId, JSON.stringify(j).slice(0, 200)),
     ).catch((e) => console.error('[보강 실패(무시)]', e));
     EdgeRuntime.waitUntil(enrich);
-    return `✅ 승인됨 — ${issue.title}\n과거 뉴스 보강을 백그라운드로 시작했습니다. 관련 법령 확정은 대시보드에서.`;
+    EdgeRuntime.waitUntil(
+      enrichIssue(sb, issueId)
+        .then((r) => console.log('[자동보강]', issueId, r))
+        .catch((e) => console.error('[자동보강 실패(무시)]', issueId, e)),
+    );
+    return `✅ 승인됨 — ${issue.title}\n과거 뉴스 재수집 + 자동 보강(영향 요약·이해관계자·법령 주제)을 시작했습니다.\n과거 사례·기점 소급은 세션에서 "이슈 ${issueId} 보강해줘".`;
   }
 
   if (action === 'reject') {
@@ -108,6 +212,11 @@ async function runAction(sb: ReturnType<typeof createClient>, action: string, is
 
   if (action === 'keep') {
     return `유지합니다 — ${issue.title} (30일 뒤 다시 확인)`;
+  }
+
+  if (action === 'enrich') {           // 수동 재보강 — 기존값 보존, 빈 항목만 채운다
+    const r = await enrichIssue(sb, issueId);
+    return `🧩 자동 보강 — ${issue.title}: ${r}`;
   }
   return `알 수 없는 동작: ${action}`;
 }
@@ -175,6 +284,17 @@ Deno.serve(async (req) => {
   const auth = req.headers.get('authorization') || '';
   const token = auth.toLowerCase().startsWith('bearer ') ? auth.slice(7).trim() : '';
   if (!token) return json(401, { error: { message: '로그인이 필요합니다.' } }, cors);
+  // 내부 호출(service-role Bearer) — 세션·다른 함수의 enrich 재실행용
+  if (token === env('SUPABASE_SERVICE_ROLE_KEY')) {
+    const body = await req.json().catch(() => null);
+    const action = String(body?.action || '');
+    const issueId = Number(body?.issue_id || 0);
+    if (!['approve', 'reject', 'resolve', 'keep', 'enrich'].includes(action) || !issueId) {
+      return json(400, { error: { message: 'action/issue_id가 올바르지 않습니다.' } }, cors);
+    }
+    try { return json(200, { ok: true, result: await runAction(sb, action, issueId) }, cors); }
+    catch (e) { console.error('[내부 액션 실패]', e); return json(500, { error: { message: '처리 실패' } }, cors); }
+  }
   const { data: userData } = await sb.auth.getUser(token);
   const user = userData?.user;
   if (!user) return json(401, { error: { message: '로그인이 필요합니다.' } }, cors);
@@ -187,7 +307,7 @@ Deno.serve(async (req) => {
   const body = await req.json().catch(() => null);
   const action = String(body?.action || '');
   const issueId = Number(body?.issue_id || 0);
-  if (!['approve', 'reject', 'resolve', 'keep'].includes(action) || !issueId) {
+  if (!['approve', 'reject', 'resolve', 'keep', 'enrich'].includes(action) || !issueId) {
     return json(400, { error: { message: 'action/issue_id가 올바르지 않습니다.' } }, cors);
   }
   try {
