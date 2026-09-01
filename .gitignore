@@ -13,3 +13,4 @@ document_chunks_export.jsonl
 document_chunks_sample.jsonl
 okf_probe*.json
 archive/logs_260827/
+speech_rebuild/
