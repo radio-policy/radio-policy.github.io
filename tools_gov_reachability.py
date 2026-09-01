@@ -79,8 +79,10 @@ def main() -> int:
     print('TLS 지문 위장:', '활성(curl_cffi)' if IMPERSONATE else '없음(일반 requests)')
     print('=' * 62)
 
-    ok_n = sum(probe(*t) for t in TARGETS)
-    total = len(TARGETS)
+    results = [(t[0], probe(*t)) for t in TARGETS]
+    ok_n = sum(1 for _, ok in results if ok)
+    total = len(results)
+    failed = [name for name, ok in results if not ok]
 
     print('=' * 62)
     print('결과: %d/%d 정상' % (ok_n, total))
@@ -91,7 +93,16 @@ def main() -> int:
     else:
         print('판정: 일부만 실패 — 사이트별 개별 문제(구조 변경/일시 장애) 가능성')
     print('=' * 62)
-    return 0 if ok_n else 1
+
+    # GitHub Actions 주석으로도 남긴다 — 로그 API가 리다이렉트라 원격에서 읽기 어렵기 때문.
+    # 주석은 check-runs API로 바로 조회된다.
+    summary = '%d/%d 정상' % (ok_n, total)
+    if failed:
+        summary += ' | 실패: ' + ', '.join(failed)
+    print('::notice title=gov-reachability::' + summary)
+
+    # 전부 통과해야 성공으로 본다 — 원격에서는 conclusion만 보고도 판정할 수 있게.
+    return 0 if ok_n == total else 1
 
 
 if __name__ == '__main__':
