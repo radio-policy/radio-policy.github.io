@@ -3273,21 +3273,30 @@ let currentNewsSearch = '';  // 뉴스 검색어 (클라이언트 필터 — 중
 // 6개 기관 자동 수집 확장(2026-08)에 맞춰 접두 추가 — '방송통신위원회 보도자료' 등은
 // 기존 '방통위' 접두와 별개 문자열이라 명시해야 정부 탭에 잡힌다.
 var GOV_SOURCE_PREFIXES = ['국립전파연구원', '과기정통부', '방통위', '방송통신위원회', '중앙전파관리소', 'ETRI', 'KISDI'];
-// 해외 규제기관 5종 (2026-08) — category='해외' 행과 함께 정부 보도자료·공지사항 탭에 포함.
-// 칩은 '해외' 통합 1개만 노출한다(기관별 칩을 늘리면 칩 과밀).
+// 해외 규제기관 5종 (2026-08). **정부 보도자료·공지 탭에서는 제외**한다(2026-09-01 운영자 결정) —
+// 같은 23건이 「해외 규제동향」 전용 탭과 이 탭에 동시에 보여 "왜 같은 게 두 군데 있나" 혼란이 있었다.
+// 저장은 원래부터 news_feed 한 곳(category='해외')이고 중복 수집이 아니었다. 표시만 한쪽으로 모은다.
+// 이 상수는 govAgencyOf()의 '해외' 판정과 해외 전용 탭에서 계속 쓰므로 지우지 말 것.
 var OVERSEAS_SOURCE_PREFIXES = ['FCC', 'Ofcom', 'BEREC', '日총무성', 'ITU'];
 
-// gov 탭 포함 판정 — source 접두(국내 7 + 해외 5) 또는 category='해외'
-function isGovFeedItem(n) {
+// 해외 항목인지 — gov 탭 제외 판정과 기관 칩 분류에 공용
+function isOverseasFeedItem(n) {
   var s = (n && n.source) || '';
   if (n && n.category === '해외') return true;
-  if (OVERSEAS_SOURCE_PREFIXES.some(function(p) { return s.startsWith(p); })) return true;
+  return OVERSEAS_SOURCE_PREFIXES.some(function(p) { return s.startsWith(p); });
+}
+
+// gov 탭 포함 판정 — 국내 기관 7종만. 해외는 「해외 규제동향」 탭 전용.
+function isGovFeedItem(n) {
+  var s = (n && n.source) || '';
+  if (isOverseasFeedItem(n)) return false;
   return GOV_SOURCE_PREFIXES.some(function(p) { return s.startsWith(p); });
 }
 
 // ── 정부 보도자료 기관 필터 (모니터링 > 정부 보도자료·공지사항 상단 칩) ──
 var currentGovAgency = '전체';
-var GOV_AGENCY_TABS = ['전체', '과기정통부', '전파연구원', '방통위', '전파관리소', 'ETRI', 'KISDI', '해외', '기타'];
+// '해외'는 뺐다 — gov 탭이 국내 기관만 담게 됐으므로 칩이 항상 0건이 된다(2026-09-01).
+var GOV_AGENCY_TABS = ['전체', '과기정통부', '전파연구원', '방통위', '전파관리소', 'ETRI', 'KISDI', '기타'];
 
 // news_feed.source 접두 → 기관 슬러그 매핑 (클라이언트 필터 전용)
 function govAgencyOf(source, category) {
