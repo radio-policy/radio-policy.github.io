@@ -129,7 +129,9 @@ def _haiku_profile(rep_title: str, member_titles: list) -> dict | None:
 def _notify(text, buttons=None):
     from notify import send_telegram
     markup = {'inline_keyboard': [buttons]} if buttons else None
-    send_telegram(text, disable_web_page_preview=True, reply_markup=markup)
+    # 이슈맵 메시지는 무음 — 운영자봇 소리는 긴급 뉴스·워치독 몫으로 남긴다(운영자 지시 2026-09-01)
+    send_telegram(text, disable_web_page_preview=True, disable_notification=True,
+                  reply_markup=markup)
 
 
 def _load_issues(sb):

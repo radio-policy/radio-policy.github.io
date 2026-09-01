@@ -59,6 +59,7 @@ def split_message(text: str, limit: int = SPLIT_LIMIT) -> list:
 
 def send_telegram(text: str, *, chat_id=None, parse_mode=None,
                   disable_web_page_preview: bool = False,
+                  disable_notification: bool = False,
                   reply_markup: dict | None = None) -> bool:
     """텔레그램 발송. 전 조각 성공 시 True, 하나라도 실패(또는 env 미설정) 시 False.
 
@@ -83,6 +84,8 @@ def send_telegram(text: str, *, chat_id=None, parse_mode=None,
             payload['parse_mode'] = parse_mode
         if disable_web_page_preview:
             payload['disable_web_page_preview'] = True
+        if disable_notification:      # 무음 발송 — 알림은 쌓이되 소리·진동 없음 (이슈맵류, 2026-09-01)
+            payload['disable_notification'] = True
         if reply_markup and i == len(chunks) - 1:
             payload['reply_markup'] = reply_markup
 
