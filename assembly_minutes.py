@@ -904,6 +904,13 @@ def build_speech_rows(meeting: dict, blocks: list, confirmed: list,
                       max_excerpts: int = MAX_EXCERPTS) -> list:
     """confirmed 발언 블록을 발언자별 assembly_speeches 행으로 구성.
     요지는 dry-run 이 아닐 때만 Haiku 로 생성(비용 방어)."""
+    # 키가 없으면 요지가 규칙 폴백(원문 앞 문장 절단)으로 저장된다 — 그게 2026-09-01
+    # 전량 재수집(#113)을 부른 원인이다. **원문을 저장하지 않는 테이블이라 사후 수리가
+    # 불가능**하므로, 폴백을 쌓느니 이번 회차 발언 적재를 건너뛴다(섹션은 정상 적재되고,
+    # 키가 돌아온 뒤 실행에서 speeches_exist가 비어 있어 소급 적재된다).
+    if not dry and not os.environ.get('ANTHROPIC_API_KEY', '').strip():
+        print('  [발언 적재 건너뜀] ANTHROPIC_API_KEY 없음 — 폴백 요지를 저장하지 않는다(#113)')
+        return []
     agenda = _primary_agenda(meeting)
     mdate = (meeting['conf_date'] or '').strip() or None
     rows = []
