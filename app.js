@@ -9097,11 +9097,24 @@ function renderPersonStance(p) {
 
 function personTopicFilter(t) { _personTopicFilter = (_personTopicFilter === t) ? '' : t; var p = (_peopleCache || []).find(function(x) { return x.id === selectedPersonId; }); if (p) { renderPersonTopics(p); renderPersonSpeeches(p); } }
 
+// 사회·진행 발언 판정 — 회의록에는 "잠깐만 기다려 주십시오, ○○○ 위원님" 같은 진행 발언이
+// 섞여 있고, 원문을 저장하지 않는 테이블이라 재요약이 불가능하다(#99). 지우지 않고 접어서
+// 내용 발언만 앞에 보인다. (운영자 지적 2026-09-01: "이걸로는 무슨 내용인지 알 수 없다")
+var _PROC_RE = /(잠깐만|잠시만|기다려 주|수고하셨|정회|속개|의사진행|나와 계세요|나오세요|자리에 앉|말씀하십시오|다음은\s*\S+\s*위원님|이상입니다)/;
+function _isProceduralSpeech(s) {
+  var t = String((s && s.summary) || '').trim();
+  if (!t) return true;
+  if (t.length < 18) return true;              // 한 마디 조각 — 내용을 담기엔 너무 짧다
+  return _PROC_RE.test(t) && t.length < 60;    // 진행 문구 + 짧음 (긴 발언은 본론이 이어진다)
+}
+
 function renderPersonTopics(p) {
   var box = document.getElementById('person-topics');
   if (!box) return;
   var cnt = {};
-  _personSpeeches.forEach(function(s) { var t = (s.topic || '').trim(); if (t) cnt[t] = (cnt[t] || 0) + 1; });
+  // 쟁점 칩 건수도 내용 발언 기준 — 진행 발언이 "SK텔레콤 언급 11"처럼 부풀리던 것을 막는다
+  _personSpeeches.filter(function(s) { return !_isProceduralSpeech(s); })
+    .forEach(function(s) { var t = (s.topic || '').trim(); if (t) cnt[t] = (cnt[t] || 0) + 1; });
   var top = Object.keys(cnt).sort(function(a, b) { return cnt[b] - cnt[a]; }).slice(0, 10);
   if (!top.length) { box.innerHTML = ''; return; }
   box.innerHTML = _personSec('주요 쟁점', '클릭하면 발언 필터') +
@@ -9117,8 +9130,18 @@ function renderPersonSpeeches(p) {
   if (!box) return;
   var list = _personSpeeches;
   if (_personTopicFilter) list = list.filter(function(s) { return (s.topic || '').trim() === _personTopicFilter; });
+  var proc = list.filter(_isProceduralSpeech);
+  list = list.filter(function(s) { return !_isProceduralSpeech(s); });
   var CAP = 100;
   var shown = list.slice(0, CAP);
+  function _spRow(s) {
+      return '<div style="border:1px solid var(--border);border-radius:8px;padding:8px 12px;font-size:12px;background:var(--bg-secondary)">' +
+        '<span style="color:var(--text-tertiary)">' + escHtml(s.meeting_date || '') + '</span>' +
+        (s.topic ? ' · <span style="color:var(--accent)">' + escHtml(s.topic) + '</span>' : '') +
+        (s.agenda ? ' · <span style="color:var(--text-tertiary)">' + escHtml(String(s.agenda).slice(0, 40)) + '</span>' : '') +
+        '<div style="margin-top:3px;color:var(--text-primary)">' + escHtml(s.summary || '') +
+        (s.source_url ? ' <a href="' + safeUrl(s.source_url) + '" target="_blank" rel="noopener" style="font-size:11px">원문</a>' : '') + '</div></div>';
+  }
   box.innerHTML = _personSec('발언 이력', list.length + '건' + (_personTopicFilter ? ' — ' + escHtml(_personTopicFilter) : '') + ' · 과방위 회의록 발췌') +
     (shown.length ? '<div style="display:flex;flex-direction:column;gap:6px">' + shown.map(function(s) {
       return '<div style="border:1px solid var(--border);border-radius:8px;padding:8px 12px;font-size:12px;background:var(--bg-secondary)">' +
@@ -9128,7 +9151,11 @@ function renderPersonSpeeches(p) {
         '<div style="margin-top:3px;color:var(--text-primary)">' + escHtml(s.summary || '') +
         (s.source_url ? ' <a href="' + safeUrl(s.source_url) + '" target="_blank" rel="noopener" style="font-size:11px">원문</a>' : '') + '</div></div>';
     }).join('') + (list.length > CAP ? '<div style="font-size:11px;color:var(--text-tertiary);padding:4px">외 ' + (list.length - CAP) + '건 — 쟁점 칩으로 좁혀 보세요</div>' : '') + '</div>'
-    : '<div style="font-size:12px;color:var(--text-tertiary);padding:8px">발언 기록이 없습니다.</div>');
+    : '<div style="font-size:12px;color:var(--text-tertiary);padding:8px">내용 발언 기록이 없습니다.</div>') +
+    (proc.length ? '<details style="margin-top:8px"><summary style="cursor:pointer;font-size:11px;color:var(--text-tertiary)">' +
+      '진행·단편 발언 ' + proc.length + '건 (사회·호명 등 내용 없음)</summary>' +
+      '<div style="display:flex;flex-direction:column;gap:6px;margin-top:6px;opacity:0.75">' +
+      proc.slice(0, 60).map(_spRow).join('') + '</div></details>' : '');
 }
 
 function renderPersonBills(p, bills) {

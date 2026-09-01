@@ -879,6 +879,26 @@ def _primary_agenda(meeting: dict) -> str:
     return ''
 
 
+# 발언 이력용 잡음 배제 (2026-09-01, 운영자 지적) — "잠깐만 기다려 주십시오, ○○○ 위원님"
+# 같은 사회·호명 발언이 인물 프로필에 "무슨 내용인지 알 수 없는" 행으로 남았다. 원문(raw)을
+# 저장하지 않아 사후 재요약이 불가능하므로(#99) 적재 시점에 거른다. 길이만으로는 못 거른다 —
+# 20~55자에도 실질 발언이 많다(실측). 진행 문구 + 짧음의 교집합만 뺀다.
+# (기존 is_procedural/PROCEDURAL_RE는 개회·선서 등 '의례' 판정용이라 목적이 다르다 — 별도 함수)
+CHAIR_NOISE_RE = re.compile(
+    r'(잠깐만|잠시만|기다려\s*주|수고하셨|나와\s*계세요|나오세요|말씀하십시오|'
+    r'다음은\s*\S+\s*위원님|이상입니다)')
+
+
+def is_noise_speech(text: str) -> bool:
+    """발언 이력에 남길 가치가 없는 사회·호명 발언인가."""
+    t = re.sub(r'\s+', ' ', text or '').strip()
+    if not t:
+        return True
+    if len(t) < 18:
+        return True
+    return bool(CHAIR_NOISE_RE.search(t)) and len(t) < 60
+
+
 def build_speech_rows(meeting: dict, blocks: list, confirmed: list,
                       keywords: list, source_url: str, dry: bool = False,
                       max_excerpts: int = MAX_EXCERPTS) -> list:
@@ -895,6 +915,8 @@ def build_speech_rows(meeting: dict, blocks: list, confirmed: list,
         if key in seen:
             continue
         seen.add(key)
+        if is_noise_speech(b['text']):    # 사회·호명 등 내용 없는 발언은 적재하지 않는다
+            continue
         topic = ', '.join(matched_keywords(b['text'], keywords)[:5])
         if not topic and is_always_keep(b['text']):
             topic = 'SK텔레콤 언급'
