@@ -165,7 +165,22 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 
 ### pg_cron 스케줄 잡 (DB 내부 스케줄러, UTC 기준 / KST=UTC+9). `select * from cron.job`로 조회.
 
-✅ **GitHub 계정 복구 완료(2026-08-25) — 디스패치 잡 전부 재활성.** 8/1 정지로 비활성했던 4개(`crawl-trigger-hourly`·`assembly-crawl-trigger`·`law-crawl-trigger`·`watchdog-trigger`)를 되살렸고, `foreign-press-trigger`(jobid 19)를 신설했다. **주의: GitHub 자체 cron(`schedule:`)은 복구 후에도 깨어나지 않았다** — 플래그 해제 8시간 뒤까지 `schedule` 이벤트 0건(10:17·11:17 슬롯 모두 미발화). 반면 pg_cron→`workflow_dispatch` 경로는 11:47 정시 자동 발화·성공을 실측했다. **주 트리거는 pg_cron이며 GitHub cron에 의존하지 말 것**(원래 설계와 동일). GitHub cron이 나중에 깨어나도 이미 판정한 기사는 건너뛰므로 데이터 피해는 없으나 로그가 이중화된다 — 복귀 후 확인해 살아났으면 워크플로의 `schedule:` 줄 제거를 검토한다. **PC 임시작업 5개는 2026-08-26 전부 비활성화**(`radio_TEMP_crawl_hourly`·`briefing_0605`·`assembly_1000`·`law_1130`·`foreign`) — GitHub 단독 야간 운전을 하루 성공(8/25~26, 시간대별 수집 연속·해외동향 `fail=0`·감시견 `ok`)한 뒤 정리했다. **삭제가 아니라 비활성이므로 GitHub이 다시 죽으면 `schtasks /change /tn <이름> /enable`로 즉시 되살린다.** PC에 남는 것은 한국 IP 필수 작업뿐: 정부공고 체인(17:00)·본문 재수집(매시 :22)·회의록 요약(10:30)·CRMS(월1회)·로컬 미리보기. **밤·주말 PC 종료 가능.**
+✅ **GitHub 계정 복구 완료(2026-08-25) — 디스패치 잡 전부 재활성.** 8/1 정지로 비활성했던 4개(`crawl-trigger-hourly`·`assembly-crawl-trigger`·`law-crawl-trigger`·`watchdog-trigger`)를 되살렸고, `foreign-press-trigger`(jobid 19)를 신설했다.
+
+**[트리거 3층 구조 — 2026-09-01 실측으로 확정]** 이 표가 장애 대응의 출발점이다.
+
+| 층 | 경로 | 정확도 | 고장 영역 |
+|---|---|---|---|
+| **주** | pg_cron → `dispatch_github_workflow()` → GitHub Actions | **초 단위 정시** | Supabase + **GitHub** |
+| 보조 | 워크플로의 `schedule:` (GitHub 자체 cron) | **2~7시간 지각** | **GitHub** |
+| 독립 | PC Windows 작업 스케줄러 | 정시 | PC |
+
+- **주·보조는 같은 고장 영역이다 — 서로의 백업이 아니다.** 둘 다 종착지가 GitHub Actions라, GitHub이 죽으면 함께 죽는다. 2026-08-01 계정 스팸 플래그 때 실제로 그랬다(pg_cron은 멀쩡히 발화했지만 디스패치가 막혔고, GitHub cron도 함께 정지). 그때 시스템을 살린 것은 **PC**였다. "GitHub cron이 있으니 백업은 된다"고 착각하지 말 것.
+- **GitHub 자체 cron은 복구 후 되살아났으나 심하게 밀린다**(2026-09-01 실측: 해외동향 pg_cron 05:30 정각 대 GitHub 09:01, 브리핑 06:05 대 09:10). GitHub cron은 원래부터 혼잡 시 지연·드롭이 잦다(2026-06-15에 23~00 UTC 최혼잡 구간을 피해 21 UTC로 옮긴 이력). **따라서 하루 2회 실행되는 로그는 정상이다** — 정시 쪽이 pg_cron, 늦은 쪽이 GitHub cron이다. 중복 발송은 `already_sent_today()`가, 중복 판정은 캐시 건너뜀이 막고, 저장소가 public이라 Actions 사용료는 0원이다.
+- **`schedule:` 줄을 지우지 말 것.** 로그 이중화가 거슬려 제거를 검토했으나(2026-08-25 메모) **유지가 결론이다.** GitHub은 멀쩡한데 pg_cron 경로만 끊기는 무음 실패(배경역사 #18 — PAT에서 Actions 권한이 빠져 디스패치 403인데 pg_cron은 `succeeded`로 보고)에서 늦게라도 도는 유일한 장치가 이것이다.
+- **독립 백업은 PC뿐이며, 지금은 브리핑에만 있다.** `RadioPolicy-BriefingBackup`(매일 09:40)이 `morning_briefing.py`를 한 번 더 돌려 미발송이면 그때 보낸다(이미 나갔으면 건너뜀 — 실측 확인). **수집 계열(뉴스·법안·법령·해외동향)에는 독립 층이 없다** — `radio_TEMP_*` 5개는 비활성 상태다. GitHub이 또 정지되면 `schtasks /change /tn <이름> /enable`로 즉시 되살릴 것.
+
+**PC 임시작업 5개는 2026-08-26 전부 비활성화**(`radio_TEMP_crawl_hourly`·`briefing_0605`·`assembly_1000`·`law_1130`·`foreign`) — GitHub 단독 야간 운전을 하루 성공(8/25~26, 시간대별 수집 연속·해외동향 `fail=0`·감시견 `ok`)한 뒤 정리했다. **삭제가 아니라 비활성이므로 GitHub이 다시 죽으면 즉시 되살린다.** PC에 남는 것은 한국 IP 필수 작업과 브리핑 백업뿐: 정부공고 체인(17:00)·본문 재수집(매시 :22)·회의록 요약(10:30)·CRMS(월1회)·브리핑 백업(09:40)·로컬 미리보기. **밤·주말 PC 종료 가능.** (배경역사 #115)
 
 | jobid | jobname | UTC | KST | 역할 |
 |---|---|---|---|---|
