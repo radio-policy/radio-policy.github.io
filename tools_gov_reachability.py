@@ -21,6 +21,7 @@
 """
 import re
 import sys
+import time
 
 sys.stdout.reconfigure(encoding='utf-8')   # 스케줄러 cp949 캡처 대비(지침 #19)
 
@@ -48,7 +49,8 @@ TARGETS = [
     ('KCC 보도자료',       'https://www.kcc.go.kr/user.do?boardId=1113&page=A05030000&dc=K05030000', 'table tbody tr, ul li'),
     ('ETRI 보도자료',      'https://www.etri.re.kr/kor/bbs/list.etri?b_board_id=ETRI06', 'table tbody tr, ul li'),
     ('KISDI',              'https://www.kisdi.re.kr/index.do', 'a'),
-    ('입법예고(lawmaking)', 'https://opinion.lawmaking.go.kr/gcom/ogLmPp', 'table tbody tr, ul li'),
+    # 쿼리스트링 없이는 빈 목록이 온다 — 실제 크롤러와 동일하게 맞춘다 (gov_notice_crawler.py:854)
+    ('입법예고(lawmaking)', 'https://opinion.lawmaking.go.kr/gcom/ogLmPp?isOgYn=Y&opYn=Y&pageIndex=1', 'table tbody tr'),
 ]
 
 
@@ -79,7 +81,14 @@ def main() -> int:
     print('TLS 지문 위장:', '활성(curl_cffi)' if IMPERSONATE else '없음(일반 requests)')
     print('=' * 62)
 
-    results = [(t[0], probe(*t)) for t in TARGETS]
+    results = []
+    for i, t in enumerate(TARGETS):
+        # 사이트 간 간격 — 쉼 없이 연속 요청하면 opinion.lawmaking.go.kr이
+        # HTTP 200에 빈 목록을 돌려준다(단독 요청은 20행). 실제 크롤러도 요청
+        # 사이에 time.sleep(1)을 둔다(gov_notice_crawler.py:904).
+        if i:
+            time.sleep(1)
+        results.append((t[0], probe(*t)))
     ok_n = sum(1 for _, ok in results if ok)
     total = len(results)
     failed = [name for name, ok in results if not ok]
