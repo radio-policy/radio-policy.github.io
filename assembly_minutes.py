@@ -616,11 +616,34 @@ REFUSAL_RE = re.compile(
     re.I)
 MIN_HANGUL_RATIO = 0.4      # 정상 요약은 실측 전량 0.5 이상, 거절문은 0.0 — 여유를 둔 경계
 
+# 한국어 메타응답 — 요약이 아니라 **모델이 사용자에게 말을 거는** 응답이다. 영어 거절문만
+# 막고 있어 "제공하신 회의록에서 SK텔레콤을 직접 언급하는 부분이 없습니다…"가 그대로 저장돼
+# 화면에 노출됐다(운영자 지적 2026-09-01). 요약할 내용이 없으면 규칙 폴백이 정답이다.
+META_KO_RE = re.compile(
+    r'제공(하신|해\s*주신)|주신\s*(회의록|자료|내용)|요약을?\s*(드리|하기|작성하기)\s*(어렵|힘들|곤란)|'
+    r'요약할?\s*(내용|수)\s*(이|가)?\s*없|찾을\s*수\s*없습니다|포함되어\s*있지\s*않(아|습니다)|'
+    r'죄송(하지만|합니다)|말씀해\s*주시')
+
+
+def clip_sentence(txt: str, limit: int) -> str:
+    """상한을 넘으면 **문장 경계**에서 자른다 — 하드 슬라이스는 "…요약을 "처럼 말이 끊긴다.
+    경계를 못 찾으면 그때만 말줄임표를 붙인다(잘렸음을 화면에서 알 수 있게)."""
+    t = (txt or '').strip()
+    if len(t) <= limit:
+        return t
+    head = t[:limit]
+    for m in re.finditer(r'[.?!](?:\s|$)|(?:다|요|까)\.', head):
+        end = m.end()
+    try:
+        return head[:end].strip()
+    except NameError:
+        return head.rstrip() + '…'
+
 
 def is_valid_summary(txt: str, min_len: int = 8) -> bool:
     """요약으로 채택해도 되는 응답인가 — 거절·메타응답이 아니고 한글이 실질적으로 있을 것."""
     t = (txt or '').strip()
-    if len(t) < min_len or REFUSAL_RE.search(t):
+    if len(t) < min_len or REFUSAL_RE.search(t) or META_KO_RE.search(t):
         return False
     letters = [c for c in t if c.isalpha()]
     if not letters:
@@ -704,7 +727,7 @@ def summarize_meeting(meeting_title: str, picked_texts: list, fallback: str = ''
             if txt:
                 print('  [요약 부적합 — 규칙 폴백] %s' % txt[:60])
             return fallback
-        return txt[:250]
+        return clip_sentence(txt, 250)
     except Exception as e:
         print('  [요약 실패 — 규칙 폴백] %s' % str(e)[:60])
         return fallback
@@ -844,7 +867,7 @@ def summarize_speech(meeting_title: str, agenda: str, name: str,
             if txt:
                 print('  [요지 부적합 — 규칙 폴백] %s' % txt[:60])
             return fallback
-        return txt[:250]
+        return clip_sentence(txt, 250)
     except Exception as e:
         print('  [발언 요지 실패 — 폴백] %s' % str(e)[:50])
         return fallback
