@@ -7874,12 +7874,24 @@ async function loadIssueMap(force) {
         .order('last_activity_at', { ascending: false });
       if (resp.error) throw resp.error;
       var issues = resp.data || [];
-      var lResp = await sb.from('issue_links')
-        .select('id,issue_id,item_type,item_id,item_date,title,note,added_by,created_at')
-        .order('item_date', { ascending: false });
-      if (lResp.error) throw lResp.error;
+      // 전량 페이징 — PostgREST는 요청당 1,000행에서 자른다. 링크가 1,000행을 넘은 순간
+      // (2026-08-27 실측 1,478행) 오래된 연결이 통째로 사라져 "타임라인이 비었다"로 보였다.
+      // .range() 페이징에는 반드시 .order() — 정렬 없는 페이징은 행 누락이 비결정적이다. (#66·#71)
+      var links = [];
+      for (var _off = 0; _off < 50000; _off += 1000) {
+        var lResp = await sb.from('issue_links')
+          .select('id,issue_id,item_type,item_id,item_date,title,note,added_by,created_at')
+          .order('id').range(_off, _off + 999);
+        if (lResp.error) throw lResp.error;
+        links = links.concat(lResp.data || []);
+        if ((lResp.data || []).length < 1000) break;
+      }
       var byIssue = {};
-      (lResp.data || []).forEach(function(l) { (byIssue[l.issue_id] = byIssue[l.issue_id] || []).push(l); });
+      links.forEach(function(l) { (byIssue[l.issue_id] = byIssue[l.issue_id] || []).push(l); });
+      // 화면은 최신순을 전제로 한다(연대기·대표 선정) — 이슈별로 정렬해 종전 동작을 유지
+      Object.keys(byIssue).forEach(function(k) {
+        byIssue[k].sort(function(a, b) { return String(b.item_date || '').localeCompare(String(a.item_date || '')); });
+      });
       issues.forEach(function(i) { i._links = byIssue[i.id] || []; });
       _issueCache = issues;
     } catch (e) {
