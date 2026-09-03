@@ -186,7 +186,9 @@ def format_minutes_digest(meeting_date: str, title: str, summary: str, sp_rows: 
         groups.setdefault(v['group'], []).append(v)
     for rows in groups.values():
         rows.sort(key=lambda v: v['seq'])
-    order = sorted(groups, key=lambda g: (-len(groups[g]), groups[g][0]['seq']))
+    # 자사 언급 행이 든 그룹을 맨 앞에 — 운영자 지시(2026-09-03): SK텔레콤 관련 발언은 반드시 보여야 한다.
+    order = sorted(groups, key=lambda g: (0 if any(SKT_CHIP in v['line'] for v in groups[g]) else 1,
+                                          -len(groups[g]), groups[g][0]['seq']))
 
     # ── 줄 배분: 1차 그룹당 1줄, 2차 남은 줄을 큰 그룹부터 ──
     alloc = {g: 0 for g in order}

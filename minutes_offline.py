@@ -259,6 +259,15 @@ def _verify_viewer(blocks: list, m: dict):
     return {'foreign': foreign, 'pdf_ok': ok, 'detail': detail}, pdf
 
 
+
+def _skt_in_body(sec_text: str) -> bool:
+    """자사 언급 표시 근거 — 섹션에서 **요약 줄·개요 블록·제목 줄을 뺀 발췌 원문**에 ALWAYS_KEEP_TERMS 가 있는가.
+    요약문까지 보면 "SK텔레콤이 직접 언급되지 않았습니다" 같은 옛 요약이 표시를 켠다(2026-09-03 실측 29건)."""
+    s = re.sub(r'(?m)^요약: .*$', '', sec_text or '')
+    s = re.sub(r'(?ms)^개요:\n.*?(?=\n\n|\Z)', '', s)
+    s = re.sub(r'(?m)^## .*$', '', s)
+    return any(t in s for t in am.ALWAYS_KEEP_TERMS)
+
 def _is_mismatch(verify: dict) -> bool:
     return bool((verify or {}).get('foreign')) or (verify or {}).get('pdf_ok') is False
 
@@ -857,7 +866,7 @@ def _parse_section_record(doc_name: str, sec_text: str, excerpt_chars: int):
     excerpt = body[qa.end():].strip() if qa else body
     if len(excerpt) > excerpt_chars:
         excerpt = excerpt[:excerpt_chars].rstrip() + '…'
-    skt_flag = any(t in sec_text for t in am.ALWAYS_KEEP_TERMS)
+    skt_flag = _skt_in_body(sec_text)
     viewer_id, confer_num, is_audit = _confer_num_of(title, sec_text)
     return {
         'schema': SCHEMA_RESUM, 'confer_num': confer_num, 'doc_name': doc_name,
@@ -1246,7 +1255,7 @@ def import_resummary(sb, in_dir: str, year: int, limit: int, dry: bool,
                 print('    [유지·본문 %d자 < %d] %s %s' % (len(parts['body']), MIN_BODY_LEN, ymd6, title[:40]))
                 new_sections.append(sec)
                 continue
-            skt_flag = bool(base.get('skt_flag')) or any(t in sec for t in am.ALWAYS_KEEP_TERMS)
+            skt_flag = _skt_in_body(sec)     # 요약·개요 줄은 빼고 발췌 원문만 본다(2026-09-03 실측: 옛 요약문의 'SK텔레콤이 언급되지 않았습니다'가 표시를 켰다)
             new_body, info = _apply_resummary(parts['body'], j.get('meeting_summary') or '',
                                               j.get('meeting_overview') or [], skt_flag)
             if not info['summary_replaced']:

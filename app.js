@@ -9428,9 +9428,59 @@ function _parseMinuteSection(text) {
       break;
     }
   }
+  // 구버전(2026-08-14 이전 등록, 2024·2025 문서 다수)은 '관련 발언:' 헤더 + '◾ 이름(직위): 본문' 한 줄 블록
   var qi = text.search(/^질의·응답:/m);
+  if (qi < 0) qi = text.search(/^관련 발언:/m);
   out.rawQa = qi >= 0 ? text.slice(qi) : text;
   return out;
+}
+
+// SK텔레콤 언급 하이라이트 (2026-09-03 운영자 요구: 회의록에 SK텔레콤이 나오면 반드시 보이게).
+// 별도 박스 대신 발췌 원문 흐름 안에서 회사명을 굵게 표시하고, 하단 칩 'SK텔레콤 N곳'으로 순환 이동한다.
+// 발췌 원문은 크롤러가 회사 언급 블록을 무조건 보존하므로(신형 ▶/↳/▪, 구형 ◾) 결정적 — AI·DB 변경 없음.
+var SKT_TERMS = ['SK텔레콤', 'SK 텔레콤', '에스케이텔레콤', 'SKT', 'sk텔레콤'];
+
+// pressTextToHtml 결과(이스케이프된 HTML)에서 태그 밖 텍스트에만 용어를 <mark class="skt-mark" id="skt-mark-N">로 감싼다.
+// 긴 용어부터 치환해 'SK텔레콤' 안의 'SKT' 중복 방지. 굵게만(배경·색 변경 없음) — 운영자 지정.
+function _markSkt(html) {
+  var terms = SKT_TERMS.slice().sort(function(a, b) { return b.length - a.length; });
+  var re = new RegExp(terms.map(function(t) { return t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }).join('|'), 'g');
+  var n = 0;
+  return String(html || '').split(/(<[^>]*>)/).map(function(part, i) {
+    if (i % 2 === 1) return part;   // 태그는 그대로
+    return part.replace(re, function(t) {
+      return '<mark class="skt-mark" id="skt-mark-' + (n++) + '" style="background:transparent;color:inherit;font-weight:700;padding:0">' + t + '</mark>';
+    });
+  }).join('');
+}
+function _countSktMarks(marked) {
+  return (String(marked || '').match(/class="skt-mark"/g) || []).length;
+}
+
+// 발췌 원문 토글 (버튼 라벨 동기화). force: true=펼침, false=접힘, undefined=반전
+function _minuteRawToggle(force) {
+  var d = document.getElementById('minute-raw-qa');
+  var btn = document.getElementById('minute-raw-toggle');
+  if (!d) return;
+  var on = (force === undefined) ? d.style.display === 'none' : !!force;
+  d.style.display = on ? '' : 'none';
+  if (btn) btn.innerHTML = on ? '<i class="ti ti-chevron-up"></i> 발췌 원문 닫기' : '<i class="ti ti-chevron-down"></i> 발췌 원문 보기';
+}
+
+// 'SK텔레콤 N곳' 칩·요약 접미 클릭: 발췌 원문을 펼치고 다음 mark로 순환 이동
+function _sktJumpNext() {
+  var d = document.getElementById('minute-raw-qa');
+  if (!d) return;
+  var marks = d.querySelectorAll('mark.skt-mark');
+  if (!marks.length) return;
+  if (d.style.display === 'none') _minuteRawToggle(true);
+  var i = parseInt(d.getAttribute('data-skt-idx') || '-1', 10) + 1;
+  if (i >= marks.length) i = 0;
+  d.setAttribute('data-skt-idx', String(i));
+  for (var k = 0; k < marks.length; k++) marks[k].style.outline = (k === i) ? '2px solid var(--accent-purple)' : '';
+  marks[i].scrollIntoView({ block: 'center', behavior: 'smooth' });
+  var cnt = document.getElementById('minute-skt-count');
+  if (cnt) cnt.textContent = 'SK텔레콤 ' + (i + 1) + '/' + marks.length + '곳';
 }
 
 // 과방위 회의록 구조화 상세 — 보도자료 모달(#press-detail-modal) 재사용.
@@ -9483,11 +9533,23 @@ async function openMinuteDetail(mt) {
     }
     if (meta.length) html += '<div style="display:flex;flex-wrap:wrap;gap:6px 16px;font-size:12px;color:var(--text-secondary);line-height:1.6;margin-bottom:10px">' + meta.join('') + '</div>';
 
-    // 한 줄 요약 (목록과 같은 보라 배지)
+    // 발췌 원문 HTML + SK텔레콤 용어 굵게(mark) — 요약 접미·하단 칩이 건수를 공유 (2026-09-03)
+    var rawHtml = _markSkt(pressTextToHtml(p.rawQa));
+    var sktCount = _countSktMarks(rawHtml);
+    var sktChipStyle = 'display:inline-block;font-size:10px;font-weight:700;color:var(--accent-purple);background:rgba(139,92,246,.1);padding:0 6px;border-radius:3px;cursor:pointer;vertical-align:middle';
+
+    // 한 줄 요약 (목록과 같은 보라 배지). 끝의 '(SK텔레콤 언급)' 접미는 mark가 있으면 클릭해 첫 언급으로 이동
     if (p.summary) {
+      var sumBody = p.summary, sumSuffix = '';
+      var sfx = sumBody.match(/\s*\(SK텔레콤 언급\)\s*$/);
+      if (sfx) { sumBody = sumBody.slice(0, sfx.index).trim(); sumSuffix = '(SK텔레콤 언급)'; }
       html += '<div style="font-size:12px;color:var(--text-secondary);line-height:1.6;margin-bottom:6px">' +
         '<span style="font-size:10px;font-weight:700;color:var(--accent-purple);background:rgba(139,92,246,.1);padding:0 5px;border-radius:3px;margin-right:6px">요약</span>' +
-        escHtml(p.summary) + '</div>';
+        escHtml(sumBody) +
+        (sumSuffix ? (sktCount
+          ? ' <span onclick="_sktJumpNext()" title="발췌 원문의 SK텔레콤 언급으로 이동" style="' + sktChipStyle + '">' + sumSuffix + '</span>'
+          : ' ' + escHtml(sumSuffix)) : '') +
+        '</div>';
     }
 
     // 회의 개요 — '[주제]' 접두는 굵게
@@ -9527,12 +9589,15 @@ async function openMinuteDetail(mt) {
     }
 
     // 하단: 국회 원문 + 발췌 원문(질의·응답) — 발언 요약이 없으면 발췌 원문을 바로 펼친다
-    var rawHtml = pressTextToHtml(p.rawQa);
+    //       + 'SK텔레콤 N곳' 칩: 발췌 원문을 펼치고 mark 사이를 순환 이동
     html += '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:18px;padding-top:12px;border-top:1px solid var(--border)">' +
       (safeUrl(srcUrl) ? '<a href="' + safeUrl(srcUrl) + '" target="_blank" rel="noopener" class="btn" style="font-size:12px;text-decoration:none"><i class="ti ti-external-link"></i> 국회 원문 보기</a>' : '') +
       (speeches.length
-        ? '<button type="button" class="btn" style="font-size:12px" onclick="var d=document.getElementById(\'minute-raw-qa\');var on=d.style.display===\'none\';d.style.display=on?\'\':\'none\';this.innerHTML=(on?\'<i class=&quot;ti ti-chevron-up&quot;></i> 발췌 원문 닫기\':\'<i class=&quot;ti ti-chevron-down&quot;></i> 발췌 원문 보기\')"><i class="ti ti-chevron-down"></i> 발췌 원문 보기</button>'
+        ? '<button type="button" id="minute-raw-toggle" class="btn" style="font-size:12px" onclick="_minuteRawToggle()"><i class="ti ti-chevron-down"></i> 발췌 원문 보기</button>'
         : '<span style="font-size:11px;color:var(--text-muted)">발언 요약이 아직 없어 발췌 원문을 표시합니다</span>') +
+      (sktCount
+        ? '<span id="minute-skt-count" onclick="_sktJumpNext()" title="클릭할 때마다 다음 SK텔레콤 언급으로 이동" style="' + sktChipStyle + ';font-size:11px;padding:2px 8px">SK텔레콤 ' + sktCount + '곳</span>'
+        : '') +
     '</div>' +
     '<div id="minute-raw-qa" style="' + (speeches.length ? 'display:none;' : '') + 'margin-top:10px">' + rawHtml + '</div>';
 
