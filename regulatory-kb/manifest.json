@@ -1,7 +1,7 @@
 {
   "schema": "regulatory-kb-manifest/v1",
-  "updated": "2026-07-31",
-  "entry_count": 251,
+  "updated": "2026-09-03",
+  "entry_count": 257,
   "dedup_key_rule": "정규화 제목(버전 수식어 '(구버전)' 등 제거) + '|' + law_type. 같은 dedup_key = 같은 법령(버전만 다를 수 있음).",
   "on_readd_rule": {
     "same_law_number": "동일 법령번호 재추가 → 기존 path에 덮어쓰기(idempotent). 신규 파일 생성 금지.",
@@ -318,6 +318,17 @@
       "enforcement_date": "2026-06-02",
       "concept_type": "Law",
       "path": "laws/national-finance-act/national_finance_act.md",
+      "status": "superseded",
+      "superseded_by": "제21859호"
+    },
+    {
+      "dedup_key": "국가재정법|법률",
+      "title": "국가재정법",
+      "law_type": "법률",
+      "law_number": "제21859호",
+      "enforcement_date": "2026-08-11",
+      "concept_type": "Law",
+      "path": "laws/national-finance-act/national_finance_act_21859.md",
       "status": "current"
     },
     {
@@ -448,6 +459,17 @@
       "enforcement_date": "2023-12-22",
       "concept_type": "Notice",
       "path": "laws/radio-act/spectrum-notices/aviation_frequency_management.md",
+      "status": "superseded",
+      "superseded_by": "제2026-446호"
+    },
+    {
+      "dedup_key": "항공주파수 이용 및 관리에 관한 규정|국토교통부고시",
+      "title": "항공주파수 이용 및 관리에 관한 규정",
+      "law_type": "국토교통부고시",
+      "law_number": "제2026-446호",
+      "enforcement_date": "2026-08-20",
+      "concept_type": "Notice",
+      "path": "laws/radio-act/spectrum-notices/aviation_frequency_management_2026_446.md",
       "status": "current"
     },
     {
@@ -1092,6 +1114,17 @@
       "enforcement_date": "2026-07-24",
       "concept_type": "Notice",
       "path": "laws/radio-act/conformity-assessment/test_lab_designation_2026_4.md",
+      "status": "superseded",
+      "superseded_by": "제2026-5호"
+    },
+    {
+      "dedup_key": "방송통신기자재등 시험기관의 지정 및 관리에 관한 고시 (제2026-5호)|국립전파연구원고시",
+      "title": "방송통신기자재등 시험기관의 지정 및 관리에 관한 고시 (제2026-5호)",
+      "law_type": "국립전파연구원고시",
+      "law_number": "제2026-5호",
+      "enforcement_date": "2026-08-21",
+      "concept_type": "Notice",
+      "path": "laws/radio-act/conformity-assessment/test_lab_designation_2026_5.md",
       "status": "current"
     },
     {
@@ -1352,6 +1385,17 @@
       "enforcement_date": "2026-05-19",
       "concept_type": "Decree",
       "path": "laws/privacy-act/enforcement_decree.md",
+      "status": "superseded",
+      "superseded_by": "제36121호"
+    },
+    {
+      "dedup_key": "개인정보 보호법 시행령|대통령령",
+      "title": "개인정보 보호법 시행령",
+      "law_type": "대통령령",
+      "law_number": "제36121호",
+      "enforcement_date": "2026-08-20",
+      "concept_type": "Decree",
+      "path": "laws/privacy-act/enforcement_decree_36121.md",
       "status": "current"
     },
     {
@@ -2201,8 +2245,19 @@
       "enforcement_date": "2026-07-21",
       "concept_type": "Regulation",
       "path": "laws/ai-framework-act/enforcement_decree.md",
-      "status": "current",
-      "dedup_key": "인공지능 발전과 신뢰 기반 조성 등에 관한 기본법 시행령|대통령령"
+      "status": "superseded",
+      "dedup_key": "인공지능 발전과 신뢰 기반 조성 등에 관한 기본법 시행령|대통령령",
+      "superseded_by": "제36580호"
+    },
+    {
+      "dedup_key": "인공지능 발전과 신뢰 기반 조성 등에 관한 기본법 시행령|대통령령",
+      "title": "인공지능 발전과 신뢰 기반 조성 등에 관한 기본법 시행령",
+      "law_type": "대통령령",
+      "law_number": "제36580호",
+      "enforcement_date": "2026-08-20",
+      "concept_type": "Regulation",
+      "path": "laws/ai-framework-act/enforcement_decree_36580.md",
+      "status": "current"
     },
     {
       "title": "인공지능제품ㆍ서비스 확인 절차 운영에 관한 고시",
@@ -2252,6 +2307,17 @@
       "enforcement_date": "2025-10-01",
       "concept_type": "Law",
       "path": "laws/data-industry-act/데이터_산업진흥_및_이용촉진에_관한_기본법.md",
+      "status": "superseded",
+      "superseded_by": "제21392호"
+    },
+    {
+      "dedup_key": "데이터 산업진흥 및 이용촉진에 관한 기본법|법률",
+      "title": "데이터 산업진흥 및 이용촉진에 관한 기본법",
+      "law_type": "법률",
+      "law_number": "제21392호",
+      "enforcement_date": "2026-08-28",
+      "concept_type": "Law",
+      "path": "laws/data-industry-act/데이터_산업진흥_및_이용촉진에_관한_기본법_21392.md",
       "status": "current"
     },
     {
