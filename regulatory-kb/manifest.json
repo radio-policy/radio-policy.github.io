@@ -1,7 +1,7 @@
 {
   "schema": "regulatory-kb-manifest/v1",
   "updated": "2026-09-03",
-  "entry_count": 257,
+  "entry_count": 433,
   "dedup_key_rule": "정규화 제목(버전 수식어 '(구버전)' 등 제거) + '|' + law_type. 같은 dedup_key = 같은 법령(버전만 다를 수 있음).",
   "on_readd_rule": {
     "same_law_number": "동일 법령번호 재추가 → 기존 path에 덮어쓰기(idempotent). 신규 파일 생성 금지.",
@@ -2588,6 +2588,1766 @@
       "enforcement_date": "",
       "concept_type": "Guideline",
       "path": "laws/telecom-facility-standards/이동통신용_무선설비_예비전원설비_설치_가이드라인.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "시청각미디어서비스법안|의안#2219343",
+      "title": "시청각미디어서비스법안",
+      "law_type": "의안",
+      "law_number": "2219343",
+      "enforcement_date": "2026-06-18",
+      "concept_type": "Bill",
+      "path": "bills/2026/2219343.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "위치정보의 보호 및 이용 등에 관한 법률 일부개정법률안|의안#2219307",
+      "title": "위치정보의 보호 및 이용 등에 관한 법률 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2219307",
+      "enforcement_date": "2026-06-17",
+      "concept_type": "Bill",
+      "path": "bills/2026/2219307.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보통신공사업법 일부개정법률안|의안#2219070",
+      "title": "정보통신공사업법 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2219070",
+      "enforcement_date": "2026-05-27",
+      "concept_type": "Bill",
+      "path": "bills/2026/2219070.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "소프트웨어 진흥법 일부개정법률안|의안#2219069",
+      "title": "소프트웨어 진흥법 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2219069",
+      "enforcement_date": "2026-05-27",
+      "concept_type": "Bill",
+      "path": "bills/2026/2219069.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "방송미디어통신위원회의 설치 및 운영에 관한 법률 일부개정법률안|의안#2218958",
+      "title": "방송미디어통신위원회의 설치 및 운영에 관한 법률 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2218958",
+      "enforcement_date": "2026-05-13",
+      "concept_type": "Bill",
+      "path": "bills/2026/2218958.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "방송미디어통신위원회의 설치 및 운영에 관한 법률 일부개정법률안|의안#2218934",
+      "title": "방송미디어통신위원회의 설치 및 운영에 관한 법률 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2218934",
+      "enforcement_date": "2026-05-12",
+      "concept_type": "Bill",
+      "path": "bills/2026/2218934.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "지능정보화 기본법 일부개정법률안|의안#2218407",
+      "title": "지능정보화 기본법 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2218407",
+      "enforcement_date": "2026-04-17",
+      "concept_type": "Bill",
+      "path": "bills/2026/2218407.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "인터넷 멀티미디어 방송사업법 일부개정법률안|의안#2218059",
+      "title": "인터넷 멀티미디어 방송사업법 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2218059",
+      "enforcement_date": "2026-04-02",
+      "concept_type": "Bill",
+      "path": "bills/2026/2218059.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "디지털 재난안전 관리법안|의안#2217291",
+      "title": "디지털 재난안전 관리법안",
+      "law_type": "의안",
+      "law_number": "2217291",
+      "enforcement_date": "2026-03-06",
+      "concept_type": "Bill",
+      "path": "bills/2026/2217291.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "딥페이크 피해 방지 및 삭제 의무에 관한 법률안|의안#2216539",
+      "title": "딥페이크 피해 방지 및 삭제 의무에 관한 법률안",
+      "law_type": "의안",
+      "law_number": "2216539",
+      "enforcement_date": "2026-02-03",
+      "concept_type": "Bill",
+      "path": "bills/2026/2216539.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "방송미디어통신위원회의 설치 및 운영에 관한 법률 일부개정법률안|의안#2216185",
+      "title": "방송미디어통신위원회의 설치 및 운영에 관한 법률 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2216185",
+      "enforcement_date": "2026-01-20",
+      "concept_type": "Bill",
+      "path": "bills/2026/2216185.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보보호산업의 진흥에 관한 법률 일부개정법률안|의안#2215944",
+      "title": "정보보호산업의 진흥에 관한 법률 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2215944",
+      "enforcement_date": "2026-01-09",
+      "concept_type": "Bill",
+      "path": "bills/2026/2215944.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보보호산업의 진흥에 관한 법률 일부개정법률안|의안#2215797",
+      "title": "정보보호산업의 진흥에 관한 법률 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2215797",
+      "enforcement_date": "2025-12-31",
+      "concept_type": "Bill",
+      "path": "bills/2025/2215797.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보통신공사업법 일부개정법률안|의안#2215164",
+      "title": "정보통신공사업법 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2215164",
+      "enforcement_date": "2025-12-11",
+      "concept_type": "Bill",
+      "path": "bills/2025/2215164.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "사이버재해보험법안|의안#2215050",
+      "title": "사이버재해보험법안",
+      "law_type": "의안",
+      "law_number": "2215050",
+      "enforcement_date": "2025-12-09",
+      "concept_type": "Bill",
+      "path": "bills/2025/2215050.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "디지털포용법 일부개정법률안|의안#2214800",
+      "title": "디지털포용법 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2214800",
+      "enforcement_date": "2025-12-03",
+      "concept_type": "Bill",
+      "path": "bills/2025/2214800.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보통신공사업법 일부개정법률안|의안#2214722",
+      "title": "정보통신공사업법 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2214722",
+      "enforcement_date": "2025-11-28",
+      "concept_type": "Bill",
+      "path": "bills/2025/2214722.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "소프트웨어 진흥법 일부개정법률안|의안#2214631",
+      "title": "소프트웨어 진흥법 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2214631",
+      "enforcement_date": "2025-11-27",
+      "concept_type": "Bill",
+      "path": "bills/2025/2214631.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "지능정보화 기본법 일부개정법률안|의안#2214379",
+      "title": "지능정보화 기본법 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2214379",
+      "enforcement_date": "2025-11-19",
+      "concept_type": "Bill",
+      "path": "bills/2025/2214379.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "방송미디어통신위원회의 설치 및 운영에 관한 법률 일부개정법률안|의안#2214361",
+      "title": "방송미디어통신위원회의 설치 및 운영에 관한 법률 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2214361",
+      "enforcement_date": "2025-11-18",
+      "concept_type": "Bill",
+      "path": "bills/2025/2214361.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "인터넷 멀티미디어 방송사업법 일부개정법률안|의안#2214309",
+      "title": "인터넷 멀티미디어 방송사업법 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2214309",
+      "enforcement_date": "2025-11-17",
+      "concept_type": "Bill",
+      "path": "bills/2025/2214309.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "방송미디어통신위원회의 설치 및 운영에 관한 법률 일부개정법률안|의안#2213614",
+      "title": "방송미디어통신위원회의 설치 및 운영에 관한 법률 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2213614",
+      "enforcement_date": "2025-10-15",
+      "concept_type": "Bill",
+      "path": "bills/2025/2213614.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "이동통신보안법안|의안#2213313",
+      "title": "이동통신보안법안",
+      "law_type": "의안",
+      "law_number": "2213313",
+      "enforcement_date": "2025-09-26",
+      "concept_type": "Bill",
+      "path": "bills/2025/2213313.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "인터넷 멀티미디어 방송사업법 일부개정법률안|의안#2213312",
+      "title": "인터넷 멀티미디어 방송사업법 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2213312",
+      "enforcement_date": "2025-09-26",
+      "concept_type": "Bill",
+      "path": "bills/2025/2213312.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보보호산업의 진흥에 관한 법률 일부개정법률안|의안#2213015",
+      "title": "정보보호산업의 진흥에 관한 법률 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2213015",
+      "enforcement_date": "2025-09-16",
+      "concept_type": "Bill",
+      "path": "bills/2025/2213015.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "인터넷 멀티미디어 방송사업법 일부개정법률안|의안#2212975",
+      "title": "인터넷 멀티미디어 방송사업법 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2212975",
+      "enforcement_date": "2025-09-15",
+      "concept_type": "Bill",
+      "path": "bills/2025/2212975.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "방송통신위원회의 설치 및 운영에 관한 법률 일부개정법률안|의안#2212577",
+      "title": "방송통신위원회의 설치 및 운영에 관한 법률 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2212577",
+      "enforcement_date": "2025-09-01",
+      "concept_type": "Bill",
+      "path": "bills/2025/2212577.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보통신공사업법 일부개정법률안|의안#2212478",
+      "title": "정보통신공사업법 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2212478",
+      "enforcement_date": "2025-08-28",
+      "concept_type": "Bill",
+      "path": "bills/2025/2212478.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "소프트웨어 진흥법 일부개정법률안|의안#2212477",
+      "title": "소프트웨어 진흥법 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2212477",
+      "enforcement_date": "2025-08-28",
+      "concept_type": "Bill",
+      "path": "bills/2025/2212477.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보보호산업의 진흥에 관한 법률 일부개정법률안|의안#2212292",
+      "title": "정보보호산업의 진흥에 관한 법률 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2212292",
+      "enforcement_date": "2025-08-21",
+      "concept_type": "Bill",
+      "path": "bills/2025/2212292.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "디지털포용법 일부개정법률안|의안#2212290",
+      "title": "디지털포용법 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2212290",
+      "enforcement_date": "2025-08-21",
+      "concept_type": "Bill",
+      "path": "bills/2025/2212290.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보통신공사업법 일부개정법률안|의안#2212042",
+      "title": "정보통신공사업법 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2212042",
+      "enforcement_date": "2025-08-07",
+      "concept_type": "Bill",
+      "path": "bills/2025/2212042.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보보호산업의 진흥에 관한 법률 일부개정법률안|의안#2211927",
+      "title": "정보보호산업의 진흥에 관한 법률 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2211927",
+      "enforcement_date": "2025-08-01",
+      "concept_type": "Bill",
+      "path": "bills/2025/2211927.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "방송통신위원회의 설치 및 운영에 관한 법률 일부개정법률안|의안#2211914",
+      "title": "방송통신위원회의 설치 및 운영에 관한 법률 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2211914",
+      "enforcement_date": "2025-08-01",
+      "concept_type": "Bill",
+      "path": "bills/2025/2211914.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "방송통신위원회의 설치 및 운영에 관한 법률 일부개정법률안|의안#2211827",
+      "title": "방송통신위원회의 설치 및 운영에 관한 법률 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2211827",
+      "enforcement_date": "2025-07-29",
+      "concept_type": "Bill",
+      "path": "bills/2025/2211827.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "디지털포용법 일부개정법률안|의안#2211773",
+      "title": "디지털포용법 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2211773",
+      "enforcement_date": "2025-07-28",
+      "concept_type": "Bill",
+      "path": "bills/2025/2211773.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "시청각미디어통신위원회의 설치 등에 관한 법률안|의안#2211765",
+      "title": "시청각미디어통신위원회의 설치 등에 관한 법률안",
+      "law_type": "의안",
+      "law_number": "2211765",
+      "enforcement_date": "2025-07-28",
+      "concept_type": "Bill",
+      "path": "bills/2025/2211765.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "디지털포용법 일부개정법률안|의안#2211592",
+      "title": "디지털포용법 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2211592",
+      "enforcement_date": "2025-07-21",
+      "concept_type": "Bill",
+      "path": "bills/2025/2211592.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "위치정보의 보호 및 이용 등에 관한 법률 일부개정법률안|의안#2211185",
+      "title": "위치정보의 보호 및 이용 등에 관한 법률 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2211185",
+      "enforcement_date": "2025-07-01",
+      "concept_type": "Bill",
+      "path": "bills/2025/2211185.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보통신공사업법 일부개정법률안|의안#2211168",
+      "title": "정보통신공사업법 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2211168",
+      "enforcement_date": "2025-06-30",
+      "concept_type": "Bill",
+      "path": "bills/2025/2211168.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "디지털포용법 일부개정법률안|의안#2210939",
+      "title": "디지털포용법 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2210939",
+      "enforcement_date": "2025-06-19",
+      "concept_type": "Bill",
+      "path": "bills/2025/2210939.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "소프트웨어 진흥법 일부개정법률안|의안#2210774",
+      "title": "소프트웨어 진흥법 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2210774",
+      "enforcement_date": "2025-06-12",
+      "concept_type": "Bill",
+      "path": "bills/2025/2210774.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "방송통신위원회의 설치 및 운영에 관한 법률 일부개정법률안|의안#2210744",
+      "title": "방송통신위원회의 설치 및 운영에 관한 법률 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2210744",
+      "enforcement_date": "2025-06-12",
+      "concept_type": "Bill",
+      "path": "bills/2025/2210744.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "디지털포용법 일부개정법률안|의안#2210681",
+      "title": "디지털포용법 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2210681",
+      "enforcement_date": "2025-06-09",
+      "concept_type": "Bill",
+      "path": "bills/2025/2210681.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "소프트웨어 진흥법 일부개정법률안|의안#2210526",
+      "title": "소프트웨어 진흥법 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2210526",
+      "enforcement_date": "2025-05-15",
+      "concept_type": "Bill",
+      "path": "bills/2025/2210526.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보통신망 이용촉진 및 정보보호 등에 관한 법률 일부개정법률안|의안#2210509",
+      "title": "정보통신망 이용촉진 및 정보보호 등에 관한 법률 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2210509",
+      "enforcement_date": "2025-05-14",
+      "concept_type": "Bill",
+      "path": "bills/2025/2210509.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보통신망 이용촉진 및 정보보호 등에 관한 법률 일부개정법률안|의안#2210304",
+      "title": "정보통신망 이용촉진 및 정보보호 등에 관한 법률 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2210304",
+      "enforcement_date": "2025-05-01",
+      "concept_type": "Bill",
+      "path": "bills/2025/2210304.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보통신망 이용촉진 및 정보보호 등에 관한 법률 일부개정법률안|의안#2210277",
+      "title": "정보통신망 이용촉진 및 정보보호 등에 관한 법률 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2210277",
+      "enforcement_date": "2025-04-30",
+      "concept_type": "Bill",
+      "path": "bills/2025/2210277.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보통신 진흥 및 융합 활성화 등에 관한 특별법 일부개정법률안|의안#2210191",
+      "title": "정보통신 진흥 및 융합 활성화 등에 관한 특별법 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2210191",
+      "enforcement_date": "2025-04-28",
+      "concept_type": "Bill",
+      "path": "bills/2025/2210191.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "방송통신위원회의 설치 및 운영에 관한 법률 일부개정법률안|의안#2210140",
+      "title": "방송통신위원회의 설치 및 운영에 관한 법률 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2210140",
+      "enforcement_date": "2025-04-25",
+      "concept_type": "Bill",
+      "path": "bills/2025/2210140.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "장애인 차별조항 정비를 위한 과학기술정보방송통신위원회 소관 6개 법률 일부개정을 위한 법률안|의안#2210037",
+      "title": "장애인 차별조항 정비를 위한 과학기술정보방송통신위원회 소관 6개 법률 일부개정을 위한 법률안",
+      "law_type": "의안",
+      "law_number": "2210037",
+      "enforcement_date": "2025-04-22",
+      "concept_type": "Bill",
+      "path": "bills/2025/2210037.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "지능정보화 기본법 일부개정법률안|의안#2209948",
+      "title": "지능정보화 기본법 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2209948",
+      "enforcement_date": "2025-04-18",
+      "concept_type": "Bill",
+      "path": "bills/2025/2209948.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "인터넷 멀티미디어 방송사업법 일부개정법률안|의안#2209830",
+      "title": "인터넷 멀티미디어 방송사업법 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2209830",
+      "enforcement_date": "2025-04-15",
+      "concept_type": "Bill",
+      "path": "bills/2025/2209830.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보통신망 이용촉진 및 정보보호 등에 관한 법률 일부개정법률안|의안#2209806",
+      "title": "정보통신망 이용촉진 및 정보보호 등에 관한 법률 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2209806",
+      "enforcement_date": "2025-04-15",
+      "concept_type": "Bill",
+      "path": "bills/2025/2209806.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보통신망 이용촉진 및 정보보호 등에 관한 법률 일부개정법률안|의안#2209795",
+      "title": "정보통신망 이용촉진 및 정보보호 등에 관한 법률 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2209795",
+      "enforcement_date": "2025-04-14",
+      "concept_type": "Bill",
+      "path": "bills/2025/2209795.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "지능정보화 기본법 일부개정법률안|의안#2209740",
+      "title": "지능정보화 기본법 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2209740",
+      "enforcement_date": "2025-04-11",
+      "concept_type": "Bill",
+      "path": "bills/2025/2209740.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보통신망 이용촉진 및 정보보호 등에 관한 법률 일부개정법률안|의안#2209704",
+      "title": "정보통신망 이용촉진 및 정보보호 등에 관한 법률 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2209704",
+      "enforcement_date": "2025-04-10",
+      "concept_type": "Bill",
+      "path": "bills/2025/2209704.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보통신망 이용촉진 및 정보보호 등에 관한 법률 일부개정법률안|의안#2209604",
+      "title": "정보통신망 이용촉진 및 정보보호 등에 관한 법률 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2209604",
+      "enforcement_date": "2025-04-07",
+      "concept_type": "Bill",
+      "path": "bills/2025/2209604.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "방송통신위원회의 설치 및 운영에 관한 법률 일부개정법률안|의안#2209473",
+      "title": "방송통신위원회의 설치 및 운영에 관한 법률 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2209473",
+      "enforcement_date": "2025-03-31",
+      "concept_type": "Bill",
+      "path": "bills/2025/2209473.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보통신망 이용촉진 및 정보보호 등에 관한 법률 일부개정법률안|의안#2209332",
+      "title": "정보통신망 이용촉진 및 정보보호 등에 관한 법률 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2209332",
+      "enforcement_date": "2025-03-25",
+      "concept_type": "Bill",
+      "path": "bills/2025/2209332.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "지능정보화 기본법 일부개정법률안|의안#2209327",
+      "title": "지능정보화 기본법 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2209327",
+      "enforcement_date": "2025-03-25",
+      "concept_type": "Bill",
+      "path": "bills/2025/2209327.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "방송통신위원회의 설치 및 운영에 관한 법률 일부개정법률안|의안#2209290",
+      "title": "방송통신위원회의 설치 및 운영에 관한 법률 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2209290",
+      "enforcement_date": "2025-03-24",
+      "concept_type": "Bill",
+      "path": "bills/2025/2209290.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보통신망 이용촉진 및 정보보호 등에 관한 법률 일부개정법률안|의안#2209282",
+      "title": "정보통신망 이용촉진 및 정보보호 등에 관한 법률 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2209282",
+      "enforcement_date": "2025-03-24",
+      "concept_type": "Bill",
+      "path": "bills/2025/2209282.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보통신망 이용촉진 및 정보보호 등에 관한 법률 일부개정법률안|의안#2209268",
+      "title": "정보통신망 이용촉진 및 정보보호 등에 관한 법률 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2209268",
+      "enforcement_date": "2025-03-21",
+      "concept_type": "Bill",
+      "path": "bills/2025/2209268.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보통신망 이용촉진 및 정보보호 등에 관한 법률 일부개정법률안|의안#2209257",
+      "title": "정보통신망 이용촉진 및 정보보호 등에 관한 법률 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2209257",
+      "enforcement_date": "2025-03-21",
+      "concept_type": "Bill",
+      "path": "bills/2025/2209257.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보통신망 이용촉진 및 정보보호 등에 관한 법률 일부개정법률안|의안#2209252",
+      "title": "정보통신망 이용촉진 및 정보보호 등에 관한 법률 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2209252",
+      "enforcement_date": "2025-03-21",
+      "concept_type": "Bill",
+      "path": "bills/2025/2209252.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보통신망 이용촉진 및 정보보호 등에 관한 법률 일부개정법률안|의안#2209044",
+      "title": "정보통신망 이용촉진 및 정보보호 등에 관한 법률 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2209044",
+      "enforcement_date": "2025-03-18",
+      "concept_type": "Bill",
+      "path": "bills/2025/2209044.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보통신망 이용촉진 및 정보보호 등에 관한 법률 일부개정법률안|의안#2208928",
+      "title": "정보통신망 이용촉진 및 정보보호 등에 관한 법률 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2208928",
+      "enforcement_date": "2025-03-14",
+      "concept_type": "Bill",
+      "path": "bills/2025/2208928.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보통신망 이용촉진 및 정보보호 등에 관한 법률 일부개정법률안|의안#2208838",
+      "title": "정보통신망 이용촉진 및 정보보호 등에 관한 법률 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2208838",
+      "enforcement_date": "2025-03-12",
+      "concept_type": "Bill",
+      "path": "bills/2025/2208838.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보통신망 이용촉진 및 정보보호 등에 관한 법률 일부개정법률안|의안#2208803",
+      "title": "정보통신망 이용촉진 및 정보보호 등에 관한 법률 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2208803",
+      "enforcement_date": "2025-03-11",
+      "concept_type": "Bill",
+      "path": "bills/2025/2208803.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "방송통신위원회의 설치 및 운영에 관한 법률 일부개정법률안|의안#2208622",
+      "title": "방송통신위원회의 설치 및 운영에 관한 법률 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2208622",
+      "enforcement_date": "2025-03-04",
+      "concept_type": "Bill",
+      "path": "bills/2025/2208622.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보통신망 이용촉진 및 정보보호 등에 관한 법률 일부개정법률안|의안#2208460",
+      "title": "정보통신망 이용촉진 및 정보보호 등에 관한 법률 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2208460",
+      "enforcement_date": "2025-02-26",
+      "concept_type": "Bill",
+      "path": "bills/2025/2208460.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보통신망 이용촉진 및 정보보호 등에 관한 법률 일부개정법률안|의안#2208450",
+      "title": "정보통신망 이용촉진 및 정보보호 등에 관한 법률 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2208450",
+      "enforcement_date": "2025-02-26",
+      "concept_type": "Bill",
+      "path": "bills/2025/2208450.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보통신 진흥 및 융합 활성화 등에 관한 특별법 일부개정법률안|의안#2208399",
+      "title": "정보통신 진흥 및 융합 활성화 등에 관한 특별법 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2208399",
+      "enforcement_date": "2025-02-25",
+      "concept_type": "Bill",
+      "path": "bills/2025/2208399.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "방송통신위원회의 설치 및 운영에 관한 법률 일부개정법률안|의안#2208298",
+      "title": "방송통신위원회의 설치 및 운영에 관한 법률 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2208298",
+      "enforcement_date": "2025-02-20",
+      "concept_type": "Bill",
+      "path": "bills/2025/2208298.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보통신망 이용촉진 및 정보보호 등에 관한 법률 일부개정법률안|의안#2208271",
+      "title": "정보통신망 이용촉진 및 정보보호 등에 관한 법률 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2208271",
+      "enforcement_date": "2025-02-19",
+      "concept_type": "Bill",
+      "path": "bills/2025/2208271.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보통신 진흥 및 융합 활성화 등에 관한 특별법 일부개정법률안|의안#2208212",
+      "title": "정보통신 진흥 및 융합 활성화 등에 관한 특별법 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2208212",
+      "enforcement_date": "2025-02-17",
+      "concept_type": "Bill",
+      "path": "bills/2025/2208212.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보통신망 이용촉진 및 정보보호 등에 관한 법률 일부개정법률안|의안#2208046",
+      "title": "정보통신망 이용촉진 및 정보보호 등에 관한 법률 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2208046",
+      "enforcement_date": "2025-02-11",
+      "concept_type": "Bill",
+      "path": "bills/2025/2208046.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보통신망 이용촉진 및 정보보호 등에 관한 법률 일부개정법률안|의안#2207938",
+      "title": "정보통신망 이용촉진 및 정보보호 등에 관한 법률 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2207938",
+      "enforcement_date": "2025-02-06",
+      "concept_type": "Bill",
+      "path": "bills/2025/2207938.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "방송통신위원회의 설치 및 운영에 관한 법률 일부개정법률안|의안#2201620",
+      "title": "방송통신위원회의 설치 및 운영에 관한 법률 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2201620",
+      "enforcement_date": "2024-07-11",
+      "concept_type": "Bill",
+      "path": "bills/2024/2201620.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "지능정보화 기본법 일부개정법률안|의안#2201206",
+      "title": "지능정보화 기본법 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2201206",
+      "enforcement_date": "2024-07-01",
+      "concept_type": "Bill",
+      "path": "bills/2024/2201206.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "지능정보화 기본법 일부개정법률안|의안#2201165",
+      "title": "지능정보화 기본법 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2201165",
+      "enforcement_date": "2024-06-28",
+      "concept_type": "Bill",
+      "path": "bills/2024/2201165.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "방송통신위원회의 설치 및 운영에 관한 법률 일부개정법률안|의안#2200902",
+      "title": "방송통신위원회의 설치 및 운영에 관한 법률 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2200902",
+      "enforcement_date": "2024-06-25",
+      "concept_type": "Bill",
+      "path": "bills/2024/2200902.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보통신망 이용촉진 및 정보보호 등에 관한 법률 일부개정법률안|의안#2200713",
+      "title": "정보통신망 이용촉진 및 정보보호 등에 관한 법률 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2200713",
+      "enforcement_date": "2024-06-20",
+      "concept_type": "Bill",
+      "path": "bills/2024/2200713.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "디지털포용법안|의안#2200551",
+      "title": "디지털포용법안",
+      "law_type": "의안",
+      "law_number": "2200551",
+      "enforcement_date": "2024-06-17",
+      "concept_type": "Bill",
+      "path": "bills/2024/2200551.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보통신망 이용촉진 및 정보보호 등에 관한 법률 일부개정법률안|의안#2200515",
+      "title": "정보통신망 이용촉진 및 정보보호 등에 관한 법률 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2200515",
+      "enforcement_date": "2024-06-14",
+      "concept_type": "Bill",
+      "path": "bills/2024/2200515.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "방송통신위원회의 설치 및 운영에 관한 법률 일부개정법률안|의안#2200461",
+      "title": "방송통신위원회의 설치 및 운영에 관한 법률 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2200461",
+      "enforcement_date": "2024-06-13",
+      "concept_type": "Bill",
+      "path": "bills/2024/2200461.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "방송통신위원회의 설치 및 운영에 관한 법률 일부개정법률안|의안#2200451",
+      "title": "방송통신위원회의 설치 및 운영에 관한 법률 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2200451",
+      "enforcement_date": "2024-06-13",
+      "concept_type": "Bill",
+      "path": "bills/2024/2200451.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "방송통신위원회의 설치 및 운영에 관한 법률 일부개정법률안|의안#2200398",
+      "title": "방송통신위원회의 설치 및 운영에 관한 법률 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2200398",
+      "enforcement_date": "2024-06-12",
+      "concept_type": "Bill",
+      "path": "bills/2024/2200398.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보통신망 이용촉진 및 정보보호 등에 관한 법률 일부개정법률안|의안#2200352",
+      "title": "정보통신망 이용촉진 및 정보보호 등에 관한 법률 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2200352",
+      "enforcement_date": "2024-06-12",
+      "concept_type": "Bill",
+      "path": "bills/2024/2200352.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보통신망 이용촉진 및 정보보호 등에 관한 법률 일부개정법률안|의안#2200294",
+      "title": "정보통신망 이용촉진 및 정보보호 등에 관한 법률 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2200294",
+      "enforcement_date": "2024-06-11",
+      "concept_type": "Bill",
+      "path": "bills/2024/2200294.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "방송통신위원회의 설치 및 운영에 관한 법률 일부개정법률안|의안#2200249",
+      "title": "방송통신위원회의 설치 및 운영에 관한 법률 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2200249",
+      "enforcement_date": "2024-06-10",
+      "concept_type": "Bill",
+      "path": "bills/2024/2200249.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "방송통신위원회의 설치 및 운영에 관한 법률 일부개정법률안|의안#2200229",
+      "title": "방송통신위원회의 설치 및 운영에 관한 법률 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2200229",
+      "enforcement_date": "2024-06-10",
+      "concept_type": "Bill",
+      "path": "bills/2024/2200229.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "방송통신위원회의 설치 및 운영에 관한 법률 일부개정법률안|의안#2200181",
+      "title": "방송통신위원회의 설치 및 운영에 관한 법률 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2200181",
+      "enforcement_date": "2024-06-07",
+      "concept_type": "Bill",
+      "path": "bills/2024/2200181.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "방송통신위원회의 설치 및 운영에 관한 법률 일부개정법률안|의안#2200170",
+      "title": "방송통신위원회의 설치 및 운영에 관한 법률 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2200170",
+      "enforcement_date": "2024-06-05",
+      "concept_type": "Bill",
+      "path": "bills/2024/2200170.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "방송통신위원회의 설치 및 운영에 관한 법률 일부개정법률안|의안#2200140",
+      "title": "방송통신위원회의 설치 및 운영에 관한 법률 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2200140",
+      "enforcement_date": "2024-06-05",
+      "concept_type": "Bill",
+      "path": "bills/2024/2200140.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "방송법 일부개정법률안|의안#2217585",
+      "title": "방송법 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2217585",
+      "enforcement_date": "2026-03-18",
+      "concept_type": "Bill",
+      "path": "bills/2026/2217585.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "방송법 일부개정법률안|의안#2217544",
+      "title": "방송법 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2217544",
+      "enforcement_date": "2026-03-17",
+      "concept_type": "Bill",
+      "path": "bills/2026/2217544.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "방송법 일부개정법률안|의안#2213311",
+      "title": "방송법 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2213311",
+      "enforcement_date": "2025-09-26",
+      "concept_type": "Bill",
+      "path": "bills/2025/2213311.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "방송법 일부개정법률안|의안#2212971",
+      "title": "방송법 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2212971",
+      "enforcement_date": "2025-09-15",
+      "concept_type": "Bill",
+      "path": "bills/2025/2212971.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "방송법 일부개정법률안|의안#2217353",
+      "title": "방송법 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2217353",
+      "enforcement_date": "2026-03-10",
+      "concept_type": "Bill",
+      "path": "bills/2026/2217353.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "방송법 일부개정법률안|의안#2215238",
+      "title": "방송법 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2215238",
+      "enforcement_date": "2025-12-15",
+      "concept_type": "Bill",
+      "path": "bills/2025/2215238.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "방송법 일부개정법률안|의안#2214311",
+      "title": "방송법 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2214311",
+      "enforcement_date": "2025-11-17",
+      "concept_type": "Bill",
+      "path": "bills/2025/2214311.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "방송법 일부개정법률안|의안#2217474",
+      "title": "방송법 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2217474",
+      "enforcement_date": "2026-03-13",
+      "concept_type": "Bill",
+      "path": "bills/2026/2217474.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "방송법 일부개정법률안|의안#2210835",
+      "title": "방송법 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2210835",
+      "enforcement_date": "2025-06-13",
+      "concept_type": "Bill",
+      "path": "bills/2025/2210835.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "방송법 일부개정법률안|의안#2217823",
+      "title": "방송법 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2217823",
+      "enforcement_date": "2026-03-27",
+      "concept_type": "Bill",
+      "path": "bills/2026/2217823.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "방송법 일부개정법률안|의안#2218280",
+      "title": "방송법 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2218280",
+      "enforcement_date": "2026-04-13",
+      "concept_type": "Bill",
+      "path": "bills/2026/2218280.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "방송법 일부개정법률안|의안#2217305",
+      "title": "방송법 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2217305",
+      "enforcement_date": "2026-03-06",
+      "concept_type": "Bill",
+      "path": "bills/2026/2217305.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "방송법 일부개정법률안|의안#2209791",
+      "title": "방송법 일부개정법률안",
+      "law_type": "의안",
+      "law_number": "2209791",
+      "enforcement_date": "2025-04-14",
+      "concept_type": "Bill",
+      "path": "bills/2025/2209791.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "데이터산업 기반 조성 및 산업육성 지원 전문기관 지정 고시|과학기술정보통신부고시",
+      "title": "데이터산업 기반 조성 및 산업육성 지원 전문기관 지정 고시",
+      "law_type": "과학기술정보통신부고시",
+      "law_number": "제2026-22호",
+      "enforcement_date": "2026-04-09",
+      "concept_type": "Notice",
+      "path": "laws/data-industry-act/notices/data_industry_support_agency_designation.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "데이터안심구역의 지정 및 운영 등에 관한 고시|과학기술정보통신부고시",
+      "title": "데이터안심구역의 지정 및 운영 등에 관한 고시",
+      "law_type": "과학기술정보통신부고시",
+      "law_number": "제2026-20호",
+      "enforcement_date": "2026-04-09",
+      "concept_type": "Notice",
+      "path": "laws/data-industry-act/notices/data_safe_zone_designation_operation.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "데이터 가치평가기관 지정 및 운영 등에 관한 고시|과학기술정보통신부고시",
+      "title": "데이터 가치평가기관 지정 및 운영 등에 관한 고시",
+      "law_type": "과학기술정보통신부고시",
+      "law_number": "제2026-21호",
+      "enforcement_date": "2026-04-09",
+      "concept_type": "Notice",
+      "path": "laws/data-industry-act/notices/data_valuation_agency_designation.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "디지털포용법|법률",
+      "title": "디지털포용법",
+      "law_type": "법률",
+      "law_number": "제20672호",
+      "enforcement_date": "2026-01-22",
+      "concept_type": "Law",
+      "path": "laws/digital-inclusion-act/digital_inclusion_act.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "디지털포용법 시행령|대통령령",
+      "title": "디지털포용법 시행령",
+      "law_type": "대통령령",
+      "law_number": "제36005호",
+      "enforcement_date": "2026-01-22",
+      "concept_type": "Decree",
+      "path": "laws/digital-inclusion-act/digital_inclusion_act_enforcement_decree.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "전자서명법|법률",
+      "title": "전자서명법",
+      "law_type": "법률",
+      "law_number": "제18479호",
+      "enforcement_date": "2022-10-20",
+      "concept_type": "Law",
+      "path": "laws/digital-signature-act/digital_signature_act.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "전자서명법 시행령|대통령령",
+      "title": "전자서명법 시행령",
+      "law_type": "대통령령",
+      "law_number": "제33723호",
+      "enforcement_date": "2023-09-15",
+      "concept_type": "Decree",
+      "path": "laws/digital-signature-act/digital_signature_act_enforcement_decree.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "전자서명법 시행규칙|과학기술정보통신부령",
+      "title": "전자서명법 시행규칙",
+      "law_type": "과학기술정보통신부령",
+      "law_number": "제56호",
+      "enforcement_date": "2020-12-10",
+      "concept_type": "Rule",
+      "path": "laws/digital-signature-act/digital_signature_act_enforcement_rules.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "전자문서 및 전자거래 기본법|법률",
+      "title": "전자문서 및 전자거래 기본법",
+      "law_type": "법률",
+      "law_number": "제18478호",
+      "enforcement_date": "2022-10-20",
+      "concept_type": "Law",
+      "path": "laws/electronic-document-act/electronic_document_act.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "전자문서 및 전자거래 기본법 시행령|대통령령",
+      "title": "전자문서 및 전자거래 기본법 시행령",
+      "law_type": "대통령령",
+      "law_number": "제33913호",
+      "enforcement_date": "2023-12-12",
+      "concept_type": "Decree",
+      "path": "laws/electronic-document-act/electronic_document_act_enforcement_decree.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "전자문서 및 전자거래 기본법 시행규칙|과학기술정보통신부령",
+      "title": "전자문서 및 전자거래 기본법 시행규칙",
+      "law_type": "과학기술정보통신부령",
+      "law_number": "제61호",
+      "enforcement_date": "2020-12-22",
+      "concept_type": "Rule",
+      "path": "laws/electronic-document-act/electronic_document_act_enforcement_rules.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "공인전자문서중계자 설비에 관한 규정|과학기술정보통신부고시",
+      "title": "공인전자문서중계자 설비에 관한 규정",
+      "law_type": "과학기술정보통신부고시",
+      "law_number": "제2021-62호",
+      "enforcement_date": "2021-08-27",
+      "concept_type": "Notice",
+      "path": "laws/electronic-document-act/notices/certified_edoc_relay_facility_standard.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보통신 진흥 및 융합 활성화 등에 관한 특별법|법률",
+      "title": "정보통신 진흥 및 융합 활성화 등에 관한 특별법",
+      "law_type": "법률",
+      "law_number": "제21554호",
+      "enforcement_date": "2026-04-21",
+      "concept_type": "Law",
+      "path": "laws/ict-convergence-act/ict_convergence_act.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보통신 진흥 및 융합 활성화 등에 관한 특별법 시행령|대통령령",
+      "title": "정보통신 진흥 및 융합 활성화 등에 관한 특별법 시행령",
+      "law_type": "대통령령",
+      "law_number": "제36220호",
+      "enforcement_date": "2026-03-24",
+      "concept_type": "Decree",
+      "path": "laws/ict-convergence-act/ict_convergence_act_enforcement_decree.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보통신 진흥 및 융합 활성화 등에 관한 특별법 시행규칙|과학기술정보통신부령",
+      "title": "정보통신 진흥 및 융합 활성화 등에 관한 특별법 시행규칙",
+      "law_type": "과학기술정보통신부령",
+      "law_number": "제00096호",
+      "enforcement_date": "2022-12-11",
+      "concept_type": "Rule",
+      "path": "laws/ict-convergence-act/ict_convergence_act_enforcement_rules.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보통신융합등 기술ㆍ서비스에 대한 신속처리ㆍ임시허가ㆍ실증특례 운영규정|과학기술정보통신부고시",
+      "title": "정보통신융합등 기술ㆍ서비스에 대한 신속처리ㆍ임시허가ㆍ실증특례 운영규정",
+      "law_type": "과학기술정보통신부고시",
+      "law_number": "제2026-49호",
+      "enforcement_date": "2026-07-10",
+      "concept_type": "Notice",
+      "path": "laws/ict-convergence-act/notices/ict_convergence_fasttrack_temp_permit_regulation.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보통신융합 기술·서비스 등의 품질인증기관 지정|과학기술정보통신부고시",
+      "title": "정보통신융합 기술·서비스 등의 품질인증기관 지정",
+      "law_type": "과학기술정보통신부고시",
+      "law_number": "제2018-67호",
+      "enforcement_date": "2018-09-19",
+      "concept_type": "Notice",
+      "path": "laws/ict-convergence-act/notices/ict_convergence_quality_certification_body_designation.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보통신융합 기술·서비스 등의 품질인증기준|과학기술정보통신부고시",
+      "title": "정보통신융합 기술·서비스 등의 품질인증기준",
+      "law_type": "과학기술정보통신부고시",
+      "law_number": "제2026-44호",
+      "enforcement_date": "2026-06-08",
+      "concept_type": "Notice",
+      "path": "laws/ict-convergence-act/notices/ict_convergence_quality_certification_standard.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보보호산업의 진흥에 관한 법률|법률",
+      "title": "정보보호산업의 진흥에 관한 법률",
+      "law_type": "법률",
+      "law_number": "제19990호",
+      "enforcement_date": "2024-07-10",
+      "concept_type": "Law",
+      "path": "laws/information-security-industry-act/information_security_industry_act.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보보호산업의 진흥에 관한 법률 시행령|대통령령",
+      "title": "정보보호산업의 진흥에 관한 법률 시행령",
+      "law_type": "대통령령",
+      "law_number": "제35801호",
+      "enforcement_date": "2025-10-01",
+      "concept_type": "Decree",
+      "path": "laws/information-security-industry-act/information_security_industry_act_enforcement_decree.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보보호산업의 진흥에 관한 법률 시행규칙|과학기술정보통신부령",
+      "title": "정보보호산업의 진흥에 관한 법률 시행규칙",
+      "law_type": "과학기술정보통신부령",
+      "law_number": "제00116호",
+      "enforcement_date": "2023-10-19",
+      "concept_type": "Rule",
+      "path": "laws/information-security-industry-act/information_security_industry_act_enforcement_rules.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "접근성 품질인증 및 시험평가 등에 관한 고시|과학기술정보통신부고시",
+      "title": "접근성 품질인증 및 시험평가 등에 관한 고시",
+      "law_type": "과학기술정보통신부고시",
+      "law_number": "제2026-43호",
+      "enforcement_date": "2026-06-09",
+      "concept_type": "Notice",
+      "path": "laws/intelligent-informatization-act/notices/accessibility_quality_certification_testing.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "인터넷주소자원에 관한 법률|법률",
+      "title": "인터넷주소자원에 관한 법률",
+      "law_type": "법률",
+      "law_number": "제18736호",
+      "enforcement_date": "2022-07-12",
+      "concept_type": "Law",
+      "path": "laws/internet-address-act/internet_address_act.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "인터넷주소자원에 관한 법률 시행령|대통령령",
+      "title": "인터넷주소자원에 관한 법률 시행령",
+      "law_type": "대통령령",
+      "law_number": "제32784호",
+      "enforcement_date": "2022-07-12",
+      "concept_type": "Decree",
+      "path": "laws/internet-address-act/internet_address_act_enforcement_decree.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "개인위치정보사업등록 세부심사기준별 평가방법|방송미디어통신위원회고시",
+      "title": "개인위치정보사업등록 세부심사기준별 평가방법",
+      "law_type": "방송미디어통신위원회고시",
+      "law_number": "제2026-13호",
+      "enforcement_date": "2026-06-04",
+      "concept_type": "Notice",
+      "path": "laws/location-info-act/notices/location_info_business_registration_criteria.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "개인위치정보사업 양수 및 법인의 합병 등의 인가 세부심사기준별 평가방법|방송미디어통신위원회고시",
+      "title": "개인위치정보사업 양수 및 법인의 합병 등의 인가 세부심사기준별 평가방법",
+      "law_type": "방송미디어통신위원회고시",
+      "law_number": "제2026-14호",
+      "enforcement_date": "2026-06-04",
+      "concept_type": "Notice",
+      "path": "laws/location-info-act/notices/location_info_business_transfer_merger_approval_criteria.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보보호 관리등급 부여에 관한 고시|과학기술정보통신부고시",
+      "title": "정보보호 관리등급 부여에 관한 고시",
+      "law_type": "과학기술정보통신부고시",
+      "law_number": "제2017-7호",
+      "enforcement_date": "2017-08-24",
+      "concept_type": "Notice",
+      "path": "laws/network-act/notices/info_security_grade_notice.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보보호조치에 관한 지침|과학기술정보통신부고시",
+      "title": "정보보호조치에 관한 지침",
+      "law_type": "과학기술정보통신부고시",
+      "law_number": "제2017-7호",
+      "enforcement_date": "2017-08-24",
+      "concept_type": "Notice",
+      "path": "laws/network-act/notices/info_security_measures_guideline.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보보호 사전점검에 관한 고시|과학기술정보통신부고시",
+      "title": "정보보호 사전점검에 관한 고시",
+      "law_type": "과학기술정보통신부고시",
+      "law_number": "제2017-7호",
+      "enforcement_date": "2017-08-24",
+      "concept_type": "Notice",
+      "path": "laws/network-act/notices/info_security_preinspection_notice.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보보호제품 성능평가 운영지침|과학기술정보통신부고시",
+      "title": "정보보호제품 성능평가 운영지침",
+      "law_type": "과학기술정보통신부고시",
+      "law_number": "제2020-34호",
+      "enforcement_date": "2020-07-16",
+      "concept_type": "Notice",
+      "path": "laws/network-act/notices/info_security_product_performance_evaluation_guideline.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보보호 전문서비스 기업 지정 등에 관한 고시|과학기술정보통신부고시",
+      "title": "정보보호 전문서비스 기업 지정 등에 관한 고시",
+      "law_type": "과학기술정보통신부고시",
+      "law_number": "제2017-24호",
+      "enforcement_date": "2017-10-27",
+      "concept_type": "Notice",
+      "path": "laws/network-act/notices/info_security_service_firm_designation_notice.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보보호시스템 평가·인증 등에 관한 고시|과학기술정보통신부고시",
+      "title": "정보보호시스템 평가·인증 등에 관한 고시",
+      "law_type": "과학기술정보통신부고시",
+      "law_number": "제2022-61호",
+      "enforcement_date": "2022-10-31",
+      "concept_type": "Notice",
+      "path": "laws/network-act/notices/info_security_system_evaluation_certification_notice.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보보호 취약점 신고자에 대한 포상업무 위탁 고시|과학기술정보통신부고시",
+      "title": "정보보호 취약점 신고자에 대한 포상업무 위탁 고시",
+      "law_type": "과학기술정보통신부고시",
+      "law_number": "제2023-21호",
+      "enforcement_date": "2023-06-26",
+      "concept_type": "Notice",
+      "path": "laws/network-act/notices/info_security_vulnerability_reward_notice.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보통신망연결기기등 정보보호인증에 관한 고시|과학기술정보통신부고시",
+      "title": "정보통신망연결기기등 정보보호인증에 관한 고시",
+      "law_type": "과학기술정보통신부고시",
+      "law_number": "제2021-73호",
+      "enforcement_date": "2021-09-23",
+      "concept_type": "Notice",
+      "path": "laws/network-act/notices/iot_device_security_certification_notice.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "통신과금서비스 운영에 관한 고시|과학기술정보통신부고시",
+      "title": "통신과금서비스 운영에 관한 고시",
+      "law_type": "과학기술정보통신부고시",
+      "law_number": "제2017-7호",
+      "enforcement_date": "2017-08-24",
+      "concept_type": "Notice",
+      "path": "laws/network-act/notices/telecom_billing_service_operation_notice.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "무선설비규칙|과학기술정보통신부령",
+      "title": "무선설비규칙",
+      "law_type": "과학기술정보통신부령",
+      "law_number": "제86호",
+      "enforcement_date": "2022-01-04",
+      "concept_type": "Rule",
+      "path": "laws/radio-act/wireless_equipment_rules.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "대한민국 방송통신위원회와 칠레공화국 통신청간의 전기통신기기에 대한 상호인정 협정|방송통신위원회고시",
+      "title": "대한민국 방송통신위원회와 칠레공화국 통신청간의 전기통신기기에 대한 상호인정 협정",
+      "law_type": "방송통신위원회고시",
+      "law_number": "제2008-109호",
+      "enforcement_date": "2008-08-19",
+      "concept_type": "Notice",
+      "path": "laws/radio-act/conformity-assessment/mra_chile.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "소프트웨어프로세스 품질인증 운영에 관한 지침|과학기술정보통신부고시",
+      "title": "소프트웨어프로세스 품질인증 운영에 관한 지침",
+      "law_type": "과학기술정보통신부고시",
+      "law_number": "제2025-21호",
+      "enforcement_date": "2025-04-30",
+      "concept_type": "Notice",
+      "path": "laws/software-industry-act/notices/software_process_quality_certification.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "소프트웨어 진흥법|법률",
+      "title": "소프트웨어 진흥법",
+      "law_type": "법률",
+      "law_number": "제20476호",
+      "enforcement_date": "2025-04-23",
+      "concept_type": "Law",
+      "path": "laws/software-promotion-act/software_promotion_act.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "소프트웨어 진흥법 시행령|대통령령",
+      "title": "소프트웨어 진흥법 시행령",
+      "law_type": "대통령령",
+      "law_number": "제36338호",
+      "enforcement_date": "2026-06-03",
+      "concept_type": "Decree",
+      "path": "laws/software-promotion-act/software_promotion_act_enforcement_decree.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "소프트웨어 진흥법 시행규칙|과학기술정보통신부령",
+      "title": "소프트웨어 진흥법 시행규칙",
+      "law_type": "과학기술정보통신부령",
+      "law_number": "제149호",
+      "enforcement_date": "2025-04-30",
+      "concept_type": "Rule",
+      "path": "laws/software-promotion-act/software_promotion_act_enforcement_rules.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "전기통신기본법|법률",
+      "title": "전기통신기본법",
+      "law_type": "법률",
+      "law_number": "제16019호",
+      "enforcement_date": "2019-06-25",
+      "concept_type": "Law",
+      "path": "laws/telecom-basic-act/telecom_basic_act.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "전기통신기본법 시행령|대통령령",
+      "title": "전기통신기본법 시행령",
+      "law_type": "대통령령",
+      "law_number": "제22605호",
+      "enforcement_date": "2011-01-24",
+      "concept_type": "Decree",
+      "path": "laws/telecom-basic-act/telecom_basic_act_enforcement_decree.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "번호안내서비스를 제공하지 않아도 되는 경미한 사업|과학기술정보통신부고시",
+      "title": "번호안내서비스를 제공하지 않아도 되는 경미한 사업",
+      "law_type": "과학기술정보통신부고시",
+      "law_number": "제2020-75호",
+      "enforcement_date": "2020-12-11",
+      "concept_type": "Notice",
+      "path": "laws/telecom-business-act/notices/directory_assistance_exemption_business.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "경제적 이익 등 제공의 부당한 이용자 차별행위에 관한 세부기준|방송미디어통신위원회고시",
+      "title": "경제적 이익 등 제공의 부당한 이용자 차별행위에 관한 세부기준",
+      "law_type": "방송미디어통신위원회고시",
+      "law_number": "제2026-11호",
+      "enforcement_date": "2026-05-18",
+      "concept_type": "Notice",
+      "path": "laws/telecom-business-act/notices/economic_benefit_discrimination_criteria.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "전기통신설비 공동구축을 위한 협의회 구성·운영 및 전담기관 지정 등에 관한 고시|과학기술정보통신부고시",
+      "title": "전기통신설비 공동구축을 위한 협의회 구성·운영 및 전담기관 지정 등에 관한 고시",
+      "law_type": "과학기술정보통신부고시",
+      "law_number": "제2018-33호",
+      "enforcement_date": "2018-07-01",
+      "concept_type": "Notice",
+      "path": "laws/telecom-business-act/notices/facility_joint_construction_council_agency.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "이동통신단말장치 고유식별번호 공유 전문기관 지정 등에 관한 고시|과학기술정보통신부고시",
+      "title": "이동통신단말장치 고유식별번호 공유 전문기관 지정 등에 관한 고시",
+      "law_type": "과학기술정보통신부고시",
+      "law_number": "제2026-33호",
+      "enforcement_date": "2026-04-28",
+      "concept_type": "Notice",
+      "path": "laws/telecom-business-act/notices/imei_sharing_agency_designation.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "시내전화서비스 등 번호이동성 시행에 관한 기준|과학기술정보통신부고시",
+      "title": "시내전화서비스 등 번호이동성 시행에 관한 기준",
+      "law_type": "과학기술정보통신부고시",
+      "law_number": "제2023-40호",
+      "enforcement_date": "2024-05-01",
+      "concept_type": "Notice",
+      "path": "laws/telecom-business-act/notices/local_phone_number_portability_standard.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "기간통신역무가 아닌 전기통신서비스|과학기술정보통신부고시",
+      "title": "기간통신역무가 아닌 전기통신서비스",
+      "law_type": "과학기술정보통신부고시",
+      "law_number": "제2020-23호",
+      "enforcement_date": "2020-05-26",
+      "concept_type": "Notice",
+      "path": "laws/telecom-business-act/notices/non_basic_telecom_service_scope.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "자가전기통신설비 목적외 사용의 특례 범위|과학기술정보통신부고시",
+      "title": "자가전기통신설비 목적외 사용의 특례 범위",
+      "law_type": "과학기술정보통신부고시",
+      "law_number": "제2019-15호",
+      "enforcement_date": "2019-03-15",
+      "concept_type": "Notice",
+      "path": "laws/telecom-business-act/notices/private_telecom_facility_alternate_use_scope.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "신호점번호관리기준|과학기술정보통신부고시",
+      "title": "신호점번호관리기준",
+      "law_type": "과학기술정보통신부고시",
+      "law_number": "제2019-44호",
+      "enforcement_date": "2019-06-25",
+      "concept_type": "Notice",
+      "path": "laws/telecom-business-act/notices/signaling_point_code_management_standard.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "전기통신사업자의 통계보고 등에 관한 고시|과학기술정보통신부고시",
+      "title": "전기통신사업자의 통계보고 등에 관한 고시",
+      "law_type": "과학기술정보통신부고시",
+      "law_number": "제2019-48호",
+      "enforcement_date": "2019-06-25",
+      "concept_type": "Notice",
+      "path": "laws/telecom-business-act/notices/telecom_carrier_statistics_report_notice.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "통신망 종합관리 지침|과학기술정보통신부고시",
+      "title": "통신망 종합관리 지침",
+      "law_type": "과학기술정보통신부고시",
+      "law_number": "제2017-7호",
+      "enforcement_date": "2017-08-24",
+      "concept_type": "Notice",
+      "path": "laws/telecom-business-act/notices/telecom_network_comprehensive_management_guideline.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "수출하고자 하는 중고 이동통신단말장치의 분실ㆍ도난 단말장치 여부 확인방법 등에 관한 고시|과학기술정보통신부고시",
+      "title": "수출하고자 하는 중고 이동통신단말장치의 분실ㆍ도난 단말장치 여부 확인방법 등에 관한 고시",
+      "law_type": "과학기술정보통신부고시",
+      "law_number": "제2026-26호",
+      "enforcement_date": "2026-04-28",
+      "concept_type": "Notice",
+      "path": "laws/telecom-business-act/notices/used_handset_export_theft_check.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "중고 이동통신단말장치 안심거래 사업자 인증기준 등에 관한 고시|과학기술정보통신부고시",
+      "title": "중고 이동통신단말장치 안심거래 사업자 인증기준 등에 관한 고시",
+      "law_type": "과학기술정보통신부고시",
+      "law_number": "제2026-32호",
+      "enforcement_date": "2026-04-28",
+      "concept_type": "Notice",
+      "path": "laws/telecom-business-act/notices/used_handset_safe_trade_certification_notice.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "부가통신서비스 요금신고 대상에서 제외되는 전기통신사업자|과학기술정보통신부고시",
+      "title": "부가통신서비스 요금신고 대상에서 제외되는 전기통신사업자",
+      "law_type": "과학기술정보통신부고시",
+      "law_number": "제2019-59호",
+      "enforcement_date": "2019-07-25",
+      "concept_type": "Notice",
+      "path": "laws/telecom-business-act/notices/value_added_service_fee_report_exemption.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보통신공사업법|법률",
+      "title": "정보통신공사업법",
+      "law_type": "법률",
+      "law_number": "제20730호",
+      "enforcement_date": "2026-02-01",
+      "concept_type": "Law",
+      "path": "laws/telecom-construction-act/telecom_construction_act.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보통신공사업법 시행령|대통령령",
+      "title": "정보통신공사업법 시행령",
+      "law_type": "대통령령",
+      "law_number": "제36220호",
+      "enforcement_date": "2026-03-24",
+      "concept_type": "Decree",
+      "path": "laws/telecom-construction-act/telecom_construction_act_enforcement_decree.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보통신공사업법 시행규칙|과학기술정보통신부령",
+      "title": "정보통신공사업법 시행규칙",
+      "law_type": "과학기술정보통신부령",
+      "law_number": "제00152호",
+      "enforcement_date": "2025-07-18",
+      "concept_type": "Rule",
+      "path": "laws/telecom-construction-act/telecom_construction_act_enforcement_rules.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "방송통신표준|국립전파연구원고시",
+      "title": "방송통신표준",
+      "law_type": "국립전파연구원고시",
+      "law_number": "제2013-7호",
+      "enforcement_date": "2013-07-23",
+      "concept_type": "Notice",
+      "path": "laws/telecom-facility-standards/notices/broadcasting_telecom_standard.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "방송통신표준화지침|국립전파연구원고시",
+      "title": "방송통신표준화지침",
+      "law_type": "국립전파연구원고시",
+      "law_number": "제2017-8호",
+      "enforcement_date": "2017-08-28",
+      "concept_type": "Notice",
+      "path": "laws/telecom-facility-standards/notices/broadcasting_telecom_standardization_guideline.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "통신구 최소유지관리기준|과학기술정보통신부고시",
+      "title": "통신구 최소유지관리기준",
+      "law_type": "과학기술정보통신부고시",
+      "law_number": "제2021-48호",
+      "enforcement_date": "2021-06-30",
+      "concept_type": "Notice",
+      "path": "laws/telecom-facility-standards/notices/conduit_minimum_maintenance_standard.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "통신구 성능개선기준|과학기술정보통신부고시",
+      "title": "통신구 성능개선기준",
+      "law_type": "과학기술정보통신부고시",
+      "law_number": "제2021-47호",
+      "enforcement_date": "2021-06-30",
+      "concept_type": "Notice",
+      "path": "laws/telecom-facility-standards/notices/conduit_performance_improvement_standard.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "접지설비·구내통신설비·선로설비 및 통신공동구등에 대한 기술기준|국립전파연구원고시",
+      "title": "접지설비·구내통신설비·선로설비 및 통신공동구등에 대한 기술기준",
+      "law_type": "국립전파연구원고시",
+      "law_number": "제2025-10호",
+      "enforcement_date": "2025-11-28",
+      "concept_type": "Notice",
+      "path": "laws/telecom-facility-standards/notices/grounding_indoor_facility_conduit_standard.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보통신설비 유지보수·관리기준|과학기술정보통신부고시",
+      "title": "정보통신설비 유지보수·관리기준",
+      "law_type": "과학기술정보통신부고시",
+      "law_number": "제2025-48호",
+      "enforcement_date": "2025-07-18",
+      "concept_type": "Notice",
+      "path": "laws/telecom-facility-standards/notices/ict_facility_maintenance_standard.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "정보통신표준 개발·운영 지침|국립전파연구원고시",
+      "title": "정보통신표준 개발·운영 지침",
+      "law_type": "국립전파연구원고시",
+      "law_number": "제2022-24호",
+      "enforcement_date": "2022-12-29",
+      "concept_type": "Notice",
+      "path": "laws/telecom-facility-standards/notices/ict_standard_development_guideline.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "통신설비를 이용한 중계서비스 제공 등에 관한 기준|과학기술정보통신부고시",
+      "title": "통신설비를 이용한 중계서비스 제공 등에 관한 기준",
+      "law_type": "과학기술정보통신부고시",
+      "law_number": "제2017-7호",
+      "enforcement_date": "2017-08-24",
+      "concept_type": "Notice",
+      "path": "laws/telecom-facility-standards/notices/relay_service_provision_standard.md",
       "status": "current"
     }
   ]

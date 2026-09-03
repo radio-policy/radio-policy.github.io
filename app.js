@@ -1446,18 +1446,30 @@ function buildKbContext(rows) {
     var t = (r.title || '').trim();
     if (t && lastKbSources.indexOf(KB_SRC_PREFIX + t) === -1) lastKbSources.push(KB_SRC_PREFIX + t);
   });
+  // 국회 계류 법안 요약(concept_type='Bill', 2026-09-04) — 두 RPC가 concept_type을 반환한다(실DB 확인).
+  // 확정 법령이 아니므로 라벨을 「법안요약 · 국회 계류 — 확정 법령 아님」으로 바꾸고 메타도 의안번호·발의일로
+  // 읽히게 한다. rag.ts buildKbContext와 동일 유지 — 한쪽만 고치지 말 것. 순서는 그대로.
+  var hasBill = false;
   var items = rows.map(function(r, i) {
+    var bill = (r.concept_type || '') === 'Bill';
+    if (bill) hasBill = true;
     var meta = [];
     if (r.law_type) meta.push(r.law_type);
-    if (r.law_number) meta.push('법령번호: ' + r.law_number);
-    if (r.enforcement_date) meta.push('시행일: ' + r.enforcement_date);
+    if (r.law_number) meta.push((bill ? '의안번호: ' : '법령번호: ') + r.law_number);
+    if (r.enforcement_date) meta.push((bill ? '발의일: ' : '시행일: ') + r.enforcement_date);
     var metaStr = meta.length ? ' [' + meta.join(' | ') + ']' : '';
-    return '[법령요약 ' + (i+1) + '] ' + (r.title || '') + metaStr + '\n' + (r.content || '');
+    var label = bill ? '[법안요약 ' + (i+1) + ' · 국회 계류 — 확정 법령 아님]' : '[법령요약 ' + (i+1) + ']';
+    return label + ' ' + (r.title || '') + metaStr + '\n' + (r.content || '');
   });
+  var billNote = hasBill
+    ? '※ [법안요약 · 국회 계류 — 확정 법령 아님]으로 표시된 항목은 국회에 계류 중인 법률안의 요약입니다. ' +
+      '현행 법령이 아니므로 "…하는 법안이 발의되어 있다(계류 중)"로만 서술하고, 확정된 규정처럼 인용하거나 시행 중인 것으로 답하지 마세요.\n'
+    : '';
   return '\n\n---\n\n[법령·규제 요약 지식베이스 — 현행 법령·고시·훈령 요약/실무]\n' +
     '아래는 우리 팀이 정리한 법령·고시·훈령의 요약·적용범위·실무 체크리스트·소관부처 문서(현행본)입니다. ' +
     '법의 취지·실무 대응·담당부처를 물을 때 활용하세요. ' +
-    '단, 정확한 조문 번호·문구 인용은 위 RAG 조문 원문을 최우선으로 하고, 이 요약은 실무 맥락 보강용으로 쓰세요:\n\n' +
+    '단, 정확한 조문 번호·문구 인용은 위 RAG 조문 원문을 최우선으로 하고, 이 요약은 실무 맥락 보강용으로 쓰세요:\n' +
+    billNote + '\n' +
     items.join('\n\n---\n\n');
 }
 

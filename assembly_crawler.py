@@ -103,44 +103,181 @@ NOTICE_DEADLINE_DAYS = 3
 #  API 조회
 # ═══════════════════════════════════════════════════════════
 
-def fetch_bills(keyword: str, page: int = 1, page_size: int = 100) -> list[dict]:
-    """열린국회정보 API로 법안 검색"""
+# ── 페이징 (2026-09-04 실측 교정) ──────────────────────────────
+#  종전 fetch_bills()는 pIndex=1 한 페이지(pSize=100)만 받고 끝났다. 호출부도 page 인자를
+#  넘긴 적이 없어, 22대에서 100건을 넘는 키워드(정보통신망·개인정보·인공지능·데이터)는
+#  101건째부터 **조용히** 누락됐다(오류 없음 → heartbeat 정상 → 아무도 모름).
+#  같은 API가 COMMITTEE=과학기술정보방송통신위원회 조건도 받는데(22대 802건), DB에는
+#  그중 311건만 있었다(전체 466건). 키워드 검색은 법안명에 그 말이 있어야만 잡히므로
+#  「정보통신공사업법」「위치정보법」「소프트웨어 진흥법」처럼 이름에 키워드가 없는
+#  과방위 소관 법안은 구조적으로 못 본다. → ① 페이지를 끝까지 넘긴다(한 페이지가 pSize
+#  미만이면 마지막) ② 과방위 소관 전수 스윕(fetch_committee_bills)을 키워드 루프 뒤에 더한다.
+#  페이지당 재시도 3회·페이지 간 0.3s 대기는 종전 규칙 그대로.
+
+def _fetch_bill_rows(extra_params: dict, label: str, page_size: int = 100) -> list[dict]:
+    """nzmimeepazxkubdpn 공통 페이징 조회. 마지막 페이지(행수 < page_size)까지 전량 반환.
+    페이지 하나가 3회 재시도 후에도 실패하면 그때까지 모은 행만 반환(부분 결과·로그)."""
     if not ASSEMBLY_API_KEY:
         print('[경고] ASSEMBLY_API_KEY 없음 — 건너뜀')
         return []
 
-    params = {
-        'KEY': ASSEMBLY_API_KEY,
-        'Type': 'json',
-        'pIndex': page,
-        'pSize': page_size,
-        'AGE': ASSEMBLY_AGE,
-        'BILL_NAME': keyword,
-    }
-    try:
-        # 하루 1회 잡 — 일시 오류 1회가 하루치 누락으로 직결되지 않도록 3회 재시도 (배경역사 #23)
-        resp = None
-        for attempt in range(1, 4):
-            try:
-                resp = requests.get(API_BASE, params=params, timeout=15)
-                resp.raise_for_status()
-                break
-            except Exception as e:
-                if attempt < 3:
-                    print(f'  [재시도 {attempt}/3] {keyword}: {e}')
-                    time.sleep(5)
-                else:
-                    raise
-        data = resp.json()
-        rows_wrapper = data.get('nzmimeepazxkubdpn', [])
-        # 응답 구조: [{head: [...]}, {row: [...]}]
-        for item in rows_wrapper:
-            if 'row' in item:
-                return item['row']
-        return []
-    except Exception as e:
-        print(f'  [API 오류] {keyword}: {e}')
-        return []
+    rows_all: list[dict] = []
+    page = 1
+    while True:
+        params = {
+            'KEY': ASSEMBLY_API_KEY,
+            'Type': 'json',
+            'pIndex': page,
+            'pSize': page_size,
+            'AGE': ASSEMBLY_AGE,
+        }
+        params.update(extra_params)
+        try:
+            # 하루 1회 잡 — 일시 오류 1회가 하루치 누락으로 직결되지 않도록 3회 재시도 (배경역사 #23)
+            resp = None
+            for attempt in range(1, 4):
+                try:
+                    resp = requests.get(API_BASE, params=params, timeout=15)
+                    resp.raise_for_status()
+                    break
+                except Exception as e:
+                    if attempt < 3:
+                        print(f'  [재시도 {attempt}/3] {label} p{page}: {e}')
+                        time.sleep(5)
+                    else:
+                        raise
+            data = resp.json()
+            rows: list[dict] = []
+            # 응답 구조: [{head: [...]}, {row: [...]}] — 결과 없음(INFO-200)이면 키 자체가 없다
+            for item in data.get('nzmimeepazxkubdpn', []):
+                if 'row' in item:
+                    rows = item['row'] or []
+                    break
+        except Exception as e:
+            print(f'  [API 오류] {label} p{page}: {e}' + (f' (앞 {len(rows_all)}건은 유지)' if rows_all else ''))
+            return rows_all
+        rows_all.extend(rows)
+        if len(rows) < page_size:
+            break
+        page += 1
+        time.sleep(0.3)  # API rate limit (페이지 간)
+    return rows_all
+
+
+def fetch_bills(keyword: str, page_size: int = 100) -> list[dict]:
+    """열린국회정보 API로 법안명 검색 — 모든 페이지를 합쳐 반환 (종전: 1페이지만)"""
+    return _fetch_bill_rows({'BILL_NAME': keyword}, keyword, page_size)
+
+
+# ── 과방위 소관 전수 스윕 (2026-09-04 신설) ─────────────────────
+COMMITTEE_NAME = '과학기술정보방송통신위원회'
+COMMITTEE_SWEEP_KEYWORD = '과방위소관'   # 스윕으로 들어온 법안의 matched_keywords 표식
+# 법안명에 이 문자열이 있으면 판정 없이 관련(통신·전파·정보통신·데이터·AI·플랫폼 계열 법령군).
+# 과방위 소관이라도 원자력·우주·과기 출연연·KAIST·우정·KBS/EBS/MBC 거버넌스 등은 팀 업무 밖이라
+# 이 목록에 없는 이름은 건너뛴다. 「방송법…」만은 통신·플랫폼 규제가 섞여 Haiku 판정으로 넘긴다.
+COMMITTEE_FAMILIES = [
+    '정보통신망 이용촉진', '방송통신위원회의 설치', '방송미디어통신위원회의 설치',
+    '정보통신공사업법', '지능정보화 기본법', '위치정보의 보호', '소프트웨어 진흥법',
+    '정보보호산업', '디지털포용', '인터넷 멀티미디어 방송', '정보통신 진흥 및 융합',
+    '이동통신보안', '디지털 재난', '사이버재해보험', '딥페이크', '시청각미디어',
+    '양자과학기술', '장애인 차별조항', '전기통신', '전파법', '방송통신발전', '단말',
+    '주파수', '데이터', '클라우드', '인공지능', '개인정보', '플랫폼',
+]
+
+
+def fetch_committee_bills(committee: str = COMMITTEE_NAME) -> list[dict]:
+    """소관위 기준 법안 전량 조회(페이징). 행의 COMMITTEE 키를 CURR_COMMITTEE로도 복사해
+    upsert_bill·알림·판정 입력(_notice_judge_items)이 키워드 검색 행과 같은 모양으로 쓰게 한다."""
+    rows = _fetch_bill_rows({'COMMITTEE': committee}, f'소관위={committee}')
+    for b in rows:
+        if not b.get('CURR_COMMITTEE') and b.get('COMMITTEE'):
+            b['CURR_COMMITTEE'] = b['COMMITTEE']
+    return rows
+
+
+def is_committee_bill_relevant(bill: dict):
+    """과방위 소관 법안의 관련성 1차 판정.
+    True  = 법안명이 COMMITTEE_FAMILIES 중 하나를 포함 → 관련
+    None  = 「방송법…」 → Haiku 판정 필요(호출부가 judge_notices_haiku로 넘김)
+    False = 그 외(원자력·우주·출연연 등) → 건너뜀"""
+    name = (bill.get('BILL_NAME') or '').strip()
+    if not name:
+        return False
+    if any(f in name for f in COMMITTEE_FAMILIES):
+        return True
+    if name.startswith('방송법'):
+        return None
+    return False
+
+
+def sweep_committee_bills(collected: dict, existing_bills: dict, dry_run: bool = False) -> None:
+    """과방위 소관 전수 스윕 — 관련 법안을 collected(bill_id → (row, keywords))에 합친다.
+    · 이미 collected에 있으면 키워드 '과방위소관'만 덧붙인다(merge).
+    · 「방송법…」은 입법예고 패스와 같은 Haiku 배치 판정(judge_notices_haiku, app_config
+      assembly_notice_criteria + 키워드 폴백)을 재사용한다. 이미 추적 중(existing_bills)이면
+      판정 없이 관련, 기각 이력(app_config.assembly_committee_rejected)이 있으면 재판정하지 않는다
+      — 매일 같은 방송법 수십 건을 다시 판정하는 낭비·판정 흔들림 방지(입법예고 기각 캐시와 같은 원리).
+      입법예고 캐시(assembly_notice_rejected)는 진행중 목록 기준으로 매일 정리되므로 키를 분리한다."""
+    bills = fetch_committee_bills()
+    print(f'  과방위 소관 법안: {len(bills)}건')
+    if not bills:
+        return
+
+    relevant: list[dict] = []
+    pending: list[dict] = []          # 방송법 계열 — Haiku 판정 대상
+    auto_pending = 0
+    for b in bills:
+        bill_id = b.get('BILL_ID', '')
+        if not bill_id:
+            continue
+        verdict = is_committee_bill_relevant(b)
+        if verdict is True:
+            relevant.append(b)
+        elif verdict is None:
+            if bill_id in collected or bill_id in existing_bills:
+                relevant.append(b)        # 이미 관련으로 잡혀 있는 방송법 → 판정 생략
+                auto_pending += 1
+            else:
+                pending.append(b)
+
+    rejected = load_rejected_cache(COMMITTEE_REJECT_KEY) if pending else {}
+    to_judge = [b for b in pending if b['BILL_ID'] not in rejected]
+    print(f'  1차 관련(법령군): {len(relevant) - auto_pending}건 | 방송법 계열: {len(pending)}건'
+          f' (기존 추적 {auto_pending}건, 기각 캐시 스킵 {len(pending) - len(to_judge)}건, 판정 {len(to_judge)}건)')
+    if to_judge:
+        nos = judge_notices_haiku(to_judge)
+        if nos is None:
+            print('  [경고] Haiku 판정 불가 — 키워드 폴백(fail-open)')
+            nos = keyword_match_notices(to_judge)
+        newly_rejected = 0
+        today_tag = datetime.now(KST).strftime('%y%m%d')
+        for b in to_judge:
+            if (b.get('BILL_NO') or '').strip() in nos:
+                relevant.append(b)
+                print(f'    ✅ 방송법 관련 판정: [{b.get("BILL_NO", "")}] {(b.get("BILL_NAME") or "")[:50]}')
+            else:
+                rejected[b['BILL_ID']] = today_tag
+                newly_rejected += 1
+        if newly_rejected:
+            # 22대 안에서는 법안이 목록에서 사라지지 않으므로 현재 목록에 있는 id만 남긴다
+            active = {b.get('BILL_ID') for b in bills}
+            rejected = {k: v for k, v in rejected.items() if k in active}
+            if dry_run:
+                print(f'  (dry-run) 과방위 기각 캐시 갱신 생략: +{newly_rejected}건')
+            else:
+                save_rejected_cache(rejected, COMMITTEE_REJECT_KEY)
+
+    added = merged = 0
+    for b in relevant:
+        bill_id = b['BILL_ID']
+        if bill_id in collected:
+            if COMMITTEE_SWEEP_KEYWORD not in collected[bill_id][1]:
+                collected[bill_id][1].append(COMMITTEE_SWEEP_KEYWORD)
+            merged += 1
+        else:
+            collected[bill_id] = (b, [COMMITTEE_SWEEP_KEYWORD])
+            added += 1
+    print(f'  과방위 스윕 결과: 관련 {len(relevant)}건 → 신규 편입 {added}건, 기존 병합 {merged}건')
 
 
 # ═══════════════════════════════════════════════════════════
@@ -537,11 +674,15 @@ def keyword_match_notices(candidates: list[dict]) -> set:
 
 
 # ── 기각 캐시 (app_config.assembly_notice_rejected — {bill_id: 'YYMMDD'}) ──
+# 같은 형식의 두 번째 키 assembly_committee_rejected(과방위 스윕 방송법 판정 기각분)는 key 인자로 구분.
+NOTICE_REJECT_KEY    = 'assembly_notice_rejected'
+COMMITTEE_REJECT_KEY = 'assembly_committee_rejected'
 
-def load_rejected_cache() -> dict:
+
+def load_rejected_cache(key: str = NOTICE_REJECT_KEY) -> dict:
     try:
         rows = sb.table('app_config').select('value') \
-            .eq('key', 'assembly_notice_rejected').limit(1).execute().data
+            .eq('key', key).limit(1).execute().data
         if rows and (rows[0]['value'] or '').strip():
             cache = json.loads(rows[0]['value'])
             if isinstance(cache, dict):
@@ -551,10 +692,10 @@ def load_rejected_cache() -> dict:
     return {}
 
 
-def save_rejected_cache(cache: dict):
+def save_rejected_cache(cache: dict, key: str = NOTICE_REJECT_KEY):
     try:
         sb.table('app_config').upsert(
-            {'key': 'assembly_notice_rejected',
+            {'key': key,
              'value': json.dumps(cache, ensure_ascii=False)},
             on_conflict='key').execute()
         print(f'  기각 캐시 저장: {len(cache)}건')
@@ -803,6 +944,12 @@ def main(dry_run: bool = False):
                 collected[bill_id] = (b, [keyword])
 
         time.sleep(0.3)  # API rate limit
+
+    # ── 과방위 소관 전수 스윕 (2026-09-04) — 키워드 루프와 독립: 오류가 나도 키워드 수집분은 저장 ──
+    try:
+        sweep_committee_bills(collected, existing_bills, dry_run=dry_run)
+    except Exception as e:
+        print(f'  [과방위 스윕 오류(무시)] {e}')
 
     print(f'\n  총 고유 법안: {len(collected)}건')
 

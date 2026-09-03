@@ -204,7 +204,10 @@ async function searchChunks(sb: SupabaseClient, apiKey: string, query: string): 
 }
 
 // ── kb 요약 검색 (app.js searchKbSummaries 이식: trgm×5 + 시맨틱(law-2)×10 융합, 상위 5) ──
-interface KbRow { doc_id: string; chunk_idx: number; title?: string; content?: string; law_type?: string; law_number?: string; enforcement_date?: string; trgm_score?: number; similarity?: number; _score?: number; }
+// concept_type·path는 두 RPC(search_kb_chunks_trgm / match_kb_chunks_semantic)가 이미 반환한다(실DB 확인 2026-09-04).
+interface KbRow { doc_id: string; chunk_idx: number; title?: string; content?: string; law_type?: string; law_number?: string; enforcement_date?: string; concept_type?: string; path?: string; trgm_score?: number; similarity?: number; _score?: number; }
+// 국회 계류 법안 요약(concept_type='Bill', 2026-09-04) — 확정 법령이 아니므로 라벨·안내문을 따로 단다
+const isBillRow = (r: KbRow): boolean => (r.concept_type || '') === 'Bill';
 async function searchKbSummaries(sb: SupabaseClient, query: string): Promise<KbRow[]> {
   try {
     const trgmP = sb.rpc('search_kb_chunks_trgm', { query_text: query, match_threshold: 0.10, match_count: 6, only_current: true })
@@ -357,17 +360,27 @@ async function buildAnnexContext(sb: SupabaseClient, chunks: Chunk[], question: 
   }
 }
 
+// app.js buildKbContext와 동일 유지 — 한쪽만 고치지 말 것.
+// 법안(concept_type='Bill') 항목은 라벨을 「법안요약 · 국회 계류 — 확정 법령 아님」으로 바꾸고
+// 메타도 의안번호·발의일로 읽히게 한다(law_number=의안번호, enforcement_date=발의일). 순서는 그대로.
 function buildKbContext(rows: KbRow[]): string {
   if (!rows.length) return '';
+  let hasBill = false;
   const items = rows.map((r, i) => {
+    const bill = isBillRow(r);
+    if (bill) hasBill = true;
     const meta: string[] = [];
     if (r.law_type) meta.push(r.law_type);
-    if (r.law_number) meta.push('법령번호: ' + r.law_number);
-    if (r.enforcement_date) meta.push('시행일: ' + r.enforcement_date);
+    if (r.law_number) meta.push((bill ? '의안번호: ' : '법령번호: ') + r.law_number);
+    if (r.enforcement_date) meta.push((bill ? '발의일: ' : '시행일: ') + r.enforcement_date);
     const metaStr = meta.length ? ' [' + meta.join(' | ') + ']' : '';
-    return `[법령요약 ${i + 1}] ${r.title || ''}${metaStr}\n${r.content || ''}`;
+    const label = bill ? `[법안요약 ${i + 1} · 국회 계류 — 확정 법령 아님]` : `[법령요약 ${i + 1}]`;
+    return `${label} ${r.title || ''}${metaStr}\n${r.content || ''}`;
   });
-  return '\n\n---\n\n[법령·규제 요약 지식베이스 — 현행 법령·고시·훈령 요약/실무]\n정확한 조문 번호·문구 인용은 위 RAG 조문 원문을 최우선으로 하고, 이 요약은 실무 맥락 보강용으로 쓰세요:\n\n' + items.join('\n\n---\n\n');
+  const billNote = hasBill
+    ? '※ [법안요약 · 국회 계류 — 확정 법령 아님]으로 표시된 항목은 국회에 계류 중인 법률안의 요약입니다. 현행 법령이 아니므로 "…하는 법안이 발의되어 있다(계류 중)"로만 서술하고, 확정된 규정처럼 인용하거나 시행 중인 것으로 답하지 마세요.\n'
+    : '';
+  return '\n\n---\n\n[법령·규제 요약 지식베이스 — 현행 법령·고시·훈령 요약/실무]\n정확한 조문 번호·문구 인용은 위 RAG 조문 원문을 최우선으로 하고, 이 요약은 실무 맥락 보강용으로 쓰세요:\n' + billNote + '\n' + items.join('\n\n---\n\n');
 }
 
 // ── Sonnet 호출: 스트리밍으로 받아 서버에서 누적 ──
@@ -659,7 +672,8 @@ export async function answerLawQuery(sb: SupabaseClient, query: string): Promise
   // 법률 특화 voyage-law-2를 써서 같은 질문에 이 고시를 정확히 짚었다.
   // → 잘 맞히는 검색이 지목한 법령의 조문을 확정적으로 가져오면, 검색 운에 기대지 않아도 된다.
   // (HNSW는 ef_search 기본값 탓에 300건을 요청해도 ~40건만 훑는다 — 임계·건수를 올려도 못 넘는다.)
-  const kbTitles = [...new Set(kb.map((r) => (r.title || '').trim()))].filter((t) => t.length >= 4).slice(0, 3);
+  // 법안 요약(Bill)은 조문 다리에서 제외 — 「전파법 일부개정법률안」 제목으로 현행 조문을 끌어오면 안 된다
+  const kbTitles = [...new Set(kb.filter((r) => !isBillRow(r)).map((r) => (r.title || '').trim()))].filter((t) => t.length >= 4).slice(0, 3);
   const bridged: LawHit[] = [];
   if (kbTitles.length) {
     const qWords = extractKeywords(query).map((w) => w.toLowerCase());
@@ -723,7 +737,7 @@ export async function answerLawQuery(sb: SupabaseClient, query: string): Promise
   }
   if (kb.length) {
     ctxParts.push('[법령 요약(실무 맥락 보강용 — 조문 인용은 위 원문 우선)]\n' + kb.slice(0, 3).map((r) =>
-      `· ${(r.title || '').trim()}\n${(r.content || '').slice(0, 500)}`
+      `· ${isBillRow(r) ? '[국회 계류 법안 — 확정 법령 아님] ' : ''}${(r.title || '').trim()}\n${(r.content || '').slice(0, 500)}`
     ).join('\n\n'));
   }
 
@@ -1096,7 +1110,7 @@ export async function answerAdvisory(sb: SupabaseClient, systemPrompt: string, q
   for (const h of extra) if (h.doc_name && !sources.includes(h.doc_name)) sources.push(h.doc_name);
   for (const s of annex.sources) { const t = '[별표] ' + s; if (!sources.includes(t)) sources.push(t); }
   for (const c of chunks) if (c.doc_name && !sources.includes(c.doc_name)) sources.push(c.doc_name);
-  for (const r of kb) { const t = '[요약] ' + (r.title || '').trim(); if (r.title && !sources.includes(t)) sources.push(t); }
+  for (const r of kb) { const t = (isBillRow(r) ? '[법안요약·계류] ' : '[요약] ') + (r.title || '').trim(); if (r.title && !sources.includes(t)) sources.push(t); }
   for (const s of news.sources) if (!sources.includes(s)) sources.push(s);
   // 근거 청크 id — sources와 같은 순서(조문 정밀검색분 먼저, 그다음 RAG). 숫자 id만 남긴다.
   const chunkIds: number[] = [];
