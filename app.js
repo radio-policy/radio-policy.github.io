@@ -5484,7 +5484,9 @@ function renderBriefingNewsItem(block, importance, briefingIdx, itemIdx) {
       + '<div style="margin-bottom:6px">' + titleHtml + '</div>'
       + summaryHtml
       + linkHtml
-      + '<div id="' + analysisId + '" data-briefing-analysis="1" style="margin-top:10px;padding:10px 12px;background:rgba(239,68,68,0.06);border-radius:8px;border:1px solid rgba(239,68,68,0.2)">'
+      // data-needs-analysis는 **저장된 분석이 없는 항목에만** 붙는다 — 즉석 AI 분석의 유일한 트리거 (#118).
+      // 저장 분석이 있는 항목까지 다시 돌리면 방문할 때마다 Haiku 호출이 반복된다.
+      + '<div id="' + analysisId + '" data-briefing-analysis="1"' + (storedAnalysis ? '' : ' data-needs-analysis="1"') + ' style="margin-top:10px;padding:10px 12px;background:rgba(239,68,68,0.06);border-radius:8px;border:1px solid rgba(239,68,68,0.2)">'
       +   (storedAnalysis
           ? '<div style="font-size:12px;color:var(--text-primary);line-height:1.7"><span style="font-weight:700">⚠️ SKT 영향 분석</span> ' + mdBold(storedAnalysis) + '</div>'
           : '<div style="display:flex;align-items:center;gap:7px;font-size:12px;color:var(--text-secondary)">'
@@ -5618,11 +5620,15 @@ async function loadBriefing() {
     // 최신 브리핑(idx=0)의 긴급 항목 AI 분석 — innerHTML 직후 요소 직접 참조
     // (innerHTML 설정은 동기 완료이므로 바로 querySelectorAll 가능)
     var analysisTargets = [];
-    // data-briefing-analysis 속성으로 분석 컨테이너를 정확히 식별
+    // 최신 브리핑(#bf-0) 안에서, 저장된 분석이 **없는** 긴급 항목만(data-needs-analysis).
+    // ★ 종전에는 여기서 0건이면 "fallback"으로 목록 전체의 [id^="bi-"]를 훑었다 — 93일치
+    //   브리핑의 긴급 항목 146개 전부에 Haiku 영향도 분석이 걸려, 화면을 열 때마다 146회 호출됐다
+    //   (2026-09-03 실측: 하루 452회, 브라우저 동시연결 6개가 이 큐에 묶여 다른 화면이 몇십 초 멈춤).
+    //   오늘 브리핑의 긴급 항목이 저장 분석을 갖고 있으면 항상 0건이라 매번 fallback으로 떨어졌다.
+    //   fallback은 삭제 — 즉석 분석은 최신 브리핑의 미분석 항목에만 건다. (#118)
     var firstBriefingEl = listEl.querySelector('#bf-0');
     if (firstBriefingEl) {
-      var urgentDivs = firstBriefingEl.querySelectorAll('[data-briefing-analysis]');
-      console.log('[briefing] 긴급 분석 대상 (data attr):', urgentDivs.length, '개');
+      var urgentDivs = firstBriefingEl.querySelectorAll('[data-needs-analysis]');
       urgentDivs.forEach(function(div) {
         var container = div.parentElement;
         var titleEl = container ? container.querySelector('[data-news-title]') : null;
@@ -5630,18 +5636,7 @@ async function loadBriefing() {
         analysisTargets.push({ el: div, title: titleText });
       });
     }
-    // data attr 방식 fallback: 모든 [id^="bi-"] 탐색
-    if (analysisTargets.length === 0) {
-      var allBiDivs = listEl.querySelectorAll('[id^="bi-"]');
-      console.log('[briefing] fallback bi-* 탐색 결과:', allBiDivs.length, '개');
-      allBiDivs.forEach(function(div) {
-        var container = div.parentElement;
-        var titleEl = container ? container.querySelector('[data-news-title]') : null;
-        var titleText = titleEl ? titleEl.textContent.trim() : '';
-        analysisTargets.push({ el: div, title: titleText });
-      });
-    }
-    console.log('[briefing] 최종 분석 대상:', analysisTargets.length, '개');
+    console.log('[briefing] 즉석 분석 대상(최신 브리핑·미분석 긴급 항목):', analysisTargets.length, '개');
     analysisTargets.forEach(function(item) {
       console.log('[briefing] 분석 시작:', item.el.id || '(no id)', '|', item.title.slice(0, 40));
       analyzeBriefingItemEl(item.el, item.title);
