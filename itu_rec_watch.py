@@ -57,7 +57,7 @@ ITU_REC_URL = 'https://www.itu.int/rec/R-REC-{rec}/en'
 #   · 완전한 Chrome UA 문자열          → 연결 자체를 블랙홀(ReadTimeout, 재시도 전부 실패)
 #   · python-requests 기본 UA / curl / 아래 같은 정직한 UA → 정상 200 (1초대 응답)
 # 위장할수록 오히려 막힌다. 예의상으로도 신원을 밝히는 편이 맞다.
-USER_AGENT = 'radio-policy-ai-itu-watch/1.0 (+https://github.com/youjinwoong/radio-policy-ai)'
+USER_AGENT = 'radio-policy-ai-itu-watch/1.0 (+https://github.com/radio-policy/radio-policy.github.io)'
 
 REQ_TIMEOUT   = 20
 REQ_INTERVAL  = 1.5   # 요청 간 간격(초) — 예의상 텀. ITU 사이트는 응답이 들쭉날쭉하다.

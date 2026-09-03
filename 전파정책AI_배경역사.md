@@ -263,7 +263,7 @@ HTTP/2 사고에서 직접 겪은 불편(빈 브리핑·주말 오경보·점검
 **교훈**:
 1. **PAT를 재생성/재발급할 때 권한이 그대로 따라오지 않을 수 있다.** 이 PAT의 필수 권한은 **Repository: Contents(Read/Write) + Metadata(Read, 자동) + Actions(Read/Write)** 3종. Actions가 빠지면 git push(commit)는 되지만 workflow_dispatch는 403.
 2. **pg_cron "succeeded"는 GitHub가 받았다는 뜻이 아니다**(net.http_post 비동기). 트리거 교체·점검은 `net._http_response.status_code`로 확인.
-3. 무해 검증법: `net.http_get`로 `https://api.github.com/repos/youjinwoong/radio-policy-ai`(200+push 확인)은 토큰 유효성만, **workflow_dispatch 204**는 Actions 권한까지 확인 — 후자가 진짜 동작 보증.
+3. 무해 검증법: `net.http_get`로 `https://api.github.com/repos/radio-policy/radio-policy.github.io`(200+push 확인; 2026-09-03 조직 이전 전에는 youjinwoong/radio-policy-ai)은 토큰 유효성만, **workflow_dispatch 204**는 Actions 권한까지 확인 — 후자가 진짜 동작 보증.
 4. 이번 재생성본은 만료일 없음 → 7일 만료 경고 재발 없음(보안상 무기한이 부담이면 만료기간 재설정 가능하나 그러면 만료마다 이 절차 반복).
 
 ---
@@ -4544,3 +4544,26 @@ AI가 지어낼 위험 — #60 OCR 반려와 같은 원리로, 틀린 사실의 
 갖춘 상태**가 됐다. 이 자동 보강은 시연용 일회성이 아니라 상시 유지(무인 반복 경로 = API
 원칙, 승인은 주 몇 건이라 비용 무시 가능 — 운영자 확인). 남은 결함 하나: enrich 내부 오류가
 삼켜지면 "추가 보강 없음"으로 보고된다(이슈 7 실측 — 재시도로 해결, 로그에는 남음).
+
+**#115 GitHub 저장소 조직 이전 — pg_cron 트리거 6시간 무음 실패 + 미러 CORS 재발 (2026-09-03).**
+운영자가 집 PC에서 미러 주소를 루트 도메인(`radio-policy.github.io`)으로 만들기 위해 저장소를
+`youjinwoong/radio-policy-ai` → 조직 `radio-policy/radio-policy.github.io`로 이전했다(GitLab 정본은
+무변경, 구 주소에는 리다이렉트 저장소). 인수인계 문서는 "소스 무수정·봇 무영향"으로 판단했으나
+세션 조사에서 두 가지가 어긋나 있었다. ①**pg_cron → workflow_dispatch가 04:47 KST부터 매시 403**
+("Resource not accessible by personal access token") — Vault `github_pat`이 개인 계정 소유
+fine-grained 토큰이라 조직 저장소에 권한이 없고, DB 함수 2개도 옛 경로를 하드코딩. cron 잡은
+`succeeded`로 찍혀 #18과 같은 무음 실패였고, GitHub 자체 cron(백업)은 매시 17분 중 2회만 돌아
+(06:47·09:13) 약 6시간 동안 뉴스 수집이 사실상 멈춰 있었다. ②**Edge Function 3개 CORS 목록에
+새 미러 주소가 없어** github.io에서 AI 자문이 "Failed to fetch"(#110 재발 조건).
+**처리(심사 4시간 전, 원복 대신 진행 선택).** CORS는 세 파일에 주소 한 줄씩 바꿔 MCP
+`deploy_edge_function`으로 배포(50KB 미만이라 CLI 없이 가능, operator-webhook은 verify_jwt=false
+유지 필수) → 두 주소 preflight 204 확인 → 운영자가 github.io에서 자문 성공 화면으로 실검증.
+PAT는 운영자가 조직 소유 `radio-policy-commit-org`(Actions·Contents R/W)를 발급해 Vault 교체,
+세션이 마이그레이션 `github_dispatch_repo_moved_to_org`로 두 함수 경로를 교체 → **10:47 크롤
+트리거가 204**, GitHub 쪽 `workflow_dispatch` 이벤트로 실행 확인. 문서·코드 폴백값
+(CLAUDE.md·지침·HANDOFF·개요·health_watchdog·itu_rec_watch)의 옛 주소도 정리.
+**교훈.** ①fine-grained PAT은 resource owner 단위 — 저장소를 옮기면 토큰이 즉시 죽는다.
+"소스 무수정"이 "시스템 무영향"은 아니다(외부 연결점: PAT·CORS·하드코딩 URL). ②MCP
+`execute_sql`은 `supabase_read_only_user`라 SECURITY DEFINER 함수를 호출할 수 없다 — 교체 검증은
+다음 cron 실행의 `net._http_response`로(#18 규칙 재확인). ③배포 직후에도 브라우저가 preflight를
+수 분 캐시하므로 "고쳤는데 아직 안 됨"은 새로고침 후 재판정.

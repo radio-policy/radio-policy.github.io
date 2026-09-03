@@ -13,8 +13,8 @@
 ## 프로젝트 개요
 
 SKT Comm센터 기술정책팀의 전파·통신 정책 모니터링 자동화 시스템.
-- 대시보드: https://radio-policy.gitlab.io/
-- GitHub: https://github.com/youjinwoong/radio-policy-ai
+- 대시보드: https://radio-policy.gitlab.io/ (GitLab Pages, 정본) · 미러 https://radio-policy.github.io/ (GitHub Pages)
+- 저장소: 주 GitLab `gitlab.com/radio-policy/radio-policy.gitlab.io` · 미러 GitHub `github.com/radio-policy/radio-policy.github.io` (조직 `radio-policy` 소유, 2026-09-03 개인 계정에서 이전 — 배경역사 #115)
 - 담당자: 유진웅 (you.jinwoong@gmail.com)
 
 ## 로컬 파일 위치
@@ -839,7 +839,7 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **구본(superseded) 청크는 임베딩을 두지 말 것** — 검색이 결과에서 걸러내는데 HNSW RAM만 차지한다(2,635개 제거로 작업세트가 캐시 안으로 들어옴). backfill_embeddings.py에 status neq.superseded 필터가 있으니 제거하지 말 것. promote_due가 새로 강등한 구본은 임베딩이 남는데, 작업세트가 다시 캐시에 근접하면 `update document_chunks set embedding=null where status='superseded'` + REINDEX로 정리. (배경역사 #54)
 - **Supabase 파이썬 클라이언트는 `sb_client.make_client` 사용, `create_client` 직접 호출 금지** — supabase-py 2.31 httpx HTTP/2 keepalive 끊김(RemoteProtocolError: Server disconnected) 회피(HTTP/1.1 강제+재시도). 신규 스크립트도 동일 적용. (배경역사 #15)
 - **워크플로 pip를 버전 무고정으로 되돌리지 말 것(`requirements.txt` 유지)** — 무고정 자동 최신화가 어느 날 갑자기 깨뜨림(HTTP/2 사고). 버전 올릴 땐 한 번에 하나씩 바꿔 Run으로 검증. (배경역사 #15)
-- **GitHub PAT 재생성·교체 시 Actions(R/W) 권한 확인 누락 금지 / pg_cron 'succeeded'를 트리거 성공으로 믿지 말 것** — fine-grained PAT 필수권한은 Contents(R/W)+Metadata(자동)+Actions(R/W). Actions가 빠지면 git push는 되지만 workflow_dispatch는 403, 그런데 net.http_post가 비동기라 cron 잡은 succeeded로 찍혀 모든 트리거가 무음으로 멈춤. 교체 검증은 `net._http_response.status_code`(204=성공)로. (배경역사 #18)
+- **GitHub PAT 재생성·교체 시 Actions(R/W) 권한 확인 누락 금지 / pg_cron 'succeeded'를 트리거 성공으로 믿지 말 것** — fine-grained PAT 필수권한은 Contents(R/W)+Metadata(자동)+Actions(R/W). Actions가 빠지면 git push는 되지만 workflow_dispatch는 403, 그런데 net.http_post가 비동기라 cron 잡은 succeeded로 찍혀 모든 트리거가 무음으로 멈춤. 교체 검증은 `net._http_response.status_code`(204=성공)로. (배경역사 #18) **저장소를 다른 계정·조직으로 옮기면 fine-grained PAT은 즉시 무효** — 토큰은 resource owner(계정/조직) 단위라 옛 소유자 토큰은 새 소유자 저장소에 403. 이전 직후 조직 소유 토큰을 재발급해 Vault를 갱신하고, `dispatch_github_workflow`·`trigger_briefing_if_missing`의 저장소 경로도 함께 바꿀 것(GitHub 리다이렉트에 기대지 말 것). (배경역사 #115)
 - **모닝 브리핑 빈-브리핑 폴백(요약→제목)·`already_sent_today` 폴백 교체 허용 로직 제거 금지** — PC 꺼진 날 빈 브리핑 방지 + 본문 채워지면 정식본 자동 교체 핵심. (배경역사 #16)
 - **기사 0건 무뉴스 통지(`_handle_no_news`)·`_NONEWS_PREFIX` placeholder·시각무관 1일1회 발송을 '09시 이전 무음 종료'로 되돌리지 말 것** — 무음 누락 오인 방지. placeholder는 기사 들어오면 정식본 자동 교체(폴백과 동일 패턴), 중복은 placeholder 존재로 1일1회 차단. `already_sent_today`의 `_NONEWS_PREFIX` 교체 허용도 유지. (배경역사 #17)
 - **워치독을 'DB 신선도만' 보던 방식으로 되돌리지 말 것 / 크롤러 heartbeat(`system_health` 3종: last_crawl_run·last_gov_notice_run·last_refetch_run) 쓰기·`system_health` 테이블 삭제 금지** — '고장 vs 없음(주말·드문 입법예고)' 구분·오경보 방지·운영상태 탭 핵심. (배경역사 #16)
@@ -1029,7 +1029,7 @@ EMAIL_FROM, EMAIL_PASSWORD, EMAIL_TO, RESEND_API_KEY,
 TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, LAW_OC_KEY(=radiopolicyai),
 ASSEMBLY_API_KEY, NAVER_CLIENT_ID, NAVER_CLIENT_SECRET, SUBSCRIBER_BOT_TOKEN
 ※ 로컬은 동일 키를 .env에(.gitignore 등록). backfill_report_embeddings.py는 SUPABASE_URL·SERVICE_KEY·VOYAGE_API_KEY만.
-※ Vault github_pat(fine-grained PAT, radio-policy-commit) 필수권한: Repository — Contents(R/W)·Metadata(자동)·Actions(R/W). 재생성 시 Actions 누락 주의(배경역사 #18).
+※ Vault github_pat(fine-grained PAT, `radio-policy-commit-org`, resource owner = 조직 `radio-policy`, 만료 2027-09-04) 필수권한: Repository — Contents(R/W)·Metadata(자동)·Actions(R/W). 재생성 시 Actions 누락 주의(배경역사 #18), 저장소 소유자와 토큰 소유자가 같아야 함(#115).
 ```
 
 ### Supabase Edge Function Secrets

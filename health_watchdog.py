@@ -27,7 +27,7 @@ SUPABASE_KEY = os.environ["SUPABASE_SERVICE_KEY"]
 TG_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TG_CHAT = os.environ["TELEGRAM_CHAT_ID"]
 GH_TOKEN = os.environ.get("GITHUB_TOKEN", "")
-REPO = os.environ.get("GITHUB_REPOSITORY", "youjinwoong/radio-policy-ai")
+REPO = os.environ.get("GITHUB_REPOSITORY", "radio-policy/radio-policy.github.io")
 
 NOW = datetime.datetime.now(datetime.timezone.utc)
 KST = datetime.timezone(datetime.timedelta(hours=9))
