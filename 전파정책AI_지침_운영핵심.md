@@ -653,7 +653,7 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
   **원문은 record.assembly.go.kr 뷰어 xml.do가 정본**(PDF는 pdftotext에서 글리프 깨짐 — 폴백만).
 - 발언 선별: press_keywords 1차 + Haiku 2차(press_relevance_criteria) → 채택+전후 1블록 →
   `과방위_회의록_{YYYY}.md`(doc_category='회의록', 섹션 '## YYMMDD 제N차 (안건)') —
-  press_ingest.**register_kb_section**(register_press의 일반화) 사용. 22대 개원(2024)부터 백필.
+  press_ingest.**register_kb_section**(register_press의 일반화) 사용. 22대 개원(2024)부터 백필 → **2026-09-03 세션 파이프라인(minutes_offline.py)으로 20대 개원(2016)까지 소급 완료**(상임위 257회의·발언 1,975건, #120).
 - 대시보드: 국회 법안 탭 하단 목록 + openPressDetail 재사용. KB 목록 블랙리스트에 '회의록' 포함.
 - 17시 run_gov_crawler.bat 체인에서 매일 신규분 수집. heartbeat last_minutes_run.
 - **발언자별 입장 추적(2026-08-03, #67)**: 판정 통과 본 발언(전후 문맥 제외)을 `assembly_speeches`
@@ -679,7 +679,7 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
     값 충돌을 막으려 `assembly_speeches.confer_num`은 **`audit-{MNTS_ID}`**로 네임스페이스.
   - 섹션 제목 `국정감사 (첫 기관 외 N개 기관)`, **dedupe 접두는 '국정감사' 고정**(기관 목록이 바뀌어도 안 흔들림).
   - 국감 회의록은 1,700~2,100블록이라 판정 상한 80·수록 상한 50(상임위는 40·30).
-  - CLI: `--audit-only`(소급 백필) / `--no-audit`. 22대 개원 이전 연도는 자동 스킵.
+  - CLI: `--audit-only`(소급 백필) / `--no-audit`. 2016년(20대 개원) 이전 연도는 자동 스킵.
 - **뷰어는 간헐적으로 페이지를 덜 보낸다 — `fetch_speech_blocks()`는 best-of-N (2026-08-14, #99)**:
   같은 id 51996이 어떤 때는 3,449블록, 어떤 때는 432/363블록으로 왔다. 한 번만 받으면 그 시점에 걸린 회의가
   **잘린 채 등재**되고 `section_exists()`가 헤더만 보고 dup 처리해 **영구히 갱신되지 않는다**(실제로 이 모양의
