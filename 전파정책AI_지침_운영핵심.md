@@ -746,6 +746,7 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 
 이슈맵 관련 하지-말-것:
 - **`operator-webhook`은 `--no-verify-jwt`로 배포할 것** — 텔레그램은 Authorization 헤더가 없어 verify_jwt가 켜지면 게이트웨이에서 전부 차단된다(버튼 무반응인데 함수 로그에 아무것도 없으면 이것부터 의심). 관문은 `X-Telegram-Bot-Api-Secret-Token`+chat_id 검증이다.
+- **화면 로드 시 자동으로 도는 AI 호출에 "0건이면 전체를 훑는" fallback을 두지 말 것** — Daily Briefing이 최신 브리핑에 미분석 긴급 항목이 0건이면 목록 전체(93일치 긴급 146개)에 Haiku 영향도 분석을 걸어, 로그인 사용자가 화면을 열 때마다 146회 호출·하루 452회가 됐다. 브라우저의 호스트당 동시연결 6개가 그 큐에 묶여 **로그인 상태에서만** 다른 화면이 몇십 초 멈췄고(비로그인은 AI 호출이 없어 정상), 증상이 "장애"처럼 보였다. 자동 AI 호출은 **대상을 좁게(최신·미저장) 고정**하고, 급증 판별은 `advisory_usage`의 general 카운트(전날 대비)와 `function_edge_logs`의 분당 POST 수로 한다. (배경역사 #118)
 - **CORS 허용 목록은 `claude-proxy`·`news-archive-search`·`operator-webhook` 세 함수를 함께 고칠 것** — 한쪽만 고치면 그 주소에서 해당 기능만 조용히 죽는다. GitHub Pages 주소 누락으로 AI 기능 전체가 "Failed to fetch"였던 사고(#110)의 재발 방지. 증상 판별: Edge 로그에 OPTIONS 204만 있고 POST가 없으면 브라우저가 CORS로 본요청을 차단한 것.
 - **document_chunks에 벡터를 일괄 insert하지 말 것** — 4만 행+HNSW에서 12행 일괄도 statement timeout(57014). `issue_case_ingest.py`처럼 3건씩 분할.
 - **news_feed의 `event` 라벨로 사건을 묶지 말 것** — 같은 사건이 유사 라벨 6~7개로 갈라지고(펨토셀 실측), 본문에 스친 주제가 라벨로 붙는다(2분기 실적 기사 수십 건에 "통합요금제 출시" 라벨). 묶음은 `news_dedup.cluster_star`(제목 키워드, 임계 3)로.
