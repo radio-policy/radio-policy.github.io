@@ -3447,15 +3447,36 @@ async function loadNews() {
     // tags·event는 _groupNews의 묶기 조건에 쓰인다 — 빠지면 undefined가 돼 조건이 조용히 무력화된다
     // (태그 조건은 항상 통과, 사건 라벨은 영영 제목 유사도로 폴백. 컬럼 추가 시 여기부터 볼 것)
     var NEWS_LIST_COLS = 'id,title,source,category,url,is_read,published_at,created_at,summary,importance,urgency,locked,briefed_date,content_fetched_at,tags,event';
-    var all = [];
-    for (var off = 0; off < 10000; off += 1000) {
-      var page = await sb.from('news_feed').select(NEWS_LIST_COLS)
+    // 페이지를 **병렬로** 받는다(2026-09-03). 종전에는 앞 페이지 응답을 기다려야 다음 요청이
+    // 나가는 순차 루프라, 행이 늘면 왕복 횟수가 그대로 늘었다(8/21 6회 → 9/3 10회, 9,031행).
+    // 총 건수를 먼저 세어 페이지 수를 계산하므로 `off < 10000` 하드코딩도 없앴다 —
+    // 그 상한은 9,031행 시점에서 3일 뒤 도달 예정이었고, 넘으면 published_at 내림차순이라
+    // **오래된 뉴스가 에러 없이 잘리는** 조용한 실패가 될 참이었다(#48·#103·#108 계보).
+    var PAGE = 1000, MAX_PAGES = 60;   // 안전장치: 60,000행(60일 보존 기준 여유 3배)
+    var cnt = await sb.from('news_feed').select('id', { count: 'exact', head: true });
+    if (cnt.error) throw cnt.error;
+    var total = cnt.count || 0;
+    var pages = Math.ceil(total / PAGE);
+    if (pages > MAX_PAGES) {
+      // 자르되 조용히 넘어가지 않는다 — 여기 걸리면 보존기간·수집량을 다시 봐야 한다
+      console.warn('[뉴스] 총 ' + total + '행이 안전상한(' + (MAX_PAGES * PAGE) + ')을 넘어 일부만 로드합니다');
+      pages = MAX_PAGES;
+    }
+    var reqs = [];
+    for (var p = 0; p < pages; p++) {
+      var off = p * PAGE;
+      reqs.push(sb.from('news_feed').select(NEWS_LIST_COLS)
         .order('published_at', { ascending: false, nullsFirst: false })
-        .range(off, off + 999);
+        .range(off, off + PAGE - 1));
+    }
+    // Promise.all은 입력 순서를 보존하므로 그대로 이어붙이면 정렬이 유지된다.
+    // 한 페이지라도 실패하면 reject → 아래 catch로 간다(부분 목록을 정상인 척 보여주지 않는다).
+    var pagesData = await Promise.all(reqs);
+    var all = [];
+    pagesData.forEach(function(page) {
       if (page.error) throw page.error;
       all = all.concat(page.data || []);
-      if ((page.data || []).length < 1000) break;
-    }
+    });
     // 잠금 기사 별도 조회·병합 유지(배경역사 #38) — 전량 조회가 어떤 이유로든 잘려도 잠금 기사는 항상 포함
     var lockedResp = await sb.from('news_feed').select(NEWS_LIST_COLS).eq('locked', true).limit(500);
     var seen = new Set();
