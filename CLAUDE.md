@@ -88,6 +88,7 @@ python minutes_offline.py --export-resummary --out DIR          # 기존 섹션 
 python minutes_offline.py --import-resummary --in DIR           # 요약 줄 교체 + 개요 블록 삽입, 섹션 통째 재등록 + SK 칩 소급(정렬 검사 통과분만)
 python minutes_offline.py --export-candidates --year 2019 --out DIR   # 20·21대 소급: 회의+뷰어 블록+키워드 후보 → DIR/2019/*.blocks.json·*.cand.json
 python minutes_offline.py --import-judged --in DIR              # 세션이 쓴 *.judged.json(minutes-judged/1) → 섹션+발언 등록(run()과 같은 dedupe)
+python minutes_offline.py --verify-exported --in DIR --year 2017 --fix   # 뷰어 오응답(타 위원회 본문) PDF 대조·교정 — 뷰어 id가 다른 위원회 회의록을 돌려준 실측 8/281(#120-보론); 상임위는 run()도 PDF 대조 후 등재
 ```
 
 **One-off AI work runs in a Claude session, never through the Anthropic API** (operator rule, #111·#120): re-summarising or backfilling past 대수 is done by session subagents writing the JSON files above (cost 0); the API is reserved for unattended recurring runs (17:00 chain). Sonnet 5 non-streaming calls must pass `thinking={'type':'disabled'}` (adaptive thinking is on by default → billed thinking tokens and `content[0]` is not text).

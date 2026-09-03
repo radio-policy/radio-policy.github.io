@@ -12,12 +12,19 @@
 
 A. 20·21대 상임위 회의록 신규 백필
    1) --export-candidates --year YYYY --out DIR
-      회의 목록(am.fetch_meetings) → 뷰어 원문(best-of-N, PDF 폴백) → 키워드 후보 선별
-      (am.candidate_blocks) → DIR/{year}/{confer_num}.blocks.json + .cand.json 저장.
+      회의 목록(am.fetch_meetings) → 뷰어 원문(best-of-N, PDF 폴백) → **뷰어 본문 교차 검증**
+      (am.looks_foreign_committee + am.verify_blocks_against_pdf: 뷰어가 다른 회의의 본문을 돌려준 실측
+      2017/41948·42378, 2018/43150 — 불일치면 PDF 블록으로 교체 src='PDF(뷰어 불일치)', PDF 도 없으면
+      _index.json 에 skipped='viewer_mismatch_no_pdf') → 키워드 후보 선별(am.candidate_blocks)
+      → DIR/{year}/{confer_num}.blocks.json + .cand.json 저장(meeting.verify 에 판정 기록).
       DIR/_criteria.txt(관련성 기준문, app_config 원본) + DIR/_rules.md(세션 판정 규칙) 1회 생성.
+   1') --verify-exported --in DIR [--year Y] [--fix]
+      이미 내보낸 blocks.json 을 PDF 와 재대조해 표로 출력 + DIR/{year}/_verify.json.
+      --fix 는 불일치 회의를 PDF 블록으로 다시 쓰고(blocks/cand/_index) 그 회의의 .judged.json 을 지운다.
    2) 세션이 .cand.json 을 읽고 DIR/{year}/{confer_num}.judged.json 을 쓴다.
    3) --import-judged --in DIR
       .judged.json + .blocks.json 으로 섹션 본문·발언 행을 만들어 등재(run() 과 같은 dedupe).
+      meeting.verify 가 불일치인데 src 가 'PDF…' 가 아니면(미복구) 거부한다.
 
 B. 기존 섹션(~238건, 2016~2026) 요약·개요 재작성
    1) --export-resummary --out DIR
@@ -35,7 +42,8 @@ B. 기존 섹션(~238건, 2016~2026) 요약·개요 재작성
 
 JSON 계약(정확한 스키마는 _rules.md 에도 같은 내용으로 적힌다):
 
-  minutes-blocks/1     {"schema","meeting":{…fetch_meetings 필드 + viewer_id,is_audit,dae_num,comm_name,src},
+  minutes-blocks/1     {"schema","meeting":{…fetch_meetings 필드 + viewer_id,is_audit,dae_num,comm_name,src,
+                        verify:{foreign,pdf_ok,detail[,fixed,fixed_at,viewer_blocks]}},
                         "detail":{…VCONFDETAIL},"blocks":[{"name","pos","text"}…]}
   minutes-candidates/1 {"schema","meeting":{confer_num,viewer_id,title,conf_date,dgr,agenda,n_blocks,max_excerpts,src},
                         "candidates":[{"idx","name","pos","always_keep","kw":[…],"score","text"}…]}
@@ -233,11 +241,82 @@ RULES_MD = '''# 과방위 회의록 세션 판정 규칙 (minutes_offline)
 #  A-1. 후보 내보내기
 # ═══════════════════════════════════════════════════════════
 
+SRC_PDF_MISMATCH = 'PDF(뷰어 불일치)'   # 뷰어 본문이 다른 회의로 판정돼 PDF 로 갈아탄 원문 표시
+SKIP_VIEWER_MISMATCH = 'viewer_mismatch_no_pdf'
+
+
+def _verify_viewer(blocks: list, m: dict):
+    """뷰어 블록 교차 검증(2026-09-03 실측: 뷰어가 다른 회의 본문을 돌려줌 — 41948·42378·43150).
+    반환 (verify dict, pdf=(텍스트, 오류)). 국감·pdf_url 없음이면 PDF 대조는 None(판정 불가).
+    verify = {'foreign': 타 부처명|None, 'pdf_ok': True|False|None, 'detail': str}"""
+    foreign = am.looks_foreign_committee(blocks)
+    pdf_url = (m.get('pdf_url') or '') if not m.get('is_audit') else ''
+    if not pdf_url:
+        return ({'foreign': foreign, 'pdf_ok': None,
+                 'detail': '국감(검증 제외)' if m.get('is_audit') else 'pdf_url 없음'}, ('', 'pdf_url 없음'))
+    pdf = am.fetch_pdf_text(pdf_url)
+    ok, detail = am.verify_blocks_against_pdf(blocks, pdf_url, pdf=pdf)
+    return {'foreign': foreign, 'pdf_ok': ok, 'detail': detail}, pdf
+
+
+def _is_mismatch(verify: dict) -> bool:
+    return bool((verify or {}).get('foreign')) or (verify or {}).get('pdf_ok') is False
+
+
+def _candidates_of(blocks: list, keywords: list, max_cand: int, cand_chars: int):
+    """키워드 후보 목록(cand.json 의 candidates 모양). 반환 (cands, always)."""
+    always, matched = am.candidate_blocks(blocks, keywords, max_cand)
+    always_set = set(always)
+    cands = []
+    for i in sorted(set(always) | set(matched)):
+        b = blocks[i]
+        cands.append({
+            'idx':         i,
+            'name':        b['name'],
+            'pos':         b.get('pos') or '',
+            'always_keep': i in always_set,
+            'kw':          am.matched_keywords(b['text'], keywords),
+            'score':       am.relevance_score(b['text'], keywords),
+            'text':        b['text'][:cand_chars],
+        })
+    return cands, always
+
+
+def _write_meeting_files(ydir: Path, m: dict, detail: dict, blocks: list, cands: list,
+                         src: str, verify: dict):
+    """{cn}.blocks.json + {cn}.cand.json 저장 — 내보내기와 --verify-exported --fix 가 같은 모양을 쓴다."""
+    cn = str(m['confer_num'])
+    viewer_id = m.get('viewer_id') or cn
+    meeting_out = dict(m)
+    meeting_out['src'] = src
+    meeting_out['verify'] = verify
+    blocks_path = ydir / ('%s.blocks.json' % cn)
+    cand_path = ydir / ('%s.cand.json' % cn)
+    _write_json(blocks_path, {
+        'schema': SCHEMA_BLOCKS, 'meeting': meeting_out, 'detail': detail or {},
+        'blocks': [{'name': b['name'], 'pos': b.get('pos') or '', 'text': b['text']}
+                   for b in blocks],
+    })
+    _write_json(cand_path, {
+        'schema': SCHEMA_CAND,
+        'meeting': {
+            'confer_num': cn, 'viewer_id': str(viewer_id), 'title': m['title'],
+            'conf_date': m['conf_date'], 'dgr': m.get('dgr') or '',
+            'agenda': list(m.get('agenda') or []), 'n_blocks': len(blocks),
+            'max_excerpts': am.AUDIT_MAX_EXCERPTS if m.get('is_audit') else am.MAX_EXCERPTS,
+            'src': src,
+        },
+        'candidates': cands,
+    })
+    return blocks_path, cand_path
+
+
 def export_candidates(sb, api_key: str, year: int, out_dir: str, max_cand: int,
                       cand_chars: int, limit: int, force: bool) -> dict:
     _require_contract(['fetch_meetings', 'candidate_blocks', 'fetch_speech_blocks',
                        'pdf_fallback_blocks', 'fetch_detail', 'relevance_score',
-                       'matched_keywords', 'speeches_exist', 'MAX_EXCERPTS'])
+                       'matched_keywords', 'speeches_exist', 'MAX_EXCERPTS',
+                       'looks_foreign_committee', 'verify_blocks_against_pdf', 'fetch_pdf_text'])
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     keywords = load_press_keywords(sb)
@@ -267,7 +346,8 @@ def export_candidates(sb, api_key: str, year: int, out_dir: str, max_cand: int,
     print('[후보 내보내기] %d년 상임위 회의 %d건, 키워드 %d개, 후보 상한 %d, 후보 본문 %d자'
           % (year, len(meetings), len(keywords), max_cand, cand_chars))
     doc_name = _doc_name(year)
-    stats = {'exported': 0, 'skip_db': 0, 'skip_file': 0, 'fail': 0, 'n_cand': 0}
+    stats = {'exported': 0, 'skip_db': 0, 'skip_file': 0, 'fail': 0, 'n_cand': 0,
+             'mismatch_fixed': 0, 'mismatch_skip': 0}
 
     for m in meetings:
         if limit and stats['exported'] >= limit:
@@ -315,43 +395,44 @@ def export_candidates(sb, api_key: str, year: int, out_dir: str, max_cand: int,
             time.sleep(1)
             continue
 
+        # 뷰어 본문 교차 검증 — 뷰어가 다른 회의 본문을 돌려준 실측(2017/41948·42378, 2018/43150).
+        # 타 상임위 직함이 보이거나 PDF 표본 대조가 불일치면 뷰어 블록을 버리고 PDF 블록으로 간다.
+        verify = {'foreign': None, 'pdf_ok': None, 'detail': '뷰어 아님(검증 생략)'}
+        if src == '뷰어':
+            verify, pdf = _verify_viewer(blocks, m)
+            if _is_mismatch(verify):
+                why = ('타 상임위 직함 %s' % verify['foreign']) if verify['foreign'] else verify['detail']
+                try:
+                    fixed = am.pdf_fallback_blocks(m.get('pdf_url') or '', pdf_text=pdf[0])
+                except Exception as e:
+                    fixed = []
+                    why += ' / PDF 폴백 예외 %s' % str(e)[:50]
+                if not fixed:
+                    print('  [!!뷰어 불일치·PDF 폴백 없음→스킵] %s %s (%s) — 잘못된 본문은 내보내지 않는다'
+                          % (ymd6, m['title'][:50], why))
+                    index[cn] = {
+                        'confer_num': cn, 'conf_date': m['conf_date'], 'title': m['title'],
+                        'n_candidates': 0, 'cand_file': '', 'skipped': SKIP_VIEWER_MISMATCH,
+                        'verify': verify,
+                    }
+                    _write_json(index_path, sorted(index.values(),
+                                                   key=lambda e: (e['conf_date'], e['confer_num'])))
+                    stats['mismatch_skip'] += 1
+                    time.sleep(1)
+                    continue
+                print('  [뷰어 불일치→PDF 폴백] %s %s (%s) 뷰어 %d블록 → PDF %d블록'
+                      % (ymd6, m['title'][:44], why, len(blocks), len(fixed)))
+                blocks, src = fixed, SRC_PDF_MISMATCH
+                stats['mismatch_fixed'] += 1
+            elif verify['pdf_ok'] is None:
+                print('  [뷰어 검증 불가·뷰어 사용] %s %s (%s)' % (ymd6, m['title'][:44], verify['detail']))
+
         detail = am.fetch_detail(api_key, m.get('conf_id') or '') or {}
-        always, matched = am.candidate_blocks(blocks, keywords, max_cand)
-        always_set = set(always)
-        cand_idx = sorted(set(always) | set(matched))
-        cands = []
-        for i in cand_idx:
-            b = blocks[i]
-            cands.append({
-                'idx':         i,
-                'name':        b['name'],
-                'pos':         b.get('pos') or '',
-                'always_keep': i in always_set,
-                'kw':          am.matched_keywords(b['text'], keywords),
-                'score':       am.relevance_score(b['text'], keywords),
-                'text':        b['text'][:cand_chars],
-            })
-        meeting_out = dict(m)
-        meeting_out['src'] = src
-        _write_json(blocks_path, {
-            'schema': SCHEMA_BLOCKS, 'meeting': meeting_out, 'detail': detail,
-            'blocks': [{'name': b['name'], 'pos': b.get('pos') or '', 'text': b['text']}
-                       for b in blocks],
-        })
-        _write_json(cand_path, {
-            'schema': SCHEMA_CAND,
-            'meeting': {
-                'confer_num': cn, 'viewer_id': str(viewer_id), 'title': m['title'],
-                'conf_date': m['conf_date'], 'dgr': m.get('dgr') or '',
-                'agenda': list(m.get('agenda') or []), 'n_blocks': len(blocks),
-                'max_excerpts': am.AUDIT_MAX_EXCERPTS if m.get('is_audit') else am.MAX_EXCERPTS,
-                'src': src,
-            },
-            'candidates': cands,
-        })
+        cands, always = _candidates_of(blocks, keywords, max_cand, cand_chars)
+        blocks_path, cand_path = _write_meeting_files(ydir, m, detail, blocks, cands, src, verify)
         index[cn] = {
             'confer_num': cn, 'conf_date': m['conf_date'], 'title': m['title'],
-            'n_candidates': len(cands), 'cand_file': cand_path.name,
+            'n_candidates': len(cands), 'cand_file': cand_path.name, 'src': src, 'verify': verify,
         }
         _write_json(index_path, sorted(index.values(),
                                        key=lambda e: (e['conf_date'], e['confer_num'])))
@@ -362,9 +443,122 @@ def export_candidates(sb, api_key: str, year: int, out_dir: str, max_cand: int,
         stats['n_cand'] += len(cands)
         time.sleep(1)
 
-    print('[후보 내보내기 완료] year=%d 내보냄=%d(후보 %d) DB중복=%d 파일중복=%d 실패=%d → %s'
+    print('[후보 내보내기 완료] year=%d 내보냄=%d(후보 %d) DB중복=%d 파일중복=%d 실패=%d '
+          '뷰어불일치→PDF=%d 뷰어불일치·스킵=%d → %s'
           % (year, stats['exported'], stats['n_cand'], stats['skip_db'],
-             stats['skip_file'], stats['fail'], ydir))
+             stats['skip_file'], stats['fail'], stats['mismatch_fixed'],
+             stats['mismatch_skip'], ydir))
+    return stats
+
+
+# ═══════════════════════════════════════════════════════════
+#  A-1'. 내보낸 원문 재검증 (--verify-exported)
+# ═══════════════════════════════════════════════════════════
+
+def verify_exported(sb, in_dir: str, year: int, fix: bool, max_cand: int, cand_chars: int) -> dict:
+    """이미 내보낸 {year}/{cn}.blocks.json 의 블록을 PDF 와 다시 대조한다(국감 제외).
+    --fix: 불일치 회의는 PDF 블록으로 blocks/cand 를 다시 쓰고, 잘못된 본문으로 만든 .judged.json 은 지운다."""
+    _require_contract(['looks_foreign_committee', 'verify_blocks_against_pdf', 'fetch_pdf_text',
+                       'pdf_fallback_blocks', 'candidate_blocks', 'relevance_score',
+                       'matched_keywords', 'MAX_EXCERPTS', 'AUDIT_MAX_EXCERPTS'])
+    root = Path(in_dir)
+    if not root.is_dir():
+        print('[오류] 입력 폴더 없음: %s' % root)
+        return {}
+    keywords = load_press_keywords(sb) if fix else []
+    stats = {'checked': 0, 'ok': 0, 'mismatch': 0, 'unverifiable': 0, 'skipped': 0,
+             'fixed': 0, 'fix_failed': 0, 'judged_deleted': 0}
+    print('[내보낸 원문 재검증%s] %s%s' % (' --fix' if fix else '', root,
+                                         (' (%d년)' % year) if year else ''))
+    for d in _year_dirs(root, year):
+        results = []
+        index_path = d / '_index.json'
+        index = {str(e['confer_num']): e for e in (_read_json(index_path, []) or [])}
+        files = sorted(d.glob('*.blocks.json'), key=lambda p: p.name)
+        print('  %s: blocks.json %d건' % (d.name, len(files)))
+        print('  %-8s %-10s %7s %-10s %-6s %s' % ('confer', 'date', 'blocks', 'foreign', 'pdf_ok', 'detail'))
+        for bpath in files:
+            cn = bpath.name[:-len('.blocks.json')]
+            try:
+                b = _read_json(bpath)
+            except Exception as e:
+                print('  %-8s JSON 파싱 실패: %s' % (cn, str(e)[:60]))
+                stats['skipped'] += 1
+                continue
+            m = b.get('meeting') or {}
+            blocks = b.get('blocks') or []
+            date = m.get('conf_date') or ''
+            if m.get('is_audit'):
+                stats['skipped'] += 1
+                continue
+            pdf_url = m.get('pdf_url') or ''
+            if not pdf_url:
+                print('  %-8s %-10s %7d %-10s %-6s %s' % (cn, date, len(blocks), '-', '-', 'pdf_url 없음·스킵'))
+                stats['skipped'] += 1
+                continue
+            stats['checked'] += 1
+            verify, pdf = _verify_viewer(blocks, m)
+            mismatch = _is_mismatch(verify)
+            row = {'confer_num': cn, 'conf_date': date, 'title': m.get('title') or '',
+                   'n_blocks': len(blocks), 'src': m.get('src') or '', 'mismatch': mismatch,
+                   'fixed': False, **verify}
+            print('  %-8s %-10s %7d %-10s %-6s %s' % (
+                cn, date, len(blocks), verify['foreign'] or '-',
+                {True: 'ok', False: 'FAIL', None: '?'}[verify['pdf_ok']],
+                verify['detail'] + (' ← 불일치' if mismatch else '')))
+            if mismatch:
+                stats['mismatch'] += 1
+            elif verify['pdf_ok'] is None:
+                stats['unverifiable'] += 1
+            else:
+                stats['ok'] += 1
+            if mismatch and fix:
+                try:
+                    fixed = am.pdf_fallback_blocks(pdf_url, pdf_text=pdf[0])
+                except Exception as e:
+                    fixed = []
+                    print('    [fix 실패] PDF 폴백 예외: %s' % str(e)[:60])
+                if not fixed:
+                    print('    [fix 실패] %s PDF 블록 0건 — blocks.json 그대로 둠(등재 시 거부됨)' % cn)
+                    stats['fix_failed'] += 1
+                else:
+                    cands, always = _candidates_of(fixed, keywords, max_cand, cand_chars)
+                    vfix = dict(verify)
+                    vfix['fixed'] = True
+                    vfix['fixed_at'] = datetime.now(am.KST).isoformat(timespec='seconds')
+                    vfix['viewer_blocks'] = len(blocks)
+                    _write_meeting_files(d, m, b.get('detail') or {}, fixed, cands,
+                                         SRC_PDF_MISMATCH, vfix)
+                    jpath = d / ('%s.judged.json' % cn)
+                    if jpath.exists():
+                        jpath.unlink()
+                        stats['judged_deleted'] += 1
+                        print('    [판정 삭제] %s — 잘못된 본문으로 판정된 파일' % jpath.name)
+                    entry = index.get(cn) or {'confer_num': cn, 'conf_date': date,
+                                              'title': m.get('title') or ''}
+                    entry.update({'n_candidates': len(cands), 'cand_file': '%s.cand.json' % cn,
+                                  'src': SRC_PDF_MISMATCH, 'verify': vfix})
+                    entry.pop('skipped', None)
+                    index[cn] = entry
+                    row.update({'fixed': True, 'n_blocks_fixed': len(fixed), 'n_candidates': len(cands)})
+                    stats['fixed'] += 1
+                    print('    [fix] %s 뷰어 %d블록 → PDF %d블록, 후보 %d(자사 %d) — 재판정 필요'
+                          % (cn, len(blocks), len(fixed), len(cands), len(always)))
+            results.append(row)
+            time.sleep(1)
+        if fix and index:
+            _write_json(index_path, sorted(index.values(),
+                                           key=lambda e: (e.get('conf_date') or '', e['confer_num'])))
+        _write_json(d / '_verify.json', {
+            'checked_at': datetime.now(am.KST).isoformat(timespec='seconds'), 'fix': fix,
+            'results': results,
+        })
+    print('[재검증 완료] checked=%d ok=%d mismatch=%d unverifiable=%d skipped=%d fixed=%d fix_failed=%d judged_deleted=%d'
+          % (stats['checked'], stats['ok'], stats['mismatch'], stats['unverifiable'],
+             stats['skipped'], stats['fixed'], stats['fix_failed'], stats['judged_deleted']))
+    if stats['mismatch'] and not fix:
+        print('  ※ 불일치 %d건 — `--verify-exported --fix` 로 PDF 원문으로 갈아끼우고 판정 파일을 지운 뒤 재판정'
+              % stats['mismatch'])
     return stats
 
 
@@ -461,6 +655,15 @@ def import_judged(sb, in_dir: str, year: int, limit: int, dry: bool) -> dict:
             continue
 
         m = b['meeting']
+        # 뷰어 본문 불일치로 표시된 회의는 PDF 로 갈아끼운(src 가 'PDF…') 경우에만 등재한다 —
+        # 다른 회의의 본문으로 만든 판정을 DB 에 넣지 않기 위해(2026-09-03, --verify-exported --fix 로 복구).
+        v = m.get('verify') or {}
+        if _is_mismatch(v) and not (m.get('src') or '').startswith('PDF'):
+            print('  [거부·뷰어 본문 불일치] %s — foreign=%s pdf_ok=%s (%s) src=%s → '
+                  '`--verify-exported --fix` 후 재판정'
+                  % (jpath.name, v.get('foreign'), v.get('pdf_ok'), v.get('detail'), m.get('src')))
+            stats['invalid'] += 1
+            continue
         detail = b.get('detail') or {}
         blocks = b['blocks']
         kept = j['kept']
@@ -1151,6 +1354,10 @@ def main():
                       help='B-1. DB 의 기존 회의록 섹션을 --out/resum 에 내보냄 (DB 무변경)')
     mode.add_argument('--import-resummary', action='store_true',
                       help='B-2. --in/resum 의 *.judged.json 으로 요약·개요 갈아끼움 + SKT 칩 소급')
+    mode.add_argument('--verify-exported', action='store_true',
+                      help="A-1'. --in 폴더의 blocks.json 을 PDF 와 재대조(뷰어 불일치 탐지). --fix 로 PDF 원문으로 교체")
+    ap.add_argument('--fix', action='store_true',
+                    help='verify-exported: 불일치 회의를 PDF 블록으로 다시 쓰고 .judged.json 삭제')
     ap.add_argument('--year', type=int, default=0, help='대상 연도 (export-candidates 필수, 나머지는 필터)')
     ap.add_argument('--out', help='내보내기 폴더')
     ap.add_argument('--in', dest='in_dir', help='가져오기 폴더')
@@ -1192,6 +1399,8 @@ def main():
     elif args.import_resummary:
         import_resummary(sb, args.in_dir, args.year, args.limit, args.dry_run,
                          args.no_refetch, args.force)
+    elif args.verify_exported:
+        verify_exported(sb, args.in_dir, args.year, args.fix, args.max_candidates, args.cand_chars)
     print('[소요] %.0f초' % (datetime.now() - t0).total_seconds())
 
 

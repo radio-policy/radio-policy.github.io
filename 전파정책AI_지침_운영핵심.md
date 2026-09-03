@@ -778,6 +778,26 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
   토글(원문 질의·응답은 `pressTextToHtml` 유지). 발언 행 0건이면 발췌 원문을 바로 보인다.
   `fetchPressSection()`을 `openPressDetail`에서 분리해 공용(보도자료 출력 무변경). `loadAssemblyMinutes`가
   `src_url`도 보관.
+- **뷰어 본문 교차 검증 — 뷰어 id가 다른 위원회 회의록을 돌려준다 (2026-09-03, #120-보론)**: 20·21대 소급
+  export 281회의 중 **8회의**가 HTML 제목은 맞는데 발언 블록이 엉뚱한 상임위였다(2017/41948 미방위 법안소위 →
+  2025 국방위 1,059블록, 2017/42378 과방위 → 기재위·국세청, 2018/43150 기재위 예산소위, 2019/43754·2017/42374
+  국세청·관세청·조달청, 2021/45634·2022/46840·2023/47682 국토교통부·행정안전부). **같은 id의 Open API
+  `PDF_LINK_URL`은 전부 정상**이라 PDF가 대조 근거다. 22대에도 흔적(2026 문서 260129/56204와 260311/56351
+  섹션 발췌가 같은 발언으로 시작 — 둘 중 하나가 오응답, **별도 재수집 미조치**).
+  - `assembly_minutes.py`: `fetch_pdf_text()`(1회 다운로드를 검증·폴백이 공유) / `looks_foreign_committee(blocks)`
+    (pos에 소관 기관명 — 미래창조과학부·과기정통부·방통위·방미통위·원안위·우주항공청·KBS·EBS — 이 하나도 없고
+    타 부처명(국방부·국세청·관세청·조달청·기획재정부·법무부·국토교통부·행정안전부 …)이 있으면 그 기관명 반환.
+    ⚠️ **'위원장'·'전문위원' 같은 일반 직위를 소관 표지에 넣으면 절대 안 걸린다**(실측 — 41948·42378이 통과됨)) /
+    `verify_blocks_against_pdf(blocks, pdf_url)`(가장 긴 블록 6개의 앞 30자를 공백 제거 후 PDF 텍스트에서 찾아
+    **60%↑ 적중이면 ok**; PDF 2,000자 미만·다운로드 실패는 판정불가 None → 뷰어 그대로 사용+로그).
+    일일 `run()`은 뷰어 블록 확보 직후 **상임위 회의(pdf_url 있음)에만** 두 검사를 걸어 불일치면
+    `[뷰어 불일치→PDF 폴백]` 로그 후 `pdf_fallback_blocks`로 교체(`src='PDF(뷰어 불일치)'`), PDF도 없으면 fail
+    스킵 — **오응답 본문은 절대 등재하지 않는다.** 국감 경로는 PDF URL이 같은 뷰어 id로 만들어져 독립 근거가
+    아니라 검증하지 않는다. 실측 분리가 뚜렷: 정상 회의 표본 5~6/6 적중, 오응답 회의 0/6.
+  - `minutes_offline.py`: `--export-candidates`가 같은 검사(불일치 → PDF 블록, blocks.json
+    `meeting.verify={foreign,pdf_ok,detail}`), 새 모드 **`--verify-exported --in DIR [--year Y] [--fix]`**(기존
+    export를 PDF와 재대조해 표 출력 + `{year}/_verify.json`; `--fix`면 PDF 블록으로 재생성하고 해당
+    `.judged.json` 삭제 → 재판정 필요), `--import-judged`는 verify 불일치인데 src가 PDF가 아닌 회의를 **거부**.
 
 ## 국회 입법예고 추적 (assembly_crawler 입법예고 패스 + law_diff_gen 국회 분석, 2026-08-02 신설 — 배경역사 #56)
 
@@ -862,6 +882,7 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **요약 프롬프트에 '통신사 관점'·'SK텔레콤 관점' 같은 관점 지시를 넣지 말 것(#120)** — 모델이 관점을 못 찾으면 "SK텔레콤이 직접 언급되지 않았습니다"·"정책 논의는 없었다" 같은 **언급 없음 메타응답**을 내고 그것이 요약으로 저장된다(실측 3건). 요약은 "무엇이 논의됐는지"만 묻고, 자사 언급 표시는 규칙(`skt_mentioned`)으로 따로 붙인다.
 - **일회성 AI 작업(재요약·과거 대수 소급)은 세션이 하고 Anthropic API를 쓰지 말 것(#120)** — Sonnet 5 API로 640회의 ≈ $110, 세션이면 0. `minutes_offline.py`의 export → 세션 판정 JSON → import 파이프라인을 쓴다. `assembly_minutes.py --year <작년 이전>`은 `--allow-api` 없이는 거부되도록 잠가 뒀다 — 이 잠금을 풀지 말 것. API는 무인 반복(17시 체인)에만.
 - **Sonnet 5 비스트리밍 호출에는 `thinking={'type':'disabled'}` 필수(#120)** — 적응형 추론이 기본 ON이라 thinking 토큰이 과금되고 `content[0]`이 텍스트 블록이 아니어서 `content[0].text` 읽기가 깨진다. `assembly_minutes.py`의 `MINUTES_THINKING`이 모든 호출·`make_ai_judge(thinking=)`에 전달된다. 새 Sonnet 5 호출을 만들면 같은 값을 넘길 것.
+- **국회회의록 뷰어 본문을 검증 없이 믿지 말 것(#120-보론)** — 뷰어(`xml.do?id=`)가 id에 따라 **다른 위원회 회의록 본문**을 돌려주는 일이 있다(실측 8/281 — 미방위 법안소위 id에 2025 국방위 1,059블록, 과방위 id에 국세청 본문). 제목·HTML 머리는 맞아서 눈으로는 모른다. 상임위 회의는 Open API PDF와 대조(`verify_blocks_against_pdf` + `looks_foreign_committee`)하고 불일치면 PDF 폴백, PDF도 없으면 등재하지 않는다. 소관 표지에 '위원장'·'전문위원' 같은 일반 직위를 넣으면 검사가 무력화된다. 검증 없이 등재된 과거 섹션은 `minutes_offline.py --verify-exported --fix`로 교정한다.
 
 - **"조용한 실패"를 만들지 말 것 — 2026-08-03에만 4건, 이후로도 계속 나온다.** 에러 없이 결과만 틀리는 코드는 며칠씩 발견되지 않는다. 실측 사례: ①뉴스 1,000건 초과 시 조회가 잘려 이미 알림한 기사를 재발송 ②`.range()` 페이징에 `.order()`가 없어 관계도 노드가 매 실행 오삭제 ③refetch가 해외 기사를 수집 즉시 삭제 ④뉴스 클러스터가 연쇄 병합으로 91건 한 덩어리 ⑤**RLS 정책에 `authenticated`가 빠져 로그인 사용자에게만 10개 테이블이 0행**(#108 — 관계도 빈 화면, AI 자문 법령요약 갈래 소실). **판정·필터·삭제 로직을 만들면 "틀렸을 때 무엇이 보이는가"를 먼저 정하고, 안 보이면 로그를 남길 것.**
 - **조회 컬럼 목록(`select(...)`)에서 조건에 쓰는 컬럼을 빠뜨리지 말 것** — 값이 `undefined`/`None`이 되어 **조건이 조용히 무력화**된다(에러도 안 난다). 2026-08-03 하루에 세 번 발생: 구독자 `tags`(전원 전체수신으로 퇴화), refetch `category`(해외 예외 미작동), 뉴스 목록 `tags`(클러스터 태그 조건 무력화). `select('*')`가 아닌 **명시 목록**을 쓰는 곳은 조건 추가 시 반드시 함께 갱신.
@@ -932,7 +953,7 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **PostgREST는 요청당 최대 1,000행에서 자른다 — `.limit(2000)`도 1,000에서 잘린다** — 무정렬이면 어떤 1,000건이 올지도 임의라 "최근 것만 사라지는" 형태로 증상이 난다(보도자료 목록·상세가 실제로 그랬다). 대량 조회는 반드시 `order + range` 페이징. (배경역사 #53)
 - **게시판 목록을 페이지 순회할 때 순환 방어를 넣을 것** — 마지막 페이지를 넘겨도 같은 내용을 반복 반환하는 게시판(ETRI)이 있고, URL에 페이지 번호가 박혀 'URL 신규' 판정으로는 못 거른다. 페이지의 제목 조합(fingerprint)이 재등장하면 종료. (배경역사 #53)
 - **fcc.gov 안의 /rss 경로를 RSS로 믿지 말 것** — HTML을 반환하는 가짜 경로다. 진짜 피드는 EDOCS API(api2.fcc.gov)에 있다. Ofcom은 전 경로 Cloudflare 차단이라 직접 수집 시도 금지(구글 뉴스 site: RSS 우회 유지). (배경역사 #54)
-- **국회 회의록은 PDF가 아니라 뷰어(xml.do)가 정본** — PDF_LINK_URL의 PDF는 pdftotext에서 중반부 글리프가 깨진다(폰트 문제). 뷰어의 발언자 단위 구조를 쓰고 PDF는 폴백으로만. (배경역사 #54)
+- **국회 회의록은 PDF가 아니라 뷰어(xml.do)가 정본** — PDF_LINK_URL의 PDF는 pdftotext에서 중반부 글리프가 깨진다(폰트 문제). 뷰어의 발언자 단위 구조를 쓰고 PDF는 폴백으로만. (배경역사 #54) 단 **뷰어 본문이 다른 위원회 회의록인지는 PDF로 검증**한다 — 정본이라도 id 오응답이 있다(#120-보론).
 - **'보고서 초안 제안' 메뉴는 숨김 상태(삭제 아님)** — index.html 주석 2곳을 해제하면 복원된다. 패널·함수·report_* 테이블은 보존 중(봇 보고서 기능이 재사용 예정). (배경역사 #54)
 - **구본(superseded) 청크는 임베딩을 두지 말 것** — 검색이 결과에서 걸러내는데 HNSW RAM만 차지한다(2,635개 제거로 작업세트가 캐시 안으로 들어옴). backfill_embeddings.py에 status neq.superseded 필터가 있으니 제거하지 말 것. promote_due가 새로 강등한 구본은 임베딩이 남는데, 작업세트가 다시 캐시에 근접하면 `update document_chunks set embedding=null where status='superseded'` + REINDEX로 정리. (배경역사 #54)
 - **Supabase 파이썬 클라이언트는 `sb_client.make_client` 사용, `create_client` 직접 호출 금지** — supabase-py 2.31 httpx HTTP/2 keepalive 끊김(RemoteProtocolError: Server disconnected) 회피(HTTP/1.1 강제+재시도). 신규 스크립트도 동일 적용. (배경역사 #15)
@@ -1159,7 +1180,8 @@ npx supabase@latest functions deploy send-subscriber-briefing --project-ref zwkj
 ```
 python minutes_offline.py --export-candidates --year 2019 --out DIR   # 소급: 회의 목록+뷰어 블록+키워드 후보 → DIR/2019/{confer_num}.blocks.json·.cand.json
 #   → 세션 서브에이전트가 {confer_num}.judged.json(minutes-judged/1) 작성
-python minutes_offline.py --import-judged --in DIR [--year 2019] [--limit N] [--dry-run]   # 섹션+발언 등록(run()과 같은 dedupe)
+python minutes_offline.py --verify-exported --in DIR [--year 2017] [--fix]   # 뷰어 오응답(타 위원회 본문) PDF 대조 → _verify.json; --fix = PDF 블록으로 재생성 + .judged.json 삭제(재판정)
+python minutes_offline.py --import-judged --in DIR [--year 2019] [--limit N] [--dry-run]   # 섹션+발언 등록(run()과 같은 dedupe). verify 불일치인데 src≠PDF면 거부
 python minutes_offline.py --export-resummary --out DIR                 # 재요약: 기존 섹션 → DIR/resum/{year}/{ymd6}_{confer_num}.json (DB 무변경)
 #   → 세션이 …judged.json({meeting_summary, meeting_overview}) 작성
 python minutes_offline.py --import-resummary --in DIR [--no-refetch] [--force] [--limit N] [--dry-run]   # 섹션 통째 재등록 + SK 칩 소급(정렬 검사 통과분만), _done.json 재개

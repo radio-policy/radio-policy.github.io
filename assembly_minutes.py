@@ -11,6 +11,9 @@ doc_name='과방위_회의록_{YYYY}.md')에 섹션으로 등재한다.
           div.speaker[data-name][data-pos] > div.talk 구조로 발언 블록이 깨끗하게 분리됨.
   2순위 — PDF_LINK_URL + pdftotext(press_ingest._pdf_to_text): 국회 PDF는 폰트 문제로
           중반부 글리프가 깨지는 사례가 있어(실측) 뷰어 실패 시 폴백으로만 사용.
+  교차 검증(2026-09-03) — 뷰어가 **다른 회의의 본문**을 돌려주는 id 가 있다(2017/41948·42378, 2018/43150
+          실측; PDF 는 정상). 상임위 회의는 looks_foreign_committee + verify_blocks_against_pdf 로
+          뷰어 블록을 PDF 와 대조해 불일치면 PDF 블록으로 갈아탄다(src='PDF(뷰어 불일치)').
 
 국정감사 회의록은 별도 경로다 (2026-08-13 추가, 22대만).
   위 Open API 는 CLASS_NAME='상임위원회' 인 회의록만 돌려준다(실측 — 2019년 과방위 41건을
@@ -416,15 +419,35 @@ def _fetch_speech_blocks_once(confer_num) -> list:
     return blocks
 
 
-def pdf_fallback_blocks(pdf_url: str) -> list:
-    """폴백: 회의록 PDF를 pdftotext 로 추출해 '◯발언자' 단위로 분리.
-    국회 PDF는 일부 폰트 글리프가 깨질 수 있음(실측) — 최후 수단."""
+def fetch_pdf_text(pdf_url: str):
+    """회의록 PDF 내려받기 + pdftotext. 반환 (텍스트, 실패 사유) — 성공이면 사유 ''.
+    검증(verify_blocks_against_pdf)과 폴백(pdf_fallback_blocks)이 같은 PDF 를 두 번 받지 않도록 분리."""
     if not pdf_url:
-        return []
-    data = requests.get(pdf_url, headers=HEADERS, timeout=120).content
+        return '', 'pdf_url 없음'
+    try:
+        data = requests.get(pdf_url, headers=HEADERS, timeout=120).content
+    except Exception as e:
+        return '', 'PDF 다운로드 실패: %s' % str(e)[:60]
     if data[:4] != b'%PDF':
-        return []
+        return '', 'PDF 아님(%d바이트, %r)' % (len(data), data[:8])
     txt = _pdf_to_text(data)
+    if not txt:
+        return '', 'pdftotext 추출 실패(0자)'
+    return txt, ''
+
+
+def pdf_fallback_blocks(pdf_url: str, pdf_text: str = None) -> list:
+    """폴백: 회의록 PDF를 pdftotext 로 추출해 '◯발언자' 단위로 분리.
+    국회 PDF는 일부 폰트 글리프가 깨질 수 있음(실측) — 최후 수단.
+    pdf_text 를 주면(검증 단계에서 이미 받은 텍스트) 다시 내려받지 않는다."""
+    if pdf_text is None:
+        if not pdf_url:
+            return []
+        data = requests.get(pdf_url, headers=HEADERS, timeout=120).content
+        if data[:4] != b'%PDF':
+            return []
+        pdf_text = _pdf_to_text(data)
+    txt = pdf_text
     if not txt:
         return []
     blocks = []
@@ -436,6 +459,75 @@ def pdf_fallback_blocks(pdf_url: str) -> list:
         if label.strip() and rest:
             blocks.append({'name': label.strip(), 'pos': '', 'text': rest})
     return blocks
+
+
+# ── 뷰어 본문 교차 검증 (2026-09-03 실측: id → 본문 불일치) ──────────────
+# 뷰어(xml.do?id=CONFER_NUM)가 **다른 회의의 본문**을 돌려주는 사례가 있다 — 제목·HTML 머리는 맞는데
+# 발언 블록이 엉뚱한 상임위다(2017/41948 미방위 법안소위 → 2025 국방위 1,059블록, 2017/42378 과방위
+# → 기재위·국세청, 2018/43150 → 기재위 예산소위). 같은 CONFER_NUM 의 Open API PDF_LINK_URL 은
+# 올바른 회의록이었다(실측). 그래서 뷰어 블록은 (1) 발언자 직함으로 타 상임위 냄새를 싸게 걸러내고
+# (2) PDF 원문과 표본 대조해 통과한 것만 쓴다. 불일치면 PDF 폴백 블록으로 갈아탄다.
+# 자기 위원회 표지는 **소관 기관명만** 쓴다 — '위원장'·'전문위원' 같은 일반 직위는 어느 위원회에나
+# 있어 넣으면 판정이 절대 안 걸린다(실측: 국방위 본문 41948·국세청 본문 42378이 통과됨, 2026-09-03).
+OWN_COMMITTEE_POS_MARKS = [
+    '미래창조과학부', '과학기술정보통신부', '방송통신위원회', '방송미디어통신위원회',
+    '원자력안전위원회', '우주항공청', '한국방송공사', '한국교육방송공사',
+]
+FOREIGN_AGENCY_POS_MARKS = [
+    '국방부', '국세청', '관세청', '조달청', '기획재정부', '법무부', '보건복지부', '국토교통부',
+    '고용노동부', '행정안전부', '교육부', '외교부', '통일부', '환경부', '농림축산식품부',
+    '해양수산부', '산업통상자원부', '금융위원회', '공정거래위원회',
+]
+VERIFY_MIN_PDF_CHARS = 2000      # PDF 텍스트가 이보다 짧으면(글리프 깨짐·빈 PDF) 판정 불가
+VERIFY_PROBE_CHARS = 30          # 블록 앞부분(공백 제거) 표본 길이
+VERIFY_PROBE_MIN_CHARS = 10      # 이보다 짧은 블록은 표본으로 쓰지 않음
+VERIFY_OK_RATIO = 0.6            # 표본 적중률이 이 이상이면 일치
+
+
+def looks_foreign_committee(blocks: list):
+    """발언자 직함(pos)만으로 타 상임위 회의록인지 싼 값에 가늠한다.
+    과방위 소관 부처·위원회 직함이 하나도 없고 타 부처 직함이 있으면 그 부처명, 아니면 None.
+    (뷰어 블록의 pos 전용 — PDF 폴백 블록은 pos 가 비어 있어 항상 None.)"""
+    poss = [(b.get('pos') or '') for b in (blocks or [])]
+    if any(any(k in p for k in OWN_COMMITTEE_POS_MARKS) for p in poss):
+        return None
+    for p in poss:
+        for a in FOREIGN_AGENCY_POS_MARKS:
+            if a in p:
+                return a
+    return None
+
+
+def _squash(s: str) -> str:
+    return re.sub(r'\s+', '', s or '')
+
+
+def verify_blocks_against_pdf(blocks: list, pdf_url: str, sample: int = 6, pdf=None):
+    """뷰어 블록이 같은 회의의 PDF 원문과 같은 내용인지 표본 대조.
+    반환 (ok, detail): ok=True 일치 / False 불일치 / None 판정 불가(PDF 없음·다운로드 실패·너무 짧음).
+    방법: 가장 긴 블록 sample 개의 앞 VERIFY_PROBE_CHARS 자(공백 제거)를 PDF 텍스트(공백 제거)에서 찾아
+    적중률 VERIFY_OK_RATIO 이상이면 일치. pdf=(텍스트, 오류) 를 주면(fetch_pdf_text 결과) 재다운로드 없음."""
+    if not blocks:
+        return None, '블록 없음'
+    if pdf is None:
+        pdf = fetch_pdf_text(pdf_url)
+    txt, err = pdf
+    if err:
+        return None, err
+    hay = _squash(txt)
+    if len(hay) < VERIFY_MIN_PDF_CHARS:
+        return None, 'PDF 텍스트 %d자 < %d' % (len(hay), VERIFY_MIN_PDF_CHARS)
+    longest = sorted(blocks, key=lambda b: len(b.get('text') or ''), reverse=True)[:sample]
+    probes = []
+    for b in longest:
+        p = _squash(b.get('text') or '')[:VERIFY_PROBE_CHARS]
+        if len(p) >= VERIFY_PROBE_MIN_CHARS:
+            probes.append(p)
+    if not probes:
+        return None, '표본으로 쓸 만큼 긴 블록 없음'
+    hits = sum(1 for p in probes if p in hay)
+    ok = hits / len(probes) >= VERIFY_OK_RATIO
+    return ok, '표본 %d/%d 적중, PDF %d자' % (hits, len(probes), len(hay))
 
 
 # ═══════════════════════════════════════════════════════════
@@ -1483,6 +1575,31 @@ def run(sb, api_key: str, year: int, limit: int = 0, dry: bool = False,
             print('  [원문 없음·스킵] %s' % m['title'][:60])
             stats['fail'] += 1
             continue
+        # 뷰어 본문 교차 검증(2026-09-03) — 뷰어가 다른 회의의 본문을 돌려준 실측(41948·42378·43150).
+        # 상임위 회의만: Open API 의 PDF_LINK_URL 이 뷰어와 독립된 사본이라 대조 근거가 된다.
+        # 국감은 검증하지 않는다 — 국감 PDF 는 뷰어 id(MNTS_ID)로 만든 URL(AUDIT_PDF_URL)이라
+        # 뷰어와 같은 id 체계를 공유해 독립 사본이 아니다(경로 무변경, 운영자 결정 전까지).
+        if src == '뷰어' and not is_audit and m.get('pdf_url'):
+            foreign = looks_foreign_committee(blocks)
+            pdf = fetch_pdf_text(m['pdf_url'])
+            ok, detail = verify_blocks_against_pdf(blocks, m['pdf_url'], pdf=pdf)
+            if foreign or ok is False:
+                why = ('타 상임위 직함 %s' % foreign) if foreign else detail
+                try:
+                    fixed = pdf_fallback_blocks(m['pdf_url'], pdf_text=pdf[0])
+                except Exception as e:
+                    fixed = []
+                    why += ' / PDF 폴백 예외 %s' % str(e)[:50]
+                if not fixed:
+                    print('  [뷰어 불일치·PDF 폴백 없음→스킵] %s (%s) — 잘못된 본문은 등재하지 않는다'
+                          % (m['title'][:50], why))
+                    stats['fail'] += 1
+                    continue
+                print('  [뷰어 불일치→PDF 폴백] %s (%s) 뷰어 %d블록 → PDF %d블록'
+                      % (m['title'][:44], why, len(blocks), len(fixed)))
+                blocks, src = fixed, 'PDF(뷰어 불일치)'
+            elif ok is None:
+                print('  [뷰어 검증 불가·뷰어 사용] %s (%s)' % (m['title'][:44], detail))
         picked, confirmed = select_relevant(blocks, keywords, judge, m['title'],
                                             max_judge=max_judge)
         detail = fetch_detail(api_key, m['conf_id'])
