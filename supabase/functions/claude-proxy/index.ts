@@ -38,7 +38,7 @@ const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
 //   (증상은 화면에 "Failed to fetch" 한 줄뿐이라 원인 찾기가 어렵다). 2026-08-26 발견·수정.
 const ALLOWED_ORIGINS = [
   'https://radio-policy.gitlab.io',
-  'https://youjinwoong.github.io',
+  'https://radio-policy.github.io',
   'http://localhost:8000',
   'http://127.0.0.1:8000',
 ];

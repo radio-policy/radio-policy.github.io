@@ -31,7 +31,7 @@ const NAVER_SECRET = env('NAVER_CLIENT_SECRET');
 // claude-proxy와 같은 목록을 유지한다 — 한쪽만 고치면 그 주소에서 기능이 조용히 죽는다
 const ALLOWED_ORIGINS = [
   'https://radio-policy.gitlab.io',
-  'https://youjinwoong.github.io',
+  'https://radio-policy.github.io',
   'http://localhost:8000',
   'http://127.0.0.1:8000',
 ];

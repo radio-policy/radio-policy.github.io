@@ -32,7 +32,7 @@ const TG = `https://api.telegram.org/bot${BOT}`;
 
 const ALLOWED_ORIGINS = [
   'https://radio-policy.gitlab.io',
-  'https://youjinwoong.github.io',
+  'https://radio-policy.github.io',
   'http://localhost:8000',
   'http://127.0.0.1:8000',
 ];
