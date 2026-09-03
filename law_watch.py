@@ -481,7 +481,11 @@ def main():
     if not a.dry_run and not a.no_notify and (outdated or upcoming):
         lines = [f"📋 <b>법령 현행화 점검</b> ({datetime.now(KST):%m/%d %H:%M})", ""]
         if outdated:
-            lines.append(f"🔄 <b>개정 감지 {len(outdated)}건</b> — 대시보드에서 현행화 승인 필요")
+            # 2026-09-01: 「대시보드에서 승인 필요」에서 바꿨다. 대시보드에는 승인 버튼이 없었고
+            # (app.js는 목록 표시 전용), 이제 같은 실행 체인의 뒤 스텝이 자동 교체·DIFF까지 한다.
+            # 알림의 성격이 **지시 → 통보**로 바뀌었다.
+            lines.append(f"🔄 <b>개정 감지 {len(outdated)}건</b> — 이어서 자동 현행화됩니다"
+                         f"\n<i>바뀐 조문은 대시보드 「법령 개정 추적」에서 확인</i>")
             for d, nm, r_no, r_enf, l_no, l_enf in outdated[:10]:
                 lines.append(f"· {nm}: {r_no} → <b>{l_no}</b> ({l_enf} 시행)")
             if len(outdated) > 10:

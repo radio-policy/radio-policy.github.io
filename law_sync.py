@@ -490,6 +490,25 @@ def sync_one(sb, watch_row, args):
             _delete_doc_chunks(sb, old_doc)
             print(f"  ✓ 보존 상한 초과 삭제: {old_doc[:60]} ({info['count']}청크)")
 
+    # ③-b 교체 이력 기록 — law_diff_gen이 (구본 → 신본) 조문 DIFF를 만들 근거 (2026-09-01)
+    #  왜 필요한가: doc_name에 법령번호·시행일이 박혀 있어 교체 후엔 구·신 문서명이 서로 다르고,
+    #  law_watch 행은 새 문서명으로 이관되며 구 행은 지워진다(아래 ④). 즉 이 함수를 벗어나면
+    #  "무엇이 무엇으로 바뀌었는지"를 아는 곳이 어디에도 남지 않는다.
+    #  law_pending을 그대로 쓰는 이유: (watch_doc_name=기준본, doc_name=새 판) 짝이 이미
+    #  이 표의 구조이고, law_diff_gen의 시행예정 경로가 같은 컬럼을 읽는다 — 표를 새로 만들면
+    #  같은 일을 두 벌로 하게 된다. sync_state에 CHECK 제약은 없음(2026-09-01 확인, #65 계열 점검).
+    if sup:
+        base_doc = max(sup, key=lambda d: (existing[d].get('enf') or ''))   # 가장 최근 구본
+        sb.table('law_pending').upsert({
+            'law_name': law_name, 'law_id': law_id or None,
+            'law_type_token': meta['law_type_token'], 'api_target': target,
+            'watch_doc_name': base_doc, 'doc_name': new_doc,
+            'mst': mst, 'law_no': law_no, 'enf_date': enf,
+            'sync_state': 'replaced', 'loaded_at': now, 'updated_at': now,
+            'note': f'--all-outdated 자동 교체 ({datetime.now():%Y-%m-%d})',
+        }, on_conflict='law_name,mst,enf_date', ignore_duplicates=False).execute()
+        print(f"  ✓ 교체 이력 기록 (DIFF 대상): {base_doc[:48]} → {new_doc[:48]}")
+
     # ④ law_watch 갱신 — 기존 행은 새 문서명으로 이관
     sb.table('law_watch').upsert({
         'doc_name': new_doc, 'law_name': law_name,

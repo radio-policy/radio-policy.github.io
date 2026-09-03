@@ -775,6 +775,51 @@ def process_promoted(sb, ai_client, args, results):
         generate_one(sb, ai_client, args, r, base_doc, new_doc, 'promoted', results)
 
 
+def process_replaced(sb, ai_client, args, results):
+    """(c) sync_state='replaced' — 개정 감지분 자동 교체(law_sync --all-outdated)의 사후 DIFF.
+
+    2026-09-01 신설. 종전에는 교체 경로에 DIFF가 없어서, 운영자가 「제36340호 → 36121」이라는
+    번호 두 개만 보고 승인하고 교체 후엔 무엇이 바뀌었는지 볼 화면이 아예 없었다(승인 게이트가
+    정보 없는 형식이었다 — 배경역사 #31의 결정을 뒤집은 근거). 승인을 없앤 대신 **사후에
+    바뀐 조문을 보여준다.**
+
+    구조는 process_loaded와 같다 — law_sync가 교체 시 law_pending에
+    (watch_doc_name=구본, doc_name=신본) 짝을 sync_state='replaced'로 남긴다.
+    ⚠️ 구본은 superseded로 남아 있어야 비교가 된다. law_sync의 보존 상한(KEEP_VERSIONS)에
+    걸려 삭제되기 전에 돌아야 하므로, 워크플로에서 --all-outdated **바로 다음**에 둔다.
+    """
+    q = (sb.table('law_pending').select('*')
+         .eq('sync_state', 'replaced').not_.is_('doc_name', 'null'))
+    if args.law:
+        q = q.ilike('law_name', f'%{args.law}%')
+    rows = (q.order('law_name').order('enf_date').execute().data) or []
+    print(f'=== 교체(replaced) 후보 {len(rows)}건 ===')
+    for r in rows:
+        base_doc, new_doc = r.get('watch_doc_name'), r['doc_name']
+        name = r['law_name']
+        if not base_doc or base_doc.endswith('.pdf') or not r.get('law_id'):
+            why = 'base=PDF본' if (base_doc or '').endswith('.pdf') else 'law_id/기준본 없음'
+            print(f'  - 제외: {name} ({why})')
+            results['excluded'].append(f'{name}({why})')
+            continue
+        # 기준본이 실제로 남아 있는지 확인 — 보존 상한으로 이미 지워졌으면 비교 불가
+        got = ((sb.table('document_chunks').select('id', count='exact')
+                .eq('doc_name', base_doc).limit(1).execute()).count) or 0
+        if not got:
+            print(f'  - 제외: {name} (기준본 청크 없음 — 보존 상한으로 삭제된 판)')
+            results['excluded'].append(f'{name}(기준본 소실)')
+            continue
+        if not args.backfill:
+            ex = existing_diff(sb, name, new_doc, 'replaced')
+            loaded_at = _parse_ts(r.get('loaded_at'))
+            analyzed_at = _parse_ts(ex.get('analyzed_at')) if ex else None
+            if ex and analyzed_at and (not loaded_at or analyzed_at >= loaded_at):
+                print(f'  - 기분석: {name} (analyzed {analyzed_at:%m-%d %H:%M})')
+                results['skipped'] += 1
+                continue
+        generate_one(sb, ai_client, args, r, base_doc, new_doc, 'replaced', results)
+
+
 def analyze_proposed(client, law_name, deadline, body, cur_arts):
     """입법예고 개정안 1콜 분석. cur_arts={정규화키: (article_no, 본문)}."""
     cur_parts, total = [], 0
@@ -1232,6 +1277,7 @@ def main():
         process_assembly(sb, ai_client, args, results)   # 국회 입법예고 — 같은 단계
         process_loaded(sb, ai_client, args, results)
         process_promoted(sb, ai_client, args, results)
+        process_replaced(sb, ai_client, args, results)   # 개정 감지 자동 교체분의 사후 DIFF (2026-09-01)
 
     print(f'\n=== 완료: 생성 {len(results["created"])} · 전환 {results["converted"]} · '
           f'기존 {results["skipped"]} · 변경없음 {results["nochange"]} · '
