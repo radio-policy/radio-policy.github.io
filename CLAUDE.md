@@ -16,7 +16,7 @@ This repo's operating knowledge lives in two hand-maintained Korean documents, n
 
 SKT Comm Center 기술정책팀's radio/telecom **policy-monitoring automation system**, run by a single operator. Crawlers gather government notices, laws, national-assembly bills, and news into Supabase; a morning briefing goes out daily; a GitHub Pages dashboard offers RAG-based AI advisory and report-draft generation.
 
-- Dashboard: https://radio-policy.gitlab.io/ (GitHub Pages)
+- Dashboard: https://radio-policy.gitlab.io/ (GitLab Pages) · mirror https://radio-policy.github.io/
 - Supabase project `zwkjedumfuhodckmtxxn` (ap-northeast-1 / Tokyo)
 
 ## Architecture (big picture)
@@ -88,7 +88,7 @@ There is no build step, linter, or test suite — the dashboard is static files 
 
 ## Deploy / commit workflow (Windows PC — critical)
 
-- **push는 `gitlab`·`origin` 두 원격 모두** (2026-08-25~, GitHub 계정 복구로 이중화 완성). **주 저장소는 GitLab**(`gitlab.com/radio-policy/radio-policy.gitlab.io`), GitHub(`origin`)은 실시간 미러 — 두 Pages(radio-policy.gitlab.io / youjinwoong.github.io)가 **같은 커밋에서 자동 재빌드되어 상시 동일**하게 유지되므로, 한쪽이 죽으면 다른 주소가 즉시 예비가 된다(알림 링크는 GitLab 주소 사용). 워크플로는 저장소에 커밋하지 않으므로(크롤은 Supabase에만 씀) 두 원격이 어긋날 원인은 세션 커밋뿐이다. gitlab 인증은 **`C:\Users\SKTelecom\.gitlab-credentials` 파일**(credential store helper, URL 평문 토큰 금지), origin 인증은 Windows 자격 증명 관리자.
+- **push는 `gitlab`·`origin` 두 원격 모두** (2026-08-25~, GitHub 계정 복구로 이중화 완성). **주 저장소는 GitLab**(`gitlab.com/radio-policy/radio-policy.gitlab.io`), GitHub(`origin` = github.com/radio-policy/radio-policy.github.io)은 실시간 미러 — 두 Pages(radio-policy.gitlab.io / radio-policy.github.io)가 **같은 커밋에서 자동 재빌드되어 상시 동일**하게 유지되므로, 한쪽이 죽으면 다른 주소가 즉시 예비가 된다(알림 링크는 GitLab 주소 사용). 워크플로는 저장소에 커밋하지 않으므로(크롤은 Supabase에만 씀) 두 원격이 어긋날 원인은 세션 커밋뿐이다. gitlab 인증은 **`C:\Users\SKTelecom\.gitlab-credentials` 파일**(credential store helper, URL 평문 토큰 금지), origin 인증은 Windows 자격 증명 관리자.
 - **세션 커밋 규칙 3줄** (여러 창·맥북 공통): ① 작업 시작 전 `git pull gitlab main` ② 커밋·푸시는 작업한 세션이 직접 하되 **동시에 커밋하는 세션은 하나만** ③ 커밋 후 즉시 **`git push gitlab main && git push origin main`(둘 다)** + 원격 대조 — 미푸시를 쌓아두지 않는다. origin push가 실패해도 gitlab push가 성공했으면 백업은 확보된 것 — origin은 다음 기회에 따라잡으면 된다(반대는 불가).
 - **Session commits are allowed only with the 3-step verification** (relaxed 2026-07-31, 배경역사 #37): ① check the tail of each target file is intact before committing, ② `git add` explicit filenames only, ③ after push, verify remote==local (`git fetch gitlab` → rev-parse match + `git diff gitlab/main -- <files>` is empty + remote file tail intact). If ③ mismatches, do NOT re-push — investigate first. The old Cowork sandbox (stale/truncating mount — it once pushed a file with its end cut off, handoff §4-1) remains banned from committing; the relaxation applies to sessions whose git view of the repo is verifiably consistent.
 - **Always `git add <explicit filename>` — never `git add -A` / `git add .`** A stale mount can silently revert other files back to an old version and push the revert.
