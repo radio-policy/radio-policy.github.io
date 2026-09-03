@@ -15,7 +15,8 @@ crawler.py 말미에서 매시 호출된다(try/except 격리 — 실패해도 �
 
 중복 억제 3중:
   norm_key 일치 → skip / 임베딩 코사인 ≥0.80 → 신규 제안 대신 기존 active 이슈에
-  자동 연결(잠금 포함), rejected와 일치하면 skip(재제안 금지).
+  자동 연결(잠금 포함), proposed·rejected와 ≥0.72면 skip(재제안 금지 — 기각도
+  0.72를 쓴다, 0.80은 클러스터 벡터 특성상 새는 것 실측 2026-09-03).
 
 비용: 제안 확정 시에만 Haiku 1콜(제목·정의·카테고리). 평시 매시 실행 비용 ≈ 0.
 """
@@ -395,7 +396,10 @@ def _suggest_from_news(sb, issues, dry):
         # ② 제안 판정 — 발제 기준 + 제안·기각과의 중복 억제
         if nk_state and nk_state[0] in ('proposed', 'rejected'):
             continue
-        if sim_p >= SIM_PROPOSED_DUP or sim_r >= SIM_MERGE:
+        # 기각 재제안도 0.72로 막는다 — 클러스터 벡터는 최종 이슈 벡터보다 유사도가
+        # 낮게 나와 0.80으로는 새는 것을 실측(기각 #57~59가 하루 만에 0.84~0.92짜리
+        # 쌍둥이 #65~67로 재제안, 2026-09-03)
+        if sim_p >= SIM_PROPOSED_DUP or sim_r >= SIM_PROPOSED_DUP:
             continue
         days = {(r.get('published_at') or '')[:10] for r in group if r.get('published_at')}
         urgent = sum(1 for r in group if r.get('urgency') == '긴급')
@@ -443,7 +447,7 @@ def _reg_dedup(issues, norm_key, vec):
     if sim_a >= SIM_MERGE:
         return (f'sim={sim_a:.2f}', best_active)
     if (nk_state and nk_state[0] in ('proposed', 'rejected')) \
-            or sim_p >= SIM_PROPOSED_DUP or sim_r >= SIM_MERGE:
+            or sim_p >= SIM_PROPOSED_DUP or sim_r >= SIM_PROPOSED_DUP:
         return ('dup', None)
     return (None, None)
 
