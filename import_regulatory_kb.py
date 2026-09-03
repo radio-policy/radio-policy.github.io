@@ -133,34 +133,7 @@ def family_of(path):
     parts = path.replace("\\", "/").split("/")
     if parts[0] == "laws" and len(parts) > 2:
         return parts[1]
-    if parts[0] == "bills":
-        # bills/<year>/<bill_no>.md — 국회 계류 법안(concept_type='Bill'). 연도 하위 폴더는
-        # 정리용일 뿐 family는 하나('bills')로 묶는다(자문 검색은 family를 안 보고 concept_type을 본다).
-        return "bills"
     return parts[0]
-
-
-# ── 법안(Bill) 문서 규칙 (2026-09-04) ─────────────────────────
-#  국회 계류 법안 요약을 kb_documents에 넣되(concept_type='Bill', family='bills',
-#  law_type='의안', law_number=의안번호, enforcement_date=발의일), 자문이 **확정 법령으로
-#  오인하지 않도록** rag.ts/app.js buildKbContext가 concept_type='Bill'이면 라벨을
-#  「법안요약 · 국회 계류 — 확정 법령 아님」으로 바꾼다.
-#  dedup_key: 법령은 `제목|law_type`(add_law.dedup_key)이지만 법안은 **같은 이름의 개정안이
-#  제안자만 다르게 여러 건** 공존하므로(전파법 일부개정법률안 ×N) 의안번호를 붙인다.
-#    bills → `제목|의안#<의안번호>`  예) 전파법 일부개정법률안|의안#2215722
-BILL_LAW_TYPE = "의안"
-BILL_REQUIRED_SECTIONS = ("# 제안이유", "# 주요내용", "# 통신사업자 영향")
-BILL_MIN_CHARS = 150
-
-
-def bill_dedup_key(title, bill_no):
-    t = re.sub(r"\s*\((구버전|현행)\)\s*", "", title or "").strip()
-    return f"{t}|{BILL_LAW_TYPE}#{(bill_no or '').strip()}"
-
-
-def is_bill_entry(entry, fm=None):
-    ct = (entry.get("concept_type") or (fm or {}).get("type") or "")
-    return ct == "Bill" or (entry.get("path") or "").replace("\\", "/").startswith("bills/")
 
 
 def chunk_body(body, title):
@@ -207,25 +180,10 @@ _INCOMPLETE_TAIL = re.compile(r'[가-힣A-Za-z0-9]$')
 def check_body_complete(path: str, body: str):
     """반환: (ok, 사유). 잘린 본문을 적재 전에 잡는다 — 통과 못 하면 그 문서만 건너뛴다."""
     b = (body or "").strip()
-    p = (path or "").replace("\\", "/")
-
-    if p.startswith("bills/"):
-        # 법안 요약(2026-09-04): Citations 대신 제안이유·주요내용·통신사업자 영향 3개 섹션이
-        # 있어야 하고(마지막 섹션이 없으면 생성이 중간에 끊긴 것), 말미 완결성을 본다.
-        if len(b) < BILL_MIN_CHARS:
-            return False, f"본문이 너무 짧음({len(b)}자)"
-        missing = [s for s in BILL_REQUIRED_SECTIONS if not re.search(r"^" + re.escape(s) + r"\s*$", b, re.M)]
-        if missing:
-            return False, "법안 필수 섹션 없음: " + ", ".join(missing)
-        lines = b.rstrip().splitlines()
-        tail = lines[-1].strip() if lines else ""
-        if tail and not tail.startswith(("|", "-", "*", "#", ">")) and _INCOMPLETE_TAIL.search(tail):
-            return False, f"마지막 줄이 문장 중간에서 끊김: …{tail[-40:]!r}"
-        return True, ""
-
     if len(b) < 200:
         return False, f"본문이 너무 짧음({len(b)}자)"
 
+    p = (path or "").replace("\\", "/")
     if "# Citations" in b:
         # 종료 표지에 도달했으면 완결이다. 말미 검사를 더 하면 안 된다 —
         # Citations 줄은 `…(제36281호)(20260428).pdf`, `…document_chunks) 기준`처럼
@@ -249,27 +207,14 @@ def check_body_complete(path: str, body: str):
 # ── 메인 ──────────────────────────────────────────────────
 
 def build_doc_row(entry, fm, body):
-    ed = entry.get("enforcement_date") or fm.get("enforcement_date") or None
-    title = entry.get("title") or fm.get("title") or ""
-    law_type = entry.get("law_type") or fm.get("law_type") or None
-    law_number = entry.get("law_number") or fm.get("law_number") or None
-    dedup_key = entry.get("dedup_key") or None
-    if is_bill_entry(entry, fm):
-        # 법안: law_type '의안', law_number=의안번호, enforcement_date=발의일(YYYY-MM-DD).
-        # dedup_key는 manifest 값이 있어도 의안번호 규칙(`제목|의안#번호`)을 강제한다 —
-        # 같은 이름의 개정안(제안자만 다름)이 한 키로 뭉쳐 supersede되는 사고 방지.
-        law_type = law_type or BILL_LAW_TYPE
-        if law_number:
-            dedup_key = bill_dedup_key(title, law_number)
-        elif dedup_key and "#" not in dedup_key:
-            print(f"  ⚠️ 법안 의안번호(law_number) 없음 — dedup_key에 '#'가 없음: {entry.get('path')}")
+    ed = entry.get("enforcement_date") or None
     return {
-        "dedup_key": dedup_key,
-        "title": title,
+        "dedup_key": entry.get("dedup_key") or None,
+        "title": entry.get("title") or fm.get("title") or "",
         "concept_type": entry.get("concept_type") or fm.get("type") or None,
         "family": family_of(entry["path"]),
-        "law_type": law_type,
-        "law_number": law_number,
+        "law_type": entry.get("law_type") or None,
+        "law_number": entry.get("law_number") or None,
         "enforcement_date": ed,
         "competent_authority": fm.get("competent_authority") or None,
         "status": entry.get("status") or "current",
@@ -301,11 +246,6 @@ def main():
             sys.exit(1)
         entries = [e for e in entries if any(p in e["path"] for p in pats)]
         if not entries:
-            # dry-run은 "오늘 해당 항목이 0건"이 정상 답이 될 수 있다(예: --only bills/ 가 아직 비어 있을 때).
-            # 실제 적재에서는 오타로 아무것도 안 적재되는 것을 잡기 위해 종전대로 오류.
-            if dry:
-                print(f"--only 필터: 0건 (일치 항목 없음 → {pats}) — dry-run 종료")
-                return
             print(f"오류: --only 패턴과 일치하는 manifest 항목 없음 → {pats}")
             sys.exit(1)
         print(f"--only 필터: {len(entries)}건 선택")

@@ -124,7 +124,17 @@ create table if not exists public.assembly_bills (
   -- 국회 입법예고 추적 (2026-08-02, 배경역사 #56)
   notice_end_dt    text,                     -- 의견등록 마감일 'YYYY-MM-DD' (진행중 API NOTI_ED_DT)
   notice_url       text,                     -- pal.assembly.go.kr 상세 링크
-  notice_alert_stage smallint default 0      -- 0=미알림 1=시작알림됨 2=D-3알림됨 (발송 성공 시에만 갱신)
+  notice_alert_stage smallint default 0,     -- 0=미알림 1=시작알림됨 2=D-3알림됨 (발송 성공 시에만 갱신)
+  notice_briefed_at timestamptz,             -- 아침 브리핑에 입법예고로 실린 시각(morning_briefing)
+  -- 진행단계 원본 (2026-09-04, 배경역사 #122) — API가 주는 일자·결과. proc_result는 bill_stage.derive_stage()가
+  -- PROC_RESULT가 빈 계류 법안에 '소관위 회부/심사중·위원회 의결·법사위 회부/심사중'을 파생해 저장한다.
+  committee_dt     text,                     -- 소관위 회부일 (COMMITTEE_DT)
+  cmt_present_dt   text,                     -- 소관위 상정일 (CMT_PRESENT_DT) — 소위 필드는 API에 없어 상정일이 심사 착수 대리 지표
+  cmt_proc_dt      text,                     -- 소관위 처리일 (CMT_PROC_DT)
+  cmt_proc_result  text,                     -- 소관위 처리결과 (CMT_PROC_RESULT_CD) — 가결→'위원회 의결', 대안반영폐기 등→종결
+  law_submit_dt    text,                     -- 법사위 회부일 (LAW_SUBMIT_DT)
+  law_present_dt   text,                     -- 법사위 상정일 (LAW_PRESENT_DT)
+  law_proc_dt      text                      -- 법사위 처리일 (LAW_PROC_DT)
 );
 comment on table public.assembly_bills is '국회 의안 모니터링 — 전파/통신 관련 법안 추적';
 

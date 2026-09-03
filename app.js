@@ -1446,30 +1446,18 @@ function buildKbContext(rows) {
     var t = (r.title || '').trim();
     if (t && lastKbSources.indexOf(KB_SRC_PREFIX + t) === -1) lastKbSources.push(KB_SRC_PREFIX + t);
   });
-  // 국회 계류 법안 요약(concept_type='Bill', 2026-09-04) — 두 RPC가 concept_type을 반환한다(실DB 확인).
-  // 확정 법령이 아니므로 라벨을 「법안요약 · 국회 계류 — 확정 법령 아님」으로 바꾸고 메타도 의안번호·발의일로
-  // 읽히게 한다. rag.ts buildKbContext와 동일 유지 — 한쪽만 고치지 말 것. 순서는 그대로.
-  var hasBill = false;
   var items = rows.map(function(r, i) {
-    var bill = (r.concept_type || '') === 'Bill';
-    if (bill) hasBill = true;
     var meta = [];
     if (r.law_type) meta.push(r.law_type);
-    if (r.law_number) meta.push((bill ? '의안번호: ' : '법령번호: ') + r.law_number);
-    if (r.enforcement_date) meta.push((bill ? '발의일: ' : '시행일: ') + r.enforcement_date);
+    if (r.law_number) meta.push('법령번호: ' + r.law_number);
+    if (r.enforcement_date) meta.push('시행일: ' + r.enforcement_date);
     var metaStr = meta.length ? ' [' + meta.join(' | ') + ']' : '';
-    var label = bill ? '[법안요약 ' + (i+1) + ' · 국회 계류 — 확정 법령 아님]' : '[법령요약 ' + (i+1) + ']';
-    return label + ' ' + (r.title || '') + metaStr + '\n' + (r.content || '');
+    return '[법령요약 ' + (i+1) + '] ' + (r.title || '') + metaStr + '\n' + (r.content || '');
   });
-  var billNote = hasBill
-    ? '※ [법안요약 · 국회 계류 — 확정 법령 아님]으로 표시된 항목은 국회에 계류 중인 법률안의 요약입니다. ' +
-      '현행 법령이 아니므로 "…하는 법안이 발의되어 있다(계류 중)"로만 서술하고, 확정된 규정처럼 인용하거나 시행 중인 것으로 답하지 마세요.\n'
-    : '';
   return '\n\n---\n\n[법령·규제 요약 지식베이스 — 현행 법령·고시·훈령 요약/실무]\n' +
     '아래는 우리 팀이 정리한 법령·고시·훈령의 요약·적용범위·실무 체크리스트·소관부처 문서(현행본)입니다. ' +
     '법의 취지·실무 대응·담당부처를 물을 때 활용하세요. ' +
-    '단, 정확한 조문 번호·문구 인용은 위 RAG 조문 원문을 최우선으로 하고, 이 요약은 실무 맥락 보강용으로 쓰세요:\n' +
-    billNote + '\n' +
+    '단, 정확한 조문 번호·문구 인용은 위 RAG 조문 원문을 최우선으로 하고, 이 요약은 실무 맥락 보강용으로 쓰세요:\n\n' +
     items.join('\n\n---\n\n');
 }
 
@@ -7685,6 +7673,16 @@ function _billIsPassed(p) {
   p = p || '';
   return p.includes('가결') || p === '본회의 통과' || p === '공포' || p === '정부이송';
 }
+// 폐기 판정 — 대안반영폐기·부결·철회
+function _billIsDiscarded(p) {
+  p = p || '';
+  return p.includes('폐기') || p === '부결' || p === '철회';
+}
+// 계류 판정 — 통과도 폐기도 아닌 모든 단계(접수·소관위 회부/심사중·위원회 의결·법사위 회부/심사중·본회의 심의).
+// 2026-09-04(#122)부터 proc_result가 '접수' 외 단계 라벨을 가지므로 '접수' 문자열 비교로 계류를 세면 안 된다.
+function _billIsActive(p) {
+  return !_billIsPassed(p) && !_billIsDiscarded(p);
+}
 
 // 이 법안 카드에 '조문 DIFF 보기' 링크를 붙일 수 있는가 — _asmDiffCache 기준
 // (a) 의견등록 법안: origin='assembly' proposed & new_doc==bill_no
@@ -7745,6 +7743,8 @@ function assemblyStatusLabel(proc) {
   if (!proc || proc === '접수') return { text: '접수', color: '#6b7280' };
   if (proc.includes('가결') || proc === '본회의 통과' || proc === '공포' || proc === '정부이송') return { text: proc, color: '#22c55e' };
   if (proc.includes('폐기') || proc === '부결' || proc === '철회') return { text: proc, color: '#ef4444' };
+  if (proc === '위원회 의결') return { text: proc, color: '#0d9488' };   // 위원회 통과·본회의 대기 — '통과'(초록)와 구분되는 청록
+  if (proc === '소관위 회부') return { text: proc, color: '#9ca3af' };   // 회부만 된 상태 — 접수와 거의 같은 무게
   if (proc.includes('소관위')) return { text: proc, color: '#3b82f6' };
   if (proc.includes('법사위')) return { text: proc, color: '#8b5cf6' };
   if (proc.includes('본회의')) return { text: proc, color: '#f59e0b' };
@@ -7756,9 +7756,9 @@ function assemblyMatchesFilter(bill) {
   if (assemblyFilterMode === '전체') return true;
   if (assemblyFilterMode === '최근') { var d = _parseProposeDt(bill.propose_dt); return !!d && d >= new Date(Date.now() - 7 * 86400000); }
   if (assemblyFilterMode === '의견') return _billCommentOpen(bill);
-  if (assemblyFilterMode === '접수') return !bill.proc_result || p === '접수';
-  if (assemblyFilterMode === '통과') return p.includes('가결') || p === '본회의 통과' || p === '공포' || p === '정부이송';
-  if (assemblyFilterMode === '폐기') return p.includes('폐기') || p === '부결' || p === '철회';
+  if (assemblyFilterMode === '접수') return _billIsActive(p);
+  if (assemblyFilterMode === '통과') return _billIsPassed(p);
+  if (assemblyFilterMode === '폐기') return _billIsDiscarded(p);
   return true;
 }
 
@@ -7772,9 +7772,9 @@ function renderAssemblyBills(bills) {
   var totalCount   = bills.length;
   var newCount     = bills.filter(function(b) { var d = _parseProposeDt(b.propose_dt); return d && d >= weekAgo; }).length;
   var commentCount = bills.filter(function(b) { return _billCommentOpen(b); }).length;   // assemblyMatchesFilter('의견')와 동일 판정
-  var activeCount  = bills.filter(function(b) { var p = b.proc_result || ''; return !p || p === '접수'; }).length;
-  var passedCount  = bills.filter(function(b) { var p = b.proc_result || ''; return p.includes('가결') || p === '본회의 통과' || p === '공포' || p === '정부이송'; }).length;
-  var discardedCount = bills.filter(function(b) { var p = b.proc_result || ''; return p.includes('폐기') || p === '부결' || p === '철회'; }).length;
+  var activeCount  = bills.filter(function(b) { return _billIsActive(b.proc_result || ''); }).length;
+  var passedCount  = bills.filter(function(b) { return _billIsPassed(b.proc_result || ''); }).length;
+  var discardedCount = bills.filter(function(b) { return _billIsDiscarded(b.proc_result || ''); }).length;
 
   var setVal = function(id, v) { var el = document.getElementById(id); if (el) el.textContent = v; };
   setVal('asm-total',  totalCount);

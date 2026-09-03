@@ -188,66 +188,6 @@ class TestDaysToDeadline(unittest.TestCase):
         self.assertIsNone(_days_to_deadline(None, today))
 
 
-class TestCommitteeBillRelevance(unittest.TestCase):
-    """⑧-2 assembly_crawler.is_committee_bill_relevant — 과방위 소관 스윕 1차 판정
-    (법령군 포함 → True / 「방송법…」 → None=Haiku 판정 위임 / 그 외 → False).
-    assembly_crawler는 import 시 더미 env로 Supabase 클라이언트만 만들고 접속하지 않는다(⑧과 동일)."""
-
-    def test_family_hit(self):
-        from assembly_crawler import is_committee_bill_relevant, COMMITTEE_FAMILIES
-        self.assertTrue(is_committee_bill_relevant({'BILL_NAME': '정보통신망 이용촉진 및 정보보호 등에 관한 법률 일부개정법률안'}))
-        self.assertTrue(is_committee_bill_relevant({'BILL_NAME': '전기통신사업법 일부개정법률안'}))
-        self.assertTrue(is_committee_bill_relevant({'BILL_NAME': '위치정보의 보호 및 이용 등에 관한 법률 일부개정법률안'}))
-        self.assertIn('전파법', COMMITTEE_FAMILIES)
-
-    def test_broadcast_act_needs_judge(self):
-        from assembly_crawler import is_committee_bill_relevant
-        self.assertIsNone(is_committee_bill_relevant({'BILL_NAME': '방송법 일부개정법률안'}))
-
-    def test_out_of_scope_false(self):
-        from assembly_crawler import is_committee_bill_relevant
-        self.assertFalse(is_committee_bill_relevant({'BILL_NAME': '원자력안전법 일부개정법률안'}))
-        self.assertFalse(is_committee_bill_relevant({'BILL_NAME': '한국과학기술원법 일부개정법률안'}))
-        self.assertFalse(is_committee_bill_relevant({'BILL_NAME': ''}))
-        self.assertFalse(is_committee_bill_relevant({}))
-
-
-class TestBillKbHelpers(unittest.TestCase):
-    """⑧-3 import_regulatory_kb — 법안(Bill) 문서 지원: family·dedup_key·본문 완결 게이트"""
-
-    def test_family_and_dedup_key(self):
-        import import_regulatory_kb as ikb
-        self.assertEqual(ikb.family_of('bills/2026/2215722.md'), 'bills')
-        self.assertEqual(ikb.family_of('laws/radio-act/radio_act.md'), 'radio-act')
-        self.assertEqual(ikb.bill_dedup_key('전파법 일부개정법률안', '2215722'), '전파법 일부개정법률안|의안#2215722')
-        row = ikb.build_doc_row(
-            {'path': 'bills/2026/2215722.md', 'title': '전파법 일부개정법률안', 'concept_type': 'Bill',
-             'law_type': '의안', 'law_number': '2215722', 'enforcement_date': '2026-08-01', 'status': 'current'},
-            {}, '본문')
-        self.assertEqual(row['family'], 'bills')
-        self.assertEqual(row['dedup_key'], '전파법 일부개정법률안|의안#2215722')
-        self.assertEqual(row['law_type'], '의안')
-        self.assertEqual(row['law_number'], '2215722')
-        self.assertEqual(row['enforcement_date'], '2026-08-01')
-
-    def test_bill_body_gate(self):
-        import import_regulatory_kb as ikb
-        good = ('# 제안이유\n' + '가' * 60 + '\n\n# 주요내용\n' + '나' * 60 +
-                '\n\n# 통신사업자 영향\n' + '다' * 60 + ' 영향이 있다.')
-        ok, why = ikb.check_body_complete('bills/2026/2215722.md', good)
-        self.assertTrue(ok, why)
-        # 필수 섹션 누락
-        ok, why = ikb.check_body_complete('bills/2026/x.md', good.replace('# 통신사업자 영향', '# 영향'))
-        self.assertFalse(ok)
-        self.assertIn('통신사업자 영향', why)
-        # 말미 절단
-        ok, _ = ikb.check_body_complete('bills/2026/x.md', good + '\n\n또한 이 법안은 통신사업자에게')
-        self.assertFalse(ok)
-        # laws/ 는 종전 규칙 유지(Citations 필수)
-        ok, _ = ikb.check_body_complete('laws/x/y.md', good + '\n' + '라' * 100)
-        self.assertFalse(ok)
-
-
 class TestEmbedUtilValidation(unittest.TestCase):
     """⑨ embed_util 입력 검증 — 네트워크 없이 도달 가능한 부분만"""
 
@@ -445,6 +385,40 @@ class TestMinutesDigest(unittest.TestCase):
         self.assertEqual(self._digest(summary=None, sp_rows=None), '')
         # 요지 없는 행뿐이면 역시 ''
         self.assertEqual(self._digest(summary='', sp_rows=[{'speaker': 'x', 'summary': ''}]), '')
+
+
+class TestBillStage(unittest.TestCase):
+    """bill_stage — 진행단계 파생(2026-09-04, #122). PROC_RESULT가 빈 계류 법안을 회부·상정·
+    위원회 의결·법사위로 구분한다. 자문 근거와는 무관(법안은 동향 전용)."""
+
+    def test_ladder(self):
+        import bill_stage as bs
+        self.assertEqual(bs.derive_stage({}), '접수')
+        self.assertEqual(bs.derive_stage({'COMMITTEE_DT': '2026-01-01'}), '소관위 회부')
+        self.assertEqual(bs.derive_stage({'COMMITTEE_DT': '2026-01-01', 'CMT_PRESENT_DT': '2026-01-10'}), '소관위 심사중')
+        self.assertEqual(bs.derive_stage({'CMT_PRESENT_DT': '2026-01-10', 'LAW_SUBMIT_DT': '2026-02-01'}), '법사위 회부')
+        self.assertEqual(bs.derive_stage({'LAW_SUBMIT_DT': '2026-02-01', 'LAW_PRESENT_DT': '2026-02-10'}), '법사위 심사중')
+
+    def test_committee_result_branches(self):
+        import bill_stage as bs
+        # 위원회 가결은 종결이 아니라 본회의 대기 — '위원회 의결'
+        self.assertEqual(bs.derive_stage({'CMT_PRESENT_DT': '2026-01-10', 'CMT_PROC_RESULT_CD': '수정가결'}), '위원회 의결')
+        # 위원회 단계 폐기는 그 값으로 종결
+        self.assertEqual(bs.derive_stage({'CMT_PRESENT_DT': '2026-01-10', 'CMT_PROC_RESULT_CD': '대안반영폐기'}), '대안반영폐기')
+        # 본회의 처리결과(PROC_RESULT)가 있으면 항상 우선
+        self.assertEqual(bs.derive_stage({'PROC_RESULT': '원안가결', 'CMT_PROC_RESULT_CD': '수정가결'}), '원안가결')
+        self.assertEqual(bs.derive_stage({'PROC_RESULT': ' 철회 ', 'LAW_PRESENT_DT': '2026-02-10'}), '철회')
+
+    def test_terminal_whitelist_and_columns(self):
+        import bill_stage as bs
+        for alive in ('접수', '소관위 회부', '소관위 심사중', '위원회 의결', '법사위 회부', '법사위 심사중'):
+            self.assertFalse(bs.is_terminal_label(alive), alive)
+        for dead in ('수정가결', '원안가결', '대안반영폐기', '철회', '부결', '', None, '미래의결과코드'):
+            self.assertTrue(bs.is_terminal_label(dead), dead)
+        cols = bs.stage_columns({'COMMITTEE_DT': '2026-01-01', 'CMT_PRESENT_DT': '', 'LAW_SUBMIT_DT': None})
+        self.assertEqual(cols['committee_dt'], '2026-01-01')
+        self.assertIsNone(cols['cmt_present_dt']); self.assertIsNone(cols['law_submit_dt'])
+        self.assertEqual(set(cols), set(bs.STAGE_FIELDS))
 
 
 if __name__ == '__main__':

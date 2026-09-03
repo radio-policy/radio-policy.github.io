@@ -14,6 +14,7 @@ import sys
 import json
 import time
 import argparse
+import bill_stage   # 진행단계 파생(#122) — PROC_RESULT가 비면 회부·상정·법사위·위원회 의결을 구분
 import requests
 from datetime import datetime, timezone, timedelta
 
@@ -81,7 +82,7 @@ KEYWORDS = [
 
 # 상태 변경 시 알림을 보낼 중요 단계
 NOTABLE_STATUS = {
-    '소관위 심사중', '법사위 심사중', '본회의 심의',
+    '소관위 심사중', '위원회 의결', '법사위 회부', '법사위 심사중', '본회의 심의',
     '본회의 통과', '대안반영폐기', '부결', '철회',
     '정부이송', '공포',
 }
@@ -286,7 +287,16 @@ def sweep_committee_bills(collected: dict, existing_bills: dict, dry_run: bool =
 
 def load_existing_bills() -> dict[str, dict]:
     """DB의 기존 법안 목록 로드 (bill_id → row)"""
-    rows = sb.table('assembly_bills').select('*').execute().data
+    # supabase-py 기본 1,000행 상한 — 665건(2026-09-04)이라 아직 한 페이지지만, 넘는 순간 기존 법안이
+    # '신규'로 재알림되는 사고가 나므로 처음부터 페이징한다(#122).
+    rows: list[dict] = []
+    start = 0
+    while True:
+        page = sb.table('assembly_bills').select('*').order('id').range(start, start + 999).execute().data or []
+        rows.extend(page)
+        if len(page) < 1000:
+            break
+        start += 1000
     return {r['bill_id']: r for r in rows}
 
 
@@ -303,7 +313,7 @@ def upsert_bill(bill: dict, matched_keywords: list[str], existing: dict | None) 
     """법안 저장/갱신. 반환값: 'new' | 'status_changed' | 'unchanged'"""
     bill_id      = bill.get('BILL_ID', '')
     bill_name    = bill.get('BILL_NAME', '').strip()
-    proc_result  = (bill.get('PROC_RESULT') or '접수').strip()
+    proc_result  = bill_stage.derive_stage(bill)   # PROC_RESULT 비면 단계 파생(#122)
     propose_dt   = bill.get('PROPOSE_DT', '')
     link_url     = bill_link(bill)
 
@@ -324,6 +334,8 @@ def upsert_bill(bill: dict, matched_keywords: list[str], existing: dict | None) 
         'link_url':         link_url,
         'updated_at':       datetime.now(KST).isoformat(),
     }
+    stage_cols = bill_stage.stage_columns(bill)      # 회부·상정·위원회 처리·법사위 일자(#122)
+    row.update(stage_cols)
 
     if existing is None:
         # 신규 법안
@@ -337,15 +349,15 @@ def upsert_bill(bill: dict, matched_keywords: list[str], existing: dict | None) 
         sb.table('assembly_bills').update(row).eq('bill_id', bill_id).execute()
         return 'status_changed'
 
-    # 키워드 추가만 있으면 업데이트
+    # 키워드 추가·단계 컬럼 변화(라벨은 같아도 처리일 등이 채워진 경우)만 있으면 조용히 업데이트
     existing_kw = set(existing.get('matched_keywords') or [])
     new_kw      = set(matched_keywords)
+    upd = {k: v for k, v in stage_cols.items() if existing.get(k) != v}
     if not new_kw.issubset(existing_kw):
-        merged = list(existing_kw | new_kw)
-        sb.table('assembly_bills').update({
-            'matched_keywords': merged,
-            'updated_at': datetime.now(KST).isoformat(),
-        }).eq('bill_id', bill_id).execute()
+        upd['matched_keywords'] = list(existing_kw | new_kw)
+    if upd:
+        upd['updated_at'] = datetime.now(KST).isoformat()
+        sb.table('assembly_bills').update(upd).eq('bill_id', bill_id).execute()
 
     return 'unchanged'
 
@@ -385,7 +397,7 @@ def notify_new(bill: dict, keywords: list[str]):
         f'• 제안자: {bill.get("PROPOSER", "—")}\n'
         f'• 소관위: {bill.get("CURR_COMMITTEE", "—")}\n'
         f'• 제안일: {dt_str}\n'
-        f'• 상태: {bill.get("PROC_RESULT", "접수")}\n'
+        f'• 상태: {bill_stage.derive_stage(bill)}\n'
         f'• 키워드: {kw_str}'
     )
     if link:
@@ -394,7 +406,7 @@ def notify_new(bill: dict, keywords: list[str]):
 
 
 def notify_status_change(bill: dict, prev_status: str, keywords: list[str]):
-    new_status = bill.get('PROC_RESULT', '')
+    new_status = bill_stage.derive_stage(bill)
     link       = bill_link(bill)
     msg = (
         f'🔄 <b>[법안 상태 변경]</b>\n'
@@ -912,9 +924,10 @@ def run_notice_pass(dry_run: bool = False):
 #  메인
 # ═══════════════════════════════════════════════════════════
 
-def main(dry_run: bool = False):
+def main(dry_run: bool = False, suppress_status_alerts: bool = False):
     print(f'[국회 법안 모니터링] 시작 — {datetime.now(KST).strftime("%Y-%m-%d %H:%M KST")}'
-          + (' [DRY-RUN — DB 쓰기·알림 없음]' if dry_run else ''))
+          + (' [DRY-RUN — DB 쓰기·알림 없음]' if dry_run else '')
+          + (' [상태변경 알림 억제]' if suppress_status_alerts else ''))
 
     if not ASSEMBLY_API_KEY:
         print('[오류] ASSEMBLY_API_KEY 환경변수가 없습니다.')
@@ -962,7 +975,7 @@ def main(dry_run: bool = False):
 
         if dry_run:
             # DB 무변경 — 결과만 판정해서 출력
-            proc = (bill.get('PROC_RESULT') or '접수').strip()
+            proc = bill_stage.derive_stage(bill)
             if existing is None:
                 result = 'new'
             elif existing['proc_result'] != proc:
@@ -981,10 +994,12 @@ def main(dry_run: bool = False):
         elif result == 'status_changed':
             changed_count += 1
             prev = existing['proc_result']
-            new  = bill.get('PROC_RESULT', '')
+            new  = bill_stage.derive_stage(bill)
             print(f'  🔄 상태변경: {bill.get("BILL_NAME", "")[:30]} ({prev} → {new})')
-            # 중요 상태 변경만 알림 (접수→접수 같은 무의미한 변경 제외)
-            if not dry_run and new in NOTABLE_STATUS:
+            # 중요 상태 변경만 알림 (접수→소관위 회부 같은 사소한 변경 제외).
+            # --suppress-status-alerts: 단계 파생 규칙 배포 직후 1회 백필용 — 수백 건이 한꺼번에
+            # '접수'→상정 이후 라벨로 바뀌는 것은 실제 변동이 아니므로 알림을 내지 않는다(#122).
+            if not dry_run and not suppress_status_alerts and new in NOTABLE_STATUS:
                 notify_status_change(bill, prev, keywords)
 
     print(f'\n[완료] 신규 {new_count}건 | 상태변경 {changed_count}건 | 총 추적 {len(collected)}건')
@@ -1003,5 +1018,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='국회 법안·입법예고 모니터링 크롤러')
     parser.add_argument('--dry-run', action='store_true',
                         help='DB 쓰기·텔레그램 알림 없이 수집/판정 결과만 출력')
+    parser.add_argument('--suppress-status-alerts', action='store_true',
+                        help='DB는 갱신하되 상태변경 알림만 건너뜀 — 단계 라벨 규칙 변경 직후 1회 백필 전용(신규 법안 알림은 그대로)')
     args = parser.parse_args()
-    main(dry_run=args.dry_run)
+    main(dry_run=args.dry_run, suppress_status_alerts=args.suppress_status_alerts)

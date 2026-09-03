@@ -62,24 +62,10 @@ def fetch_all_kb_documents(sb):
         start += page
 
 
-def is_bill_row(row):
-    """concept_type='Bill'(국회 계류 법안 요약, 2026-09-04). path는 bills/<year>/<의안번호>.md 규약."""
-    return (row.get("concept_type") or "") == "Bill" or (row.get("path") or "").startswith("bills/")
-
-
-def bill_dedup_key(row):
-    """법안 dedup_key 규칙 = `제목|의안#의안번호` (import_regulatory_kb.bill_dedup_key와 동일 —
-    같은 이름의 개정안이 제안자만 다르게 여럿이라 법령 규칙 `제목|law_type`로는 뭉친다)."""
-    title = (row.get("title") or "").strip()
-    return f"{title}|의안#{(row.get('law_number') or '').strip()}"
-
-
 def build_md(row):
-    """행 컬럼으로 frontmatter를 재구성해 번들 md 파일 내용 생성 (본문은 body_md 그대로).
-    Bill 행도 같은 frontmatter 형식으로 왕복한다(type: Bill / law_type: 의안 / law_number: 의안번호 /
-    enforcement_date: 발의일) — import_regulatory_kb.build_doc_row가 manifest 값이 비면 이 frontmatter를 읽는다."""
+    """행 컬럼으로 frontmatter를 재구성해 번들 md 파일 내용 생성 (본문은 body_md 그대로)."""
     fm = ["---"]
-    fm.append(f"type: {row.get('concept_type') or ('Bill' if is_bill_row(row) else 'Notice')}")
+    fm.append(f"type: {row.get('concept_type') or 'Notice'}")
     fm.append(f"title: {row.get('title') or ''}")
     if row.get("description"):
         fm.append(f"description: {row['description']}")
@@ -94,19 +80,13 @@ def build_md(row):
 
 
 def manifest_entry(row):
-    bill = is_bill_row(row)
-    dedup_key = row.get("dedup_key")
-    if bill and (not dedup_key or "#" not in dedup_key):
-        dedup_key = bill_dedup_key(row)          # 의안번호 규칙으로 보정(DB 행이 규칙 이전에 들어온 경우)
-    if bill and not (row.get("path") or "").startswith("bills/"):
-        print(f"  ⚠️ Bill 행의 path가 bills/ 밖: {row.get('path')} — 재적재 시 family가 'bills'로 잡히지 않는다")
     e = {
-        "dedup_key": dedup_key,
+        "dedup_key": row.get("dedup_key"),
         "title": row.get("title"),
-        "law_type": row.get("law_type") or ("의안" if bill else None),
+        "law_type": row.get("law_type"),
         "law_number": row.get("law_number"),
         "enforcement_date": row.get("enforcement_date"),
-        "concept_type": row.get("concept_type") or ("Bill" if bill else None),
+        "concept_type": row.get("concept_type"),
         "path": row["path"],
         "status": row.get("status") or "current",
     }
