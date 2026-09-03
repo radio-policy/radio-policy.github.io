@@ -68,14 +68,53 @@ API_DETAIL = 'https://open.assembly.go.kr/portal/openapi/VCONFDETAIL'
 VIEWER_URL = ('https://record.assembly.go.kr/assembly/viewer/minutes/xml.do'
               '?id=%s&type=view')
 
-DAE_NUM = '22'                       # 22대 국회
+DAE_NUM = '22'                       # 22대 국회 (현행 기본값 — 소급 조회는 아래 표)
 COMM_NAME = '과학기술정보방송통신위원회'
 DOC_CATEGORY = '회의록'
 
+# 연도 → (Open API DAE_NUM, 위원회명 후보). 상임위 회의록 API는 DAE_NUM·COMM_NAME이 필수라
+# 20·21대 소급(2026-09-03 운영자 지시)은 표로 고정한다(국감 AUDIT_DAE_TABLE과 같은 이유).
+# **20대 전반기(~2017-07-26)는 '미래창조과학방송통신위원회'** — 실측: 2016년은 미방위 명칭으로만
+# 17건, 2017년은 두 명칭에 각각 11건·16건이 잡힌다. 임기 교체연도(2020·2024, 5/30)는 두 대를
+# 모두 질의하고 CONFER_NUM으로 합친다. 23대 개원 시 한 줄 추가할 것.
+COMMITTEE_DAE_TABLE = [
+    (2016, 2020, '20', ['미래창조과학방송통신위원회', '과학기술정보방송통신위원회']),
+    (2020, 2024, '21', ['과학기술정보방송통신위원회']),
+    (2024, 2099, '22', ['과학기술정보방송통신위원회']),
+]
+
+
+def committee_queries_for(year: int) -> list:
+    """해당 연도에 던질 (DAE_NUM, COMM_NAME) 쌍 목록. 표에 없으면 현행 상수 1쌍."""
+    out = []
+    for lo, hi, dae, comms in COMMITTEE_DAE_TABLE:
+        if lo <= year <= hi:
+            out.extend((dae, c) for c in comms)
+    return out or [(DAE_NUM, COMM_NAME)]
+
+
+# 일일 경로(17시 체인)의 AI 모델 — 2026-09-03 Haiku → Sonnet 5 (운영자 결정).
+# Haiku는 영문 거절문이 요지로 저장된 사고(#99)와 무내용 요약이 실측됐다. 월 7회 남짓이라
+# 비용 차이는 월 $1 수준. **비스트리밍 호출은 thinking을 꺼야 한다** — Sonnet 5는 적응형
+# 추론이 기본 ON이라 사고 토큰이 과금되고 content[0]이 text가 아니게 된다(메모리 함정).
+MINUTES_MODEL = 'claude-sonnet-5'
+MINUTES_THINKING = {'type': 'disabled'}
+
 BLOCK_TRUNC = 1500                   # 발언 블록당 발췌 상한(자)
-MAX_JUDGE_BLOCKS = 40                # 회의당 Haiku 판정 상한 (비용·시간 방어)
+MAX_JUDGE_BLOCKS = 40                # 회의당 AI 판정 상한 (비용·시간 방어)
 MAX_EXCERPTS = 30                    # 회의당 수록 발췌 상한
 MAX_AGENDA_LINES = 15                # 개요의 안건 나열 상한
+
+# 구독자 다이제스트(텔레그램 '국회·법률 동향', 2026-09-03) 가드.
+# 백필·재요약 경로에서 큐가 폭주하지 않도록 **신규 섹션 + 최근 60일 + 실질 회의**만 적재한다.
+DIGEST_MAX_AGE_DAYS = 60
+DIGEST_MIN_SPEECHES = 3
+
+# 자사 언급 표시 — AI 판정이 아니라 **원문 블록에 ALWAYS_KEEP_TERMS가 있는지**로 결정한다(규칙).
+# 회의 요약 줄 끝에는 SKT_SUFFIX, 발언 topic에는 SKT_CHIP(대시보드가 콤마 분리 칩으로 렌더).
+SKT_CHIP = 'SK텔레콤 언급'
+SKT_SUFFIX = ' (SK텔레콤 언급)'
+OVERVIEW_MARK = '개요:'              # 섹션 본문의 회의 개요 블록 머리(대시보드 상세가 파싱)
 
 # ── 국정감사 회의록 (2026-08-13 추가, 22대 전용) ────────────────
 # 검색 폼 실측: collection='record5' + CLASS_CD='5' 여야 국감 컬렉션이 조회된다.
@@ -161,38 +200,41 @@ def fetch_meetings(api_key: str, year: int) -> list:
     반환: [{'confer_num','title','conf_date','sess','dgr','agenda',
             'pdf_url','conf_id'}] (최신 회의 먼저)."""
     by_conf: dict = {}
-    page, psize = 1, 300
-    while True:
-        data = _api_get(API_MINUTES, {
-            'KEY': api_key, 'Type': 'json', 'pIndex': page, 'pSize': psize,
-            'DAE_NUM': DAE_NUM, 'CONF_DATE': str(year), 'COMM_NAME': COMM_NAME,
-        })
-        rows = _rows_of(data, 'ncwgseseafwbuheph')
-        for r in rows:
-            num = r.get('CONFER_NUM')
-            if not num:
-                continue
-            m = by_conf.get(num)
-            if m is None:
-                title = (r.get('TITLE') or '').strip()
-                sm = re.search(r'제(\d+)회\s*제(\d+)차', title)
-                m = by_conf[num] = {
-                    'confer_num': num,
-                    'title':      title,
-                    'conf_date':  (r.get('CONF_DATE') or '').strip(),
-                    'sess':       sm.group(1) if sm else '',
-                    'dgr':        sm.group(2) if sm else '',
-                    'agenda':     [],
-                    'pdf_url':    (r.get('PDF_LINK_URL') or '').strip(),
-                    'conf_id':    (r.get('CONF_ID') or '').strip(),
-                }
-            sub = (r.get('SUB_NAME') or '').strip()
-            if sub and sub not in m['agenda']:
-                m['agenda'].append(sub)
-        if len(rows) < psize:
-            break
-        page += 1
-        time.sleep(0.3)
+    for dae, comm in committee_queries_for(year):
+        page, psize = 1, 300
+        while True:
+            data = _api_get(API_MINUTES, {
+                'KEY': api_key, 'Type': 'json', 'pIndex': page, 'pSize': psize,
+                'DAE_NUM': dae, 'CONF_DATE': str(year), 'COMM_NAME': comm,
+            })
+            rows = _rows_of(data, 'ncwgseseafwbuheph')
+            for r in rows:
+                num = r.get('CONFER_NUM')
+                if not num:
+                    continue
+                m = by_conf.get(num)
+                if m is None:
+                    title = (r.get('TITLE') or '').strip()
+                    sm = re.search(r'제(\d+)회\s*제(\d+)차', title)
+                    m = by_conf[num] = {
+                        'confer_num': num,
+                        'title':      title,
+                        'conf_date':  (r.get('CONF_DATE') or '').strip(),
+                        'sess':       sm.group(1) if sm else '',
+                        'dgr':        sm.group(2) if sm else '',
+                        'agenda':     [],
+                        'pdf_url':    (r.get('PDF_LINK_URL') or '').strip(),
+                        'conf_id':    (r.get('CONF_ID') or '').strip(),
+                        'dae_num':    dae,
+                        'comm_name':  comm,
+                    }
+                sub = (r.get('SUB_NAME') or '').strip()
+                if sub and sub not in m['agenda']:
+                    m['agenda'].append(sub)
+            if len(rows) < psize:
+                break
+            page += 1
+            time.sleep(0.3)
     meetings = list(by_conf.values())
     meetings.sort(key=lambda m: (m['conf_date'], int(m['dgr'] or 0)), reverse=True)
     return meetings
@@ -405,6 +447,45 @@ def is_always_keep(text: str) -> bool:
     return any(t in text for t in ALWAYS_KEEP_TERMS)
 
 
+def skt_mentioned(blocks: list, indices) -> bool:
+    """수록 블록(indices) 중 자사 언급이 하나라도 있는가 — 회의 요약 줄의 표시 근거(규칙)."""
+    return any(is_always_keep(blocks[i]['text']) for i in indices
+               if 0 <= i < len(blocks))
+
+
+def with_skt_suffix(summary: str, flag: bool) -> str:
+    """요약 줄 끝에 ' (SK텔레콤 언급)'을 한 번만 붙인다. 요약이 비었으면 그대로."""
+    s = (summary or '').strip()
+    if not s or not flag or SKT_CHIP in s:
+        return s
+    return s + SKT_SUFFIX
+
+
+def format_overview(items) -> str:
+    """회의 개요 블록 문자열. items = [{'topic','text'}, …] 또는 이미 만들어진 문자열.
+    검증(is_valid_summary)을 통과한 문단만 남기고, 하나도 없으면 '' (블록 생략).
+    형식: '개요:\\n[주제] 문단\\n[주제] 문단' — 문단은 한 줄, 빈 줄로 블록이 끝난다(대시보드 파서 계약)."""
+    if not items:
+        return ''
+    if isinstance(items, str):
+        lines = [ln.strip() for ln in items.replace('\r', '').split('\n') if ln.strip()]
+        if lines and lines[0].startswith(OVERVIEW_MARK):
+            lines = lines[1:]
+        paras = lines
+    else:
+        paras = []
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            topic = re.sub(r'\s+', ' ', str(it.get('topic') or '')).strip(' []')
+            text = re.sub(r'\s+', ' ', str(it.get('text') or '')).strip()
+            if not text:
+                continue
+            paras.append(('[%s] ' % topic if topic else '') + text)
+    good = [p for p in paras if is_valid_summary(re.sub(r'^\[[^\]]*\]\s*', '', p), 20)]
+    return (OVERVIEW_MARK + '\n' + '\n'.join(good)) if good else ''
+
+
 # ── 주제어 오탐 방지 (2026-08-14) ───────────────────────────────
 # 한국어에는 단어 경계가 없어 단순 `in` 매칭이 **다른 낱말 속의 키워드**를 잡는다.
 # 실측(축적된 회의록 섹션 본문 230만자)에서 확인된 것만 막는다 — 지침의 '혼신→이혼신고'
@@ -531,17 +612,9 @@ def select_relevant(blocks: list, keywords: list, judge, meeting_title: str,
       include   — 섹션 발췌용(확정 블록 + 전후 1블록) 인덱스 정렬 목록
       confirmed — 판정 통과 '본' 발언 블록 인덱스(전후 문맥 제외).
                   발언자별 적재(assembly_speeches)는 confirmed 만 사용해 중복 Haiku 콜을 피한다."""
-    always = [i for i, b in enumerate(blocks)
-              if is_always_keep(b['text']) and not is_procedural(b)]
-    always_set = set(always)
-    # 절차성 발언(개의·선서·인사말)을 먼저 걷어내고, 남은 후보를 **관련도 순**으로 세운다.
-    # 판정·수록 상한이 있는데 인덱스 순으로 주면 회의 앞부분(의례)만 남는다.
-    matched = [i for i, b in enumerate(blocks)
-               if i not in always_set and not is_procedural(b)
-               and any(kw_hit(b['text'], k) for k in keywords)]
-    matched.sort(key=lambda i: (-relevance_score(blocks[i]['text'], keywords), i))
+    always, matched = candidate_blocks(blocks, keywords, max_judge)
     confirmed = list(always)
-    for i in matched[:max_judge]:
+    for i in matched:
         b = blocks[i]
         if judge is None:
             confirmed.append(i)
@@ -551,6 +624,28 @@ def select_relevant(blocks: list, keywords: list, judge, meeting_title: str,
         if ok:
             confirmed.append(i)
     confirmed.sort()
+    return with_context(confirmed, blocks), confirmed
+
+
+def candidate_blocks(blocks: list, keywords: list, max_cand: int = MAX_JUDGE_BLOCKS):
+    """판정 후보 추출(select_relevant에서 분리, 2026-09-03 — 오프라인 파이프라인이 같은 후보를 쓴다).
+    반환: (always, matched)
+      always  — 자사 언급 블록(절차성 제외). 판정 없이 확정.
+      matched — 키워드 매칭 블록(절차성·always 제외)을 **관련도 순**으로 세워 max_cand까지."""
+    always = [i for i, b in enumerate(blocks)
+              if is_always_keep(b['text']) and not is_procedural(b)]
+    always_set = set(always)
+    # 절차성 발언(개의·선서·인사말)을 먼저 걷어내고, 남은 후보를 **관련도 순**으로 세운다.
+    # 판정·수록 상한이 있는데 인덱스 순으로 주면 회의 앞부분(의례)만 남는다.
+    matched = [i for i, b in enumerate(blocks)
+               if i not in always_set and not is_procedural(b)
+               and any(kw_hit(b['text'], k) for k in keywords)]
+    matched.sort(key=lambda i: (-relevance_score(blocks[i]['text'], keywords), i))
+    return always, matched[:max_cand]
+
+
+def with_context(confirmed: list, blocks: list) -> list:
+    """확정 블록 + 전후 1블록(문맥) 인덱스 정렬 목록(섹션 발췌용)."""
     include = set()
     for i in confirmed:
         include.add(i)                       # 확정 블록은 이미 검증됨
@@ -559,7 +654,7 @@ def select_relevant(blocks: list, keywords: list, judge, meeting_title: str,
         for j in (i - 1, i + 1):
             if 0 <= j < len(blocks) and not is_procedural(blocks[j]):
                 include.add(j)
-    return sorted(include), confirmed
+    return sorted(include)
 
 
 # ═══════════════════════════════════════════════════════════
@@ -707,12 +802,17 @@ def summarize_meeting(meeting_title: str, picked_texts: list, fallback: str = ''
         import anthropic
         client = anthropic.Anthropic(api_key=api_key)
         joined = '\n'.join(picked_texts)[:6000]
+        # 2026-09-03 프롬프트 교체: 종전 "통신사(SK텔레콤) 관점에서"는 언급이 없는 회의에서
+        # "SK텔레콤이 직접 언급되지 않았습니다" 류 **무내용 요약**을 만들었다(7/6·7/30·8/19 실측).
+        # 관점 지시를 빼고 회의 전체 쟁점을 쓰게 한다. 자사 언급 표시는 규칙(with_skt_suffix)이 맡는다.
         resp = client.messages.create(
-            model='claude-haiku-4-5-20251001',
+            model=MINUTES_MODEL,
             max_tokens=200,
+            thinking=MINUTES_THINKING,
             messages=[{'role': 'user', 'content': (
                 '아래는 국회 과방위 회의 「%s」에서 발췌한 통신·전파·AI 관련 발언들이다. '
-                '통신사(SK텔레콤) 관점에서 어떤 논의가 있었는지 1~2문장(130자 이내)으로 요약하라. '
+                '이 회의에서 통신·전파·AI 관련해 무엇이 논의됐는지 1~2문장(130자 이내)으로 요약하라. '
+                '특정 기업의 관점을 취하지 말고 논의된 주제·쟁점·정부 답변 요지를 사실대로 쓴다. '
                 '머리기호·따옴표 없이 문장만 출력.\n\n%s' % (meeting_title, joined)
             )}],
         )
@@ -731,6 +831,50 @@ def summarize_meeting(meeting_title: str, picked_texts: list, fallback: str = ''
     except Exception as e:
         print('  [요약 실패 — 규칙 폴백] %s' % str(e)[:60])
         return fallback
+
+
+def summarize_overview(meeting_title: str, picked_texts: list, topics: list = None) -> str:
+    """대시보드 상세용 **회의 개요**(주제별 문단 2~5개, 300~600자) — 2026-09-03 신설(운영자 결정:
+    텔레그램·목록은 한 줄 요약, 대시보드는 읽기 좋은 긴 문단을 따로). 실패·부적합이면 ''(블록 생략).
+    형식 계약은 format_overview()와 같다: '[주제] 문단' 한 줄씩."""
+    api_key = os.environ.get('ANTHROPIC_API_KEY', '')
+    if not api_key or not picked_texts:
+        return ''
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=api_key)
+        joined = '\n'.join(picked_texts)[:9000]
+        hint = ('주제명은 가급적 다음 키워드에서 고른다: %s.\n' % ', '.join(topics[:8])) if topics else ''
+        resp = client.messages.create(
+            model=MINUTES_MODEL,
+            max_tokens=1200,
+            thinking=MINUTES_THINKING,
+            messages=[{'role': 'user', 'content': (
+                '아래는 국회 과방위 회의 「%s」에서 발췌한 통신·전파·AI 관련 발언들이다. '
+                '이 회의의 개요를 주제별 문단 2~5개, 합계 300~600자로 작성하라.\n'
+                '규칙:\n'
+                '- 각 문단은 한 줄로, "[주제] 문단내용" 형식(예: "[주파수·5G] 이정헌 위원은 … 답했다.").\n'
+                '- 누가 무엇을 지적·질의했고 정부(장관·차관·실장 등)가 무엇이라 답했는지 사실만 쓴다.\n'
+                '- 발언자의 성향·정파성·의도를 단정하는 평가어(친기업/반기업/강경/옹호/편향 등)를 쓰지 않는다.\n'
+                '- 특정 기업의 관점을 취하지 않는다. 다만 SK텔레콤이 언급된 발언이 있으면 그 문단에 '
+                '"(SK텔레콤 언급)"을 붙인다.\n'
+                '- 머리기호·번호·따옴표·제목 없이 문단 줄만 출력한다.\n'
+                '%s\n%s' % (meeting_title, hint, joined)
+            )}],
+        )
+        txt = ''
+        for blk in resp.content:            # 적응형 추론 대비 — text 블록만
+            if getattr(blk, 'type', '') == 'text':
+                txt = (blk.text or '').strip()
+                break
+        txt = re.sub(r'^[#\-•*"\s]*(개요\s*[::]?\s*)?', '', txt)
+        overview = format_overview(txt)
+        if not overview:
+            print('  [개요 부적합 — 생략] %s' % txt[:60])
+        return overview
+    except Exception as e:
+        print('  [개요 실패 — 생략] %s' % str(e)[:60])
+        return ''
 
 
 # ═══════════════════════════════════════════════════════════
@@ -850,8 +994,9 @@ def summarize_speech(meeting_title: str, agenda: str, name: str,
             % (meeting_title, agenda or '(미상)', name, pos or '', text[:2000])
         )
         resp = client.messages.create(
-            model='claude-haiku-4-5-20251001',
+            model=MINUTES_MODEL,
             max_tokens=160,
+            thinking=MINUTES_THINKING,
             messages=[{'role': 'user', 'content': prompt}],
         )
         txt = ''
@@ -924,14 +1069,17 @@ def is_noise_speech(text: str) -> bool:
 
 def build_speech_rows(meeting: dict, blocks: list, confirmed: list,
                       keywords: list, source_url: str, dry: bool = False,
-                      max_excerpts: int = MAX_EXCERPTS) -> list:
+                      max_excerpts: int = MAX_EXCERPTS, presummarized: dict = None) -> list:
     """confirmed 발언 블록을 발언자별 assembly_speeches 행으로 구성.
-    요지는 dry-run 이 아닐 때만 Haiku 로 생성(비용 방어)."""
+    요지는 dry-run 이 아닐 때만 AI 로 생성(비용 방어).
+    presummarized={블록idx: 요지} 를 주면(오프라인 파이프라인 — 세션이 작성) API를 부르지 않고
+    그 요지를 쓰되, is_valid_summary 를 통과한 것만 적재한다(부적합은 **미적재**, #113)."""
     # 키가 없으면 요지가 규칙 폴백(원문 앞 문장 절단)으로 저장된다 — 그게 2026-09-01
     # 전량 재수집(#113)을 부른 원인이다. **원문을 저장하지 않는 테이블이라 사후 수리가
     # 불가능**하므로, 폴백을 쌓느니 이번 회차 발언 적재를 건너뛴다(섹션은 정상 적재되고,
     # 키가 돌아온 뒤 실행에서 speeches_exist가 비어 있어 소급 적재된다).
-    if not dry and not os.environ.get('ANTHROPIC_API_KEY', '').strip():
+    if not dry and presummarized is None \
+            and not os.environ.get('ANTHROPIC_API_KEY', '').strip():
         print('  [발언 적재 건너뜀] ANTHROPIC_API_KEY 없음 — 폴백 요지를 저장하지 않는다(#113)')
         return []
     agenda = _primary_agenda(meeting)
@@ -947,11 +1095,21 @@ def build_speech_rows(meeting: dict, blocks: list, confirmed: list,
         seen.add(key)
         if is_noise_speech(b['text']):    # 사회·호명 등 내용 없는 발언은 적재하지 않는다
             continue
-        topic = ', '.join(matched_keywords(b['text'], keywords)[:5])
-        if not topic and is_always_keep(b['text']):
-            topic = 'SK텔레콤 언급'
-        summary = '' if dry else summarize_speech(
-            meeting['title'], agenda, speaker, b['pos'], b['text'], keywords)
+        # 자사 언급 칩은 키워드 유무와 무관하게 **항상** 붙인다(2026-09-03 — 종전엔 키워드가
+        # 없을 때만 붙어 4/28 '이훈기 위원: SKT 영업정지…' 같은 발언이 칩 없이 저장됐다).
+        kws = matched_keywords(b['text'], keywords)[:5]
+        if is_always_keep(b['text']) and SKT_CHIP not in kws:
+            kws.append(SKT_CHIP)
+        topic = ', '.join(kws)
+        if presummarized is not None:
+            s = (presummarized.get(i) or presummarized.get(str(i)) or '').strip()
+            if not is_valid_summary(s):
+                print('  [요지 부적합 — 미적재] idx=%d %s' % (i, s[:40]))
+                continue
+            summary = clip_sentence(s, 250)
+        else:
+            summary = '' if dry else summarize_speech(
+                meeting['title'], agenda, speaker, b['pos'], b['text'], keywords)
         rows.append({
             'speaker':      speaker,
             'speaker_raw':  b['name'],
@@ -1032,7 +1190,10 @@ def _trunc(text: str) -> str:
 
 def build_section_body(meeting: dict, detail: dict, blocks: list, picked: list,
                        summary: str = '', max_excerpts: int = MAX_EXCERPTS,
-                       keywords: list = None) -> str:
+                       keywords: list = None, overview: str = '') -> str:
+    """섹션 본문. overview(format_overview 결과)가 있으면 안건 다음·질의응답 앞에 '개요:' 블록을
+    넣는다(빈 값이면 종전 포맷과 바이트 동일). '요약:' 줄은 대시보드가 섹션 앞 900자 안에서
+    파싱하므로 개요 블록은 반드시 그 **뒤**에 둔다."""
     lines = ['**%s**' % meeting['title']]
     if summary:
         lines.append('요약: %s' % summary)
@@ -1051,6 +1212,9 @@ def build_section_body(meeting: dict, detail: dict, blocks: list, picked: list,
         if rest > 0:
             lines.append('  외 %d건' % rest)
     lines.append('')
+    if overview:
+        lines.append(overview.strip())
+        lines.append('')
     if picked:
         lines.append('질의·응답:')
         lines.append('')
@@ -1086,15 +1250,37 @@ def section_range(sb, doc_name: str, ymd6: str, title: str):
     register_kb_section 이 섹션을 통째로 넣으므로 한 섹션의 청크는 연속하고, 다음 섹션의
     헤더는 반드시 청크 맨 앞('## ')에 온다 — 그 직전까지가 이 섹션의 범위다."""
     pat = '%%## %s %s%%' % (ymd6, _like_escape(title[:25]))
-    rows = sb.table('document_chunks').select('chunk_index').eq('doc_name', doc_name) \
+    rows = sb.table('document_chunks').select('chunk_index,content').eq('doc_name', doc_name) \
         .like('content', pat).order('chunk_index').limit(1).execute().data or []
     if not rows:
         return None
     start = rows[0]['chunk_index']
+    # ⚠️ 전제 검증(2026-09-03 실측): 2024·2025 문서는 섹션 250개 중 105개의 헤더가 **청크 중간**에
+    # 있다(어느 시점의 재청킹 흔적). 그 상태에서 위 전제로 범위를 잡으면 이웃 섹션 2~3개가 함께
+    # 지워진다(2026-08-14 사고 유형). 시작 청크가 헤더(또는 프리앰블+헤더)로 시작하고 범위 안에
+    # 헤더가 하나뿐일 때만 범위를 돌려주고, 아니면 None(호출자는 교체를 건너뛴다).
+    head = rows[0]['content'] or ''
+    hdr_re = re.compile(r'(?m)^## \d{6} ')
+    first_hdr = hdr_re.search(head)
+    if not first_hdr or (first_hdr.start() > 0 and not head.lstrip().startswith('# ')):
+        print('  [섹션 범위 보류] %s %s — 헤더가 청크 중간(idx %d)이라 범위를 잡지 않는다'
+              % (ymd6, title[:20], start))
+        return None
+    if len(hdr_re.findall(head)) > 1:
+        print('  [섹션 범위 보류] %s %s — 한 청크에 헤더 %d개(idx %d)'
+              % (ymd6, title[:20], len(hdr_re.findall(head)), start))
+        return None
     nxt = sb.table('document_chunks').select('chunk_index').eq('doc_name', doc_name) \
         .gt('chunk_index', start).like('content', '## %') \
         .order('chunk_index').limit(1).execute().data or []
-    return start, (nxt[0]['chunk_index'] - 1) if nxt else _doc_max_index(sb, doc_name)
+    end = (nxt[0]['chunk_index'] - 1) if nxt else _doc_max_index(sb, doc_name)
+    mid = sb.table('document_chunks').select('content').eq('doc_name', doc_name) \
+        .gt('chunk_index', start).lte('chunk_index', end).execute().data or []
+    if any(hdr_re.search(r['content'] or '') for r in mid):
+        print('  [섹션 범위 보류] %s %s — 범위 %d~%d 안에 다른 섹션 헤더가 청크 중간에 있다'
+              % (ymd6, title[:20], start, end))
+        return None
+    return start, end
 
 
 def shell_section_range(sb, doc_name: str, ymd6: str, title: str):
@@ -1138,6 +1324,62 @@ def renumber_doc(sb, doc_name: str) -> int:
 #  메인
 # ═══════════════════════════════════════════════════════════
 
+def _digest_skip_reason(m: dict, sp_rows: list, notify: bool, body: str):
+    """다이제스트를 적재하지 않는 이유(없으면 None). 조용한 실패 금지 — 사유를 항상 찍는다."""
+    if not notify:
+        return '--no-notify'
+    if SHELL_BODY_MARK in (body or ''):
+        return '껍데기 섹션(관련 발언 없음)'
+    if len(sp_rows) < DIGEST_MIN_SPEECHES:
+        return '발언 요지 %d건 < %d (절차성 회의)' % (len(sp_rows), DIGEST_MIN_SPEECHES)
+    if not _is_recent(m.get('conf_date'), DIGEST_MAX_AGE_DAYS):
+        return '회의일 %s — %d일 초과(백필)' % (m.get('conf_date'), DIGEST_MAX_AGE_DAYS)
+    return None
+
+
+def _build_digest(m: dict, title: str, summary: str, sp_rows: list, url: str,
+                  skt_flag: bool) -> str:
+    from subscriber_notify import format_minutes_digest
+    return format_minutes_digest(m.get('conf_date') or '', title, summary, sp_rows, url,
+                                 skt_flag=skt_flag)
+
+
+def _print_digest_preview(m, title, summary, sp_rows, url, skt_flag, notify, body):
+    """dry-run 전용 — 큐에 넣지 않고 다이제스트를 화면에 보여준다."""
+    why = _digest_skip_reason(m, sp_rows, notify, body)
+    if why:
+        print('  [다이제스트 생략: %s]' % why)
+        return
+    try:
+        html = _build_digest(m, title, summary or '(요약 생략 — dry-run)', sp_rows, url, skt_flag)
+    except Exception as e:
+        print('  [다이제스트 미리보기 실패] %s' % str(e)[:80])
+        return
+    print('  ----- 다이제스트 미리보기 (%d자) -----' % len(html))
+    print('\n'.join('  | ' + ln for ln in html.split('\n')))
+    print('  ----------------------------------')
+
+
+def _enqueue_digest(sb, m, title, summary, sp_rows, url, skt_flag, notify, body):
+    why = _digest_skip_reason(m, sp_rows, notify, body)
+    if why:
+        print('  [다이제스트 생략: %s]' % why)
+        return False
+    try:
+        from subscriber_notify import queue_for_subscribers
+        html = _build_digest(m, title, summary, sp_rows, url, skt_flag)
+        if not html:
+            print('  [다이제스트 생략: 내용 없음]')
+            return False
+        ok = queue_for_subscribers(sb, 'assembly', html)
+        print('  [다이제스트 %s] %s %s (%d자)'
+              % ('적재' if ok else '적재 실패(무시)', m.get('conf_date'), title, len(html)))
+        return ok
+    except Exception as e:
+        print('  [다이제스트 적재 실패(무시)] %s' % str(e)[:80])
+        return False
+
+
 def _heartbeat(sb, note: str):
     try:
         sb.table('system_health').upsert(
@@ -1149,11 +1391,21 @@ def _heartbeat(sb, note: str):
         print('[heartbeat 오류] %s' % e)
 
 
+def _is_recent(conf_date: str, days: int) -> bool:
+    """회의일이 오늘(KST)로부터 days일 이내인가. 파싱 실패는 False(큐 적재 쪽은 fail-closed)."""
+    try:
+        d = datetime.strptime((conf_date or '').replace('-', '')[:8], '%Y%m%d').date()
+    except ValueError:
+        return False
+    return (datetime.now(KST).date() - d).days <= days
+
+
 def run(sb, api_key: str, year: int, limit: int = 0, dry: bool = False,
-        audit: bool = True, audit_only: bool = False) -> dict:
+        audit: bool = True, audit_only: bool = False, notify: bool = True) -> dict:
     keywords = load_press_keywords(sb)
-    judge = make_ai_judge(sb, keywords)
-    mode = '키워드+AI판정' if judge else '키워드만(AI 불가 폴백)'
+    # 회의록 판정만 Sonnet 5 — make_ai_judge는 보도자료 판정과 공용이라 기본값(Haiku)은 그대로 둔다.
+    judge = make_ai_judge(sb, keywords, model=MINUTES_MODEL, thinking=MINUTES_THINKING)
+    mode = '키워드+AI판정(%s)' % MINUTES_MODEL if judge else '키워드만(AI 불가 폴백)'
     print('[과방위 회의록] %d년, 모드=%s, 키워드 %d개 (자사 언급은 판정 없이 무조건 수록)'
           % (year, mode, len(keywords)))
 
@@ -1242,23 +1494,31 @@ def run(sb, api_key: str, year: int, limit: int = 0, dry: bool = False,
         # 규칙 요약으로라도 채운다 (국감 백필이 무료 모드라 통째로 비었던 사고, 2026-08-14).
         summary = '' if dry else summarize_meeting(
             m['title'], picked_texts, fallback=rule_summary(m, blocks, capped, keywords))
+        # 자사 언급 표시는 규칙 — 수록 발췌(picked) 원문에 SK텔레콤이 있으면 붙인다(2026-09-03).
+        skt_flag = skt_mentioned(blocks, picked)
+        summary = with_skt_suffix(summary, skt_flag)
+        # 대시보드 상세용 회의 개요(주제별 문단) — 텔레그램·목록은 위 한 줄 요약만 쓴다.
+        overview = '' if dry else summarize_overview(
+            m['title'], picked_texts, rule_topics(picked_texts, keywords, top=8))
         body = build_section_body(m, detail, blocks, picked, summary,
-                                  max_excerpts=max_exc, keywords=keywords)
+                                  max_excerpts=max_exc, keywords=keywords, overview=overview)
         url = VIEWER_URL % viewer_id
         if dry:
             sp_rows = build_speech_rows(m, blocks, confirmed, keywords, url, dry=True,
                                         max_excerpts=max_exc)
             speakers = sorted({r['speaker'] for r in sp_rows})
-            print('  [dry-run] ## %s %s | 원문=%s 블록 %d, 발췌 %d, %d자'
-                  % (ymd6, title, src, len(blocks), len(picked), len(body)))
+            print('  [dry-run] ## %s %s | 원문=%s 블록 %d, 발췌 %d, %d자, SK텔레콤 언급=%s'
+                  % (ymd6, title, src, len(blocks), len(picked), len(body), skt_flag))
             print('  발언자별 후보 %d건 / 발언자 %d명: %s'
                   % (len(sp_rows), len(speakers), ', '.join(speakers)[:120]))
             print('  ----- 섹션 미리보기 -----')
             print('\n'.join('  | ' + ln for ln in body.split('\n')[:40]))
             print('  -------------------------')
+            _print_digest_preview(m, title, summary, sp_rows, url, skt_flag, notify, body)
             stats['new'] += 1
             continue
         did_work = False
+        registered = False
         # ① 기존 회의록 섹션(document_chunks) — 없을 때만 등재 (경로 무변경)
         if sec_exists:
             pass
@@ -1278,17 +1538,25 @@ def run(sb, api_key: str, year: int, limit: int = 0, dry: bool = False,
                 print('  [등재] %s %s (%s, 발췌 %d)' % (ymd6, title, src, len(picked)))
                 stats['new'] += 1
                 did_work = True
+                registered = True
             else:
                 stats['dup'] += 1
         # ② 발언자별 입장(assembly_speeches) — 없을 때만 적재 (추가 경로)
+        sp_rows = []
         if not sp_exists:
-            n_sp = upsert_speeches(
-                sb, build_speech_rows(m, blocks, confirmed, keywords, url, dry=False,
-                                      max_excerpts=max_exc))
+            sp_rows = build_speech_rows(m, blocks, confirmed, keywords, url, dry=False,
+                                        max_excerpts=max_exc)
+            n_sp = upsert_speeches(sb, sp_rows)
             if n_sp:
                 print('  [발언 적재] %s 발언 %d건' % (ymd6, n_sp))
                 stats['sp'] += n_sp
                 did_work = True
+        # ③ 구독자 다이제스트(텔레그램 '국회·법률 동향', 2026-09-03) — **신규 섹션**이고 최근
+        #    60일 이내이며 실질 발언이 3건 이상일 때만 큐에 적재한다. 백필(--year 과거)·재등재·
+        #    껍데기 회의는 절대 적재하지 않는다(6명에게 30건이 쏟아지는 #118 유형 사고 방지).
+        #    발송은 send-subscriber-briefing이 각자의 수신 시각에 묶어 보낸다(즉시 트리거 없음).
+        if registered:
+            _enqueue_digest(sb, m, title, summary, sp_rows, url, skt_flag, notify, body)
         if did_work:
             stats['proc'] += 1
         time.sleep(1)
@@ -1313,17 +1581,27 @@ def main():
     ap.add_argument('--year', type=int, default=0, help='대상 연도 (기본: 올해)')
     ap.add_argument('--no-audit', action='store_true', help='국정감사 회의록 수집 제외')
     ap.add_argument('--audit-only', action='store_true',
-                    help='국정감사 회의록만 수집 (22대 한정, 소급 백필용)')
+                    help='국정감사 회의록만 수집 (소급 백필용)')
+    ap.add_argument('--no-notify', action='store_true',
+                    help='구독자 큐(회의록 다이제스트) 적재 안 함')
+    ap.add_argument('--allow-api', action='store_true',
+                    help='재작년 이전 연도에도 API(AI) 경로 허용 — 기본 거부(소급은 minutes_offline.py)')
     args = ap.parse_args()
 
     api_key = os.environ.get('ASSEMBLY_API_KEY', '')
     if not api_key:
         print('[오류] ASSEMBLY_API_KEY 환경변수가 없습니다.')
         return
-    sb = make_client(os.environ['SUPABASE_URL'], os.environ['SUPABASE_SERVICE_KEY'])
     year = args.year or datetime.now(KST).year
+    # 과거 연도 소급은 세션 파이프라인(minutes_offline.py)이 맡는다 — 운영자 규칙(2026-09-03):
+    # 일회성 AI 작업에 API를 쓰지 않는다. 실수로 --year 2019 를 돌려 수백 회의를 과금하지 않게 막는다.
+    if year < datetime.now(KST).year - 1 and not args.dry_run and not args.allow_api:
+        print('[거부] %d년은 API 경로로 돌리지 않습니다 — minutes_offline.py(세션 파이프라인)를 쓰거나 '
+              '--allow-api 를 명시하세요.' % year)
+        return
+    sb = make_client(os.environ['SUPABASE_URL'], os.environ['SUPABASE_SERVICE_KEY'])
     run(sb, api_key, year, limit=args.limit, dry=args.dry_run,
-        audit=not args.no_audit, audit_only=args.audit_only)
+        audit=not args.no_audit, audit_only=args.audit_only, notify=not args.no_notify)
 
 
 if __name__ == '__main__':

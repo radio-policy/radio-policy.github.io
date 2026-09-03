@@ -34,7 +34,7 @@ SKT Comm Center 기술정책팀's radio/telecom **policy-monitoring automation s
 
 **Briefing/alerts** — `morning_briefing.py` sends 06:00 KST email(with analysis)/Telegram(without). Zero-news days still send a "🕊️ no news" notice so silent failure isn't mistaken for breakage.
 
-**Two Telegram bots, deliberately separate** — the operator bot (`TELEGRAM_BOT_TOKEN`) pushes to one person immediately, as it always has. The subscriber bot `정책 AI도우미` (`SUBSCRIBER_BOT_TOKEN`, added 2026-08-01; renamed from `정책AI 도우미` 2026-08-02) is interactive: `/start` opens an inline keyboard, and briefing + urgent news + assembly bills all arrive **once at the subscriber's chosen hour** (6–12), never immediately. Crawlers therefore *queue* into `subscriber_queue` instead of sending — the suppression/clustering verdicts (#44) stay in Python and are not reimplemented in TS. Two Edge Functions back this: `telegram-webhook` (commands, `/law` article lookup, `/ask` advisory behind per-chat_id approval + 20/day cap) and `send-subscriber-briefing` (hourly pg_cron, `briefing_hour <= now` catch-up). Source lives in `supabase/functions/`; deploy with the Supabase CLI (needs `SUPABASE_ACCESS_TOKEN` in `.env` — the MCP transfer route fails past ~50 KB). **`/ask` reads its system prompt from `app_config.system_prompt`, so run `python sync_system_prompt.py` after editing `system_prompt.js` or the bot answers with a stale prompt (or fails outright).**
+**Two Telegram bots, deliberately separate** — the operator bot (`TELEGRAM_BOT_TOKEN`) pushes to one person immediately, as it always has. The subscriber bot `정책 AI도우미` (`SUBSCRIBER_BOT_TOKEN`, added 2026-08-01; renamed from `정책AI 도우미` 2026-08-02) is interactive: `/start` opens an inline keyboard, and briefing + urgent news + assembly bills all arrive **once at the subscriber's chosen hour** (6–12), never immediately. Crawlers therefore *queue* into `subscriber_queue` instead of sending — the suppression/clustering verdicts (#44) stay in Python and are not reimplemented in TS. The `assembly` topic (button **'🏛️ 국회·법률 동향'**, renamed from '법안 동향' 2026-09-03, #120) = 국회 법안 단계변경 + 국회·부처 입법예고 + **과방위 회의록 다이제스트** (`assembly_minutes.py`, only for newly registered sections ≤60 days old with ≥3 speech rows; backfill/offline imports never enqueue). Two Edge Functions back this: `telegram-webhook` (commands, `/law` article lookup, `/ask` advisory behind per-chat_id approval + 20/day cap) and `send-subscriber-briefing` (hourly pg_cron, `briefing_hour <= now` catch-up). Source lives in `supabase/functions/`; deploy with the Supabase CLI (needs `SUPABASE_ACCESS_TOKEN` in `.env` — the MCP transfer route fails past ~50 KB). **`/ask` reads its system prompt from `app_config.system_prompt`, so run `python sync_system_prompt.py` after editing `system_prompt.js` or the bot answers with a stale prompt (or fails outright).**
 
 **Dashboard frontend** — `index.html` + `app.js` (~270 KB, single file) + `styles.css`, plus `system_prompt.js`. Two AI features, both **SSE-streamed (`stream:true`) — do not revert to non-streaming** (2 min+ responses hit an idle "Failed to fetch"):
 - *AI advisory*: RAG 3-way hybrid — keyword `ilike`+`search_chunks_trgm`, plus Voyage embedding → `match_chunks_semantic` (pgvector) → hybrid rank → Claude Sonnet.
@@ -81,8 +81,16 @@ python press_backfill.py --agency 방통위  # 특정 기관 백필/델타 (dedu
 # 법령 DIFF·해외·회의록 (2026-08-02 신설 — #54)
 python law_diff_gen.py --dry-run --backfill   # 시행예정/승격 쌍의 조문 diff (실행은 17시 체인)
 python foreign_press.py --dry-run             # FCC·Ofcom·BEREC·日총무성·ITU (05:30 스케줄)
-python assembly_minutes.py --dry-run --limit 1  # 과방위 회의록 (17시 체인, 뷰어가 정본·PDF 폴백) + 발언자별 assembly_speeches 적재(#67)
+python assembly_minutes.py --dry-run --limit 1  # 과방위 회의록 (17시 체인, 뷰어가 정본·PDF 폴백) + 발언자별 assembly_speeches 적재(#67). Sonnet 5(MINUTES_MODEL, thinking disabled); --no-notify = 큐 미적재; --year <작년 이전>은 --allow-api 없이 거부
+
+# 회의록 오프라인(세션) 파이프라인 — Anthropic API 0회 (#120). 17:00~17:30 실행 금지, import는 단일·순차
+python minutes_offline.py --export-resummary --out DIR          # 기존 섹션 → DIR/resum/{year}/*.json (DB 무변경); 세션이 *.judged.json 작성
+python minutes_offline.py --import-resummary --in DIR           # 요약 줄 교체 + 개요 블록 삽입, 섹션 통째 재등록 + SK 칩 소급(정렬 검사 통과분만)
+python minutes_offline.py --export-candidates --year 2019 --out DIR   # 20·21대 소급: 회의+뷰어 블록+키워드 후보 → DIR/2019/*.blocks.json·*.cand.json
+python minutes_offline.py --import-judged --in DIR              # 세션이 쓴 *.judged.json(minutes-judged/1) → 섹션+발언 등록(run()과 같은 dedupe)
 ```
+
+**One-off AI work runs in a Claude session, never through the Anthropic API** (operator rule, #111·#120): re-summarising or backfilling past 대수 is done by session subagents writing the JSON files above (cost 0); the API is reserved for unattended recurring runs (17:00 chain). Sonnet 5 non-streaming calls must pass `thinking={'type':'disabled'}` (adaptive thinking is on by default → billed thinking tokens and `content[0]` is not text).
 
 There is no build step, linter, or test suite — the dashboard is static files served by GitHub Pages, and the crawlers are run directly. Validate JS changes with `node --check` on the changed function.
 

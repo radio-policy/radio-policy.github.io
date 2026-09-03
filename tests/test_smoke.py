@@ -237,5 +237,155 @@ class TestSbClientHttp11(unittest.TestCase):
         self.assertEqual(getattr(pool, '_retries', 3), 3)     # 재시도 3회
 
 
+class TestMinutesDigest(unittest.TestCase):
+    """⑪ subscriber_notify.format_minutes_digest — 과방위 회의록 다이제스트 순수 포맷터
+
+    검증 축: 이스케이프, 그룹 순서·줄 배분(10줄 상한), SKT 칩, 예산(3500 절단 회피·태그 무손상),
+    발송 측 mergeQueueBlocks 오병합 방지(`N. ` 줄 금지).
+    """
+
+    URL = 'https://record.assembly.go.kr/assembly/viewer/minutes/xml.do?id=56569&type=view'
+    TITLE = '제3차 (전기통신사업법 <개정> & 방송법)'
+    SUMMARY = '주파수 공급 & 요금 인하를 놓고 여야 질의 집중'
+
+    @staticmethod
+    def _rows():
+        rows = []
+        seq = 0
+        # 주파수 6건 (그중 1건은 SKT 칩 동반), 요금 4건, AI 2건 — chunk_seq는 서로 섞어 넣는다
+        spec = [('주파수', 6), ('요금', 4), ('AI', 2)]
+        pools = {t: n for t, n in spec}
+        while any(pools.values()):
+            for t, _ in spec:
+                if pools[t] <= 0:
+                    continue
+                seq += 1
+                pools[t] -= 1
+                topic = t
+                speaker = f'{t}위원{seq}'
+                if t == '주파수' and pools[t] == 3:      # 주파수 3번째 행에 칩 부착
+                    topic = '주파수, SK텔레콤 언급'
+                    speaker = '칩위원'
+                rows.append({'speaker': speaker,
+                             'position': '위원' if seq % 2 else None,
+                             'topic': topic,
+                             'summary': f'{t} 관련 발언 요지 {seq} & 근거 설명',
+                             'chunk_seq': seq})
+        # 요지 없는 행은 무시되어야 한다
+        rows.append({'speaker': '무요지', 'position': None, 'topic': '주파수',
+                     'summary': None, 'chunk_seq': 99})
+        return rows
+
+    def _digest(self, **kw):
+        from subscriber_notify import format_minutes_digest
+        args = dict(meeting_date='2026-04-28', title=self.TITLE, summary=self.SUMMARY,
+                    sp_rows=self._rows(), url=self.URL)
+        args.update(kw)
+        return format_minutes_digest(**args)
+
+    @staticmethod
+    def _bullets(out):
+        return [ln for ln in out.split('\n') if ln.startswith('· ')]
+
+    @staticmethod
+    def _headings(out):
+        return [ln for ln in out.split('\n')[1:] if ln.startswith('<b>')]
+
+    def test_header_and_escaping(self):
+        out = self._digest()
+        self.assertTrue(out.startswith('🏛️ <b>과방위 회의록 · 4/28 '))
+        first = out.split('\n')[0]
+        self.assertIn('&amp; 방송법', first)
+        self.assertIn('&lt;개정&gt;', first)
+        self.assertNotIn('<개정>', first)
+        self.assertIn('주파수 공급 &amp; 요금 인하를 놓고 여야 질의 집중', out.split('\n')[1])
+
+    def test_line_allocation_and_groups(self):
+        from subscriber_notify import DASHBOARD_URL
+        out = self._digest()
+        bullets = self._bullets(out)
+        self.assertEqual(len(bullets), 10)               # 기본 max_lines
+        self.assertIn('… 외 2건', out)                    # 유효 12건 − 표시 10건
+        heads = self._headings(out)
+        self.assertEqual(heads[0], '<b>주파수</b>')       # 최다 그룹이 먼저
+        self.assertEqual(heads, ['<b>주파수</b>', '<b>요금</b>', '<b>AI</b>'])
+        for h in heads:
+            self.assertRegex(h, r'^<b>[^<>]+</b>$')
+        # 그룹 안 정렬은 chunk_seq 순
+        seqs = [int(ln.rsplit('요지 ', 1)[1].split(' ')[0]) for ln in bullets[:6]]
+        self.assertEqual(seqs, sorted(seqs))
+        # 링크
+        self.assertIn(f'<a href="{self.URL.replace("&", "&amp;")}">원문</a>', out)
+        self.assertIn('&amp;type=view', out)
+        self.assertIn(DASHBOARD_URL, out)
+        # 발송 측 병합 규칙에 걸리는 `N. ` 줄이 없어야 한다
+        for ln in out.split('\n'):
+            self.assertNotRegex(ln, r'^\d+\.\s')
+        self.assertLess(len(out), 2600)
+
+    def test_skt_chip_row_and_flag(self):
+        out = self._digest()
+        chip_lines = [ln for ln in self._bullets(out) if ln.startswith('· 칩위원')]
+        self.assertEqual(len(chip_lines), 1)
+        self.assertTrue(chip_lines[0].endswith(' (SK텔레콤 언급)'))
+        # 다른 줄엔 칩이 붙지 않는다
+        others = [ln for ln in self._bullets(out) if not ln.startswith('· 칩위원')]
+        self.assertTrue(all(not ln.endswith(' (SK텔레콤 언급)') for ln in others))
+        # 직위 None인 행은 이름 뒤에 공백 없이 콜론
+        self.assertTrue(any(': ' in ln and ' 위원:' not in ln for ln in others))
+
+        flagged = self._digest(skt_flag=True)
+        line2 = flagged.split('\n')[1]
+        self.assertTrue(line2.endswith(' (SK텔레콤 언급)'))
+        self.assertEqual(line2.count('SK텔레콤 언급'), 1)
+        # 요약이 이미 칩을 달고 있으면 중복 부착 없음
+        already = self._digest(skt_flag=True, summary=self.SUMMARY + ' (SK텔레콤 언급)')
+        self.assertEqual(already.split('\n')[1].count('SK텔레콤 언급'), 1)
+
+    def test_max_lines_three(self):
+        out = self._digest(max_lines=3)
+        self.assertEqual(len(self._bullets(out)), 3)          # 그룹당 1줄씩
+        self.assertIn('… 외 9건', out)
+        self.assertEqual(self._headings(out), ['<b>주파수</b>', '<b>요금</b>', '<b>AI</b>'])
+
+    def test_tiny_budget_keeps_footer_and_tags_intact(self):
+        out = self._digest(budget=300)
+        self.assertIsInstance(out, str)
+        self.assertTrue(out.endswith('">대시보드</a>'))
+        self.assertEqual(out.count('<a '), out.count('</a>'))
+        self.assertEqual(out.count('<b>'), out.count('</b>'))
+        self.assertIn('… 외 ', out)
+        self.assertLess(len(self._bullets(out)), 10)
+        # 빈 그룹 제목이 남아 있으면 안 된다
+        lines = out.split('\n')
+        for i, ln in enumerate(lines):
+            if ln.startswith('<b>') and i > 0:
+                self.assertTrue(lines[i + 1].startswith('· '), f'빈 그룹 제목: {ln}')
+
+    def test_long_summary_trimmed(self):
+        from subscriber_notify import MINUTES_LINE_CHARS
+        rows = [{'speaker': '장문', 'position': None, 'topic': '주파수',
+                 'summary': '가' * (MINUTES_LINE_CHARS + 50), 'chunk_seq': 1}]
+        out = self._digest(sp_rows=rows)
+        ln = self._bullets(out)[0]
+        self.assertTrue(ln.endswith('…'))
+        self.assertEqual(ln, '· 장문: ' + '가' * MINUTES_LINE_CHARS + '…')
+        self.assertNotIn('… 외', out)                         # 전부 표시 → 외 N건 없음
+
+    def test_date_fallback_and_no_topic(self):
+        rows = [{'speaker': '무주제', 'position': '', 'topic': None,
+                 'summary': '주제 없는 발언', 'chunk_seq': None}]
+        out = self._digest(meeting_date='4월말', sp_rows=rows)
+        self.assertTrue(out.startswith('🏛️ <b>과방위 회의록 · 4월말 '))
+        self.assertIn('<b>기타</b>', out)
+        self.assertIn('· 무주제: 주제 없는 발언', out)
+
+    def test_empty_returns_blank(self):
+        self.assertEqual(self._digest(summary='', sp_rows=[]), '')
+        self.assertEqual(self._digest(summary=None, sp_rows=None), '')
+        # 요지 없는 행뿐이면 역시 ''
+        self.assertEqual(self._digest(summary='', sp_rows=[{'speaker': 'x', 'summary': ''}]), '')
+
+
 if __name__ == '__main__':
     unittest.main()

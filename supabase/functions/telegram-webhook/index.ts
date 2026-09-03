@@ -143,7 +143,7 @@ function settingsKeyboard(s: Sub) {
   return { inline_keyboard: [
     [{ text: `${chk(s.topic_briefing)} 📡 모닝 브리핑`, callback_data: 't:briefing' },
      { text: `${chk(s.topic_urgent)} 📡 주요 뉴스`, callback_data: 't:urgent' }],
-    [{ text: `${chk(s.topic_assembly)} 🏛️ 법안 동향`, callback_data: 't:assembly' }],
+    [{ text: `${chk(s.topic_assembly)} 🏛️ 국회·법률 동향`, callback_data: 't:assembly' }],
     // ── 관심분야 ── 모닝 브리핑은 팀이 같은 그림을 보는 자리라 전원 동일하게 두고,
     // 하루 여러 번 오는 '주요 뉴스'에만 적용한다.
     // 주요 뉴스가 꺼져 있으면 태그 버튼을 아예 감춘다 — 눌러도 아무 효과가 없는 죽은 버튼을
@@ -155,7 +155,7 @@ function settingsKeyboard(s: Sub) {
     [{ text: '— 아래는 하나만 선택 —', callback_data: 'noop' }],
     [{ text: `${sel(s.days === 'daily')} 매일 받기`, callback_data: 'd:daily' },
      { text: `${sel(s.days === 'weekday')} 평일만`, callback_data: 'd:weekday' }],
-    // 수신 창 = 시작~종료. 브리핑은 시작 시각에 1회, 주요 뉴스·법안은 그 뒤 새로 생기는 대로
+    // 수신 창 = 시작~종료. 브리핑은 시작 시각에 1회, 주요 뉴스·국회·법률 동향은 그 뒤 새로 생기는 대로
     // 매시 :25에 전달되고, 종료 시각을 넘기면 다음 날 시작 시각까지 발송이 없다.
     // (종전에는 종료가 '23시'로 코드에 박혀 있었다 — 구독자가 고르게 바꿈, 2026-08-03)
     [{ text: `받기 시작 시각 — 현재 ${hh(s.briefing_hour)}시`, callback_data: 'noop' }],
@@ -175,7 +175,8 @@ function settingsKeyboard(s: Sub) {
 
 const START_TEXT =
   '✅ <b>구독 완료!</b>\n\n' +
-  '선택한 요일·시각에 <b>모닝 브리핑</b>이 도착하고, <b>주요 뉴스·법안 동향</b>은 그 시각 이후 새로 생기는 대로 전달됩니다.\n' +
+  '선택한 요일·시각에 <b>모닝 브리핑</b>이 도착하고, <b>주요 뉴스·국회·법률 동향</b>은 그 시각 이후 새로 생기는 대로 전달됩니다.\n' +
+  '   <i>국회·법률 동향 = 국회 법안 · 입법예고(국회·부처) · 과방위 회의록 요약</i>\n' +
   '🌙 <b>받기 종료 시각을 넘기면 다음 날 시작 시각까지 발송하지 않습니다.</b>\n' +
   '아래 버튼으로 콘텐츠·요일·수신 시각을 바로 바꿀 수 있어요. (언제든 /settings)\n' +
   '항목을 모두 끄면 알림이 오지 않습니다.\n\n' +
@@ -890,7 +891,7 @@ async function handleCallback(cb: { id: string; data?: string; from: { id: numbe
   const patch: Record<string, unknown> = {};
   if (data === 't:briefing') { patch.topic_briefing = !sub.topic_briefing; ack = patch.topic_briefing ? '모닝 브리핑 ON' : '모닝 브리핑 OFF'; }
   else if (data === 't:urgent') { patch.topic_urgent = !sub.topic_urgent; ack = patch.topic_urgent ? '주요 뉴스 ON' : '주요 뉴스 OFF'; }
-  else if (data === 't:assembly') { patch.topic_assembly = !sub.topic_assembly; ack = patch.topic_assembly ? '법안 동향 ON' : '법안 동향 OFF'; }
+  else if (data === 't:assembly') { patch.topic_assembly = !sub.topic_assembly; ack = patch.topic_assembly ? '국회·법률 동향 ON' : '국회·법률 동향 OFF'; }
   else if (data.startsWith('g:')) {
     // ── 관심분야 토글 ── 불리언 토글과 달리 배열 연산이라 3단계다.
     //  ① 빈 배열(=전체 수신)이면 먼저 6개 전체로 전개한다 — 그래야 "하나만 끄기"가 성립한다.
@@ -1026,7 +1027,7 @@ Deno.serve(async (req: Request) => {
       let sub = await getSub(chatId);
       if (!sub) { await upsertSub(chatId, { username: from.username || null, first_name: from.first_name || null }); sub = (await getSub(chatId))!; }
       await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML',
-        text: '⚙️ <b>수신 설정</b>\n버튼을 눌러 바로 변경할 수 있습니다.\n✅⬜ = 여러 개 선택 · 🔵⚪ = 하나만 선택\n<i>항목을 모두 끄면 알림이 오지 않습니다.</i>\n\n🌙 <b>발송 시간대</b> — 모닝 브리핑은 <b>시작 시각</b>에 1회, 주요 뉴스·법안은 그 뒤 새로 생기는 대로 전달됩니다. <b>종료 시각을 넘기면 다음 날 시작 시각까지 발송하지 않습니다.</b>',
+        text: '⚙️ <b>수신 설정</b>\n버튼을 눌러 바로 변경할 수 있습니다.\n✅⬜ = 여러 개 선택 · 🔵⚪ = 하나만 선택\n<i>항목을 모두 끄면 알림이 오지 않습니다.</i>\n\n🌙 <b>발송 시간대</b> — 모닝 브리핑은 <b>시작 시각</b>에 1회, 주요 뉴스·국회·법률 동향은 그 뒤 새로 생기는 대로 전달됩니다. <b>종료 시각을 넘기면 다음 날 시작 시각까지 발송하지 않습니다.</b>',
         reply_markup: settingsKeyboard(sub) });
     } else if (text === '/stop') {
       // 메뉴에서는 뺐지만 하위호환으로 남긴다 — '모든 항목 끄기'로 동작(설정·시각은 보존)

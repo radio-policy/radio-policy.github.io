@@ -3,8 +3,9 @@
   "configurations": [
     {
       "name": "local-preview",
-      "url": "http://localhost:8000",
-      "port": 8000
+      "runtimeExecutable": "C:\\Users\\SKTelecom\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
+      "runtimeArgs": ["-m", "http.server", "8765", "--bind", "127.0.0.1"],
+      "port": 8765
     }
   ]
 }

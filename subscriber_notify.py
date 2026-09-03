@@ -108,6 +108,142 @@ def format_urgent_html(urgent_items: list) -> str:
 
 
 # ═══════════════════════════════════════════════════════
+#  과방위 회의록 다이제스트 (2026-09-03) — assembly 토픽으로 큐 적재
+# ═══════════════════════════════════════════════════════
+MINUTES_DIGEST_BUDGET = 2500       # queue_for_subscribers의 3500 절단(태그 중간 절단 가능)에 절대 닿지 않게
+MINUTES_DIGEST_MAX_LINES = 10      # 발언 요지 줄 수 상한 (운영자 결정 2026-09-03)
+MINUTES_LINE_CHARS = 140
+SKT_CHIP = 'SK텔레콤 언급'
+
+
+def _fmt_md(meeting_date) -> str:
+    """'YYYY-MM-DD' → 'M/D'(앞자리 0 제거). 형식이 아니면 원문을 이스케이프해 그대로."""
+    raw = str(meeting_date or '').strip()
+    parts = raw.split('-')
+    if len(parts) == 3 and parts[1].isdigit() and parts[2].isdigit():
+        return f'{int(parts[1])}/{int(parts[2])}'
+    return esc(raw)
+
+
+def format_minutes_digest(meeting_date: str, title: str, summary: str, sp_rows: list,
+                          url: str, skt_flag: bool = False,
+                          max_lines: int = MINUTES_DIGEST_MAX_LINES,
+                          budget: int = MINUTES_DIGEST_BUDGET) -> str:
+    """과방위 회의록 1건 → 구독자용 다이제스트 HTML (순수 포맷터, DB·네트워크 없음).
+
+    길이 제약 — queue_for_subscribers()는 html을 3500자에서 **맹목적으로** 자른다. 절단점이
+    <a href="…"> 태그 한가운데면 텔레그램 sendMessage가 400으로 발송 전체를 실패시키므로,
+    여기서 budget(기본 2500)을 넘기기 전에 발언 줄 추가를 멈추고 꼬리(외 N건·링크)만 붙인다.
+    태그를 잘라 만드는 일은 없다.
+
+    발송 측 병합(mergeQueueBlocks) 통과 제약 — send-subscriber-briefing은 첫 줄이
+    (앞부분)(숫자)(건…) 꼴이고 이어지는 줄이 `1. ` `2. `… 로 번호 매겨진 행들을 하나로 합친다.
+    회의록 제목(예: '현안질의 외 19건')이 첫 줄 정규식에 걸릴 수 있으므로, 발언 줄은 반드시
+    `· ` 불릿을 쓰고 `N. ` 줄을 절대 만들지 않는다 — 그래야 병합 대상이 아니라 그대로 통과한다.
+
+    그룹 규칙 — topic의 첫 키워드(SKT 칩 제외)가 그룹, 없으면 '기타'. 그룹은 건수 내림차순
+    (동률은 가장 이른 chunk_seq), 그룹 안은 chunk_seq 순. 줄 배분은 1차로 그룹당 1줄씩,
+    2차로 남은 줄을 큰 그룹부터 채운다. 요지 없는 행은 제외, 빈 그룹 제목은 내지 않는다.
+    요약도 행도 없으면 ''(호출측이 건너뜀).
+    """
+    # ── 유효 행 정리 ──
+    valid = []
+    for r in sp_rows or []:
+        if not isinstance(r, dict):
+            continue
+        s = str(r.get('summary') or '').strip()
+        if not s:
+            continue
+        topic = str(r.get('topic') or '')
+        kws = [k.strip() for k in topic.split(',') if k.strip()]
+        group = next((k for k in kws if k != SKT_CHIP), '기타')
+        try:
+            seq = int(r.get('chunk_seq') or 0)
+        except (TypeError, ValueError):
+            seq = 0
+        if len(s) > MINUTES_LINE_CHARS:
+            s = s[:MINUTES_LINE_CHARS].rstrip() + '…'
+        who = esc(r.get('speaker'))
+        pos = esc(r.get('position')).strip()
+        if pos:
+            who = f'{who} {pos}'
+        line = f'· {who}: {esc(s)}'
+        if SKT_CHIP in kws:
+            line += f' ({SKT_CHIP})'
+        valid.append({'group': group, 'seq': seq, 'line': line})
+
+    summary_line = esc(summary).strip()
+    if skt_flag and summary_line and SKT_CHIP not in summary_line:
+        summary_line += f' ({SKT_CHIP})'
+    elif skt_flag and not summary_line:
+        summary_line = f'({SKT_CHIP})'
+    if not summary_line and not valid:
+        return ''
+
+    # ── 그룹화·정렬 ──
+    groups: dict = {}
+    for v in valid:
+        groups.setdefault(v['group'], []).append(v)
+    for rows in groups.values():
+        rows.sort(key=lambda v: v['seq'])
+    order = sorted(groups, key=lambda g: (-len(groups[g]), groups[g][0]['seq']))
+
+    # ── 줄 배분: 1차 그룹당 1줄, 2차 남은 줄을 큰 그룹부터 ──
+    alloc = {g: 0 for g in order}
+    remaining = max(0, int(max_lines))
+    for g in order:
+        if remaining <= 0:
+            break
+        alloc[g] = 1
+        remaining -= 1
+    for g in order:
+        if remaining <= 0:
+            break
+        extra = min(remaining, len(groups[g]) - alloc[g])
+        alloc[g] += extra
+        remaining -= extra
+
+    # ── 조립(예산 검사 포함) ──
+    total = len(valid)
+    esc_url = esc(url).strip()
+
+    def footer(n_shown: int) -> str:
+        bits = []
+        rest = total - n_shown
+        if rest > 0:
+            bits.append(f'… 외 {rest}건')
+        if esc_url:
+            bits.append(f'<a href="{esc_url}">원문</a>')
+        bits.append(f'<a href="{DASHBOARD_URL}">대시보드</a>')
+        return ' · '.join(bits)
+
+    parts = [f'🏛️ <b>과방위 회의록 · {_fmt_md(meeting_date)} {esc(title).strip()}</b>']
+    if summary_line:
+        parts.append(summary_line)
+    parts.append('')   # 헤더 블록과 발언 블록 사이 빈 줄
+
+    shown, stop = 0, False
+    for g in order:
+        if stop or alloc[g] <= 0:
+            break
+        heading_pending = f'<b>{esc(g)}</b>'
+        for v in groups[g][:alloc[g]]:
+            candidate = ([heading_pending] if heading_pending else []) + [v['line']]
+            projected = len('\n'.join(parts + candidate)) + 2 + len(footer(shown + 1))
+            if projected > budget:
+                stop = True
+                break
+            parts.extend(candidate)
+            heading_pending = ''
+            shown += 1
+
+    if parts[-1] != '':
+        parts.append('')
+    parts.append(footer(shown))
+    return '\n'.join(parts)
+
+
+# ═══════════════════════════════════════════════════════
 #  기사 단위 큐 (2026-08-03) — 구독 관심분야 태그 필터의 전제
 # ═══════════════════════════════════════════════════════
 #  기존 방식은 "발송 묶음 1건 = 큐 1행"이라 ①기사 식별자가 없고 ②한 행이 서로 다른 태그의

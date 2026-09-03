@@ -35,7 +35,8 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 ├── law_crawler.py              # 법제처 DRF API 법령·고시 모니터링(11:00 KST). 엔드포인트 www.law.go.kr/DRF/lawSearch.do, OC=radiopolicyai
 ├── assembly_crawler.py         # 국회 법안 모니터링(열린국회정보 API, 22대) + 국회 입법예고 추적 패스(#56)
 ├── law_diff_gen.py             # 법령 조문 DIFF 생성(행정부 예고/시행예정/시행 + 국회 예고 --assembly-only) (#54·#56). **국회분은 KB 등재 법령만 분석(#86)** — 「이 법안이 KB에 있는 법을 고치는가」 대조. AI 판정이 아니라 문자열 대조라 비용 0이고, 운영자가 KB 등재로 대상을 직접 통제한다. 법령명 정규화 필수(`[ㆍ·・.\s]` 제거 — 「대·중소기업」 표기가 DB/국회가 다르다). **KB 조회 실패 시 필터 미적용(fail-open), 제외분은 로그에 이름을 남긴다**(빠진 법을 KB 등재로 되살릴 수 있게). **조문 매칭은 법제처 신구법대비표 API(oldAndNew/admrulOldAndNew) 정본 우선, 없으면(존재여부 N) difflib 폴백 — 영향분석·요약은 무변경. pending/promoted 경로만 (#63)**
-├── foreign_press.py / assembly_minutes.py  # 해외 규제기관(05:30) / 과방위 회의록(17시 체인) (#54)
+├── foreign_press.py / assembly_minutes.py  # 해외 규제기관(05:30) / 과방위 회의록(17시 체인) (#54). 회의록 일일 경로는 Sonnet 5(`MINUTES_MODEL`, thinking disabled) + 신규 회의 다이제스트를 구독자 큐(assembly)에 적재 (#120)
+├── minutes_offline.py          # 회의록 **API 0** 파이프라인(#120): 후보·재요약 JSON 내보내기 → 세션(서브에이전트)이 판정·요약 JSON 작성 → 가져오기. 재요약·20·21대 소급 전용, 큐 적재 없음
 ├── notify.py / embed_util.py   # 공용 유틸 — 텔레그램 전송(분할·재시도·429) / Voyage 임베딩. 새 코드는 반드시 재사용 (#58)
 ├── tests/test_smoke.py         # 스모크 테스트(표준 unittest·네트워크 0, 17케이스). `python -m unittest discover -s tests` (#58)
 ├── upload_law_pdf.py           # PDF/MD/PPTX→document_chunks RAG 업로드(조문 헤더 청킹)
@@ -93,9 +94,9 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 | law_graph_edges | 법령 관계도 엣지(source_id→target_id, on delete cascade). relation_type: 근거(주제→법령)/인용(조문 인용)/하위법령(계열). source: seed/citation/family/**thdcmp**/**delegation**/ai. weight=인용·재확인 횟수(엣지 굵기). unique(source,target,relation_type). RLS 동일. **delegation(2026-08-03, #81)** = `law_delegations` 표 기반 위임 엣지(weight=5, 최우선) — 조문 근거 원본은 표에 있으므로 description은 요약만. 우선순위 delegation > thdcmp(4) > family(3), 상위 출처가 정본화한 노드쌍은 하위 출처 억제(**적재 성공을 DB에서 재확인한 뒤** 억제 — #65 공백 사고 순서). **thdcmp(2026-08-02, #65)** = 법제처 3단비교 API(`lawService.do?target=thdCmp&knd=2`) 정본 위임 — weight=4. **CHECK 제약에 source 값을 추가해야 적재됨**(신규 source 태그 도입 시 `law_graph_edges_source_check` 확장 필수 — #65에서 누락으로 적재 실패 후 수정) |
 | law_delegations | **법령 위임 대응표**(#80·#81): parent_law·parent_article ↔ child_law·child_article, unique 4키. 출처 2계열 — ①법제처 3단비교 정본(`sync_law_delegations.py`, 법률↔시행령·시행규칙 조문 단위 1,586행) ②고시 제1조 역추출(`sync_notice_delegations.py`, 정규식·AI 미사용, child_article='전체' 230행). /law가 상·하위 조문 동시 제시에, 관계도가 delegation 엣지 생성에 사용. 재적재 안전(upsert + 성공 확인 후 stale 정리). 고시→상위 연결은 3단비교 범위 밖이라 역추출이 유일 경로. **③수기 확정표 `MANUAL_BASIS`(#82, 14건)** — 제1조가 없거나 근거를 안 쓰는 문서(협정문·분배표·공고)를 **상위 법령 조문에서 역방향 확인**(「…을 정하여 고시한다」가 그 문서를 지목)해 채움. **확정만 넣고 포괄 위임('법·영에서 위임한 사항'류)은 제외** — 잘못된 조문 엣지는 없는 관계보다 나쁘다. 정규식이 성공하면 그쪽이 이기므로 원문 개정 시 자동으로 비켜선다. DB 직접 삽입 금지(17시 prune_stale이 지움) |
 | telegram_subscribers | 구독자 봇 가입자(chat_id PK). topic_briefing/urgent/assembly(각각 on·off), days(daily/weekday), briefing_hour(6~12, **'받기 시작 시각'** — 브리핑은 이 시각 1회, 긴급·법안은 이후 매시 :25 배달), last_briefing_sent_date·last_urgent_sent_at·last_assembly_sent_at(중복 발송 방지), ai_allowed(**기본 false** — AI 자문 승인 플래그), ai_count_date·ai_count(일일 20회 상한), **law_allowed(#100, 기본 false — `/law` 자연어 승인 플래그)**, law_count_date·law_count(일일 10회 상한). active는 봇 차단(403) 자동 처리 전용이며 화면에 버튼은 없다. **RLS 켜고 정책 0개 = service_role 전용**(chat_id는 개인정보, 프런트 노출 금지 — 의도된 설계) **unlimited boolean(#85)** — true면 /ask·/law 일일 상한 면제(카운터는 계속 올려 사용량 관찰). 구독자 속성이라 app_config가 아니라 이 행에 둔다. getSub이 select('*')라 컬럼만 추가하면 코드가 자동으로 읽는다. ⚠️ 비용 상한이 사라지므로 신뢰 인원에게만 |
-| subscriber_queue | 긴급·법안 알림 큐(topic: urgent/assembly, html, created_at). 크롤러가 **발송 대신 적재**하고 send-subscriber-briefing이 각 구독자 수신 시각에 꺼내 보낸다. 억제·클러스터링(#44)·법안 상태변경 판정을 TS로 재구현하지 않으려는 구조. RLS 정책 0개 |
+| subscriber_queue | 긴급·법안 알림 큐(topic: urgent/assembly, html, created_at). 크롤러가 **발송 대신 적재**하고 send-subscriber-briefing이 각 구독자 수신 시각에 꺼내 보낸다. 억제·클러스터링(#44)·법안 상태변경 판정을 TS로 재구현하지 않으려는 구조. RLS 정책 0개. **topic=assembly 적재원 3곳(#120)**: assembly_crawler(국회 법안 단계변경·국회 입법예고) + gov_notice_crawler(부처 입법예고) + **assembly_minutes(과방위 회의록 다이제스트 — 신규 섹션·60일 이내·발언 3건↑일 때만, `subscriber_notify.format_minutes_digest()`, 2,500자 예산)**. 오프라인 임포트(minutes_offline)는 절대 적재하지 않는다 |
 | telegram_usage (#100) | 봇 사용 이력(chat_id·command·query 200자·ok·result_note·created_at, 180일 보관). 종전엔 `ai_count`/`law_count` 숫자뿐이라 **무엇을 물었는지가 없었다.** `logUsage()`가 assem·law·law_article·ask·start에서 기록하며 **fail-open**(로깅 실패가 본 기능을 막으면 본말전도). 실패 경로도 `ok=false`+사유로 남긴다 — "검색했는데 안 나왔다"가 통계에서 빠지면 기준문 손볼 근거가 사라진다. **RLS 켜고 정책 0개 = service_role 전용** ⚠️ 생성 마이그레이션에서 RLS를 빠뜨려 공개 anon 키로 chat_id·질의 원문이 열려 있었다 — **텔레그램 계열 테이블을 새로 만들 때 RLS를 같은 마이그레이션에 반드시 넣을 것** |
-| assembly_speeches (#99) | 회의록 발언자별 행(confer_num·speaker·topic·summary). 국감분은 `confer_num='audit-{MNTS_ID}'` 네임스페이스(상임위 `CONFER_NUM`과 값이 겹칠 수 있다). **원문(raw)은 저장하지 않는다** — summary가 잘못 생성되면 재요약이 불가능하니 **생성 시점의 검증이 유일한 방어선**이다(실제로 LLM 영문 거절문이 그대로 저장돼 화면에 노출된 적이 있다) |
+| assembly_speeches (#99) | 회의록 발언자별 행(confer_num·speaker·topic·summary). 국감분은 `confer_num='audit-{MNTS_ID}'` 네임스페이스(상임위 `CONFER_NUM`과 값이 겹칠 수 있다). **원문(raw)은 저장하지 않는다** — summary가 잘못 생성되면 재요약이 불가능하니 **생성 시점의 검증이 유일한 방어선**이다(실제로 LLM 영문 거절문이 그대로 저장돼 화면에 노출된 적이 있다). **`topic`의 `SK텔레콤 언급` 칩은 규칙 기반·상시 부착(#120)** — 원문 블록이 `ALWAYS_KEEP_TERMS`에 걸리면 키워드 주제가 있어도 콤마로 **항상 덧붙인다**(종전엔 키워드가 없을 때만 → 4/28 이훈기 'SKT 영업정지' 행에 칩이 없었다). 대시보드는 topic을 콤마 분리해 칩으로 그린다 |
 
 ### Edge Function · RPC
 
@@ -113,7 +114,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 | match_report_samples (RPC) | 보고서 샘플 시맨틱 검색(코사인). filter_type으로 유형 한정 |
 | **`/law` 번호 조회는 DB 표기가 「N조」다(#92)** | `document_chunks.article_no`는 **`12조(교육과목 및 시간)`처럼 '제'가 없다** — 실측 「제N조」 0건 / 「N조」 7,587건. `handleArticleLookup`이 `제${artNo}조`로 조회해 **번호 직접 조회가 한 번도 동작하지 않았다.** 자연어 질의는 AI 검색 경로라 멀쩡해서 안 들켰고, 안내문에는 「조문 원문이 바로 나옵니다」라고 적혀 있었다. 지금은 `.or('article_no.ilike.N조%,article_no.ilike.제N조%')`로 두 형식을 모두 받고 비교 전에 앞의 '제'를 벗긴다. ⚠️ **문서에 「된다」고 쓰기 전에 그 경로로 한 번 돌려 볼 것** — 인접 경로가 되면 전체가 되는 줄 알기 쉽다 |
 | **뉴스 2차 묶기 = Haiku 의미 판정(#92)** | 키워드 클러스터링(`cluster_star`, 공유 3개)으로 못 묶인 **대표들만** `news_dedup.group_same_event()`로 다시 묶는다. 매체마다 관점이 달라 제목 어휘가 안 겹치는 사건이 있다(공정위 불공정약관 4건: 쌍별 공유 **최대 1개**). 프롬프트의 **「하나의 처분·발표를 여러 각도에서 쓴 것은 같은 사건」 문장이 결정적** — 이 문장 없이는 2묶음, 넣으면 실전 조건(다른 사건 혼재)에서 정확히 1묶음. **오묶음 실측 0건.** ⚠️ **클러스터링에만 쓰고 억제(`is_followup`)에는 쓰지 말 것** — 묶기가 틀리면 「(관련 보도 N건)」으로 남지만 **억제가 틀리면 알림이 사라져 되돌릴 수 없다.** ⚠️ **임계값 3→2 금지**(#44: KT 해킹 과징금과 5G 과장광고가 한 사건이 된다). 응답 번호가 1~N과 불일치하면 **부분 신뢰 없이 통째로 버린다**(fail-open). 비용은 실행당 최대 1회·수백 토큰. `extract_keywords`는 한글 토큰에도 **조사를 뗀다**(종전엔 금액에만 떼서 「약관」≠「약관에」였다) |
-| telegram-webhook (Edge) | 구독자 봇 수신부. `/start`·`/settings` 인라인 키보드, `/law "OO법 N조"` 조문 원문 즉답, `/ask` AI 자문(승인제), `/admin`(운영자), **주요 뉴스 '더 보기' `mn\|` 콜백(#105 — `news_feed` 읽기 전용, 큐·워터마크 무접촉)**. **verify_jwt off** 대신 `X-Telegram-Bot-Api-Secret-Token` 검증. 오류가 나도 200을 반환한다 — 비200이면 텔레그램이 같은 업데이트를 무한 재전송한다 |
+| telegram-webhook (Edge) | 구독자 봇 수신부. `/start`·`/settings` 인라인 키보드(수신 토글 버튼 **'🏛️ 국회·법률 동향'** — 2026-09-03 '법안 동향'에서 개명, callback `t:assembly`·컬럼 `topic_assembly`·큐 topic `assembly`는 그대로. 국회 법안+국회·부처 입법예고+과방위 회의록 다이제스트를 한 토글로 받는다, #120), `/law "OO법 N조"` 조문 원문 즉답, `/ask` AI 자문(승인제), `/admin`(운영자), **주요 뉴스 '더 보기' `mn\|` 콜백(#105 — `news_feed` 읽기 전용, 큐·워터마크 무접촉)**. **verify_jwt off** 대신 `X-Telegram-Bot-Api-Secret-Token` 검증. 오류가 나도 200을 반환한다 — 비200이면 텔레그램이 같은 업데이트를 무한 재전송한다 |
 | assembly-search (Edge, #98) | 대시보드 "원문 검색" 탭용 CORS JSON 엔드포인트. 국회회의록시스템을 **실시간 검색**한다(DB 무관). `telegram-webhook`과 **`_shared/assembly_search.ts`를 공유**하되 두 함수가 **각각 번들**하므로 그 파일을 고치면 **반드시 둘 다 배포**할 것 — 한쪽만 하면 텔레그램과 웹이 같은 질문에 다르게 답한다 |
 | admin-daily-report (Edge, #100) | 매일 **09:00 KST**(pg_cron `0 0 * * *` UTC) 운영자에게 구독자 목록·권한(자문/법령)·수신 설정·관심분야·명령 사용 통계를 텔레그램으로 보낸다. Vault `admin_report_cron_secret` → `x-cron-secret`, **`--no-verify-jwt` 배포 필수**. 180일 초과 `telegram_usage` 정리도 같은 잡이 겸한다. ⚠️ **'최근 발송 브리핑'은 일부러 뺐다** — 매일 같은 날짜가 찍혀 신호가 되지 못한다(운영자 지시). 리포트에는 **변하는 것만** 싣는다 |
 | send-subscriber-briefing (Edge) | 구독자 정시 발송. pg_cron이 매시 호출 → 브리핑(daily_briefings)+긴급·법안(subscriber_queue)을 **수신 시각이 도래한 구독자에게 한 번에** 보낸다. `briefing_hour <= 현재KST시` catch-up이라 브리핑이 늦게 생성돼도 다음 정각에 따라잡는다. `x-cron-secret` 검증. **주요 뉴스 마지막 조각에 '더 보기' 버튼을 굽는다(#105)** — 구간은 `last_urgent_sent_at`(없으면 당일 00:00) ~ `maxCreatedAt(urgentEligible)`, 즉 **워터마크 전진값과 같은 값**이라 앞뒤 버튼이 빈틈없이 맞물린다. 브리핑·법안 메시지에는 붙이지 않는다 |
@@ -315,6 +316,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 법령·고시 신규/개정| 텔레그램  (첫 실행 베이스라인은 생략)
 국회 법안 단계변경 | 텔레그램
 국회 입법예고 시작/D-3 | 텔레그램 운영자 + **구독자 큐(topic=assembly)에도 적재**(2026-08-25 문서 정정 — 종전 "운영자 전용·큐 미적재"는 사실과 달랐다). assembly_crawler 입법예고 패스, stage 컬럼 dedupe. 운영자 방침: **주요 법안의 입법예고는 구독자에게 필요하다** — 발송을 끊지 말고 `app_config.assembly_notice_criteria`로 선별을 조인다
+과방위 회의록 신규 | 구독자 큐(topic=assembly) 다이제스트 (17:00 체인, 신규 섹션·60일 이내·발언 3건↑에서만 — #120). 운영자 즉시 알림 없음, 즉시 발송 트리거 없음(다음 :25 정시 배달). 백필·오프라인 임포트 경로는 적재 안 함
 ```
 
 **② 구독자 봇 채널** (2026-08-01 신설 — `정책AI 도우미` @radio_policy_law_ai_bot, `SUBSCRIBER_BOT_TOKEN`)
@@ -328,6 +330,12 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
                    |   긴급 적재 시 subscriber_notify._trigger_delivery()가 발송 함수를 1회 호출해
                    |   다음 :25를 기다리지 않는다(발송 함수가 수신 시각을 검사하므로 심야엔 무발송).
                    | 요일 선택(매일/평일만), 항목별 on·off. 항목 전부 끄면 수신 없음
+                   | ※ 토글 명칭(2026-09-03, #120): 🗞️ 브리핑 / 🔴 주요 뉴스 / **🏛️ 국회·법률 동향**(구 '법안 동향').
+                   |   assembly 토글 하나가 **국회 법안 단계변경 + 국회 입법예고 + 부처 입법예고 + 과방위 회의록
+                   |   다이제스트**를 받는다. '국회 동향'이 아닌 이유: 부처 입법예고(gov_notice_crawler)가 이미
+                   |   같은 토글로 나가고 있었다. 회의록 별도 토글은 두지 않았다(월 1~15회로 드물고 DB 변경·
+                   |   구독자 6명 재설정 부담 > 이득). 라벨은 telegram-webhook·admin-daily-report·
+                   |   setup_subscriber_bot.py BOT_DESC 세 곳 — 바꿀 땐 셋 다.
 조문 조회 /law     | "OO법 N조" 원문 즉답 (LLM 없음, 비용 0)
 AI 자문 /ask       | 운영자 승인(chat_id별 1회) + 일일 20회 상한. 건당 100~400원
 ```
@@ -706,6 +714,70 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
   **수록 상한에서도 우선권**을 준다(`cap_indices`) — 상한을 앞에서 자르면 회의 후반의 자사 발언이 통째로
   날아간다(실측: 2024-10-08 확정 93개 > 상한 50). 인식어 SK텔레콤/SK 텔레콤/에스케이텔레콤/SKT.
   상임위·국감 두 경로에 공통 적용. `topic`은 키워드가 없으면 'SK텔레콤 언급'.
+  → **2026-09-03(#120)부터 칩은 상시 부착**: 원문이 인식어에 걸리면 키워드 주제가 있어도 `SK텔레콤 언급`을
+  콤마로 덧붙인다(`build_speech_rows`). 요약 줄에도 `with_skt_suffix()`가 ` (SK텔레콤 언급)`을 1회 붙인다.
+  **AI 판정이 아니라 `skt_mentioned(blocks, picked)` 규칙**(원문 문자열 매칭)이다 — 요약문에 SK가 언급됐는지
+  AI에게 묻지 말 것(요약이 언급을 빠뜨리면 표시도 사라진다).
+- **텔레그램 다이제스트 (2026-09-03, #120)**: 17시 체인에서 **신규 등록된 회의 1건당** `subscriber_notify.
+  format_minutes_digest()` → `queue_for_subscribers(sb,'assembly',html)`. 적재 조건 **넷 모두** 충족 시에만:
+  ①`register_kb_section`이 True(신규 섹션 — dup·껍데기 복구는 제외) ②`--no-notify` 아님 ③껍데기 섹션 아님
+  ④발언 요지 **3건↑**(`DIGEST_MIN_SPEECHES`) ⑤회의일 **60일 이내**(`DIGEST_MAX_AGE_DAYS`, 날짜 파싱 실패 =
+  fail-closed로 적재 안 함). 스킵 사유는 전부 print(조용한 실패 금지). 즉시 발송 트리거 없음 — 다음 :25에
+  send-subscriber-briefing이 각 구독자 시각에 묶어 보낸다. 형식: 헤더 `🏛️ <b>과방위 회의록 · M/D 제N차 (안건)</b>`
+  + 한 줄 요약 + 주제별 발언 요지(≤10줄·140자/줄) + 푸터 `… 외 N건 · 원문 · 대시보드`. **예산 2,500자** —
+  `queue_for_subscribers`가 3,500자에서 맹목 절단하므로 `<a>` 태그 중간이 잘려 텔레그램 400이 나지 않게
+  여유를 둔다. 불릿은 `· `만, **`N. ` 번호줄 금지** — 발송 함수 `mergeQueueBlocks`가 번호줄을 재조립한다.
+- **요약 프롬프트·두 층 요약 (2026-09-03, #120)**: 종전 프롬프트 "통신사(SK텔레콤) 관점에서 어떤 논의가
+  있었는지"는 **"SK텔레콤이 직접 언급되지 않았습니다" / "정책 논의는 없었다" 같은 무내용 메타응답**을
+  요약으로 저장했다(실측 2026-07-06·07-30·08-19 섹션). 현행: "이 회의에서 통신·전파·AI 관련해 무엇이
+  논의됐는지 1~2문장(130자 이내)… 특정 기업의 관점을 취하지 말고…". ⚠️ **요약 프롬프트에 관점 지시를
+  넣지 말 것.** 요약은 두 층 — ①**한 줄 요약**(130자, 250자 절단): 목록·텔레그램용, `요약:` 줄은 본문
+  **첫 900자 안**에 있어야 한다(app.js가 거기서 파싱) ②**회의 개요**(`summarize_overview()`, 주제별 문단
+  2~5개·300~600자·각 줄 `[주제] 문단`): 대시보드 상세용, 섹션 본문에 `개요:` 블록으로 **`- 안건:` 뒤·
+  `질의·응답:` 앞**에 둔다. `build_section_body(..., overview='')` — 빈 값이면 옛 형식과 바이트 동일.
+  `format_overview()`가 문단마다 `is_valid_summary`를 통과시키고 하나도 없으면 블록을 **생략**한다(폴백
+  저장 없음, #113 규칙). 발언 요지는 120자 유지.
+- **모델 (2026-09-03, #120)**: 일일 경로의 판정·회의 요약·개요·발언 요지 전부 **Sonnet 5**
+  (`MINUTES_MODEL='claude-sonnet-5'`, `MINUTES_THINKING={'type':'disabled'}`; `make_ai_judge(sb, keywords,
+  model=, thinking=)` 신설 kwargs — press_ingest 기본은 Haiku 그대로라 보도자료 판정 무변경). ⚠️ **비스트리밍
+  호출은 thinking disabled 필수** — Sonnet 5는 적응형 추론이 기본 ON이라 thinking 토큰이 과금되고
+  `content[0]`이 텍스트가 아니다. 비용 ≈ $0.26/회의, 월 7회 ≈ $1.8. Haiku를 버린 이유: 영문 거절문을
+  요지로 저장(#99) + 무내용 요약. CLI: `--no-notify`(큐 미적재), **`--year`로 작년 이전 연도를 돌리려면
+  `--allow-api` 필수**(없으면 안내문과 함께 거부) — 과거 연도는 아래 오프라인 파이프라인으로.
+- **20·21대 소급 + 오프라인(세션) 파이프라인 (2026-09-03, #120 — Anthropic API 0회)**:
+  - 운영자 규칙: **일회성 AI 작업(재요약·소급 백필)은 Claude 세션(서브에이전트, Sonnet 5)이 하고 API를
+    쓰지 않는다.** API는 무인 반복(17시 체인)에만. Sonnet 5 API로 640회의를 돌리면 ≈ $110.
+  - `COMMITTEE_DAE_TABLE`(assembly_minutes.py): (2016~2020, '20', [미래창조과학방송통신위원회,
+    과학기술정보방송통신위원회]) / (2020~2024, '21', [과기정통위]) / (2024~, '22', [과기정통위]).
+    `committee_queries_for(year)` → `fetch_meetings`가 (dae, comm) 쌍 전부를 질의해 CONFER_NUM으로 합치고
+    `dae_num`·`comm_name`을 기록. 실측(페이지1/300행): 2016 미방위 17 / 2017 미방위 11 + 과방위 16 /
+    2019 10 / 2021 18 / 2023 19. **20대 전반기(~2017-07-26) 명칭이 다르다 — 빼면 2016~2017 통째 누락.**
+    23대 개원 시 한 줄 추가.
+  - `minutes_offline.py` 명령(파이썬 안에 AI 호출 0):
+    `--export-candidates --year Y --out DIR` → 회의 목록 + 뷰어 블록(best-of-N) + 키워드 후보를
+    `DIR/{year}/{confer_num}.blocks.json`·`.cand.json` + `_index.json`·`_criteria.txt`·`_rules.md`로.
+    세션이 `{confer_num}.judged.json` = `{schema:'minutes-judged/1', confer_num, meeting_summary,
+    meeting_overview:[{topic,text}], kept:[{idx,summary}], rejected:[…], judged_by}` 작성.
+    `--import-judged --in DIR [--year] [--limit] [--dry-run]` → run()과 같은 dedupe(section_exists → 껍데기 →
+    register_kb_section) + `build_speech_rows(presummarized=…)`(검증 실패 요지는 저장 안 함).
+    `--export-resummary --out DIR`(DB만 읽음) → 기존 섹션을 `DIR/resum/{year}/{ymd6}_{confer_num}.json`
+    (발췌 ≤8,000자·skt_flag·viewer_id)으로. 세션이 `…judged.json` = `{meeting_summary, meeting_overview}`.
+    `--import-resummary --in DIR [--no-refetch] [--force] [--limit] [--dry-run]` → 요약 줄 교체 + 개요 블록
+    삽입 후 섹션을 **통째로 재등록**(drop_section + register_kb_section + renumber_doc — 개요 삽입으로
+    첫 청크가 700자를 넘어 부분 갱신이 불가) → 뷰어 블록을 다시 받아 **정렬 검사 통과 시에만**
+    `assembly_speeches.topic`에 SK 칩 소급(모든 `chunk_seq < len(blocks)` + `normalize_speaker(blocks[cs].name)
+    == speaker`; 불일치는 스킵+로그). `_done.json`으로 재개 가능. subscriber_notify 미임포트·큐 적재 없음.
+    끝나면 `backfill_embeddings.py`로 재등록 청크(~700) 재임베딩.
+  - ⚠️ **17:00~17:30에는 오프라인 임포트 금지**(gov 크롤러 체인과 겹쳐 섹션 중복 사고). 내보내기(뷰어 fetch)
+    병렬은 **3~4 프로세스 이하**(#99 잘린 응답). **임포트는 단일 프로세스·순차**(chunk_index 재번호).
+  - 세션 배치: 재요약 ~238회의 → 서브에이전트 ~25개(8~10건씩, 동시) / 20·21대 ~300~330회의 → ~40개를
+    20개씩 2파(wave).
+- **대시보드 회의록 상세 (2026-09-03, #120, `app.js?v=20260904a`)**: `openAssemblyMinute` → `openMinuteDetail(mt)`.
+  일시·안건 → 요약 배지 → 회의 개요 문단(`[주제]` 굵게) → **주요 발언 N건**(주제별 묶음, `assembly_speeches`를
+  섹션의 `(원문: URL)` == `source_url`로 조인) → SK텔레콤 언급 칩 → 푸터 `국회 원문 보기` + `발췌 원문 보기`
+  토글(원문 질의·응답은 `pressTextToHtml` 유지). 발언 행 0건이면 발췌 원문을 바로 보인다.
+  `fetchPressSection()`을 `openPressDetail`에서 분리해 공용(보도자료 출력 무변경). `loadAssemblyMinutes`가
+  `src_url`도 보관.
 
 ## 국회 입법예고 추적 (assembly_crawler 입법예고 패스 + law_diff_gen 국회 분석, 2026-08-02 신설 — 배경역사 #56)
 
@@ -786,6 +858,10 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 ## 하지 말아야 할 것 (규칙 + 한 줄 이유 / 상세는 배경역사 문서)
 
 - **세션 주도의 일회성 AI 대량 작업을 Edge Function 수동 호출로 돌리지 말 것** — 함수 내부가 Anthropic API를 불러 별도 과금된다. 이슈맵 과거뉴스 백필을 `news-archive-search` 반복 호출로 처리했다가 크레딧 재결제 주기가 3~5일→1일로 줄어 운영자 재지적(2026-08-26, #111). 세션 백필은 세션이 직접 검색·판정·INSERT(비용 0), Edge 경로는 무인 자동화(승인 훅·대시보드 버튼) 전용.
+- **회의록 다이제스트는 신규 섹션 + 60일 이내 + 발언 3건↑에서만 큐에 넣을 것 — 백필·오프라인 임포트 경로에서는 절대 적재 금지(#120)** — `register_kb_section`이 True를 돌려준 새 회의만, `DIGEST_MAX_AGE_DAYS`·`DIGEST_MIN_SPEECHES` 가드를 통과해야 `queue_for_subscribers('assembly')`. 20·21대 소급(300건↑)이나 재요약이 큐로 새면 구독자 6명이 옛 회의록 수백 통을 받는다. `minutes_offline.py`는 subscriber_notify를 임포트조차 하지 않는다. 날짜 파싱 실패는 fail-closed(적재 안 함).
+- **요약 프롬프트에 '통신사 관점'·'SK텔레콤 관점' 같은 관점 지시를 넣지 말 것(#120)** — 모델이 관점을 못 찾으면 "SK텔레콤이 직접 언급되지 않았습니다"·"정책 논의는 없었다" 같은 **언급 없음 메타응답**을 내고 그것이 요약으로 저장된다(실측 3건). 요약은 "무엇이 논의됐는지"만 묻고, 자사 언급 표시는 규칙(`skt_mentioned`)으로 따로 붙인다.
+- **일회성 AI 작업(재요약·과거 대수 소급)은 세션이 하고 Anthropic API를 쓰지 말 것(#120)** — Sonnet 5 API로 640회의 ≈ $110, 세션이면 0. `minutes_offline.py`의 export → 세션 판정 JSON → import 파이프라인을 쓴다. `assembly_minutes.py --year <작년 이전>`은 `--allow-api` 없이는 거부되도록 잠가 뒀다 — 이 잠금을 풀지 말 것. API는 무인 반복(17시 체인)에만.
+- **Sonnet 5 비스트리밍 호출에는 `thinking={'type':'disabled'}` 필수(#120)** — 적응형 추론이 기본 ON이라 thinking 토큰이 과금되고 `content[0]`이 텍스트 블록이 아니어서 `content[0].text` 읽기가 깨진다. `assembly_minutes.py`의 `MINUTES_THINKING`이 모든 호출·`make_ai_judge(thinking=)`에 전달된다. 새 Sonnet 5 호출을 만들면 같은 값을 넘길 것.
 
 - **"조용한 실패"를 만들지 말 것 — 2026-08-03에만 4건, 이후로도 계속 나온다.** 에러 없이 결과만 틀리는 코드는 며칠씩 발견되지 않는다. 실측 사례: ①뉴스 1,000건 초과 시 조회가 잘려 이미 알림한 기사를 재발송 ②`.range()` 페이징에 `.order()`가 없어 관계도 노드가 매 실행 오삭제 ③refetch가 해외 기사를 수집 즉시 삭제 ④뉴스 클러스터가 연쇄 병합으로 91건 한 덩어리 ⑤**RLS 정책에 `authenticated`가 빠져 로그인 사용자에게만 10개 테이블이 0행**(#108 — 관계도 빈 화면, AI 자문 법령요약 갈래 소실). **판정·필터·삭제 로직을 만들면 "틀렸을 때 무엇이 보이는가"를 먼저 정하고, 안 보이면 로그를 남길 것.**
 - **조회 컬럼 목록(`select(...)`)에서 조건에 쓰는 컬럼을 빠뜨리지 말 것** — 값이 `undefined`/`None`이 되어 **조건이 조용히 무력화**된다(에러도 안 난다). 2026-08-03 하루에 세 번 발생: 구독자 `tags`(전원 전체수신으로 퇴화), refetch `category`(해외 예외 미작동), 뉴스 목록 `tags`(클러스터 태그 조건 무력화). `select('*')`가 아닌 **명시 목록**을 쓰는 곳은 조건 추가 시 반드시 함께 갱신.
@@ -1076,6 +1152,19 @@ python sync_system_prompt.py                     # system_prompt.js → app_conf
 npx supabase@latest functions deploy telegram-webhook --project-ref zwkjedumfuhodckmtxxn --no-verify-jwt
 npx supabase@latest functions deploy send-subscriber-briefing --project-ref zwkjedumfuhodckmtxxn --no-verify-jwt
 ※ CLI 배포는 .env의 SUPABASE_ACCESS_TOKEN(sbp_...) 필요. MCP 전송 방식은 파일 50KB 넘으면 실패한다.
+※ 토글 라벨(국회·법률 동향 등)을 바꾸면 telegram-webhook + admin-daily-report 둘 다 재배포 + setup_subscriber_bot.py 재실행(BOT_DESC).
+```
+
+### 과방위 회의록 오프라인(세션) 파이프라인 (`minutes_offline.py`, #120 — Anthropic API 0회)
+```
+python minutes_offline.py --export-candidates --year 2019 --out DIR   # 소급: 회의 목록+뷰어 블록+키워드 후보 → DIR/2019/{confer_num}.blocks.json·.cand.json
+#   → 세션 서브에이전트가 {confer_num}.judged.json(minutes-judged/1) 작성
+python minutes_offline.py --import-judged --in DIR [--year 2019] [--limit N] [--dry-run]   # 섹션+발언 등록(run()과 같은 dedupe)
+python minutes_offline.py --export-resummary --out DIR                 # 재요약: 기존 섹션 → DIR/resum/{year}/{ymd6}_{confer_num}.json (DB 무변경)
+#   → 세션이 …judged.json({meeting_summary, meeting_overview}) 작성
+python minutes_offline.py --import-resummary --in DIR [--no-refetch] [--force] [--limit N] [--dry-run]   # 섹션 통째 재등록 + SK 칩 소급(정렬 검사 통과분만), _done.json 재개
+python backfill_embeddings.py                                          # 재등록 청크 재임베딩(마지막에 1회)
+※ 17:00~17:30 실행 금지(gov 체인 충돌). export 병렬 ≤3~4, import는 단일·순차. 큐 적재 없음.
 ```
 
 ---

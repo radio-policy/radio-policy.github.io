@@ -44,7 +44,7 @@ type Usage = { chat_id: number; command: string; query: string | null; result_no
 type QueueRow = { topic: string; created_at: string };
 
 const QUEUE_LABEL: Record<string, string> = {
-  briefing: '모닝 브리핑', urgent: '주요 뉴스', assembly: '법안 동향',
+  briefing: '모닝 브리핑', urgent: '주요 뉴스', assembly: '국회·법률 동향',
 };
 
 const CMD_LABEL: Record<string, string> = {
@@ -63,7 +63,7 @@ function subscriptionLine(s: Sub): string {
   const on: string[] = [];
   if (s.topic_briefing) on.push('📡 브리핑');
   if (s.topic_urgent) on.push('📰 뉴스');
-  if (s.topic_assembly) on.push('🏛 법안');
+  if (s.topic_assembly) on.push('🏛 국회·법률');
   if (!on.length) return '수신 항목 없음(사실상 중지)';
   const hh = (v: number) => String(v).padStart(2, '0');
   const when = `${s.days === 'weekday' ? '평일' : '매일'} ${hh(s.briefing_hour)}~${hh(s.end_hour ?? 22)}시`;
@@ -113,7 +113,7 @@ function buildReport(subs: Sub[], usage: Usage[], queue: QueueRow[], since7: Dat
   out += '\n<b>구독 현황</b> (수신 켠 사람 기준)\n' +
     `📡 모닝 브리핑 ${n((s) => s.topic_briefing)}명 · ` +
     `📰 주요 뉴스 ${n((s) => s.topic_urgent)}명 · ` +
-    `🏛 법안 동향 ${n((s) => s.topic_assembly)}명\n` +
+    `🏛 국회·법률 동향 ${n((s) => s.topic_assembly)}명\n` +
     `어제 발송 대상 물량: ${
       Object.entries(qByTopic).map(([k, v]) => `${QUEUE_LABEL[k] || k} ${v}건`).join(' · ') || '없음'
     }\n`;
@@ -140,7 +140,7 @@ function buildReport(subs: Sub[], usage: Usage[], queue: QueueRow[], since7: Dat
     // 브리핑은 켜 두면 매일 같은 날짜가 찍혀 신호가 없다(운영자 지시 2026-08-14) — 뺀다.
     const sent = [
       s.last_urgent_sent_at ? `뉴스 ${kstDate(new Date(s.last_urgent_sent_at))}` : '',
-      s.last_assembly_sent_at ? `법안 ${kstDate(new Date(s.last_assembly_sent_at))}` : '',
+      s.last_assembly_sent_at ? `국회·법률 ${kstDate(new Date(s.last_assembly_sent_at))}` : '',
     ].filter(Boolean).join(' · ') || '발송 이력 없음';
     out += `\n• <b>${name}</b> ${handle}\n` +
       `  수신 ${escapeHtml(subscriptionLine(s))}\n` +

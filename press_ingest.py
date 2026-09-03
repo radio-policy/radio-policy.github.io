@@ -111,23 +111,28 @@ def load_press_criteria(sb) -> str:
     return RELEVANCE_CRITERIA_FALLBACK
 
 
-def make_ai_judge(sb, keywords: list):
-    """제목+본문 기반 관련성 판정기(Haiku). API 불가 시 None(호출자가 키워드 방식 유지).
-    개별 호출 실패 시엔 키워드 매칭으로 폴백(fail-open) — 무음 누락 방지(#39)."""
+def make_ai_judge(sb, keywords: list, model: str = 'claude-haiku-4-5-20251001',
+                  thinking: dict = None):
+    """제목+본문 기반 관련성 판정기(기본 Haiku). API 불가 시 None(호출자가 키워드 방식 유지).
+    개별 호출 실패 시엔 키워드 매칭으로 폴백(fail-open) — 무음 누락 방지(#39).
+    model/thinking 은 호출자별 선택 — 회의록(assembly_minutes)만 Sonnet 5 + thinking off 를 넘긴다
+    (2026-09-03). 보도자료 경로는 인자를 안 넘기므로 종전과 동일하다."""
     api_key = os.environ.get('ANTHROPIC_API_KEY', '')
     if not api_key or anthropic is None:
         return None
     criteria = load_press_criteria(sb)
     client = anthropic.Anthropic(api_key=api_key)
+    extra = {'thinking': thinking} if thinking else {}
 
     def judge(title: str, body: str):
         try:
             resp = client.messages.create(
-                model='claude-haiku-4-5-20251001',
+                model=model,
                 max_tokens=60,
                 # 프롬프트는 배치 경로와 **같은 함수**에서 만든다 — 두 경로가 갈라지면
                 # 같은 기사가 실행 방식에 따라 다르게 판정된다(#88·#92의 '코드 두 벌' 재발).
                 messages=[{'role': 'user', 'content': _judge_prompt(criteria, title, body)}],
+                **extra,
             )
             txt = ''
             for blk in resp.content:   # 적응형 추론 대비 — text 블록만 취함

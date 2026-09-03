@@ -6686,6 +6686,90 @@ function askAboutPress(el) {
   }, 300);
 }
 
+// document_chunks(doc_name)에서 '## YYMMDD 제목' 섹션 하나를 찾아 정리된 텍스트와 원문 URL을 돌려준다.
+// 보도자료 상세(openPressDetail)와 회의록 상세(openMinuteDetail)가 공유. (2026-09-04 분리)
+// 반환: { text, srcUrl } | null(문서 청크 없음) | { text: null }(섹션 못 찾음)
+async function fetchPressSection(title, date, docName) {
+  // '2026-01-15' → '260115'
+  var yymmdd = date.replace(/-/g, '').substring(2);
+
+  // 문서 하나가 2,000청크를 넘을 수 있어(과기정통부 백필) 500 limit → range 페이징 (#53)
+  var chunks = [];
+  var pageStart = 0;
+  while (true) {
+    var cr = await sb.from('document_chunks')
+      .select('chunk_index, content')
+      .eq('doc_name', docName)
+      .order('chunk_index')
+      .range(pageStart, pageStart + 999);
+    if (cr.error) break;
+    chunks = chunks.concat(cr.data || []);
+    if (!cr.data || cr.data.length < 1000) break;
+    pageStart += 1000;
+  }
+
+  if (chunks.length === 0) return null;
+
+  // 전체 텍스트 합치기 (청킹은 개행 경계라 join('')이 원문 그대로 복원)
+  var fullText = chunks.map(function(c) { return c.content; }).join('');
+
+  // ## YYMMDD 경계로 섹션 분리
+  var sections = fullText.split(/(?=^## \d{6})/m);
+
+  // 해당 날짜 + 제목이 함께 맞는 섹션 우선 (같은 날 여러 건이면 날짜만으론 오표시 — #53)
+  var titleKey = (title || '').replace(/\s+/g, '').substring(0, 12).toLowerCase();
+  var targetSection = null;
+  var dateOnlyMatch = null;
+  for (var i = 0; i < sections.length; i++) {
+    if (!new RegExp('^## ' + yymmdd).test(sections[i])) continue;
+    if (!dateOnlyMatch) dateOnlyMatch = sections[i];
+    var headerLine = (sections[i].split('\n')[0] || '').replace(/\s+/g, '').toLowerCase();
+    if (titleKey && headerLine.indexOf(titleKey) !== -1) {
+      targetSection = sections[i];
+      break;
+    }
+  }
+  if (!targetSection) targetSection = dateOnlyMatch;
+
+  if (!targetSection) {
+    // 제목으로 검색 폴백
+    targetSection = sections.find(function(s) {
+      return s.toLowerCase().indexOf(title.toLowerCase().substring(0, 10)) !== -1;
+    }) || null;
+  }
+
+  if (!targetSection) return { text: null, srcUrl: null };
+
+  // 불필요한 이미지 설명, 중복 제목 라인 정리
+  var cleaned = targetSection
+    .replace(/그림입니다\.\n원본 그림의 이름:[^\n]+\n원본 그림의 크기:[^\n]+/g, '')
+    .replace(/^# \d{6}[^\n]*\n/m, '')  // # YYMMDD 중복 제목 제거
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+  // 수집 시 저장해 둔 '(원문: URL)' 추출 — 본문에서는 빼고 상단 버튼으로 노출 (#53)
+  var srcUrl = null;
+  var srcMatch = cleaned.match(/\(원문:\s*(https?:[^\s)]+)\)/);
+  if (srcMatch) {
+    srcUrl = srcMatch[1];
+    cleaned = cleaned.replace(/\(원문:\s*https?:[^\s)]+\)\s*/g, '').trim();
+  }
+
+  return { text: cleaned, srcUrl: srcUrl };
+}
+
+// 섹션 텍스트의 간단한 마크다운 → HTML 변환 (이스케이프 포함). 보도자료 본문·회의록 발췌 원문 공용.
+function pressTextToHtml(cleaned) {
+  return cleaned
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/^## (.+)$/gm, '<h3 style="color:var(--accent-purple);font-size:14px;margin:16px 0 6px">$1</h3>')
+    .replace(/^### (.+)$/gm, '<h4 style="color:var(--text-primary);font-size:13px;margin:12px 0 4px;font-weight:600">$1</h4>')
+    .replace(/^- (.+)$/gm, '<li style="margin:2px 0">$1</li>')
+    .replace(/(<li[^>]*>.*<\/li>\n?)+/g, function(m){ return '<ul style="padding-left:20px;margin:6px 0">' + m + '</ul>'; })
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\n/g, '<br>');
+}
+
 async function openPressDetail(title, date, docName) {
   var modal  = document.getElementById('press-detail-modal');
   var titleEl = document.getElementById('press-detail-title');
@@ -6698,87 +6782,22 @@ async function openPressDetail(title, date, docName) {
   bodyEl.innerHTML = '<div style="text-align:center;padding:30px;color:#aaa">불러오는 중...</div>';
   modal.style.display = 'flex';
 
-  // '2026-01-15' → '260115'
-  var yymmdd = date.replace(/-/g, '').substring(2);
-
   try {
-    // 문서 하나가 2,000청크를 넘을 수 있어(과기정통부 백필) 500 limit → range 페이징 (#53)
-    var chunks = [];
-    var pageStart = 0;
-    while (true) {
-      var cr = await sb.from('document_chunks')
-        .select('chunk_index, content')
-        .eq('doc_name', docName)
-        .order('chunk_index')
-        .range(pageStart, pageStart + 999);
-      if (cr.error) break;
-      chunks = chunks.concat(cr.data || []);
-      if (!cr.data || cr.data.length < 1000) break;
-      pageStart += 1000;
-    }
+    var sec = await fetchPressSection(title, date, docName);
 
-    if (chunks.length === 0) {
+    if (!sec) {
       bodyEl.innerHTML = '<div style="color:#f66;padding:20px">내용을 찾을 수 없습니다.</div>';
       return;
     }
-
-    // 전체 텍스트 합치기 (청킹은 개행 경계라 join('')이 원문 그대로 복원)
-    var fullText = chunks.map(function(c) { return c.content; }).join('');
-
-    // ## YYMMDD 경계로 섹션 분리
-    var sections = fullText.split(/(?=^## \d{6})/m);
-
-    // 해당 날짜 + 제목이 함께 맞는 섹션 우선 (같은 날 여러 건이면 날짜만으론 오표시 — #53)
-    var titleKey = (title || '').replace(/\s+/g, '').substring(0, 12).toLowerCase();
-    var targetSection = null;
-    var dateOnlyMatch = null;
-    for (var i = 0; i < sections.length; i++) {
-      if (!new RegExp('^## ' + yymmdd).test(sections[i])) continue;
-      if (!dateOnlyMatch) dateOnlyMatch = sections[i];
-      var headerLine = (sections[i].split('\n')[0] || '').replace(/\s+/g, '').toLowerCase();
-      if (titleKey && headerLine.indexOf(titleKey) !== -1) {
-        targetSection = sections[i];
-        break;
-      }
-    }
-    if (!targetSection) targetSection = dateOnlyMatch;
-
-    if (!targetSection) {
-      // 제목으로 검색 폴백
-      targetSection = sections.find(function(s) {
-        return s.toLowerCase().indexOf(title.toLowerCase().substring(0, 10)) !== -1;
-      }) || null;
-    }
-
-    if (!targetSection) {
+    if (sec.text == null) {
       bodyEl.innerHTML = '<div style="color:#f66;padding:20px">해당 보도자료 내용을 찾을 수 없습니다.</div>';
       return;
     }
 
-    // 불필요한 이미지 설명, 중복 제목 라인 정리
-    var cleaned = targetSection
-      .replace(/그림입니다\.\n원본 그림의 이름:[^\n]+\n원본 그림의 크기:[^\n]+/g, '')
-      .replace(/^# \d{6}[^\n]*\n/m, '')  // # YYMMDD 중복 제목 제거
-      .replace(/\n{3,}/g, '\n\n')
-      .trim();
-
-    // 수집 시 저장해 둔 '(원문: URL)' 추출 — 본문에서는 빼고 상단 버튼으로 노출 (#53)
-    var srcUrl = null;
-    var srcMatch = cleaned.match(/\(원문:\s*(https?:[^\s)]+)\)/);
-    if (srcMatch) {
-      srcUrl = srcMatch[1];
-      cleaned = cleaned.replace(/\(원문:\s*https?:[^\s)]+\)\s*/g, '').trim();
-    }
+    var srcUrl = sec.srcUrl;
 
     // 간단한 마크다운 → HTML 변환
-    var html = cleaned
-      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-      .replace(/^## (.+)$/gm, '<h3 style="color:var(--accent-purple);font-size:14px;margin:16px 0 6px">$1</h3>')
-      .replace(/^### (.+)$/gm, '<h4 style="color:var(--text-primary);font-size:13px;margin:12px 0 4px;font-weight:600">$1</h4>')
-      .replace(/^- (.+)$/gm, '<li style="margin:2px 0">$1</li>')
-      .replace(/(<li[^>]*>.*<\/li>\n?)+/g, function(m){ return '<ul style="padding-left:20px;margin:6px 0">' + m + '</ul>'; })
-      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-      .replace(/\n/g, '<br>');
+    var html = pressTextToHtml(sec.text);
 
     if (srcUrl) {
       // 원문 페이지에는 첨부(HWPX/PDF)도 있어 그림·인포그래픽까지 확인 가능 (스킴은 위 정규식이 https?:로 한정)
@@ -9336,11 +9355,14 @@ async function loadAssemblyMinutes(force) {
           var sm = s.slice(0, 900).match(/^요약:\s*(.+)$/m);
           // 구버전 수집분의 '# 요약' 접두 중복 표시 방어 (데이터는 소급 작업이 정리, #54)
           var smText = sm ? sm[1].replace(/^[#\s]*(요약\s*[:：]?\s*)+/, '').trim() : '';
+          // '(원문: URL)' 꼬리 = assembly_speeches.source_url 조인 키 (회의록 상세의 발언 요약 조회용)
+          var su = s.match(/\(원문:\s*(https?:[^\s)]+)\)/);
           minutes.push({
             title: m[2].trim(),
             date: '20' + m[1].slice(0, 2) + '-' + m[1].slice(2, 4) + '-' + m[1].slice(4, 6),
             doc_name: dn,
-            summary: smText
+            summary: smText,
+            src_url: su ? su[1] : null
           });
         });
       });
@@ -9380,8 +9402,144 @@ async function loadAssemblyMinutes(force) {
 function openAssemblyMinute(idx) {
   var mt = _assemblyMinutesCache && _assemblyMinutesCache[idx];
   if (!mt) return;
-  // 보도자료 상세 모달 재사용 — doc_name 기반 '## YYMMDD 제목' 섹션 조회라 회의록 형식과 동일
-  openPressDetail(mt.title, mt.date, mt.doc_name);
+  openMinuteDetail(mt);
+}
+
+// 회의록 섹션 텍스트 → { summary, when, agendas[], overview[], rawQa } (2026-09-04 구조화 상세)
+// 형식: '요약:' 한 줄(없을 수 있음) / '- 일시: …' / '- 안건:' 뒤 두 칸 들여쓴 줄들 /
+//       '개요:' 뒤 빈 줄까지의 문단(구버전엔 없음) / '질의·응답:' 이후 발췌 원문
+function _parseMinuteSection(text) {
+  var lines = text.split('\n');
+  var out = { summary: '', when: '', agendas: [], overview: [], rawQa: '' };
+  var sm = text.match(/^요약:\s*(.+)$/m);
+  if (sm) out.summary = sm[1].replace(/^[#\s]*(요약\s*[:：]?\s*)+/, '').trim();
+  var wm = text.match(/^- 일시:\s*(.+)$/m);
+  if (wm) out.when = wm[1].trim();
+  var i;
+  for (i = 0; i < lines.length; i++) {
+    if (/^- 안건:\s*$/.test(lines[i])) {
+      for (var j = i + 1; j < lines.length && /^  \S/.test(lines[j]); j++) out.agendas.push(lines[j].trim());
+      break;
+    }
+  }
+  for (i = 0; i < lines.length; i++) {
+    if (/^개요:\s*$/.test(lines[i])) {
+      for (var k = i + 1; k < lines.length && lines[k].trim() !== ''; k++) out.overview.push(lines[k].trim());
+      break;
+    }
+  }
+  var qi = text.search(/^질의·응답:/m);
+  out.rawQa = qi >= 0 ? text.slice(qi) : text;
+  return out;
+}
+
+// 과방위 회의록 구조화 상세 — 보도자료 모달(#press-detail-modal) 재사용.
+// 헤더 → 한 줄 요약 → 회의 개요 → 주요 발언 요약(assembly_speeches, 주제별) → 국회 원문 링크 + 발췌 원문 토글
+async function openMinuteDetail(mt) {
+  var modal  = document.getElementById('press-detail-modal');
+  var titleEl = document.getElementById('press-detail-title');
+  var dateEl  = document.getElementById('press-detail-date');
+  var bodyEl  = document.getElementById('press-detail-body');
+  if (!modal || !mt) return;
+
+  titleEl.textContent = mt.title;
+  dateEl.textContent  = mt.date;
+  bodyEl.innerHTML = '<div style="text-align:center;padding:30px;color:#aaa">불러오는 중...</div>';
+  modal.style.display = 'flex';
+
+  try {
+    var sec = await fetchPressSection(mt.title, mt.date, mt.doc_name);
+    if (!sec || sec.text == null) {
+      bodyEl.innerHTML = '<div style="color:#f66;padding:20px">내용을 찾을 수 없습니다.</div>';
+      return;
+    }
+    var p = _parseMinuteSection(sec.text);
+    if (!p.summary && mt.summary) p.summary = mt.summary;
+
+    // 발언 요약 (source_url = '(원문: URL)' 꼬리). 회의당 60행 내외라 단일 조회.
+    var srcUrl = sec.srcUrl || mt.src_url || null;
+    var speeches = [];
+    if (srcUrl) {
+      var sr = await sb.from('assembly_speeches')
+        .select('speaker, position, topic, summary, chunk_seq, source_url')
+        .eq('source_url', srcUrl)
+        .order('chunk_seq');
+      if (!sr.error && sr.data) speeches = sr.data;
+    }
+
+    var SKT = 'SK텔레콤 언급';
+    var chip = '<span style="display:inline-block;font-size:10px;color:var(--accent-purple);background:rgba(139,92,246,.1);padding:0 6px;border-radius:3px;margin-left:6px;vertical-align:middle">' + SKT + '</span>';
+    var hStyle = 'font-size:13px;font-weight:700;color:var(--text-primary);margin:18px 0 8px;padding-bottom:4px;border-bottom:1px solid var(--border)';
+
+    var html = '';
+
+    // 메타: 일시 / 안건(앞 3건 + 외 N건, 전체는 title 툴팁)
+    var meta = [];
+    if (p.when) meta.push('<span><i class="ti ti-clock" style="margin-right:3px"></i>' + escHtml(p.when) + '</span>');
+    if (p.agendas.length) {
+      var shown = p.agendas.slice(0, 3).join(' · ');
+      var rest = p.agendas.length - 3;
+      meta.push('<span title="' + escHtml(p.agendas.join('\n')) + '"><i class="ti ti-list" style="margin-right:3px"></i>안건: ' + escHtml(shown) + (rest > 0 ? ' <span style="color:var(--text-muted)">외 ' + rest + '건</span>' : '') + '</span>');
+    }
+    if (meta.length) html += '<div style="display:flex;flex-wrap:wrap;gap:6px 16px;font-size:12px;color:var(--text-secondary);line-height:1.6;margin-bottom:10px">' + meta.join('') + '</div>';
+
+    // 한 줄 요약 (목록과 같은 보라 배지)
+    if (p.summary) {
+      html += '<div style="font-size:12px;color:var(--text-secondary);line-height:1.6;margin-bottom:6px">' +
+        '<span style="font-size:10px;font-weight:700;color:var(--accent-purple);background:rgba(139,92,246,.1);padding:0 5px;border-radius:3px;margin-right:6px">요약</span>' +
+        escHtml(p.summary) + '</div>';
+    }
+
+    // 회의 개요 — '[주제]' 접두는 굵게
+    if (p.overview.length) {
+      html += '<div style="' + hStyle + '">회의 개요</div>';
+      p.overview.forEach(function(line) {
+        var tm = line.match(/^\[([^\]]+)\]\s*(.*)$/);
+        html += '<p style="margin:0 0 8px;font-size:13px;line-height:1.7">' +
+          (tm ? '<b style="color:var(--text-primary)">[' + escHtml(tm[1]) + ']</b> ' + escHtml(tm[2]) : escHtml(line)) + '</p>';
+      });
+    }
+
+    // 주요 발언 — topic 첫 키워드(SK텔레콤 언급 제외)로 묶고 건수 내림차순
+    if (speeches.length) {
+      var groups = {};
+      var order = [];
+      speeches.forEach(function(r) {
+        var kws = String(r.topic || '').split(',').map(function(t) { return t.trim(); }).filter(function(t) { return t && t !== SKT; });
+        var g = kws[0] || '기타';
+        if (!groups[g]) { groups[g] = []; order.push(g); }
+        groups[g].push(r);
+      });
+      order.sort(function(a, b) { return groups[b].length - groups[a].length; });
+      html += '<div style="' + hStyle + '">주요 발언 ' + speeches.length + '건</div>';
+      order.forEach(function(g) {
+        html += '<div style="font-size:11px;font-weight:700;color:var(--accent-purple);margin:10px 0 4px">' + escHtml(g) + ' <span style="color:var(--text-muted);font-weight:400">' + groups[g].length + '</span></div>';
+        groups[g].forEach(function(r) {
+          var skt = String(r.topic || '').indexOf(SKT) !== -1;
+          html += '<div style="font-size:12px;line-height:1.6;margin:0 0 5px 8px">' +
+            '<b style="color:var(--text-primary)">' + escHtml(r.speaker) + '</b>' +
+            (r.position ? ' <span style="color:var(--text-muted);font-size:11px">' + escHtml(r.position) + '</span>' : '') +
+            (r.summary ? ': ' + escHtml(r.summary) : '') +
+            (skt ? chip : '') +
+          '</div>';
+        });
+      });
+    }
+
+    // 하단: 국회 원문 + 발췌 원문(질의·응답) — 발언 요약이 없으면 발췌 원문을 바로 펼친다
+    var rawHtml = pressTextToHtml(p.rawQa);
+    html += '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:18px;padding-top:12px;border-top:1px solid var(--border)">' +
+      (safeUrl(srcUrl) ? '<a href="' + safeUrl(srcUrl) + '" target="_blank" rel="noopener" class="btn" style="font-size:12px;text-decoration:none"><i class="ti ti-external-link"></i> 국회 원문 보기</a>' : '') +
+      (speeches.length
+        ? '<button type="button" class="btn" style="font-size:12px" onclick="var d=document.getElementById(\'minute-raw-qa\');var on=d.style.display===\'none\';d.style.display=on?\'\':\'none\';this.innerHTML=(on?\'<i class=&quot;ti ti-chevron-up&quot;></i> 발췌 원문 닫기\':\'<i class=&quot;ti ti-chevron-down&quot;></i> 발췌 원문 보기\')"><i class="ti ti-chevron-down"></i> 발췌 원문 보기</button>'
+        : '<span style="font-size:11px;color:var(--text-muted)">발언 요약이 아직 없어 발췌 원문을 표시합니다</span>') +
+    '</div>' +
+    '<div id="minute-raw-qa" style="' + (speeches.length ? 'display:none;' : '') + 'margin-top:10px">' + rawHtml + '</div>';
+
+    bodyEl.innerHTML = html;
+  } catch(e) {
+    bodyEl.innerHTML = '<div style="color:#f66;padding:20px">오류: ' + escHtml((e && e.message) || String(e)) + '</div>';
+  }
 }
 
 // ── 발언자별 보기 (assembly_speeches, 2026-08-03) ──────────────
