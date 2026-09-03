@@ -9390,7 +9390,8 @@ async function loadAssemblyMinutes(force) {
       (mt.summary
         ? '<div style="font-size:11px;color:var(--text-secondary);line-height:1.5;margin:4px 0 0 76px">' +
             '<span style="font-size:10px;font-weight:700;color:var(--accent-purple);background:rgba(139,92,246,.1);padding:0 5px;border-radius:3px;margin-right:6px">요약</span>' +
-            escHtml(mt.summary) +
+            // 자사 언급 접미는 목록에서도 눈에 띄게 굵게 (운영자 지시 2026-09-03)
+            escHtml(mt.summary).replace(/\(SK텔레콤 언급\)\s*$/, '<b style="color:var(--accent-purple);font-weight:800">(SK텔레콤 언급)</b>') +
           '</div>'
         : '') +
     '</div>';
