@@ -455,10 +455,39 @@ def pdf_fallback_blocks(pdf_url: str, pdf_text: str = None) -> list:
         if not part.startswith('◯'):
             continue
         label, _, rest = part[1:].partition('\n')
+        name, pos, lead = _split_pdf_label(label.strip())
+        rest = (lead + '\n' + rest) if lead else rest
         rest = re.sub(r'\n{2,}', '\n', rest).strip()
-        if label.strip() and rest:
-            blocks.append({'name': label.strip(), 'pos': '', 'text': rest})
+        if name and rest:
+            blocks.append({'name': name, 'pos': pos, 'text': rest})
     return blocks
+
+
+# PDF의 '◯' 줄은 "직위 이름 첫문장…" 또는 "이름 위원 첫문장…"이 한 줄에 붙어 온다(실측 2026-09-03:
+# "◯위원장 최민희 의석을 정돈하여 주시기 바랍니다.", "◯과학기술정보통신부장관 이종호 예, 그렇게 하겠…",
+# "◯문미옥 위원 저는 8페이지에…"). 줄 전체를 이름으로 저장하면 normalize_speaker 가 '미상'을 돌려주고
+# 첫 문장이 발언 본문에서 빠진다(뷰어 불일치 교정분 18회의에서 실측). 여기서 이름·직위·첫 문장을 가른다.
+_PDF_TITLE_END = ('소위원장', '부위원장', '위원장대리', '위원장', '간사', '진술인', '증인', '참고인', '공술인',
+                  '장관', '차관', '청장', '처장', '원장', '사장', '대표', '이사장', '본부장', '단장', '실장',
+                  '국장', '과장', '부단장', '부사장', '부원장', '부의장', '대변인', '직무대리', '권한대행',
+                  '부문장', '부장', '팀장', '정책관', '조정관', '기획관', '심의관', '담당관')
+_PDF_ROLE_AFTER = ('위원', '의원', '간사', '진술인', '증인', '참고인', '공술인')
+_PDF_NAME_RE = re.compile(r'[가-힣一-龥]{2,5}')
+
+
+def _split_pdf_label(label: str):
+    """'◯' 줄 → (이름, 직위, 첫 문장). 못 가르면 (줄 전체, '', '') — 종전 동작."""
+    toks = label.split()
+    if len(toks) >= 2:
+        t0, t1 = toks[0], toks[1]
+        lead2 = ' '.join(toks[2:]).strip()
+        if t0.endswith(_PDF_TITLE_END) and _PDF_NAME_RE.fullmatch(t1):
+            return t1, t0, lead2                       # "위원장 최민희 …", "과기정통부장관 이종호 …"
+        if _PDF_NAME_RE.fullmatch(t0) and t1 in _PDF_ROLE_AFTER:
+            return t0, t1, lead2                       # "문미옥 위원 …"
+        if _PDF_NAME_RE.fullmatch(t0):
+            return t0, '', ' '.join(toks[1:]).strip()  # "홍길동 …"
+    return label, '', ''
 
 
 # ── 뷰어 본문 교차 검증 (2026-09-03 실측: id → 본문 불일치) ──────────────
