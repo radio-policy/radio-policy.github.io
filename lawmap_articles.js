@@ -497,7 +497,48 @@ function lmaJoinChunks(acc, next) {
   for (var k = max; k >= 20; k--) { if (acc.slice(-k) === next.slice(0, k)) return acc + next.slice(k); }
   return acc + '\n' + next;
 }
-function lmaItemLabel(k, a) {   // '37조 무선통신시설의 공동이용' / '전문 (조문 체계 없음)'
+// ── 별표·별지 (2026-09-06, 배경역사 #127) — 근거 조문 본문(또는 주제 설명)이 인용하는 별표를 같은 상자 안에 네모로 올린다 ──
+//  전파사용료의 가입자 수 기준은 시행령 90조①이 아니라 별표 8에 있다 — 조문만 그리면 사슬이 90조에서 끊긴다(운영자 지적).
+var LMA_ANNEX_RE = /(별표|별지)\s*(?:제\s*)?(\d+(?:\s*의\s*\d+)?)\s*(?:호)?\s*(?:서식)?/g;
+function lmaAnnexKey(kind, num) { return kind + String(num).replace(/\s/g, ''); }          // '별표8' · '별표11의2' · '별지57'
+function lmaAnnexLabelOf(key) { var m = /^(별표|별지)(.+)$/.exec(String(key || '')); return m ? (m[1] === '별지' ? '별지 제' + m[2] + '호' : '별표 ' + m[2]) : String(key || ''); }
+function lmaAnyLabel(key) { if (key === '전문') return '전문'; if (/^(별표|별지)/.test(key)) return lmaAnnexLabelOf(key); return lmaKeyLabel(key); }
+function lmaExtractAnnexRefs(text) {   // → [{key, kind, num, fromPara, snippet}] (표제 자신은 제외, 같은 별표·항은 1회)
+  var out = [], seen = {}, m, t = String(text || ''), re = new RegExp(LMA_ANNEX_RE.source, 'g');
+  while ((m = re.exec(t)) !== null) {
+    if (m.index === 0) continue;
+    var key = lmaAnnexKey(m[1], m[2]), para = lmaLastPara(t.slice(0, m.index)), k = key + '|' + para;
+    if (seen[k]) continue; seen[k] = 1;
+    out.push({ key: key, kind: m[1], num: m[2].replace(/\s/g, ''), fromPara: para, snippet: lmaSentenceAround(t, m.index, m.index + m[0].length) });
+  }
+  return out;
+}
+async function lmaFetchAnnexes(docName, keys) {   // article_no: '별표 8(전파사용료 산정기준(제90조제1항 관련))' / '별지 제57호서식(…)'
+  var out = {};
+  if (!docName || !keys.length) return out;
+  var ors = [];
+  keys.forEach(function(k) {
+    var m = /^(별표|별지)(.+)$/.exec(k); if (!m) return;
+    var kind = m[1], n = m[2];
+    ors.push('article_no.ilike."' + kind + ' ' + n + '(%"', 'article_no.ilike."' + kind + n + '(%"', 'article_no.eq.' + kind + ' ' + n, 'article_no.eq.' + kind + n,
+             'article_no.ilike."' + kind + ' 제' + n + '호%"', 'article_no.ilike."' + kind + ' ' + n + '호%"');
+  });
+  var r = await sb.from('document_chunks').select('article_no,chunk_index,content').eq('doc_name', docName).or(ors.join(',')).order('chunk_index').limit(300);
+  if (r.error) throw new Error(r.error.message);
+  (r.data || []).forEach(function(c) {
+    var am = /^(별표|별지)\s*(?:제\s*)?(\d+(?:의\d+)?)/.exec(c.article_no || ''); if (!am) return;
+    var k = lmaAnnexKey(am[1], am[2]); if (keys.indexOf(k) < 0) return;
+    if (!out[k]) out[k] = { key: k, articleNo: c.article_no, title: lmaTitleOf(c.article_no), content: '', isAnnex: true };
+    out[k].content = lmaJoinChunks(out[k].content, c.content || '');
+  });
+  return out;
+}
+function lmaItemLabel(k, a) {   // '37조 무선통신시설의 공동이용' / '전문 (조문 체계 없음)' / '별표 8 전파사용료 산정기준'
+  if (/^(별표|별지)/.test(k)) {   // 별표 제목은 길다(별표 11: 40자) — 18자에서 잘라 상자를 어지럽히지 않게; 전체 제목은 카드에서
+    var t = a && a.title ? a.title.replace(/\s*\(제[^()]*관련\)\s*$/, '').replace(/\(제[^()]*관련\)/, '').trim() : '';
+    if (t.length > 18) t = t.slice(0, 17) + '…';
+    return lmaAnnexLabelOf(k) + (t ? ' ' + t : '');
+  }
   if (k === '전문') return '전문 (조문 체계 없음)';
   return lmaKeyLabel(k).replace(/^제/, '') + (a && a.title ? ' ' + a.title : '');
 }
@@ -671,10 +712,45 @@ async function lmaBuildModel(topicId) {
     });
   });
 
+  // 별표·별지 (#127): 근거 조문 본문·주제 설명이 인용하는 별표를 같은 상자에. 설명에 적힌 것과 ①항(원칙)에서 지정한 것은 진하게, 그 외 항은 연하게
+  var LMA_MAX_ANNEX_PER_BOX = 6;
+  for (var ai = 0; ai < laws.length; ai += 4) {
+    await Promise.all(laws.slice(ai, ai + 4).map(async function(L) {
+      L.annexes = []; L.annexMissing = [];
+      if (!L.docName || L.noScheme || !L.primaries.length) return;
+      var refs = [], seenK = {}, keys = [];
+      lmaExtractAnnexRefs(L.edge.description || '').forEach(function(r) { r.fromKey = L.primaries[0]; r.dark = true; r.fromDesc = true; refs.push(r); });
+      L.primaries.forEach(function(k) {
+        var a = L.articles[k]; if (!a) return;
+        lmaExtractAnnexRefs(a.content).forEach(function(r) { r.fromKey = k; r.dark = (r.fromPara === '' || r.fromPara === '①'); refs.push(r); });
+      });
+      refs.forEach(function(r) { if (!seenK[r.key]) { seenK[r.key] = 1; keys.push(r.key); } });
+      if (!keys.length) return;
+      var got = await lmaFetchAnnexes(L.docName, keys);
+      for (var vi = 1; vi < (L.versions || []).length; vi++) {   // 노드가 가리키는 판에 없으면 다른 판에서
+        var miss = keys.filter(function(k) { return !got[k]; }); if (!miss.length) break;
+        var g2 = await lmaFetchAnnexes(L.versions[vi], miss); Object.keys(g2).forEach(function(k) { got[k] = g2[k]; });
+      }
+      keys.forEach(function(k) {
+        if (!got[k]) { L.annexMissing.push(k); return; }
+        if (L.annexes.length >= LMA_MAX_ANNEX_PER_BOX) return;
+        got[k].dark = refs.some(function(r) { return r.key === k && r.dark; });
+        L.articles[k] = got[k]; L.annexes.push(k);
+      });
+      refs.forEach(function(r) {
+        if (!L.articles[r.key] || !L.articles[r.fromKey]) return;
+        var id = L.node.id + '#' + r.fromKey + '>' + L.node.id + '#' + r.key;
+        if (edges.some(function(e) { return e.id === id; })) return;
+        edges.push({ id: id, from: { L: L, key: r.fromKey, para: r.fromPara || '' }, to: { L: L, key: r.key }, para: r.fromPara || '', kind: 'annex', snippet: r.snippet, count: 1, viaDesc: !!r.fromDesc });
+      });
+    }));
+  }
+
   // 상자·조문 항목
   var boxes = laws.map(function(L) {
     var items = L.primaries.map(function(k) { return { id: L.node.id + '#' + k, key: k, label: lmaWrapLabel(lmaItemLabel(k, L.articles[k]), 11), primary: true }; })
-      .concat(L.followers.map(function(k) { return { id: L.node.id + '#' + k, key: k, label: lmaWrapLabel(lmaItemLabel(k, L.articles[k]), 11), primary: false }; }));
+      .concat(L.followers.map(function(k) { return { id: L.node.id + '#' + k, key: k, label: lmaWrapLabel(lmaItemLabel(k, L.articles[k]), 11), primary: false }; }))
+      .concat((L.annexes || []).map(function(k) { return { id: L.node.id + '#' + k, key: k, label: lmaWrapLabel(lmaItemLabel(k, L.articles[k]), 11), primary: !!L.articles[k].dark, annex: true }; }));
     if (!items.length) {
       items.push({ id: L.node.id + '#none', key: null, primary: true,
         label: !L.docName ? '원문 KB 미보유' : (L.missing && L.missing.length ? lmaKeyLabel(L.missing[0]) + ' 원문에 없음' : '조문 체계 없음') });
@@ -726,12 +802,15 @@ async function lmaRenderTopic(topicId) {
     var col = LAWMAP_COLORS[b.type] || '#999';
     b.items.forEach(function(it) {
       var p = pos[it.id] || { x: 0, y: 0 };
-      visNodes.push({
-        id: it.id, label: it.label, shape: 'dot', size: it.primary ? 12 : 9, x: p.x, y: p.y, fixed: true,
+      var nd = {
+        id: it.id, label: it.label, shape: it.annex ? 'square' : 'dot', size: it.annex ? (it.primary ? 10 : 8) : (it.primary ? 12 : 9), x: p.x, y: p.y, fixed: true,
+        borderWidth: it.annex ? 1.5 : 1,
         color: { background: it.primary ? col : lmaHexToRgba(col, 0.45), border: it.primary ? 'rgba(0,0,0,0.22)' : lmaHexToRgba(col, 0.8),
                  highlight: { background: col, border: textColor } },
         font: { color: it.primary ? textColor : subColor, size: 11, strokeWidth: 4, strokeColor: bgColor }
-      });
+      };
+      // 점선 테두리(shapeProperties.borderDashes)는 vis 9.1.9의 square 그리기에서 'borderDashes' 읽기 오류를 내서 쓰지 않는다 — 네모 모양만으로 구분
+      visNodes.push(nd);
     });
   });
   var visEdges = [];
@@ -748,14 +827,16 @@ async function lmaRenderTopic(topicId) {
   model.edges.forEach(function(e) {
     var fromId = e.from.L.node.id + '#' + e.from.key, toId = e.to.L.node.id + '#' + e.to.key;
     var sameLaw = e.from.L === e.to.L;
-    var label = e.kind === 'deleg' ? '위임' : lmaEdgeLabel(e.from.key, e.para, sameLaw ? null : lmaShortLawName(e.to.L.node.name), e.to.key);
+    var label = e.kind === 'deleg' ? '위임'
+      : (e.kind === 'annex' ? (e.from.key.replace(/^제/, '') + (e.para || '') + ' → ' + lmaAnnexLabelOf(e.to.key))
+      : lmaEdgeLabel(e.from.key, e.para, sameLaw ? null : lmaShortLawName(e.to.L.node.name), e.to.key));
     visEdges.push({
       id: e.id, from: fromId, to: toId, label: label, arrows: { to: { enabled: true, scaleFactor: 0.6 } },
       width: e.kind === 'deleg' ? 1 : Math.min(1.2 + (e.count - 1) * 0.6, 3), dashes: e.kind === 'deleg' ? [6, 4] : false,
       color: { color: '#8a8f98', opacity: 0.75, highlight: '#5b7ff5' },
       font: { size: 10, color: subColor, strokeWidth: 3, strokeColor: bgColor, align: 'middle' },
       smooth: { type: 'curvedCW', roundness: 0.12 },
-      title: '[' + lmaShortLawName(e.from.L.node.name) + ' ' + lmaKeyLabel(e.from.key).replace(/^제전문$/, '전문') + (e.para || '') + ' → ' + lmaShortLawName(e.to.L.node.name) + ' ' + lmaKeyLabel(e.to.key) + ']\n' +
+      title: '[' + lmaShortLawName(e.from.L.node.name) + ' ' + lmaAnyLabel(e.from.key) + (e.para || '') + ' → ' + lmaShortLawName(e.to.L.node.name) + ' ' + lmaAnyLabel(e.to.key) + ']\n' +
         (e.snippet ? ('“' + e.snippet + '”') : (e.kind === 'deleg' ? (e.viaDesc ? '위임 관계 — 주제 엣지 설명에 적힌 위임 근거(본문에는 조문 인용 없음)' : '위임 관계(본문 인용 없음)') : ''))
     });
   });
@@ -788,14 +869,15 @@ async function lmaRenderTopic(topicId) {
   });
   try { _lawMapNet.fit({ animation: false }); } catch(e) {}
   var citeCount = model.edges.filter(function(e) { return e.kind === 'cite'; }).length;
-  var delegCount = model.edges.length - citeCount;
+  var annexCount = model.laws.reduce(function(s, L) { return s + ((L.annexes || []).length); }, 0);
+  var delegCount = model.edges.filter(function(e) { return e.kind === 'deleg'; }).length;
   // lawMapSelectTopic이 renderLawMapGraph 직후 자기 상태줄을 쓰므로(캐시 경로는 동기 실행) 한 틱 늦게 덮어쓴다
   setTimeout(function() {
     if (_lawMapFocusId !== topicId) return;
     setLawMapStatus('주제 <b>' + lmEsc(model.topic.name) + '</b> — 조문 단위 보기: 근거 조문 ' + model.primaryCount + '개 · 조문 인용 ' + citeCount + '건' +
-      (delegCount ? ' · 위임 ' + delegCount + '건' : '') + (model.outsideCount ? ' · 주제 밖 법령 인용 ' + model.outsideCount + '건(카드에서 확인)' : '') +
+      (annexCount ? ' · 별표 ' + annexCount + '개' : '') + (delegCount ? ' · 위임 ' + delegCount + '건' : '') + (model.outsideCount ? ' · 주제 밖 법령 인용 ' + model.outsideCount + '건(카드에서 확인)' : '') +
       (citeCount === 0 ? ' · <span style="color:var(--text-tertiary)">근거 조문 사이 직접 인용 없음 — 각 법령이 독립적으로 규정</span>' : '') +
-      ' · <span style="color:var(--text-tertiary)">동그라미=조문, 상자=법령, 진한 동그라미=근거 조문</span>');
+      ' · <span style="color:var(--text-tertiary)">동그라미=조문, 네모=별표, 상자=법령, 진한 것=근거</span>');
   }, 0);
 }
 
@@ -810,7 +892,7 @@ function lmaShowArticleCard(L, key, model) {
   var ins = model.edges.filter(function(e) { return e.to.L === L && e.to.key === key; });
   function edgeLine(e, dir) {
     var other = dir === 'out' ? e.to : e.from;
-    var lab = lmaShortLawName(other.L.node.name) + ' ' + lmaKeyLabel(other.key);
+    var lab = lmaShortLawName(other.L.node.name) + ' ' + lmaAnyLabel(other.key);
     return '<li>' + (dir === 'out' ? '→ ' : '← ') + '<b>' + lmEsc(lab) + '</b>' + (e.kind === 'deleg' ? ' (위임)' : (e.para ? ' <span style="color:var(--text-tertiary)">' + lmEsc(e.para) + '에서 인용</span>' : '')) +
       (e.snippet ? '<div style="font-size:11px;color:var(--text-tertiary);margin-left:14px">“' + lmEsc(e.snippet) + '”</div>' : '') + '</li>';
   }
@@ -827,11 +909,14 @@ function lmaShowArticleCard(L, key, model) {
   var html =
     '<div style="font-weight:700;color:var(--text-primary)">' + lmEsc(L.node.name) +
       ' <span style="font-size:10px;padding:1px 7px;border-radius:999px;background:' + color + '22;border:1px solid ' + color + '66;color:var(--text-secondary)">' + (LAWMAP_TYPE_LABEL[L.node.node_type] || '') + '</span>' +
-      ' <span style="font-size:11px;color:var(--text-tertiary)">' + (isPrimary ? '근거 조문' : '근거 조문이 인용한 조문') + '</span></div>' +
+      ' <span style="font-size:11px;color:var(--text-tertiary)">' + (a.isAnnex ? (a.dark ? '근거 조문이 지정한 별표' : '근거 조문이 인용한 별표') : (isPrimary ? '근거 조문' : '근거 조문이 인용한 조문')) + '</span></div>' +
     '<div style="margin:5px 0;padding:6px 10px;border-left:3px solid ' + color + ';background:var(--bg-secondary);border-radius:0 6px 6px 0;font-size:12.5px;color:var(--text-primary)"><b>' +
-      lmEsc(key === '전문' ? '전문(조문 체계 없는 문서 — 앞부분)' : lmaKeyLabel(key)) + (a.title ? '(' + lmEsc(a.title) + ')' : '') + '</b>' +
+      lmEsc(key === '전문' ? '전문(조문 체계 없는 문서 — 앞부분)' : lmaAnyLabel(key)) + (a.title ? '(' + lmEsc(a.title) + ')' : '') + '</b>' +
       (isPrimary && L.edge.description ? '<div style="font-size:11.5px;color:var(--text-secondary);margin-top:2px">🎯 ' + lmEsc(model.topic.name) + '에서의 역할: ' + lmEsc(L.edge.description) + '</div>' : '') + '</div>' +
-    '<pre style="white-space:pre-wrap;font-family:inherit;font-size:12px;line-height:1.55;color:var(--text-primary);background:var(--bg-secondary);padding:8px 10px;border-radius:6px;max-height:260px;overflow:auto;margin:6px 0">' + lmEsc(body.slice(0, 2400)) + (body.length > 2400 ? '\n…' : '') + '</pre>' +
+    (a.isAnnex
+      // 별표는 문자로 그린 표라 고정폭·줄바꿈 없음으로 보여야 줄이 맞는다
+      ? '<pre style="white-space:pre;font-family:ui-monospace,Consolas,\'D2Coding\',monospace;font-size:11px;line-height:1.35;color:var(--text-primary);background:var(--bg-secondary);padding:8px 10px;border-radius:6px;max-height:320px;overflow:auto;margin:6px 0">' + lmEsc(body.slice(0, 6000)) + (body.length > 6000 ? '\n…' : '') + '</pre>'
+      : '<pre style="white-space:pre-wrap;font-family:inherit;font-size:12px;line-height:1.55;color:var(--text-primary);background:var(--bg-secondary);padding:8px 10px;border-radius:6px;max-height:260px;overflow:auto;margin:6px 0">' + lmEsc(body.slice(0, 2400)) + (body.length > 2400 ? '\n…' : '') + '</pre>') +
     ((outs.length || ins.length) ? '<div style="font-size:11px;color:var(--text-tertiary);margin-top:4px">이 조문의 인용 관계 (화면 안)</div><ul style="margin:2px 0 0 18px;padding:0;font-size:12px;color:var(--text-secondary)">' +
       outs.map(function(e) { return edgeLine(e, 'out'); }).join('') + ins.map(function(e) { return edgeLine(e, 'in'); }).join('') + '</ul>' : '') +
     (moreHtml ? '<div style="font-size:11px;color:var(--text-tertiary);margin-top:6px">이 조문이 인용하는 다른 조문 (위임 근거 나열 — 화면에 그리지 않음)</div><ul style="margin:2px 0 0 18px;padding:0;font-size:12px;color:var(--text-secondary)">' + moreHtml + '</ul>' : '') +

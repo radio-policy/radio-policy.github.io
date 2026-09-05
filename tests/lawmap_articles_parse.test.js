@@ -118,5 +118,22 @@ eq('artno null', lmaArtNoMatches(null, '19조'), false);
   console.log((ok2 ? 'ok  ' : 'FAIL') + ' no inheritance across sentence (self 제6조 stays self)', ok2 ? '' : JSON.stringify(t2));
   total++; if (!ok2) fails++;
 })();
+
+// ── 별표·별지 인용 (#127) ──
+(function() {
+  var t = lmaExtractAnnexRefs('제90조(전파사용료의 산정기준 등)\n① 법 제68조제1항 단서에 따라 … 전파사용료는 별표 8에 따라 산정한다.\n② … 산정기준은 별표 9와 같다. 2. … 별표 10과 같다. 3. … 산정은 별표 11과 같다.');
+  var keys = t.map(function(r) { return r.key + r.fromPara; }).join(',');
+  var ok1 = keys === '별표8①,별표9②,별표10②,별표11②';
+  total++; if (!ok1) fails++; console.log((ok1 ? 'ok  ' : 'FAIL') + ' annex refs from 90조', ok1 ? '' : keys);
+  var t2 = lmaExtractAnnexRefs('제26조(전파사용료 일시납부신청서) 영 제91조제3항에 따른 전파사용료 일시납부신청서는 별지 제57호서식과 같다.');
+  var ok2 = t2.length === 1 && t2[0].key === '별지57';
+  total++; if (!ok2) fails++; console.log((ok2 ? 'ok  ' : 'FAIL') + ' 별지 제57호서식 → 별지57', ok2 ? '' : JSON.stringify(t2));
+  var t3 = lmaExtractAnnexRefs('제91조(전파사용료의 징수기간 등)\n① 전파사용료는 분기별로 부과ㆍ징수하며, 분기별 징수기간은 별표 11의2와 같다.');
+  var ok3 = t3.length === 1 && t3[0].key === '별표11의2' && lmaAnnexLabelOf('별표11의2') === '별표 11의2' && lmaAnnexLabelOf('별지57') === '별지 제57호';
+  total++; if (!ok3) fails++; console.log((ok3 ? 'ok  ' : 'FAIL') + ' 별표 11의2 · 라벨', ok3 ? '' : JSON.stringify(t3));
+  var ok4 = lmaExtractAnnexRefs('별표 8(전파사용료 산정기준(제90조제1항 관련)) 무선데이터통신 가입자당').length === 0;
+  total++; if (!ok4) fails++; console.log((ok4 ? 'ok  ' : 'FAIL') + ' 별표 표제 자신은 제외');
+})();
+
 console.log('\n' + (total - fails) + '/' + total + ' passed' + (fails ? ', ' + fails + ' FAILED' : ''));
 process.exit(fails ? 1 : 0);
