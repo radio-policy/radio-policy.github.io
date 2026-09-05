@@ -313,6 +313,8 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 
 ## 대시보드 (GitHub Pages)
 
+- **넓게 보기·전체화면 (2026-09-06, 배경역사 #126)**: 대시보드 프레임은 `.app` 1100×680 카드라 프로젝터에서 작다. 상단바 "넓게 보기"(`toggleWide`, `body.ui-wide`, localStorage `ui_wide`) = 사이드바 접고 프레임을 화면 크기로(관계도 그래프·자문 영역 높이도 늘어남). 관계도 그래프(`#lawmap-graph`)·자문 영역(`#chat-wrap`)에는 "전체화면" 버튼(`toggleFullscreen`, Fullscreen API, Esc 종료; 그래프는 `fullscreenchange`에서 `setSize·fit` 재실행). 둘 다 기본 꺼짐. **전체화면은 사람의 실제 클릭에서만 열린다** — 자동화 클릭(내장 미리보기·크롬 확장)은 user activation이 없어 `TypeError: not granted`로 거부되므로 검증은 사람이 한 번 눌러야 한다. 카드는 전체화면에 포함하지 않는다(운영자 결정: 카드 안 보여도 됨).
+
 - URL: https://radio-policy.gitlab.io/
 - **수정 배포 시 index.html 캐시 버스터 `app.js?v=`·`styles.css?v=` 갱신 필수 (현재 `app.js?v=20260729a` / `styles.css?v=20260723b`)** — CSS 고칠 때 styles.css 버스터도 갱신해야 사용자 브라우저가 새로 받음
 - 아이콘은 Tabler Icons webfont(ti ti-*) — 존재하는 이름만(없으면 빈칸 렌더).
