@@ -17,4 +17,8 @@ echo [%date% %time%] notice_delegations exit=%ERRORLEVEL% >> gov_crawler_log.txt
 echo [%date% %time%] === citation_graph start === >> gov_crawler_log.txt
 "C:\Users\SKTelecom\AppData\Local\Programs\Python\Python312\python.exe" build_law_citation_graph.py >> build_law_citation_graph_sched.log 2>&1
 echo [%date% %time%] citation_graph exit=%ERRORLEVEL% >> gov_crawler_log.txt
+rem lawmap topic-edge check (read-only; reports edges whose cited article is missing from the KB text, #123)
+echo [%date% %time%] === lawmap_edge_check start === >> gov_crawler_log.txt
+"C:\Users\SKTelecom\AppData\Local\Programs\Python\Python312\python.exe" lawmap_edge_check.py >> lawmap_edge_check_sched.log 2>&1
+echo [%date% %time%] lawmap_edge_check exit=%ERRORLEVEL% >> gov_crawler_log.txt
 echo [%date% %time%] === done === >> gov_crawler_log.txt

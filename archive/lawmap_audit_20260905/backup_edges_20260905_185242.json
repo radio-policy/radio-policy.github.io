@@ -1,0 +1,2142 @@
+[
+ {
+  "id": "795e873e-efa7-402b-ad06-85c5c5de9618",
+  "source_id": "c36968ca-3d6f-48d8-9e88-0f1d23405ca2",
+  "target_id": "bb1f71e8-9c5f-4832-af90-8a927b713242",
+  "relation_type": "근거",
+  "description": "중요통신시설 예비전원 용량(3시간)·이원화 세부기준 (제8조)",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-08-20T10:53:34.892199+00:00"
+ },
+ {
+  "id": "e7514e39-ce7b-4708-b89b-7ad70870adaf",
+  "source_id": "0d4c8b41-991d-48fa-9796-1f2356a35135",
+  "target_id": "e551ff1d-404a-47c0-bbaf-cf27c85dfee0",
+  "relation_type": "근거",
+  "description": "약관 신고·인가, 요금한도 고지 (제28조·제32조의2)",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-30T08:33:10.285853+00:00"
+ },
+ {
+  "id": "bbf571d5-25e0-4b7b-ac57-93edf961edc0",
+  "source_id": "0d4c8b41-991d-48fa-9796-1f2356a35135",
+  "target_id": "36be4127-5ca9-4d47-a7cc-9e5d9af1bbb9",
+  "relation_type": "근거",
+  "description": "SKT 이동통신 요금 인가대상 지정 (사업법 제28조)",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-30T08:33:10.285853+00:00"
+ },
+ {
+  "id": "932bfe7a-7328-4c24-9ede-d5a9086751ea",
+  "source_id": "d4cdd2ac-8aee-42af-b77e-8c8252cda381",
+  "target_id": "dc0c7984-bd49-4812-a883-c0e5f653bd04",
+  "relation_type": "근거",
+  "description": "지원금 관련 자료제출 서식·방법 (제1조)",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-30T08:33:10.285853+00:00"
+ },
+ {
+  "id": "c765d6e4-e9f3-417e-b0a3-ee91c5ba96c9",
+  "source_id": "b1fcbd2b-c173-4b97-8735-7b801efb610b",
+  "target_id": "bb1f71e8-9c5f-4832-af90-8a927b713242",
+  "relation_type": "근거",
+  "description": "등급 지정기준·중요통신시설 재난관리 (제1조·제11조)",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-30T08:33:10.285853+00:00"
+ },
+ {
+  "id": "8d413db0-276f-48c5-849f-2e2c0246c65b",
+  "source_id": "b1fcbd2b-c173-4b97-8735-7b801efb610b",
+  "target_id": "7870d09e-82a5-4983-8b78-1e558962b0bc",
+  "relation_type": "근거",
+  "description": "신고대상 중요 전기통신설비 지정 (전기통신사업법 제62조 관련)",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-30T08:33:10.285853+00:00"
+ },
+ {
+  "id": "4b529bdf-dc12-4922-93d4-b27530b4ae7f",
+  "source_id": "c36968ca-3d6f-48d8-9e88-0f1d23405ca2",
+  "target_id": "8c4e51e9-53bd-4639-8c1a-09dd6ef7dcfe",
+  "relation_type": "근거",
+  "description": "의무선박국·의무항공기국 전용 예비전원 규정(기지국 미적용) (제16조)",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-08-20T10:53:36.814974+00:00"
+ },
+ {
+  "id": "2f975d3a-8def-4256-bc1f-a7981e0fe22d",
+  "source_id": "5f0b2fc0-70c7-4a6c-9700-9dc0beaece6f",
+  "target_id": "70cf79b3-af3e-4f5a-bf3f-62fa676aecc1",
+  "relation_type": "근거",
+  "description": "전기통신 기본개념·정의와 기본계획(대부분 조문은 사업법으로 이관)",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T14:36:55.335254+00:00"
+ },
+ {
+  "id": "3e613ba7-ba58-49eb-b943-5ee80e112304",
+  "source_id": "5c32173f-a9ed-4398-aa49-f544c3766dc3",
+  "target_id": "b0e9793e-20c9-47ff-b5e7-3081a10e4b5a",
+  "relation_type": "근거",
+  "description": "SW사업 공정계약·불이익행위 금지",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T14:36:56.116558+00:00"
+ },
+ {
+  "id": "49de2a48-2d6e-4dfb-829d-799f4ac8969b",
+  "source_id": "d4cdd2ac-8aee-42af-b77e-8c8252cda381",
+  "target_id": "7bb92e89-589a-4026-8d4f-3f0b3c0a8d27",
+  "relation_type": "근거",
+  "description": "IMEI 공유 전문기관 지정",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T14:37:23.317673+00:00"
+ },
+ {
+  "id": "75895586-0631-4fd3-ad9d-6128b2b3cc7d",
+  "source_id": "c36968ca-3d6f-48d8-9e88-0f1d23405ca2",
+  "target_id": "685d4c87-30ff-454f-bc29-242b66203b78",
+  "relation_type": "근거",
+  "description": "통신구 최소유지관리 기준",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T14:37:23.786107+00:00"
+ },
+ {
+  "id": "d1651103-1473-4c70-885d-a4e636bdda3a",
+  "source_id": "4053255e-1689-40d2-9465-3c452d34f0d1",
+  "target_id": "72ffaf98-5fa2-461d-9b14-97ee5b8cd45b",
+  "relation_type": "근거",
+  "description": "손말이음 중계서비스 제공·의무사업자 분담",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T14:37:24.252145+00:00"
+ },
+ {
+  "id": "0efb0caa-92a6-4f11-9017-5a2959767692",
+  "source_id": "096a7d42-3ada-4495-b326-d60ebbbe84fa",
+  "target_id": "6564d0f2-4f93-4878-856d-32296a85c0a0",
+  "relation_type": "근거",
+  "description": "정보보호제품 성능평가",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T14:37:24.721222+00:00"
+ },
+ {
+  "id": "d4a876b7-d146-4612-a955-3d8ea4aafd6c",
+  "source_id": "00392b6c-563c-45c8-ac28-408c5bf50e2e",
+  "target_id": "aab6fa59-1622-4437-9958-5013905f872b",
+  "relation_type": "근거",
+  "description": "평가항목·서식",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T14:37:25.634945+00:00"
+ },
+ {
+  "id": "3b8caba8-0dd6-44e7-a889-397b04b14fbe",
+  "source_id": "3cff9a3a-33bc-4e55-88f7-c2a426b2b87f",
+  "target_id": "3352ede3-07b6-4f01-9548-e6a8c55f0f8b",
+  "relation_type": "근거",
+  "description": "3.5㎓ 이동통신용·비면허 대역 용도 확인 (고시 제2024-44호)",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-07-30T14:46:52.408359+00:00"
+ },
+ {
+  "id": "393a15fc-38e4-45ae-afa4-9b55432d9503",
+  "source_id": "23f4c9e6-b9f0-4d10-9ed5-9559df611477",
+  "target_id": "1a96c9aa-61bd-4a49-af46-9bcaec2ea888",
+  "relation_type": "근거",
+  "description": "무선국 검사 시 예비전원설비 설치 확인 (제24조)",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-08-20T16:59:47.159647+00:00"
+ },
+ {
+  "id": "83e26a7a-2502-41de-b2f9-951fd23fa9e4",
+  "source_id": "c36968ca-3d6f-48d8-9e88-0f1d23405ca2",
+  "target_id": "e39a3886-75bf-4a3d-bcba-0beb61d2b362",
+  "relation_type": "근거",
+  "description": "접지·구내통신·선로·통신공동구 기술기준",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T14:36:55.475662+00:00"
+ },
+ {
+  "id": "b9743c2e-b651-43d5-a270-fd603d3f4a70",
+  "source_id": "5c32173f-a9ed-4398-aa49-f544c3766dc3",
+  "target_id": "1123a2f1-a2ca-48b9-9a16-911e2e7908ae",
+  "relation_type": "근거",
+  "description": "하도급 제한·영향평가",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T14:36:56.17544+00:00"
+ },
+ {
+  "id": "a7937d1d-1c9b-4ff0-9e92-285cf84df4bf",
+  "source_id": "f2eef2bf-0bf8-40c4-a67e-568331317230",
+  "target_id": "9c5a88cb-987a-4885-8b86-5e222691b0dd",
+  "relation_type": "근거",
+  "description": "한·칠레 MRA",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T14:37:23.376167+00:00"
+ },
+ {
+  "id": "d5671038-4ddc-4403-96a1-70e443df5168",
+  "source_id": "096a7d42-3ada-4495-b326-d60ebbbe84fa",
+  "target_id": "3e7850fe-4dbc-4a62-80fa-77074fc07ded",
+  "relation_type": "근거",
+  "description": "정보보호 공시·정보보호산업 진흥",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T14:37:24.30912+00:00"
+ },
+ {
+  "id": "fd4573e0-0297-4e66-8f15-7309f1b472c1",
+  "source_id": "d4cdd2ac-8aee-42af-b77e-8c8252cda381",
+  "target_id": "e551ff1d-404a-47c0-bbaf-cf27c85dfee0",
+  "relation_type": "근거",
+  "description": "단말기 유통 관련 금지행위",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "160dee9f-a5ea-4802-b32e-09037df5044d",
+  "source_id": "5f0b2fc0-70c7-4a6c-9700-9dc0beaece6f",
+  "target_id": "a930e634-d85d-40c7-b5c3-189eb945f4e3",
+  "relation_type": "근거",
+  "description": "등록·인가 절차",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "cbf7e411-6c85-46b2-a944-70d69e9851ea",
+  "source_id": "b1e303f5-f994-4095-bb51-3182b8796442",
+  "target_id": "1a96c9aa-61bd-4a49-af46-9bcaec2ea888",
+  "relation_type": "근거",
+  "description": "전자파 등급표시 근거",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "c61dc82a-36b6-4278-a89b-e1e35ef9ffde",
+  "source_id": "2aad9b35-a241-4824-8066-9b93bf29388a",
+  "target_id": "1a96c9aa-61bd-4a49-af46-9bcaec2ea888",
+  "relation_type": "근거",
+  "description": "무선설비 공동사용 근거",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "98b748e6-b94d-45b6-b3b2-2e30c0a0621c",
+  "source_id": "e1126cb9-290a-4f5a-af36-3cdbe59308fd",
+  "target_id": "1a96c9aa-61bd-4a49-af46-9bcaec2ea888",
+  "relation_type": "근거",
+  "description": "공공용 주파수 수급계획",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "a1fa1f17-54b6-461b-909a-bcab13bd4a12",
+  "source_id": "3cff9a3a-33bc-4e55-88f7-c2a426b2b87f",
+  "target_id": "1a96c9aa-61bd-4a49-af46-9bcaec2ea888",
+  "relation_type": "근거",
+  "description": "무선국 개설 신고 면제",
+  "source": "seed",
+  "weight": 4,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "55a7c31e-2938-4037-8895-d01716928b91",
+  "source_id": "aba9be2e-6c3a-4b0a-892f-1b97ac3103bb",
+  "target_id": "6d1b92a8-dd22-484b-a9bf-a5bde74ef0c5",
+  "relation_type": "근거",
+  "description": "설비 기술기준",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "d1184f08-cd8e-4352-9c37-0546ffd2d4fe",
+  "source_id": "c36968ca-3d6f-48d8-9e88-0f1d23405ca2",
+  "target_id": "6d1b92a8-dd22-484b-a9bf-a5bde74ef0c5",
+  "relation_type": "근거",
+  "description": "설비 기술기준 (대통령령)",
+  "source": "seed",
+  "weight": 3,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "f44c687d-1940-4af1-84f0-9a5a8dd4f7f3",
+  "source_id": "d4cdd2ac-8aee-42af-b77e-8c8252cda381",
+  "target_id": "2c35f082-a8b8-425b-943a-c76181192c10",
+  "relation_type": "근거",
+  "description": "과징금 부과 기준",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "41be6af8-731f-44f1-9e8b-c2bec717ae82",
+  "source_id": "e1126cb9-290a-4f5a-af36-3cdbe59308fd",
+  "target_id": "f37f1f26-332a-44f1-8dfc-10388988534e",
+  "relation_type": "근거",
+  "description": "이용계획서 작성 기준",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "dafb98e4-d0dd-49f8-852e-b754e0ed6c7a",
+  "source_id": "d798e32c-fc28-42b6-9fb2-17b1d7a7c02e",
+  "target_id": "140b7dd0-b617-46ae-8ddc-fa66822bf930",
+  "relation_type": "근거",
+  "description": "USB-C 충전 기술기준",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "72be4918-db16-4de7-84f9-11d7f0800ca0",
+  "source_id": "aba9be2e-6c3a-4b0a-892f-1b97ac3103bb",
+  "target_id": "30bd7d7b-f8c9-45eb-aa16-a2b5a6025a8d",
+  "relation_type": "근거",
+  "description": "화재안전 성능기준",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "aa39731f-f8a5-4866-b6e0-25574ee238ea",
+  "source_id": "3cff9a3a-33bc-4e55-88f7-c2a426b2b87f",
+  "target_id": "86aaf56f-2f0d-4a08-9d3d-bc56462c973a",
+  "relation_type": "근거",
+  "description": "면제 무선설비 기술기준",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "4a6842f9-9670-47d5-986f-e6b5b99ba352",
+  "source_id": "c36968ca-3d6f-48d8-9e88-0f1d23405ca2",
+  "target_id": "5f1c44a9-14e4-44e0-817f-f952d86975d9",
+  "relation_type": "근거",
+  "description": "안전성·신뢰성 기준",
+  "source": "seed",
+  "weight": 3,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "5fd6ed33-1d8e-4771-8135-9c3b12aa1356",
+  "source_id": "3cff9a3a-33bc-4e55-88f7-c2a426b2b87f",
+  "target_id": "b80a09b7-d94c-4359-a598-803b5cbac0d7",
+  "relation_type": "근거",
+  "description": "면제 무선기기 범위",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "ff44a3d1-b6a2-44a4-a6a1-f57f10f4fa6a",
+  "source_id": "b1e303f5-f994-4095-bb51-3182b8796442",
+  "target_id": "6f688157-c292-4096-ae2a-91c476d63632",
+  "relation_type": "근거",
+  "description": "등급·표시 기준",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "dacba9b3-de65-4dc2-94bb-a4f8e65a05b2",
+  "source_id": "d4cdd2ac-8aee-42af-b77e-8c8252cda381",
+  "target_id": "872ece1b-9091-448c-8d02-190c2cb628cf",
+  "relation_type": "근거",
+  "description": "단말 기술기준",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "d7e19db3-b0ec-4dd1-9ab9-0442da5bff1b",
+  "source_id": "3cff9a3a-33bc-4e55-88f7-c2a426b2b87f",
+  "target_id": "4bb717d8-457d-4e75-98b3-40086c07a813",
+  "relation_type": "근거",
+  "description": "커버리지 정보 제공 의무, 와이파이는 지점정보 대체 가능 (제3조 등)",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-07-30T14:46:52.617131+00:00"
+ },
+ {
+  "id": "e851c825-723d-4c21-bb6a-f8253ac62ce2",
+  "source_id": "e1126cb9-290a-4f5a-af36-3cdbe59308fd",
+  "target_id": "e6cbd848-d239-4105-b1d4-0795adb33502",
+  "relation_type": "근거",
+  "description": "업무처리 절차",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "54d76ee8-5af0-4f02-ac34-a68a22d555cc",
+  "source_id": "ffc44693-b921-47a9-997d-2292f1e7dff2",
+  "target_id": "e551ff1d-404a-47c0-bbaf-cf27c85dfee0",
+  "relation_type": "근거",
+  "description": "매년 경쟁상황 평가 실시(제34조제2항), 평가 결과로 시장지배적 사업자·도매제공의무 판단(제35조·제38조의2 등)",
+  "source": "seed",
+  "weight": 3,
+  "created_at": "2026-08-20T17:06:41.015362+00:00"
+ },
+ {
+  "id": "92f3afc6-2b63-4af5-894f-851bfb92db0f",
+  "source_id": "2aad9b35-a241-4824-8066-9b93bf29388a",
+  "target_id": "575705d7-ecdf-4385-ba1b-86a53fe60436",
+  "relation_type": "근거",
+  "description": "공동사용·설치 기준",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "06db7a4c-ef37-4a88-94ca-7d601869b742",
+  "source_id": "b830dd68-935a-46f4-93db-94aa99947245",
+  "target_id": "b94baba9-223a-4468-a2b4-d492f1d302c9",
+  "relation_type": "근거",
+  "description": "시험기관 지정·관리",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "78930eb8-7dab-4006-ba11-c80c2fce56ae",
+  "source_id": "f2eef2bf-0bf8-40c4-a67e-568331317230",
+  "target_id": "9343aaf8-4ee8-417d-a149-62c59c28194b",
+  "relation_type": "근거",
+  "description": "국내 적합성평가 절차",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "557cc7e9-154e-444d-995e-c0873a120acb",
+  "source_id": "d798e32c-fc28-42b6-9fb2-17b1d7a7c02e",
+  "target_id": "9343aaf8-4ee8-417d-a149-62c59c28194b",
+  "relation_type": "근거",
+  "description": "적합성평가 절차",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "55275432-cd9c-4170-ba4c-1936fa3356a7",
+  "source_id": "b830dd68-935a-46f4-93db-94aa99947245",
+  "target_id": "9343aaf8-4ee8-417d-a149-62c59c28194b",
+  "relation_type": "근거",
+  "description": "적합인증·등록 절차",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "5f23d22c-1abb-4f72-be79-306c38341a39",
+  "source_id": "aba9be2e-6c3a-4b0a-892f-1b97ac3103bb",
+  "target_id": "d762618c-24a3-4dda-8459-52c5b11ea804",
+  "relation_type": "근거",
+  "description": "화재안전 기술기준",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "f580a94d-bdea-44f9-bae1-9d466200d659",
+  "source_id": "b1e303f5-f994-4095-bb51-3182b8796442",
+  "target_id": "4a6e76cc-e19a-4141-8888-6fd1d19098b4",
+  "relation_type": "근거",
+  "description": "측정대상 기자재",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "dc9c1d60-d7f5-472b-b200-43687c155866",
+  "source_id": "3f75ffd9-acba-462d-81ac-34548f8253c3",
+  "target_id": "9bab54f0-f19d-409b-a463-8285f81cb790",
+  "relation_type": "근거",
+  "description": "전자파강도 측정방법",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "5964415b-b0d3-4c11-a634-d05ac60885f2",
+  "source_id": "3f75ffd9-acba-462d-81ac-34548f8253c3",
+  "target_id": "a84d3b92-76dc-4c81-96f0-854933b00117",
+  "relation_type": "근거",
+  "description": "인체보호 기준값",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "80be81e8-3249-4e62-858d-636964765147",
+  "source_id": "f2eef2bf-0bf8-40c4-a67e-568331317230",
+  "target_id": "89d63f9a-5c2c-4bd2-a39b-cf1cdaa3f43e",
+  "relation_type": "근거",
+  "description": "한·EU MRA",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "6ce36b44-fdd1-46d0-8352-dd3e295050b9",
+  "source_id": "5f0b2fc0-70c7-4a6c-9700-9dc0beaece6f",
+  "target_id": "67d38e82-1cc3-4d12-a676-5c1e3e167470",
+  "relation_type": "근거",
+  "description": "지자체 사업 적합성 평가",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "5239da69-e1ef-4275-8296-5e1781f86cd0",
+  "source_id": "0d4c8b41-991d-48fa-9796-1f2356a35135",
+  "target_id": "a3d16ebb-b01a-4823-b468-0cb3eb7bdf76",
+  "relation_type": "근거",
+  "description": "요금신고 제외 사업자 지정",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T14:37:22.96667+00:00"
+ },
+ {
+  "id": "ac8aa7a3-d5e8-436c-a65e-ccb4feefb4a6",
+  "source_id": "c36968ca-3d6f-48d8-9e88-0f1d23405ca2",
+  "target_id": "2da0566f-3c37-4901-82e5-097167cdbfe2",
+  "relation_type": "근거",
+  "description": "방송통신표준화 절차",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T14:37:23.901928+00:00"
+ },
+ {
+  "id": "2eb08f6e-5c98-401e-9f88-9c0d6bad4368",
+  "source_id": "096a7d42-3ada-4495-b326-d60ebbbe84fa",
+  "target_id": "e3338eaa-0d26-4677-b0a1-fe2000f27966",
+  "relation_type": "근거",
+  "description": "정보보호산업법 위임 서식·절차",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T14:37:24.42494+00:00"
+ },
+ {
+  "id": "532ef2ad-ea19-4a78-9f8c-1e9dbdb70f19",
+  "source_id": "096a7d42-3ada-4495-b326-d60ebbbe84fa",
+  "target_id": "8272f19b-9c71-4d6f-afd4-2aafa0f47f8c",
+  "relation_type": "근거",
+  "description": "IoT 기기 정보보호인증",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T14:37:24.896482+00:00"
+ },
+ {
+  "id": "334be1f2-cb86-4c39-9d17-6c9eb9fa7f10",
+  "source_id": "00392b6c-563c-45c8-ac28-408c5bf50e2e",
+  "target_id": "24c1efa4-c724-4682-bb1f-c5aa410910fd",
+  "relation_type": "근거",
+  "description": "전자문서법 위임 서식",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T14:37:25.80162+00:00"
+ },
+ {
+  "id": "fa177aeb-9331-4cf1-9251-a4e08cbf6b41",
+  "source_id": "3cff9a3a-33bc-4e55-88f7-c2a426b2b87f",
+  "target_id": "9343aaf8-4ee8-417d-a149-62c59c28194b",
+  "relation_type": "근거",
+  "description": "객차 내 AP·라우터 등 기자재 적합성평가 요건 (고시 제2025-56호)",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-07-30T14:46:53.378332+00:00"
+ },
+ {
+  "id": "c0efb5b1-f022-47a7-b5ed-cb2acc358bfe",
+  "source_id": "e2759c0d-e862-4a67-aba8-10531972c534",
+  "target_id": "e551ff1d-404a-47c0-bbaf-cf27c85dfee0",
+  "relation_type": "근거",
+  "description": "이용자 역무 선택 정보 제공 의무의 상위 근거(제56조의2) (제56조의2)",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-08-03T10:34:05.835155+00:00"
+ },
+ {
+  "id": "3d388513-c985-418b-8221-ac6c9fd2a78d",
+  "source_id": "00392b6c-563c-45c8-ac28-408c5bf50e2e",
+  "target_id": "cfe822f4-c6ca-47b0-8cc0-a78ec186cc71",
+  "relation_type": "근거",
+  "description": "전자서명 효력·인정사업자",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T14:36:55.792818+00:00"
+ },
+ {
+  "id": "82f54133-8ae9-46cf-a1da-c8c6f85ebffc",
+  "source_id": "5c32173f-a9ed-4398-aa49-f544c3766dc3",
+  "target_id": "86c81471-ce51-483d-b90d-2df8d4033f28",
+  "relation_type": "근거",
+  "description": "SW사업 관련 서식",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T14:37:26.384571+00:00"
+ },
+ {
+  "id": "960ea204-b0e7-4bdd-9fd9-2adac2938638",
+  "source_id": "11bcfd66-97ad-448e-b5a2-c92be3c28c7c",
+  "target_id": "1a96c9aa-61bd-4a49-af46-9bcaec2ea888",
+  "relation_type": "근거",
+  "description": "준공검사를 자기적합확인으로 갈음하는 근거 신설(제24조제2항) (제24조제2항)",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-08-02T16:15:26.35892+00:00"
+ },
+ {
+  "id": "0511e1e5-df57-446d-98ac-ad854bcef6c9",
+  "source_id": "4c0350e9-66de-4e53-9041-ce9b94784bf9",
+  "target_id": "bf630078-0bfb-4509-a121-59e2e78adbb6",
+  "relation_type": "근거",
+  "description": "AI 산업 진흥·고영향 AI 규제의 기본법 (2026.1 제정)",
+  "source": "ai",
+  "weight": 2,
+  "created_at": "2026-08-03T02:44:12.36007+00:00"
+ },
+ {
+  "id": "6c2f6a79-dae5-4cbb-9c36-0727783b9d00",
+  "source_id": "4c0350e9-66de-4e53-9041-ce9b94784bf9",
+  "target_id": "1aef71ee-3f6e-47f4-be04-bb760167beb6",
+  "relation_type": "근거",
+  "description": "고영향 AI 기준·사실조사 절차 등 위임사항",
+  "source": "ai",
+  "weight": 2,
+  "created_at": "2026-08-03T02:44:12.36007+00:00"
+ },
+ {
+  "id": "87ec02bb-c669-481c-ae21-a89407e4b07a",
+  "source_id": "3e9d65f2-f562-4f11-b5b0-24fab0f296ee",
+  "target_id": "7b827dd6-5384-4903-9a5f-1a6afede9947",
+  "relation_type": "근거",
+  "description": "데이터 산업 진흥·데이터 자산 보호의 기본법",
+  "source": "ai",
+  "weight": 2,
+  "created_at": "2026-08-03T02:44:12.36007+00:00"
+ },
+ {
+  "id": "59e21ab8-2adb-484e-8254-7cca6930f5a4",
+  "source_id": "3e9d65f2-f562-4f11-b5b0-24fab0f296ee",
+  "target_id": "776f2f0f-93c9-4885-8fb1-7cca05595cf7",
+  "relation_type": "근거",
+  "description": "데이터 가치평가·분쟁조정 등 위임사항",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-08-03T02:44:12.36007+00:00"
+ },
+ {
+  "id": "ddef735f-eeab-445a-85fa-8d27f0aaf198",
+  "source_id": "3e9d65f2-f562-4f11-b5b0-24fab0f296ee",
+  "target_id": "ece42aa7-e5de-479c-971b-d6a266a4e2db",
+  "relation_type": "근거",
+  "description": "데이터 관련 신고·지정 서식",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-08-03T02:44:12.36007+00:00"
+ },
+ {
+  "id": "e4a8018a-4bce-46bf-a7fb-895132ae9595",
+  "source_id": "3e9d65f2-f562-4f11-b5b0-24fab0f296ee",
+  "target_id": "7300d592-6292-4704-8e91-1e23cec9bf28",
+  "relation_type": "근거",
+  "description": "클라우드컴퓨팅 발전·이용자 보호의 기본법",
+  "source": "ai",
+  "weight": 2,
+  "created_at": "2026-08-03T02:44:12.36007+00:00"
+ },
+ {
+  "id": "f5b16618-c96d-41a8-a6c9-56b438f018ab",
+  "source_id": "3e9d65f2-f562-4f11-b5b0-24fab0f296ee",
+  "target_id": "acae926d-e485-4d2c-82a7-165992e0f109",
+  "relation_type": "근거",
+  "description": "침해사고 통지·공공기관 이용 촉진 등 위임사항",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-08-03T02:44:12.36007+00:00"
+ },
+ {
+  "id": "e3f92256-85ea-4c71-8f5b-a1e01620abcc",
+  "source_id": "3e9d65f2-f562-4f11-b5b0-24fab0f296ee",
+  "target_id": "751a487e-c740-4b6b-854c-1104d0e9664f",
+  "relation_type": "근거",
+  "description": "클라우드 신고·서식",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-08-03T02:44:12.36007+00:00"
+ },
+ {
+  "id": "5e7d59ec-f0a9-4427-8b44-967f5712ed24",
+  "source_id": "096a7d42-3ada-4495-b326-d60ebbbe84fa",
+  "target_id": "01090f27-3722-4837-95dc-ff99cd0e3e62",
+  "relation_type": "근거",
+  "description": "ISMS·ISMS-P 인증 기준·심사 절차 (망법 제47조 위임)",
+  "source": "ai",
+  "weight": 2,
+  "created_at": "2026-08-03T02:44:12.36007+00:00"
+ },
+ {
+  "id": "d8f07715-68b5-4184-9de4-d895fa383d92",
+  "source_id": "096a7d42-3ada-4495-b326-d60ebbbe84fa",
+  "target_id": "82b9c17f-f981-4bf0-9a7b-17b7798679b6",
+  "relation_type": "근거",
+  "description": "클라우드 보안인증(CSAP) — 공공시장 진출 시 필수 인증",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-08-03T02:44:12.36007+00:00"
+ },
+ {
+  "id": "a4167d42-f87e-4a4d-8fa8-e5fb39978a70",
+  "source_id": "e2759c0d-e862-4a67-aba8-10531972c534",
+  "target_id": "befe3f41-83ff-4ff4-af9e-588e3aab56b7",
+  "relation_type": "근거",
+  "description": "통신상품 온라인 판매·청약철회 등 소비자보호 기본법",
+  "source": "ai",
+  "weight": 2,
+  "created_at": "2026-08-03T02:44:12.36007+00:00"
+ },
+ {
+  "id": "6cb0c1ff-181d-4beb-b700-117e536ac609",
+  "source_id": "e2759c0d-e862-4a67-aba8-10531972c534",
+  "target_id": "9329c6d0-8d8e-49f7-97d5-f0fefb418c27",
+  "relation_type": "근거",
+  "description": "통신판매 신고·거래기록 보존 등 위임사항",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-08-03T02:44:12.36007+00:00"
+ },
+ {
+  "id": "54ab2810-b345-4d10-8c19-350deba886f8",
+  "source_id": "e2759c0d-e862-4a67-aba8-10531972c534",
+  "target_id": "a72f2272-41a3-458b-9cd1-9c8ee44d900c",
+  "relation_type": "근거",
+  "description": "통신판매업 신고 등 서식",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-08-03T02:44:12.36007+00:00"
+ },
+ {
+  "id": "341d8c1b-7e73-401b-88c0-4570dd06c4f7",
+  "source_id": "e2759c0d-e862-4a67-aba8-10531972c534",
+  "target_id": "6da7b417-c54c-43ab-8334-0f7ad37af120",
+  "relation_type": "근거",
+  "description": "품목별(통신서비스 포함) 정보제공 항목 고시",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-08-03T02:44:12.36007+00:00"
+ },
+ {
+  "id": "90d85b48-1571-4903-8b9f-6546ac63104d",
+  "source_id": "e2759c0d-e862-4a67-aba8-10531972c534",
+  "target_id": "fd42ec5d-0d1d-4162-bfb2-708e7835c46e",
+  "relation_type": "근거",
+  "description": "부당 표시·광고 금지 일반법 — 통신 속도·요금 광고 규제",
+  "source": "ai",
+  "weight": 2,
+  "created_at": "2026-08-03T02:44:12.36007+00:00"
+ },
+ {
+  "id": "0d2967a8-b2f8-4d9a-96b1-d39819f7c90a",
+  "source_id": "e2759c0d-e862-4a67-aba8-10531972c534",
+  "target_id": "9b43ee52-f3d9-4f0c-92e2-24c48682a3dd",
+  "relation_type": "근거",
+  "description": "부당광고 판단·과징금 산정 등 위임사항",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-08-03T02:44:12.36007+00:00"
+ },
+ {
+  "id": "1fd99ad9-d632-4cbb-8660-ae062b7859cd",
+  "source_id": "e2759c0d-e862-4a67-aba8-10531972c534",
+  "target_id": "fab244c4-7b07-4362-8a16-3b7ff23a4dfc",
+  "relation_type": "근거",
+  "description": "불공정 약관 조항 무효·심사 일반법",
+  "source": "ai",
+  "weight": 2,
+  "created_at": "2026-08-03T02:44:12.36007+00:00"
+ },
+ {
+  "id": "a31721a5-becf-4178-b89c-d13022704e7b",
+  "source_id": "e2759c0d-e862-4a67-aba8-10531972c534",
+  "target_id": "fd498015-6dad-4b89-a0ea-ebe2e6000095",
+  "relation_type": "근거",
+  "description": "약관 심사청구 절차 등 위임사항",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-08-03T02:44:12.36007+00:00"
+ },
+ {
+  "id": "bad108b8-5d99-4dc6-b7f0-1344d4c7dc25",
+  "source_id": "0d4c8b41-991d-48fa-9796-1f2356a35135",
+  "target_id": "fab244c4-7b07-4362-8a16-3b7ff23a4dfc",
+  "relation_type": "근거",
+  "description": "통신 이용약관 불공정 조항 심사의 일반법 (약관규제법)",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-08-03T02:44:12.36007+00:00"
+ },
+ {
+  "id": "5b7b80c1-1833-4131-a5d4-386bce41d53c",
+  "source_id": "a57501c0-6152-4b05-9c06-900323043830",
+  "target_id": "01090f27-3722-4837-95dc-ff99cd0e3e62",
+  "relation_type": "근거",
+  "description": "개인정보보호 관리체계(ISMS-P) 인증 기준",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-08-03T02:44:12.36007+00:00"
+ },
+ {
+  "id": "2c4d3f03-b1f3-4c7c-b5c5-e7a342e2c34a",
+  "source_id": "b1fcbd2b-c173-4b97-8735-7b801efb610b",
+  "target_id": "c8ca4c62-bdb6-420e-9723-2e5e8da114a8",
+  "relation_type": "근거",
+  "description": "집적정보통신시설(IDC) 물리적·기술적 보호조치 기준",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-08-03T02:44:12.36007+00:00"
+ },
+ {
+  "id": "2178e56f-23fb-42df-b76b-6e8e42360ed6",
+  "source_id": "e2759c0d-e862-4a67-aba8-10531972c534",
+  "target_id": "4bb717d8-457d-4e75-98b3-40086c07a813",
+  "relation_type": "근거",
+  "description": "5G/LTE 커버리지 맵의 격자단위 공개 방식·절차를 구체화 (고시 전체)",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-08-03T10:34:06.241969+00:00"
+ },
+ {
+  "id": "9d53cbc2-e1d2-4b20-8c1d-8e601a720c60",
+  "source_id": "00392b6c-563c-45c8-ac28-408c5bf50e2e",
+  "target_id": "2140b249-e7cd-4fc5-8287-493ce24f9954",
+  "relation_type": "근거",
+  "description": "전자문서 효력·공인전자문서센터·중계자",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T14:36:55.926969+00:00"
+ },
+ {
+  "id": "1fea2cd8-10f1-4911-8000-31b9f9a195c7",
+  "source_id": "b2052cd6-dab1-475a-b784-5528cac9e1fc",
+  "target_id": "df803c1e-4875-414b-9014-3ed874db7212",
+  "relation_type": "근거",
+  "description": "제50조 이용자 차별행위의 세부 판단기준",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T14:37:22.722962+00:00"
+ },
+ {
+  "id": "d7ee5616-e358-4343-a4ac-ef95c269cf75",
+  "source_id": "d4cdd2ac-8aee-42af-b77e-8c8252cda381",
+  "target_id": "3c2e9deb-8856-40c0-91e6-b0368ffb3fd0",
+  "relation_type": "근거",
+  "description": "수출 중고단말의 분실·도난 여부 확인",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T14:37:23.200019+00:00"
+ },
+ {
+  "id": "24002ddb-910e-480f-a63b-5386c92201c9",
+  "source_id": "c36968ca-3d6f-48d8-9e88-0f1d23405ca2",
+  "target_id": "14f33ff0-a7de-4bf0-9261-746685958307",
+  "relation_type": "근거",
+  "description": "정보통신설비 유지보수·관리자 기준",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T14:37:23.662975+00:00"
+ },
+ {
+  "id": "b1dbd3ab-8d27-472f-ba7e-64a50d2b76b5",
+  "source_id": "79da4169-ee2c-4951-8f06-c508b590c22c",
+  "target_id": "d3a700e9-ba7a-412f-81ab-7abb05d659da",
+  "relation_type": "근거",
+  "description": "전기통신사업자 통계보고 항목·주기",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T14:37:24.140096+00:00"
+ },
+ {
+  "id": "f2544c0c-ab9c-4a77-9bda-9edd63695e05",
+  "source_id": "11bcfd66-97ad-448e-b5a2-c92be3c28c7c",
+  "target_id": "1da59e03-c5a4-4771-bb6b-ea4a96b68f0a",
+  "relation_type": "근거",
+  "description": "자기적합확인 대상 무선국·절차 위임 조항이 현행본에 미반영, 입법예고 중 (제45조의2(준공검사 면제, 별개 제도))",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-08-02T16:15:26.700264+00:00"
+ },
+ {
+  "id": "befea8d4-8ad5-44af-8034-838405226e1d",
+  "source_id": "09a357d7-632d-4284-85f8-d68e19d8d668",
+  "target_id": "58ef0c06-d5ad-4782-b98e-92fad089c297",
+  "relation_type": "근거",
+  "description": "인터넷주소자원 관리·분쟁조정",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T14:36:56.05906+00:00"
+ },
+ {
+  "id": "3589041c-03c4-4490-8e92-5ee552f42c5e",
+  "source_id": "5f0b2fc0-70c7-4a6c-9700-9dc0beaece6f",
+  "target_id": "64406d88-9c1f-4740-8765-331cca8bdf76",
+  "relation_type": "근거",
+  "description": "기간통신역무에서 제외되는 서비스 범위 지정",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T14:37:22.786597+00:00"
+ },
+ {
+  "id": "7a97e379-f2af-4f4c-9769-8b7d070d1feb",
+  "source_id": "d4cdd2ac-8aee-42af-b77e-8c8252cda381",
+  "target_id": "a53e9085-b2a3-4bc5-b851-87cd604e2c9d",
+  "relation_type": "근거",
+  "description": "중고단말 안심거래 사업자 인증기준",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T14:37:23.261506+00:00"
+ },
+ {
+  "id": "4ae51b71-0efa-4b25-b320-102352334fa6",
+  "source_id": "c36968ca-3d6f-48d8-9e88-0f1d23405ca2",
+  "target_id": "6373e5d5-0b2d-4261-9e62-0b6132c8e527",
+  "relation_type": "근거",
+  "description": "통신구 성능개선 기준",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T14:37:23.72422+00:00"
+ },
+ {
+  "id": "5cf0e86f-d9e8-4e06-9e50-d7186e6919ce",
+  "source_id": "096a7d42-3ada-4495-b326-d60ebbbe84fa",
+  "target_id": "e9a0a0ca-81f0-431b-84e1-c5718fb4a7b6",
+  "relation_type": "근거",
+  "description": "정보보호시스템 평가·인증(CC)",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T14:37:24.664236+00:00"
+ },
+ {
+  "id": "1affb638-0a04-4252-9c4f-f8df7e0e9477",
+  "source_id": "00392b6c-563c-45c8-ac28-408c5bf50e2e",
+  "target_id": "88e678d1-58f3-4748-a460-a56c4d10c0a4",
+  "relation_type": "근거",
+  "description": "인정·평가기관 운영",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T14:37:25.576069+00:00"
+ },
+ {
+  "id": "c09ff289-daaf-4145-922b-e33167168b66",
+  "source_id": "11bcfd66-97ad-448e-b5a2-c92be3c28c7c",
+  "target_id": "b5f5f3e5-0187-404e-be68-4e5ea659df1b",
+  "relation_type": "근거",
+  "description": "무선국 자기적합확인서 서식 신설 입법예고 중(의견마감 2026.8.31) (서식 신설(개정예고))",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-08-02T16:15:26.917987+00:00"
+ },
+ {
+  "id": "d432e905-b020-4d87-9d6a-762ad9a6a687",
+  "source_id": "096a7d42-3ada-4495-b326-d60ebbbe84fa",
+  "target_id": "8883e34f-e096-4286-903c-e0a308cc3161",
+  "relation_type": "근거",
+  "description": "정보보호 관리등급 부여",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T14:37:24.484226+00:00"
+ },
+ {
+  "id": "de5e6011-7fdc-4ff3-b5c8-aa333874fbb6",
+  "source_id": "00392b6c-563c-45c8-ac28-408c5bf50e2e",
+  "target_id": "a34c9f50-ced9-4654-86bf-4683235b319b",
+  "relation_type": "근거",
+  "description": "전자문서 유통·중계자 지정",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T14:37:25.74766+00:00"
+ },
+ {
+  "id": "e43701be-d6a0-4a3f-a195-237489bed409",
+  "source_id": "09a357d7-632d-4284-85f8-d68e19d8d668",
+  "target_id": "ca0d1c63-236c-4fee-9e11-5a2a4a57ac4c",
+  "relation_type": "근거",
+  "description": "인터넷주소 관리기관 위탁",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T14:37:26.206789+00:00"
+ },
+ {
+  "id": "ec94431b-15c2-435c-8d4f-a8bb1183af5e",
+  "source_id": "11bcfd66-97ad-448e-b5a2-c92be3c28c7c",
+  "target_id": "9343aaf8-4ee8-417d-a149-62c59c28194b",
+  "relation_type": "근거",
+  "description": "명칭이 유사한 기자재 자기적합확인 제도(별개)와 구분 설명 (제58조의2 근거 고시)",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-08-02T16:15:27.158082+00:00"
+ },
+ {
+  "id": "ad044c3e-d556-436f-a28a-8bfb3942af76",
+  "source_id": "dceed673-7d20-4a35-8eec-54b45f249a72",
+  "target_id": "8bdf09ce-7c78-4a64-b13f-98c0bf5c6259",
+  "relation_type": "근거",
+  "description": "긴급구조 상황 판단·의사확인·경보발송 절차 (제28조·제30조)",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-30T08:33:10.285853+00:00"
+ },
+ {
+  "id": "8811b36a-f5d5-4cba-a62f-d805c657ff07",
+  "source_id": "668f0cfd-1e2a-48c7-b70b-ca4db169f497",
+  "target_id": "e551ff1d-404a-47c0-bbaf-cf27c85dfee0",
+  "relation_type": "근거",
+  "description": "설비등의 제공·공동사용·정보제공 의무 (제35조·제41조)",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-30T08:33:10.285853+00:00"
+ },
+ {
+  "id": "907b291f-a8e0-4d6b-9151-cc0d72a7db84",
+  "source_id": "668f0cfd-1e2a-48c7-b70b-ca4db169f497",
+  "target_id": "a930e634-d85d-40c7-b5c3-189eb945f4e3",
+  "relation_type": "근거",
+  "description": "전송·선로설비 등의 제공 절차 (제37조)",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-30T08:33:10.285853+00:00"
+ },
+ {
+  "id": "a3ecf27f-9e19-4041-8cb8-86d8974f687e",
+  "source_id": "f744785a-3647-4494-bca1-05ba9b81a420",
+  "target_id": "e85eac46-8d86-4ee4-802a-aef60397f831",
+  "relation_type": "근거",
+  "description": "특별재난지역 무선국 감면대상·감면기간 기준 (법 제67조 위임)",
+  "source": "seed",
+  "weight": 4,
+  "created_at": "2026-07-30T08:33:10.285853+00:00"
+ },
+ {
+  "id": "c15ff49c-0b79-4a51-8ca8-9f66bc2a1c9e",
+  "source_id": "b1fcbd2b-c173-4b97-8735-7b801efb610b",
+  "target_id": "d17ea30c-3602-4e7a-a869-d538b6447f4b",
+  "relation_type": "근거",
+  "description": "기반시설에 포함되는 사업용 전기통신설비 지정 (제1조)",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-30T08:33:10.285853+00:00"
+ },
+ {
+  "id": "27fcd4f0-8ed8-4120-9cff-83e6a6a2224f",
+  "source_id": "1b38d62e-3d62-45ff-83b6-9e576ea98611",
+  "target_id": "1a96c9aa-61bd-4a49-af46-9bcaec2ea888",
+  "relation_type": "근거",
+  "description": "주파수 회수·재배치",
+  "source": "seed",
+  "weight": 6,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "1ee63b9f-8e9d-4f62-a907-f74e22b37411",
+  "source_id": "4313e28f-bf19-4693-9347-23deec0800a1",
+  "target_id": "1a96c9aa-61bd-4a49-af46-9bcaec2ea888",
+  "relation_type": "근거",
+  "description": "무선국 검사 (제24~25조)",
+  "source": "seed",
+  "weight": 7,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "b87fec62-1c6c-4474-82b0-0fdbf41ac47d",
+  "source_id": "445aea4b-f779-4772-a58a-4d40be60a801",
+  "target_id": "9e03e9af-444d-4cf0-8292-0a1eac36f1ae",
+  "relation_type": "근거",
+  "description": "운영규정(심의·지정 절차)",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T14:37:25.178724+00:00"
+ },
+ {
+  "id": "dfb21838-87ff-4f99-8c0b-8498d489b040",
+  "source_id": "e158c7ed-2f1f-4e98-bcf2-7e6adbf085b6",
+  "target_id": "72ffaf98-5fa2-461d-9b14-97ee5b8cd45b",
+  "relation_type": "근거",
+  "description": "청각·언어장애인 통신중계서비스",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T14:37:26.089308+00:00"
+ },
+ {
+  "id": "885b5e3a-5f1e-4def-bcc0-149ba129cefb",
+  "source_id": "d9324eee-c6d2-48b2-bff4-64787e714cd3",
+  "target_id": "5a9b9947-5438-4ca2-a3a8-76026ef1d927",
+  "relation_type": "근거",
+  "description": "재난관리책임자 조치사항에 무선통신시설 공동이용 포함 (제27조의2제4항, 법 제37조의2)",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-08-21T01:26:04.11433+00:00"
+ },
+ {
+  "id": "481f93f1-88c8-463f-bccf-836bd6e36229",
+  "source_id": "d9324eee-c6d2-48b2-bff4-64787e714cd3",
+  "target_id": "a930e634-d85d-40c7-b5c3-189eb945f4e3",
+  "relation_type": "근거",
+  "description": "무선통신시설 공동이용 협정 신고·인가 절차와 대가 산정 (제40조, 별표 4)",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-08-21T01:26:04.11433+00:00"
+ },
+ {
+  "id": "a5c4379b-d849-4d98-b795-3d6eba7b90fc",
+  "source_id": "8343c270-1260-4d91-9c8c-509e452ba7aa",
+  "target_id": "85d32703-712f-4f30-8c0b-ac78088ee152",
+  "relation_type": "근거",
+  "description": "광고성 정보 표기 방법·수신동의 처리 등 제50조 위임 세부기준 (제61조~제62조)",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-08-26T14:43:01.401028+00:00"
+ },
+ {
+  "id": "fd409029-c38c-49ae-b44c-a6ae6adfbe80",
+  "source_id": "8343c270-1260-4d91-9c8c-509e452ba7aa",
+  "target_id": "e551ff1d-404a-47c0-bbaf-cf27c85dfee0",
+  "relation_type": "근거",
+  "description": "거짓 표시 전화번호 차단, 문자재판매사업(특수부가통신) 관리 — 대량문자 전송자격인증제의 제도 기반 (제84조·제22조)",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-08-26T14:43:01.401028+00:00"
+ },
+ {
+  "id": "44ffd6d2-bc08-4f3f-9d0e-95a41d82cd4b",
+  "source_id": "8343c270-1260-4d91-9c8c-509e452ba7aa",
+  "target_id": "a930e634-d85d-40c7-b5c3-189eb945f4e3",
+  "relation_type": "근거",
+  "description": "특수한 유형의 부가통신사업(문자재판매) 등록 요건·점검 세부기준",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-08-26T14:43:01.401028+00:00"
+ },
+ {
+  "id": "152315a5-acb1-4c02-8956-3795c2bc24b5",
+  "source_id": "aa077d1b-b083-46c4-92b0-a933974b85c6",
+  "target_id": "3352ede3-07b6-4f01-9548-e6a8c55f0f8b",
+  "relation_type": "근거",
+  "description": "국가 주파수 분배 현황",
+  "source": "seed",
+  "weight": 3,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "b44841ea-7840-41af-b4fd-fbed767777c5",
+  "source_id": "5f0b2fc0-70c7-4a6c-9700-9dc0beaece6f",
+  "target_id": "688fa2fa-54a0-4cba-8350-c493cc165b21",
+  "relation_type": "근거",
+  "description": "전기통신기본법 위임사항",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T14:37:22.908001+00:00"
+ },
+ {
+  "id": "f1f353f1-a616-4316-b7fa-25501a48eec9",
+  "source_id": "096a7d42-3ada-4495-b326-d60ebbbe84fa",
+  "target_id": "ae4ae31e-34cf-4dbc-b84d-90b598d398df",
+  "relation_type": "근거",
+  "description": "정보통신서비스 제공자 정보보호조치",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T14:37:24.7821+00:00"
+ },
+ {
+  "id": "228c863b-ff92-4928-95c2-eea4a16cf3e5",
+  "source_id": "d406bd51-b2b3-4404-bf4a-78b44068d66a",
+  "target_id": "d50b78db-6824-4bc5-8769-804e9dfc8c36",
+  "relation_type": "근거",
+  "description": "무선국 면허 등록면허세 (제34조)",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "fb4142b9-ea51-4fea-8d48-7b016bc70c4d",
+  "source_id": "fd53268f-e11a-4d33-b29c-4237e2c747f4",
+  "target_id": "2ac96973-ef21-469c-9e5c-30e744c2ad8c",
+  "relation_type": "근거",
+  "description": "항행안전시설 기준",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "1e8f31e6-5f1e-4e91-a0aa-a72cd50e3bb1",
+  "source_id": "2435c1a0-e56b-46cb-86d4-989e53f769e2",
+  "target_id": "1a96c9aa-61bd-4a49-af46-9bcaec2ea888",
+  "relation_type": "근거",
+  "description": "전자파 장해 방지 근거",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "3c6bbaf3-ab1b-4eb3-9a3d-37f435a8fbaa",
+  "source_id": "e58dbfea-3882-47fd-b9cc-aa0ea80c4007",
+  "target_id": "1a96c9aa-61bd-4a49-af46-9bcaec2ea888",
+  "relation_type": "근거",
+  "description": "무선국 허가·기술기준 근거",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "8182399a-6805-467c-9eb0-b40ddee38fac",
+  "source_id": "4a53927c-3b11-487a-9427-e3294bf31a45",
+  "target_id": "1a96c9aa-61bd-4a49-af46-9bcaec2ea888",
+  "relation_type": "근거",
+  "description": "무선종사자 자격·배치 (제70조 이하)",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "f44852d0-7fb6-4c53-8c6d-e07aecb91e26",
+  "source_id": "be3d6a0a-ab78-499f-aada-465fa5eec09c",
+  "target_id": "1a96c9aa-61bd-4a49-af46-9bcaec2ea888",
+  "relation_type": "근거",
+  "description": "혼신 보호·제거 명령",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "20731e4c-5404-4ef1-b08b-cbd7bd73e33e",
+  "source_id": "2e31d673-7598-48f8-a0e0-2601bbe9c76f",
+  "target_id": "1a96c9aa-61bd-4a49-af46-9bcaec2ea888",
+  "relation_type": "근거",
+  "description": "위성망 국제등록·조정",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "23c806a3-b7e2-477b-8157-9d35aab72993",
+  "source_id": "f65f8528-1e17-4ee4-8389-162d80c73a9d",
+  "target_id": "1a96c9aa-61bd-4a49-af46-9bcaec2ea888",
+  "relation_type": "근거",
+  "description": "무선국 변경허가·신고",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "2c6dedee-1919-4db1-889e-e953a27d9519",
+  "source_id": "2aad9b35-a241-4824-8066-9b93bf29388a",
+  "target_id": "6d1b92a8-dd22-484b-a9bf-a5bde74ef0c5",
+  "relation_type": "근거",
+  "description": "설비 기술기준",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "b01d7fcc-531c-4902-850f-af0dbbaf50e4",
+  "source_id": "82e0808f-1a34-43d5-a40b-e8a7a6e3c7fe",
+  "target_id": "d39efbe7-9839-463e-ae63-cc96ae332ac3",
+  "relation_type": "근거",
+  "description": "재난관리 체계",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "9a52bc22-e0b1-4e4a-ace3-c69107df9781",
+  "source_id": "186d576d-814d-4073-9b5b-857a1f8c5dc9",
+  "target_id": "d39efbe7-9839-463e-ae63-cc96ae332ac3",
+  "relation_type": "근거",
+  "description": "국가 재난관리 체계",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "0d8ff602-a49c-4992-bc36-cc50239766fb",
+  "source_id": "d406bd51-b2b3-4404-bf4a-78b44068d66a",
+  "target_id": "4d22a072-05da-4557-a797-f423e24561ef",
+  "relation_type": "근거",
+  "description": "등록면허세 세율·납부 절차",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "07a4950f-8d63-407c-83ae-1a91b7f26379",
+  "source_id": "2e31d673-7598-48f8-a0e0-2601bbe9c76f",
+  "target_id": "6a347c9f-b38e-4033-81ec-3a2953e27427",
+  "relation_type": "근거",
+  "description": "우주국·지구국 무선설비 기술기준",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "9b96287d-2fd0-4d54-a4f7-bb8d1001df60",
+  "source_id": "e58dbfea-3882-47fd-b9cc-aa0ea80c4007",
+  "target_id": "945d2377-7a38-4dd4-8d1f-9b0db181d533",
+  "relation_type": "근거",
+  "description": "해상망 운영",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "732b390c-48e6-495c-8dcc-5b20325d8c20",
+  "source_id": "e58dbfea-3882-47fd-b9cc-aa0ea80c4007",
+  "target_id": "5b169af0-74d1-492f-8284-3c087490c7ae",
+  "relation_type": "근거",
+  "description": "해상 무선설비 기준",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "ceb3eecd-7372-46dc-8450-c2c83048a779",
+  "source_id": "a0dc3d46-a101-4937-a034-99a339e9b41d",
+  "target_id": "1da59e03-c5a4-4771-bb6b-ea4a96b68f0a",
+  "relation_type": "근거",
+  "description": "허가 절차 세부",
+  "source": "seed",
+  "weight": 3,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "eee558a4-71eb-40cb-8512-a909f0caeea5",
+  "source_id": "4313e28f-bf19-4693-9347-23deec0800a1",
+  "target_id": "1da59e03-c5a4-4771-bb6b-ea4a96b68f0a",
+  "relation_type": "근거",
+  "description": "검사 절차·주기",
+  "source": "seed",
+  "weight": 6,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "0a47c0bc-8acd-49d8-a7bd-9fcc846cd236",
+  "source_id": "84e37738-f85f-4a3f-a85e-18db5058ca3c",
+  "target_id": "1da59e03-c5a4-4771-bb6b-ea4a96b68f0a",
+  "relation_type": "근거",
+  "description": "재할당 절차·대가",
+  "source": "seed",
+  "weight": 16,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "6561d0be-6a52-40cd-a4c3-6b56d6ae0d4d",
+  "source_id": "d406bd51-b2b3-4404-bf4a-78b44068d66a",
+  "target_id": "1da59e03-c5a4-4771-bb6b-ea4a96b68f0a",
+  "relation_type": "근거",
+  "description": "전파사용료 산정·감면 (별표)",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "8594eefc-c877-4938-ba99-62905223f330",
+  "source_id": "4a53927c-3b11-487a-9427-e3294bf31a45",
+  "target_id": "056d3127-36ca-4b92-9178-7caf60e974ca",
+  "relation_type": "근거",
+  "description": "배치기준",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "ef9713e5-eaec-4289-9533-e2b54641cb3f",
+  "source_id": "186d576d-814d-4073-9b5b-857a1f8c5dc9",
+  "target_id": "d25c3193-d3c9-452e-ad52-59467e9b995f",
+  "relation_type": "근거",
+  "description": "재난 시 공동이용",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "ce61f808-0deb-44dd-ace6-19f215208f51",
+  "source_id": "fd53268f-e11a-4d33-b29c-4237e2c747f4",
+  "target_id": "c86cab36-a6df-45a1-8661-73be75b524d4",
+  "relation_type": "근거",
+  "description": "항공 무선설비 기준",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "08934a6a-4fbd-4ea2-8400-7fbb77cd7391",
+  "source_id": "994e049d-f0d8-48b5-b5e0-828a07e70000",
+  "target_id": "8611a829-d860-48ca-a115-c5dc1c840e32",
+  "relation_type": "근거",
+  "description": "기금 운용·관리 세부",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "3ebcf8b7-3bb3-4ee9-94af-35e6078e9a98",
+  "source_id": "d798e32c-fc28-42b6-9fb2-17b1d7a7c02e",
+  "target_id": "872ece1b-9091-448c-8d02-190c2cb628cf",
+  "relation_type": "근거",
+  "description": "단말 기술기준",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "771b673d-b5a7-428d-ac90-322c44e0b7b3",
+  "source_id": "e58dbfea-3882-47fd-b9cc-aa0ea80c4007",
+  "target_id": "fb269f3c-b11e-4ce0-bb81-bdea081af77d",
+  "relation_type": "근거",
+  "description": "해상망 이용",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "cae12846-0a0c-490e-9a0c-e1cfd29287c8",
+  "source_id": "1b38d62e-3d62-45ff-83b6-9e576ea98611",
+  "target_id": "798c5d3e-7f09-4378-acec-2380fbe001d4",
+  "relation_type": "근거",
+  "description": "재배치 사례 공고",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "9f71d07f-b88b-474c-b364-d8fbb8222fdf",
+  "source_id": "4313e28f-bf19-4693-9347-23deec0800a1",
+  "target_id": "9ff9d458-370d-4b3b-8a87-6089dd2a28a2",
+  "relation_type": "근거",
+  "description": "검사 실무 처리기준",
+  "source": "seed",
+  "weight": 4,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "55e9efcd-470f-4249-905a-316a4e4277e9",
+  "source_id": "d406bd51-b2b3-4404-bf4a-78b44068d66a",
+  "target_id": "9ff9d458-370d-4b3b-8a87-6089dd2a28a2",
+  "relation_type": "근거",
+  "description": "검사 실무 기준",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "99f6a91e-9091-4757-a0c9-e9008dfa529a",
+  "source_id": "f65f8528-1e17-4ee4-8389-162d80c73a9d",
+  "target_id": "b5f5f3e5-0187-404e-be68-4e5ea659df1b",
+  "relation_type": "근거",
+  "description": "변경 신청 서식",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "d697e877-3535-41ff-8a89-e07253f22924",
+  "source_id": "d406bd51-b2b3-4404-bf4a-78b44068d66a",
+  "target_id": "b5f5f3e5-0187-404e-be68-4e5ea659df1b",
+  "relation_type": "근거",
+  "description": "무선국 검사 수수료·서식",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "c7ece4b2-5978-4502-93f1-c11d8232bab7",
+  "source_id": "4a53927c-3b11-487a-9427-e3294bf31a45",
+  "target_id": "150a6938-16a9-484c-a446-b246fe42acdf",
+  "relation_type": "근거",
+  "description": "자격검정 수수료·면제",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "ef928a56-ce67-4143-96cf-3739baae87e3",
+  "source_id": "82e0808f-1a34-43d5-a40b-e8a7a6e3c7fe",
+  "target_id": "3132e19b-2773-4a84-a2fc-56581a307c4a",
+  "relation_type": "근거",
+  "description": "재난안전망 요구기능",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "395feb8e-2abb-495e-a264-274ba51e6fb7",
+  "source_id": "186d576d-814d-4073-9b5b-857a1f8c5dc9",
+  "target_id": "f43e5216-629c-41cb-93c8-3fe99a42039f",
+  "relation_type": "근거",
+  "description": "통신재난관리 (제40조 등)",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "6014f6d0-8570-47a2-8451-13c5efc10ef9",
+  "source_id": "994e049d-f0d8-48b5-b5e0-828a07e70000",
+  "target_id": "f43e5216-629c-41cb-93c8-3fe99a42039f",
+  "relation_type": "근거",
+  "description": "기금 설치·재원 (제24~26조)",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "8166d3dd-9534-49da-b636-5e44f5f1401c",
+  "source_id": "f65f8528-1e17-4ee4-8389-162d80c73a9d",
+  "target_id": "e5e86ef8-d2b6-43e5-945c-db58d24fc072",
+  "relation_type": "근거",
+  "description": "변경허가 불요 범위",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "88860b75-8e55-432c-a473-fcfedbecade2",
+  "source_id": "2e31d673-7598-48f8-a0e0-2601bbe9c76f",
+  "target_id": "b9af4a5e-64ca-4182-8635-bb3a399dd7ab",
+  "relation_type": "근거",
+  "description": "위성전파 감시 실무",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "05f4388e-2277-451a-a913-7e0c5173fefc",
+  "source_id": "82e0808f-1a34-43d5-a40b-e8a7a6e3c7fe",
+  "target_id": "8f0b02c4-917d-4fce-b092-25f50d4ec6ed",
+  "relation_type": "근거",
+  "description": "재난안전 무선국 특례",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "294d9c30-7709-4f4a-ba64-b7b7d3c53ba6",
+  "source_id": "994e049d-f0d8-48b5-b5e0-828a07e70000",
+  "target_id": "edbad71a-a2e0-4f94-926b-c3e13ea5a53f",
+  "relation_type": "근거",
+  "description": "부담금 관리 근거",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "8aa79806-c381-4245-8391-e78d5089490a",
+  "source_id": "2435c1a0-e56b-46cb-86d4-989e53f769e2",
+  "target_id": "6dbd76a6-ea87-4531-80ce-70dcd5bd2bdb",
+  "relation_type": "근거",
+  "description": "EMC 시험방법",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "7c4fb6e9-4d27-4abc-be11-7d71cd410903",
+  "source_id": "be3d6a0a-ab78-499f-aada-465fa5eec09c",
+  "target_id": "813895cc-1c97-40ea-8d77-5eb5879ae5d9",
+  "relation_type": "근거",
+  "description": "전파환경 측정",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "93638fa5-13e7-4e3d-a9ea-f163d7e1472a",
+  "source_id": "aa077d1b-b083-46c4-92b0-a933974b85c6",
+  "target_id": "42c88e82-5912-4218-88a8-7c9fdaeef052",
+  "relation_type": "근거",
+  "description": "공동사용 기준",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "ab0b561c-8f5c-4fd6-959c-eabb3a1e1e7e",
+  "source_id": "fd53268f-e11a-4d33-b29c-4237e2c747f4",
+  "target_id": "32d37bc9-11d1-42b3-bdb1-672525598e18",
+  "relation_type": "근거",
+  "description": "항공주파수 관리",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "c4ba304f-f909-4821-9b76-419c6e35f34e",
+  "source_id": "2435c1a0-e56b-46cb-86d4-989e53f769e2",
+  "target_id": "39dc80d1-fee3-47df-b922-f1be8d4aacd4",
+  "relation_type": "근거",
+  "description": "EMC 기준",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "d7a972a4-1296-4842-8f21-55c59b28087b",
+  "source_id": "3f75ffd9-acba-462d-81ac-34548f8253c3",
+  "target_id": "7679fb82-c348-4c36-9092-6b021da02ce4",
+  "relation_type": "근거",
+  "description": "SAR 측정방법",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "76d7b85d-56e8-4f98-b516-ffefd35eecd9",
+  "source_id": "be3d6a0a-ab78-499f-aada-465fa5eec09c",
+  "target_id": "754200fe-4e10-43b1-ac60-e54a15719b9e",
+  "relation_type": "근거",
+  "description": "전파관리 실무 세칙",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "8f7b8fc7-6d97-4c1c-99cd-4a45c6bce86d",
+  "source_id": "994e049d-f0d8-48b5-b5e0-828a07e70000",
+  "target_id": "8006c479-c0a5-459f-8808-bf101ed3d09a",
+  "relation_type": "근거",
+  "description": "할당대가 수입 배분",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "865e39fc-6753-4b7e-81d3-c537e7c4715e",
+  "source_id": "1b38d62e-3d62-45ff-83b6-9e576ea98611",
+  "target_id": "ac6987a2-2287-4db8-86ab-e016060454fd",
+  "relation_type": "근거",
+  "description": "이용자 지원·표시",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "1d0d7d81-66d5-4fb5-ba89-ddceef8c0057",
+  "source_id": "618b3baf-7318-4bae-bfe9-689284597b4c",
+  "target_id": "a26a0f7b-9628-4dd4-81f3-efda90b526a6",
+  "relation_type": "근거",
+  "description": "산정·부과 세부 고시",
+  "source": "seed",
+  "weight": 5,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "1323a195-61db-44de-b228-6bad6de08028",
+  "source_id": "3cff9a3a-33bc-4e55-88f7-c2a426b2b87f",
+  "target_id": "e551ff1d-404a-47c0-bbaf-cf27c85dfee0",
+  "relation_type": "근거",
+  "description": "통신서비스 품질평가·품질 개선 근거 (품질평가 관련 조항)",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-07-30T14:46:52.822486+00:00"
+ },
+ {
+  "id": "60131e5a-a2c4-4643-bf1a-d6fc05b27826",
+  "source_id": "b540e5d9-8997-4bba-8fe7-aba08a8bc829",
+  "target_id": "e551ff1d-404a-47c0-bbaf-cf27c85dfee0",
+  "relation_type": "근거",
+  "description": "기간통신사업의 설비·역무 규제 일반 — 협의체가 예고한 \"규제 개선\"의 1차 대상 법률",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-08-27T06:31:53.086668+00:00"
+ },
+ {
+  "id": "53101821-be92-47e1-95ad-4b596de359f7",
+  "source_id": "096a7d42-3ada-4495-b326-d60ebbbe84fa",
+  "target_id": "6e9faaf3-e256-4955-b02a-a43b32c72ad5",
+  "relation_type": "근거",
+  "description": "취약점 신고 포상 위탁",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T14:37:24.839+00:00"
+ },
+ {
+  "id": "ff7e3dc2-6589-41fd-974d-0d1b3328c688",
+  "source_id": "3cff9a3a-33bc-4e55-88f7-c2a426b2b87f",
+  "target_id": "a84d3b92-76dc-4c81-96f0-854933b00117",
+  "relation_type": "근거",
+  "description": "중계기·기지국 증설 시 전자파 노출 한계 기준 (고시 제2019-4호)",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-07-30T14:46:53.117197+00:00"
+ },
+ {
+  "id": "2a5f0764-5b9a-4167-9023-cc3745192438",
+  "source_id": "84e37738-f85f-4a3f-a85e-18db5058ca3c",
+  "target_id": "17364a16-48b5-4db3-9f09-abf284e47d83",
+  "relation_type": "근거",
+  "description": "신청 절차 세부 고시",
+  "source": "seed",
+  "weight": 9,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "55b78277-2486-4ff4-927c-e0c0c7eac43d",
+  "source_id": "05f55810-8d73-4ed1-86f8-92093d46e99b",
+  "target_id": "5a9b9947-5438-4ca2-a3a8-76026ef1d927",
+  "relation_type": "근거",
+  "description": "통신재난관리심의위원회 구성 (제23조의2)",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-29T04:51:09.136307+00:00"
+ },
+ {
+  "id": "8808c31d-579d-45b8-8437-c6ede5798cb2",
+  "source_id": "b540e5d9-8997-4bba-8fe7-aba08a8bc829",
+  "target_id": "195a7746-da0c-42ed-8960-5265c4bfe09c",
+  "relation_type": "근거",
+  "description": "정보통신 진흥·규제 특례의 제도 틀 — 민관 협의와 종합대책의 법적 근거 후보",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-08-27T06:31:53.086668+00:00"
+ },
+ {
+  "id": "19f97b8e-0094-427b-9d2d-3d130e3c8447",
+  "source_id": "e2842f11-bcdf-4689-aff3-6efff1f24a77",
+  "target_id": "02eb5865-4ad3-428d-8575-b7e4de153215",
+  "relation_type": "근거",
+  "description": "공사업 등록·감리·하도급·유지보수 의무",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T14:36:55.593557+00:00"
+ },
+ {
+  "id": "a3457310-bcda-4c37-9753-7527133fa9fa",
+  "source_id": "2baac268-3429-4673-af42-8313e2bfaa53",
+  "target_id": "75711b4e-fe15-4981-b951-6d681e465beb",
+  "relation_type": "근거",
+  "description": "시내전화 번호이동성 시행 기준",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T14:37:23.026065+00:00"
+ },
+ {
+  "id": "2e33665f-de5f-4181-88a7-82ae19f79416",
+  "source_id": "c36968ca-3d6f-48d8-9e88-0f1d23405ca2",
+  "target_id": "61e54034-6792-4a78-bf11-0316af33236f",
+  "relation_type": "근거",
+  "description": "정보통신표준 개발·운영",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T14:37:23.967183+00:00"
+ },
+ {
+  "id": "1520dbd2-49c4-4439-9bee-ac785d97c240",
+  "source_id": "a0dc3d46-a101-4937-a034-99a339e9b41d",
+  "target_id": "b5f5f3e5-0187-404e-be68-4e5ea659df1b",
+  "relation_type": "근거",
+  "description": "신청 서식",
+  "source": "seed",
+  "weight": 3,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "769fc2b4-753a-4d35-b904-6cd789b121bc",
+  "source_id": "27958384-2082-4d24-9ff2-414eb457f4ee",
+  "target_id": "3352ede3-07b6-4f01-9548-e6a8c55f0f8b",
+  "relation_type": "근거",
+  "description": "3.5㎓·28㎓ 등 대역별 용도 분배 세부 내역 (과기정통부고시 제2024-44호)",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-07-30T15:06:10.095902+00:00"
+ },
+ {
+  "id": "e2077acc-363a-4a78-ab4d-ea13e809085e",
+  "source_id": "a0dc3d46-a101-4937-a034-99a339e9b41d",
+  "target_id": "1a96c9aa-61bd-4a49-af46-9bcaec2ea888",
+  "relation_type": "근거",
+  "description": "무선국 개설허가·신고 (제19조)",
+  "source": "seed",
+  "weight": 4,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "6042eafc-0d8c-490c-8c43-0de88f9d5a8c",
+  "source_id": "e2842f11-bcdf-4689-aff3-6efff1f24a77",
+  "target_id": "6e8c65e7-3a1a-44c8-858c-3381327c1ee6",
+  "relation_type": "근거",
+  "description": "감리원 배치·하도급 기준",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T14:36:55.650997+00:00"
+ },
+ {
+  "id": "a07e38b2-c465-499b-b64d-3ae6e8eca953",
+  "source_id": "1428dfb7-f0f0-42df-9a00-56cb179dbe13",
+  "target_id": "d7e022b2-7e15-421a-bf91-49971ebfc23b",
+  "relation_type": "근거",
+  "description": "양수·합병 인가 심사기준별 평가방법",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T14:37:22.663043+00:00"
+ },
+ {
+  "id": "8672f746-914c-4800-8460-4ab1dcf12fae",
+  "source_id": "2baac268-3429-4673-af42-8313e2bfaa53",
+  "target_id": "062780dc-598d-40dc-8697-881adecd9f87",
+  "relation_type": "근거",
+  "description": "번호안내서비스 제공 의무 면제 범위",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T14:37:23.143888+00:00"
+ },
+ {
+  "id": "c7771535-b255-4628-aefd-f35b69294e4d",
+  "source_id": "096a7d42-3ada-4495-b326-d60ebbbe84fa",
+  "target_id": "b72b4fad-c157-46b2-bdfc-d284ded29571",
+  "relation_type": "근거",
+  "description": "정보보호 사전점검",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T14:37:24.539361+00:00"
+ },
+ {
+  "id": "8e3f6d12-5477-40a1-aeee-917232a7cc90",
+  "source_id": "e2842f11-bcdf-4689-aff3-6efff1f24a77",
+  "target_id": "01687fdb-480e-4331-a183-d187af995859",
+  "relation_type": "근거",
+  "description": "관리자 선임신고 등 서식",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T14:37:25.464141+00:00"
+ },
+ {
+  "id": "4dfebcb7-4b33-4620-9266-5a962bb0d7c2",
+  "source_id": "e158c7ed-2f1f-4e98-bcf2-7e6adbf085b6",
+  "target_id": "cd84ac12-5323-493f-9e0d-6fc55a4654d4",
+  "relation_type": "근거",
+  "description": "디지털 접근성·무인정보단말기 의무",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T14:37:25.920667+00:00"
+ },
+ {
+  "id": "5c6b73dd-833c-42ca-b706-cf9bcdfec18c",
+  "source_id": "27958384-2082-4d24-9ff2-414eb457f4ee",
+  "target_id": "4bb717d8-457d-4e75-98b3-40086c07a813",
+  "relation_type": "근거",
+  "description": "커버리지 정보 게시 의무, 와이파이는 지점 정보 대체 가능 (제2019-27호)",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-07-30T15:06:10.489775+00:00"
+ },
+ {
+  "id": "aff9638f-3ffc-4808-bd65-27eea4ef7f65",
+  "source_id": "27958384-2082-4d24-9ff2-414eb457f4ee",
+  "target_id": "1da59e03-c5a4-4771-bb6b-ea4a96b68f0a",
+  "relation_type": "근거",
+  "description": "자기적합확인 대상 무선국 위임 조항 미반영(개정 입법예고 중) (제35801호(현행))",
+  "source": "ai",
+  "weight": 2,
+  "created_at": "2026-07-30T15:06:10.688582+00:00"
+ },
+ {
+  "id": "5aa5121c-3ce9-4f8c-a20d-526cdbe08b94",
+  "source_id": "acbc7191-fd8b-4787-b4e6-552a649ab31e",
+  "target_id": "c8ca4c62-bdb6-420e-9723-2e5e8da114a8",
+  "relation_type": "근거",
+  "description": "데이터센터 재난 예방·보호조치 — 재난관리 대상시설 확대(2023) 관련",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-08-03T02:44:12.36007+00:00"
+ },
+ {
+  "id": "de226b5d-ef5d-4e8e-8e5c-63c0af819fa3",
+  "source_id": "096a7d42-3ada-4495-b326-d60ebbbe84fa",
+  "target_id": "083c427a-f6d1-4d8a-980b-dee60cfda1c0",
+  "relation_type": "근거",
+  "description": "정보보호 전문서비스 기업 지정",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T14:37:24.594323+00:00"
+ },
+ {
+  "id": "34706224-d1d6-4dd7-8d10-b79bd6367490",
+  "source_id": "445aea4b-f779-4772-a58a-4d40be60a801",
+  "target_id": "3fa9eb6e-61fc-4452-bb0d-8b04df5661f7",
+  "relation_type": "근거",
+  "description": "임시허가·실증특례 절차",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T14:37:25.061086+00:00"
+ },
+ {
+  "id": "a620a39d-b3ed-46c1-ab1e-80aba0d6f818",
+  "source_id": "e158c7ed-2f1f-4e98-bcf2-7e6adbf085b6",
+  "target_id": "76057642-a9ae-4d2c-8009-224a8b9a56db",
+  "relation_type": "근거",
+  "description": "접근성 보장 세부기준",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T14:37:25.97834+00:00"
+ },
+ {
+  "id": "3a8706af-d74b-4bcf-8283-9b50902877ef",
+  "source_id": "27958384-2082-4d24-9ff2-414eb457f4ee",
+  "target_id": "a84d3b92-76dc-4c81-96f0-854933b00117",
+  "relation_type": "근거",
+  "description": "기지국·중계기 전자파 민원 대응의 기준 (제2019-4호)",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-07-30T15:06:10.875837+00:00"
+ },
+ {
+  "id": "df2c4e70-6b30-439f-a3b1-166ab5a4b6c2",
+  "source_id": "186d576d-814d-4073-9b5b-857a1f8c5dc9",
+  "target_id": "783e1f74-b266-40ca-8c46-1924d59e7d6d",
+  "relation_type": "근거",
+  "description": "통신망 종합관리·장애 대응 지침",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T14:37:24.195116+00:00"
+ },
+ {
+  "id": "77cd1fdd-d26f-4fc3-8b20-79c6fcc9a706",
+  "source_id": "445aea4b-f779-4772-a58a-4d40be60a801",
+  "target_id": "110bf52d-ac6b-4cd3-8095-8a0ce9156b60",
+  "relation_type": "근거",
+  "description": "신청 서식",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T14:37:25.1198+00:00"
+ },
+ {
+  "id": "89eda10d-3a98-4582-aae9-1905566e1aee",
+  "source_id": "e158c7ed-2f1f-4e98-bcf2-7e6adbf085b6",
+  "target_id": "d4a9ea79-27af-4dbd-a5fc-8f4503707c3d",
+  "relation_type": "근거",
+  "description": "접근성 품질인증·시험평가",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T14:37:26.034635+00:00"
+ },
+ {
+  "id": "cebb6feb-ac25-4727-9545-a2be78aec679",
+  "source_id": "acbc7191-fd8b-4787-b4e6-552a649ab31e",
+  "target_id": "d39efbe7-9839-463e-ae63-cc96ae332ac3",
+  "relation_type": "상위 재난관리 체계",
+  "description": "국가 재난안전관리 법제와의 관계",
+  "source": "seed",
+  "weight": 1,
+  "created_at": "2026-07-30T16:53:51.234857+00:00"
+ },
+ {
+  "id": "26a8b360-55d7-44d1-9b35-833f2838f01f",
+  "source_id": "acbc7191-fd8b-4787-b4e6-552a649ab31e",
+  "target_id": "9cb44951-8ce1-45c2-a2ed-452686796a53",
+  "relation_type": "사전협의 대상",
+  "description": "별표1의4: 재난·안전 관련 계획 수립 시 사전협의 대상",
+  "source": "seed",
+  "weight": 1,
+  "created_at": "2026-07-30T16:53:51.234857+00:00"
+ },
+ {
+  "id": "4ceb4460-dabb-4a04-8adc-27a67a6d02e7",
+  "source_id": "1428dfb7-f0f0-42df-9a00-56cb179dbe13",
+  "target_id": "f3f15b82-343a-45ea-a18d-55e46fe29e8a",
+  "relation_type": "근거",
+  "description": "등록 심사기준별 평가방법·배점",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T14:37:22.594814+00:00"
+ },
+ {
+  "id": "b096acb1-977d-4133-bf42-48d2975a9c3f",
+  "source_id": "2baac268-3429-4673-af42-8313e2bfaa53",
+  "target_id": "35a02a7a-dd84-4c25-a850-f33f74fb8f89",
+  "relation_type": "근거",
+  "description": "신호점번호(SPC) 부여·관리",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T14:37:23.082599+00:00"
+ },
+ {
+  "id": "f74bbe9e-2881-4cee-9ca3-677e954b8297",
+  "source_id": "668f0cfd-1e2a-48c7-b70b-ca4db169f497",
+  "target_id": "aa70dca9-8f99-431a-a084-559679f48183",
+  "relation_type": "근거",
+  "description": "설비 공동구축 협의회·전담기관",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T14:37:24.02502+00:00"
+ },
+ {
+  "id": "5959b9ae-e69f-47fc-8613-66cf71c96c82",
+  "source_id": "bb68b30c-9f85-43ad-bdb3-b5692233c6e2",
+  "target_id": "45d193a9-4ee2-41b0-a26b-5828de70d140",
+  "relation_type": "근거",
+  "description": "통신과금서비스 운영 기준",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T14:37:24.953722+00:00"
+ },
+ {
+  "id": "d32ed6f5-7152-4886-bb54-3f484c6b751e",
+  "source_id": "618b3baf-7318-4bae-bfe9-689284597b4c",
+  "target_id": "4151b927-d5ff-4242-bdc4-57c3c029b664",
+  "relation_type": "근거",
+  "description": "할당대상법인 선정취소 등 처분시 청문절차 적용 (청문 절차 관련 규정)",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-07-30T06:32:43.486384+00:00"
+ },
+ {
+  "id": "2f64e180-671b-4f04-9fcd-d2cf06c68f41",
+  "source_id": "aa077d1b-b083-46c4-92b0-a933974b85c6",
+  "target_id": "4bb717d8-457d-4e75-98b3-40086c07a813",
+  "relation_type": "근거",
+  "description": "5G 커버리지·품질 정보 이용자 제공 의무 근거 (제3조)",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-07-30T09:23:53.346126+00:00"
+ },
+ {
+  "id": "613f7da4-0396-4fe9-b282-aa796e439f38",
+  "source_id": "aa077d1b-b083-46c4-92b0-a933974b85c6",
+  "target_id": "36be4127-5ca9-4d47-a7cc-9e5d9af1bbb9",
+  "relation_type": "근거",
+  "description": "SKT 이동통신서비스가 이용약관 인가대상임을 규정 (제1호)",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-07-30T09:23:53.847549+00:00"
+ },
+ {
+  "id": "a83db63d-688c-4cb0-a223-b51432f03003",
+  "source_id": "ca614928-f59b-415c-a40b-af5650a6b89c",
+  "target_id": "492c47ce-2c4e-4879-989e-3da4f0352dad",
+  "relation_type": "근거",
+  "description": "부당한 공동행위 금지 — 기지국 임차료 담합(2024, 200억)·번호이동 담합(2025, 963억 확정) 처분 근거 (제40조)",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-08-26T14:43:01.401028+00:00"
+ },
+ {
+  "id": "a218d7d9-fb21-4c24-bc59-d6d04c304fb6",
+  "source_id": "d9324eee-c6d2-48b2-bff4-64787e714cd3",
+  "target_id": "325d2109-e147-4222-8cc6-d0ca5dc09d60",
+  "relation_type": "근거",
+  "description": "제37조 관련 설비 공동사용의 대가산정 등 세부기준 (전기통신사업법 제41조제2항 위임)",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T09:58:16.109554+00:00"
+ },
+ {
+  "id": "890c4b68-7261-42a1-81b9-41ddf8d3716b",
+  "source_id": "ca614928-f59b-415c-a40b-af5650a6b89c",
+  "target_id": "a100547d-ff80-4b7a-b791-887bdc4184ba",
+  "relation_type": "근거",
+  "description": "과징금 부과 세부기준(관련 매출액 산정) — 최대 5.5조 추산이 963억으로 감액된 산정 쟁점",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-08-26T14:43:01.401028+00:00"
+ },
+ {
+  "id": "67fdc1ad-f059-4b72-a4ae-83f3332c0053",
+  "source_id": "445aea4b-f779-4772-a58a-4d40be60a801",
+  "target_id": "037eec38-120f-440c-8c52-818652ec8d80",
+  "relation_type": "근거",
+  "description": "품질인증기관 지정",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T14:37:25.234241+00:00"
+ },
+ {
+  "id": "ba782786-2e2d-4756-90f7-6b41db78076a",
+  "source_id": "fd53268f-e11a-4d33-b29c-4237e2c747f4",
+  "target_id": "1d22495f-e647-4850-b5e4-cca9035d9b4f",
+  "relation_type": "근거",
+  "description": "항공 안전 규율",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "abb33b40-a90b-4ec2-9faa-e8bc5c739bd2",
+  "source_id": "a0dc3d46-a101-4937-a034-99a339e9b41d",
+  "target_id": "4b13f3bb-a90c-452a-8208-ed0c89714401",
+  "relation_type": "근거",
+  "description": "무선국 분류",
+  "source": "seed",
+  "weight": 2,
+  "created_at": "2026-07-23T05:03:25.005704+00:00"
+ },
+ {
+  "id": "4d5450b1-c8d0-408a-b0de-f160b47596bb",
+  "source_id": "b540e5d9-8997-4bba-8fe7-aba08a8bc829",
+  "target_id": "5b39a52c-b837-4ca4-912c-6bd29657d88e",
+  "relation_type": "근거",
+  "description": "통합투자세액공제(제24조) — 5G·네트워크 설비 투자 세액공제 확대 논의의 근거",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-08-27T06:31:53.086668+00:00"
+ },
+ {
+  "id": "c6d76809-f6bb-46f8-9a7f-f8b16339cd62",
+  "source_id": "b540e5d9-8997-4bba-8fe7-aba08a8bc829",
+  "target_id": "3122c338-4284-49ab-b18a-ae27814cdde8",
+  "relation_type": "근거",
+  "description": "세액공제 대상 시설·기술의 범위 — 통신망 설비의 공제 대상 포함 여부를 정하는 위임사항",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-08-27T06:31:53.086668+00:00"
+ },
+ {
+  "id": "11de18a6-ad90-4df7-bf7b-3cf58a5e115d",
+  "source_id": "445aea4b-f779-4772-a58a-4d40be60a801",
+  "target_id": "d3b0f2a7-65bb-46af-9d32-d4ad4997278c",
+  "relation_type": "근거",
+  "description": "품질인증기준",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T14:37:25.291529+00:00"
+ },
+ {
+  "id": "482bc593-7f7b-4b42-8972-038628ab655c",
+  "source_id": "668f0cfd-1e2a-48c7-b70b-ca4db169f497",
+  "target_id": "9698a4b0-8152-435f-b441-dafdc3ba52f4",
+  "relation_type": "근거",
+  "description": "자가설비 목적외 사용 특례",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-09-03T14:37:24.083739+00:00"
+ },
+ {
+  "id": "01534efa-2c1e-4834-bdd2-b47b058c12bb",
+  "source_id": "b2052cd6-dab1-475a-b784-5528cac9e1fc",
+  "target_id": "fd42ec5d-0d1d-4162-bfb2-708e7835c46e",
+  "relation_type": "근거",
+  "description": "통신서비스 부당광고 제재 — 사업법 금지행위와의 공정위 축 접점",
+  "source": "ai",
+  "weight": 1,
+  "created_at": "2026-08-03T02:44:12.36007+00:00"
+ }
+]

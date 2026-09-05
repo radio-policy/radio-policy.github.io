@@ -2315,6 +2315,7 @@ async function callClaude(userText, onDelta) {
     '이번 질문이 법령·고시·규제 근거가 있는 정책/법령 질문이면, 답변 본문을 모두 마친 뒤 맨 마지막 줄에 아래 형식의 블록을 정확히 한 줄로 출력하세요 (블록 앞뒤에 설명·마크다운 금지):\n' +
     '<lawmap>{"topic":"주제명(2~12자)","description":"주제 한줄 설명","relations":[{"law":"법령·고시명","type":"law|decree|rules|notice|etc","relation":"관계 한줄","basis":"제N조","law_desc":"법령 한줄 설명"}]}</lawmap>\n' +
     '- relations에는 이번 답변에서 실제 근거로 사용한 법령·고시만 포함 (최대 8개). law는 정식 명칭(예: "전파법", "전기통신사업법 시행령").\n' +
+    '- basis는 답변에서 실제 인용한 조문 번호("제N조"·"제N조의M")만. 조문을 특정할 수 없으면 그 법령은 빼세요(저장 전 원문 대조에서 없는 조문은 버려짐). relation은 "관련" 같은 일반어 대신 그 조문이 무엇을 정하는지 한 줄.\n' +
     '- 기존 주제명 목록에 같은 의미의 주제가 있으면 새 이름을 만들지 말고 그 이름을 그대로 재사용: ' + (lawTopics.length ? lawTopics.join(', ') : '(아직 없음)') + '\n' +
     '- 보고서 작성 요청, 문서 요약, 잡담, 법령 근거가 등장하지 않는 질문이면 이 블록을 출력하지 마세요.';
   // ── 프롬프트 캐싱(Anthropic prompt caching): 텍스트는 기존 연결 순서 그대로, 캐시 표시만 추가 ──
@@ -2958,17 +2959,30 @@ async function sendChat() {
     // 법령 관계도 자동 축적: 답변의 <lawmap> 블록 → DB 저장 + 답변 밑 미니 관계도 표시 (추가 API 호출 없음)
     if (lastLawmapData && lastLawmapData.topic && Array.isArray(lastLawmapData.relations) && lastLawmapData.relations.length > 0) {
       const lmData = lastLawmapData;
-      saveLawmapData(lmData, 'ai')
-        .then(function() { _lawMapLoaded = false; })  // 다음 관계도 탭 진입 시 새로 로드
-        .catch(function(e) { console.warn('법령 관계도 저장 실패(답변은 정상):', e); });
       const lmDiv = document.createElement('div');
       lmDiv.className = 'lawmap-mini';
-      lmDiv.innerHTML =
-        '<div class="lawmap-mini-head"><i class="ti ti-topology-star-3"></i> 이 답변의 법령 관계도 <span>— 관계망에 자동 반영됨</span></div>' +
-        renderMiniLawMap(lmData.topic, lmData.relations) +
-        '<div class="lawmap-mini-link">관계도 탭에서 크게 보기 →</div>';
-      lmDiv.addEventListener('click', function() { goLawMapTopicByName(lmData.topic); });
+      lmDiv.innerHTML = '<div class="lawmap-mini-head"><i class="ti ti-topology-star-3"></i> 이 답변의 법령 관계도 <span>— 근거 조문을 원문과 대조하는 중…</span></div>';
       msgEl.appendChild(lmDiv);
+      // 저장 전 검증 관문(#123)을 통과한 관계만 그리고 저장 — 조문이 원문에 없는 관계는 표시·저장하지 않음
+      saveLawmapData(lmData, 'ai').then(function(saved) {
+        _lawMapLoaded = false;  // 다음 관계도 탭 진입 시 새로 로드
+        var ok = (saved && saved.saved) || [];
+        var sk = (saved && saved.skipped) || [];
+        var note = sk.length ? '<div style="font-size:11px;color:#b45309;margin:4px 0">⚠ 원문에서 조문을 확인하지 못해 제외: ' +
+          sk.map(function(s) { return lmEsc(s.law) + '(' + lmEsc(s.reason) + ')'; }).join(', ') + '</div>' : '';
+        if (!ok.length) {
+          lmDiv.innerHTML = '<div class="lawmap-mini-head"><i class="ti ti-topology-star-3"></i> 이 답변의 법령 관계도 <span>— 원문에서 확인된 근거 조문이 없어 관계망에 반영하지 않음</span></div>' + note;
+          return;
+        }
+        lmDiv.innerHTML =
+          '<div class="lawmap-mini-head"><i class="ti ti-topology-star-3"></i> 이 답변의 법령 관계도 <span>— 원문 대조 후 관계망에 반영됨</span></div>' +
+          renderMiniLawMap(lmData.topic, ok) + note +
+          '<div class="lawmap-mini-link">관계도 탭에서 크게 보기 →</div>';
+        lmDiv.addEventListener('click', function() { goLawMapTopicByName(lmData.topic); });
+      }).catch(function(e) {
+        console.warn('법령 관계도 저장 실패(답변은 정상):', e);
+        lmDiv.innerHTML = '<div class="lawmap-mini-head"><i class="ti ti-topology-star-3"></i> 이 답변의 법령 관계도 <span>— 저장 실패(답변은 정상)</span></div>';
+      });
     }
 
     if (sb) {
@@ -10984,7 +10998,7 @@ async function askLawMap() {
 }
 
 // ── AI 호출 공통 (비스트리밍·짧은 JSON) ──
-var LAWMAP_GEN_SYSTEM = '당신은 한국 전파·통신 법령 체계 전문가입니다. 질문 주제와 관련된 법령(법률·시행령·시행규칙·고시)과 타 분야 법령(세법 등)까지 포함해 관계도를 JSON으로만 출력합니다. 형식: {"topic":"주제명(2~12자)","description":"주제 한줄 설명","relations":[{"law":"법령 정식명칭","type":"law|decree|rules|notice|etc","relation":"주제와의 관계 한줄","basis":"제N조 등 근거 조문","law_desc":"법령 한줄 설명"}]} — JSON 외 텍스트 금지. relations 최대 8개. 제공된 참고 원문에 근거가 있으면 basis에 조문을 명시하고, 근거가 불확실한 법령은 넣지 마세요.';
+var LAWMAP_GEN_SYSTEM = '당신은 한국 전파·통신 법령 체계 전문가입니다. 질문 주제와 관련된 법령(법률·시행령·시행규칙·고시)과 타 분야 법령(세법 등)까지 포함해 관계도를 JSON으로만 출력합니다. 형식: {"topic":"주제명(2~12자)","description":"주제 한줄 설명","relations":[{"law":"법령 정식명칭","type":"law|decree|rules|notice|etc","relation":"주제와의 관계 한줄","basis":"제N조 등 근거 조문","law_desc":"법령 한줄 설명"}]} — JSON 외 텍스트 금지. relations 최대 8개. basis는 제공된 참고 원문에서 실제로 확인한 조문 번호("제N조", "제N조의M")만 적고, 조문을 특정할 수 없는 법령은 relations에서 빼세요(저장 전에 원문과 대조하므로 없는 조문은 버려집니다). relation은 "관련"·"관련 조문" 같은 일반어 대신 그 조문이 무엇을 규정하는지 한 줄로 쓰세요.';
 
 async function callLawmapAI(userMsg) {
   var cfg = getConfig();
@@ -11029,14 +11043,79 @@ async function generateLawMapTopic() {
       if (sel) sel.value = saved.topicId;
       renderLawMapGraph(saved.topicId);
       showLawMapNodeDetail(saved.topicId);
+      setLawMapStatus('✨ 생성 완료 · 원문 대조 후 ' + (saved.saved || []).length + '건 저장 — 다음부터는 검색만으로 표시됩니다' + lawmapSkipNote(saved.skipped));
+    } else {
+      setLawMapStatus('⚠️ AI가 제시한 관계 중 원문에서 확인된 근거 조문이 없어 저장하지 않았습니다' + lawmapSkipNote(saved.skipped));
     }
-    setLawMapStatus('✨ 생성 완료 · DB 저장 — 다음부터는 검색만으로 표시됩니다');
   } catch(e) {
     setLawMapStatus('⚠️ 생성 실패: ' + lmEsc(e && e.message ? e.message : e));
   }
 }
 
+// ── 저장 전 검증 관문 (2026-09-05, 배경역사 #123) ──
+//  AI가 준 근거 조문이 KB 원문(document_chunks)에 실제로 있는 관계만 새 엣지로 저장한다.
+//  2026-09-05 전수 검증에서 주제 엣지 356건 중 214건이 조문 오류·자리표시였고, 그 주범이 여기서
+//  검증 없이 저장된 ai 엣지였다. 규칙: 문서 있음+조문 있음 → 저장 / 문서 있음+조문 없음(또는 조문 자체가
+//  없음) → 저장 안 함 / 문서가 KB에 없음 → '[원문 KB 미보유 — 미검증]' 꼬리표를 달아 저장(등재 후보로 남김).
+//  검증 자체가 실패하면 저장하지 않는다(fail-closed) — 사유는 상태줄·콘솔에 남긴다.
+var LAWMAP_UNVERIFIED_TAG = '[원문 KB 미보유 — 미검증]';
+function lmNormName(s) { return String(s || '').replace(/\.(pdf|md)$/i, '').replace(/[ㆍ·\s]/g, ''); }   // 가운뎃점 두 표기(·/ㆍ)·공백 무시
+async function lawmapFindDoc(lawName) {
+  var name = String(lawName || '').trim();
+  if (!name || !sb) return null;
+  var variants = [name];
+  if (name.indexOf('·') >= 0) variants.push(name.replace(/·/g, 'ㆍ'));
+  if (name.indexOf('ㆍ') >= 0) variants.push(name.replace(/ㆍ/g, '·'));
+  var nrm = lmNormName(name);
+  for (var i = 0; i < variants.length; i++) {
+    var pats = [variants[i] + '%', '%' + variants[i] + '(%'];   // 뒤쪽은 "(소관부처) 고시명(…)"처럼 부처 접두가 붙은 문서
+    for (var p = 0; p < pats.length; p++) {
+      var r = await sb.from('document_chunks').select('doc_name').ilike('doc_name', pats[p]).limit(30);
+      if (r.error) throw new Error(r.error.message || 'document_chunks 조회 실패');
+      // 이름 바로 뒤가 '(' 또는 끝인 문서만('전파법'이 '전파법 시행령'에 붙지 않게), 여러 판이면 최신(문자열 최대)
+      var ok = (r.data || []).map(function(x) { return x.doc_name; }).filter(function(d) {
+        var nd = lmNormName(d).replace(/^\([^)]*\)/, '');
+        return nd === nrm || nd.indexOf(nrm + '(') === 0;
+      });
+      if (ok.length) return ok.sort().pop();
+    }
+  }
+  return null;
+}
+async function lawmapDocHasArticles(docName) {
+  var r = await sb.from('document_chunks').select('id').eq('doc_name', docName).not('article_no', 'is', null).limit(1);
+  if (r.error) throw new Error(r.error.message);
+  return !!(r.data && r.data.length);
+}
+async function lawmapArticleExists(docName, wants) {
+  // article_no는 문서마다 '제19조(…)'/'19조(…)' 두 형태 — 양쪽 매칭 (노드 카드 lawmapArtNoMatch와 같은 규칙)
+  var ors = [];
+  wants.forEach(function(w) {
+    ors.push('article_no.eq.' + w, 'article_no.eq.제' + w, 'article_no.ilike."' + w + '(%"', 'article_no.ilike."제' + w + '(%"');
+  });
+  var r = await sb.from('document_chunks').select('id').eq('doc_name', docName).or(ors.join(',')).limit(1);
+  if (r.error) throw new Error(r.error.message);
+  return !!(r.data && r.data.length);
+}
+async function lawmapVerifyRelation(rel) {
+  var doc = await lawmapFindDoc(rel.law);
+  if (!doc) return { ok: true, tag: LAWMAP_UNVERIFIED_TAG, reason: 'KB 미보유' };
+  var w = lawmapArtNums(rel.basis || '');
+  if (!w.wants.length) {
+    var hasArt = await lawmapDocHasArticles(doc);
+    return hasArt ? { ok: false, reason: '근거 조문 번호 없음' } : { ok: true, tag: '', reason: '조문 체계 없는 문서' };
+  }
+  var found = await lawmapArticleExists(doc, w.wants);
+  return found ? { ok: true, tag: '' } : { ok: false, reason: '제' + w.wants[0] + ' 원문에 없음' };
+}
+function lawmapSkipNote(skipped) {
+  if (!skipped || !skipped.length) return '';
+  return ' · <span style="color:#b45309">조문 미확인으로 제외 ' + skipped.length + '건: ' +
+    skipped.map(function(s) { return lmEsc(s.law) + '(' + lmEsc(s.reason) + ')'; }).join(', ') + '</span>';
+}
+
 // ── 저장 (병합 원칙: 기존 노드·엣지 절대 삭제 안 함 — 신규만 추가, 재확인 엣지는 weight+1) ──
+//  반환 { topicId, saved:[검증 통과 관계], skipped:[{law, reason}] } — 검증 통과 관계가 없고 주제도 없으면 빈 주제를 만들지 않음
 async function saveLawmapData(data, src) {
   if (!sb || !data || !data.topic || !Array.isArray(data.relations)) return {};
   src = src || 'ai';
@@ -11058,25 +11137,39 @@ async function saveLawmapData(data, src) {
     }
     return ins.data.id;
   }
-  var topicId = await getOrCreateNode(data.topic, 'topic', data.description || null);
-  if (!topicId) return {};
   var validTypes = { law:1, decree:1, rules:1, notice:1, etc:1 };
-  var rels = data.relations.slice(0, 10);
-  for (var i = 0; i < rels.length; i++) {
-    var rel = rels[i];
-    if (!rel || !rel.law) continue;
+  var rels = data.relations.slice(0, 10).filter(function(r) { return r && r.law; });
+  // 저장 전 검증 관문(#123): 근거 조문이 KB 원문에 실제로 있는 관계만 통과
+  var verified = [], skipped = [];
+  for (var v = 0; v < rels.length; v++) {
+    var chk;
+    try { chk = await lawmapVerifyRelation(rels[v]); }
+    catch(e) { chk = { ok: false, reason: '검증 오류(' + (e && e.message ? e.message : e) + ')' }; }
+    if (chk.ok) { rels[v]._tag = chk.tag || ''; verified.push(rels[v]); }
+    else skipped.push({ law: rels[v].law, reason: chk.reason || '조문 미확인' });
+  }
+  if (skipped.length) console.warn('관계도 저장 제외(조문 미확인):', skipped);
+  var topicName = String(data.topic || '').trim();
+  var exT = await sb.from('law_graph_nodes').select('id').eq('name', topicName).eq('node_type', 'topic').maybeSingle();
+  if (!verified.length && !(exT.data && exT.data.id)) return { saved: [], skipped: skipped };
+  var topicId = await getOrCreateNode(topicName, 'topic', data.description || null);
+  if (!topicId) return { saved: [], skipped: skipped };
+  var saved = [];
+  for (var i = 0; i < verified.length; i++) {
+    var rel = verified[i];
     var t = validTypes[rel.type] ? rel.type : guessLawNodeType(String(rel.law));
     var lawId = await getOrCreateNode(rel.law, t, rel.law_desc || null);
     if (!lawId || lawId === topicId) continue;
-    var desc = (rel.relation || '관련') + (rel.basis ? ' (' + rel.basis + ')' : '');
+    var desc = (rel.relation || '관련') + (rel.basis ? ' (' + rel.basis + ')' : '') + (rel._tag ? ' ' + rel._tag : '');
     var exE = await sb.from('law_graph_edges').select('id,weight').eq('source_id', topicId).eq('target_id', lawId).eq('relation_type', '근거').maybeSingle();
     if (exE.data && exE.data.id) {
       try { await sb.from('law_graph_edges').update({ weight: (exE.data.weight || 1) + 1 }).eq('id', exE.data.id); } catch(e) {}
     } else {
       try { await sb.from('law_graph_edges').insert({ source_id: topicId, target_id: lawId, relation_type: '근거', description: desc, source: src, weight: 1 }); } catch(e) { console.warn('엣지 저장 실패(계속):', e); }
     }
+    saved.push(rel);
   }
-  return { topicId: topicId };
+  return { topicId: topicId, saved: saved, skipped: skipped };
 }
 
 // ── AI 보강: 현재 주제 그래프를 통째로 보여주고 "빠진 관계만" 추가 (기존 유지) ──
@@ -11100,11 +11193,11 @@ async function enrichLawMapTopic() {
       (ctx ? '\n\n[참고 법령 원문]\n' + ctx : '');
     var data = await callLawmapAI(userMsg);
     data.topic = topic.name; // 주제명 강제 고정
-    await saveLawmapData(data, 'ai');
+    var enr = await saveLawmapData(data, 'ai');
     await loadLawMap(true);
     var again = _lawMapNodes.find(function(n) { return n.name === topic.name && n.node_type === 'topic'; });
     if (again) renderLawMapGraph(again.id);
-    setLawMapStatus('✨ 보강 완료 — 기존 관계는 유지, 신규만 추가됨');
+    setLawMapStatus('✨ 보강 완료 — 기존 관계는 유지, 원문 대조 통과 ' + (enr.saved || []).length + '건 추가' + lawmapSkipNote(enr.skipped));
   } catch(e) {
     setLawMapStatus('⚠️ 보강 실패: ' + lmEsc(e && e.message ? e.message : e));
   }

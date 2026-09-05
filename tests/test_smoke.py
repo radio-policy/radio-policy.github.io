@@ -435,3 +435,42 @@ class TestBillStage(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestLawmapEdgeCheck(unittest.TestCase):
+    """lawmap_edge_check — 주제 엣지 설명의 근거 조문 판정(순수 함수, 네트워크 없음). 배경역사 #123"""
+
+    def test_art_key_and_names(self):
+        import lawmap_edge_check as m
+        self.assertEqual(m.art_key('제19조(신고를 통한 무선국 개설 등)'), '19조')
+        self.assertEqual(m.art_key('19조의2(무선국)'), '19조의2')
+        self.assertEqual(m.base_of('전파법(법률)(제21553호)(20260421).pdf'), '전파법')
+        self.assertEqual(m.base_of('(과학기술정보통신부) 방송통신발전기금 운용·관리규정(과학기술정보통신부고시)(제2022-2호).pdf'),
+                         '방송통신발전기금운용관리규정')
+        self.assertEqual(m.nrm('표시ㆍ광고의 공정화에 관한 법률'), m.nrm('표시·광고의 공정화에 관한 법률'))
+
+    def test_own_articles_vs_cross_reference(self):
+        import lawmap_edge_check as m
+        own, cross = m.own_articles('청문(제22조①3호가)·사전 통지(제21조) — 선정취소(전파법 제15조의2)에 적용', '행정절차법')
+        self.assertEqual(own, ['22조', '21조']); self.assertEqual(cross, 1)
+        self.assertEqual(m.own_articles('전파법 제9조 주파수분배', '전파법'), (['9조'], 0))
+        self.assertEqual(m.own_articles('법 제41조제2항 위임', '전기통신설비의 공동사용 등의 기준'), ([], 1))
+        # 나열·범위 표기, 연결부호 상속, '위임' 후행
+        self.assertEqual(m.own_articles('등록·양수합병 인가 (제6·18조)', '전기통신사업법'), (['6조', '18조'], 0))
+        self.assertEqual(m.own_articles('전파사용료 부과 (제67~68조)', '전파법'), (['67조', '68조'], 0))
+        self.assertEqual(m.own_articles('전파법 제37조·제45조·제47조 위임, 제1조', '무선설비규칙'), (['1조'], 3))
+        self.assertEqual(m.own_articles('2년 주기 확인 등 제50조 위임 세부 (제61조~제62조의3)', '정보통신망법 시행령'),
+                         (['61조', '62조의3'], 1))
+
+    def test_judge_levels(self):
+        import lawmap_edge_check as m
+        self.assertEqual(m.judge('관련 조문', '전파법', True, {'9조'})[1], 'placeholder')
+        self.assertEqual(m.judge('설명', '협정', False, None)[:2], ('WARN', 'doc_missing'))
+        self.assertEqual(m.judge('설명 [원문 KB 미보유 — 법제처 미공개]', '협정', False, None)[0], 'OK')
+        self.assertEqual(m.judge('주파수분배(제9조)', '전파법', True, {'9조', '10조'})[1], 'verified')
+        self.assertEqual(m.judge('할당(제99조)', '전파법', True, {'9조'})[:2], ('ERR', 'art_missing'))
+        self.assertEqual(m.judge('할당(제9조·제99조)', '전파법', True, {'9조'})[:2], ('WARN', 'art_partial'))
+        self.assertEqual(m.judge('협정 전문', '협정', True, set())[1], 'no_article_scheme')
+        self.assertEqual(m.judge('면허 종류 (제39조)', '지방세법 시행령', True, set())[0], 'OK')   # 조문 체계 없는 문서는 대조 불가
+        self.assertEqual(m.judge('할당대금 기재 (서식 5의2)', '전파법 시행규칙', True, {'1조'})[1], 'annex_ref')
+        self.assertEqual(m.judge('설명만 있음', '전파법', True, {'9조'})[:2], ('ERR', 'no_article'))
