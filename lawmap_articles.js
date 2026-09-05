@@ -229,7 +229,7 @@ function lmaRectDistToOrigin(r) {
 
 function lmaLayout(boxes, opts) {
   var o = { nodeSize: 14, itemGapX: 92, itemGapY: 46, padX: 18, padY: 30, captionH: 22, maxCols: 3,
-            minRadius: 200, topicClearance: 90, labelH: 26, margin: 24, minBoxW: 120, topicId: null };
+            minRadius: 200, topicClearance: 90, labelH: 26, margin: 24, minBoxW: 120, topicId: null, aspectY: 1 };   // aspectY<1: 타원(가로로 넓고 세로로 낮게) — 화면 비율에 맞춰 자동 맞춤 배율을 올린다
   for (var k in (opts || {})) if (opts[k] != null) o[k] = opts[k];
   boxes = boxes || [];
   var measured = boxes.map(function (b) { var m = lmaMeasureBox(b, o); m.box = b; return m; });
@@ -250,7 +250,7 @@ function lmaLayout(boxes, opts) {
   for (; radius <= 2000; radius += 20) {
     rects = order.map(function (m, idx) {
       var ang = -Math.PI / 2 + (2 * Math.PI * idx) / count;  // -90°부터 시계방향
-      var cx = count === 1 ? 0 : Math.cos(ang) * radius, cy = count === 1 ? -radius : Math.sin(ang) * radius;
+      var cx = count === 1 ? 0 : Math.cos(ang) * radius, cy = count === 1 ? -radius * o.aspectY : Math.sin(ang) * radius * o.aspectY;
       return { id: m.box.id, label: m.box.label, type: m.box.type, x: cx - m.w / 2, y: cy - m.h / 2, w: m.w, h: m.h, _m: m };
     });
     var ok = true;
@@ -379,11 +379,28 @@ if (typeof module !== 'undefined') module.exports = {
 //  파서(lmaBasisKeys·lmaExtractCitations)·배치(lmaLayout·lmaDrawBoxes)는 같은 파일 앞부분.
 // ═══════════════════════════════════════════════════════════════════════════════════════
 
-var _lmaMode = (function() {
-  // 기본은 법령 단위(큰 그림) — 운영자 결정(2026-09-06): 먼저 어떤 법이 걸려 있는지 보고, 버튼으로 조문 단위(자세한 그림)로 내려간다
-  try { var v = localStorage.getItem('lawmap_article_mode'); return v === '1'; } catch(e) { return false; }
-})();
+// 기본은 항상 법령 단위(큰 그림) — 운영자 결정(2026-09-06): 페이지를 열 때도, 다른 주제로 옮길 때도 법령 단위부터 시작하고
+//   버튼으로 조문 단위(자세한 그림)로 내려간다. 예전의 localStorage 기억은 쓰지 않는다(리허설 뒤 조문 화면이 먼저 뜨는 실수 방지).
+var _lmaMode = false;
+var _lmaLastTopic = null;
 var _lmaBypass = false;          // 폴백 재진입 방지
+// 별표 보이기/숨기기 (2026-09-06, #127-보론) — 별표가 많은 주제는 상자가 두 줄로 커지므로 조문만 먼저 보고 싶을 때 끈다. 기본 켬.
+var _lmaShowAnnex = (function() { try { return localStorage.getItem('lawmap_annex') !== '0'; } catch(e) { return true; } })();
+function lmaSetAnnex(on) {
+  _lmaShowAnnex = !!on;
+  try { localStorage.setItem('lawmap_annex', _lmaShowAnnex ? '1' : '0'); } catch(e) {}
+  lmaUpdateToggle();
+  if (_lmaMode && _lawMapFocusId && _lmaCache[_lawMapFocusId]) lmaRenderTopic(_lawMapFocusId);   // 캐시 모델로 재그리기 — 재조회 없음
+}
+// 화면(약 2:1)에 맞춘 타원 배치·촘촘한 간격 — 자동 맞춤은 그래프 전체 크기로 배율을 정하므로 세로를 줄일수록 글자가 커진다(운영자: 상자·글자 더 크게)
+var LMA_LAYOUT_OPTS = { itemGapX: 145, itemGapY: 70, maxCols: 3, minRadius: 170, topicClearance: 80, margin: 14, captionH: 32, minBoxW: 210, padY: 34, aspectY: 0.6 };
+function lmaLayoutOpts(topicId) { var o = {}; for (var k in LMA_LAYOUT_OPTS) o[k] = LMA_LAYOUT_OPTS[k]; o.topicId = topicId; return o; }
+// 화면에 그릴 것: 별표를 끄면 별표 항목·조문→별표 선을 빼고 배치를 다시 계산한다(모델은 그대로)
+function lmaViewOf(model) {
+  if (_lmaShowAnnex) return { boxes: model.boxes, layout: model.layout, edges: model.edges };
+  var boxes = model.boxes.map(function(b) { return { id: b.id, label: b.label, type: b.type, L: b.L, items: b.items.filter(function(it) { return !it.annex; }) }; });
+  return { boxes: boxes, layout: lmaLayout(boxes, lmaLayoutOpts(model.topic.id)), edges: model.edges.filter(function(e) { return e.kind !== 'annex'; }) };
+}
 // vis-network 툴팁은 기본이 한 줄(white-space:nowrap)이라 문장 단위 툴팁이 화면 오른쪽에서 잘렸다(운영자 지적) → 너비 제한 + 줄바꿈
 (function() {
   try {
@@ -397,14 +414,16 @@ var _lmaModel = null;            // 현재 화면 모델 (클릭 처리용)
 var LMA_MAX_ITEMS_PER_BOX = 6;   // 상자당 조문 상한 (근거 조문 우선, 나머지 "외 N개")
 
 function lmaShouldHandle(focusId) {
-  if (!_lmaMode || _lmaBypass || !focusId) return false;
+  if (_lmaBypass || !focusId) return false;
   var f = _lawMapNodes.find(function(n) { return n.id === focusId; });
-  return !!(f && f.node_type === 'topic');
+  if (!(f && f.node_type === 'topic')) return false;
+  if (_lmaLastTopic !== focusId) { _lmaLastTopic = focusId; _lmaMode = false; }   // 주제가 바뀌면 법령 단위부터
+  return _lmaMode;
 }
 
 function lmaSetMode(on) {
   _lmaMode = !!on;
-  try { localStorage.setItem('lawmap_article_mode', _lmaMode ? '1' : '0'); } catch(e) {}
+  _lmaLastTopic = _lawMapFocusId;
   lmaUpdateToggle();
   if (_lawMapFocusId) {
     var f = _lawMapNodes.find(function(n) { return n.id === _lawMapFocusId; });
@@ -423,6 +442,12 @@ function lmaEnsureToggle() {
   b.title = '큰 그림(법령 단위) ↔ 자세한 그림(조문 단위: 동그라미=조문, 상자=법령, 선=근거 조문 사이의 실제 인용)';
   b.onclick = function() { lmaSetMode(!_lmaMode); };
   anchor.insertAdjacentElement('afterend', b);
+  var a = document.createElement('button');
+  a.id = 'lma-annex-btn'; a.className = 'btn';
+  a.style.cssText = 'font-size:11px;padding:2px 8px;margin-left:6px;display:none';
+  a.title = '별표·별지 네모와 조문→별표 선을 숨기거나 다시 보입니다(조문 단위 보기에서만)';
+  a.onclick = function() { lmaSetAnnex(!_lmaShowAnnex); };
+  b.insertAdjacentElement('afterend', a);
   lmaUpdateToggle();
 }
 function lmaUpdateToggle() {
@@ -434,6 +459,11 @@ function lmaUpdateToggle() {
     ? '<i class="ti ti-arrow-back-up"></i> 법령 단위로 돌아가기'
     : '<i class="ti ti-zoom-in"></i> 조문 단위로 자세히 보기';
   b.className = _lmaMode ? 'btn' : 'btn btn-primary';
+  var a = document.getElementById('lma-annex-btn');
+  if (a) {
+    a.style.display = (f && f.node_type === 'topic' && _lmaMode) ? 'inline-flex' : 'none';
+    a.innerHTML = _lmaShowAnnex ? '<i class="ti ti-table-off"></i> 별표 숨기기' : '<i class="ti ti-table"></i> 별표 보이기';
+  }
 }
 
 // ── 문서명 확정 (노드 카드와 같은 규칙: doc_name → document_chunks ilike) ──
@@ -757,7 +787,7 @@ async function lmaBuildModel(topicId) {
     }
     return { id: L.node.id, label: L.node.name, type: L.node.node_type, items: items, L: L };
   });
-  var layout = lmaLayout(boxes, { itemGapX: 150, itemGapY: 70, maxCols: 3, minRadius: 230, topicClearance: 110, topicId: topic.id, captionH: 30, minBoxW: 200, padY: 34 });
+  var layout = lmaLayout(boxes, lmaLayoutOpts(topic.id));
   var primaryCount = laws.reduce(function(s, L) { return s + L.primaries.length; }, 0);
   var outsideCount = laws.reduce(function(s, L) { return s + L.outside.length; }, 0);
   return { topic: topic, laws: laws, boxes: boxes, edges: edges, layout: layout, primaryCount: primaryCount, outsideCount: outsideCount, builtAt: Date.now() };
@@ -792,13 +822,14 @@ async function lmaRenderTopic(topicId) {
   var textColor = (css.getPropertyValue('--text-primary') || '').trim() || '#333';
   var subColor = (css.getPropertyValue('--text-secondary') || '').trim() || '#666';
   var bgColor = (css.getPropertyValue('--bg-primary') || '').trim() || '#fff';
-  var pos = model.layout.positions;
+  var view = lmaViewOf(model);
+  var pos = view.layout.positions;
   var visNodes = [{
     id: model.topic.id, label: lawmapWrapLabel(model.topic.name), shape: 'dot', size: 22, x: 0, y: 0, fixed: true,
     color: { background: LAWMAP_COLORS.topic, border: 'rgba(0,0,0,0.22)', highlight: { background: LAWMAP_COLORS.topic, border: textColor } },
     font: { color: textColor, size: 15, strokeWidth: 4, strokeColor: bgColor, bold: true }
   }];
-  model.boxes.forEach(function(b) {
+  view.boxes.forEach(function(b) {
     var col = LAWMAP_COLORS[b.type] || '#999';
     b.items.forEach(function(it) {
       var p = pos[it.id] || { x: 0, y: 0 };
@@ -807,7 +838,7 @@ async function lmaRenderTopic(topicId) {
         borderWidth: it.annex ? 1.5 : 1,
         color: { background: it.primary ? col : lmaHexToRgba(col, 0.45), border: it.primary ? 'rgba(0,0,0,0.22)' : lmaHexToRgba(col, 0.8),
                  highlight: { background: col, border: textColor } },
-        font: { color: it.primary ? textColor : subColor, size: 11, strokeWidth: 4, strokeColor: bgColor }
+        font: { color: it.primary ? textColor : subColor, size: 12.5, strokeWidth: 4, strokeColor: bgColor }
       };
       // 점선 테두리(shapeProperties.borderDashes)는 vis 9.1.9의 square 그리기에서 'borderDashes' 읽기 오류를 내서 쓰지 않는다 — 네모 모양만으로 구분
       visNodes.push(nd);
@@ -824,7 +855,7 @@ async function lmaRenderTopic(topicId) {
         color: { color: LAWMAP_COLORS.topic, opacity: 0.45 }, arrows: { to: { enabled: false } }, smooth: false, title: L.edge.description || '' });
     });
   });
-  model.edges.forEach(function(e) {
+  view.edges.forEach(function(e) {
     var fromId = e.from.L.node.id + '#' + e.from.key, toId = e.to.L.node.id + '#' + e.to.key;
     var sameLaw = e.from.L === e.to.L;
     var label = e.kind === 'deleg' ? '위임'
@@ -834,7 +865,7 @@ async function lmaRenderTopic(topicId) {
       id: e.id, from: fromId, to: toId, label: label, arrows: { to: { enabled: true, scaleFactor: 0.6 } },
       width: e.kind === 'deleg' ? 1 : Math.min(1.2 + (e.count - 1) * 0.6, 3), dashes: e.kind === 'deleg' ? [6, 4] : false,
       color: { color: '#8a8f98', opacity: 0.75, highlight: '#5b7ff5' },
-      font: { size: 10, color: subColor, strokeWidth: 3, strokeColor: bgColor, align: 'middle' },
+      font: { size: 11, color: subColor, strokeWidth: 3, strokeColor: bgColor, align: 'middle' },
       smooth: { type: 'curvedCW', roundness: 0.12 },
       title: '[' + lmaShortLawName(e.from.L.node.name) + ' ' + lmaAnyLabel(e.from.key) + (e.para || '') + ' → ' + lmaShortLawName(e.to.L.node.name) + ' ' + lmaAnyLabel(e.to.key) + ']\n' +
         (e.snippet ? ('“' + e.snippet + '”') : (e.kind === 'deleg' ? (e.viaDesc ? '위임 관계 — 주제 엣지 설명에 적힌 위임 근거(본문에는 조문 인용 없음)' : '위임 관계(본문 인용 없음)') : ''))
@@ -851,8 +882,8 @@ async function lmaRenderTopic(topicId) {
   if (_lawMapNet) { try { _lawMapNet.destroy(); } catch(e) {} }
   _lawMapNet = new vis.Network(el, data, options);
   // 법령 이름(상자 캡션)은 크고 진하게 — 전체화면·프로젝터에서 법령 구분이 먼저 읽혀야 한다(운영자 요청 2026-09-06)
-  var theme = { captionColor: textColor, font: '700 15px ' + ((css.getPropertyValue('--font-sans') || '').trim() || 'sans-serif') };
-  _lawMapNet.on('beforeDrawing', function(ctx) { try { lmaDrawBoxes(ctx, model.layout.rects, theme); } catch(e) {} });
+  var theme = { captionColor: textColor, font: '700 17px ' + ((css.getPropertyValue('--font-sans') || '').trim() || 'sans-serif') };
+  _lawMapNet.on('beforeDrawing', function(ctx) { try { lmaDrawBoxes(ctx, view.layout.rects, theme); } catch(e) {} });
   _lawMapNet.on('click', function(p) {
     if (p.nodes && p.nodes.length) {
       var id = p.nodes[0];
@@ -864,10 +895,10 @@ async function lmaRenderTopic(topicId) {
       lmaShowArticleCard(L, key, model);
       return;
     }
-    var hit = p.pointer && p.pointer.canvas ? lmaHitRect(model.layout.rects, p.pointer.canvas.x, p.pointer.canvas.y) : null;
+    var hit = p.pointer && p.pointer.canvas ? lmaHitRect(view.layout.rects, p.pointer.canvas.x, p.pointer.canvas.y) : null;
     if (hit) showLawMapNodeDetail(hit.id);
   });
-  try { _lawMapNet.fit({ animation: false }); } catch(e) {}
+  try { _lawMapNet.fit({ animation: false, maxZoomLevel: 2.4 }); } catch(e) {}
   var citeCount = model.edges.filter(function(e) { return e.kind === 'cite'; }).length;
   var annexCount = model.laws.reduce(function(s, L) { return s + ((L.annexes || []).length); }, 0);
   var delegCount = model.edges.filter(function(e) { return e.kind === 'deleg'; }).length;
@@ -875,7 +906,7 @@ async function lmaRenderTopic(topicId) {
   setTimeout(function() {
     if (_lawMapFocusId !== topicId) return;
     setLawMapStatus('주제 <b>' + lmEsc(model.topic.name) + '</b> — 조문 단위 보기: 근거 조문 ' + model.primaryCount + '개 · 조문 인용 ' + citeCount + '건' +
-      (annexCount ? ' · 별표 ' + annexCount + '개' : '') + (delegCount ? ' · 위임 ' + delegCount + '건' : '') + (model.outsideCount ? ' · 주제 밖 법령 인용 ' + model.outsideCount + '건(카드에서 확인)' : '') +
+      (annexCount ? ' · 별표 ' + annexCount + '개' + (_lmaShowAnnex ? '' : '(숨김)') : '') + (delegCount ? ' · 위임 ' + delegCount + '건' : '') + (model.outsideCount ? ' · 주제 밖 법령 인용 ' + model.outsideCount + '건(카드에서 확인)' : '') +
       (citeCount === 0 ? ' · <span style="color:var(--text-tertiary)">근거 조문 사이 직접 인용 없음 — 각 법령이 독립적으로 규정</span>' : '') +
       ' · <span style="color:var(--text-tertiary)">동그라미=조문, 네모=별표, 상자=법령, 진한 것=근거</span>');
   }, 0);

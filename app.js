@@ -11668,7 +11668,7 @@ function applyWide(on) {
   if (b) b.innerHTML = on ? '<i class="ti ti-arrows-diagonal-minimize-2"></i>원래 크기' : '<i class="ti ti-arrows-horizontal"></i>넓게 보기';
   try { window.dispatchEvent(new Event('resize')); } catch(e) {}
   // 컨테이너 크기가 CSS 전환 뒤에 확정되므로 한 틱 뒤에 다시 맞춘다(바로 fit하면 예전 크기 기준으로 잘려 보임)
-  function refit() { if (typeof _lawMapNet !== 'undefined' && _lawMapNet) { try { _lawMapNet.setSize('100%', '100%'); _lawMapNet.redraw(); _lawMapNet.fit({ animation: false }); } catch(e) {} } }
+  function refit() { if (typeof _lawMapNet !== 'undefined' && _lawMapNet) { try { _lawMapNet.setSize('100%', '100%'); _lawMapNet.redraw(); _lawMapNet.fit({ animation: false, maxZoomLevel: 1.8 }); } catch(e) {} } }
   refit(); setTimeout(refit, 150); setTimeout(refit, 500);
 }
 function toggleWide() {
@@ -11687,7 +11687,7 @@ function toggleFullscreen(id) {
 document.addEventListener('fullscreenchange', function() {
   // 그래프는 크기가 바뀌면 다시 그려야 한다(vis-network는 컨테이너 크기를 스스로 다시 읽지 않는다)
   if (typeof _lawMapNet !== 'undefined' && _lawMapNet) {
-    setTimeout(function() { try { _lawMapNet.setSize('100%', '100%'); _lawMapNet.redraw(); _lawMapNet.fit({ animation: false }); } catch(e) {} }, 80);
+    setTimeout(function() { try { _lawMapNet.setSize('100%', '100%'); _lawMapNet.redraw(); _lawMapNet.fit({ animation: false, maxZoomLevel: 1.8 }); } catch(e) {} }, 80);
   }
   document.querySelectorAll('.fs-btn').forEach(function(b) {
     var on = !!document.fullscreenElement;
