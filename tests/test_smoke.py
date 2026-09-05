@@ -149,6 +149,18 @@ class TestMorningBriefingAssemblySection(unittest.TestCase):
         self.assertIn('• [의견등록 ~%s (D-3)] 정보통신망법 일부개정법률안' % nd[5:], lines)
         self.assertIn('  🔗 https://pal.assembly.go.kr/x', lines)
 
+    def test_changed_cap_and_noise_filter(self):
+        # 2026-09-04 06:00 브리핑에 백필 442건이 쏟아진 사고(#122-보론): '소관위 회부' 전이는 빼고, 상한을 넘으면 접는다
+        import morning_briefing as mb
+        changed = [{'bill_name': f'법안{i}', 'prev_proc_result': '접수', 'proc_result': '소관위 심사중'} for i in range(30)]
+        changed += [{'bill_name': '잡음', 'prev_proc_result': '접수', 'proc_result': '소관위 회부'}]
+        out = mb._format_assembly_section({'new': [], 'changed': changed, 'deadline': []})
+        lines = out.split('\n')
+        shown = [l for l in lines if l.startswith('• [처리 변경]')]
+        self.assertEqual(len(shown), mb.CHANGED_MAX_LINES)
+        self.assertNotIn('• [처리 변경] 잡음: 접수 → 소관위 회부', lines)
+        self.assertIn(f'  … 처리 변경 외 {30 - mb.CHANGED_MAX_LINES}건 (대시보드 국회 법안 탭)', lines)
+
 
 class TestProposedLawName(unittest.TestCase):
     """⑦ law_diff_gen._proposed_law_name — 예고 제목에서 법령명 추출"""

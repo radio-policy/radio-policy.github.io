@@ -679,6 +679,14 @@ NEW_BILL_MAX_AGE_DAYS = 7
 # 9일로 두면 주말 하루 밀린 정도는 흡수하고, 절반 이상 지난 예고는 걸러진다.
 NOTICE_MIN_REMAIN_DAYS = 9
 
+# 처리 변경 섹션 상한·잡음 필터 (2026-09-04, 배경역사 #122-보론)
+#  단계 파생 규칙(bill_stage) 배포 백필이 442건을 '접수 → 소관위 …'로 바꾸자 06:00 브리핑·구독자
+#  다이제스트에 그 전부가 [처리 변경]으로 쏟아졌다(크롤러 알림은 억제했지만 이 섹션은 prev≠now만 본다).
+#  ① '소관위 회부'로의 전이는 접수와 무게가 같아 싣지 않는다. ② 상한을 넘으면 '외 N건'으로 접는다.
+CHANGED_MAX_LINES = 12
+NEW_MAX_LINES = 15
+CHANGED_SKIP_TO = {'소관위 회부'}
+
 
 def fetch_assembly_items(sb) -> dict:
     """국회 법안 동향 3종 조회 — assembly_bills
@@ -721,6 +729,7 @@ def fetch_assembly_items(sb) -> dict:
         result['changed'] = [
             r for r in (resp.data or [])
             if r.get('prev_proc_result') and r.get('prev_proc_result') != r.get('proc_result')
+            and (r.get('proc_result') or '').strip() not in CHANGED_SKIP_TO
         ]
 
         # (c) 의견등록 — 진행 중 & 미노출 & **갓 시작한 것만** ('YYYY-MM-DD' 문자열 비교)
@@ -802,7 +811,9 @@ def _format_assembly_section(items: dict) -> str:
     """국회 법안 동향 브리핑 섹션"""
     today = datetime.now(KST).date()
     lines = ['🏛️ [국회 법안 동향]']
-    for it in items.get('new', []):
+    new_items = list(items.get('new', []))
+    new_more = max(0, len(new_items) - NEW_MAX_LINES)
+    for it in new_items[:NEW_MAX_LINES]:
         bill = it.get('bill_name', '')
         proposer = it.get('proposer', '')
         tag = '신규 발의'
@@ -811,13 +822,20 @@ def _format_assembly_section(items: dict) -> str:
         lines.append(f'• [{tag}] {bill} — {proposer}')
         if it.get('notice_url'):
             lines.append(f"  🔗 {it['notice_url']}")
-    for it in items.get('changed', []):
+    if new_more:
+        lines.append(f'  … 신규 발의 외 {new_more}건 (대시보드 국회 법안 탭)')
+    changed = [it for it in items.get('changed', [])
+               if (it.get('proc_result') or '').strip() not in CHANGED_SKIP_TO]   # 포맷 단계에서도 한 번 더(호출자가 필터 안 했을 때)
+    changed_more = max(0, len(changed) - CHANGED_MAX_LINES)
+    for it in changed[:CHANGED_MAX_LINES]:
         bill = it.get('bill_name', '')
         prev = it.get('prev_proc_result', '')
         now = it.get('proc_result', '')
         lines.append(f'• [처리 변경] {bill}: {prev} → {now}')
         if it.get('notice_url'):
             lines.append(f"  🔗 {it['notice_url']}")
+    if changed_more:
+        lines.append(f'  … 처리 변경 외 {changed_more}건 (대시보드 국회 법안 탭)')
     for it in items.get('deadline', []):
         bill = it.get('bill_name', '')
         proposer = (it.get('proposer') or '').strip()

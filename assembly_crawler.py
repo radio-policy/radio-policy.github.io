@@ -309,8 +309,12 @@ def bill_link(bill: dict) -> str:
     return link
 
 
-def upsert_bill(bill: dict, matched_keywords: list[str], existing: dict | None) -> str:
-    """법안 저장/갱신. 반환값: 'new' | 'status_changed' | 'unchanged'"""
+def upsert_bill(bill: dict, matched_keywords: list[str], existing: dict | None,
+                silent_status: bool = False) -> str:
+    """법안 저장/갱신. 반환값: 'new' | 'status_changed' | 'unchanged'
+    silent_status=True(--suppress-status-alerts 백필): 상태가 바뀌어도 prev_proc_result를 새 값으로 맞춰
+    아침 브리핑 [처리 변경](prev≠now·24h)에도 흔적을 남기지 않는다 — 2026-09-04 06:00 브리핑에 442건이
+    쏟아진 사고(#122-보론). 진짜 변동은 다음 날 크롤러가 정상 경로로 잡는다."""
     bill_id      = bill.get('BILL_ID', '')
     bill_name    = bill.get('BILL_NAME', '').strip()
     proc_result  = bill_stage.derive_stage(bill)   # PROC_RESULT 비면 단계 파생(#122)
@@ -345,7 +349,7 @@ def upsert_bill(bill: dict, matched_keywords: list[str], existing: dict | None) 
 
     # 기존 법안 — 상태 변경 확인
     if existing['proc_result'] != proc_result:
-        row['prev_proc_result'] = existing['proc_result']
+        row['prev_proc_result'] = proc_result if silent_status else existing['proc_result']
         sb.table('assembly_bills').update(row).eq('bill_id', bill_id).execute()
         return 'status_changed'
 
@@ -983,7 +987,7 @@ def main(dry_run: bool = False, suppress_status_alerts: bool = False):
             else:
                 result = 'unchanged'
         else:
-            result = upsert_bill(bill, keywords, existing)
+            result = upsert_bill(bill, keywords, existing, silent_status=suppress_status_alerts)
 
         if result == 'new':
             new_count += 1
@@ -1019,6 +1023,6 @@ if __name__ == '__main__':
     parser.add_argument('--dry-run', action='store_true',
                         help='DB 쓰기·텔레그램 알림 없이 수집/판정 결과만 출력')
     parser.add_argument('--suppress-status-alerts', action='store_true',
-                        help='DB는 갱신하되 상태변경 알림만 건너뜀 — 단계 라벨 규칙 변경 직후 1회 백필 전용(신규 법안 알림은 그대로)')
+                        help='DB는 갱신하되 상태변경 알림을 건너뛰고 prev_proc_result도 새 값으로 맞춤(아침 브리핑 처리 변경에도 안 실림) — 단계 라벨 규칙 변경 직후 1회 백필 전용(신규 법안 알림은 그대로)')
     args = parser.parse_args()
     main(dry_run=args.dry_run, suppress_status_alerts=args.suppress_status_alerts)
