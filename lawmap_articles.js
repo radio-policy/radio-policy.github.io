@@ -143,8 +143,10 @@ function lmaSentenceAround(text, s, e) {
     while ((hm = hre.exec(head)) !== null) headTitle = hm[1].replace(/\s+/g, ' ').trim();
     if (headTitle) out = headTitle + ' › ' + out;
   }
-  if (out.length > 220) {
-    var rel = s - a, lo = Math.max(0, rel - 90), hi = Math.min(out.length, rel + (e - s) + 110);
+  // 상한 420자. 넘으면 인용 앞 60자부터 문장 끝을 우선 남긴다 — 시행령 90조①의 "…사업법 제38조에 따라 …(긴 괄호)… 별표 8의 가입자 수에서 빼고 산정한다"처럼
+  //   인용이 문장 앞에 있으면 규정의 핵심(뒤쪽)이 잘려 나갔다(운영자 지적 2026-09-06)
+  if (out.length > 420) {
+    var rel = s - a, lo = Math.max(0, rel - 60), hi = Math.min(out.length, lo + 420);
     out = (lo > 0 ? '…' : '') + out.slice(lo, hi) + (hi < out.length ? '…' : '');
   }
   return out;
