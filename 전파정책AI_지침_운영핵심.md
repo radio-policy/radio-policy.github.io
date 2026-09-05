@@ -1154,6 +1154,7 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 
 - **관계도 주제 엣지를 조문 번호 없이·검증 없이 저장하지 말 것 — AI가 준 `basis`는 원문 대조 후에만 DB에 쓴다** (2026-09-05, #123). `saveLawmapData`의 검증 관문(`lawmapVerifyRelation`)을 우회하는 저장 경로를 만들지 말고, 세션이 시드 엣지를 넣을 때도 설명에 `제N조`를 적고 그 조문이 `document_chunks.article_no`에 있는지 확인한다. "관련 조문"·"(관련)" 같은 자리표시는 금지. 전수 검증에서 356건 중 214건이 틀려 있었고 그 다수가 검증 없이 저장된 ai 엣지였다 — 관계도는 전문가가 보는 화면이라 한 줄의 틀린 조문이 시스템 전체의 신뢰를 깎는다.
 - **노드명·문서명 대조를 정규화 없이 LIKE 한 번으로 끝내지 말 것** (2026-09-05, #123) — 가운뎃점 `·`/`ㆍ` 두 표기, 공백, `.pdf` 꼬리, `(소관부처)` 접두가 섞여 있어 그대로 비교하면 있는 문서를 "미보유"로 오판한다(표시광고법 사례, 노드 doc_name `.pdf` 74건). `nrm()`/`lmNormName()`을 거친 뒤 비교하고, 문서 존재 여부로 결론을 내리기 전에 두 표기를 모두 시도한다.
+- **대시보드에 새 정적 파일(js/css)을 추가하면 `.gitlab-ci.yml`의 `cp … public/` 목록에도 넣을 것** (2026-09-06, #125) — GitLab Pages는 그 목록의 파일만 배포한다(index.html·styles.css·app.js·system_prompt.js·lawmap_articles.js). 빠뜨리면 로컬·GitHub Pages(저장소 전체 서빙)에서는 되는데 **주 주소(gitlab.io)에서만 404**가 나고, `typeof` 가드 덕에 화면은 조용히 종전 동작으로 돌아가 "배포했는데 안 바뀐다"로 보인다. 배포 확인은 `curl -o /dev/null -w "%{http_code}" https://radio-policy.gitlab.io/<파일>`로 파일 단위까지.
 - **Supabase MCP `execute_sql`을 병렬 에이전트 다수가 동시에 두드리게 하지 말 것 — 동시 4개 이하, 조회는 묶어서** (2026-09-05, #123) — 12개 에이전트가 각자 조회하자 rate-limit으로 배치가 중단됐다. 검증·탐색을 병렬로 돌릴 때는 에이전트 수를 줄이거나 한 에이전트가 여러 건을 한 쿼리로 묶어 조회하게 지시한다. MCP는 읽기 전용(UPDATE는 25006)이므로 쓰기는 `sb_client` 스크립트로.
 
 ## 알려진 제약사항

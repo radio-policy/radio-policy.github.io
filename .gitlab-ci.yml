@@ -6,7 +6,7 @@ pages:
   image: alpine:latest
   script:
     - mkdir -p public
-    - cp index.html styles.css app.js system_prompt.js public/
+    - cp index.html styles.css app.js system_prompt.js lawmap_articles.js public/   # 새 정적 파일은 여기에도 추가해야 GitLab Pages에 실린다(GitHub Pages는 저장소 전체를 서빙) — #125에서 404로 실측
   artifacts:
     paths:
       - public
