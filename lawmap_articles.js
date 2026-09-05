@@ -399,17 +399,39 @@ function lmaUpdateToggle() {
 }
 
 // ── 문서명 확정 (노드 카드와 같은 규칙: doc_name → document_chunks ilike) ──
-async function lmaResolveDocName(n) {
-  if (n.doc_name) return n.doc_name;
-  try {
-    var dq = await sb.from('document_chunks').select('doc_name').ilike('doc_name', n.name + '%').limit(20);
-    var nrm = lmaNorm(n.name);
-    var ok = (dq.data || []).map(function(x) { return x.doc_name; }).filter(function(d) {
-      var nd = lmaNorm(d); return nd === nrm || nd.indexOf(nrm + '(') === 0;
+//  전수 점검(#125, 71주제)에서 잡힌 함정 셋을 여기서 처리한다:
+//   ① 노드 doc_name이 청크 없는 .pdf 이름을 가리킴 → 존재 확인 후 버림  ② 노드명 공백이 문서명과 다름("독점규제및공정거래에관한법률 시행령")
+//   → 앞 4자로 chunk_index=0 행(문서당 1행)만 조회해 정규화 비교  ③ 같은 법의 판(版)이 여럿 → 노드가 가리키는 판을 앞에, 나머지는 문자열 내림차순(조문 없으면 다음 판에서 찾음)
+async function lmaDocVersions(n) {
+  var nrm = lmaNorm(n.name), seen = {}, out = [];
+  function take(rows) {
+    (rows || []).forEach(function(x) {
+      var d = x.doc_name; if (!d || seen[d]) return;
+      var nd = lmaNorm(d).replace(/^\([^)]*\)/, '');
+      if (nd === nrm || nd.indexOf(nrm + '(') === 0) { seen[d] = 1; out.push(d); }
     });
-    if (ok.length) return ok.sort().pop();
+  }
+  try {
+    if (n.doc_name) { var r0 = await sb.from('document_chunks').select('doc_name').eq('doc_name', n.doc_name).limit(1); take(r0.data); }
+    var pre = String(n.name).replace(/\s+/g, ' ').trim().slice(0, 4);
+    var r1 = await sb.from('document_chunks').select('doc_name').eq('chunk_index', 0).ilike('doc_name', pre + '%').limit(300); take(r1.data);
+    if (!out.length) { var r2 = await sb.from('document_chunks').select('doc_name').eq('chunk_index', 0).ilike('doc_name', '%' + pre + '%').limit(300); take(r2.data); }
   } catch(e) {}
-  return null;
+  out.sort(); out.reverse();
+  if (n.doc_name && seen[n.doc_name]) out = [n.doc_name].concat(out.filter(function(d) { return d !== n.doc_name; }));
+  return out;
+}
+async function lmaDocHasScheme(docName) {
+  // '제N조' 꼴 article_no가 하나라도 있어야 조문 체계로 본다 — 부칙·별표·붙임만 있거나 '1.1 목적'식 번호(정보보호시스템 평가·인증 고시)는 아니다
+  var r = await sb.from('document_chunks').select('id').eq('doc_name', docName).filter('article_no', 'match', '^제?[0-9]+조').limit(1);
+  if (r.error) throw new Error(r.error.message);
+  return !!(r.data && r.data.length);
+}
+async function lmaFetchLead(docName) {   // 조문 체계 없는 문서(공고·협정·표준·심사지침)의 앞머리 — '전문' 항목의 본문
+  var r = await sb.from('document_chunks').select('content,chunk_index').eq('doc_name', docName).order('chunk_index').limit(3);
+  var acc = '';
+  (r.data || []).forEach(function(c) { acc = lmaJoinChunks(acc, c.content || ''); });
+  return acc;
 }
 
 // ── 조문 청크 조회: 한 문서의 여러 조문을 한 번에 (article_no '제19조(…)'/'19조(…)' 두 형태) ──
@@ -436,6 +458,10 @@ function lmaJoinChunks(acc, next) {
   var max = Math.min(140, acc.length, next.length);
   for (var k = max; k >= 20; k--) { if (acc.slice(-k) === next.slice(0, k)) return acc + next.slice(k); }
   return acc + '\n' + next;
+}
+function lmaItemLabel(k, a) {   // '37조 무선통신시설의 공동이용' / '전문 (조문 체계 없음)'
+  if (k === '전문') return '전문 (조문 체계 없음)';
+  return lmaKeyLabel(k).replace(/^제/, '') + (a && a.title ? ' ' + a.title : '');
 }
 function lmaTitleOf(articleNo) {
   var m = String(articleNo || '').match(/\(([^()]*(?:\([^()]*\)[^()]*)*)\)\s*$/);
@@ -484,12 +510,29 @@ async function lmaBuildModel(topicId) {
   // 문서명·근거 조문 (병렬 조회는 4개씩)
   for (var i = 0; i < laws.length; i += 4) {
     await Promise.all(laws.slice(i, i + 4).map(async function(L) {
-      L.docName = await lmaResolveDocName(L.node);
+      L.versions = await lmaDocVersions(L.node);
+      L.docName = L.versions[0] || null;
       L.keys = lmaBasisKeys(L.edge.description || '', L.node.name);
-      if (L.docName && !L.keys.length) L.keys = ['1조'];          // 고시 전체가 주제일 때: 목적 조항으로 대표
-      if (L.docName && L.keys.length) L.articles = await lmaFetchArticles(L.docName, L.keys);
-      L.primaries = L.keys.filter(function(k) { return !!L.articles[k]; });
-      L.missing = L.keys.filter(function(k) { return !L.articles[k]; });
+      L.noScheme = false;
+      if (L.docName) {
+        if (!(await lmaDocHasScheme(L.docName))) {
+          // 공고·협정·표준·공정위 심사지침처럼 article_no가 없는(부칙만 있는) 문서 → '전문' 한 항목으로 대표
+          L.noScheme = true; L.keys = [];
+          L.articles['전문'] = { key: '전문', articleNo: '', title: '', content: await lmaFetchLead(L.docName) };
+        } else {
+          if (!L.keys.length) L.keys = ['1조'];          // 고시 전체가 주제일 때: 목적 조항으로 대표
+          L.articles = await lmaFetchArticles(L.docName, L.keys);
+          // 노드가 가리키는 판에 없는 조문은 다른 판에서 (지방세법 시행령 39조: 구판 PDF는 조문 파싱이 비어 있었다)
+          for (var vi = 1; vi < L.versions.length; vi++) {
+            var miss0 = L.keys.filter(function(k) { return !L.articles[k]; });
+            if (!miss0.length) break;
+            var got0 = await lmaFetchArticles(L.versions[vi], miss0);
+            Object.keys(got0).forEach(function(k) { L.articles[k] = got0[k]; });
+          }
+        }
+      }
+      L.primaries = L.noScheme ? ['전문'] : L.keys.filter(function(k) { return !!L.articles[k]; });
+      L.missing = L.noScheme ? [] : L.keys.filter(function(k) { return !L.articles[k]; });
     }));
   }
   laws.forEach(function(L) {
@@ -558,8 +601,8 @@ async function lmaBuildModel(topicId) {
 
   // 상자·조문 항목
   var boxes = laws.map(function(L) {
-    var items = L.primaries.map(function(k) { return { id: L.node.id + '#' + k, key: k, label: lmaWrapLabel(lmaKeyLabel(k).replace(/^제/, '') + (L.articles[k].title ? ' ' + L.articles[k].title : ''), 11), primary: true }; })
-      .concat(L.followers.map(function(k) { return { id: L.node.id + '#' + k, key: k, label: lmaWrapLabel(lmaKeyLabel(k).replace(/^제/, '') + (L.articles[k].title ? ' ' + L.articles[k].title : ''), 11), primary: false }; }));
+    var items = L.primaries.map(function(k) { return { id: L.node.id + '#' + k, key: k, label: lmaWrapLabel(lmaItemLabel(k, L.articles[k]), 11), primary: true }; })
+      .concat(L.followers.map(function(k) { return { id: L.node.id + '#' + k, key: k, label: lmaWrapLabel(lmaItemLabel(k, L.articles[k]), 11), primary: false }; }));
     if (!items.length) {
       items.push({ id: L.node.id + '#none', key: null, primary: true,
         label: !L.docName ? '원문 KB 미보유' : (L.missing && L.missing.length ? lmaKeyLabel(L.missing[0]) + ' 원문에 없음' : '조문 체계 없음') });
@@ -708,7 +751,7 @@ function lmaShowArticleCard(L, key, model) {
       ' <span style="font-size:10px;padding:1px 7px;border-radius:999px;background:' + color + '22;border:1px solid ' + color + '66;color:var(--text-secondary)">' + (LAWMAP_TYPE_LABEL[L.node.node_type] || '') + '</span>' +
       ' <span style="font-size:11px;color:var(--text-tertiary)">' + (isPrimary ? '근거 조문' : '근거 조문이 인용한 조문') + '</span></div>' +
     '<div style="margin:5px 0;padding:6px 10px;border-left:3px solid ' + color + ';background:var(--bg-secondary);border-radius:0 6px 6px 0;font-size:12.5px;color:var(--text-primary)"><b>' +
-      lmEsc(lmaKeyLabel(key)) + (a.title ? '(' + lmEsc(a.title) + ')' : '') + '</b>' +
+      lmEsc(key === '전문' ? '전문(조문 체계 없는 문서 — 앞부분)' : lmaKeyLabel(key)) + (a.title ? '(' + lmEsc(a.title) + ')' : '') + '</b>' +
       (isPrimary && L.edge.description ? '<div style="font-size:11.5px;color:var(--text-secondary);margin-top:2px">🎯 ' + lmEsc(model.topic.name) + '에서의 역할: ' + lmEsc(L.edge.description) + '</div>' : '') + '</div>' +
     '<pre style="white-space:pre-wrap;font-family:inherit;font-size:12px;line-height:1.55;color:var(--text-primary);background:var(--bg-secondary);padding:8px 10px;border-radius:6px;max-height:260px;overflow:auto;margin:6px 0">' + lmEsc(body.slice(0, 2400)) + (body.length > 2400 ? '\n…' : '') + '</pre>' +
     ((outs.length || ins.length) ? '<div style="font-size:11px;color:var(--text-tertiary);margin-top:4px">이 조문의 인용 관계 (화면 안)</div><ul style="margin:2px 0 0 18px;padding:0;font-size:12px;color:var(--text-secondary)">' +
