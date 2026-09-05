@@ -114,7 +114,7 @@ function lmaExtractCitations(content, ctx) {
     keys = lmaExpandKeys(m[1], m[2]);
     para = lmaLastPara(before);
     prevEnd = m.index + m[0].length; prevTarget = target;
-    snip = text.slice(Math.max(0, m.index - 30), m.index + m[0].length + 30).replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
+    snip = lmaSentenceAround(text, m.index, m.index + m[0].length);
     for (i = 0; i < keys.length; i++) {
       if (target === 'self' && ctx.selfKey && keys[i] === ctx.selfKey) continue;
       k = target + '|' + keys[i] + '|' + para;
@@ -122,6 +122,24 @@ function lmaExtractCitations(content, ctx) {
       seen[k] = 1;
       out.push({ target: target, key: keys[i], fromPara: para, snippet: snip });
     }
+  }
+  return out;
+}
+
+/** 인용 위치를 감싸는 문장 하나 — 앞은 줄바꿈·'다.'·항(①)·호("1. ") 표지 뒤부터, 뒤는 '다.'/줄바꿈까지. 30자 앞뒤로 자르던 종전 방식은
+ *  "분기로 한다.나. 감면대상 무선국 중 …"처럼 문장이 중간에서 잘려 툴팁이 읽히지 않았다(운영자 지적). 220자 상한, 넘으면 인용 주변만 남기고 '…' */
+function lmaSentenceAround(text, s, e) {
+  var head = text.slice(0, s), tail = text.slice(e);
+  var starts = [head.lastIndexOf('\n') + 1];
+  var mm, re = /다\.\s*|[①-⑳]\s*|(?:^|\s)(?:\d{1,2}|[가-하])\.\s+/g;
+  while ((mm = re.exec(head)) !== null) starts.push(mm.index + mm[0].length);
+  var a = Math.max.apply(null, starts.concat([0]));
+  var endRe = /다\.|\n/g, b = text.length;
+  if ((mm = endRe.exec(tail)) !== null) b = e + mm.index + (mm[0] === '\n' ? 0 : mm[0].length);
+  var out = text.slice(a, b).replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
+  if (out.length > 220) {
+    var rel = s - a, lo = Math.max(0, rel - 90), hi = Math.min(out.length, rel + (e - s) + 110);
+    out = (lo > 0 ? '…' : '') + out.slice(lo, hi) + (hi < out.length ? '…' : '');
   }
   return out;
 }
