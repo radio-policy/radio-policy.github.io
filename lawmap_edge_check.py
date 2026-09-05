@@ -231,6 +231,15 @@ def run(since_hours: float, notify: bool, notify_all: bool):
                 art_cache[docs] = fetch_articles(sb, docs)
             arts = art_cache[docs]
         level, code, detail = judge(e.get("description"), e["target"], bool(docs), arts)
+        # AI 즉석 생성이 'KB 미보유' 꼬리표로 남긴 엣지는 등재 후보이거나 지어낸 문서명이다(2026-09-05 '전파사용료 징수에 관한 고시' — 법제처에 없음).
+        # 생성 후 3일 안에는 WARN으로 올려 운영자가 법제처 검색으로 존재를 확인하고 등재/삭제를 결정하게 한다.
+        if code == "doc_missing_tagged" and e.get("source") == "ai":
+            try:
+                age_h = (datetime.now(timezone.utc) - datetime.fromisoformat(e["created_at"].replace("Z", "+00:00"))).total_seconds() / 3600
+            except Exception:
+                age_h = 0
+            if age_h <= 72:
+                level, code, detail = "WARN", "doc_missing_ai_new", "AI가 붙인 KB 미보유 문서 — 법제처 존재 확인 후 등재/삭제 결정"
         results.append((level, code, detail, e))
 
     counts = {}
