@@ -6,7 +6,7 @@
 <title>전파정책 전문가 AI — SKT Comm센터 기술정책팀</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <link rel="stylesheet" href="styles.css?v=20260826a">
+  <link rel="stylesheet" href="styles.css?v=20260906a">
 
 </head>
 <body>
@@ -66,6 +66,7 @@
         <!-- 계정 — 인라인 요소로 두어 모바일에서도 보이게 (.btn 숨김 규칙 회피) -->
         <span id="acct-label" onclick="onAccountClick()" title="계정" style="cursor:pointer;font-size:11px;display:inline-flex;align-items:center;gap:3px;color:var(--text-secondary);padding:4px 6px;white-space:nowrap"><i class="ti ti-user"></i>로그인</span>
         <span id="acct-logout" onclick="doLogout()" title="로그아웃" style="display:none;cursor:pointer;font-size:11px;color:var(--text-secondary);padding:4px 8px;white-space:nowrap;border:0.5px solid var(--border-mid);border-radius:var(--radius-md)"><i class="ti ti-logout"></i> 로그아웃</span>
+        <button class="btn" id="ui-wide-btn" onclick="toggleWide()" title="사이드바를 접고 본문을 화면 너비로 (다시 누르면 원래대로)"><i class="ti ti-arrows-horizontal"></i>넓게 보기</button>
         <button class="btn" onclick="smartRefresh()"><i class="ti ti-refresh"></i>새로고침</button>
         <button onclick="go('settings',null)" title="설정" style="background:none;border:none;cursor:pointer;color:var(--text-secondary);font-size:16px;padding:4px;line-height:1"><i class="ti ti-settings"></i></button>
       </div>
@@ -75,9 +76,10 @@
 
       <!-- AI 자문 -->
       <div class="panel" id="panel-chat">
-        <div class="chat-wrap" style="height:calc(100vh - 200px); max-height: 520px;">
-          <div style="display:flex;justify-content:flex-end;margin-bottom:8px;flex-shrink:0">
+        <div class="chat-wrap" id="chat-wrap" style="height:calc(100vh - 200px); max-height: 520px;">
+          <div style="display:flex;justify-content:flex-end;gap:6px;margin-bottom:8px;flex-shrink:0">
             <button class="btn" onclick="openChatHistory()"><i class="ti ti-history"></i>자문 이력</button>
+            <button class="btn fs-btn" onclick="toggleFullscreen('chat-wrap')" title="이 화면만 전체화면 (Esc로 종료)"><i class="ti ti-maximize"></i>전체화면</button>
           </div>
           <div class="chat-area" id="chat-area">
             <div class="msg msg-ai">
@@ -393,6 +395,7 @@
           <button class="btn" id="lawmap-notice-toggle" style="font-size:11px;padding:3px 10px;display:none" onclick="toggleLawMapNotice()"><i class="ti ti-eye"></i> 고시 펼치기</button>
           <span id="lawmap-status" style="font-size:11px;color:var(--text-secondary)"></span>
           <button class="btn" id="lawmap-enrich-btn" style="margin-left:auto;font-size:11px;padding:3px 10px;display:none" onclick="enrichLawMapTopic()"><i class="ti ti-sparkles"></i> AI로 보강</button>
+          <button class="btn fs-btn" style="font-size:11px;padding:3px 10px" onclick="toggleFullscreen('lawmap-graph')" title="그래프만 전체화면 (Esc로 종료) — 휠 확대·드래그·클릭 그대로"><i class="ti ti-maximize"></i>전체화면</button>
         </div>
         <div id="lawmap-graph" class="lawmap-graph"><div style="color:var(--text-secondary);font-size:12px;padding:16px">불러오는 중...</div></div>
         <div class="lawmap-legend">
@@ -1171,7 +1174,7 @@
 <script src="https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js"></script>
 <script>if(typeof pdfjsLib!=='undefined'){pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';}</script>
 <script src="system_prompt.js?v=20260819a"></script>
-<script src="app.js?v=20260906b"></script>
+<script src="app.js?v=20260906c"></script>
 <script src="lawmap_articles.js?v=20260906i"></script>
 </body>
 </html>

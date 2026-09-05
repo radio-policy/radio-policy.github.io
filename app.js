@@ -11658,3 +11658,38 @@ document.addEventListener('DOMContentLoaded', function() {
   refreshOpsLight();   // 상단바 상태등 — 페이지 로드 시 1회 (이후 smartRefresh마다 갱신)
   setTimeout(autoExtractTermsIfNeeded, 60000);
 });
+
+// ── 넓게 보기 / 한 영역 전체화면 (2026-09-06, 배경역사 #126) ──
+//  대시보드 프레임은 1100×680 카드(.app)라 프로젝터·큰 모니터에서 작다(운영자). 넓게 보기 = 사이드바 접고 프레임을 화면 크기로,
+//  전체화면 = 관계도 그래프(#lawmap-graph) 또는 자문 영역(#chat-wrap)만 Fullscreen API로. 둘 다 기본은 꺼짐, 넓게 보기만 localStorage 기억.
+function applyWide(on) {
+  document.body.classList.toggle('ui-wide', !!on);
+  var b = document.getElementById('ui-wide-btn');
+  if (b) b.innerHTML = on ? '<i class="ti ti-arrows-diagonal-minimize-2"></i>원래 크기' : '<i class="ti ti-arrows-horizontal"></i>넓게 보기';
+  try { window.dispatchEvent(new Event('resize')); } catch(e) {}
+  if (typeof _lawMapNet !== 'undefined' && _lawMapNet) { try { _lawMapNet.redraw(); _lawMapNet.fit({ animation: false }); } catch(e) {} }
+}
+function toggleWide() {
+  var on = !document.body.classList.contains('ui-wide');
+  try { localStorage.setItem('ui_wide', on ? '1' : '0'); } catch(e) {}
+  applyWide(on);
+}
+function toggleFullscreen(id) {
+  var el = document.getElementById(id);
+  if (!el) return;
+  if (document.fullscreenElement) { try { document.exitFullscreen(); } catch(e) {} return; }
+  if (!el.requestFullscreen) { alert('이 브라우저는 전체화면을 지원하지 않습니다. 대신 "넓게 보기"와 브라우저 전체화면(F11)을 함께 쓰세요.'); return; }
+  if (!el.querySelector('.fs-hint')) { var h = document.createElement('div'); h.className = 'fs-hint'; h.textContent = 'Esc 키로 전체화면 종료 · 휠로 확대·축소'; el.appendChild(h); }
+  el.requestFullscreen().catch(function(e) { console.warn('fullscreen 실패:', e); });
+}
+document.addEventListener('fullscreenchange', function() {
+  // 그래프는 크기가 바뀌면 다시 그려야 한다(vis-network는 컨테이너 크기를 스스로 다시 읽지 않는다)
+  if (typeof _lawMapNet !== 'undefined' && _lawMapNet) {
+    setTimeout(function() { try { _lawMapNet.setSize('100%', '100%'); _lawMapNet.redraw(); _lawMapNet.fit({ animation: false }); } catch(e) {} }, 80);
+  }
+  document.querySelectorAll('.fs-btn').forEach(function(b) {
+    var on = !!document.fullscreenElement;
+    b.innerHTML = on ? '<i class="ti ti-minimize"></i>전체화면 종료' : '<i class="ti ti-maximize"></i>전체화면';
+  });
+});
+(function() { try { if (localStorage.getItem('ui_wide') === '1') applyWide(true); } catch(e) {} })();

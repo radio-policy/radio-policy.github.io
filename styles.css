@@ -490,3 +490,18 @@ mark.kb-hit { background: rgba(245, 197, 24, .38); color: inherit; border-radius
 /* 국회 법안 제안이유 3줄 접기 — 클릭하면 펼침(.open). 데이터는 전문 유지, 표시만 제한 */
 .asm-sum { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; cursor: pointer; }
 .asm-sum.open { display: block; -webkit-line-clamp: unset; overflow: visible; }
+
+/* ── 넓게 보기 / 전체화면 (2026-09-06, 배경역사 #126) — 프로젝터·큰 화면용. 버튼을 누르지 않으면 종전 레이아웃 그대로 ── */
+body.ui-wide { align-items: stretch; }
+body.ui-wide .app { max-width: none; height: calc(100vh - 16px); margin: 8px; border-radius: var(--radius-md); }
+body.ui-wide .sidebar { display: none; }
+body.ui-wide .chat-wrap { max-height: none !important; height: calc(100vh - 150px) !important; }
+body.ui-wide .lawmap-graph { height: calc(100vh - 330px); }
+body.ui-wide .topbar-title::before { content: "☰ "; color: var(--text-tertiary); }
+/* 한 영역만 전체화면(Fullscreen API): 배경·여백을 채워 검은 화면이 되지 않게 */
+:fullscreen { background: var(--bg-primary) !important; }
+#lawmap-graph:fullscreen { height: 100vh !important; min-height: 0 !important; border: 0 !important; border-radius: 0 !important; }
+#chat-wrap:fullscreen { height: 100vh !important; max-height: none !important; padding: 20px 8vw !important; box-sizing: border-box; }
+#chat-wrap:fullscreen .msg { font-size: 15px; max-width: 92%; }
+.fs-hint { display: none; }
+:fullscreen .fs-hint { display: block; position: fixed; top: 10px; right: 14px; z-index: 9; font-size: 11px; color: var(--text-secondary); background: var(--bg-secondary); border: 0.5px solid var(--border-light); border-radius: 999px; padding: 3px 10px; }
