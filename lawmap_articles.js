@@ -726,6 +726,10 @@ async function lmaRenderTopic(topicId) {
   });
   var visEdges = [];
   model.laws.forEach(function(L) {
+    if (!L.primaries.length) {   // 원문 미보유·조문 없음 자리표시도 주제와 점선으로 잇는다 — 떠 있는 상자는 "왜 있나"를 묻게 한다(운영자 지적)
+      visEdges.push({ id: 't>' + L.node.id + '#none', from: model.topic.id, to: L.node.id + '#none', dashes: [4, 4], width: 1,
+        color: { color: LAWMAP_COLORS.topic, opacity: 0.35 }, arrows: { to: { enabled: false } }, smooth: false, title: L.edge.description || '' });
+    }
     L.primaries.forEach(function(k) {
       visEdges.push({ id: 't>' + L.node.id + '#' + k, from: model.topic.id, to: L.node.id + '#' + k, dashes: [4, 4], width: 1,
         color: { color: LAWMAP_COLORS.topic, opacity: 0.45 }, arrows: { to: { enabled: false } }, smooth: false, title: L.edge.description || '' });
