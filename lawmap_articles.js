@@ -134,9 +134,15 @@ function lmaSentenceAround(text, s, e) {
   var mm, re = /다\.\s*|[①-⑳]\s*|(?:^|\s)(?:\d{1,2}|[가-하])\.\s+/g;
   while ((mm = re.exec(head)) !== null) starts.push(mm.index + mm[0].length);
   var a = Math.max.apply(null, starts.concat([0]));
-  var endRe = /다\.|\n/g, b = text.length;
-  if ((mm = endRe.exec(tail)) !== null) b = e + mm.index + (mm[0] === '\n' ? 0 : mm[0].length);
+  var endRe = /다\.|\n|　/g, b = text.length;   // 전각 공백(　)은 조문 없는 고시가 항목을 나누는 구분자
+  if ((mm = endRe.exec(tail)) !== null) b = e + mm.index + (mm[0] === '다.' ? mm[0].length : 0);
   var out = text.slice(a, b).replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
+  // 목(가.·나.)으로 시작하면 바로 위 번호 항목의 제목을 앞에 — "나. 감면대상 무선국 중 …"만으로는 무슨 항목인지 모른다(특별재난지역 감면 고시, 운영자 지적)
+  if (/^[가-하]\.\s/.test(out)) {
+    var hm, hre = /(?:^|\s)(\d{1,2}\.\s*[^\s:.]{1,20}[^.:]{0,20}?)(?=\s*[:：]|\s*가\.|\s*$)/g, headTitle = '';
+    while ((hm = hre.exec(head)) !== null) headTitle = hm[1].replace(/\s+/g, ' ').trim();
+    if (headTitle) out = headTitle + ' › ' + out;
+  }
   if (out.length > 220) {
     var rel = s - a, lo = Math.max(0, rel - 90), hi = Math.min(out.length, rel + (e - s) + 110);
     out = (lo > 0 ? '…' : '') + out.slice(lo, hi) + (hi < out.length ? '…' : '');
@@ -515,6 +521,28 @@ function lmaResolveTarget(cit, L, laws) {
   return laws.find(function(X) { var nx = lmaNorm(X.node.name); return nx === k || nx.indexOf(k) === 0 && nx.length - k.length <= 2; }) || null;
 }
 
+// 주제 엣지 설명의 타 법령 조문("법 제67조", "사업법 제28조④", "전파법 시행령 제91조") → 화면 안 법령·조문으로 해소
+function lmaDescCrossRefs(description, L, laws) {
+  var text = String(description || '').replace(LMA_RANGE2_RE, '제$1$2$3조');
+  var out = [], seen = {}, m, before, lw, word, T, keys, i;
+  var re = new RegExp(LMA_ART_RE.source, 'g');
+  var own = lmaBasisKeys(description, L.node.name);
+  while ((m = re.exec(text)) !== null) {
+    keys = lmaExpandKeys(m[1], m[2]);
+    if (keys.some(function(k) { return own.indexOf(k) >= 0; })) continue;    // 자기 조문
+    before = text.slice(0, m.index);
+    lw = LMA_LAWWORD_RE.exec(before);
+    word = lw ? lmaNorm(lw[1]) : '';
+    if (!word) continue;                                                       // 법령 낱말 없는 교차 조문은 판단 불가
+    if (word === '법') T = L.parent || null;
+    else if (word === '영' || word === '시행령') T = L.parentDecree || null;
+    else T = laws.find(function(X) { var nx = lmaNorm(X.node.name); return X !== L && (nx === word || nx.indexOf(word) >= 0 || word.indexOf(nx) >= 0); }) || null;
+    if (!T || T === L) continue;
+    for (i = 0; i < keys.length; i++) { var id = T.node.id + '#' + keys[i]; if (!seen[id]) { seen[id] = 1; out.push({ T: T, key: keys[i] }); } }
+  }
+  return out;
+}
+
 // ── 모델 구축 ──
 async function lmaBuildModel(topicId) {
   var topic = _lawMapNodes.find(function(n) { return n.id === topicId; });
@@ -621,6 +649,18 @@ async function lmaBuildModel(topicId) {
     edges.push({ id: L.node.id + '>deleg>' + L.parent.node.id, from: { L: L, key: L.primaries[0], para: '' }, to: { L: L.parent, key: L.parent.primaries[0] }, kind: 'deleg', count: 1 });
   });
 
+  // 설명에 적힌 위임 근거: "(법 제67조제1항제7호 위임)", "사업법 제28조④" — 본문에 인용이 없어도 전수 검증(#123)으로 정정된 설명이므로 점선으로 잇는다
+  //   (특별재난지역 감면 고시 → 전파법 67조: 고시 본문은 시행령 91조③만 인용하고 자기 근거 67조는 설명에만 있었다)
+  laws.forEach(function(L) {
+    if (!L.primaries.length) return;
+    lmaDescCrossRefs(L.edge.description || '', L, laws).forEach(function(x) {
+      if (!x.T.articles[x.key]) return;
+      var dup = edges.some(function(e) { return e.from.L === L && e.to.L === x.T && e.to.key === x.key; });
+      if (dup) return;
+      edges.push({ id: L.node.id + '>desc>' + x.T.node.id + '#' + x.key, from: { L: L, key: L.primaries[0], para: '' }, to: { L: x.T, key: x.key }, kind: 'deleg', viaDesc: true, count: 1 });
+    });
+  });
+
   // 상자·조문 항목
   var boxes = laws.map(function(L) {
     var items = L.primaries.map(function(k) { return { id: L.node.id + '#' + k, key: k, label: lmaWrapLabel(lmaItemLabel(k, L.articles[k]), 11), primary: true }; })
@@ -701,7 +741,8 @@ async function lmaRenderTopic(topicId) {
       color: { color: '#8a8f98', opacity: 0.75, highlight: '#5b7ff5' },
       font: { size: 10, color: subColor, strokeWidth: 3, strokeColor: bgColor, align: 'middle' },
       smooth: { type: 'curvedCW', roundness: 0.12 },
-      title: e.snippet ? ('“' + e.snippet + '”') : (e.kind === 'deleg' ? '위임 관계(본문 인용 없음)' : '')
+      title: '[' + lmaShortLawName(e.from.L.node.name) + ' ' + lmaKeyLabel(e.from.key).replace(/^제전문$/, '전문') + (e.para || '') + ' → ' + lmaShortLawName(e.to.L.node.name) + ' ' + lmaKeyLabel(e.to.key) + ']\n' +
+        (e.snippet ? ('“' + e.snippet + '”') : (e.kind === 'deleg' ? (e.viaDesc ? '위임 관계 — 주제 엣지 설명에 적힌 위임 근거(본문에는 조문 인용 없음)' : '위임 관계(본문 인용 없음)') : ''))
     });
   });
   el.innerHTML = '';
