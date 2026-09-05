@@ -409,7 +409,7 @@ function lmaEnsureToggle() {
   if (!anchor) return;
   var b = document.createElement('button');
   b.id = 'lma-toggle'; b.className = 'btn';
-  b.style.cssText = 'font-size:11px;padding:2px 8px;margin-left:6px;display:none';
+  b.style.cssText = 'font-size:11px;padding:2px 8px;margin-left:auto;display:none';   // 보강 버튼이 숨겨져도 오른쪽 정렬 유지
   b.title = '큰 그림(법령 단위) ↔ 자세한 그림(조문 단위: 동그라미=조문, 상자=법령, 선=근거 조문 사이의 실제 인용)';
   b.onclick = function() { lmaSetMode(!_lmaMode); };
   anchor.insertAdjacentElement('afterend', b);
@@ -684,7 +684,7 @@ async function lmaRenderTopic(topicId) {
   lmaEnsureToggle();
   updateLawMapNoticeToggle(false);
   var enrichBtn = document.getElementById('lawmap-enrich-btn');
-  if (enrichBtn) enrichBtn.style.display = 'inline-flex';
+  if (enrichBtn) enrichBtn.style.display = (typeof LAWMAP_ENRICH_HIDDEN !== 'undefined' && LAWMAP_ENRICH_HIDDEN) ? 'none' : 'inline-flex';
   lmaUpdateToggle();
   var model = _lmaCache[topicId];
   if (!model) {

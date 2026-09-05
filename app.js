@@ -10660,6 +10660,10 @@ async function promoteFinalToSample() {
 //  성장 경로: ①자문 자동 축적(<lawmap> 블록) ②탭 즉석 AI 생성 ③AI 보강 ④인용망 스크립트(build_law_citation_graph.py)
 // ════════════════════════════════════════════
 var LAWMAP_COLORS = { topic:'#5b7ff5', law:'#2ea060', decree:'#1f9e9e', rules:'#1f9e9e', notice:'#e08a3c', etc:'#d5486a' };
+// 'AI로 보강' 버튼 숨김 (2026-09-06 운영자 결정, 배경역사 #125-보론6) — 71주제 전수 검증이 끝나 "빠진 법령 채우기"는 달성됐고,
+//  보강 1회가 지어낸 문서명·범위 밖 법령·정의 조항을 붙인 실측(전파사용료). 발표 뒤 "제안 → 사람 승인 → 저장" 형태로 되살릴 때 false로.
+//  enrichLawMapTopic() 자체는 남겨 둔다(콘솔 호출 가능).
+var LAWMAP_ENRICH_HIDDEN = true;
 var LAWMAP_TYPE_LABEL = { topic:'주제', law:'법률', decree:'시행령', rules:'규칙·세칙', notice:'고시·행정규칙', etc:'기타·국제' };
 
 let _lawMapLoaded = false;
@@ -10872,7 +10876,7 @@ function renderLawMapGraph(focusId) {
   updateLawMapNoticeToggle(!_lawMapFocusId);
   // 보강 버튼: 주제 포커스일 때만 노출
   var enrichBtn = document.getElementById('lawmap-enrich-btn');
-  if (enrichBtn) enrichBtn.style.display = (focusNode && focusNode.node_type === 'topic') ? 'inline-flex' : 'none';
+  if (enrichBtn) enrichBtn.style.display = (focusNode && focusNode.node_type === 'topic' && !LAWMAP_ENRICH_HIDDEN) ? 'inline-flex' : 'none';
 
   var css = getComputedStyle(document.documentElement);
   var textColor = (css.getPropertyValue('--text-primary') || '').trim() || '#333';
