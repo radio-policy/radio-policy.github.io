@@ -10971,9 +10971,55 @@ async function askLawMap() {
   if (!q) return;
   if (!sb) { setLawMapStatus('⚠️ Supabase 연결이 필요합니다 (설정 탭)'); return; }
   if (!_lawMapLoaded) await loadLawMap();
+
+  // ── "법령명 + 제N조" 질문 (2026-09-05, 배경역사 #124): 주제 단어 매칭이 아니라 그 조문을 근거로 삼는 주제로 간다 ──
+  //  "전기통신사업법 37조"가 '통신사업 회계분리'(제49조)에 부분일치로 붙어 엉뚱한 조문을 보여준 사고.
+  var artQ = lawmapParseArticleQuery(q);
+  if (artQ) {
+    var lawNode = lawmapFindNodeByName(artQ.law);
+    if (lawNode) {
+      var hits = [];
+      _lawMapEdges.forEach(function(e) {
+        if (e.source_id !== lawNode.id && e.target_id !== lawNode.id) return;
+        var otherId = e.source_id === lawNode.id ? e.target_id : e.source_id;
+        var t = _lawMapNodes.find(function(x) { return x.id === otherId; });
+        if (t && t.node_type === 'topic' && lawmapDescCites(e.description, artQ.key)) hits.push({ topic: t, edge: e });
+      });
+      if (hits.length) {
+        // 그 조문만 콕 찍은(인용 조문 수가 적은) 주제를 앞에 — 재난로밍(제37·38·44조)보다 무선통신시설 공동이용(제37조)
+        hits.sort(function(a, b) { return lawmapDescArticleCount(a.edge.description) - lawmapDescArticleCount(b.edge.description) || (b.edge.weight || 0) - (a.edge.weight || 0); });
+        var first = hits[0].topic;
+        var sel0 = document.getElementById('lawmap-topic-select');
+        if (sel0) sel0.value = first.id;
+        renderLawMapGraph(first.id);
+        var others = hits.slice(1).map(function(h) {
+          return '<button class="btn" style="font-size:11px;padding:2px 8px" onclick="lawmapGoTopic(\'' + h.topic.id + '\',\'' + lawNode.id + '\')">' + lmEsc(h.topic.name) + '</button>';
+        }).join(' ');
+        setLawMapStatus('✔ <b>' + lmEsc(lawNode.name) + ' 제' + lmEsc(artQ.key) + '</b>을 근거로 하는 주제: <b>' + lmEsc(first.name) + '</b>' +
+          (others ? ' · 같은 조문을 근거로 하는 다른 주제: ' + others : '') + ' — API 호출 없음');
+        showLawMapNodeDetail(lawNode.id);   // 주제 맥락의 법령 카드: 🎯 역할 + 📌 제N조 발췌
+        return;
+      }
+      // 이 조문을 근거로 삼는 주제가 없음 → 법령 노드 포커스 + 해당 조문 원문 발췌 (엉뚱한 주제로 가지 않음)
+      renderLawMapGraph(lawNode.id);
+      setLawMapStatus(lmEsc(lawNode.name) + ' 제' + lmEsc(artQ.key) + '을 근거로 삼는 주제가 아직 없습니다 — 법령 중심 관계와 조문 원문을 표시합니다 · ' +
+        '<button class="btn btn-primary" style="font-size:11px;padding:2px 10px" onclick="generateLawMapTopic()"><i class="ti ti-sparkles"></i> AI로 관계도 생성 (1회 과금)</button>');
+      await showLawMapNodeDetail(lawNode.id);
+      var docName0 = lawNode.doc_name || null;
+      if (!docName0) {
+        try { var dq0 = await sb.from('document_chunks').select('doc_name').ilike('doc_name', lawNode.name + '%').limit(1); if (dq0.data && dq0.data.length) docName0 = dq0.data[0].doc_name; } catch(e) {}
+      }
+      if (docName0) fillLawMapArticle(lawNode, '제' + artQ.key, docName0, lawNode.name, null);
+      return;
+    }
+    // 법령 노드가 관계망에 없으면 아래 일반 주제 매칭으로 (법령명 토큰은 매칭에서 제외됨)
+  }
+
   // 양방향 매칭: ① 주제명의 핵심 단어가 질문에 실제로 들어있어야 함(질문 공백 제거 후 부분일치)
   //             ② 질문 키워드가 주제 설명에 들어가면 가점(동점 해소)
-  var qns = q.replace(/\s+/g, '').toLowerCase();
+  //  법령명 토큰("전기통신사업법", "전파법 시행령")은 먼저 걷어낸다 — '통신사업'이 '전기통신사업법' 안에 부분일치하는 오탐 차단(#124)
+  var qStripped = q.replace(/(^|\s)[가-힣A-Za-z0-9·ㆍ]*(?:법|법률|시행령|시행규칙|규칙|고시)(?=\s|$|\d)/g, '$1 ');
+  var qns = qStripped.replace(/\s+/g, '').toLowerCase();
   var kws = extractKeywords(q).filter(function(k) { return !LAWMAP_MATCH_STOP[k]; });
   var best = null, bestScore = 0;
   _lawMapNodes.filter(function(n) { return n.node_type === 'topic'; }).forEach(function(n) {
@@ -10997,8 +11043,54 @@ async function askLawMap() {
   }
 }
 
+// ── "법령명 + 제N조" 질문 보조 (#124) ──
+function lawmapParseArticleQuery(q) {   // "전기통신사업법 37조", "전파법 시행령 제10조의2 …" → {law, key:'37조'|'10조의2'}
+  var m = String(q || '').match(/^\s*([가-힣A-Za-z0-9·ㆍ()\s]*?(?:법|법률|령|규칙|고시|규정|기준|지침|분배표))\s*(?:제\s*)?(\d+)\s*조(?:\s*의\s*(\d+))?(?:\s|$|[^\d])/);
+  if (!m) return null;
+  var law = m[1].replace(/\s+/g, ' ').trim();
+  if (law.length < 2) return null;
+  return { law: law, key: m[2] + '조' + (m[3] ? '의' + m[3] : '') };
+}
+function lawmapFindNodeByName(name) {   // 노드명 정규화 일치(가운뎃점·공백 무시), 주제 제외
+  var k = lmNormName(name);
+  return _lawMapNodes.find(function(n) { return n.node_type !== 'topic' && lmNormName(n.name) === k; }) || null;
+}
+var LAWMAP_DESC_ART_RE = /제\s*(\d+(?:\s*[·ㆍ,~∼\-]\s*\d+)*)\s*조(?:\s*의\s*(\d+))?/g;
+function lawmapDescCites(desc, key) {   // 설명이 그 조문을 인용하나 — "제37조", "제35~37조", "제35·37조" 인식, 제37조≠제37조의2
+  var mm = String(key || '').match(/^(\d+)조(?:의(\d+))?$/);
+  if (!mm) return false;
+  var n = parseInt(mm[1], 10), ui = mm[2] || null, m;
+  var d = lawmapDescNormRange(desc);
+  LAWMAP_DESC_ART_RE.lastIndex = 0;
+  while ((m = LAWMAP_DESC_ART_RE.exec(d))) {
+    var parts = m[1].split(/[·ㆍ,]/), hit = false;
+    parts.forEach(function(p) {
+      var r = p.split(/[~∼\-]/).map(function(x) { return parseInt(x, 10); });
+      if (r.length === 2 && !isNaN(r[0]) && !isNaN(r[1])) { if (n >= r[0] && n <= r[1]) hit = true; }
+      else if (r[0] === n) hit = true;
+    });
+    if (!hit) continue;
+    if (ui ? (m[2] === ui) : (!m[2] || parts.length > 1)) return true;
+  }
+  return false;
+}
+function lawmapDescNormRange(desc) {   // "제35조~제38조" → "제35~38조" (범위를 한 매치로)
+  return String(desc || '').replace(/조\s*([~∼\-])\s*제?\s*(\d+)\s*조/g, '$1$2조');
+}
+function lawmapDescArticleCount(desc) {
+  var c = 0, d = lawmapDescNormRange(desc); LAWMAP_DESC_ART_RE.lastIndex = 0;
+  while (LAWMAP_DESC_ART_RE.exec(d)) c++;
+  return c;
+}
+function lawmapGoTopic(topicId, nodeId) {   // 상태줄의 "다른 주제" 버튼 — 주제 전환 후 같은 법령 카드 유지
+  var sel = document.getElementById('lawmap-topic-select');
+  if (sel) sel.value = topicId;
+  renderLawMapGraph(topicId);
+  showLawMapNodeDetail(nodeId || topicId);
+}
+
 // ── AI 호출 공통 (비스트리밍·짧은 JSON) ──
-var LAWMAP_GEN_SYSTEM = '당신은 한국 전파·통신 법령 체계 전문가입니다. 질문 주제와 관련된 법령(법률·시행령·시행규칙·고시)과 타 분야 법령(세법 등)까지 포함해 관계도를 JSON으로만 출력합니다. 형식: {"topic":"주제명(2~12자)","description":"주제 한줄 설명","relations":[{"law":"법령 정식명칭","type":"law|decree|rules|notice|etc","relation":"주제와의 관계 한줄","basis":"제N조 등 근거 조문","law_desc":"법령 한줄 설명"}]} — JSON 외 텍스트 금지. relations 최대 8개. basis는 제공된 참고 원문에서 실제로 확인한 조문 번호("제N조", "제N조의M")만 적고, 조문을 특정할 수 없는 법령은 relations에서 빼세요(저장 전에 원문과 대조하므로 없는 조문은 버려집니다). relation은 "관련"·"관련 조문" 같은 일반어 대신 그 조문이 무엇을 규정하는지 한 줄로 쓰세요.';
+var LAWMAP_GEN_SYSTEM ='당신은 한국 전파·통신 법령 체계 전문가입니다. 질문 주제와 관련된 법령(법률·시행령·시행규칙·고시)과 타 분야 법령(세법 등)까지 포함해 관계도를 JSON으로만 출력합니다. 형식: {"topic":"주제명(2~12자)","description":"주제 한줄 설명","relations":[{"law":"법령 정식명칭","type":"law|decree|rules|notice|etc","relation":"주제와의 관계 한줄","basis":"제N조 등 근거 조문","law_desc":"법령 한줄 설명"}]} — JSON 외 텍스트 금지. relations 최대 8개. basis는 제공된 참고 원문에서 실제로 확인한 조문 번호("제N조", "제N조의M")만 적고, 조문을 특정할 수 없는 법령은 relations에서 빼세요(저장 전에 원문과 대조하므로 없는 조문은 버려집니다). relation은 "관련"·"관련 조문" 같은 일반어 대신 그 조문이 무엇을 규정하는지 한 줄로 쓰세요.';
 
 async function callLawmapAI(userMsg) {
   var cfg = getConfig();
