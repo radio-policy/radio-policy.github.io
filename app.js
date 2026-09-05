@@ -10995,14 +10995,14 @@ async function askLawMap() {
         var others = hits.slice(1).map(function(h) {
           return '<button class="btn" style="font-size:11px;padding:2px 8px" onclick="lawmapGoTopic(\'' + h.topic.id + '\',\'' + lawNode.id + '\')">' + lmEsc(h.topic.name) + '</button>';
         }).join(' ');
-        setLawMapStatus('✔ <b>' + lmEsc(lawNode.name) + ' 제' + lmEsc(artQ.key) + '</b>을 근거로 하는 주제: <b>' + lmEsc(first.name) + '</b>' +
+        setLawMapStatus('✔ <b>' + lmEsc(lawNode.name) + ' 제' + lmEsc(artQ.key) + '</b>를 근거로 하는 주제: <b>' + lmEsc(first.name) + '</b>' +
           (others ? ' · 같은 조문을 근거로 하는 다른 주제: ' + others : '') + ' — API 호출 없음');
         showLawMapNodeDetail(lawNode.id);   // 주제 맥락의 법령 카드: 🎯 역할 + 📌 제N조 발췌
         return;
       }
       // 이 조문을 근거로 삼는 주제가 없음 → 법령 노드 포커스 + 해당 조문 원문 발췌 (엉뚱한 주제로 가지 않음)
       renderLawMapGraph(lawNode.id);
-      setLawMapStatus(lmEsc(lawNode.name) + ' 제' + lmEsc(artQ.key) + '을 근거로 삼는 주제가 아직 없습니다 — 법령 중심 관계와 조문 원문을 표시합니다 · ' +
+      setLawMapStatus(lmEsc(lawNode.name) + ' 제' + lmEsc(artQ.key) + '를 근거로 삼는 주제가 아직 없습니다 — 법령 중심 관계와 조문 원문을 표시합니다 · ' +
         '<button class="btn btn-primary" style="font-size:11px;padding:2px 10px" onclick="generateLawMapTopic()"><i class="ti ti-sparkles"></i> AI로 관계도 생성 (1회 과금)</button>');
       await showLawMapNodeDetail(lawNode.id);
       var docName0 = lawNode.doc_name || null;
