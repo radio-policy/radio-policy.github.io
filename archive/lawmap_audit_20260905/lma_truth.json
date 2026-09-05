@@ -1,0 +1,1144 @@
+{
+ "재난문자": {
+  "topic_node_id": "b8dccf5e-b399-4d6b-a609-9be30e7361df",
+  "edges": [
+   {
+    "edge_id": "382052c5-0d07-4cf0-840f-e13d176fa993",
+    "target": "방송통신발전 기본법",
+    "node_type": "law",
+    "target_node_id": "f43e5216-629c-41cb-93c8-3fe99a42039f",
+    "target_doc_name": "방송통신발전 기본법(법률)(제21066호)(20251001)",
+    "relation_type": "근거",
+    "description": "[인접 제도] 재난방송 의무와 터널·지하공간 수신시설 설치 (제40조·제40조의3)",
+    "source": "seed",
+    "weight": 2
+   },
+   {
+    "edge_id": "40196581-6422-45bf-9ebf-e26795b94cf4",
+    "target": "재난 및 안전관리 기본법 시행령",
+    "node_type": "decree",
+    "target_node_id": "9cb44951-8ce1-45c2-a2ed-452686796a53",
+    "target_doc_name": "재난 및 안전관리 기본법 시행령(대통령령)(제36516호)(20260722)",
+    "relation_type": "근거",
+    "description": "송출 요청 대상 '주요 전기통신사업자' = 이동전화 역무 제공자 등, 세부 기준은 행안부령에 위임 (제46조의2)",
+    "source": "ai",
+    "weight": 1
+   },
+   {
+    "edge_id": "45689d06-d8bb-415f-8db9-a8e705cc904a",
+    "target": "재난문자방송 기준 및 운영규정",
+    "node_type": "notice",
+    "target_node_id": "6fd31df8-e860-4008-a7b4-88c5b2ef7b0c",
+    "target_doc_name": "재난문자방송 기준 및 운영규정(행정안전부예규)(제361호)(20260204)",
+    "relation_type": "근거",
+    "description": "송출요청 권한(제11조)·발송기준(제12조·별표1) — 행정안전부 예규",
+    "source": "seed",
+    "weight": 2
+   },
+   {
+    "edge_id": "adcdd5fd-c9c6-4441-8ea5-63492599d351",
+    "target": "재난 및 안전관리 기본법",
+    "node_type": "law",
+    "target_node_id": "d39efbe7-9839-463e-ae63-cc96ae332ac3",
+    "target_doc_name": "재난 및 안전관리 기본법(법률)(제21313호)(20260722)",
+    "relation_type": "근거",
+    "description": "재난문자 송출 요청 근거 — 주요 전기통신사업자에 문자 송신 요청(③2호), 사업자 이행 의무(⑤), 휴대전화 화면 표시 의무(⑥) (제38조의2)",
+    "source": "ai",
+    "weight": 1
+   },
+   {
+    "edge_id": "b4647457-b924-42f6-a64b-ba9d77d75d0e",
+    "target": "재난 및 안전관리 기본법 시행규칙",
+    "node_type": "rules",
+    "target_node_id": "d027f7f9-74a1-487f-be56-5e30024e34f0",
+    "target_doc_name": "재난 및 안전관리 기본법 시행규칙(행정안전부령)(제00567호)(20250708)",
+    "relation_type": "근거",
+    "description": "재난문자방송 기준·운영 — 행동요령 포함, 중앙대책본부장 송출 요청, 세부는 행안부장관 고시 (제11조의4)",
+    "source": "ai",
+    "weight": 1
+   }
+  ],
+  "desc_notes": [
+   {
+    "edge_target": "재난문자방송 기준 및 운영규정",
+    "token": "별표1",
+    "kind": "annex",
+    "note": "별표라 article_no 단위로 존재하지 않음 — 제12조 본문이 '별표 1과 같이 마련한다'로 참조"
+   },
+   {
+    "edge_target": "재난 및 안전관리 기본법",
+    "token": "③2호·⑤·⑥",
+    "kind": "paragraph-of-basis",
+    "note": "모두 제38조의2 내부 항·호 표기 — 별도 조문 아님"
+   }
+  ],
+  "basis": [
+   {
+    "doc": "방송통신발전 기본법",
+    "key": "40조",
+    "desc_token": "(제40조·제40조의3)",
+    "found": true,
+    "doc_name": "방송통신발전 기본법(법률)(제21066호)(20251001)",
+    "chunks": 3,
+    "article_no": "40조(재난방송 등)",
+    "chunk_ids": [
+     26862,
+     26863,
+     26864
+    ],
+    "chunk_indexes": [
+     57,
+     58,
+     59
+    ],
+    "alt_versions": {
+     "방송통신발전 기본법(법률)(제21380호)(20260820)": 3
+    },
+    "latest_by_sort": "방송통신발전 기본법(법률)(제21380호)(20260820)",
+    "version_note": "2 versions in KB: (제21066호)(20251001) [= node doc_name, used here] and (제21380호)(20260820) [latest by string sort]. 40조의3·37조의2 identical in both; 40조 DIFFERS: the 20260820 판 inserts a new ④ (한국수어, cites 「방송법」 제69조제8항) and renumbers old ④→⑤, ⑤→⑥, ⑥→⑦, ⑦→⑧."
+   },
+   {
+    "doc": "방송통신발전 기본법",
+    "key": "40조의3",
+    "desc_token": "(제40조·제40조의3)",
+    "found": true,
+    "doc_name": "방송통신발전 기본법(법률)(제21066호)(20251001)",
+    "chunks": 1,
+    "article_no": "40조의3(재난방송등 수신시설의 설치)",
+    "chunk_ids": [
+     26866
+    ],
+    "chunk_indexes": [
+     61
+    ],
+    "alt_versions": {
+     "방송통신발전 기본법(법률)(제21380호)(20260820)": 1
+    },
+    "latest_by_sort": "방송통신발전 기본법(법률)(제21380호)(20260820)",
+    "version_note": "2 versions in KB: (제21066호)(20251001) [= node doc_name, used here] and (제21380호)(20260820) [latest by string sort]. 40조의3·37조의2 identical in both; 40조 DIFFERS: the 20260820 판 inserts a new ④ (한국수어, cites 「방송법」 제69조제8항) and renumbers old ④→⑤, ⑤→⑥, ⑥→⑦, ⑦→⑧."
+   },
+   {
+    "doc": "재난 및 안전관리 기본법 시행령",
+    "key": "46조의2",
+    "desc_token": "(제46조의2)",
+    "found": true,
+    "doc_name": "재난 및 안전관리 기본법 시행령(대통령령)(제36516호)(20260722)",
+    "chunks": 1,
+    "article_no": "46조의2(주요 전기통신사업자 등)",
+    "chunk_ids": [
+     36059
+    ],
+    "chunk_indexes": [
+     124
+    ],
+    "alt_versions": {},
+    "latest_by_sort": "재난 및 안전관리 기본법 시행령(대통령령)(제36516호)(20260722)",
+    "version_note": null
+   },
+   {
+    "doc": "재난문자방송 기준 및 운영규정",
+    "key": "11조",
+    "desc_token": "송출요청 권한(제11조)",
+    "found": true,
+    "doc_name": "재난문자방송 기준 및 운영규정(행정안전부예규)(제361호)(20260204)",
+    "chunks": 1,
+    "article_no": "11조(송출요청 권한)",
+    "chunk_ids": [
+     55055
+    ],
+    "chunk_indexes": [
+     19
+    ],
+    "alt_versions": {},
+    "latest_by_sort": "재난문자방송 기준 및 운영규정(행정안전부예규)(제361호)(20260204)",
+    "version_note": null
+   },
+   {
+    "doc": "재난문자방송 기준 및 운영규정",
+    "key": "12조",
+    "desc_token": "발송기준(제12조·별표1)",
+    "found": true,
+    "doc_name": "재난문자방송 기준 및 운영규정(행정안전부예규)(제361호)(20260204)",
+    "chunks": 1,
+    "article_no": "12조(발송기준)",
+    "chunk_ids": [
+     55056
+    ],
+    "chunk_indexes": [
+     20
+    ],
+    "alt_versions": {},
+    "latest_by_sort": "재난문자방송 기준 및 운영규정(행정안전부예규)(제361호)(20260204)",
+    "version_note": null
+   },
+   {
+    "doc": "재난 및 안전관리 기본법",
+    "key": "38조의2",
+    "desc_token": "(제38조의2)",
+    "found": true,
+    "doc_name": "재난 및 안전관리 기본법(법률)(제21313호)(20260722)",
+    "chunks": 4,
+    "article_no": "38조의2(재난 예보ㆍ경보체계 구축ㆍ운영 등)",
+    "chunk_ids": [
+     27035,
+     27036,
+     27037,
+     27038
+    ],
+    "chunk_indexes": [
+     100,
+     101,
+     102,
+     103
+    ],
+    "alt_versions": {
+     "재난 및 안전관리 기본법(법률)(제21834호)(20270108)": 4
+    },
+    "latest_by_sort": "재난 및 안전관리 기본법(법률)(제21834호)(20270108)",
+    "version_note": "2 versions in KB: (제21313호)(20260722) [= node doc_name, used here] and (제21834호)(20270108) [latest by string sort, 시행예정]. 38조의2 identical in both."
+   },
+   {
+    "doc": "재난 및 안전관리 기본법 시행규칙",
+    "key": "11조의4",
+    "desc_token": "(제11조의4)",
+    "found": true,
+    "doc_name": "재난 및 안전관리 기본법 시행규칙(행정안전부령)(제00567호)(20250708)",
+    "chunks": 1,
+    "article_no": "11조의4(재난문자방송에 대한 기준ㆍ운영 등)",
+    "chunk_ids": [
+     32439
+    ],
+    "chunk_indexes": [
+     17
+    ],
+    "alt_versions": {},
+    "latest_by_sort": "재난 및 안전관리 기본법 시행규칙(행정안전부령)(제00567호)(20250708)",
+    "version_note": null
+   }
+  ],
+  "citations": [
+   {
+    "from_doc": "방송통신발전 기본법",
+    "from_article": "40조",
+    "from_paragraph": "①",
+    "to_doc": "재난 및 안전관리 기본법",
+    "to_article": "3조",
+    "quote": "「재난 및 안전관리 기본법」 제3조에 따른 재난"
+   },
+   {
+    "from_doc": "방송통신발전 기본법",
+    "from_article": "40조",
+    "from_paragraph": "② 1호",
+    "to_doc": "재난 및 안전관리 기본법",
+    "to_article": "36조",
+    "quote": "「재난 및 안전관리 기본법」 제36조에 따른 재난사태의 선포"
+   },
+   {
+    "from_doc": "방송통신발전 기본법",
+    "from_article": "40조",
+    "from_paragraph": "② 2호",
+    "to_doc": "재난 및 안전관리 기본법",
+    "to_article": "38조",
+    "quote": "「재난 및 안전관리 기본법」 제38조에 따른 재난 예보ㆍ경보의 발령"
+   },
+   {
+    "from_doc": "방송통신발전 기본법",
+    "from_article": "40조의3",
+    "from_paragraph": "①",
+    "to_doc": "방송통신발전 기본법",
+    "to_article": "40조",
+    "quote": "제40조제1항에 따른 재난방송등 및 「민방위기본법」 제33조에 따른 민방위 경보의 원활한 수신",
+    "note": "same-document bare 제N조; target is a basis article"
+   },
+   {
+    "from_doc": "재난 및 안전관리 기본법",
+    "from_article": "38조의2",
+    "from_paragraph": "⑦",
+    "to_doc": "재난 및 안전관리 기본법",
+    "to_article": "41조",
+    "quote": "제41조에 따른 위험구역 및 「자연재해대책법」 제12조에 따른 자연재해위험개선지구",
+    "note": "same-document bare 제N조"
+   },
+   {
+    "from_doc": "재난 및 안전관리 기본법 시행령",
+    "from_article": "46조의2",
+    "from_paragraph": "①",
+    "to_doc": "재난 및 안전관리 기본법",
+    "to_article": "38조의2",
+    "quote": "법 제38조의2제3항제2호에서 \"대통령령으로 정하는 주요 전기통신사업자\"란",
+    "note": "'법 제N조' = 모법(재난 및 안전관리 기본법); target is a basis article"
+   },
+   {
+    "from_doc": "재난 및 안전관리 기본법 시행령",
+    "from_article": "46조의2",
+    "from_paragraph": "②",
+    "to_doc": "재난 및 안전관리 기본법",
+    "to_article": "38조의2",
+    "quote": "법 제38조의2제3항제4호에서 \"대통령령으로 정하는 주요 신문사업자 및 인터넷신문사업자\"란",
+    "note": "'법 제N조' = 모법"
+   },
+   {
+    "from_doc": "재난 및 안전관리 기본법 시행규칙",
+    "from_article": "11조의4",
+    "from_paragraph": "①",
+    "to_doc": "재난 및 안전관리 기본법 시행령",
+    "to_article": "46조의2",
+    "quote": "영 제46조의2제3항에 따른 재난문자방송(이하 \"재난문자방송\"이라 한다)에는",
+    "note": "'영 제N조' = 모 시행령; target is a basis article"
+   },
+   {
+    "from_doc": "재난 및 안전관리 기본법 시행규칙",
+    "from_article": "11조의4",
+    "from_paragraph": "②",
+    "to_doc": "재난 및 안전관리 기본법 시행령",
+    "to_article": "46조의2",
+    "quote": "중앙대책본부장은 영 제46조의2제1항제5호의 전기통신사업자에게 재난정보를 재난문자방송으로 송출하도록 요청할 수 있다",
+    "note": "'영 제N조' = 모 시행령"
+   },
+   {
+    "from_doc": "재난문자방송 기준 및 운영규정",
+    "from_article": "11조",
+    "from_paragraph": "①",
+    "to_doc": "재난 및 안전관리 기본법",
+    "to_article": "38조의2",
+    "quote": "「재난 및 안전관리 기본법」 제38조의2제3항에 따라 기간통신사업자와 방송사업자에게 재난문자방송의 송출을 요청할 수 있다",
+    "note": "target is a basis article"
+   },
+   {
+    "from_doc": "재난문자방송 기준 및 운영규정",
+    "from_article": "12조",
+    "from_paragraph": "③ 2호",
+    "to_doc": "재난문자방송 기준 및 운영규정",
+    "to_article": "7조",
+    "quote": "제7조에 따른 운영책임자의 요청에 따라 사용기관의 장이 필요하다고 인정하는 정보",
+    "note": "same-document bare 제N조"
+   }
+  ],
+  "outside": [
+   {
+    "from_doc": "방송통신발전 기본법",
+    "from_article": "40조",
+    "from_paragraph": "①",
+    "to_doc": "자연재해대책법",
+    "to_article": "2조",
+    "quote": "「자연재해대책법」 제2조에 따른 재해"
+   },
+   {
+    "from_doc": "방송통신발전 기본법",
+    "from_article": "40조",
+    "from_paragraph": "①",
+    "to_doc": "민방위기본법",
+    "to_article": "2조",
+    "quote": "「민방위기본법」 제2조에 따른 민방위사태"
+   },
+   {
+    "from_doc": "방송통신발전 기본법",
+    "from_article": "40조",
+    "from_paragraph": "① 1호",
+    "to_doc": "방송법",
+    "to_article": "2조",
+    "quote": "「방송법」 제2조제3호가목에 따른 지상파방송사업자"
+   },
+   {
+    "from_doc": "방송통신발전 기본법",
+    "from_article": "40조",
+    "from_paragraph": "① 2호",
+    "to_doc": "방송법",
+    "to_article": "2조",
+    "quote": "「방송법」 제2조제3호나목에 따른 종합유선방송사업자"
+   },
+   {
+    "from_doc": "방송통신발전 기본법",
+    "from_article": "40조",
+    "from_paragraph": "① 3호",
+    "to_doc": "방송법",
+    "to_article": "2조",
+    "quote": "「방송법」 제2조제3호다목에 따른 위성방송사업자"
+   },
+   {
+    "from_doc": "방송통신발전 기본법",
+    "from_article": "40조",
+    "from_paragraph": "① 4호",
+    "to_doc": "방송법",
+    "to_article": "2조",
+    "quote": "「방송법」 제2조제3호라목에 따른 방송채널사용사업자"
+   },
+   {
+    "from_doc": "방송통신발전 기본법",
+    "from_article": "40조",
+    "from_paragraph": "① 5호",
+    "to_doc": "인터넷 멀티미디어 방송사업법",
+    "to_article": "2조",
+    "quote": "「인터넷 멀티미디어 방송사업법」 제2조제5호가목에 따른 인터넷 멀티미디어 방송 제공사업자"
+   },
+   {
+    "from_doc": "방송통신발전 기본법",
+    "from_article": "40조",
+    "from_paragraph": "② 3호",
+    "to_doc": "민방위기본법",
+    "to_article": "33조",
+    "quote": "「민방위기본법」 제33조에 따른 민방위 경보의 발령(민방위 훈련을 실시하는 경우는 제외한다)"
+   },
+   {
+    "from_doc": "방송통신발전 기본법",
+    "from_article": "40조",
+    "from_paragraph": "④ (⑤ in 20260820 판)",
+    "to_doc": "방송미디어통신위원회의 설치 및 운영에 관한 법률",
+    "to_article": "18조",
+    "quote": "「방송미디어통신위원회의 설치 및 운영에 관한 법률」 제18조에 따른 방송미디어통신심의위원회는"
+   },
+   {
+    "from_doc": "방송통신발전 기본법",
+    "from_article": "40조의3",
+    "from_paragraph": "①",
+    "to_doc": "도로법",
+    "to_article": "2조",
+    "quote": "「도로법」 제2조제1호에 따른 도로"
+   },
+   {
+    "from_doc": "방송통신발전 기본법",
+    "from_article": "40조의3",
+    "from_paragraph": "①",
+    "to_doc": "도시철도법",
+    "to_article": "2조",
+    "quote": "「도시철도법」 제2조제3호에 따른 도시철도시설"
+   },
+   {
+    "from_doc": "방송통신발전 기본법",
+    "from_article": "40조의3",
+    "from_paragraph": "①",
+    "to_doc": "철도의 건설 및 철도시설 유지관리에 관한 법률",
+    "to_article": "2조",
+    "quote": "「철도의 건설 및 철도시설 유지관리에 관한 법률」 제2조제6호에 따른 철도시설"
+   },
+   {
+    "from_doc": "방송통신발전 기본법",
+    "from_article": "40조의3",
+    "from_paragraph": "①",
+    "to_doc": "민방위기본법",
+    "to_article": "33조",
+    "quote": "「민방위기본법」 제33조에 따른 민방위 경보의 원활한 수신"
+   },
+   {
+    "from_doc": "방송통신발전 기본법",
+    "from_article": "40조의3",
+    "from_paragraph": "① 1호",
+    "to_doc": "방송법",
+    "to_article": "2조",
+    "quote": "「방송법」 제2조제1호나목에 따른 라디오방송의 수신에 필요한 중계설비"
+   },
+   {
+    "from_doc": "방송통신발전 기본법",
+    "from_article": "40조의3",
+    "from_paragraph": "① 2호",
+    "to_doc": "방송법",
+    "to_article": "2조",
+    "quote": "「방송법」 제2조제1호라목에 따른 이동멀티미디어방송의 수신에 필요한 중계설비"
+   },
+   {
+    "from_doc": "재난 및 안전관리 기본법",
+    "from_article": "38조의2",
+    "from_paragraph": "③ 2호",
+    "to_doc": "전기통신사업법",
+    "to_article": "2조",
+    "quote": "「전기통신사업법」 제2조제8호에 따른 전기통신사업자 중 대통령령으로 정하는 주요 전기통신사업자",
+    "note": "전기통신사업법 is a target of the OTHER topic (무선통신시설 공동이용), not of 재난문자"
+   },
+   {
+    "from_doc": "재난 및 안전관리 기본법",
+    "from_article": "38조의2",
+    "from_paragraph": "③ 3호",
+    "to_doc": "방송법",
+    "to_article": "2조",
+    "quote": "「방송법」 제2조제3호에 따른 방송사업자에 대한 필요한 정보의 신속한 방송"
+   },
+   {
+    "from_doc": "재난 및 안전관리 기본법",
+    "from_article": "38조의2",
+    "from_paragraph": "③ 4호",
+    "to_doc": "신문 등의 진흥에 관한 법률",
+    "to_article": "2조",
+    "quote": "「신문 등의 진흥에 관한 법률」 제2조제3호 및 제4호에 따른 신문사업자 및 인터넷신문사업자"
+   },
+   {
+    "from_doc": "재난 및 안전관리 기본법",
+    "from_article": "38조의2",
+    "from_paragraph": "③ 5호",
+    "to_doc": "옥외광고물 등의 관리와 옥외광고산업 진흥에 관한 법률",
+    "to_article": "2조",
+    "quote": "「옥외광고물 등의 관리와 옥외광고산업 진흥에 관한 법률」 제2조제1호에 따른 디지털광고물의 관리자"
+   },
+   {
+    "from_doc": "재난 및 안전관리 기본법",
+    "from_article": "38조의2",
+    "from_paragraph": "④ 1호",
+    "to_doc": "지진ㆍ지진해일ㆍ화산의 관측 및 경보에 관한 법률",
+    "to_article": "2조",
+    "quote": "「지진ㆍ지진해일ㆍ화산의 관측 및 경보에 관한 법률」 제2조제1호부터 제3호까지에 따른 지진ㆍ지진해일ㆍ화산"
+   },
+   {
+    "from_doc": "재난 및 안전관리 기본법",
+    "from_article": "38조의2",
+    "from_paragraph": "⑦",
+    "to_doc": "자연재해대책법",
+    "to_article": "12조",
+    "quote": "「자연재해대책법」 제12조에 따른 자연재해위험개선지구"
+   },
+   {
+    "from_doc": "재난 및 안전관리 기본법 시행령",
+    "from_article": "46조의2",
+    "from_paragraph": "① 6호",
+    "to_doc": "전기통신사업법",
+    "to_article": "2조",
+    "quote": "「전기통신사업법」 제2조제12호에 따른 부가통신역무"
+   },
+   {
+    "from_doc": "재난 및 안전관리 기본법 시행령",
+    "from_article": "46조의2",
+    "from_paragraph": "② 1호",
+    "to_doc": "신문 등의 진흥에 관한 법률",
+    "to_article": "2조",
+    "quote": "「신문 등의 진흥에 관한 법률」 제2조제1호가목의 일반일간신문을 발행하는 신문사업자"
+   },
+   {
+    "from_doc": "재난 및 안전관리 기본법 시행령",
+    "from_article": "46조의2",
+    "from_paragraph": "② 3호",
+    "to_doc": "독점규제 및 공정거래에 관한 법률",
+    "to_article": "2조",
+    "quote": "「독점규제 및 공정거래에 관한 법률」 제2조제12호의 계열회사를 말한다"
+   }
+  ],
+  "delegations": [
+   {
+    "from_doc": "재난 및 안전관리 기본법",
+    "from_article": "38조의2",
+    "from_paragraph": "③ 2호",
+    "to_doc": "재난 및 안전관리 기본법 시행령",
+    "quote": "대통령령으로 정하는 주요 전기통신사업자",
+    "realised_by": "시행령 46조의2①"
+   },
+   {
+    "from_doc": "재난 및 안전관리 기본법",
+    "from_article": "38조의2",
+    "from_paragraph": "⑫",
+    "to_doc": "재난 및 안전관리 기본법 시행령",
+    "quote": "제3항 및 제4항에 따른 요청의 절차 … 필요한 사항은 대통령령으로 정한다",
+    "realised_by": null
+   },
+   {
+    "from_doc": "재난 및 안전관리 기본법 시행령",
+    "from_article": "46조의2",
+    "from_paragraph": "③",
+    "to_doc": "재난 및 안전관리 기본법 시행규칙",
+    "quote": "재난문자방송에 대한 기준과 운영 등의 세부 사항은 행정안전부령으로 정한다",
+    "realised_by": "시행규칙 11조의4"
+   },
+   {
+    "from_doc": "재난 및 안전관리 기본법 시행규칙",
+    "from_article": "11조의4",
+    "from_paragraph": "③",
+    "to_doc": "재난문자방송 기준 및 운영규정",
+    "quote": "재난문자방송의 기준 및 운영에 필요한 세부 사항은 행정안전부장관이 정한다",
+    "realised_by": "운영규정(행안부예규) 전체"
+   },
+   {
+    "from_doc": "방송통신발전 기본법",
+    "from_article": "40조",
+    "from_paragraph": "②, ⑦",
+    "to_doc": "방송통신발전 기본법 시행령",
+    "quote": "대통령령으로 정하는 바에 따라 / 구체적인 사항은 대통령령으로 정한다",
+    "realised_by": null,
+    "note": "방발기본법 시행령 is NOT a target of the 재난문자 topic"
+   },
+   {
+    "from_doc": "방송통신발전 기본법",
+    "from_article": "40조의3",
+    "from_paragraph": "③",
+    "to_doc": "방송통신발전 기본법 시행령",
+    "quote": "조사의 방법ㆍ절차 등에 필요한 사항은 대통령령으로 정한다",
+    "realised_by": null,
+    "note": "방발기본법 시행령 is NOT a target of the 재난문자 topic"
+   }
+  ]
+ },
+ "무선통신시설 공동이용": {
+  "topic_node_id": "d9324eee-c6d2-48b2-bff4-64787e714cd3",
+  "edges": [
+   {
+    "edge_id": "481f93f1-88c8-463f-bccf-836bd6e36229",
+    "target": "전기통신사업법 시행령",
+    "node_type": "decree",
+    "target_node_id": "a930e634-d85d-40c7-b5c3-189eb945f4e3",
+    "target_doc_name": "전기통신사업법 시행령(대통령령)(제36281호)(20260428)",
+    "relation_type": "근거",
+    "description": "공동이용 협정의 신고·인가 제출서류와 고시기준 적합성 심사 (제40조); 공동이용 차별·협정 거부는 금지행위 유형 (별표 4 제1호·제2호)",
+    "source": "seed",
+    "weight": 2
+   },
+   {
+    "edge_id": "49921d74-2f2a-4b88-9d50-8d6644b81967",
+    "target": "재난 시 무선통신시설 공동이용 범위 및 절차에 대한 고시",
+    "node_type": "notice",
+    "target_node_id": "d25c3193-d3c9-452e-ad52-59467e9b995f",
+    "target_doc_name": "재난 시 무선통신시설 공동이용 범위 및 절차에 대한 고시(과학기술정보통신부고시)(제2023-31호)(20230905)",
+    "relation_type": "근거",
+    "description": "방발기본법 제37조의2의 위임에 따라 재난 시 로밍 절차·대가정산 세부기준 규정 (제1조, 제5~8조, 제12~13조)",
+    "source": "ai",
+    "weight": 2
+   },
+   {
+    "edge_id": "5f5559bd-a629-4fd9-a537-bfae80a1ed10",
+    "target": "방송통신발전 기본법",
+    "node_type": "law",
+    "target_node_id": "f43e5216-629c-41cb-93c8-3fe99a42039f",
+    "target_doc_name": "방송통신발전 기본법(법률)(제21066호)(20251001)",
+    "relation_type": "근거",
+    "description": "재난 경보 발령 시 정부가 이동통신사업자 간 공동이용(로밍)을 명령할 수 있는 근거 (제37조의2)",
+    "source": "ai",
+    "weight": 2
+   },
+   {
+    "edge_id": "885b5e3a-5f1e-4def-bcc0-149ba129cefb",
+    "target": "방송통신발전 기본법 시행령",
+    "node_type": "decree",
+    "target_node_id": "5a9b9947-5438-4ca2-a3a8-76026ef1d927",
+    "target_doc_name": "방송통신발전 기본법 시행령(대통령령)(제35810호)(20251001)",
+    "relation_type": "근거",
+    "description": "통신재난관리 전담부서·전담인력의 총괄 업무에 법 제37조의2 무선통신시설 공동이용 조치 포함 (제27조의2제4항제4호)",
+    "source": "seed",
+    "weight": 2
+   },
+   {
+    "edge_id": "ce47e496-1a00-40bd-8991-d28d1e9c0929",
+    "target": "전기통신사업법",
+    "node_type": "law",
+    "target_node_id": "e551ff1d-404a-47c0-bbaf-cf27c85dfee0",
+    "target_doc_name": "전기통신사업법(법률)(제21652호)(20260519)",
+    "relation_type": "근거",
+    "description": "사업자 간 자율 협정 또는 지정사업자 의무로 무선통신시설 공동이용 허용 (제37조)",
+    "source": "ai",
+    "weight": 2
+   }
+  ],
+  "desc_notes": [
+   {
+    "edge_target": "재난 시 무선통신시설 공동이용 범위 및 절차에 대한 고시",
+    "token": "방발기본법 제37조의2",
+    "kind": "cross-ref",
+    "note": "타 법령 인용(위임 근거) — 고시 자체 조문 아님. 대상 문서 '방송통신발전 기본법' 37조의2(기초조문)와 일치"
+   },
+   {
+    "edge_target": "방송통신발전 기본법 시행령",
+    "token": "법 제37조의2",
+    "kind": "cross-ref",
+    "note": "모법 인용 — 시행령 자체 조문 아님. 대상 문서 '방송통신발전 기본법' 37조의2(기초조문)와 일치"
+   },
+   {
+    "edge_target": "전기통신사업법 시행령",
+    "token": "별표 4 제1호·제2호",
+    "kind": "annex",
+    "note": "별표라 article_no 단위로 존재하지 않음(금지행위 유형)"
+   }
+  ],
+  "basis": [
+   {
+    "doc": "전기통신사업법 시행령",
+    "key": "40조",
+    "desc_token": "(제40조)",
+    "found": true,
+    "doc_name": "전기통신사업법 시행령(대통령령)(제36281호)(20260428)",
+    "chunks": 2,
+    "article_no": "40조(상호접속 등에 관한 협정신고 등)",
+    "chunk_ids": [
+     36486,
+     36487
+    ],
+    "chunk_indexes": [
+     119,
+     120
+    ],
+    "alt_versions": {},
+    "latest_by_sort": "전기통신사업법 시행령(대통령령)(제36281호)(20260428)",
+    "version_note": null
+   },
+   {
+    "doc": "재난 시 무선통신시설 공동이용 범위 및 절차에 대한 고시",
+    "key": "1조",
+    "desc_token": "(제1조, 제5~8조, 제12~13조)",
+    "found": true,
+    "doc_name": "재난 시 무선통신시설 공동이용 범위 및 절차에 대한 고시(과학기술정보통신부고시)(제2023-31호)(20230905)",
+    "chunks": 1,
+    "article_no": "1조(목적)",
+    "chunk_ids": [
+     32832
+    ],
+    "chunk_indexes": [
+     0
+    ],
+    "alt_versions": {},
+    "latest_by_sort": "재난 시 무선통신시설 공동이용 범위 및 절차에 대한 고시(과학기술정보통신부고시)(제2023-31호)(20230905)",
+    "version_note": null
+   },
+   {
+    "doc": "재난 시 무선통신시설 공동이용 범위 및 절차에 대한 고시",
+    "key": "5조",
+    "desc_token": "(제1조, 제5~8조, 제12~13조)",
+    "found": true,
+    "doc_name": "재난 시 무선통신시설 공동이용 범위 및 절차에 대한 고시(과학기술정보통신부고시)(제2023-31호)(20230905)",
+    "chunks": 1,
+    "article_no": "5조(대상 지역)",
+    "chunk_ids": [
+     32837
+    ],
+    "chunk_indexes": [
+     5
+    ],
+    "alt_versions": {},
+    "latest_by_sort": "재난 시 무선통신시설 공동이용 범위 및 절차에 대한 고시(과학기술정보통신부고시)(제2023-31호)(20230905)",
+    "version_note": null
+   },
+   {
+    "doc": "재난 시 무선통신시설 공동이용 범위 및 절차에 대한 고시",
+    "key": "6조",
+    "desc_token": "(제1조, 제5~8조, 제12~13조)",
+    "found": true,
+    "doc_name": "재난 시 무선통신시설 공동이용 범위 및 절차에 대한 고시(과학기술정보통신부고시)(제2023-31호)(20230905)",
+    "chunks": 1,
+    "article_no": "6조(제공 기간)",
+    "chunk_ids": [
+     32838
+    ],
+    "chunk_indexes": [
+     6
+    ],
+    "alt_versions": {},
+    "latest_by_sort": "재난 시 무선통신시설 공동이용 범위 및 절차에 대한 고시(과학기술정보통신부고시)(제2023-31호)(20230905)",
+    "version_note": null
+   },
+   {
+    "doc": "재난 시 무선통신시설 공동이용 범위 및 절차에 대한 고시",
+    "key": "7조",
+    "desc_token": "(제1조, 제5~8조, 제12~13조)",
+    "found": true,
+    "doc_name": "재난 시 무선통신시설 공동이용 범위 및 절차에 대한 고시(과학기술정보통신부고시)(제2023-31호)(20230905)",
+    "chunks": 1,
+    "article_no": "7조(서비스 범위)",
+    "chunk_ids": [
+     32839
+    ],
+    "chunk_indexes": [
+     7
+    ],
+    "alt_versions": {},
+    "latest_by_sort": "재난 시 무선통신시설 공동이용 범위 및 절차에 대한 고시(과학기술정보통신부고시)(제2023-31호)(20230905)",
+    "version_note": null
+   },
+   {
+    "doc": "재난 시 무선통신시설 공동이용 범위 및 절차에 대한 고시",
+    "key": "8조",
+    "desc_token": "(제1조, 제5~8조, 제12~13조)",
+    "found": true,
+    "doc_name": "재난 시 무선통신시설 공동이용 범위 및 절차에 대한 고시(과학기술정보통신부고시)(제2023-31호)(20230905)",
+    "chunks": 1,
+    "article_no": "8조(품질 및 제한)",
+    "chunk_ids": [
+     32840
+    ],
+    "chunk_indexes": [
+     8
+    ],
+    "alt_versions": {},
+    "latest_by_sort": "재난 시 무선통신시설 공동이용 범위 및 절차에 대한 고시(과학기술정보통신부고시)(제2023-31호)(20230905)",
+    "version_note": null
+   },
+   {
+    "doc": "재난 시 무선통신시설 공동이용 범위 및 절차에 대한 고시",
+    "key": "12조",
+    "desc_token": "(제1조, 제5~8조, 제12~13조)",
+    "found": true,
+    "doc_name": "재난 시 무선통신시설 공동이용 범위 및 절차에 대한 고시(과학기술정보통신부고시)(제2023-31호)(20230905)",
+    "chunks": 1,
+    "article_no": "12조(통화량 산정)",
+    "chunk_ids": [
+     32846
+    ],
+    "chunk_indexes": [
+     14
+    ],
+    "alt_versions": {},
+    "latest_by_sort": "재난 시 무선통신시설 공동이용 범위 및 절차에 대한 고시(과학기술정보통신부고시)(제2023-31호)(20230905)",
+    "version_note": null
+   },
+   {
+    "doc": "재난 시 무선통신시설 공동이용 범위 및 절차에 대한 고시",
+    "key": "13조",
+    "desc_token": "(제1조, 제5~8조, 제12~13조)",
+    "found": true,
+    "doc_name": "재난 시 무선통신시설 공동이용 범위 및 절차에 대한 고시(과학기술정보통신부고시)(제2023-31호)(20230905)",
+    "chunks": 1,
+    "article_no": "13조(대가의 정산)",
+    "chunk_ids": [
+     32847
+    ],
+    "chunk_indexes": [
+     15
+    ],
+    "alt_versions": {},
+    "latest_by_sort": "재난 시 무선통신시설 공동이용 범위 및 절차에 대한 고시(과학기술정보통신부고시)(제2023-31호)(20230905)",
+    "version_note": null
+   },
+   {
+    "doc": "방송통신발전 기본법",
+    "key": "37조의2",
+    "desc_token": "(제37조의2)",
+    "found": true,
+    "doc_name": "방송통신발전 기본법(법률)(제21066호)(20251001)",
+    "chunks": 1,
+    "article_no": "37조의2(재난 시 무선통신시설의 공동이용 등)",
+    "chunk_ids": [
+     26858
+    ],
+    "chunk_indexes": [
+     53
+    ],
+    "alt_versions": {
+     "방송통신발전 기본법(법률)(제21380호)(20260820)": 1
+    },
+    "latest_by_sort": "방송통신발전 기본법(법률)(제21380호)(20260820)",
+    "version_note": "2 versions in KB: (제21066호)(20251001) [= node doc_name, used here] and (제21380호)(20260820) [latest by string sort]. 40조의3·37조의2 identical in both; 40조 DIFFERS: the 20260820 판 inserts a new ④ (한국수어, cites 「방송법」 제69조제8항) and renumbers old ④→⑤, ⑤→⑥, ⑥→⑦, ⑦→⑧."
+   },
+   {
+    "doc": "방송통신발전 기본법 시행령",
+    "key": "27조의2",
+    "desc_token": "(제27조의2제4항제4호)",
+    "found": true,
+    "doc_name": "방송통신발전 기본법 시행령(대통령령)(제35810호)(20251001)",
+    "chunks": 2,
+    "article_no": "27조의2(방송통신재난관리책임자의 지정 등)",
+    "chunk_ids": [
+     35612,
+     35613
+    ],
+    "chunk_indexes": [
+     42,
+     43
+    ],
+    "alt_versions": {},
+    "latest_by_sort": "방송통신발전 기본법 시행령(대통령령)(제35810호)(20251001)",
+    "version_note": null
+   },
+   {
+    "doc": "전기통신사업법",
+    "key": "37조",
+    "desc_token": "(제37조)",
+    "found": true,
+    "doc_name": "전기통신사업법(법률)(제21652호)(20260519)",
+    "chunks": 1,
+    "article_no": "37조(무선통신시설의 공동이용)",
+    "chunk_ids": [
+     27275
+    ],
+    "chunk_indexes": [
+     108
+    ],
+    "alt_versions": {
+     "전기통신사업법(법률)(제21503호)(20261001)": 1
+    },
+    "latest_by_sort": "전기통신사업법(법률)(제21652호)(20260519)",
+    "version_note": "2 versions in KB: (제21652호)(20260519) [= node doc_name, used here; ALSO latest by string sort since '21652' > '21503'] and (제21503호)(20261001) [later 시행일 but lower 공포번호]. 37조 identical in both."
+   }
+  ],
+  "citations": [
+   {
+    "from_doc": "방송통신발전 기본법",
+    "from_article": "37조의2",
+    "from_paragraph": "①",
+    "to_doc": "전기통신사업법",
+    "to_article": "2조",
+    "quote": "이동통신서비스(「전기통신사업법」 제2조제18호에 따른 이동통신서비스를 말한다. 이하 같다)"
+   },
+   {
+    "from_doc": "방송통신발전 기본법",
+    "from_article": "37조의2",
+    "from_paragraph": "③",
+    "to_doc": "전기통신사업법",
+    "to_article": "38조",
+    "quote": "「전기통신사업법」 제38조에 따라 다른 전기통신사업자(「전기통신사업법」 제2조제8호의 전기통신사업자를 말한다)와 협정을 체결한"
+   },
+   {
+    "from_doc": "방송통신발전 기본법",
+    "from_article": "37조의2",
+    "from_paragraph": "③",
+    "to_doc": "전기통신사업법",
+    "to_article": "2조",
+    "quote": "다른 전기통신사업자(「전기통신사업법」 제2조제8호의 전기통신사업자를 말한다)"
+   },
+   {
+    "from_doc": "전기통신사업법 시행령",
+    "from_article": "40조",
+    "from_paragraph": "①",
+    "to_doc": "전기통신사업법",
+    "to_article": "38조",
+    "quote": "법 제38조제5항, 제44조제1항부터 제3항까지의 규정에 따라 도매제공, 설비등의 제공ㆍ공동이용ㆍ상호접속",
+    "note": "'법 제N조' = 모법(전기통신사업법)"
+   },
+   {
+    "from_doc": "전기통신사업법 시행령",
+    "from_article": "40조",
+    "from_paragraph": "①",
+    "to_doc": "전기통신사업법",
+    "to_article": "44조",
+    "quote": "법 제38조제5항, 제44조제1항부터 제3항까지의 규정에 따라",
+    "note": "'법 제N조' = 모법; 제44조 follows 법 제38조제5항 in the same enumeration"
+   },
+   {
+    "from_doc": "전기통신사업법 시행령",
+    "from_article": "40조",
+    "from_paragraph": "②",
+    "to_doc": "전기통신사업법",
+    "to_article": "35조",
+    "quote": "법 제35조제3항ㆍ제37조제3항ㆍ제38조의2제3항ㆍ제39조제2항ㆍ제41조제2항 또는 제42조제2항에 따른",
+    "note": "'법 제N조' = 모법 (enumeration of 6 articles)"
+   },
+   {
+    "from_doc": "전기통신사업법 시행령",
+    "from_article": "40조",
+    "from_paragraph": "②",
+    "to_doc": "전기통신사업법",
+    "to_article": "37조",
+    "quote": "법 제35조제3항ㆍ제37조제3항ㆍ제38조의2제3항ㆍ제39조제2항ㆍ제41조제2항 또는 제42조제2항에 따른",
+    "note": "target is a basis article (전기통신사업법 37조③ = 공동이용 기준 고시)"
+   },
+   {
+    "from_doc": "전기통신사업법 시행령",
+    "from_article": "40조",
+    "from_paragraph": "②",
+    "to_doc": "전기통신사업법",
+    "to_article": "38조의2",
+    "quote": "법 제35조제3항ㆍ제37조제3항ㆍ제38조의2제3항ㆍ제39조제2항ㆍ제41조제2항 또는 제42조제2항에 따른"
+   },
+   {
+    "from_doc": "전기통신사업법 시행령",
+    "from_article": "40조",
+    "from_paragraph": "②",
+    "to_doc": "전기통신사업법",
+    "to_article": "39조",
+    "quote": "법 제35조제3항ㆍ제37조제3항ㆍ제38조의2제3항ㆍ제39조제2항ㆍ제41조제2항 또는 제42조제2항에 따른"
+   },
+   {
+    "from_doc": "전기통신사업법 시행령",
+    "from_article": "40조",
+    "from_paragraph": "②",
+    "to_doc": "전기통신사업법",
+    "to_article": "41조",
+    "quote": "법 제35조제3항ㆍ제37조제3항ㆍ제38조의2제3항ㆍ제39조제2항ㆍ제41조제2항 또는 제42조제2항에 따른"
+   },
+   {
+    "from_doc": "전기통신사업법 시행령",
+    "from_article": "40조",
+    "from_paragraph": "②",
+    "to_doc": "전기통신사업법",
+    "to_article": "42조",
+    "quote": "법 제35조제3항ㆍ제37조제3항ㆍ제38조의2제3항ㆍ제39조제2항ㆍ제41조제2항 또는 제42조제2항에 따른"
+   },
+   {
+    "from_doc": "전기통신사업법 시행령",
+    "from_article": "40조",
+    "from_paragraph": "③",
+    "to_doc": "전기통신사업법",
+    "to_article": "44조",
+    "quote": "법 제44조제2항에 따라 협정 체결의 인가ㆍ변경인가ㆍ폐지인가를 받은 기간통신사업자 및 같은 조 제3항에 따라",
+    "note": "'같은 조 제3항' also = 법 제44조③"
+   },
+   {
+    "from_doc": "전기통신사업법 시행령",
+    "from_article": "40조",
+    "from_paragraph": "④",
+    "to_doc": "전기통신사업법",
+    "to_article": "65조",
+    "quote": "법 제65조제3항에 따라 제1항에 따른 서류를 받았을 때에는"
+   },
+   {
+    "from_doc": "전기통신사업법 시행령",
+    "from_article": "40조",
+    "from_paragraph": "④",
+    "to_doc": "전기통신사업법",
+    "to_article": "35조",
+    "quote": "그 내용이 법 제35조제3항에 따른 기준에 적합한지와"
+   },
+   {
+    "from_doc": "방송통신발전 기본법 시행령",
+    "from_article": "27조의2",
+    "from_paragraph": "①",
+    "to_doc": "방송통신발전 기본법",
+    "to_article": "39조의2",
+    "quote": "주요방송통신사업자는 법 제39조의2제1항에 따라 해당 방송통신사업자의 방송통신재난 관련 업무를 총괄하는 부서의 장을",
+    "note": "'법 제N조' = 모법(방송통신발전 기본법)"
+   },
+   {
+    "from_doc": "방송통신발전 기본법 시행령",
+    "from_article": "27조의2",
+    "from_paragraph": "③",
+    "to_doc": "방송통신발전 기본법",
+    "to_article": "39조의2",
+    "quote": "법 제39조의2제2항에 따라 전년도 전기통신역무(「전기통신사업법」에 따른 전기통신역무를 말한다. 이하 같다) 매출액이"
+   },
+   {
+    "from_doc": "방송통신발전 기본법 시행령",
+    "from_article": "27조의2",
+    "from_paragraph": "④ 1호",
+    "to_doc": "방송통신발전 기본법",
+    "to_article": "35조의3",
+    "quote": "법 제35조의3제1항에 따른 통신시설의 등급 분류와 그 근거자료 제출"
+   },
+   {
+    "from_doc": "방송통신발전 기본법 시행령",
+    "from_article": "27조의2",
+    "from_paragraph": "④ 2호",
+    "to_doc": "방송통신발전 기본법",
+    "to_article": "35조의3",
+    "quote": "법 제35조의3제2항에 따라 지정된 등급에 따른 통신시설의 관리조치"
+   },
+   {
+    "from_doc": "방송통신발전 기본법 시행령",
+    "from_article": "27조의2",
+    "from_paragraph": "④ 3호",
+    "to_doc": "방송통신발전 기본법",
+    "to_article": "36조",
+    "quote": "법 제36조 및 제36조의2에 따른 방송통신재난관리계획의 수립 및 이행"
+   },
+   {
+    "from_doc": "방송통신발전 기본법 시행령",
+    "from_article": "27조의2",
+    "from_paragraph": "④ 3호",
+    "to_doc": "방송통신발전 기본법",
+    "to_article": "36조의2",
+    "quote": "법 제36조 및 제36조의2에 따른 방송통신재난관리계획의 수립 및 이행"
+   },
+   {
+    "from_doc": "방송통신발전 기본법 시행령",
+    "from_article": "27조의2",
+    "from_paragraph": "④ 4호",
+    "to_doc": "방송통신발전 기본법",
+    "to_article": "37조",
+    "quote": "법 제37조에 따른 방송통신설비의 통합 운용과 법 제37조의2에 따른 무선통신시설의 공동이용에 필요한 조치"
+   },
+   {
+    "from_doc": "방송통신발전 기본법 시행령",
+    "from_article": "27조의2",
+    "from_paragraph": "④ 4호",
+    "to_doc": "방송통신발전 기본법",
+    "to_article": "37조의2",
+    "quote": "법 제37조에 따른 방송통신설비의 통합 운용과 법 제37조의2에 따른 무선통신시설의 공동이용에 필요한 조치",
+    "note": "target is a basis article; this is the exact 호 named by the edge description (제27조의2제4항제4호)"
+   },
+   {
+    "from_doc": "방송통신발전 기본법 시행령",
+    "from_article": "27조의2",
+    "from_paragraph": "④ 5호",
+    "to_doc": "방송통신발전 기본법",
+    "to_article": "38조",
+    "quote": "법 제38조 및 제39조제4항에 따른 방송통신재난의 현황, 원인, 응급조치 내용, 복구대책, 피해복구 진행 상황 등의 보고"
+   },
+   {
+    "from_doc": "방송통신발전 기본법 시행령",
+    "from_article": "27조의2",
+    "from_paragraph": "④ 5호",
+    "to_doc": "방송통신발전 기본법",
+    "to_article": "39조",
+    "quote": "법 제38조 및 제39조제4항에 따른 방송통신재난의 현황, 원인, 응급조치 내용, 복구대책, 피해복구 진행 상황 등의 보고"
+   },
+   {
+    "from_doc": "재난 시 무선통신시설 공동이용 범위 및 절차에 대한 고시",
+    "from_article": "1조",
+    "from_paragraph": "(본문)",
+    "to_doc": "방송통신발전 기본법",
+    "to_article": "37조의2",
+    "quote": "이 기준은 「방송통신발전기본법」 제37조의2에 따라 재난 시 이동통신서비스",
+    "note": "law name written WITHOUT the space ('방송통신발전기본법'); target is a basis article"
+   }
+  ],
+  "outside": [
+   {
+    "from_doc": "방송통신발전 기본법",
+    "from_article": "37조의2",
+    "from_paragraph": "② 1호",
+    "to_doc": "재난 및 안전관리 기본법",
+    "to_article": "38조",
+    "quote": "「재난 및 안전관리 기본법」 제38조에 따라 경계 이상의 방송통신재난 경보가 발령된 경우",
+    "note": "재난 및 안전관리 기본법 is a target of the OTHER topic (재난문자), not of this one"
+   },
+   {
+    "from_doc": "방송통신발전 기본법 시행령",
+    "from_article": "27조의2",
+    "from_paragraph": "③",
+    "to_doc": "전기통신사업법",
+    "to_article": null,
+    "quote": "전기통신역무(「전기통신사업법」에 따른 전기통신역무를 말한다. 이하 같다)",
+    "note": "document-level mention, no article (전기통신사업법 IS a target of this topic but no 조 is cited)"
+   },
+   {
+    "from_doc": "방송통신발전 기본법 시행령",
+    "from_article": "27조의2",
+    "from_paragraph": "④ 6호",
+    "to_doc": "재난 및 안전관리 기본법",
+    "to_article": null,
+    "quote": "「재난 및 안전관리 기본법」 및 「지속가능한 기반시설 관리 기본법」 등 다른 법령에서 규정한",
+    "note": "document-level mention, no article"
+   },
+   {
+    "from_doc": "방송통신발전 기본법 시행령",
+    "from_article": "27조의2",
+    "from_paragraph": "④ 6호",
+    "to_doc": "지속가능한 기반시설 관리 기본법",
+    "to_article": null,
+    "quote": "「재난 및 안전관리 기본법」 및 「지속가능한 기반시설 관리 기본법」 등 다른 법령에서 규정한",
+    "note": "document-level mention, no article"
+   },
+   {
+    "from_doc": "재난 시 무선통신시설 공동이용 범위 및 절차에 대한 고시",
+    "from_article": "1조",
+    "from_paragraph": "(본문)",
+    "to_doc": "이동통신단말장치 유통구조 개선에 관한 법률",
+    "to_article": "2조",
+    "quote": "「이동통신단말장치 유통구조 개선에 관한 법률」 제2조제1호의 이동통신서비스를 말한다"
+   },
+   {
+    "from_doc": "재난 시 무선통신시설 공동이용 범위 및 절차에 대한 고시",
+    "from_article": "5조",
+    "from_paragraph": "①",
+    "to_doc": "재난 및 안전관리 기본법",
+    "to_article": "38조",
+    "quote": "「재난 및 안전관리 기본법」 제38조에 따른 경계 이상의 방송통신재난 경보 발령의 원인이 되는 재난 발생 지역"
+   }
+  ],
+  "delegations": [
+   {
+    "from_doc": "방송통신발전 기본법",
+    "from_article": "37조의2",
+    "from_paragraph": "④",
+    "to_doc": "재난 시 무선통신시설 공동이용 범위 및 절차에 대한 고시",
+    "quote": "무선통신시설의 공동이용의 범위, 절차 및 방법 등에 관하여 필요한 사항은 과학기술정보통신부장관이 정하여 고시한다",
+    "realised_by": "고시 1조(목적)가 역방향으로 「방송통신발전기본법」 제37조의2를 인용"
+   },
+   {
+    "from_doc": "전기통신사업법",
+    "from_article": "37조",
+    "from_paragraph": "①·②·③",
+    "to_doc": "(과기정통부 고시 — 공동이용 대가·범위 기준)",
+    "quote": "과학기술정보통신부장관이 정하여 고시하는 기간통신사업자 간의 공동이용의 대가 / …기준은 과학기술정보통신부장관이 정하여 고시한다",
+    "realised_by": null,
+    "note": "전기통신사업법 37조 contains NO 제N조 citation; the delegated 고시 is not the 재난 시 고시 (which hangs off 방발기본법 37조의2) and is not a target"
+   },
+   {
+    "from_doc": "방송통신발전 기본법 시행령",
+    "from_article": "27조의2",
+    "from_paragraph": "⑤",
+    "to_doc": "(과기정통부 고시 — 전담부서·전담인력 운용)",
+    "quote": "통신재난관리 전담부서 및 전담인력의 운용 등에 필요한 사항은 과학기술정보통신부장관이 정하여 고시한다",
+    "realised_by": null
+   }
+  ]
+ }
+}

@@ -10810,6 +10810,9 @@ function renderLawMapGraph(focusId) {
   _lawMapFocusId = focusId || null;
   var el = document.getElementById('lawmap-graph');
   if (!el) return;
+  // 주제 포커스 + '조문 단위 보기' 켬 → lawmap_articles.js가 그린다 (#125). 실패 시 그쪽에서 _lmaBypass로 여기로 되돌아옴.
+  if (typeof lmaShouldHandle === 'function' && lmaShouldHandle(_lawMapFocusId)) { lmaRenderTopic(_lawMapFocusId); return; }
+  if (typeof lmaUpdateToggle === 'function') { try { lmaEnsureToggle(); lmaUpdateToggle(); } catch(e) {} }
   var nodes = _lawMapNodes, edges = _lawMapEdges;
   var focusNode = null;
   if (_lawMapFocusId) {
