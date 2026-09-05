@@ -372,7 +372,8 @@ if (typeof module !== 'undefined') module.exports = {
 // ═══════════════════════════════════════════════════════════════════════════════════════
 
 var _lmaMode = (function() {
-  try { var v = localStorage.getItem('lawmap_article_mode'); return v === null ? true : v === '1'; } catch(e) { return true; }
+  // 기본은 법령 단위(큰 그림) — 운영자 결정(2026-09-06): 먼저 어떤 법이 걸려 있는지 보고, 버튼으로 조문 단위(자세한 그림)로 내려간다
+  try { var v = localStorage.getItem('lawmap_article_mode'); return v === '1'; } catch(e) { return false; }
 })();
 var _lmaBypass = false;          // 폴백 재진입 방지
 var _lmaCache = {};              // topicId → 모델 (같은 세션 안 재조회 방지)
@@ -403,7 +404,7 @@ function lmaEnsureToggle() {
   var b = document.createElement('button');
   b.id = 'lma-toggle'; b.className = 'btn';
   b.style.cssText = 'font-size:11px;padding:2px 8px;margin-left:6px;display:none';
-  b.title = '주제 화면을 법령 단위/조문 단위로 전환';
+  b.title = '큰 그림(법령 단위) ↔ 자세한 그림(조문 단위: 동그라미=조문, 상자=법령, 선=근거 조문 사이의 실제 인용)';
   b.onclick = function() { lmaSetMode(!_lmaMode); };
   anchor.insertAdjacentElement('afterend', b);
   lmaUpdateToggle();
@@ -413,7 +414,10 @@ function lmaUpdateToggle() {
   if (!b) return;
   var f = _lawMapFocusId ? _lawMapNodes.find(function(n) { return n.id === _lawMapFocusId; }) : null;
   b.style.display = (f && f.node_type === 'topic') ? 'inline-flex' : 'none';
-  b.innerHTML = '<i class="ti ' + (_lmaMode ? 'ti-toggle-right' : 'ti-toggle-left') + '"></i> 조문 단위 보기 ' + (_lmaMode ? '켬' : '끔');
+  b.innerHTML = _lmaMode
+    ? '<i class="ti ti-arrow-back-up"></i> 법령 단위로 돌아가기'
+    : '<i class="ti ti-zoom-in"></i> 조문 단위로 자세히 보기';
+  b.className = _lmaMode ? 'btn' : 'btn btn-primary';
 }
 
 // ── 문서명 확정 (노드 카드와 같은 규칙: doc_name → document_chunks ilike) ──
