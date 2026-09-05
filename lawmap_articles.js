@@ -382,6 +382,14 @@ var _lmaMode = (function() {
   try { var v = localStorage.getItem('lawmap_article_mode'); return v === '1'; } catch(e) { return false; }
 })();
 var _lmaBypass = false;          // 폴백 재진입 방지
+// vis-network 툴팁은 기본이 한 줄(white-space:nowrap)이라 문장 단위 툴팁이 화면 오른쪽에서 잘렸다(운영자 지적) → 너비 제한 + 줄바꿈
+(function() {
+  try {
+    var st = document.createElement('style');
+    st.textContent = '.vis-tooltip{max-width:460px !important;white-space:pre-wrap !important;word-break:keep-all;overflow-wrap:anywhere;line-height:1.5;font-size:12px !important;padding:8px 10px !important;border-radius:8px !important;box-shadow:0 4px 14px rgba(0,0,0,.12)}';
+    document.head.appendChild(st);
+  } catch(e) {}
+})();
 var _lmaCache = {};              // topicId → 모델 (같은 세션 안 재조회 방지)
 var _lmaModel = null;            // 현재 화면 모델 (클릭 처리용)
 var LMA_MAX_ITEMS_PER_BOX = 6;   // 상자당 조문 상한 (근거 조문 우선, 나머지 "외 N개")
