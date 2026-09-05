@@ -305,7 +305,7 @@ function lmaDrawBoxes(ctx, rects, theme) {
       label += '…';
     }
     ctx.fillStyle = t.captionColor || '#555';
-    ctx.fillText(label, x + 10, y + 15);
+    ctx.fillText(label, x + 12, y + 19);
   });
   ctx.restore();
 }
@@ -679,7 +679,7 @@ async function lmaBuildModel(topicId) {
     }
     return { id: L.node.id, label: L.node.name, type: L.node.node_type, items: items, L: L };
   });
-  var layout = lmaLayout(boxes, { itemGapX: 150, itemGapY: 70, maxCols: 3, minRadius: 230, topicClearance: 110, topicId: topic.id });
+  var layout = lmaLayout(boxes, { itemGapX: 150, itemGapY: 70, maxCols: 3, minRadius: 230, topicClearance: 110, topicId: topic.id, captionH: 30, minBoxW: 200, padY: 34 });
   var primaryCount = laws.reduce(function(s, L) { return s + L.primaries.length; }, 0);
   var outsideCount = laws.reduce(function(s, L) { return s + L.outside.length; }, 0);
   return { topic: topic, laws: laws, boxes: boxes, edges: edges, layout: layout, primaryCount: primaryCount, outsideCount: outsideCount, builtAt: Date.now() };
@@ -767,7 +767,8 @@ async function lmaRenderTopic(topicId) {
   };
   if (_lawMapNet) { try { _lawMapNet.destroy(); } catch(e) {} }
   _lawMapNet = new vis.Network(el, data, options);
-  var theme = { captionColor: subColor, font: '12px ' + ((css.getPropertyValue('--font-sans') || '').trim() || 'sans-serif') };
+  // 법령 이름(상자 캡션)은 크고 진하게 — 전체화면·프로젝터에서 법령 구분이 먼저 읽혀야 한다(운영자 요청 2026-09-06)
+  var theme = { captionColor: textColor, font: '700 15px ' + ((css.getPropertyValue('--font-sans') || '').trim() || 'sans-serif') };
   _lawMapNet.on('beforeDrawing', function(ctx) { try { lmaDrawBoxes(ctx, model.layout.rects, theme); } catch(e) {} });
   _lawMapNet.on('click', function(p) {
     if (p.nodes && p.nodes.length) {
