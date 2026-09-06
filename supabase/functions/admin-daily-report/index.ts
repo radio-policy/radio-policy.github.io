@@ -4,14 +4,16 @@
 //  역할: 매일 09:00 KST(pg_cron `0 0 * * *` UTC), 구독자 목록과 구독자별 사용 통계를 운영자에게 텔레그램으로 보낸다.
 //        (운영자 지시 2026-08-14 — "매일 관리자 계정으로 구독자 list 및 각 구독자가 한 작업들 통계")
 //
-//  발송 경로: 구독자 봇 토큰으로 **운영자 chat_id 에게만** 보낸다. 승인 요청이 이미 같은 경로로
-//        가고 있어 시크릿을 새로 넣지 않아도 되고, 운영자 봇(푸시 전용)과 채널이 갈리지 않는다.
+//  발송 경로: **운영자 봇(radio-policy-ai, TELEGRAM_BOT_TOKEN)으로 운영자 chat_id 에게만** 보낸다.
+//        2026-08-14~09-06은 구독자 봇('정책 AI도우미') 토큰으로 보냈는데, 운영자에게 구독자용 봇 이름으로
+//        도착해 "모든 구독자에게 나가는 것 아닌가" 혼동을 낳았다(운영자 지시 2026-09-06: "관리자 아이디
+//        radio-policy-ai 로만 보내줘"). 수신자는 전과 같이 운영자 1인. 시크릿 미설정 시 구독자 봇 폴백.
 //
 //  통계 원본: telegram_usage (2026-08-14 신설). 그 전에는 일일 카운터만 있어 매일 초기화됐다 —
 //        이 표가 쌓이기 시작한 날부터의 이력만 나온다.
 //
 //  트리거: pg_cron → trigger_admin_report() → 이 함수 (x-cron-secret 검증).
-//  Secrets: SUBSCRIBER_BOT_TOKEN / OPERATOR_CHAT_ID / ADMIN_REPORT_CRON_SECRET
+//  Secrets: TELEGRAM_BOT_TOKEN(운영자봇, 폴백 SUBSCRIBER_BOT_TOKEN) / OPERATOR_CHAT_ID / ADMIN_REPORT_CRON_SECRET
 // ============================================================================
 
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
@@ -20,7 +22,7 @@ import { escapeHtml, splitByLines, sendTelegramHtml } from '../_shared/telegram_
 import { NEWS_TAGS } from '../_shared/news_tags.ts';
 
 const env = (k: string) => (Deno.env.get(k) || '').trim();
-const BOT_TOKEN = env('SUBSCRIBER_BOT_TOKEN');
+const BOT_TOKEN = env('TELEGRAM_BOT_TOKEN') || env('SUBSCRIBER_BOT_TOKEN');   // 운영자 봇 우선(2026-09-06)
 const OPERATOR_CHAT_ID = Number(env('OPERATOR_CHAT_ID') || '0');
 const CRON_SECRET = env('ADMIN_REPORT_CRON_SECRET');
 const RETENTION_DAYS = 180;
