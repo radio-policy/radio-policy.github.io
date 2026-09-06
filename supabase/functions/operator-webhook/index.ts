@@ -163,8 +163,10 @@ async function runAction(sb: ReturnType<typeof createClient>, action: string, is
     await sb.from('issues').update({
       state: 'active', last_activity_at: now, updated_at: now,
     }).eq('id', issueId);
-    // 근거 기사는 제안 시점에 이미 연결·잠금돼 있다. 과거 뉴스 보강만 백그라운드로.
-    const enrich = fetch(`${env('SUPABASE_URL')}/functions/v1/news-archive-search`, {
+    // 과거 뉴스 재수집 → AI 보강 순서를 직렬로 보장한다. 동시 출발이면 무보도(diff형)
+    // 제안은 승인 시점 기사 0건이라 AI 보강이 "연결 기사 없음"으로 헛돌고 끝난다(#129 실측:
+    // 이슈 51에서 재수집 완료 10초 전에 자동보강이 먼저 포기).
+    const chain = fetch(`${env('SUPABASE_URL')}/functions/v1/news-archive-search`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${env('SUPABASE_SERVICE_ROLE_KEY')}`,
@@ -173,13 +175,11 @@ async function runAction(sb: ReturnType<typeof createClient>, action: string, is
       body: JSON.stringify({ issue_id: issueId }),
     }).then((r) => r.json()).then((j) =>
       console.log('[보강]', issueId, JSON.stringify(j).slice(0, 200)),
-    ).catch((e) => console.error('[보강 실패(무시)]', e));
-    EdgeRuntime.waitUntil(enrich);
-    EdgeRuntime.waitUntil(
-      enrichIssue(sb, issueId)
-        .then((r) => console.log('[자동보강]', issueId, r))
-        .catch((e) => console.error('[자동보강 실패(무시)]', issueId, e)),
-    );
+    ).catch((e) => console.error('[보강 실패(무시), AI 보강은 계속]', e))
+      .then(() => enrichIssue(sb, issueId))
+      .then((r) => console.log('[자동보강]', issueId, r))
+      .catch((e) => console.error('[자동보강 실패(무시)]', issueId, e));
+    EdgeRuntime.waitUntil(chain);
     return `✅ 승인됨 — ${issue.title}\n과거 뉴스 재수집 + 자동 보강(영향 요약·이해관계자·법령 주제)을 시작했습니다.\n과거 사례·기점 소급은 세션에서 "이슈 ${issueId} 보강해줘".`;
   }
 
