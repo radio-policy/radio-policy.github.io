@@ -77,6 +77,19 @@ def _norm_key(title: str) -> str:
     return '|'.join(sorted(extract_keywords(title))[:6])
 
 
+def _clip_sentence(text, limit=500):
+    """정의문 절단은 문장 경계에서 — [:120] 하드컷이 "…실질적 제"처럼 화면에 남았다(#129-보론).
+    limit 안의 마지막 '다.'까지 취하고, 문장 종결이 너무 앞이면 하드컷 폴백."""
+    t = (text or '').strip()
+    if len(t) <= limit:
+        return t
+    cut = t[:limit]
+    idx = cut.rfind('다.')
+    if idx >= limit // 3:
+        return cut[:idx + 2]
+    return cut
+
+
 def _cosine(a, b):
     num = sum(x * y for x, y in zip(a, b))
     da = sum(x * x for x in a) ** 0.5
@@ -477,7 +490,7 @@ def _suggest_from_regs(sb, issues, dry):
             continue
         if skip:
             continue
-        _propose(sb, issues, title[:60], (d.get('summary') or '')[:120] or None, '규제·CR', nk,
+        _propose(sb, issues, title[:60], _clip_sentence(d.get('summary')) or None, '규제·CR', nk,
                  {'kind': 'law_diff_high', 'diff_id': d['id'],
                   'detail': f'중요 개정(urgency high) · 시행 {d.get("enf_date") or "?"} — 보도 유무와 무관'},
                  dry, stage_hint='현안')
@@ -504,7 +517,7 @@ def _suggest_from_regs(sb, issues, dry):
             continue
         if skip:
             continue
-        _propose(sb, issues, b['bill_name'][:60], (b.get('summary') or '')[:120] or None, '규제·CR', nk,
+        _propose(sb, issues, b['bill_name'][:60], _clip_sentence(b.get('summary')) or None, '규제·CR', nk,
                  {'kind': 'assembly_notice', 'bill_no': b['bill_no'],
                   'detail': f'국회 입법예고 · 의견 마감 {b.get("notice_end_dt")}'},
                  dry, stage_hint='현안')
