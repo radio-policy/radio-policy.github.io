@@ -316,6 +316,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 ## 대시보드 (GitHub Pages)
 
 - **넓게 보기·전체화면 (2026-09-06, 배경역사 #126)**: 대시보드 프레임은 `.app` 1100×680 카드라 프로젝터에서 작다. 상단바 "넓게 보기"(`toggleWide`, `body.ui-wide`, localStorage `ui_wide`) = 사이드바 접고 프레임을 화면 크기로(관계도 그래프·자문 영역 높이도 늘어남). 관계도 그래프(`#lawmap-graph`)·자문 영역(`#chat-wrap`)에는 "전체화면" 버튼(`toggleFullscreen`, Fullscreen API, Esc 종료; 그래프는 `fullscreenchange`에서 `setSize·fit` 재실행). 둘 다 기본 꺼짐. **전체화면은 사람의 실제 클릭에서만 열린다** — 자동화 클릭(내장 미리보기·크롬 확장)은 user activation이 없어 `TypeError: not granted`로 거부되므로 검증은 사람이 한 번 눌러야 한다. 카드는 전체화면에 포함하지 않는다(운영자 결정: 카드 안 보여도 됨).
+- **뉴스 목록은 1만 건이라 '다시 그리기'가 비용이다 (2026-09-07, 배경역사 #130)**: `renderNewsList`는 클릭·중요도 변경·검색마다 호출된다. 묶음(`_groupNews`)은 날짜별로 나눠 한 번만 훑고, 기사별 비교 재료(`_newsFeat`: 제목 키워드·사건 라벨 2-gram·태그)를 객체에 붙여 재사용하며, 결과는 `_newsGroupMemo`(키: `_newsCacheVer`·필터·소스·기관·검색어·건수)에 캐시한다. 화면은 처음 `NEWS_RENDER_STEP`(300) 그룹만 그리고 '더 보기'로 이어 붙인다. **목록 구성이 바뀌는 곳(loadNews·deleteNewsItem 등)은 반드시 `_newsCacheVer++`** — 안 올리면 지워진 기사가 묶음 캐시에 남는다. 중요도 변경(`setNewsImportance`)은 화면부터 바꾸고 DB는 뒤에서(실패 시 되돌림). 실측: 클릭→목록 갱신 14초 → 0.2초.
 
 - URL: https://radio-policy.gitlab.io/
 - **수정 배포 시 index.html 캐시 버스터 `app.js?v=`·`styles.css?v=` 갱신 필수 (현재 `app.js?v=20260729a` / `styles.css?v=20260723b`)** — CSS 고칠 때 styles.css 버스터도 갱신해야 사용자 브라우저가 새로 받음
@@ -1163,6 +1164,7 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **노드명·문서명 대조를 정규화 없이 LIKE 한 번으로 끝내지 말 것** (2026-09-05, #123) — 가운뎃점 `·`/`ㆍ` 두 표기, 공백, `.pdf` 꼬리, `(소관부처)` 접두가 섞여 있어 그대로 비교하면 있는 문서를 "미보유"로 오판한다(표시광고법 사례, 노드 doc_name `.pdf` 74건). `nrm()`/`lmNormName()`을 거친 뒤 비교하고, 문서 존재 여부로 결론을 내리기 전에 두 표기를 모두 시도한다.
 - **대시보드에 새 정적 파일(js/css)을 추가하면 `.gitlab-ci.yml`의 `cp … public/` 목록에도 넣을 것** (2026-09-06, #125) — GitLab Pages는 그 목록의 파일만 배포한다(index.html·styles.css·app.js·system_prompt.js·lawmap_articles.js). 빠뜨리면 로컬·GitHub Pages(저장소 전체 서빙)에서는 되는데 **주 주소(gitlab.io)에서만 404**가 나고, `typeof` 가드 덕에 화면은 조용히 종전 동작으로 돌아가 "배포했는데 안 바뀐다"로 보인다. 배포 확인은 `curl -o /dev/null -w "%{http_code}" https://radio-policy.gitlab.io/<파일>`로 파일 단위까지.
 - **Supabase MCP `execute_sql`을 병렬 에이전트 다수가 동시에 두드리게 하지 말 것 — 동시 4개 이하, 조회는 묶어서** (2026-09-05, #123) — 12개 에이전트가 각자 조회하자 rate-limit으로 배치가 중단됐다. 검증·탐색을 병렬로 돌릴 때는 에이전트 수를 줄이거나 한 에이전트가 여러 건을 한 쿼리로 묶어 조회하게 지시한다. MCP는 읽기 전용(UPDATE는 25006)이므로 쓰기는 `sb_client` 스크립트로.
+- **뉴스 목록 렌더에 1만 건 전체를 훑는 계산(O(n²) 묶음·전건 HTML 조립)을 다시 넣지 말 것 — 묶음은 날짜별·캐시, 화면은 300그룹씩** (2026-09-07, #130) — 2026-09-03 병렬 페이지 로드로 1만 건이 다 실리자 클릭마다 14초 멈춤(묶음 12초). 목록 구성이 바뀌면 `_newsCacheVer++`, 비교 재료는 `_newsFeat`로 재사용.
 
 ## 알려진 제약사항
 

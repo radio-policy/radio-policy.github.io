@@ -3495,6 +3495,7 @@ async function loadNews() {
     var lockedResp = await sb.from('news_feed').select(NEWS_LIST_COLS).eq('locked', true).limit(500);
     var seen = new Set();
     newsDataCache = [];
+    _newsCacheVer++;   // 목록 구성이 바뀜 — 묶음 캐시 무효화
     all.concat(lockedResp.data || []).forEach(function(n) {
       if (seen.has(n.id)) return; seen.add(n.id); newsDataCache.push(n);
     });
@@ -3511,6 +3512,14 @@ async function loadNews() {
 
 // ── 뉴스 그룹핑 유틸 ─────────────────────────────────────
 var _newsGroupOpen = {};
+// 묶음 결과 캐시 + 점진 렌더(2026-09-07, #130). 같은 조건(캐시 세대·필터·검색)이면 묶음을 다시
+// 계산하지 않고, 처음엔 NEWS_RENDER_STEP 그룹만 그린 뒤 '더 보기'로 이어 붙인다 — 1만 건을 한 번에
+// 그리면 HTML 조립·삽입만 1.7초(실측). 캐시 세대(_newsCacheVer)는 목록 구성이 바뀔 때만 올린다.
+var _newsGroupMemo = { key: null, groups: [] };
+var _newsCacheVer = 0;
+var NEWS_RENDER_STEP = 300;
+var _newsRenderLimit = NEWS_RENDER_STEP;
+function showMoreNews() { _newsRenderLimit += NEWS_RENDER_STEP; renderNewsList(); }
 
 function _extractKeywords(title) {
   var stopwords = ['관련','대한','위한','통해','대해','기반','위해','이후','이전',
@@ -3579,51 +3588,77 @@ function _eventSimilarity(e1, e2) {
 // 제목 유사도 임계(0.15)와 값을 비교하지 말 것 — 제목 쪽은 키워드 비율, 이쪽은 글자 2-gram 겹침으로 척도가 다르다.
 var EVENT_SIM_THRESHOLD = 0.45;
 
+// 같은 날짜끼리만 묶이므로 날짜별로 먼저 나눈 뒤 날짜 안에서만 비교한다(2026-09-07, #130).
+// 종전엔 안쪽 루프가 매번 전체를 훑는 O(n²)라 1만 건에서 12초(실측) — 중요도 클릭·기사 클릭마다
+// 목록을 다시 그리면서 화면이 멈춘 원인. 결과(그룹 구성·순서)는 종전과 같다.
 function _groupNews(items) {
-  var used = {};
+  var byDate = {}, order = [];
+  for (var i = 0; i < items.length; i++) {
+    var d = (items[i].published_at || items[i].created_at || '').slice(0, 10);
+    if (!byDate[d]) { byDate[d] = []; order.push(d); }
+    byDate[d].push(items[i]);
+  }
   var groups = [];
+  order.forEach(function(d) { _groupSameDay(byDate[d], groups); });
+  return groups;
+}
+// 기사별 비교 재료(제목 키워드·사건 라벨 2-gram 주머니)를 한 번만 만들어 객체에 붙여 둔다 —
+// 종전엔 쌍마다 정규식 추출을 다시 해 비교 1회에 10µs, 하루 500건이면 그날만 25만 쌍이었다.
+function _newsFeat(n) {
+  var f = n._feat;
+  if (f && f.title === n.title && f.event === n.event) return f;
+  var kw = _extractKeywords(n.title || '');
+  var ev = (n.event || '').trim();
+  var evBag = null, evLen = 0;
+  if (ev) {
+    var grams = _eventBigrams(ev); evLen = grams.length; evBag = {};
+    grams.forEach(function(g) { evBag[g] = (evBag[g] || 0) + 1; });
+  }
+  f = { title: n.title, event: n.event, kw: kw, kwSet: new Set(kw), ev: ev, evBag: evBag, evLen: evLen,
+        tags: (Array.isArray(n.tags) && n.tags.length) ? n.tags : null };
+  n._feat = f;
+  return f;
+}
+// _titleSimilarity·_eventSimilarity + 태그 겹침 조건과 같은 계산을 미리 만든 재료로 한다(결과 동일).
+function _pairSimOk(a, b) {
+  if (a.tags && b.tags && !a.tags.some(function(t) { return b.tags.includes(t); })) return false;
+  if (a.ev && b.ev) {
+    if (!a.evLen || !b.evLen) return false;
+    var hit = 0;
+    for (var g in a.evBag) { if (b.evBag[g]) hit += Math.min(a.evBag[g], b.evBag[g]); }
+    return hit / Math.min(a.evLen, b.evLen) >= EVENT_SIM_THRESHOLD;
+  }
+  if (!a.kw.length || !b.kw.length) return false;
+  var shared = 0;
+  for (var i = 0; i < a.kw.length; i++) if (b.kwSet.has(a.kw[i])) shared++;
+  if (shared < 2) return false;
+  return shared / Math.max(a.kw.length, b.kw.length) >= 0.15;
+}
+function _groupSameDay(items, groups) {
+  var used = {};
+  var feats = items.map(_newsFeat);
   for (var i = 0; i < items.length; i++) {
     if (used[i]) continue;
     var group = [items[i]];
-    var d1 = (items[i].published_at || items[i].created_at || '').slice(0, 10);
     used[i] = true;
-    // 그룹 크기가 늘어날 수 있으므로 반복 확인 (전이적 그룹핑)
-    var changed = true;
-    while (changed) {
-      changed = false;
-      for (var j = 0; j < items.length; j++) {
-        if (used[j]) continue;
-        var d2 = (items[j].published_at || items[j].created_at || '').slice(0, 10);
-        if (d1 !== d2) continue;
-        // 대표 기사(group[0])와 유사할 때만 추가 — 예전엔 '그룹 안 어느 하나와라도' 였는데
-        // 그러면 A~B, B~C로 한 다리 건너 계속 이어붙어(연쇄 병합) 무관한 기사가 한 덩어리가 된다.
-        // 2026-08-03 실측: 통신 뉴스가 '통신3사·요금제·출시' 같은 흔한 단어를 공유해
-        // 번호이동·자급제 요금제·안테나 공급·5G 광고 위법이 91건 한 그룹으로 묶였다.
-        // 분야 태그가 있으면 겹치는 것만 묶는다(둘 중 하나라도 미판정이면 제목 유사도만으로 판단).
-        // 양쪽 다 사건 라벨이 있으면 라벨끼리 비교한다 — 같은 사건을 다룬 기사는 언론사마다
-        // 제목 표현이 달라 단어 겹침으로는 잘 안 잡히지만, 라벨은 사실만 남긴 문장이라 수렴한다.
-        // 한쪽이라도 라벨이 없으면(미판정·키워드 폴백·구 데이터) 종전대로 제목 유사도로 판단한다.
-        var seed = group[0];
-        var ev1 = (seed.event || '').trim(), ev2 = (items[j].event || '').trim();
-        var simOk = (ev1 && ev2)
-          ? _eventSimilarity(ev1, ev2) >= EVENT_SIM_THRESHOLD
-          : _titleSimilarity(seed.title, items[j].title) >= 0.15;
-        var tagOk = true;
-        var ts = seed.tags, tj = items[j].tags;
-        if (Array.isArray(ts) && ts.length && Array.isArray(tj) && tj.length) {
-          tagOk = ts.some(function(t) { return tj.includes(t); });
-        }
-        if (simOk && tagOk) {
-          group.push(items[j]);
-          used[j] = true;
-          changed = true;
-        }
-      }
+    // 대표 기사(group[0])와 유사할 때만 추가 — 예전엔 '그룹 안 어느 하나와라도' 였는데
+    // 그러면 A~B, B~C로 한 다리 건너 계속 이어붙어(연쇄 병합) 무관한 기사가 한 덩어리가 된다.
+    // 2026-08-03 실측: 통신 뉴스가 '통신3사·요금제·출시' 같은 흔한 단어를 공유해
+    // 번호이동·자급제 요금제·안테나 공급·5G 광고 위법이 91건 한 그룹으로 묶였다.
+    // 분야 태그가 있으면 겹치는 것만 묶는다(둘 중 하나라도 미판정이면 제목 유사도만으로 판단).
+    // 양쪽 다 사건 라벨이 있으면 라벨끼리 비교한다 — 같은 사건을 다룬 기사는 언론사마다
+    // 제목 표현이 달라 단어 겹침으로는 잘 안 잡히지만, 라벨은 사실만 남긴 문장이라 수렴한다.
+    // 한쪽이라도 라벨이 없으면(미판정·키워드 폴백·구 데이터) 종전대로 제목 유사도로 판단한다.
+    // 비교 상대가 항상 대표 기사뿐이라 한 번만 훑으면 된다 — 멤버가 늘어도 판정이 바뀌지 않는다
+    // (종전의 while(changed) 재순회는 결과가 같고 시간만 배로 들었다, 2026-09-07 #130).
+    for (var j = 0; j < items.length; j++) {
+      if (used[j]) continue;
+      if (_pairSimOk(feats[i], feats[j])) { group.push(items[j]); used[j] = true; }
     }
     groups.push(group);
   }
-  return groups;
 }
+
 
 function _groupTitle(items) {
   // 사건 라벨이 있으면 그룹에서 가장 많이 나온 라벨을 그룹 이름으로 쓴다.
@@ -3739,10 +3774,16 @@ function renderNewsList() {
   }
 
   // 정부 보도자료·공지사항은 그룹핑 없이 개별 표시
-  var groups = currentNewsSourceType === 'gov' ? sorted.map(function(n){ return [n]; }) : _groupNews(sorted);
+  var gkey = [_newsCacheVer, currentNewsFilter, currentNewsSourceType, currentGovAgency, currentNewsSearch, sorted.length].join('');
+  if (_newsGroupMemo.key !== gkey) {
+    _newsGroupMemo = { key: gkey, groups: currentNewsSourceType === 'gov' ? sorted.map(function(n){ return [n]; }) : _groupNews(sorted) };
+    _newsRenderLimit = NEWS_RENDER_STEP;   // 조건이 바뀌면 처음부터
+  }
+  var groups = _newsGroupMemo.groups;
+  var shown = groups.slice(0, _newsRenderLimit);
   var html = '';
 
-  groups.forEach(function(group, gi) {
+  shown.forEach(function(group, gi) {
     if (group.length === 1) {
       html += _renderSingleItem(group[0]);
     } else {
@@ -3781,6 +3822,10 @@ function renderNewsList() {
     }
   });
 
+  if (groups.length > shown.length) {
+    html += '<div style="text-align:center;padding:10px 0"><button class="btn" onclick="showMoreNews()" style="font-size:12px;padding:6px 16px">' +
+      '<i class="ti ti-chevron-down"></i> 더 보기 (' + (groups.length - shown.length) + '개 남음)</button></div>';
+  }
   var groupCount = groups.filter(function(g){ return g.length > 1; }).length;
   var totalGrouped = groups.filter(function(g){ return g.length > 1; }).reduce(function(s,g){ return s+g.length; }, 0);
   if (groupCount > 0) {
@@ -3844,6 +3889,7 @@ async function deleteNewsItem(newsId) {
     var resp = await sb.from('news_feed').delete().eq('id', newsId);
     if (resp.error) throw resp.error;
     newsDataCache = newsDataCache.filter(function(x) { return String(x.id) !== String(newsId); });
+    _newsCacheVer++;   // 목록 구성이 바뀜 — 묶음 캐시 무효화
     if (String(selectedNewsId) === String(newsId)) {
       selectedNewsId = null;
       var panel = document.getElementById('news-detail-panel');
@@ -3872,6 +3918,19 @@ async function setNewsImportance(newsId, newVal) {
   if (!n || !sb) return;
   var oldVal = n._importance || n.importance || n.urgency || '참고';
   if (oldVal === newVal) return;
+  // 화면부터 바꾼다(낙관적 갱신, 2026-09-07, #130) — 종전엔 DB 왕복 3회(갱신·피드백 조회·기록)를
+  // 기다린 뒤에야 목록을 다시 그려 클릭 반응이 늦었다. DB가 실패하면 되돌리고 알린다.
+  var apply = function(v) {
+    n.importance = v; n.urgency = v; n._importance = v;
+    if (currentNewsFilter !== '전체') _newsCacheVer++;   // 필터 목록에서 빠지므로 묶음 캐시 무효화
+    renderNewsList();
+    var rule = IMPORTANCE_RULES[v];
+    var badge = document.getElementById('importance-badge-' + newsId);
+    if (badge && rule) { badge.textContent = rule.label; badge.style.color = rule.color; badge.style.background = rule.bg; }
+    var sel = document.getElementById('imp-sel-' + newsId);
+    if (sel) sel.innerHTML = _impSelHtml(newsId, v);
+  };
+  apply(newVal);
   try {
     var ur = await sb.from('news_feed').update({ importance: newVal, urgency: newVal })
       .eq('id', newsId).select('id,importance');
@@ -3888,16 +3947,10 @@ async function setNewsImportance(newsId, newVal) {
       fb.ai_importance = oldVal;
       await sb.from('importance_feedback').insert(fb);
     }
-    n.importance = newVal; n.urgency = newVal; n._importance = newVal;
-    renderNewsList();
-    var rule = IMPORTANCE_RULES[newVal];
-    var badge = document.getElementById('importance-badge-' + newsId);
-    if (badge && rule) { badge.textContent = rule.label; badge.style.color = rule.color; badge.style.background = rule.bg; }
-    var sel = document.getElementById('imp-sel-' + newsId);
-    if (sel) sel.innerHTML = _impSelHtml(newsId, newVal);
-    // 당일 브리핑에 포함된 기사면 브리핑 원문의 🔴 표시도 동기화
-    try { await syncBriefingUrgency(newsId, newVal); } catch(e2) { console.warn('[브리핑 동기화] 실패(무시):', e2); }
+    // 당일 브리핑에 포함된 기사면 브리핑 원문의 🔴 표시도 동기화 — 화면을 막지 않고 뒤에서
+    syncBriefingUrgency(newsId, newVal).catch(function(e2) { console.warn('[브리핑 동기화] 실패(무시):', e2); });
   } catch(e) {
+    apply(oldVal);
     alert('긴급도 수정 실패: ' + e.message);
   }
 }
