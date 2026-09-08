@@ -148,6 +148,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 | 로그인 필요 | **profiles·teams·advisory_usage·answer_feedback** | anon 정책 없음. authenticated에 역할별 SELECT(본인/팀/admin), profiles·teams UPDATE는 admin만. AI 호출은 `claude-proxy`가 JWT를 검증한다 (#104) |
 | | importance_feedback | select 공개. **insert·update는 승인 프로필만**(#133) |
 | | tech_terms | select·insert·update (anon 열림 — #133 범위 밖, 추후 검토) |
+| | app_config | select 공개. update는 `press_keywords`(기존)와 **`terms_last_extraction`(승인 프로필, #137 — 용어 자동 추출 하루 1회 서버 게이트)** 두 키만 |
 | | **people** | select 공개. **update는 admin만**(`is_admin()`, #135 — 입장 요약 생성·갱신 버튼도 관리자에게만 표시). 종전엔 public(anon 포함) update가 열려 있었다 |
 | | custom_knowledge | select·insert·update·delete (팀원 기여 창구) |
 | | law_graph_nodes·law_graph_edges | select·insert·update (delete는 service 전용 — 병합만) |

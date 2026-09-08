@@ -7094,11 +7094,21 @@ async function backfillTermDetails(rows) {
 }
 
 async function autoExtractTermsIfNeeded() {
-  var today = new Date().toISOString().slice(0, 10);
-  var lastRun = localStorage.getItem('last_terms_extraction');
-  if (lastRun === today) return; // 오늘 이미 실행함
   if (!sb) return;
   if (!aiReady()) return;
+  // 하루 1회 판단은 **서버 값**(app_config.terms_last_extraction, KST 날짜)으로 한다 (#137, 2026-09-08).
+  // 종전엔 localStorage라 승인자 브라우저마다 하루 1회씩 돌았다(승인자 10명 = 하루 10회).
+  // 선점 UPDATE(.neq 오늘)로 한 브라우저만 이기므로 동시 접속에도 중복 실행이 없다.
+  // 서버 값을 못 읽거나 선점에 실패하면 돌리지 않는다(비용 방향으로 fail-closed).
+  var today = new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10);
+  try {
+    var cfg = await sb.from('app_config').select('value').eq('key', 'terms_last_extraction').maybeSingle();
+    if (cfg.error) return;
+    if (cfg.data && String(cfg.data.value || '').slice(0, 10) === today) return;   // 오늘 이미 실행됨(누군가)
+    var claim = await sb.from('app_config').update({ value: today })
+      .eq('key', 'terms_last_extraction').neq('value', today).select('key');
+    if (claim.error || !claim.data || !claim.data.length) return;                    // 다른 브라우저가 먼저 선점
+  } catch(e) { return; }
 
   try {
     var cutoff = new Date();
@@ -7161,8 +7171,7 @@ async function autoExtractTermsIfNeeded() {
         if (r2.data && r2.data[0]) newRows.push(r2.data[0]);
       }
     }
-    localStorage.setItem('last_terms_extraction', today);
-    console.log('[기술 용어] 자동 추출 완료:', saved, '건 저장');
+    console.log('[기술 용어] 자동 추출 완료:', saved, '건 저장 (오늘 실행 기록: app_config.terms_last_extraction)');
 
     // 신규 용어의 상세 설명·개념도를 곧바로 채운다 — 운영자가 클릭할 때까지
     // 비워 두면 열어 볼 때마다 수십 초를 기다려야 한다. (배경역사 #46)
