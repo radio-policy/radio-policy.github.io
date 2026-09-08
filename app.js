@@ -4089,11 +4089,13 @@ async function showNewsDetail(newsId) {
 
   // content는 목록 조회(select)에서 제외했으므로(초기 전송량 절감, #61) 상세 열람 시 해당 1건만 온디맨드 조회.
   // RAG 자문은 별도 쿼리(select에 content 포함)로 본문을 직접 가져오므로 캐시 슬림화와 무관.
-  if (sb && n.content === undefined) {
+  // 저장된 영향 분석(impact_analysis, #134)도 같은 왕복으로 가져온다 — 있으면 AI를 다시 부르지 않는다.
+  if (sb && (n.content === undefined || n.impact_analysis === undefined)) {
     try {
-      var cResp = await sb.from('news_feed').select('content').eq('id', n.id).maybeSingle();
+      var cResp = await sb.from('news_feed').select('content,impact_analysis').eq('id', n.id).maybeSingle();
       n.content = (cResp && cResp.data && cResp.data.content) || '';
-    } catch(e) { n.content = ''; }
+      n.impact_analysis = (cResp && cResp.data && cResp.data.impact_analysis) || null;
+    } catch(e) { n.content = ''; n.impact_analysis = null; }
   }
 
   // 요약 + 영향도 분석 자동 실행
@@ -4204,12 +4206,45 @@ async function summarizeNews(newsId) {
 }
 
 // ── AI 영향도 분석 (Claude Haiku — 빠른 분석) ───────────────
-async function analyzeNewsImpact(newsId) {
+// ── 영향 분석 결과 표시 (저장본·새 분석 공용, #134) ──
+// text는 모델 원문(<impact>/<priority> 태그 포함). 저장본이면 "다시 분석" 링크를 붙인다(승인자만 보임).
+function _renderImpactBox(box, n, text, fromSaved) {
+  if (!box) return;
+  var impactM   = text.match(/<impact>([\s\S]*?)<\/impact>/);
+  var priorityM = text.match(/<priority>([\s\S]*?)<\/priority>/);
+  var impactText   = impactM   ? impactM[1].trim()   : '';
+  var priorityText = priorityM ? priorityM[1].trim() : '';
+  var rule = IMPORTANCE_RULES[n._importance] || IMPORTANCE_RULES['참고'];
+  var html;
+  if (impactText) {
+    html = renderSummaryHtml(impactText) +
+      (priorityText ? '<div style="font-size:11px;color:' + rule.color + ';font-weight:600;margin-top:6px">⚡ ' + priorityText + '</div>' : '');
+  } else {
+    html = text
+      ? renderSummaryHtml(text.trim())
+      : '<span style="color:var(--text-tertiary);font-size:11px">분석 결과를 받지 못했습니다 — AI 자문에서 직접 질문해 주세요.</span>';
+  }
+  if (fromSaved && aiReady()) {
+    html += '<div style="margin-top:6px;text-align:right"><span onclick="analyzeNewsImpact(\'' + n.id + '\', true)" ' +
+      'style="cursor:pointer;font-size:10px;color:var(--text-muted)" title="저장된 분석을 버리고 새로 분석합니다(AI 호출 1회)">🔄 다시 분석</span></div>';
+  }
+  box.innerHTML = html;
+}
+
+async function analyzeNewsImpact(newsId, force) {
   var n = newsDataCache.find(function(x) { return String(x.id) === String(newsId); });
   if (!n) return;
-  if (!aiReady()) { alert(aiGateMsg()); return; }
 
   var box = document.getElementById('impact-box-' + newsId);
+
+  // ① 저장된 분석이 있으면 그대로 보여준다(AI 호출 0, 비로그인도 열람 가능). 종전엔 열 때마다·사람마다
+  //    Haiku를 다시 불렀다 — 첫 열람자가 낸 비용을 반복해서 내는 구조였다(#134).
+  if (!force && n.impact_analysis) { _renderImpactBox(box, n, n.impact_analysis, true); return; }
+  if (!aiReady()) {
+    // 자동 실행 경로라 alert 대신 상자 안에 조용히 안내한다.
+    if (box) box.innerHTML = '<span style="color:var(--text-tertiary);font-size:11px">' + chEsc(aiGateMsg()) + '</span>';
+    return;
+  }
 
   try {
     var sysMsg = SKT_IMPACT_SYSTEM_PROMPT;
@@ -4241,24 +4276,14 @@ async function analyzeNewsImpact(newsId) {
 
     var text = (data.content && data.content[0] && data.content[0].text) || '';
 
-    var impactM   = text.match(/<impact>([\s\S]*?)<\/impact>/);
-    var priorityM = text.match(/<priority>([\s\S]*?)<\/priority>/);
+    _renderImpactBox(box, n, text, false);
 
-    var impactText   = impactM   ? impactM[1].trim()   : '';
-    var priorityText = priorityM ? priorityM[1].trim() : '';
-
-    var rule = IMPORTANCE_RULES[n._importance] || IMPORTANCE_RULES['참고'];
-
-    if (box) {
-      if (impactText) {
-        box.innerHTML =
-          renderSummaryHtml(impactText) +
-          (priorityText ? '<div style="font-size:11px;color:' + rule.color + ';font-weight:600;margin-top:6px">⚡ ' + priorityText + '</div>' : '');
-      } else {
-        box.innerHTML = text
-          ? renderSummaryHtml(text.trim())
-          : '<span style="color:var(--text-tertiary);font-size:11px">분석 결과를 받지 못했습니다 — AI 자문에서 직접 질문해 주세요.</span>';
-      }
+    // ② 결과 저장 — 다음 열람(누구든)은 저장본을 본다. 빈 응답은 저장하지 않는다(재시도 여지).
+    //    60일 롤링 삭제와 함께 사라지고, 잠금 기사는 분석도 같이 남는다. 실패는 표시에 영향 없음.
+    if (text && text.trim() && sb) {
+      n.impact_analysis = text;
+      sb.from('news_feed').update({ impact_analysis: text, impact_analyzed_at: new Date().toISOString() })
+        .eq('id', n.id).then(function(r) { if (r && r.error) console.warn('영향 분석 저장 실패(무시):', r.error.message); });
     }
 
     // ※ 과거에는 분석의 priority로 긴급도 배지·DB를 자동 덮어썼으나 제거됨 (2026-06-12).
