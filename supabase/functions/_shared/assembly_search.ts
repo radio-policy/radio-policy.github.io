@@ -43,6 +43,8 @@ export type AssemQuery = {
   speaker: string;         // 의원명. '' 이면 발언자 무관
   query: string;           // 회의록 본문에서 찾을 낱말
   year?: number;           // 특정 연도로 좁힐 때
+  yearFrom?: number;       // 기간 검색 시작 연도(포함). "최근 5년간"·"2019~2021년" (#131)
+  yearTo?: number;         // 기간 검색 끝 연도(포함). year와 함께 쓰지 않는다 — 아래 mkBody 참조
   dae?: number;            // 대수(20·21·22). "22대 국회에서…" 같은 표현을 범위 지정으로 받는다
   daeOut?: number;         // 지원 범위(20~22) 밖 대수. 검색어에서 걷어내되 "범위 밖"이라고 알리기 위해 남긴다
   kinds?: AssemKind[];     // 미지정이면 상임위+국정감사 모두
@@ -50,6 +52,21 @@ export type AssemQuery = {
 
 // 대수 → 검색폼 대수코드. 20대=22 … 22대=24 (Open API 의 DAE_NUM 과 다른 체계).
 const DAE_TO_TH: Record<number, string> = { 20: '22', 21: '23', 22: '24' };
+
+// 보유 회의록의 실제 연도 범위 (2026-09-08 실측: assembly_speeches 2016~2026, 발언 6,720건).
+// 2자리 연도('19년')를 4자리로 펼칠 때와 "최근 N년"의 범위를 자를 때의 기준이다.
+// ⚠️ 해가 바뀌면 ASSEM_MAX_YEAR를 올려야 "최근 N년"이 올해를 포함한다.
+export const ASSEM_MIN_YEAR = 2016;
+export const ASSEM_MAX_YEAR = 2026;
+const ASSEM_DATA_YEARS = ASSEM_MAX_YEAR - ASSEM_MIN_YEAR + 1;   // 11
+
+/** '19'·'2019' → 2019. 보유 범위(16~26년) 밖이면 undefined — 연도가 아니라고 본다.
+ *  범위를 두는 이유: '1900MHz'의 00이나 '5년간'의 5가 연도로 둔갑하는 것을 막는다(실측 사고). */
+function normYear(raw: string): number | undefined {
+  const n = Number(raw);
+  const y = n >= 100 ? n : 2000 + n;
+  return y >= ASSEM_MIN_YEAR && y <= ASSEM_MAX_YEAR ? y : undefined;
+}
 
 export type AssemHit = {
   date: string;        // 'YYYY.MM.DD'
@@ -117,10 +134,41 @@ export function parseAssemQueryRule(text: string): AssemQuery {
     rest = rest.replace(mName[0], ' ');
   }
 
-  // ② 연도 — '년'을 반드시 요구한다. 안 그러면 "1900MHz 대역"의 1900이 연도로 잡힌다(실측).
+  // ② 기간 — 상대 기간을 먼저 본다. "최근 5년간 …"의 '5년'을 아래 연도 규칙이 먼저 먹으면
+  //    2005년으로 오인하거나 검색어에 '5년간'이 남는다(#131 이전 동작).
+  //    유의어를 넓게 받는다: 최근·최근에·근래·요즘 / 과거·지난·이전 — 뜻은 같고 표기만 다르다.
   let year: number | undefined;
-  const mYear = rest.match(/(19|20)(\d{2})\s*년/);
-  if (mYear) { year = Number(mYear[1] + mYear[2]); rest = rest.replace(mYear[0], ' '); }
+  let yearFrom: number | undefined;
+  let yearTo: number | undefined;
+  const mSpan = rest.match(/(?:최근|근래|요즘|과거|지난|이전)\s*(\d{1,2})\s*년\s*(?:간|동안|치)?/);
+  if (mSpan) {
+    const n = Number(mSpan[1]);
+    if (n >= 1 && n <= ASSEM_DATA_YEARS) {
+      yearTo = ASSEM_MAX_YEAR;
+      yearFrom = Math.max(ASSEM_MIN_YEAR, ASSEM_MAX_YEAR - n + 1);   // n년간 = 올해 포함
+    }
+    rest = rest.replace(mSpan[0], ' ');   // 범위를 못 잡아도 검색어로는 남기지 않는다
+  }
+
+  // ②' 연도 범위 — "2019~2021년", "2019년부터 2021년까지"
+  if (yearFrom === undefined) {
+    const mRange = rest.match(/(?:20)?(\d{2})\s*년?\s*(?:~|-|부터|에서)\s*(?:20)?(\d{2})\s*년/);
+    if (mRange) {
+      const a = normYear(mRange[1]), b = normYear(mRange[2]);
+      if (a && b) { yearFrom = Math.min(a, b); yearTo = Math.max(a, b); rest = rest.replace(mRange[0], ' '); }
+    }
+  }
+
+  // ②'' 단일 연도 — '년'을 반드시 요구한다. 안 그러면 "1900MHz 대역"의 1900이 연도로 잡힌다(실측).
+  //    2자리 표기('19년')도 받는다(#131). 다만 **앞에 숫자가 붙어 있으면 제외** — "1900MHz"의 '00'이나
+  //    "제20대"의 숫자 꼬리를 연도로 삼지 않기 위해서다. 보유 데이터 범위(16~26년) 밖은 무시한다.
+  if (yearFrom === undefined) {
+    const mYear = rest.match(/(?<![0-9])((?:20)?\d{2})\s*년/);
+    if (mYear) {
+      const y = normYear(mYear[1]);
+      if (y) { year = y; rest = rest.replace(mYear[0], ' '); }
+    }
+  }
 
   // ②' 대수 — "22대 국회에서 …" 는 **범위 지정**이지 검색어가 아니다.
   //    이걸 안 걷어내면 '22대'가 검색어로 나가 엉뚱한 193건이 잡힌다(2026-08-14 운영자 지적).
@@ -163,7 +211,7 @@ export function parseAssemQueryRule(text: string): AssemQuery {
     speaker = words.shift() as string;
   }
   // 원문 문자열 AND 검색이라 낱말이 늘수록 0건 위험이 커진다 — 최대 2개까지만.
-  return { speaker, query: words.slice(0, 2).join(' '), year, dae, daeOut,
+  return { speaker, query: words.slice(0, 2).join(' '), year, yearFrom, yearTo, dae, daeOut,
            kinds: kinds.length ? kinds : undefined };
 }
 
@@ -204,6 +252,10 @@ export async function parseAssemQuery(text: string, apiKey?: string): Promise<As
       speaker: (p.speaker || rule.speaker || '').trim(),
       query: (p.query || '').trim(),
       year: p.year || rule.year,
+      // 기간은 Haiku에게 묻지 않는다(규칙 파서가 확실하다) — 대수와 같은 이유.
+      // 안 실어 주면 "최근 5년간 어떤 얘기가 있었나"가 Haiku로 넘어갔을 때 기간이 조용히 사라진다.
+      yearFrom: rule.yearFrom,
+      yearTo: rule.yearTo,
       // 대수는 Haiku에게 묻지 않는다(규칙 파서가 확실하다). 여기서 안 실어 주면 "22대 국회에서 어떤
       // 얘기가 있었나"처럼 Haiku로 넘어간 질의에서 대수 제한이 조용히 사라진다.
       dae: rule.dae,
@@ -233,8 +285,10 @@ export async function searchAssemblySpeeches(
   const mkBody = (page: number) => new URLSearchParams({
     query: q.query, searchField: 'SPK_CNTS', SPK_NM: q.speaker || '', SPKSAME: 'N', BILL_NO: '',
     sort: 'DATE/DESC',
-    startDate: q.year ? `${q.year}-01-01` : '',
-    endDate: q.year ? `${q.year}-12-31` : '',
+    // 단일 연도(year)와 기간(yearFrom~yearTo)은 배타적이다 — 파서가 둘 중 하나만 채운다.
+    // 기간이 있으면 기간이 우선(#131).
+    startDate: q.yearFrom ? `${q.yearFrom}-01-01` : q.year ? `${q.year}-01-01` : '',
+    endDate: q.yearTo ? `${q.yearTo}-12-31` : q.year ? `${q.year}-12-31` : '',
     collection: colls.join(','),
     CLASS_CD: colls.map((c) => c.replace('record', '')).join(','),
     CMIT_CD: ASSEM_CMIT_CD,
@@ -440,7 +494,9 @@ export async function searchAssemblyWithFallback(
   // ② 두 낱말 AND 가 너무 좁은 경우 — 변별력이 큰 낱말 하나만 남긴다
   if (longest && longest !== q.query) attempts.push({ ...q, query: longest });
   // ③ 연도·회의구분 제약을 푼다 (연도 오인식·구분 오판 복구)
-  if (q.year || q.kinds?.length) attempts.push({ ...q, year: undefined, kinds: undefined });
+  if (q.year || q.yearFrom || q.kinds?.length) {
+    attempts.push({ ...q, year: undefined, yearFrom: undefined, yearTo: undefined, kinds: undefined });
+  }
 
   let last: AssemResult | null = null;
   for (let i = 0; i < Math.min(attempts.length, 4); i++) {
