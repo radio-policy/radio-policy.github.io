@@ -3856,6 +3856,7 @@ function filterNewsByImportance(el, importance) {
 // ── 뉴스 상세 패널 ─────────────────────────────────────────
 // ── 뉴스 잠금 토글 (locked=true면 60일 경과해도 삭제되지 않음) ──
 async function toggleNewsLock(newsId) {
+  if (!canEditNews()) { alert(newsEditGateMsg()); return; }
   var n = newsDataCache.find(function(x) { return String(x.id) === String(newsId); });
   if (!n || !sb) return;
   var newVal = !n.locked;
@@ -3878,6 +3879,7 @@ async function toggleNewsLock(newsId) {
 
 // ── 뉴스 기사 삭제 (news_feed 영구 삭제 + deleted_news 등록으로 재수집 방지) ──
 async function deleteNewsItem(newsId) {
+  if (!canEditNews()) { alert(newsEditGateMsg()); return; }
   var n = newsDataCache.find(function(x) { return String(x.id) === String(newsId); });
   if (!n || !sb) return;
   var msg = '이 기사를 삭제할까요?\n\n' + (n.title || '');
@@ -3901,19 +3903,32 @@ async function deleteNewsItem(newsId) {
   }
 }
 
+// ── 뉴스 편집 권한 (2026-09-08, #133) ──
+// 중요도 변경·잠금·삭제는 **승인된 로그인 계정**만. 열람은 그대로 공개.
+// 화면 게이트는 안내용이고 실제 관문은 DB 정책이다(news_feed UPDATE/DELETE·importance_feedback 쓰기 →
+// 승인 프로필만, anon은 is_read·content·summary 컬럼만 UPDATE 가능). 공개 대시보드라 브라우저 콘솔에서
+// 직접 UPDATE를 날릴 수 있으므로 화면 게이트만으로는 막히지 않는다.
+function canEditNews() { return aiReady(); }
+function newsEditGateMsg() {
+  if (!currentUser) return '뉴스 중요도·잠금·삭제는 로그인 후 이용할 수 있습니다. 우측 상단에서 로그인해 주세요.';
+  return aiGateMsg();
+}
+
 // ── 긴급도 수정 셀렉터 HTML (뉴스 상세 모달) ──
 function _impSelHtml(newsId, current) {
+  var editable = canEditNews();
   return ['긴급', '보통', '참고'].map(function(v) {
     var r = IMPORTANCE_RULES[v] || {};
     var act = (current === v);
-    return '<span onclick="setNewsImportance(\'' + newsId + '\',\'' + v + '\')" ' +
-      'style="cursor:pointer;font-size:10px;padding:2px 7px;border-radius:4px;white-space:nowrap;border:1px solid ' + (act ? r.color : 'var(--border-secondary)') + ';' +
-      'color:' + (act ? '#fff' : 'var(--text-tertiary)') + ';background:' + (act ? r.color : 'transparent') + '">' + (v === '긴급' ? '중요' : v) + '</span>';
-  }).join('');
+    return '<span ' + (editable ? 'onclick="setNewsImportance(\'' + newsId + '\',\'' + v + '\')" ' : 'title="' + escHtml(newsEditGateMsg()) + '" ') +
+      'style="cursor:' + (editable ? 'pointer' : 'not-allowed') + ';font-size:10px;padding:2px 7px;border-radius:4px;white-space:nowrap;border:1px solid ' + (act ? r.color : 'var(--border-secondary)') + ';' +
+      'color:' + (act ? '#fff' : 'var(--text-tertiary)') + ';background:' + (act ? r.color : 'transparent') + (editable ? '' : ';opacity:.6') + '">' + (v === '긴급' ? '중요' : v) + '</span>';
+  }).join('') + (editable ? '' : '<span style="font-size:10px;color:var(--text-muted);margin-left:4px">🔒 로그인 후 변경</span>');
 }
 
 // ── 긴급도 수동 수정 — importance_feedback에 기록되어 크롤러 분류가 학습됨 ──
 async function setNewsImportance(newsId, newVal) {
+  if (!canEditNews()) { alert(newsEditGateMsg()); return; }
   var n = newsDataCache.find(function(x) { return String(x.id) === String(newsId); });
   if (!n || !sb) return;
   var oldVal = n._importance || n.importance || n.urgency || '참고';
@@ -9789,19 +9804,58 @@ async function searchAssemblySpeech() {
     chips.map(function(c) {
       return '<span style="font-size:11px;color:var(--text-secondary);background:var(--bg-secondary);border:0.5px solid var(--border-mid);padding:2px 8px;border-radius:999px">' + c + '</span>';
     }).join('') +
-    '<span style="margin-left:auto;font-size:11px;color:var(--text-muted)">전체 ' + (data.total || 0) + '건' +
-    ((data.hits || []).length && data.total > data.hits.length ? ' · 최근 ' + data.hits.length + '건 표시' : '') + '</span></div>';
+    '</div>';
+
+  // ── 1단: 정리해 둔 발언(assembly_speeches 요지) — 두 단 검색(#132). 첫 페이지에만 붙어 온다.
+  var stored = data.stored || null;
+  var storedHtml = '';
+  if (stored && stored.hits && stored.hits.length) {
+    storedHtml =
+      // 두 묶음이 왜 같이 오는지 — 결과를 읽기 전에 알아야 하므로 조건 칩 바로 아래 한 줄(운영자 문안, #132)
+      '<div style="font-size:11px;color:var(--text-muted);line-height:1.6;margin:-4px 0 12px">' +
+        '정리해 둔 발언(요지)과 국회 회의록 원문을 함께 보여드립니다. 요지는 말을 정리해 둔 것이라 다른 낱말로 한 발언도 잡고, ' +
+        '원문은 실제 발언 그대로라 요지에서 빠진 말을 잡습니다.' +
+      '</div>' +
+      '<div style="margin-bottom:14px">' +
+        '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap">' +
+          '<span style="font-size:12px;font-weight:700;color:var(--text-primary)">📚 정리해 둔 발언</span>' +
+          '<span style="font-size:11px;color:var(--text-muted)">' + stored.total + '건 · 통신·전파 관련 요지, 발언자별 · 매일 17:00 갱신</span>' +
+        '</div>' +
+        '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">' +
+        stored.hits.map(function(s) {
+          var who = escHtml((s.speaker || '') + (s.position ? ' ' + _asmShortPos(s.position) : ''));
+          return '<tr style="border-top:0.5px solid var(--border)">' +
+            '<td style="padding:5px 6px;white-space:nowrap;color:var(--text-muted);vertical-align:top">' + escHtml(s.date || '') + '</td>' +
+            '<td style="padding:5px 6px;white-space:nowrap;font-weight:600;vertical-align:top">' + who + '</td>' +
+            '<td style="padding:5px 6px;white-space:nowrap;color:var(--text-muted);vertical-align:top;max-width:160px;overflow:hidden;text-overflow:ellipsis" title="' + escHtml(s.topic || '') + '">' + escHtml(s.topic || '') + '</td>' +
+            '<td style="padding:5px 6px;line-height:1.6;color:var(--text-secondary)">' + escHtml(s.summary || '') + '</td>' +
+            '<td style="padding:5px 6px;white-space:nowrap;vertical-align:top">' +
+              (s.url ? '<a href="' + escHtml(s.url) + '" target="_blank" rel="noopener" style="font-size:10px;text-decoration:none">원문 <i class="ti ti-external-link"></i></a>' : '') +
+            '</td></tr>';
+        }).join('') +
+        '</table></div>' +
+        (stored.total > stored.hits.length
+          ? '<div style="font-size:11px;color:var(--text-muted);padding:6px">… 외 ' + (stored.total - stored.hits.length) + '건 — 연도·의원명을 붙여 좁혀 보세요.</div>'
+          : '') +
+      '</div>';
+  }
 
   var hits = data.hits || [];
+  var liveHead = '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap">' +
+    '<span style="font-size:12px;font-weight:700;color:var(--text-primary)">🏛️ 회의록 원문</span>' +
+    '<span style="font-size:11px;color:var(--text-muted)">국회회의록시스템 실시간 · 전체 ' + (data.total || 0) + '건' +
+    (hits.length && data.total > hits.length ? ' · 최근 ' + hits.length + '건 표시' : '') + '</span></div>';
+
   if (!hits.length) {
-    out.innerHTML = head +
-      '<div style="color:var(--text-secondary);padding:16px;text-align:center;font-size:12px;line-height:1.7">결과가 없습니다.<br>' +
+    out.innerHTML = head + storedHtml + liveHead +
+      '<div style="color:var(--text-secondary);padding:16px;text-align:center;font-size:12px;line-height:1.7">' +
+      (data.notice ? escHtml(data.notice) : '원문 검색 결과가 없습니다.') + '<br>' +
       '<span style="font-size:11px;color:var(--text-muted)">회의록에 나온 낱말 그대로여야 찾힙니다(예: 전파사용료, 무선국 검사). 연도·이름을 빼고 다시 시도해 보세요.</span></div>';
     return;
   }
 
   var KIND_COLOR = { '국정감사': '#dc2626', '상임위': '#2563eb' };
-  out.innerHTML = head + hits.map(function(h) {
+  out.innerHTML = head + storedHtml + liveHead + hits.map(function(h) {
     var c = KIND_COLOR[h.kind] || 'var(--text-muted)';
     var cmit = (h.committee || '').replace('과학기술정보방송통신위원회', '과방위').replace('미래창조과학방송통신위원회', '미방위');
     return '<div class="card" style="cursor:default;padding:12px 14px;margin-bottom:8px">' +
@@ -9830,7 +9884,17 @@ async function searchAssemblySpeech() {
       (h.auditOrgs ? '<div style="font-size:10px;color:var(--text-muted);margin-top:6px">피감기관: ' + escHtml(h.auditOrgs.slice(0, 120)) + (h.auditOrgs.length > 120 ? '…' : '') + '</div>' : '') +
     '</div>';
   }).join('') +
-  '<div style="font-size:10px;color:var(--text-muted);text-align:center;padding:6px">출처: 국회회의록시스템 실시간 검색 · 과방위 상임위·국정감사(20대~현재)</div>';
+  '<div style="font-size:10px;color:var(--text-muted);text-align:center;padding:6px">출처: ' +
+    (storedHtml ? '정리해 둔 발언(assembly_speeches, 매일 17:00 갱신) + ' : '') +
+    '국회회의록시스템 실시간 검색 · 과방위 상임위·국정감사(20대~현재)</div>';
+}
+
+/** 직위 축약(1단 표) — 공용 파일 shortPosition과 같은 규칙. */
+function _asmShortPos(pos) {
+  return (pos || '')
+    .replace('과학기술정보통신부', '과기정통부').replace('방송통신위원회', '방통위')
+    .replace('방송미디어통신위원회', '방미통위').replace('한국방송통신전파진흥원', 'KCA')
+    .replace('중앙전파관리소', '전파관리소');
 }
 
 async function loadSpeakers(force) {

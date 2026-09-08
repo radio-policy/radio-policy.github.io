@@ -1,9 +1,11 @@
 // ============================================================================
-//  공용 : 국회 회의록 발언 검색 (국회회의록시스템 실시간 검색)
+//  공용 : 국회 회의록 발언 검색 — 두 단(정리해 둔 발언 → 국회회의록시스템 실시간 원문)
 //
-//  왜 실시간인가 — DB(assembly_speeches)는 22대·판정 통과분·요지만 담고 있어
-//  "2019년 김성수 의원이 무선국 관련해 뭐라고 했나" 같은 질의에 답할 수 없다.
-//  이 모듈은 국회 검색 API를 그대로 호출해 **20대(2016)~현재**를 훑는다. 축적 데이터 무관.
+//  1단 `searchStoredSpeeches` — 우리 DB(assembly_speeches, 2016~·판정 통과분·발언자별 **요지**).
+//     토큰 0, 0.2초. 발언자·날짜·주제·입장이 구조화돼 있고 국회 사이트가 죽어도 나온다.
+//  2단 `searchAssemblySpeeches` — 국회 검색 API를 그대로 호출해 **20대(2016)~현재 원문 전체**를 훑는다.
+//     요지에는 지나가듯 언급한 낱말이 남지 않고(실측: 2019 국감 '무선국' 원문 17건 vs 요지 16건, 집합이 다름),
+//     원문 문자열 검색은 "기지국 준공검사"처럼 다른 낱말로 말한 발언을 못 잡는다 — 둘이 서로의 구멍을 메운다(#132).
 //
 //  **검색 범위는 과방위(20대 전반기 미래창조과학방송통신위원회 포함)의 상임위·국정감사 회의록뿐이다**
 //  (운영자 지시 2026-08-14). 본회의·타 상임위·예결위는 넣지 않는다 — 전파·통신 정책 문맥이 아니고,
@@ -20,6 +22,8 @@
 //   - S_TH/E_TH 는 **검색폼 대수코드**(22=제20대, 24=제22대)로 열린국회 API의 DAE_NUM 과 다른 체계다.
 //   - 본문 원문 검색이라 형태소 분석이 없다 — 회의록에 나온 낱말 그대로여야 잡힌다.
 // ============================================================================
+
+import type { SupabaseClient } from 'jsr:@supabase/supabase-js@2';
 
 export const ASSEM_SEARCH_URL = 'https://record.assembly.go.kr/assembly/mnts/search/search.do';
 export const ASSEM_VIEWER_URL = 'https://record.assembly.go.kr/assembly/viewer/minutes/xml.do?id=';
@@ -54,7 +58,8 @@ export type AssemQuery = {
 const DAE_TO_TH: Record<number, string> = { 20: '22', 21: '23', 22: '24' };
 
 // 보유 회의록의 실제 연도 범위 (2026-09-08 실측: assembly_speeches 2016~2026, 발언 6,720건).
-// 2자리 연도('19년')를 4자리로 펼칠 때와 "최근 N년"의 범위를 자를 때의 기준이다.
+// 2자리 연도('19년')를 4자리로 펼칠 때와 "최근 N년"의 범위를 자를 때의 **기준일 뿐**이다 —
+// 2단 원문 검색은 이 6,720건이 아니라 국회 시스템 원문 전체를 대상으로 한다(1단만 DB).
 // ⚠️ 해가 바뀌면 ASSEM_MAX_YEAR를 올려야 "최근 N년"이 올해를 포함한다.
 export const ASSEM_MIN_YEAR = 2016;
 export const ASSEM_MAX_YEAR = 2026;
@@ -515,4 +520,101 @@ export function shortCommittee(name: string): string {
   return (name || '')
     .replace('과학기술정보방송통신위원회', '과방위')
     .replace('미래창조과학방송통신위원회', '미방위');
+}
+
+// ── 1단: 정리해 둔 발언 (assembly_speeches) ──────────────────────
+// 매일 17:00 assembly_minutes.py가 쌓는 발언자별 요지(2016~, 통신·전파·AI 관련 + SKT 언급).
+// 원문이 아니라 요지라 낱말이 빠질 수 있으므로 **요지·주제·안건을 모두** 대상으로 찾는다
+// (실측: 변재일 2019-10-18 eSIM 발언은 topic에만 '무선국'이 있다). 2단 원문 검색과 합쳐서 쓴다.
+
+export type AssemStoredHit = {
+  date: string;        // 'YYYY.MM.DD' — 2단 hit.date와 같은 표기
+  kind: string;        // '상임위' | '국정감사' (안건명으로 판별)
+  speaker: string;     // '김성수'
+  position: string;    // '위원' | '과학기술정보통신부제2차관' …
+  agenda: string;
+  topic: string;
+  summary: string;
+  url: string;         // 회의록 뷰어 링크(source_url)
+};
+
+export type AssemStoredResult = { total: number; hits: AssemStoredHit[] };
+
+// 대수 → 임기 날짜 범위. 2단은 검색폼 대수코드(S_TH/E_TH)로 좁히지만 DB에는 대수 컬럼이 없어 날짜로 자른다.
+const DAE_DATE: Record<number, [string, string]> = {
+  20: ['2016-05-30', '2020-05-29'],
+  21: ['2020-05-30', '2024-05-29'],
+  22: ['2024-05-30', '2028-05-29'],
+};
+
+// PostgREST `.or()` 문법 문자(쉼표·괄호·%)가 낱말에 섞이면 필터가 깨진다 — 규칙 파서는 이미 걸러 주지만
+// Haiku 경로의 낱말은 임의 문자열이라 여기서 한 번 더 자른다.
+const likeSafe = (w: string) => (w || '').replace(/[^가-힣A-Za-z0-9]/g, '');
+
+/** 직위 축약 — 한 줄 표시용. */
+export function shortPosition(pos: string): string {
+  return (pos || '')
+    .replace('과학기술정보통신부', '과기정통부').replace('방송통신위원회', '방통위')
+    .replace('방송미디어통신위원회', '방미통위').replace('한국방송통신전파진흥원', 'KCA')
+    .replace('중앙전파관리소', '전파관리소');
+}
+
+/**
+ * 정리해 둔 발언에서 찾는다. 낱말은 AND(각 낱말이 요지·주제·안건 어디든 있으면 됨), 발언자는 부분 일치.
+ * 연도·기간·대수·회의 구분은 2단과 같은 해석(AssemQuery)을 그대로 받는다.
+ * 실패는 호출자가 잡아 2단만으로 진행한다(fail-open) — DB 장애가 원문 검색을 막으면 안 된다.
+ */
+export async function searchStoredSpeeches(
+  sb: SupabaseClient, q: AssemQuery, limit = 20,
+): Promise<AssemStoredResult> {
+  const words = (q.query || '').split(/\s+/).map(likeSafe).filter((w) => w.length >= 2);
+  const speaker = likeSafe(q.speaker || '');
+  if (!words.length && !speaker) return { total: 0, hits: [] };
+
+  let sel = sb.from('assembly_speeches')
+    .select('speaker,position,meeting_date,agenda,topic,summary,source_url,chunk_seq', { count: 'exact' });
+  // 낱말마다 .or()를 따로 건다 — PostgREST는 여러 or 파라미터를 AND로 묶는다.
+  for (const w of words) sel = sel.or(`summary.ilike.%${w}%,topic.ilike.%${w}%,agenda.ilike.%${w}%`);
+  if (speaker) sel = sel.ilike('speaker', `%${speaker}%`);
+
+  // 단일 연도와 기간은 배타적(파서가 하나만 채움). 대수는 임기 날짜와 교집합.
+  let from = q.yearFrom ? `${q.yearFrom}-01-01` : q.year ? `${q.year}-01-01` : '';
+  let to = q.yearTo ? `${q.yearTo}-12-31` : q.year ? `${q.year}-12-31` : '';
+  if (q.dae && DAE_DATE[q.dae]) {
+    const [a, b] = DAE_DATE[q.dae];
+    from = from && from > a ? from : a;
+    to = to && to < b ? to : b;
+  }
+  if (from) sel = sel.gte('meeting_date', from);
+  if (to) sel = sel.lte('meeting_date', to);
+
+  const wantAudit = !q.kinds || q.kinds.includes('국정감사');
+  const wantStanding = !q.kinds || q.kinds.includes('상임위');
+  if (wantAudit && !wantStanding) sel = sel.ilike('agenda', '%국정감사%');
+  if (wantStanding && !wantAudit) sel = sel.not('agenda', 'ilike', '%국정감사%');
+
+  const { data, error, count } = await sel
+    .order('meeting_date', { ascending: false })
+    .order('chunk_seq', { ascending: true })
+    .limit(limit);
+  if (error) throw new Error(error.message);
+
+  type R = {
+    speaker: string | null; position: string | null; meeting_date: string | null;
+    agenda: string | null; topic: string | null; summary: string | null; source_url: string | null;
+  };
+  const hits: AssemStoredHit[] = ((data || []) as R[]).map((r) => {
+    const agenda = (r.agenda || '').trim();
+    return {
+      date: (r.meeting_date || '').slice(0, 10).replaceAll('-', '.'),
+      kind: agenda.includes('국정감사') ? '국정감사' : '상임위',
+      speaker: (r.speaker || '').trim(),
+      position: (r.position || '').trim(),
+      agenda,
+      topic: (r.topic || '').trim(),
+      summary: (r.summary || '').trim(),
+      url: (r.source_url || '').trim(),
+    };
+  });
+  return { total: count ?? hits.length, hits };
 }

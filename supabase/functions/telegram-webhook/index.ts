@@ -25,7 +25,7 @@ import { answerAdvisory, answerLawQuery } from '../_shared/rag.ts';
 import { NEWS_TAGS, TAG_SLUGS, matchTags } from '../_shared/news_tags.ts';
 import { groupBySameEvent } from '../_shared/news_group.ts';
 import { parseMoreCallback, encodeMoreCallback, formatRange, MORE_PAGE_SIZE } from '../_shared/news_more.ts';
-import { parseAssemQuery, searchAssemblyWithFallback, attachContext, shortCommittee, type AssemQuery, type AssemKind } from '../_shared/assembly_search.ts';
+import { parseAssemQuery, searchAssemblyWithFallback, attachContext, shortCommittee, searchStoredSpeeches, shortPosition, type AssemQuery, type AssemKind, type AssemStoredResult } from '../_shared/assembly_search.ts';
 
 // env는 반드시 trim — Supabase 콘솔에 값을 붙여넣을 때 줄바꿈이 딸려 들어가는 일이 잦고,
 // 그러면 시크릿 비교가 조용히 어긋나거나(401) API 헤더가 깨진다. 공백은 시크릿에 의미가 없다.
@@ -228,9 +228,10 @@ function resolveLawName(docName: string): string {
   return official ? official + suffix : docName;
 }
 
-// ── /assem 국회 발언 검색 (국회회의록시스템 실시간 검색, AI 비용 0) ──
+// ── /assem 국회 발언 검색 (1단 정리해 둔 발언 + 2단 국회회의록시스템 실시간 원문, AI 비용 0) ──
 // 검색 로직·위원회 코드는 _shared/assembly_search.ts 한 곳에만 둔다(대시보드와 공유).
-const ASSEM_MAX_HITS = 5;       // 한 번에 보여줄 발언 수
+const ASSEM_MAX_HITS = 5;       // 한 번에 보여줄 원문 발언 수
+const ASSEM_STORED_MAX = 20;    // 1단 요지 표시 상한 — 한 줄 ~90자라 20건이면 한 통(3,800자) 안. 넘치면 '외 N건'
 
 /** 검색 스니펫의 <!HS>…<!HE> 강조 마커를 텔레그램 <b>로. 이스케이프 뒤에 치환해야 안전하다. */
 function assemSnippet(raw: string): string {
@@ -293,10 +294,37 @@ async function handleAssemSearch(chatId: number, arg: string): Promise<void> {
   await sendAssemResults(chatId, parsed, 0);
 }
 
+// 두 묶음이 왜 같이 오는지 — 결과를 읽기 **전에** 알아야 하므로 조건 줄 바로 아래 한 줄로 둔다(운영자 문안, #132).
+const ASSEM_TWO_STAGE_NOTE =
+  '<i>정리해 둔 발언(요지)과 국회 회의록 원문을 함께 보여드립니다. 요지는 말을 정리해 둔 것이라 다른 낱말로 한 발언도 잡고, ' +
+  '원문은 실제 발언 그대로라 요지에서 빠진 말을 잡습니다.</i>\n';
+
+/** 1단(정리해 둔 발언) 묶음을 HTML 로. 텔레그램은 줄글이라 요지 한 줄 + 원문 링크로 압축한다. */
+function formatStoredSection(stored: AssemStoredResult): string {
+  let html = `📚 <b>정리해 둔 발언</b> ${stored.total}건 <i>(통신·전파 관련 요지, 발언자별)</i>\n`;
+  for (const s of stored.hits) {
+    const who = `${s.speaker} ${shortPosition(s.position)}`.trim();
+    html += `• ${escapeHtml(s.date)} <b>${escapeHtml(who)}</b> — ${escapeHtml(s.summary)}` +
+      (s.url ? ` <a href="${s.url}">원문</a>` : '') + '\n';
+  }
+  if (stored.total > stored.hits.length) {
+    html += `<i>… 외 ${stored.total - stored.hits.length}건 — 대시보드 과방위 회의록 탭에서 전체 보기</i>\n`;
+  }
+  return html;
+}
+
 /** 검색 실행 + 결과 전송. '더 보기'(offset>0)도 같은 함수를 탄다. */
 async function sendAssemResults(chatId: number, q: AssemQuery, offset: number): Promise<void> {
   let result;
   let parsed = q;
+  // 1단(정리해 둔 발언)은 첫 묶음에만, 2단(국회 원문)과 **동시에** 시작한다 — DB 0.2초, 국회 수 초(#132).
+  // DB 조회 실패는 무시하고 2단만으로 간다(fail-open).
+  const storedP: Promise<AssemStoredResult | null> = offset === 0
+    ? searchStoredSpeeches(sb, q, ASSEM_STORED_MAX).catch((e) => {
+        console.error('[assem 1단 DB 조회 실패(무시)]', String((e as Error)?.message ?? e).slice(0, 120));
+        return null;
+      })
+    : Promise.resolve(null);
   try {
     result = await searchAssemblyWithFallback(q, ASSEM_MAX_HITS, 20_000, offset);
     parsed = result.parsed;   // 재시도로 해석이 바뀌었으면 조건 표시도 실제 쓰인 해석으로 맞춘다
@@ -305,9 +333,24 @@ async function sendAssemResults(chatId: number, q: AssemQuery, offset: number): 
     if (offset === 0) await attachContext(result, 1, 1, 3, 600);
   } catch (e) {
     console.error('[assem 검색 실패]', e);
+    // 국회 사이트 장애 — 1단이 있으면 그것만이라도 보낸다(종전엔 실패 한 줄뿐).
+    const stored = await storedP;
+    if (stored && stored.hits.length) {
+      await sendTelegramHtml(BOT_TOKEN, chatId,
+        '⚠️ 국회 회의록 시스템 조회에 실패해 <b>정리해 둔 발언</b>만 보여드립니다. 원문은 잠시 후 다시 시도해 주세요.\n\n' +
+        formatStoredSection(stored));
+      await logUsage(chatId, 'assem', q.query, true, `국회 조회 실패·저장 ${stored.total}건`);
+      return;
+    }
     await sendTelegramHtml(BOT_TOKEN, chatId, '⚠️ 국회 회의록 시스템 조회에 실패했습니다. 잠시 후 다시 시도해 주세요.');
     return;
   }
+  let stored = await storedP;
+  // 2단이 재시도로 해석을 바꿨는데 1단이 원래 해석으로 0건이면, 바뀐 해석으로 1단도 다시 찾는다.
+  if (stored && !stored.hits.length && result.retried) {
+    stored = await searchStoredSpeeches(sb, parsed, ASSEM_STORED_MAX).catch(() => stored);
+  }
+  const storedHtml = stored && stored.hits.length ? formatStoredSection(stored) : '';
 
   // 해석 결과를 그대로 보여준다 — 자연어 파싱이 빗나갔을 때 사용자가 바로 알아채고 고쳐 쓸 수 있게.
   const cond = [
@@ -320,6 +363,14 @@ async function sendAssemResults(chatId: number, q: AssemQuery, offset: number): 
   ].filter(Boolean).join(' · ');
 
   if (!result.hits.length) {
+    if (storedHtml) {
+      // 1단만 있는 경우 — 원문 검색은 0건이었음을 반드시 알린다(조용히 1단만 보이면 "원문에도 없다"로 오해).
+      await logUsage(chatId, 'assem', parsed.query, true, `원문 0건·저장 ${stored!.total}건`);
+      await sendTelegramHtml(BOT_TOKEN, chatId,
+        `🔍 <b>${escapeHtml(cond)}</b>\n${ASSEM_TWO_STAGE_NOTE}\n${storedHtml}\n` +
+        '<i>🏛️ 국회 회의록 원문 검색에서는 결과가 없습니다 — 원문에 나온 낱말 그대로여야 찾힙니다(예: 전파사용료, 무선국 검사).</i>');
+      return;
+    }
     await sendTelegramHtml(BOT_TOKEN, chatId,
       `🔍 ${escapeHtml(cond)} — 결과가 없습니다.\n` +
       '<i>회의록 원문에 나온 낱말 그대로여야 찾힙니다(예: 전파사용료, 무선국 검사). ' +
@@ -331,11 +382,13 @@ async function sendAssemResults(chatId: number, q: AssemQuery, offset: number): 
     await logUsage(chatId, 'assem',
       [parsed.speaker, parsed.query, parsed.year, parsed.dae ? `${parsed.dae}대` : '']
         .filter(Boolean).join(' '),
-      true, `${result.total}건`);
+      true, `원문 ${result.total}건` + (stored ? `·저장 ${stored.total}건` : ''));
   }
   const from = offset + 1;
   const to = offset + result.hits.length;
-  let html = `🔍 <b>${escapeHtml(cond)}</b> — 전체 <b>${result.total}</b>건` +
+  let html = `🔍 <b>${escapeHtml(cond)}</b>\n`;
+  if (storedHtml) html += `${ASSEM_TWO_STAGE_NOTE}\n${storedHtml}\n`;
+  html += `🏛️ <b>회의록 원문</b> 전체 <b>${result.total}</b>건` +
     (result.total > result.hits.length ? ` (최신순 ${from}~${to}번째)` : '') + '\n';
   // 재시도로 조건을 푼 결과라면 반드시 알린다 — 건수가 크면 사용자는 그걸 신뢰의 근거로 읽는다.
   if (result.retried) html += `<i>원래 조건으로는 결과가 없어 <b>${escapeHtml(parsed.query)}</b>(으)로 다시 찾은 결과입니다.</i>\n`;
@@ -356,7 +409,8 @@ async function sendAssemResults(chatId: number, q: AssemQuery, offset: number): 
     }
     html += (h.url ? `<a href="${h.url}">회의록 원문 보기</a>\n` : '');
   }
-  html += '\n<i>출처: 국회회의록시스템 실시간 검색 (20대~현재 과방위 상임위·국정감사)</i>';
+  html += '\n<i>출처: ' + (storedHtml ? '정리해 둔 발언(매일 17시 갱신) + ' : '') +
+    '국회회의록시스템 실시간 검색 (20대~현재 과방위 상임위·국정감사)</i>';
 
   const parts = splitByLines(html);
   for (const part of parts.slice(0, -1)) await sendTelegramHtml(BOT_TOKEN, chatId, part);

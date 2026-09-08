@@ -117,7 +117,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 | **`/law` 번호 조회는 DB 표기가 「N조」다(#92)** | `document_chunks.article_no`는 **`12조(교육과목 및 시간)`처럼 '제'가 없다** — 실측 「제N조」 0건 / 「N조」 7,587건. `handleArticleLookup`이 `제${artNo}조`로 조회해 **번호 직접 조회가 한 번도 동작하지 않았다.** 자연어 질의는 AI 검색 경로라 멀쩡해서 안 들켰고, 안내문에는 「조문 원문이 바로 나옵니다」라고 적혀 있었다. 지금은 `.or('article_no.ilike.N조%,article_no.ilike.제N조%')`로 두 형식을 모두 받고 비교 전에 앞의 '제'를 벗긴다. ⚠️ **문서에 「된다」고 쓰기 전에 그 경로로 한 번 돌려 볼 것** — 인접 경로가 되면 전체가 되는 줄 알기 쉽다 |
 | **뉴스 2차 묶기 = Haiku 의미 판정(#92)** | 키워드 클러스터링(`cluster_star`, 공유 3개)으로 못 묶인 **대표들만** `news_dedup.group_same_event()`로 다시 묶는다. 매체마다 관점이 달라 제목 어휘가 안 겹치는 사건이 있다(공정위 불공정약관 4건: 쌍별 공유 **최대 1개**). 프롬프트의 **「하나의 처분·발표를 여러 각도에서 쓴 것은 같은 사건」 문장이 결정적** — 이 문장 없이는 2묶음, 넣으면 실전 조건(다른 사건 혼재)에서 정확히 1묶음. **오묶음 실측 0건.** ⚠️ **클러스터링에만 쓰고 억제(`is_followup`)에는 쓰지 말 것** — 묶기가 틀리면 「(관련 보도 N건)」으로 남지만 **억제가 틀리면 알림이 사라져 되돌릴 수 없다.** ⚠️ **임계값 3→2 금지**(#44: KT 해킹 과징금과 5G 과장광고가 한 사건이 된다). 응답 번호가 1~N과 불일치하면 **부분 신뢰 없이 통째로 버린다**(fail-open). 비용은 실행당 최대 1회·수백 토큰. `extract_keywords`는 한글 토큰에도 **조사를 뗀다**(종전엔 금액에만 떼서 「약관」≠「약관에」였다) |
 | telegram-webhook (Edge) | 구독자 봇 수신부. `/start`·`/settings` 인라인 키보드(수신 토글 버튼 **'🏛️ 국회·법률 동향'** — 2026-09-03 '법안 동향'에서 개명, callback `t:assembly`·컬럼 `topic_assembly`·큐 topic `assembly`는 그대로. 국회 법안+국회·부처 입법예고+과방위 회의록 다이제스트를 한 토글로 받는다, #120), `/law "OO법 N조"` 조문 원문 즉답, `/ask` AI 자문(승인제), `/admin`(운영자), **주요 뉴스 '더 보기' `mn\|` 콜백(#105 — `news_feed` 읽기 전용, 큐·워터마크 무접촉)**. **verify_jwt off** 대신 `X-Telegram-Bot-Api-Secret-Token` 검증. 오류가 나도 200을 반환한다 — 비200이면 텔레그램이 같은 업데이트를 무한 재전송한다 |
-| assembly-search (Edge, #98) | 대시보드 "원문 검색" 탭용 CORS JSON 엔드포인트. 국회회의록시스템을 **실시간 검색**한다(DB 무관). `telegram-webhook`과 **`_shared/assembly_search.ts`를 공유**하되 두 함수가 **각각 번들**하므로 그 파일을 고치면 **반드시 둘 다 배포**할 것 — 한쪽만 하면 텔레그램과 웹이 같은 질문에 다르게 답한다 |
+| assembly-search (Edge, #98·#132) | 대시보드 "원문 검색" 탭용 CORS JSON 엔드포인트. 응답 `stored`(1단, `assembly_speeches` 요지, 첫 페이지만) + `hits`(2단, 국회회의록시스템 **실시간 검색**). `telegram-webhook`과 **`_shared/assembly_search.ts`를 공유**하되 두 함수가 **각각 번들**하므로 그 파일을 고치면 **반드시 둘 다 배포**할 것 — 한쪽만 하면 텔레그램과 웹이 같은 질문에 다르게 답한다 |
 | admin-daily-report (Edge, #100) | 매일 **09:00 KST**(pg_cron `0 0 * * *` UTC) 운영자에게 구독자 목록·권한(자문/법령)·수신 설정·관심분야·명령 사용 통계를 텔레그램으로 보낸다. **발신은 운영자 봇(radio-policy-ai, `TELEGRAM_BOT_TOKEN`) — 구독자 봇 토큰으로 보내지 말 것**(2026-09-06까지 구독자 봇 이름으로 도착해 운영자가 "모든 구독자에게 나가나" 오해, #128). 수신자는 `OPERATOR_CHAT_ID` 1인이며 구독자에게는 애초에 가지 않는다. Vault `admin_report_cron_secret` → `x-cron-secret`, **`--no-verify-jwt` 배포 필수**. 180일 초과 `telegram_usage` 정리도 같은 잡이 겸한다. ⚠️ **'최근 발송 브리핑'은 일부러 뺐다** — 매일 같은 날짜가 찍혀 신호가 되지 못한다(운영자 지시). 리포트에는 **변하는 것만** 싣는다 |
 | send-subscriber-briefing (Edge) | 구독자 정시 발송. pg_cron이 매시 호출 → 브리핑(daily_briefings)+긴급·법안(subscriber_queue)을 **수신 시각이 도래한 구독자에게 한 번에** 보낸다. `briefing_hour <= 현재KST시` catch-up이라 브리핑이 늦게 생성돼도 다음 정각에 따라잡는다. `x-cron-secret` 검증. **주요 뉴스 마지막 조각에 '더 보기' 버튼을 굽는다(#105)** — 구간은 `last_urgent_sent_at`(없으면 당일 00:00) ~ `maxCreatedAt(urgentEligible)`, 즉 **워터마크 전진값과 같은 값**이라 앞뒤 버튼이 빈틈없이 맞물린다. 브리핑·법안 메시지에는 붙이지 않는다 |
 | **'더 보기' 인코딩/디코딩은 한 파일에(#105)** | `_shared/news_more.ts`가 굽기(발송 함수)와 읽기(웹훅)를 **둘 다** 들고 있다. 두 함수에 흩어 두면 한쪽만 고쳤을 때 **에러 없이 '만료된 버튼'만 응답**해 원인을 찾기 어렵다. `callback_data` 64B 상한은 `TextEncoder` 길이 검사로 지키고, 초과하면 버튼을 생략한다(assemCallbackData와 같은 방식) |
@@ -141,11 +141,13 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 |---|---|---|
 | 읽기 전용 | law_amendments·assembly_bills·law_diffs·law_watch·law_pending·feedback_rules·system_health·kb_documents·kb_chunks | select만 |
 | 화면 기능 | news_feed | select·update·**delete**(기사 삭제 버튼) — insert 없음 |
-| | daily_briefings | select·update(긴급도 수정 시 본문 동기화) |
-| | deleted_news | select·insert (**append-only**) |
+| | daily_briefings | select. **update는 승인 프로필만**(#133, 긴급도 수정 시 본문 동기화) |
+| | deleted_news | select. **insert는 승인 프로필만**(#133, **append-only**) |
+| | **news_feed** | select 공개. **update는 anon이 `is_read`·`content`·`summary` 컬럼만**(컬럼 권한 + `news_feed_upd_anon`), 중요도·잠금 등 나머지 컬럼과 **delete는 승인 프로필만**(`news_feed_upd_auth`·`news_feed_del`, `is_approved_user()`). 종전엔 anon이 전 컬럼 update·delete 가능 → 인터넷 누구나 중요도 변경·기사 삭제 가능했다(#133) |
 | | **chat_logs** | anon은 **insert만**. 읽기는 **로그인 계정의 RLS 스코프**(#104) — 본인 / 팀장=자기 팀 / admin=전체(텔레그램 행은 user_id가 없어 admin만). 건수는 `chat_logs_month_count()` |
 | 로그인 필요 | **profiles·teams·advisory_usage·answer_feedback** | anon 정책 없음. authenticated에 역할별 SELECT(본인/팀/admin), profiles·teams UPDATE는 admin만. AI 호출은 `claude-proxy`가 JWT를 검증한다 (#104) |
-| | importance_feedback·tech_terms | select·insert·update |
+| | importance_feedback | select 공개. **insert·update는 승인 프로필만**(#133) |
+| | tech_terms | select·insert·update (anon 열림 — #133 범위 밖, 추후 검토) |
 | | custom_knowledge | select·insert·update·delete (팀원 기여 창구) |
 | | law_graph_nodes·law_graph_edges | select·insert·update (delete는 service 전용 — 병합만) |
 | 조건부 | **app_config** | select 전체 / insert·update는 **`key in ('claude_key','press_keywords')` 행만** |
@@ -322,7 +324,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 - **수정 배포 시 index.html 캐시 버스터 `app.js?v=`·`styles.css?v=` 갱신 필수 (현재 `app.js?v=20260729a` / `styles.css?v=20260723b`)** — CSS 고칠 때 styles.css 버스터도 갱신해야 사용자 브라우저가 새로 받음
 - 아이콘은 Tabler Icons webfont(ti ti-*) — 존재하는 이름만(없으면 빈칸 렌더).
 - 메뉴 (2026-08-02 개편, 17→9 — 배경역사 #56): [모니터링] **통합 모니터링**(패널 상단 탭: 뉴스|정부 보도자료·공지|해외 규제동향) / Daily Briefing / 기술 용어 · [AI 도우미] AI 자문 / 법령 관계도 · [법안 동향] 국회 법안 / 과방위 회의록 / **법령 개정 추적**(탭: 입법예고·개정 현황|조문 DIFF — 기존 lawtrack·diff 패널 무수정 재사용) · [지식베이스] **지식베이스**(탭: 법령·고시|보도자료|실무 안내|ITU-R|추가지식). **설정=상단 톱니 아이콘, 운영 상태=상단 상태등**(🟢/🔴 하트비트 종합, 클릭 시 패널 — refreshOpsLight). 탭 바는 기존 go() 라우팅을 호출하는 상위 컴포넌트(renderGroupTabs)라 패널·로드 함수는 무수정. 모바일 하단 5버튼 유지, 딥링크(pageTobn) 기존 값 유효. 보고서 초안 메뉴는 계속 주석 숨김.
-- 뉴스 중요도: 화면 라벨 "🔴 중요/🟡 보통/🟢 참고", 내부값·DB·코드는 '긴급/보통/참고'. 수정 시 news_feed 갱신+importance_feedback 기록+당일 브리핑 🔴 동기화. 잠금=60일 삭제 제외, 삭제=영구+deleted_news 기록.
+- 뉴스 중요도: 화면 라벨 "🔴 중요/🟡 보통/🟢 참고", 내부값·DB·코드는 '긴급/보통/참고'. 수정 시 news_feed 갱신+importance_feedback 기록+당일 브리핑 🔴 동기화. **중요도 변경·잠금·삭제는 승인된 로그인 계정만**(#133, `canEditNews()`=로그인+승인+활성; 비로그인은 🔒 표시·클릭 불가). 화면 게이트는 안내용이고 실제 관문은 DB 정책(위 RLS 표). 잠금=60일 삭제 제외, 삭제=영구+deleted_news 기록.
 
 ## 알림 채널
 
@@ -716,10 +718,20 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
   적용해 "예, 협의하겠습니다" 급 **짧은 확답이 전부 절차성으로 버려졌다**(↳ 부착률 30.4%, 같은 의원 ▶ 연속 31%).
   길이 조건만 빼고 절차성 정규식은 유지 → **77.4% / 9.5%**. **짧은 확답이 그날의 실질 성과인 경우가 많다**
   ("무선국 면허세는 행안부와 협의해 낮추겠다").
+- **국회 발언 검색 = 두 단 (2026-09-08, 배경역사 #132)**: 텔레그램 `assem`과 대시보드 원문 검색 탭 모두
+  ① **정리해 둔 발언**(`assembly_speeches` 요지, 2016~, `searchStoredSpeeches`, 토큰 0·0.2초) → ② **국회회의록시스템
+  실시간 원문**(아래) 순으로 답한다. 두 단은 **동시에 시작**하고, 국회 사이트가 죽으면 1단만이라도 보낸다.
+  1단은 요지·주제·안건을 **모두** 대상으로 찾는다(요지에는 지나가듯 말한 낱말이 빠진다 — 실측 2019 국감 '무선국':
+  원문 17건 vs 요지 16건+주제만 1건, 집합이 다름). 2단이 재시도로 해석을 바꾸면 1단도 바뀐 해석으로 다시 찾는다.
+  표시 상한: 텔레그램 20건(한 통 안), 대시보드 30건(표). 원문 0건인데 1단이 있으면 **"원문 검색에서는 결과 없음"을 반드시
+  함께** 보낸다(조용히 1단만 보이면 "원문에도 없다"로 오해). **두 묶음이 왜 같이 오는지는 조건 줄 바로 아래 한 줄로 알린다**
+  (운영자 문안 `ASSEM_TWO_STAGE_NOTE`, 대시보드도 같은 문장 — 뒤에 붙이면 긴 결과에 밀려 안 읽힌다). 실측 근거: 요지에만 잡힌
+  4건은 발언자가 '무선국' 대신 점검·검사·표본·기지국이라고만 말했고, 원문에만 잡힌 4건은 60자 요지에서 낱말이 빠진 경우. 발표(2026-09-08 컨테스트)에서 "쌓아 둔 6,700건에서 찾는다"고
+  설명한 것을 사실로 만드는 변경이기도 하다 — 그 전까지는 2단뿐이었다.
 - **국회 발언 원문 검색 (2026-08-14, 배경역사 #98 — 축적 데이터와 무관한 실시간 경로)**:
-  DB(`assembly_speeches`)는 22대·판정 통과분·**요지만** 담아 "2019년 김성수 의원 무선국" 류 질의에
-  답하지 못한다. 그래서 국회회의록시스템을 **실시간 검색**하는 경로를 따로 뒀다. AI 요약을 하지 않아
-  **비용 0**(자연어 파싱만 규칙 실패 시 Haiku 1콜).
+  DB(`assembly_speeches`)는 판정 통과분·**요지만** 담아 "2019년 김성수 의원 무선국" 류 원문 질의에
+  답하지 못한다. 그래서 국회회의록시스템을 **실시간 검색**하는 경로를 따로 뒀다(위 두 단의 2단). AI 요약을 하지 않아
+  **비용 0**(자연어 파싱만 규칙 실패 시 Haiku 1콜, 건당 약 1원 — 규칙이 핵심어를 하나라도 뽑으면 AI를 타지 않는다).
   - **로직은 `supabase/functions/_shared/assembly_search.ts` 한 곳에만** 둔다. 텔레그램(`assem`)과
     대시보드(`assembly-search` 함수)가 이 파일을 공유 — 두 벌이 되면 같은 질문에 다른 답이 난다(#88·#92).
   - **범위 = 과방위 상임위 + 국정감사뿐**(운영자 지시). 본회의·타 상임위는 넣지 않는다(문맥 밖 + 동명이인 오답).
@@ -1189,6 +1201,9 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 11. GitHub cron 드롭·지연(best-effort) — Supabase pg_cron이 주 트리거, 그래도 누락 시 "Run workflow"·PC 보완.
 12. 대시보드 업로드는 텍스트 기반 PDF만(스캔본 불가).
 13. AI 자문·보고서 초안 무거운 질문은 2분+ 소요(스트리밍이라 정상).
+
+- **국회 발언 검색에서 1단(정리해 둔 발언)과 2단(국회 원문) 중 하나를 빼지 말 것 (2026-09-08, #132)** — 요지에는 지나가듯 말한 낱말이 빠지고(변재일 eSIM 발언은 topic에만 '무선국'), 원문 문자열 검색은 "기지국 준공검사"처럼 다른 낱말로 말한 발언을 못 잡는다. 둘이 서로의 구멍을 메우는 구조라 한쪽만 남기면 한 방향의 누락이 생긴다. 1단은 요지·주제·안건 **모두** 검색, 원문 0건이면 "원문에서는 없음"을 **반드시 같이** 보낸다. 공용 파일(`_shared/assembly_search.ts`)을 고치면 `telegram-webhook`·`assembly-search` **둘 다 배포**.
+- **공개 대시보드의 쓰기 권한을 화면 게이트로만 막았다고 믿지 말 것 (2026-09-08, #133)** — news_feed는 anon UPDATE/DELETE 정책이 `true`라 브라우저 콘솔에서 누구나 중요도를 바꾸고 기사를 지울 수 있었다. 편집(중요도·잠금·삭제·importance_feedback·deleted_news·daily_briefings 갱신)은 **DB 정책이 `is_approved_user()`로 막고**, anon은 news_feed의 `is_read`·`content`·`summary` **컬럼 권한만**. 새 테이블에 anon 쓰기 정책을 줄 때는 "인터넷 누구나"가 그 쓰기를 해도 되는지 먼저 물을 것. 검증은 anon 키로 REST PATCH/DELETE를 직접 쏴서(401 또는 0행) 확인.
 
 ## 외부 서비스·키
 
