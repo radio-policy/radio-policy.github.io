@@ -1521,8 +1521,37 @@ def _is_recent(conf_date: str, days: int) -> bool:
     return (datetime.now(KST).date() - d).days <= days
 
 
+def _alert_operator_new_minutes(items: list, year: int) -> bool:
+    """신규 등재 회의록을 **운영자 봇**(TELEGRAM_BOT_TOKEN/CHAT_ID)으로 알린다 (#136, 2026-09-08).
+
+    운영자 지시: 회의록(국감 포함)이 새로 올라오면 알려 달라 — 인물 입장 요약 등 세션 전체 갱신의
+    트리거로 쓴다. 구독자 다이제스트(_enqueue_digest, 구독자 봇 큐)와는 별개 채널이며 조건도 다르다
+    (다이제스트는 60일 이내·발언 3건↑만, 이 알림은 **등재된 모든 신규 섹션**). dry-run·오프라인
+    임포트(minutes_offline)는 부르지 않는다. 실패해도 수집을 막지 않는다(notify.send_telegram fail-open).
+    """
+    if not items:
+        return False
+    from notify import send_telegram as _send_tg   # run()의 notify 인자(bool)와 이름이 겹쳐 지역 임포트
+    lines = ['🏛️ <b>과방위 회의록 신규 등재 %d건</b> (%d년)' % (len(items), year)]
+    for it in items[:15]:
+        d = it['ymd6']
+        date = '20%s.%s.%s' % (d[:2], d[2:4], d[4:6]) if len(d) == 6 else d
+        kind = '국정감사' if it['is_audit'] else '상임위'
+        line = '• %s %s | %s | 발언 %d건' % (date, kind, it['title'][:60], it['n_sp'])
+        if it.get('url'):
+            line += ' <a href="%s">원문</a>' % it['url']
+        lines.append(line)
+    if len(items) > 15:
+        lines.append('… 외 %d건' % (len(items) - 15))
+    lines.append('')
+    lines.append('<i>발언자별 요지는 assembly_speeches에 적재됨. 인물 입장 요약(stance_summary)은 자동 갱신되지 않으니 '
+                 '세션에서 전체 업데이트할 것.</i>')
+    return _send_tg('\n'.join(lines), parse_mode='HTML', disable_web_page_preview=True)
+
+
 def run(sb, api_key: str, year: int, limit: int = 0, dry: bool = False,
-        audit: bool = True, audit_only: bool = False, notify: bool = True) -> dict:
+        audit: bool = True, audit_only: bool = False, notify: bool = True,
+        operator_alert: bool = True) -> dict:
     keywords = load_press_keywords(sb)
     # 회의록 판정만 Sonnet 5 — make_ai_judge는 보도자료 판정과 공용이라 기본값(Haiku)은 그대로 둔다.
     judge = make_ai_judge(sb, keywords, model=MINUTES_MODEL, thinking=MINUTES_THINKING)
@@ -1552,6 +1581,7 @@ def run(sb, api_key: str, year: int, limit: int = 0, dry: bool = False,
                   '(열린국회정보 Open API + 국회회의록시스템)\n\n---\n\n' % year)
 
     stats = {'new': 0, 'dup': 0, 'fail': 0, 'sp': 0, 'proc': 0}
+    new_items = []                   # 이번 실행에서 새로 등재한 섹션 — 끝나고 운영자 봇 알림(#136)
     renum_docs = set()               # 껍데기 섹션을 갈아끼운 문서 — 끝나고 결번 정리
     for m in meetings:
         # limit 은 '실제로 무언가 적재한(섹션 신규 or 발언 신규) 회의' 수를 센다.
@@ -1703,6 +1733,8 @@ def run(sb, api_key: str, year: int, limit: int = 0, dry: bool = False,
         #    발송은 send-subscriber-briefing이 각자의 수신 시각에 묶어 보낸다(즉시 트리거 없음).
         if registered:
             _enqueue_digest(sb, m, title, summary, sp_rows, url, skt_flag, notify, body)
+            new_items.append({'ymd6': ymd6, 'title': title, 'is_audit': is_audit,
+                              'n_sp': len(sp_rows), 'url': url})
         if did_work:
             stats['proc'] += 1
         time.sleep(1)
@@ -1717,6 +1749,10 @@ def run(sb, api_key: str, year: int, limit: int = 0, dry: bool = False,
     print('[과방위 회의록 완료] ' + note)
     if not dry:
         _heartbeat(sb, note)
+        # 운영자 봇 알림 — 신규 등재가 있을 때만. 구독자 큐와 별개(#136).
+        if operator_alert and new_items:
+            ok = _alert_operator_new_minutes(new_items, year)
+            print('  [운영자 알림] 신규 %d건 %s' % (len(new_items), '발송' if ok else '발송 실패(무시)'))
     return stats
 
 
@@ -1730,6 +1766,8 @@ def main():
                     help='국정감사 회의록만 수집 (소급 백필용)')
     ap.add_argument('--no-notify', action='store_true',
                     help='구독자 큐(회의록 다이제스트) 적재 안 함')
+    ap.add_argument('--no-operator-alert', action='store_true',
+                    help='신규 등재 시 운영자 봇 알림 안 함 (소급·재실행용, #136)')
     ap.add_argument('--allow-api', action='store_true',
                     help='재작년 이전 연도에도 API(AI) 경로 허용 — 기본 거부(소급은 minutes_offline.py)')
     args = ap.parse_args()
@@ -1747,7 +1785,8 @@ def main():
         return
     sb = make_client(os.environ['SUPABASE_URL'], os.environ['SUPABASE_SERVICE_KEY'])
     run(sb, api_key, year, limit=args.limit, dry=args.dry_run,
-        audit=not args.no_audit, audit_only=args.audit_only, notify=not args.no_notify)
+        audit=not args.no_audit, audit_only=args.audit_only, notify=not args.no_notify,
+        operator_alert=not args.no_operator_alert)
 
 
 if __name__ == '__main__':

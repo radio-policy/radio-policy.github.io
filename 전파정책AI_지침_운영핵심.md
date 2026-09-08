@@ -675,6 +675,8 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 
 ## 과방위 회의록 수집 (assembly_minutes, 2026-08-02 신설 — 배경역사 #54)
 
+- **신규 등재 시 운영자 봇 알림 (2026-09-08, #136)**: `run()`이 이번 실행에서 **새로 등재한 섹션**(상임위·국감)이 있으면 끝에 운영자 봇(`TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID`, `notify.send_telegram`)으로 날짜·구분·제목·발언 건수·원문 링크를 보낸다. 구독자 다이제스트(구독자 봇 큐, 60일 이내·발언 3건↑만)와 **별개 채널·별개 조건**이다. 용도: 인물 입장 요약(`people.stance_summary`)은 자동 갱신되지 않으므로 이 알림을 세션 전체 업데이트의 트리거로 쓴다(운영자 지시). dry-run·`minutes_offline` 임포트는 보내지 않고, 소급·재실행에는 `--no-operator-alert`. 17시 체인(.bat)은 옵션 없이 호출하므로 기본 켜짐.
+
 - 열린국회 API **ncwgseseafwbuheph**(row=안건 단위 → CONFER_NUM으로 회의 그룹핑) →
   **원문은 record.assembly.go.kr 뷰어 xml.do가 정본**(PDF는 pdftotext에서 글리프 깨짐 — 폴백만).
 - 발언 선별: press_keywords 1차 + Haiku 2차(press_relevance_criteria) → 채택+전후 1블록 →
