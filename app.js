@@ -9243,7 +9243,8 @@ function _personSec(title, hint) {
 function renderPersonStance(p) {
   var box = document.getElementById('person-stance');
   if (!box) return;
-  var canGen = typeof aiReady === 'function' ? aiReady() : false;
+  // 입장 요약 생성·갱신은 **관리자만**(운영자 지시 2026-09-08, #135) — Sonnet 호출 + people 행 갱신이라 승인자 전체에 열지 않는다.
+  var canGen = typeof isAdminUser === 'function' ? isAdminUser() : false;
   box.innerHTML = _personSec('쟁점별 입장 요약', p.stance_updated_at ? 'AI 생성 · ' + String(p.stance_updated_at).slice(0, 10) : 'AI 생성') +
     '<div style="border:1px solid var(--border);border-radius:10px;padding:12px 14px;background:var(--bg-secondary)">' +
     (p.stance_summary
@@ -9348,7 +9349,8 @@ function renderPersonNews(p, rows) {
 async function refreshPersonStance(id) {
   var p = (_peopleCache || []).find(function(x) { return String(x.id) === String(id); });
   if (!p || !sb) return;
-  if (typeof aiReady === 'function' && !aiReady()) { alert(typeof aiGateMsg === 'function' ? aiGateMsg() : '로그인이 필요합니다.'); return; }
+  // 관리자 전용(#135). 화면 게이트는 안내용이고 실제 관문은 people UPDATE 정책(is_admin()).
+  if (typeof isAdminUser !== 'function' || !isAdminUser()) { alert('인물 입장 요약 생성·갱신은 관리자만 할 수 있습니다.'); return; }
   var box = document.getElementById('person-stance');
   if (box) box.innerHTML = _personSec('쟁점별 입장 요약', '') +
     '<div style="font-size:12px;color:var(--text-secondary);padding:12px 14px;border:1px solid var(--border);border-radius:10px">' +

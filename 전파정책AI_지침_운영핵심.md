@@ -77,7 +77,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 | law_amendments | 법령·고시·입법예고. law_type: law/bylaw/rules/admrul/lsAnc. lsAnc는 law_id=`lsAnc_op_{md5}` |
 | assembly_bills | 국회 법안. bill_id(UNIQUE)·법안명·단계·소관위·제안일·링크. **+국회 입법예고**(2026-08-02): notice_end_dt(의견마감 'YYYY-MM-DD')·notice_url(pal 상세)·notice_alert_stage(0미알림/1시작알림/2 D-3알림 — 발송 성공 시에만 갱신) **+진행단계 원본**(2026-09-04, #122): committee_dt(소관위 회부)·cmt_present_dt(상정)·cmt_proc_dt/cmt_proc_result(위원회 처리)·law_submit_dt/law_present_dt/law_proc_dt(법사위). proc_result는 API PROC_RESULT가 비면 `bill_stage.derive_stage()`가 '소관위 회부/심사중·위원회 의결·법사위 회부/심사중'을 파생(종전엔 전부 '접수') |
 | assembly_speeches | 과방위 발언자별 발언(#67). speaker(정규화명)·speaker_raw·position·meeting_date·confer_num·chunk_seq·agenda·topic·summary(Haiku 요지, 성향 단정어 금지 가드)·source_url. unique(confer_num,speaker,chunk_seq). RLS anon select만. assembly_minutes.py가 document_chunks와 독립 dedupe로 적재 |
-| people | **인물 프로필**(#112): speaker_key(assembly_speeches.speaker 일치 키)·name(표시명)·kind(의원/정부·참고인)·party(활동 당시)·position·terms·is_22(현역 판정=22대 발언 존재)·speech_count·stance_summary(AI 쟁점별 입장 요약 캐시)·stance_updated_at. 발언 4건 이상만 시드. RLS: select/update 공개(issues 관례) |
+| people | **인물 프로필**(#112, 갱신은 admin만 #135): speaker_key(assembly_speeches.speaker 일치 키)·name(표시명)·kind(의원/정부·참고인)·party(활동 당시)·position·terms·is_22(현역 판정=22대 발언 존재)·speech_count·stance_summary(AI 쟁점별 입장 요약 캐시)·stance_updated_at. 발언 4건 이상만 시드. RLS: select/update 공개(issues 관례) |
 | document_chunks | 법령·고시·보도자료 RAG 청크. embedding(vector 1024, HNSW), article_no=조항번호+제목. file_path=업로드 원본 Storage 경로. **보도자료는 2026-08-02부터 자동 수집**: doc_name=`{기관}_보도자료_{YYYY}.md`(기관: 과기정통부/전파연구원/방통위/전파관리소/ETRI/KISDI), 섹션 헤더 `## YYMMDD 제목`, 마지막 줄 `(원문: URL)`, **700자 무겹침 청킹**(대시보드가 청크를 이어붙여 원문 복원하므로 overlap 금지) |
 | app_config | 키-값 설정. `system_prompt`(봇 자문 프롬프트), `press_keywords`(보도자료 수집 키워드 JSON 배열 — 대시보드 '수집 키워드 관리' 카드가 편집), `press_relevance_criteria`(매일 수집 AI 관련성 판정 기준문), `assembly_notice_criteria`(국회 입법예고 Haiku 판정 기준문)·`assembly_notice_rejected`(기각 캐시 JSON — 자동 관리) 등. **claude_key는 anon 노출되는 브라우저용 — 서버측 재사용 금지** |
 | custom_knowledge | 팀 추가 지식(수동 입력). AI 자문 키워드 매칭 참조 |
@@ -148,6 +148,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 | 로그인 필요 | **profiles·teams·advisory_usage·answer_feedback** | anon 정책 없음. authenticated에 역할별 SELECT(본인/팀/admin), profiles·teams UPDATE는 admin만. AI 호출은 `claude-proxy`가 JWT를 검증한다 (#104) |
 | | importance_feedback | select 공개. **insert·update는 승인 프로필만**(#133) |
 | | tech_terms | select·insert·update (anon 열림 — #133 범위 밖, 추후 검토) |
+| | **people** | select 공개. **update는 admin만**(`is_admin()`, #135 — 입장 요약 생성·갱신 버튼도 관리자에게만 표시). 종전엔 public(anon 포함) update가 열려 있었다 |
 | | custom_knowledge | select·insert·update·delete (팀원 기여 창구) |
 | | law_graph_nodes·law_graph_edges | select·insert·update (delete는 service 전용 — 병합만) |
 | 조건부 | **app_config** | select 전체 / insert·update는 **`key in ('claude_key','press_keywords')` 행만** |
