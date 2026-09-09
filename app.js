@@ -7863,9 +7863,11 @@ async function openDiffFromAssembly(type, key) {
 }
 
 function filterAssembly(el, mode) {
-  assemblyFilterMode = mode;
+  // 같은 칸(또는 '단계 이동' 링크)을 다시 누르면 전체 보기 — 상단 '전체 법안' 카드를 없앤 뒤의 필터 해제 수단 (#139)
+  assemblyFilterMode = (mode === assemblyFilterMode) ? '전체' : mode;
   if (assemblyBillsCache) renderAssemblyBills(assemblyBillsCache);
 }
+var ASM_STAGE_NAMES = { '접수':'발의', '회부':'위원회 회부', '심사':'위원회 심사 중', '의결':'위원회 통과', '법사위':'법사위·본회의', '통과':'본회의 통과', '폐기':'폐기·철회' };
 
 function _parseProposeDt(s) {
   if (!s) return null;
@@ -7915,22 +7917,22 @@ function renderAssemblyBills(bills) {
   bills.forEach(function(b) { stageCounts[_billStageKey(b.proc_result || '')]++; });
 
   var setVal = function(id, v) { var el = document.getElementById(id); if (el) el.textContent = v; };
-  setVal('asm-total',  totalCount);
-  setVal('asm-new',    newCount);
-  setVal('asm-comment', commentCount);
-  setVal('asm-changed', changedCount);
   Object.keys(stageCounts).forEach(function(k) { setVal('asm-stage-' + k, stageCounts[k]); });
+  // 스트립 아래 줄 — 왼쪽: 선택 상태(전체 N건 / 선택: 칸 이름 · 다시 누르면 전체 보기), 오른쪽: 최근 7일 단계 이동 N건
+  var selTxt;
+  if (assemblyFilterMode.indexOf('stage:') === 0) selTxt = '선택: ' + (ASM_STAGE_NAMES[assemblyFilterMode.slice(6)] || assemblyFilterMode.slice(6)) + ' · 다시 누르면 전체 보기';
+  else if (assemblyFilterMode === '변경') selTxt = '선택: 최근 7일 단계 이동 · 다시 누르면 전체 보기';
+  else if (assemblyFilterMode === '의견') selTxt = '선택: 의견등록 가능 · 배지를 다시 누르면 전체 보기';
+  else selTxt = '전체 ' + totalCount + '건 · 최근 발의(7일) ' + newCount + '건';
+  setVal('asm-foot-sel', selTxt);
+  var footChg = document.getElementById('asm-foot-changed');
+  if (footChg) { footChg.textContent = '↔ 최근 7일 단계 이동 ' + changedCount + '건'; footChg.classList.toggle('on', assemblyFilterMode === '변경'); }
   // '위원회 회부' 칸의 의견등록 배지 — 상단 '의견등록 가능' 카드와 같은 판정(_billCommentOpen)·같은 수.
   // (회부 정보가 API에 늦게 오는 며칠은 '발의' 칸 법안도 의견등록이 열려 있을 수 있어 칸별로 나누지 않는다)
   var badge = document.getElementById('asm-stage-notice');
   if (badge) { badge.textContent = '의견등록 가능 ' + commentCount + '건'; badge.hidden = commentCount === 0; }
 
-  // 선택된 카드·칸 강조 (필터 버튼 줄 제거 → 카드가 필터 겸용)
-  document.querySelectorAll('#assembly-stats .stat-card').forEach(function(c) {
-    var on = c.getAttribute('data-mode') === assemblyFilterMode;
-    c.style.outline = on ? '2px solid var(--accent)' : '';
-    c.style.outlineOffset = on ? '-2px' : '';
-  });
+  // 선택된 칸 강조 (상단 카드 줄은 #139에서 제거 — 스트립 칸이 필터 겸용)
   document.querySelectorAll('#assembly-stages .asm-stage').forEach(function(c) {
     c.classList.toggle('on', c.getAttribute('data-mode') === assemblyFilterMode);
   });

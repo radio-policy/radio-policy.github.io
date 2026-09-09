@@ -840,16 +840,11 @@
           <span style="font-size:12px;color:var(--text-secondary)">22대 국회 · 전파·통신 관련 법안 자동 추적 · 매일 10:00 KST 갱신</span>
         </div>
 
-        <!-- 통계 1줄: 할 일·시간축 (2026-09-09, #139) -->
-        <div class="stat-row" style="grid-template-columns:repeat(4,1fr);margin-bottom:10px" id="assembly-stats">
-          <div class="stat-card" style="cursor:pointer" data-mode="전체" onclick="filterAssembly(this,'전체')"><div class="stat-value" id="asm-total">—</div><div class="stat-label">전체 법안</div></div>
-          <div class="stat-card" style="cursor:pointer" data-mode="최근" onclick="filterAssembly(this,'최근')"><div class="stat-value" id="asm-new">—</div><div class="stat-label">최근 발의(7일)</div></div>
-          <div class="stat-card" style="cursor:pointer" data-mode="의견" onclick="filterAssembly(this,'의견')"><div class="stat-value" id="asm-comment" style="color:#dc2626">—</div><div class="stat-label">의견등록 가능</div></div>
-          <div class="stat-card" style="cursor:pointer" data-mode="변경" onclick="filterAssembly(this,'변경')"><div class="stat-value" id="asm-changed" style="color:#0d9488">—</div><div class="stat-label">최근 변경(7일)</div></div>
-        </div>
-        <!-- 통계 2줄: 진행 단계 스트립 — 발의 → 위원회 회부 → 위원회 심사 중 → 위원회 통과 → 법사위·본회의 → 본회의 통과 | 폐기·철회.
-             칸 이름은 카드 상태 라벨(assemblyStatusLabel)과 같은 말을 쓴다. '위원회 회부' 칸이 국회 입법예고 의견등록 구간. -->
-        <div class="card" id="assembly-stages" style="cursor:default;padding:8px 10px;margin-bottom:16px;display:flex;align-items:stretch;gap:0;overflow-x:auto">
+        <!-- 진행 단계 스트립 (2026-09-09, #139 — 운영자 결정으로 상단 카드 줄은 없앰) — 발의 → 위원회 회부 → 위원회 심사 중 → 위원회 통과 → 법사위·본회의 → 본회의 통과 | 폐기·철회.
+             칸 이름은 카드 상태 라벨(assemblyStatusLabel)과 같은 말을 쓴다. '위원회 회부' 칸이 국회 입법예고 의견등록 구간. 칸을 다시 누르면 전체 보기.
+             아래 줄: 선택 상태 + '최근 7일 단계 이동 N건'(누르면 이동한 법안만). -->
+        <div class="card" id="assembly-stages" style="cursor:default;padding:8px 10px 6px;margin-bottom:16px">
+        <div class="asm-strip" style="display:flex;align-items:stretch;gap:0;overflow-x:auto">
           <div class="asm-stage" data-mode="stage:접수" onclick="filterAssembly(this,'stage:접수')" title="발의만 되고 아직 위원회에 회부되지 않음"><div class="asm-stage-n" id="asm-stage-접수">—</div><div class="asm-stage-l">발의</div></div>
           <div class="asm-stage-arrow">›</div>
           <div class="asm-stage" data-mode="stage:회부" onclick="filterAssembly(this,'stage:회부')" title="소관 위원회 회부 — 국회 입법예고(의견등록)가 열리는 구간"><div class="asm-stage-n" id="asm-stage-회부">—</div><div class="asm-stage-l">위원회 회부</div><div class="asm-stage-badge" id="asm-stage-notice" onclick="event.stopPropagation();filterAssembly(this,'의견')" title="지금 의견을 낼 수 있는 법안만 보기" hidden>의견등록 가능 —건</div></div>
@@ -864,6 +859,11 @@
           <div class="asm-stage-arrow" style="color:var(--border)">|</div>
           <div class="asm-stage" data-mode="stage:폐기" onclick="filterAssembly(this,'stage:폐기')" title="대안반영폐기(위원회 대안에 흡수)·철회·부결"><div class="asm-stage-n" id="asm-stage-폐기" style="color:#dc2626">—</div><div class="asm-stage-l">폐기·철회</div></div>
         </div>
+        <div class="asm-foot" style="display:flex;justify-content:space-between;align-items:center;gap:8px;border-top:1px solid var(--border);margin-top:6px;padding-top:5px;font-size:11px;color:var(--text-secondary)">
+          <span id="asm-foot-sel">—</span>
+          <a href="javascript:void(0)" id="asm-foot-changed" data-mode="변경" onclick="filterAssembly(this,'변경')" title="지난 7일 안에 진행 단계가 바뀐 법안만 보기" style="color:#0d9488;font-weight:600;text-decoration:none;white-space:nowrap">—</a>
+        </div>
+        </div>
         <style>
           #assembly-stages .asm-stage { flex:1 1 0; min-width:86px; text-align:center; padding:6px 4px; border-radius:8px; cursor:pointer; position:relative; }
           #assembly-stages .asm-stage:hover { background:var(--bg-hover, rgba(0,0,0,.04)); }
@@ -873,6 +873,7 @@
           #assembly-stages .asm-stage-arrow { align-self:center; color:var(--text-muted); font-size:14px; padding:0 2px; }
           #assembly-stages .asm-stage-badge { display:inline-block; margin-top:4px; font-size:10px; font-weight:700; color:#dc2626; background:rgba(239,68,68,.12); padding:1px 7px; border-radius:99px; white-space:nowrap; }
           #assembly-stages .asm-stage-badge[hidden] { display:none; }
+          #assembly-stages .asm-foot a.on { outline:2px solid var(--accent); outline-offset:2px; border-radius:4px; }
         </style>
 
         <div id="assembly-list">
@@ -1200,7 +1201,7 @@
 <script src="https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js"></script>
 <script>if(typeof pdfjsLib!=='undefined'){pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';}</script>
 <script src="system_prompt.js?v=20260819a"></script>
-<script src="app.js?v=20260909a"></script>
+<script src="app.js?v=20260909b"></script>
 <script src="lawmap_articles.js?v=20260906s"></script>
 </body>
 </html>
