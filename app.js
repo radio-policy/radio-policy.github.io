@@ -10173,6 +10173,64 @@ function fillLawMapTopicSelect() {
 //    직접 이웃끼리의 계열 선(전파법—시행령)은 아래 엣지 필터가 keep 내부를 다 살리므로 그대로 보인다.
 //  · 법령 노드 포커스: 직접 이웃 + 계열(하위법령) 1단 확장 유지 — 전파법 클릭 시 시행령·고시
 //    계열을 보는 용도는 살아 있다. ※ 인용 이웃으로 2촌 확장하면 허브 법령을 거쳐 수백 노드로 폭발.
+// ── 주제 화면의 법령↔법령 선은 "이 주제의 근거 조문 사이 연결"만 (#148, 2026-09-09) ──
+//  종전엔 이웃 법령 사이의 **법령 전체** 인용·위임(전파법→시행령 제20조→제6조… 147건)을 그대로 그려,
+//  전파사용료 화면에 전파사용료와 무관한 위임 선이 굵게 나왔다(운영자: "전체 관계를 가져오지 마").
+//  조문 단위 보기(lawmap_articles.js lmaBuildModel)가 이미 "근거 조문 사이의 실제 인용·위임"을 계산하므로
+//  그 모델을 법령 단위 화면에서도 쓴다: 법령↔법령 선 = 모델의 조문 연결을 법령 쌍으로 묶은 것(굵기 = 연결 수),
+//  주제→법령 선 굵기 = 그 법령의 근거 조문 수. 재확인 횟수(weight)는 굵기에서 뺀다.
+//  모델이 아직 없으면 주제→법령 선만 먼저 그리고, 대조가 끝나면 다시 그린다(같은 세션 캐시 _lmaCache 공유).
+var _lawmapScopedBuilding = {};
+function lawmapTopicScopedEdges(topicId, allEdges) {
+  var topicEdges = allEdges.filter(function(e) { return e.source_id === topicId || e.target_id === topicId; });
+  var model = (typeof _lmaCache !== 'undefined') ? _lmaCache[topicId] : null;
+  if (!model) {
+    lawmapEnsureTopicModel(topicId);
+    return topicEdges.map(function(e) { return Object.assign({}, e, { _w: 1 }); });
+  }
+  var byLaw = {};
+  (model.laws || []).forEach(function(L) { byLaw[L.node.id] = L; });
+  var out = topicEdges.map(function(e) {
+    var otherId = e.source_id === topicId ? e.target_id : e.source_id;
+    var L = byLaw[otherId];
+    var n = L ? Math.max(1, (L.primaries || []).length) : 1;
+    return Object.assign({}, e, { _w: n, _title: (e.relation_type || '') + (e.description ? ' — ' + e.description : '') + ' · 근거 조문 ' + n + '개' });
+  });
+  var agg = {};
+  (model.edges || []).forEach(function(me) {
+    if (!me.from || !me.to || me.kind === 'annex' || me.from.L === me.to.L) return;
+    var k = me.from.L.node.id + '>' + me.to.L.node.id;
+    if (!agg[k]) agg[k] = { from: me.from.L, to: me.to.L, pairs: [] };
+    // lmaAnyLabel: '전문'(조문 체계 없는 고시)·별표는 그대로, 조문은 '제N조' — lmaKeyLabel만 쓰면 '제전문'이 된다(실측)
+    var lab = lmaAnyLabel(me.from.key) + (me.para || '') + ' → ' + lmaAnyLabel(me.to.key) + (me.kind === 'deleg' ? '(위임)' : '');
+    if (agg[k].pairs.indexOf(lab) < 0) agg[k].pairs.push(lab);
+  });
+  Object.keys(agg).forEach(function(k) {
+    var a = agg[k];
+    out.push({
+      id: 'scoped:' + k, source_id: a.from.node.id, target_id: a.to.node.id,
+      relation_type: '조문 인용', description: a.pairs.join(', '), source: 'scoped',
+      weight: a.pairs.length, _w: a.pairs.length,
+      _title: lmaShortLawName(a.from.node.name) + ' → ' + lmaShortLawName(a.to.node.name) + ' — 이 주제의 근거 조문 사이 연결 ' + a.pairs.length + '건: ' + a.pairs.join(' · ')
+    });
+  });
+  return out;
+}
+function lawmapEnsureTopicModel(topicId) {
+  if (typeof lmaBuildModel !== 'function' || typeof _lmaCache === 'undefined') return;
+  if (_lmaCache[topicId] || _lawmapScopedBuilding[topicId]) return;
+  _lawmapScopedBuilding[topicId] = true;
+  setLawMapStatus('근거 조문 사이의 연결을 원문과 대조하는 중… (주제→법령 선만 먼저 표시)');
+  lmaBuildModel(topicId).then(function(m) {
+    _lmaCache[topicId] = m; delete _lawmapScopedBuilding[topicId];
+    if (_lawMapFocusId === topicId && !(typeof lmaShouldHandle === 'function' && lmaShouldHandle(topicId))) renderLawMapGraph(topicId);
+  }).catch(function(e) {
+    delete _lawmapScopedBuilding[topicId];
+    console.warn('주제 조문 대조 실패 — 주제→법령 선만 표시:', e);
+    setLawMapStatus('법령 사이 조문 연결을 만들지 못해 주제→법령 선만 표시합니다 (' + lmEsc(e && e.message ? e.message : e) + ')');
+  });
+}
+
 function lawmapNeighborhood(centerId) {
   var keep = new Set([centerId]);
   var centerNode = _lawMapNodes.find(function(n) { return n.id === centerId; });
@@ -10188,9 +10246,11 @@ function lawmapNeighborhood(centerId) {
     if (keep.has(e.source_id)) keep.add(e.target_id);
     else if (keep.has(e.target_id)) keep.add(e.source_id);
   });
+  var subEdges = _lawMapEdges.filter(function(e) { return keep.has(e.source_id) && keep.has(e.target_id); });
+  if (isTopic) subEdges = lawmapTopicScopedEdges(centerId, subEdges);   // #148: 주제 화면은 근거 조문 사이 연결만
   return {
     nodes: _lawMapNodes.filter(function(n) { return keep.has(n.id); }),
-    edges: _lawMapEdges.filter(function(e) { return keep.has(e.source_id) && keep.has(e.target_id); })
+    edges: subEdges
   };
 }
 
@@ -10290,9 +10350,10 @@ function renderLawMapGraph(focusId) {
     return {
       id: e.id, from: e.source_id, to: e.target_id,
       arrows: { to: { enabled: true, scaleFactor: 0.5 } },
-      width: Math.min(1 + Math.log((e.weight || 1)) / Math.LN2 * 0.7, 4),
+      // 굵기(#148): 주제 화면은 _w(근거 조문 수 / 근거 조문 사이 연결 수). 전체 인용망·법령 포커스는 weight(인용 수) 로그 스케일 유지
+      width: e._w ? Math.min(0.8 + e._w * 0.6, 5) : Math.min(1 + Math.log((e.weight || 1)) / Math.LN2 * 0.7, 4),
       color: { color: '#8a8f98', opacity: 0.5, highlight: '#5b7ff5' },
-      title: (e.relation_type || '') + (e.description ? ' — ' + e.description : ''),
+      title: e._title || ((e.relation_type || '') + (e.description ? ' — ' + e.description : '')),
       smooth: { type: 'continuous' }
     };
   });
