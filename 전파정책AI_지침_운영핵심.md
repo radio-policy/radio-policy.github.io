@@ -44,11 +44,10 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 ├── add_law.py                  # 법령 추가 통합(Ⓑ): PDF 1개→①조문 document_chunks ②Haiku 요약 OKF→regulatory-kb+manifest+kb_* 동시. MAINTENANCE.md dedup 규칙 적용
 ├── regulatory-kb/              # OKF 법령 요약 번들(manifest.json 정본 + laws/·procedures/·glossary/). kb_* 적재 원천
 ├── backfill_embeddings.py      # Voyage 임베딩 백필(document_chunks NULL만)
-├── backfill_report_embeddings.py # 보고서 샘플 임베딩 백필(report_samples NULL만) — 신규 보고서 등록·채택본 승격 후 실행
 ├── resend_briefing.py / send_briefing.py  # 브리핑 재발송·발송 단독
 ├── health_watchdog.py          # 외부 헬스 워치독(GitHub Actions, Supabase 독립) — 크롤러 성공여부 인지(고장 vs 뉴스없음 구분)
 ├── system_prompt.js            # 대시보드 AI 자문 시스템 프롬프트(위임 관계 검증·핵심 조문 참조)
-├── index.html / app.js         # 대시보드 프론트엔드(GitHub Pages). AI 자문·보고서 초안 모두 SSE 스트리밍(stream:true) — 비스트리밍 복귀 금지. AI 자문은 RAG+뉴스+법령동향 컨텍스트 조합
+├── index.html / app.js         # 대시보드 프론트엔드(GitHub Pages). AI 자문은 SSE 스트리밍(stream:true) — 비스트리밍 복귀 금지. AI 자문은 RAG+뉴스+법령동향 컨텍스트 조합
 ├── crms_guide_sync.py          # 중앙전파관리소 업무안내 38p → regulatory-kb 적재(월 1회, 한국 IP). 본문 sha256 비교로 변경분만
 ├── lawmap_articles.js          # 관계도 '조문 단위 보기'(주제 포커스 전용, index.html이 app.js 뒤에 로드) — 조문 파서·상자 배치·조립. 테스트 node tests/lawmap_articles_*.test.js (#125)
 ├── lawmap_edge_check.py        # 관계도 주제 엣지 점검(읽기 전용) — 설명의 근거 조문이 KB 원문에 있는지 대조, 17시 체인 마지막 단계, 신규 문제만 운영자 무음 알림 (#123)
@@ -84,10 +83,6 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 | chat_logs | AI 자문 이력. **2026-08-20(#103)부터 네 경로 공통 정본 답변 로그** — 대시보드 자문·텔레그램 /ask·/law 자연어·/law 조문 직조회. `channel`(만족도 집계 축)·`chat_id`(텔레그램 이용자)·`chunk_ids`(jsonb, 그때 실제로 프롬프트에 들어간 근거 청크 id — 불만족 분석 재료) 컬럼 추가. 자문 이력 목록은 `category='텔레그램-조문조회'`만 제외(기계적 원문 출력이라 성격이 다름 — 피드백 탭에서는 보인다). 삭제 가능. `sources`(text)는 **두 종류를 접두사로 구분해** 담는다 — 법령·문서명은 그대로, 수집 뉴스는 `[뉴스] 제목 (매체, 날짜)`. 화면·내보내기에서 `splitSources()`로 갈라 별도 표기(법령은 6개 초과분 `… 등 N개`). **뉴스는 본문 발췌로 실제 반영된 건만** 기록(제목 목록 30건은 근거 아님). 스키마 변경 없이 반영 여부를 사후 검증하려는 구조. (배경역사 #35) |
 | teams / profiles / advisory_usage | 대시보드 계정 체계(#104). `teams`=3팀(경쟁제도팀·기술정책팀·AI정책팀, 팀 합산 일일 한도). `profiles`=auth.users 1:1(이름·팀·role(admin/leader/member)·개인 한도·unlimited·**approved**(관리자 승인 전 AI 잠김)·active). 가입 시 트리거가 승인대기 프로필 자동 생성. `advisory_usage`=(user_id, day, kind) 일일 사용량, kind는 advisory(한도 대상)/general(백스톱 300). 쓰기는 service_role RPC 전용 |
 | answer_feedback | 답변 만족도 👍👎(#103). **세 경로 공통 한 테이블** — `channel`(telegram_ask/telegram_law/dashboard)로 구분해 경로별 불만족률 비교. `log_id` 유니크 FK→chat_logs(재투표는 upsert로 갱신, 로그 삭제 시 set null이라 평점·경로는 보존). `rating` 1/-1, `reason`은 대시보드 👎 사유(텔레그램은 버튼만 → null). **RLS 켜짐 + anon 정책 없음** — 쓰기는 `submit_answer_feedback` RPC, 읽기는 `admin_list_answer_feedback`(관리자 비밀번호). 화면: AI 자문 > '답변 피드백' 탭 |
-| report_samples | 보고서 초안 제안 — 내 보고서 전문(형식·톤 학습용, 청킹 안 함). embedding(vector 1024, HNSW). report_type=정책검토/규제영향/동향보고/기타 |
-| report_style_rules | 보고서 스타일 가이드 캐시(단일 행 id=1). sample_count·feedback_count로 자동 재증류 임계(+2) 추적 |
-| report_feedback | 보고서 피드백 — request·draft·final(채택·교정본)·rating(1/-1). 편집-diff 학습 데이터. 영구 |
-| report_directives | "항상 적용" 영구 지시 — 모든 초안 시스템 프롬프트에 최우선 주입. 관리 탭에서 삭제 가능 |
 | alert_suppress_log | 긴급 재알림 억제 내역(어떤 기존 기사와 유사해 막았는지, 공유 키워드). **1~2주 실측 후 "본문에만 새 내용" 놓침이 있으면 Haiku 판정 층(월 2~6$) 추가 판단**용. service만 접근(정책 없음) (#44) |
 | system_health | 운영 heartbeat(key별 1행). last_crawl_run=뉴스크롤러 / last_gov_notice_run=입법예고·정부고시 / last_refetch_run=본문수집. 워치독 '고장 vs 없음' 구분 + 운영상태 탭. RLS+anon select |
 | kb_documents | 법령·규제 **요약/실무 문서**(regulatory-kb OKF 번들, 문서당 1행). concept_type·law_type·law_number·enforcement_date·status(current/superseded)·body_md 컬럼. path 유니크(정체 키). **document_chunks(조문 원문)와 별개 레이어** — 조문 인용은 그쪽, 요약·적용범위·실무는 이쪽. RLS+anon select. **법안 요약은 넣지 않는다**(2026-09-04 #122 — #121에서 넣었던 concept_type='Bill' 109건은 같은 날 삭제): 자문 근거는 확정 법령(시행예정본 포함)만, 국회 법안은 동향 전용. |
@@ -113,7 +108,6 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 | admin_delete_custom_file / admin_delete_chat_log (RPC) | 대시보드 삭제용(비밀번호 검증, security definer). **삭제된 행 수를 반환**하며 프런트는 0이면 실패로 처리한다. `document_chunks`·`chat_logs`는 RLS가 켜져 있고 DELETE 정책이 없어 프런트 직접 `delete()`가 오류 없이 0건으로 끝났다(#48) |
 | list_kb_guide_docs (RPC) | `실무 안내` 탭 목록(현행본 203건). **body_md는 안 돌려준다** — 203건 합계 681kB라 브라우저로 내려받으면 안 되고, `has_table`(표 포함 여부)·`chunks`(청크 수)만 서버에서 계산해 준다. 본문은 클릭 시 그 문서 1건만 조회 |
 | search_chunks_trgm / match_chunks_semantic (RPC) | trgm / pgvector 시맨틱 검색 |
-| match_report_samples (RPC) | 보고서 샘플 시맨틱 검색(코사인). filter_type으로 유형 한정 |
 | **`/law` 번호 조회는 DB 표기가 「N조」다(#92)** | `document_chunks.article_no`는 **`12조(교육과목 및 시간)`처럼 '제'가 없다** — 실측 「제N조」 0건 / 「N조」 7,587건. `handleArticleLookup`이 `제${artNo}조`로 조회해 **번호 직접 조회가 한 번도 동작하지 않았다.** 자연어 질의는 AI 검색 경로라 멀쩡해서 안 들켰고, 안내문에는 「조문 원문이 바로 나옵니다」라고 적혀 있었다. 지금은 `.or('article_no.ilike.N조%,article_no.ilike.제N조%')`로 두 형식을 모두 받고 비교 전에 앞의 '제'를 벗긴다. ⚠️ **문서에 「된다」고 쓰기 전에 그 경로로 한 번 돌려 볼 것** — 인접 경로가 되면 전체가 되는 줄 알기 쉽다 |
 | **뉴스 2차 묶기 = Haiku 의미 판정(#92)** | 키워드 클러스터링(`cluster_star`, 공유 3개)으로 못 묶인 **대표들만** `news_dedup.group_same_event()`로 다시 묶는다. 매체마다 관점이 달라 제목 어휘가 안 겹치는 사건이 있다(공정위 불공정약관 4건: 쌍별 공유 **최대 1개**). 프롬프트의 **「하나의 처분·발표를 여러 각도에서 쓴 것은 같은 사건」 문장이 결정적** — 이 문장 없이는 2묶음, 넣으면 실전 조건(다른 사건 혼재)에서 정확히 1묶음. **오묶음 실측 0건.** ⚠️ **클러스터링에만 쓰고 억제(`is_followup`)에는 쓰지 말 것** — 묶기가 틀리면 「(관련 보도 N건)」으로 남지만 **억제가 틀리면 알림이 사라져 되돌릴 수 없다.** ⚠️ **임계값 3→2 금지**(#44: KT 해킹 과징금과 5G 과장광고가 한 사건이 된다). 응답 번호가 1~N과 불일치하면 **부분 신뢰 없이 통째로 버린다**(fail-open). 비용은 실행당 최대 1회·수백 토큰. `extract_keywords`는 한글 토큰에도 **조사를 뗀다**(종전엔 금액에만 떼서 「약관」≠「약관에」였다) |
 | telegram-webhook (Edge) | 구독자 봇 수신부. `/start`·`/settings` 인라인 키보드(수신 토글 버튼 **'🏛️ 국회·법률 동향'** — 2026-09-03 '법안 동향'에서 개명, callback `t:assembly`·컬럼 `topic_assembly`·큐 topic `assembly`는 그대로. 국회 법안+국회·부처 입법예고+과방위 회의록 다이제스트를 한 토글로 받는다, #120), `/law "OO법 N조"` 조문 원문 즉답, `/ask` AI 자문(승인제), `/admin`(운영자), **주요 뉴스 '더 보기' `mn\|` 콜백(#105 — `news_feed` 읽기 전용, 큐·워터마크 무접촉)**. **verify_jwt off** 대신 `X-Telegram-Bot-Api-Secret-Token` 검증. 오류가 나도 200을 반환한다 — 비200이면 텔레그램이 같은 업데이트를 무한 재전송한다 |
@@ -156,7 +150,6 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 | | **document_chunks** | select / insert는 **`is_approved=false` 강제**(승인 대기로만 들어옴) |
 | service 전용 | telegram_subscribers·subscriber_queue·alert_suppress_log·changes·documents·system_status | 정책 0개 |
 | | **answer_feedback** | 정책 0개 — 쓰기는 `submit_answer_feedback` RPC(anon 실행 가능, 조회 불가), 읽기는 `admin_list_answer_feedback`(비밀번호). 공개 페이지에 남의 평점·불만 사유를 노출하지 않으려는 구조 (#103) |
-| 쓰기 회수 | report_samples·report_style_rules·report_feedback·report_directives | select만 (보고서 메뉴 숨김 상태 — ⑦ 부활 시 재개방) |
 
 - **app_config 행 제한의 이유**: `system_prompt`는 telegram-webhook Edge Function이 봇 자문
   시스템 프롬프트로 그대로 읽어간다. anon이 이 행을 바꿀 수 있으면 대시보드 키 하나로 봇의 지시문을
@@ -216,21 +209,9 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 - **내부** `watchdog_scan(p_dry_run boolean default true)`(pg_cron jobid 16, 하루 3회, GitHub 독립) — `system_health` **10키 전수** 감시. 키마다 다른 임계(매시류 3h / 하루1회류 26h / foreign 30h / itu 40일). note에 `fail=N`·`failed=N`·`실패 N`이 N>0면 "돌았지만 실패"로 별도 경고(**`new=0`은 정책 크롤러 정상값이라 신호 아님**). 이상 키+유형을 md5 시그니처화해 `system_health.watchdog_alert_state`에 저장 → 직전과 다를 때만 1건 요약 발송(재알림 억제), 정상 복귀 시 `ok`로 리셋. 발송은 Vault `telegram_bot_token`→`net.http_post`→chat 344506450. 기본 인자가 dry라 **수동 점검 `select watchdog_scan();`은 발송 없이 이상 목록만 반환**(실발송은 cron의 `watchdog_scan(false)`).
 - ⚠️ **남은 사각**: 둘 다 감시자↔감시대상이 다른 플랫폼이 됐지만, **Supabase 자체가 다운되면 watchdog_scan도 함께 죽는다**(외부가 "접속 불가"로 일부만 커버, 그것도 GitHub 생존 시). 완전 3중화(Supabase·GitHub 무의존 외부 제3지점 폴링)는 후속 과제.
 
-## 보고서 초안 제안 (자문 메뉴)
+## 보고서 초안 제안 — 제거됨 (2026-09-09, 배경역사 #142)
 
-내 보고서 **형식·톤** + 법령·자료(RAG) **내용 근거**로 보고서 초안 생성. 핵심: 내용은 RAG에서, 형식·톤은 내 보고서에서.
-
-- 메뉴: [자문] › 보고서 초안 제안 (탭2 — 초안 생성 / 내 보고서 관리)
-- 생성: claude-sonnet-5, stream:true, web_search 3회 (callReportDraft). 증류: claude-haiku-4-5 (distillReportStyle).
-- **상위 모델(Sonnet 계열)은 자문·보고서·DIFF·용어상세 4곳 + 백필 스크립트에서만 사용** — 모델 교체 시 app.js 6곳과 backfill_term_details.py를 함께 바꿔야 생성물 형식·품질 일치. Haiku 경로는 비용 구조상 그대로 둘 것. (배경역사 #27)
-- **개인화 학습 채널 3종** (쓸수록 내 톤 수렴):
-  1. **말로 지시(onReviseDraft)** — `이번만`(다회 대화식 즉석 수정, 기억 안 함) / `항상 적용`(report_directives 영구 저장→모든 초안 최우선 주입, 관리 탭에서 삭제)
-  2. **빨간펜(편집-diff)** — "고쳐서 최종본 채택"(saveReportFinal→report_feedback.final). 초안↔최종본 차이를 증류에 "반드시 반영". 채택본은 "예시 보고서로 추가"로 승격(선택)
-  3. **👍/👎(submitReportFeedback)** — 약한 신호. 👎는 "피하라" 패턴으로 증류 반영
-- **자동 재증류**: sample_count·feedback_count로 추적, 임계(샘플+2 또는 피드백+2) 도달 시 자동. 수동은 "스타일 재학습" 버튼. 구조 학습엔 샘플 2편 이상 필요.
-- **파일 등록**: drag&drop / 클릭 (PDF·docx·pptx·md·txt, 브라우저 파서). **임베딩**: 등록·승격 후 PC에서 `python backfill_report_embeddings.py`(NULL만). 그 전엔 유형/최신순 폴백("임베딩 대기").
-- **내보내기**: exportReportDraftDoc(마크다운→HTML→.doc).
-- 보안: 원문은 Supabase(private)에만. 생성 시 예시·스타일·지시가 Anthropic API로 전송됨(학습엔 미사용). 민감 수치는 마스킹·형식 위주 등록 권장.
+사내 보고서를 외부 서버(Supabase)에 올려 형식·톤을 학습하던 기능. 운영자 결정으로 메뉴·패널·함수(app.js)·`report_samples`/`report_style_rules`/`report_feedback`/`report_directives` 테이블·`match_report_samples` RPC·`backfill_report_embeddings.py`를 모두 삭제했다(삭제 시점 서버에 보고서 0건). **복원하지 않는다** — 보고서 생성은 사내 시스템 몫.
 
 ## 법령·규제 요약 레이어 (regulatory-kb → kb_*)
 
@@ -325,7 +306,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 - URL: https://radio-policy.gitlab.io/
 - **수정 배포 시 index.html 캐시 버스터 `app.js?v=`·`styles.css?v=` 갱신 필수 (현재 `app.js?v=20260729a` / `styles.css?v=20260723b`)** — CSS 고칠 때 styles.css 버스터도 갱신해야 사용자 브라우저가 새로 받음
 - 아이콘은 Tabler Icons webfont(ti ti-*) — 존재하는 이름만(없으면 빈칸 렌더).
-- 메뉴 (2026-08-02 개편, 17→9 — 배경역사 #56): [모니터링] **통합 모니터링**(패널 상단 탭: 뉴스|정부 보도자료·공지|해외 규제동향) / Daily Briefing / 기술 용어 · [AI 도우미] AI 자문 / 법령 관계도 · [법안 동향] 국회 법안 / 과방위 회의록 / **법령 개정 추적**(탭: 입법예고·개정 현황|조문 DIFF — 기존 lawtrack·diff 패널 무수정 재사용) · [지식베이스] **지식베이스**(탭: 법령·고시|보도자료|실무 안내|ITU-R|추가지식). **설정=상단 톱니 아이콘, 운영 상태=상단 상태등**(🟢/🔴 하트비트 종합, 클릭 시 패널 — refreshOpsLight). 탭 바는 기존 go() 라우팅을 호출하는 상위 컴포넌트(renderGroupTabs)라 패널·로드 함수는 무수정. 모바일 하단 5버튼 유지, 딥링크(pageTobn) 기존 값 유효. 보고서 초안 메뉴는 계속 주석 숨김.
+- 메뉴 (2026-08-02 개편, 17→9 — 배경역사 #56): [모니터링] **통합 모니터링**(패널 상단 탭: 뉴스|정부 보도자료·공지|해외 규제동향) / Daily Briefing / 기술 용어 · [AI 도우미] AI 자문 / 법령 관계도 (보고서 초안 제안은 #142로 삭제)· [법안 동향] 국회 법안 / 과방위 회의록 / **법령 개정 추적**(탭: 입법예고·개정 현황|조문 DIFF — 기존 lawtrack·diff 패널 무수정 재사용) · [지식베이스] **지식베이스**(탭: 법령·고시|보도자료|실무 안내|ITU-R|추가지식). **설정=상단 톱니 아이콘, 운영 상태=상단 상태등**(🟢/🔴 하트비트 종합, 클릭 시 패널 — refreshOpsLight). 탭 바는 기존 go() 라우팅을 호출하는 상위 컴포넌트(renderGroupTabs)라 패널·로드 함수는 무수정. 모바일 하단 5버튼 유지, 딥링크(pageTobn) 기존 값 유효. 보고서 초안 메뉴는 계속 주석 숨김.
 - 뉴스 중요도: 화면 라벨 "🔴 중요/🟡 보통/🟢 참고", 내부값·DB·코드는 '긴급/보통/참고'. 수정 시 news_feed 갱신+importance_feedback 기록+당일 브리핑 🔴 동기화. **중요도 변경·잠금·삭제는 승인된 로그인 계정만**(#133, `canEditNews()`=로그인+승인+활성; 비로그인은 🔒 표시·클릭 불가). 화면 게이트는 안내용이고 실제 관문은 DB 정책(위 RLS 표). 잠금=60일 삭제 제외, 삭제=영구+deleted_news 기록.
 
 ## 알림 채널
@@ -414,7 +395,6 @@ python refetch_content.py    # 본문 재수집(한국 IP, trafilatura)
 python resend_briefing.py [날짜]              # 브리핑 재발송
 python upload_law_pdf.py 파일 "문서명" 고시    # 법령/고시/ITU-R 업로드 (업로드 시 PDF 편집흔적 자동 정리 — clean_pdf_artifacts)
 python backfill_embeddings.py                 # 임베딩 백필(document_chunks)
-python backfill_report_embeddings.py          # 보고서 샘플 임베딩 백필(report_samples)
 python backfill_term_details.py               # 기술용어 상세 백필(tech_terms 설명·개념도·관련용어, 빈 것만. 모델은 app.js와 동일하게 유지)
 python build_law_citation_graph.py            # 법령 관계도 인용망 재구축(citation·family 엣지만 — 멱등. 새 법령 업로드 후 실행)
 #  ⚠️ 단독 예약이 아니다 — run_gov_crawler.bat 체인의 6번째 단계로 **매일 17시 자동 실행**된다(#106).
@@ -476,7 +456,7 @@ python import_regulatory_kb.py --only <path조각> [...]   # OKF 요약 일부�
 - **총량 상한 24,000자.** 과태료 조문처럼 긴 조문 2건만으로 17KB가 된다. **조문 중간에서 자르지 말 것**(모델이 잘린 문구를 인용한다) — 조문 경계에서 끊고 생략 건수를 프롬프트에 남긴다.
 - 페일소프트: 조회 실패 시 빈 문자열 반환, 자문은 현행 기준으로 정상 동작.
 - 답변 하단에 '시행 예정 반영' 배지를 띄워 답변이 현행 기준임을 가시화한다.
-- **보고서 초안 생성 경로에도 동일 적용.** 보고서는 임원 보고로 나가므로 "현행은 X"만 쓰면 시행 임박 개정을 빠뜨린 문서가 된다. 참고 출처 목록에 `시행예정: <법령> <시행일>`이 함께 남는다.
+- (보고서 초안 경로는 #142로 삭제됨 — 자문 경로에만 적용)
 ### PDF 등재본의 API 재적재 (`law_sync.py --reingest`)
 
 PDF에서 추출해 올린 등재본은 **단어 중간에 줄바꿈이 들어가 키워드 검색이 깨진다.** 전파법은 197청크 중 188청크(95%)가 그 상태였고, `가격경쟁`이 `가격\n경쟁`으로 잘려 `ilike` 검색에 걸리지 않았다. 조문 단위가 아닌 800자 단위 청킹이라 `article_no`도 부정확하고 `law_id`도 비어 있다.
@@ -568,7 +548,7 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 
 - **큰 문서에 `--force` 재시도를 반복하지 말 것.** 1회차가 성공해도 2회차가 같은 문서를 다시 처리하다 timeout이 나면, 온전한 데이터가 `[교체중]` 이름에 남고 정식 이름에는 부분 삽입분만 남는다(주파수 분배표에서 실제 발생). 성공 로그(`검증 완료`)를 확인하고 멈출 것.
 - **중간 실패는 재실행으로 자동 복구된다(2026-07-30 자가감사 후 보강).** ①`reingest_one`은 `[교체중]`/`[PDF원본]` 잔재를 감지하면 "손상률 30% 미만 스킵"을 무시하고 복구 경로로 진입한다(예전엔 API본으로 오인·스킵되어 수동 SQL로만 풀렸다). ②`sync_one`은 신본이 이미 등재된 상태로 재진입하면 그냥 건너뛰지 않고 **앞선 실행이 남긴 current 구본을 마저 강등하고 law_watch를 정리**한다 — 방송통신발전기금 규정(제2026-25호) 적재에서 1회차가 강등 단계 timeout으로 끊겼을 때 이 경로로 복구됐다. ③승격(`promote_due`)은 **신본 current 먼저, 구본 강등은 그 다음**(중간 실패 시 검색 공백 대신 이중 current — 안전한 쪽으로 실패).
-- **임베딩 백필용 부분 인덱스 3개를 지우지 말 것** — `document_chunks`/`kb_chunks`/`report_samples`의 `(id) WHERE embedding IS NULL`. 없으면 백필 대상 조회가 Seq Scan(전수 스캔, 5초+)이라 잦은 `57014`/500의 원인이 된다(EXPLAIN 실측 5,137ms → 0.061ms). 대량 삭제·갱신 뒤에는 `VACUUM ANALYZE document_chunks`를 한 번 돌릴 것(단독 문장으로 — 트랜잭션 안에서는 실패한다).
+- **임베딩 백필용 부분 인덱스 3개를 지우지 말 것** — `document_chunks`/`kb_chunks`의 `(id) WHERE embedding IS NULL`(report_samples는 #142로 삭제). 없으면 백필 대상 조회가 Seq Scan(전수 스캔, 5초+)이라 잦은 `57014`/500의 원인이 된다(EXPLAIN 실측 5,137ms → 0.061ms). 대량 삭제·갱신 뒤에는 `VACUUM ANALYZE document_chunks`를 한 번 돌릴 것(단독 문장으로 — 트랜잭션 안에서는 실패한다).
 - **재적재 불가 사례가 있다.** 법제처에 등록돼 있어도 `조문내용`·`부칙`이 빈 문자열이고 **첨부파일만** 있는 경우가 있다(2012년 '공고' 계열). 이때는 `조문 취득 결과가 비어 있음 — 중단`으로 끝나며 재시도로 해결되지 않는다 — PDF 등재본을 그대로 두는 것이 맞다.
 - **조문 취득 범위**: `law_sync.py`는 **조문 + 부칙 + 별표**를 모두 가져온다. 응답의 `조문.조문단위`, `부칙`, `별표.별표단위` 세 곳을 읽어야 한다 — 처음에 조문만 읽어 부칙이 통째로 빠졌고(9건 중 8건), 그 상태로 "API는 별표를 주지 않는다"고 잘못 단정했다.
   - **부칙**은 응답 모양이 두 가지다. 법령은 `부칙단위[{내용,번호,일자}]`, 행정규칙은 `{부칙내용:[...], 부칙공포번호:[...], 부칙공포일자:[...]}` 병렬 배열.
@@ -945,7 +925,6 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **크롤·브리핑이 ~20초 만에 동시 실패(`RemoteProtocolError: Server disconnected`)**: supabase-py HTTP/2 끊김 → `sb_client.make_client`(HTTP/1.1)로 해결됨. 재발 시 `create_client` 직접 호출 파일 없는지 확인. 크롤은 성공인데 news 0·브리핑 빔이면 본문 미수집 → PC `python refetch_content.py` 실행 후 브리핑 재실행. (배경역사 #15)
 - **입법예고 미수집**: DB law_type='lsAnc' 건수·MAX(created_at) 확인. `gov_notice_crawler.py` 로그. PC 의존(17:00).
 - **AI 자문 "Failed to fetch"**: 무거운 질문 2분+ idle 끊김 → stream:true로 해결됨. 사내망 프록시·확장프로그램·F12 네트워크 확인.
-- **보고서 초안 미생성·학습**: Claude 키 / report_samples 2편↑·"스타일 재학습" / embedding NULL→`backfill_report_embeddings.py` / report_directives 행 / 임계 +2건.
 
 ## 하지 말아야 할 것 (규칙 + 한 줄 이유 / 상세는 배경역사 문서)
 
@@ -1026,7 +1005,6 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **게시판 목록을 페이지 순회할 때 순환 방어를 넣을 것** — 마지막 페이지를 넘겨도 같은 내용을 반복 반환하는 게시판(ETRI)이 있고, URL에 페이지 번호가 박혀 'URL 신규' 판정으로는 못 거른다. 페이지의 제목 조합(fingerprint)이 재등장하면 종료. (배경역사 #53)
 - **fcc.gov 안의 /rss 경로를 RSS로 믿지 말 것** — HTML을 반환하는 가짜 경로다. 진짜 피드는 EDOCS API(api2.fcc.gov)에 있다. Ofcom은 전 경로 Cloudflare 차단이라 직접 수집 시도 금지(구글 뉴스 site: RSS 우회 유지). (배경역사 #54)
 - **국회 회의록은 PDF가 아니라 뷰어(xml.do)가 정본** — PDF_LINK_URL의 PDF는 pdftotext에서 중반부 글리프가 깨진다(폰트 문제). 뷰어의 발언자 단위 구조를 쓰고 PDF는 폴백으로만. (배경역사 #54) 단 **뷰어 본문이 다른 위원회 회의록인지는 PDF로 검증**한다 — 정본이라도 id 오응답이 있다(#120-보론).
-- **'보고서 초안 제안' 메뉴는 숨김 상태(삭제 아님)** — index.html 주석 2곳을 해제하면 복원된다. 패널·함수·report_* 테이블은 보존 중(봇 보고서 기능이 재사용 예정). (배경역사 #54)
 - **구본(superseded) 청크는 임베딩을 두지 말 것** — 검색이 결과에서 걸러내는데 HNSW RAM만 차지한다(2,635개 제거로 작업세트가 캐시 안으로 들어옴). backfill_embeddings.py에 status neq.superseded 필터가 있으니 제거하지 말 것. promote_due가 새로 강등한 구본은 임베딩이 남는데, 작업세트가 다시 캐시에 근접하면 `update document_chunks set embedding=null where status='superseded'` + REINDEX로 정리. (배경역사 #54)
 - **Supabase 파이썬 클라이언트는 `sb_client.make_client` 사용, `create_client` 직접 호출 금지** — supabase-py 2.31 httpx HTTP/2 keepalive 끊김(RemoteProtocolError: Server disconnected) 회피(HTTP/1.1 강제+재시도). 신규 스크립트도 동일 적용. (배경역사 #15)
 - **워크플로 pip를 버전 무고정으로 되돌리지 말 것(`requirements.txt` 유지)** — 무고정 자동 최신화가 어느 날 갑자기 깨뜨림(HTTP/2 사고). 버전 올릴 땐 한 번에 하나씩 바꿔 Run으로 검증. (배경역사 #15)
@@ -1074,7 +1052,6 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **자문 뉴스 발췌를 일괄 600자로 되돌리지 말 것(1위 1,800자·2·3위 700자 차등 유지) / 출처에 제목 목록 30건을 넣지 말 것(본문 발췌분만)** — 600자는 기사 앞부분 수치는 살리고 뒷부분 최신 상황만 잘라내 답변을 옛 시점으로 후퇴시킨다(실측: `28㎓` 627자, `시범 운영` 1252자 지점). 근거로 쓰이지 않은 제목 목록을 출처로 표기하면 거짓 표기가 된다. (배경역사 #35)
 - **자문 뉴스 발췌 뒤의 "수치 인용 우선" 지시를 제거하지 말 것** — 기사 본문이 프롬프트에 들어가 있어도 모델이 웹검색 쪽 옛 수치를 골라 쓴 사례가 있다(검색이 아니라 생성 단계 문제). 질문이 수치·순위 비교를 묻고 발췌에 그 수치가 있으면 매체·날짜와 함께 인용하게 강제한다. (배경역사 #35)
 - **deleted_news·importance_feedback·feedback_rules 비우지 말 것** — 재수집 방지·학습용 영구.
-- **report_samples·report_feedback·report_directives·report_style_rules 비우지 말 것** — 보고서 형식·개인화 학습 데이터(비우면 초기화).
 - **보고서 개인화 채널(말로 지시·빨간펜·👍/👎·자동 재증류)을 단일 채널로 축소 금지** — "쓸수록 내 톤" 핵심.
 - **callReportDraft·callClaude를 비스트리밍으로 되돌리지 말 것** — 2분+ 응답 idle 끊김 "Failed to fetch". stream:true 유지.
 - **비스트리밍 Claude 호출에서 `data.content[0].text` 가정 금지 — Sonnet 5는 `thinking` 미지정 시 적응형 추론 기본 ON** — 응답 첫 블록이 빈 thinking 블록이 되어 `content[0].text`가 undefined(`reading 'trim'` 크래시) + 숨은 thinking 토큰이 max_tokens 잠식으로 출력 잘림. 기계적 추출(용어추출·법령DIFF 등)은 `thinking:{type:'disabled'}` 추가하고, 응답은 반드시 `content.find(b=>b.type==='text')`로 읽을 것. 스트리밍(자문·보고서)은 text_delta만 누적하므로 무관, Haiku는 적응형 기본 OFF이라 무관. Sonnet 4.6→5 전환(#27) 후 발생. (2026-07-23 용어추출 크래시·법령DIFF 무음 사고)
@@ -1185,7 +1162,6 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **피드백 버튼은 분할 답변의 마지막 조각에만 붙일 것** — `splitByLines`로 1~3개 메시지가 되는데 전 조각에 달면 한 답변에 투표창이 여러 개 생긴다. `sendAnswerWithFeedback()` 사용. `callback_data`는 64바이트 상한이라 질문을 실을 수 없으므로 `fb:<rating>:<log_id>` 형태를 유지할 것. (배경역사 #103)
 - **답변을 기록하는 insert에서 `.select('id')`를 빼지 말 것** — 👍👎가 그 id로 평점을 매단다. `handleAsk`는 이 때문에 **기록이 전송보다 앞에 있고**, 실패 경로의 `[자문 실패]` 기록은 `logged` 가드로 이중 기록을 막는다 — 순서를 되돌리면 버튼이 사라지고 가드를 빼면 행이 겹친다. (배경역사 #103)
 - **`chat_logs`에 새 경로를 적재할 때 `channel`을 빠뜨리지 말 것** — 경로별 불만족률 비교가 이 컬럼 하나에 달려 있다. 값은 `telegram_ask`/`telegram_law`/`dashboard` 셋뿐이고, /law 두 하위경로는 `category`('텔레그램-법령검색'·'텔레그램-조문조회')로 구분한다. 자문 이력 목록(`openChatHistory`)은 조문 직조회만 제외하므로 새 category를 만들면 노출 여부를 함께 결정할 것. (배경역사 #103)
-- **`report_feedback`에 anon INSERT 정책을 열지 말 것 — 공개 대시보드에서는 보고서 기능을 쓰지 않는다** (2026-08-20 운영자 방침: 보고서 초안 제안은 **사내 시스템 전용**, `docs/사내이식_계획.md`). 현재 정책은 SELECT만 있어 프런트 insert(app.js:8419·8456)가 조용히 실패하는 상태이고 행 수도 0인데, 메뉴 자체가 숨김이라 실사용 영향이 없다. 안 쓰는 기능을 위해 공개 페이지에 쓰기 구멍을 내는 쪽이 더 나쁘다. **사내 이식 시 그쪽 인증 체계에서 정식 처리**할 것 — 그때 `.error` 확인(선례 app.js:7920)도 함께 넣어야 같은 조용한 실패가 재발하지 않는다. #48 계열. (배경역사 #103)
 
 - **관계도 주제 엣지를 조문 번호 없이·검증 없이 저장하지 말 것 — AI가 준 `basis`는 원문 대조 후에만 DB에 쓴다** (2026-09-05, #123). `saveLawmapData`의 검증 관문(`lawmapVerifyRelation`)을 우회하는 저장 경로를 만들지 말고, 세션이 시드 엣지를 넣을 때도 설명에 `제N조`를 적고 그 조문이 `document_chunks.article_no`에 있는지 확인한다. "관련 조문"·"(관련)" 같은 자리표시는 금지. 전수 검증에서 356건 중 214건이 틀려 있었고 그 다수가 검증 없이 저장된 ai 엣지였다 — 관계도는 전문가가 보는 화면이라 한 줄의 틀린 조문이 시스템 전체의 신뢰를 깎는다.
 - **노드명·문서명 대조를 정규화 없이 LIKE 한 번으로 끝내지 말 것** (2026-09-05, #123) — 가운뎃점 `·`/`ㆍ` 두 표기, 공백, `.pdf` 꼬리, `(소관부처)` 접두가 섞여 있어 그대로 비교하면 있는 문서를 "미보유"로 오판한다(표시광고법 사례, 노드 doc_name `.pdf` 74건). `nrm()`/`lmNormName()`을 거친 뒤 비교하고, 문서 존재 여부로 결론을 내리기 전에 두 표기를 모두 시도한다.
@@ -1199,7 +1175,7 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 2. 본문 수집: PC 꺼지면 RSS 요약만 → refetch_content.py 보완. trafilatura 로컬 필수(`pip install trafilatura`).
 3. Supabase는 **Pro(유료) 플랜**(2026-08-02 운영자 확인 — DB 8GB·Storage 100GB 포함, 실측 DB ~600MB). 과거 "무료 500MB×2" 기술은 폐기. 신규 프로젝트는 여전히 불요(하나로 충분) — 다만 금지 사유가 '슬롯 부족'이 아니라 '분산 관리 비용'으로 바뀜. **실제 병목은 RAM(컴퓨트 2GB — shared_buffers 512MB)**: 벡터 인덱스가 캐시를 넘으면 검색이 급락한 전력(무료 시절)이 있으니 대량 적재 후엔 REINDEX로 인덱스를 컴팩트하게 유지할 것.
 4. 스포츠 기사 오탐: EXCLUDE_KEYWORDS+피드백 관리.
-5. 신규 업로드 문서·보고서: backfill 전까지 시맨틱 미적용("임베딩 대기"). 보고서는 backfill_report_embeddings.py(PC 의존).
+5. 신규 업로드 문서: backfill 전까지 시맨틱 미적용("임베딩 대기").
 6. 60일 초과 삭제는 Supabase pg_cron(jobid 2, 매일 00:00 KST, created_at 기준 `DELETE ... AND locked=false`)이 PC 없이 자동 수행. refetch_content.py는 published_at 기준 보조 정리(PC 의존). 입법예고 수집만 PC 의존(17:00 로컬).
 7. 무선국 자기적합확인(전파법 제24조②, 2026.10.22 시행): 시행령 위임 미반영 — 개정 공포 시 PDF 업로드.
 8. 일부 고시는 시행 전 개정본만 보유(적합성평가 2025-56호 등).
@@ -1207,7 +1183,7 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 10. 일부 사이트 SSL/봇 차단으로 본문 수집 불가(403·SSLV3·CERTIFICATE) — 정상 baseline.
 11. GitHub cron 드롭·지연(best-effort) — Supabase pg_cron이 주 트리거, 그래도 누락 시 "Run workflow"·PC 보완.
 12. 대시보드 업로드는 텍스트 기반 PDF만(스캔본 불가).
-13. AI 자문·보고서 초안 무거운 질문은 2분+ 소요(스트리밍이라 정상).
+13. AI 자문 무거운 질문은 2분+ 소요(스트리밍이라 정상).
 
 - **국회 발언 검색에서 1단(정리해 둔 발언)과 2단(국회 원문) 중 하나를 빼지 말 것 (2026-09-08, #132)** — 요지에는 지나가듯 말한 낱말이 빠지고(변재일 eSIM 발언은 topic에만 '무선국'), 원문 문자열 검색은 "기지국 준공검사"처럼 다른 낱말로 말한 발언을 못 잡는다. 둘이 서로의 구멍을 메우는 구조라 한쪽만 남기면 한 방향의 누락이 생긴다. 1단은 요지·주제·안건 **모두** 검색, 원문 0건이면 "원문에서는 없음"을 **반드시 같이** 보낸다. 공용 파일(`_shared/assembly_search.ts`)을 고치면 `telegram-webhook`·`assembly-search` **둘 다 배포**.
 - **공개 대시보드의 쓰기 권한을 화면 게이트로만 막았다고 믿지 말 것 (2026-09-08, #133)** — news_feed는 anon UPDATE/DELETE 정책이 `true`라 브라우저 콘솔에서 누구나 중요도를 바꾸고 기사를 지울 수 있었다. 편집(중요도·잠금·삭제·importance_feedback·deleted_news·daily_briefings 갱신)은 **DB 정책이 `is_approved_user()`로 막고**, anon은 news_feed의 `is_read`·`content`·`summary` **컬럼 권한만**. 새 테이블에 anon 쓰기 정책을 줄 때는 "인터넷 누구나"가 그 쓰기를 해도 되는지 먼저 물을 것. 검증은 anon 키로 REST PATCH/DELETE를 직접 쏴서(401 또는 0행) 확인.
@@ -1219,7 +1195,7 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 | GitHub Actions+Pages | 자동화+호스팅 | 무료 |
 | Supabase | DB+Edge(voyage-embed)+Storage | **Pro(유료)** — DB 8GB·Storage 100GB 포함(2026-08-02 정정). 컴퓨트 Small(RAM 2GB)이 실제 병목 |
 | Voyage AI | 임베딩(voyage-4-lite, 1024) | 무료 2억 토큰 |
-| Anthropic API | AI 자문·보고서 초안(sonnet stream)+긴급도/요약/스타일증류(Haiku) | 키는 app_config(claude_key) |
+| Anthropic API | AI 자문(sonnet stream)+긴급도/요약(Haiku) | 키는 app_config(claude_key) |
 | Resend | 이메일 | 100/일 |
 | Telegram Bot | 알림 | 무제한. **봇 2개** — 운영자용(`TELEGRAM_BOT_TOKEN`)·구독자용 `정책AI 도우미`(`SUBSCRIBER_BOT_TOKEN`, @radio_policy_law_ai_bot) |
 | trafilatura(pip) | 본문 추출 | 로컬 설치 |
@@ -1236,7 +1212,7 @@ SUPABASE_URL, SUPABASE_SERVICE_KEY, ANTHROPIC_API_KEY,
 EMAIL_FROM, EMAIL_PASSWORD, EMAIL_TO, RESEND_API_KEY,
 TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, LAW_OC_KEY(=radiopolicyai),
 ASSEMBLY_API_KEY, NAVER_CLIENT_ID, NAVER_CLIENT_SECRET, SUBSCRIBER_BOT_TOKEN
-※ 로컬은 동일 키를 .env에(.gitignore 등록). backfill_report_embeddings.py는 SUPABASE_URL·SERVICE_KEY·VOYAGE_API_KEY만.
+※ 로컬은 동일 키를 .env에(.gitignore 등록).
 ※ Vault github_pat(fine-grained PAT, `radio-policy-commit-org`, resource owner = 조직 `radio-policy`, 만료 2027-09-04) 필수권한: Repository — Contents(R/W)·Metadata(자동)·Actions(R/W). 재생성 시 Actions 누락 주의(배경역사 #18), 저장소 소유자와 토큰 소유자가 같아야 함(#116).
 ```
 

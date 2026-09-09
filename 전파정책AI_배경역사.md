@@ -5201,3 +5201,17 @@ KB에 있는 재난안전법(제38조의2 ③ 문자 송신 요청권·⑤ 협�
 
 **구현.** `assembly_crawler.main()`이 루프 중 즉시 알림을 보내던 것을 `new_items`·`changes`로 모아 루프 뒤 한 번에: `format_new_bills_batch`(운영자+구독자 같은 한 통, `send_telegram` 경유), `format_status_batch(changes, NOTABLE_STATUS)`→운영자 전용(`send_operator_only`), `format_status_batch(changes, SUBSCRIBER_STATUS)`→구독자 큐 전용(`queue_subscribers_only`). 묶음은 전이 종류별 그룹, 의미 큰 순(가결→위원회 의결→법사위→기타→폐기), 그룹당 10건 + '외 N건', 3,300자 초과 시 남은 그룹은 건수만(subscriber_queue 3,500자 절단·텔레그램 3,800자 분할보다 먼저 스스로 접는다). `--suppress-status-alerts`는 상태 변경 묶음만 건너뛴다. 종전 `notify_new`/`notify_status_change` 삭제. 테스트 3건(구독자 필터·그룹·상한·문자 상한). 입법예고 패스 알림은 그대로(이미 하루 한 번, 시작·D-3).
 
+**#142 보고서 초안 제안 기능 삭제 — 사내 보고서는 외부 서버에 두지 않는다 (2026-09-09).**
+
+운영자: "자동 보고서 생성은 지금 숨김인데, 삭제하자. 외부 서버에서는 사내 보고서를 써서는 안 된다."
+보고서 초안 제안은 운영자의 사내 보고서 원문을 `report_samples`(Supabase)에 통째로 올려 형식·톤을
+학습하고 RAG로 내용을 채우던 기능(#54 이후 메뉴 숨김, 2026-08-20 "사내 시스템 전용" 방침). 숨김은
+언제든 되살릴 수 있는 상태였고 테이블도 남아 있었다. 실측: report_samples 0행, report_feedback 0행,
+report_directives 0행, report_style_rules 1행(증류된 문체 규칙 캐시) — 삭제 시점에 서버에 사내
+보고서는 없었다. 조치: app.js 보고서 블록 593줄(switchReportTab~promoteFinalToSample)과 `go()`의
+`reportdraft` 라우팅, index.html 패널(124줄)·숨김 주석 2곳(사이드바 nav·모바일 서브메뉴), 테이블 4개와
+`match_report_samples` RPC, `backfill_report_embeddings.py`, 지침의 섹션·표·점검·금지 항목 12줄을 모두
+지웠다. CLAUDE.md에 "복원하지 않는다"를 남겼다. 남는 것: 자문 프록시의 스트리밍 한도 판별에서
+"보고서 초안"은 더 이상 대상이 아니다(자문만). 교훈: "숨김"은 데이터를 지우지 않는다 — 외부에 두면 안
+되는 데이터의 경로는 숨기는 게 아니라 **경로와 저장소를 함께 없애야** 방침이 코드로 보장된다.
+

@@ -32,9 +32,6 @@
       <div class="nav-label">AI 도우미</div>
       <div class="nav-item" tabindex="0" role="button" data-nav="chat" onclick="go('chat',this)"><i class="ti ti-message-circle"></i>AI 자문</div>
       <div class="nav-item" tabindex="0" role="button" data-nav="lawmap" onclick="go('lawmap',this)"><i class="ti ti-topology-star-3"></i>법령 관계도</div>
-      <!-- 보고서 초안 제안 — 미사용으로 숨김 2026-08-02, 복원 시 주석 해제 (#54)
-      <div class="nav-item" onclick="go('reportdraft',this)"><i class="ti ti-file-text"></i>보고서 초안 제안</div>
-      -->
     </div>
     <div class="nav-group">
       <div class="nav-label">법안 동향</div>
@@ -131,130 +128,7 @@
       </div>
 
       <!-- 보고서 초안 제안 -->
-      <div class="panel" id="panel-reportdraft">
-        <div style="display:flex;gap:6px;margin-bottom:14px;border-bottom:0.5px solid var(--border-light);padding-bottom:10px">
-          <button id="rtab-gen" class="btn btn-primary active" onclick="switchReportTab('gen')" style="font-size:12px"><i class="ti ti-sparkles"></i> 초안 생성</button>
-          <button id="rtab-manage" class="btn" onclick="switchReportTab('manage')" style="font-size:12px"><i class="ti ti-folder"></i> 내 보고서 관리</button>
-          <span style="margin-left:auto;font-size:11px;color:var(--text-tertiary);align-self:center">내용은 법령·자료(RAG)에서, 형식·톤은 내 보고서에서</span>
-        </div>
-
-        <!-- 초안 생성 탭 -->
-        <div id="report-tab-gen">
-          <div style="display:flex;flex-direction:column;gap:10px;max-width:760px">
-            <div>
-              <div style="font-size:11px;color:var(--text-secondary);margin-bottom:4px">어떤 보고서를 만들까요? <span style="color:#dc2626">*</span></div>
-              <textarea id="report-req-input" rows="3" placeholder="예: 주파수 재할당 관련 정책검토 보고서 초안 만들어줘"
-                style="width:100%;box-sizing:border-box;padding:10px 12px;font-size:13px;border:0.5px solid var(--border-mid);border-radius:var(--radius-md);background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;outline:none;resize:vertical;line-height:1.6"></textarea>
-            </div>
-            <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
-              <div>
-                <div style="font-size:11px;color:var(--text-secondary);margin-bottom:4px">참고할 보고서 유형</div>
-                <select id="report-gen-type" style="padding:8px 12px;font-size:13px;border:0.5px solid var(--border-mid);border-radius:var(--radius-md);background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;outline:none">
-                  <option value="전체">전체</option>
-                  <option value="정책검토">정책검토</option>
-                  <option value="규제영향">규제영향</option>
-                  <option value="동향보고">동향보고</option>
-                  <option value="기타">기타</option>
-                </select>
-              </div>
-              <button class="btn btn-primary" id="report-gen-btn" onclick="onGenerateDraft()" style="min-width:120px"><i class="ti ti-sparkles"></i> 초안 생성</button>
-            </div>
-            <div id="report-draft-output" style="margin-top:8px;padding:16px;border:0.5px solid var(--border-light);border-radius:var(--radius-md);background:var(--bg-secondary);font-size:13px;line-height:1.7;color:var(--text-primary);min-height:80px">
-              <div style="color:var(--text-tertiary);font-size:12px">요청을 입력하고 [초안 생성]을 누르면, 등록된 내 보고서 형식과 법령·자료 근거를 합쳐 초안을 작성합니다.</div>
-            </div>
-            <div id="report-draft-actions" style="display:none;gap:8px;align-items:center;flex-wrap:wrap">
-              <button class="btn btn-primary" onclick="startEditDraft()" style="font-size:12px"><i class="ti ti-edit"></i> 고쳐서 최종본 채택</button>
-              <button class="btn" onclick="exportReportDraftDoc()" style="font-size:12px"><i class="ti ti-file-download"></i> DOCX로 내보내기</button>
-              <button class="btn" onclick="submitReportFeedback(1)" style="font-size:12px">👍</button>
-              <button class="btn" onclick="submitReportFeedback(-1)" style="font-size:12px">👎</button>
-              <button class="btn" id="report-promote-btn" onclick="promoteFinalToSample()" style="display:none;font-size:12px"><i class="ti ti-bookmark-plus"></i> 예시 보고서로 추가</button>
-              <span id="report-feedback-note" style="font-size:11px;color:var(--text-muted)"></span>
-            </div>
-
-            <!-- 말로 고치기 (대화식): 이번만 / 항상 적용 -->
-            <div id="report-revise-row" style="display:none;flex-direction:column;gap:6px;margin-top:8px">
-              <div style="font-size:11px;color:var(--text-secondary)">말로 고치기 — 어떻게 바꿀지 적고 누르세요 (여러 번 이어서 가능)</div>
-              <div style="display:flex;gap:6px;flex-wrap:wrap">
-                <input id="report-revise-input" type="text" placeholder="예: 결론을 앞으로 빼고 3문단으로 줄여줘"
-                  onkeydown="if(event.key==='Enter')onReviseDraft('once')"
-                  style="flex:1;min-width:240px;padding:8px 12px;font-size:13px;border:0.5px solid var(--border-mid);border-radius:var(--radius-md);background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;outline:none"/>
-                <button class="btn btn-primary" id="report-revise-once-btn" onclick="onReviseDraft('once')" style="font-size:12px"><i class="ti ti-wand"></i> 이번만 고치기</button>
-                <button class="btn" id="report-revise-always-btn" onclick="onReviseDraft('always')" style="font-size:12px"><i class="ti ti-pin"></i> 항상 적용</button>
-              </div>
-            </div>
-
-            <!-- 빨간펜 학습: 초안을 고쳐 최종본 채택 → 차이를 학습 -->
-            <div id="report-edit-area" style="display:none;margin-top:6px;padding:12px;border:0.5px solid var(--accent,#6366f1);border-radius:var(--radius-md);background:var(--bg-secondary)">
-              <div style="font-size:11px;color:var(--text-secondary);margin-bottom:6px">초안을 원하는 형태로 고친 뒤 <b>최종본 채택</b>을 누르세요. 초안과 최종본의 <b>차이</b>를 학습해 다음 초안이 당신 톤에 맞춰집니다.</div>
-              <textarea id="report-final-input" rows="12"
-                style="width:100%;box-sizing:border-box;padding:10px 12px;font-size:13px;border:0.5px solid var(--border-mid);border-radius:var(--radius-md);background:var(--bg-primary,#fff);color:var(--text-primary);font-family:inherit;outline:none;resize:vertical;line-height:1.6"></textarea>
-              <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:8px">
-                <button class="btn" onclick="cancelEditDraft()" style="font-size:12px">취소</button>
-                <button class="btn btn-primary" id="report-final-save-btn" onclick="saveReportFinal()" style="font-size:12px"><i class="ti ti-check"></i> 최종본 채택</button>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- 내 보고서 관리 탭 -->
-        <div id="report-tab-manage" style="display:none">
-          <div style="display:flex;flex-direction:column;gap:12px;max-width:720px">
-            <div style="font-size:12px;color:var(--text-secondary);line-height:1.6">
-              내 기존 보고서를 등록하면 그 <b>구조·톤·표현</b>을 학습해 초안에 반영합니다. (전문 그대로 보관 — 형식 학습용)
-            </div>
-            <div>
-              <div style="font-size:11px;color:var(--text-secondary);margin-bottom:4px">제목 <span style="color:#dc2626">*</span></div>
-              <input id="report-sample-title" type="text" placeholder="예: 3.5GHz 재할당 정책검토 보고서"
-                style="width:100%;box-sizing:border-box;padding:8px 12px;font-size:13px;border:0.5px solid var(--border-mid);border-radius:var(--radius-md);background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;outline:none"/>
-            </div>
-            <div style="display:flex;gap:8px;flex-wrap:wrap">
-              <div>
-                <div style="font-size:11px;color:var(--text-secondary);margin-bottom:4px">유형</div>
-                <select id="report-sample-type" style="padding:8px 12px;font-size:13px;border:0.5px solid var(--border-mid);border-radius:var(--radius-md);background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;outline:none">
-                  <option value="정책검토">정책검토</option>
-                  <option value="규제영향">규제영향</option>
-                  <option value="동향보고">동향보고</option>
-                  <option value="기타">기타</option>
-                </select>
-              </div>
-              <div style="flex:1;min-width:260px">
-                <div style="font-size:11px;color:var(--text-secondary);margin-bottom:4px">파일에서 불러오기 <span style="color:var(--text-tertiary)">(PDF·Word·PPTX·MD·TXT)</span></div>
-                <div id="report-drop-zone"
-                  ondragover="handleReportFileDragOver(event)" ondragleave="handleReportFileDragLeave(event)" ondrop="handleReportFileDrop(event)"
-                  onclick="document.getElementById('report-file-input').click()"
-                  style="border:1px dashed var(--border-mid);border-radius:var(--radius-md);padding:14px;text-align:center;cursor:pointer;background:var(--bg-secondary);transition:border-color .15s">
-                  <i class="ti ti-cloud-upload" style="font-size:18px;color:var(--text-tertiary)"></i>
-                  <div style="font-size:12px;color:var(--text-secondary);margin-top:4px">파일을 끌어다 놓거나 <span style="color:var(--accent,#6366f1)">클릭해 선택</span></div>
-                  <span id="report-file-label" style="font-size:11px;color:var(--text-muted)"></span>
-                </div>
-                <input id="report-file-input" type="file" accept=".pdf,.docx,.pptx,.md,.txt" onchange="onReportFileSelect(this)" style="display:none"/>
-              </div>
-            </div>
-            <div>
-              <div style="font-size:11px;color:var(--text-secondary);margin-bottom:4px">보고서 본문 <span style="color:#dc2626">*</span> <span style="color:var(--text-tertiary)">(파일에서 불러오거나 직접 붙여넣기)</span></div>
-              <textarea id="report-sample-content" rows="8" placeholder="보고서 전문을 붙여넣으세요. 형식·흐름 학습에 사용됩니다."
-                style="width:100%;box-sizing:border-box;padding:10px 12px;font-size:13px;border:0.5px solid var(--border-mid);border-radius:var(--radius-md);background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;outline:none;resize:vertical;line-height:1.6"></textarea>
-            </div>
-            <div>
-              <div style="font-size:11px;color:var(--text-secondary);margin-bottom:4px">한 줄 요약 <span style="color:var(--text-tertiary)">(선택 · 검색 보조)</span></div>
-              <input id="report-sample-summary" type="text" placeholder="예: 3.5GHz 재할당 대가·조건 검토"
-                style="width:100%;box-sizing:border-box;padding:8px 12px;font-size:13px;border:0.5px solid var(--border-mid);border-radius:var(--radius-md);background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;outline:none"/>
-            </div>
-            <div style="display:flex;justify-content:flex-end">
-              <button class="btn btn-primary" id="report-save-btn" onclick="onSaveReportSample()" style="min-width:120px"><i class="ti ti-device-floppy"></i> 보고서 등록</button>
-            </div>
-
-            <div style="display:flex;align-items:center;gap:8px;margin-top:6px;padding-top:10px;border-top:0.5px solid var(--border-light)">
-              <span style="font-size:12px;font-weight:600;color:var(--text-primary)">등록된 보고서</span>
-              <span id="report-style-status" style="font-size:11px;color:var(--text-muted)"></span>
-              <button class="btn" id="report-relearn-btn" onclick="onRelearnStyle()" style="margin-left:auto;font-size:11px"><i class="ti ti-refresh"></i> 스타일 재학습</button>
-            </div>
-            <div id="report-style-rules-box" style="display:none;white-space:pre-wrap;font-size:11px;color:var(--text-secondary);background:var(--bg-tertiary,#f6f7f9);border:0.5px solid var(--border-light);border-radius:var(--radius-md);padding:10px;line-height:1.6"></div>
-            <div id="report-directives-list"></div>
-            <div id="report-sample-list"></div>
-          </div>
-        </div>
-      </div><!-- panel-reportdraft -->
+    <!-- (제거됨 2026-09-09, #142) 보고서 초안 제안 패널 — 사내 보고서 외부 서버 금지 -->
 
       <!-- 법령 DIFF 분석 -->
       <div class="panel" id="panel-diff">
@@ -1033,11 +907,6 @@
       <button class="mobile-submenu-item" onclick="go('lawmap',null);setBottomNav('bn-chat');closeMobileSubMenu('chat-sub')">
         <i class="ti ti-topology-star-3"></i>법령 관계도
       </button>
-      <!-- 보고서 초안 제안 — 미사용으로 숨김 2026-08-02, 복원 시 주석 해제 (#54)
-      <button class="mobile-submenu-item" onclick="go('reportdraft',null);setBottomNav('bn-chat');closeMobileSubMenu('chat-sub')">
-        <i class="ti ti-file-text"></i>보고서 초안 제안
-      </button>
-      -->
     </div>
   </div>
 
@@ -1201,7 +1070,7 @@
 <script src="https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js"></script>
 <script>if(typeof pdfjsLib!=='undefined'){pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';}</script>
 <script src="system_prompt.js?v=20260819a"></script>
-<script src="app.js?v=20260909b"></script>
+<script src="app.js?v=20260909c"></script>
 <script src="lawmap_articles.js?v=20260906s"></script>
 </body>
 </html>
