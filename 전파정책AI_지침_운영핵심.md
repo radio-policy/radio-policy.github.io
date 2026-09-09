@@ -142,11 +142,11 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 | | **chat_logs** | anon은 **insert만**. 읽기는 **로그인 계정의 RLS 스코프**(#104) — 본인 / 팀장=자기 팀 / admin=전체(텔레그램 행은 user_id가 없어 admin만). 건수는 `chat_logs_month_count()` |
 | 로그인 필요 | **profiles·teams·advisory_usage·answer_feedback** | anon 정책 없음. authenticated에 역할별 SELECT(본인/팀/admin), profiles·teams UPDATE는 admin만. AI 호출은 `claude-proxy`가 JWT를 검증한다 (#104) |
 | | importance_feedback | select 공개. **insert·update는 승인 프로필만**(#133) |
-| | tech_terms | select·insert·update (anon 열림 — #133 범위 밖, 추후 검토) |
+| | tech_terms | select 공개. **insert·update는 승인 프로필만**(#143, 2026-09-09). 자동 추출(term_extract.py)·백필은 service_role |
 | | app_config | select 공개. update는 `press_keywords` 키만(#137의 `terms_last_extraction` 게이트는 #141로 폐지 — 정책·행 삭제) |
 | | **people** | select 공개. **update는 admin만**(`is_admin()`, #135 — 입장 요약 생성·갱신 버튼도 관리자에게만 표시). 종전엔 public(anon 포함) update가 열려 있었다 |
-| | custom_knowledge | select·insert·update·delete (팀원 기여 창구) |
-| | law_graph_nodes·law_graph_edges | select·insert·update (delete는 service 전용 — 병합만) |
+| | custom_knowledge | select 공개. **insert·update·delete는 승인 프로필만**(#143 — 종전엔 anon도 삭제 가능했다). 팀원 기여 창구 |
+| | law_graph_nodes·law_graph_edges | select 공개. **insert·update는 승인 프로필만**(#143 — 자문 말미 `<lawmap>` 자동 축적이 승인자 브라우저에서 돌므로 승인자까지 허용; 과제 1 '제안→승인' 도입 시 재조정). delete는 service 전용 — 병합만 |
 | 조건부 | **app_config** | select 전체 / insert·update는 **`key in ('claude_key','press_keywords')` 행만** |
 | | **document_chunks** | select / insert는 **`is_approved=false` 강제**(승인 대기로만 들어옴) |
 | service 전용 | telegram_subscribers·subscriber_queue·alert_suppress_log·changes·documents·system_status | 정책 0개 |
