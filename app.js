@@ -2881,7 +2881,10 @@ async function sendChat() {
     }
 
     // 법령 관계도 자동 축적: 답변의 <lawmap> 블록 → DB 저장 + 답변 밑 미니 관계도 표시 (추가 API 호출 없음)
-    if (lastLawmapData && lastLawmapData.topic && Array.isArray(lastLawmapData.relations) && lastLawmapData.relations.length > 0) {
+    // 관계도 자동 축적은 **관리자 자문에서만**(#144, 2026-09-09) — law_graph_* 쓰기 정책이 is_admin()이라
+    // 일반 승인자 브라우저에서는 저장이 막힌다(막힌 결과를 "원문 미확인 제외"로 오해하지 않게 아예 시도하지 않는다).
+    // 과제 1(제안→승인)이 들어가면 승인자 자문도 '검토 대기'로 축적하는 RPC를 열 것.
+    if (isAdminUser() && lastLawmapData && lastLawmapData.topic && Array.isArray(lastLawmapData.relations) && lastLawmapData.relations.length > 0) {
       const lmData = lastLawmapData;
       const lmDiv = document.createElement('div');
       lmDiv.className = 'lawmap-mini';
