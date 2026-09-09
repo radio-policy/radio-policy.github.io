@@ -262,11 +262,23 @@ def run(since_hours: float, notify: bool, notify_all: bool):
         except Exception:
             return False
     to_send = problems if notify_all else [r for r in problems if since_hours > 0 and is_new(r[3])]
-    if not to_send:
-        print("텔레그램: 보낼 신규 문제 없음")
+    # 검토 대기 제안(lawmap_proposals, #147) — 승인이 밀리면 관계도가 자라지 않으므로 건수·최고 대기일을 함께 알린다
+    pending_n, pending_days = 0, 0
+    try:
+        pend = sb.table("lawmap_proposals").select("created_at").eq("status", "pending").execute().data or []
+        pending_n = len(pend)
+        if pend:
+            oldest = min(datetime.fromisoformat(p["created_at"].replace("Z", "+00:00")) for p in pend)
+            pending_days = (datetime.now(timezone.utc) - oldest).days
+    except Exception as e:
+        print("검토 대기 조회 실패(무시):", e)
+    if not to_send and not pending_n:
+        print("텔레그램: 보낼 신규 문제·검토 대기 없음")
         return
     from notify import send_telegram
     lines = [f"🔎 관계도 주제 엣지 점검 — 문제 {len(to_send)}건" + ("" if notify_all else f" (최근 {since_hours:g}시간 생성분)")]
+    if pending_n:
+        lines.append(f"📝 AI 연결 제안 검토 대기 {pending_n}건" + (f" (가장 오래된 것 {pending_days}일)" if pending_days else "") + " → 관계도 탭 '검토 대기' 카드에서 승인/기각")
     for level, code, detail, e in to_send[:25]:
         lines.append(f"• [{level}] {e['topic']} → {e['target']}: {detail or code}")
     if len(to_send) > 25:

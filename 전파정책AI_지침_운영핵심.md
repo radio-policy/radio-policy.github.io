@@ -51,7 +51,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 ├── index.html / app.js         # 대시보드 프론트엔드(GitHub Pages). AI 자문은 SSE 스트리밍(stream:true) — 비스트리밍 복귀 금지. AI 자문은 RAG+뉴스+법령동향 컨텍스트 조합
 ├── crms_guide_sync.py          # 중앙전파관리소 업무안내 38p → regulatory-kb 적재(월 1회, 한국 IP). 본문 sha256 비교로 변경분만
 ├── lawmap_articles.js          # 관계도 '조문 단위 보기'(주제 포커스 전용, index.html이 app.js 뒤에 로드) — 조문 파서·상자 배치·조립. 테스트 node tests/lawmap_articles_*.test.js (#125)
-├── lawmap_edge_check.py        # 관계도 주제 엣지 점검(읽기 전용) — 설명의 근거 조문이 KB 원문에 있는지 대조, 17시 체인 마지막 단계, 신규 문제만 운영자 무음 알림 (#123)
+├── lawmap_edge_check.py        # 관계도 주제 엣지 점검(읽기 전용) — 설명의 근거 조문이 KB 원문에 있는지 대조, 17시 체인 마지막 단계, 신규 문제만 운영자 무음 알림 (#123) + **검토 대기 제안 건수·최고 대기일 알림(#147)**
 ├── run_gov_crawler.bat / run_briefing_backup.bat / run_crms_sync.bat / setup_*.ps1  # 배치·스케줄러 등록
 └── .github/workflows/          # daily_crawl·morning_briefing·law_crawl·assembly_crawl·backfill·cleanup·health_watchdog
 ```
@@ -90,6 +90,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 | kb_chunks | kb_documents 본문 청크 + embedding(**voyage-law-2** 1024, HNSW). doc_id FK(cascade). 자문이 시맨틱+trgm으로 조회 |
 | law_graph_nodes | 법령 관계도 노드(name UNIQUE). node_type: topic(주제)/law/decree/rules/notice/etc. source: seed(세션 시드)/citation(인용망 스크립트)/ai(자문·즉석 생성). doc_name=document_chunks 연결(원문 보기). RLS+anon select/insert/update(delete는 service 전용) |
 | law_graph_edges | 법령 관계도 엣지(source_id→target_id, on delete cascade). relation_type: 근거(주제→법령)/인용(조문 인용)/하위법령(계열). source: seed/citation/family/**thdcmp**/**delegation**/ai. weight=인용·재확인 횟수(엣지 굵기). unique(source,target,relation_type). RLS 동일. **delegation(2026-08-03, #81)** = `law_delegations` 표 기반 위임 엣지(weight=5, 최우선) — 조문 근거 원본은 표에 있으므로 description은 요약만. 우선순위 delegation > thdcmp(4) > family(3), 상위 출처가 정본화한 노드쌍은 하위 출처 억제(**적재 성공을 DB에서 재확인한 뒤** 억제 — #65 공백 사고 순서). **thdcmp(2026-08-02, #65)** = 법제처 3단비교 API(`lawService.do?target=thdCmp&knd=2`) 정본 위임 — weight=4. **CHECK 제약에 source 값을 추가해야 적재됨**(신규 source 태그 도입 시 `law_graph_edges_source_check` 확장 필수 — #65에서 누락으로 적재 실패 후 수정) |
+| lawmap_proposals | **AI 연결 제안 검토 대기(#147, 2026-09-09)**: 자문 말미 `<lawmap>` 블록·관리자 즉석 생성·보강이 만든 연결은 정식 관계도에 바로 들어가지 않고 여기 쌓인다. origin(advisory/generate/enrich)·question·topic·description·relations(jsonb)·gate(제출 시 관문 결과)·status(pending/approved/rejected)·decided_*·result. 관리자가 관계도 탭 **"검토 대기 N건"** 카드에서 수정·AI 보강·관문 재검사·기각·**승인**(=saveLawmapData, 관문 #123 통과분만 law_graph_*에 반영). 정식 테이블은 오염되지 않고 상태 컬럼도 없다 |
 | law_delegations | **법령 위임 대응표**(#80·#81): parent_law·parent_article ↔ child_law·child_article, unique 4키. 출처 2계열 — ①법제처 3단비교 정본(`sync_law_delegations.py`, 법률↔시행령·시행규칙 조문 단위 1,586행) ②고시 제1조 역추출(`sync_notice_delegations.py`, 정규식·AI 미사용, child_article='전체' 230행). /law가 상·하위 조문 동시 제시에, 관계도가 delegation 엣지 생성에 사용. 재적재 안전(upsert + 성공 확인 후 stale 정리). 고시→상위 연결은 3단비교 범위 밖이라 역추출이 유일 경로. **③수기 확정표 `MANUAL_BASIS`(#82, 14건)** — 제1조가 없거나 근거를 안 쓰는 문서(협정문·분배표·공고)를 **상위 법령 조문에서 역방향 확인**(「…을 정하여 고시한다」가 그 문서를 지목)해 채움. **확정만 넣고 포괄 위임('법·영에서 위임한 사항'류)은 제외** — 잘못된 조문 엣지는 없는 관계보다 나쁘다. 정규식이 성공하면 그쪽이 이기므로 원문 개정 시 자동으로 비켜선다. DB 직접 삽입 금지(17시 prune_stale이 지움) |
 | telegram_subscribers | 구독자 봇 가입자(chat_id PK). topic_briefing/urgent/assembly(각각 on·off), days(daily/weekday), briefing_hour(6~12, **'받기 시작 시각'** — 브리핑은 이 시각 1회, 긴급·법안은 이후 매시 :25 배달), last_briefing_sent_date·last_urgent_sent_at·last_assembly_sent_at(중복 발송 방지), ai_allowed(**기본 false** — AI 자문 승인 플래그), ai_count_date·ai_count(일일 20회 상한), **law_allowed(#100, 기본 false — `/law` 자연어 승인 플래그)**, law_count_date·law_count(일일 10회 상한). active는 봇 차단(403) 자동 처리 전용이며 화면에 버튼은 없다. **RLS 켜고 정책 0개 = service_role 전용**(chat_id는 개인정보, 프런트 노출 금지 — 의도된 설계) **unlimited boolean(#85)** — true면 /ask·/law 일일 상한 면제(카운터는 계속 올려 사용량 관찰). 구독자 속성이라 app_config가 아니라 이 행에 둔다. getSub이 select('*')라 컬럼만 추가하면 코드가 자동으로 읽는다. ⚠️ 비용 상한이 사라지므로 신뢰 인원에게만 |
 | subscriber_queue | 긴급·법안 알림 큐(topic: urgent/assembly, html, created_at). 크롤러가 **발송 대신 적재**하고 send-subscriber-briefing이 각 구독자 수신 시각에 꺼내 보낸다. 억제·클러스터링(#44)·법안 상태변경 판정을 TS로 재구현하지 않으려는 구조. RLS 정책 0개. **topic=assembly 적재원 3곳(#120)**: assembly_crawler(국회 법안 단계변경·국회 입법예고) + gov_notice_crawler(부처 입법예고) + **assembly_minutes(과방위 회의록 다이제스트 — 신규 섹션·60일 이내·발언 3건↑일 때만, `subscriber_notify.format_minutes_digest()`, 2,500자 예산)**. 오프라인 임포트(minutes_offline)는 절대 적재하지 않는다 |
@@ -146,7 +147,8 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 | | app_config | select 공개. update는 `press_keywords` 키만(#137의 `terms_last_extraction` 게이트는 #141로 폐지 — 정책·행 삭제) |
 | | **people** | select 공개. **update는 admin만**(`is_admin()`, #135 — 입장 요약 생성·갱신 버튼도 관리자에게만 표시). 종전엔 public(anon 포함) update가 열려 있었다 |
 | | custom_knowledge | select 공개. **insert·update·delete는 승인 프로필만**(#143 — 종전엔 anon도 삭제 가능했다). 팀원 기여 창구 |
-| | law_graph_nodes·law_graph_edges | select 공개. **insert·update는 admin만**(#144 — 자문 말미 `<lawmap>` 자동 축적도 관리자 자문에서만 시도, app.js `isAdminUser()` 게이트; 과제 1 '제안→승인' 도입 시 승인자용 RPC로 재개방). delete는 service 전용 — 병합만 |
+| | law_graph_nodes·law_graph_edges | select 공개. **insert·update는 admin만**(#144). AI 연결은 직접 쓰지 않고 `lawmap_proposals`를 거친다(#147) — 승인 시 관리자 브라우저가 saveLawmapData로 쓴다. delete는 service 전용 — 병합만 |
+| | lawmap_proposals | select: admin 전체 / 본인 제안. **insert는 승인 프로필(본인 명의)**, update·delete는 admin만 (#147) |
 | 조건부 | **app_config** | select 전체 / insert·update는 **`key in ('claude_key','press_keywords')` 행만** |
 | | **document_chunks** | select / insert는 **`is_approved=false` 강제**(승인 대기로만 들어옴) |
 | service 전용 | telegram_subscribers·subscriber_queue·alert_suppress_log·changes·documents·system_status | 정책 0개 |
@@ -255,6 +257,8 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 - 반영 여부는 답변 아래 `🗞️ 참조 뉴스` 배지로 확인한다. **배지가 없으면 그 답변에는 뉴스가 안 들어간 것** — 사후 판별 수단이 없어 오답을 신뢰했던 사고의 재발 방지 장치다. (배경역사 #35)
 
 ## 법령 관계도 (lawmap 메뉴, 2026-07-23 신설)
+
+- **AI가 만드는 연결은 전부 "제안 → 관리자 승인" (2026-09-09 #147, 결정은 2026-09-06)**: 자문 답변 말미 `<lawmap>` 블록(승인자·관리자 모두), 관리자의 "AI로 관계도 생성", 카드 안 "AI로 보강"은 `lawmap_proposals`에 검토 대기로 저장된다(제출 시 관문 결과를 gate에 미리 기록). 관리자는 관계도 탭 상단 **"검토 대기 N건"** 버튼 → 카드에서 법령명·구분·관계 설명·근거 조문을 고치고, ✕로 관계를 빼고, "관문 재검사"(비용 0)·"AI로 보강"(Sonnet 1회)을 거쳐 **승인**하면 saveLawmapData(관문 #123)가 정식 관계도에 반영한다. 기각은 사유와 함께 남는다. 승인 전 제안은 그래프 어디에도 안 보인다. 관문은 조문 실존까지만 보므로 **근거 적합성(정의·목적 조항 금지)·문서 실존·문안은 승인자가 본다**. 17시 `lawmap_edge_check.py`가 대기 건수·최고 대기일을 알린다. 도구줄의 옛 "AI로 보강" 버튼(`LAWMAP_ENRICH_HIDDEN`)은 숨김 유지 — 보강은 카드 안에서만.
 
 주제↔법령 네트워크 그래프(vis-network). 데이터는 law_graph_nodes/edges, 성장 경로 4개:
 

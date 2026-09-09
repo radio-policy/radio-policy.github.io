@@ -268,9 +268,12 @@
           </select>
           <button class="btn" id="lawmap-notice-toggle" style="font-size:11px;padding:3px 10px;display:none" onclick="toggleLawMapNotice()"><i class="ti ti-eye"></i> 고시 펼치기</button>
           <span id="lawmap-status" style="font-size:11px;color:var(--text-secondary)"></span>
-          <button class="btn" id="lawmap-enrich-btn" style="margin-left:auto;font-size:11px;padding:3px 10px;display:none" onclick="enrichLawMapTopic()"><i class="ti ti-sparkles"></i> AI로 보강</button>
+          <button class="btn" id="lawmap-pending-btn" style="margin-left:auto;font-size:11px;padding:3px 10px;display:none" onclick="toggleLawmapProposals()" title="AI가 제안한 연결 — 승인해야 관계도에 들어갑니다 (#147)"><i class="ti ti-inbox"></i> 검토 대기</button>
+          <button class="btn" id="lawmap-enrich-btn" style="font-size:11px;padding:3px 10px;display:none" onclick="enrichLawMapTopic()"><i class="ti ti-sparkles"></i> AI로 보강</button>
           <button class="btn fs-btn" style="font-size:11px;padding:3px 10px" onclick="toggleFullscreen('lawmap-graph')" title="그래프만 전체화면 (Esc로 종료) — 휠 확대·드래그·클릭 그대로"><i class="ti ti-maximize"></i>전체화면</button>
         </div>
+        <!-- 관리자: AI 연결 제안 검토 카드 (#147) — "검토 대기 N건" 버튼으로 펼침 -->
+        <div id="lawmap-proposals" style="display:none;margin-bottom:10px"></div>
         <div id="lawmap-graph" class="lawmap-graph"><div style="color:var(--text-secondary);font-size:12px;padding:16px">불러오는 중...</div></div>
         <div class="lawmap-legend">
           <span><i class="lawmap-dot" style="background:#5b7ff5"></i> 주제</span>
@@ -1070,7 +1073,7 @@
 <script src="https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js"></script>
 <script>if(typeof pdfjsLib!=='undefined'){pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';}</script>
 <script src="system_prompt.js?v=20260819a"></script>
-<script src="app.js?v=20260909e"></script>
+<script src="app.js?v=20260909f"></script>
 <script src="lawmap_articles.js?v=20260906s"></script>
 </body>
 </html>

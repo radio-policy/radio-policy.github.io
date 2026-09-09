@@ -2881,34 +2881,28 @@ async function sendChat() {
     }
 
     // 법령 관계도 자동 축적: 답변의 <lawmap> 블록 → DB 저장 + 답변 밑 미니 관계도 표시 (추가 API 호출 없음)
-    // 관계도 자동 축적은 **관리자 자문에서만**(#144, 2026-09-09) — law_graph_* 쓰기 정책이 is_admin()이라
-    // 일반 승인자 브라우저에서는 저장이 막힌다(막힌 결과를 "원문 미확인 제외"로 오해하지 않게 아예 시도하지 않는다).
-    // 과제 1(제안→승인)이 들어가면 승인자 자문도 '검토 대기'로 축적하는 RPC를 열 것.
-    if (isAdminUser() && lastLawmapData && lastLawmapData.topic && Array.isArray(lastLawmapData.relations) && lastLawmapData.relations.length > 0) {
+    // 관계도 제안(#147, 2026-09-09): 답변 말미 <lawmap> 블록은 정식 관계도(law_graph_*)에 바로 넣지 않고
+    // **관리자 검토 대기(lawmap_proposals)** 로 올린다 — 승인자·관리자 모두. 관문(조문 실존)은 제출 시 미리 검사해
+    // 결과를 카드에 표시하고, 실제 저장은 관리자가 카드에서 승인할 때 saveLawmapData가 다시 거친다.
+    // (#144의 "관리자 자문만 직접 축적"은 이 구조로 대체됨)
+    if (aiReady() && lastLawmapData && lastLawmapData.topic && Array.isArray(lastLawmapData.relations) && lastLawmapData.relations.length > 0) {
       const lmData = lastLawmapData;
       const lmDiv = document.createElement('div');
       lmDiv.className = 'lawmap-mini';
-      lmDiv.innerHTML = '<div class="lawmap-mini-head"><i class="ti ti-topology-star-3"></i> 이 답변의 법령 관계도 <span>— 근거 조문을 원문과 대조하는 중…</span></div>';
+      lmDiv.innerHTML = '<div class="lawmap-mini-head"><i class="ti ti-topology-star-3"></i> 이 답변의 법령 관계도 <span>— 근거 조문을 원문과 대조해 검토 대기에 올리는 중…</span></div>';
       msgEl.appendChild(lmDiv);
-      // 저장 전 검증 관문(#123)을 통과한 관계만 그리고 저장 — 조문이 원문에 없는 관계는 표시·저장하지 않음
-      saveLawmapData(lmData, 'ai').then(function(saved) {
-        _lawMapLoaded = false;  // 다음 관계도 탭 진입 시 새로 로드
-        var ok = (saved && saved.saved) || [];
-        var sk = (saved && saved.skipped) || [];
-        var note = sk.length ? '<div style="font-size:11px;color:#b45309;margin:4px 0">⚠ 원문에서 조문을 확인하지 못해 제외: ' +
-          sk.map(function(s) { return lmEsc(s.law) + '(' + lmEsc(s.reason) + ')'; }).join(', ') + '</div>' : '';
-        if (!ok.length) {
-          lmDiv.innerHTML = '<div class="lawmap-mini-head"><i class="ti ti-topology-star-3"></i> 이 답변의 법령 관계도 <span>— 원문에서 확인된 근거 조문이 없어 관계망에 반영하지 않음</span></div>' + note;
-          return;
-        }
+      submitLawmapProposal(lmData, 'advisory', text).then(function(res) {
+        var gate = (res && res.gate) || [];
+        var okRels = (lmData.relations || []).filter(function(r, i) { return gate[i] && gate[i].ok; });
         lmDiv.innerHTML =
-          '<div class="lawmap-mini-head"><i class="ti ti-topology-star-3"></i> 이 답변의 법령 관계도 <span>— 원문 대조 후 관계망에 반영됨</span></div>' +
-          renderMiniLawMap(lmData.topic, ok) + note +
-          '<div class="lawmap-mini-link">관계도 탭에서 크게 보기 →</div>';
-        lmDiv.addEventListener('click', function() { goLawMapTopicByName(lmData.topic); });
+          '<div class="lawmap-mini-head"><i class="ti ti-topology-star-3"></i> 이 답변의 법령 관계도 <span>— 관리자 검토 대기에 올렸습니다 (주제 ' + lmEsc(lmData.topic) +
+          ' · 관계 ' + lmData.relations.length + '건 · 원문에서 조문 확인 ' + okRels.length + '건)</span></div>' +
+          (okRels.length ? renderMiniLawMap(lmData.topic, okRels) : '') +
+          '<div class="lawmap-mini-link">관리자가 승인하면 관계도 탭에 반영됩니다</div>';
+        if (typeof refreshLawmapPendingBadge === 'function') refreshLawmapPendingBadge();
       }).catch(function(e) {
-        console.warn('법령 관계도 저장 실패(답변은 정상):', e);
-        lmDiv.innerHTML = '<div class="lawmap-mini-head"><i class="ti ti-topology-star-3"></i> 이 답변의 법령 관계도 <span>— 저장 실패(답변은 정상)</span></div>';
+        console.warn('법령 관계도 제안 제출 실패(답변은 정상):', e);
+        lmDiv.innerHTML = '<div class="lawmap-mini-head"><i class="ti ti-topology-star-3"></i> 이 답변의 법령 관계도 <span>— 검토 대기 등록 실패(답변은 정상)</span></div>';
       });
     }
 
@@ -10124,6 +10118,7 @@ function toggleLawMapNotice() {
 async function loadLawMap(force) {
   var el = document.getElementById('lawmap-graph');
   if (!el || !sb) return;
+  if (typeof refreshLawmapPendingBadge === 'function') refreshLawmapPendingBadge();   // 관리자: 검토 대기 N건 (#147)
   if (_lawMapLoaded && !force) { return; }
   el.innerHTML = '<div style="color:var(--text-secondary);font-size:12px;padding:16px">불러오는 중...</div>';
   try {
@@ -10541,19 +10536,254 @@ async function generateLawMapTopic() {
       '\n\n기존 주제명 목록(같은 의미가 있으면 그대로 재사용): ' + (existingTopics.join(', ') || '(없음)') +
       (ctx ? '\n\n[참고 법령 원문]\n' + ctx : '');
     var data = await callLawmapAI(userMsg);
-    var saved = await saveLawmapData(data, 'ai');
-    await loadLawMap(true);
-    if (saved.topicId) {
-      var sel = document.getElementById('lawmap-topic-select');
-      if (sel) sel.value = saved.topicId;
-      renderLawMapGraph(saved.topicId);
-      showLawMapNodeDetail(saved.topicId);
-      setLawMapStatus('✨ 생성 완료 · 원문 대조 후 ' + (saved.saved || []).length + '건 저장 — 다음부터는 검색만으로 표시됩니다' + lawmapSkipNote(saved.skipped));
-    } else {
-      setLawMapStatus('⚠️ AI가 제시한 관계 중 원문에서 확인된 근거 조문이 없어 저장하지 않았습니다' + lawmapSkipNote(saved.skipped));
-    }
+    // 즉석 생성도 정식 관계도에 바로 넣지 않고 검토 대기로(#147, 2026-09-06 결정 "한 번 생성=확정 아님") — 카드에서 수정·보강 후 승인
+    var res = await submitLawmapProposal(data, 'generate', q);
+    var okN = ((res && res.gate) || []).filter(function(g) { return g.ok; }).length;
+    setLawMapStatus('📝 제안 생성 — 주제 "' + lmEsc(data.topic) + '" 관계 ' + ((data.relations || []).length) + '건(조문 확인 ' + okN + '건). 아래 검토 대기 카드에서 수정·보강 후 승인하세요.');
+    await loadLawmapProposals(true);
   } catch(e) {
     setLawMapStatus('⚠️ 생성 실패: ' + lmEsc(e && e.message ? e.message : e));
+  }
+}
+
+// ════════════════════════════════════════════
+//  법령 관계도 — AI 연결 "제안 → 관리자 승인" (#147, 2026-09-09 · 결정은 2026-09-06)
+//  AI가 만드는 연결(자문 말미 <lawmap>, 즉석 생성, 보강)은 lawmap_proposals에 검토 대기로 쌓이고,
+//  관리자가 관계도 탭 "검토 대기 N건" 카드에서 수정·AI 보강·기각·승인한다. 승인 = saveLawmapData(관문 포함).
+//  이슈맵의 제안·승인과 같은 구조. 관문은 "조문이 원문에 있는가"까지만 보므로 근거 적합성·문서 실존·문안은 사람이 본다.
+// ════════════════════════════════════════════
+var _lawmapProposals = [];
+var LAWMAP_REL_TYPES = ['law', 'decree', 'rules', 'notice', 'etc'];
+
+/** 관문 검사만(저장 없음) — 관계별 {law, ok, reason, tag}. DB 조회뿐, AI 비용 0. */
+async function lawmapGateCheck(relations) {
+  var out = [];
+  for (var i = 0; i < (relations || []).length; i++) {
+    var rel = relations[i];
+    if (!rel || !rel.law) { out.push({ law: '', ok: false, reason: '법령명 없음', tag: '' }); continue; }
+    var chk;
+    try { chk = await lawmapVerifyRelation(rel); }
+    catch(e) { chk = { ok: false, reason: '검증 오류(' + (e && e.message ? e.message : e) + ')' }; }
+    out.push({ law: rel.law, ok: !!chk.ok, reason: chk.reason || '', tag: chk.tag || '' });
+  }
+  return out;
+}
+
+/** 제안 제출 — 승인자·관리자 공통. 반환 {id, gate}. */
+async function submitLawmapProposal(data, origin, question) {
+  if (!sb || !aiReady() || !currentUser) throw new Error('로그인·승인이 필요합니다');
+  var rels = (data.relations || []).slice(0, 10).filter(function(r) { return r && r.law; }).map(function(r) {
+    return { law: String(r.law || '').trim(), type: LAWMAP_REL_TYPES.indexOf(r.type) >= 0 ? r.type : guessLawNodeType(String(r.law || '')),
+             relation: String(r.relation || '').trim(), basis: String(r.basis || '').trim(), law_desc: String(r.law_desc || '').trim() };
+  });
+  if (!rels.length) throw new Error('관계가 없습니다');
+  var gate = await lawmapGateCheck(rels);
+  var row = {
+    origin: origin || 'advisory',
+    question: String(question || '').slice(0, 500),
+    topic: String(data.topic || '').trim().slice(0, 60),
+    description: data.description ? String(data.description).slice(0, 300) : null,
+    relations: rels,
+    gate: gate,
+    requester: (currentProfile && currentProfile.name) || (currentUser && currentUser.email) || null,
+    created_by: currentUser.id
+  };
+  var r = await sb.from('lawmap_proposals').insert(row).select('id').single();
+  if (r.error) throw new Error(r.error.message);
+  return { id: r.data.id, gate: gate };
+}
+
+/** 관리자: 검토 대기 건수 배지 */
+async function refreshLawmapPendingBadge() {
+  var btn = document.getElementById('lawmap-pending-btn');
+  if (!btn || !sb) return;
+  if (!isAdminUser()) { btn.style.display = 'none'; return; }
+  try {
+    var r = await sb.from('lawmap_proposals').select('id', { count: 'exact', head: true }).eq('status', 'pending');
+    var n = r.count || 0;
+    btn.style.display = 'inline-flex';
+    btn.innerHTML = '<i class="ti ti-inbox"></i> 검토 대기 ' + n + '건';
+    btn.style.fontWeight = n ? '700' : '';
+    var panel = document.getElementById('lawmap-proposals');
+    if (!n && panel && panel.style.display !== 'none') panel.style.display = 'none';
+  } catch(e) { console.warn('검토 대기 건수 조회 실패:', e); }
+}
+
+async function toggleLawmapProposals() {
+  var panel = document.getElementById('lawmap-proposals');
+  if (!panel) return;
+  if (panel.style.display !== 'none') { panel.style.display = 'none'; return; }
+  await loadLawmapProposals(true);
+}
+
+async function loadLawmapProposals(show) {
+  var panel = document.getElementById('lawmap-proposals');
+  if (!panel || !sb || !isAdminUser()) return;
+  if (show) panel.style.display = '';
+  panel.innerHTML = '<div style="font-size:12px;color:var(--text-secondary);padding:10px">검토 대기 제안을 불러오는 중…</div>';
+  var r = await sb.from('lawmap_proposals').select('*').eq('status', 'pending').order('created_at', { ascending: false }).limit(50);
+  if (r.error) { panel.innerHTML = '<div style="font-size:12px;color:#c0392b;padding:10px">불러오기 실패: ' + lmEsc(r.error.message) + '</div>'; return; }
+  _lawmapProposals = r.data || [];
+  refreshLawmapPendingBadge();
+  if (!_lawmapProposals.length) { panel.innerHTML = '<div style="font-size:12px;color:var(--text-secondary);padding:10px">검토 대기 중인 제안이 없습니다.</div>'; return; }
+  panel.innerHTML = _lawmapProposals.map(_lawmapProposalCardHtml).join('');
+}
+
+var LAWMAP_ORIGIN_LABEL = { advisory: 'AI 자문 답변', generate: 'AI로 관계도 생성', enrich: 'AI 보강' };
+
+function _lawmapGateBadge(g) {
+  if (!g) return '<span style="font-size:10px;color:var(--text-muted)">미검사</span>';
+  if (g.ok && !g.tag) return '<span style="font-size:10px;color:#15803d;font-weight:600">조문 확인 ✓</span>';
+  if (g.ok && g.tag) return '<span style="font-size:10px;color:#b45309;font-weight:600" title="' + lmEsc(g.reason) + '">KB 미보유 — 법제처 확인 필요</span>';
+  return '<span style="font-size:10px;color:#b91c1c;font-weight:600">' + lmEsc(g.reason || '조문 미확인') + '</span>';
+}
+
+function _lawmapProposalCardHtml(p) {
+  var rels = Array.isArray(p.relations) ? p.relations : [];
+  var gate = Array.isArray(p.gate) ? p.gate : [];
+  var when = (p.created_at || '').slice(0, 16).replace('T', ' ');
+  var typeSel = function(cur, idx) {
+    var labels = { law: '법률', decree: '시행령', rules: '시행규칙', notice: '고시', etc: '기타' };
+    return '<select data-pid="' + p.id + '" data-idx="' + idx + '" data-field="type" style="font-size:11px;padding:2px 4px">' +
+      LAWMAP_REL_TYPES.map(function(t) { return '<option value="' + t + '"' + (t === cur ? ' selected' : '') + '>' + labels[t] + '</option>'; }).join('') + '</select>';
+  };
+  var inp = function(field, val, idx, w) {
+    return '<input data-pid="' + p.id + '" data-idx="' + idx + '" data-field="' + field + '" value="' + lmEsc(val || '') + '" style="width:' + w + ';font-size:11px;padding:3px 5px;border:0.5px solid var(--border-mid);border-radius:4px;background:var(--bg-secondary);color:var(--text-primary)">';
+  };
+  var rows = rels.map(function(r, i) {
+    return '<tr id="lmp-row-' + p.id + '-' + i + '" style="border-top:0.5px solid var(--border)">' +
+      '<td style="padding:4px">' + inp('law', r.law, i, '190px') + '</td>' +
+      '<td style="padding:4px">' + typeSel(r.type, i) + '</td>' +
+      '<td style="padding:4px">' + inp('relation', r.relation, i, '220px') + '</td>' +
+      '<td style="padding:4px">' + inp('basis', r.basis, i, '120px') + '</td>' +
+      '<td style="padding:4px;white-space:nowrap">' + _lawmapGateBadge(gate[i]) + '</td>' +
+      '<td style="padding:4px"><span onclick="lawmapProposalRemoveRel(\'' + p.id + '\',' + i + ')" title="이 관계 제외" style="cursor:pointer;color:var(--text-muted)">✕</span></td>' +
+    '</tr>';
+  }).join('');
+  return '<div class="card" id="lmp-card-' + p.id + '" style="cursor:default;padding:12px 14px;margin-bottom:10px">' +
+    '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">' +
+      '<span style="font-size:10px;font-weight:700;color:#6366f1;border:1px solid #6366f1;padding:0 6px;border-radius:4px">' + lmEsc(LAWMAP_ORIGIN_LABEL[p.origin] || p.origin) + '</span>' +
+      '<span style="font-size:11px;color:var(--text-muted)">' + lmEsc(when) + ' · ' + lmEsc(p.requester || '') + '</span>' +
+      '<span style="margin-left:auto;font-size:11px;color:var(--text-muted)">관계 ' + rels.length + '건 · 조문 확인 ' + gate.filter(function(g) { return g && g.ok && !g.tag; }).length + '건</span>' +
+    '</div>' +
+    (p.question ? '<div style="font-size:11px;color:var(--text-secondary);margin-bottom:6px">질문: ' + lmEsc(p.question.slice(0, 160)) + '</div>' : '') +
+    '<div style="display:flex;gap:8px;align-items:center;margin-bottom:6px;flex-wrap:wrap">' +
+      '<span style="font-size:12px;font-weight:700">주제</span>' + inp('topic', p.topic, -1, '180px') +
+      '<span style="font-size:12px;font-weight:700">설명</span>' + inp('description', p.description, -1, '360px') +
+    '</div>' +
+    '<div style="overflow-x:auto"><table style="border-collapse:collapse;font-size:11px;width:100%"><thead><tr style="color:var(--text-muted)"><th style="text-align:left;padding:4px">법령</th><th style="text-align:left;padding:4px">구분</th><th style="text-align:left;padding:4px">관계 설명</th><th style="text-align:left;padding:4px">근거 조문</th><th style="text-align:left;padding:4px">관문</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
+    '<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;align-items:center">' +
+      '<button class="btn btn-primary" style="font-size:11px;padding:3px 12px" onclick="lawmapProposalApprove(\'' + p.id + '\')"><i class="ti ti-check"></i> 승인 (수정 내용 반영)</button>' +
+      '<button class="btn" style="font-size:11px;padding:3px 10px" onclick="lawmapProposalEnrich(\'' + p.id + '\')" title="Sonnet 1회 — 빠진 법령·관계를 제안에 추가(승인 전)"><i class="ti ti-sparkles"></i> AI로 보강</button>' +
+      '<button class="btn" style="font-size:11px;padding:3px 10px" onclick="lawmapProposalRecheck(\'' + p.id + '\')" title="수정한 법령명·조문으로 관문 재검사(비용 0)"><i class="ti ti-refresh"></i> 관문 재검사</button>' +
+      '<button class="btn" style="font-size:11px;padding:3px 10px;color:#b91c1c" onclick="lawmapProposalReject(\'' + p.id + '\')"><i class="ti ti-x"></i> 기각</button>' +
+      '<span id="lmp-note-' + p.id + '" style="font-size:11px;color:var(--text-secondary)"></span>' +
+    '</div>' +
+  '</div>';
+}
+
+/** 카드의 현재 입력값을 {topic, description, relations}로 모은다(✕로 뺀 행은 제외). */
+function _lawmapProposalCollect(pid) {
+  var card = document.getElementById('lmp-card-' + pid);
+  var p = _lawmapProposals.find(function(x) { return x.id === pid; });
+  if (!card || !p) return null;
+  var get = function(idx, field) { var el = card.querySelector('[data-idx="' + idx + '"][data-field="' + field + '"]'); return el ? el.value.trim() : ''; };
+  var rels = [];
+  (p.relations || []).forEach(function(r, i) {
+    var row = document.getElementById('lmp-row-' + pid + '-' + i);
+    if (!row || row.dataset.removed === '1') return;
+    var law = get(i, 'law'); if (!law) return;
+    rels.push({ law: law, type: get(i, 'type') || r.type, relation: get(i, 'relation'), basis: get(i, 'basis'), law_desc: r.law_desc || '' });
+  });
+  return { topic: get(-1, 'topic') || p.topic, description: get(-1, 'description') || p.description || '', relations: rels };
+}
+
+function lawmapProposalRemoveRel(pid, idx) {
+  var row = document.getElementById('lmp-row-' + pid + '-' + idx);
+  if (!row) return;
+  row.dataset.removed = row.dataset.removed === '1' ? '0' : '1';
+  row.style.opacity = row.dataset.removed === '1' ? '0.35' : '';
+  row.style.textDecoration = row.dataset.removed === '1' ? 'line-through' : '';
+}
+
+function _lmpNote(pid, html) { var el = document.getElementById('lmp-note-' + pid); if (el) el.innerHTML = html; }
+
+/** 수정한 값으로 관문 재검사 → 제안 행 갱신 → 카드 다시 그림 */
+async function lawmapProposalRecheck(pid) {
+  if (!isAdminUser()) return;
+  var data = _lawmapProposalCollect(pid); if (!data) return;
+  _lmpNote(pid, '관문 재검사 중…');
+  var gate = await lawmapGateCheck(data.relations);
+  var u = await sb.from('lawmap_proposals').update({ topic: data.topic, description: data.description || null, relations: data.relations, gate: gate }).eq('id', pid);
+  if (u.error) { _lmpNote(pid, '저장 실패: ' + lmEsc(u.error.message)); return; }
+  await loadLawmapProposals(true);
+}
+
+/** 승인 — 카드의 수정 내용으로 saveLawmapData(관문 포함) → 정식 관계도 반영 */
+async function lawmapProposalApprove(pid) {
+  if (!isAdminUser()) { alert('관리자만 승인할 수 있습니다.'); return; }
+  var data = _lawmapProposalCollect(pid); if (!data) return;
+  if (!data.relations.length) { alert('남은 관계가 없습니다. 기각하거나 관계를 되살려 주세요.'); return; }
+  _lmpNote(pid, '승인 처리 중… 원문 대조 후 관계도에 반영합니다');
+  try {
+    var res = await saveLawmapData({ topic: data.topic, description: data.description, relations: data.relations }, 'ai');
+    var savedN = (res.saved || []).length;
+    var u = await sb.from('lawmap_proposals').update({
+      status: 'approved', decided_at: new Date().toISOString(), decided_by: currentUser.id,
+      topic: data.topic, description: data.description || null, relations: data.relations,
+      result: { topicId: res.topicId || null, saved: (res.saved || []).map(function(r) { return r.law; }), skipped: res.skipped || [] }
+    }).eq('id', pid);
+    if (u.error) throw new Error(u.error.message);
+    await loadLawMap(true);
+    if (res.topicId) {
+      var sel = document.getElementById('lawmap-topic-select');
+      if (sel) sel.value = res.topicId;
+      renderLawMapGraph(res.topicId);
+      showLawMapNodeDetail(res.topicId);
+    }
+    setLawMapStatus('✅ 승인 — 원문 대조 통과 ' + savedN + '건 관계도 반영' + lawmapSkipNote(res.skipped));
+    await loadLawmapProposals(true);
+  } catch(e) {
+    _lmpNote(pid, '승인 실패: ' + lmEsc(e && e.message ? e.message : e));
+  }
+}
+
+async function lawmapProposalReject(pid) {
+  if (!isAdminUser()) return;
+  var reason = prompt('기각 사유(선택)');
+  if (reason === null) return;
+  var u = await sb.from('lawmap_proposals').update({ status: 'rejected', decided_at: new Date().toISOString(), decided_by: currentUser.id, decision_note: reason || null }).eq('id', pid);
+  if (u.error) { _lmpNote(pid, '기각 실패: ' + lmEsc(u.error.message)); return; }
+  await loadLawmapProposals(true);
+}
+
+/** AI 보강(승인 전) — 제안의 관계 목록을 보여주고 빠진 법령·관계만 받아 카드에 합친다. Sonnet 1회(관리자 한도). */
+async function lawmapProposalEnrich(pid) {
+  if (!isAdminUser()) return;
+  var data = _lawmapProposalCollect(pid); if (!data) return;
+  _lmpNote(pid, '🔄 AI 보강 중… (20~40초, 1회 과금)');
+  try {
+    var curLines = data.relations.map(function(r) { return data.topic + ' → ' + r.law + ' : ' + (r.relation || '') + (r.basis ? ' (' + r.basis + ')' : ''); }).join('\n');
+    var chunks = await searchKeywords(data.topic, false);
+    var ctx = (chunks || []).slice(0, 6).map(function(c) {
+      return '[' + c.doc_name + (c.article_no ? ' ' + c.article_no : '') + ']\n' + (c.content || '').slice(0, 400);
+    }).join('\n\n');
+    var userMsg = '주제 "' + data.topic + '"의 현재 제안 관계:\n' + (curLines || '(없음)') +
+      '\n\n위 목록에서 빠진 관련 법령·관계만 추가로 제시하세요. topic은 반드시 "' + data.topic + '" 그대로 사용하고, 이미 있는 법령은 relations에 넣지 마세요. 정의·목적 조항은 근거로 쓰지 마세요.' +
+      (ctx ? '\n\n[참고 법령 원문]\n' + ctx : '');
+    var more = await callLawmapAI(userMsg);
+    var have = {}; data.relations.forEach(function(r) { have[r.law.replace(/\s+/g, '')] = 1; });
+    var added = (more.relations || []).filter(function(r) { return r && r.law && !have[String(r.law).replace(/\s+/g, '')]; }).slice(0, 8).map(function(r) {
+      return { law: String(r.law).trim(), type: LAWMAP_REL_TYPES.indexOf(r.type) >= 0 ? r.type : guessLawNodeType(String(r.law)), relation: String(r.relation || '').trim(), basis: String(r.basis || '').trim(), law_desc: String(r.law_desc || '').trim() };
+    });
+    var rels = data.relations.concat(added);
+    var gate = await lawmapGateCheck(rels);
+    var u = await sb.from('lawmap_proposals').update({ topic: data.topic, description: data.description || null, relations: rels, gate: gate }).eq('id', pid);
+    if (u.error) throw new Error(u.error.message);
+    await loadLawmapProposals(true);
+    setLawMapStatus('✨ 보강 — 관계 ' + added.length + '건 추가 제안(승인 전). 카드에서 확인 후 승인하세요.');
+  } catch(e) {
+    _lmpNote(pid, '보강 실패: ' + lmEsc(e && e.message ? e.message : e));
   }
 }
 
