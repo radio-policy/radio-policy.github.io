@@ -281,6 +281,33 @@ def sweep_committee_bills(collected: dict, existing_bills: dict, dry_run: bool =
     print(f'  과방위 스윕 결과: 관련 {len(relevant)}건 → 신규 편입 {added}건, 기존 병합 {merged}건')
 
 
+def refresh_untouched_bills(collected: dict, existing_bills: dict) -> int:
+    """이번 수집(키워드 검색·과방위 스윕)에 안 잡힌 **살아 있는** 기존 법안을 의안번호로 개별 조회해
+    collected에 합친다(#139). 대상은 주로 입법예고 패스로만 들어온 타 위원회 법안(정무위·복지위 등,
+    matched_keywords 빈 값) — 키워드도 과방위 소관도 아니라 매일 수집에서 빠지고, 그 결과 단계가
+    '접수'에서 영영 안 움직였다(실측 29건, 회부일이 API엔 있는데 DB엔 없음). 종결된 법안은 더 바뀔 게
+    없어 조회하지 않는다. 하루 수십 콜 수준."""
+    targets = [r for bid, r in existing_bills.items()
+               if bid not in collected and (r.get('bill_no') or '').strip()
+               and not bill_stage.is_terminal_label(r.get('proc_result'))]
+    if not targets:
+        return 0
+    got = 0
+    for r in targets:
+        try:
+            rows = _fetch_bill_rows({'BILL_NO': r['bill_no'].strip()}, f'개별 {r["bill_no"]}', page_size=10)
+        except Exception as e:
+            print(f'  [개별 조회 실패] {r["bill_no"]}: {e}')
+            continue
+        row = next((b for b in rows if b.get('BILL_ID') == r['bill_id']), None) or (rows[0] if rows else None)
+        if not row or not row.get('BILL_ID'):
+            continue
+        collected[row['BILL_ID']] = (row, list(r.get('matched_keywords') or []))
+        got += 1
+    print(f'  미수집 계류 법안 개별 갱신: 대상 {len(targets)}건 → 조회 성공 {got}건')
+    return got
+
+
 # ═══════════════════════════════════════════════════════════
 #  DB 처리
 # ═══════════════════════════════════════════════════════════
@@ -357,6 +384,9 @@ def upsert_bill(bill: dict, matched_keywords: list[str], existing: dict | None,
     existing_kw = set(existing.get('matched_keywords') or [])
     new_kw      = set(matched_keywords)
     upd = {k: v for k, v in stage_cols.items() if existing.get(k) != v}
+    for k in ('propose_dt', 'committee', 'proc_dt'):          # 입법예고 경로로 들어온 행은 발의일·소관위가 비어 있다(#139)
+        if not existing.get(k) and row.get(k):
+            upd[k] = row[k]
     if not new_kw.issubset(existing_kw):
         upd['matched_keywords'] = list(existing_kw | new_kw)
     if upd:
@@ -967,6 +997,12 @@ def main(dry_run: bool = False, suppress_status_alerts: bool = False):
         sweep_committee_bills(collected, existing_bills, dry_run=dry_run)
     except Exception as e:
         print(f'  [과방위 스윕 오류(무시)] {e}')
+
+    # 이번 수집에 안 잡힌 계류 법안(입법예고 경로로만 들어온 타 위원회 법안 등) 단계 갱신 (#139)
+    try:
+        refresh_untouched_bills(collected, existing_bills)
+    except Exception as e:
+        print(f'  [개별 갱신 오류(무시)] {e}')
 
     print(f'\n  총 고유 법안: {len(collected)}건')
 
