@@ -7799,6 +7799,25 @@ function _billIsDiscarded(p) {
 function _billIsActive(p) {
   return !_billIsPassed(p) && !_billIsDiscarded(p);
 }
+// 진행 단계 스트립의 칸 키 (2026-09-09, #139) — 발의 → 회부 → 심사(상정 이후·소위 포함) → 의결(위원회 통과) → 법사위·본회의 → 통과 | 폐기.
+// proc_result 라벨(bill_stage.derive_stage)을 7칸으로 접는다. 칸 이름과 카드 라벨이 같은 말을 쓰도록 여기서만 매핑한다.
+function _billStageKey(p) {
+  p = p || '';
+  if (_billIsPassed(p)) return '통과';
+  if (_billIsDiscarded(p)) return '폐기';
+  if (p === '위원회 의결') return '의결';
+  if (p.includes('법사위') || p.includes('본회의')) return '법사위';
+  if (p === '소관위 심사중') return '심사';
+  if (p === '소관위 회부') return '회부';
+  return '접수';
+}
+// 최근 변경 — 7일 안에 단계가 바뀐 법안(prev_proc_result ≠ proc_result, updated_at 기준).
+// 상정처럼 수십 건이 한 번에 바뀌는 날 목록만 봐서는 알 수 없어서 카드에 '이전 → 현재 · 날짜'를 붙인다.
+function _billChangedRecently(b, sinceMs) {
+  if (!b || !b.prev_proc_result || b.prev_proc_result === b.proc_result) return false;
+  var t = b.updated_at ? new Date(b.updated_at).getTime() : 0;
+  return !!t && t >= (sinceMs || (Date.now() - 7 * 86400000));
+}
 
 // 이 법안 카드에 '조문 DIFF 보기' 링크를 붙일 수 있는가 — _asmDiffCache 기준
 // (a) 의견등록 법안: origin='assembly' proposed & new_doc==bill_no
@@ -7872,6 +7891,9 @@ function assemblyMatchesFilter(bill) {
   if (assemblyFilterMode === '전체') return true;
   if (assemblyFilterMode === '최근') { var d = _parseProposeDt(bill.propose_dt); return !!d && d >= new Date(Date.now() - 7 * 86400000); }
   if (assemblyFilterMode === '의견') return _billCommentOpen(bill);
+  if (assemblyFilterMode === '변경') return _billChangedRecently(bill);
+  if (assemblyFilterMode.indexOf('stage:') === 0) return _billStageKey(p) === assemblyFilterMode.slice(6);
+  // 구 모드(카드가 없어진 뒤에도 외부 링크·상태값으로 들어올 수 있어 남겨 둠)
   if (assemblyFilterMode === '접수') return _billIsActive(p);
   if (assemblyFilterMode === '통과') return _billIsPassed(p);
   if (assemblyFilterMode === '폐기') return _billIsDiscarded(p);
@@ -7888,26 +7910,36 @@ function renderAssemblyBills(bills) {
   var totalCount   = bills.length;
   var newCount     = bills.filter(function(b) { var d = _parseProposeDt(b.propose_dt); return d && d >= weekAgo; }).length;
   var commentCount = bills.filter(function(b) { return _billCommentOpen(b); }).length;   // assemblyMatchesFilter('의견')와 동일 판정
-  var activeCount  = bills.filter(function(b) { return _billIsActive(b.proc_result || ''); }).length;
-  var passedCount  = bills.filter(function(b) { return _billIsPassed(b.proc_result || ''); }).length;
-  var discardedCount = bills.filter(function(b) { return _billIsDiscarded(b.proc_result || ''); }).length;
+  var changedCount = bills.filter(function(b) { return _billChangedRecently(b, weekAgo.getTime()); }).length;
+  var stageCounts = { '접수':0, '회부':0, '심사':0, '의결':0, '법사위':0, '통과':0, '폐기':0 };
+  bills.forEach(function(b) { stageCounts[_billStageKey(b.proc_result || '')]++; });
 
   var setVal = function(id, v) { var el = document.getElementById(id); if (el) el.textContent = v; };
   setVal('asm-total',  totalCount);
   setVal('asm-new',    newCount);
   setVal('asm-comment', commentCount);
-  setVal('asm-active', activeCount);
-  setVal('asm-passed', passedCount);
-  setVal('asm-discarded', discardedCount);
+  setVal('asm-changed', changedCount);
+  Object.keys(stageCounts).forEach(function(k) { setVal('asm-stage-' + k, stageCounts[k]); });
+  // '위원회 회부' 칸의 의견등록 배지 — 상단 '의견등록 가능' 카드와 같은 판정(_billCommentOpen)·같은 수.
+  // (회부 정보가 API에 늦게 오는 며칠은 '발의' 칸 법안도 의견등록이 열려 있을 수 있어 칸별로 나누지 않는다)
+  var badge = document.getElementById('asm-stage-notice');
+  if (badge) { badge.textContent = '의견등록 가능 ' + commentCount + '건'; badge.hidden = commentCount === 0; }
 
-  // 선택된 카드 강조 (필터 버튼 줄 제거 → 카드가 필터 겸용)
+  // 선택된 카드·칸 강조 (필터 버튼 줄 제거 → 카드가 필터 겸용)
   document.querySelectorAll('#assembly-stats .stat-card').forEach(function(c) {
     var on = c.getAttribute('data-mode') === assemblyFilterMode;
     c.style.outline = on ? '2px solid var(--accent)' : '';
     c.style.outlineOffset = on ? '-2px' : '';
   });
+  document.querySelectorAll('#assembly-stages .asm-stage').forEach(function(c) {
+    c.classList.toggle('on', c.getAttribute('data-mode') === assemblyFilterMode);
+  });
 
   var filtered = bills.filter(assemblyMatchesFilter).slice().sort(function(a, b) {
+    // '최근 변경'은 바뀐 순(updated_at 최신순)이 자연스럽다
+    if (assemblyFilterMode === '변경') {
+      return (b.updated_at ? new Date(b.updated_at).getTime() : 0) - (a.updated_at ? new Date(a.updated_at).getTime() : 0);
+    }
     // 의견등록 가능 행은 최상단 — 그 이후는 기존 발의일 최신순 유지
     var ca = _billCommentOpen(a) ? 1 : 0, cb = _billCommentOpen(b) ? 1 : 0;
     if (ca !== cb) return cb - ca;
@@ -7930,6 +7962,12 @@ function renderAssemblyBills(bills) {
           : b.propose_dt)
       : '—';
     var isNew = (function() { var d = _parseProposeDt(b.propose_dt); return d && d >= weekAgo; })();
+    // 7일 안에 단계가 바뀐 법안은 '이전 → 현재 · M/D 변경'으로 표시 (#139)
+    var chg = '';
+    if (_billChangedRecently(b, weekAgo.getTime())) {
+      var cd = new Date(b.updated_at);
+      chg = (cd.getMonth() + 1) + '/' + cd.getDate();
+    }
     var borderTop = i === 0 ? '' : 'border-top:1px solid var(--border);';
     // 열린국회정보 API가 LINK_URL을 안 주는 경우 bill_id로 의안정보시스템 상세 URL 구성
     var linkUrl = b.link_url || (b.bill_id ? 'https://likms.assembly.go.kr/bill/billDetail.do?billId=' + encodeURIComponent(b.bill_id) : '');
@@ -7969,7 +8007,11 @@ function renderAssemblyBills(bills) {
       + '<span style="font-size:10px;color:var(--text-muted)">' + escHtml(b.committee || '—') + '</span>'
       + '<span style="font-size:10px;color:var(--text-muted)">|</span>'
       + '<span style="font-size:10px;color:var(--text-muted)">발의 ' + proposeDt + '</span>'
-      + '<span style="margin-left:auto;font-size:10px;font-weight:600;color:' + sl.color + '">' + escHtml(sl.text) + '</span>'
+      + '<span style="margin-left:auto;font-size:10px;white-space:nowrap">'
+      + (chg ? '<span style="color:var(--text-muted)">' + escHtml(b.prev_proc_result) + ' → </span>' : '')
+      + '<span style="font-weight:600;color:' + sl.color + '">' + escHtml(sl.text) + '</span>'
+      + (chg ? '<span style="color:#0d9488;font-weight:600"> · ' + chg + ' 변경</span>' : '')
+      + '</span>'
       + '</div>'
       + (b.summary ? '<div class="asm-sum" title="클릭하면 전체 내용을 펼치거나 접습니다" onclick="event.stopPropagation();this.classList.toggle(\'open\')" style="font-size:11px;color:var(--text-secondary);line-height:1.45;margin:6px 0 0">' + escHtml(b.summary) + '</div>' : '')
       + (kws ? '<div style="margin-top:4px;font-size:10px;color:var(--text-muted)">키워드: ' + escHtml(kws) + '</div>' : '')
