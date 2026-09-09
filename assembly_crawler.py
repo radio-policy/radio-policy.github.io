@@ -87,6 +87,18 @@ NOTABLE_STATUS = {
     '정부이송', '공포',
 }
 
+# 구독자에게 보내는 상태 변경 (2026-09-09, #140 운영자 결정): "통과 가능성이 높은 단계 진입"(위원회 통과 이후)과
+# 폐기만. 상정(소관위 회부→심사중)은 구독자가 할 일이 없는 단계라 보내지 않는다 — 대시보드 스트립·'최근 7일 단계 이동'이 맡는다.
+# 운영자 봇은 NOTABLE_STATUS(상정 포함) 전부. 둘 다 법안 1건당 1통이 아니라 **실행당 한 통**으로 묶는다(9/9 상정 57건 → 구독자 7명에게 수백 줄 다이제스트 사고).
+SUBSCRIBER_STATUS = {
+    '위원회 의결', '법사위 회부', '법사위 심사중', '본회의 심의',
+    '본회의 통과', '원안가결', '수정가결', '정부이송', '공포',
+    '대안반영폐기', '부결', '철회',
+}
+ALERT_MAX_PER_GROUP = 10     # 묶음 메시지에서 그룹(전이 종류)당 나열하는 법안 수
+ALERT_MAX_CHARS = 3300       # subscriber_queue 3500자 절단·텔레그램 분할 전에 스스로 접는다
+DASHBOARD_BILLS_URL = 'https://radio-policy.gitlab.io/#assembly'
+
 API_BASE = 'https://open.assembly.go.kr/portal/openapi/nzmimeepazxkubdpn'
 
 # ── 입법예고 추적 설정 (2026-08-02 신설) ──────────────────────
@@ -421,37 +433,88 @@ def send_telegram(msg: str):
         print(f'[구독자 큐 적재 실패(무시)] {e}')
 
 
-def notify_new(bill: dict, keywords: list[str]):
-    kw_str = ', '.join(keywords)
-    dt_str = format_date(bill.get('PROPOSE_DT', ''))
-    link   = bill_link(bill)
-    msg = (
-        f'📋 <b>[국회 신규 법안]</b>\n'
-        f'{bill.get("BILL_NAME", "")}\n\n'
-        f'• 제안자: {bill.get("PROPOSER", "—")}\n'
-        f'• 소관위: {bill.get("CURR_COMMITTEE", "—")}\n'
-        f'• 제안일: {dt_str}\n'
-        f'• 상태: {bill_stage.derive_stage(bill)}\n'
-        f'• 키워드: {kw_str}'
-    )
-    if link:
-        msg += f'\n🔗 <a href="{link}">의안 바로가기</a>'
-    send_telegram(msg)
+def send_operator_only(msg: str):
+    """운영자 봇에만 보낸다(구독자 큐 미적재). 상태 변경 묶음처럼 운영자·구독자 내용이 다른 알림용."""
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        print('[텔레그램] 환경변수 미설정 — 건너뜀')
+        return
+    notify.send_telegram(msg, chat_id=TELEGRAM_CHAT_ID, parse_mode='HTML')
 
 
-def notify_status_change(bill: dict, prev_status: str, keywords: list[str]):
-    new_status = bill_stage.derive_stage(bill)
-    link       = bill_link(bill)
-    msg = (
-        f'🔄 <b>[법안 상태 변경]</b>\n'
-        f'{bill.get("BILL_NAME", "")}\n\n'
-        f'• {prev_status} → <b>{new_status}</b>\n'
-        f'• 소관위: {bill.get("CURR_COMMITTEE", "—")}\n'
-        f'• 키워드: {", ".join(keywords)}'
-    )
-    if link:
-        msg += f'\n🔗 <a href="{link}">의안 바로가기</a>'
-    send_telegram(msg)
+def queue_subscribers_only(msg: str):
+    """구독자 큐에만 적재(운영자 봇 미발송)."""
+    try:
+        from subscriber_notify import queue_for_subscribers
+        queue_for_subscribers(sb, 'assembly', msg)
+    except Exception as e:
+        print(f'[구독자 큐 적재 실패(무시)] {e}')
+
+
+def _esc(t) -> str:
+    return (str(t or '')).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+
+
+def _bill_line(bill: dict, extra: str = '') -> str:
+    name = _esc((bill.get('BILL_NAME') or '').strip())
+    link = bill_link(bill)
+    head = f'<a href="{_esc(link)}">{name}</a>' if link else name
+    return f'• {head}{extra}'
+
+
+def format_new_bills_batch(items: list, max_lines: int = ALERT_MAX_PER_GROUP) -> str:
+    """신규 발의 묶음 — items: [(bill, keywords)]. 실행당 한 통(#140). 빈 목록이면 ''."""
+    if not items:
+        return ''
+    lines = [f'📋 <b>[국회 신규 법안 {len(items)}건]</b>']
+    for bill, kws in items[:max_lines]:
+        meta = ' · '.join(x for x in [
+            _esc((bill.get('PROPOSER') or '').strip()),
+            _esc((bill.get('CURR_COMMITTEE') or '').strip()),
+            ('발의 ' + format_date(bill.get('PROPOSE_DT', ''))) if bill.get('PROPOSE_DT') else '',
+        ] if x)
+        lines.append(_bill_line(bill, f' — {meta}' if meta else ''))
+    if len(items) > max_lines:
+        lines.append(f'… 외 {len(items) - max_lines}건')
+    lines.append(f'🔗 <a href="{DASHBOARD_BILLS_URL}">대시보드 국회 법안</a>')
+    return '\n'.join(lines)
+
+
+def format_status_batch(changes: list, allowed: set, max_per_group: int = ALERT_MAX_PER_GROUP,
+                        max_chars: int = ALERT_MAX_CHARS) -> str:
+    """상태 변경 묶음 — changes: [(bill, prev, new, keywords)]. new가 allowed에 든 것만, 전이 종류별로 묶어
+    그룹당 max_per_group건 나열 + '외 N건'. 전체가 max_chars를 넘으면 남은 그룹은 건수만 적는다. 없으면 ''."""
+    picked = [c for c in changes if c[2] in allowed]
+    if not picked:
+        return ''
+    groups: dict = {}
+    for bill, prev, new, kws in picked:
+        groups.setdefault((prev, new), []).append(bill)
+    # 통과 가능성이 높은 쪽(허용 집합 순서와 무관하게 건수 많은 순)이 아니라 '의미가 큰 순': 가결·의결·법사위 → 폐기 → 그 외
+    def _rank(key):
+        new = key[1]
+        if '가결' in new or new in ('본회의 통과', '정부이송', '공포'): return 0
+        if new == '위원회 의결': return 1
+        if '법사위' in new or '본회의' in new: return 2
+        if new in ('대안반영폐기', '부결', '철회'): return 4
+        return 3
+    order = sorted(groups, key=lambda k: (_rank(k), -len(groups[k])))
+    lines = [f'🔄 <b>[법안 상태 변경 {len(picked)}건]</b>']
+    total = len(lines[0])
+    for i, key in enumerate(order):
+        bills = groups[key]
+        head = f'\n<b>{_esc(key[0])} → {_esc(key[1])}</b> ({len(bills)}건)'
+        body = [_bill_line(b) for b in bills[:max_per_group]]
+        if len(bills) > max_per_group:
+            body.append(f'… 외 {len(bills) - max_per_group}건')
+        chunk = head + '\n' + '\n'.join(body)
+        if total + len(chunk) > max_chars:
+            rest = order[i:]
+            lines.append('\n' + ' · '.join(f'{_esc(k[0])}→{_esc(k[1])} {len(groups[k])}건' for k in rest) + ' (대시보드에서 확인)')
+            break
+        lines.append(chunk)
+        total += len(chunk)
+    lines.append(f'\n🔗 <a href="{DASHBOARD_BILLS_URL}">대시보드 국회 법안</a>')
+    return '\n'.join(lines)
 
 
 # ═══════════════════════════════════════════════════════════
@@ -1006,9 +1069,11 @@ def main(dry_run: bool = False, suppress_status_alerts: bool = False):
 
     print(f'\n  총 고유 법안: {len(collected)}건')
 
-    # DB 저장 및 알림
+    # DB 저장 — 알림은 루프가 끝난 뒤 묶어서(실행당 한 통, #140)
     new_count     = 0
     changed_count = 0
+    new_items: list = []        # (bill, keywords)
+    changes: list = []          # (bill, prev, new, keywords)
 
     for bill_id, (bill, keywords) in collected.items():
         existing = existing_bills.get(bill_id)
@@ -1028,21 +1093,37 @@ def main(dry_run: bool = False, suppress_status_alerts: bool = False):
         if result == 'new':
             new_count += 1
             print(f'  🆕 신규: {bill.get("BILL_NAME", "")[:40]}')
-            if not dry_run:
-                notify_new(bill, keywords)
+            new_items.append((bill, keywords))
 
         elif result == 'status_changed':
             changed_count += 1
             prev = existing['proc_result']
             new  = bill_stage.derive_stage(bill)
             print(f'  🔄 상태변경: {bill.get("BILL_NAME", "")[:30]} ({prev} → {new})')
-            # 중요 상태 변경만 알림 (접수→소관위 회부 같은 사소한 변경 제외).
-            # --suppress-status-alerts: 단계 파생 규칙 배포 직후 1회 백필용 — 수백 건이 한꺼번에
-            # '접수'→상정 이후 라벨로 바뀌는 것은 실제 변동이 아니므로 알림을 내지 않는다(#122).
-            if not dry_run and not suppress_status_alerts and new in NOTABLE_STATUS:
-                notify_status_change(bill, prev, keywords)
+            changes.append((bill, prev, new, keywords))
 
     print(f'\n[완료] 신규 {new_count}건 | 상태변경 {changed_count}건 | 총 추적 {len(collected)}건')
+
+    # ── 알림 묶음 (#140): 신규 발의는 운영자+구독자 같은 한 통, 상태 변경은 운영자(NOTABLE_STATUS 전부)와
+    #    구독자(SUBSCRIBER_STATUS: 위원회 통과 이후·폐기만) 내용을 달리해 각각 한 통.
+    #    --suppress-status-alerts(단계 규칙 변경 직후 백필)는 상태 변경 묶음만 건너뛴다(#122).
+    new_msg = format_new_bills_batch(new_items)
+    op_msg = '' if suppress_status_alerts else format_status_batch(changes, NOTABLE_STATUS)
+    sub_msg = '' if suppress_status_alerts else format_status_batch(changes, SUBSCRIBER_STATUS)
+    if dry_run:
+        for label, m in (('신규 발의(운영자+구독자)', new_msg), ('상태 변경(운영자)', op_msg), ('상태 변경(구독자)', sub_msg)):
+            print(f'  (dry-run) {label}: {"없음" if not m else str(len(m)) + "자"}')
+            if m:
+                print('    ' + m[:500].replace('\n', '\n    '))
+    else:
+        if new_msg:
+            send_telegram(new_msg)                 # 운영자 + 구독자 큐
+        if op_msg:
+            send_operator_only(op_msg)
+        if sub_msg:
+            queue_subscribers_only(sub_msg)
+        print(f'  알림: 신규 {"1통" if new_msg else "없음"} | 상태변경 운영자 {"1통" if op_msg else "없음"} · 구독자 {"1통" if sub_msg else "없음"}'
+              + (' [억제]' if suppress_status_alerts and changes else ''))
 
     if new_count == 0 and changed_count == 0:
         print('  변동 없음')

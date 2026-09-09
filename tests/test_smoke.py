@@ -474,3 +474,49 @@ class TestLawmapEdgeCheck(unittest.TestCase):
         self.assertEqual(m.judge('면허 종류 (제39조)', '지방세법 시행령', True, set())[0], 'OK')   # 조문 체계 없는 문서는 대조 불가
         self.assertEqual(m.judge('할당대금 기재 (서식 5의2)', '전파법 시행규칙', True, {'1조'})[1], 'annex_ref')
         self.assertEqual(m.judge('설명만 있음', '전파법', True, {'9조'})[:2], ('ERR', 'no_article'))
+
+
+class TestAssemblyAlertBatch(unittest.TestCase):
+    """assembly_crawler 알림 묶음(#140) — 실행당 한 통, 구독자는 위원회 통과 이후·폐기만, 그룹당 10건 + 외 N건"""
+
+    def _bill(self, i, name='전기통신사업법 일부개정법률안'):
+        return {'BILL_ID': f'PRC_{i}', 'BILL_NO': f'22{i:05d}', 'BILL_NAME': name, 'PROPOSER': '홍길동의원 등 10인',
+                'CURR_COMMITTEE': '과학기술정보방송통신위원회', 'PROPOSE_DT': '2026-09-01'}
+
+    def test_subscriber_filter_and_grouping(self):
+        import assembly_crawler as ac
+        changes = [(self._bill(i), '소관위 회부', '소관위 심사중', []) for i in range(57)]
+        changes += [(self._bill(100), '소관위 심사중', '위원회 의결', []), (self._bill(101, '전파법 일부개정법률안'), '소관위 심사중', '대안반영폐기', [])]
+        sub = ac.format_status_batch(changes, ac.SUBSCRIBER_STATUS)
+        self.assertIn('[법안 상태 변경 2건]', sub)
+        self.assertNotIn('소관위 심사중</b>', sub)          # 상정 전이는 구독자에게 안 감
+        self.assertIn('소관위 심사중 → 위원회 의결</b> (1건)', sub)
+        self.assertIn('→ 대안반영폐기</b> (1건)', sub)
+        self.assertLess(sub.index('위원회 의결</b>'), sub.index('대안반영폐기</b>'))   # 의미 큰 순
+        op = ac.format_status_batch(changes, ac.NOTABLE_STATUS)
+        self.assertIn('[법안 상태 변경 59건]', op)
+        self.assertIn('소관위 회부 → 소관위 심사중</b> (57건)', op)
+        self.assertIn('… 외 47건', op)
+        self.assertEqual(op.count('• <a href='), 12)         # 10 + 1 + 1
+        self.assertLess(len(op), 3500)
+        self.assertEqual(ac.format_status_batch(changes[:57], ac.SUBSCRIBER_STATUS), '')
+
+    def test_new_bills_batch(self):
+        import assembly_crawler as ac
+        items = [(self._bill(i), ['전파']) for i in range(13)]
+        m = ac.format_new_bills_batch(items)
+        self.assertIn('[국회 신규 법안 13건]', m)
+        self.assertEqual(m.count('• <a href='), 10)
+        self.assertIn('… 외 3건', m)
+        self.assertIn('대시보드', m)
+        self.assertEqual(ac.format_new_bills_batch([]), '')
+
+    def test_status_batch_char_cap(self):
+        import assembly_crawler as ac
+        changes = []
+        for g in range(12):
+            for i in range(10):
+                changes.append((self._bill(g * 100 + i, '아주 긴 이름의 법률 제%d호 일부개정법률안' % g), f'단계{g}', '위원회 의결', []))
+        m = ac.format_status_batch(changes, ac.SUBSCRIBER_STATUS, max_chars=1500)
+        self.assertLess(len(m), 2200)
+        self.assertIn('(대시보드에서 확인)', m)
