@@ -558,7 +558,7 @@
       <div class="panel" id="panel-terms">
         <div style="display:flex;gap:8px;margin-bottom:14px;align-items:center;flex-wrap:wrap">
           <span style="font-size:12px;color:var(--text-secondary)">이동통신·전파 분야 기술 용어 자동 수집 위키</span>
-          <button class="btn" onclick="extractTermsFromNews()" id="extract-terms-btn" style="margin-left:auto"><i class="ti ti-bulb"></i>뉴스에서 용어 추출</button>
+          
           <span class="badge badge-purple" style="margin-left:6px" id="terms-count-badge">—</span>
         </div>
 
@@ -658,7 +658,7 @@
             </div>
             <div style="display:flex;gap:8px">
               <button class="btn btn-primary" onclick="saveApiKeys()"><i class="ti ti-device-floppy"></i>저장 및 연결</button>
-              <button class="btn" onclick="testConnection()"><i class="ti ti-plug"></i>연결 테스트</button>
+              <button class="btn" data-admin-only onclick="testConnection()"><i class="ti ti-plug"></i>연결 테스트</button>
               <button class="btn" onclick="clearApiKeys()" style="margin-left:auto;color:#791F1F"><i class="ti ti-trash"></i>초기화</button>
             </div>
           </div>
@@ -1070,7 +1070,7 @@
 <script src="https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js"></script>
 <script>if(typeof pdfjsLib!=='undefined'){pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';}</script>
 <script src="system_prompt.js?v=20260819a"></script>
-<script src="app.js?v=20260909c"></script>
+<script src="app.js?v=20260909d"></script>
 <script src="lawmap_articles.js?v=20260906s"></script>
 </body>
 </html>

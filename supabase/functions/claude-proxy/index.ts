@@ -11,9 +11,10 @@
 //  ★ verify_jwt는 게이트가 아니다 — 켜도 **anon 키를 유효한 JWT로 통과**시킨다.
 //    실제 관문은 아래 auth.getUser(token)이다. 이 검사를 제거하지 말 것.
 //
-//  ★ 한도 판별은 body.stream 플래그다(서버가 관찰하는 값 → 위조 불가).
-//    스트리밍 = 자문·보고서초안(비용 큰 Sonnet 장문) → 'advisory' 한도 차감.
-//    비스트리밍 = 뉴스요약·용어추출 등 경량 호출 → 한도 없음, 남용 백스톱만.
+//  ★ 한도 판별은 body.model 이다(서버가 관찰하는 값 → 위조 불가). 2026-09-09 #141 부터:
+//    Sonnet 계열 = 자문(스트리밍)·법령 DIFF·용어 상세·관계도 생성·이슈 영향 등 → 'advisory' 한도 차감.
+//    Haiku = 뉴스요약·영향분석·질의확장 등 경량 호출 → 한도 없음, 남용 백스톱(300/일)만.
+//    (종전 stream===true 기준은 비스트리밍 Sonnet을 한도 밖에 두었다.)
 //    클라이언트가 보내는 헤더로 판별하도록 바꾸면 위조로 한도를 우회할 수 있다.
 //
 //  ★ 스트리밍은 TransformStream + EdgeRuntime.waitUntil(pipeTo) 형태여야 한다.
@@ -97,7 +98,10 @@ Deno.serve(async (req) => {
   }
 
   // ── ③ 승인 확인 + 한도 차감 (선차감: 동시 요청이 한도를 함께 넘는 것 방지) ──
-  const kind = body.stream === true ? 'advisory' : 'general';
+  // 한도 종류(#141, 2026-09-09): **Sonnet이면 자문 한도**(스트리밍 여부 불문), Haiku면 백스톱만.
+  // 종전 기준(stream===true)은 자문·보고서초안만 잡았고, 비스트리밍 Sonnet(용어 상세 6,000·DIFF 4,000·관계도
+  // 2,500·이슈 영향 1,200 등)이 한도 밖이었다. 모델명은 서버가 본문에서 읽는 값이라 위조되지 않는다.
+  const kind = /sonnet/i.test(model) ? 'advisory' : 'general';
   const { data: charge, error: chargeErr } = await sb.rpc('charge_ai_usage', {
     p_user: user.id,
     p_kind: kind,

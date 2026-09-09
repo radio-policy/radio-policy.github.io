@@ -2,19 +2,23 @@
 """
 tech_terms 상세(description·diagram_html·related_terms) 백필.
 
-대시보드는 용어 모달을 열 때 개별 생성(app.js generateTermDetail)하는데,
-새로 추출된 용어는 클릭 전까지 상세가 비어 "생성 중..." 로딩이 뜬다.
-이 스크립트는 비어 있는 항목만 골라 대시보드와 동일한 프롬프트·모델로
-일괄 생성해 채운다. 이미 채워진 필드는 덮어쓰지 않는다(멱등).
+2026-09-09 (#141) 부터 **매일 05:00 KST 무인 실행**(GitHub Actions term_extract.yml — term_extract.py 다음 단계).
+종전에는 대시보드가 새 용어를 뽑은 직후 브라우저에서 Sonnet 상세를 만들었는데(승인자의 자문 한도가 깎이는
+구조), 브라우저 자동 경로를 없애고 이 스크립트가 빈 항목만 골라 채운다. 이미 채워진 필드는 덮어쓰지 않는다(멱등).
 
-- 모델: claude-sonnet-4-6 (app.js generateTermDetail과 동일 — 형식·품질 일치)
+- 모델: claude-sonnet-5 (app.js generateTermDetail과 동일 — 형식·품질 일치). **thinking disabled 필수**
+  (적응형 추론이 기본 ON이라 thinking 토큰이 과금되고 max_tokens를 잠식한다 — 지침 "Sonnet 5 비스트리밍" 항목)
 - 형식: <description>/<diagram>/<related> XML 태그 (app.js와 동일 파싱)
+- --limit N: 한 번에 처리할 최대 건수(기본 10 — 비용 상한, 나머지는 다음 날). 0=전부
+- heartbeat: system_health key 'last_term_backfill_run'
 - 필요 env: SUPABASE_URL, SUPABASE_SERVICE_KEY, ANTHROPIC_API_KEY
 """
 import os
 import re
 import sys
 import time
+import argparse
+from datetime import datetime, timezone
 
 # Windows 스케줄러/cp949 콘솔 이모지 크래시 방지 (배경역사 #19)
 try:
@@ -38,9 +42,21 @@ SUPABASE_KEY      = os.environ['SUPABASE_SERVICE_KEY']
 ANTHROPIC_API_KEY = os.environ['ANTHROPIC_API_KEY']
 
 MODEL = 'claude-sonnet-5'  # app.js generateTermDetail과 동일 모델 유지
+THINKING = {'type': 'disabled'}
 
 sb: Client = make_client(SUPABASE_URL, SUPABASE_KEY)
 ai = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+
+
+def heartbeat(note: str) -> None:
+    try:
+        sb.table('system_health').upsert(
+            {'key': 'last_term_backfill_run',
+             'updated_at': datetime.now(timezone.utc).isoformat(),
+             'note': note},
+            on_conflict='key').execute()
+    except Exception as e:
+        print('[heartbeat 오류] %s' % e)
 
 
 def _empty(v) -> bool:
@@ -83,9 +99,11 @@ def generate(t: dict) -> dict | None:
         resp = ai.messages.create(
             model=MODEL,
             max_tokens=6000,
+            thinking=THINKING,
             system='당신은 이동통신·전파 정책 전문가입니다. 반드시 지정된 XML 태그 형식으로만 답변하세요.',
             messages=[{'role': 'user', 'content': build_user_msg(t)}],
         )
+        # content[0] 가정 금지 — text 블록만 이어 붙인다
         text = ''.join(b.text for b in resp.content if b.type == 'text')
     except Exception as e:
         print(f'  [API 오류] {t["term"]}: {str(e)[:100]}')
@@ -102,13 +120,26 @@ def generate(t: dict) -> dict | None:
 
 
 def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--limit', type=int, default=10, help='한 번에 처리할 최대 건수 (0=전부). 기본 10')
+    ap.add_argument('--dry-run', action='store_true', help='대상만 세고 API·DB 무변경')
+    args = ap.parse_args()
+
     rows = (sb.table('tech_terms')
-            .select('id,term,term_en,category,definition,description,diagram_html,related_terms')
+            .select('id,term,term_en,category,definition,description,diagram_html,related_terms,created_at')
+            .order('created_at', desc=True)
             .execute().data) or []
     targets = [r for r in rows if _empty(r.get('description'))
                or _empty(r.get('diagram_html'))
                or _empty(r.get('related_terms'))]
-    print(f'[용어 상세 백필] 전체 {len(rows)}건 중 대상 {len(targets)}건 (모델: {MODEL})')
+    total_targets = len(targets)
+    if args.limit > 0:
+        targets = targets[:args.limit]     # 최신 등록분부터 — 어제 뽑힌 용어가 먼저 채워진다
+    print(f'[용어 상세 백필] 전체 {len(rows)}건 중 대상 {total_targets}건, 이번 실행 {len(targets)}건 (모델: {MODEL})')
+    if args.dry_run:
+        for t in targets:
+            print(f'  [dry-run] {t["term"]}')
+        return
 
     done = failed = 0
     for t in targets:
@@ -135,7 +166,9 @@ def main():
         print(f'  ok {t["term"]} ({", ".join(update.keys())})')
         time.sleep(0.5)
 
-    print(f'[용어 상세 백필] 완료 - 성공 {done} / 실패 {failed}')
+    note = f'targets={total_targets} done={done} failed={failed} limit={args.limit}'
+    print(f'[용어 상세 백필] 완료 - {note}')
+    heartbeat(note)
 
 
 if __name__ == '__main__':

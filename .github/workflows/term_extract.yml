@@ -1,0 +1,40 @@
+name: 기술 용어 자동 추출 (뉴스 → Haiku 추출 → Sonnet 상세)
+
+# 2026-09-09 (#141) 대시보드의 브라우저 자동 추출(승인자 화면 로드 60초 뒤)을 무인 작업으로 대체.
+# 새벽 05:00 KST = 20:00 UTC — 06:00 모닝 브리핑 전에 그날치 용어가 완성된다. 새벽엔 PC가 꺼져 있어
+# 17시 PC 체인이 아니라 Actions에서 돈다(Supabase·Anthropic만 쓰므로 한국 IP 불필요).
+# 주 트리거는 Supabase pg_cron(term-extract-trigger → dispatch_github_workflow); 아래 cron은 백업.
+on:
+  schedule:
+    - cron: '0 20 * * *'
+  workflow_dispatch:
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Extract new terms from recent news (Haiku)
+        env:
+          SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          ANTHROPIC_API_KEY:    ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python term_extract.py
+
+      - name: Fill empty term details (Sonnet, max 10 per run)
+        env:
+          SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          ANTHROPIC_API_KEY:    ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python backfill_term_details.py --limit 10

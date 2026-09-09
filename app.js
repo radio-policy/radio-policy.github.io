@@ -1475,84 +1475,7 @@ let isSending = false;
 // 용어 정규화: 공백 제거 + 소문자 변환 (2.6 GHz == 2.6ghz 중복 방지)
 function normalizeTerm(s) { return (s||'').toLowerCase().replace(/\s+/g, ''); }
 
-async function extractTermsFromNews() {
-  var btn = document.getElementById('extract-terms-btn');
-  if (!sb) { alert('Supabase 연결이 필요합니다.'); return; }
-  if (!aiReady()) { alert(aiGateMsg()); return; }
-  if (btn) { btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader"></i> 추출 중...'; }
-
-  try {
-    // 최근 7일 뉴스 가져오기
-    var cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - 7);
-    var cutoffStr = cutoff.toISOString().split('T')[0];
-    var newsResp = await sb.from('news_feed').select('title,source,published_at').gte('created_at', cutoffStr).order('created_at', {ascending:false}).limit(30);
-    var newsList = (newsResp.data || []).map(function(n) { return '[' + (n.published_at||'').slice(0,10) + '] ' + n.title + ' (' + (n.source||'') + ')'; }).join('\n');
-    if (!newsList) { alert('최근 7일 뉴스가 없습니다. 먼저 뉴스 브리핑을 실행하세요.'); if(btn){btn.disabled=false;btn.innerHTML='<i class="ti ti-bulb"></i>뉴스에서 용어 추출';} return; }
-
-    // 기존 용어 목록 (정규화 비교: 공백 제거 + 소문자)
-    var existingResp = await sb.from('tech_terms').select('term').limit(500);
-    var existingTerms = (existingResp.data || []).map(function(t) { return normalizeTerm(t.term); });
-
-    // Claude에 용어 추출 요청
-    var systemMsg = '당신은 이동통신·전파 전문가입니다. 반드시 순수 JSON 배열만 출력하세요. 마크다운 코드블록 없이.';
-    var userMsg = '아래 뉴스 목록에서 이동통신·전파 분야 기술 용어(영문 약어, 표준명, 새 기술명)를 추출하세요.\n' +
-      '이미 알려진 용어(' + existingTerms.slice(0,20).join(', ') + ' 등)는 제외하세요.\n\n' +
-      '뉴스 목록:\n' + newsList + '\n\n' +
-      '형식: [{"term":"약어","term_en":"영문 전체 이름","category":"주파수|네트워크|위성|단말|규제|기타","definition":"한 줄 정의(50자 이내)","source":"출처"}]\n' +
-      '새 용어가 없으면 [] 출력.';
-
-    var res = await claudeFetch({
-      method:'POST',
-      // thinking:disabled — Sonnet 5는 thinking 미지정 시 적응형 추론이 켜져 응답 첫 블록이 빈 thinking 블록이 됨.
-      //  → content[0].text가 undefined라 크래시했고, 숨은 thinking 토큰이 max_tokens(1500)를 잠식해 JSON도 잘렸음.
-      body:JSON.stringify({model:'claude-sonnet-5',max_tokens:1500,thinking:{type:'disabled'},system:systemMsg,messages:[{role:'user',content:userMsg}]})
-    });
-    var data = await res.json();
-    if (data.type === 'error' || !data.content) {
-      throw new Error('Claude API 오류: ' + ((data.error && data.error.message) || JSON.stringify(data)));
-    }
-    // content[0]을 가정하지 말고 text 블록을 찾아서 사용 (적응형 추론 시 첫 블록이 thinking일 수 있음)
-    var textBlock = data.content.find(function(b) { return b.type === 'text'; });
-    var text = (textBlock ? textBlock.text : '').trim().replace(/^```[\w]*\n?/,'').replace(/\n?```$/,'').trim();
-    var firstBracket = text.indexOf('[');
-    var lastBracket = text.lastIndexOf(']');
-    if (firstBracket === -1) { alert('용어 추출 결과가 없습니다.'); if(btn){btn.disabled=false;btn.innerHTML='<i class="ti ti-bulb"></i>뉴스에서 용어 추출';} return; }
-    var terms = JSON.parse(text.slice(firstBracket, lastBracket + 1));
-
-    if (terms.length === 0) { alert('새로운 기술 용어가 발견되지 않았습니다.'); if(btn){btn.disabled=false;btn.innerHTML='<i class="ti ti-bulb"></i>뉴스에서 용어 추출';} return; }
-
-    // Supabase에 저장
-    var saved = 0, skipped = 0;
-    var newIds = [];
-    for (var i = 0; i < terms.length; i++) {
-      var t = terms[i];
-      if (!t.term || existingTerms.includes(normalizeTerm(t.term))) { skipped++; continue; }
-      var r = await sb.from('tech_terms').insert({
-        term: t.term, term_en: t.term_en||'', category: t.category||'기타',
-        definition: t.definition||'', source: t.source||'뉴스 자동 추출', is_reviewed: false
-      }).select('id');
-      if (!r.error && r.data && r.data[0]) {
-        saved++;
-        existingTerms.push(normalizeTerm(t.term));
-        newIds.push(r.data[0].id);
-      } else skipped++;
-    }
-
-    if (saved > 0) {
-      alert('신규 용어 ' + saved + '건 저장됨. 설명·다이어그램을 백그라운드에서 자동 생성합니다.');
-      await loadTerms(); // 목록 새로고침 후 설명 생성 시작
-      // 새로 저장된 용어 설명을 백그라운드에서 자동 생성 (클릭 전 미리 채움)
-      newIds.forEach(function(id) { generateTermDetail(id); });
-    } else {
-      alert('완료! 신규 용어 0건 저장, ' + skipped + '건 중복/스킵');
-    }
-  } catch(e) {
-    alert('오류: ' + e.message);
-  } finally {
-    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="ti ti-bulb"></i>뉴스에서 용어 추출'; }
-  }
-}
+// (제거됨 2026-09-09, #141) extractTermsFromNews — 수동 '뉴스에서 용어 추출' 버튼. 새벽 자동 추출(term_extract.py)이 대체.
 
 // ════════════════════════════════════════════
 //  기술 용어 위키
@@ -1653,7 +1576,7 @@ function renderTermsModalHtml(t) {
   var footerHtml =
     (related ? '<div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border)"><span style="font-size:11px;color:var(--text-secondary);margin-right:6px">관련 용어</span>' + related + '</div>' : '') +
     '<div style="display:flex;gap:8px;margin-top:14px">' +
-      '<button class="btn" style="font-size:11px;padding:4px 10px" onclick="generateTermDetail(&quot;' + t.id + '&quot;)" id="gen-btn-' + t.id + '">↺ 재생성</button>' +
+      (isAdminUser() ? '<button class="btn" style="font-size:11px;padding:4px 10px" onclick="generateTermDetail(&quot;' + t.id + '&quot;)" id="gen-btn-' + t.id + '">↺ 재생성</button>' : '') +
       '<button class="btn" data-term="' + escHtml(t.term) + '" onclick="askQ(this.getAttribute(\'data-term\') + \' 기술에 대해 자세히 설명해줘\')">AI 자문에서 질문</button>' +
     '</div>';
 
@@ -1748,6 +1671,7 @@ async function _fetchTermDetail(t) {
 async function generateTermDetail(id) {
   var t = termsData.find(function(x) { return x.id === id; });
   if (!t) return;
+  if (typeof isAdminUser !== 'function' || !isAdminUser()) { alert('이 기능은 관리자만 사용할 수 있습니다.'); return; }
   var btn = document.getElementById('gen-btn-' + id);
   if (btn) { btn.disabled = true; btn.textContent = '생성 중...'; }
   if (!aiReady()) { alert(aiGateMsg()); if(btn){btn.disabled=false;btn.textContent='🤖 Claude로 상세 설명·다이어그램 생성';} return; }
@@ -6183,6 +6107,7 @@ async function saveApiKeys() {
 }
 
 async function testConnection() {
+  if (typeof isAdminUser !== 'function' || !isAdminUser()) { alert('이 기능은 관리자만 사용할 수 있습니다.'); return; }
   const cfg = getConfig();
   const results = [];
   if (sb) {
@@ -7052,149 +6977,10 @@ async function savePressKeywords(btn) {
 }
 
 // ════════════════════════════════════════════
-//  기술 용어 자동 추출 (하루 1회, 백그라운드)
+//  (제거됨 2026-09-09, #141) 기술 용어 자동 추출·상세 백필 — 브라우저 경로 폐지.
+//  이제 매일 05:00 KST GitHub Actions(term_extract.yml: term_extract.py → backfill_term_details.py --limit 10)가
+//  무인으로 돈다. 브라우저는 용어 관련 AI를 스스로 부르지 않는다(관리자의 '↺ 재생성'만 남음).
 // ════════════════════════════════════════════
-// ── 신규 용어 상세 자동 채움 (배경역사 #46) ──────────────────────
-// 순차 실행한다 — 동시에 던지면 API 레이트리밋에 걸리고, 어차피 백그라운드라
-// 빠를 이유가 없다. 한 건이 실패해도 나머지는 계속 채운다(부분 성공 허용).
-async function backfillTermDetails(rows) {
-  if (!sb || !aiReady() || !rows || !rows.length) return;
-  var ok = 0;
-  for (var i = 0; i < rows.length; i++) {
-    var row = rows[i];
-    try {
-      var parsed = await _fetchTermDetail(row);
-      if (!parsed.description) continue;      // 빈 응답이면 덮어쓰지 않는다
-      var up = await sb.from('tech_terms').update({
-        description:   parsed.description,
-        diagram_html:  parsed.diagram_html,
-        related_terms: parsed.related_terms
-      }).eq('id', row.id);
-      if (!up.error) {
-        ok++;
-        // 목록이 이미 떠 있으면 즉시 반영 (안 떠 있으면 다음 loadTerms에서 반영됨)
-        var idx = (typeof termsData !== 'undefined' && termsData)
-          ? termsData.findIndex(function(x) { return x.id === row.id; }) : -1;
-        if (idx >= 0) {
-          termsData[idx].description   = parsed.description;
-          termsData[idx].diagram_html  = parsed.diagram_html;
-          termsData[idx].related_terms = parsed.related_terms;
-        }
-      }
-    } catch(e) {
-      console.warn('[기술 용어] 상세 자동 생성 실패(' + row.term + '):', e.message);
-    }
-  }
-  console.log('[기술 용어] 상세 자동 생성 ' + ok + '/' + rows.length + '건');
-  if (ok && document.getElementById('panel-terms')
-      && document.getElementById('panel-terms').classList.contains('active')) {
-    loadTerms();
-  }
-}
-
-async function autoExtractTermsIfNeeded() {
-  if (!sb) return;
-  if (!aiReady()) return;
-  // 하루 1회 판단은 **서버 값**(app_config.terms_last_extraction, KST 날짜)으로 한다 (#137, 2026-09-08).
-  // 종전엔 localStorage라 승인자 브라우저마다 하루 1회씩 돌았다(승인자 10명 = 하루 10회).
-  // 선점 UPDATE(.neq 오늘)로 한 브라우저만 이기므로 동시 접속에도 중복 실행이 없다.
-  // 서버 값을 못 읽거나 선점에 실패하면 돌리지 않는다(비용 방향으로 fail-closed).
-  var today = new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10);
-  try {
-    var cfg = await sb.from('app_config').select('value').eq('key', 'terms_last_extraction').maybeSingle();
-    if (cfg.error) return;
-    if (cfg.data && String(cfg.data.value || '').slice(0, 10) === today) return;   // 오늘 이미 실행됨(누군가)
-    var claim = await sb.from('app_config').update({ value: today })
-      .eq('key', 'terms_last_extraction').neq('value', today).select('key');
-    if (claim.error || !claim.data || !claim.data.length) return;                    // 다른 브라우저가 먼저 선점
-  } catch(e) { return; }
-
-  try {
-    var cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - 7);
-    var cutoffStr = cutoff.toISOString().split('T')[0];
-    var newsResp = await sb.from('news_feed')
-      .select('title,source,published_at')
-      .gte('created_at', cutoffStr)
-      .order('created_at', { ascending: false })
-      .limit(30);
-    var newsList = (newsResp.data || []).map(function(n) {
-      return '[' + (n.published_at || '').slice(0, 10) + '] ' + n.title + ' (' + (n.source || '') + ')';
-    }).join('\n');
-    if (!newsList) { console.log('[기술 용어] 최근 뉴스 없음, 스킵'); return; }
-
-    var existingResp = await sb.from('tech_terms').select('term').limit(500);
-    var existingSet = new Set((existingResp.data || []).map(function(t) { return t.term.toLowerCase(); }));
-
-    var userMsg = '아래 뉴스 목록에서 이동통신·전파 분야 기술 용어(영문 약어, 표준명, 새 기술명)를 추출하세요.\n' +
-      '흔한 용어(5G, LTE, Wi-Fi 등)는 제외하세요.\n\n' +
-      '뉴스 목록:\n' + newsList + '\n\n' +
-      'JSON 배열로만 출력 (신규 용어만, 없으면 []): [{"term":"...","term_en":"...","category":"...","definition":"...","source":"..."}]';
-
-    var res = await claudeFetch({
-      method: 'POST',
-      body: JSON.stringify({
-        model: 'claude-haiku-4-5-20251001',
-        max_tokens: 1000,
-        messages: [{ role: 'user', content: userMsg }]
-      })
-    });
-    var data = await res.json();
-    var textBlock = data.content && data.content.find(function(b) { return b.type === 'text'; });
-    var text = textBlock ? textBlock.text : '';
-    if (!text) return;
-
-    var firstBracket = text.indexOf('[');
-    var lastBracket = text.lastIndexOf(']');
-    if (firstBracket === -1 || lastBracket === -1) return;
-    var terms = [];
-    try { terms = JSON.parse(text.slice(firstBracket, lastBracket + 1)); } catch(e) { return; }
-    if (!terms.length) { console.log('[기술 용어] 신규 용어 없음'); return; }
-
-    var saved = 0, newRows = [];
-    for (var t of terms) {
-      if (!t.term || existingSet.has(t.term.toLowerCase())) continue;
-      var payload = {
-        term: t.term,
-        term_en: t.term_en || '',
-        category: t.category || '기타',
-        definition: t.definition || '',
-        source: t.source || '뉴스 자동 추출',
-        is_reviewed: false
-      };
-      // 이어서 상세 생성을 걸어야 하므로 삽입된 행(id 포함)을 받아 둔다
-      var r2 = await sb.from('tech_terms').insert(payload).select('id,term,term_en,category,definition');
-      if (!r2.error) {
-        saved++;
-        existingSet.add(t.term.toLowerCase());
-        if (r2.data && r2.data[0]) newRows.push(r2.data[0]);
-      }
-    }
-    console.log('[기술 용어] 자동 추출 완료:', saved, '건 저장 (오늘 실행 기록: app_config.terms_last_extraction)');
-
-    // 신규 용어의 상세 설명·개념도를 곧바로 채운다 — 운영자가 클릭할 때까지
-    // 비워 두면 열어 볼 때마다 수십 초를 기다려야 한다. (배경역사 #46)
-    if (newRows.length) await backfillTermDetails(newRows);
-
-    // 과거에 생성이 실패했거나 자동화 이전에 들어온 빈 용어도 같이 메운다.
-    // 하루 5건으로 제한 — 한 번에 몰아 돌리면 API 비용·시간이 튄다.
-    try {
-      var empties = await sb.from('tech_terms')
-        .select('id,term,term_en,category,definition')
-        .or('description.is.null,description.eq.')
-        .limit(5);
-      var pending = (empties.data || []).filter(function(r) {
-        return !newRows.some(function(n) { return n.id === r.id; });
-      });
-      if (pending.length) {
-        console.log('[기술 용어] 미완성 ' + pending.length + '건 보충 생성');
-        await backfillTermDetails(pending);
-      }
-    } catch(e) { console.warn('[기술 용어] 미완성 보충 조회 실패:', e); }
-  } catch(e) {
-    console.warn('[기술 용어] 자동 추출 오류:', e);
-  }
-}
 
 // ════════════════════════════════════════════
 //  추가 지식 — UI 함수 (패널 탭 전환 / 저장 / 목록 렌더)
@@ -8353,7 +8139,7 @@ async function showIssueDetail(issueId) {
   h += _issueCardOpen(true) +
     '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">' +
       '<span style="font-size:13px;font-weight:600;color:var(--text-primary)"><i class="ti ti-timeline"></i> 연대기 타임라인</span>' +
-      (currentProfile ? '<button class="btn" id="issue-archive-btn" onclick="enrichIssueArchive(' + i.id + ')" ' +
+      (isAdminUser() ? '<button class="btn" id="issue-archive-btn" onclick="enrichIssueArchive(' + i.id + ')" ' +
         'title="네이버·구글에서 60일 이전 기사를 다시 찾아 이슈에 붙입니다" ' +
         'style="margin-left:auto;font-size:11px;padding:3px 11px"><i class="ti ti-history-toggle"></i> 과거 뉴스 보강</button>' : '') +
     '</div>' +
@@ -8498,7 +8284,7 @@ async function showIssueDetail(issueId) {
       (i.impact_summary && i.impact_summary.generated_at
         ? '<span style="font-size:11px;color:var(--text-tertiary)">' + escHtml((i.impact_summary.model || '').replace(/-\d{8}$/, '')) + ' · ' + escHtml(String(i.impact_summary.generated_at).slice(0, 10)) + '</span>'
         : '') +
-      (currentProfile ? '<button class="btn" onclick="generateIssueImpact(' + i.id + ')" style="margin-left:auto;font-size:11px;padding:3px 11px">' +
+      (isAdminUser() ? '<button class="btn" onclick="generateIssueImpact(' + i.id + ')" style="margin-left:auto;font-size:11px;padding:3px 11px">' +
         (i.impact_summary ? '<i class="ti ti-refresh"></i> 다시 생성' : '<i class="ti ti-sparkles"></i> 생성') + '</button>' : '') +
     '</div>' +
     '<div id="issue-impact-box">' + _issueImpactHtml(i, all) + '</div>' +
@@ -8715,6 +8501,7 @@ async function openIssueLinkItem(linkId) {
 // 연결 여부는 서버(Haiku)가 판정하고, 여기서는 결과와 '제외 N건'을 보여줘 감사할 수 있게 한다.
 async function enrichIssueArchive(issueId) {
   if (!sb) return;
+  if (typeof isAdminUser !== 'function' || !isAdminUser()) { alert('이 기능은 관리자만 사용할 수 있습니다.'); return; }
   var btn = document.getElementById('issue-archive-btn');
   var box = document.getElementById('issue-archive-result');
   if (btn) { btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader"></i> 검색 중...'; }
@@ -8999,7 +8786,7 @@ function _issueImpactHtml(iss, links) {
 async function generateIssueImpact(issueId) {
   var iss = (_issueCache || []).find(function(x) { return String(x.id) === String(issueId); });
   if (!iss || !sb) return;
-  if (!aiReady()) { alert(aiGateMsg()); return; }
+  if (typeof isAdminUser !== 'function' || !isAdminUser()) { alert('이 기능은 관리자만 사용할 수 있습니다.'); return; }
   var box = document.getElementById('issue-impact-box');
   if (box) box.innerHTML = '<div style="display:flex;align-items:center;gap:8px;color:var(--text-secondary);font-size:12px;padding:12px 14px">' +
     '<span style="display:inline-block;width:14px;height:14px;border:2px solid var(--accent);border-top-color:transparent;border-radius:50%;animation:spin 0.8s linear infinite"></span>영향 요약 생성 중...</div>';
@@ -10617,7 +10404,7 @@ async function askLawMap() {
       // 이 조문을 근거로 삼는 주제가 없음 → 법령 노드 포커스 + 해당 조문 원문 발췌 (엉뚱한 주제로 가지 않음)
       renderLawMapGraph(lawNode.id);
       setLawMapStatus(lmEsc(lawNode.name) + ' 제' + lmEsc(artQ.key) + '를 근거로 삼는 주제가 아직 없습니다 — 법령 중심 관계와 조문 원문을 표시합니다 · ' +
-        '<button class="btn btn-primary" style="font-size:11px;padding:2px 10px" onclick="generateLawMapTopic()"><i class="ti ti-sparkles"></i> AI로 관계도 생성 (1회 과금)</button>');
+        '' + _lawmapGenBtnHtml() + '');
       await showLawMapNodeDetail(lawNode.id);
       var docName0 = lawNode.doc_name || null;
       if (!docName0) {
@@ -10649,11 +10436,11 @@ async function askLawMap() {
     var sel = document.getElementById('lawmap-topic-select');
     if (sel) sel.value = best.id;
     renderLawMapGraph(best.id);
-    setLawMapStatus('✔ 기존 주제 매칭 (<b>' + lmEsc(best.name) + '</b>) — API 호출 없음 · 찾던 주제가 아니면 <button class="btn" style="font-size:11px;padding:2px 8px" onclick="generateLawMapTopic()"><i class="ti ti-sparkles"></i> AI로 새로 생성</button>');
+    setLawMapStatus('✔ 기존 주제 매칭 (<b>' + lmEsc(best.name) + '</b>) — API 호출 없음 · 찾던 주제가 아니면 ' + _lawmapGenBtnHtml() + '');
     showLawMapNodeDetail(best.id);
   } else {
     // 엉뚱한 그래프를 그리지 않음 — 현재 화면 유지하고 생성만 제안
-    setLawMapStatus('“' + lmEsc(q.slice(0, 30)) + '”에 맞는 주제가 관계망에 없습니다 — <button class="btn btn-primary" style="font-size:11px;padding:2px 10px" onclick="generateLawMapTopic()"><i class="ti ti-sparkles"></i> AI로 관계도 생성 (1회 과금)</button>');
+    setLawMapStatus('“' + lmEsc(q.slice(0, 30)) + '”에 맞는 주제가 관계망에 없습니다 — ' + _lawmapGenBtnHtml() + '');
   }
 }
 
@@ -10727,10 +10514,19 @@ async function callLawmapAI(userMsg) {
   return JSON.parse(m[0]);
 }
 
+/** 'AI로 관계도 생성' 버튼 — 관리자에게만(#141). 일반 승인자에겐 관리자 요청 안내 문구. */
+function _lawmapGenBtnHtml() {
+  if (typeof isAdminUser === 'function' && isAdminUser()) {
+    return '<button class="btn btn-primary" style="font-size:11px;padding:2px 10px" onclick="generateLawMapTopic()"><i class="ti ti-sparkles"></i> AI로 관계도 생성 (1회 과금)</button>';
+  }
+  return '<span style="font-size:11px;color:var(--text-muted)">새 주제 생성은 관리자에게 요청해 주세요</span>';
+}
+
 async function generateLawMapTopic() {
   var input = document.getElementById('lawmap-q');
   var q = (input && input.value || '').trim();
   if (!q) return;
+  if (typeof isAdminUser !== 'function' || !isAdminUser()) { alert('이 기능은 관리자만 사용할 수 있습니다.'); return; }
   setLawMapStatus('🤖 RAG 근거 수집 + AI 생성 중… (20~40초)');
   try {
     var chunks = await searchKeywords(q, false);
@@ -11263,7 +11059,6 @@ document.addEventListener('DOMContentLoaded', function() {
     });
   }
   refreshOpsLight();   // 상단바 상태등 — 페이지 로드 시 1회 (이후 smartRefresh마다 갱신)
-  setTimeout(autoExtractTermsIfNeeded, 60000);
 });
 
 // ── 넓게 보기 / 한 영역 전체화면 (2026-09-06, 배경역사 #126) ──

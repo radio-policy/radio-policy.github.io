@@ -36,6 +36,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 ├── assembly_crawler.py         # 국회 법안 모니터링(열린국회정보 API, 22대) + 국회 입법예고 추적 패스(#56). **키워드 검색은 페이지 끝까지 순회**(`_fetch_bill_rows`, #121 — pIndex=1 한 페이지만 읽으면 100건 넘는 키워드가 조용히 잘림) + `fetch_committee_bills`(COMMITTEE=과학기술정보방송통신위원회 전수 스윕)로 이름에 키워드가 없는 과방위 소관 법안까지 포착(#121)
 ├── law_diff_gen.py             # 법령 조문 DIFF 생성(행정부 예고/시행예정/시행 + 국회 예고 --assembly-only) (#54·#56). **국회분은 KB 등재 법령만 분석(#86)** — 「이 법안이 KB에 있는 법을 고치는가」 대조. AI 판정이 아니라 문자열 대조라 비용 0이고, 운영자가 KB 등재로 대상을 직접 통제한다. 법령명 정규화 필수(`[ㆍ·・.\s]` 제거 — 「대·중소기업」 표기가 DB/국회가 다르다). **KB 조회 실패 시 필터 미적용(fail-open), 제외분은 로그에 이름을 남긴다**(빠진 법을 KB 등재로 되살릴 수 있게). **조문 매칭은 법제처 신구법대비표 API(oldAndNew/admrulOldAndNew) 정본 우선, 없으면(존재여부 N) difflib 폴백 — 영향분석·요약은 무변경. pending/promoted 경로만 (#63)**
 ├── foreign_press.py / assembly_minutes.py  # 해외 규제기관(05:30) / 과방위 회의록(17시 체인) (#54). 회의록 일일 경로는 Sonnet 5(`MINUTES_MODEL`, thinking disabled) + 신규 회의 다이제스트를 구독자 큐(assembly)에 적재 (#120)
+├── term_extract.py → backfill_term_details.py  # 기술 용어 자동 추출(Haiku, 최근 7일 뉴스 30건) → 빈 상세 백필(Sonnet 5 thinking disabled, --limit 10) — **05:00 KST Actions term_extract.yml**(#141, 2026-09-09). 브라우저 자동 경로·수동 '뉴스에서 용어 추출' 버튼 폐지. heartbeat last_term_extract_run·last_term_backfill_run
 ├── minutes_offline.py          # 회의록 **API 0** 파이프라인(#120): 후보·재요약 JSON 내보내기 → 세션(서브에이전트)이 판정·요약 JSON 작성 → 가져오기. 재요약·20·21대 소급 전용, 큐 적재 없음
 ├── notify.py / embed_util.py   # 공용 유틸 — 텔레그램 전송(분할·재시도·429) / Voyage 임베딩. 새 코드는 반드시 재사용 (#58)
 ├── tests/test_smoke.py         # 스모크 테스트(표준 unittest·네트워크 0, 17케이스). `python -m unittest discover -s tests` (#58)
@@ -81,7 +82,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 | app_config | 키-값 설정. `system_prompt`(봇 자문 프롬프트), `press_keywords`(보도자료 수집 키워드 JSON 배열 — 대시보드 '수집 키워드 관리' 카드가 편집), `press_relevance_criteria`(매일 수집 AI 관련성 판정 기준문), `assembly_notice_criteria`(국회 입법예고 Haiku 판정 기준문)·`assembly_notice_rejected`(기각 캐시 JSON — 자동 관리) 등. **claude_key는 anon 노출되는 브라우저용 — 서버측 재사용 금지** |
 | custom_knowledge | 팀 추가 지식(수동 입력). AI 자문 키워드 매칭 참조 |
 | chat_logs | AI 자문 이력. **2026-08-20(#103)부터 네 경로 공통 정본 답변 로그** — 대시보드 자문·텔레그램 /ask·/law 자연어·/law 조문 직조회. `channel`(만족도 집계 축)·`chat_id`(텔레그램 이용자)·`chunk_ids`(jsonb, 그때 실제로 프롬프트에 들어간 근거 청크 id — 불만족 분석 재료) 컬럼 추가. 자문 이력 목록은 `category='텔레그램-조문조회'`만 제외(기계적 원문 출력이라 성격이 다름 — 피드백 탭에서는 보인다). 삭제 가능. `sources`(text)는 **두 종류를 접두사로 구분해** 담는다 — 법령·문서명은 그대로, 수집 뉴스는 `[뉴스] 제목 (매체, 날짜)`. 화면·내보내기에서 `splitSources()`로 갈라 별도 표기(법령은 6개 초과분 `… 등 N개`). **뉴스는 본문 발췌로 실제 반영된 건만** 기록(제목 목록 30건은 근거 아님). 스키마 변경 없이 반영 여부를 사후 검증하려는 구조. (배경역사 #35) |
-| teams / profiles / advisory_usage | 대시보드 계정 체계(#104). `teams`=3팀(경쟁제도팀·기술정책팀·AI정책팀, 팀 합산 일일 한도). `profiles`=auth.users 1:1(이름·팀·role(admin/leader/member)·개인 한도·unlimited·**approved**(관리자 승인 전 AI 잠김)·active). 가입 시 트리거가 승인대기 프로필 자동 생성. `advisory_usage`=(user_id, day, kind) 일일 사용량, kind는 advisory(한도 대상)/general(백스톱 300). 쓰기는 service_role RPC 전용 |
+| teams / profiles / advisory_usage | 대시보드 계정 체계(#104). `teams`=3팀(경쟁제도팀·기술정책팀·AI정책팀, 팀 합산 일일 한도). `profiles`=auth.users 1:1(이름·팀·role(admin/leader/member)·개인 한도·unlimited·**approved**(관리자 승인 전 AI 잠김)·active). 가입 시 트리거가 승인대기 프로필 자동 생성. `advisory_usage`=(user_id, day, kind) 일일 사용량, kind는 advisory(Sonnet 호출 전부 — #141부터 스트리밍 불문)/general(Haiku, 백스톱 300). 쓰기는 service_role RPC 전용 |
 | answer_feedback | 답변 만족도 👍👎(#103). **세 경로 공통 한 테이블** — `channel`(telegram_ask/telegram_law/dashboard)로 구분해 경로별 불만족률 비교. `log_id` 유니크 FK→chat_logs(재투표는 upsert로 갱신, 로그 삭제 시 set null이라 평점·경로는 보존). `rating` 1/-1, `reason`은 대시보드 👎 사유(텔레그램은 버튼만 → null). **RLS 켜짐 + anon 정책 없음** — 쓰기는 `submit_answer_feedback` RPC, 읽기는 `admin_list_answer_feedback`(관리자 비밀번호). 화면: AI 자문 > '답변 피드백' 탭 |
 | alert_suppress_log | 긴급 재알림 억제 내역(어떤 기존 기사와 유사해 막았는지, 공유 키워드). **1~2주 실측 후 "본문에만 새 내용" 놓침이 있으면 Haiku 판정 층(월 2~6$) 추가 판단**용. service만 접근(정책 없음) (#44) |
 | system_health | 운영 heartbeat(key별 1행). last_crawl_run=뉴스크롤러 / last_gov_notice_run=입법예고·정부고시 / last_refetch_run=본문수집. 워치독 '고장 vs 없음' 구분 + 운영상태 탭. RLS+anon select |
@@ -142,7 +143,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 | 로그인 필요 | **profiles·teams·advisory_usage·answer_feedback** | anon 정책 없음. authenticated에 역할별 SELECT(본인/팀/admin), profiles·teams UPDATE는 admin만. AI 호출은 `claude-proxy`가 JWT를 검증한다 (#104) |
 | | importance_feedback | select 공개. **insert·update는 승인 프로필만**(#133) |
 | | tech_terms | select·insert·update (anon 열림 — #133 범위 밖, 추후 검토) |
-| | app_config | select 공개. update는 `press_keywords`(기존)와 **`terms_last_extraction`(승인 프로필, #137 — 용어 자동 추출 하루 1회 서버 게이트)** 두 키만 |
+| | app_config | select 공개. update는 `press_keywords` 키만(#137의 `terms_last_extraction` 게이트는 #141로 폐지 — 정책·행 삭제) |
 | | **people** | select 공개. **update는 admin만**(`is_admin()`, #135 — 입장 요약 생성·갱신 버튼도 관리자에게만 표시). 종전엔 public(anon 포함) update가 열려 있었다 |
 | | custom_knowledge | select·insert·update·delete (팀원 기여 창구) |
 | | law_graph_nodes·law_graph_edges | select·insert·update (delete는 service 전용 — 병합만) |
@@ -194,6 +195,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 | 12 | news-health-check | `0 12 * * *` | 21:00 | 무음 실패 알람(내부) check_news_health() |
 | 13 | watchdog-trigger | `35 12 * * *` | 21:35 | 외부 워치독 백업 dispatch |
 | 19 | foreign-press-trigger | `30 20 * * *` | 05:30 | **해외 규제동향 트리거(2026-08-25 신설)** → foreign_press.yml dispatch. FCC·Ofcom·BEREC·日총무성·ITU는 한국 IP가 불필요해 Actions에서 돈다 — 그전까지 PC 임시작업만 담당해 PC가 꺼지면 그날치가 통째로 빠졌다. 06:05 브리핑보다 앞서야 그날치가 실린다 |
+| 20 | term-extract-trigger | `0 20 * * *` | 05:00 | **기술 용어 자동 추출 트리거(2026-09-09 신설, #141)** → term_extract.yml dispatch. 새벽엔 PC가 꺼져 있어 Actions(Supabase·Anthropic만 쓰므로 한국 IP 불필요). Haiku 추출 + Sonnet 상세 최대 10건/일 — 06:00 브리핑 전에 그날치 완성 |
 | 16 | watchdog-scan-3x | `10 */3 * * *` | 3시간마다 :10 (00:10·03:10·…·21:10) | **내부 워치독 전수 감시** `watchdog_scan(false)` — system_health 10키 키별 임계+note 실패신호, 재알림 억제, 이상 시 1건 요약(Vault `telegram_bot_token`). :10은 :00/:35 잡과 겹치지 않게 오프셋 |
 | 18 | admin-daily-report | `0 0 * * *` | 09:00 | **운영자 일일 리포트**(#100) — 구독자 목록·권한·수신 설정·명령 사용 통계. `trigger_admin_report()` → Vault `admin_report_cron_secret` |
 | — | subscriber-briefing-hourly | `25 * * * *` | 매시 :25 | 구독자 정시 발송 → send-subscriber-briefing. `:25`는 06:05~06:20 브리핑 생성 창을 피한 값. 대상이 없으면 no-op이라 매시 돌아도 부담 없음. Vault `subscriber_cron_secret` 사용 |
@@ -1150,7 +1152,7 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **`answer_feedback`에 anon 정책을 주지 말 것** — 대시보드는 공개 페이지라 정책을 열면 남의 질문·평점·불만 사유가 그대로 노출된다. 쓰기는 `submit_answer_feedback` RPC(누구나 실행, 조회 불가), 읽기는 `admin_list_answer_feedback`(관리자 비밀번호) 전용. 텔레그램 Edge Function은 service role이라 정책과 무관. (배경역사 #103)
 - **`app_config`에 `claude_key` 행을 다시 만들지 말 것 — 브라우저는 더 이상 Anthropic 키를 갖지 않는다** (#104). 그 행은 anon SELECT가 열려 있어 **인터넷 누구나 PostgREST 한 번으로 키를 꺼내 갈 수 있었다**. 모든 AI 호출은 `claudeFetch()` → `claude-proxy` Edge Function을 거치고 키는 Edge Secret에만 있다. 설정 탭의 키 입력란도 되살리지 말 것. (배경역사 #104)
 - **`claude-proxy`의 `auth.getUser(token)` 검사를 제거하지 말 것 — `verify_jwt`는 관문이 아니다.** 대시보드 `verify_jwt`를 켜도 **anon 키를 유효한 JWT로 통과**시킨다(실측). 실제 관문은 함수 안의 `getUser()`이며, 이것이 anon 키 호출을 401로 막는다. (배경역사 #104)
-- **자문 한도 판별을 `body.stream` 대신 클라이언트 헤더로 바꾸지 말 것** — 헤더는 위조할 수 있어 한도를 우회하는 길이 된다. 스트리밍 여부는 서버가 요청 본문에서 직접 관찰하는 값이고, 스트리밍을 쓰는 것이 정확히 자문·보고서초안(비용 큰 둘)이다. 경량 호출은 한도 없이 백스톱 300회/일만. (배경역사 #104)
+- **자문 한도 판별을 `body.model`(서버가 본문에서 읽는 값) 대신 클라이언트 헤더로 바꾸지 말 것** — 헤더는 위조할 수 있어 한도를 우회하는 길이 된다. **2026-09-09(#141)부터 Sonnet 계열이면 스트리밍 여부 불문 자문 한도 차감**(자문·법령 DIFF·용어 상세·관계도 생성·이슈 영향 등), Haiku는 한도 없이 백스톱 300회/일만. 종전 `stream===true` 기준은 비스트리밍 Sonnet 8곳을 한도 밖에 두어 승인자가 하루 300회까지 눌러도 안 막혔다. (배경역사 #104·#141)
 - **프록시의 스트리밍 응답을 `new Response(upstream.body)`로 바로 반환하지 말 것** — 런타임이 응답 완료 시점에 함수를 정리해 긴 답변이 중간에 끊긴다(EarlyDrop). `TransformStream` + `EdgeRuntime.waitUntil(upstream.body.pipeTo(writable))`로 붙잡아야 한다. Edge 실행 한도는 유료 400초(자문 실측 45초~2분). (배경역사 #104)
 - **한도 카운터를 텔레그램식 read-modify-write로 만들지 말 것** — 대시보드는 탭 여러 개가 동시에 요청한다. `charge_ai_usage`처럼 `insert … on conflict do update … returning`(원자적 증가) + 팀 합산은 `pg_advisory_xact_lock`으로 직렬화할 것. 차감·환불 RPC의 EXECUTE는 **service_role 전용**(클라이언트가 한도를 조작하지 못하게). (배경역사 #104)
 - **GoTrue "Confirm email"을 켜지 말 것** — 이 시스템은 메일을 보낼 수 없다(Resend 도메인 미인증). 켜면 가입이 확인 메일 대기로 막다른길이 되고 발송 한도(429)로 실패한다. 현재 `mailer_autoconfirm=true`(확인 없이 즉시 가입). 가입 자체는 열어 두되 **승인 전에는 AI 기능이 잠긴다**(profiles.approved). (배경역사 #104)
@@ -1187,6 +1189,8 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 
 - **국회 발언 검색에서 1단(정리해 둔 발언)과 2단(국회 원문) 중 하나를 빼지 말 것 (2026-09-08, #132)** — 요지에는 지나가듯 말한 낱말이 빠지고(변재일 eSIM 발언은 topic에만 '무선국'), 원문 문자열 검색은 "기지국 준공검사"처럼 다른 낱말로 말한 발언을 못 잡는다. 둘이 서로의 구멍을 메우는 구조라 한쪽만 남기면 한 방향의 누락이 생긴다. 1단은 요지·주제·안건 **모두** 검색, 원문 0건이면 "원문에서는 없음"을 **반드시 같이** 보낸다. 공용 파일(`_shared/assembly_search.ts`)을 고치면 `telegram-webhook`·`assembly-search` **둘 다 배포**.
 - **공개 대시보드의 쓰기 권한을 화면 게이트로만 막았다고 믿지 말 것 (2026-09-08, #133)** — news_feed는 anon UPDATE/DELETE 정책이 `true`라 브라우저 콘솔에서 누구나 중요도를 바꾸고 기사를 지울 수 있었다. 편집(중요도·잠금·삭제·importance_feedback·deleted_news·daily_briefings 갱신)은 **DB 정책이 `is_approved_user()`로 막고**, anon은 news_feed의 `is_read`·`content`·`summary` **컬럼 권한만**. 새 테이블에 anon 쓰기 정책을 줄 때는 "인터넷 누구나"가 그 쓰기를 해도 되는지 먼저 물을 것. 검증은 anon 키로 REST PATCH/DELETE를 직접 쏴서(401 또는 0행) 확인.
+
+- **지식을 만들어 채우는 AI 버튼(용어 ↺재생성·AI로 관계도 생성·이슈 영향 요약·과거 뉴스 보강·연결 테스트)을 승인자 전체에 다시 열지 말 것 (2026-09-09, #141)** — 전부 관리자 전용(`isAdminUser()` + 프록시 Sonnet 한도 + news-archive-search role=admin). 일반 승인자에게 남는 AI는 **자문(한도)·법령 DIFF 수동 분석(자문 한도에 포함)·영향 분석 다시 분석(Haiku)** 셋뿐. '뉴스에서 용어 추출' 수동 버튼과 브라우저 자동 추출은 폐지 — 새벽 05:00 `term_extract.yml`이 대체. 팀장(leader)에게 열려면 프록시·`isAdminUser` 조건에 leader를 추가할 것.
 
 ## 외부 서비스·키
 
