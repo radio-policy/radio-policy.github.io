@@ -157,7 +157,7 @@
             <i class="ti ti-arrows-diff" style="color:var(--accent);margin-right:4px"></i>법령 DIFF 분석
           </div>
           <div style="font-size:11px;color:var(--text-secondary);line-height:1.6">
-            입법예고·행정예고 단계에서 <b style="color:var(--text-primary)">개정 전·후 파일</b>을 올리면 변경된 조문과 SKT 영향도를 자동 분석합니다.
+            입법예고·행정예고 단계에서 <b style="color:var(--text-primary)">개정 전·후 파일</b>을 올리면 변경된 조문과 SKT 영향도를 자동 분석합니다. (승인 계정 전용, 실행 1회가 자문 한도 1회로 계산됩니다)
           </div>
         </div>
 
@@ -563,7 +563,7 @@
       <!-- 기술 용어 위키 -->
       <div class="panel" id="panel-terms">
         <div style="display:flex;gap:8px;margin-bottom:14px;align-items:center;flex-wrap:wrap">
-          <span style="font-size:12px;color:var(--text-secondary)">이동통신·전파 분야 기술 용어 자동 수집 위키</span>
+          <span style="font-size:12px;color:var(--text-secondary)">이동통신·전파 분야 기술 용어 위키 — 매일 05:00 최근 뉴스에서 자동 추출·설명 생성</span>
           
           <span class="badge badge-purple" style="margin-left:6px" id="terms-count-badge">—</span>
         </div>
@@ -765,7 +765,7 @@
       <!-- 과방위 회의록 — 독립 메뉴로 승격 (2026-08-02 운영자 지시, #54) -->
       <div class="panel" id="panel-minutes">
         <div style="display:flex;gap:8px;margin-bottom:10px;align-items:center">
-          <span style="font-size:12px;color:var(--text-secondary)">과학기술정보방송통신위원회 상임위·국정감사 회의록 · 통신·전파·AI 관련 발언 발췌(SK텔레콤 언급은 주제 불문 수록) · 수집분 20대~(2016년 이후 상임위·국정감사, 2026-09-03 소급) · 매일 17:00 갱신 · <b>원문 검색</b> 탭은 국회 시스템에서 직접 조회</span>
+          <span style="font-size:12px;color:var(--text-secondary)">과학기술정보방송통신위원회 상임위·국정감사 회의록 · 통신·전파·AI 관련 발언 발췌(SK텔레콤 언급은 주제 불문 수록) · 수집분 20대~(2016년 이후 상임위·국정감사, 2026-09-03 소급) · 매일 17:00 갱신 · <b>원문 검색</b> 탭은 정리해 둔 발언(요지)에서 먼저 찾고 국회회의록시스템 원문을 이어서 조회</span>
         </div>
         <div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap">
           <button id="minutes-tab-by-meeting" onclick="switchMinutesView('meeting')" style="cursor:pointer;font-size:12px;padding:5px 12px;border-radius:6px;border:1px solid var(--accent);background:var(--accent);color:#fff">회의별 보기</button>
@@ -956,7 +956,7 @@
       <button class="btn btn-primary" id="login-submit" onclick="submitLogin()" style="width:100%;justify-content:center;margin-top:4px">로그인</button>
       <div id="login-note" style="font-size:11px;color:var(--text-secondary);min-height:15px"></div>
       <div id="login-switch" style="font-size:11px;color:var(--text-tertiary);text-align:center">계정이 없으신가요? <a href="#" onclick="switchLoginTab('signup');return false">가입 신청</a></div>
-      <div style="font-size:10px;color:var(--text-tertiary);text-align:center;line-height:1.5;border-top:0.5px solid var(--border-light);padding-top:8px">뉴스·브리핑·법안·지식베이스 열람은 로그인 없이 이용할 수 있습니다.<br>AI 자문 등 생성 기능만 승인된 계정이 필요합니다.</div>
+      <div style="font-size:10px;color:var(--text-tertiary);text-align:center;line-height:1.5;border-top:0.5px solid var(--border-light);padding-top:8px">열람·검색은 로그인 없이 이용할 수 있습니다.<br>AI 자문 등 생성 기능과 뉴스 중요도 변경·잠금·삭제 같은 편집은 승인된 계정이 필요합니다.</div>
     </div>
   </div>
 </div>
@@ -1076,7 +1076,7 @@
 <script src="https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js"></script>
 <script>if(typeof pdfjsLib!=='undefined'){pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';}</script>
 <script src="system_prompt.js?v=20260819a"></script>
-<script src="app.js?v=20260909i"></script>
+<script src="app.js?v=20260909j"></script>
 <script src="lawmap_articles.js?v=20260906s"></script>
 </body>
 </html>
