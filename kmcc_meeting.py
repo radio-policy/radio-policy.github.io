@@ -16,7 +16,9 @@
      · 제목 '2026년 제N차 위원회 결과'(kind='result', 회의 당일 15:00~18:45 게시) → **무조건** 저장, Haiku 안건별 요지 ≤10줄
      · 그 밖의 보도자료(kind='press') → **관련성 필터**(운영자 결정 2026-09-11 "전건은 쓰레기가 많다"): 보도자료 KB 적재와
        같은 기준 — app_config.press_keywords + Haiku 판정(press_relevance_criteria, press_ingest.make_ai_judge 재사용),
-       API 불가 시 제목 키워드. 통과분만 저장·발송. 텔레그램은 제목·담당부서·본문 앞부분·링크(요약 없음)
+       API 불가 시 제목 키워드. 통과분만 저장·발송. 텔레그램은 제목·담당부서·본문 앞부분·링크(요약 없음).
+       판정 결과는 **kmcc_press_verdict(url PK)** 에 1회 기록·영구 재사용 — Haiku 판정이 실행마다 뒤집혀 지운 글이
+       매시 되살아난 실측(드라마 AI 제작 사례, 2026-09-11 01:49) 때문. 운영자가 relevant 를 고치면 다음 실행에 반영.
   의사일정·위원회 결과는 키워드 필터 없이 무조건 news_feed 에 저장하고(source 2종), 구독자 큐 topic='kmcc' 에
   한 통씩 적재한다(수집 직후 즉시 배달 — subscriber_notify 가 urgent 와 같이 트리거).
   ※ gov_notice_crawler.crawl_kcc() 의 방미통위 보도자료 키워드 수집(17시)은 이것과 중복이라 비활성화했다(#154).
@@ -530,6 +532,25 @@ def load_existing(sb) -> dict:
     return out
 
 
+def load_verdicts(sb) -> dict:
+    """kmcc_press_verdict → {url: relevant}. 실패 시 빈 dict(그 실행만 재판정)."""
+    try:
+        rows = sb.table('kmcc_press_verdict').select('url,relevant').limit(2000).execute().data or []
+        return {r['url']: bool(r['relevant']) for r in rows if r.get('url')}
+    except Exception as e:
+        print('[판정 캐시 조회 실패 — 재판정] %s' % str(e)[:80])
+        return {}
+
+
+def save_verdict(sb, url: str, title: str, relevant: bool, reason: str) -> None:
+    try:
+        sb.table('kmcc_press_verdict').upsert(
+            {'url': url, 'title': title[:200], 'relevant': relevant, 'reason': (reason or '')[:200]},
+            on_conflict='url').execute()
+    except Exception as e:
+        print('[판정 캐시 저장 실패(무시)] %s' % str(e)[:80])
+
+
 def make_row(item: dict, content: str, summary: str, now: datetime) -> dict:
     pd = item.get('post_date')
     if pd and pd.date() == now.date():
@@ -606,6 +627,7 @@ def run(sb, pages: int = 1, dry: bool = False, notify_q: bool = True, since=None
     # 일반 보도자료 관련성 판정기 — KB 보도자료 적재와 같은 기준·같은 함수(press_ingest). dry-run 은 --ai 일 때만 Haiku.
     keywords = pi.load_press_keywords(sb) if sb is not None else list(pi.FALLBACK_KEYWORDS)
     judge = pi.make_ai_judge(sb, keywords) if (ai_preview or not dry) else None
+    verdicts = load_verdicts(sb) if sb is not None else {}
 
     for board in ('agenda', 'press'):
         try:
@@ -630,6 +652,9 @@ def run(sb, pages: int = 1, dry: bool = False, notify_q: bool = True, since=None
                 revised = bool(m and it['agenda']['file_seq'] and m.group(1) != it['agenda']['file_seq'])
             if old and not revised:
                 continue
+            if kind == 'press' and verdicts.get(it['url']) is False:
+                st['skip'] += 1          # 이미 무관 판정된 글 — 재판정하지 않는다(뒤집힘 방지)
+                continue
             use_ai = (ai_left > 0) and (use_ai_dry if dry else True)
             try:
                 if kind == 'agenda':
@@ -638,7 +663,12 @@ def run(sb, pages: int = 1, dry: bool = False, notify_q: bool = True, since=None
                     content, summary, html = build_result(it, use_ai)
                 else:
                     content, summary, html = build_press(it)
-                    ok, reason = press_relevant(judge, keywords, it['title'], content)
+                    if it['url'] in verdicts:
+                        ok, reason = verdicts[it['url']], '캐시'
+                    else:
+                        ok, reason = press_relevant(judge, keywords, it['title'], content)
+                        if not dry:
+                            save_verdict(sb, it['url'], it['title'], ok, reason)
                     if not ok:
                         st['skip'] += 1
                         print('  [무관 스킵] %s — %s' % (it['title'][:50], reason))
