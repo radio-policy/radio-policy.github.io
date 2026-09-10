@@ -29,9 +29,11 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 ├── regenerate_briefings.py     # 과거 브리핑을 클러스터링 적용본으로 재생성(수동). morning_briefing 함수 재사용, 입법예고 섹션 보존. **실행 전 daily_briefings_backup에 원본 백업 필수** (#46)
 ├── refetch_content.py          # 본문 재수집·요약(**정부 공고만 미리 생성, 참고·보통·긴급은 첫 열람 시 생성 — #153; 종전 '참고'만 생략 #82**)·60일 초과 정리(Windows 스케줄러, 한국 IP) · heartbeat(last_refetch_run)
 ├── gov_notice_crawler.py       # 정부·기관 고시→news_feed + 입법예고(opinion.lawmaking.go.kr)→law_amendments(lsAnc) (17:00, 한국 IP) · heartbeat(last_gov_notice_run)
-│                               #   RRA(국립전파연구원)·MSIT(과기정통부)·KMCC(중앙전파관리소)·KCC(방통위)·ETRI·KISDI
+│                               #   RRA(국립전파연구원)·MSIT(과기정통부)·CRMS(중앙전파관리소, 함수명은 crawl_kmcc)·KCC(방미통위=방송미디어통신위원회, 구 방통위)·ETRI·KISDI
 │                               #   ※ MSIT는 보도자료·입법행정예고·훈령예규고시 + **공고(공지사항 mPid=121&mId=310)**: 주파수 할당·재할당 공고 원문이 실리는 게시판(2026-08-02 추가). 사업공고(311)는 R&D 모집 잡음이라 제외
-│                               #   ※ crawl_kcc()는 방통위(kcc.go.kr), crawl_kmcc()는 중앙전파관리소(kmcc.go.kr) — 도메인 한 글자 차이라 혼동 주의
+│                               #   ※ crawl_kcc()는 방미통위 보도자료(kcc.go.kr, **2026-09-11부터 대상 비움 — kmcc_meeting.py가 전건 수집**), crawl_kmcc()는 중앙전파관리소(crms.go.kr — 이름은 역사적 오기, #53)
+├── kmcc_meeting.py             # **방미통위(방송미디어통신위원회) 회의 의사일정 + 보도자료 전건**(위원회 결과 포함) → news_feed(source '방송미디어통신위원회 위원회 회의' / '… 보도자료') + 구독자 큐 topic=kmcc. GitHub Actions daily_crawl.yml 매시 :17 crawler.py 뒤 단계(continue-on-error). 의사일정 PDF는 Haiku 표 복원(요약 금지), 위원회 결과는 Haiku 요지 ≤10줄, 일반 보도자료는 AI 없음·본문만. heartbeat(last_kmcc_meeting_run). `--operator-test`=운영자 봇 시험 발송, `--pages N --no-notify`=초기 적재 (#154)
+├── announce_kmcc_topic.py      # 일회성 — 구독자 전원에게 '📺 방미통위 동향' 토픽 신설 안내(2026-09-11 10:00 발송). 재실행 금지
 ├── law_crawler.py              # 법제처 DRF API 법령·고시 모니터링(11:00 KST). 엔드포인트 www.law.go.kr/DRF/lawSearch.do, OC=radiopolicyai
 ├── assembly_crawler.py         # 국회 법안 모니터링(열린국회정보 API, 22대) + 국회 입법예고 추적 패스(#56). **키워드 검색은 페이지 끝까지 순회**(`_fetch_bill_rows`, #121 — pIndex=1 한 페이지만 읽으면 100건 넘는 키워드가 조용히 잘림) + `fetch_committee_bills`(COMMITTEE=과학기술정보방송통신위원회 전수 스윕)로 이름에 키워드가 없는 과방위 소관 법안까지 포착(#121)
 ├── law_diff_gen.py             # 법령 조문 DIFF 생성(행정부 예고/시행예정/시행 + 국회 예고 --assembly-only) (#54·#56). **국회분은 KB 등재 법령만 분석(#86)** — 「이 법안이 KB에 있는 법을 고치는가」 대조. AI 판정이 아니라 문자열 대조라 비용 0이고, 운영자가 KB 등재로 대상을 직접 통제한다. 법령명 정규화 필수(`[ㆍ·・.\s]` 제거 — 「대·중소기업」 표기가 DB/국회가 다르다). **KB 조회 실패 시 필터 미적용(fail-open), 제외분은 로그에 이름을 남긴다**(빠진 법을 KB 등재로 되살릴 수 있게). **조문 매칭은 법제처 신구법대비표 API(oldAndNew/admrulOldAndNew) 정본 우선, 없으면(존재여부 N) difflib 폴백 — 영향분석·요약은 무변경. pending/promoted 경로만 (#63)**
@@ -86,15 +88,15 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 | api_usage / ai_usage_hour | **API 토큰 계측(#152, 2026-09-10)**. `api_usage`=(ts, host actions/pc/edge, site '<스크립트>.py:<함수>', model, input/cache_read/cache_write/output 토큰) — Python 스크립트가 `api_usage.install()`로 SDK `Messages.create`를 감싸 호출마다 1행 기록(fail-open, 120일 보관). 관리자만 SELECT. `ai_usage_hour`=(user_id, hour, count) 시간당 general 카운터(`charge_ai_usage` 내부용). 집계 RPC `ops_ai_usage_today()`(운영 상태 탭) |
 | answer_feedback | 답변 만족도 👍👎(#103). **세 경로 공통 한 테이블** — `channel`(telegram_ask/telegram_law/dashboard)로 구분해 경로별 불만족률 비교. `log_id` 유니크 FK→chat_logs(재투표는 upsert로 갱신, 로그 삭제 시 set null이라 평점·경로는 보존). `rating` 1/-1, `reason`은 대시보드 👎 사유(텔레그램은 버튼만 → null). **RLS 켜짐 + anon 정책 없음** — 쓰기는 `submit_answer_feedback` RPC, 읽기는 `admin_list_answer_feedback`(관리자 비밀번호). 화면: AI 자문 > '답변 피드백' 탭 |
 | alert_suppress_log | 긴급 재알림 억제 내역(어떤 기존 기사와 유사해 막았는지, 공유 키워드). **1~2주 실측 후 "본문에만 새 내용" 놓침이 있으면 Haiku 판정 층(월 2~6$) 추가 판단**용. service만 접근(정책 없음) (#44) |
-| system_health | 운영 heartbeat(key별 1행). last_crawl_run=뉴스크롤러 / last_gov_notice_run=입법예고·정부고시 / last_refetch_run=본문수집. 워치독 '고장 vs 없음' 구분 + 운영상태 탭. RLS+anon select |
+| system_health | 운영 heartbeat(key별 1행). last_crawl_run=뉴스크롤러 / last_gov_notice_run=입법예고·정부고시 / last_refetch_run=본문수집 / **last_kmcc_meeting_run=방미통위 의사일정·보도자료(매시, note `agenda=N result=M press=P new=K queued=Q fail=F`, #154 — watchdog_scan 미감시, 운영 상태 탭 행만)**. 워치독 '고장 vs 없음' 구분 + 운영상태 탭. RLS+anon select |
 | kb_documents | 법령·규제 **요약/실무 문서**(regulatory-kb OKF 번들, 문서당 1행). concept_type·law_type·law_number·enforcement_date·status(current/superseded)·body_md 컬럼. path 유니크(정체 키). **document_chunks(조문 원문)와 별개 레이어** — 조문 인용은 그쪽, 요약·적용범위·실무는 이쪽. RLS+anon select. **법안 요약은 넣지 않는다**(2026-09-04 #122 — #121에서 넣었던 concept_type='Bill' 109건은 같은 날 삭제): 자문 근거는 확정 법령(시행예정본 포함)만, 국회 법안은 동향 전용. |
 | kb_chunks | kb_documents 본문 청크 + embedding(**voyage-law-2** 1024, HNSW). doc_id FK(cascade). 자문이 시맨틱+trgm으로 조회 |
 | law_graph_nodes | 법령 관계도 노드(name UNIQUE). node_type: topic(주제)/law/decree/rules/notice/etc. source: seed(세션 시드)/citation(인용망 스크립트)/ai(자문·즉석 생성). doc_name=document_chunks 연결(원문 보기). RLS+anon select/insert/update(delete는 service 전용) |
 | law_graph_edges | 법령 관계도 엣지(source_id→target_id, on delete cascade). relation_type: 근거(주제→법령)/인용(조문 인용)/하위법령(계열). source: seed/citation/family/**thdcmp**/**delegation**/ai. weight=인용·재확인 횟수(엣지 굵기). unique(source,target,relation_type). RLS 동일. **delegation(2026-08-03, #81)** = `law_delegations` 표 기반 위임 엣지(weight=5, 최우선) — 조문 근거 원본은 표에 있으므로 description은 요약만. 우선순위 delegation > thdcmp(4) > family(3), 상위 출처가 정본화한 노드쌍은 하위 출처 억제(**적재 성공을 DB에서 재확인한 뒤** 억제 — #65 공백 사고 순서). **thdcmp(2026-08-02, #65)** = 법제처 3단비교 API(`lawService.do?target=thdCmp&knd=2`) 정본 위임 — weight=4. **CHECK 제약에 source 값을 추가해야 적재됨**(신규 source 태그 도입 시 `law_graph_edges_source_check` 확장 필수 — #65에서 누락으로 적재 실패 후 수정) |
 | lawmap_proposals | **AI 연결 제안 검토 대기(#147, 2026-09-09)**: 자문 말미 `<lawmap>` 블록·관리자 즉석 생성·보강이 만든 연결은 정식 관계도에 바로 들어가지 않고 여기 쌓인다. origin(advisory/generate/enrich)·question·topic·description·relations(jsonb)·gate(제출 시 관문 결과)·status(pending/approved/rejected)·decided_*·result. 관리자가 관계도 탭 **"검토 대기 N건"** 카드에서 수정·AI 보강·관문 재검사·기각·**승인**(=saveLawmapData, 관문 #123 통과분만 law_graph_*에 반영). 정식 테이블은 오염되지 않고 상태 컬럼도 없다 |
 | law_delegations | **법령 위임 대응표**(#80·#81): parent_law·parent_article ↔ child_law·child_article, unique 4키. 출처 2계열 — ①법제처 3단비교 정본(`sync_law_delegations.py`, 법률↔시행령·시행규칙 조문 단위 1,586행) ②고시 제1조 역추출(`sync_notice_delegations.py`, 정규식·AI 미사용, child_article='전체' 230행). /law가 상·하위 조문 동시 제시에, 관계도가 delegation 엣지 생성에 사용. 재적재 안전(upsert + 성공 확인 후 stale 정리). 고시→상위 연결은 3단비교 범위 밖이라 역추출이 유일 경로. **③수기 확정표 `MANUAL_BASIS`(#82, 14건)** — 제1조가 없거나 근거를 안 쓰는 문서(협정문·분배표·공고)를 **상위 법령 조문에서 역방향 확인**(「…을 정하여 고시한다」가 그 문서를 지목)해 채움. **확정만 넣고 포괄 위임('법·영에서 위임한 사항'류)은 제외** — 잘못된 조문 엣지는 없는 관계보다 나쁘다. 정규식이 성공하면 그쪽이 이기므로 원문 개정 시 자동으로 비켜선다. DB 직접 삽입 금지(17시 prune_stale이 지움) |
-| telegram_subscribers | 구독자 봇 가입자(chat_id PK). topic_briefing/urgent/assembly(각각 on·off), days(daily/weekday), briefing_hour(6~12, **'받기 시작 시각'** — 브리핑은 이 시각 1회, 긴급·법안은 이후 매시 :25 배달), last_briefing_sent_date·last_urgent_sent_at·last_assembly_sent_at(중복 발송 방지), ai_allowed(**기본 false** — AI 자문 승인 플래그), ai_count_date·ai_count(일일 20회 상한), **law_allowed(#100, 기본 false — `/law` 자연어 승인 플래그)**, law_count_date·law_count(일일 10회 상한). active는 봇 차단(403) 자동 처리 전용이며 화면에 버튼은 없다. **RLS 켜고 정책 0개 = service_role 전용**(chat_id는 개인정보, 프런트 노출 금지 — 의도된 설계) **unlimited boolean(#85)** — true면 /ask·/law 일일 상한 면제(카운터는 계속 올려 사용량 관찰). 구독자 속성이라 app_config가 아니라 이 행에 둔다. getSub이 select('*')라 컬럼만 추가하면 코드가 자동으로 읽는다. ⚠️ 비용 상한이 사라지므로 신뢰 인원에게만 |
-| subscriber_queue | 긴급·법안 알림 큐(topic: urgent/assembly, html, created_at). 크롤러가 **발송 대신 적재**하고 send-subscriber-briefing이 각 구독자 수신 시각에 꺼내 보낸다. 억제·클러스터링(#44)·법안 상태변경 판정을 TS로 재구현하지 않으려는 구조. RLS 정책 0개. **topic=assembly 적재원 3곳(#120)**: assembly_crawler(국회 법안 단계변경·국회 입법예고) + gov_notice_crawler(부처 입법예고) + **assembly_minutes(과방위 회의록 다이제스트 — 신규 섹션·60일 이내·발언 3건↑일 때만, `subscriber_notify.format_minutes_digest()`, 2,500자 예산)**. 오프라인 임포트(minutes_offline)는 절대 적재하지 않는다 |
+| telegram_subscribers | 구독자 봇 가입자(chat_id PK). topic_briefing/urgent/assembly/**kmcc**(각각 on·off; kmcc=방미통위 동향 #154 — 컬럼 기본 true(신규 켜짐)·기존 7명은 false로 시작, last_kmcc_sent_at 워터마크), days(daily/weekday), briefing_hour(6~12, **'받기 시작 시각'** — 브리핑은 이 시각 1회, 긴급·법안은 이후 매시 :25 배달), last_briefing_sent_date·last_urgent_sent_at·last_assembly_sent_at(중복 발송 방지), ai_allowed(**기본 false** — AI 자문 승인 플래그), ai_count_date·ai_count(일일 20회 상한), **law_allowed(#100, 기본 false — `/law` 자연어 승인 플래그)**, law_count_date·law_count(일일 10회 상한). active는 봇 차단(403) 자동 처리 전용이며 화면에 버튼은 없다. **RLS 켜고 정책 0개 = service_role 전용**(chat_id는 개인정보, 프런트 노출 금지 — 의도된 설계) **unlimited boolean(#85)** — true면 /ask·/law 일일 상한 면제(카운터는 계속 올려 사용량 관찰). 구독자 속성이라 app_config가 아니라 이 행에 둔다. getSub이 select('*')라 컬럼만 추가하면 코드가 자동으로 읽는다. ⚠️ 비용 상한이 사라지므로 신뢰 인원에게만 |
+| subscriber_queue | 긴급·법안·방미통위 알림 큐(topic: urgent/assembly/**kmcc** — CHECK 제약이 토픽을 열거하므로 토픽 추가 시 제약도 갱신, html, created_at). 크롤러가 **발송 대신 적재**하고 send-subscriber-briefing이 각 구독자 수신 시각에 꺼내 보낸다. 억제·클러스터링(#44)·법안 상태변경 판정을 TS로 재구현하지 않으려는 구조. RLS 정책 0개. **topic=assembly 적재원 3곳(#120)**: assembly_crawler(국회 법안 단계변경·국회 입법예고) + gov_notice_crawler(부처 입법예고) + **assembly_minutes(과방위 회의록 다이제스트 — 신규 섹션·60일 이내·발언 3건↑일 때만, `subscriber_notify.format_minutes_digest()`, 2,500자 예산)**. 오프라인 임포트(minutes_offline)는 절대 적재하지 않는다 |
 | telegram_usage (#100) | 봇 사용 이력(chat_id·command·query 200자·ok·result_note·created_at, 180일 보관). 종전엔 `ai_count`/`law_count` 숫자뿐이라 **무엇을 물었는지가 없었다.** `logUsage()`가 assem·law·law_article·ask·start에서 기록하며 **fail-open**(로깅 실패가 본 기능을 막으면 본말전도). 실패 경로도 `ok=false`+사유로 남긴다 — "검색했는데 안 나왔다"가 통계에서 빠지면 기준문 손볼 근거가 사라진다. **RLS 켜고 정책 0개 = service_role 전용** ⚠️ 생성 마이그레이션에서 RLS를 빠뜨려 공개 anon 키로 chat_id·질의 원문이 열려 있었다 — **텔레그램 계열 테이블을 새로 만들 때 RLS를 같은 마이그레이션에 반드시 넣을 것** |
 | assembly_speeches (#99) | 회의록 발언자별 행(confer_num·speaker·topic·summary). 국감분은 `confer_num='audit-{MNTS_ID}'` 네임스페이스(상임위 `CONFER_NUM`과 값이 겹칠 수 있다). **원문(raw)은 저장하지 않는다** — summary가 잘못 생성되면 재요약이 불가능하니 **생성 시점의 검증이 유일한 방어선**이다(실제로 LLM 영문 거절문이 그대로 저장돼 화면에 노출된 적이 있다). **`topic`의 `SK텔레콤 언급` 칩은 규칙 기반·상시 부착(#120)** — 원문 블록이 `ALWAYS_KEEP_TERMS`에 걸리면 키워드 주제가 있어도 콤마로 **항상 덧붙인다**(종전엔 키워드가 없을 때만 → 4/28 이훈기 'SKT 영업정지' 행에 칩이 없었다). 대시보드는 topic을 콤마 분리해 칩으로 그린다 |
 
@@ -346,6 +348,11 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
                    |   긴급 적재 시 subscriber_notify._trigger_delivery()가 발송 함수를 1회 호출해
                    |   다음 :25를 기다리지 않는다(발송 함수가 수신 시각을 검사하므로 심야엔 무발송).
                    | 요일 선택(매일/평일만), 항목별 on·off. 항목 전부 끄면 수신 없음
+                   | ※ **📺 방미통위 동향(topic=kmcc, 2026-09-11 #154)** — 같은 레벨의 네 번째 토글. 방송미디어통신위원회
+                   |   회의 **의사일정**(회의 전날 15:50~17:30 게시, 안건 표 전문) + **보도자료 전건**(위원회 결과=Haiku 요지 ≤10줄,
+                   |   그 밖은 제목·담당부서·본문 앞부분). kmcc_meeting.py(Actions 매시)가 큐 적재 직후 발송 함수를 **즉시 호출**
+                   |   (urgent와 동형, `_IMMEDIATE_TOPICS`) → 수집 당일·직후 배달(구독자 종료 시각을 넘긴 게시분만 다음 날 시작 시각).
+                   |   기존 구독자 꺼짐·신규 켜짐. 운영자 즉시 알림 없음. 공지사항 게시판은 대상 아님(운영자 정정).
                    | ※ 토글 명칭(2026-09-03, #120): 🗞️ 브리핑 / 🔴 주요 뉴스 / **🏛️ 국회·법률 동향**(구 '법안 동향').
                    |   assembly 토글 하나가 **국회 법안 단계변경 + 국회 입법예고 + 부처 입법예고 + 과방위 회의록
                    |   다이제스트**를 받는다. '국회 동향'이 아닌 이유: 부처 입법예고(gov_notice_crawler)가 이미
@@ -598,6 +605,8 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **매일 수집 = 전수 + AI 판정**: 각 기관 목록 1~2페이지의 최근 15일분을 키워드 없이 전부 내려받아
   Haiku가 제목+본문으로 관련성 판정(기준문=app_config.press_relevance_criteria). API 불가 시
   키워드(app_config.press_keywords) 매칭으로 폴백(fail-open).
+  **예외(#154)**: 제목이 `YYYY년 제N차 위원회 결과`(방미통위)면 `ALWAYS_INGEST_RE`로 판정을 건너뛰고 무조건 등재 — 배치 선판정에서도 제외.
+  방통위 슬러그 `방통위`(doc_name `방통위_보도자료_YYYY.md`)는 개편 뒤에도 **역사적 이름 그대로**(949청크 dedupe 키), 표시명만 방송미디어통신위원회.
 - ⚠️ **보도자료 기준문과 뉴스 기준문(news_relevance_criteria)을 주기적으로 대조할 것(#95).** 각자 진화하다
   어긋난다 — 실제로 **뉴스는 「부처 인사」를 무조건 통과**시키는데(코드의 `is_ministry_personnel_news()`까지
   이중 보장) **보도자료 기준문에는 인사 항목이 아예 없어** 과기정통부 인사 발표가 조용히 누락됐다.
@@ -939,6 +948,8 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 
 ## 점검 체크리스트 (요약 — 상세 경위는 배경역사 문서)
 
+- **방미통위 의사일정·보도자료가 텔레그램에 안 온다** → 운영 상태 탭 `방미통위 회의·결과 수집` 행(3h 기준) → note `fail>0`이면 Actions daily_crawl 로그의 kmcc 스텝(poppler 설치·download.do 차단 여부) → 구독자 `topic_kmcc`가 켜져 있는지(기존 구독자는 기본 꺼짐) → subscriber_queue topic=kmcc 행과 `last_kmcc_sent_at` 대조. (#154)
+
 - **이상 의심 시 1차 점검**: 대시보드 설정 밑 **"운영 상태"** 탭 — 크롤러 heartbeat·뉴스 입력·오늘 브리핑·입법예고·국회 한눈. (배경역사 #16)
 - **브리핑 미수신**: Actions(morning_briefing.yml) 확인→실패 시 "Run workflow" / 성공인데 미수신→`resend_briefing.py` / 09:40 후도 미수신→`briefing_backup_log.txt`. 본문 0건이어도 요약/제목 폴백으로 빈 브리핑은 안 나옴(배경역사 #16). **트리거·PAT·크롤러 heartbeat 다 정상인데 미생성이면 24h 내 신규 기사 0건을 의심** — 그날은 '🕊️ 신규 뉴스 없음' 통지+placeholder가 정상 동작(고장 아님). daily_crawl 로그 `[네이버 뉴스] N건`으로 'NAVER 키 만료(폴백만)' vs '진짜 뉴스 없음'(N>0·실패0) 가름. (배경역사 #17)
 - **트리거 전부 무음 정지(크롤·브리핑·국회·법령 동시 미동작)인데 cron 잡은 다 succeeded**: PAT 권한/만료 의심. cron 잡 상태(net.http_post 비동기라 항상 succeeded)가 아니라 `net._http_response.status_code`로 dispatch 응답 확인 — 403=Actions 권한 부족, 401=토큰 무효, 204=성공. PAT 재생성했다면 Actions(R/W) 권한 누락 여부 확인. (배경역사 #18)
@@ -949,6 +960,14 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **AI 자문 "Failed to fetch"**: 무거운 질문 2분+ idle 끊김 → stream:true로 해결됨. 사내망 프록시·확장프로그램·F12 네트워크 확인.
 
 ## 하지 말아야 할 것 (규칙 + 한 줄 이유 / 상세는 배경역사 문서)
+
+- **`kmcc_meeting.py`의 news_feed.url에 fileSeq를 넣지 말 것** — 같은 의사일정 글에 2~3주 뒤 회의록·속기록 첨부가 붙어도 행이 늘면 안 된다. 수정본은 content 첫 줄 `(fileSeq N)`으로 감지해 update. (#154)
+- **kmcc 큐 적재 여부는 upsert(ignore_duplicates) 반환값으로만 판단할 것** — 10분 동일-html 가드는 Haiku 출력이 비결정적이라 두 인스턴스가 겹치면 못 막는다. (#154)
+- **`daily_crawl.yml`의 kmcc 스텝 `continue-on-error`·`if: !cancelled()`를 지우지 말 것** — 지우면 방미통위 수집 실패가 뉴스 크롤러 결론(워치독 감시 대상)을 바꾸거나 뉴스 실패가 방미통위 수집을 막는다. (#154)
+- **`refetch_content.py --all`에서 source '방송미디어통신위원회 위원회 회의' 제외를 빼지 말 것** — PDF에서 복원한 content가 게시판 껍데기 텍스트로 덮인다. (#154)
+- **gov_notice_crawler.crawl_kcc()의 보도자료 대상을 되살리지 말 것** — kmcc_meeting.py가 전건을 다른 호스트 URL(kmcc.go.kr)로 저장하므로 같은 글이 두 번 저장된다. (#154)
+- **구독 봇 토픽을 추가할 때 5곳을 같이 갱신할 것** — telegram_subscribers 컬럼 + subscriber_queue **CHECK 제약** + subscriber_notify `_VALID_TOPICS` + send-subscriber-briefing **명시 select 목록**(빠뜨리면 undefined→전체 수신) + admin-daily-report. 한 곳만 빠져도 조용히 어긋난다. (#154)
+- **기관명 별칭 표(`PRACTICE_TERMS` 마지막 행)는 app.js와 rag.ts에 동일하게** — 방통위↔방미통위처럼 개편으로 이름이 바뀐 기관은 옛 문서(옛 이름)와 새 문서(새 이름)가 공존한다. 한쪽만 고치면 봇과 대시보드가 다른 근거를 낸다. (#154)
 
 - **세션 주도의 일회성 AI 대량 작업을 Edge Function 수동 호출로 돌리지 말 것** — 함수 내부가 Anthropic API를 불러 별도 과금된다. 이슈맵 과거뉴스 백필을 `news-archive-search` 반복 호출로 처리했다가 크레딧 재결제 주기가 3~5일→1일로 줄어 운영자 재지적(2026-08-26, #111). 세션 백필은 세션이 직접 검색·판정·INSERT(비용 0), Edge 경로는 무인 자동화(승인 훅·대시보드 버튼) 전용.
 - **회의록 다이제스트는 신규 섹션 + 60일 이내 + 발언 3건↑에서만 큐에 넣을 것 — 백필·오프라인 임포트 경로에서는 절대 적재 금지(#120)** — `register_kb_section`이 True를 돌려준 새 회의만, `DIGEST_MAX_AGE_DAYS`·`DIGEST_MIN_SPEECHES` 가드를 통과해야 `queue_for_subscribers('assembly')`. 20·21대 소급(300건↑)이나 재요약이 큐로 새면 구독자 6명이 옛 회의록 수백 통을 받는다. `minutes_offline.py`는 subscriber_notify를 임포트조차 하지 않는다. 날짜 파싱 실패는 fail-closed(적재 안 함).

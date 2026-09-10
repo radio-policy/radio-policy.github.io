@@ -23,7 +23,7 @@ const SKT_IMPACT_SYSTEM_PROMPT =
 '[분석 관점 — 반드시 구체적으로]\n' +
 '① 주파수·기술 관점: 보유 주파수 대역 직접 언급, 할당/재할당/이용기간 영향\n' +
 '② 사업 관점: 매출·가입자·CAPEX에 미치는 영향, KT·LGU+ 대비 유불리\n' +
-'③ 규제·CR 관점: 과기정통부·방통위 동향, 의견서 제출·국회 대응 필요성\n' +
+'③ 규제·CR 관점: 과기정통부·방미통위(방송미디어통신위원회) 동향, 의견서 제출·국회 대응 필요성\n' +
 '④ 대응 방향: CR팀이 즉시 취해야 할 구체적 액션\n\n' +
 '[엄수 사항 — 할루시네이션 방지]\n' +
 '- 뉴스에 명시된 사실만 근거로 쓴다. 뉴스에 없는 내용을 지어내지 않는다.\n' +
@@ -490,6 +490,9 @@ var PRACTICE_TERMS = [
   [/재할당/,                      ['주파수할당', '이용기간']],
   // 세대 서비스 종료(2G·3G…) → 주파수 처리 조문 보강 (rag.ts와 동일 유지 — 2026-08-07)
   [/(2G|3G|4G|5G|LTE|WCDMA|세대)\s*(이동통신|서비스)?\s*종료/i, ['주파수회수', '주파수할당의 취소', '이용기간']],
+  // 기관명 별칭 (2026-09-11 #154): 방송통신위원회 → 방송미디어통신위원회 개편. 옛 고시·보도자료·회의록 본문은 옛 이름,
+  // 2026년 고시·법령명은 새 이름이라 어느 쪽으로 물어도 양쪽이 잡혀야 한다. 다음 개편 때는 여기 한 줄만 더한다.
+  [/방송미디어통신위원회|방송통신위원회|방미통위|방통위/, ['방송통신위원회', '방통위', '방송미디어통신위원회', '방미통위']],
 ];
 // 시맨틱 검색용 질의 보강 — 원 질의는 지우지 않고 **뒤에 덧붙인다**(rag.ts expandQueryForSemantic와 동일)
 function expandQueryForSemantic(query) {
@@ -2048,7 +2051,7 @@ async function onDeleteCustomFile(docName, btn) {
 
 // ── 보도자료 질의 판별·검색 (0313a8f에서 복원 — 08d29f1에서 유실) ──
 function isPressQuery(query) {
-  return /보도자료|보도|발표|공지|공고|과기정통부|국립전파연구원|전파연구원|방송통신위원회|방통위|중앙전파관리소|전파관리소|ETRI|KISDI/.test(query);
+  return /보도자료|보도|발표|공지|공고|과기정통부|국립전파연구원|전파연구원|방송통신위원회|방통위|방송미디어통신위원회|방미통위|중앙전파관리소|전파관리소|ETRI|KISDI/.test(query);
 }
 // 보도자료 검색 — pressData(제목·날짜·doc_name·agency만 보유)에서 제목 매칭으로 후보를
 // 고른 뒤, 본문은 document_chunks에서 doc_name+제목 일부 ilike로 실조회해 채운다.
@@ -3209,7 +3212,9 @@ let selectedNewsId = null;   // 현재 선택된 뉴스 id
 let currentNewsSearch = '';  // 뉴스 검색어 (클라이언트 필터 — 중요도와 AND 결합)
 // 6개 기관 자동 수집 확장(2026-08)에 맞춰 접두 추가 — '방송통신위원회 보도자료' 등은
 // 기존 '방통위' 접두와 별개 문자열이라 명시해야 정부 탭에 잡힌다.
-var GOV_SOURCE_PREFIXES = ['국립전파연구원', '과기정통부', '방통위', '방송통신위원회', '중앙전파관리소', 'ETRI', 'KISDI'];
+// 2026-09-11 (#154): 방통위→방송미디어통신위원회 개편 반영 — 새 소스명('방송미디어통신위원회 보도자료/위원회 회의/공지사항')을
+// 추가하되 옛 접두는 남긴다(기존 행이 그대로 보여야 한다). refetch_content.GOV_SOURCE_PREFIXES 와 같은 목록 유지.
+var GOV_SOURCE_PREFIXES = ['국립전파연구원', '과기정통부', '방통위', '방송통신위원회', '방송미디어통신위원회', '방미통위', '중앙전파관리소', 'ETRI', 'KISDI'];
 // 해외 규제기관 5종 (2026-08). **정부 보도자료·공지 탭에서는 제외**한다(2026-09-01 운영자 결정) —
 // 같은 23건이 「해외 규제동향」 전용 탭과 이 탭에 동시에 보여 "왜 같은 게 두 군데 있나" 혼란이 있었다.
 // 저장은 원래부터 news_feed 한 곳(category='해외')이고 중복 수집이 아니었다. 표시만 한쪽으로 모은다.
@@ -3234,6 +3239,10 @@ function isGovFeedItem(n) {
 var currentGovAgency = '전체';
 // '해외'는 뺐다 — gov 탭이 국내 기관만 담게 됐으므로 칩이 항상 0건이 된다(2026-09-01).
 var GOV_AGENCY_TABS = ['전체', '과기정통부', '전파연구원', '방통위', '전파관리소', 'ETRI', 'KISDI', '기타'];
+// 칩 **라벨**만 현행화 (2026-09-11 #154). 키(슬러그) '방통위'는 news_feed.source 접두·document_chunks doc_name 접두
+// ('방통위_보도자료_YYYY.md', 949청크의 중복 판정 키)와 묶여 있어 바꾸지 않는다 — 역사적 이름이다.
+var AGENCY_LABELS = { '방통위': '방미통위' };
+function agencyLabel(key) { return AGENCY_LABELS[key] || key; }
 
 // news_feed.source 접두 → 기관 슬러그 매핑 (클라이언트 필터 전용)
 function govAgencyOf(source, category) {
@@ -3241,7 +3250,9 @@ function govAgencyOf(source, category) {
   if (category === '해외' || OVERSEAS_SOURCE_PREFIXES.some(function(p) { return s.indexOf(p) === 0; })) return '해외';
   if (s.indexOf('과기정통부') === 0) return '과기정통부';
   if (s.indexOf('국립전파연구원') === 0) return '전파연구원';
-  if (s.indexOf('방송통신위원회') === 0 || s.indexOf('방통위') === 0) return '방통위';
+  // 옛 이름(방송통신위원회·방통위)과 새 이름(방송미디어통신위원회·방미통위) 모두 같은 칩으로
+  if (s.indexOf('방송통신위원회') === 0 || s.indexOf('방통위') === 0 ||
+      s.indexOf('방송미디어통신위원회') === 0 || s.indexOf('방미통위') === 0) return '방통위';
   if (s.indexOf('중앙전파관리소') === 0) return '전파관리소';
   if (s.indexOf('ETRI') === 0) return 'ETRI';
   if (s.indexOf('KISDI') === 0) return 'KISDI';
@@ -3257,7 +3268,7 @@ function renderGovAgencyTabs(govData) {
   el.innerHTML = GOV_AGENCY_TABS.map(function(a) {
     var cnt = (a === '전체') ? (govData || []).length : (counts[a] || 0);
     return '<span class="tag' + (currentGovAgency === a ? ' selected' : '') + '" ' +
-      'onclick="filterGovAgency(\'' + a + '\')">' + a + (cnt ? ' ' + cnt : '') + '</span>';
+      'onclick="filterGovAgency(\'' + a + '\')">' + agencyLabel(a) + (cnt ? ' ' + cnt : '') + '</span>';
   }).join('');
 }
 
@@ -3678,8 +3689,13 @@ function renderNewsList() {
   // 기관 칩 건수(renderGovAgencyTabs)에는 영향을 주지 않도록 맨 마지막에 적용한다.
   if (currentNewsSearch) {
     var q = currentNewsSearch.toLowerCase();
+    // 기관명 별칭(#154): '방미통위'로 치면 '방통위' 제목 기사도, 그 반대도 잡히게 OR 로 넓힌다
+    var qs = [q];
+    var AGENCY_ALIASES = ['방송미디어통신위원회', '방송통신위원회', '방미통위', '방통위'];
+    if (AGENCY_ALIASES.indexOf(q) !== -1) qs = AGENCY_ALIASES.slice();
     data = data.filter(function(n) {
-      return ((n.title || '') + '\n' + (n.summary || '') + '\n' + (n.source || '')).toLowerCase().indexOf(q) !== -1;
+      var hay = ((n.title || '') + '\n' + (n.summary || '') + '\n' + (n.source || '')).toLowerCase();
+      return qs.some(function(k) { return hay.indexOf(k) !== -1; });
     });
   }
 
@@ -6256,6 +6272,12 @@ async function loadOpsStatus() {
     rows += opsRow('└ 입법예고 최근 새 항목', opsAgoText(lastLaw), null, '매칭되는 새 입법예고가 드물어 간격 큼(정상)');
     rows += opsRow('본문 수집 (refetch, heartbeat)', opsAgoText(lastRefetch), null,
                    lastRefetch ? ('최근 결과: ' + hbNote('last_refetch_run')) : 'PC 본문 수집 (heartbeat 대기)');
+    // 방미통위 회의 의사일정·위원회 결과 (kmcc_meeting.py, Actions 매시 :17 뉴스 뒤 단계 — #154).
+    // watchdog_scan 은 아직 이 키를 안 본다(2주 안정 뒤 추가 검토) — 이 행이 유일한 감시 창이다.
+    var lastKmcc = hbTime('last_kmcc_meeting_run');
+    rows += opsRow('방미통위 회의·결과 수집 (heartbeat)', opsAgoText(lastKmcc),
+                   lastKmcc ? (hoursAgo(lastKmcc) < 3) : null,
+                   lastKmcc ? ('최근 결과: ' + hbNote('last_kmcc_meeting_run')) : 'Actions 매시 (heartbeat 대기)');
     rows += opsRow('국회 법안 최근 갱신', opsAgoText(lastBill), null, '매일 10:00');
     rows += opsRow('뉴스 보관 건수', (newsCount != null ? newsCount + '건' : '—'), null, '60일 유지');
     // 오늘 AI 호출 (#152, 관리자만) — 백필·화면 버그로 호출이 폭주해도 재결제 때까지 아무도 몰랐다(#111·#118).

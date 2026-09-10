@@ -580,3 +580,136 @@ class TestRefetchSummaryGate(unittest.TestCase):
     def test_issue_suggest_hours(self):
         import crawler
         self.assertEqual(crawler.ISSUE_SUGGEST_HOURS, {5, 11, 15, 20})
+
+
+class TestKmccMeeting(unittest.TestCase):
+    """방미통위 회의 의사일정·위원회 결과·공지 수집기 (#154) — 순수 함수만, 네트워크 0."""
+
+    def setUp(self):
+        import kmcc_meeting as km
+        self.km = km
+
+    def test_agenda_title(self):
+        km = self.km
+        m = km.parse_agenda_title('2026년 제34차 방송미디어통신위원회 회의(0909) 의사일정')
+        self.assertEqual((m['year'], m['nth'], m['kind']), (2026, 34, '회의'))
+        self.assertEqual(m['meeting_date'], date(2026, 9, 9))
+        m = km.parse_agenda_title('2026년 제33차 방송미디어통신위원회 서면회의(0904) 의사일정')
+        self.assertEqual(m['kind'], '서면회의')
+        m = km.parse_agenda_title('2026년 제1차 방송미디어통신위원회 회의 의사일정')
+        self.assertEqual(m['nth'], 1)
+        self.assertIsNone(m['meeting_date'])
+        self.assertIsNone(km.parse_agenda_title('2026년 제34차 위원회 결과'))
+        r = km.parse_result_title('2026년 제34차 위원회 결과')
+        self.assertEqual((r['year'], r['nth']), (2026, 34))
+        self.assertIsNone(km.parse_result_title('12개 홈쇼핑 사업자 재승인 의결'))
+
+    def test_canonical_url(self):
+        km = self.km
+        u = km.canonical_url('/user.do;jsessionid=ABC.servlet-x?mode=view&page=A02010100&dc=K02010100&boardId=1003&cp=1&nop=10&boardSeq=69432')
+        self.assertEqual(u, 'https://www.kmcc.go.kr/user.do?mode=view&page=A02010100&dc=K02010100&boardId=1003&boardSeq=69432')
+
+    def test_meeting_rows_pick_agenda_only(self):
+        km = self.km
+        html = '''<table><tbody>
+        <tr><td>1061</td><td><a href="/user.do;jsessionid=X?mode=view&amp;page=A02010100&amp;dc=K02010100&amp;boardId=1003&amp;cp=1&amp;boardSeq=69300">2026년 제29차 방송미디어통신위원회 회의(0821) 의사일정</a></td>
+        <td><a href="/download.do?fileSeq=71683"><img alt="제2026-29차 회의 의사일정(8.21.).pdf"> 의사일정</a>
+            <a href="/download.do?fileSeq=71790"><img alt="회의록.md"> 회의록</a>
+            <a href="/download.do?fileSeq=71791"><img alt="속기록.md"> 속기록</a></td>
+        <td>1유형</td><td>2026-08-20</td><td>446</td></tr>
+        <tr><td>1060</td><td><a href="/user.do?boardId=1003&amp;boardSeq=1">2026년 제28차 방송미디어통신위원회 회의(0814) 회의록만</a></td><td></td><td></td><td>2026-08-13</td><td>1</td></tr>
+        </tbody></table>'''
+        rows = km.parse_meeting_rows(html)
+        self.assertEqual(len(rows), 1)
+        r = rows[0]
+        self.assertEqual(r['board_seq'], '69300')
+        self.assertEqual(r['agenda']['file_seq'], '71683')
+        self.assertIn('의사일정', r['agenda']['filename'])
+        self.assertEqual(r['post_date'].date(), date(2026, 8, 20))
+        self.assertNotIn('cp=', r['url'])
+
+    def test_press_rows_split_result_and_press(self):
+        km = self.km
+        html = '''<table><tbody>
+        <tr><td>5665</td><td><a href="/user.do?boardId=1113&amp;cp=1&amp;boardSeq=69437">2026년 제34차 위원회 결과</a></td>
+        <td>정책홍보팀</td><td>1유형</td><td></td><td>2026-09-09</td><td>421</td></tr>
+        <tr><td>5666</td><td><a href="/user.do?boardId=1113&amp;boardSeq=69440">불법스팸 ‘최대 6% 과징금’, 10월 시행</a></td>
+        <td>디지털이용자기반과</td><td>1유형</td><td></td><td>2026-09-09</td><td>446</td></tr></tbody></table>'''
+        rows = km.parse_press_rows(html)
+        self.assertEqual([r['kind'] for r in rows], ['result', 'press'])
+        self.assertEqual(rows[0]['meta']['nth'], 34)
+        self.assertEqual(rows[0]['meta']['dept'], '정책홍보팀')
+        self.assertEqual(rows[1]['meta']['dept'], '디지털이용자기반과')
+        self.assertNotIn('cp=', rows[0]['url'])
+
+    def test_parse_agenda_out(self):
+        km = self.km
+        p = km.parse_agenda_out('회의명: 2026년 제34차 회의\n일시: 2026. 9. 9.(수) 14:30\n장소: 4층\n'
+                                '[의결사항 2건]\n가|A안|내용A|과A|공개\n나|B안|내용B|과B|비공개\n[보고사항 0건]')
+        self.assertEqual(p['head']['일시'], '2026. 9. 9.(수) 14:30')
+        self.assertEqual(len(p['sections']), 1)
+        self.assertEqual(p['sections'][0][1][1][0], '나')
+        self.assertEqual(km.parse_agenda_out('그냥 문장'), {})
+        self.assertEqual(km.parse_agenda_out(''), {})
+
+    def test_agenda_html_budget_and_rules(self):
+        km = self.km
+        meta = {'nth': 34, 'kind': '회의', 'meeting_date': date(2026, 9, 9)}
+        items = [(chr(0xAC00 + i), '안건 & 제목 %d' % i, '주요내용 ' * 30, '담당과', '공개') for i in range(20)]
+        html = km.format_agenda_html(meta, {'일시': '2026. 9. 9.(수) 14:30'}, [('의결사항', items)],
+                                     'https://www.kmcc.go.kr/x?a=1&b=2', 'https://www.kmcc.go.kr/download.do?fileSeq=1')
+        self.assertLessEqual(len(html), km.HTML_BUDGET)
+        self.assertTrue(html.startswith('📋 <b>방미통위 제34차 회의 의사일정 · 9/9 14:30</b>'))
+        self.assertNotRegex(html, r'(?m)^\d+\. ')
+        self.assertIn('&amp; 제목', html)
+        self.assertIn('… 외 ', html)
+        self.assertIn('>원문</a>', html)
+        self.assertIn('>PDF</a>', html)
+        self.assertIn('>대시보드</a>', html)
+        self.assertNotRegex(html.splitlines()[0], r'\d+건')
+
+    def test_result_html(self):
+        km = self.km
+        lines = km.parse_result_lines('1. [의결] 첫째\n- 둘째 접두 없음\n\n[의견청취] 셋째 ' + 'x' * 200)
+        self.assertEqual(lines[0], '[의결] 첫째')
+        self.assertTrue(lines[1].startswith('[기타] 둘째'))
+        self.assertLessEqual(len(lines[2]), km.RESULT_LINE_CHARS + 1)
+        html = km.format_result_html({'nth': 34}, datetime(2026, 9, 9, tzinfo=km.KST), lines, 'https://www.kmcc.go.kr/y')
+        self.assertTrue(html.startswith('🏛️ <b>방미통위 제34차 위원회 결과 · 9/9</b>'))
+        self.assertIn('\n· [의결] 첫째', html)
+        self.assertLessEqual(len(html), km.HTML_BUDGET)
+
+    def test_press_html(self):
+        km = self.km
+        it = {'title': '공고 & 안내', 'url': 'https://www.kmcc.go.kr/n', 'post_date': datetime(2026, 9, 11, tzinfo=km.KST),
+              'meta': {'dept': '대전분소'}}
+        html = km.format_press_html(it, '공고 & 안내\n' + '본문 ' * 300)
+        self.assertLessEqual(len(html), km.HTML_BUDGET)
+        self.assertTrue(html.startswith('📰 <b>방미통위 보도자료 · 9/11</b>'))
+        self.assertIn('<b>공고 &amp; 안내</b>', html)
+        self.assertIn('· 대전분소', html)
+        self.assertIn('· 본문 본문', html)
+        self.assertIn('…', html)
+
+    def test_should_queue_window(self):
+        km = self.km
+        now = datetime(2026, 9, 11, 18, 0, tzinfo=km.KST)
+        self.assertTrue(km.should_queue(datetime(2026, 9, 9, tzinfo=km.KST), now))
+        self.assertFalse(km.should_queue(datetime(2026, 9, 8, tzinfo=km.KST), now))
+        self.assertFalse(km.should_queue(None, now))
+
+    def test_press_always_ingest(self):
+        import press_ingest as pi
+        self.assertTrue(pi.ALWAYS_INGEST_RE.search('2026년 제34차 위원회 결과'))
+        self.assertFalse(pi.ALWAYS_INGEST_RE.search('불법스팸 최대 6% 과징금'))
+
+    def test_subscriber_topics(self):
+        import subscriber_notify as sn
+        self.assertIn('kmcc', sn._VALID_TOPICS)
+        self.assertIn('kmcc', sn._IMMEDIATE_TOPICS)
+        self.assertNotIn('assembly', sn._IMMEDIATE_TOPICS)
+
+    def test_gov_prefix_new_names(self):
+        import refetch_content as rc
+        self.assertTrue(rc._is_gov_source('방송미디어통신위원회 위원회 회의'))
+        self.assertTrue(rc._is_gov_source('방미통위 공지'))

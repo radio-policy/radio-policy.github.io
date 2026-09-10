@@ -25,6 +25,12 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
 
+      # 방미통위 의사일정 PDF(kmcc_meeting.py) — press_ingest 가 Poppler pdftotext 바이너리에 의존한다.
+      # 없으면 PDF 텍스트가 조용히 '' 가 되어 제목·링크만 저장된다. 실패해도 뉴스 크롤러는 돌아야 한다.
+      - name: Poppler(pdftotext) 설치 — 방미통위 의사일정 PDF
+        continue-on-error: true
+        run: sudo apt-get install -y -qq --no-install-recommends poppler-utils
+
       - name: 크롤러 실행
         env:
           SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
@@ -41,3 +47,18 @@ jobs:
           NAVER_CLIENT_SECRET:  ${{ secrets.NAVER_CLIENT_SECRET }}
           VOYAGE_API_KEY:       ${{ secrets.VOYAGE_API_KEY }}   # 이슈맵 제안 파이프 임베딩 (2026-08-26)
         run: python crawler.py
+
+      # 방미통위 위원회 회의 의사일정·'제N차 위원회 결과' 수집 (2026-09-11 #154).
+      # 게시 시각이 15~19시에 몰리고 회의 전날·당일에 바로 받아야 하므로 뉴스와 같은 매시 실행에 편승한다.
+      # kmcc.go.kr 은 Actions 데이터센터 IP 에서 열린다(#113). crawler.py 가 실패해도 실행하고,
+      # 이 스텝이 실패해도 워크플로 결론(health_watchdog 감시 대상)을 바꾸지 않는다 — continue-on-error 를 지우지 말 것.
+      - name: 방미통위 회의 의사일정·위원회 결과 수집 (kmcc_meeting.py)
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 8
+        env:
+          SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          ANTHROPIC_API_KEY:    ${{ secrets.ANTHROPIC_API_KEY }}
+          CRON_SECRET:          ${{ secrets.CRON_SECRET }}       # 큐 적재 직후 즉시 배달 호출(subscriber_notify._trigger_delivery)
+        run: python kmcc_meeting.py

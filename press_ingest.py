@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 정부 보도자료 공용 수집 모듈 (PC 실행 — 한국 IP)
-대상 6개 기관: 과기정통부 / 전파연구원 / 방통위 / 전파관리소 / ETRI / KISDI
+대상 6개 기관: 과기정통부 / 전파연구원 / 방통위(=방송미디어통신위원회, 슬러그는 역사적 이름 유지) / 전파관리소 / ETRI / KISDI
 결과: Supabase document_chunks (doc_category='보도자료', doc_name='{기관}_보도자료_{YYYY}.md')
 
 gov_notice_crawler.py(매일 17시)가 run_daily()를, press_backfill.py(일회성)가
@@ -78,6 +78,9 @@ BODY_MIN = 120            # 이보다 짧으면 추출 실패로 간주
 # 배치 판정(#96) 최소 건수 — 이보다 적으면 제출·폴링 왕복이 절감액보다 비싸다.
 # (신규 1~2건뿐인 날이 흔하다. 그런 날은 기존 개별 판정이 더 빠르고 싸다.)
 BATCH_MIN_ITEMS = 5
+# 관련성 판정 없이 무조건 등재하는 제목 (2026-09-11 #154) — 방미통위 '2026년 제34차 위원회 결과'.
+# 방송 거버넌스 안건이 대부분이라 Haiku 가 무관으로 거를 수 있지만, 운영자 결정으로 전건 보존한다.
+ALWAYS_INGEST_RE = re.compile(r'^\d{4}년\s*제\d+차\s*위원회\s*결과')
 OCR_TRIGGER = 500         # PDF 텍스트층이 이보다 짧으면 이미지-전용 의심 → OCR 시도
 OCR_ACCEPT = 1000         # OCR 결과가 이 이상일 때만 본문으로 채택
 OCR_MAX_PAGES = 8         # OCR 대상 최대 페이지 (150dpi 이미지화)
@@ -885,7 +888,8 @@ AGENCIES = {
     # slug: (표시명, list_fn, extract_fn)  — slug 가 doc_name 접두(기관 탭 기준)
     '과기정통부':  ('과학기술정보통신부', msit_list, msit_extract),
     '전파연구원':  ('국립전파연구원',     rra_list,  rra_extract),
-    '방통위':      ('방송통신위원회',     kcc_list,  kcc_extract),
+    # 슬러그 '방통위'는 doc_name 접두('방통위_보도자료_YYYY.md', 949청크 dedupe 키)라 개편 뒤에도 바꾸지 않는다(#154). 표시명만 현행화.
+    '방통위':      ('방송미디어통신위원회', kcc_list,  kcc_extract),
     '전파관리소':  ('중앙전파관리소',     crms_list, crms_extract),
     'ETRI':        ('한국전자통신연구원', etri_list, etri_extract),
     'KISDI':       ('정보통신정책연구원', kisdi_list, kisdi_extract),
@@ -1014,7 +1018,9 @@ def _collect_one(sb, slug: str, item: dict, extract_fn, stats: dict, dry: bool =
         print('  [추출 실패·스킵] %s (%d자)' % (item['title'][:40], len(body or '')))
         stats['fail'] += 1
         return False
-    if judge is not None:
+    if ALWAYS_INGEST_RE.search(item.get('title') or ''):
+        print('  [무조건 등재] %s' % item['title'][:40])    # 방미통위 '제N차 위원회 결과' — 판정 우회(#154)
+    elif judge is not None:
         ok, reason = judge(item['title'], body)
         if not ok:
             stats['skip'] = stats.get('skip', 0) + 1
@@ -1070,6 +1076,8 @@ def run_daily(sb, keywords: list = None, max_per_agency: int = 15, dry: bool = F
         if judge and len(candidates) >= BATCH_MIN_ITEMS:
             pending = []
             for it in candidates:
+                if ALWAYS_INGEST_RE.search(it.get('title') or ''):
+                    continue                       # 무조건 등재분 — 판정 토큰 낭비 방지(#154)
                 dt0 = it.get('date') or datetime.now(KST)
                 if section_exists(sb, '%s_보도자료_%d.md' % (slug, dt0.year),
                                   dt0.strftime('%y%m%d'), it['title']):

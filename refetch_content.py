@@ -46,7 +46,7 @@ KST           = timezone(timedelta(hours=9))
 # 요약을 **미리** 만드는 유일한 대상이다: 정부 공고는 event 라벨도 네이버 요약도 없어 대시보드
 # 미리보기 대체 텍스트가 전혀 없다. 나머지 등급(참고·보통·긴급)은 첫 열람 때 생성(app.js).
 GOV_SOURCE_PREFIXES = ['국립전파연구원', '과기정통부', '과학기술정보통신부', '방통위', '방송통신위원회',
-                       '방송미디어통신위원회', '중앙전파관리소', 'ETRI', 'KISDI']
+                       '방송미디어통신위원회', '방미통위', '중앙전파관리소', 'ETRI', 'KISDI']
 
 
 def _is_gov_source(source: str) -> bool:
@@ -142,7 +142,10 @@ def main():
     all_articles = resp.data or []
 
     if regen_all:
-        todo = [a for a in all_articles if a.get("url")]
+        # 방미통위 회의 의사일정 행은 kmcc_meeting.py 가 PDF 에서 복원한 content 를 이미 갖고 있다 —
+        # 상세 페이지를 다시 긁으면 게시판 껍데기 텍스트로 덮이므로 --all 에서도 제외한다(#154)
+        todo = [a for a in all_articles if a.get("url")
+                and not (a.get("source") or "").startswith("방송미디어통신위원회 위원회 회의")]
         mode = "전체 재수집"
     else:
         todo = [

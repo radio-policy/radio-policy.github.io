@@ -47,6 +47,10 @@ TARGETS = [
     ('CRMS 보도자료',      'https://www.crms.go.kr/lay1/bbs/S1T30C34/A/77/list.do', 'table tbody tr'),
     ('CRMS 공지사항',      'https://www.crms.go.kr/lay1/bbs/S1T30C31/A/10/list.do', 'table tbody tr'),
     ('KCC 보도자료',       'https://www.kcc.go.kr/user.do?boardId=1113&page=A05030000&dc=K05030000', 'table tbody tr, ul li'),
+    # 방미통위 회의 게시판 + 첨부 다운로드 (kmcc_meeting.py, 2026-09-11 #154) — 목록은 #113 에서 열림이 확인됐지만
+    # download.do 는 미실측이었다. 'RE:PDF' 는 Referer 를 붙여 받은 바이트가 %PDF 로 시작하면 행 1 로 센다.
+    ('KMCC 위원회회의',    'https://www.kmcc.go.kr/user.do?boardId=1003&page=A02010100&dc=K02010100', 'table tbody tr'),
+    ('KMCC download.do',   'https://www.kmcc.go.kr/download.do?fileSeq=71864', 'RE:PDF'),
     ('ETRI 보도자료',      'https://www.etri.re.kr/kor/bbs/list.etri?b_board_id=ETRI06', 'table tbody tr, ul li'),
     ('KISDI',              'https://www.kisdi.re.kr/index.do', 'a'),
     # 쿼리스트링 없이는 빈 목록이 온다 — 실제 크롤러와 동일하게 맞춘다 (gov_notice_crawler.py:854)
@@ -57,12 +61,17 @@ TARGETS = [
 def probe(name: str, url: str, selector: str):
     """(성공여부, 실패사유) 반환. 실패사유는 Actions 주석에 실어 원격에서 읽는다."""
     try:
+        hdr = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        if selector == 'RE:PDF':
+            hdr['Referer'] = 'https://www.kmcc.go.kr/user.do'
         if IMPERSONATE:
-            res = requests.get(url, impersonate='chrome110', timeout=25)
+            res = requests.get(url, impersonate='chrome110', timeout=25,
+                               headers=({'Referer': hdr['Referer']} if 'Referer' in hdr else None))
         else:
-            res = requests.get(url, timeout=25,
-                               headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
-        if selector == 'RE:MSIT':
+            res = requests.get(url, timeout=25, headers=hdr)
+        if selector == 'RE:PDF':
+            rows = 1 if res.content[:4] == b'%PDF' else 0
+        elif selector == 'RE:MSIT':
             # 목록 항목은 onclick="fn_detail(숫자)" 로만 드러난다
             rows = len(re.findall(r'onclick="fn_detail\((\d+)\);"', res.text))
         else:

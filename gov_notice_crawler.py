@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
 정부 기관 고시·예규·입법예고 전용 크롤러 (PC 실행 — 한국 IP)
-대상: 국립전파연구원 / 과기정통부 / 방통위
+대상: 국립전파연구원 / 과기정통부 / 방미통위(방송미디어통신위원회, 구 방통위) / 전파관리소 / ETRI / KISDI
 결과: Supabase news_feed 저장
+※ 방미통위 회의 의사일정·위원회 결과·공지사항은 별도 kmcc_meeting.py(Actions 매시)가 맡는다 (#154)
 """
 
 import os
@@ -373,9 +374,9 @@ def crawl_kmcc() -> list:
 
 
 # ═══════════════════════════════════════════════════════
-#  크롤러 — 방송통신위원회 (kcc.go.kr)
+#  크롤러 — 방송미디어통신위원회 (kcc.go.kr ≡ kmcc.go.kr, 2026 개편 전 '방송통신위원회')
 #
-#  주의: 위 crawl_kmcc()가 긁는 kmcc.go.kr 은 '중앙전파관리소'다. 두 사이트가 같은 CMS라
+#  주의: 위 crawl_kmcc()가 긁는 곳은 crms.go.kr '중앙전파관리소'다(이름은 역사적 오기). 두 사이트가 같은 CMS라
 #  boardId 체계까지 비슷해 오랫동안 방통위로 잘못 표기돼 있었다(2026-08-01 정정).
 #  방통위 본체는 www.kcc.go.kr 이며 목록은 mode 없이 boardId 를 줘야 표가 나온다
 #  (mode=view 를 주면 안내 페이지만 반환됨 — 실측 확인).
@@ -392,8 +393,11 @@ KCC_KEYWORDS = RADIO_KEYWORDS + [
 
 def crawl_kcc() -> list:
     items = []
+    # 2026-09-11 (#154): 방미통위 보도자료는 kmcc_meeting.py(Actions 매시)가 **전건**을 news_feed 에 저장한다.
+    # 여기서 키워드 필터로 한 번 더 긁으면 같은 글이 다른 URL(kcc.go.kr vs kmcc.go.kr)로 두 번 저장되므로
+    # 대상을 비웠다(함수·키워드는 KB 적재(press_ingest)와 복구 대비로 남김). 되살리려면 아래 한 줄을 풀 것.
     targets = [
-        ('https://www.kcc.go.kr/user.do?boardId=1113&page=A05030000&dc=K05030000', '보도자료'),
+        # ('https://www.kcc.go.kr/user.do?boardId=1113&page=A05030000&dc=K05030000', '보도자료'),
     ]
     for url, label in targets:
         try:
@@ -423,7 +427,8 @@ def crawl_kcc() -> list:
                         break
                 items.append({
                     'title':        title,
-                    'source':       '방송통신위원회 ' + label,
+                    # 2026-09-11 (#154) 새 기관명. 대시보드 정부 탭은 옛·새 접두 모두 '방통위' 칩(라벨 '방미통위')으로 모은다
+                    'source':       '방송미디어통신위원회 ' + label,
                     'category':     detect_category(title),
                     'url':          href,
                     'is_read':      False,
@@ -432,9 +437,9 @@ def crawl_kcc() -> list:
                     'importance':   '보통',
                 })
                 found += 1
-            print('[방통위] %s: 행 %d개 스캔, 키워드 매칭 %d건' % (label, len(rows), found))
+            print('[방미통위] %s: 행 %d개 스캔, 키워드 매칭 %d건' % (label, len(rows), found))
         except Exception as e:
-            print('[방통위 오류] %s: %s' % (label, e))
+            print('[방미통위 오류] %s: %s' % (label, e))
         time.sleep(1)
     return items
 
@@ -988,7 +993,7 @@ def main():
     all_items += crawl_rra()
     all_items += crawl_msit()
     all_items += crawl_kmcc()     # 중앙전파관리소 (crms.go.kr — kmcc.go.kr 아님, #53)
-    all_items += crawl_kcc()      # 방송통신위원회 (신규)
+    all_items += crawl_kcc()      # 방송미디어통신위원회 보도자료 (구 방통위)
     all_items += crawl_etri()     # ETRI 보도자료 (신규)
     all_items += crawl_kisdi()    # KISDI 보도자료·공지 (신규)
     all_items += crawl_opinion_lawmaking()

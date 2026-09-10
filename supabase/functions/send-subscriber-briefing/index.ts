@@ -57,11 +57,13 @@ interface Sub {
   chat_id: number;
   days: string;
   topic_briefing: boolean; topic_urgent: boolean; topic_assembly: boolean;
+  topic_kmcc: boolean;   // 방미통위 동향(#154) — 의사일정·위원회 결과. urgent 처럼 크롤러가 큐 적재 직후 이 함수를 즉시 호출한다
   briefing_hour: number;
   end_hour: number;      // 수신 종료 시각(18~22) — 이 시각을 넘기면 다음 날 시작 시각까지 무발송
   last_briefing_sent_date: string | null;
   last_urgent_sent_at: string | null;
   last_assembly_sent_at: string | null;
+  last_kmcc_sent_at: string | null;
   // 관심분야. **빈 배열 = 전체 수신**(캐논). NOT NULL DEFAULT '{}' 이라 기존 구독자는 자동 하위호환.
   tags: string[];
 }
@@ -220,7 +222,7 @@ Deno.serve(async (req: Request) => {
     let q = sb.from('telegram_subscribers')
       // ⚠ select('*')가 아니라 **명시 목록**이다. 컬럼을 빠뜨리면 값이 undefined가 되어
       //   "전체 수신"으로 조용히 퇴화하고 타입 검사도 못 잡는다. 컬럼 추가 시 여기부터 고칠 것.
-      .select('chat_id, days, topic_briefing, topic_urgent, topic_assembly, briefing_hour, end_hour, last_briefing_sent_date, last_urgent_sent_at, last_assembly_sent_at, tags')
+      .select('chat_id, days, topic_briefing, topic_urgent, topic_assembly, topic_kmcc, briefing_hour, end_hour, last_briefing_sent_date, last_urgent_sent_at, last_assembly_sent_at, last_kmcc_sent_at, tags')
       // 수신 창: briefing_hour(오전 6~10) ≤ 지금 ≤ end_hour(오후 6~10).
       // end_hour는 종전에 코드에 박혀 있던 '23시 이후 무발송'을 구독자가 고르게 바꾼 것.
       // 창을 벗어난 시간대의 큐는 버리지 않는다 — 워터마크가 안 움직이므로 다음 날 시작 시각에 전달된다.
@@ -281,13 +283,18 @@ Deno.serve(async (req: Request) => {
       // 1단 — 평가 대상(워터마크 전진의 근거)
       const urgentEligible = pickEligible(s.topic_urgent, 'urgent', s.last_urgent_sent_at);
       const assemblyEligible = pickEligible(s.topic_assembly, 'assembly', s.last_assembly_sent_at);
-      // 2단 — 실제 발송분. 법안 동향(assembly)은 기사 단위 개념이 없어 태그 필터를 적용하지 않는다.
+      const kmccEligible = pickEligible(s.topic_kmcc, 'kmcc', s.last_kmcc_sent_at);
+      // 2단 — 실제 발송분. 법안 동향(assembly)·방미통위(kmcc)는 기사 단위 개념이 없어 태그 필터를 적용하지 않는다.
       const urgent = matchTags(urgentEligible, s.tags);
       const assembly = assemblyEligible;
+      const kmcc = kmccEligible;
 
       const groups: Array<{ topic: string; rows: QueueRow[] }> = [
         { topic: 'urgent', rows: urgent },
         { topic: 'assembly', rows: assembly },
+        // kmcc 행은 첫 줄이 "📋 <b>방미통위 제N차 회의 의사일정 …</b>" 꼴이라 HEADER_COUNT_RE(숫자+건)에 안 걸리고
+        // 줄은 '· ' 불릿뿐이라 mergeQueueBlocks 가 그대로 통과시킨다(assembly 와 같은 legacy 경로).
+        { topic: 'kmcc', rows: kmcc },
       ];
       for (const { topic, rows: grp } of groups) {
         if (!grp.length) continue;
@@ -351,8 +358,10 @@ Deno.serve(async (req: Request) => {
         // 워터마크는 delivered가 아니라 **eligible** 기준, nowIso가 아니라 **max(created_at)**.
         const uMark = maxCreatedAt(urgentEligible);
         const aMark = maxCreatedAt(assemblyEligible);
+        const kMark = maxCreatedAt(kmccEligible);
         if (uMark) patch.last_urgent_sent_at = uMark;
         if (aMark) patch.last_assembly_sent_at = aMark;
+        if (kMark) patch.last_kmcc_sent_at = kMark;
         if (Object.keys(patch).length) await sb.from('telegram_subscribers').update(patch).eq('chat_id', s.chat_id);
         if (msgs.length) sent++;   // 실제로 보낸 사람만 집계 (워터마크만 전진한 경우는 제외)
       } else failed++;

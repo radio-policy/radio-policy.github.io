@@ -21,7 +21,11 @@ from datetime import datetime, timedelta, timezone
 
 DASHBOARD_URL = 'https://radio-policy.gitlab.io/'
 
-_VALID_TOPICS = ('urgent', 'assembly')
+# kmcc = 방미통위 동향(위원회 회의 의사일정·위원회 결과, 2026-09-11 #154). subscriber_queue.topic CHECK 도 같이 갱신됨.
+_VALID_TOPICS = ('urgent', 'assembly', 'kmcc')
+# 큐 적재 직후 발송 함수를 바로 부르는 토픽 — 수집 당일·직후 배달이 목적인 것들.
+# assembly 는 정시(:25)만 — 법안 단계변경·입법예고는 하루 한 묶음이 적절하다.
+_IMMEDIATE_TOPICS = ('urgent', 'kmcc')
 
 
 def esc(s) -> str:
@@ -58,7 +62,7 @@ def queue_for_subscribers(sb, topic: str, html_text: str) -> bool:
     except Exception as e:
         print(f'[구독자 큐] 적재 실패(무시): {e}')
         return False
-    if topic == 'urgent':
+    if topic in _IMMEDIATE_TOPICS:
         _trigger_delivery()   # 다음 정시(:25)를 기다리지 않고 바로 배달 시도
     return True
 

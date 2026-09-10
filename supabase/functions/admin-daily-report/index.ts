@@ -36,17 +36,18 @@ type Sub = {
   chat_id: number; first_name: string | null; username: string | null;
   active: boolean; ai_allowed: boolean; law_allowed: boolean; unlimited?: boolean;
   briefing_hour: number; end_hour: number; days: string; created_at: string;
-  topic_briefing: boolean; topic_urgent: boolean; topic_assembly: boolean;
+  topic_briefing: boolean; topic_urgent: boolean; topic_assembly: boolean; topic_kmcc: boolean;
   tags: string[] | null;
   last_briefing_sent_date: string | null;
   last_urgent_sent_at: string | null;
   last_assembly_sent_at: string | null;
+  last_kmcc_sent_at: string | null;
 };
 type Usage = { chat_id: number; command: string; query: string | null; result_note: string | null; created_at: string };
 type QueueRow = { topic: string; created_at: string };
 
 const QUEUE_LABEL: Record<string, string> = {
-  briefing: '모닝 브리핑', urgent: '주요 뉴스', assembly: '국회·법률 동향',
+  briefing: '모닝 브리핑', urgent: '주요 뉴스', assembly: '국회·법률 동향', kmcc: '방미통위 동향',
 };
 
 const CMD_LABEL: Record<string, string> = {
@@ -66,6 +67,7 @@ function subscriptionLine(s: Sub): string {
   if (s.topic_briefing) on.push('📡 브리핑');
   if (s.topic_urgent) on.push('📰 뉴스');
   if (s.topic_assembly) on.push('🏛 국회·법률');
+  if (s.topic_kmcc) on.push('📺 방미통위');
   if (!on.length) return '수신 항목 없음(사실상 중지)';
   const hh = (v: number) => String(v).padStart(2, '0');
   const when = `${s.days === 'weekday' ? '평일' : '매일'} ${hh(s.briefing_hour)}~${hh(s.end_hour ?? 22)}시`;
@@ -115,7 +117,8 @@ function buildReport(subs: Sub[], usage: Usage[], queue: QueueRow[], since7: Dat
   out += '\n<b>구독 현황</b> (수신 켠 사람 기준)\n' +
     `📡 모닝 브리핑 ${n((s) => s.topic_briefing)}명 · ` +
     `📰 주요 뉴스 ${n((s) => s.topic_urgent)}명 · ` +
-    `🏛 국회·법률 동향 ${n((s) => s.topic_assembly)}명\n` +
+    `🏛 국회·법률 동향 ${n((s) => s.topic_assembly)}명 · ` +
+    `📺 방미통위 동향 ${n((s) => s.topic_kmcc)}명\n` +
     `어제 발송 대상 물량: ${
       Object.entries(qByTopic).map(([k, v]) => `${QUEUE_LABEL[k] || k} ${v}건`).join(' · ') || '없음'
     }\n`;
@@ -143,6 +146,7 @@ function buildReport(subs: Sub[], usage: Usage[], queue: QueueRow[], since7: Dat
     const sent = [
       s.last_urgent_sent_at ? `뉴스 ${kstDate(new Date(s.last_urgent_sent_at))}` : '',
       s.last_assembly_sent_at ? `국회·법률 ${kstDate(new Date(s.last_assembly_sent_at))}` : '',
+      s.last_kmcc_sent_at ? `방미통위 ${kstDate(new Date(s.last_kmcc_sent_at))}` : '',
     ].filter(Boolean).join(' · ') || '발송 이력 없음';
     out += `\n• <b>${name}</b> ${handle}\n` +
       `  수신 ${escapeHtml(subscriptionLine(s))}\n` +
@@ -204,8 +208,8 @@ Deno.serve(async (req: Request) => {
       sb.from('telegram_subscribers')
         .select('chat_id, first_name, username, active, ai_allowed, law_allowed, unlimited, ' +
                 'briefing_hour, end_hour, days, created_at, tags, ' +
-                'topic_briefing, topic_urgent, topic_assembly, ' +
-                'last_briefing_sent_date, last_urgent_sent_at, last_assembly_sent_at')
+                'topic_briefing, topic_urgent, topic_assembly, topic_kmcc, ' +
+                'last_briefing_sent_date, last_urgent_sent_at, last_assembly_sent_at, last_kmcc_sent_at')
         .order('created_at'),
       sb.from('telegram_usage')
         .select('chat_id, command, query, result_note, created_at')

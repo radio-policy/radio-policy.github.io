@@ -30,6 +30,7 @@ SKT Comm Center 기술정책팀's radio/telecom **policy-monitoring automation s
 **Collection** — each crawler writes to a table and a `system_health` heartbeat:
 - `crawler.py` — news via Naver Search OpenAPI (falls back to Google RSS). 넓은 키워드 54개 수집 → Haiku 관련성 1차 선별(app_config `news_relevance_criteria`, 무관은 저장 안 함, 실패 시 키워드 폴백, 부처 인사는 무조건 통과) → 통과분만 본문 수집·Haiku 긴급도 분류(피드백 학습) (#66). Runs in GitHub Actions hourly.
 - `gov_notice_crawler.py` — government notices (RRA/MSIT/방통위/전파관리소/ETRI/KISDI) + 입법예고. **PC-local only** (Korean IP required; government sites block foreign IPs) — do NOT move to GitHub Actions. At the end it calls `press_ingest.run_daily()` — full-text press-release ingestion into the KB (6 agencies, 최근 15일 전수 수집 + Haiku 관련성 판정, keyword fallback) + auto embedding backfill. 주의: kmcc.go.kr은 전파관리소가 아니라 방송미디어통신위원회(구 방통위) 새 도메인이며, 전파관리소는 crms.go.kr (#53).
+- `kmcc_meeting.py` (#154, 2026-09-11) — 방미통위(방송미디어통신위원회 = 구 방통위, kmcc.go.kr ≡ kcc.go.kr) **회의 의사일정 PDF + 보도자료 전건** → `news_feed` (sources `방송미디어통신위원회 위원회 회의` / `… 보도자료`, no keyword filter, content/summary written directly) + subscriber queue topic `kmcc` with immediate delivery. Runs as an extra step in `daily_crawl.yml` (hourly, Actions; kmcc.go.kr is reachable from datacenter IPs — #113). Agenda PDFs are restructured by Haiku (no summarising), 위원회 결과 summarised by Haiku, other press releases sent as title + snippet. `gov_notice_crawler.crawl_kcc()` press target is emptied to avoid double storage. Agency label in the dashboard is now `방미통위`, but the slug/prefix `방통위` (`doc_name` `방통위_보도자료_YYYY.md`) is historical and must not be renamed.
 - `law_crawler.py` (법제처 DRF API, endpoint `www.law.go.kr/DRF/lawSearch.do`), `assembly_crawler.py` (열린국회정보 API — 법안 수집 + **국회 입법예고 패스**: `nknalejkafmvgzmpt` 전량 수신 → Haiku 의미 판정(app_config `assembly_notice_criteria`) → 의견마감 배지·운영자 알림, #56; 키워드 검색은 마지막 페이지까지 순회 + `fetch_committee_bills`로 과방위 소관 전수 스윕 병행 — #121), `refetch_content.py` (body re-fetch via trafilatura, PC-local). 국회 입법예고 법안의 조문 분석(신구조문대비표 → proposed DIFF, origin='assembly')은 `law_diff_gen.py --assembly-only`.
 
 **Briefing/alerts** — `morning_briefing.py` sends 06:00 KST email(with analysis)/Telegram(without). Zero-news days still send a "🕊️ no news" notice so silent failure isn't mistaken for breakage.
@@ -70,6 +71,7 @@ python crawler.py             # news — confirm "[네이버 뉴스] N건 수집
 python law_crawler.py         # laws/notices
 python assembly_crawler.py    # assembly bills (stage labels via bill_stage.derive_stage; after changing stage rules run once with --suppress-status-alerts to avoid an alert storm, #122)
 python gov_notice_crawler.py  # gov notices + 입법예고 (Korean IP)
+python kmcc_meeting.py --dry-run   # 방미통위 의사일정·보도자료 파싱 확인 (DB·AI 무접촉); --operator-test = 운영자 봇 시험 발송; --pages 2 --no-notify --allow-api = 초기 적재
 python refetch_content.py     # body re-fetch (Korean IP, trafilatura). Summaries are pre-generated for 정부 공고 only (#153); everything else is generated on first open in the dashboard
 
 # Briefing / embeddings

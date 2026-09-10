@@ -91,6 +91,7 @@ async function sendAnswerWithFeedback(chatId: number, html: string, logId: strin
 interface Sub {
   chat_id: number; username: string | null; first_name: string | null; active: boolean;
   topic_briefing: boolean; topic_urgent: boolean; topic_assembly: boolean;
+  topic_kmcc: boolean;   // 방미통위 동향 — 위원회 회의 의사일정·위원회 결과 (2026-09-11 #154). 기존 구독자 false, 신규 true
   days: string; briefing_hour: number;
   ai_allowed: boolean; ai_count_date: string | null; ai_count: number;
   law_count_date?: string | null; law_count?: number;   // 자연어 /law 일일 상한 (2026-08-03)
@@ -144,6 +145,9 @@ function settingsKeyboard(s: Sub) {
     [{ text: `${chk(s.topic_briefing)} 📡 모닝 브리핑`, callback_data: 't:briefing' },
      { text: `${chk(s.topic_urgent)} 📡 주요 뉴스`, callback_data: 't:urgent' }],
     [{ text: `${chk(s.topic_assembly)} 🏛️ 국회·법률 동향`, callback_data: 't:assembly' }],
+    // 방미통위 동향(#154): 위원회 회의 의사일정(회의 전날 게시)·보도자료 전건(위원회 결과 포함)이 게시 직후 온다.
+    // 같은 레벨의 네 번째 항목 — 국회·법률(입법)과 성격이 달라 별도 토글 (운영자 결정 2026-09-11)
+    [{ text: `${chk(s.topic_kmcc)} 📺 방미통위 동향`, callback_data: 't:kmcc' }],
     // ── 관심분야 ── 모닝 브리핑은 팀이 같은 그림을 보는 자리라 전원 동일하게 두고,
     // 하루 여러 번 오는 '주요 뉴스'에만 적용한다.
     // 주요 뉴스가 꺼져 있으면 태그 버튼을 아예 감춘다 — 눌러도 아무 효과가 없는 죽은 버튼을
@@ -175,8 +179,9 @@ function settingsKeyboard(s: Sub) {
 
 const START_TEXT =
   '✅ <b>구독 완료!</b>\n\n' +
-  '선택한 요일·시각에 <b>모닝 브리핑</b>이 도착하고, <b>주요 뉴스·국회·법률 동향</b>은 그 시각 이후 새로 생기는 대로 전달됩니다.\n' +
+  '선택한 요일·시각에 <b>모닝 브리핑</b>이 도착하고, <b>주요 뉴스·국회·법률 동향·방미통위 동향</b>은 그 시각 이후 새로 생기는 대로 전달됩니다.\n' +
   '   <i>국회·법률 동향 = 국회 법안 · 입법예고(국회·부처) · 과방위 회의록 요약</i>\n' +
+  '   <i>방미통위 동향 = 방송미디어통신위원회 회의 의사일정(회의 전날) · 보도자료 전건(위원회 결과 포함)</i>\n' +
   '🌙 <b>받기 종료 시각을 넘기면 다음 날 시작 시각까지 발송하지 않습니다.</b>\n' +
   '아래 버튼으로 콘텐츠·요일·수신 시각을 바로 바꿀 수 있어요. (언제든 /settings)\n' +
   '항목을 모두 끄면 알림이 오지 않습니다.\n\n' +
@@ -208,8 +213,11 @@ const LAW_ALIASES: Record<string, string> = {
   '방송통신발전법': '방송통신발전 기본법',
   '정보통신기반보호법': '정보통신기반 보호법',  // 정식명은 띄어쓰기 포함
   '통비법': '통신비밀보호법',
-  '방통위설치법': '방송통신위원회의 설치 및 운영에 관한 법률',
-  '방통위법': '방송통신위원회의 설치 및 운영에 관한 법률',
+  // 2026 개편으로 법령명 자체가 바뀌었다(#154). KB 에 옛 이름 문서는 0건 — 옛 약칭도 새 정식명으로 보낸다.
+  '방통위설치법': '방송미디어통신위원회의 설치 및 운영에 관한 법률',
+  '방통위법': '방송미디어통신위원회의 설치 및 운영에 관한 법률',
+  '방미통위설치법': '방송미디어통신위원회의 설치 및 운영에 관한 법률',
+  '방미통위법': '방송미디어통신위원회의 설치 및 운영에 관한 법률',
   'ICT특별법': '정보통신 진흥 및 융합 활성화 등에 관한 특별법',
   '정보통신융합법': '정보통신 진흥 및 융합 활성화 등에 관한 특별법',
   '지능정보화법': '지능정보화 기본법',
@@ -936,7 +944,7 @@ async function handleCallback(cb: { id: string; data?: string; from: { id: numbe
   const cur = await getSub(chatId);
   const sub: Sub = cur ?? {
     chat_id: chatId, username: null, first_name: null, active: true,
-    topic_briefing: true, topic_urgent: true, topic_assembly: true,
+    topic_briefing: true, topic_urgent: true, topic_assembly: true, topic_kmcc: true,
     days: 'daily', briefing_hour: 7,
     ai_allowed: false, ai_count_date: null, ai_count: 0,
     tags: [],   // 빈 배열 = 전체 수신 (DB 기본값과 동일)
@@ -946,6 +954,7 @@ async function handleCallback(cb: { id: string; data?: string; from: { id: numbe
   if (data === 't:briefing') { patch.topic_briefing = !sub.topic_briefing; ack = patch.topic_briefing ? '모닝 브리핑 ON' : '모닝 브리핑 OFF'; }
   else if (data === 't:urgent') { patch.topic_urgent = !sub.topic_urgent; ack = patch.topic_urgent ? '주요 뉴스 ON' : '주요 뉴스 OFF'; }
   else if (data === 't:assembly') { patch.topic_assembly = !sub.topic_assembly; ack = patch.topic_assembly ? '국회·법률 동향 ON' : '국회·법률 동향 OFF'; }
+  else if (data === 't:kmcc') { patch.topic_kmcc = !sub.topic_kmcc; ack = patch.topic_kmcc ? '방미통위 동향 ON' : '방미통위 동향 OFF'; }
   else if (data.startsWith('g:')) {
     // ── 관심분야 토글 ── 불리언 토글과 달리 배열 연산이라 3단계다.
     //  ① 빈 배열(=전체 수신)이면 먼저 6개 전체로 전개한다 — 그래야 "하나만 끄기"가 성립한다.
@@ -996,12 +1005,12 @@ async function handleCallback(cb: { id: string; data?: string; from: { id: numbe
   }
   // 예전 메시지에 남아 있는 해지/재개 버튼 호환 — 항목 일괄 끄기/켜기로 해석한다
   else if (data === 'unsub') {
-    patch.topic_briefing = false; patch.topic_urgent = false; patch.topic_assembly = false;
+    patch.topic_briefing = false; patch.topic_urgent = false; patch.topic_assembly = false; patch.topic_kmcc = false;
     ack = '모든 알림을 껐습니다 (조회·자문은 계속 사용 가능)';
   }
   else if (data === 'resub') {
     patch.active = true;
-    patch.topic_briefing = true; patch.topic_urgent = true; patch.topic_assembly = true;
+    patch.topic_briefing = true; patch.topic_urgent = true; patch.topic_assembly = true; patch.topic_kmcc = true;
     ack = '모든 알림을 켰습니다';
   }
   else { await tg('answerCallbackQuery', { callback_query_id: cb.id }); return; }
@@ -1081,11 +1090,11 @@ Deno.serve(async (req: Request) => {
       let sub = await getSub(chatId);
       if (!sub) { await upsertSub(chatId, { username: from.username || null, first_name: from.first_name || null }); sub = (await getSub(chatId))!; }
       await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML',
-        text: '⚙️ <b>수신 설정</b>\n버튼을 눌러 바로 변경할 수 있습니다.\n✅⬜ = 여러 개 선택 · 🔵⚪ = 하나만 선택\n<i>항목을 모두 끄면 알림이 오지 않습니다.</i>\n\n🌙 <b>발송 시간대</b> — 모닝 브리핑은 <b>시작 시각</b>에 1회, 주요 뉴스·국회·법률 동향은 그 뒤 새로 생기는 대로 전달됩니다. <b>종료 시각을 넘기면 다음 날 시작 시각까지 발송하지 않습니다.</b>',
+        text: '⚙️ <b>수신 설정</b>\n버튼을 눌러 바로 변경할 수 있습니다.\n✅⬜ = 여러 개 선택 · 🔵⚪ = 하나만 선택\n<i>항목을 모두 끄면 알림이 오지 않습니다.</i>\n\n🌙 <b>발송 시간대</b> — 모닝 브리핑은 <b>시작 시각</b>에 1회, 주요 뉴스·국회·법률 동향·방미통위 동향은 그 뒤 새로 생기는 대로 전달됩니다. <b>종료 시각을 넘기면 다음 날 시작 시각까지 발송하지 않습니다.</b>',
         reply_markup: settingsKeyboard(sub) });
     } else if (text === '/stop') {
       // 메뉴에서는 뺐지만 하위호환으로 남긴다 — '모든 항목 끄기'로 동작(설정·시각은 보존)
-      await upsertSub(chatId, { topic_briefing: false, topic_urgent: false, topic_assembly: false });
+      await upsertSub(chatId, { topic_briefing: false, topic_urgent: false, topic_assembly: false, topic_kmcc: false });
       await sendTelegramHtml(BOT_TOKEN, chatId, '🔕 모든 알림을 껐습니다.\n/settings 에서 원하는 항목만 다시 켤 수 있습니다.\n(조문 조회·AI 자문은 계속 사용 가능)');
     } else if (text === '/admin') {
       await handleAdmin(chatId);

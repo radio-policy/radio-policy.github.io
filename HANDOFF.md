@@ -132,7 +132,7 @@ git read-tree HEAD && git add <파일> && git commit -m "..." && git push origin
 - `.gitattributes`에 `*.bat text eol=crlf` 등록돼 있음.
 
 ### 4-5. 부처 인사 뉴스 항상 수집
-- 과기정통부·방통위 인사이동 뉴스는 항상 수집 대상. `crawler.py`의 `is_ministry_personnel_news()`가 처리 — 제거 금지.
+- 과기정통부·방미통위(방송미디어통신위원회, 구 방통위) 인사이동 뉴스는 항상 수집 대상. `crawler.py`의 `is_ministry_personnel_news()`가 처리 — 제거 금지.
 
 ### 4-7. 구독자 봇 토큰·시크릿 (2026-08-01 신설)
 - 텔레그램 봇이 **둘**입니다. 운영자용 `TELEGRAM_BOT_TOKEN`(기존, 나에게만 알림)과 구독자용
