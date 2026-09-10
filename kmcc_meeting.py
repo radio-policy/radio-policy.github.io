@@ -207,7 +207,10 @@ def parse_agenda_out(txt: str) -> dict:
             continue
         m = re.match(r'^(회의명|일시|장소)\s*[:：]\s*(.+)$', line)
         if m and cur is None:
-            head[m.group(1)] = m.group(2).strip()
+            v = m.group(2).strip()
+            # PDF 머리글 '회 의 명 : 년 2026 제34차 회의' — pdftotext 가 '년'을 앞으로 보낸다(실측). 순서만 되돌린다.
+            v = re.sub(r'^년\s*(\d{4})\s*', r'\1년 ', v)
+            head[m.group(1)] = v
             continue
         if '|' in line and cur is not None:
             cells = [c.strip() for c in line.split('|')]
