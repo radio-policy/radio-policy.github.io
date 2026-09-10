@@ -32,9 +32,11 @@ jobs:
           ANTHROPIC_API_KEY:    ${{ secrets.ANTHROPIC_API_KEY }}
         run: python term_extract.py
 
-      - name: Fill empty term details (Sonnet, max 10 per run)
+      # 2026-09-10 (#153) 10 → 30: 새로 뽑힌 용어는 예외 없이 이 실행에서 바로 채운다(운영자 지시 "뽑히자마자 자동 생성").
+      # 하루 신규 평균 2.4건이라 평소 비용은 같고, 30은 backfill_term_details의 --allow-api 없는 상한이다.
+      - name: Fill empty term details (Sonnet, max 30 per run — 신규분 전부 즉시)
         env:
           SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           ANTHROPIC_API_KEY:    ${{ secrets.ANTHROPIC_API_KEY }}
-        run: python backfill_term_details.py --limit 10
+        run: python backfill_term_details.py --limit 30
