@@ -5511,3 +5511,9 @@ refetch_content 두 벌)에 새 이름 추가. 신규 소스명은 `방송미디
 **교훈.** ① 게시 시각 같은 운영 사실은 사이트에 없어도 첨부 메타데이터(PDF CreationDate)로 잴 수 있다 — 추정으로 스케줄을 짜지 말 것.
 ② "정부 사이트 = 한국 IP"는 #113에서 이미 깨진 전제인데 또 관성으로 답했다. 지침의 정정 항목을 먼저 볼 것. ③ 이름이 바뀐 기관은
 라벨·키·저장 접두가 한 문자열인지 먼저 세어 보고, 키는 두고 라벨만 바꾸는 편이 데이터 이전 없이 안전하다.
+**#154-보론 (같은 날 새벽).** 커밋 뒤 `dispatch_github_workflow('gov_reachability_test.yml')`을 RPC로 불러 Actions에서 재봤다 —
+**14/14 정상**(`KMCC 위원회회의` 목록 + `download.do?fileSeq=71864` PDF 시그니처 포함). #113의 "download.do 미실측" 공백이 닫혔다.
+결과는 새로 만든 DB 함수 `gh_api_get(p_path)`(Vault PAT, pg_net GET → `net._http_response`)로 읽었다 — PC에 gh CLI·PAT이 없고
+MCP execute_sql은 읽기 전용이라 net.http_*를 직접 못 부른다. 초기 적재는 `--pages 2 --no-notify --allow-api`로 의사일정 9건(26~34차,
+45일 이내)·보도자료 20건(8/20~9/10, 위원회 결과 6건 요약) — 큐 0건. crawl_kcc가 kcc.go.kr URL로 먼저 저장해 둔 '불법스팸 최대 6%
+과징금' 1건은 중복이라 옛 행을 지웠다.

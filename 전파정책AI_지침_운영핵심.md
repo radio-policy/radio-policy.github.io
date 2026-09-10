@@ -949,6 +949,7 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 ## 점검 체크리스트 (요약 — 상세 경위는 배경역사 문서)
 
 - **방미통위 의사일정·보도자료가 텔레그램에 안 온다** → 운영 상태 탭 `방미통위 회의·결과 수집` 행(3h 기준) → note `fail>0`이면 Actions daily_crawl 로그의 kmcc 스텝(poppler 설치·download.do 차단 여부) → 구독자 `topic_kmcc`가 켜져 있는지(기존 구독자는 기본 꺼짐) → subscriber_queue topic=kmcc 행과 `last_kmcc_sent_at` 대조. (#154)
+- **GitHub Actions 실행 결과를 원격에서 읽는 법(#154 신설 도구)** — gh CLI·PAT이 PC에 없다. DB 함수 `gh_api_get(p_path)`(SECURITY DEFINER, Vault `github_pat`)가 GitHub REST GET을 보내고 pg_net 요청 id를 돌려준다 → `net._http_response`에서 id로 읽는다. 순서: `/repos/radio-policy/radio-policy.github.io/actions/workflows/<file>.yml/runs?per_page=1`(run id·conclusion) → `/actions/runs/<id>/jobs`(job id) → `/check-runs/<job_id>/annotations`(스크립트의 `::notice` 요약). 호출은 Python `sb.rpc('gh_api_get', {'p_path': …})` — MCP execute_sql은 읽기 전용이라 net.http_*·dispatch를 못 부른다. 워크플로 수동 실행도 같은 이유로 `sb.rpc('dispatch_github_workflow', {'p_workflow': 'x.yml'})`.
 
 - **이상 의심 시 1차 점검**: 대시보드 설정 밑 **"운영 상태"** 탭 — 크롤러 heartbeat·뉴스 입력·오늘 브리핑·입법예고·국회 한눈. (배경역사 #16)
 - **브리핑 미수신**: Actions(morning_briefing.yml) 확인→실패 시 "Run workflow" / 성공인데 미수신→`resend_briefing.py` / 09:40 후도 미수신→`briefing_backup_log.txt`. 본문 0건이어도 요약/제목 폴백으로 빈 브리핑은 안 나옴(배경역사 #16). **트리거·PAT·크롤러 heartbeat 다 정상인데 미생성이면 24h 내 신규 기사 0건을 의심** — 그날은 '🕊️ 신규 뉴스 없음' 통지+placeholder가 정상 동작(고장 아님). daily_crawl 로그 `[네이버 뉴스] N건`으로 'NAVER 키 만료(폴백만)' vs '진짜 뉴스 없음'(N>0·실패0) 가름. (배경역사 #17)
