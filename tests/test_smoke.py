@@ -520,3 +520,44 @@ class TestAssemblyAlertBatch(unittest.TestCase):
         m = ac.format_status_batch(changes, ac.SUBSCRIBER_STATUS, max_chars=1500)
         self.assertLess(len(m), 2200)
         self.assertIn('(대시보드에서 확인)', m)
+
+
+class TestApiUsage(unittest.TestCase):
+    """api_usage(#152): usage 기록 헬퍼 — 응답 반환 규약·fail-open·site 라벨 (네트워크 없음)."""
+
+    def _resp(self):
+        class U:  # anthropic Usage 흉내
+            input_tokens = 1200; output_tokens = 15
+            cache_read_input_tokens = 0; cache_creation_input_tokens = 0
+        class R:
+            usage = U(); model = 'claude-haiku-4-5-20251001'; content = []
+        return R()
+
+    def test_record_returns_response_and_never_raises(self):
+        import api_usage
+        captured = []
+        api_usage._client = lambda: (_ for _ in ()).throw(RuntimeError('no db'))   # DB 없음 → 삼켜야 한다
+        api_usage._fail_count = 0
+        r = self._resp()
+        self.assertIs(api_usage.record('t.py:f', r), r)
+        api_usage.record_usage = lambda site, usage, model=None: captured.append((site, usage, model))
+        api_usage.record('crawler.py:classify_urgency', r)
+        self.assertEqual(captured[0][0], 'crawler.py:classify_urgency')
+        self.assertEqual(captured[0][1].input_tokens, 1200)
+
+    def test_usage_row_shape(self):
+        import api_usage
+        row = api_usage._usage_row('x.py:y', self._resp().usage, 'm')
+        self.assertEqual(set(row), {'host', 'site', 'model', 'input_tokens', 'cache_read', 'cache_write', 'output_tokens', 'ts'})
+        self.assertEqual(row['input_tokens'], 1200); self.assertEqual(row['cache_read'], 0)
+        self.assertIsNone(api_usage._usage_row('x', None, 'm'))
+        d = api_usage._usage_row('x', {'input_tokens': 3, 'cache_read_input_tokens': 2}, None)
+        self.assertEqual((d['input_tokens'], d['cache_read'], d['output_tokens']), (3, 2, 0))
+
+    def test_install_is_idempotent_and_wraps_create(self):
+        import api_usage
+        from anthropic.resources.messages import Messages
+        api_usage._installed = False
+        api_usage.install(); first = Messages.create
+        api_usage.install(); self.assertIs(Messages.create, first)
+        self.assertTrue(getattr(Messages, '_api_usage_wrapped', False))

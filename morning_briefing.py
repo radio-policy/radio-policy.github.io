@@ -30,6 +30,7 @@ import requests
 import anthropic
 from supabase import Client
 from sb_client import make_client
+import api_usage; api_usage.install()   # Anthropic usage 기록(#152) — 호출부 무변경, fail-open
 import notify   # 텔레그램 전송 공용 유틸 (개선⑪) — 전송부만 위임
 
 # ── 환경변수 ──────────────────────────────────────────────

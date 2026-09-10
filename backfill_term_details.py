@@ -36,6 +36,7 @@ except ImportError:
 import anthropic
 from supabase import Client
 from sb_client import make_client
+import api_usage; api_usage.install()   # Anthropic usage 기록(#152) — 호출부 무변경, fail-open
 
 SUPABASE_URL      = os.environ['SUPABASE_URL']
 SUPABASE_KEY      = os.environ['SUPABASE_SERVICE_KEY']
@@ -123,7 +124,15 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--limit', type=int, default=10, help='한 번에 처리할 최대 건수 (0=전부). 기본 10')
     ap.add_argument('--dry-run', action='store_true', help='대상만 세고 API·DB 무변경')
+    ap.add_argument('--allow-api', action='store_true',
+                    help='--limit 0(전부) 또는 30건 초과를 허용(#152). 없으면 거부')
     args = ap.parse_args()
+
+    # #152 폭주 방지: 한 번에 30건 초과(용어당 Sonnet 6000토큰)는 명시 허용 없이는 돌리지 않는다.
+    if not args.dry_run and not args.allow_api and (args.limit <= 0 or args.limit > 30):
+        print('[중단] --limit 0 또는 30건 초과는 대량 Sonnet 호출입니다. 정말 API로 돌리려면 --allow-api 를 붙이세요. '
+              '일회성 백필은 세션에서 처리하는 것이 원칙입니다(#152).')
+        return
 
     rows = (sb.table('tech_terms')
             .select('id,term,term_en,category,definition,description,diagram_html,related_terms,created_at')

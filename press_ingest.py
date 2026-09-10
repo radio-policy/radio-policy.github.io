@@ -24,6 +24,7 @@ import zipfile
 import tempfile
 import subprocess
 from datetime import datetime, timezone, timedelta
+import api_usage; api_usage.install()   # Anthropic usage 기록(#152) — 호출부 무변경, fail-open
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")
@@ -224,6 +225,10 @@ def batch_judge_all(sb, items_bodies: list, keywords: list, wait_sec: int = 900)
         for r in client.messages.batches.results(batch.id):
             if r.result.type != 'succeeded':
                 continue                      # errored/expired/canceled → 호출부가 개별 재판정
+            # 배치 결과는 SDK의 Messages.create 경로를 지나지 않아 usage를 명시 기록한다(#152)
+            api_usage.record_usage('press_ingest.py:batch_judge_all',
+                                   getattr(r.result.message, 'usage', None),
+                                   getattr(r.result.message, 'model', None))
             txt = ''
             for blk in r.result.message.content:
                 if getattr(blk, 'type', '') == 'text':

@@ -82,7 +82,8 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 | app_config | 키-값 설정. `system_prompt`(봇 자문 프롬프트), `press_keywords`(보도자료 수집 키워드 JSON 배열 — 대시보드 '수집 키워드 관리' 카드가 편집), `press_relevance_criteria`(매일 수집 AI 관련성 판정 기준문), `assembly_notice_criteria`(국회 입법예고 Haiku 판정 기준문)·`assembly_notice_rejected`(기각 캐시 JSON — 자동 관리) 등. **claude_key는 anon 노출되는 브라우저용 — 서버측 재사용 금지** |
 | custom_knowledge | 팀 추가 지식(수동 입력). AI 자문 키워드 매칭 참조 |
 | chat_logs | AI 자문 이력. **2026-08-20(#103)부터 네 경로 공통 정본 답변 로그** — 대시보드 자문·텔레그램 /ask·/law 자연어·/law 조문 직조회. `channel`(만족도 집계 축)·`chat_id`(텔레그램 이용자)·`chunk_ids`(jsonb, 그때 실제로 프롬프트에 들어간 근거 청크 id — 불만족 분석 재료) 컬럼 추가. 자문 이력 목록은 `category='텔레그램-조문조회'`만 제외(기계적 원문 출력이라 성격이 다름 — 피드백 탭에서는 보인다). 삭제 가능. `sources`(text)는 **두 종류를 접두사로 구분해** 담는다 — 법령·문서명은 그대로, 수집 뉴스는 `[뉴스] 제목 (매체, 날짜)`. 화면·내보내기에서 `splitSources()`로 갈라 별도 표기(법령은 6개 초과분 `… 등 N개`). **뉴스는 본문 발췌로 실제 반영된 건만** 기록(제목 목록 30건은 근거 아님). 스키마 변경 없이 반영 여부를 사후 검증하려는 구조. (배경역사 #35) |
-| teams / profiles / advisory_usage | 대시보드 계정 체계(#104). `teams`=3팀(경쟁제도팀·기술정책팀·AI정책팀, 팀 합산 일일 한도). `profiles`=auth.users 1:1(이름·팀·role(admin/leader/member)·개인 한도·unlimited·**approved**(관리자 승인 전 AI 잠김)·active). 가입 시 트리거가 승인대기 프로필 자동 생성. `advisory_usage`=(user_id, day, kind) 일일 사용량, kind는 advisory(Sonnet 호출 전부 — #141부터 스트리밍 불문)/general(Haiku, 백스톱 300). 쓰기는 service_role RPC 전용 |
+| teams / profiles / advisory_usage | 대시보드 계정 체계(#104). `teams`=3팀(경쟁제도팀·기술정책팀·AI정책팀, 팀 합산 일일 한도). `profiles`=auth.users 1:1(이름·팀·role(admin/leader/member)·개인 한도·unlimited·**approved**(관리자 승인 전 AI 잠김)·active). 가입 시 트리거가 승인대기 프로필 자동 생성. `advisory_usage`=(user_id, day, kind) 일일 사용량, kind는 advisory(Sonnet 호출 전부 — #141부터 스트리밍 불문)/general(Haiku, 백스톱 **100/일 + 60/시간**, #152 — 종전 300; 정당한 대량 작업은 관리자 profile.unlimited로 우회). 쓰기는 service_role RPC 전용 |
+| api_usage / ai_usage_hour | **API 토큰 계측(#152, 2026-09-10)**. `api_usage`=(ts, host actions/pc/edge, site '<스크립트>.py:<함수>', model, input/cache_read/cache_write/output 토큰) — Python 스크립트가 `api_usage.install()`로 SDK `Messages.create`를 감싸 호출마다 1행 기록(fail-open, 120일 보관). 관리자만 SELECT. `ai_usage_hour`=(user_id, hour, count) 시간당 general 카운터(`charge_ai_usage` 내부용). 집계 RPC `ops_ai_usage_today()`(운영 상태 탭) |
 | answer_feedback | 답변 만족도 👍👎(#103). **세 경로 공통 한 테이블** — `channel`(telegram_ask/telegram_law/dashboard)로 구분해 경로별 불만족률 비교. `log_id` 유니크 FK→chat_logs(재투표는 upsert로 갱신, 로그 삭제 시 set null이라 평점·경로는 보존). `rating` 1/-1, `reason`은 대시보드 👎 사유(텔레그램은 버튼만 → null). **RLS 켜짐 + anon 정책 없음** — 쓰기는 `submit_answer_feedback` RPC, 읽기는 `admin_list_answer_feedback`(관리자 비밀번호). 화면: AI 자문 > '답변 피드백' 탭 |
 | alert_suppress_log | 긴급 재알림 억제 내역(어떤 기존 기사와 유사해 막았는지, 공유 키워드). **1~2주 실측 후 "본문에만 새 내용" 놓침이 있으면 Haiku 판정 층(월 2~6$) 추가 판단**용. service만 접근(정책 없음) (#44) |
 | system_health | 운영 heartbeat(key별 1행). last_crawl_run=뉴스크롤러 / last_gov_notice_run=입법예고·정부고시 / last_refetch_run=본문수집. 워치독 '고장 vs 없음' 구분 + 운영상태 탭. RLS+anon select |
@@ -199,7 +200,9 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 | 19 | foreign-press-trigger | `30 20 * * *` | 05:30 | **해외 규제동향 트리거(2026-08-25 신설)** → foreign_press.yml dispatch. FCC·Ofcom·BEREC·日총무성·ITU는 한국 IP가 불필요해 Actions에서 돈다 — 그전까지 PC 임시작업만 담당해 PC가 꺼지면 그날치가 통째로 빠졌다. 06:05 브리핑보다 앞서야 그날치가 실린다 |
 | 20 | term-extract-trigger | `0 20 * * *` | 05:00 | **기술 용어 자동 추출 트리거(2026-09-09 신설, #141)** → term_extract.yml dispatch. 새벽엔 PC가 꺼져 있어 Actions(Supabase·Anthropic만 쓰므로 한국 IP 불필요). Haiku 추출 + Sonnet 상세 최대 10건/일 — 06:00 브리핑 전에 그날치 완성 |
 | 16 | watchdog-scan-3x | `10 */3 * * *` | 3시간마다 :10 (00:10·03:10·…·21:10) | **내부 워치독 전수 감시** `watchdog_scan(false)` — system_health 10키 키별 임계+note 실패신호, 재알림 억제, 이상 시 1건 요약(Vault `telegram_bot_token`). :10은 :00/:35 잡과 겹치지 않게 오프셋 |
-| 18 | admin-daily-report | `0 0 * * *` | 09:00 | **운영자 일일 리포트**(#100) — 구독자 목록·권한·수신 설정·명령 사용 통계. `trigger_admin_report()` → Vault `admin_report_cron_secret` |
+| 18 | admin-daily-report | `0 0 * * *` | 09:00 | **운영자 일일 리포트**(#100) — 구독자 목록·권한·수신 설정·명령 사용 통계 + **어제 AI 호출(자문/일반)·스크립트 토큰 한 줄**(#152). `trigger_admin_report()` → Vault `admin_report_cron_secret` |
+| 21 | ai-usage-burst-check | `15 * * * *` | 매시 :15 | **AI 호출 폭주 경보**(#152) `check_ai_usage_burst()` — 오늘 general 합계 >100이면 운영자 텔레그램 1회/일(Vault `telegram_bot_token`, 마지막 경보일은 system_health `ai_burst_alert`) |
+| 22 | api-usage-cleanup | `30 15 * * *` | 00:30 | `api_usage` 120일 초과 삭제 |
 | — | subscriber-briefing-hourly | `25 * * * *` | 매시 :25 | 구독자 정시 발송 → send-subscriber-briefing. `:25`는 06:05~06:20 브리핑 생성 창을 피한 값. 대상이 없으면 no-op이라 매시 돌아도 부담 없음. Vault `subscriber_cron_secret` 사용 |
 
 - 공용 디스패치 함수 `dispatch_github_workflow(p_workflow)` + `trigger_briefing_if_missing()`. 인증: GitHub PAT을 Supabase Vault `github_pat`에 저장. 텔레그램 토큰은 Vault `telegram_bot_token`.
@@ -606,7 +609,7 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
   미완). 몇 건만 되살릴 때는 목록에서 제목으로 찾아 `press_ingest._collect_one()`에 직접 넘긴다.
   ★ **기준문을 먼저 고치고 백필할 것** — 순서를 바꾸면 갱신 전 기준으로 다시 걸러진다.
 - **관련성 판정은 Batch API로 — 토큰 50%(#96)**: `batch_judge_all()`이 신규 후보를 모아 한 번에
-  제출한다(`BATCH_MIN_ITEMS=5` 미만이면 왕복이 더 비싸 개별 판정). 10분 내 미완료·만료·실패분은
+  제출한다(`BATCH_MIN_ITEMS=5` 미만이면 왕복이 더 비싸 개별 판정). 15분(`wait_sec=900`) 내 미완료·만료·실패분은
   **그 건만 개별 판정으로 폴백** — 배치에 태우는 건 원문이 아니라 「관련 있나」라는 질문이고
   제목·본문·URL은 제출 전에 확보돼 있으므로 **자료 손실 경로가 없다**(만료분은 과금도 안 된다).
   ⚠️ **프롬프트는 `_judge_prompt()` 한 함수만 쓸 것** — 배치/개별이 다른 문구를 쓰면 같은 기사가
@@ -615,8 +618,19 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
   ⚠️ **해외규제·국회·회의록·법령DIFF도 배치화하지 말 것** — 판정 물량이 하루 0~35건뿐이라 추가 절감이
   월 2~3천 원인데, 해외규제는 06:05 브리핑까지 35분뿐이고 국회는 당일 알림이 있다.
 - **비용 구조(2026-08-13 실측)**: 평상시 **월 ~8만 원**(Haiku 판정이 대부분, 자문 Sonnet은 월 ~1.5만 원).
-  ⚠️ **프롬프트 캐싱은 이 시스템에서 무효** — 크롤러 시스템 프롬프트가 1,130토큰이라 Haiku 최소
-  캐시 길이(2,048) 미달로 실측상 캐시 저장·읽기 모두 0이었다. 콘솔의 「캐싱 적중률 0%」가 그것이다.
+  ⚠️ **프롬프트 캐싱은 현재 무효** — Haiku 4.5의 최소 캐시 길이는 **4,096토큰**(종전 기록 2,048은 오류, #152 정정)이라
+  긴급도 콜(1.5~1.9k)은 영구히 미달이고, 선별 콜 고정부(4.3~4.5k)도 경계선이다. 미달이면 `cache_control`을 붙여도
+  에러 없이 `cache_creation_input_tokens=0`으로 조용히 안 잡힌다 — 콘솔의 「캐싱 적중률 0%」가 그것이다.
+  캐시를 시도할 땐 반드시 `api_usage.cache_write>0`을 첫 실행에서 확인하고, 0이면 되돌릴 것(#152 W7).
+- **비용 구조(2026-09-10 재실측, #152)**: 정기 실행 **$2.5~3/일 ≈ 월 $75~90**. 몸통은 뉴스 Haiku 세 가지 — 선별 배치
+  (평일 60배치/일, $30~40) > 요약 생성(146/일, $11~14) ≈ 긴급도 개별 판정(300/일, $12~14) > Sonnet 정기 $10 > 기타 Haiku $5~8.
+  **긴급도 개별 판정은 Actions에서 제목만 본다**(본문 수집 전, `_screen_text`도 pop됨 — #84 A/B 당시에도 동일). 선별 콜은
+  긴급도 규칙·피드백 토큰과 urgency 출력을 매 배치 지불하면서 결과를 버린다(1953행이 덮어씀) — W3 그림자 컬럼으로 기록 예정.
+  ⚠️ **일회성 폭주가 정기 절감을 지운다**: 9/1·9/3 #118 버그 + KB 대량 등록 OKF 생성 = 이달 $12~17. 방지 장치(#152):
+  general 백스톱 100/일·60/시(`charge_ai_usage`), 매시 폭주 경보(cron 21), 운영 상태 탭 "오늘 대시보드 AI 호출" 행(관리자),
+  일일 리포트 AI 줄, 대량 스크립트 `--allow-api` 게이트(`press_backfill.py`, `law_diff_gen.py --backfill`,
+  `backfill_term_details.py --limit 0/30초과`). **토큰 계측은 `api_usage` 표**(스크립트 `api_usage.install()` 한 줄) — 절감안의
+  효과 확인은 코드 리뷰가 아니라 이 표로 한다. API 키는 Actions/PC/Edge **용도별 3개로 분리**해 콘솔에서도 갈라 본다(운영자가 콘솔에서 키 2개 추가 발급).
   ⚠️ **야간 수집 중단도 무의미** — 야간 8회는 하루 26건뿐이고 끊어도 05:50이 몰아서 판정한다(월 ~500원).
   ⚠️ **8/2~3 비용 스파이크는 보도자료 백필(6,012청크)이라는 일회성** — 이걸 평상시로 오독하지 말 것.
 - **백필/폴백 키워드는 제목 매칭**: press_keywords(2026-08-02 기준 33개, 대시보드에서 편집).
@@ -1176,6 +1190,10 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **대시보드에 새 정적 파일(js/css)을 추가하면 `.gitlab-ci.yml`의 `cp … public/` 목록에도 넣을 것** (2026-09-06, #125) — GitLab Pages는 그 목록의 파일만 배포한다(index.html·styles.css·app.js·system_prompt.js·lawmap_articles.js). 빠뜨리면 로컬·GitHub Pages(저장소 전체 서빙)에서는 되는데 **주 주소(gitlab.io)에서만 404**가 나고, `typeof` 가드 덕에 화면은 조용히 종전 동작으로 돌아가 "배포했는데 안 바뀐다"로 보인다. 배포 확인은 `curl -o /dev/null -w "%{http_code}" https://radio-policy.gitlab.io/<파일>`로 파일 단위까지.
 - **Supabase MCP `execute_sql`을 병렬 에이전트 다수가 동시에 두드리게 하지 말 것 — 동시 4개 이하, 조회는 묶어서** (2026-09-05, #123) — 12개 에이전트가 각자 조회하자 rate-limit으로 배치가 중단됐다. 검증·탐색을 병렬로 돌릴 때는 에이전트 수를 줄이거나 한 에이전트가 여러 건을 한 쿼리로 묶어 조회하게 지시한다. MCP는 읽기 전용(UPDATE는 25006)이므로 쓰기는 `sb_client` 스크립트로.
 - **뉴스 목록 렌더에 1만 건 전체를 훑는 계산(O(n²) 묶음·전건 HTML 조립)을 다시 넣지 말 것 — 묶음은 날짜별·캐시, 화면은 300그룹씩** (2026-09-07, #130) — 2026-09-03 병렬 페이지 로드로 1만 건이 다 실리자 클릭마다 14초 멈춤(묶음 12초). 목록 구성이 바뀌면 `_newsCacheVer++`, 비교 재료는 `_newsFeat`로 재사용.
+- **Anthropic 호출을 새로 추가하는 Python 스크립트는 `import api_usage; api_usage.install()` 한 줄을 넣을 것 (2026-09-10, #152)** — 없으면 그 호출은 청구서에만 나오고 어느 기능인지 영원히 모른다. Message Batches 결과는 SDK 경로가 달라 `api_usage.record_usage()`로 명시 기록.
+- **대량 API 스크립트에 `--allow-api` 게이트를 빼지 말 것 (#152)** — 8/2~3(6,012청크)·8/26·9/1 폭주는 전부 "한 번만 돌리자"였다. 일회성은 세션이 DB에 직접 쓴다(비용 0).
+- **`charge_ai_usage`의 general 백스톱(100/일·60/시)을 올리지 말 것 (#152)** — 관측된 정상 최대는 30/일. 정당한 대량 작업은 관리자 profile.unlimited로 우회하고, 끝나면 되돌린다.
+- **Haiku 캐시 최소 길이는 4,096 — "2,048"로 계산하지 말 것 (#152)** — 미달은 조용히 0이라 코드 리뷰로는 못 잡는다. `api_usage.cache_write`로 확인.
 
 ## 알려진 제약사항
 
@@ -1233,7 +1251,7 @@ VOYAGE_API_KEY           voyage-embed + rag.ts 임베딩
 SUBSCRIBER_BOT_TOKEN     구독자 봇 (운영자 봇 토큰과 다름)
 TELEGRAM_WEBHOOK_SECRET  webhook 진위 검증 (Telegram이 헤더로 보냄)
 CRON_SECRET              pg_cron → send-subscriber-briefing 인증
-ANTHROPIC_API_KEY        자문·키워드확장 (app_config.claude_key 재사용 금지)
+ANTHROPIC_API_KEY        자문·키워드확장 (app_config.claude_key 재사용 금지). #152: Actions(GitHub secret)·PC(.env)·Edge(여기) **세 곳은 서로 다른 키**를 쓴다 — 콘솔 사용량이 용도별로 갈라 보이게. 키 이름 예: radio-actions / radio-pc / radio-edge
 OPERATOR_CHAT_ID         344506450 — 자문 승인 버튼 수신자
 ※ Vault subscriber_cron_secret = CRON_SECRET 과 같은 값(트리거 함수가 여기서 읽음).
 ※ 값 붙여넣기 시 줄바꿈 혼입 주의 — 콘솔의 SHA256 다이제스트로 대조 검증할 것.

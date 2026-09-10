@@ -14,6 +14,7 @@ crawler.py(텔레그램·이메일 재알림 억제)와 morning_briefing.py(브�
 이어버려(실측: 261건 묶음) 브리핑에서 사건 하나가 통째로 사라진다.
 """
 import re
+import api_usage; api_usage.install()   # Anthropic usage 기록(#152) — 호출부 무변경, fail-open
 
 # 대시보드 _extractKeywords와 동일한 불용어 (양쪽을 함께 고칠 것)
 STOPWORDS = {

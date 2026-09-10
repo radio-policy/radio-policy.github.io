@@ -6255,6 +6255,24 @@ async function loadOpsStatus() {
                    lastRefetch ? ('최근 결과: ' + hbNote('last_refetch_run')) : 'PC 본문 수집 (heartbeat 대기)');
     rows += opsRow('국회 법안 최근 갱신', opsAgoText(lastBill), null, '매일 10:00');
     rows += opsRow('뉴스 보관 건수', (newsCount != null ? newsCount + '건' : '—'), null, '60일 유지');
+    // 오늘 AI 호출 (#152, 관리자만) — 백필·화면 버그로 호출이 폭주해도 재결제 때까지 아무도 몰랐다(#111·#118).
+    // 일반(Haiku) 평일 5~30이 정상, 100 초과면 pg_cron이 텔레그램 경보. 토큰은 api_usage(스크립트 기록)에서.
+    if (isAdminUser()) {
+      try {
+        var ai = await sb.rpc('ops_ai_usage_today');
+        var a = ai && ai.data;
+        if (a && a.ok) {
+          var tok = (a.tokens || []).map(function(t) {
+            return t.host + ' ' + t.calls + '콜 · 입력 ' + Math.round((t.input_tokens || 0) / 1000) + 'k' +
+              (t.cache_read ? ' (캐시 ' + Math.round(t.cache_read / 1000) + 'k)' : '') +
+              ' · 출력 ' + Math.round((t.output_tokens || 0) / 1000) + 'k';
+          }).join(' / ');
+          rows += opsRow('오늘 대시보드 AI 호출', '자문 ' + a.advisory + '회 · 일반 ' + a.general + '회 (어제 ' + a.general_yday + ')',
+                         a.general > 100 ? false : true,
+                         '일반 평일 5~30 정상 · 100 초과 경보. 스크립트 토큰: ' + (tok || '기록 없음'));
+        }
+      } catch (e2) { /* 표시용 — 실패해도 패널은 살린다 */ }
+    }
 
     el.innerHTML =
       '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">' +

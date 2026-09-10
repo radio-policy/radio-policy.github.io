@@ -24,6 +24,7 @@ crawler.py 말미에서 매시 호출된다(try/except 격리 — 실패해도 �
 import argparse
 import json
 import os
+import api_usage; api_usage.install()   # Anthropic usage 기록(#152) — 호출부 무변경, fail-open
 import re
 import sys
 from collections import Counter

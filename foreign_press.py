@@ -70,6 +70,7 @@ except ImportError:
     anthropic = None
 
 from sb_client import make_client
+import api_usage; api_usage.install()   # Anthropic usage 기록(#152) — 호출부 무변경, fail-open
 
 KST = timezone(timedelta(hours=9))
 

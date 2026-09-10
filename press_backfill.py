@@ -84,7 +84,16 @@ def main():
     ap.add_argument('--agency', default='', help='기관 slug 쉼표 구분 (기본 6개 전체)')
     ap.add_argument('--dry-run', action='store_true')
     ap.add_argument('--skip-embed', action='store_true')
+    ap.add_argument('--allow-api', action='store_true',
+                    help='대량 API 판정 허용. 없으면 --dry-run만 가능(#152 — 일회성 백필은 세션에서 처리하는 것이 원칙)')
     args = ap.parse_args()
+
+    # #152 폭주 방지: 2024년부터 전 기관 순회 = 수천 건 Haiku 판정(8/2~3 스파이크의 원인). 실수로 돌리지 못하게
+    # --allow-api 없이는 거부한다. 일회성 백필은 Claude 세션(구독, 비용 0)에서 DB에 직접 쓰는 것이 원칙.
+    if not args.dry_run and not args.allow_api:
+        print('[중단] 대량 API 판정입니다(기관당 수백~수천 건 Haiku). 정말 API로 돌리려면 --allow-api 를 붙이세요. '
+              '일회성 백필은 세션에서 처리하는 것이 원칙입니다(#152). 미리 보려면 --dry-run.')
+        return 2
 
     started = datetime.now(KST)
     print('=' * 50)

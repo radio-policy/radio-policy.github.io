@@ -36,6 +36,7 @@ except ImportError:
 
 import anthropic
 from sb_client import make_client
+import api_usage; api_usage.install()   # Anthropic usage 기록(#152) — 호출부 무변경, fail-open
 
 SUPABASE_URL      = os.environ['SUPABASE_URL']
 SUPABASE_KEY      = os.environ['SUPABASE_SERVICE_KEY']

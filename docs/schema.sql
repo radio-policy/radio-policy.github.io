@@ -314,6 +314,33 @@ create table if not exists public.advisory_usage (
 -- 관련 함수: handle_new_user(트리거) / is_admin·is_leader·my_team(정책 헬퍼, definer)
 --            charge_ai_usage·refund_ai_usage(**service_role 전용**) / get_my_quota(표시용)
 --            admin_delete_chat_log_v2(역할 기반)
+-- charge_ai_usage v2 (#152, 2026-09-10): general 백스톱 300→100/일 + 시간당 60(ai_usage_hour).
+--   반환 reason: not_approved / member_limit / team_limit / general_backstop / hourly_backstop / bad_kind.
+--   전체 본문은 Supabase 마이그레이션 `api_usage_metering_and_backstop_152`에 있음(DB가 원본).
+
+-- 1-19c) API 토큰 계측·폭주 방지 (#152) --------------------------------------
+create table if not exists public.api_usage (
+  id            bigserial primary key,
+  ts            timestamptz not null default now(),
+  host          text not null default 'pc',      -- actions / pc / edge
+  site          text not null,                   -- '<script>.py:<function>' (api_usage.py가 자동 부여)
+  model         text,
+  input_tokens  int not null default 0,
+  cache_read    int not null default 0,
+  cache_write   int not null default 0,
+  output_tokens int not null default 0
+);
+create index if not exists api_usage_ts_idx on public.api_usage (ts desc);
+alter table public.api_usage enable row level security;      -- 쓰기 service_role, 읽기 admin(is_admin())
+create table if not exists public.ai_usage_hour (
+  user_id uuid not null references auth.users(id) on delete cascade,
+  hour    timestamptz not null,
+  count   int not null default 0,
+  primary key (user_id, hour)
+);
+-- 함수: check_ai_usage_burst() — pg_cron 21(매시 :15), 오늘 general >100이면 운영자 텔레그램 1회/일
+--       ops_ai_usage_today() — 운영 상태 탭 집계(admin만), authenticated에 execute
+-- pg_cron 22 api-usage-cleanup: delete from api_usage where ts < now() - interval '120 days'
 
 -- 1-20) 답변 만족도 (#103) ---------------------------------------------------
 -- 세 경로 공통. log_id 유니크 + upsert라 재투표는 행이 늘지 않고 마지막 값으로 갱신된다.

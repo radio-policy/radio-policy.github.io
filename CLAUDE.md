@@ -48,7 +48,11 @@ SKT Comm Center 기술정책팀's radio/telecom **policy-monitoring automation s
 **Shared utilities (2026-08-02, #58)** — new code MUST reuse these instead of re-implementing:
 `notify.send_telegram(text, *, chat_id, parse_mode, disable_web_page_preview)` for Telegram (handles
 3800-char splitting, retries, 429 Retry-After; `health_watchdog.py` stays deliberately independent) and
-`embed_util.get_embeddings(texts, ...)` for Voyage embeddings. Smoke tests live in `tests/test_smoke.py`
+`embed_util.get_embeddings(texts, ...)` for Voyage embeddings. **Every Python script that calls Anthropic
+must have `import api_usage; api_usage.install()`** (#152, 2026-09-10) — it wraps the SDK once and logs each
+call's token usage to the `api_usage` table (site = calling function, fail-open); Message Batches results are
+logged explicitly via `api_usage.record_usage()`. Bulk scripts refuse mass API runs without `--allow-api`
+(one-off work belongs in a Claude session, cost 0). Smoke tests live in `tests/test_smoke.py`
 (stdlib unittest, no network) — run `python -m unittest discover -s tests` after touching shared logic.
 
 **Shared DB client** — every Python script MUST create its Supabase client via `sb_client.make_client(url, key)`, never `create_client` directly. This forces HTTP/1.1 (supabase-py 2.31 negotiates HTTP/2, which the endpoint drops → `RemoteProtocolError: Server disconnected`). Applies to new scripts too.

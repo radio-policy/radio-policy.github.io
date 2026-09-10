@@ -174,6 +174,32 @@ Deno.serve(async (req: Request) => {
 
   try {
     const since7 = new Date(Date.now() - 7 * 24 * 3600 * 1000);
+    // #152 AI 호출·토큰 한 줄 — 백필·화면 버그 폭주(#111·#118)가 재결제 때까지 안 보였던 것을 매일 아침 보이게.
+    const kstYday = kstDate(new Date(Date.now() - 24 * 3600 * 1000));
+    const ydayFrom = new Date(new Date(kstYday + 'T00:00:00+09:00').getTime()).toISOString();
+    const ydayTo = new Date(new Date(kstYday + 'T00:00:00+09:00').getTime() + 24 * 3600 * 1000).toISOString();
+    const aiLine = await (async () => {
+      try {
+        const [{ data: au }, { data: tok }] = await Promise.all([
+          sb.from('advisory_usage').select('kind, count').eq('day', kstYday),
+          sb.from('api_usage').select('host, input_tokens, cache_read, output_tokens').gte('ts', ydayFrom).lt('ts', ydayTo),
+        ]);
+        const sum = (rows: Array<{ kind: string; count: number }> | null, k: string) =>
+          (rows || []).filter((r) => r.kind === k).reduce((s, r) => s + (r.count || 0), 0);
+        const byHost: Record<string, { n: number; i: number; c: number; o: number }> = {};
+        for (const t of (tok || []) as Array<{ host: string; input_tokens: number; cache_read: number; output_tokens: number }>) {
+          const b = byHost[t.host] || (byHost[t.host] = { n: 0, i: 0, c: 0, o: 0 });
+          b.n++; b.i += t.input_tokens || 0; b.c += t.cache_read || 0; b.o += t.output_tokens || 0;
+        }
+        const k = (v: number) => Math.round(v / 1000) + 'k';
+        const tokStr = Object.entries(byHost).map(([h, b]) =>
+          `${h} ${b.n}콜 입력 ${k(b.i)}${b.c ? '(캐시 ' + k(b.c) + ')' : ''} 출력 ${k(b.o)}`).join(' · ') || '기록 없음';
+        const gen = sum(au, 'general');
+        return `\n<b>AI 호출(어제)</b> 자문 ${sum(au, 'advisory')}회 · 일반 ${gen}회${gen > 100 ? ' ⚠️ 폭주' : ''} (평소 5~30)\n` +
+          `<i>스크립트 토큰: ${escapeHtml(tokStr)}</i>\n`;
+      } catch (_e) { return ''; }
+    })();
+
     const [{ data: subs }, { data: usage }, { data: queue }] = await Promise.all([
       sb.from('telegram_subscribers')
         .select('chat_id, first_name, username, active, ai_allowed, law_allowed, unlimited, ' +
@@ -191,7 +217,7 @@ Deno.serve(async (req: Request) => {
     ]);
 
     const html = buildReport((subs || []) as Sub[], (usage || []) as Usage[],
-                             (queue || []) as QueueRow[], since7);
+                             (queue || []) as QueueRow[], since7) + aiLine;
     // maxParts 기본값 3(≈11.7KB)이면 구독자가 20~25명을 넘을 때 뒷사람과 '집계 기간' 줄이 조용히 잘린다.
     // 운영자 1명에게만 가는 리포트라 조각이 늘어도 부담이 없어 8로 올린다.
     for (const part of splitByLines(html, 3900, 8)) await sendTelegramHtml(BOT_TOKEN, OPERATOR_CHAT_ID, part);

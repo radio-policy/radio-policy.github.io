@@ -50,6 +50,7 @@ except Exception:
     pass
 
 from sb_client import make_client   # create_client 직접 사용 금지 — HTTP/1.1 강제 (지침)
+import api_usage; api_usage.install()   # Anthropic usage 기록(#152) — 호출부 무변경, fail-open
 import notify   # 텔레그램 전송 공용 유틸 (개선⑪) — 전송부만 위임
 
 SB_URL = os.getenv('SUPABASE_URL')
@@ -1252,7 +1253,15 @@ def main():
                     help='입법예고(proposed) 소급 기간(일, 기본 60)')
     ap.add_argument('--assembly-only', action='store_true',
                     help='국회 입법예고(assembly) 패스만 단독 실행')
+    ap.add_argument('--allow-api', action='store_true',
+                    help='--backfill 같은 대량 Sonnet 재생성 허용(#152). 없으면 --backfill은 --dry-run만 가능')
     args = ap.parse_args()
+
+    # #152 폭주 방지: --backfill은 loaded 전건(수십~수백 건)을 Sonnet 8000토큰으로 재생성한다.
+    if args.backfill and not args.dry_run and not args.allow_api:
+        print('[중단] --backfill은 대량 Sonnet 호출입니다. 정말 API로 돌리려면 --allow-api 를 붙이세요. '
+              '일회성 재생성은 세션에서 처리하는 것이 원칙입니다(#152). 미리 보려면 --dry-run.')
+        sys.exit(2)
 
     if not (SB_URL and SB_KEY):
         print('오류: .env에 SUPABASE_URL, SUPABASE_SERVICE_KEY 필요')

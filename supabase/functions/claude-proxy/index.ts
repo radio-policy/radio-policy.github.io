@@ -126,6 +126,12 @@ Deno.serve(async (req) => {
         `${c.team_name ?? '팀'}의 오늘 자문 한도(${c.team_limit}회)를 모두 사용했습니다. ` +
         '내일 다시 이용하거나 관리자에게 한도 조정을 요청해 주세요.', cors);
     }
+    // #152: 일반(Haiku) 백스톱 100/일·60/시간 — 화면 자동 호출 버그·대량 등록 폭주를 막는 안전장치.
+    if (reason === 'general_backstop' || reason === 'hourly_backstop') {
+      return errJson(429, 'quota',
+        (reason === 'hourly_backstop' ? '이번 시간 AI 보조 호출이 60회를 넘었습니다. ' : '오늘 AI 보조 호출이 100회를 넘었습니다. ') +
+        '잠시 뒤 다시 시도하거나, 대량 작업이면 관리자에게 알려 주세요(세션에서 처리하는 것이 원칙).', cors);
+    }
     return errJson(429, 'quota', '오늘 이용 한도를 초과했습니다.', cors);
   }
 

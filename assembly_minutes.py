@@ -55,6 +55,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from sb_client import make_client
+import api_usage; api_usage.install()   # Anthropic usage 기록(#152) — 호출부 무변경, fail-open
 from press_ingest import (
     load_press_keywords, make_ai_judge, register_kb_section, section_exists,
     _pdf_to_text, _like_escape, _doc_max_index,
