@@ -179,7 +179,7 @@ function settingsKeyboard(s: Sub) {
 
 const START_TEXT =
   '✅ <b>구독 완료!</b>\n\n' +
-  '선택한 요일·시각에 <b>모닝 브리핑</b>이 도착하고, <b>주요 뉴스·국회·법률 동향·방미통위 동향</b>은 그 시각 이후 새로 생기는 대로 전달됩니다.\n' +
+  '선택한 요일·시각에 <b>모닝 브리핑</b>이 도착하고, 나머지 알림은 그 시각 이후 새로 생기는 대로 전달됩니다.\n' +
   '   <i>국회·법률 동향 = 국회 법안 · 입법예고(국회·부처) · 과방위 회의록 요약</i>\n' +
   '   <i>방미통위 동향 = 방송미디어통신위원회 회의 의사일정(회의 전날) · 위원회 결과(회의 당일) · 통신·전파 관련 보도자료</i>\n' +
   '🌙 <b>받기 종료 시각을 넘기면 다음 날 시작 시각까지 발송하지 않습니다.</b>\n' +
@@ -1090,7 +1090,7 @@ Deno.serve(async (req: Request) => {
       let sub = await getSub(chatId);
       if (!sub) { await upsertSub(chatId, { username: from.username || null, first_name: from.first_name || null }); sub = (await getSub(chatId))!; }
       await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML',
-        text: '⚙️ <b>수신 설정</b>\n버튼을 눌러 바로 변경할 수 있습니다.\n✅⬜ = 여러 개 선택 · 🔵⚪ = 하나만 선택\n<i>항목을 모두 끄면 알림이 오지 않습니다.</i>\n\n🌙 <b>발송 시간대</b> — 모닝 브리핑은 <b>시작 시각</b>에 1회, 주요 뉴스·국회·법률 동향·방미통위 동향은 그 뒤 새로 생기는 대로 전달됩니다. <b>종료 시각을 넘기면 다음 날 시작 시각까지 발송하지 않습니다.</b>',
+        text: '⚙️ <b>수신 설정</b>\n버튼을 눌러 바로 변경할 수 있습니다.\n✅⬜ = 여러 개 선택 · 🔵⚪ = 하나만 선택\n<i>항목을 모두 끄면 알림이 오지 않습니다.</i>\n\n🌙 <b>발송 시간대</b> — 모닝 브리핑은 <b>시작 시각</b>에 1회, 나머지 알림은 그 뒤 새로 생기는 대로 옵니다. <b>종료 시각 이후에는 다음 날 시작 시각까지 발송하지 않습니다.</b>',
         reply_markup: settingsKeyboard(sub) });
     } else if (text === '/stop') {
       // 메뉴에서는 뺐지만 하위호환으로 남긴다 — '모든 항목 끄기'로 동작(설정·시각은 보존)
