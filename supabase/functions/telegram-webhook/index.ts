@@ -144,10 +144,10 @@ function settingsKeyboard(s: Sub) {
   return { inline_keyboard: [
     [{ text: `${chk(s.topic_briefing)} 📡 모닝 브리핑`, callback_data: 't:briefing' },
      { text: `${chk(s.topic_urgent)} 📡 주요 뉴스`, callback_data: 't:urgent' }],
-    [{ text: `${chk(s.topic_assembly)} 🏛️ 국회·법률 동향`, callback_data: 't:assembly' }],
     // 방미통위 동향(#154): 위원회 회의 의사일정(회의 전날 게시)·위원회 결과(회의 당일)·통신·전파 관련 보도자료가 게시 직후 온다.
-    // 같은 레벨의 네 번째 항목 — 국회·법률(입법)과 성격이 달라 별도 토글 (운영자 결정 2026-09-11)
-    [{ text: `${chk(s.topic_kmcc)} 📺 방미통위 동향`, callback_data: 't:kmcc' }],
+    // 같은 레벨의 네 번째 항목 — 국회·법률(입법)과 성격이 달라 별도 토글. 두 개를 한 줄에(운영자 지시 2026-09-11).
+    [{ text: `${chk(s.topic_assembly)} 🏛️ 국회·법률 동향`, callback_data: 't:assembly' },
+     { text: `${chk(s.topic_kmcc)} 📺 방미통위 동향`, callback_data: 't:kmcc' }],
     // ── 관심분야 ── 모닝 브리핑은 팀이 같은 그림을 보는 자리라 전원 동일하게 두고,
     // 하루 여러 번 오는 '주요 뉴스'에만 적용한다.
     // 주요 뉴스가 꺼져 있으면 태그 버튼을 아예 감춘다 — 눌러도 아무 효과가 없는 죽은 버튼을
