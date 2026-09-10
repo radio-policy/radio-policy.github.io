@@ -483,12 +483,15 @@ def build_agenda(item: dict, use_ai: bool, revised: bool = False) -> tuple:
 
 
 def press_relevant(judge, keywords: list, title: str, body: str) -> tuple:
-    """일반 보도자료 관련성 — Haiku 판정기(press_ingest.make_ai_judge)가 있으면 그것, 없으면 **제목** 키워드.
+    """일반 보도자료 관련성 — ① **제목**에 보도자료 키워드가 있으면 AI 없이 통과(안전망: Haiku 가 '갤럭시Z8 지원금
+    과장광고'를 무관으로 답한 실측 2026-09-11) ② 없으면 Haiku 판정기(press_ingest.make_ai_judge) ③ 판정기도 없으면 탈락.
     (본문 키워드는 '통신'류가 흔해 너무 느슨하다 — press_ingest 의 무-API 후보 선정도 제목 기준이다.)"""
+    hit = next((k for k in keywords if k in (title or '')), None)
+    if hit:
+        return True, '제목키워드:' + hit
     if judge is not None:
         return judge(title, body)
-    hit = next((k for k in keywords if k in (title or '')), None)
-    return (True, '제목키워드:' + hit) if hit else (False, '제목 키워드 불일치')
+    return False, '제목 키워드 불일치'
 
 
 def build_press(item: dict) -> tuple:

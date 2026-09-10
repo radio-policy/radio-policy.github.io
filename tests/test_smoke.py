@@ -720,3 +720,5 @@ class TestKmccMeeting(unittest.TestCase):
         self.assertTrue(km.press_relevant(None, kw, '5G 특화망 주파수 공급', '')[0])
         self.assertFalse(km.press_relevant(None, kw, '드라마 제작 사례 공유', '주파수라는 낱말이 본문에만')[0])
         self.assertEqual(km.press_relevant(lambda t, b: (True, 'ai'), kw, 'x', 'y'), (True, 'ai'))
+        # 제목 키워드 일치는 AI 판정보다 우선(안전망)
+        self.assertTrue(km.press_relevant(lambda t, b: (False, 'ai-무관'), kw, '5G 지원금 안내', '')[0])
