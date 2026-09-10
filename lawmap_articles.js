@@ -867,8 +867,9 @@ async function lmaRenderTopic(topicId) {
       color: { color: '#8a8f98', opacity: 0.75, highlight: '#5b7ff5' },
       font: { size: 11, color: subColor, strokeWidth: 3, strokeColor: bgColor, align: 'middle' },
       smooth: { type: 'curvedCW', roundness: 0.12 },
-      title: '[' + lmaShortLawName(e.from.L.node.name) + ' ' + lmaAnyLabel(e.from.key) + (e.para || '') + ' → ' + lmaShortLawName(e.to.L.node.name) + ' ' + lmaAnyLabel(e.to.key) + ']\n' +
-        (e.snippet ? ('“' + e.snippet + '”') : (e.kind === 'deleg' ? (e.viaDesc ? '위임 관계 — 주제 엣지 설명에 적힌 위임 근거(본문에는 조문 인용 없음)' : '위임 관계(본문 인용 없음)') : ''))
+      // 말풍선은 요소(lmTipEl)로 — 문자열은 vis가 innerText로 넣어 <b>·<br>가 글자로 보인다 (#151)
+      title: lmTipEl('<b>' + lmEsc(lmaShortLawName(e.from.L.node.name) + ' ' + lmaAnyLabel(e.from.key) + (e.para || '') + ' → ' + lmaShortLawName(e.to.L.node.name) + ' ' + lmaAnyLabel(e.to.key)) + '</b><br>' +
+        (e.snippet ? ('“' + lmEsc(e.snippet) + '”') : (e.kind === 'deleg' ? (e.viaDesc ? '위임 관계 — 주제 엣지 설명에 적힌 위임 근거(본문에는 조문 인용 없음)' : '위임 관계(본문 인용 없음)') : '')))
     });
   });
   el.innerHTML = '';

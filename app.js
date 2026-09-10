@@ -10067,6 +10067,8 @@ let _lawMapHiddenCount = 0;    // 접힌 고시 수 (토글 라벨용)
 let _visNetLoadPromise = null;
 
 function lmEsc(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+// vis-network 9는 문자열 title을 innerText로 넣어 HTML이 그대로 보인다(실측) — 꾸민 말풍선은 요소로 넘긴다. html은 lmEsc를 거친 조각만 (#151)
+function lmTipEl(html) { var d = document.createElement('div'); d.innerHTML = html; return d; }
 
 function guessLawNodeType(name) {
   if (/시행령$/.test(name)) return 'decree';
@@ -10190,11 +10192,14 @@ function lawmapTopicScopedEdges(topicId, allEdges) {
   }
   var byLaw = {};
   (model.laws || []).forEach(function(L) { byLaw[L.node.id] = L; });
+  var topicNode = _lawMapNodes.find(function(x) { return x.id === topicId; });
   var out = topicEdges.map(function(e) {
     var otherId = e.source_id === topicId ? e.target_id : e.source_id;
     var L = byLaw[otherId];
     var n = L ? Math.max(1, (L.primaries || []).length) : 1;
-    return Object.assign({}, e, { _w: n, _title: (e.relation_type || '') + (e.description ? ' — ' + e.description : '') + ' · 근거 조문 ' + n + '개' });
+    var other = _lawMapNodes.find(function(x) { return x.id === otherId; });
+    var head = '<b>' + lmEsc(topicNode ? topicNode.name : '주제') + ' → ' + lmEsc(other ? lmaShortLawName(other.name) : '') + '</b> · 근거 조문 ' + n + '개';
+    return Object.assign({}, e, { _w: n, _title: head + '<br>' + lmEsc((e.relation_type || '') + (e.description ? ' — ' + e.description : '')) });
   });
   var agg = {};
   (model.edges || []).forEach(function(me) {
@@ -10203,15 +10208,42 @@ function lawmapTopicScopedEdges(topicId, allEdges) {
     if (!agg[k]) agg[k] = { from: me.from.L, to: me.to.L, pairs: [] };
     // lmaAnyLabel: '전문'(조문 체계 없는 고시)·별표는 그대로, 조문은 '제N조' — lmaKeyLabel만 쓰면 '제전문'이 된다(실측)
     var lab = lmaAnyLabel(me.from.key) + (me.para || '') + ' → ' + lmaAnyLabel(me.to.key) + (me.kind === 'deleg' ? '(위임)' : '');
-    if (agg[k].pairs.indexOf(lab) < 0) agg[k].pairs.push(lab);
+    if (agg[k].pairs.some(function(p) { return p.lab === lab; })) return;
+    // 연결 내용(#151): 인용 문장(snippet)은 cite에만 있고 위임(deleg)은 조문 화면과 같은 문구로
+    var what = me.snippet ? String(me.snippet)
+      : (me.kind === 'deleg' ? (me.viaDesc ? '위임 관계 — 주제 엣지 설명에 적힌 위임 근거(본문에는 조문 인용 없음)' : '위임 관계(본문 인용 없음)') : '');
+    agg[k].pairs.push({ lab: lab, what: what, quote: !!me.snippet });
   });
+  // 각 법령의 이 주제에서의 역할(law_graph_edges.description) — 끝의 "(제N조…)" 괄호는 조문 줄에 이미 있으므로 뗀다
+  function roleOf(L) { return String((L.edge && L.edge.description) || '').replace(/\s*\([^()]*(제\d+조|조\b|위임|인용)[^()]*\)\s*$/, '').trim(); }
+  function clip(s, n) { s = String(s || ''); return s.length > n ? s.slice(0, n) + '…' : s; }
+  var SHOW_MAX = 4;
   Object.keys(agg).forEach(function(k) {
     var a = agg[k];
+    var fromName = lmaShortLawName(a.from.node.name), toName = lmaShortLawName(a.to.node.name);
+    // 같은 문장이 여러 조문을 인용하면(방발법 25조① → 전파법 7조·11조) 한 줄로 합친다
+    var groups = [];
+    a.pairs.forEach(function(p) {
+      var g = p.quote && groups.find(function(x) { return x.what === p.what && x.quote; });
+      if (g) g.labs.push(p.lab); else groups.push({ labs: [p.lab], what: p.what, quote: p.quote });
+    });
+    var shown = groups.slice(0, SHOW_MAX), rest = groups.slice(SHOW_MAX);
+    var lines = shown.map(function(g) {
+      return '• ' + lmEsc(g.labs.join(' · ')) + (g.what ? ' — ' + (g.quote ? '“' + lmEsc(clip(g.what, 140)) + '”' : lmEsc(g.what)) : '');
+    });
+    if (rest.length) lines.push('<span style="color:#888">외 ' + rest.reduce(function(s, g) { return s + g.labs.length; }, 0) + '건: ' + lmEsc(rest.map(function(g) { return g.labs.join(' · '); }).join(' · ')) + '</span>');
+    var roles = [];
+    var rf = roleOf(a.from), rt = roleOf(a.to);
+    if (rf) roles.push(lmEsc(fromName) + ': ' + lmEsc(rf));
+    if (rt) roles.push(lmEsc(toName) + ': ' + lmEsc(rt));
+    var title = '<b>' + lmEsc(fromName) + ' → ' + lmEsc(toName) + '</b> · 이 주제의 근거 조문 사이 연결 ' + a.pairs.length + '건<br>' + lines.join('<br>') +
+      (roles.length ? '<br><span style="color:#888">' + roles.join('<br>') + '</span>' : '');
+    // 노드 카드 연결 목록용(lmEsc를 거쳐 표시되므로 날 문자열)
+    var desc = groups.map(function(g) { return g.labs.join(' · ') + (g.what ? (g.quote ? ': “' + clip(g.what, 80) + '”' : ': ' + g.what) : ''); }).join(' / ');
     out.push({
       id: 'scoped:' + k, source_id: a.from.node.id, target_id: a.to.node.id,
-      relation_type: '조문 인용', description: a.pairs.join(', '), source: 'scoped',
-      weight: a.pairs.length, _w: a.pairs.length,
-      _title: lmaShortLawName(a.from.node.name) + ' → ' + lmaShortLawName(a.to.node.name) + ' — 이 주제의 근거 조문 사이 연결 ' + a.pairs.length + '건: ' + a.pairs.join(' · ')
+      relation_type: '조문 인용', description: desc, source: 'scoped',
+      weight: a.pairs.length, _w: a.pairs.length, _title: title
     });
   });
   return out;
@@ -10353,7 +10385,7 @@ function renderLawMapGraph(focusId) {
       // 굵기(#148): 주제 화면은 _w(근거 조문 수 / 근거 조문 사이 연결 수). 전체 인용망·법령 포커스는 weight(인용 수) 로그 스케일 유지
       width: e._w ? Math.min(0.8 + e._w * 0.6, 5) : Math.min(1 + Math.log((e.weight || 1)) / Math.LN2 * 0.7, 4),
       color: { color: '#8a8f98', opacity: 0.5, highlight: '#5b7ff5' },
-      title: e._title || ((e.relation_type || '') + (e.description ? ' — ' + e.description : '')),
+      title: e._title ? lmTipEl(e._title) : ((e.relation_type || '') + (e.description ? ' — ' + e.description : '')),
       smooth: { type: 'continuous' }
     };
   });

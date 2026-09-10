@@ -505,3 +505,8 @@ body.ui-wide .topbar-title::before { content: "☰ "; color: var(--text-tertiary
 #chat-wrap:fullscreen .msg { font-size: 15px; max-width: 92%; }
 .fs-hint { display: none; }
 :fullscreen .fs-hint { display: block; position: fixed; top: 10px; right: 14px; z-index: 9; font-size: 11px; color: var(--text-secondary); background: var(--bg-secondary); border: 0.5px solid var(--border-light); border-radius: 999px; padding: 3px 10px; }
+
+
+/* 법령 관계도 선 말풍선(vis-network 9, pre-wrap) — 인용 문장이 길어 폭 상한·줄간격만 잡는다. 내용은 lmTipEl 요소로 넘김 (#151) */
+div.vis-tooltip { white-space: pre-wrap; max-width: 460px; line-height: 1.5; font-size: 12px; font-family: inherit;
+  padding: 8px 10px; border-radius: 8px; box-shadow: 0 4px 14px rgba(0,0,0,.12); }
