@@ -27,7 +27,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 ├── morning_briefing.py         # 모닝 브리핑 생성·발송(06:00 KST). **app_config.briefing_excluded_urls(JSON 배열)의 URL은 제외(#85)** — 오탐 기사를 브리핑에서만 빼는 수단. 삭제(대시보드·자문에서도 사라짐)·published_at 조작(사실 왜곡)·등급 하향(24h 전체를 보므로 무효)을 다 버리고 택한 방식. 조회 실패는 빈 집합(fail-open) — 🔴=DB 긴급도, 같은 사건 클러스터링(대표 1건+관련 N건, #44), SKT 영향 분석, 신규 입법예고 📢 섹션, 본문 0건 시 요약→제목 폴백(빈 브리핑 방지), 기사 0건 시 시각무관 1일1회 '🕊️무뉴스' 통지+placeholder(_handle_no_news)
 ├── news_dedup.py               # 같은 사건 재보도 판정 공용 유틸(제목 키워드, API 비용 0) — crawler·morning_briefing 공유. 임계 3·별-형 클러스터링 근거는 파일 주석 (#44)
 ├── regenerate_briefings.py     # 과거 브리핑을 클러스터링 적용본으로 재생성(수동). morning_briefing 함수 재사용, 입법예고 섹션 보존. **실행 전 daily_briefings_backup에 원본 백업 필수** (#46)
-├── refetch_content.py          # 본문 재수집·요약(**'참고' 등급은 생략 — 온디맨드, #82**)·60일 초과 정리(Windows 스케줄러, 한국 IP) · heartbeat(last_refetch_run)
+├── refetch_content.py          # 본문 재수집·요약(**정부 공고만 미리 생성, 참고·보통·긴급은 첫 열람 시 생성 — #153; 종전 '참고'만 생략 #82**)·60일 초과 정리(Windows 스케줄러, 한국 IP) · heartbeat(last_refetch_run)
 ├── gov_notice_crawler.py       # 정부·기관 고시→news_feed + 입법예고(opinion.lawmaking.go.kr)→law_amendments(lsAnc) (17:00, 한국 IP) · heartbeat(last_gov_notice_run)
 │                               #   RRA(국립전파연구원)·MSIT(과기정통부)·KMCC(중앙전파관리소)·KCC(방통위)·ETRI·KISDI
 │                               #   ※ MSIT는 보도자료·입법행정예고·훈령예규고시 + **공고(공지사항 mPid=121&mId=310)**: 주파수 할당·재할당 공고 원문이 실리는 게시판(2026-08-02 추가). 사업공고(311)는 R&D 모집 잡음이라 제외
@@ -1194,6 +1194,10 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **대량 API 스크립트에 `--allow-api` 게이트를 빼지 말 것 (#152)** — 8/2~3(6,012청크)·8/26·9/1 폭주는 전부 "한 번만 돌리자"였다. 일회성은 세션이 DB에 직접 쓴다(비용 0).
 - **`charge_ai_usage`의 general 백스톱(100/일·60/시)을 올리지 말 것 (#152)** — 관측된 정상 최대는 30/일. 정당한 대량 작업은 관리자 profile.unlimited로 우회하고, 끝나면 되돌린다.
 - **Haiku 캐시 최소 길이는 4,096 — "2,048"로 계산하지 말 것 (#152)** — 미달은 조용히 0이라 코드 리뷰로는 못 잡는다. `api_usage.cache_write`로 확인.
+- **뉴스 요약 미리 생성을 정부 공고 밖으로 넓히지 말 것 (2026-09-10, #153)** — 보통·긴급 읽힘률 0.9%·0.8%에 월 $11~12를 썼다. `refetch_content.py`의 신규분 게이트(`_is_gov_source`)와 요약 백필 쿼리(`GOV_SOURCE_PREFIXES`)는 **같은 상수를 쓰는 한 쌍** — 한쪽만 넓히면 백필이 시간당 30건씩 도로 만든다. 첫 열람 생성은 app.js `summarizeNews`(로그인, ~3초), 브리핑 게재분은 06시 역저장, 목록 미리보기는 event 대체, 목록 검색은 제목만.
+- **용어 설명 생성 경로를 다시 두 개로 만들지 말 것 (#153)** — `backfill_term_details.py`(05:00, Sonnet, 추출 직후 채움)가 단일 생성원. refetch의 매시 Haiku 경로는 같은 용어를 두 번 만들어 제거했다. 예외분(하루 10건 초과·수동 추가)은 다음 05:00 또는 관리자 ↺재생성.
+- **이슈맵 자동 제안은 하루 4회(05·11·15·20시, `ISSUE_SUGGEST_HOURS`) — 매시로 되돌리지 말 것 (#153)** — 한 시간치 2~3건으로 만든 파편 제안이 61% 기각됐고 경계 판정 Sonnet 콜이 매시 나갔다. 제안은 검토 큐라 6시간 지연 무해.
+- **app.js의 비스트리밍 Sonnet 호출에는 `thinking:{type:'disabled'}`를 반드시 넣을 것 (#153)** — 적응형 추론 기본 ON이라 사고 토큰 과금 + max_tokens 잠식(용어 SVG 잘림). 연결 테스트 ping은 Haiku(Sonnet이면 자문 한도 1회 차감).
 
 ## 알려진 제약사항
 

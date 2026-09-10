@@ -1409,6 +1409,7 @@ def fetch_article_body(url: str, source: str) -> tuple:
 #  (선별이 죽었다고 수집 자체가 멈추면 무음 누락이 된다 — 배경역사 #39).
 # ═══════════════════════════════════════════════════════
 
+ISSUE_SUGGEST_HOURS = {5, 11, 15, 20}   # 이슈맵 자동 제안 실행 시각(KST, #153) — 매시 → 하루 4회
 SCREEN_BATCH_SIZE = 35          # 1콜당 판정 기사 수 (제목+요약 300자 기준 ≈ 3~4K 입력토큰)
 SCREEN_MODEL = 'claude-haiku-4-5-20251001'
 
@@ -2806,9 +2807,16 @@ def main():
 
     # ── 이슈맵 자동 제안 파이프 (2026-08-26, P4) ──
     # fail-open 격리: 제안 파이프의 어떤 실패도 크롤러 본연의 수집·통지에 영향을 주면 안 된다.
+    # 하루 4회만(05·11·15·20시 KST 실행, 2026-09-10 #153) — 매시 돌리면 경계 판정 Sonnet 1콜이 매시 나가고
+    # (월 $1~3) 한 시간치 2~3건으로 만든 파편 제안이 61% 기각됐다(#111·#119). 제안은 알림이 아니라
+    # 운영자 검토 큐라 최대 6시간 지연은 무해. 시각은 :47 pg_cron 주 트리거 기준.
     try:
-        from issue_suggest import run_suggest
-        run_suggest(sb)
+        _kst_hour = datetime.now(timezone(timedelta(hours=9))).hour
+        if _kst_hour in ISSUE_SUGGEST_HOURS:
+            from issue_suggest import run_suggest
+            run_suggest(sb)
+        else:
+            print(f'[이슈 제안] {_kst_hour}시 — 실행 시각({sorted(ISSUE_SUGGEST_HOURS)}) 아님, 건너뜀')
     except Exception as e:
         print(f'[이슈 제안 파이프 실패(무시)] {e}')
 

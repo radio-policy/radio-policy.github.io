@@ -561,3 +561,22 @@ class TestApiUsage(unittest.TestCase):
         api_usage.install(); first = Messages.create
         api_usage.install(); self.assertIs(Messages.create, first)
         self.assertTrue(getattr(Messages, '_api_usage_wrapped', False))
+
+
+class TestRefetchSummaryGate(unittest.TestCase):
+    """#153: 요약 미리 생성은 정부 공고만 — 신규분 게이트와 백필 접두 목록이 같은 상수를 쓴다."""
+
+    def test_gov_source_prefixes(self):
+        import refetch_content as rc
+        self.assertTrue(rc._is_gov_source('과학기술정보통신부 보도자료'))
+        self.assertTrue(rc._is_gov_source('방송통신위원회 공지'))
+        self.assertTrue(rc._is_gov_source('KISDI 보고서'))
+        self.assertFalse(rc._is_gov_source('yna.co.kr'))
+        self.assertFalse(rc._is_gov_source(''))
+        self.assertFalse(rc._is_gov_source(None))
+        for p in rc.GOV_SOURCE_PREFIXES:
+            self.assertTrue(rc._is_gov_source(p + ' x'))
+
+    def test_issue_suggest_hours(self):
+        import crawler
+        self.assertEqual(crawler.ISSUE_SUGGEST_HOURS, {5, 11, 15, 20})

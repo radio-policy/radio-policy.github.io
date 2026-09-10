@@ -1608,8 +1608,9 @@ function openTermsModal(id) {
   var modal = document.getElementById('terms-modal');
   modal.style.display = 'flex';
 
-  // 설명 없으면 자동 생성 시작
-  if (!t.description) {
+  // 설명 없으면 자동 생성 시작 — 관리자만(#153). 비관리자는 어차피 generateTermDetail이 '관리자만' 경고를
+  // 띄우므로 자동 호출은 경고만 만든다. 설명은 05:00 backfill_term_details(Sonnet)가 채운다(지연 ≤24h).
+  if (!t.description && typeof isAdminUser === 'function' && isAdminUser()) {
     generateTermDetail(id);
   }
 }
@@ -1644,7 +1645,8 @@ async function _fetchTermDetail(t) {
     '<related>관련용어1,관련용어2,관련용어3</related>';
   var res = await claudeFetch({
     method:'POST',
-    body:JSON.stringify({model:'claude-sonnet-5',max_tokens:6000,system:systemMsg,messages:[{role:'user',content:userMsg}]})
+    // thinking 명시 OFF(#153): Sonnet 5는 적응형 추론이 기본 ON이라 사고 토큰이 과금되고 max_tokens를 잠식해 SVG가 잘릴 수 있다.
+    body:JSON.stringify({model:'claude-sonnet-5',max_tokens:6000,thinking:{type:'disabled'},system:systemMsg,messages:[{role:'user',content:userMsg}]})
   });
   var data = await res.json();
   if (data.type === 'error' || !data.content) {
@@ -6120,7 +6122,8 @@ async function testConnection() {
     try {
       const res = await claudeFetch({
         method: 'POST',
-        body: JSON.stringify({ model: 'claude-sonnet-5', max_tokens: 10, messages: [{ role: 'user', content: 'ping' }] })
+        // Haiku로(#153) — Sonnet이면 프록시가 자문 한도 1회를 차감한다(#141 모델명 기준). 연결 확인에 Sonnet은 불필요.
+        body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 10, messages: [{ role: 'user', content: 'ping' }] })
       });
       results.push(res.ok ? 'Claude API 연결 성공' : 'Claude API X (HTTP ' + res.status + ')');
     } catch(e) { results.push('Claude API X (' + e.message + ')'); }
@@ -8836,7 +8839,7 @@ async function generateIssueImpact(issueId) {
   try {
     var res = await claudeFetch({
       method: 'POST',
-      body: JSON.stringify({ model: 'claude-sonnet-5', max_tokens: 1200,
+      body: JSON.stringify({ model: 'claude-sonnet-5', max_tokens: 1200, thinking: { type: 'disabled' },
         system: SKT_IMPACT_SYSTEM_PROMPT, messages: [{ role:'user', content: userMsg }] })
     });
     var data = await res.json();
@@ -9220,7 +9223,7 @@ async function refreshPersonStance(id) {
       '- SKT/통신사에 직접 관련된 발언이 있으면 별도 불릿으로 표시하라.';
     var res = await claudeFetch({
       method: 'POST',
-      body: JSON.stringify({ model: 'claude-sonnet-5', max_tokens: 1000, messages: [{ role: 'user', content: userMsg }] })
+      body: JSON.stringify({ model: 'claude-sonnet-5', max_tokens: 1000, thinking: { type: 'disabled' }, messages: [{ role: 'user', content: userMsg }] })
     });
     var data = await res.json();
     if (data.error) throw new Error(data.error.message || 'API 오류');

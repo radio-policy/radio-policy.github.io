@@ -70,7 +70,7 @@ python crawler.py             # news — confirm "[네이버 뉴스] N건 수집
 python law_crawler.py         # laws/notices
 python assembly_crawler.py    # assembly bills (stage labels via bill_stage.derive_stage; after changing stage rules run once with --suppress-status-alerts to avoid an alert storm, #122)
 python gov_notice_crawler.py  # gov notices + 입법예고 (Korean IP)
-python refetch_content.py     # body re-fetch (Korean IP, trafilatura)
+python refetch_content.py     # body re-fetch (Korean IP, trafilatura). Summaries are pre-generated for 정부 공고 only (#153); everything else is generated on first open in the dashboard
 
 # Briefing / embeddings
 python resend_briefing.py [date]        # resend a briefing

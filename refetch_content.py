@@ -41,6 +41,17 @@ SUPABASE_URL  = os.environ['SUPABASE_URL']
 SUPABASE_KEY  = os.environ.get('SUPABASE_SERVICE_KEY') or os.environ['SUPABASE_KEY']
 DELAY_BETWEEN = 1.5
 KST           = timezone(timedelta(hours=9))
+
+# 정부 공고 source 접두(#153) — app.js GOV_SOURCE_PREFIXES와 같은 목록에 정식 명칭을 더한 것.
+# 요약을 **미리** 만드는 유일한 대상이다: 정부 공고는 event 라벨도 네이버 요약도 없어 대시보드
+# 미리보기 대체 텍스트가 전혀 없다. 나머지 등급(참고·보통·긴급)은 첫 열람 때 생성(app.js).
+GOV_SOURCE_PREFIXES = ['국립전파연구원', '과기정통부', '과학기술정보통신부', '방통위', '방송통신위원회',
+                       '방송미디어통신위원회', '중앙전파관리소', 'ETRI', 'KISDI']
+
+
+def _is_gov_source(source: str) -> bool:
+    s = (source or '').strip()
+    return any(s.startswith(p) for p in GOV_SOURCE_PREFIXES)
 # ─────────────────────────────────────────────────────────────
 
 
@@ -218,12 +229,14 @@ def main():
             else:
                 print(f"✅ ({len(body)}자)", end="")
 
-            # 본문 수집 직후 요약 자동 생성 — 단 '참고' 등급은 건너뛴다(2026-08-03, 비용 절감 ②).
-            #   '참고'가 수집분의 ~75%인데 대시보드 읽힘률은 1% 미만이라 대부분 버려진다.
-            #   요약을 실제로 쓰는 곳: 대시보드 목록 미리보기·상세뿐. 06시 브리핑은 content를 직접
-            #   읽고(morning_briefing.py), 텔레그램 알림은 제목·링크만 쓴다 — 둘 다 영향 없음.
-            #   대시보드는 summary가 없으면 클릭 시 그 자리에서 생성해 DB에 되쓴다(app.js).
-            if (article.get("urgency") or "") != "참고":
+            # 본문 수집 직후 요약 자동 생성 — **정부 공고만**(2026-09-10, #153; 종전은 '참고'만 제외).
+            #   요약을 쓰는 곳은 대시보드 목록 미리보기·상세뿐인데 보통·긴급 읽힘률이 0.9%·0.8%라
+            #   월 3,200건 요약($11~12)이 대부분 버려졌다. 06시 브리핑은 content를 직접 읽고 게재분(≤50건)에
+            #   요약을 역저장하며, 텔레그램은 제목·링크만 쓴다 — 둘 다 영향 없음. 대시보드는 summary가
+            #   없으면 첫 열람 때 그 자리에서 생성해 DB에 되쓴다(app.js summarizeNews, 실측 ~3초).
+            #   정부 공고는 예외: event 라벨도 네이버 요약도 없어 미리보기 대체 텍스트가 전혀 없다.
+            #   ★ 아래 '요약 백필'의 조건과 반드시 짝을 맞출 것 — 한쪽만 바꾸면 백필이 도로 만든다(#82).
+            if _is_gov_source(article.get("source", "")):
                 summary = crawler.generate_summary(
                     article.get("title", ""),
                     article.get("source", ""),
@@ -246,15 +259,14 @@ def main():
     print(f"\n완료! 성공 {ok}건 · 실패 {fail}건 · 미매칭 {skip}건 · 상대경로 {invalid}건")
 
     # ── 뉴스 요약 백필 ───────────────────────────────────
-    # 본문은 있지만 요약이 없는 기사를 자동으로 채워 대시보드 첫 클릭 대기 제거.
-    # '참고' 등급은 제외한다(#82) — 위 신규분 생략과 짝이다. 여기를 빼먹으면 생략한 요약을
-    # 이 백필이 시간당 30건씩 도로 만들어 절감이 0이 된다.
+    # 본문은 있지만 요약이 없는 **정부 공고**만 채운다(#153) — 위 신규분 조건과 짝이다. 여기를
+    # 넓히면 생략한 요약을 이 백필이 시간당 30건씩 도로 만들어 절감이 0이 된다(#82의 함정).
     try:
         sum_resp = sb.table("news_feed") \
             .select("id,title,source,published_at,content") \
             .is_("summary", "null") \
             .not_.is_("content", "null") \
-            .neq("urgency", "참고") \
+            .or_(",".join("source.like.%s*" % p for p in GOV_SOURCE_PREFIXES)) \
             .order("published_at", desc=True) \
             .limit(30).execute()
         no_summary = [a for a in (sum_resp.data or []) if len((a.get("content") or "").strip()) >= 100]
@@ -274,19 +286,10 @@ def main():
     except Exception as e:
         print(f"\n[요약 백필 오류] {e}")
 
-    # ── 기술 용어 설명 백필 ──────────────────────────────
-    # description이 비어 있는 용어를 자동으로 채워 대시보드 첫 클릭 대기 제거
-    try:
-        resp = sb.table("tech_terms").select("id,term,term_en,category,definition") \
-            .is_("description", "null").limit(20).execute()
-        missing = resp.data or []
-        if missing:
-            print(f"\n[용어 설명 백필] description 없는 용어 {len(missing)}건 생성 시작")
-            crawler.generate_term_descriptions(missing)
-        else:
-            print("\n[용어 설명 백필] 모든 용어에 description 있음 — 건너뜀")
-    except Exception as e:
-        print(f"\n[용어 설명 백필 오류] {e}")
+    # ── 기술 용어 설명 백필 — 제거(2026-09-10, #153) ──
+    # 같은 용어를 여기(Haiku, 매시)와 backfill_term_details.py(Sonnet, 05:00, term_extract.yml 2단계)가
+    # 두 번 만들고 있었다. 05:00 Sonnet 경로가 단일 생성원이다(신규 하루 ~2.4건 < limit 10, 지연 ≤24h).
+    # 관리자는 용어 모달의 ↺재생성으로 즉시 생성할 수 있다.
 
     # ── heartbeat ── (운영 상태 탭 '본문 수집(refetch) 마지막 실행')
     _refetch_heartbeat(sb, f'ok={ok} fail={fail} skip={skip}')
