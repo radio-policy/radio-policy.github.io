@@ -13,9 +13,11 @@
      회의록·속기록 첨부는 무시한다(운영자 결정 2026-09-11).
   ② 보도자료 게시판(boardId=1113) **전건** (운영자 지시 2026-09-11 — 공지사항 게시판이 아니라 보도자료).
      HTML 본문(td.table_con)만 읽는다 — 첨부(hwp/pdf/hwpx)는 본문과 같은 내용이라 읽지 않는다(운영자 확인).
-     · 제목 '2026년 제N차 위원회 결과'(kind='result', 회의 당일 15:00~18:45 게시) → Haiku 안건별 요지 ≤10줄
-     · 그 밖의 보도자료(kind='press') → AI 없음, 텔레그램은 제목·담당부서·본문 앞부분·링크
-  둘 다 **키워드 필터 없이 무조건** news_feed 에 저장하고(source 2종), 구독자 큐 topic='kmcc' 에
+     · 제목 '2026년 제N차 위원회 결과'(kind='result', 회의 당일 15:00~18:45 게시) → **무조건** 저장, Haiku 안건별 요지 ≤10줄
+     · 그 밖의 보도자료(kind='press') → **관련성 필터**(운영자 결정 2026-09-11 "전건은 쓰레기가 많다"): 보도자료 KB 적재와
+       같은 기준 — app_config.press_keywords + Haiku 판정(press_relevance_criteria, press_ingest.make_ai_judge 재사용),
+       API 불가 시 제목 키워드. 통과분만 저장·발송. 텔레그램은 제목·담당부서·본문 앞부분·링크(요약 없음)
+  의사일정·위원회 결과는 키워드 필터 없이 무조건 news_feed 에 저장하고(source 2종), 구독자 큐 topic='kmcc' 에
   한 통씩 적재한다(수집 직후 즉시 배달 — subscriber_notify 가 urgent 와 같이 트리거).
   ※ gov_notice_crawler.crawl_kcc() 의 방미통위 보도자료 키워드 수집(17시)은 이것과 중복이라 비활성화했다(#154).
 
@@ -27,7 +29,7 @@
     첨부가 늘어도 행이 늘면 안 된다. 의사일정 수정본(새 fileSeq)은 content 첫 줄의 fileSeq 로 감지해 update.
   - 신규 여부는 upsert(ignore_duplicates) **반환값**으로 판단 — 두 인스턴스가 겹쳐 돌아도 한쪽만 큐 적재.
   - content(원문)·summary(Haiku) 를 여기서 직접 쓴다(refetch_content 는 content ≥100자 행을 건드리지 않음).
-heartbeat: system_health key 'last_kmcc_meeting_run', note 'agenda=N result=M press=P new=K queued=Q fail=F'
+heartbeat: system_health key 'last_kmcc_meeting_run', note 'agenda=N result=M press=P skip=S new=K queued=Q fail=F'
 필요 env: SUPABASE_URL, SUPABASE_SERVICE_KEY, ANTHROPIC_API_KEY(없으면 원문 폴백),
          --operator-test 는 TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID(운영자 봇)
 
@@ -480,6 +482,15 @@ def build_agenda(item: dict, use_ai: bool, revised: bool = False) -> tuple:
     return content, summary, html
 
 
+def press_relevant(judge, keywords: list, title: str, body: str) -> tuple:
+    """일반 보도자료 관련성 — Haiku 판정기(press_ingest.make_ai_judge)가 있으면 그것, 없으면 **제목** 키워드.
+    (본문 키워드는 '통신'류가 흔해 너무 느슨하다 — press_ingest 의 무-API 후보 선정도 제목 기준이다.)"""
+    if judge is not None:
+        return judge(title, body)
+    hit = next((k for k in keywords if k in (title or '')), None)
+    return (True, '제목키워드:' + hit) if hit else (False, '제목 키워드 불일치')
+
+
 def build_press(item: dict) -> tuple:
     body = fetch_press_body(item)
     content = body if len(body) >= 100 else (body + '\n' + item['url'] + '\n(본문 텍스트 없음 — 원문 링크 참조)')
@@ -584,11 +595,14 @@ def list_items(board: str, pages: int) -> list:
 def run(sb, pages: int = 1, dry: bool = False, notify_q: bool = True, since=None,
         allow_api: bool = False, ai_preview: bool = False) -> dict:
     now = datetime.now(KST)
-    st = {'agenda': 0, 'result': 0, 'press': 0, 'new': 0, 'queued': 0, 'fail': 0}
+    st = {'agenda': 0, 'result': 0, 'press': 0, 'skip': 0, 'new': 0, 'queued': 0, 'fail': 0}
     existing = {} if dry else load_existing(sb)
     ai_left = 10 ** 9 if allow_api else MAX_AI_PER_RUN
     use_ai_dry = ai_preview
     from subscriber_notify import queue_for_subscribers
+    # 일반 보도자료 관련성 판정기 — KB 보도자료 적재와 같은 기준·같은 함수(press_ingest). dry-run 은 --ai 일 때만 Haiku.
+    keywords = pi.load_press_keywords(sb) if sb is not None else list(pi.FALLBACK_KEYWORDS)
+    judge = pi.make_ai_judge(sb, keywords) if (ai_preview or not dry) else None
 
     for board in ('agenda', 'press'):
         try:
@@ -621,6 +635,11 @@ def run(sb, pages: int = 1, dry: bool = False, notify_q: bool = True, since=None
                     content, summary, html = build_result(it, use_ai)
                 else:
                     content, summary, html = build_press(it)
+                    ok, reason = press_relevant(judge, keywords, it['title'], content)
+                    if not ok:
+                        st['skip'] += 1
+                        print('  [무관 스킵] %s — %s' % (it['title'][:50], reason))
+                        continue
             except Exception as e:
                 print('  [추출 실패] %s: %s' % (it['title'][:40], str(e)[:100]))
                 st['fail'] += 1
@@ -709,8 +728,8 @@ def main():
         sb = make_client(os.environ['SUPABASE_URL'], os.environ['SUPABASE_SERVICE_KEY'])
     st = run(sb, pages=args.pages, dry=args.dry_run, notify_q=not args.no_notify,
              since=since, allow_api=args.allow_api, ai_preview=args.ai)
-    note = 'agenda=%d result=%d press=%d new=%d queued=%d fail=%d' % (
-        st['agenda'], st['result'], st['press'], st['new'], st['queued'], st['fail'])
+    note = 'agenda=%d result=%d press=%d skip=%d new=%d queued=%d fail=%d' % (
+        st['agenda'], st['result'], st['press'], st['skip'], st['new'], st['queued'], st['fail'])
     print('[방미통위 수집 완료] ' + note)
     if not args.dry_run and sb is not None:
         heartbeat(sb, note)

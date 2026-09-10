@@ -713,3 +713,10 @@ class TestKmccMeeting(unittest.TestCase):
         import refetch_content as rc
         self.assertTrue(rc._is_gov_source('방송미디어통신위원회 위원회 회의'))
         self.assertTrue(rc._is_gov_source('방미통위 공지'))
+
+    def test_press_relevant_fallback(self):
+        km = self.km
+        kw = ['주파수', '5G']
+        self.assertTrue(km.press_relevant(None, kw, '5G 특화망 주파수 공급', '')[0])
+        self.assertFalse(km.press_relevant(None, kw, '드라마 제작 사례 공유', '주파수라는 낱말이 본문에만')[0])
+        self.assertEqual(km.press_relevant(lambda t, b: (True, 'ai'), kw, 'x', 'y'), (True, 'ai'))

@@ -32,7 +32,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 │                               #   RRA(국립전파연구원)·MSIT(과기정통부)·CRMS(중앙전파관리소, 함수명은 crawl_kmcc)·KCC(방미통위=방송미디어통신위원회, 구 방통위)·ETRI·KISDI
 │                               #   ※ MSIT는 보도자료·입법행정예고·훈령예규고시 + **공고(공지사항 mPid=121&mId=310)**: 주파수 할당·재할당 공고 원문이 실리는 게시판(2026-08-02 추가). 사업공고(311)는 R&D 모집 잡음이라 제외
 │                               #   ※ crawl_kcc()는 방미통위 보도자료(kcc.go.kr, **2026-09-11부터 대상 비움 — kmcc_meeting.py가 전건 수집**), crawl_kmcc()는 중앙전파관리소(crms.go.kr — 이름은 역사적 오기, #53)
-├── kmcc_meeting.py             # **방미통위(방송미디어통신위원회) 회의 의사일정 + 보도자료 전건**(위원회 결과 포함) → news_feed(source '방송미디어통신위원회 위원회 회의' / '… 보도자료') + 구독자 큐 topic=kmcc. GitHub Actions daily_crawl.yml 매시 :17 crawler.py 뒤 단계(continue-on-error). 의사일정 PDF는 Haiku 표 복원(요약 금지), 위원회 결과는 Haiku 요지 ≤10줄, 일반 보도자료는 AI 없음·본문만. heartbeat(last_kmcc_meeting_run). `--operator-test`=운영자 봇 시험 발송, `--pages N --no-notify`=초기 적재 (#154)
+├── kmcc_meeting.py             # **방미통위(방송미디어통신위원회) 회의 의사일정 + 위원회 결과(무조건) + 관련성 통과 보도자료** → news_feed(source '방송미디어통신위원회 위원회 회의' / '… 보도자료') + 구독자 큐 topic=kmcc. GitHub Actions daily_crawl.yml 매시 :17 crawler.py 뒤 단계(continue-on-error). 의사일정 PDF는 Haiku 표 복원(요약 금지), 위원회 결과는 Haiku 요지 ≤10줄, 일반 보도자료는 AI 없음·본문만. heartbeat(last_kmcc_meeting_run). `--operator-test`=운영자 봇 시험 발송, `--pages N --no-notify`=초기 적재 (#154)
 ├── announce_kmcc_topic.py      # 일회성 — 구독자 전원에게 '📺 방미통위 동향' 토픽 신설 안내(2026-09-11 10:00 발송). 재실행 금지
 ├── law_crawler.py              # 법제처 DRF API 법령·고시 모니터링(11:00 KST). 엔드포인트 www.law.go.kr/DRF/lawSearch.do, OC=radiopolicyai
 ├── assembly_crawler.py         # 국회 법안 모니터링(열린국회정보 API, 22대) + 국회 입법예고 추적 패스(#56). **키워드 검색은 페이지 끝까지 순회**(`_fetch_bill_rows`, #121 — pIndex=1 한 페이지만 읽으면 100건 넘는 키워드가 조용히 잘림) + `fetch_committee_bills`(COMMITTEE=과학기술정보방송통신위원회 전수 스윕)로 이름에 키워드가 없는 과방위 소관 법안까지 포착(#121)
@@ -349,8 +349,10 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
                    |   다음 :25를 기다리지 않는다(발송 함수가 수신 시각을 검사하므로 심야엔 무발송).
                    | 요일 선택(매일/평일만), 항목별 on·off. 항목 전부 끄면 수신 없음
                    | ※ **📺 방미통위 동향(topic=kmcc, 2026-09-11 #154)** — 같은 레벨의 네 번째 토글. 방송미디어통신위원회
-                   |   회의 **의사일정**(회의 전날 15:50~17:30 게시, 안건 표 전문) + **보도자료 전건**(위원회 결과=Haiku 요지 ≤10줄,
-                   |   그 밖은 제목·담당부서·본문 앞부분). kmcc_meeting.py(Actions 매시)가 큐 적재 직후 발송 함수를 **즉시 호출**
+                   |   회의 **의사일정**(회의 전날 15:50~17:30 게시, 안건 표 전문) + **위원회 결과**(무조건, Haiku 요지 ≤10줄) +
+                   |   **그 밖의 보도자료는 관련성 필터 통과분만**(press_ingest와 같은 기준 — app_config press_keywords + Haiku
+                   |   press_relevance_criteria, 무-API 시 제목 키워드; 운영자 "전건은 쓰레기가 많다" 2026-09-11 — 제목·담당부서·본문 앞부분).
+                   |   kmcc_meeting.py(Actions 매시)가 큐 적재 직후 발송 함수를 **즉시 호출**
                    |   (urgent와 동형, `_IMMEDIATE_TOPICS`) → 수집 당일·직후 배달(구독자 종료 시각을 넘긴 게시분만 다음 날 시작 시각).
                    |   기존 구독자 꺼짐·신규 켜짐. 운영자 즉시 알림 없음. 공지사항 게시판은 대상 아님(운영자 정정).
                    | ※ 토글 명칭(2026-09-03, #120): 🗞️ 브리핑 / 🔴 주요 뉴스 / **🏛️ 국회·법률 동향**(구 '법안 동향').
