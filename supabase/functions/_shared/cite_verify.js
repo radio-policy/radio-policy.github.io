@@ -136,6 +136,78 @@
     return { chunks: out, addedIds: addedIds, expanded: full.size };
   }
 
+  // 역참조 발췌(#155-보론4, 운영자 결정 2026-09-11): 검색된 조문 X를 **인용하는** 같은 법령의 다른 조문에서
+  // 인용 문장(그 줄)만 잘라 온다 — 제재(제20조 등록취소)·조사(제51조)·준용 조항은 질문 어휘로는 검색되지 않지만
+  // "제32조의4제5항에 따른 …"처럼 검색된 조문을 가리키므로 이 경로로 닿는다. AI 요약이 아니라 원문 발췌라 비용 0·오류 0.
+  //   chunks: 순위순 조문 청크(정밀검색분 먼저)
+  //   fetchCiting(doc_name, key) → 같은 문서에서 content에 '제'+key가 든 조각 [{id, doc_name, article_no, chunk_index, content}]
+  //   반환 { text: 프롬프트 블록, chunks: 검증용 의사 청크(_excerpt=true), ids: 발췌 원본 조각 id }
+  function citeRegex(key) {
+    // '32조의4'는 '제32조의40'과, '32조'는 '제32조의4'와 구분한다
+    const esc = key.replace(/조의(\d+)$/, '조의$1').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp('제' + esc + (/조의\d+$/.test(key) ? '(?!\\d)' : '(?!의\\d)(?!\\d)'));
+  }
+  function excerptAround(content, re, maxLen) {
+    const s = String(content || '');
+    const m = s.match(re);
+    if (!m) return '';
+    const at = m.index;
+    let start = s.lastIndexOf('\n', at);
+    start = start === -1 ? 0 : start + 1;
+    let end = s.indexOf('\n', at);
+    if (end === -1) end = s.length;
+    let unit = s.slice(start, end).trim();
+    if (unit.length > maxLen) {
+      const rel = at - start;
+      const from = Math.max(0, rel - Math.floor(maxLen / 2));
+      unit = (from > 0 ? '…' : '') + unit.slice(from, from + maxLen) + (from + maxLen < unit.length ? '…' : '');
+    }
+    return unit;
+  }
+  async function buildCitingExcerpts(chunks, fetchCiting, opts) {
+    opts = opts || {};
+    const maxPer = opts.maxPerArticle != null ? opts.maxPerArticle : 4;
+    const maxTotal = opts.maxTotal != null ? opts.maxTotal : 8;
+    const maxLen = opts.maxLen != null ? opts.maxLen : 300;
+    const have = new Set();          // 이미 컨텍스트에 있는 doc|key — 발췌 불필요
+    const targets = [];
+    for (const c of chunks || []) {
+      const k = articleKey(c && c.article_no);
+      if (!k || !c.doc_name) continue;
+      const gk = c.doc_name + '|' + k;
+      if (!have.has(gk)) { have.add(gk); targets.push({ doc: c.doc_name, key: k }); }
+    }
+    const out = [], ids = [], seen = new Set();
+    for (const t of targets) {
+      if (out.length >= maxTotal) break;
+      let rows = [];
+      try { rows = (await fetchCiting(t.doc, t.key)) || []; } catch (e) { rows = []; }
+      const re = citeRegex(t.key);
+      let n = 0;
+      rows.sort(function (a, b) { return (a.chunk_index || 0) - (b.chunk_index || 0); });
+      for (const r of rows) {
+        if (n >= maxPer || out.length >= maxTotal) break;
+        const rk = articleKey(r.article_no);
+        if (!rk || rk === t.key) continue;                                   // 자기 자신
+        if (/^(부칙|별표|서식|별지|붙임)/.test(String(r.article_no || ''))) continue;
+        const gk = r.doc_name + '|' + rk;
+        if (have.has(gk) || seen.has(gk)) continue;                          // 이미 실린 조문·중복
+        const ex = excerptAround(r.content, re, maxLen);
+        if (!ex) continue;
+        seen.add(gk); n++;
+        out.push({ doc_name: r.doc_name, article_no: r.article_no, cites: t.key, excerpt: ex });
+        if (typeof r.id === 'number') ids.push(r.id);
+      }
+    }
+    if (!out.length) return { text: '', chunks: [], ids: [] };
+    const text = '\n\n---\n\n[검색된 조문을 인용하는 다른 조문 — 발췌]\n' +
+      '아래는 위 조문을 가리키는 같은 법령의 다른 조문(제재·조사·준용 등)에서 **인용 문장만** 잘라 온 것입니다. 전문이 아니므로 ' +
+      '이 발췌에 없는 항·호의 내용을 추정하지 마세요. 인용할 때는 「법령명 제N조」와 발췌에 보이는 항·호까지만 적으세요.\n\n' +
+      out.map(function (x, i) { return '[역참조 ' + (i + 1) + '] ' + x.doc_name + ' 제' + x.article_no + ' — 제' + x.cites + ' 인용\n' + x.excerpt; }).join('\n\n');
+    const pseudo = out.map(function (x) { return { id: null, doc_name: x.doc_name, article_no: x.article_no, chunk_index: 0, content: x.excerpt, _excerpt: true }; });
+    return { text: text, chunks: pseudo, ids: ids };
+  }
+
   // 시스템 프롬프트의 「■ 전파법 제16조(재할당) [원문 확인됨] …」 블록 → 의사 청크.
   // 이 조문들은 검색과 무관하게 매 자문에 실리므로, 대조 대상에 넣지 않으면 정당한 인용이 '미확인'이 된다.
   function pseudoChunksFromPrompt(prompt) {
@@ -190,34 +262,57 @@
     return null;
   }
 
-  // 표시 하나의 앞 문단에서 인용 대상을 읽는다
+  // 표시 하나의 앞 문단에서 인용 대상을 읽는다.
+  // 반환 mentions = 등장 순서의 조 언급 목록(조마다 항·호·앞 법령명). key/paras/items/lawInfo는 첫 언급(primary) —
+  // 실제 대상 선택은 checkCitation이 "컨텍스트에 있고 인용문과 가장 많이 겹치는 후보"로 한다(#155-보론3: 조문을 통째로
+  // 인용하면 그 안의 교차참조(제52조·제53조)가 먼저 잡혀 정작 인용 대상(앞 줄 제목의 제50조)을 놓쳤다).
   function parseSegment(segment) {
     const s = String(segment || '').replace(/\*\*/g, '');
     const artRe = /제\s?(\d+)\s?조(?:\s?의\s?(\d+))?/g;
-    const mentions = [];
+    const raw = [];
     let a;
-    while ((a = artRe.exec(s))) mentions.push({ idx: a.index, end: a.index + a[0].length, key: a[1] + '조' + (a[2] ? '의' + a[2] : '') });
-    if (!mentions.length) {
+    while ((a = artRe.exec(s))) raw.push({ idx: a.index, end: a.index + a[0].length, key: a[1] + '조' + (a[2] ? '의' + a[2] : '') });
+    if (!raw.length) {
       const bm = s.match(/별표\s*제?\s*(\d+(?:의\d+)?)/);
       return bm ? { kind: 'annex', annex: bm[1] } : { kind: 'none' };
     }
-    const primary = mentions[0];
-    const paras = [], items = [];
-    for (let i = 0; i < mentions.length; i++) {
-      if (mentions[i].key !== primary.key) continue;
-      const stop = i + 1 < mentions.length ? mentions[i + 1].idx : s.length;
-      const tail = s.slice(mentions[i].end, stop);
+    const byKey = new Map();
+    const mentions = [];
+    for (let i = 0; i < raw.length; i++) {
+      const m = raw[i];
+      let rec = byKey.get(m.key);
+      if (!rec) { rec = { key: m.key, idx: m.idx, paras: [], items: [], lawInfo: lawNameBefore(s.slice(0, m.idx)) }; byKey.set(m.key, rec); mentions.push(rec); }
+      const stop = i + 1 < raw.length ? raw[i + 1].idx : s.length;
+      const tail = s.slice(m.end, stop);
       let pm;
       const pRe = /제\s?(\d+)\s?항/g;
-      while ((pm = pRe.exec(tail))) if (paras.indexOf(+pm[1]) === -1) paras.push(+pm[1]);
+      while ((pm = pRe.exec(tail))) if (rec.paras.indexOf(+pm[1]) === -1) rec.paras.push(+pm[1]);
       // 원문자 항 표기(제5조①)는 조 바로 뒤에 붙은 것만 — 답변 본문의 ①②③ 나열과 섞이지 않게
       const cm = tail.match(/^\s*(?:\([^)]*\))?\s*([①-⑳])/);
-      if (cm) { const n = CIRCLED.indexOf(cm[1]) + 1; if (paras.indexOf(n) === -1) paras.push(n); }
+      if (cm) { const n = CIRCLED.indexOf(cm[1]) + 1; if (rec.paras.indexOf(n) === -1) rec.paras.push(n); }
       const iRe = /(?:제\s?)?(\d+)\s?호(?:\s?의\s?(\d+))?/g;
-      while ((pm = iRe.exec(tail))) { const it = pm[1] + (pm[2] ? '의' + pm[2] : ''); if (items.indexOf(it) === -1) items.push(it); }
+      while ((pm = iRe.exec(tail))) { const it = pm[1] + (pm[2] ? '의' + pm[2] : ''); if (rec.items.indexOf(it) === -1) rec.items.push(it); }
     }
-    return { kind: 'article', key: primary.key, paras: paras, items: items, lawInfo: lawNameBefore(s.slice(0, primary.idx)) };
+    const p = mentions[0];
+    return { kind: 'article', key: p.key, paras: p.paras, items: p.items, lawInfo: p.lawInfo, mentions: mentions };
   }
+
+  // 인용문(답변 문장)이 원문 텍스트와 얼마나 그대로 겹치는가 — 0~1. 공백·가운뎃점·따옴표·괄호를 뗀 뒤
+  // 18자 창을 8자씩 밀며 원문에 있는지 센다. 통째 인용은 ≈1, 바꿔 쓴 설명은 ≈0.
+  function normQ(s) {
+    return String(s || '').replace(/\*\*/g, '').replace(/\[[^\]]*\]/g, '')
+      .replace(/[\s·ㆍ‧•'"“”‘’「」『』()（）\[\],.:;、。…\-—–]/g, '');
+  }
+  function quoteOverlap(claim, text) {
+    const a = normQ(claim), b = normQ(text);
+    if (a.length < 12 || !b) return 0;
+    const W = 18, S = 8;
+    let hits = 0, n = 0;
+    if (a.length <= W) return b.indexOf(a) !== -1 ? 1 : 0;
+    for (let i = 0; i + W <= a.length; i += S) { n++; if (b.indexOf(a.slice(i, i + W)) !== -1) hits++; }
+    return n ? hits / n : 0;
+  }
+  const VERBATIM_MIN = 0.6;   // 이 이상 겹치면 "원문 그대로 인용" — 번호 파싱 없이 확인됨, Haiku 판정 생략
 
   // 답변에서 표시를 전부 찾아 각 표시의 인용 대상을 붙인다
   function findCitations(answer) {
@@ -241,10 +336,36 @@
       for (let k = 1; k < starts.length && parsed.kind === 'none'; k++) {
         segStart = starts[k]; parsed = parseSegment(text.slice(segStart, tagStart));
       }
+      // 후보 조문은 **앞의 비어 있지 않은 줄 2개**까지 더 본다(직전 표시 이후로 한정) — 「## 금지행위(제50조)」 제목이나
+      // 「업무처리규정 제11조는 다음과 같이 규정합니다.」 다음 줄에 조문을 통째로 옮기는 답변 형식 때문. 인용문(segment)은 넓히지 않는다.
+      let extStart = segStart, linesBack = 0;
+      while (linesBack < 2 && extStart > prevEnd) {
+        const j = text.lastIndexOf('\n', extStart - 2);        // 직전 줄의 시작(-1이면 문서 첫 줄)
+        const start = Math.max(prevEnd, j === -1 ? 0 : j + 1);
+        if (text.slice(start, extStart).trim()) linesBack++;    // 빈 줄은 세지 않는다
+        extStart = start;
+      }
+      extStart = Math.max(prevEnd, extStart, tagStart - 1600);
       const c = Object.assign({ tagStart: tagStart, tagEnd: tagEnd, tag: m[0], segment: text.slice(segStart, tagStart) }, parsed);
       if (c.kind === 'article') {
         if (c.lawInfo && c.lawInfo.inherit) c.lawInherit = lastLaw;
         else if (c.lawInfo && c.lawInfo.candidates) c.lawText = c.lawInfo.text;
+        // 후보 = 인용문 안의 조 + 앞 줄에만 있는 조(뒤에 붙임 — 겹침이 같으면 인용문 안의 조가 우선)
+        const inSeg = new Set(c.mentions.map(function (x) { return x.key; }));
+        const ext = extStart < segStart ? parseSegment(text.slice(extStart, tagStart)) : null;
+        c.candidates = c.mentions.slice();
+        if (ext && ext.kind === 'article') {
+          for (const x of ext.mentions) if (!inSeg.has(x.key)) c.candidates.push(Object.assign({}, x, { extOnly: true }));
+        }
+        for (const x of c.candidates) if (x.lawInfo && x.lawInfo.inherit) x.lawInherit = lastLaw;
+      } else if (c.kind === 'none' && extStart < segStart) {
+        // 인용문에 조 번호가 없어도 앞 줄에 있으면 그것이 대상 (「제11조는 다음과 같이 규정합니다.」 + 원문 줄)
+        const ext = parseSegment(text.slice(extStart, tagStart));
+        if (ext.kind === 'article') {
+          Object.assign(c, ext, { kind: 'article' });
+          c.candidates = ext.mentions.map(function (x) { return Object.assign({}, x, { extOnly: true }); });
+          for (const x of c.candidates) if (x.lawInfo && x.lawInfo.inherit) x.lawInherit = lastLaw;
+        }
       }
       cites.push(c);
       prevEnd = tagEnd;
@@ -264,39 +385,66 @@
     }
     const families = [];
     for (const c of chunks || []) { const f = docFamily(c.doc_name); if (f && families.indexOf(f) === -1) families.push(f); }
-    let lawDoc = null;
-    if (cite.lawInfo && cite.lawInfo.candidates) lawDoc = resolveLaw(cite.lawInfo, families);
-    else if (cite.lawInherit) lawDoc = resolveLaw(cite.lawInherit, families);
-    let cands = (chunks || []).filter(function (c) { return articleKey(c.article_no) === cite.key; });
-    if (!cands.length) return { status: 'missing', reason: (lawDoc || cite.lawText || '') + ' ' + cite.key + ' 원문 없음', lawDoc: lawDoc };
-    if (lawDoc) {
-      const same = cands.filter(function (c) { return docFamily(c.doc_name) === lawDoc; });
-      if (!same.length) return { status: 'missing', reason: lawDoc + ' ' + cite.key + ' 원문 없음(같은 조가 다른 문서에만 있음)', lawDoc: lawDoc };
-      cands = same;
+    // 문서·조별 정본 텍스트 (같은 조가 현행·시행예정 두 판으로 있을 수 있어 문서별로 묶는다)
+    const articleText = new Map();   // doc_name|key → merged text
+    for (const c of chunks || []) {
+      const k = articleKey(c.article_no);
+      if (!k) continue;
+      const gk = c.doc_name + '|' + k;
+      if (!articleText.has(gk)) articleText.set(gk, []);
+      articleText.get(gk).push(c);
     }
-    // 문서별로 묶어 가장 긴 것을 정본으로 (같은 조가 현행·시행예정 두 판으로 있을 수 있다)
-    const byDoc = new Map();
-    for (const c of cands) { if (!byDoc.has(c.doc_name)) byDoc.set(c.doc_name, []); byDoc.get(c.doc_name).push(c); }
-    let best = null, bestText = '';
-    for (const [doc, list] of byDoc) {
-      list.sort(function (a, b) { return (a.chunk_index || 0) - (b.chunk_index || 0); });
-      const t = mergeChunkTexts(list.map(function (c) { return c.content || ''; }));
-      if (t.length > bestText.length) { best = doc; bestText = t; }
+    const mergedOf = function (gk) {
+      const list = articleText.get(gk).slice().sort(function (a, b) { return (a.chunk_index || 0) - (b.chunk_index || 0); });
+      return mergeChunkTexts(list.map(function (c) { return c.content || ''; }));
+    };
+    const claim = cite.segment || '';
+
+    // ① 원문 그대로 인용이면 번호 파싱과 무관하게 확인됨 — 어느 조문(별표 포함)의 텍스트와 겹치는지 본다.
+    //    (통째 인용 안의 교차참조가 엉뚱한 조를 가리켜 '미확인'이 되던 오판 방지, #155-보론3)
+    let vbBest = null, vbRatio = 0;
+    for (const gk of articleText.keys()) {
+      const r = quoteOverlap(claim, mergedOf(gk));
+      if (r > vbRatio) { vbRatio = r; vbBest = gk; }
     }
+    if (vbBest && vbRatio >= VERBATIM_MIN) {
+      const [doc, key] = [vbBest.slice(0, vbBest.lastIndexOf('|')), vbBest.slice(vbBest.lastIndexOf('|') + 1)];
+      return { status: 'ok', kind: 'article', lawDoc: docFamily(doc), doc: doc, key: key, text: mergedOf(vbBest), verbatim: true, overlap: vbRatio, reason: '원문 그대로 인용(' + Math.round(vbRatio * 100) + '%)' };
+    }
+
+    // ② 후보 조문(인용문 안 → 앞 줄) 중 컨텍스트에 있는 것을 고른다 — 여럿이면 인용문과 가장 많이 겹치는 것, 같으면 앞의 것
+    const candidates = (cite.candidates && cite.candidates.length) ? cite.candidates : [{ key: cite.key, paras: cite.paras || [], items: cite.items || [], lawInfo: cite.lawInfo, lawInherit: cite.lawInherit }];
+    let chosen = null, chosenRatio = -1, chosenDoc = null, chosenText = '', chosenLaw = null;
+    const misses = [];
+    for (const cand of candidates) {
+      let lawDoc = null;
+      if (cand.lawInfo && cand.lawInfo.candidates) lawDoc = resolveLaw(cand.lawInfo, families);
+      else if (cand.lawInherit) lawDoc = resolveLaw(cand.lawInherit, families);
+      let cands = (chunks || []).filter(function (c) { return articleKey(c.article_no) === cand.key; });
+      if (lawDoc) cands = cands.filter(function (c) { return docFamily(c.doc_name) === lawDoc; });
+      if (!cands.length) { misses.push((lawDoc || (cand.lawInfo && cand.lawInfo.text) || '') + ' ' + cand.key); continue; }
+      let best = null, bestText = '';
+      const docs = new Set(cands.map(function (c) { return c.doc_name; }));
+      for (const doc of docs) { const t = mergedOf(doc + '|' + cand.key); if (t.length > bestText.length) { best = doc; bestText = t; } }
+      const r = quoteOverlap(claim, bestText);
+      if (r > chosenRatio) { chosen = cand; chosenRatio = r; chosenDoc = best; chosenText = bestText; chosenLaw = lawDoc; }
+    }
+    if (!chosen) return { status: 'missing', reason: misses.map(function (s) { return s.trim(); }).join('·') + ' 원문 없음', lawDoc: null };
     // 항·호는 원문에 그 구조가 있을 때만 검사 (단항 조문에 "제1항"이라고 쓴 것까지 잡지 않는다)
-    if (cite.paras && cite.paras.length && /[①-⑳]/.test(bestText)) {
-      for (const n of cite.paras) {
-        if (n >= 1 && n <= 20 && bestText.indexOf(CIRCLED[n - 1]) === -1)
-          return { status: 'missing', reason: cite.key + ' 제' + n + '항 원문 없음(조문 일부만 검색됨)', lawDoc: lawDoc, doc: best };
+    const paras = chosen.paras || [], items = chosen.items || [];
+    if (paras.length && /[①-⑳]/.test(chosenText)) {
+      for (const n of paras) {
+        if (n >= 1 && n <= 20 && chosenText.indexOf(CIRCLED[n - 1]) === -1)
+          return { status: 'missing', reason: chosen.key + ' 제' + n + '항 원문 없음(조문 일부만 검색됨)', lawDoc: chosenLaw, doc: chosenDoc, key: chosen.key };
       }
     }
-    if (cite.items && cite.items.length && /(^|\n)\s*\d+(의\d+)?\.\s/.test(bestText)) {
-      for (const it of cite.items) {
-        if (!new RegExp('(^|\\n)\\s*' + it + '\\.\\s').test(bestText))
-          return { status: 'missing', reason: cite.key + ' 제' + it + '호 원문 없음(조문 일부만 검색됨)', lawDoc: lawDoc, doc: best };
+    if (items.length && /(^|\n)\s*\d+(의\d+)?\.\s/.test(chosenText)) {
+      for (const it of items) {
+        if (!new RegExp('(^|\\n)\\s*' + it + '\\.\\s').test(chosenText))
+          return { status: 'missing', reason: chosen.key + ' 제' + it + '호 원문 없음(조문 일부만 검색됨)', lawDoc: chosenLaw, doc: chosenDoc, key: chosen.key };
       }
     }
-    return { status: 'ok', kind: 'article', lawDoc: lawDoc, doc: best, text: bestText };
+    return { status: 'ok', kind: 'article', lawDoc: chosenLaw, doc: chosenDoc, key: chosen.key, paras: paras, items: items, text: chosenText, overlap: chosenRatio };
   }
 
   // 3) Haiku 판정 — 원문이 있었던 인용만. callHaiku(system, user) → Promise<string(JSON 배열 텍스트)>
@@ -331,7 +479,8 @@
     if (!cites.length) return { answer: answer, verdicts: [], changed: 0 };
     const results = cites.map(function (c) { return Object.assign({}, c, checkCitation(c, chunks, (args && args.annexSources) || [])); });
     const maxJudge = args && args.maxJudge != null ? args.maxJudge : 8;
-    const toJudge = results.filter(function (r) { return r.status === 'ok' && r.text; }).slice(0, maxJudge);
+    // 원문 그대로 인용(verbatim)은 판정할 것이 없다 — Haiku에 보내지 않는다(비용·오판 방지)
+    const toJudge = results.filter(function (r) { return r.status === 'ok' && r.text && !r.verbatim; }).slice(0, maxJudge);
     if (toJudge.length && args && typeof args.callHaiku === 'function') {
       try {
         const items = toJudge.map(function (r, i) {
@@ -366,7 +515,8 @@
       answer: out, changed: changed,
       verdicts: results.map(function (r) {
         return { tag: r.tag, kind: r.kind, key: r.key || (r.annex ? '별표 ' + r.annex : null), law: r.lawDoc || r.lawText || null,
-          paras: r.paras || [], items: r.items || [], status: r.status, reason: r.reason || null, judge: r.judge || null, doc: r.doc || null };
+          paras: r.paras || [], items: r.items || [], status: r.status, reason: r.reason || null, judge: r.judge || null, doc: r.doc || null,
+          verbatim: !!r.verbatim, overlap: typeof r.overlap === 'number' ? Math.round(r.overlap * 100) / 100 : null };
       }),
     };
   }
@@ -375,7 +525,8 @@
     TAG_MISSING: TAG_MISSING, TAG_MISMATCH: TAG_MISMATCH,
     articleKey: articleKey, docFamily: docFamily, mergeChunkTexts: mergeChunkTexts,
     expandArticles: expandArticles, pseudoChunksFromPrompt: pseudoChunksFromPrompt,
-    lawNameBefore: lawNameBefore, familyMatches: familyMatches, resolveLaw: resolveLaw,
+    buildCitingExcerpts: buildCitingExcerpts, citeRegex: citeRegex, excerptAround: excerptAround,
+    lawNameBefore: lawNameBefore, familyMatches: familyMatches, resolveLaw: resolveLaw, quoteOverlap: quoteOverlap,
     parseSegment: parseSegment, findCitations: findCitations, checkCitation: checkCitation,
     judgeCitations: judgeCitations, verifyCitations: verifyCitations,
   };

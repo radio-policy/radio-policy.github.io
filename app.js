@@ -439,6 +439,16 @@ async function fetchArticleChunks(docName, key) {
     .like('article_no', key + '%').order('chunk_index', { ascending: true }).limit(40);
   return r.data || [];
 }
+// 역참조 발췌(#155-보론4)에 쓰는 조회 — rag.ts fetchCitingChunks와 동일 조건
+var CITING_OPTS = { maxPerArticle: 4, maxTotal: 8, maxLen: 300 };
+async function fetchCitingChunks(docName, key) {
+  if (!sb) return [];
+  var r = await sb.from('document_chunks').select('id, doc_name, article_no, chunk_index, content')
+    .eq('doc_name', docName).eq('status', 'current').eq('is_approved', true)
+    .not('article_no', 'is', null).like('content', '%제' + key + '%')
+    .order('chunk_index', { ascending: true }).limit(30);
+  return r.data || [];
+}
 async function verifyCitationsRemote(answer, chunkIds, annexSources) {
   if (!sb) return null;
   if (!/\[원문\s*확인됨[^\]]*\]/.test(answer)) return null;   // 표시가 없으면 부르지 않는다(Haiku·한도 절약)
@@ -2272,11 +2282,23 @@ async function callClaude(userText, onDelta) {
     } catch(e) { console.warn('조문 보강 실패(검색 결과 그대로 진행):', e); }
   }
 
-  // 근거 청크 id 스냅샷 — 출처 목록과 같은 순서(조문 정밀검색분 먼저, 그다음 RAG, 끝에 보강 조각).
+  // 역참조 발췌(#155-보론4) — 검색된 조문을 인용하는 같은 법령의 다른 조문(제재·조사·준용)에서 인용 문장만.
+  // 발췌 원본 조각 id는 lastAdvChunkIds에 넣어 verify-citations가 그 조문으로 검증한다. rag.ts와 동일 유지.
+  var citingContext = '', _advCitingIds = [];
+  if (window.CiteVerify && sb) {
+    try {
+      var ce = await CiteVerify.buildCitingExcerpts((lawExtra || []).concat(ragChunks), fetchCitingChunks, CITING_OPTS);
+      citingContext = ce.text || '';
+      _advCitingIds = ce.ids || [];
+      if (ce.chunks.length) console.log('역참조 발췌:', ce.chunks.length + '건');
+    } catch(e) { console.warn('역참조 발췌 실패(건너뜀):', e); }
+  }
+
+  // 근거 청크 id 스냅샷 — 출처 목록과 같은 순서(조문 정밀검색분 먼저, 그다음 RAG, 끝에 보강·역참조 조각).
   // 보도자료 의사청크는 id가 'press_…' 문자열이라 document_chunks 조회가 불가능하므로 제외한다
   // (문서명은 lastRagSources에 그대로 남는다).
   lastAdvChunkIds = [];
-  (lawExtra || []).concat(ragChunks).concat(_advAddedIds.map(function(id) { return { id: id }; })).forEach(function(c) {
+  (lawExtra || []).concat(ragChunks).concat(_advAddedIds.concat(_advCitingIds).map(function(id) { return { id: id }; })).forEach(function(c) {
     if (c && typeof c.id === 'number' && lastAdvChunkIds.indexOf(c.id) === -1) lastAdvChunkIds.push(c.id);
   });
 
@@ -2317,7 +2339,7 @@ async function callClaude(userText, onDelta) {
   // 가변부(lawmapGuide는 lawTopics 목록이 변함 + RAG·뉴스 등 질문마다 다른 컨텍스트)는
   // 캐시 블록 '뒤'에 둬야 적중한다 — 가변 요소를 고정부 앞·중간에 끼우지 말 것.
   const systemStable   = SYSTEM_PROMPT + webSearchGuide;
-  const systemVariable = lawmapGuide + ragContext + lawArticleContext + annexContext + pendingContext + kbContext + customContext + newsContext + lawTrackContext + assemblyContext;
+  const systemVariable = lawmapGuide + ragContext + lawArticleContext + citingContext + annexContext + pendingContext + kbContext + customContext + newsContext + lawTrackContext + assemblyContext;
   const systemWithRag = [
     { type: 'text', text: systemStable, cache_control: { type: 'ephemeral' } },
     { type: 'text', text: systemVariable }

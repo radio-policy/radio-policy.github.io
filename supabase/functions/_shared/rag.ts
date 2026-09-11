@@ -448,6 +448,15 @@ async function fetchArticleChunks(sb: SupabaseClient, docName: string, key: stri
     .like('article_no', key + '%').order('chunk_index', { ascending: true }).limit(40);
   return (r.data || []) as Chunk[];
 }
+// ── 역참조 발췌(#155-보론4)에 쓰는 조회 — 같은 문서에서 '제<key>'를 본문에 담은 조문 조각. app.js fetchCitingChunks와 동일 조건 ──
+const CITING_OPTS = { maxPerArticle: 4, maxTotal: 8, maxLen: 300 };
+async function fetchCitingChunks(sb: SupabaseClient, docName: string, key: string): Promise<Chunk[]> {
+  const r = await sb.from('document_chunks').select('id, doc_name, article_no, chunk_index, content')
+    .eq('doc_name', docName).eq('status', 'current').eq('is_approved', true)
+    .not('article_no', 'is', null).like('content', '%제' + key + '%')
+    .order('chunk_index', { ascending: true }).limit(30);
+  return (r.data || []) as Chunk[];
+}
 
 // ── /law 키워드 검색 전용 (LLM 답변 없이 조문만 찾아 준다) ──
 // 실측(2026-08-01): "3G 종료를 하는 방법"에 trgm 단독은 흔한 단어 '방법'에 끌려 개인정보·위치정보
@@ -1100,6 +1109,15 @@ export async function answerAdvisory(sb: SupabaseClient, systemPrompt: string, q
   // 상위 RAG 조문에 먼저 돌아간다. app.js 호출부와 동일 유지 — 한쪽만 고치지 말 것.
   const annex = await buildAnnexContext(sb, chunks2.concat(extra2 as unknown as Chunk[]), question);
 
+  // 역참조 발췌(#155-보론4) — 검색된 조문을 인용하는 같은 법령의 다른 조문(제재·조사·준용)에서 인용 문장만.
+  // 「대리점·판매점 관리」 질문에 제20조(등록취소 사유)·제51조(조사 대상)는 질문 어휘로 검색되지 않지만
+  // "제32조의4제5항에 따른 …"처럼 검색된 조문을 가리키므로 이 경로로 닿는다. app.js와 동일 유지.
+  let citing: { text: string; chunks: Chunk[]; ids: number[] } = { text: '', chunks: [], ids: [] };
+  try {
+    citing = await CiteVerify.buildCitingExcerpts((extra2 as unknown as Chunk[]).concat(chunks2), (d: string, k: string) => fetchCitingChunks(sb, d, k), CITING_OPTS);
+    if (citing.chunks.length) console.log(`[역참조 발췌] ${citing.chunks.length}건`);
+  } catch (e) { console.warn('역참조 발췌 실패(건너뜀):', e); }
+
   const telegramGuide = '\n\n---\n\n[텔레그램 답변 형식 지침]\n' +
     '이 답변은 텔레그램 메시지로 전송됩니다. 다음을 지키세요:\n' +
     '- 전체 3,000자 이내로 간결하게. 핵심 결론 먼저, 근거 조문 다음.\n' +
@@ -1117,7 +1135,7 @@ export async function answerAdvisory(sb: SupabaseClient, systemPrompt: string, q
   // 가변부(질문마다 바뀌는 RAG·조문·요약·뉴스)는 캐시 블록 '뒤'에 둬야 적중한다.
   const systemStable = systemPrompt + telegramGuide;
   // 국회 동향은 '근거'가 아니라 '배경'이라 맨 뒤 — 조문·요약·기사보다 앞에 두지 말 것
-  const systemVariable = buildRagContext(chunks2) + lawContext + annex.text + buildKbContext(kb) + news.text + asm;
+  const systemVariable = buildRagContext(chunks2) + lawContext + citing.text + annex.text + buildKbContext(kb) + news.text + asm;
   const system: SystemBlock[] = [
     { type: 'text', text: systemStable, cache_control: { type: 'ephemeral' } },
   ];
@@ -1133,7 +1151,7 @@ export async function answerAdvisory(sb: SupabaseClient, systemPrompt: string, q
   let answer = rawAnswer;
   try {
     const vr = await CiteVerify.verifyCitations({
-      answer: rawAnswer, chunks: (extra2 as unknown as Chunk[]).concat(chunks2), annexSources: annex.sources, systemPrompt,
+      answer: rawAnswer, chunks: (extra2 as unknown as Chunk[]).concat(chunks2).concat(citing.chunks), annexSources: annex.sources, systemPrompt,
       callHaiku: (sys: string, u: string) => callHaikuText(sb, apiKey, sys, u, 'rag.ts:citeJudge', 900),
     });
     answer = vr.answer;
@@ -1153,7 +1171,7 @@ export async function answerAdvisory(sb: SupabaseClient, systemPrompt: string, q
   for (const s of news.sources) if (!sources.includes(s)) sources.push(s);
   // 근거 청크 id — sources와 같은 순서(조문 정밀검색분 먼저, 그다음 RAG, 끝에 보강 조각). 숫자 id만 남긴다.
   const chunkIds: number[] = [];
-  for (const h of (extra2 as unknown as Chunk[]).concat(chunks2 as Chunk[]).concat(addedIds.map((id) => ({ id } as Chunk)))) {
+  for (const h of (extra2 as unknown as Chunk[]).concat(chunks2 as Chunk[]).concat(addedIds.concat(citing.ids).map((id) => ({ id } as Chunk)))) {
     if (typeof h.id === 'number' && !chunkIds.includes(h.id)) chunkIds.push(h.id);
   }
   return { answer, sources, webSources: webRefs, chunkIds };
