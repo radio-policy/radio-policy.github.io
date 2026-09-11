@@ -5577,3 +5577,7 @@ Deno(rag.ts·verify-citations)·브라우저(index.html `<script>`)·node 테스
 `sources`를 쉼표 문자열로 저장해 `JSON.parse`가 실패하고 통째로 웹 출처 1건이 되기 때문(진짜 웹 인용은 판례 1건). 세션 칩으로 분리.
 ②KB에서 서로 다른 방미통위 고시 8건이 모두 「제2026-11호(20260518)」 — 위원회 명칭 변경 일괄개정 고시일 가능성, 확인 필요.
 ③callSonnet은 thinking을 끄지 않아 적응형 추론 토큰이 매 자문 과금된다 — 자문 품질에 도움이 되므로 끄지 않기로, 실비는 이제 표에서 본다.
+**#155-보론 (같은 날).** 커밋 뒤 GitLab Pages는 `supabase/functions/_shared/cite_verify.js`를 바로 서빙(200)했는데 GitHub 미러는 새
+index.html까지 받고도 그 파일만 404. 원인은 Jekyll — GitHub Pages가 기본 빌드에서 **밑줄로 시작하는 폴더(`_shared`)를 제외**한다.
+루트에 `.nojekyll`을 두어 저장소를 그대로 서빙하게 했다(4a1394d). 모듈이 없으면 `window.CiteVerify` 가드로 검증만 건너뛰어 자문은
+멀쩡히 나오므로, 미러에서만 검증이 빠지는 상태가 눈에 안 띈다 — 지침 do-not에 추가.

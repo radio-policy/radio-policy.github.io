@@ -991,6 +991,7 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 
 - **새 자문 진입점을 만들면 반드시 `cite_verify.js`의 `expandArticles`(프롬프트 전)와 `verifyCitations`(답변 후)를 거칠 것** — 이 둘을 거치지 않은 「[원문 확인됨]」은 모델 자기 신고로 돌아가, "표시가 붙으면 따로 검증할 필요 없다"는 사용자 약속이 깨진다(9/10 제50조 실측). (#155)
 - **`_shared/cite_verify.js`를 고치면 `telegram-webhook`·`verify-citations` 둘 다 배포하고 `index.html`의 그 스크립트 캐시버스터를 올릴 것** — 세 곳이 같은 파일을 각각 번들·로드한다. `.gitlab-ci.yml` cp 목록에서 이 경로를 빼면 GitLab Pages에서만 404가 난다(#125와 같은 함정). (#155)
+- **루트 `.nojekyll`을 지우지 말 것** — GitHub Pages는 Jekyll 규칙으로 **밑줄로 시작하는 폴더(`supabase/functions/_shared/`)를 통째로 빼고** 빌드한다. 파일이 저장소에 있고 GitLab에서는 200인데 GitHub 미러만 404였던 실측(2026-09-11). 브라우저는 모듈이 없으면 검증만 건너뛰어 증상이 조용하다. (#155)
 - **검증 꼬리표 문구(`[⚠️ 원문 미확인 …]`·`[⚠️ 원문과 다르게 설명됨 …]`)를 바꾸면 `app.js renderMd` 색 규칙·시스템 프롬프트 3-③·테스트를 함께 바꿀 것** — 문자열 일치로 색이 붙는다. (#155)
 - **인용 검증에서 `unparsed`(인용을 못 읽음)를 미확인으로 바꾸지 말 것** — 표시가 조문과 떨어져 붙은 정상 답변까지 경고가 붙어 경고가 신호가 아니게 된다. (#155)
 - **자문 실비를 글자수로 추정하지 말 것 — `api_usage`(host=edge)에 기록된다** (#155)
