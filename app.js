@@ -2416,6 +2416,9 @@ async function callClaude(userText, onDelta) {
             }
           } else if (evt.type === 'content_block_start' && evt.content_block) {
             (evt.content_block.citations || []).forEach(addCitation);
+            // 웹검색 전 서술("먼저 조문을 검색하겠습니다.")과 검색 후 본문이 다른 text 블록으로 오는데 이어 붙이면
+            // "…검색하겠습니다.# 분석:"처럼 붙는다(11:20 실측) — 블록 사이에 빈 줄을 넣는다. rag.ts와 동일 유지
+            if (evt.content_block.type === 'text' && aiText && !/\n\s*$/.test(aiText)) aiText += '\n\n';
           } else if (evt.type === 'message_delta' && evt.delta && evt.delta.stop_reason) {
             stopReason = evt.delta.stop_reason;
           } else if (evt.type === 'error') {

@@ -346,7 +346,12 @@
         extStart = start;
       }
       extStart = Math.max(prevEnd, extStart, tagStart - 1600);
-      const c = Object.assign({ tagStart: tagStart, tagEnd: tagEnd, tag: m[0], segment: text.slice(segStart, tagStart) }, parsed);
+      // 표시 뒤 문단(다음 표시·빈 줄·900자까지) — 꼬리표를 제목 줄에 붙이고 내용은 그 아래에 쓰는 답변 형식
+      // (「**② 전기통신사업법 제32조의14(…) [원문 확인됨]**\n① 대리점은 …」)에서 인용문은 뒤에 있다(#155-보론5).
+      const nextTag = (function () { TAG_RE.lastIndex = tagEnd; const nm = TAG_RE.exec(text); TAG_RE.lastIndex = tagEnd; return nm ? nm.index : text.length; })();
+      const blank = text.indexOf('\n\n', tagEnd + 1);
+      const after = text.slice(tagEnd, Math.min(nextTag, blank === -1 ? text.length : blank + 1, tagEnd + 900));
+      const c = Object.assign({ tagStart: tagStart, tagEnd: tagEnd, tag: m[0], segment: text.slice(segStart, tagStart), after: after }, parsed);
       if (c.kind === 'article') {
         if (c.lawInfo && c.lawInfo.inherit) c.lawInherit = lastLaw;
         else if (c.lawInfo && c.lawInfo.candidates) c.lawText = c.lawInfo.text;
@@ -398,18 +403,28 @@
       const list = articleText.get(gk).slice().sort(function (a, b) { return (a.chunk_index || 0) - (b.chunk_index || 0); });
       return mergeChunkTexts(list.map(function (c) { return c.content || ''; }));
     };
-    const claim = cite.segment || '';
+    // 인용문: 표시 앞 문장. 앞이 제목·조 번호뿐(내용 40자 미만)이면 표시 뒤 문단이 인용문이다(#155-보론5).
+    const before = cite.segment || '';
+    // 내용 길이 = 조 번호·괄호 제목·법령명을 뺀 나머지(정규화 24자 미만이면 "제목·번호뿐")
+    const stripCite = function (s) {
+      return normQ(String(s || '').replace(/제\s?\d+\s?조(?:\s?의\s?\d+)?(?:\s?\([^)]*\))?/g, '')
+        .replace(/[가-힣A-Za-z0-9·ㆍ\s]{0,40}?(법률|법|시행령|시행규칙|규칙|고시|규정|기준|세칙|지침)(?=\s|$|[,:.)])/g, ''));
+    };
+    const beforeBody = stripCite(before);
+    const headingOnly = beforeBody.length < 24 && normQ(cite.after || '').length >= 24;
+    const claim = headingOnly ? cite.after : before;
 
     // ① 원문 그대로 인용이면 번호 파싱과 무관하게 확인됨 — 어느 조문(별표 포함)의 텍스트와 겹치는지 본다.
-    //    (통째 인용 안의 교차참조가 엉뚱한 조를 가리켜 '미확인'이 되던 오판 방지, #155-보론3)
+    //    (통째 인용 안의 교차참조가 엉뚱한 조를 가리켜 '미확인'이 되던 오판 방지, #155-보론3). 앞·뒤 중 큰 쪽.
     let vbBest = null, vbRatio = 0;
     for (const gk of articleText.keys()) {
-      const r = quoteOverlap(claim, mergedOf(gk));
+      const t = mergedOf(gk);
+      const r = Math.max(quoteOverlap(before, t), cite.after ? quoteOverlap(cite.after, t) : 0);
       if (r > vbRatio) { vbRatio = r; vbBest = gk; }
     }
     if (vbBest && vbRatio >= VERBATIM_MIN) {
       const [doc, key] = [vbBest.slice(0, vbBest.lastIndexOf('|')), vbBest.slice(vbBest.lastIndexOf('|') + 1)];
-      return { status: 'ok', kind: 'article', lawDoc: docFamily(doc), doc: doc, key: key, text: mergedOf(vbBest), verbatim: true, overlap: vbRatio, reason: '원문 그대로 인용(' + Math.round(vbRatio * 100) + '%)' };
+      return { status: 'ok', kind: 'article', lawDoc: docFamily(doc), doc: doc, key: key, text: mergedOf(vbBest), verbatim: true, overlap: vbRatio, claim: claim, reason: '원문 그대로 인용(' + Math.round(vbRatio * 100) + '%)' };
     }
 
     // ② 후보 조문(인용문 안 → 앞 줄) 중 컨텍스트에 있는 것을 고른다 — 여럿이면 인용문과 가장 많이 겹치는 것, 같으면 앞의 것
@@ -444,14 +459,17 @@
           return { status: 'missing', reason: chosen.key + ' 제' + it + '호 원문 없음(조문 일부만 검색됨)', lawDoc: chosenLaw, doc: chosenDoc, key: chosen.key };
       }
     }
-    return { status: 'ok', kind: 'article', lawDoc: chosenLaw, doc: chosenDoc, key: chosen.key, paras: paras, items: items, text: chosenText, overlap: chosenRatio };
+    // 인용문에 내용이 없으면(제목·번호뿐) 판정할 것이 없다 — 표시를 그대로 둔다
+    if ((headingOnly ? normQ(cite.after || '') : beforeBody).length < 24)
+      return { status: 'ok', kind: 'article', lawDoc: chosenLaw, doc: chosenDoc, key: chosen.key, paras: paras, items: items, text: chosenText, overlap: chosenRatio, claim: claim, verbatim: true, reason: '조문 번호·제목만 표시(판정 대상 없음)' };
+    return { status: 'ok', kind: 'article', lawDoc: chosenLaw, doc: chosenDoc, key: chosen.key, paras: paras, items: items, text: chosenText, overlap: chosenRatio, claim: claim };
   }
 
   // 3) Haiku 판정 — 원문이 있었던 인용만. callHaiku(system, user) → Promise<string(JSON 배열 텍스트)>
   const JUDGE_SYSTEM =
     '당신은 법령 인용 검증자입니다. 각 항목의 "인용문"(AI 답변의 한 대목)이 "원문"(법령·고시 조문)의 내용을 사실과 다르게 옮겼는지만 판정합니다.\n' +
     '불일치로 보는 경우: 조문 번호·항·호가 원문과 다르다 / 의무의 주체·상대방이 바뀌었다 / 요건·효과·기한·수치·예외가 원문과 다르다 / 원문에 없는 내용을 원문의 규정처럼 서술했다.\n' +
-    '불일치가 아닌 경우: 요약·생략·표현 차이 / 원문에 근거한 해석·의견 / 다른 조문을 함께 언급 / 인용문이 원문의 일부만 다룸.\n' +
+    '불일치가 아닌 경우: 요약·생략·표현 차이 / 원문에 근거한 해석·의견 / 다른 조문을 함께 언급 / 인용문이 원문의 일부만 다룸 / 인용문이 조문 번호·제목만 적고 내용을 옮기지 않음(→ "판단불가").\n' +
     '확신이 없으면 "판단불가". 출력은 JSON 배열만, 설명 금지: [{"id":1,"verdict":"일치|불일치|판단불가","reason":"30자 이내"}]';
 
   async function judgeCitations(items, callHaiku) {
@@ -484,7 +502,7 @@
     if (toJudge.length && args && typeof args.callHaiku === 'function') {
       try {
         const items = toJudge.map(function (r, i) {
-          const claim = r.segment.replace(/\*\*/g, '').replace(/\s+/g, ' ').trim();
+          const claim = String(r.claim || r.segment || '').replace(/\*\*/g, '').replace(/\s+/g, ' ').trim();
           return {
             id: i + 1,
             target: (r.lawDoc || r.lawText || '') + ' ' + r.key + (r.paras.length ? ' 제' + r.paras.join('·') + '항' : '') + (r.items.length ? ' 제' + r.items.join('·') + '호' : ''),

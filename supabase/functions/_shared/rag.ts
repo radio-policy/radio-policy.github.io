@@ -431,6 +431,8 @@ async function callSonnet(apiKey: string, system: string | SystemBlock[], questi
               webRefs.push({ url: c.url, title: (c.title || '').trim() || c.url });
             }
           }
+          // 웹검색 전후의 text 블록이 붙어 "…검색하겠습니다.# 분석:"이 되지 않게 블록 사이에 빈 줄 (app.js와 동일)
+          else if (d.type === 'content_block_start' && d.content_block?.type === 'text' && text && !/\n\s*$/.test(text)) text += '\n\n';
           else if (d.type === 'message_start' && d.message?.usage) usage = mergeUsage(usage, d.message.usage);
           else if (d.type === 'message_delta' && d.usage) usage = mergeUsage(usage, d.usage);
         } catch { /* keep-alive 등 무시 */ }

@@ -165,6 +165,19 @@ function ok(name, cond, extra) {
   eq('판정 없이 대조만', v4.verdicts.map(function (x) { return x.status; }), ['ok', 'missing', 'ok']);
   eq('표시 없는 답변은 무변경', (await CV.verifyCitations({ answer: '표시 없음', chunks: full })).changed, 0);
 
+  // ── #155-보론5: 꼬리표가 제목 줄에 붙고 내용은 그 아래 (11:20 대시보드 답변 — Haiku가 "번호만 표기"로 불일치 판정) ──
+  var h = '**② 전기통신사업법 제32조의14(판매점 선임에 대한 승낙 등) [원문 확인됨]**\n① 대리점은 이동통신사업자의 서면에 의한 사전승낙 없이는 판매점을 선임할 수 없으며, 사전승낙을 받지 아니한 자와 이동통신사업자와 이용자 간의 계약 체결 등에 관한 거래를 하여서는 아니 됩니다. 즉, 대리점이 어떤 자를 판매점으로 기능시키려면 사전 서면승낙이 있어야 합니다.\n③ 이동통신사업자는 사전승낙의 거부·지연·철회 요건과 기준을 미리 공지해야 합니다.\n\n**③ 위반 시 제재**';
+  var hc = CV.findCitations(h);
+  ok('제목 줄 표시: 뒤 문단이 after로 잡힘', /① 대리점은/.test(hc[0].after) && !/위반 시 제재/.test(hc[0].after), hc[0].after);
+  var hr = CV.checkCitation(hc[0], full, []);
+  eq('제목 줄 표시: 32조의14 ok, 인용문은 뒤 문단', [hr.status, hr.key, /① 대리점은/.test(hr.claim)], ['ok', '32조의14', true]);
+  var judgedClaim = null;
+  await CV.verifyCitations({ answer: h, chunks: full, callHaiku: async function (s, u) { judgedClaim = u; return '[{"id":1,"verdict":"일치"}]'; } });
+  ok('제목 줄 표시: Haiku에는 뒤 문단이 간다(제목만 보내지 않음)', judgedClaim === null || /① 대리점은/.test(judgedClaim), judgedClaim);
+  // 앞·뒤 모두 내용이 없으면 판정 생략
+  var only = CV.checkCitation(CV.findCitations('전기통신사업법 제32조의14 [원문 확인됨]\n\n다음 절')[0], full, []);
+  eq('번호만 표시: 판정 없이 ok', [only.status, only.verbatim], ['ok', true]);
+
   // ── 역참조 발췌 (#155-보론4) ──
   var art20 = { id: 27210, doc_name: C.c50_136.doc_name, article_no: '20조(등록의 취소 등)', chunk_index: 35, content: '제20조(등록의 취소 등)\n① 과학기술정보통신부장관은 기간통신사업자가 다음 각 호의 어느 하나에 해당하면 그 등록의 전부 또는 일부를 취소하거나 1년 이내의 기간을 정하여 사업의 전부 또는 일부의 정지를 명할 수 있다.\n1.  속임수나 그 밖의 부정한 방법으로 등록을 한 경우\n5의2.  제32조의4제5항에 따른 관리ㆍ감독 또는 같은 조 제6항에 따른 모니터링을 소홀히 하여 타인의 명의를 사용하거나 그 밖의 부정한 방법으로 전기통신역무 제공계약이 대통령령으로 정하는 기준 이상 다수 체결된 경우' };
   var art51 = { id: 27306, doc_name: C.c50_136.doc_name, article_no: '51조(사실조사 등)', chunk_index: 139, content: '제51조(사실조사 등)\n① 방송미디어통신위원회는 … 제32조의14제1항ㆍ제3항ㆍ제5항, 제32조의15제2항ㆍ제3항 또는 제50조제1항을 위반한 행위가 있다고 인정하면 … 조사를 하게 할 수 있다.\n② …\n4.  제2호의 대리점ㆍ판매점을 제외하고 그 밖에 전기통신사업자의 업무를 위탁받아 취급하는 자' };
