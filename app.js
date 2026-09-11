@@ -1553,6 +1553,8 @@ async function loadTerms() {
     termsLoaded = true;
     var badge = document.getElementById('terms-count-badge');
     if (badge) badge.textContent = termsData.length + '개 용어';
+    var tabN = document.getElementById('terms-tab-tech-n');
+    if (tabN) tabN.textContent = termsData.length;
     renderTerms(termsData);
   } catch(e) {
     console.warn('tech_terms 로드 실패:', e);
@@ -1679,6 +1681,224 @@ function openTermsModal(id) {
 
 function closeTermsModal() {
   document.getElementById('terms-modal').style.display = 'none';
+}
+
+// ════════════════════════════════════════════
+//  법적 용어 정의 — law_terms (현행 법령·고시의 정의 조문 원문, law_terms_sync.py 매일 11:00). AI 0회 (#156)
+//  같은 패널의 탭 1(기본). 탭 2는 위의 기술 용어(tech_terms) — 기존 함수·id 그대로.
+// ════════════════════════════════════════════
+var _termsTab = 'law';
+var lawTermsData = [], lawTermsLoaded = false, _lawTermGroups = [], _lawTermGroupMap = {};
+var LAW_TYPE_RANK = {법률:0, 대통령령:1, 부령:2, 규칙:2, 고시:3, 훈령:4, 예규:4, 공고:5, 기타:6};
+var LAW_TYPE_BADGE = {법률:'badge-purple', 대통령령:'badge-blue', 부령:'badge-blue', 규칙:'badge-blue', 고시:'badge-teal'};
+var LAW_TERMS_INITIAL_CARDS = 200;
+
+function switchTermsTab(tab, force) {
+  _termsTab = tab === 'tech' ? 'tech' : 'law';
+  var lawBody = document.getElementById('terms-law-body');
+  var techBody = document.getElementById('terms-tech-body');
+  if (lawBody) lawBody.style.display = _termsTab === 'law' ? '' : 'none';
+  if (techBody) techBody.style.display = _termsTab === 'tech' ? '' : 'none';
+  var tl = document.getElementById('terms-tab-law'), tt = document.getElementById('terms-tab-tech');
+  if (tl) tl.classList.toggle('active', _termsTab === 'law');
+  if (tt) tt.classList.toggle('active', _termsTab === 'tech');
+  if (_termsTab === 'law') loadLawTerms(force); else loadTerms();
+}
+
+function lawTermRank(r) { return LAW_TYPE_RANK[r.law_type] != null ? LAW_TYPE_RANK[r.law_type] : 6; }
+
+async function loadLawTerms(force) {
+  var el = document.getElementById('law-terms-list');
+  if (!el) return;
+  if (!sb) { el.innerHTML = '<div style="padding:20px;color:var(--text-tertiary);font-size:12px">Supabase 연결 필요 (설정 탭에서 API 키 입력)</div>'; return; }
+  if (lawTermsLoaded && !force) { filterLawTerms(); return; }
+  try {
+    // PostgREST 1,000행 상한 → order+range 페이징 (≈1,400행)
+    var rows = [], off = 0, page = 1000;
+    while (true) {
+      var resp = await sb.from('law_terms')
+        .select('id,term,term_key,term_alias,law_name,law_type,doc_name,article_no,item_no,definition,effective_date')
+        .order('id').range(off, off + page - 1);
+      var batch = resp.data || [];
+      rows = rows.concat(batch);
+      if (batch.length < page) break;
+      off += page;
+    }
+    lawTermsData = rows;
+    lawTermsLoaded = true;
+    buildLawTermGroups();
+    populateLawTermFilters();
+    var docs = {};
+    rows.forEach(function(r) { docs[r.doc_name] = 1; });
+    var badge = document.getElementById('law-terms-count-badge');
+    if (badge) badge.textContent = _lawTermGroups.length + '개 용어 · ' + rows.length + '개 정의 · ' + Object.keys(docs).length + '개 법령';
+    var tabN = document.getElementById('terms-tab-law-n');
+    if (tabN) tabN.textContent = _lawTermGroups.length;
+    filterLawTerms();
+  } catch(e) {
+    console.warn('law_terms 로드 실패:', e);
+    el.innerHTML = '<div style="padding:20px;color:var(--text-tertiary);font-size:12px">법적 용어 정의를 불러오지 못했습니다 (law_terms).</div>';
+  }
+}
+
+// term_key 로 묶기 — 한 용어를 여러 법령이 정의하면 defs 여러 개 (법률 > 대통령령 > 부령 > 고시 순, 그 안에서 법령명·시행일 역순)
+function buildLawTermGroups() {
+  var map = {};
+  lawTermsData.forEach(function(r) {
+    var k = r.term_key || (r.term || '').toLowerCase();
+    if (!map[k]) map[k] = { key: k, term: r.term, alias: r.term_alias || '', defs: [] };
+    map[k].defs.push(r);
+    if (!map[k].alias && r.term_alias) map[k].alias = r.term_alias;
+  });
+  _lawTermGroups = Object.keys(map).map(function(k) {
+    var g = map[k];
+    g.defs.sort(function(a, b) {
+      var d = lawTermRank(a) - lawTermRank(b);
+      if (d) return d;
+      var n = (a.law_name || '').localeCompare(b.law_name || '', 'ko');
+      if (n) return n;
+      return (b.effective_date || '').localeCompare(a.effective_date || '');
+    });
+    g.term = g.defs[0].term;   // 대표 표기는 최상위 법령의 것
+    return g;
+  }).sort(function(a, b) { return a.term.localeCompare(b.term, 'ko'); });
+  _lawTermGroupMap = {};
+  _lawTermGroups.forEach(function(g) { _lawTermGroupMap[g.key] = g; });
+}
+
+function populateLawTermFilters() {
+  var typeSel = document.getElementById('law-terms-type-filter');
+  if (!typeSel) return;
+  var counts = {};
+  lawTermsData.forEach(function(r) { counts[r.law_type || '기타'] = (counts[r.law_type || '기타'] || 0) + 1; });
+  var types = Object.keys(counts).sort(function(a, b) { return (LAW_TYPE_RANK[a] != null ? LAW_TYPE_RANK[a] : 6) - (LAW_TYPE_RANK[b] != null ? LAW_TYPE_RANK[b] : 6); });
+  typeSel.innerHTML = '<option value="">전체 법종</option>' + types.map(function(t) {
+    return '<option value="' + escHtml(t) + '">' + escHtml(t) + ' (' + counts[t] + ')</option>';
+  }).join('');
+  populateLawNameFilter('');
+}
+
+function populateLawNameFilter(type) {
+  var lawSel = document.getElementById('law-terms-law-filter');
+  if (!lawSel) return;
+  var names = {};
+  lawTermsData.forEach(function(r) {
+    if (type && r.law_type !== type) return;
+    var k = r.law_name || r.doc_name;
+    if (!names[k]) names[k] = { rank: lawTermRank(r), n: 0 };
+    names[k].n += 1;
+  });
+  var list = Object.keys(names).sort(function(a, b) {
+    var d = names[a].rank - names[b].rank;
+    return d || a.localeCompare(b, 'ko');
+  });
+  lawSel.innerHTML = '<option value="">전체 법령</option>' + list.map(function(n) {
+    return '<option value="' + escHtml(n) + '">' + escHtml(n) + ' (' + names[n].n + ')</option>';
+  }).join('');
+}
+
+function onLawTypeFilterChange() {
+  var typeSel = document.getElementById('law-terms-type-filter');
+  populateLawNameFilter(typeSel ? typeSel.value : '');
+  filterLawTerms();
+}
+
+function resetLawTermsFilter() {
+  var q = document.getElementById('law-terms-search-input'); if (q) q.value = '';
+  var t = document.getElementById('law-terms-type-filter'); if (t) t.value = '';
+  populateLawNameFilter('');
+  filterLawTerms();
+}
+
+function filterLawTerms() {
+  if (!lawTermsLoaded) return;
+  var q = ((document.getElementById('law-terms-search-input') || {}).value || '').toLowerCase().trim();
+  var type = (document.getElementById('law-terms-type-filter') || {}).value || '';
+  var law = (document.getElementById('law-terms-law-filter') || {}).value || '';
+  var matched = [];
+  _lawTermGroups.forEach(function(g) {
+    var defs = g.defs.filter(function(r) {
+      if (type && r.law_type !== type) return false;
+      if (law && (r.law_name || r.doc_name) !== law) return false;
+      if (!q) return true;
+      return (r.term || '').toLowerCase().indexOf(q) >= 0 ||
+        (r.term_alias || '').toLowerCase().indexOf(q) >= 0 ||
+        (r.definition || '').toLowerCase().indexOf(q) >= 0 ||
+        (r.law_name || '').toLowerCase().indexOf(q) >= 0;
+    });
+    if (defs.length) matched.push({ key: g.key, term: g.term, alias: g.alias, defs: defs, total: g.defs.length });
+  });
+  renderLawTerms(matched, { truncated: !q && !type && !law });
+}
+
+function lawTermSourceLabel(r) {
+  var art = (r.article_no || '').replace(/\(.*$/, '');
+  var item = r.item_no || '';
+  var tail = item === '본문' || !item ? '' : (/항$/.test(item) ? ' 제' + item : ' 제' + item + '호');
+  return '제' + art + tail;
+}
+
+function lawTermBadge(r) {
+  return '<span class="badge ' + (LAW_TYPE_BADGE[r.law_type] || 'badge-amber') + '">' + escHtml(r.law_type || '기타') + '</span>';
+}
+
+function renderLawTerms(groups, opt) {
+  var el = document.getElementById('law-terms-list');
+  if (!el) return;
+  if (!groups || groups.length === 0) {
+    el.innerHTML = '<div style="padding:20px;color:var(--text-tertiary);font-size:12px;grid-column:1/-1">검색 결과가 없습니다.</div>';
+    return;
+  }
+  var shown = groups, notice = '';
+  if (opt && opt.truncated && groups.length > LAW_TERMS_INITIAL_CARDS) {
+    shown = groups.slice(0, LAW_TERMS_INITIAL_CARDS);
+    notice = '<div style="padding:10px;color:var(--text-tertiary);font-size:11.5px;grid-column:1/-1;text-align:center">전체 ' + groups.length + '개 용어 중 ' + LAW_TERMS_INITIAL_CARDS + '개 표시 — 검색어·법종·법령으로 좁혀 보세요</div>';
+  }
+  // 정의 원문은 DB에서 온 문자열 — innerHTML 삽입 전 escHtml (#61)
+  el.innerHTML = shown.map(function(g) {
+    var d = g.defs[0];
+    var docs = {};
+    g.defs.forEach(function(r) { docs[r.doc_name] = 1; });
+    var nDocs = Object.keys(docs).length;
+    var def = d.definition || '';
+    if (def.length > 160) def = def.slice(0, 160) + '…';
+    return '<div class="card" style="cursor:pointer;padding:12px 14px" data-key="' + escHtml(g.key) + '" onclick="openLawTermModal(this.getAttribute(\'data-key\'))">' +
+      '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;flex-wrap:wrap">' +
+        '<span style="font-size:14px;font-weight:600;color:var(--text-primary)">' + escHtml(g.term) + '</span>' +
+        (g.alias ? '<span style="font-size:11px;color:var(--text-tertiary)">(' + escHtml(g.alias) + ')</span>' : '') +
+        '<span style="margin-left:auto;display:flex;gap:4px">' +
+          (nDocs > 1 ? '<span class="badge badge-amber">' + nDocs + '개 법령</span>' : '') + lawTermBadge(d) +
+        '</span>' +
+      '</div>' +
+      '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:6px;line-height:1.5">' + escHtml(def) + '</div>' +
+      '<div style="font-size:11px;color:var(--text-tertiary)">📌 ' + escHtml(d.law_name || d.doc_name) + ' ' + escHtml(lawTermSourceLabel(d)) + '</div>' +
+    '</div>';
+  }).join('') + notice;
+}
+
+function openLawTermModal(key) {
+  var g = _lawTermGroupMap[key];
+  if (!g) return;
+  var html =
+    '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px">' +
+      '<span style="font-size:20px;font-weight:700;color:var(--text-primary)">' + escHtml(g.term) + '</span>' +
+      (g.alias ? '<span style="font-size:13px;color:var(--text-secondary)">' + escHtml(g.alias) + '</span>' : '') +
+      '<span class="badge badge-purple">' + g.defs.length + '개 정의</span>' +
+    '</div>' +
+    '<div style="font-size:11px;color:var(--text-tertiary);margin-bottom:12px">법령 조문 원문 그대로 — AI 해설 없음</div>';
+  html += g.defs.map(function(r) {
+    var enf = r.effective_date && /^\d{8}$/.test(r.effective_date)
+      ? ' · 시행 ' + r.effective_date.slice(0, 4) + '.' + r.effective_date.slice(4, 6) + '.' + r.effective_date.slice(6, 8) : '';
+    return '<div style="margin-bottom:12px">' +
+      '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:4px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">📌 <b>' + escHtml(r.law_name || r.doc_name) + '</b> ' + lawTermBadge(r) + ' ' + escHtml(lawTermSourceLabel(r)) + escHtml(enf) + '</div>' +
+      '<div style="font-size:13px;line-height:1.65;padding:10px 14px;background:var(--bg-secondary);border-radius:var(--radius-md);border-left:3px solid var(--accent);white-space:pre-wrap">' + escHtml(r.definition || '') + '</div>' +
+    '</div>';
+  }).join('');
+  html += '<div style="display:flex;gap:8px;margin-top:14px">' +
+    '<button class="btn" data-term="' + escHtml(g.term) + '" onclick="askQ(this.getAttribute(\'data-term\') + \' 의 법적 정의와 관련 규정을 설명해줘\')">AI 자문에서 질문</button>' +
+  '</div>';
+  document.getElementById('terms-modal-content').innerHTML = html;
+  document.getElementById('terms-modal').style.display = 'flex';
 }
 
 // ── 용어 상세 생성: 화면과 분리된 핵심부 ──────────────────────────
@@ -3247,7 +3467,7 @@ function smartRefresh() {
   var map = {
     'panel-news':     function() { loadNews(); },
     'panel-briefing': function() { loadBriefing(); },
-    'panel-terms':    function() { loadTerms && loadTerms(); },
+    'panel-terms':    function() { if (typeof _termsTab !== 'undefined' && _termsTab === 'law') loadLawTerms(true); else loadTerms && loadTerms(); },
     'panel-press':    function() { loadPressJSON(); },
     'panel-law':      function() { loadKbDocs(true); },
     'panel-guide':    function() { loadGuideDocs(true); },
@@ -6397,6 +6617,11 @@ async function loadOpsStatus() {
     rows += opsRow('방미통위 회의·결과 수집 (heartbeat)', opsAgoText(lastKmcc),
                    lastKmcc ? (hoursAgo(lastKmcc) < 3) : null,
                    lastKmcc ? ('최근 결과: ' + hbNote('last_kmcc_meeting_run')) : 'Actions 매시 (heartbeat 대기)');
+    // 법적 용어 정의 재추출 (law_terms_sync.py, law_crawl.yml 11:00 마지막 단계 — #156). watchdog_scan 미감시, 이 행이 감시 창.
+    var lastLT = hbTime('last_law_terms_sync');
+    rows += opsRow('법적 용어 정의 추출 (heartbeat)', opsAgoText(lastLT),
+                   lastLT ? (hoursAgo(lastLT) < 30 && hbNote('last_law_terms_sync').indexOf('fail=1') < 0) : null,
+                   lastLT ? ('최근 결과: ' + hbNote('last_law_terms_sync')) : 'Actions 11:00 law_crawl.yml (heartbeat 대기)');
     rows += opsRow('국회 법안 최근 갱신', opsAgoText(lastBill), null, '매일 10:00');
     rows += opsRow('뉴스 보관 건수', (newsCount != null ? newsCount + '건' : '—'), null, '60일 유지');
     // 오늘 AI 호출 (#152, 관리자만) — 백필·화면 버그로 호출이 폭주해도 재결제 때까지 아무도 몰랐다(#111·#118).
@@ -6546,7 +6771,7 @@ function go(page, navEl, sourceType) {
 
   // 상단 바 제목 업데이트
   var newsTitle = currentNewsSourceType === 'gov' ? '정부 보도자료·공지사항 (최근 60일)' : (currentNewsSourceType === 'media' ? '뉴스 (최근 60일)' : '보도자료·뉴스 (최근 60일)');
-  var titles = {home:'대시보드', chat:'AI 자문', diff:'법령 개정 추적 — 조문 DIFF', law:'지식베이스 — 법령·고시', guide:'지식베이스 — 실무 안내', lawmap:'법령 관계도', itu:'지식베이스 — ITU-R', press:'지식베이스 — 보도자료', custom:'지식베이스 — 추가지식', terms:'기술 용어', news:newsTitle, briefing:'Daily Briefing', assembly:'국회 법안', minutes:'과방위 회의록', people:'인물 — 과방위 발언·발의 이력', overseas:'해외 규제동향 (최근 60일)', issuemap:'이슈맵', lawtrack:'법령 개정 추적 — 입법예고·개정 현황', settings:'설정', opsstatus:'운영 상태', feedback:'AI 자문 — 답변 피드백'};
+  var titles = {home:'대시보드', chat:'AI 자문', diff:'법령 개정 추적 — 조문 DIFF', law:'지식베이스 — 법령·고시', guide:'지식베이스 — 실무 안내', lawmap:'법령 관계도', itu:'지식베이스 — ITU-R', press:'지식베이스 — 보도자료', custom:'지식베이스 — 추가지식', terms:'법적·기술 용어', news:newsTitle, briefing:'Daily Briefing', assembly:'국회 법안', minutes:'과방위 회의록', people:'인물 — 과방위 발언·발의 이력', overseas:'해외 규제동향 (최근 60일)', issuemap:'이슈맵', lawtrack:'법령 개정 추적 — 입법예고·개정 현황', settings:'설정', opsstatus:'운영 상태', feedback:'AI 자문 — 답변 피드백'};
   var ttEl = document.getElementById('topbar-title');
   if (ttEl && titles[page]) ttEl.textContent = titles[page];
 
@@ -6558,7 +6783,7 @@ function go(page, navEl, sourceType) {
   if (page === 'briefing') loadBriefing();
   if (page === 'settings') loadSettingsUI();
   if (page === 'press') loadPressFromSupabase();
-  if (page === 'terms') loadTerms();
+  if (page === 'terms') switchTermsTab(_termsTab);   // 기본 탭 = 법적 용어 정의 (#156)
   if (page === 'law') loadKbDocs();
   if (page === 'guide') loadGuideDocs();
   if (page === 'lawmap') loadLawMap();

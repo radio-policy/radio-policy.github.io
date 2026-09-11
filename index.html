@@ -26,7 +26,7 @@
       <div class="nav-item active" tabindex="0" role="button" data-nav="monitor" onclick="go('news',this,'media')"><i class="ti ti-news"></i>통합 모니터링</div>
       <div class="nav-item" tabindex="0" role="button" data-nav="issuemap" onclick="go('issuemap',this)"><i class="ti ti-sitemap"></i>이슈맵</div>
       <div class="nav-item" tabindex="0" role="button" data-nav="briefing" onclick="go('briefing',this)"><i class="ti ti-coffee"></i>Daily Briefing</div>
-      <div class="nav-item" tabindex="0" role="button" data-nav="terms" onclick="go('terms',this)"><i class="ti ti-book"></i>기술 용어</div>
+      <div class="nav-item" tabindex="0" role="button" data-nav="terms" onclick="go('terms',this)"><i class="ti ti-book"></i>법적·기술 용어</div>
     </div>
     <div class="nav-group">
       <div class="nav-label">AI 도우미</div>
@@ -560,11 +560,37 @@
 
       </div><!-- panel-custom -->
 
-      <!-- 기술 용어 위키 -->
+      <!-- 법적·기술 용어 — 탭 2개: 법적 용어 정의(기본, law_terms 조문 원문 #156) | 기술 용어(tech_terms, 기존 그대로) -->
       <div class="panel" id="panel-terms">
+        <div style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
+          <button class="guide-chip active" id="terms-tab-law" onclick="switchTermsTab('law')">📖 법적 용어 정의<span id="terms-tab-law-n"></span></button>
+          <button class="guide-chip" id="terms-tab-tech" onclick="switchTermsTab('tech')">🔧 기술 용어<span id="terms-tab-tech-n"></span></button>
+        </div>
+
+        <!-- 탭 1: 법적 용어 정의 — 현행 법령·고시의 정의 조문 원문 (AI 0회, 매일 11:00 law_terms_sync.py) -->
+        <div id="terms-law-body">
+          <div style="display:flex;gap:8px;margin-bottom:14px;align-items:center;flex-wrap:wrap">
+            <span style="font-size:12px;color:var(--text-secondary)">법률·시행령·시행규칙·고시·훈령·예규에서 <b>법적으로 정의된 단어</b>입니다 — 조문 원문 그대로(AI 해설 없음), 매일 11:00 법령 현행화 뒤 자동 갱신</span>
+            <span class="badge badge-purple" style="margin-left:6px" id="law-terms-count-badge">—</span>
+          </div>
+          <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+            <input type="text" id="law-terms-search-input" placeholder="용어·정의 본문 검색..." style="flex:1;min-width:140px;padding:7px 12px;font-size:12px;border:0.5px solid var(--border-mid);border-radius:var(--radius-md);background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;outline:none" oninput="filterLawTerms()"/>
+            <select id="law-terms-type-filter" onchange="onLawTypeFilterChange()" style="padding:7px 10px;font-size:12px;border:0.5px solid var(--border-mid);border-radius:var(--radius-md);background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;outline:none;max-width:160px">
+              <option value="">전체 법종</option>
+            </select>
+            <select id="law-terms-law-filter" onchange="filterLawTerms()" style="padding:7px 10px;font-size:12px;border:0.5px solid var(--border-mid);border-radius:var(--radius-md);background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;outline:none;max-width:260px">
+              <option value="">전체 법령</option>
+            </select>
+            <button class="btn" onclick="resetLawTermsFilter()">초기화</button>
+          </div>
+          <div id="law-terms-list" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;max-height:560px;overflow-y:auto"></div>
+        </div>
+
+        <!-- 탭 2: 기술 용어 위키 (기존 — id 변경 없음) -->
+        <div id="terms-tech-body" style="display:none">
         <div style="display:flex;gap:8px;margin-bottom:14px;align-items:center;flex-wrap:wrap">
           <span style="font-size:12px;color:var(--text-secondary)">이동통신·전파 분야 기술 용어 위키 — 매일 05:00 최근 뉴스에서 자동 추출·설명 생성</span>
-          
+
           <span class="badge badge-purple" style="margin-left:6px" id="terms-count-badge">—</span>
         </div>
 
@@ -585,6 +611,7 @@
 
         <!-- 용어 카드 목록 -->
         <div id="terms-list" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;max-height:480px;overflow-y:auto"></div>
+        </div>
 
         <!-- 용어 상세 모달 -->
         <div id="terms-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:200;align-items:center;justify-content:center">
@@ -875,7 +902,7 @@
         <i class="ti ti-coffee"></i>Daily Briefing
       </button>
       <button class="mobile-submenu-item" onclick="go('terms',null);setBottomNav('bn-monitor');closeMobileSubMenu('monitor-sub')">
-        <i class="ti ti-book"></i>기술 용어
+        <i class="ti ti-book"></i>법적·기술 용어
       </button>
     </div>
   </div>
@@ -1078,7 +1105,7 @@
 <script src="system_prompt.js?v=20260911c"></script>
 <!-- 인용 조문 통째 보강·[원문 확인됨] 검증 로직 — 텔레그램 rag.ts와 같은 파일(#155). GitLab Pages는 .gitlab-ci.yml cp 목록에 있어야 실린다 -->
 <script src="supabase/functions/_shared/cite_verify.js?v=20260911g"></script>
-<script src="app.js?v=20260911g"></script>
+<script src="app.js?v=20260911h"></script>
 <script src="lawmap_articles.js?v=20260910a"></script>
 </body>
 </html>

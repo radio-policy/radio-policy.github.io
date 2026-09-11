@@ -39,6 +39,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 ├── law_diff_gen.py             # 법령 조문 DIFF 생성(행정부 예고/시행예정/시행 + 국회 예고 --assembly-only) (#54·#56). **국회분은 KB 등재 법령만 분석(#86)** — 「이 법안이 KB에 있는 법을 고치는가」 대조. AI 판정이 아니라 문자열 대조라 비용 0이고, 운영자가 KB 등재로 대상을 직접 통제한다. 법령명 정규화 필수(`[ㆍ·・.\s]` 제거 — 「대·중소기업」 표기가 DB/국회가 다르다). **KB 조회 실패 시 필터 미적용(fail-open), 제외분은 로그에 이름을 남긴다**(빠진 법을 KB 등재로 되살릴 수 있게). **조문 매칭은 법제처 신구법대비표 API(oldAndNew/admrulOldAndNew) 정본 우선, 없으면(존재여부 N) difflib 폴백 — 영향분석·요약은 무변경. pending/promoted 경로만 (#63)**
 ├── foreign_press.py / assembly_minutes.py  # 해외 규제기관(05:30) / 과방위 회의록(17시 체인) (#54). 회의록 일일 경로는 Sonnet 5(`MINUTES_MODEL`, thinking disabled) + 신규 회의 다이제스트를 구독자 큐(assembly)에 적재 (#120)
 ├── term_extract.py → backfill_term_details.py  # 기술 용어 자동 추출(Haiku, 최근 7일 뉴스 30건) → 빈 상세 백필(Sonnet 5 thinking disabled, --limit 10) — **05:00 KST Actions term_extract.yml**(#141, 2026-09-09). 브라우저 자동 경로·수동 '뉴스에서 용어 추출' 버튼 폐지. heartbeat last_term_extract_run·last_term_backfill_run
+├── law_terms_sync.py           # **법적 용어 정의**(#156, 2026-09-11): 현행 법령·고시의 정의 조문(제N조(정의)·(용어의 정의)·(용어정의)·(용어의 뜻) — 제목 정확 일치 4종만)에서 호 항목을 **원문 그대로** 추출 → law_terms 전량 재생성(upsert 후 synced_at 미갱신 행 삭제, 추출 급감 시 삭제 생략). AI 0회. **law_crawl.yml 11:00 체인 마지막 단계**(law_watch 뒤). heartbeat last_law_terms_sync(note docs/terms/deleted/unparsed/dup/fail). `--dry-run`·`--doc <문서명 조각>`. 순수 함수 테스트 tests/test_law_terms.py
 ├── minutes_offline.py          # 회의록 **API 0** 파이프라인(#120): 후보·재요약 JSON 내보내기 → 세션(서브에이전트)이 판정·요약 JSON 작성 → 가져오기. 재요약·20·21대 소급 전용, 큐 적재 없음
 ├── notify.py / embed_util.py   # 공용 유틸 — 텔레그램 전송(분할·재시도·429) / Voyage 임베딩. 새 코드는 반드시 재사용 (#58)
 ├── tests/test_smoke.py         # 스모크 테스트(표준 unittest·네트워크 0, 17케이스). `python -m unittest discover -s tests` (#58)
@@ -81,6 +82,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 | assembly_speeches | 과방위 발언자별 발언(#67). speaker(정규화명)·speaker_raw·position·meeting_date·confer_num·chunk_seq·agenda·topic·summary(Haiku 요지, 성향 단정어 금지 가드)·source_url. unique(confer_num,speaker,chunk_seq). RLS anon select만. assembly_minutes.py가 document_chunks와 독립 dedupe로 적재 |
 | people | **인물 프로필**(#112, 갱신은 admin만 #135): speaker_key(assembly_speeches.speaker 일치 키)·name(표시명)·kind(의원/정부·참고인)·party(활동 당시)·position·terms·is_22(현역 판정=22대 발언 존재)·speech_count·stance_summary(AI 쟁점별 입장 요약 캐시)·stance_updated_at. 발언 4건 이상만 시드. RLS: select/update 공개(issues 관례) |
 | document_chunks | 법령·고시·보도자료 RAG 청크. embedding(vector 1024, HNSW), article_no=조항번호+제목. file_path=업로드 원본 Storage 경로. **보도자료는 2026-08-02부터 자동 수집**: doc_name=`{기관}_보도자료_{YYYY}.md`(기관: 과기정통부/전파연구원/방통위/전파관리소/ETRI/KISDI), 섹션 헤더 `## YYMMDD 제목`, 마지막 줄 `(원문: URL)`, **700자 무겹침 청킹**(대시보드가 청크를 이어붙여 원문 복원하므로 overlap 금지) |
+| law_terms | **법적 용어 정의**(#156): 현행 문서의 정의 조문 항목을 원문 그대로 1행씩(term·term_key·term_alias·law_name·law_type·doc_name·article_no·item_no·definition·effective_date·synced_at). unique(doc_name,article_no,item_no). 대시보드는 term_key로 묶어 표시(법률>대통령령>부령>고시 순 대표). **파생 테이블 — 매일 11:00 law_terms_sync.py가 전량 재생성, SQL 직접 편집 금지**. RLS select 공개·쓰기 정책 없음(service_role만) |
 | app_config | 키-값 설정. `system_prompt`(봇 자문 프롬프트), `press_keywords`(보도자료 수집 키워드 JSON 배열 — 대시보드 '수집 키워드 관리' 카드가 편집), `press_relevance_criteria`(매일 수집 AI 관련성 판정 기준문), `assembly_notice_criteria`(국회 입법예고 Haiku 판정 기준문)·`assembly_notice_rejected`(기각 캐시 JSON — 자동 관리) 등. **claude_key는 anon 노출되는 브라우저용 — 서버측 재사용 금지** |
 | custom_knowledge | 팀 추가 지식(수동 입력). AI 자문 키워드 매칭 참조 |
 | chat_logs | AI 자문 이력. **2026-08-20(#103)부터 네 경로 공통 정본 답변 로그** — 대시보드 자문·텔레그램 /ask·/law 자연어·/law 조문 직조회. `channel`(만족도 집계 축)·`chat_id`(텔레그램 이용자)·`chunk_ids`(jsonb, 그때 실제로 프롬프트에 들어간 근거 청크 id — 불만족 분석 재료) 컬럼 추가. 자문 이력 목록은 `category='텔레그램-조문조회'`만 제외(기계적 원문 출력이라 성격이 다름 — 피드백 탭에서는 보인다). 삭제 가능. `sources`(text)는 **두 종류를 접두사로 구분해** 담는다 — 법령·문서명은 그대로, 수집 뉴스는 `[뉴스] 제목 (매체, 날짜)`. 화면·내보내기에서 `splitSources()`로 갈라 별도 표기(법령은 6개 초과분 `… 등 N개`). **뉴스는 본문 발췌로 실제 반영된 건만** 기록(제목 목록 30건은 근거 아님). 스키마 변경 없이 반영 여부를 사후 검증하려는 구조. (배경역사 #35) |
@@ -88,7 +90,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 | api_usage / ai_usage_hour | **API 토큰 계측(#152, 2026-09-10)**. `api_usage`=(ts, host actions/pc/edge, site '<스크립트>.py:<함수>', model, input/cache_read/cache_write/output 토큰) — Python 스크립트가 `api_usage.install()`로 SDK `Messages.create`를 감싸 호출마다 1행 기록(fail-open, 120일 보관). **Edge도 기록한다(#155, host=edge)**: `rag.ts:callSonnet`(텔레그램 자문 Sonnet)·`rag.ts:citeJudge`·`rag.ts:expandQueryKeywords`·`rag.ts:answerLawQuery`·`verify-citations:citeJudge`·`dashboard:<x-site>`(claude-proxy 경유 전부, 자문은 `dashboard:advisory`, 라벨 없는 호출은 `dashboard:unknown`) — 자문 1건 실비는 이제 추정이 아니라 이 표로 본다. 관리자만 SELECT. `ai_usage_hour`=(user_id, hour, count) 시간당 general 카운터(`charge_ai_usage` 내부용). 집계 RPC `ops_ai_usage_today()`(운영 상태 탭) |
 | answer_feedback | 답변 만족도 👍👎(#103). **세 경로 공통 한 테이블** — `channel`(telegram_ask/telegram_law/dashboard)로 구분해 경로별 불만족률 비교. `log_id` 유니크 FK→chat_logs(재투표는 upsert로 갱신, 로그 삭제 시 set null이라 평점·경로는 보존). `rating` 1/-1, `reason`은 대시보드 👎 사유(텔레그램은 버튼만 → null). **RLS 켜짐 + anon 정책 없음** — 쓰기는 `submit_answer_feedback` RPC, 읽기는 `admin_list_answer_feedback`(관리자 비밀번호). 화면: AI 자문 > '답변 피드백' 탭 |
 | alert_suppress_log | 긴급 재알림 억제 내역(어떤 기존 기사와 유사해 막았는지, 공유 키워드). **1~2주 실측 후 "본문에만 새 내용" 놓침이 있으면 Haiku 판정 층(월 2~6$) 추가 판단**용. service만 접근(정책 없음) (#44) |
-| system_health | 운영 heartbeat(key별 1행). last_crawl_run=뉴스크롤러 / last_gov_notice_run=입법예고·정부고시 / last_refetch_run=본문수집 / **last_kmcc_meeting_run=방미통위 의사일정·보도자료(매시, note `agenda=N result=M press=P new=K queued=Q fail=F`, #154 — watchdog_scan 미감시, 운영 상태 탭 행만)**. 워치독 '고장 vs 없음' 구분 + 운영상태 탭. RLS+anon select |
+| system_health | 운영 heartbeat(key별 1행). last_crawl_run=뉴스크롤러 / last_gov_notice_run=입법예고·정부고시 / last_refetch_run=본문수집 / **last_kmcc_meeting_run=방미통위 의사일정·보도자료(매시, note `agenda=N result=M press=P new=K queued=Q fail=F`, #154 — watchdog_scan 미감시, 운영 상태 탭 행만)** / **last_law_terms_sync=법적 용어 정의 추출(11:00, note `docs= terms= deleted= unparsed= dup= fail=`, #156 — watchdog_scan 미감시, 운영 상태 탭 행만)**. 워치독 '고장 vs 없음' 구분 + 운영상태 탭. RLS+anon select |
 | kb_documents | 법령·규제 **요약/실무 문서**(regulatory-kb OKF 번들, 문서당 1행). concept_type·law_type·law_number·enforcement_date·status(current/superseded)·body_md 컬럼. path 유니크(정체 키). **document_chunks(조문 원문)와 별개 레이어** — 조문 인용은 그쪽, 요약·적용범위·실무는 이쪽. RLS+anon select. **법안 요약은 넣지 않는다**(2026-09-04 #122 — #121에서 넣었던 concept_type='Bill' 109건은 같은 날 삭제): 자문 근거는 확정 법령(시행예정본 포함)만, 국회 법안은 동향 전용. |
 | kb_chunks | kb_documents 본문 청크 + embedding(**voyage-law-2** 1024, HNSW). doc_id FK(cascade). 자문이 시맨틱+trgm으로 조회 |
 | law_graph_nodes | 법령 관계도 노드(name UNIQUE). node_type: topic(주제)/law/decree/rules/notice/etc. source: seed(세션 시드)/citation(인용망 스크립트)/ai(자문·즉석 생성). doc_name=document_chunks 연결(원문 보기). RLS+anon select/insert/update(delete는 service 전용) |
@@ -149,6 +151,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 | 로그인 필요 | **profiles·teams·advisory_usage·answer_feedback** | anon 정책 없음. authenticated에 역할별 SELECT(본인/팀/admin), profiles·teams UPDATE는 admin만. AI 호출은 `claude-proxy`가 JWT를 검증한다 (#104) |
 | | importance_feedback | select 공개. **insert·update는 승인 프로필만**(#133) |
 | | tech_terms | select 공개. **insert·update는 admin만**(#144, 2026-09-09 — 화면 쓰기는 관리자 '↺ 재생성'뿐). 자동 추출(term_extract.py)·백필은 service_role이라 무관 |
+| | law_terms | select 공개(anon·authenticated). **insert·update·delete 정책 없음** — 쓰는 곳은 law_terms_sync.py(service_role)뿐, 화면 쓰기 없음 (#156) |
 | | app_config | select 공개. update는 `press_keywords` 키만(#137의 `terms_last_extraction` 게이트는 #141로 폐지 — 정책·행 삭제) |
 | | **people** | select 공개. **update는 admin만**(`is_admin()`, #135 — 입장 요약 생성·갱신 버튼도 관리자에게만 표시). 종전엔 public(anon 포함) update가 열려 있었다 |
 | | custom_knowledge | select 공개. **insert·update·delete는 승인 프로필만**(#143 — 종전엔 anon도 삭제 가능했다). 팀원 기여 창구 |
@@ -378,7 +381,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 - URL: https://radio-policy.gitlab.io/
 - **수정 배포 시 index.html 캐시 버스터 `app.js?v=`·`styles.css?v=` 갱신 필수 (현재 `app.js?v=20260729a` / `styles.css?v=20260723b`)** — CSS 고칠 때 styles.css 버스터도 갱신해야 사용자 브라우저가 새로 받음
 - 아이콘은 Tabler Icons webfont(ti ti-*) — 존재하는 이름만(없으면 빈칸 렌더).
-- 메뉴 (2026-08-02 개편, 17→9 — 배경역사 #56): [모니터링] **통합 모니터링**(패널 상단 탭: 뉴스|정부 보도자료·공지|해외 규제동향) / Daily Briefing / 기술 용어 · [AI 도우미] AI 자문 / 법령 관계도 (보고서 초안 제안은 #142로 삭제)· [법안 동향] 국회 법안 / 과방위 회의록 / **법령 개정 추적**(탭: 입법예고·개정 현황|조문 DIFF — 기존 lawtrack·diff 패널 무수정 재사용) · [지식베이스] **지식베이스**(탭: 법령·고시|보도자료|실무 안내|ITU-R|추가지식). **설정=상단 톱니 아이콘, 운영 상태=상단 상태등**(🟢/🔴 하트비트 종합, 클릭 시 패널 — refreshOpsLight). 탭 바는 기존 go() 라우팅을 호출하는 상위 컴포넌트(renderGroupTabs)라 패널·로드 함수는 무수정. 모바일 하단 5버튼 유지, 딥링크(pageTobn) 기존 값 유효. 보고서 초안 메뉴는 계속 주석 숨김.
+- 메뉴 (2026-08-02 개편, 17→9 — 배경역사 #56): [모니터링] **통합 모니터링**(패널 상단 탭: 뉴스|정부 보도자료·공지|해외 규제동향) / Daily Briefing / **법적·기술 용어**(패널 안 칩 탭: **법적 용어 정의**(기본, law_terms 조문 원문·AI 0회)|기술 용어(tech_terms) — #156) · [AI 도우미] AI 자문 / 법령 관계도 (보고서 초안 제안은 #142로 삭제)· [법안 동향] 국회 법안 / 과방위 회의록 / **법령 개정 추적**(탭: 입법예고·개정 현황|조문 DIFF — 기존 lawtrack·diff 패널 무수정 재사용) · [지식베이스] **지식베이스**(탭: 법령·고시|보도자료|실무 안내|ITU-R|추가지식). **설정=상단 톱니 아이콘, 운영 상태=상단 상태등**(🟢/🔴 하트비트 종합, 클릭 시 패널 — refreshOpsLight). 탭 바는 기존 go() 라우팅을 호출하는 상위 컴포넌트(renderGroupTabs)라 패널·로드 함수는 무수정. 모바일 하단 5버튼 유지, 딥링크(pageTobn) 기존 값 유효. 보고서 초안 메뉴는 계속 주석 숨김.
 - 뉴스 중요도: 화면 라벨 "🔴 중요/🟡 보통/🟢 참고", 내부값·DB·코드는 '긴급/보통/참고'. 수정 시 news_feed 갱신+importance_feedback 기록+당일 브리핑 🔴 동기화. **중요도 변경·잠금·삭제는 승인된 로그인 계정만**(#133, `canEditNews()`=로그인+승인+활성; 비로그인은 🔒 표시·클릭 불가). 화면 게이트는 안내용이고 실제 관문은 DB 정책(위 RLS 표). 잠금=60일 삭제 제외, 삭제=영구+deleted_news 기록.
 
 ## 알림 채널
@@ -475,6 +478,7 @@ python resend_briefing.py [날짜]              # 브리핑 재발송
 python upload_law_pdf.py 파일 "문서명" 고시    # 법령/고시/ITU-R 업로드 (업로드 시 PDF 편집흔적 자동 정리 — clean_pdf_artifacts)
 python backfill_embeddings.py                 # 임베딩 백필(document_chunks)
 python backfill_term_details.py               # 기술용어 상세 백필(tech_terms 설명·개념도·관련용어, 빈 것만. 모델은 app.js와 동일하게 유지)
+python law_terms_sync.py [--dry-run|--doc <문서명 조각>]   # 법적 용어 정의 재추출(law_terms, AI 0회). Actions 11:00 law_crawl.yml 마지막 단계가 자동 실행 — 수동은 PC에서 law_sync.py로 법령을 교체한 날·파서 수정 검증용. 월 1회 점검: 제목이 '정의)'로 끝나는데 4종 밖인 조문이 있는지 `select distinct article_no from document_chunks where status='current' and article_no ~ '정의\)' and article_no !~ '^[0-9]+조(의[0-9]+)?\((정의|용어의 ?정의|용어정의|용어의 ?뜻)\)$'` (#156)
 python build_law_citation_graph.py            # 법령 관계도 인용망 재구축(citation·family 엣지만 — 멱등. 새 법령 업로드 후 실행)
 #  ⚠️ 단독 예약이 아니다 — run_gov_crawler.bat 체인의 6번째 단계로 **매일 17시 자동 실행**된다(#106).
 #     그래서 관계도의 citation 노드·엣지를 SQL로 손보면 그날 17시에 원복된다. "결과물(DB)이 아니라
@@ -500,6 +504,7 @@ python import_regulatory_kb.py --only <path조각> [...]   # OKF 요약 일부�
 ```
 [매일 11시] law_sync.py --promote   시행일 도래한 pending → current 승격(+직전 current → superseded)
             law_watch.py            지식베이스 스캔(동적 발견) → 법제처 현행본 대조
+            law_terms_sync.py       정의 조문 → law_terms 전량 재추출(승격·교체된 판 반영, AI 0회 — #156)
                                     + 시행예정 통합본 전건을 law_pending에 기록 → 텔레그램 알림
 [개정 감지] 대시보드 설정 탭 '법령 현행화 상태'에서 확인
 [현행화]   PC에서 law_sync.py --all-outdated  → 조문 취득·등재·구버전 정리·임베딩 백필
@@ -1031,6 +1036,9 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **AI 자문 "Failed to fetch"**: 무거운 질문 2분+ idle 끊김 → stream:true로 해결됨. 사내망 프록시·확장프로그램·F12 네트워크 확인.
 
 ## 하지 말아야 할 것 (규칙 + 한 줄 이유 / 상세는 배경역사 문서)
+- **`law_terms`(법적 용어 정의)를 SQL로 손보지 말 것 (#156)** — 파생 테이블이라 다음 11:00 `law_terms_sync.py`가 전량 덮어쓴다(관계도 citation 노드와 같은 이치). 정의 문안이 틀리면 원인은 `document_chunks` 청크(현행화)나 파서다 — 그쪽을 고친다.
+- **정의 조문 제목 필터를 '정의' 부분일치로 느슨하게 바꾸지 말 것 (#156)** — `(정의)`·`(용어의 정의)`·`(용어정의)`·`(용어의 뜻)` 정확 일치 4종만. 부분일치는 '분쟁조정의 특례'·'지정의 방법'·'기금계정의 설치' 같은 조문 25건이 걸려 조문 본문이 용어로 들어온다(실측). 새 제목 변형은 월 1회 점검 쿼리로 찾아 4종에 추가한다.
+- **법적 용어 정의에 AI 해설·재작성을 붙이지 말 것 (#156)** — 운영자 결정: 법률 용어는 조문 원문이 정답이라 AI 해설이 오히려 위험. 탭에는 원문 정의 + 출처(법령명·조·호·시행일)만, 질문은 'AI 자문에서 질문' 버튼(자문 한도)으로.
 
 - **새 자문 진입점을 만들면 반드시 `cite_verify.js`의 `expandArticles`(프롬프트 전)와 `verifyCitations`(답변 후)를 거칠 것** — 이 둘을 거치지 않은 「[원문 확인됨]」은 모델 자기 신고로 돌아가, "표시가 붙으면 따로 검증할 필요 없다"는 사용자 약속이 깨진다(9/10 제50조 실측). (#155)
 - **`_shared/cite_verify.js`를 고치면 `telegram-webhook`·`verify-citations` 둘 다 배포하고 `index.html`의 그 스크립트 캐시버스터를 올릴 것** — 세 곳이 같은 파일을 각각 번들·로드한다. `.gitlab-ci.yml` cp 목록에서 이 경로를 빼면 GitLab Pages에서만 404가 난다(#125와 같은 함정). (#155)

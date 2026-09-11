@@ -59,3 +59,12 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python law_watch.py
+
+      # 정의 조문(제N조(정의)) → law_terms 재추출 — 대시보드 '법적 용어 정의' 탭 (#156). AI 0회, Supabase만.
+      # 승격(--promote)·현행화 뒤에 돌아야 그날 바뀐 판이 반영된다. 실패해도 나머지 체인과 무관.
+      - name: Sync law term definitions (law_terms, no AI)
+        continue-on-error: true
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python law_terms_sync.py
