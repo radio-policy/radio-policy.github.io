@@ -88,6 +88,23 @@ class TestPressChunking(unittest.TestCase):
         from press_ingest import _chunk_text
         self.assertEqual(_chunk_text('짧은 본문'), ['짧은 본문'])
 
+    def test_derive_chunk_dates(self):
+        """③-2 발표일 유도(#155-보론2) — 헤더는 첫 조각에만, 뒤 조각은 이어받고, 프리앰블은 비움"""
+        from press_ingest import derive_chunk_dates, ymd6_to_ymd8
+        self.assertEqual(ymd6_to_ymd8('260324'), '20260324')
+        self.assertEqual(ymd6_to_ymd8('2603'), '')
+        chunks = [
+            (0, '# 과기정통부 보도자료 2026\n프리앰블'),
+            (1, '## 260310 첫 자료\n본문 1'),
+            (2, '본문 1 이어짐\n\n(원문: http://a)\n\n## 260324 둘째 자료\n\n본문 2'),
+            (3, '본문 2 이어짐'),
+            (4, '본문 2 끝 (원문: http://b)'),
+        ]
+        self.assertEqual(derive_chunk_dates(chunks),
+                         {1: '20260310', 2: '20260324', 3: '20260324', 4: '20260324'})
+        # 순서가 섞여 들어와도 chunk_index 순으로 판단
+        self.assertEqual(derive_chunk_dates(list(reversed(chunks)))[3], '20260324')
+
 
 class TestCrawlerKeywordMatching(unittest.TestCase):
     """④ crawler 키워드 매칭 — '전파간섭' 매치, '이혼신고' 비매치 (지침: '혼신' 금지)"""

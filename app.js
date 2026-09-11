@@ -1249,7 +1249,8 @@ function buildRagContext(chunks) {
     var meta = [];
     if (c.article_no) meta.push('조항: ' + c.article_no);
     if (c.notice_no) meta.push('고시번호: ' + c.notice_no);
-    if (c.effective_date) meta.push('시행일: ' + c.effective_date);
+    // 보도자료는 effective_date가 '발표일'이다(#155-보론2) — 시행일이라 적으면 모델이 제도 시행일로 오독한다. rag.ts와 동일 유지
+    if (c.effective_date) meta.push((/보도자료/.test(c.doc_category || '') ? '발표일: ' : '시행일: ') + c.effective_date);
     var metaStr = meta.length ? ' [' + meta.join(' | ') + ']' : '';
     var sim = c._semantic_score ? ' (시맨틱: ' + (c._semantic_score * 100).toFixed(0) + '%)' : (c._trgm_score ? ' (trgm: ' + (c._trgm_score * 100).toFixed(0) + '%)' : '');
     return '[참조 ' + (i+1) + '] 출처: ' + c.doc_name + ' (' + c.doc_category + ')' + metaStr + sim + '\n' + c.content;

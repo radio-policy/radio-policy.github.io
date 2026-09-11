@@ -920,6 +920,32 @@ def _chunk_text(text: str, size: int = CHUNK_SIZE) -> list:
     return [c for c in chunks if c.strip()]
 
 
+_SECTION_HEAD_RE = re.compile(r'^## (\d{6}) ', re.M)
+
+
+def ymd6_to_ymd8(ymd6: str) -> str:
+    """'260324' → '20260324' (document_chunks.effective_date는 법령과 같은 YYYYMMDD 문자열)."""
+    s = str(ymd6 or '').strip()
+    return ('20' + s) if re.fullmatch(r'\d{6}', s) else ''
+
+
+def derive_chunk_dates(chunks: list) -> dict:
+    """보도자료 문서의 조각 목록 [(chunk_index, content), …] → {chunk_index: 'YYYYMMDD'}.
+    섹션 헤더 '## YYMMDD 제목'은 섹션의 첫 조각에만 있으므로, chunk_index 순으로 훑으며
+    마지막으로 본 헤더의 날짜를 이어 준다(한 조각에 헤더가 둘이면 마지막 것). 헤더를 아직
+    못 본 앞부분(문서 프리앰블)은 비운다. #155-보론2: 발표일이 없어 '국무회의 의결'을
+    '추진 중'으로 답한 사고의 조치."""
+    out = {}
+    cur = ''
+    for idx, content in sorted(chunks, key=lambda t: t[0]):
+        heads = _SECTION_HEAD_RE.findall(content or '')
+        if heads:
+            cur = ymd6_to_ymd8(heads[-1])
+        if cur:
+            out[idx] = cur
+    return out
+
+
 def section_exists(sb, doc_name: str, ymd6: str, title: str) -> bool:
     pat = '%%## %s %s%%' % (ymd6, _like_escape(title[:25]))
     try:
@@ -958,6 +984,9 @@ def register_kb_section(sb, doc_name: str, doc_category: str, ymd6: str, title: 
             'content':      chunk,
             'is_approved':  True,
             'status':       'current',
+            # 발표일(#155-보론2) — 자문 컨텍스트가 '[발표일: YYYYMMDD]'로 표시해 모델이 시점을 안다.
+            # 헤더는 첫 조각에만 남으므로 메타로 모든 조각에 싣는다(기존분은 press_date_backfill.py).
+            'effective_date': ymd6_to_ymd8(ymd6) or None,
         })
     sb.table('document_chunks').insert(rows).execute()
     return True

@@ -84,6 +84,7 @@ python upload_law_pdf.py <file> "<name>" 고시   # upload law/notice/ITU-R to R
 # 보도자료 (2026-08-02 자동화 — #53)
 python press_ingest.py --dry-run          # 6개 기관 수집 시험 (DB 무변경)
 python press_backfill.py --agency 방통위  # 특정 기관 백필/델타 (dedupe라 재실행 안전)
+python press_date_backfill.py --dry-run   # 보도자료 청크 effective_date(=발표일, 시행일 아님) 채우기 — 메타만, AI 0회, idempotent (#155-보론2)
 # 키워드·AI 판정 기준문은 app_config(press_keywords/press_relevance_criteria)가 원본
 
 # 법령 DIFF·해외·회의록 (2026-08-02 신설 — #54)

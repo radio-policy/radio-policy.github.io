@@ -242,7 +242,8 @@ function buildRagContext(chunks: Chunk[]): string {
     const meta: string[] = [];
     if (c.article_no) meta.push('조항: ' + c.article_no);
     if (c.notice_no) meta.push('고시번호: ' + c.notice_no);
-    if (c.effective_date) meta.push('시행일: ' + c.effective_date);
+    // 보도자료는 effective_date가 '발표일'이다(#155-보론2) — 시행일이라 적으면 모델이 제도 시행일로 오독한다
+    if (c.effective_date) meta.push((/보도자료/.test(c.doc_category || '') ? '발표일: ' : '시행일: ') + c.effective_date);
     const metaStr = meta.length ? ' [' + meta.join(' | ') + ']' : '';
     return `[참조 ${i + 1}] 출처: ${c.doc_name} (${c.doc_category || ''})${metaStr}\n${c.content}`;
   });
