@@ -39,7 +39,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 ├── law_diff_gen.py             # 법령 조문 DIFF 생성(행정부 예고/시행예정/시행 + 국회 예고 --assembly-only) (#54·#56). **국회분은 KB 등재 법령만 분석(#86)** — 「이 법안이 KB에 있는 법을 고치는가」 대조. AI 판정이 아니라 문자열 대조라 비용 0이고, 운영자가 KB 등재로 대상을 직접 통제한다. 법령명 정규화 필수(`[ㆍ·・.\s]` 제거 — 「대·중소기업」 표기가 DB/국회가 다르다). **KB 조회 실패 시 필터 미적용(fail-open), 제외분은 로그에 이름을 남긴다**(빠진 법을 KB 등재로 되살릴 수 있게). **조문 매칭은 법제처 신구법대비표 API(oldAndNew/admrulOldAndNew) 정본 우선, 없으면(존재여부 N) difflib 폴백 — 영향분석·요약은 무변경. pending/promoted 경로만 (#63)**
 ├── foreign_press.py / assembly_minutes.py  # 해외 규제기관(05:30) / 과방위 회의록(17시 체인) (#54). 회의록 일일 경로는 Sonnet 5(`MINUTES_MODEL`, thinking disabled) + 신규 회의 다이제스트를 구독자 큐(assembly)에 적재 (#120)
 ├── term_extract.py → backfill_term_details.py  # 기술 용어 자동 추출(Haiku, 최근 7일 뉴스 30건) → 빈 상세 백필(Sonnet 5 thinking disabled, --limit 10) — **05:00 KST Actions term_extract.yml**(#141, 2026-09-09). 브라우저 자동 경로·수동 '뉴스에서 용어 추출' 버튼 폐지. heartbeat last_term_extract_run·last_term_backfill_run
-├── law_terms_sync.py           # **법적 용어 정의**(#156, 2026-09-11): 현행 법령·고시의 정의 조문(제N조(정의)·(용어의 정의)·(용어정의)·(용어의 뜻) — 제목 정확 일치 4종만)에서 호 항목을 **원문 그대로** 추출 → law_terms 전량 재생성(upsert 후 synced_at 미갱신 행 삭제, 추출 급감 시 삭제 생략). AI 0회. **law_crawl.yml 11:00 체인 마지막 단계**(law_watch 뒤). heartbeat last_law_terms_sync(note docs/terms/deleted/unparsed/dup/fail). `--dry-run`·`--doc <문서명 조각>`. 순수 함수 테스트 tests/test_law_terms.py
+├── law_terms_sync.py           # **법적 용어 정의**(#156, 2026-09-11): 현행 법령·고시의 정의 조문(제N조(정의)·(용어의 정의)·(용어정의)·(용어의 뜻) — 제목 정확 일치 4종만)에서 호 항목을 **원문 그대로** 추출 → law_terms 전량 재생성(upsert 후 synced_at 미갱신 행 삭제, 추출 급감 시 삭제 생략). AI 0회. **law_crawl.yml 11:00 체인, 승격(--promote) 직후·law_watch 앞**(감시는 KB를 안 바꾸고 50분 잡 한도를 다 쓴 실측이 있어 그 뒤에 두면 건너뛰어진다). heartbeat last_law_terms_sync(note docs/terms/deleted/unparsed/dup/fail). `--dry-run`·`--doc <문서명 조각>`. 순수 함수 테스트 tests/test_law_terms.py
 ├── minutes_offline.py          # 회의록 **API 0** 파이프라인(#120): 후보·재요약 JSON 내보내기 → 세션(서브에이전트)이 판정·요약 JSON 작성 → 가져오기. 재요약·20·21대 소급 전용, 큐 적재 없음
 ├── notify.py / embed_util.py   # 공용 유틸 — 텔레그램 전송(분할·재시도·429) / Voyage 임베딩. 새 코드는 반드시 재사용 (#58)
 ├── tests/test_smoke.py         # 스모크 테스트(표준 unittest·네트워크 0, 17케이스). `python -m unittest discover -s tests` (#58)
@@ -478,7 +478,7 @@ python resend_briefing.py [날짜]              # 브리핑 재발송
 python upload_law_pdf.py 파일 "문서명" 고시    # 법령/고시/ITU-R 업로드 (업로드 시 PDF 편집흔적 자동 정리 — clean_pdf_artifacts)
 python backfill_embeddings.py                 # 임베딩 백필(document_chunks)
 python backfill_term_details.py               # 기술용어 상세 백필(tech_terms 설명·개념도·관련용어, 빈 것만. 모델은 app.js와 동일하게 유지)
-python law_terms_sync.py [--dry-run|--doc <문서명 조각>]   # 법적 용어 정의 재추출(law_terms, AI 0회). Actions 11:00 law_crawl.yml 마지막 단계가 자동 실행 — 수동은 PC에서 law_sync.py로 법령을 교체한 날·파서 수정 검증용. 월 1회 점검: 제목이 '정의)'로 끝나는데 4종 밖인 조문이 있는지 `select distinct article_no from document_chunks where status='current' and article_no ~ '정의\)' and article_no !~ '^[0-9]+조(의[0-9]+)?\((정의|용어의 ?정의|용어정의|용어의 ?뜻)\)$'` (#156)
+python law_terms_sync.py [--dry-run|--doc <문서명 조각>]   # 법적 용어 정의 재추출(law_terms, AI 0회). Actions 11:00 law_crawl.yml(승격 직후 단계)가 자동 실행 — 수동은 PC에서 law_sync.py로 법령을 교체한 날·파서 수정 검증용. 월 1회 점검: 제목이 '정의)'로 끝나는데 4종 밖인 조문이 있는지 `select distinct article_no from document_chunks where status='current' and article_no ~ '정의\)' and article_no !~ '^[0-9]+조(의[0-9]+)?\((정의|용어의 ?정의|용어정의|용어의 ?뜻)\)$'` (#156)
 python build_law_citation_graph.py            # 법령 관계도 인용망 재구축(citation·family 엣지만 — 멱등. 새 법령 업로드 후 실행)
 #  ⚠️ 단독 예약이 아니다 — run_gov_crawler.bat 체인의 6번째 단계로 **매일 17시 자동 실행**된다(#106).
 #     그래서 관계도의 citation 노드·엣지를 SQL로 손보면 그날 17시에 원복된다. "결과물(DB)이 아니라
@@ -503,8 +503,8 @@ python import_regulatory_kb.py --only <path조각> [...]   # OKF 요약 일부�
 
 ```
 [매일 11시] law_sync.py --promote   시행일 도래한 pending → current 승격(+직전 current → superseded)
+            law_terms_sync.py       정의 조문 → law_terms 전량 재추출(승격·교체된 판 반영, AI 0회 — #156). law_watch 앞에 둔다(감시가 잡 한도를 다 쓰면 뒤 단계는 건너뛰어짐)
             law_watch.py            지식베이스 스캔(동적 발견) → 법제처 현행본 대조
-            law_terms_sync.py       정의 조문 → law_terms 전량 재추출(승격·교체된 판 반영, AI 0회 — #156)
                                     + 시행예정 통합본 전건을 law_pending에 기록 → 텔레그램 알림
 [개정 감지] 대시보드 설정 탭 '법령 현행화 상태'에서 확인
 [현행화]   PC에서 law_sync.py --all-outdated  → 조문 취득·등재·구버전 정리·임베딩 백필

@@ -5672,6 +5672,11 @@ Haiku 1회, 요약 오류를 검증기가 못 잡음)·사전 요약(7,500조문
 
 만든 것: `law_terms` 테이블(파생·RLS select 공개·쓰기 정책 없음), `law_terms_sync.py`(순수 함수 merge_chunks·parse_definitions·law_type_of +
 upsert → `synced_at < 실행시각` 행 삭제, **추출이 0건이거나 기존의 50% 미만이면 삭제 생략**해 일시 장애로 표가 비는 사고 방지),
-`tests/test_law_terms.py` 16케이스, `law_crawl.yml` 마지막 단계(continue-on-error), 대시보드 `#panel-terms` 안 guide-chip 탭 2개
+`tests/test_law_terms.py` 16케이스, `law_crawl.yml` 승격 직후 단계(continue-on-error), 대시보드 `#panel-terms` 안 guide-chip 탭 2개
 (기본 법적 용어 정의 — term_key로 묶어 카드 1장·`N개 법령` 배지, 필터 없을 땐 200장만 렌더, 모달에 정의한 법령 전부 + 출처 + 'AI 자문에서
 질문'), 기술 용어 탭은 id·함수 무수정 이동. 운영 상태 탭에 heartbeat 행. 메뉴명 '법적·기술 용어'.
+**#156-보론 단계 위치 (같은 날 오후).** 커밋 뒤 `dispatch_github_workflow('law_crawl.yml')`로 시험 실행했더니 11:30 정규 실행과 겹친
+중복 실행이 됐고, 그 실행은 앞 단계 law_watch.py가 **50분 잡 한도를 다 써 취소**(02:53→03:43Z)되면서 새 단계가 `skipped`로 끝났다
+(gh_api_get → jobs 조회). 새 단계는 승격(--promote) 뒤이기만 하면 되고 law_watch는 대조만 하고 KB를 바꾸지 않으므로, 단계를
+**승격 직후·law_watch 앞**으로 옮겼다. 교훈: 체인 끝에 새 단계를 붙일 땐 앞 단계의 소요 시간이 잡 한도에 닿는지 먼저 본다.
+

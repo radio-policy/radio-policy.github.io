@@ -79,7 +79,7 @@ python refetch_content.py     # body re-fetch (Korean IP, trafilatura). Summarie
 python resend_briefing.py [date]        # resend a briefing
 python backfill_embeddings.py           # document_chunks embeddings (NULL only)
 python term_extract.py --dry-run        # 기술 용어 자동 추출 시험(Haiku) — 실제 실행은 05:00 KST Actions term_extract.yml → backfill_term_details.py --limit 10 (#141)
-python law_terms_sync.py --dry-run     # 법적 용어 정의(현행 법령·고시 제N조(정의) 원문) → law_terms 재추출 시험. 실제는 11:00 law_crawl.yml 마지막 단계, AI 0회. 대시보드 '법적·기술 용어' 탭 1의 데이터 (#156)
+python law_terms_sync.py --dry-run     # 법적 용어 정의(현행 법령·고시 제N조(정의) 원문) → law_terms 재추출 시험. 실제는 11:00 law_crawl.yml 승격 직후 단계(law_watch 앞), AI 0회. 대시보드 '법적·기술 용어' 탭 1의 데이터 (#156)
 python upload_law_pdf.py <file> "<name>" 고시   # upload law/notice/ITU-R to RAG
 
 # 보도자료 (2026-08-02 자동화 — #53)
