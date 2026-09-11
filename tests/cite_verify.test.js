@@ -196,6 +196,17 @@ function ok(name, cond, extra) {
   // 옛 형식은 종전대로
   eq('옛 형식 무변화', CV.findCitations(FX.answer).map(function (x) { return x.key; }), ['32조의14', '50조', '11조']);
 
+  // ── #155-보론7: 표시 없는 통째 인용에 표시 자동 부착 (11:39 답변 — 표시 0개) ──
+  var noTag = '## 2. 핵심 근거조문 — 전기통신사업법 제32조의14\n\n대리점은 이동통신사업자의 서면에 의한 사전승낙 없이는 판매점을 선임할 수 없으며, 사전승낙을 받지 아니한 자와 이동통신사업자와 이용자 간의 계약 체결 등에 관한 거래를 하여서는 아니 된다\n\n는 것이 제1항의 핵심입니다. 질문의 개인사업자가 판매점을 관리한다면 위반 소지가 있습니다.\n\n| 시나리오 | 판단 |\n|---|---|\n| 사전승낙 없음 | 위반 소지 |\n\n' + q50 + '고 규정되어 있습니다.';
+  var at = CV.autoTagVerbatim(noTag, full);
+  eq('자동 부착: 통째 인용 2문단', at.added, 2);
+  ok('자동 부착: 32조의14·50조 표시, 제목·표·설명 문단은 그대로', /아니 된다 \[원문 확인됨: 전기통신사업법 제32조의14\]/.test(at.answer) && /본다고 규정되어 있습니다\. \[원문 확인됨: 전기통신사업법 제50조\]/.test(at.answer) && !/핵심 근거조문[^\n]*\[원문/.test(at.answer) && !/위반 소지가 있습니다\. \[/.test(at.answer) && !/\| 판단 \|[^\n]*\[/.test(at.answer), at.answer);
+  var av = await CV.verifyCitations({ answer: noTag, chunks: full, callHaiku: async function () { throw new Error('호출되면 안 됨'); } });
+  eq('자동 부착 뒤 검증: 2건 verbatim ok, Haiku 없음', [av.autoTagged, av.verdicts.map(function (v) { return v.status + ':' + v.key + ':' + v.verbatim; })], [2, ['ok:32조의14:true', 'ok:50조:true']]);
+  eq('autoTag=false면 안 붙인다', (await CV.verifyCitations({ answer: noTag, chunks: full, autoTag: false })).autoTagged, 0);
+  eq('이미 표시 있는 문단은 안 건드림', CV.autoTagVerbatim(q50 + ' [원문 확인됨: 전기통신사업법 제50조제2항]', full).added, 0);
+  eq('근거 없으면 무변화', CV.autoTagVerbatim(noTag, []).added, 0);
+
   // ── 역참조 발췌 (#155-보론4) ──
   var art20 = { id: 27210, doc_name: C.c50_136.doc_name, article_no: '20조(등록의 취소 등)', chunk_index: 35, content: '제20조(등록의 취소 등)\n① 과학기술정보통신부장관은 기간통신사업자가 다음 각 호의 어느 하나에 해당하면 그 등록의 전부 또는 일부를 취소하거나 1년 이내의 기간을 정하여 사업의 전부 또는 일부의 정지를 명할 수 있다.\n1.  속임수나 그 밖의 부정한 방법으로 등록을 한 경우\n5의2.  제32조의4제5항에 따른 관리ㆍ감독 또는 같은 조 제6항에 따른 모니터링을 소홀히 하여 타인의 명의를 사용하거나 그 밖의 부정한 방법으로 전기통신역무 제공계약이 대통령령으로 정하는 기준 이상 다수 체결된 경우' };
   var art51 = { id: 27306, doc_name: C.c50_136.doc_name, article_no: '51조(사실조사 등)', chunk_index: 139, content: '제51조(사실조사 등)\n① 방송미디어통신위원회는 … 제32조의14제1항ㆍ제3항ㆍ제5항, 제32조의15제2항ㆍ제3항 또는 제50조제1항을 위반한 행위가 있다고 인정하면 … 조사를 하게 할 수 있다.\n② …\n4.  제2호의 대리점ㆍ판매점을 제외하고 그 밖에 전기통신사업자의 업무를 위탁받아 취급하는 자' };

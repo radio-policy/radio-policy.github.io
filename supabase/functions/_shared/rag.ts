@@ -1157,7 +1157,7 @@ export async function answerAdvisory(sb: SupabaseClient, systemPrompt: string, q
       callHaiku: (sys: string, u: string) => callHaikuText(sb, apiKey, sys, u, 'rag.ts:citeJudge', 900),
     });
     answer = vr.answer;
-    if (vr.verdicts.length) console.log('[인용 검증]', JSON.stringify(vr.verdicts.map((v: { key: string; status: string; reason: string }) => [v.key, v.status, v.reason])));
+    if (vr.verdicts.length || vr.autoTagged) console.log('[인용 검증]', 'auto+' + (vr.autoTagged || 0), JSON.stringify(vr.verdicts.map((v: { key: string; status: string; reason: string }) => [v.key, v.status, v.reason])));
   } catch (e) { console.warn('인용 검증 실패(답변 그대로):', e); }
 
   // 출처 순서: **조문 정밀검색분(extra)을 먼저** — 텔레그램 footer는 앞 6개만 보여주므로(#89),

@@ -66,8 +66,8 @@ Deno.serve(async (req) => {
   const ids = (Array.isArray(body.chunk_ids) ? body.chunk_ids : []).filter((v): v is number => typeof v === 'number').slice(0, 80);
   const annexSources = (Array.isArray(body.annex_sources) ? body.annex_sources : []).map((s) => String(s)).slice(0, 10);
 
-  // 표시가 없으면 할 일이 없다 — Haiku도 한도도 쓰지 않는다
-  if (!/\[원문\s*확인됨[^\]]*\]/.test(answer)) return json(200, { answer, verdicts: [], changed: 0, skipped: 'no_tags' }, cors);
+  // 표시도 근거도 없으면 할 일이 없다. 표시가 없어도 근거 청크가 있으면 통째 인용에 표시를 붙여 준다(#155-보론7).
+  if (!/\[원문\s*확인됨[^\]]*\]/.test(answer) && !ids.length) return json(200, { answer, verdicts: [], changed: 0, skipped: 'no_tags' }, cors);
 
   // 승인·백스톱(Haiku 1회 = general 1회)
   const { data: charge, error: chargeErr } = await sb.rpc('charge_ai_usage', { p_user: user.id, p_kind: 'general' });
@@ -103,8 +103,8 @@ Deno.serve(async (req) => {
         ? (sys: string, u: string) => callHaikuText(sb, ANTHROPIC_KEY, sys, u, 'verify-citations:citeJudge', 900)
         : null,
     });
-    console.log('[인용 검증]', user.email || user.id, JSON.stringify(vr.verdicts.map((v: { key: string; status: string; reason: string }) => [v.key, v.status, v.reason])));
-    return json(200, { answer: vr.answer, verdicts: vr.verdicts, changed: vr.changed }, cors);
+    console.log('[인용 검증]', user.email || user.id, 'auto+' + (vr.autoTagged || 0), JSON.stringify(vr.verdicts.map((v: { key: string; status: string; reason: string }) => [v.key, v.status, v.reason])));
+    return json(200, { answer: vr.answer, verdicts: vr.verdicts, changed: vr.changed, autoTagged: vr.autoTagged || 0 }, cors);
   } catch (e) {
     console.error('[인용 검증 실패]', e);
     return json(200, { answer, verdicts: [], changed: 0, error: String(e) }, cors);   // fail-open: 답변은 그대로

@@ -451,7 +451,9 @@ async function fetchCitingChunks(docName, key) {
 }
 async function verifyCitationsRemote(answer, chunkIds, annexSources) {
   if (!sb) return null;
-  if (!/\[원문\s*확인됨[^\]]*\]/.test(answer)) return null;   // 표시가 없으면 부르지 않는다(Haiku·한도 절약)
+  // 표시가 없어도 근거 청크가 있으면 부른다(#155-보론7) — 서버가 표시 없는 통째 인용에 표시를 붙여 준다.
+  // 근거가 하나도 없고 표시도 없으면 할 일이 없다.
+  if (!/\[원문\s*확인됨[^\]]*\]/.test(answer) && !(chunkIds && chunkIds.length)) return null;
   var s = await sb.auth.getSession();
   var session = s.data && s.data.session;
   if (!session) return null;
@@ -2445,7 +2447,7 @@ async function callClaude(userText, onDelta) {
   // 있었으면 Haiku가 원문과 설명의 일치를 판정한다. 없으면 「⚠️ 원문 미확인」, 다르면 「⚠️ 원문과 다르게 설명됨」.
   // 표시가 없는 답변은 verifyCitationsRemote가 그냥 null을 돌려준다. 실패해도 답변은 그대로(fail-open).
   window._advCiteVerdicts = null;
-  if (/\[원문\s*확인됨[^\]]*\]/.test(aiText)) {
+  if (/\[원문\s*확인됨[^\]]*\]/.test(aiText) || (lastAdvChunkIds && lastAdvChunkIds.length && aiText.length > 200)) {
     if (typeof onDelta === 'function') onDelta(aiText + '\n\n⏳ 인용 조문을 원문과 대조하는 중…');
     try {
       var vr = await verifyCitationsRemote(aiText, lastAdvChunkIds, lastAnnexSources);

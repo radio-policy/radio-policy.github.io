@@ -351,7 +351,8 @@
       const nextTag = (function () { TAG_RE.lastIndex = tagEnd; const nm = TAG_RE.exec(text); TAG_RE.lastIndex = tagEnd; return nm ? nm.index : text.length; })();
       const blank = text.indexOf('\n\n', tagEnd + 1);
       const after = text.slice(tagEnd, Math.min(nextTag, blank === -1 ? text.length : blank + 1, tagEnd + 900));
-      const c = Object.assign({ tagStart: tagStart, tagEnd: tagEnd, tag: m[0], segment: text.slice(segStart, tagStart), after: after }, parsed);
+      // line = 표시가 있는 줄만(조 번호가 없어 segment가 앞 문단으로 넓어졌어도 겹침 판정은 이 줄로도 본다)
+      const c = Object.assign({ tagStart: tagStart, tagEnd: tagEnd, tag: m[0], segment: text.slice(segStart, tagStart), line: text.slice(starts[0], tagStart), after: after }, parsed);
       // 꼬리표 안에 대상이 적힌 형식(#155-보론6, 2026-09-11 운영자 결정): 「[원문 확인됨: 전기통신사업법 제32조의14제1항]」
       // 「[원문 확인됨: 전파법 시행령 별표 3]」 — 있으면 앞뒤 문장 추측 없이 이것이 1순위 후보. 옛 형식(「[원문 확인됨]」,
       // 「[원문 확인됨, 참조4]」)은 종전대로 앞뒤에서 추측한다.
@@ -437,7 +438,7 @@
     let vbBest = null, vbRatio = 0;
     for (const gk of articleText.keys()) {
       const t = mergedOf(gk);
-      const r = Math.max(quoteOverlap(before, t), cite.after ? quoteOverlap(cite.after, t) : 0);
+      const r = Math.max(quoteOverlap(before, t), cite.line ? quoteOverlap(cite.line, t) : 0, cite.after ? quoteOverlap(cite.after, t) : 0);
       if (r > vbRatio) { vbRatio = r; vbBest = gk; }
     }
     if (vbBest && vbRatio >= VERBATIM_MIN) {
@@ -505,14 +506,55 @@
     return out;
   }
 
+  // 표시 없는 통째 인용에 표시를 붙인다(#155-보론7, 11:39 답변 — 모델이 조문을 그대로 옮기고도 표시를 하나도 안 붙였다).
+  // 원문과 60% 이상 그대로 겹치는 문단은 기계가 증명할 수 있으므로 「[원문 확인됨: 법령명 제N조]」를 문단 끝에 붙인다.
+  // 제목(#)·표(|)·이미 표시가 있는 문단·짧은 문단은 건너뛴다. 항·호는 적지 않는다(어느 항인지 단정하지 않기 위해).
+  function autoTagVerbatim(answer, chunks) {
+    const text = String(answer || '');
+    const arts = new Map();
+    for (const c of chunks || []) {
+      const k = articleKey(c && c.article_no);
+      if (!k || !c.doc_name) continue;
+      const gk = c.doc_name + '|' + k;
+      if (!arts.has(gk)) arts.set(gk, []);
+      arts.get(gk).push(c);
+    }
+    if (!arts.size) return { answer: text, added: 0 };
+    const merged = new Map();
+    for (const [gk, list] of arts) {
+      list.sort(function (a, b) { return (a.chunk_index || 0) - (b.chunk_index || 0); });
+      merged.set(gk, mergeChunkTexts(list.map(function (c) { return c.content || ''; })));
+    }
+    let added = 0;
+    const parts = text.split(/(\n[ \t]*\n)/);   // 문단과 구분자를 번갈아 보존
+    for (let i = 0; i < parts.length; i += 2) {
+      const p = parts[i];
+      const body = p.replace(/^\s*[-*>]\s+/, '');
+      if (!p.trim() || /^\s*#/.test(p) || /^\s*\|/.test(p)) continue;
+      if (/\[(원문\s*확인됨|⚠️ 원문|학습 데이터 기반|근거 조문 미확인)[^\]]*\]/.test(p)) continue;
+      if (normQ(body).length < 40) continue;
+      let best = null, bestR = 0;
+      for (const [gk, t] of merged) { const r = quoteOverlap(body, t); if (r > bestR) { bestR = r; best = gk; } }
+      if (!best || bestR < VERBATIM_MIN) continue;
+      const doc = best.slice(0, best.lastIndexOf('|')), key = best.slice(best.lastIndexOf('|') + 1);
+      const tag = ' [원문 확인됨: ' + docFamily(doc) + ' 제' + key + ']';
+      // 문단 끝의 굵게(**) 닫힘 안쪽에 넣지 않는다 — 끝 공백만 떼고 뒤에 붙인다
+      parts[i] = p.replace(/\s+$/, '') + tag;
+      added++;
+    }
+    return { answer: parts.join(''), added: added };
+  }
+
   // 종합: 답변 → 표시 검증·교체
   //   { answer, chunks, annexSources, systemPrompt, callHaiku, maxJudge }
   //   → { answer, verdicts: [{tag, kind, key, law, status, reason, judge}], changed }
   async function verifyCitations(args) {
-    const answer = String((args && args.answer) || '');
     const chunks = ((args && args.chunks) || []).concat(args && args.systemPrompt ? pseudoChunksFromPrompt(args.systemPrompt) : []);
+    // 표시 없는 통째 인용에 먼저 표시를 붙인다(autoTag=false로 끌 수 있음) — 그 뒤 검증은 모델이 붙인 표시와 같은 경로
+    const at = (args && args.autoTag === false) ? { answer: String((args && args.answer) || ''), added: 0 } : autoTagVerbatim((args && args.answer) || '', chunks);
+    const answer = at.answer;
     const cites = findCitations(answer);
-    if (!cites.length) return { answer: answer, verdicts: [], changed: 0 };
+    if (!cites.length) return { answer: answer, verdicts: [], changed: 0, autoTagged: at.added };
     const results = cites.map(function (c) { return Object.assign({}, c, checkCitation(c, chunks, (args && args.annexSources) || [])); });
     const maxJudge = args && args.maxJudge != null ? args.maxJudge : 8;
     // 원문 그대로 인용(verbatim)은 판정할 것이 없다 — Haiku에 보내지 않는다(비용·오판 방지)
@@ -552,7 +594,7 @@
       out = out.slice(0, r.tagStart) + rep + out.slice(r.tagEnd); changed++;
     }
     return {
-      answer: out, changed: changed,
+      answer: out, changed: changed, autoTagged: at.added,
       verdicts: results.map(function (r) {
         return { tag: r.tag, kind: r.kind, key: r.key || (r.annex ? '별표 ' + r.annex : null), law: r.lawDoc || r.lawText || null,
           paras: r.paras || [], items: r.items || [], status: r.status, reason: r.reason || null, judge: r.judge || null, doc: r.doc || null,
@@ -568,7 +610,7 @@
     buildCitingExcerpts: buildCitingExcerpts, citeRegex: citeRegex, excerptAround: excerptAround,
     lawNameBefore: lawNameBefore, familyMatches: familyMatches, resolveLaw: resolveLaw, quoteOverlap: quoteOverlap,
     parseSegment: parseSegment, findCitations: findCitations, checkCitation: checkCitation,
-    judgeCitations: judgeCitations, verifyCitations: verifyCitations,
+    judgeCitations: judgeCitations, verifyCitations: verifyCitations, autoTagVerbatim: autoTagVerbatim,
   };
   root.CiteVerify = CiteVerify;
   if (typeof module !== 'undefined' && module.exports) module.exports = CiteVerify;
