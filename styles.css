@@ -116,6 +116,17 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 .msg-ai pre { background: var(--bg-tertiary); padding: 10px 12px; border-radius: var(--radius-md); overflow-x: auto; margin: 8px 0; }
 .msg-ai pre code { display: block; background: none; padding: 0; border-radius: 0; white-space: pre; line-height: 1.5; font-size: 12px; }
 .msg-name { font-size: 11px; font-weight: 600; margin-bottom: 5px; color: var(--text-secondary); }
+/* 인용 꼬리표(#155): [원문 확인됨]=초록, [⚠️ 원문 미확인]=회색, [⚠️ 원문과 다르게 설명됨]=주황, [학습 데이터 기반]=보라 */
+.cite { display: inline-block; font-size: 11px; line-height: 1.5; padding: 0 5px; border-radius: 4px; white-space: nowrap; vertical-align: baseline; }
+.cite-ok { background: #e3f4e6; color: #1f7a36; }
+.cite-miss { background: #ececec; color: #666; }
+.cite-bad { background: #fdebd0; color: #a34d00; font-weight: 600; }
+.cite-learn { background: var(--accent-light); color: var(--accent-dark); }
+@media (prefers-color-scheme: dark) {
+  .cite-ok { background: #1f3d27; color: #8fd9a3; }
+  .cite-miss { background: #3a3a3c; color: #bbb; }
+  .cite-bad { background: #4a2e10; color: #f5b46b; }
+}
 .msg-ai h3, .msg-ai h4, .msg-ai h5, .msg-ai h6 { margin: 12px 0 6px; font-weight: 700; line-height: 1.4; }
 .msg-ai h3 { font-size: 15px; }
 .msg-ai h4 { font-size: 14px; }

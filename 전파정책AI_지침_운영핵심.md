@@ -85,7 +85,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 | custom_knowledge | 팀 추가 지식(수동 입력). AI 자문 키워드 매칭 참조 |
 | chat_logs | AI 자문 이력. **2026-08-20(#103)부터 네 경로 공통 정본 답변 로그** — 대시보드 자문·텔레그램 /ask·/law 자연어·/law 조문 직조회. `channel`(만족도 집계 축)·`chat_id`(텔레그램 이용자)·`chunk_ids`(jsonb, 그때 실제로 프롬프트에 들어간 근거 청크 id — 불만족 분석 재료) 컬럼 추가. 자문 이력 목록은 `category='텔레그램-조문조회'`만 제외(기계적 원문 출력이라 성격이 다름 — 피드백 탭에서는 보인다). 삭제 가능. `sources`(text)는 **두 종류를 접두사로 구분해** 담는다 — 법령·문서명은 그대로, 수집 뉴스는 `[뉴스] 제목 (매체, 날짜)`. 화면·내보내기에서 `splitSources()`로 갈라 별도 표기(법령은 6개 초과분 `… 등 N개`). **뉴스는 본문 발췌로 실제 반영된 건만** 기록(제목 목록 30건은 근거 아님). 스키마 변경 없이 반영 여부를 사후 검증하려는 구조. (배경역사 #35) |
 | teams / profiles / advisory_usage | 대시보드 계정 체계(#104). `teams`=3팀(경쟁제도팀·기술정책팀·AI정책팀, 팀 합산 일일 한도). `profiles`=auth.users 1:1(이름·팀·role(admin/leader/member)·개인 한도·unlimited·**approved**(관리자 승인 전 AI 잠김)·active). 가입 시 트리거가 승인대기 프로필 자동 생성. `advisory_usage`=(user_id, day, kind) 일일 사용량, kind는 advisory(Sonnet 호출 전부 — #141부터 스트리밍 불문)/general(Haiku, 백스톱 **100/일 + 60/시간**, #152 — 종전 300; 정당한 대량 작업은 관리자 profile.unlimited로 우회). 쓰기는 service_role RPC 전용 |
-| api_usage / ai_usage_hour | **API 토큰 계측(#152, 2026-09-10)**. `api_usage`=(ts, host actions/pc/edge, site '<스크립트>.py:<함수>', model, input/cache_read/cache_write/output 토큰) — Python 스크립트가 `api_usage.install()`로 SDK `Messages.create`를 감싸 호출마다 1행 기록(fail-open, 120일 보관). 관리자만 SELECT. `ai_usage_hour`=(user_id, hour, count) 시간당 general 카운터(`charge_ai_usage` 내부용). 집계 RPC `ops_ai_usage_today()`(운영 상태 탭) |
+| api_usage / ai_usage_hour | **API 토큰 계측(#152, 2026-09-10)**. `api_usage`=(ts, host actions/pc/edge, site '<스크립트>.py:<함수>', model, input/cache_read/cache_write/output 토큰) — Python 스크립트가 `api_usage.install()`로 SDK `Messages.create`를 감싸 호출마다 1행 기록(fail-open, 120일 보관). **Edge도 기록한다(#155, host=edge)**: `rag.ts:callSonnet`(텔레그램 자문 Sonnet)·`rag.ts:citeJudge`·`rag.ts:expandQueryKeywords`·`rag.ts:answerLawQuery`·`verify-citations:citeJudge`·`dashboard:<x-site>`(claude-proxy 경유 전부, 자문은 `dashboard:advisory`, 라벨 없는 호출은 `dashboard:unknown`) — 자문 1건 실비는 이제 추정이 아니라 이 표로 본다. 관리자만 SELECT. `ai_usage_hour`=(user_id, hour, count) 시간당 general 카운터(`charge_ai_usage` 내부용). 집계 RPC `ops_ai_usage_today()`(운영 상태 탭) |
 | answer_feedback | 답변 만족도 👍👎(#103). **세 경로 공통 한 테이블** — `channel`(telegram_ask/telegram_law/dashboard)로 구분해 경로별 불만족률 비교. `log_id` 유니크 FK→chat_logs(재투표는 upsert로 갱신, 로그 삭제 시 set null이라 평점·경로는 보존). `rating` 1/-1, `reason`은 대시보드 👎 사유(텔레그램은 버튼만 → null). **RLS 켜짐 + anon 정책 없음** — 쓰기는 `submit_answer_feedback` RPC, 읽기는 `admin_list_answer_feedback`(관리자 비밀번호). 화면: AI 자문 > '답변 피드백' 탭 |
 | alert_suppress_log | 긴급 재알림 억제 내역(어떤 기존 기사와 유사해 막았는지, 공유 키워드). **1~2주 실측 후 "본문에만 새 내용" 놓침이 있으면 Haiku 판정 층(월 2~6$) 추가 판단**용. service만 접근(정책 없음) (#44) |
 | system_health | 운영 heartbeat(key별 1행). last_crawl_run=뉴스크롤러 / last_gov_notice_run=입법예고·정부고시 / last_refetch_run=본문수집 / **last_kmcc_meeting_run=방미통위 의사일정·보도자료(매시, note `agenda=N result=M press=P new=K queued=Q fail=F`, #154 — watchdog_scan 미감시, 운영 상태 탭 행만)**. 워치독 '고장 vs 없음' 구분 + 운영상태 탭. RLS+anon select |
@@ -105,7 +105,8 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 
 | 이름 | 역할 |
 |---|---|
-| **claude-proxy (Edge)** | 대시보드의 **모든** Anthropic 호출(14곳)을 대신 수행(#104). ①`auth.getUser()`로 로그인 검증(**verify_jwt는 anon 키도 통과시켜 관문이 못 됨**) ②`profiles.approved` 확인 ③`charge_ai_usage`로 한도 차감(`body.stream===true`면 자문, 아니면 일반) ④모델 화이트리스트·max_tokens 상한 검사 후 **body를 그대로 전달**(cache_control·tools·thinking 보존) ⑤스트리밍은 `TransformStream`+`waitUntil(pipeTo)`로 통과. 키는 Edge Secret `ANTHROPIC_API_KEY`에만 존재 |
+| **claude-proxy (Edge)** | 대시보드의 **모든** Anthropic 호출(14곳)을 대신 수행(#104). ①`auth.getUser()`로 로그인 검증(**verify_jwt는 anon 키도 통과시켜 관문이 못 됨**) ②`profiles.approved` 확인 ③`charge_ai_usage`로 한도 차감(`body.stream===true`면 자문, 아니면 일반) ④모델 화이트리스트·max_tokens 상한 검사 후 **body를 그대로 전달**(cache_control·tools·thinking 보존) ⑤스트리밍은 `TransformStream`+`waitUntil(pipeTo)`로 통과 ⑥지나가는 스트림에서 `message_start`/`message_delta`의 usage만 엿봐 `api_usage`(host=edge, site=`dashboard:<x-site 헤더>`)에 기록(#155 — 바이트는 안 바꾸고 실패는 삼킴; `x-site`는 라벨일 뿐 한도·권한 판정에 쓰지 않는다). 키는 Edge Secret `ANTHROPIC_API_KEY`에만 존재 |
+| **verify-citations (Edge, #155)** | 대시보드 자문의 **「[원문 확인됨]」 검증** 진입점. 브라우저가 답변 본문 + 근거 청크 id(`lastAdvChunkIds`) + 별표 출처를 보내면 ①청크 재조회 → `_shared/cite_verify.js`의 `expandArticles`(조문 통째 보강) ②`verifyCitations` — 표시마다 앞 인용(법령명·조·항·호·별표)을 파싱해 원문 존재 대조(2안), 있으면 Haiku가 원문 vs 설명 일치 판정(3안). 없으면 `[⚠️ 원문 미확인 — 검색 결과에 해당 조문 없음]`, 다르면 `[⚠️ 원문과 다르게 설명됨 — 확인 필요]`로 교체해 돌려준다. 시스템 프롬프트(app_config)의 핵심 조문 5개도 대조 대상. 인증·CORS는 claude-proxy와 동일, Haiku 1회 = `charge_ai_usage('general')` 1회. 표시가 없는 답변은 호출 자체를 안 한다. **텔레그램 /ask는 이 함수를 부르지 않고 `rag.ts answerAdvisory` 안에서 같은 모듈을 직접 돌린다** — 로직은 한 파일, 진입점만 둘 |
 | charge_ai_usage / refund_ai_usage / get_my_quota (RPC) | 자문 한도(#104). 앞 둘은 **service_role 전용**(클라이언트 조작 방지) — 원자적 증가 + 팀 합산 advisory lock, 선차감 후 초과면 롤백. `get_my_quota`는 화면 표시용 본인 조회 |
 | voyage-embed (Edge) | 질의 임베딩. VOYAGE_API_KEY는 Supabase Secrets(브라우저 노출 금지). **body.model로 모델 선택(하위호환)**: 미지정=voyage-4-lite(document_chunks 조문), `voyage-law-2`(kb_chunks 법령요약). 저장·질의 모델 반드시 일치 |
 | match_kb_chunks_semantic / search_kb_chunks_trgm (RPC) | 법령요약(kb_chunks) 시맨틱/trgm 검색. 기본 `only_current=true`(구버전 제외). insert_kb_chunks(RPC)는 적재 시 청크 일괄 삽입(text→vector) |
@@ -244,6 +245,29 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 인용: buildRagContext()가 조항(번호+제목)·고시번호·시행일 표시. article_no에 조문 제목 포함.
 임베딩 백필: 신규 업로드 후 PC에서 python backfill_embeddings.py (NULL만). 그 전엔 "임베딩 대기" 배지.
 ```
+
+**「[원문 확인됨]」은 기계가 보증한다 (#155, 2026-09-11 — 봇·대시보드 공통, `supabase/functions/_shared/cite_verify.js` 한 파일).**
+종전에는 프롬프트 지시로 모델이 스스로 붙이는 자기 신고였다(#146 A안). 9/10 텔레그램 자문이 전기통신사업법 제50조①5호·5호의2를
+"차별적 지원금"이라 설명하며 표시를 붙였는데, 실제 컨텍스트에는 제50조 뒷조각(8호~③)만 있었다. 세 단계로 고정:
+
+1. **조문 통째 보강** `expandArticles` — RAG·조문정밀검색 결과 중 조문(`^\d+조`) 조각이 있으면 같은 문서·같은 조의 나머지 조각을
+   `fetchArticleChunks`(status current·is_approved)로 붙여 겹침 병합(청크 앞뒤 ~90자 중복 제거) 후 **첫 원소에 전문**, 같은 조의 다른
+   조각은 제거. 상한 `maxArticles 10 · maxChunksPerArticle 4 · maxAddedChunks 14`(rag.ts `EXPAND_OPTS`·app.js `CITE_EXPAND_OPTS`·
+   verify-citations 동일 유지). 검색이 집은 조각은 상한과 무관하게 포함, 잘리면 「N조각 중 M조각만」을 모델에 고지. 정밀검색분이 앞이라 예산이
+   근거 조문에 먼저 간다. 추가 조각 id는 `chunk_ids` 끝에 붙는다.
+2. **원문 존재 대조** `findCitations`+`checkCitation` — 표시마다 앞 인용을 **같은 줄 → 같은 문단 → 직전 표시 이후 1,200자** 순으로 읽어
+   첫 「제N조(의M)」를 주인공으로, 그 조에 붙은 항(제N항·조 바로 뒤 원문자)·호(N호·N호의M)를 모은다(뒤에 나오는 다른 조는 인용문 속
+   교차참조로 보고 무시). 법령명은 조 앞 단어(괄호 건너뜀, `동법·같은 법·법`은 직전 인용 상속, 약칭표 `LAW_ALIASES`)를 문서 family와 맞춘다 —
+   못 맞추면 법령 미상(어느 문서든 허용). 항·호는 **원문에 그 구조(①…/「N.  」)가 있을 때만** 검사한다(단항 조문의 "제1항" 표기는 허용).
+   조 없음·항 없음·호 없음 → `[⚠️ 원문 미확인 — 검색 결과에 해당 조문 없음]`. 시스템 프롬프트의 「■ … 제N조 [원문 확인됨]」 블록은
+   `pseudoChunksFromPrompt`로 대조 대상에 넣는다(안 넣으면 정당한 인용이 미확인이 된다). 인용을 못 읽으면(`unparsed`) 표시를 건드리지 않는다.
+3. **Haiku 판정** `judgeCitations` — 원문이 있었던 인용만(최대 8건, 1회 호출) 「인용문 vs 원문」을 JSON으로 판정. `불일치`만
+   `[⚠️ 원문과 다르게 설명됨 — 확인 필요]`로 교체, `판단불가`·호출 실패는 표시 유지(fail-open). 비용 ≈ 자문 1건당 10~15원.
+
+진입점: 텔레그램 = `rag.ts answerAdvisory`(callSonnet 뒤, 같은 프로세스) / 대시보드 = 답변 스트림 종료 후 `verifyCitationsRemote` →
+`verify-citations` Edge(브라우저는 키가 없으므로). 대시보드 꼬리표는 `renderMd`가 색으로 구분(초록 확인/회색 미확인/주황 불일치/보라 학습데이터),
+검증이 돈 답변에만 「인용 대조(N건)」 한 줄. 표시가 보증하는 것은 **"인용한 조·항·호의 원문이 실제로 모델 앞에 있었고, 설명이 원문과
+어긋나지 않았다"까지**다 — 해석의 타당성까지는 아니다. 검증: `node tests/cite_verify.test.js`(픽스처 = 9/10 실제 답변·청크, 60건).
 
 ## 자문 뉴스 컨텍스트 (news_feed → 프롬프트)
 
@@ -965,6 +989,11 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 
 ## 하지 말아야 할 것 (규칙 + 한 줄 이유 / 상세는 배경역사 문서)
 
+- **새 자문 진입점을 만들면 반드시 `cite_verify.js`의 `expandArticles`(프롬프트 전)와 `verifyCitations`(답변 후)를 거칠 것** — 이 둘을 거치지 않은 「[원문 확인됨]」은 모델 자기 신고로 돌아가, "표시가 붙으면 따로 검증할 필요 없다"는 사용자 약속이 깨진다(9/10 제50조 실측). (#155)
+- **`_shared/cite_verify.js`를 고치면 `telegram-webhook`·`verify-citations` 둘 다 배포하고 `index.html`의 그 스크립트 캐시버스터를 올릴 것** — 세 곳이 같은 파일을 각각 번들·로드한다. `.gitlab-ci.yml` cp 목록에서 이 경로를 빼면 GitLab Pages에서만 404가 난다(#125와 같은 함정). (#155)
+- **검증 꼬리표 문구(`[⚠️ 원문 미확인 …]`·`[⚠️ 원문과 다르게 설명됨 …]`)를 바꾸면 `app.js renderMd` 색 규칙·시스템 프롬프트 3-③·테스트를 함께 바꿀 것** — 문자열 일치로 색이 붙는다. (#155)
+- **인용 검증에서 `unparsed`(인용을 못 읽음)를 미확인으로 바꾸지 말 것** — 표시가 조문과 떨어져 붙은 정상 답변까지 경고가 붙어 경고가 신호가 아니게 된다. (#155)
+- **자문 실비를 글자수로 추정하지 말 것 — `api_usage`(host=edge)에 기록된다** (#155)
 - **`kmcc_meeting.py`의 news_feed.url에 fileSeq를 넣지 말 것** — 같은 의사일정 글에 2~3주 뒤 회의록·속기록 첨부가 붙어도 행이 늘면 안 된다. 수정본은 content 첫 줄 `(fileSeq N)`으로 감지해 update. (#154)
 - **kmcc 큐 적재 여부는 upsert(ignore_duplicates) 반환값으로만 판단할 것** — 10분 동일-html 가드는 Haiku 출력이 비결정적이라 두 인스턴스가 겹치면 못 막는다. (#154)
 - **`daily_crawl.yml`의 kmcc 스텝 `continue-on-error`·`if: !cancelled()`를 지우지 말 것** — 지우면 방미통위 수집 실패가 뉴스 크롤러 결론(워치독 감시 대상)을 바꾸거나 뉴스 실패가 방미통위 수집을 막는다. (#154)

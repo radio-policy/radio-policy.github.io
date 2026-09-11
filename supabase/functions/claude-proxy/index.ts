@@ -26,6 +26,7 @@
 
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
 import { createClient } from 'jsr:@supabase/supabase-js@2';
+import { recordApiUsage, mergeUsage, type ApiUsage } from '../_shared/usage.ts';
 
 // env는 반드시 trim — 콘솔에 붙여넣을 때 줄바꿈이 딸려 들어가면 인증이 조용히 어긋난다(#51)
 const env = (k: string) => (Deno.env.get(k) || '').trim();
@@ -51,7 +52,7 @@ function corsHeaders(origin: string | null): Record<string, string> {
   const allow = origin && ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0];
   return {
     'Access-Control-Allow-Origin': allow,
-    'Access-Control-Allow-Headers': 'authorization, content-type',
+    'Access-Control-Allow-Headers': 'authorization, content-type, x-site',
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
     'Vary': 'Origin',
   };
@@ -102,6 +103,9 @@ Deno.serve(async (req) => {
   // 종전 기준(stream===true)은 자문·보고서초안만 잡았고, 비스트리밍 Sonnet(용어 상세 6,000·DIFF 4,000·관계도
   // 2,500·이슈 영향 1,200 등)이 한도 밖이었다. 모델명은 서버가 본문에서 읽는 값이라 위조되지 않는다.
   const kind = /sonnet/i.test(model) ? 'advisory' : 'general';
+  // 토큰 기록 라벨(#155) — 브라우저가 x-site 헤더로 알려주는 호출 위치(자문·용어·관계도 …).
+  // 한도·권한 판정에는 절대 쓰지 않는다(헤더는 위조 가능 — 라벨이 틀려도 비용 표가 어긋날 뿐).
+  const site = 'dashboard:' + (req.headers.get('x-site') || 'unknown').replace(/[^\w.:-]/g, '').slice(0, 40);
   const { data: charge, error: chargeErr } = await sb.rpc('charge_ai_usage', {
     p_user: user.id,
     p_kind: kind,
@@ -169,10 +173,37 @@ Deno.serve(async (req) => {
   // ── ⑤ 응답 전달 ──
   if (body.stream === true && upstream.body) {
     // 바이트를 그대로 흘려보낸다 → 브라우저의 기존 SSE 파서가 한 줄도 바뀌지 않는다.
+    // 지나가는 바이트를 엿보며 usage만 뽑는다(#155): message_start(입력·캐시) / message_delta(출력 누계).
+    // 이 탭은 바이트를 바꾸지 않고, 파싱 실패는 삼킨다 — 기록이 안 될 뿐 스트림은 그대로.
     const { readable, writable } = new TransformStream();
+    const dec = new TextDecoder();
+    let acc = '';
+    let usage: ApiUsage = {};
+    const scan = (line: string) => {
+      if (!line.startsWith('data:')) return;
+      try {
+        const d = JSON.parse(line.slice(5).trim());
+        if (d.type === 'message_start' && d.message?.usage) usage = mergeUsage(usage, d.message.usage);
+        else if (d.type === 'message_delta' && d.usage) usage = mergeUsage(usage, d.usage);
+      } catch { /* keep-alive·조각난 줄 */ }
+    };
+    const tap = new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, ctrl) {
+        ctrl.enqueue(chunk);
+        try {
+          acc += dec.decode(chunk, { stream: true });
+          const lines = acc.split('\n');
+          acc = lines.pop() || '';
+          for (const l of lines) scan(l);
+        } catch { /* 기록용 — 무시 */ }
+      },
+      async flush() {
+        try { if (acc) scan(acc); await recordApiUsage(sb, site, model, usage); } catch { /* 무시 */ }
+      },
+    });
     // waitUntil로 붙잡지 않으면 응답 반환 시점에 런타임이 함수를 정리해 스트림이 끊긴다
     EdgeRuntime.waitUntil(
-      upstream.body.pipeTo(writable).catch((e) => console.error('[스트림 중단]', e)),
+      upstream.body.pipeThrough(tap).pipeTo(writable).catch((e) => console.error('[스트림 중단]', e)),
     );
     return new Response(readable, {
       headers: {
@@ -184,7 +215,13 @@ Deno.serve(async (req) => {
     });
   }
 
-  return new Response(upstream.body, {
+  // 비스트리밍 — 본문을 한 번 읽어 usage를 기록하고 그대로 돌려준다
+  const text = await upstream.text();
+  try {
+    const parsed = JSON.parse(text);
+    await recordApiUsage(sb, site, model, parsed?.usage);
+  } catch { /* 기록용 — 무시 */ }
+  return new Response(text, {
     status: 200,
     headers: { ...cors, 'content-type': 'application/json' },
   });

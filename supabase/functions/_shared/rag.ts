@@ -12,6 +12,11 @@
 // ============================================================================
 
 import type { SupabaseClient } from 'jsr:@supabase/supabase-js@2';
+// [원문 확인됨] 검증 모듈(#155) — 브라우저·node 테스트와 같은 파일을 쓰므로 globalThis로 받는다
+import './cite_verify.js';
+import { recordApiUsage, callHaikuText, mergeUsage, type ApiUsage } from './usage.ts';
+// deno-lint-ignore no-explicit-any
+const CiteVerify = (globalThis as any).CiteVerify;
 
 const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
 const VOYAGE_URL = 'https://api.voyageai.com/v1/embeddings';
@@ -38,7 +43,7 @@ function extractKeywords(text: string): string[] {
 }
 
 // ── Haiku 쿼리 확장 (실패 시 빈 배열 → 기본 키워드만) ──
-async function expandQueryKeywords(apiKey: string, query: string): Promise<string[]> {
+async function expandQueryKeywords(apiKey: string, query: string, sb?: SupabaseClient): Promise<string[]> {
   try {
     const res = await fetch(ANTHROPIC_URL, {
       method: 'POST',
@@ -52,6 +57,7 @@ async function expandQueryKeywords(apiKey: string, query: string): Promise<strin
     });
     if (!res.ok) return [];
     const data = await res.json();
+    if (sb) await recordApiUsage(sb, 'rag.ts:expandQueryKeywords', 'claude-haiku-4-5-20251001', data.usage);
     const text = (data.content?.find((b: { type: string }) => b.type === 'text')?.text) || '';
     return text.split(',')
       .map((w: string) => w.trim().replace(/^["'\d.)\s]+|["'\s]+$/g, ''))
@@ -77,7 +83,7 @@ async function getQueryEmbedding(query: string, model = 'voyage-4-lite'): Promis
 }
 
 interface Chunk {
-  id: number; doc_name: string; doc_category?: string; content: string;
+  id: number; doc_name: string; doc_category?: string; content: string; chunk_index?: number;
   notice_no?: string; article_no?: string; effective_date?: string;
   trgm_score?: number; similarity?: number;
   _score?: number; _trgm_score?: number; _semantic_score?: number; _hybrid_score?: number;
@@ -93,7 +99,7 @@ const TOTAL_CHUNK_CUT = 15;
 // ── 3중 하이브리드 조문 검색 (app.js searchKeywords 이식, 상위 15개) ──
 async function searchChunks(sb: SupabaseClient, apiKey: string, query: string): Promise<Chunk[]> {
   const baseKeywords = extractKeywords(query);
-  const expanded = await expandQueryKeywords(apiKey, query);
+  const expanded = await expandQueryKeywords(apiKey, query, sb);
   // 기본 → 법령 표제어(LAW_SYNONYMS) → LLM 확장 순 (app.js searchKeywords와 동일 유지)
   const keywords: string[] = [];
   const seenKw = new Set<string>();
@@ -379,7 +385,7 @@ type SystemBlock = { type: 'text'; text: string; cache_control?: { type: 'epheme
 // (2026-08-03 이전에는 text_delta만 담고 인용을 버려서, 웹에서 온 수치·현황의 출처가
 //  어디에도 안 남았다 — footer에는 내부 RAG 문서명만 나열돼 "참고가 전부 법령" 사고.)
 export interface WebRef { url: string; title: string }
-async function callSonnet(apiKey: string, system: string | SystemBlock[], question: string): Promise<{ text: string; webRefs: WebRef[] }> {
+async function callSonnet(apiKey: string, system: string | SystemBlock[], question: string): Promise<{ text: string; webRefs: WebRef[]; usage: ApiUsage }> {
   const res = await fetch(ANTHROPIC_URL, {
     method: 'POST',
     headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
@@ -397,6 +403,7 @@ async function callSonnet(apiKey: string, system: string | SystemBlock[], questi
     throw new Error((err as { error?: { message?: string } }).error?.message || `Anthropic HTTP ${res.status}`);
   }
   let text = '';
+  let usage: ApiUsage = {};   // message_start(입력·캐시) + message_delta(출력 누계) — 비용 기록용(#155)
   const webRefs: WebRef[] = [];
   const seenUrls = new Set<string>();
   const reader = res.body!.getReader();
@@ -423,11 +430,22 @@ async function callSonnet(apiKey: string, system: string | SystemBlock[], questi
               webRefs.push({ url: c.url, title: (c.title || '').trim() || c.url });
             }
           }
+          else if (d.type === 'message_start' && d.message?.usage) usage = mergeUsage(usage, d.message.usage);
+          else if (d.type === 'message_delta' && d.usage) usage = mergeUsage(usage, d.usage);
         } catch { /* keep-alive 등 무시 */ }
       }
     }
   }
-  return { text, webRefs };
+  return { text, webRefs, usage };
+}
+
+// ── 인용 조문 통째 보강(#155-1안)에 쓰는 조각 조회 — verify-citations·app.js fetchArticleChunks와 동일 조건 ──
+const EXPAND_OPTS = { maxArticles: 10, maxChunksPerArticle: 4, maxAddedChunks: 14 };
+async function fetchArticleChunks(sb: SupabaseClient, docName: string, key: string): Promise<Chunk[]> {
+  const r = await sb.from('document_chunks').select('id, doc_name, article_no, chunk_index, content')
+    .eq('doc_name', docName).eq('status', 'current').eq('is_approved', true)
+    .like('article_no', key + '%').order('chunk_index', { ascending: true }).limit(40);
+  return (r.data || []) as Chunk[];
 }
 
 // ── /law 키워드 검색 전용 (LLM 답변 없이 조문만 찾아 준다) ──
@@ -515,7 +533,7 @@ const DOMAIN_DOC_RE = /전파|통신|무선|주파수/;
 export async function searchLawArticles(sb: SupabaseClient, query: string, limit = 5): Promise<LawHit[]> {
   const apiKey = env('ANTHROPIC_API_KEY');
   const base = extractKeywords(query);
-  const expanded = apiKey ? await expandQueryKeywords(apiKey, query) : [];   // 키 없으면 기본 키워드만(페일소프트)
+  const expanded = apiKey ? await expandQueryKeywords(apiKey, query, sb) : [];   // 키 없으면 기본 키워드만(페일소프트)
 
   const seen = new Map<string, boolean>();
   const keywords: string[] = [];
@@ -769,7 +787,8 @@ export async function answerLawQuery(sb: SupabaseClient, query: string): Promise
     const err = await res.json().catch(() => ({}));
     throw new Error((err as { error?: { message?: string } }).error?.message || `Anthropic HTTP ${res.status}`);
   }
-  const data = await res.json() as { content?: { type: string; text?: string }[] };
+  const data = await res.json() as { content?: { type: string; text?: string }[]; usage?: ApiUsage };
+  await recordApiUsage(sb, 'rag.ts:answerLawQuery', 'claude-haiku-4-5-20251001', data.usage);
   // content[0]이 text가 아닐 수 있으므로 find로 고른다 (Sonnet5 적응형 추론에서 실제로 겪은 함정 — Haiku도 같은 방어)
   const text = (data.content || []).find((b) => b.type === 'text')?.text || '';
   if (!text.trim()) return null;
@@ -1053,17 +1072,32 @@ export async function answerAdvisory(sb: SupabaseClient, systemPrompt: string, q
     have.add(c.id); seenArt.add(key);
     extra.push({ id: c.id, doc_name: c.doc_name, article_no: c.article_no, content: c.content, _hits: 0 } as LawHit);
   }
-  const lawContext = extra.length
+  // 인용 조문 통째 보강(#155-1안) — 검색이 조문의 한 조각만 집으면 나머지 조각을 붙여 조문 전체를 준다.
+  // 9/10 사고: 제50조는 뒷조각(8호~③)만 들어갔고, 모델은 ②에 적힌 "제1항제5호 및 제5호의2" 문구만 보고
+  // 5호·5호의2의 내용을 옛 지식으로 쓰면서 [원문 확인됨]을 붙였다. 정밀검색분(extra)을 앞에 둬 보강 예산이
+  // 근거 조문에 먼저 간다. 실패하면 검색 결과 그대로 진행. app.js callClaude와 동일 유지 — 한쪽만 고치지 말 것.
+  let extra2: LawHit[] = extra, chunks2: Chunk[] = chunks, addedIds: number[] = [];
+  try {
+    const tagged = (extra as unknown as Chunk[]).map((h) => ({ ...h, _src: 'extra' }))
+      .concat(chunks.map((c) => ({ ...c, _src: 'rag' })));
+    const ex = await CiteVerify.expandArticles(tagged, (d: string, k: string) => fetchArticleChunks(sb, d, k), EXPAND_OPTS);
+    type Tagged = Chunk & { _src: string };
+    extra2 = (ex.chunks as Tagged[]).filter((c) => c._src === 'extra') as unknown as LawHit[];
+    chunks2 = (ex.chunks as Tagged[]).filter((c) => c._src === 'rag');
+    addedIds = ex.addedIds as number[];
+    if (ex.expanded) console.log(`[조문 보강] ${ex.expanded}개 조문 통째(조각 +${addedIds.length})`);
+  } catch (e) { console.warn('조문 보강 실패(검색 결과 그대로 진행):', e); }
+  const lawContext = extra2.length
     ? '\n\n---\n\n[조문 정밀검색 결과 — 질문 의도에 직접 대응하는 조문]\n' +
       '위 RAG 결과에 없더라도 아래 조문이 질문의 핵심 근거일 가능성이 높습니다. 우선 확인하세요:\n\n' +
-      extra.map((h, i) => `[조문 ${i + 1}] ${h.doc_name}${h.article_no ? ' ' + h.article_no : ''}\n${h.content}`).join('\n\n---\n\n')
+      extra2.map((h, i) => `[조문 ${i + 1}] ${h.doc_name}${h.article_no ? ' ' + h.article_no : ''}\n${h.content}`).join('\n\n---\n\n')
     : '';
 
   // 별표 동반 인출(#90) — 조문이 「별표 N에 따른다」고 넘긴 그 표를 함께 싣는다.
   // 입력은 RAG + 조문 정밀검색분. RAG만 넘기면 조문 섹션에만 있는 조문(예: 전파법 시행령
   // 제14조 「별표 3에 따라 산정한다」)의 인용을 놓친다. chunks를 앞에 둬야 상한 2개가
   // 상위 RAG 조문에 먼저 돌아간다. app.js 호출부와 동일 유지 — 한쪽만 고치지 말 것.
-  const annex = await buildAnnexContext(sb, (chunks as Chunk[]).concat(extra as unknown as Chunk[]), question);
+  const annex = await buildAnnexContext(sb, chunks2.concat(extra2 as unknown as Chunk[]), question);
 
   const telegramGuide = '\n\n---\n\n[텔레그램 답변 형식 지침]\n' +
     '이 답변은 텔레그램 메시지로 전송됩니다. 다음을 지키세요:\n' +
@@ -1082,13 +1116,28 @@ export async function answerAdvisory(sb: SupabaseClient, systemPrompt: string, q
   // 가변부(질문마다 바뀌는 RAG·조문·요약·뉴스)는 캐시 블록 '뒤'에 둬야 적중한다.
   const systemStable = systemPrompt + telegramGuide;
   // 국회 동향은 '근거'가 아니라 '배경'이라 맨 뒤 — 조문·요약·기사보다 앞에 두지 말 것
-  const systemVariable = buildRagContext(chunks) + lawContext + annex.text + buildKbContext(kb) + news.text + asm;
+  const systemVariable = buildRagContext(chunks2) + lawContext + annex.text + buildKbContext(kb) + news.text + asm;
   const system: SystemBlock[] = [
     { type: 'text', text: systemStable, cache_control: { type: 'ephemeral' } },
   ];
   if (systemVariable) system.push({ type: 'text', text: systemVariable }); // 빈 text 블록은 API가 거부
 
-  const { text: answer, webRefs } = await callSonnet(apiKey, system, question);
+  const { text: rawAnswer, webRefs, usage } = await callSonnet(apiKey, system, question);
+  await recordApiUsage(sb, 'rag.ts:callSonnet', 'claude-sonnet-5', usage);
+
+  // [원문 확인됨] 검증(#155-2·3안) — 표시가 붙은 인용의 조문(법령명·조·항·호·별표)이 실제로 위 컨텍스트에
+  // 있었는지 대조하고(2안), 있었으면 Haiku가 원문과 설명이 맞는지 판정한다(3안). 없으면 「⚠️ 원문 미확인」,
+  // 다르면 「⚠️ 원문과 다르게 설명됨」으로 표시를 바꾼다. 시스템 프롬프트의 핵심 조문 5개도 대조 대상.
+  // 검증 자체가 실패하면 답변은 그대로 나간다(fail-open). 대시보드는 verify-citations Edge가 같은 모듈을 쓴다.
+  let answer = rawAnswer;
+  try {
+    const vr = await CiteVerify.verifyCitations({
+      answer: rawAnswer, chunks: (extra2 as unknown as Chunk[]).concat(chunks2), annexSources: annex.sources, systemPrompt,
+      callHaiku: (sys: string, u: string) => callHaikuText(sb, apiKey, sys, u, 'rag.ts:citeJudge', 900),
+    });
+    answer = vr.answer;
+    if (vr.verdicts.length) console.log('[인용 검증]', JSON.stringify(vr.verdicts.map((v: { key: string; status: string; reason: string }) => [v.key, v.status, v.reason])));
+  } catch (e) { console.warn('인용 검증 실패(답변 그대로):', e); }
 
   // 출처 순서: **조문 정밀검색분(extra)을 먼저** — 텔레그램 footer는 앞 6개만 보여주므로(#89),
   // RAG 15개를 먼저 채우면 정작 답변이 인용한 조문이 잘려 나간다. 실제로 「기지국 개설 허가 절차」
@@ -1096,14 +1145,14 @@ export async function answerAdvisory(sb: SupabaseClient, systemPrompt: string, q
   // 세미나 자료만 보였다 — 근거는 맞는데 어디서 왔는지 확인할 수가 없었다.
   // 별표는 조문 다음·RAG 앞 — 금액·요율을 물은 답변의 정본이 별표이므로 잘리면 안 된다(#90).
   const sources: string[] = [];
-  for (const h of extra) if (h.doc_name && !sources.includes(h.doc_name)) sources.push(h.doc_name);
+  for (const h of extra2) if (h.doc_name && !sources.includes(h.doc_name)) sources.push(h.doc_name);
   for (const s of annex.sources) { const t = '[별표] ' + s; if (!sources.includes(t)) sources.push(t); }
-  for (const c of chunks) if (c.doc_name && !sources.includes(c.doc_name)) sources.push(c.doc_name);
+  for (const c of chunks2) if (c.doc_name && !sources.includes(c.doc_name)) sources.push(c.doc_name);
   for (const r of kb) { const t = '[요약] ' + (r.title || '').trim(); if (r.title && !sources.includes(t)) sources.push(t); }
   for (const s of news.sources) if (!sources.includes(s)) sources.push(s);
-  // 근거 청크 id — sources와 같은 순서(조문 정밀검색분 먼저, 그다음 RAG). 숫자 id만 남긴다.
+  // 근거 청크 id — sources와 같은 순서(조문 정밀검색분 먼저, 그다음 RAG, 끝에 보강 조각). 숫자 id만 남긴다.
   const chunkIds: number[] = [];
-  for (const h of (extra as unknown as Chunk[]).concat(chunks as Chunk[])) {
+  for (const h of (extra2 as unknown as Chunk[]).concat(chunks2 as Chunk[]).concat(addedIds.map((id) => ({ id } as Chunk)))) {
     if (typeof h.id === 'number' && !chunkIds.includes(h.id)) chunkIds.push(h.id);
   }
   return { answer, sources, webSources: webRefs, chunkIds };

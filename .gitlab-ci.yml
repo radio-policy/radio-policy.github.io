@@ -7,6 +7,7 @@ pages:
   script:
     - mkdir -p public
     - cp index.html styles.css app.js system_prompt.js lawmap_articles.js public/   # 새 정적 파일은 여기에도 추가해야 GitLab Pages에 실린다(GitHub Pages는 저장소 전체를 서빙) — #125에서 404로 실측
+    - mkdir -p public/supabase/functions/_shared && cp supabase/functions/_shared/cite_verify.js public/supabase/functions/_shared/   # 텔레그램·대시보드 공용 인용 검증 모듈(#155) — index.html이 이 경로로 로드
   artifacts:
     paths:
       - public

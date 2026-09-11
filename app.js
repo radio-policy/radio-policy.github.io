@@ -414,14 +414,60 @@ async function claudeFetch(init) {
   var session = s.data && s.data.session;
   if (!session) throw new Error('로그인이 필요합니다. 우측 상단에서 로그인해 주세요.');
   var base = (getConfig().sbUrl || DEFAULT_SB_URL).replace(/\/+$/, '');
+  var headers = {
+    'Authorization': 'Bearer ' + session.access_token,
+    'content-type': 'application/json'
+  };
+  // 비용 기록 라벨(#155) — 프록시가 api_usage.site에 'dashboard:<site>'로 남긴다. 한도·권한과 무관.
+  if (init && init.site) headers['x-site'] = String(init.site).replace(/[^\w.:-]/g, '').slice(0, 40);
   return fetch(base + '/functions/v1/claude-proxy', {
     method: 'POST',
-    headers: {
-      'Authorization': 'Bearer ' + session.access_token,
-      'content-type': 'application/json'
-    },
+    headers: headers,
     body: (init && typeof init.body === 'string') ? init.body : JSON.stringify((init && init.body) || init)
   });
+}
+
+// ── 인용 조문 통째 보강 + [원문 확인됨] 검증 (#155, 2026-09-11) ──
+// 로직은 supabase/functions/_shared/cite_verify.js 한 파일(index.html에서 로드, 텔레그램 rag.ts와 공용).
+// 보강은 브라우저가 프롬프트를 조립하기 전에 직접, 검증은 답변이 끝난 뒤 verify-citations Edge가 한다
+// (Haiku 판정이 들어가므로 키가 있는 서버에서).
+var CITE_EXPAND_OPTS = { maxArticles: 10, maxChunksPerArticle: 4, maxAddedChunks: 14 };   // rag.ts EXPAND_OPTS와 동일 유지
+async function fetchArticleChunks(docName, key) {
+  if (!sb) return [];
+  var r = await sb.from('document_chunks').select('id, doc_name, article_no, chunk_index, content')
+    .eq('doc_name', docName).eq('status', 'current').eq('is_approved', true)
+    .like('article_no', key + '%').order('chunk_index', { ascending: true }).limit(40);
+  return r.data || [];
+}
+async function verifyCitationsRemote(answer, chunkIds, annexSources) {
+  if (!sb) return null;
+  if (!/\[원문\s*확인됨[^\]]*\]/.test(answer)) return null;   // 표시가 없으면 부르지 않는다(Haiku·한도 절약)
+  var s = await sb.auth.getSession();
+  var session = s.data && s.data.session;
+  if (!session) return null;
+  var base = (getConfig().sbUrl || DEFAULT_SB_URL).replace(/\/+$/, '');
+  var res = await fetch(base + '/functions/v1/verify-citations', {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + session.access_token, 'content-type': 'application/json' },
+    body: JSON.stringify({ answer: answer, chunk_ids: chunkIds || [], annex_sources: annexSources || [] })
+  });
+  if (!res.ok) {
+    var err = await res.json().catch(function() { return {}; });
+    throw new Error((err.error && err.error.message) || ('HTTP ' + res.status));
+  }
+  return res.json();
+}
+// 답변 하단 '인용 대조' 요약 한 줄 — 검증이 실제로 돈 답변에만 붙는다(정상 답변은 꼬리표 색만 바뀜)
+function citeVerdictSummaryHtml(verdicts) {
+  if (!verdicts || !verdicts.length) return '';
+  var n = { ok: 0, missing: 0, mismatch: 0, unclear: 0, unparsed: 0 };
+  verdicts.forEach(function(v) { if (n[v.status] !== undefined) n[v.status]++; });
+  var parts = ['원문 일치 ' + n.ok];
+  if (n.missing) parts.push('<span class="cite cite-miss">원문 미확인 ' + n.missing + '</span>');
+  if (n.mismatch) parts.push('<span class="cite cite-bad">다르게 설명됨 ' + n.mismatch + '</span>');
+  if (n.unclear) parts.push('판단 보류 ' + n.unclear);
+  if (n.unparsed) parts.push('인용 미식별 ' + n.unparsed);
+  return '<div class="rag-sources" style="margin-top:8px"><i class="ti ti-shield-check"></i>인용 대조(' + verdicts.length + '건): ' + parts.join(' · ') + '</div>';
 }
 
 // ════════════════════════════════════════════
@@ -2209,11 +2255,27 @@ async function callClaude(userText, onDelta) {
     console.log('조문 정밀검색 보강:', lawExtra.map(function(h) { return h.doc_name + ' ' + (h.article_no || ''); }).join(', '));
   }
 
-  // 근거 청크 id 스냅샷 — 출처 목록과 같은 순서(조문 정밀검색분 먼저, 그다음 RAG).
+  // 인용 조문 통째 보강(#155-1안) — 검색이 조문의 한 조각만 집으면 나머지 조각을 붙여 조문 전체를 준다.
+  // 9/10 텔레그램 사고: 제50조 뒷조각(8호~③)만 들어가 모델이 ①5호·5호의2를 기억으로 쓰고 [원문 확인됨]을 붙였다.
+  // 정밀검색분(lawExtra)을 앞에 둬 보강 예산이 근거 조문에 먼저 간다. rag.ts answerAdvisory와 동일 유지.
+  var _advAddedIds = [];
+  if (window.CiteVerify && sb) {
+    try {
+      var tagged = (lawExtra || []).map(function(h) { return Object.assign({}, h, { _src: 'extra' }); })
+        .concat(ragChunks.map(function(c) { return Object.assign({}, c, { _src: 'rag' }); }));
+      var ex = await CiteVerify.expandArticles(tagged, fetchArticleChunks, CITE_EXPAND_OPTS);
+      lawExtra = ex.chunks.filter(function(c) { return c._src === 'extra'; });
+      ragChunks = ex.chunks.filter(function(c) { return c._src === 'rag'; });
+      _advAddedIds = ex.addedIds || [];
+      if (ex.expanded) console.log('조문 통째 보강:', ex.expanded + '개 조문(조각 +' + _advAddedIds.length + ')');
+    } catch(e) { console.warn('조문 보강 실패(검색 결과 그대로 진행):', e); }
+  }
+
+  // 근거 청크 id 스냅샷 — 출처 목록과 같은 순서(조문 정밀검색분 먼저, 그다음 RAG, 끝에 보강 조각).
   // 보도자료 의사청크는 id가 'press_…' 문자열이라 document_chunks 조회가 불가능하므로 제외한다
   // (문서명은 lastRagSources에 그대로 남는다).
   lastAdvChunkIds = [];
-  (lawExtra || []).concat(ragChunks).forEach(function(c) {
+  (lawExtra || []).concat(ragChunks).concat(_advAddedIds.map(function(id) { return { id: id }; })).forEach(function(c) {
     if (c && typeof c.id === 'number' && lastAdvChunkIds.indexOf(c.id) === -1) lastAdvChunkIds.push(c.id);
   });
 
@@ -2264,6 +2326,7 @@ async function callClaude(userText, onDelta) {
 
   const res = await claudeFetch({
     method: 'POST',
+    site: 'advisory',
     body: JSON.stringify({
       model: 'claude-sonnet-5',
       // Sonnet 5 토크나이저(동일 텍스트 +30% 토큰)·적응형 추론 여유분 반영해 상향
@@ -2352,6 +2415,22 @@ async function callClaude(userText, onDelta) {
   // 닫는 태그가 잘린 미완성 블록까지 포함해 화면 텍스트에서 제거
   aiText = aiText.replace(/<lawmap>[\s\S]*?<\/lawmap>/g, '').replace(/<lawmap>[\s\S]*$/, '').replace(/\s+$/, '');
 
+  // [원문 확인됨] 검증(#155-2·3안) — 표시가 붙은 인용의 원문이 실제로 근거 청크에 있었는지 서버가 대조하고,
+  // 있었으면 Haiku가 원문과 설명의 일치를 판정한다. 없으면 「⚠️ 원문 미확인」, 다르면 「⚠️ 원문과 다르게 설명됨」.
+  // 표시가 없는 답변은 verifyCitationsRemote가 그냥 null을 돌려준다. 실패해도 답변은 그대로(fail-open).
+  window._advCiteVerdicts = null;
+  if (/\[원문\s*확인됨[^\]]*\]/.test(aiText)) {
+    if (typeof onDelta === 'function') onDelta(aiText + '\n\n⏳ 인용 조문을 원문과 대조하는 중…');
+    try {
+      var vr = await verifyCitationsRemote(aiText, lastAdvChunkIds, lastAnnexSources);
+      if (vr && typeof vr.answer === 'string' && vr.answer) {
+        aiText = vr.answer;
+        window._advCiteVerdicts = vr.verdicts || [];
+        if (vr.changed) console.warn('인용 대조: 표시 ' + vr.changed + '건 교체', vr.verdicts);
+      }
+    } catch(e) { console.warn('인용 검증 실패(답변은 그대로):', e); }
+  }
+
   chatHistory.push({ role: 'assistant', content: aiText });
   // 웹 출처는 본문에 붙이지 않고 lastWebSources로 넘겨 화면에서 🌐 배지로 따로 보여준다.
   // 저장 형식은 '[웹] 제목 (url)' — chat_logs.sources의 접두사 관례(splitSources)와 동일.
@@ -2375,7 +2454,12 @@ function renderMd(text) {
   const inline = s => esc(s)
     .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/`(.+?)`/g, '<code>$1</code>');
+    .replace(/`(.+?)`/g, '<code>$1</code>')
+    // 인용 꼬리표(#155): 확인됨=초록 / 미확인=회색 / 다르게 설명됨=주황 / 학습 데이터=보라. 글자는 그대로, 색만.
+    .replace(/\[(원문 확인됨[^\]]*)\]/g, '<span class="cite cite-ok">[$1]</span>')
+    .replace(/\[(⚠️ 원문 미확인[^\]]*)\]/g, '<span class="cite cite-miss">[$1]</span>')
+    .replace(/\[(⚠️ 원문과 다르게 설명됨[^\]]*)\]/g, '<span class="cite cite-bad">[$1]</span>')
+    .replace(/\[(학습 데이터 기반[^\]]*|근거 조문 미확인[^\]]*)\]/g, '<span class="cite cite-learn">[$1]</span>');
   const splitRow = r => r.trim().replace(/^\||\|$/g, '').split('|').map(c => c.trim());
 
   const lines = text.split('\n');
@@ -2883,6 +2967,13 @@ async function sendChat() {
           + (d.length === 8 ? d.slice(2,4)+'.'+d.slice(4,6)+'.'+d.slice(6,8) : chEsc(d)) + '</span>';
       }).join(' ');
       msgEl.appendChild(pvDiv);
+    }
+
+    // 인용 대조 요약(#155) — 검증이 돈 답변에만 한 줄. 표시 자체는 본문 꼬리표 색으로 구분된다.
+    if (window._advCiteVerdicts && window._advCiteVerdicts.length) {
+      const cvDiv = document.createElement('div');
+      cvDiv.innerHTML = citeVerdictSummaryHtml(window._advCiteVerdicts);
+      while (cvDiv.firstChild) msgEl.appendChild(cvDiv.firstChild);
     }
 
     // 법령 관계도 자동 축적: 답변의 <lawmap> 블록 → DB 저장 + 답변 밑 미니 관계도 표시 (추가 API 호출 없음)
