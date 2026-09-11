@@ -178,6 +178,24 @@ function ok(name, cond, extra) {
   var only = CV.checkCitation(CV.findCitations('전기통신사업법 제32조의14 [원문 확인됨]\n\n다음 절')[0], full, []);
   eq('번호만 표시: 판정 없이 ok', [only.status, only.verbatim], ['ok', true]);
 
+  // ── #155-보론6: 꼬리표 안에 대상을 적는 형식 ──
+  var t1 = CV.findCitations('**② 판매점 선임 사전승낙 [원문 확인됨: 전기통신사업법 제32조의14제1항]**\n① 대리점은 이동통신사업자의 서면에 의한 사전승낙 없이는 판매점을 선임할 수 없습니다.');
+  eq('꼬리표 대상: 32조의14 ①, 법령명', [t1[0].key, t1[0].paras, t1[0].lawText, t1[0].candidates[0].fromTag], ['32조의14', [1], '전기통신사업법', true]);
+  eq('꼬리표 대상: 제목 줄이라도 ok', CV.checkCitation(t1[0], full, []).status, 'ok');
+  // 인용문 안의 교차참조(제52조)보다 꼬리표의 대상(제50조)이 우선
+  var t2 = CV.findCitations('대리점이 위반하면 제52조제1항을 적용할 때 사업자가 한 것으로 본다는 취지입니다. [원문 확인됨: 전기통신사업법 제50조제2항]');
+  eq('꼬리표 대상 우선(52조 아님)', [CV.checkCitation(t2[0], full, []).status, CV.checkCitation(t2[0], full, []).key], ['ok', '50조']);
+  // 꼬리표 대상이 컨텍스트에 없으면 missing, 바뀐 표시에 대상이 남는다
+  var t3 = await CV.verifyCitations({ answer: '이통사가 면책됩니다. [원문 확인됨: 전기통신사업법 제52조의3제2항]', chunks: full });
+  eq('꼬리표 대상 없음 → missing + 대상 표기', [t3.verdicts[0].status, t3.answer], ['missing', '이통사가 면책됩니다. [⚠️ 원문 미확인 — 검색 결과에 해당 조문 없음 (전기통신사업법 제52조의3제2항)]']);
+  // 꼬리표에 엉뚱한 조를 적었지만 인용문이 다른 조문 그대로면 겹침이 바로잡는다
+  var t4 = CV.checkCitation(CV.findCitations(q50 + ' [원문 확인됨: 전기통신사업법 제32조의14]')[0], full, []);
+  eq('꼬리표 오기 + 통째 인용: 겹치는 50조로 교정', [t4.status, t4.key, t4.verbatim], ['ok', '50조', true]);
+  // 별표 대상
+  eq('꼬리표 별표 대상', CV.checkCitation(CV.findCitations('산식은 이렇습니다 [원문 확인됨: 전파법 시행령 별표 3]')[0], [], ['전파법 시행령 별표 3']).status, 'ok');
+  // 옛 형식은 종전대로
+  eq('옛 형식 무변화', CV.findCitations(FX.answer).map(function (x) { return x.key; }), ['32조의14', '50조', '11조']);
+
   // ── 역참조 발췌 (#155-보론4) ──
   var art20 = { id: 27210, doc_name: C.c50_136.doc_name, article_no: '20조(등록의 취소 등)', chunk_index: 35, content: '제20조(등록의 취소 등)\n① 과학기술정보통신부장관은 기간통신사업자가 다음 각 호의 어느 하나에 해당하면 그 등록의 전부 또는 일부를 취소하거나 1년 이내의 기간을 정하여 사업의 전부 또는 일부의 정지를 명할 수 있다.\n1.  속임수나 그 밖의 부정한 방법으로 등록을 한 경우\n5의2.  제32조의4제5항에 따른 관리ㆍ감독 또는 같은 조 제6항에 따른 모니터링을 소홀히 하여 타인의 명의를 사용하거나 그 밖의 부정한 방법으로 전기통신역무 제공계약이 대통령령으로 정하는 기준 이상 다수 체결된 경우' };
   var art51 = { id: 27306, doc_name: C.c50_136.doc_name, article_no: '51조(사실조사 등)', chunk_index: 139, content: '제51조(사실조사 등)\n① 방송미디어통신위원회는 … 제32조의14제1항ㆍ제3항ㆍ제5항, 제32조의15제2항ㆍ제3항 또는 제50조제1항을 위반한 행위가 있다고 인정하면 … 조사를 하게 할 수 있다.\n② …\n4.  제2호의 대리점ㆍ판매점을 제외하고 그 밖에 전기통신사업자의 업무를 위탁받아 취급하는 자' };

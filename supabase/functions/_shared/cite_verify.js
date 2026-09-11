@@ -352,6 +352,19 @@
       const blank = text.indexOf('\n\n', tagEnd + 1);
       const after = text.slice(tagEnd, Math.min(nextTag, blank === -1 ? text.length : blank + 1, tagEnd + 900));
       const c = Object.assign({ tagStart: tagStart, tagEnd: tagEnd, tag: m[0], segment: text.slice(segStart, tagStart), after: after }, parsed);
+      // 꼬리표 안에 대상이 적힌 형식(#155-보론6, 2026-09-11 운영자 결정): 「[원문 확인됨: 전기통신사업법 제32조의14제1항]」
+      // 「[원문 확인됨: 전파법 시행령 별표 3]」 — 있으면 앞뒤 문장 추측 없이 이것이 1순위 후보. 옛 형식(「[원문 확인됨]」,
+      // 「[원문 확인됨, 참조4]」)은 종전대로 앞뒤에서 추측한다.
+      const inner = m[0].slice(1, -1).replace(/^원문\s*확인됨/, '').replace(/^[\s:：—\-–,]+/, '').trim();
+      if (inner && /제\s?\d+\s?조|별표\s*제?\s*\d+/.test(inner)) {
+        const tp = parseSegment(inner + ' ');
+        if (tp.kind === 'article') {
+          c.tagTarget = Object.assign({}, tp.mentions[0], { fromTag: true });
+          if (c.kind !== 'article') Object.assign(c, { kind: 'article', key: tp.key, paras: tp.paras, items: tp.items, lawInfo: tp.lawInfo, mentions: [] });
+        } else if (tp.kind === 'annex' && c.kind !== 'article') {
+          Object.assign(c, { kind: 'annex', annex: tp.annex });
+        }
+      }
       if (c.kind === 'article') {
         if (c.lawInfo && c.lawInfo.inherit) c.lawInherit = lastLaw;
         else if (c.lawInfo && c.lawInfo.candidates) c.lawText = c.lawInfo.text;
@@ -363,6 +376,11 @@
           for (const x of ext.mentions) if (!inSeg.has(x.key)) c.candidates.push(Object.assign({}, x, { extOnly: true }));
         }
         for (const x of c.candidates) if (x.lawInfo && x.lawInfo.inherit) x.lawInherit = lastLaw;
+        if (c.tagTarget) {   // 꼬리표에 적힌 대상이 맨 앞 (겹침이 같으면 이것이 이긴다)
+          c.candidates = [c.tagTarget].concat(c.candidates.filter(function (x) { return x.key !== c.tagTarget.key; }));
+          c.key = c.tagTarget.key; c.paras = c.tagTarget.paras; c.items = c.tagTarget.items;
+          if (c.tagTarget.lawInfo && c.tagTarget.lawInfo.candidates) { c.lawInfo = c.tagTarget.lawInfo; c.lawText = c.tagTarget.lawInfo.text; }
+        }
       } else if (c.kind === 'none' && extStart < segStart) {
         // 인용문에 조 번호가 없어도 앞 줄에 있으면 그것이 대상 (「제11조는 다음과 같이 규정합니다.」 + 원문 줄)
         const ext = parseSegment(text.slice(extStart, tagStart));
@@ -527,7 +545,11 @@
       let rep = null;
       if (r.status === 'missing') rep = TAG_MISSING;
       else if (r.status === 'mismatch') rep = TAG_MISMATCH;
-      if (rep) { out = out.slice(0, r.tagStart) + rep + out.slice(r.tagEnd); changed++; }
+      if (!rep) continue;
+      // 꼬리표에 대상이 적혀 있었으면 바꾼 표시에도 남긴다 — 어느 조문 얘기인지 읽는 사람이 알 수 있게
+      const tgt = r.tagTarget ? String(r.tag).slice(1, -1).replace(/^원문\s*확인됨/, '').replace(/^[\s:：—\-–,]+/, '').trim() : '';
+      if (tgt) rep = rep.slice(0, -1) + ' (' + tgt + ')]';
+      out = out.slice(0, r.tagStart) + rep + out.slice(r.tagEnd); changed++;
     }
     return {
       answer: out, changed: changed,
