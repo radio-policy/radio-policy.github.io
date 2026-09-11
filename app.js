@@ -1828,6 +1828,16 @@ function filterLawTerms() {
     });
     if (defs.length) matched.push({ key: g.key, term: g.term, alias: g.alias, defs: defs, total: g.defs.length });
   });
+  if (q) {
+    // 검색어 순위: 0 용어 정확 일치 → 1 용어가 검색어로 시작 → 2 용어·별칭에 포함 → 3 정의 본문·법령명에만 포함. 같은 순위는 가나다.
+    var qk = q.replace(/\s+/g, '');
+    matched.forEach(function(g) {
+      var t = (g.term || '').toLowerCase(), tk = t.replace(/\s+/g, ''), a = (g.alias || '').toLowerCase();
+      g._rank = (tk === qk || t === q) ? 0 : (t.indexOf(q) === 0 || tk.indexOf(qk) === 0) ? 1
+              : (t.indexOf(q) >= 0 || tk.indexOf(qk) >= 0 || a.indexOf(q) >= 0) ? 2 : 3;
+    });
+    matched.sort(function(x, y) { return (x._rank - y._rank) || x.term.localeCompare(y.term, 'ko'); });
+  }
   renderLawTerms(matched, { truncated: !q && !type && !law });
 }
 
