@@ -999,6 +999,7 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **kmcc 큐 적재 여부는 upsert(ignore_duplicates) 반환값으로만 판단할 것** — 10분 동일-html 가드는 Haiku 출력이 비결정적이라 두 인스턴스가 겹치면 못 막는다. (#154)
 - **`daily_crawl.yml`의 kmcc 스텝 `continue-on-error`·`if: !cancelled()`를 지우지 말 것** — 지우면 방미통위 수집 실패가 뉴스 크롤러 결론(워치독 감시 대상)을 바꾸거나 뉴스 실패가 방미통위 수집을 막는다. (#154)
 - **`refetch_content.py --all`에서 source '방송미디어통신위원회 위원회 회의' 제외를 빼지 말 것** — PDF에서 복원한 content가 게시판 껍데기 텍스트로 덮인다. (#154)
+- **일회성 텔레그램 발송(공지 등)을 Windows 작업 스케줄러 일회성 작업에 맡기지 말 것** — 2026-09-11 10:00 안내가 0xC000013A(Ctrl+C)로 죽어 아무에게도 안 갔다. 세션에서 그 시각에 직접 실행하고 결과를 바로 확인한다. (#154-보론4)
 - **방미통위 일반 보도자료를 무관으로 지울 때는 news_feed 행만 지우지 말고 `kmcc_press_verdict.relevant=false`를 함께 둘 것** — 행만 지우면 다음 시각 실행이 재판정하고, Haiku가 뒤집으면 되살아나 큐까지 간다(2026-09-11 01:49 실측). (#154)
 - **gov_notice_crawler.crawl_kcc()의 보도자료 대상을 되살리지 말 것** — kmcc_meeting.py가 전건을 다른 호스트 URL(kmcc.go.kr)로 저장하므로 같은 글이 두 번 저장된다. (#154)
 - **구독 봇 토픽을 추가할 때 5곳을 같이 갱신할 것** — telegram_subscribers 컬럼 + subscriber_queue **CHECK 제약** + subscriber_notify `_VALID_TOPICS` + send-subscriber-briefing **명시 select 목록**(빠뜨리면 undefined→전체 수신) + admin-daily-report. 한 곳만 빠져도 조용히 어긋난다. (#154)
