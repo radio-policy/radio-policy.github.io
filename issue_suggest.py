@@ -78,6 +78,14 @@ def _norm_key(title: str) -> str:
     return '|'.join(sorted(extract_keywords(title))[:6])
 
 
+def _has_exclusion(iss):
+    """정의문에 배제 기준("해당 없음")이 있는 이슈 — 어휘 직결·유사도 0.80·과반 겹침 같은
+    결정적 연결로 붙이지 않고 관련 판정(정의문을 읽는 유일한 경로)을 거친다. 배제 기준을
+    넣어도 세 경로가 정의문을 안 봐서 #9(GSMA 행사 50건)·#30(불꽃축제 53건)이 재오염된
+    실측(2026-09-12, #157)."""
+    return '해당 없음' in ((iss or {}).get('definition') or '')
+
+
 def _clip_sentence(text, limit=500):
     """정의문 절단은 문장 경계에서 — [:120] 하드컷이 "…실질적 제"처럼 화면에 남았다(#129-보론).
     limit 안의 마지막 '다.'까지 취하고, 문장 종결이 너무 앞이면 하드컷 폴백."""
@@ -360,6 +368,7 @@ def _suggest_from_news(sb, issues, dry):
         _ofs += 1000
     already = set(linked_to)
     active_ids = {i['id'] for i in issues if i['state'] == 'active'}
+    by_id = {i['id']: i for i in issues}
 
     for ci, group in enumerate(groups):
         # 전부 이미 연결된 클러스터는 볼 것 없음 (매시 재스캔의 공회전 방지)
@@ -375,6 +384,11 @@ def _suggest_from_news(sb, issues, dry):
             # 겹침 최소 2건 — 2건짜리 클러스터의 1건 겹침(1/2)까지 무판정 연결하면 과확장
             if _top_n >= 2 and _top_n * 2 >= len(group):
                 _fresh = [r for r in group if _top_iss not in linked_to.get(str(r['id']), ())]
+                if _has_exclusion(by_id.get(_top_iss)):
+                    # 오염이 오염을 부르는 증폭 경로 — 배제 기준 이슈는 판정을 받고 붙는다
+                    borderline.append((ci, group[0]['title'], by_id[_top_iss]))
+                    print(f'[과반겹침→판정] "{group[0]["title"][:28]}" → [{_top_iss}] (배제 기준 이슈)')
+                    continue
                 if _fresh and not dry:
                     _link_news(sb, _top_iss, _fresh)
                 print(f'[연결·과반겹침] "{group[0]["title"][:28]}" → [{_top_iss}] '
@@ -398,6 +412,10 @@ def _suggest_from_news(sb, issues, dry):
         #    낱개 후속 기사도 기간과 무관하게 이슈에 붙어야 연대기가 자란다.
         if lex_hit is not None or (nk_state and nk_state[0] == 'active') or sim_a >= SIM_MERGE:
             target = lex_hit or (nk_state[1] if (nk_state and nk_state[0] == 'active') else best_active)
+            if _has_exclusion(target):
+                borderline.append((ci, group[0]['title'], target))
+                print(f'[직결→판정] "{group[0]["title"][:28]}" → [{target["id"]}] (배제 기준 이슈)')
+                continue
             n = 0 if dry else _link_news(sb, target['id'], group)
             print(f'[연결] "{group[0]["title"][:28]}" → [{target["id"]}] ({len(group)}건, sim {sim_a:.2f})')
             continue
