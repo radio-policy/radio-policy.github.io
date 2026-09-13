@@ -48,6 +48,10 @@ BOT_DESC = (
 COMMANDS = [
     {'command': 'start',    'description': '구독 시작 · 설정 메뉴'},
     {'command': 'settings', 'description': '수신 설정 변경'},
+    # setMyCommands 는 목록을 **통째로 갈아 끼운다** — 여기 없는 명령은 돌리는 순간 메뉴에서 사라진다.
+    # /assem 은 2026-09-13 BotFather로 직접 등록했는데 이 목록에 없어서, 이 스크립트를 다시 돌리면
+    # 메뉴에서 빠질 뻔했다(기능은 살아 있으나 신규 이용자가 찾지 못한다 — 실사용 1위 명령이다).
+    {'command': 'assem',    'description': '국회 발언 검색 (예: /assem 2023년 공공와이파이)'},
     # 예시를 자연어로 바꿨다 — 실제 쓰임새는 "조항 번호를 아는" 경우가 아니라
     # "이게 어떤 법과 관련되나"를 묻는 쪽이 대부분이다(운영자, 2026-08-03).
     {'command': 'law',      'description': '법령 검색 (예: /law 3G 종료 관련 법령)'},

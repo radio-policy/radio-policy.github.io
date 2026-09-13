@@ -406,6 +406,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 > **명령 메뉴 등록분**(BotFather `setMyCommands`, 2026-09-13 기준): `/start` · `/settings` · **`/assem`** · `/law` · `/ask`.
 > ⚠️ 웹훅이 받는 명령과 **메뉴에 등록된 명령은 별개**다 — 등록하지 않아도 동작은 하지만 대화창에서 `/`를 눌렀을 때 뜨지 않는다.
 > `/assem`(발언검색)은 승인 불필요·AI 비용 0이고 실사용 1위(30일 44건)인데 2026-09-13까지 메뉴에 없어 신규 사용자가 찾을 수 없었다(사내 공유 직전 발견해 등록).
+> ⚠️ **`setMyCommands`는 목록을 통째로 갈아 끼운다** — `setup_subscriber_bot.py`의 `COMMANDS`에 없는 명령은 그 스크립트를 돌리는 순간 메뉴에서 사라진다. BotFather로 직접 등록만 하고 스크립트를 안 고치면 다음 실행 때 되돌아간다(2026-09-14 `/assem`을 목록에 추가해 해소). **봇 설정은 BotFather와 스크립트 양쪽을 함께 고칠 것.**
 > 새 명령을 웹훅에 추가하면 `setMyCommands`도 같이 갱신할 것. 매칭은 슬래시 선택(`/^\/?(assem|어셈|발언검색)/`)이라 메일·안내문에는 `/law`·`/ask`와 형식을 맞춰 **`/assem`으로 표기**한다.
 
 ```
