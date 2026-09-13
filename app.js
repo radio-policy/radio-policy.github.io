@@ -4192,14 +4192,17 @@ async function deleteNewsItem(newsId) {
 }
 
 // ── 뉴스 편집 권한 (2026-09-08, #133) ──
-// 중요도 변경·잠금·삭제는 **승인된 로그인 계정**만. 열람은 그대로 공개.
-// 화면 게이트는 안내용이고 실제 관문은 DB 정책이다(news_feed UPDATE/DELETE·importance_feedback 쓰기 →
-// 승인 프로필만, anon은 is_read·content·summary 컬럼만 UPDATE 가능). 공개 대시보드라 브라우저 콘솔에서
-// 직접 UPDATE를 날릴 수 있으므로 화면 게이트만으로는 막히지 않는다.
-function canEditNews() { return aiReady(); }
+// 중요도 변경·잠금·삭제는 **관리자만**(2026-09-13, #159 — 종전 '승인 계정'에서 축소).
+// 이유: 중요도는 모든 이용자가 함께 보는 단일 값이고, 수정이 importance_feedback에 쌓여 이후 AI 판정까지
+// 학습시킨다. 타 팀에 공유하면 그 팀 기준의 수정이 기술정책팀이 보는 값과 학습을 함께 흔든다.
+// 팀별 중요도(team_urgency)가 준비되면 그때 다시 승인 계정에 열되, 값은 팀별로 갈라 저장한다.
+// 화면 게이트는 안내용이고 실제 관문은 DB다 — news_feed_edit_guard 트리거가 importance·urgency·locked
+// 컬럼 변경 시 is_admin()을 요구하고, 삭제·deleted_news·importance_feedback 쓰기는 정책이 관리자로 제한한다.
+// (요약·영향분석 저장은 같은 news_feed UPDATE 통로지만 다른 컬럼이라 승인 계정 그대로 통과한다 — #153)
+function canEditNews() { return typeof isAdminUser === 'function' && isAdminUser(); }
 function newsEditGateMsg() {
-  if (!currentUser) return '뉴스 중요도·잠금·삭제는 로그인 후 이용할 수 있습니다. 우측 상단에서 로그인해 주세요.';
-  return aiGateMsg();
+  if (!currentUser) return '뉴스 중요도·잠금·삭제는 관리자만 이용할 수 있습니다.';
+  return '뉴스 중요도·잠금·삭제는 관리자만 할 수 있습니다. 중요도는 모든 이용자가 함께 보는 값이라, 팀별 중요도 기능이 준비될 때까지 관리자 전용입니다.';
 }
 
 // ── 긴급도 수정 셀렉터 HTML (뉴스 상세 모달) ──
@@ -4211,7 +4214,7 @@ function _impSelHtml(newsId, current) {
     return '<span ' + (editable ? 'onclick="setNewsImportance(\'' + newsId + '\',\'' + v + '\')" ' : 'title="' + escHtml(newsEditGateMsg()) + '" ') +
       'style="cursor:' + (editable ? 'pointer' : 'not-allowed') + ';font-size:10px;padding:2px 7px;border-radius:4px;white-space:nowrap;border:1px solid ' + (act ? r.color : 'var(--border-secondary)') + ';' +
       'color:' + (act ? '#fff' : 'var(--text-tertiary)') + ';background:' + (act ? r.color : 'transparent') + (editable ? '' : ';opacity:.6') + '">' + (v === '긴급' ? '중요' : v) + '</span>';
-  }).join('') + (editable ? '' : '<span style="font-size:10px;color:var(--text-muted);margin-left:4px">🔒 로그인 후 변경</span>');
+  }).join('') + (editable ? '' : '<span style="font-size:10px;color:var(--text-muted);margin-left:4px">🔒 관리자만 변경</span>');
 }
 
 // ── 긴급도 수동 수정 — importance_feedback에 기록되어 크롤러 분류가 학습됨 ──

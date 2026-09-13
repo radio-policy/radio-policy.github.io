@@ -146,7 +146,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 | 화면 기능 | news_feed | select·update·**delete**(기사 삭제 버튼) — insert 없음 |
 | | daily_briefings | select. **update는 승인 프로필만**(#133, 긴급도 수정 시 본문 동기화) |
 | | deleted_news | select. **insert는 승인 프로필만**(#133, **append-only**) |
-| | **news_feed** | select 공개. **update는 anon이 `is_read`·`content`·`summary` 컬럼만**(컬럼 권한 + `news_feed_upd_anon`), 중요도·잠금 등 나머지 컬럼과 **delete는 승인 프로필만**(`news_feed_upd_auth`·`news_feed_del`, `is_approved_user()`). 종전엔 anon이 전 컬럼 update·delete 가능 → 인터넷 누구나 중요도 변경·기사 삭제 가능했다(#133) |
+| | **news_feed** | select 공개. **update는 anon이 `is_read`·`content`·`summary` 컬럼만**(컬럼 권한 + `news_feed_upd_anon`), update 나머지 컬럼은 승인 프로필(`news_feed_upd_auth`, `is_approved_user()`) — 요약·영향분석 저장이 이 통로다. 다만 **중요도(`importance`·`urgency`)·잠금(`locked`) 변경과 delete는 관리자만**(2026-09-13 #159: `news_feed_edit_guard` 트리거가 세 컬럼 변경 시 `is_admin()` 요구, `news_feed_del`·`deleted_news_ins`·`imp_fb_ins/upd` 정책도 `is_admin()`; 크롤러 등 `service_role`·`postgres`는 트리거 통과 — 막으면 매시 등급 기록이 전부 실패). 종전엔 anon이 전 컬럼 update·delete 가능 → 인터넷 누구나 중요도 변경·기사 삭제 가능했다(#133) |
 | | **chat_logs** | anon은 **insert만**. 읽기는 **로그인 계정의 RLS 스코프**(#104) — 본인 / 팀장=자기 팀 / admin=전체(텔레그램 행은 user_id가 없어 admin만). 건수는 `chat_logs_month_count()` |
 | 로그인 필요 | **profiles·teams·advisory_usage·answer_feedback** | anon 정책 없음. authenticated에 역할별 SELECT(본인/팀/admin), profiles·teams UPDATE는 admin만. AI 호출은 `claude-proxy`가 JWT를 검증한다 (#104) |
 | | importance_feedback | select 공개. **insert·update는 승인 프로필만**(#133) |
@@ -1332,7 +1332,7 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 13. AI 자문 무거운 질문은 2분+ 소요(스트리밍이라 정상).
 
 - **국회 발언 검색에서 1단(정리해 둔 발언)과 2단(국회 원문) 중 하나를 빼지 말 것 (2026-09-08, #132)** — 요지에는 지나가듯 말한 낱말이 빠지고(변재일 eSIM 발언은 topic에만 '무선국'), 원문 문자열 검색은 "기지국 준공검사"처럼 다른 낱말로 말한 발언을 못 잡는다. 둘이 서로의 구멍을 메우는 구조라 한쪽만 남기면 한 방향의 누락이 생긴다. 1단은 요지·주제·안건 **모두** 검색, 원문 0건이면 "원문에서는 없음"을 **반드시 같이** 보낸다. 공용 파일(`_shared/assembly_search.ts`)을 고치면 `telegram-webhook`·`assembly-search` **둘 다 배포**.
-- **공개 대시보드의 쓰기 권한을 화면 게이트로만 막았다고 믿지 말 것 (2026-09-08, #133)** — news_feed는 anon UPDATE/DELETE 정책이 `true`라 브라우저 콘솔에서 누구나 중요도를 바꾸고 기사를 지울 수 있었다. 편집(중요도·잠금·삭제·importance_feedback·deleted_news·daily_briefings 갱신)은 **DB 정책이 `is_approved_user()`로 막고**, anon은 news_feed의 `is_read`·`content`·`summary` **컬럼 권한만**. 새 테이블에 anon 쓰기 정책을 줄 때는 "인터넷 누구나"가 그 쓰기를 해도 되는지 먼저 물을 것. 검증은 anon 키로 REST PATCH/DELETE를 직접 쏴서(401 또는 0행) 확인.
+- **공개 대시보드의 쓰기 권한을 화면 게이트로만 막았다고 믿지 말 것 (2026-09-08, #133)** — news_feed는 anon UPDATE/DELETE 정책이 `true`라 브라우저 콘솔에서 누구나 중요도를 바꾸고 기사를 지울 수 있었다. 편집(중요도·잠금·삭제·importance_feedback·deleted_news·daily_briefings 갱신)은 **DB 정책이 `is_approved_user()`로 막고**, anon은 news_feed의 `is_read`·`content`·`summary` **컬럼 권한만**. 새 테이블에 anon 쓰기 정책을 줄 때는 "인터넷 누구나"가 그 쓰기를 해도 되는지 먼저 물을 것. 검증은 anon 키로 REST PATCH/DELETE를 직접 쏴서(401 또는 0행) 확인. **2026-09-13(#159)부터는 승인 계정이 아니라 관리자만** — 중요도는 모두가 함께 보는 단일 값이고 수정이 `importance_feedback`에 쌓여 AI 판정까지 학습시키므로, 타 팀 공유 시 그 팀 기준 수정이 기술정책팀의 값과 학습을 함께 흔든다. 팀별 중요도(`team_urgency`)가 준비되면 그때 승인 계정에 다시 열되 값을 팀별로 갈라 저장한다.
 
 - **지식을 만들어 채우는 AI 버튼(용어 ↺재생성·AI로 관계도 생성·이슈 영향 요약·과거 뉴스 보강·연결 테스트)을 승인자 전체에 다시 열지 말 것 (2026-09-09, #141)** — 전부 관리자 전용(`isAdminUser()` + 프록시 Sonnet 한도 + news-archive-search role=admin). 일반 승인자에게 남는 AI는 **자문(한도)·법령 DIFF 수동 분석(자문 한도에 포함)·영향 분석 다시 분석(Haiku)** 셋뿐. '뉴스에서 용어 추출' 수동 버튼과 브라우저 자동 추출은 폐지 — 새벽 05:00 `term_extract.yml`이 대체. 팀장(leader)에게 열려면 프록시·`isAdminUser` 조건에 leader를 추가할 것.
 
