@@ -160,14 +160,15 @@ function settingsKeyboard(s: Sub) {
     [{ text: `${sel(s.days === 'daily')} 매일 받기`, callback_data: 'd:daily' },
      { text: `${sel(s.days === 'weekday')} 평일만`, callback_data: 'd:weekday' }],
     // 수신 창 = 시작~종료. 브리핑은 시작 시각에 1회, 주요 뉴스·국회·법률 동향은 그 뒤 새로 생기는 대로
-    // 매시 :25에 전달되고, 종료 시각을 넘기면 다음 날 시작 시각까지 발송이 없다.
+    // 매시 :25에 전달되고, 종료 시각을 넘겨 큐에 쌓인 것은 다음 날 시작 시각에 워터마크로 이어 보낸다
+    // (사라지지 않는다 — QUEUE_LOOKBACK_H=72h). 안내 문구도 '안 온다'가 아니라 '모아서 온다'로 쓴다.
     // (종전에는 종료가 '23시'로 코드에 박혀 있었다 — 구독자가 고르게 바꿈, 2026-08-03)
     [{ text: `받기 시작 시각 — 현재 ${hh(s.briefing_hour)}시`, callback_data: 'noop' }],
     [6, 7, 8, 9, 10].map((v) => ({
       text: `${sel(s.briefing_hour === v)}${hh(v)}`,
       callback_data: `h:${v}`,
     })),
-    [{ text: `받기 종료 시각 — 현재 ${hh(s.end_hour)}시 (이후 무발송)`, callback_data: 'noop' }],
+    [{ text: `받기 종료 시각 — 현재 ${hh(s.end_hour)}시 (이후엔 다음 날 아침에)`, callback_data: 'noop' }],
     [18, 19, 20, 21, 22].map((v) => ({
       text: `${sel(s.end_hour === v)}${hh(v)}`,
       callback_data: `e:${v}`,
@@ -182,7 +183,7 @@ const START_TEXT =
   '선택한 요일·시각에 <b>모닝 브리핑</b>이 도착하고, 나머지 알림은 그 시각 이후 새로 생기는 대로 전달됩니다.\n' +
   '   <i>국회·법률 동향 = 국회 법안 · 입법예고(국회·부처) · 과방위 회의록 요약</i>\n' +
   '   <i>방미통위 동향 = 방송미디어통신위원회 회의 의사일정(회의 전날) · 위원회 결과(회의 당일) · 통신·전파 관련 보도자료</i>\n' +
-  '🌙 <b>받기 종료 시각을 넘기면 다음 날 시작 시각까지 발송하지 않습니다.</b>\n' +
+  '🌙 <b>받기 종료 시각을 넘겨 들어온 소식은 사라지지 않고, 다음 날 시작 시각에 모아서 보내 드립니다.</b>\n' +
   '아래 버튼으로 콘텐츠·요일·수신 시각을 바로 바꿀 수 있어요. (언제든 /settings)\n' +
   '항목을 모두 끄면 알림이 오지 않습니다.\n\n' +
   '📖 <b>법령 검색</b> — <code>/law 3G 종료 관련 법령</code> (궁금한 주제 → 관련 법령·조항과 이유. <b>운영자 최초 1회 승인 필요</b>)\n' +
@@ -1092,7 +1093,7 @@ Deno.serve(async (req: Request) => {
       let sub = await getSub(chatId);
       if (!sub) { await upsertSub(chatId, { username: from.username || null, first_name: from.first_name || null }); sub = (await getSub(chatId))!; }
       await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML',
-        text: '⚙️ <b>수신 설정</b>\n버튼을 눌러 바로 변경할 수 있습니다.\n✅⬜ = 여러 개 선택 · 🔵⚪ = 하나만 선택\n<i>항목을 모두 끄면 알림이 오지 않습니다.</i>\n\n🌙 <b>발송 시간대</b> — 모닝 브리핑은 <b>시작 시각</b>에 1회, 나머지 알림은 그 뒤 새로 생기는 대로 옵니다. <b>종료 시각 이후에는 다음 날 시작 시각까지 발송하지 않습니다.</b>',
+        text: '⚙️ <b>수신 설정</b>\n버튼을 눌러 바로 변경할 수 있습니다.\n✅⬜ = 여러 개 선택 · 🔵⚪ = 하나만 선택\n<i>항목을 모두 끄면 알림이 오지 않습니다.</i>\n\n🌙 <b>발송 시간대</b> — 모닝 브리핑은 <b>시작 시각</b>에 1회, 나머지 알림은 그 뒤 새로 생기는 대로 옵니다. <b>종료 시각을 넘겨 들어온 소식은 다음 날 시작 시각에 모아서 옵니다.</b>',
         reply_markup: settingsKeyboard(sub) });
     } else if (text === '/stop') {
       // 메뉴에서는 뺐지만 하위호환으로 남긴다 — '모든 항목 끄기'로 동작(설정·시각은 보존)
