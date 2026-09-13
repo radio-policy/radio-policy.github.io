@@ -9445,6 +9445,51 @@ function renderPeopleList() {
   _issueScrollTop(el);
 }
 
+// ── 자격(역할) 구분 (2026-09-13, #166) ─────────────────────────
+// 한 사람이 정부 쪽에서 **답변**하다가 의원이 되어 **질의**하는 일이 있다(이진숙 방통위원장 15건 → 과방위원,
+// 김현 방통위 부위원장 21건 → 의원 155건). 카드를 둘로 쪼개지 않고 한 카드 안에서 자격을 가른다 —
+// "규제기관에 있을 때 이렇게 답했는데 의원이 되어 이렇게 따진다"는 대비 자체가 정보이기 때문이다.
+var _MEMBER_POS_SET = ['위원', '위원장', '의원', '위원장대리', '조정위원장', '간사',
+                       '소위원장', '소위원장대리', '소위원장직무대리', '위원장직무대리', '반장'];
+
+function _personRoleLabel(pos) {
+  pos = String(pos || '').trim();
+  if (!pos) return '기타';
+  return _MEMBER_POS_SET.indexOf(pos) >= 0 ? '과방위원' : pos;
+}
+
+// 발언에서 자격별 구간을 뽑는다 — [{label, from, to, n}], 시작일 순.
+function _personRoleSpans(list) {
+  var m = {};
+  (list || []).forEach(function(s) {
+    var k = _personRoleLabel(s.position);
+    var d = s.meeting_date || '';
+    if (!m[k]) m[k] = { label: k, from: d, to: d, n: 0 };
+    m[k].n++;
+    if (d) {
+      if (!m[k].from || d < m[k].from) m[k].from = d;
+      if (!m[k].to || d > m[k].to) m[k].to = d;
+    }
+  });
+  return Object.keys(m).map(function(k) { return m[k]; })
+    .sort(function(a, b) { return (a.from || '').localeCompare(b.from || ''); });
+}
+
+function _ym(d) { return String(d || '').slice(0, 7); }
+
+// 자격이 둘 이상일 때만 역할 이력 줄을 보여 준다 — 한 자격뿐인 사람에게는 군더더기다.
+function renderPersonRoles(p) {
+  var box = document.getElementById('person-roles');
+  if (!box) return;
+  var spans = _personRoleSpans(_personSpeeches);
+  if (spans.length < 2) { box.innerHTML = ''; return; }
+  box.innerHTML = '<div style="margin-top:6px;font-size:11.5px;color:var(--text-secondary)">' +
+    spans.map(function(sp) {
+      return '<b style="color:var(--text-primary)">' + escHtml(sp.label) + '</b> ' +
+        escHtml(_ym(sp.from)) + '~' + escHtml(_ym(sp.to)) + ' (' + sp.n + '건)';
+    }).join(' · ') + '</div>';
+}
+
 function _personJobWord(p) {
   // 뉴스 엄격 매칭용 직함 단어 — 의원은 '의원', 정부는 직함에서 추출. 없으면 뉴스 섹션 생략.
   if (p.kind === '의원') return '의원';
@@ -9467,6 +9512,7 @@ async function showPersonDetail(id) {
         '<span style="font-size:12px;color:var(--text-secondary)">' + escHtml(sub) + '</span>' +
         '<span style="font-size:11px;color:var(--text-tertiary)">발언 ' + (p.speech_count || 0) + '건 · ' + escHtml(String(p.first_speech || '')) + ' ~ ' + escHtml(String(p.last_speech || '')) + '</span>' +
       '</div>' +
+      '<div id="person-roles"></div>' +
     '</div>' +
     '<div id="person-stance"></div>' +
     '<div id="person-topics"></div>' +
@@ -9498,6 +9544,7 @@ async function showPersonDetail(id) {
   }
   var rs = await Promise.all(jobs.map(function(j) { return j.then(function(r) { return r; }, function(e) { return { error: e }; }); }));
   _personSpeeches = (rs[0] && rs[0].data) || [];
+  renderPersonRoles(p);          // 자격 이력은 발언이 와야 계산된다
   renderPersonTopics(p);
   renderPersonSpeeches(p);
   if (billsIdx >= 0) renderPersonBills(p, (rs[billsIdx] && rs[billsIdx].data) || []);
@@ -9571,16 +9618,37 @@ function renderPersonSpeeches(p) {
         '<div style="margin-top:3px;color:var(--text-primary)">' + escHtml(s.summary || '') +
         (s.source_url ? ' <a href="' + safeUrl(s.source_url) + '" target="_blank" rel="noopener" style="font-size:11px">원문</a>' : '') + '</div></div>';
   }
+  // 자격이 둘 이상이면 구간 머리글로 갈라 놓는다(#166) — 정부 쪽 '답변'과 의원 '질의'가
+  // 한 줄로 섞여 있으면 같은 성격의 발언으로 읽힌다. 자격이 하나면 종전처럼 평평한 목록.
+  var roleSpans = _personRoleSpans(_personSpeeches);
+  var multiRole = roleSpans.length > 1;
+  function _spBlock(rows) {
+    return '<div style="display:flex;flex-direction:column;gap:6px">' + rows.map(_spRow).join('') + '</div>';
+  }
+  var listHtml;
+  if (!shown.length) {
+    listHtml = '<div style="font-size:12px;color:var(--text-tertiary);padding:8px">내용 발언 기록이 없습니다.</div>';
+  } else if (!multiRole) {
+    listHtml = _spBlock(shown) +
+      (list.length > CAP ? '<div style="font-size:11px;color:var(--text-tertiary);padding:4px">외 ' + (list.length - CAP) + '건 — 쟁점 칩으로 좁혀 보세요</div>' : '');
+  } else {
+    // 최신 자격부터. shown은 이미 날짜 내림차순이라 구간도 역순으로 돈다.
+    listHtml = roleSpans.slice().reverse().map(function(sp) {
+      var rows = shown.filter(function(s) { return _personRoleLabel(s.position) === sp.label; });
+      if (!rows.length) return '';
+      return '<div style="margin:10px 0 6px;font-size:11.5px;color:var(--text-secondary);' +
+        'border-top:1px solid var(--border);padding-top:8px">' +
+        '<b style="color:var(--text-primary)">' + escHtml(sp.label) + '</b> · ' +
+        escHtml(_ym(sp.from)) + '~' + escHtml(_ym(sp.to)) + ' · ' + rows.length + '건' +
+        (_MEMBER_POS_SET.indexOf(String(sp.label)) >= 0 || sp.label === '과방위원'
+          ? ' <span style="color:var(--text-tertiary)">— 위원으로 질의</span>'
+          : ' <span style="color:var(--text-tertiary)">— 정부·기관 측 답변</span>') +
+        '</div>' + _spBlock(rows);
+    }).join('') +
+      (list.length > CAP ? '<div style="font-size:11px;color:var(--text-tertiary);padding:4px">외 ' + (list.length - CAP) + '건 — 쟁점 칩으로 좁혀 보세요</div>' : '');
+  }
   box.innerHTML = _personSec('발언 이력', list.length + '건' + (_personTopicFilter ? ' — ' + escHtml(_personTopicFilter) : '') + ' · 과방위 회의록 발췌') +
-    (shown.length ? '<div style="display:flex;flex-direction:column;gap:6px">' + shown.map(function(s) {
-      return '<div style="border:1px solid var(--border);border-radius:8px;padding:8px 12px;font-size:12px;background:var(--bg-secondary)">' +
-        '<span style="color:var(--text-tertiary)">' + escHtml(s.meeting_date || '') + '</span>' +
-        (s.topic ? ' · <span style="color:var(--accent)">' + escHtml(s.topic) + '</span>' : '') +
-        (s.agenda ? ' · <span style="color:var(--text-tertiary)">' + escHtml(String(s.agenda).slice(0, 40)) + '</span>' : '') +
-        '<div style="margin-top:3px;color:var(--text-primary)">' + escHtml(s.summary || '') +
-        (s.source_url ? ' <a href="' + safeUrl(s.source_url) + '" target="_blank" rel="noopener" style="font-size:11px">원문</a>' : '') + '</div></div>';
-    }).join('') + (list.length > CAP ? '<div style="font-size:11px;color:var(--text-tertiary);padding:4px">외 ' + (list.length - CAP) + '건 — 쟁점 칩으로 좁혀 보세요</div>' : '') + '</div>'
-    : '<div style="font-size:12px;color:var(--text-tertiary);padding:8px">내용 발언 기록이 없습니다.</div>') +
+    listHtml +
     (proc.length ? '<details style="margin-top:8px"><summary style="cursor:pointer;font-size:11px;color:var(--text-tertiary)">' +
       '진행·단편 발언 ' + proc.length + '건 (사회·호명 등 내용 없음)</summary>' +
       '<div style="display:flex;flex-direction:column;gap:6px;margin-top:6px;opacity:0.75">' +

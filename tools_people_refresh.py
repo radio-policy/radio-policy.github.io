@@ -11,7 +11,10 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env'))
 from sb_client import make_client
 
-MEMBER_POS = {'위원','위원장','의원','위원장대리','조정위원장','간사','소위원장'}
+# 의원석 직함. '소위원장대리'·'소위원장직무대리'·'반장'은 2026-09-13까지 빠져 있어
+# 이 직함만 가진 의원이 '정부·참고인'으로 분류될 수 있었다(실측 5명, #166).
+MEMBER_POS = {'위원','위원장','의원','위원장대리','조정위원장','간사','소위원장',
+              '소위원장대리','소위원장직무대리','위원장직무대리','반장'}
 NAME_FIX = {'金炳旭':'김병욱','金成泰':'김성태','曺明姬':'조명희','柳榮夏':'유영하'}
 
 # 등록 문턱(2026-09-13): 의원·위원장은 1건이라도 등록(회의 1회만 참석해도 소관 인물),
@@ -63,16 +66,18 @@ def main():
         row = {'speech_count':a['n'], 'first_speech':a['mn'], 'last_speech':a['mx'],
                'is_22':a['t22'], 'terms':(terms + '대') if terms else None,
                'position':a['pos'] or (known.get(k) or {}).get('position')}
+        is_member = bool(a['poss'] & MEMBER_POS)
+        # kind는 **현재 자격**(최신 발언 직함)으로 정한다. 과거 자격은 대시보드가 발언에서
+        # 역할 이력으로 계산해 보여 준다(#166) — 한 사람을 두 행으로 쪼개지 않는 설계다.
+        row['kind'] = '의원' if (a['pos'] in MEMBER_POS) else '정부·참고인'
         if k in known:
             sb.table('people').update(row).eq('id', known[k]['id']).execute(); upd += 1
             continue
-        is_member = bool(a['poss'] & MEMBER_POS)
         is_telco = (any(TELCO_ORG.search(p) for p in a['poss'])
                     or (k in TELCO_NAMES and any(w in p for p in a['poss'] for w in WITNESS_POS)))
         is_policy = any(POLICY_POS.search(p) for p in a['poss'])
         if is_member or is_telco or is_policy or a['n'] >= 4:
-            row.update({'speaker_key':k, 'name':NAME_FIX.get(k, k),
-                        'kind':'의원' if is_member else '정부·참고인'})
+            row.update({'speaker_key':k, 'name':NAME_FIX.get(k, k)})
             sb.table('people').insert(row).execute(); ins += 1
     for k, p in known.items():
         if k not in agg:

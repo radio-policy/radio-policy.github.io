@@ -808,3 +808,23 @@ class TestPeopleRegisterThreshold(unittest.TestCase):
     def test_telco_name_alone_is_not_enough(self):
         # 동명이인 방어 — 증인·참고인 자격이 아니면 이름만으로는 등록하지 않는다
         self.assertEqual(self._decide(['한국인터넷진흥원장직무대행'], 1, '박정호'), (False, False))
+
+
+class TestPersonRoleKind(unittest.TestCase):
+    """#166: 자격이 바뀐 인물 — kind는 현재 자격(최신 발언 직함)으로 매번 다시 계산한다."""
+
+    def _kind(self, latest_pos):
+        import tools_people_refresh as tp
+        return '의원' if latest_pos in tp.MEMBER_POS else '정부·참고인'
+
+    def test_kind_follows_latest_position(self):
+        # 이진숙: 방통위원장(15건) → 과방위원(1건). 현재 자격이 위원이므로 '의원'
+        self.assertEqual(self._kind('위원'), '의원')
+        # 김민석: 위원 → 국무총리. 현재 자격이 정부이므로 '정부·참고인'
+        self.assertEqual(self._kind('국무총리'), '정부·참고인')
+
+    def test_member_pos_covers_deputy_chair_titles(self):
+        import tools_people_refresh as tp
+        # 2026-09-13까지 빠져 있던 의원석 직함들
+        for pos in ('소위원장대리', '소위원장직무대리', '위원장직무대리', '반장'):
+            self.assertIn(pos, tp.MEMBER_POS, pos + ' 이 의원석 직함에 없다')
