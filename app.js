@@ -10028,14 +10028,20 @@ function _shortAgenda(a) {
   return prefix + ' (' + parts.slice(0, 2).join('·') + tail + ')';
 }
 
+// 보기 전환. 'search'는 탭이 아니라 **검색을 실행했을 때만 들어가는 상태**다(2026-09-13) —
+// 검색창을 탭 밖 상단으로 올리면서 '원문 검색' 탭을 없앴다. 검색 중에는 두 탭 모두 꺼지고
+// 탭 줄 옆에 「'…' 검색 결과 · ✕ 목록으로」 빵조각이 뜬다. ✕는 직전에 보던 탭으로 돌아간다.
+var _minutesPrevView = 'meeting';
+
 function switchMinutesView(view) {
+  if (view === 'search' && _minutesView !== 'search') _minutesPrevView = _minutesView;
   _minutesView = view;
   var listEl = document.getElementById('assembly-minutes-list');
   var spkEl = document.getElementById('assembly-speakers');
   var schEl = document.getElementById('assembly-search');
   var tabM = document.getElementById('minutes-tab-by-meeting');
   var tabS = document.getElementById('minutes-tab-by-speaker');
-  var tabQ = document.getElementById('minutes-tab-search');
+  var crumb = document.getElementById('minutes-search-crumb');
   var on = 'cursor:pointer;font-size:12px;padding:5px 12px;border-radius:6px;border:1px solid var(--accent);background:var(--accent);color:#fff';
   var off = 'cursor:pointer;font-size:12px;padding:5px 12px;border-radius:6px;border:1px solid var(--border);background:var(--bg-card);color:var(--text-secondary)';
   if (listEl) listEl.style.display = view === 'meeting' ? '' : 'none';
@@ -10043,9 +10049,24 @@ function switchMinutesView(view) {
   if (schEl) schEl.style.display = view === 'search' ? '' : 'none';
   if (tabM) tabM.style.cssText = view === 'meeting' ? on : off;
   if (tabS) tabS.style.cssText = view === 'speaker' ? on : off;
-  if (tabQ) tabQ.style.cssText = view === 'search' ? on : off;
+  if (crumb && view !== 'search') crumb.style.display = 'none';
   if (view === 'speaker') loadSpeakers();
-  if (view === 'search') { var q = document.getElementById('asm-search-q'); if (q) q.focus(); }
+}
+
+// 검색 결과 상태의 빵조각. 검색어를 보여 주고 ✕로 보던 목록에 돌아간다.
+function showMinutesSearchCrumb(text) {
+  var crumb = document.getElementById('minutes-search-crumb');
+  if (!crumb) return;
+  crumb.innerHTML = '“' + escHtml(text) + '” 검색 결과 · ' +
+    '<a href="javascript:void(0)" onclick="exitMinutesSearch()" ' +
+    'style="color:var(--accent);text-decoration:none">✕ 목록으로</a>';
+  crumb.style.display = '';
+}
+
+function exitMinutesSearch() {
+  var q = document.getElementById('asm-search-q');
+  if (q) q.value = '';
+  switchMinutesView(_minutesPrevView || 'meeting');
 }
 
 // ── 국회 발언 원문 검색 (2026-08-14 #98) ──────────────────────
@@ -10065,10 +10086,9 @@ async function searchAssemblySpeech() {
   var out = document.getElementById('asm-search-result');
   if (!input || !out || !sb) return;
   var text = (input.value || '').trim();
-  if (!text) {
-    out.innerHTML = '<div style="color:var(--text-secondary);padding:12px;text-align:center;font-size:12px">찾고 싶은 발언을 입력하세요</div>';
-    return;
-  }
+  if (!text) { input.focus(); return; }   // 빈 검색은 보던 목록을 덮지 않는다
+  switchMinutesView('search');            // 검색창이 탭 밖에 있으므로 실행 시점에 결과 화면으로 전환
+  showMinutesSearchCrumb(text);
   out.innerHTML = '<div style="color:var(--text-secondary);padding:20px;text-align:center;font-size:12px">국회 회의록에서 찾는 중...</div>';
   var data;
   try {
