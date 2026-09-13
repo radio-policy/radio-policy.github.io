@@ -187,7 +187,9 @@ const START_TEXT =
   '항목을 모두 끄면 알림이 오지 않습니다.\n\n' +
   '📖 <b>법령 검색</b> — <code>/law 3G 종료 관련 법령</code> (궁금한 주제 → 관련 법령·조항과 이유. <b>운영자 최초 1회 승인 필요</b>)\n' +
   '   <i>조문 번호를 알면 승인 없이 바로 — <code>/law 전기통신사업법 19조</code></i>\n' +
-  '🏛 <b>국회 발언 검색</b> — <code>assem 2019년 국정감사에서 김성수 의원이 무선국 관련 발언 찾아줘</code>\n' +
+  // 예시에 의원 실명을 쓰지 않는다(2026-09-13, #158) — 사내 공유 대상이 넓어졌고, 이름을 넣으면 그 사람 발언만
+  // 걸러져 결과가 1~3건으로 줄어 기능이 약해 보인다(실측: 주제어 71~183건 vs 이름+주제어 1~3건).
+  '🏛 <b>국회 발언 검색</b> — <code>/assem 지하철 와이파이 관련 발언 찾아줘</code>\n' +
   '   <i>과방위 상임위·국정감사 회의록 원문에서 찾습니다(20대 국회~현재).</i>\n' +
   '🤖 <b>AI 자문</b> — <code>/ask 질문</code> (동향·시사점까지 종합, 운영자 최초 1회 승인 필요)\n' +
   // 대시보드 자문은 chatHistory를 누적해 대화가 이어지지만 봇은 질문 1건만 보낸다(rag.ts).
@@ -276,9 +278,9 @@ async function handleAssemSearch(chatId: number, arg: string): Promise<void> {
   const text = arg.trim();
   if (!text) {
     await sendTelegramHtml(BOT_TOKEN, chatId,
-      '사용법: <code>assem 2019년 국정감사에서 김성수 의원이 무선국 관련해서 발언한 내용을 찾아줘</code>\n' +
+      '사용법: <code>/assem 2019년 국정감사에서 무선국 관련해서 발언한 내용을 찾아줘</code>\n' +
       '평소 말하듯 쓰시면 의원명·연도·회의 구분을 알아서 골라냅니다. ' +
-      '<code>assem 김성수 무선국</code> 처럼 짧게 써도 됩니다.\n' +
+      '<code>/assem 지하철 와이파이</code> 처럼 짧게 써도 됩니다.\n' +
       '<i>범위: 20대 국회(2016)~현재, 과방위(20대 전반기 미방위 포함)의 상임위·국정감사 회의록.</i>');
     return;
   }
@@ -294,7 +296,7 @@ async function handleAssemSearch(chatId: number, arg: string): Promise<void> {
   }
   if (!parsed.query) {
     await sendTelegramHtml(BOT_TOKEN, chatId,
-      '🔍 무엇을 찾을지 알아내지 못했습니다.\n<code>assem 김성수 의원 무선국</code> 처럼 ' +
+      '🔍 무엇을 찾을지 알아내지 못했습니다.\n<code>/assem 지하철 와이파이</code> 처럼 ' +
       '<b>찾을 낱말</b>을 넣어 주세요.');
     await logUsage(chatId, 'assem', text, false, '핵심어 미추출');
     return;
