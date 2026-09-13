@@ -8233,6 +8233,37 @@ var ISSUE_ITEM_TYPES = {
   kb_case:     { icon:'ti-history',         label:'과거사례' },
   stakeholder: { icon:'ti-users',           label:'이해관계자' }
 };
+// 운영 메타는 관리자만 — 정의문의 판정 기준(해당/해당 없음), 링크 상태값, 근거 표기는
+// 매시 AI 판정·검증 이력을 위한 것이라 외부 열람자에게는 "내부 작업창"으로 읽힌다(#160).
+function _issueIsAdmin() { return typeof isAdminUser === 'function' && isAdminUser(); }
+
+function _issueDefPublic(def) {
+  var t = String(def || '').trim();
+  if (!t || _issueIsAdmin()) return t;
+  var marks = ['해당:', '해당 :', '해당없음', '해당 없음', '보도만 해당', '기사만 해당', '만 해당하며', '만 해당한다'];
+  var cut = -1;
+  marks.forEach(function(m) {
+    var k = t.indexOf(m);
+    if (k >= 0 && (cut < 0 || k < cut)) cut = k;
+  });
+  if (cut < 0) return t;
+  var head = t.slice(0, cut);
+  var end = head.lastIndexOf('.');
+  if (end > 20) head = head.slice(0, end + 1);
+  return head.trim().replace(/[,·\s]+$/, '');
+}
+
+function _issueLabelPublic(txt) {
+  var t = String(txt || '');
+  return _issueIsAdmin() ? t : t.replace(/\s*\((?:proposed|pending|promoted|replaced)\)\s*$/i, '');
+}
+
+function _issueNotePublic(txt) {
+  var t = String(txt || '');
+  if (!t || _issueIsAdmin()) return t;
+  return t.replace(/\s*\((?:세션[^)]*|KB[^)]*|자동[^)]*|공식 자료[^)]*)\)\s*$/, '').trim();
+}
+
 var _issueCache = null;        // [{...issue, _links:[...]}]
 var _issueFilter = { stage: null, category: null };
 var selectedIssueId = null;
@@ -8323,7 +8354,7 @@ function renderIssueMapList() {
   ISSUE_CATEGORIES.forEach(function(c) {
     h += _issueChip(c, _issueFilter.category === c, "setIssueFilter(undefined,'" + c + "')");
   });
-  h += '<button class="btn" onclick="createIssueManual()" style="margin-left:auto;font-size:11px;padding:4px 10px;white-space:nowrap"><i class="ti ti-plus"></i> 수동 등록</button>';
+  if (_issueIsAdmin()) h += '<button class="btn" onclick="createIssueManual()" style="margin-left:auto;font-size:11px;padding:4px 10px;white-space:nowrap"><i class="ti ti-plus"></i> 수동 등록</button>';
   h += '</div>';
 
   // ── 제안 대기 (관리자 전용) ──
@@ -8392,7 +8423,7 @@ function _issueCardHtml(i) {
       (hot >= 3 ? '<span style="margin-left:auto;font-size:11px;color:#ef4444;white-space:nowrap">🔥 7일 ' + hot + '건</span>' : '') +
     '</div>' +
     '<div style="font-size:13px;font-weight:600;color:var(--text-primary);line-height:1.5;margin-bottom:4px">' + escHtml(i.title) + '</div>' +
-    (i.definition ? '<div style="font-size:11px;color:var(--text-secondary);line-height:1.6;margin-bottom:8px">' + escHtml(i.definition) + '</div>' : '') +
+    (_issueDefPublic(i.definition) ? '<div style="font-size:11px;color:var(--text-secondary);line-height:1.6;margin-bottom:8px">' + escHtml(_issueDefPublic(i.definition)) + '</div>' : '') +
     '<div style="font-size:11px;color:var(--text-tertiary)">연결 ' + links.length + '건' +
       (nLaw ? ' · 법령 ' + nLaw : '') + (nCase ? ' · 유사사례 ' + nCase : '') +
       (last ? ' · 최근 ' + last : '') + '</div>' +
@@ -8509,10 +8540,10 @@ async function showIssueDetail(issueId) {
       (i.category ? '<span style="font-size:11px;color:var(--text-secondary);background:var(--bg-secondary);padding:2px 9px;border-radius:10px">' + escHtml(i.category) + '</span>' : '') +
       (i.resolution_kind ? '<span style="font-size:11px;color:var(--text-tertiary)">· 종결: ' + escHtml(i.resolution_kind) + '</span>' : '') +
       '<span style="margin-left:auto;font-size:11px;color:var(--text-tertiary)"><i class="ti ti-clock"></i> 최근 ' +
-        escHtml((i.last_activity_at || '').slice(5, 10).replace('-', '/')) + ' · 연결 ' + links.length + '건</span>' +
+        escHtml((i.last_activity_at || '').slice(5, 10).replace('-', '/')) + ' · 연결 ' + all.length + '건</span>' +
     '</div>' +
     '<div style="font-size:17px;font-weight:700;color:var(--text-primary);line-height:1.45;margin-bottom:5px">' + escHtml(i.title) + '</div>' +
-    (i.definition ? '<div style="font-size:12px;color:var(--text-secondary);line-height:1.7">' + escHtml(i.definition) + '</div>' : '') +
+    (_issueDefPublic(i.definition) ? '<div style="font-size:12px;color:var(--text-secondary);line-height:1.7">' + escHtml(_issueDefPublic(i.definition)) + '</div>' : '') +
     (admin ? '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">' +
       '<span style="font-size:11px;color:var(--text-tertiary)">단계 변경</span>' +
       Object.keys(ISSUE_STAGES).map(function(s) {
@@ -8577,13 +8608,13 @@ async function showIssueDetail(issueId) {
         '<div style="font-size:11px;color:var(--text-tertiary);margin-bottom:2px">' +
           (d ? d + ' · ' : '') + '<i class="ti ' + t.icon + '"></i> ' + escHtml(t.label) +
           (g.type === 'news' ? ' <i class="ti ti-lock" title="이슈 연결로 영구 보관됩니다"></i>' : '') +
-          (head.added_by === 'auto' ? ' <span style="color:var(--text-tertiary)">· 자동</span>' : '') +
+          (_issueIsAdmin() && head.added_by === 'auto' ? ' <span style="color:var(--text-tertiary)">· 자동</span>' : '') +
         '</div>' +
         '<div style="font-size:12px;color:var(--text-primary);line-height:1.6">' +
-          '<span onclick="openIssueLinkItem(' + head.id + ')" style="cursor:pointer">' + escHtml(head.title || head.item_id) + '</span>' +
+          '<span onclick="openIssueLinkItem(' + head.id + ')" style="cursor:pointer">' + escHtml(_issueLabelPublic(head.title || head.item_id)) + '</span>' +
           (admin ? ' <span onclick="unlinkIssueItem(' + head.id + ')" title="연결 해제" style="cursor:pointer;color:var(--text-tertiary);font-size:11px">✕</span>' : '') +
         '</div>' +
-        (head.note ? '<div style="font-size:11px;color:var(--text-secondary);line-height:1.6;margin-top:2px">' + escHtml(head.note) + '</div>' : '');
+        (_issueNotePublic(head.note) ? '<div style="font-size:11px;color:var(--text-secondary);line-height:1.6;margin-top:2px">' + escHtml(_issueNotePublic(head.note)) + '</div>' : '');
       if (rest.length) {
         h += '<details style="margin-top:3px"><summary style="font-size:11px;color:var(--text-tertiary);cursor:pointer">외 ' + rest.length + '건</summary>' +
           rest.map(function(l) {
@@ -8669,7 +8700,7 @@ async function showIssueDetail(issueId) {
         return '<div style="background:var(--bg-secondary);border-radius:var(--radius-md);padding:10px 12px">' +
           '<div style="font-size:12px;font-weight:600;color:var(--text-primary)">' + escHtml(l.title || l.item_id) +
             (admin ? ' <span onclick="unlinkIssueItem(' + l.id + ')" title="제거" style="cursor:pointer;color:var(--text-tertiary);font-size:11px">✕</span>' : '') + '</div>' +
-          (l.note ? '<div style="font-size:11px;color:var(--text-secondary);line-height:1.65;margin-top:3px">' + escHtml(l.note) + '</div>' : '') +
+          (_issueNotePublic(l.note) ? '<div style="font-size:11px;color:var(--text-secondary);line-height:1.65;margin-top:3px">' + escHtml(_issueNotePublic(l.note)) + '</div>' : '') +
         '</div>';
       }).join('') + '</div>' + _issueCardClose();
   }
@@ -8679,7 +8710,9 @@ async function showIssueDetail(issueId) {
     '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">' +
       '<span style="font-size:13px;font-weight:600;color:var(--text-primary)"><i class="ti ti-building-broadcast-tower"></i> SKT 영향 요약</span>' +
       (i.impact_summary && i.impact_summary.generated_at
-        ? '<span style="font-size:11px;color:var(--text-tertiary)">' + escHtml((i.impact_summary.model || '').replace(/-\d{8}$/, '')) + ' · ' + escHtml(String(i.impact_summary.generated_at).slice(0, 10)) + '</span>'
+        ? '<span style="font-size:11px;color:var(--text-tertiary)">' +
+            (_issueIsAdmin() ? escHtml((i.impact_summary.model || '').replace(/-\d{8}$/, '')) + ' · ' : '') +
+            escHtml(String(i.impact_summary.generated_at).slice(0, 10)) + ' 기준</span>'
         : '') +
       (isAdminUser() ? '<button class="btn" onclick="generateIssueImpact(' + i.id + ')" style="margin-left:auto;font-size:11px;padding:3px 11px">' +
         (i.impact_summary ? '<i class="ti ti-refresh"></i> 다시 생성' : '<i class="ti ti-sparkles"></i> 생성') + '</button>' : '') +
@@ -9172,7 +9205,7 @@ function _issueImpactHtml(iss, links) {
         '" style="color:var(--accent);cursor:pointer;font-size:11px">' + m + '</span>';
     });
   }
-  return (stale ? '<div style="font-size:11px;color:#b8791a;margin-bottom:6px">⚠ 요약 생성 이후 새 항목이 연결됐습니다 — 다시 생성하면 반영됩니다.</div>' : '') +
+  return (stale && _issueIsAdmin() ? '<div style="font-size:11px;color:#b8791a;margin-bottom:6px">⚠ 요약 생성 이후 새 항목이 연결됐습니다 — 다시 생성하면 반영됩니다.</div>' : '') +
     '<div style="font-size:12px;color:var(--text-primary);padding:12px 14px;background:var(--bg-secondary);border-radius:var(--radius-md);line-height:1.8">' +
       '<div style="margin-bottom:6px"><b>무슨 일</b> — ' + withCites(s.what) + '</div>' +
       '<div style="margin-bottom:6px"><b>왜 중요</b> — ' + withCites(s.why) + '</div>' +

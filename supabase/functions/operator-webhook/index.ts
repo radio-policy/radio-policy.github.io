@@ -94,7 +94,14 @@ async function enrichIssue(sb: ReturnType<typeof createClient>, issueId: number)
         ctx + '\n\n<what>무슨 일이 벌어졌는가(2~3문장)</what><why>왜 SKT에 중요한가(2~3문장)</why><action>무엇을 해야 하는가(2~3문장)</action> 형식으로만 출력.', 1000);
       const pick = (tag: string) => (t.match(new RegExp('<' + tag + '>([\\s\\S]*?)</' + tag + '>')) || [])[1]?.trim() || '';
       const what = pick('what'), why = pick('why'), action = pick('action');
-      if (what || why) {
+      // 저장 전 검증 — 모델이 "관련 기사가 없다"류로 답해도 그대로 저장돼 화면에 12일간
+      // 노출된 사고(이슈 10, 2026-09-01~13)를 막는다. 실패 문구·근거 없는 요약은 버리고
+      // 다음 보강(수동 enrich)에서 재시도한다(#160-보론).
+      const FAIL_RE = /존재하지 않는다|존재하지 않습니다|찾을 수 없|확인되지 않는다|해당하는 기사가 없|관련된 기사가 없|관련 기사가 없|제공된 목록에는|정보가 부족|알 수 없다/;
+      const bad = !what || !why || what.length < 40 || FAIL_RE.test(what) || FAIL_RE.test(why) || !/\[\d+\]/.test(what);
+      if (bad) {
+        console.error('[보강:영향 폐기]', issueId, (what || why || t).slice(0, 120));
+      } else {
         await sb.from('issues').update({ impact_summary: {
           what, why, action,
           sources: news.map((l: { id: number; title: string }, k: number) =>
