@@ -65,6 +65,21 @@ _STAGE_INCIDENT = re.compile(r'유출|해킹|침해|대규모\s*장애|먹통')
 _STAGE_LAWSUIT = re.compile(r'판결|패소|승소|상고|항소|행정소송|집행정지')
 _CORE_LAW = re.compile(r'전파|전기통신|정보통신|주파수|통신')
 
+# 제안하지 않는 유형 — 기각 105건의 다수를 차지한 홍보·행사성 보도(#161-보론3).
+# 실측(2026-09): 서울세계불꽃축제 통신망 지원이 제안 8건, 피지컬 AI·AI-RAN 실증 5건,
+# GSMA 참석 2건, 아이폰 사전예약 혜택 2건 — 전부 운영자가 기각했다.
+_NON_ISSUE = re.compile(
+    r'불꽃축제|축제|행사장|실증|시연|테스트베드|PoC|MOU|업무협약|맞손|파트너십|'
+    r'협력\s*강화|컨소시엄\s*구성|참가|참석|컨퍼런스|포럼|전시회|GSMA|MWC|CES|'
+    r'인재\s*확보|채용|조직\s*개편|자회사\s*협업|그룹사\s*연계|'
+    r'사전예약|프로모션|혜택\s*경쟁|이벤트|출시\s*기념|수상|우수사례|공모전|시상')
+# 위 낱말이 있어도 제도가 걸려 있으면 제안을 막지 않는다(홍보 기사와 정책 기사의 경계).
+_POLICY_SIGNAL = re.compile(
+    r'법률|법안|시행령|시행규칙|고시|개정|제정|입법|국회|상임위|과방위|'
+    r'과징금|시정명령|제재|처분|조사\s*착수|고발|소송|판결|'
+    r'주파수\s*(?:할당|재할당|경매|회수|대가)|의결|행정지도|규제|의무화|'
+    r'국책\s*사업|사업자?\s*선정|공모\s*결과|예산\s*편성')
+
 
 def _now():
     return datetime.now(timezone.utc)
@@ -396,6 +411,7 @@ def _suggest_from_news(sb, issues, dry):
                 continue
         nk = _norm_key(group[0]['title'])
         nk_state, best_active, sim_a, sim_p, sim_r = _match_states(issues, nk, vecs[ci])
+        titles_all = ' '.join(r['title'] for r in group)
 
         # ⓪ 어휘 직결 — 대표 제목과 active 이슈 제목의 공유 키워드 ≥3이면 판정 없이 연결.
         #    cluster_star와 같은 원칙의 결정적 규칙. AI 경계 판정이 놓친 명백한 후속
@@ -435,6 +451,24 @@ def _suggest_from_news(sb, issues, dry):
             continue
         days = {(r.get('published_at') or '')[:10] for r in group if r.get('published_at')}
         urgent = sum(1 for r in group if r.get('urgency') == '긴급')
+        # 홍보·행사성 차단 — 제도 신호가 없으면 아무리 많이 보도돼도 이슈가 아니다(#161-보론3).
+        # 연결 경로(⓪·①·과반겹침)는 이미 위에서 끝났으므로 여기서 막아도 기존 이슈의 후속은 안 잃는다.
+        if _NON_ISSUE.search(titles_all) and not _POLICY_SIGNAL.search(titles_all):
+            print(f'[제안 보류 — 홍보·행사성] "{group[0]["title"][:30]}"')
+            continue
+        # 기존 제안·기각 제목과 어휘가 3개 이상 겹치면 같은 사건의 파편이다.
+        # 임베딩 교차(SIM_PROPOSED_DUP)는 사업자명만 다른 쌍둥이를 놓친다 — 실측: 불꽃축제 제안 8건이
+        # 서로 0.72를 넘지 못해 모두 통과했다. ⓪ 어휘 직결과 같은 결정적 규칙을 제안 쪽에도 둔다.
+        # 기각분과의 대조는 후보에 제도 신호가 없을 때만 — 기각된 홍보 파편과 어휘가 겹친다는
+        # 이유로 진짜 정책 이슈가 막히면 안 된다(실측: 이 예외가 없으면 활성 #13·#30·#46이 차단됐다).
+        _cand_policy = bool(_POLICY_SIGNAL.search(titles_all))
+        _frag = next((i for i in issues
+                      if (i['state'] == 'proposed' or (i['state'] == 'rejected' and not _cand_policy))
+                      and len(kw_rep & extract_keywords(i['title'])) >= 3), None)
+        if _frag is not None:
+            print(f'[제안 보류 — 파편/재제안] "{group[0]["title"][:28]}" ≈ '
+                  f'[{_frag["id"]}·{_frag["state"]}] {_frag["title"][:24]}')
+            continue
         if (len(group) >= CLUSTER_MIN_ARTICLES and len(days) >= CLUSTER_MIN_DAYS) or \
            (urgent >= URGENT_MIN and len(days) >= URGENT_MIN_DAYS):
             # 발제 기준을 넘어도 기존 이슈와 조금이라도 닮았으면(≥0.35) 먼저 관련 판정을 받는다 —
@@ -462,6 +496,10 @@ def _suggest_from_news(sb, issues, dry):
         if not prof:
             continue
         titles_all = ' '.join(r['title'] for r in group)
+        # 생성된 제목에도 같은 잣대 — Haiku가 홍보 기사에서 그럴듯한 이슈 제목을 지어낼 수 있다
+        if _NON_ISSUE.search(prof['title']) and not _POLICY_SIGNAL.search(prof['title'] + ' ' + titles_all):
+            print(f'[제안 보류 — 홍보·행사성(생성 제목)] {prof["title"]}')
+            continue
         hint = '현안' if (_STAGE_SANCTION.search(titles_all) or _STAGE_INCIDENT.search(titles_all)
                           or _STAGE_LAWSUIT.search(titles_all)) else '발생'
         _propose(sb, issues, prof['title'], prof.get('definition'), prof.get('category', '기타'),
