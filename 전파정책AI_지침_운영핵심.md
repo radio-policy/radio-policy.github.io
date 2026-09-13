@@ -49,6 +49,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 ├── regulatory-kb/              # OKF 법령 요약 번들(manifest.json 정본 + laws/·procedures/·glossary/). kb_* 적재 원천
 ├── backfill_embeddings.py      # Voyage 임베딩 백필(document_chunks NULL만)
 ├── resend_briefing.py / send_briefing.py  # 브리핑 재발송·발송 단독
+├── briefing_audit.py           # 브리핑 품질 점검(#161) — 그날 긴급 기사를 사건 단위로 묶어 브리핑 포괄률·전일 재탕·용어·분석 수를 센다. AI 0회·읽기 전용, 주 1회 실행 권장
 ├── health_watchdog.py          # 외부 헬스 워치독(GitHub Actions, Supabase 독립) — 크롤러 성공여부 인지(고장 vs 뉴스없음 구분)
 ├── system_prompt.js            # 대시보드 AI 자문 시스템 프롬프트(위임 관계 검증·핵심 조문 참조)
 ├── index.html / app.js         # 대시보드 프론트엔드(GitHub Pages). AI 자문은 SSE 스트리밍(stream:true) — 비스트리밍 복귀 금지. AI 자문은 RAG+뉴스+법령동향 컨텍스트 조합
@@ -480,6 +481,7 @@ python law_diff_gen.py --assembly-only  # 국회 입법예고 조문 분석만 �
 python gov_notice_crawler.py # 정부 고시·입법예고(한국 IP). "[입법예고] N페이지:M행 스캔, 누적 매칭 K건"
 python refetch_content.py    # 본문 재수집(한국 IP, trafilatura)
 python resend_briefing.py [날짜]              # 브리핑 재발송
+python briefing_audit.py --days 7            # 브리핑 품질 점검 — 포괄률·재탕·용어·분석(AI 0회, 주 1회)
 python upload_law_pdf.py 파일 "문서명" 고시    # 법령/고시/ITU-R 업로드 (업로드 시 PDF 편집흔적 자동 정리 — clean_pdf_artifacts)
 python backfill_embeddings.py                 # 임베딩 백필(document_chunks)
 python backfill_term_details.py               # 기술용어 상세 백필(tech_terms 설명·개념도·관련용어, 빈 것만. 모델은 app.js와 동일하게 유지)

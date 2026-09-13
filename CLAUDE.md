@@ -77,6 +77,7 @@ python refetch_content.py     # body re-fetch (Korean IP, trafilatura). Summarie
 
 # Briefing / embeddings
 python resend_briefing.py [date]        # resend a briefing
+python briefing_audit.py --days 7       # briefing quality audit — event coverage, repeats, terms, analyses (no AI, read-only)
 python backfill_embeddings.py           # document_chunks embeddings (NULL only)
 python term_extract.py --dry-run        # 기술 용어 자동 추출 시험(Haiku) — 실제 실행은 05:00 KST Actions term_extract.yml → backfill_term_details.py --limit 10 (#141)
 python law_terms_sync.py --dry-run     # 법적 용어 정의(현행 법령·고시 제N조(정의) 원문) → law_terms 재추출 시험. 실제는 11:00 law_crawl.yml 승격 직후 단계(law_watch 앞), AI 0회. 대시보드 '법적·기술 용어' 탭 1의 데이터 (#156)
