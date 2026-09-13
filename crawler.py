@@ -1787,6 +1787,12 @@ def screen_news_items(items: list) -> list:
                     items[n]['event'] = got.get('event') or ''
                     if got.get('urgency'):        # 미판정은 키를 만들지 않는다 — 개별 판정 폴백 대상
                         items[n]['urgency'] = got['urgency']
+                    # ── 그림자 기록 (2026-09-13, #162) ──────────────────────
+                    # 선별 콜이 낸 등급은 ⑤단계(classify_urgency)가 전건 덮어써 버려진다(#84 이후 의도된 동작).
+                    # 버리기 전에 news_feed.urgency_screen에 남긴다 — **기록만** 하므로 저장 등급·알림은 불변.
+                    # 2주 뒤 urgency_screen × urgency 혼동행렬로 "선별=참고면 개별 콜 생략" 여부를 결정한다.
+                    # 빈 문자열 = 선별이 등급을 안 냄(모델 생략). 판정 경로를 안 탄 기사는 아래 setdefault가 채운다.
+                    items[n]['urgency_screen'] = got.get('urgency') or ''
                 else:
                     url = (items[n].get('url') or '').strip()
                     if url:
@@ -1829,6 +1835,7 @@ def screen_news_items(items: list) -> list:
     for it in passed:                     # 통과분만 — 탈락 기사에 안전망을 돌리면 보정 로그가 무관 기사로 오염된다
         it.setdefault('tags', [])         # 반드시 안전망보다 먼저 — 태그가 없는 기사가 바로 보정 대상이다
         it.setdefault('event', '')        # 사건 라벨 미판정은 빈 문자열(대시보드는 이때 제목 유사도로 되돌아간다)
+        it.setdefault('urgency_screen', '')   # 그림자 기록(#162) — 인사 자동통과·키워드 폴백 경로는 여기서 채운다
         _spectrum_safety_net(it)          # 판정 누락 보정 — 아래 함수 주석 참조
     for it in items:
         it.pop('_screen_text', None)      # 제거는 전체 대상 — 반환 규약(판정 전용 키는 여기서 전부 제거) 유지

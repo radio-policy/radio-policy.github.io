@@ -739,3 +739,27 @@ class TestKmccMeeting(unittest.TestCase):
         self.assertEqual(km.press_relevant(lambda t, b: (True, 'ai'), kw, 'x', 'y'), (True, 'ai'))
         # 제목 키워드 일치는 AI 판정보다 우선(안전망)
         self.assertTrue(km.press_relevant(lambda t, b: (False, 'ai-무관'), kw, '5G 지원금 안내', '')[0])
+
+
+class TestUrgencyShadow(unittest.TestCase):
+    """#162: 선별 등급 그림자 기록 — 통과분 전건에 urgency_screen 키가 있어야 벌크 upsert가 산다."""
+
+    def test_setdefault_covers_every_passed_item(self):
+        import crawler
+        # 판정 경로를 안 탄 항목(인사 자동통과·키워드 폴백)에도 키가 생기는지 — 안전망 한 줄의 계약
+        passed = [{'title': 'a'}, {'title': 'b', 'urgency_screen': '긴급'}]
+        for it in passed:
+            it.setdefault('tags', [])
+            it.setdefault('event', '')
+            it.setdefault('urgency_screen', '')
+        keys = [set(i) for i in passed]
+        self.assertEqual(keys[0], keys[1], 'PostgREST 벌크 upsert는 모든 행의 키 집합이 같아야 한다')
+        self.assertEqual(passed[0]['urgency_screen'], '')
+        self.assertEqual(passed[1]['urgency_screen'], '긴급')
+
+    def test_screen_urgency_vocabulary_maps_to_db_values(self):
+        import crawler
+        self.assertEqual(crawler._AI_PRIORITY_MAP['즉시대응'], '긴급')
+        self.assertEqual(crawler._AI_PRIORITY_MAP['금주검토'], '보통')
+        self.assertEqual(crawler._AI_PRIORITY_MAP['동향파악'], '참고')
+        self.assertEqual(crawler._AI_PRIORITY_MAP.get('알수없는값', ''), '')
