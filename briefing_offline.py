@@ -160,9 +160,23 @@ def do_import(indir: str, apply: bool):
         except Exception as e:
             print(f'{d}: 구독자 상태 확인 실패 — 안전을 위해 건너뜀 ({str(e)[:50]})')
             continue
-        cur = sb.table('daily_briefings').select('content').eq('briefing_date', d).limit(1).execute().data
+        cur = sb.table('daily_briefings').select('content,news_count').eq('briefing_date', d).limit(1).execute().data
         if not cur:
             print(f'{d}: 기존 행 없음 — 건너뜀')
+            continue
+        # 퇴행 방지 — 뉴스는 60일 롤링으로 지워지므로, 보존 경계에 걸친 날은 그날 기사의
+        # 상당수가 이미 사라져 있다. 그 상태로 다시 쓰면 원본보다 얇은 브리핑으로 덮어써서
+        # 기록이 나빠진다(실측 2026-08-30: 원본 92건 → 남은 41건). 원본이 본 기사 수의
+        # 60% 미만만 남아 있으면 건너뛴다.
+        prev_n = cur[0].get('news_count') or 0
+        now_n = src.get('articles_24h') or 0
+        if prev_n and now_n < prev_n * 0.6:
+            print(f'{d}: 원본 기사 {prev_n}건 중 {now_n}건만 남음 — 퇴행 방지로 건너뜀')
+            continue
+        prev_items = len(re.findall(r'\[ID:', cur[0]['content'] or ''))
+        new_items = len(re.findall(r'\[ID:', text))
+        if prev_items and new_items < prev_items:
+            print(f'{d}: 항목이 {prev_items} → {new_items}건으로 줄어 건너뜀(퇴행 방지)')
             continue
         print(f'{d}: {len(cur[0]["content"] or "")}자 → {len(final)}자' + ('' if apply else '  [미리보기]'))
         if apply:
