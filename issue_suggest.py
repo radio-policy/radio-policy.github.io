@@ -556,7 +556,10 @@ def _stage_and_dormancy(sb, issues, dry):
         # 휴면 판정 기준은 last_activity_at(콘텐츠의 날짜)가 아니라 **링크가 실제로 추가된 시각**.
         # 과거 기사를 보강하면 item_date는 옛날이지만 이슈는 방금 활동한 것이다 — 혼동하면
         # 만든 당일 이슈가 '36일 무활동'으로 오판된다(dry-run 실측).
+        # 단, 세션이 붙이는 이해관계자·법령·사례 링크는 '활동'이 아니다 — 큐레이션이 휴면
+        # 배지를 지워 4개월 무활동 이슈(#7)가 현안으로 남는 실측(2026-09-13, #157-보론2).
         recent = sb.table('issue_links').select('created_at').eq('issue_id', i['id']) \
+            .in_('item_type', ['news', 'press_chunk', 'minutes', 'bill', 'diff']) \
             .order('created_at', desc=True).limit(1).execute().data
         last_touch = (recent[0]['created_at'] if recent else None) or i.get('last_activity_at')
         last_dt = datetime.fromisoformat(last_touch.replace('Z', '+00:00')) if last_touch else now
