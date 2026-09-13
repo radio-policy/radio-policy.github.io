@@ -763,3 +763,48 @@ class TestUrgencyShadow(unittest.TestCase):
         self.assertEqual(crawler._AI_PRIORITY_MAP['금주검토'], '보통')
         self.assertEqual(crawler._AI_PRIORITY_MAP['동향파악'], '참고')
         self.assertEqual(crawler._AI_PRIORITY_MAP.get('알수없는값', ''), '')
+
+
+class TestSpeakerNormalize(unittest.TestCase):
+    """#164: 호환 한자(U+F900~) 발언자명이 표준 한자로 모여야 인물 명부가 갈라지지 않는다."""
+
+    def test_compat_hanja_collapses(self):
+        import assembly_minutes as am
+        self.assertEqual(am.normalize_speaker('\uf90a\u6210\u6cf0'), '\u91d1\u6210\u6cf0')  # 金成泰
+        self.assertEqual(am.normalize_speaker('\uf9c9\u69ae\u590f'), '\u67f3\u69ae\u590f')  # 柳榮夏
+
+    def test_title_strip_still_works(self):
+        import assembly_minutes as am
+        self.assertEqual(am.normalize_speaker('최민희 위원장'), '최민희')
+        self.assertEqual(am.normalize_speaker('위원장 최민희'), '최민희')
+
+
+class TestPeopleRegisterThreshold(unittest.TestCase):
+    """#164: 의원·위원장은 1건, 통신사 임원은 무조건, 그 외 정부·참고인만 4건 이상."""
+
+    def _decide(self, poss, n, name):
+        import tools_people_refresh as tp
+        is_member = bool(set(poss) & tp.MEMBER_POS)
+        is_telco = (any(tp.TELCO_ORG.search(p) for p in poss)
+                    or (name in tp.TELCO_NAMES
+                        and any(w in p for p in poss for w in tp.WITNESS_POS)))
+        return (is_member or is_telco or n >= 4), is_member
+
+    def test_member_one_speech_registers(self):
+        self.assertEqual(self._decide(['위원'], 1, '최혁진'), (True, True))
+        self.assertEqual(self._decide(['의원'], 1, '이언주'), (True, True))
+
+    def test_telco_ceo_registers_even_as_witness(self):
+        # 회의록 직함이 '증인' 하나뿐인 실제 사례 — 이름 명단이 없으면 못 걸러진다
+        self.assertEqual(self._decide(['증인'], 2, '김영섭'), (True, False))
+        self.assertEqual(self._decide(['증인'], 1, '하현회'), (True, False))
+        # 소속이 드러난 직함은 이름 명단 없이도 통과
+        self.assertEqual(self._decide(['㈜LG유플러스부사장'], 3, '박형일'), (True, False))
+
+    def test_other_witness_still_needs_four(self):
+        self.assertEqual(self._decide(['증인'], 3, '홍길동'), (False, False))
+        self.assertEqual(self._decide(['증인'], 4, '홍길동'), (True, False))
+
+    def test_telco_name_alone_is_not_enough(self):
+        # 동명이인 방어 — 증인·참고인 자격이 아니면 이름만으로는 등록하지 않는다
+        self.assertEqual(self._decide(['한국인터넷진흥원장직무대행'], 1, '박정호'), (False, False))

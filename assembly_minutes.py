@@ -32,6 +32,7 @@ doc_name='과방위_회의록_{YYYY}.md')에 섹션으로 등재한다.
 """
 
 import os
+import unicodedata
 import re
 import sys
 import time
@@ -1018,7 +1019,10 @@ def normalize_speaker(name: str) -> str:
         '홍길동(더불어민주당)'→'홍길동'.
     정부측처럼 개인명이 없고 직위만 있는 경우(예 '과학기술정보통신부장관')는
     정규화 결과가 비거나 너무 짧으면 원본을 그대로 둔다."""
-    raw = (name or '').strip()
+    # 호환 한자(U+F900~) 정규화: 회의록 PDF의 '金成泰'(U+F90A)와 HTML의 '金成泰'(U+91D1)는
+    # 눈으로 같은 글자지만 코드포인트가 달라, 같은 사람이 people 명부에 두 번 등록됐다
+    # (실측 김성태 111건/11건 분리, 柳榮夏 1건). NFKC 로 표준 한자로 모아 둔다.
+    raw = unicodedata.normalize('NFKC', (name or '')).strip()
     n = re.sub(r'\s+', ' ', raw)
     n = re.sub(r'\s*[\(（][^)）]*[\)）]', '', n).strip()   # 괄호 정당/부가정보 제거
     # 앞쪽 직위 제거: "위원장 최민희", "장관 유상임"
