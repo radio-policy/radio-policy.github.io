@@ -482,6 +482,8 @@ python gov_notice_crawler.py # 정부 고시·입법예고(한국 IP). "[입법�
 python refetch_content.py    # 본문 재수집(한국 IP, trafilatura)
 python resend_briefing.py [날짜]              # 브리핑 재발송
 python briefing_audit.py --days 7            # 브리핑 품질 점검 — 포괄률·재탕·용어·분석(AI 0회, 주 1회)
+python briefing_offline.py --export --since D1 --until D2 --out DIR  # 과거 브리핑 재생성 재료 내보내기(본문은 세션이 작성, API 0회 — #161-보론6)
+python briefing_offline.py --import --in DIR [--apply]               # 작성본 반영 — 발송 함수 봉인·오늘 날짜 제외·구독자 발송일 이중 확인
 python upload_law_pdf.py 파일 "문서명" 고시    # 법령/고시/ITU-R 업로드 (업로드 시 PDF 편집흔적 자동 정리 — clean_pdf_artifacts)
 python backfill_embeddings.py                 # 임베딩 백필(document_chunks)
 python backfill_term_details.py               # 기술용어 상세 백필(tech_terms 설명·개념도·관련용어, 빈 것만. 모델은 app.js와 동일하게 유지)
