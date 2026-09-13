@@ -11146,12 +11146,41 @@ async function callLawmapAI(userMsg) {
   return JSON.parse(m[0]);
 }
 
-/** 'AI로 관계도 생성' 버튼 — 관리자에게만(#141). 일반 승인자에겐 관리자 요청 안내 문구. */
+/** 'AI로 관계도 생성' 버튼 — 관리자에게만(#141).
+ *  종전에는 비관리자에게 "관리자에게 요청해 주세요"라는 문구만 띄웠는데,
+ *  ① 로그아웃 상태에서도 같은 문구가 떠 본인이 관리자인데 요청하라는 말로 읽혔고
+ *  ② '요청'이라 해 놓고 요청할 방법이 없었다(운영자 지적 2026-09-14).
+ *  → 로그아웃/승인대기/승인자를 갈라 말하고, 승인자에겐 실제 요청 버튼을 준다. */
 function _lawmapGenBtnHtml() {
   if (typeof isAdminUser === 'function' && isAdminUser()) {
     return '<button class="btn btn-primary" style="font-size:11px;padding:2px 10px" onclick="generateLawMapTopic()"><i class="ti ti-sparkles"></i> AI로 관계도 생성 (1회 과금)</button>';
   }
-  return '<span style="font-size:11px;color:var(--text-muted)">새 주제 생성은 관리자에게 요청해 주세요</span>';
+  if (typeof aiReady === 'function' && aiReady()) {
+    return '<button class="btn" style="font-size:11px;padding:2px 10px" onclick="lawmapRequestTopic()"><i class="ti ti-send"></i> 관계도 추가 요청</button>';
+  }
+  if (!currentUser) return '<span style="font-size:11px;color:var(--text-muted)">새 주제는 로그인 후 요청할 수 있습니다</span>';
+  return '<span style="font-size:11px;color:var(--text-muted)">계정 승인 후 새 주제를 요청할 수 있습니다</span>';
+}
+
+/** 관계도 추가 요청 — 승인 회원이 주제·사유를 남기면 '검토 대기'에 쌓이고 운영자 봇으로 알림이 간다.
+ *  알림은 DB 트리거(notify_lawmap_request)가 보낸다 — 브라우저는 봇 토큰을 모른다. */
+async function lawmapRequestTopic() {
+  if (!sb || !currentUser) { setLawMapStatus('⚠️ 로그인이 필요합니다'); return; }
+  var q = (document.getElementById('lawmap-q') || {}).value || '';
+  var topic = (prompt('어떤 주제의 관계도가 필요하신가요? (2~30자)', String(q).trim().slice(0, 30)) || '').trim();
+  if (!topic) return;
+  if (topic.length < 2 || topic.length > 30) { alert('주제는 2~30자로 적어 주세요.'); return; }
+  var why = (prompt('왜 필요한지 한 줄로 적어 주세요 (선택)', '') || '').trim();
+  setLawMapStatus('요청 보내는 중…');
+  var ins = await sb.from('lawmap_proposals').insert({
+    created_by: currentUser.id,
+    requester: (currentProfile && currentProfile.name) || currentUser.email || '',
+    origin: 'request', topic: topic, question: why || null,
+    description: null, relations: [], gate: [], status: 'pending'
+  });
+  if (ins.error) { setLawMapStatus('⚠️ 요청 실패: ' + lmEsc(ins.error.message)); return; }
+  if (typeof refreshLawmapPendingBadge === 'function') refreshLawmapPendingBadge();
+  setLawMapStatus('✅ <b>' + lmEsc(topic) + '</b> 추가 요청을 보냈습니다 — 운영자에게 알림이 갔고, 검토 후 관계도에 반영됩니다');
 }
 
 async function generateLawMapTopic() {
@@ -11263,7 +11292,7 @@ async function loadLawmapProposals(show) {
   panel.innerHTML = _lawmapProposals.map(_lawmapProposalCardHtml).join('');
 }
 
-var LAWMAP_ORIGIN_LABEL = { advisory: 'AI 자문 답변', generate: 'AI로 관계도 생성', enrich: 'AI 보강' };
+var LAWMAP_ORIGIN_LABEL = { advisory: 'AI 자문 답변', generate: 'AI로 관계도 생성', enrich: 'AI 보강', request: '추가 요청' };
 
 function _lawmapGateBadge(g) {
   if (!g) return '<span style="font-size:10px;color:var(--text-muted)">미검사</span>';
