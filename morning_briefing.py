@@ -84,11 +84,12 @@ def fetch_items_with_content() -> list:
             .gte('published_at', cutoff) \
             .not_.is_('content', 'null') \
             .order('published_at', desc=True) \
-            .limit(300) \
+            .limit(500) \
             .execute()
         # limit 60이던 시절, 대형 사건 재보도가 하루 261건 쏟아지자 조회 60건 중 55건이
         # 한 사건이었고 다른 뉴스가 브리핑에서 통째로 밀려났다(배경역사 #44).
-        # 넉넉히 300건을 받아 클러스터링으로 줄이는 방식으로 변경.
+        # 넉넉히 받아 클러스터링으로 줄이는 방식으로 변경. 2026-09-13: 24h 수집이 300건대로
+        # 늘어 limit 300이면 창의 앞쪽(어제 아침)이 잘려 나가므로 500으로 올림(#161).
         items = [it for it in (resp.data or []) if it.get('content') and len(it['content'].strip()) > 50]
         excluded = load_briefing_excluded()
         if excluded:
@@ -150,6 +151,63 @@ def fetch_items_fallback() -> tuple:
 #  STEP 1.5 — 같은 사건 클러스터링 (배경역사 #44)
 # ═══════════════════════════════════════════════════════
 
+def _briefed_recently(hours: int = 96) -> tuple:
+    """최근 브리핑에 실린 기사 id와 본문 토큰을 모은다 — 이월 중복 판정용."""
+    ids, tokens = set(), set()
+    try:
+        from news_dedup import extract_keywords
+        since = (datetime.now(KST) - timedelta(hours=hours)).strftime('%Y-%m-%d')
+        resp = sb.table('daily_briefings').select('content') \
+            .gte('briefing_date', since).order('briefing_date', desc=True).limit(4).execute()
+        for row in (resp.data or []):
+            c = row.get('content') or ''
+            ids |= set(re.findall(r'\[ID:([0-9a-f-]{36})\]', c))
+            tokens |= extract_keywords(c)
+    except Exception as e:
+        print(f'[이월] 과거 브리핑 조회 실패(무시): {e}')
+    return ids, tokens
+
+
+def fetch_carryover_items(max_items: int = 40) -> list:
+    """24~72시간 전 긴급 기사 중 **한 번도 브리핑에 오르지 못한** 것을 다시 후보로 올린다(#161-보론).
+
+    종전에는 창이 24시간 고정이라, 하루 8칸 경쟁에서 밀린 사건은 다음 날 창 밖으로 나가
+    영영 브리핑에 실리지 않았다(실측 2026-09-07~13: 미언급 긴급 사건 193건).
+    이월은 긴급 등급·본문 보유로만 한정하고, 제목 키워드가 최근 브리핑 본문에 이미
+    나온 사건은 제외한다(대표 기사만 실린 사건의 잔여 기사가 되살아나는 것을 막는다)."""
+    try:
+        from news_dedup import extract_keywords
+        now = datetime.now(KST)
+        lo = (now - timedelta(hours=72)).isoformat()
+        hi = (now - timedelta(hours=24)).isoformat()
+        resp = sb.table('news_feed') \
+            .select('id,title,source,url,published_at,content,urgency') \
+            .gte('published_at', lo).lt('published_at', hi) \
+            .eq('urgency', '긴급') \
+            .order('published_at', desc=True).limit(300).execute()
+        rows = [r for r in (resp.data or []) if (r.get('content') or '').strip() and len(r['content'].strip()) > 50]
+        if not rows:
+            return []
+        ids, tokens = _briefed_recently()
+        excluded = load_briefing_excluded()
+        out = []
+        for r in rows:
+            if r['id'] in ids:
+                continue
+            if (r.get('url') or '').strip() in excluded:
+                continue
+            kw = extract_keywords(r.get('title') or '')
+            if kw and len(kw & tokens) / len(kw) >= 0.34:
+                continue          # 이미 다룬 사건의 잔여 보도
+            r['_carry'] = True
+            out.append(r)
+        print(f'[이월] 미보도 긴급 기사 {len(out)}건 (후보 {len(rows)}건 중)')
+        return out[:max_items]
+    except Exception as e:
+        print(f'[이월] 조회 실패(무시): {e}')
+        return []
+
+
 def cluster_briefing_items(items: list, for_date: datetime = None) -> list:
     """같은 사건 재보도를 대표 1건으로 묶어 Haiku 입력을 만든다.
 
@@ -200,11 +258,14 @@ _BRIEFING_SYSTEM = """당신은 SK텔레콤 Comm센터 기술정책팀의 통신
 제공된 뉴스 목록과 각 기사의 본문을 바탕으로 간결하고 실용적인 브리핑을 작성하세요.
 
 작성 규칙:
-- [주요 뉴스]는 제공된 기사에서만 선별 (최대 8건, 긴급·보통 기사 우선)
+- [주요 뉴스]는 제공된 기사에서만 선별 (최대 12건, 긴급·보통 기사 우선)
+- **12건 중 6건 이상은 정책·규제 사안으로 채울 것** — 법령·시행령·고시 제개정, 정부·위원회 의결과 제재, 국회 논의, 주파수·번호·통신설비 제도, 침해사고 조사·수사, 요금 규제가 여기 해당한다
+- 다음은 정책 함의가 분명할 때만 넣는다: 단말 출시·사전예약·프로모션, 특정 지자체 단신(지역 와이파이 설치 등), 개별 기업 실적·주가, 해외 일반 산업 동향
 - 같은 사건·주제를 다룬 기사가 여러 건일 경우 가장 중요한 1건만 선별 (중복 주제 제외)
 - 제목 뒤 (관련 보도 N건)은 같은 사건을 다룬 기사 수 — 선별한 항목에 그대로 표기해 보도 규모가 보이게 할 것
 - **같은 사건이 여러 항목으로 나뉘어 들어올 수 있다**(예: 같은 과징금 건이 금액 표기만 다르게 2~3건). 이때는 (관련 보도 N건)이 가장 큰 1건만 [주요 뉴스]에 넣고 나머지는 버릴 것 — 사건이 같은지는 제목의 주체·사안으로 판단
-- 〔전일 기보도 이어짐〕 표시가 있는 기사를 선별하면 그 표시를 제목 뒤에 유지하고, 요약은 새로 알려진 내용 위주로 짧게 쓸 것
+- 〔전일 기보도 이어짐〕 표시가 있는 기사는 **새로 알려진 사실이 있을 때만** 선별하고 **최대 2건까지만** 넣는다 — 진전 없는 재보도로 칸을 채우지 말 것. 선별하면 그 표시를 제목 뒤에 유지하고, 요약은 새로 알려진 내용만 짧게 쓸 것
+- 〔이월 — 아직 브리핑에 못 실린 사건〕 표시는 어제까지 한 번도 브리핑에 오르지 못한 사건이다. 정책·규제 사안이면 지금이라도 [주요 뉴스]에 넣고, 제목 뒤 표시는 지울 것(독자에게는 새 소식이다)
 - [주목 포인트]는 SKT Comm센터 정책·기술 관점에서 핵심 이슈 1~3개 도출
 - 반드시 제공된 본문 내용에 근거해서만 요약 작성 — 추측·외부 지식 금지
 - 각 뉴스에 본문 기반 한 줄 요약 포함
@@ -231,6 +292,44 @@ _BRIEFING_SYSTEM = """당신은 SK텔레콤 Comm센터 기술정책팀의 통신
 뉴스 N건 / 기술 용어 N건"""
 
 
+def select_for_prompt(items: list, limit: int = 60) -> list:
+    """모델에 넘길 묶음을 고른다 — 시각순이 아니라 중요도순(#161).
+
+    종전에는 최신순 50묶음을 그대로 잘라 넘겨, 하루 사건이 50개를 넘는 날은
+    늦게 뜬(=창의 앞쪽) 정책 기사가 모델 눈에 닿지도 못하고 탈락했다.
+    실측(2026-09-07~13): 긴급 기사를 사건 단위로 묶어 브리핑에 언급조차 없는 것이 193건 —
+    LG유플러스 증거인멸 수사·불법스팸 6% 과징금 의결·주파수 재할당 제도 개편이 모두 여기 있었다.
+    정렬 기준: 긴급 > 보통 > 참고, 같은 등급이면 전일 기보도가 아닌 것, 보도 규모가 큰 것, 최신 것.
+    """
+    rank = {'긴급': 0, '보통': 1, '참고': 2}
+
+    def tier(it):
+        # 보도가 10건 이상 쏟아진 사건은 등급과 무관하게 긴급과 같은 층에서 겨룬다 —
+        # 긴급 등급이 과잉 부여돼(1건짜리 긴급 다수) 실제 대형 사건이 밀리는 것을 막는다(#161).
+        if (it.get('_related') or 0) + 1 >= 10:
+            return 0
+        return rank.get(it.get('urgency') or '참고', 2)
+
+    return sorted(
+        items,
+        key=lambda it: (
+            tier(it),
+            1 if it.get('_prev') else 0,
+            1 if it.get('_carry') else 0,
+            -(it.get('_related') or 0),
+            -_pub_key(it),
+        ),
+    )[:limit]
+
+
+def _pub_key(it: dict) -> float:
+    """정렬용 발행시각 — 파싱 실패 시 0(맨 뒤)."""
+    try:
+        return datetime.fromisoformat(str(it.get('published_at') or '').replace('Z', '+00:00')).timestamp()
+    except Exception:
+        return 0.0
+
+
 def generate_briefing(items: list, new_terms: list, for_date: datetime = None) -> str:
     """for_date: 과거 브리핑 재생성용. 미지정 시 오늘(정상 운영 경로).
     지정하지 않으면 재생성본에 '오늘' 날짜가 찍혀 7/31 브리핑에 8/1이 박힌다(#46)."""
@@ -241,12 +340,14 @@ def generate_briefing(items: list, new_terms: list, for_date: datetime = None) -
     today_str = (for_date or datetime.now(KST)).strftime('%Y년 %m월 %d일')
 
     news_lines = []
-    for it in items[:50]:
+    for it in select_for_prompt(items):
         icon = {'긴급': '🔴', '보통': '🟡', '참고': '🟢'}.get(it.get('urgency', '참고'), '🟢')
         body = (it.get('content') or '').replace('\n', ' ').strip()[:400]
         # 클러스터 대표에는 보도 규모·전일 연속 여부를 병기 (배경역사 #44)
         rel = it.get('_related', 0)
-        tags = (f' (관련 보도 {rel + 1}건)' if rel else '') + (' 〔전일 기보도 이어짐〕' if it.get('_prev') else '')
+        tags = ((f' (관련 보도 {rel + 1}건)' if rel else '')
+                + (' 〔전일 기보도 이어짐〕' if it.get('_prev') else '')
+                + (' 〔이월 — 아직 브리핑에 못 실린 사건〕' if it.get('_carry') else ''))
         news_lines.append(
             f"{icon} {it['title']}{tags} — {it.get('source','')} [ID:{it['id']}]\n"
             f"   URL: {it.get('url','')}\n"
@@ -272,7 +373,7 @@ def generate_briefing(items: list, new_terms: list, for_date: datetime = None) -
         # temperature 등 샘플링 파라미터 금지(400). 판정·번역·짧은 요약류는 Haiku 유지.
         resp = client.messages.create(
             model='claude-sonnet-5',
-            max_tokens=2500,
+            max_tokens=3500,
             thinking={'type': 'disabled'},
             system=_BRIEFING_SYSTEM,
             messages=[{'role': 'user', 'content': user_msg}],
@@ -300,7 +401,8 @@ _IMPACT_SYSTEM = """당신은 SKT Comm센터 기술정책팀의 정책 분석 AI
 - 3~4문장, 제공된 본문에 근거한 내용만 (추측·과장 금지)
 - 영향이 불명확하면 '추가 정보 수집 필요'를 명시
 - 마지막 문장에 권고 대응 1가지 포함
-- 줄바꿈 없이 한 단락으로만 출력"""
+- 줄바꿈 없이 한 단락으로만 출력
+- "SKT 관점 영향 분석:" 같은 제목·머리말을 앞에 붙이지 말고 첫 문장부터 바로 쓸 것 (표시는 시스템이 이미 붙인다)"""
 
 
 def add_urgent_analyses(items: list, briefing_text: str) -> str:
@@ -936,15 +1038,21 @@ def main():
         _handle_no_news()   # 시각 무관 1일 1회 통지 + 대시보드 placeholder
         return
 
+    # 한 번도 브리핑에 못 실린 긴급 사건을 후보에 합친다 (#161-보론)
+    items = items + fetch_carryover_items()
+
     # 같은 사건 재보도 → 대표 1건 + 관련 건수 (배경역사 #44)
     items = cluster_briefing_items(items)
 
     # 신규 기술 용어 조회 (오늘 추가된 것)
     new_terms = []
     try:
-        today_date = datetime.now(KST).strftime('%Y-%m-%d')
+        # created_at은 UTC(timestamptz)인데 KST 날짜 문자열('2026-09-13')로 비교하면
+        # 그 경계는 KST 09:00 — 06:00 발송 시점에서 3시간 뒤 미래라 언제나 0건이었다.
+        # 7일 연속 [새로 추가된 기술 용어] 공란의 원인(#161). 오프셋이 붙은 24시간 창으로 비교한다.
+        since = (datetime.now(KST) - timedelta(hours=24)).isoformat()
         resp = sb.table('tech_terms').select('term,definition') \
-            .gte('created_at', today_date) \
+            .gte('created_at', since) \
             .execute()
         new_terms = resp.data or []
         print(f'[용어] 오늘 신규 {len(new_terms)}건')
