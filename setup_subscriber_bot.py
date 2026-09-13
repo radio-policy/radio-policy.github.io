@@ -46,8 +46,10 @@ BOT_DESC = (
 )
 
 COMMANDS = [
+    # 순서 = 실사용 순(60일: assem 45 · law 30+6 · ask 13 · start 12, 2026-09-14 실측).
+    # /start 는 새로 들어오는 사람이 제일 먼저 누르므로 첫머리에 두고,
+    # /settings 는 맨 뒤 — 설정은 자주 여는 것이 아니고 /start 화면 버튼으로도 바꿀 수 있다.
     {'command': 'start',    'description': '구독 시작 · 설정 메뉴'},
-    {'command': 'settings', 'description': '수신 설정 변경'},
     # setMyCommands 는 목록을 **통째로 갈아 끼운다** — 여기 없는 명령은 돌리는 순간 메뉴에서 사라진다.
     # /assem 은 2026-09-13 BotFather로 직접 등록했는데 이 목록에 없어서, 이 스크립트를 다시 돌리면
     # 메뉴에서 빠질 뻔했다(기능은 살아 있으나 신규 이용자가 찾지 못한다 — 실사용 1위 명령이다).
@@ -56,6 +58,7 @@ COMMANDS = [
     # "이게 어떤 법과 관련되나"를 묻는 쪽이 대부분이다(운영자, 2026-08-03).
     {'command': 'law',      'description': '법령 검색 (예: /law 3G 종료 관련 법령)'},
     {'command': 'ask',      'description': 'AI 자문 (동향·시사점까지, 최초 1회 승인 필요)'},
+    {'command': 'settings', 'description': '수신 설정 변경'},
     # /stop 은 메뉴에서 뺐다 — /settings 에서 항목 3개를 끄면 같은 결과라 중복이고,
     # "해지 vs 항목 끄기" 두 상태가 있는 것처럼 보여 혼동을 준다. 명령 자체는 살려둔다(하위호환).
 ]
