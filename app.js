@@ -11150,34 +11150,39 @@ async function callLawmapAI(userMsg) {
  *  종전에는 비관리자에게 "관리자에게 요청해 주세요"라는 문구만 띄웠는데,
  *  ① 로그아웃 상태에서도 같은 문구가 떠 본인이 관리자인데 요청하라는 말로 읽혔고
  *  ② '요청'이라 해 놓고 요청할 방법이 없었다(운영자 지적 2026-09-14).
- *  → 로그아웃/승인대기/승인자를 갈라 말하고, 승인자에겐 실제 요청 버튼을 준다. */
+ *  → 관리자에겐 생성 버튼, 그 외 **모두에게**(비로그인 포함) 요청 버튼을 준다. */
 function _lawmapGenBtnHtml() {
   if (typeof isAdminUser === 'function' && isAdminUser()) {
     return '<button class="btn btn-primary" style="font-size:11px;padding:2px 10px" onclick="generateLawMapTopic()"><i class="ti ti-sparkles"></i> AI로 관계도 생성 (1회 과금)</button>';
   }
-  if (typeof aiReady === 'function' && aiReady()) {
-    return '<button class="btn" style="font-size:11px;padding:2px 10px" onclick="lawmapRequestTopic()"><i class="ti ti-send"></i> 관계도 추가 요청</button>';
-  }
-  if (!currentUser) return '<span style="font-size:11px;color:var(--text-muted)">새 주제는 로그인 후 요청할 수 있습니다</span>';
-  return '<span style="font-size:11px;color:var(--text-muted)">계정 승인 후 새 주제를 요청할 수 있습니다</span>';
+  return '<button class="btn" style="font-size:11px;padding:2px 10px" onclick="lawmapRequestTopic()"><i class="ti ti-send"></i> 관계도 추가 요청</button>';
 }
 
-/** 관계도 추가 요청 — 승인 회원이 주제·사유를 남기면 '검토 대기'에 쌓이고 운영자 봇으로 알림이 간다.
+/** 관계도 추가 요청 — 주제·사유를 남기면 '검토 대기'에 쌓이고 운영자 봇으로 알림이 간다.
+ *  **로그인 없이도 보낼 수 있다**(운영자 지시 2026-09-14 — 열람이 공개인데 요청만 막을 이유가 없다).
+ *  비로그인 요청은 created_by=null로 들어가고, RLS(lawmap_proposals_ins_anon)가 넣을 수 있는 모양을
+ *  못 박고 트리거(limit_anon_lawmap_request)가 시간당 10건·대기 20건으로 막는다.
  *  알림은 DB 트리거(notify_lawmap_request)가 보낸다 — 브라우저는 봇 토큰을 모른다. */
 async function lawmapRequestTopic() {
-  if (!sb || !currentUser) { setLawMapStatus('⚠️ 로그인이 필요합니다'); return; }
+  if (!sb) { setLawMapStatus('⚠️ Supabase 연결이 필요합니다'); return; }
   var q = (document.getElementById('lawmap-q') || {}).value || '';
   var topic = (prompt('어떤 주제의 관계도가 필요하신가요? (2~30자)', String(q).trim().slice(0, 30)) || '').trim();
   if (!topic) return;
   if (topic.length < 2 || topic.length > 30) { alert('주제는 2~30자로 적어 주세요.'); return; }
-  var why = (prompt('왜 필요한지 한 줄로 적어 주세요 (선택)', '') || '').trim();
+  var why = (prompt('왜 필요한지 한 줄로 적어 주세요 (선택)', '') || '').trim().slice(0, 300);
+  var row = { origin: 'request', topic: topic, question: why || null,
+              description: null, relations: [], gate: [], status: 'pending' };
+  if (currentUser) {
+    row.created_by = currentUser.id;
+    row.requester = ((currentProfile && currentProfile.name) || currentUser.email || '').slice(0, 40);
+  } else {
+    // 비로그인: 누구인지 알 길이 없으므로 자기 기재를 받되, 운영자에게는 '미확인'으로 표시된다.
+    var who = (prompt('누구신지 알려주시면 회신에 도움이 됩니다 (선택 · 이름/소속)', '') || '').trim().slice(0, 40);
+    row.created_by = null;
+    row.requester = who || null;
+  }
   setLawMapStatus('요청 보내는 중…');
-  var ins = await sb.from('lawmap_proposals').insert({
-    created_by: currentUser.id,
-    requester: (currentProfile && currentProfile.name) || currentUser.email || '',
-    origin: 'request', topic: topic, question: why || null,
-    description: null, relations: [], gate: [], status: 'pending'
-  });
+  var ins = await sb.from('lawmap_proposals').insert(row);
   if (ins.error) { setLawMapStatus('⚠️ 요청 실패: ' + lmEsc(ins.error.message)); return; }
   if (typeof refreshLawmapPendingBadge === 'function') refreshLawmapPendingBadge();
   setLawMapStatus('✅ <b>' + lmEsc(topic) + '</b> 추가 요청을 보냈습니다 — 운영자에게 알림이 갔고, 검토 후 관계도에 반영됩니다');
