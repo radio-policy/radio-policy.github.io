@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """인물 명부(people) 집계 갱신 — assembly_speeches 재수집 후 실행.
 발언 수·기간·현역(22대) 여부·직함을 다시 계산하고, 새로 등장한 발언자를 추가한다.
-등록 문턱: 의원·위원장 1건 이상 / 통신사 임원 무조건 / 그 외 정부·참고인 4건 이상.
+등록 문턱: 의원·위원장 1건 이상 / 통신사 임원·전파통신 소관 라인 무조건 / 그 외 정부·참고인 4건 이상.
 stance_summary(AI 입장 요약)는 건드리지 않는다."""
 import os, re, sys
 from collections import defaultdict
@@ -15,7 +15,7 @@ MEMBER_POS = {'위원','위원장','의원','위원장대리','조정위원장',
 NAME_FIX = {'金炳旭':'김병욱','金成泰':'김성태','曺明姬':'조명희','柳榮夏':'유영하'}
 
 # 등록 문턱(2026-09-13): 의원·위원장은 1건이라도 등록(회의 1회만 참석해도 소관 인물),
-# 통신사 임원도 무조건 등록. 그 외 정부·참고인만 4건 이상.
+# 통신사 임원·전파통신 소관 실무 라인도 무조건 등록. 그 외 정부·참고인만 4건 이상.
 # 통신사 임원은 회의록 직함이 '증인' 하나뿐인 경우가 대부분이라(김영섭·황현식·하현회·최택진)
 # 직함만으로는 못 거른다 → 소속이 드러난 직함(TELCO_ORG)과 이름 명단(TELCO_NAMES)을 병행한다.
 TELCO_ORG = re.compile(r'KT|케이티|SK텔레콤|에스케이텔레콤|SKT|SK브로드밴드|LG유플러스|엘지유플러스|유플러스|LG U\+')
@@ -24,6 +24,11 @@ TELCO_NAMES = {'황창규','구현모','김영섭','박정호','유영상','하�
                '강종렬','김철수','정재헌','류정환'}
 # 동명이인 오등록 방지 — 이름 명단은 증인·참고인 자격으로 나온 발언에만 적용한다.
 WITNESS_POS = ('증인','참고인','대리')
+
+# 팀 소관(전파·통신·네트워크·이용자보호) 실무 라인은 1건이라도 등록한다(2026-09-13 운영자 결정).
+# 전파정책국장·통신정책관은 우리 팀 카운터파트라 발언이 적어도 인물 축으로 묶을 값어치가 있다.
+# 반면 원자력·기초과학 출연연 기관장(1건짜리 120명의 몸통)은 소관이 아니라 4건 문턱을 유지한다.
+POLICY_POS = re.compile(r'전파|통신정책|네트워크정책|이용자정책|시장조사|주파수')
 
 def fetch_all(sb, table, cols):
     out, off = [], 0
@@ -64,7 +69,8 @@ def main():
         is_member = bool(a['poss'] & MEMBER_POS)
         is_telco = (any(TELCO_ORG.search(p) for p in a['poss'])
                     or (k in TELCO_NAMES and any(w in p for p in a['poss'] for w in WITNESS_POS)))
-        if is_member or is_telco or a['n'] >= 4:
+        is_policy = any(POLICY_POS.search(p) for p in a['poss'])
+        if is_member or is_telco or is_policy or a['n'] >= 4:
             row.update({'speaker_key':k, 'name':NAME_FIX.get(k, k),
                         'kind':'의원' if is_member else '정부·참고인'})
             sb.table('people').insert(row).execute(); ins += 1
