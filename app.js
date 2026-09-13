@@ -11051,7 +11051,27 @@ async function askLawMap() {
     setLawMapStatus('✔ 기존 주제 매칭 (<b>' + lmEsc(best.name) + '</b>) — API 호출 없음 · 찾던 주제가 아니면 ' + _lawmapGenBtnHtml() + '');
     showLawMapNodeDetail(best.id);
   } else {
-    // 엉뚱한 그래프를 그리지 않음 — 현재 화면 유지하고 생성만 제안
+    // 엉뚱한 그래프를 그리지 않는다. 다만 **직전 주제 그래프를 그대로 두는 것도 오답 표시**다 —
+    // '지원금'을 물었는데 앞서 보던 '위성망 관리'가 남아 그게 답처럼 보였다(2026-09-14).
+    // 화면·주제 선택·상세 패널을 모두 비우고 "없다"만 남긴다. (배경역사 #36 계열 — 없는 것을 없다고 보여줄 것)
+    var selNone = document.getElementById('lawmap-topic-select');
+    if (selNone) selNone.value = '';
+    _lawMapFocusId = null;
+    if (_lawMapNet) { try { _lawMapNet.destroy(); } catch (e) {} _lawMapNet = null; }
+    if (typeof lmaUpdateToggle === 'function') { try { lmaUpdateToggle(); } catch (e) {} }   // '조문 단위로 자세히 보기' 숨김
+    updateLawMapNoticeToggle(false);
+    var elNone = document.getElementById('lawmap-graph');
+    if (elNone) {
+      elNone.innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;' +
+        'min-height:280px;height:100%;gap:10px;padding:24px;text-align:center">' +
+        '<i class="ti ti-zoom-exclamation" style="font-size:30px;color:var(--text-muted);opacity:.55"></i>' +
+        '<div style="font-size:13px;color:var(--text-secondary)">“' + lmEsc(q.slice(0, 30)) + '”에 맞는 주제가 관계망에 없습니다</div>' +
+        '<div style="font-size:12px;color:var(--text-muted)">위 목록에서 주제를 고르거나 ' +
+        '<a style="cursor:pointer;text-decoration:underline" onclick="lawMapSelectTopic(\'\')">전체 인용망</a>을 보세요</div>' +
+        '</div>';
+    }
+    var detNone = document.getElementById('lawmap-detail');
+    if (detNone) detNone.innerHTML = '<span style="color:var(--text-secondary)">노드를 클릭하면 설명·주요 내용·근거 조문이 표시됩니다.</span>';
     setLawMapStatus('“' + lmEsc(q.slice(0, 30)) + '”에 맞는 주제가 관계망에 없습니다 — ' + _lawmapGenBtnHtml() + '');
   }
 }
