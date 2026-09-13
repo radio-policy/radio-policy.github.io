@@ -15,7 +15,7 @@ doc_name='과방위_회의록_{YYYY}.md')에 섹션으로 등재한다.
           실측; PDF 는 정상). 상임위 회의는 looks_foreign_committee + verify_blocks_against_pdf 로
           뷰어 블록을 PDF 와 대조해 불일치면 PDF 블록으로 갈아탄다(src='PDF(뷰어 불일치)').
 
-국정감사 회의록은 별도 경로다 (2026-08-13 추가, 22대만).
+국정감사 회의록은 별도 경로다 (2026-08-13 추가, 2026-08-14 20대 개원(2016)까지 소급 — AUDIT_MIN_YEAR·AUDIT_DAE_TABLE).
   위 Open API 는 CLASS_NAME='상임위원회' 인 회의록만 돌려준다(실측 — 2019년 과방위 41건을
   전수 조회해도 국감 0건, CLASS_NAME='국정감사' 질의도 0건). 10월에 잡히는 건 "국정감사
   증인 출석요구의 건"을 처리한 짧은 전체회의일 뿐 감사 본체가 아니다.
@@ -120,7 +120,7 @@ SKT_CHIP = 'SK텔레콤 언급'
 SKT_SUFFIX = ' (SK텔레콤 언급)'
 OVERVIEW_MARK = '개요:'              # 섹션 본문의 회의 개요 블록 머리(대시보드 상세가 파싱)
 
-# ── 국정감사 회의록 (2026-08-13 추가, 22대 전용) ────────────────
+# ── 국정감사 회의록 (2026-08-13 추가, 2026-08-14 2016년(20대)부터 소급 적재) ────────────────
 # 검색 폼 실측: collection='record5' + CLASS_CD='5' 여야 국감 컬렉션이 조회된다.
 # collection='record'(상임위)로 보내면 200 + 빈 JSON({})이 와서 '결과 없음'과 구분되지 않는다.
 AUDIT_SEARCH_PAGE = 'https://record.assembly.go.kr/assembly/mnts/minutes/search.do'
