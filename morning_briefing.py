@@ -997,44 +997,80 @@ def send_telegram(briefing_text: str) -> bool:
 
 
 def _briefing_to_html(text: str) -> str:
+    """이메일 본문 HTML. 제목에 원문 링크를 걸고 URL 줄은 지운다(#161-보론18).
+
+    텔레그램(_briefing_to_telegram_html)과 같은 규칙이다 — 같은 브리핑이 경로마다
+    다르게 보이지 않도록 맞췄다. 제목 줄 다음 3줄 안에서 링크를 찾아 짝을 짓고,
+    짝지은 링크 줄은 건너뛴다. 짝을 못 찾은 링크만 '원문 보기' 줄로 남긴다.
+    """
     import html as hl
-    lines = text.split('\n')
-    out = []
+    lines = [l.rstrip() for l in text.split(chr(10))]
+    skip, out = set(), []
     in_box = False
-    for line in lines:
+    for i, line in enumerate(lines):
+        if i in skip:
+            continue
         e = hl.escape(line)
-        is_urgent = '🔴' in line
-        if in_box and not is_urgent and (e.startswith('[') or '📡' in line or e == ''):
+        is_urgent = '\U0001F534' in line
+        if in_box and not is_urgent and (e.startswith('[') or '\U0001F4E1' in line or e == ''):
             out.append('</div>')
             in_box = False
+
+        m = _BULLET_RE.match(line)
+        if m and m.group(3):
+            url = ''
+            for j in range(i + 1, min(i + 4, len(lines))):
+                if lines[j].lstrip().startswith(('\u2022', '\u00b7')):
+                    break                      # 다음 기사에 도달하면 중단
+                lm = _LINK_RE.match(lines[j])
+                if lm:
+                    url = lm.group(1)
+                    skip.add(j)
+                    break
+            head = hl.escape(m.group(1)) + hl.escape(m.group(2) or '')
+            title = hl.escape(m.group(3))
+            tail = hl.escape(m.group(4) or '')
+            body = (f'<a href="{hl.escape(url, quote=True)}" '
+                    f'style="color:#534AB7;text-decoration:none">{title}</a>') if url else f'<b>{title}</b>'
+            item = head + body + tail
+            if is_urgent:
+                if not in_box:
+                    out.append('<div style="border:2px solid #c53030;border-radius:6px;'
+                               'background:#fff5f5;padding:10px 14px;margin:10px 0">')
+                    in_box = True
+                out.append(f'<p style="margin:3px 0">{item}</p>')
+            else:
+                out.append(f'<p style="margin:4px 0 4px 12px">{item}</p>')
+            continue
+
         if is_urgent:
             if not in_box:
-                out.append('<div style="border:2px solid #c53030;border-radius:6px;background:#fff5f5;padding:10px 14px;margin:10px 0">')
+                out.append('<div style="border:2px solid #c53030;border-radius:6px;'
+                           'background:#fff5f5;padding:10px 14px;margin:10px 0">')
                 in_box = True
             out.append(f'<p style="margin:3px 0">{e}</p>')
-        elif '📡' in line:
+        elif '\U0001F4E1' in line:
             out.append(f'<h2 style="color:#534AB7;margin-bottom:4px">{e}</h2>')
         elif e.startswith('[') and e.endswith(']'):
-            out.append(f'<h3 style="color:#1a1a1a;margin:18px 0 6px;border-bottom:1px solid #eee;padding-bottom:4px">{e}</h3>')
-        elif e.startswith('•') or '🟡' in line or '🟢' in line:
-            out.append(f'<p style="margin:4px 0 4px 12px">{e}</p>')
-        elif '⚠️ SKT 영향 분석' in line:
+            out.append(f'<h3 style="color:#1a1a1a;margin:18px 0 6px;'
+                       f'border-bottom:1px solid #eee;padding-bottom:4px">{e}</h3>')
+        elif '\u26a0\ufe0f SKT 영향 분석' in line:
             out.append(f'<p style="margin:6px 0 4px 24px;color:#9b2c2c;font-size:13px">{e.strip()}</p>')
-        elif e.startswith('  →'):
+        elif e.startswith('  \u2192'):
             out.append(f'<p style="margin:2px 0 2px 24px;color:#555;font-size:13px">{e}</p>')
-        elif e.startswith('  🔗'):
-            url = line.strip()[2:].strip()
-            # URL 문자열을 그대로 노출하지 않는다(#161-보론12) — 텔레그램은 제목에 링크를 걸고
-            # 대시보드는 '원문 보기'로 접는데 이메일만 주소가 본문에 깔려 읽기를 방해했다.
+        elif _LINK_RE.match(line):
+            # 짝 못 찾은 고아 링크만 링크 줄로 남긴다
+            u = _LINK_RE.match(line).group(1)
             out.append(f'<p style="margin:2px 0 8px 24px;font-size:12px">'
-                       f'<a href="{url}" style="color:#534AB7;text-decoration:none">🔗 원문 보기</a></p>')
+                       f'<a href="{hl.escape(u, quote=True)}" '
+                       f'style="color:#534AB7;text-decoration:none">\U0001F517 원문 보기</a></p>')
         elif e == '':
             out.append('<br>')
         else:
             out.append(f'<p style="margin:4px 0">{e}</p>')
     if in_box:
         out.append('</div>')
-    return '\n'.join(out)
+    return chr(10).join(out)
 
 
 def send_email(briefing_text: str, news_count: int) -> bool:

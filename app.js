@@ -5731,13 +5731,26 @@ function mdBold(s) { return (s || '').replace(/\*\*([^*]+)\*\*/g, '<strong>$1</s
 function renderPlainBulletItem(block) {
   var lines = block.split('\n');
   var out = '';
+  var used = {};
   for (var i = 0; i < lines.length; i++) {
+    if (used[i]) continue;
     var l = lines[i];
     if (/^• /.test(l)) {
-      out += '<div style="font-size:13px;line-height:1.8;padding-left:2px">• ' + mdBold(l.replace(/^• /, '')) + '</div>';
+      // 뒤따르는 3줄 안에서 링크를 찾아 제목에 건다(#161-보론18).
+      // 다음 항목(•)을 만나면 멈춘다 — 남의 링크를 가져다 쓰지 않도록.
+      var u = '';
+      for (var k = i + 1; k < Math.min(i + 4, lines.length); k++) {
+        if (/^• /.test(lines[k])) break;
+        var lm = lines[k].match(/^\s*🔗\s*(\S+)\s*$/);
+        if (lm) { u = lm[1]; used[k] = 1; break; }
+      }
+      var body = mdBold(l.replace(/^• /, ''));
+      if (u) body = '<a href="' + u + '" target="_blank" rel="noopener" style="color:inherit;text-decoration:none;border-bottom:1px solid var(--border)">' + body + '</a>';
+      out += '<div style="font-size:13px;line-height:1.8;padding-left:2px">• ' + body + '</div>';
     } else if (/^  → /.test(l)) {
       out += '<div style="font-size:12px;color:var(--text-secondary);padding-left:16px;line-height:1.6">→ ' + mdBold(l.replace(/^  → /, '')) + '</div>';
     } else if (/^  🔗 /.test(l)) {
+      // 짝 못 찾은 고아 링크만 링크 줄로 남긴다
       var url = l.replace(/^  🔗 /, '').trim();
       out += '<div style="padding-left:16px;font-size:12px;margin-top:2px"><a href="' + url + '" target="_blank" style="color:var(--accent);text-decoration:none">🔗 원문 보기</a></div>';
     } else if (l.trim()) {
@@ -5867,13 +5880,17 @@ function renderBriefingNewsItem(block, importance, briefingIdx, itemIdx) {
     }
   }
 
-  var titleHtml = '<span data-news-title="1" style="font-weight:500;font-size:13px;line-height:1.6">' + mdBold(titleLine) + '</span>';
+  // 제목에 원문 링크를 건다(#161-보론18) — 텔레그램·이메일과 같은 규칙이다.
+  // 링크가 없으면 종전대로 글씨만 남긴다.
+  var titleInner = linkUrl
+    ? '<a href="' + linkUrl + '" target="_blank" rel="noopener" style="color:inherit;text-decoration:none;border-bottom:1px solid var(--border)">' + mdBold(titleLine) + '</a>'
+    : mdBold(titleLine);
+  var titleHtml = '<span data-news-title="1" style="font-weight:500;font-size:13px;line-height:1.6">' + titleInner + '</span>';
   var summaryHtml = summaryLines.map(function(s) {
     return '<div style="font-size:12px;color:var(--text-secondary);padding-left:4px;margin-top:3px;line-height:1.6">→ ' + mdBold(s) + '</div>';
   }).join('');
-  var linkHtml = linkUrl
-    ? '<div style="margin-top:6px"><a href="' + linkUrl + '" target="_blank" style="font-size:12px;color:var(--accent);text-decoration:none">🔗 원문 보기</a></div>'
-    : '';
+  // 제목이 링크가 됐으므로 '원문 보기' 줄은 두지 않는다(#161-보론18)
+  var linkHtml = '';
 
   var analysisId = 'bi-' + briefingIdx + '-' + itemIdx;
 
