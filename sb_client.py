@@ -14,6 +14,25 @@ import httpx
 from supabase import create_client, Client, ClientOptions
 
 
+def heartbeat(sb: Client, key: str, note: str) -> None:
+    """system_health[key] 갱신. 실패해도 본작업에 영향 없음(fail-open).
+
+    watchdog_scan 은 watchdog_targets 에 등록된 키의 이 값을 읽어 지연·무음실패를 잡는다.
+    하트비트를 남기지 않는 스크립트는 구조적으로 감시 대상이 될 수 없다 — 실제로 법령
+    현행화 3종이 그래서 감시 밖이었고, 고시 하나가 4개월째 구버전인 것을 아무도 몰랐다(#169-보론2).
+    note 에는 건수를 남긴다(`fail=N`·`outdated=N` 이 N>0면 워치독이 '돌았지만 실패'로 본다).
+    """
+    import datetime as _dt
+    try:
+        sb.table('system_health').upsert(
+            {'key': key,
+             'updated_at': _dt.datetime.now(_dt.timezone.utc).isoformat(),
+             'note': note},
+            on_conflict='key').execute()
+    except Exception as e:
+        print('[heartbeat 오류 — 무시] %s: %s' % (key, str(e)[:80]))
+
+
 def ran_recently(sb: Client, key: str, hours: float) -> bool:
     """system_health[key]가 `hours` 시간 안에 갱신됐으면 True.
 

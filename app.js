@@ -7361,6 +7361,11 @@ function removePressKeyword(idx) {
 
 async function savePressKeywords(btn) {
   if (!sb) { _pkShowMsg('Supabase 미연결 — 저장할 수 없습니다.', true); return; }
+  // 관리자 전용(#169-보론2). 종전에는 app_config 쓰기 정책이 anon 에 열려 있어 누구나 보도자료
+  // 수집 키워드를 덮어쓸 수 있었다. 실제 관문은 app_config UPDATE 정책(is_admin())이고 여기는 안내용.
+  if (typeof isAdminUser !== 'function' || !isAdminUser()) {
+    _pkShowMsg('보도자료 키워드 수정은 관리자만 할 수 있습니다.', true); return;
+  }
   if (btn) btn.disabled = true;
   _pkShowMsg('저장 중...');
   try {
@@ -9438,7 +9443,7 @@ function renderPeopleList() {
     '<input type="text" placeholder="이름·직함 검색" value="' + escHtml(q) + '" oninput="peopleSearch(this.value)" ' +
       'style="margin-left:auto;font-size:12px;padding:5px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-secondary);color:var(--text-primary);width:150px">' +
     '</div>' +
-    '<div style="font-size:11px;color:var(--text-tertiary);margin-bottom:10px">과방위 회의록 발언자 기준(발언 4건 이상) · 현역 = 22대(2024-06~) 발언 존재 · 정당은 활동 당시 소속</div>';
+    '<div style="font-size:11px;color:var(--text-tertiary);margin-bottom:10px">과방위 회의록 발언자 기준(의원·위원장은 1건부터, 통신사 임원은 전원, 그 밖은 4건 이상) · 현역 = 22대(2024-06~) 발언 존재 · 정당은 활동 당시 소속</div>';
   h += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:8px">' +
     (cur.length ? cur.map(_personCard).join('') : '<div style="font-size:12px;color:var(--text-tertiary);padding:12px">해당 없음</div>') + '</div>';
   if (past.length) {
@@ -9494,6 +9499,17 @@ function renderPersonRoles(p) {
     }).join(' · ') + '</div>';
 }
 
+// 그 인물의 발언 조회 — 동명이인 분리(#169-보론2) 때문에 조인 키와 기간을 따로 본다.
+// speaker_key 는 식별자(동명이인은 '김성수#의원' 처럼 접미사가 붙는다)이고,
+// 실제 발언자 문자열은 speaker_match, 그 사람의 구간은 speech_from~speech_to 다(없으면 전 구간).
+function _personSpeechQuery(p, cols) {
+  var q = sb.from('assembly_speeches').select(cols)
+    .eq('speaker', p.speaker_match || p.speaker_key);
+  if (p.speech_from) q = q.gte('meeting_date', p.speech_from);
+  if (p.speech_to)   q = q.lte('meeting_date', p.speech_to);
+  return q.order('meeting_date', { ascending: false }).limit(300);
+}
+
 function _personJobWord(p) {
   // 뉴스 엄격 매칭용 직함 단어 — 의원은 '의원', 정부는 직함에서 추출. 없으면 뉴스 섹션 생략.
   if (p.kind === '의원') return '의원';
@@ -9528,8 +9544,7 @@ async function showPersonDetail(id) {
 
   // 발언·법안·뉴스 병렬 로드
   var jobs = [
-    sb.from('assembly_speeches').select('meeting_date,agenda,topic,summary,position,source_url')
-      .eq('speaker', p.speaker_key).order('meeting_date', { ascending: false }).limit(300),
+    _personSpeechQuery(p, 'meeting_date,agenda,topic,summary,position,source_url'),
   ];
   var jw = _personJobWord(p);
   var billsIdx = -1, newsIdx = -1;
@@ -9571,7 +9586,7 @@ function renderPersonStance(p) {
       ? '<div class="md-body" style="font-size:12.5px">' + renderMd(p.stance_summary) + '</div>'
       : '<div style="font-size:12px;color:var(--text-tertiary)">아직 생성되지 않았습니다.</div>') +
     '<div style="margin-top:8px;font-size:11px;color:var(--text-tertiary)">상임위 질의는 비판조가 관행이므로 실제 입장은 원문 발언으로 확인하세요.' +
-    (canGen ? ' <button class="btn" onclick="refreshPersonStance(' + p.id + ')" style="font-size:11px;padding:2px 10px;margin-left:6px">요약 ' + (p.stance_summary ? '갱신' : '생성') + '</button>' : ' (갱신은 로그인 후 가능)') +
+    (canGen ? ' <button class="btn" onclick="refreshPersonStance(' + p.id + ')" style="font-size:11px;padding:2px 10px;margin-left:6px">요약 ' + (p.stance_summary ? '갱신' : '생성') + '</button>' : ' (갱신은 관리자만 가능합니다)') +
     '</div></div>';
 }
 
@@ -9697,15 +9712,37 @@ async function refreshPersonStance(id) {
     '<div style="font-size:12px;color:var(--text-secondary);padding:12px 14px;border:1px solid var(--border);border-radius:10px">' +
     '<span style="display:inline-block;width:13px;height:13px;border:2px solid var(--accent);border-top-color:transparent;border-radius:50%;animation:spin 0.8s linear infinite;vertical-align:-2px;margin-right:6px"></span>요약 생성 중...</div>';
   try {
-    var r = await sb.from('assembly_speeches').select('meeting_date,topic,summary')
-      .eq('speaker', p.speaker_key).order('meeting_date', { ascending: false }).limit(90);
-    var rows = (r.data || []).map(function(s) { return (s.meeting_date || '') + ' [' + (s.topic || '기타') + '] ' + (s.summary || ''); }).join('\n');
+    // position 까지 받아 자격 구간을 만든다. 요약 본문은 최근 90건만 쓰되(비용), 구간 계산은
+    // 전체를 봐야 옛 자격(예: 2021년 방통위 부위원장)이 빠지지 않는다. 최다 발언자가 176건.
+    var r = await _personSpeechQuery(p, 'meeting_date,topic,summary,position');
+    var all = r.data || [];
+    var rows = all.slice(0, 90).map(function(s) { return (s.meeting_date || '') + ' [' + (s.topic || '기타') + '] ' + (s.summary || ''); }).join('\n');
+    // 자격이 둘 이상이면(정부·증인일 때 ↔ 국회위원일 때) 자격별로 갈라 쓰게 한다.
+    // 머리글은 코드가 만들어 "그대로 쓰라"고 지시한다 — 모델에게 형식을 맡기면 갱신할 때마다
+    // 구조가 흔들리고, 실제로 9/13 세션이 손으로 만든 자격 블록이 갱신 한 번에 사라질 상태였다. (#169-보론2)
+    var spans = _personRoleSpans(all);
+    var latestYm = all.length ? _ym(all[0].meeting_date) : '';
+    var capRule = '';
+    if (spans.length > 1) {
+      capRule = '\n\n이 사람은 과방위에 **자격이 둘 이상**으로 출석했다. 아래 머리글을 순서대로 ' +
+        '**한 글자도 바꾸지 말고 그대로** 쓰고, 각 머리글 바로 아래에 그 기간·그 자격의 발언만 근거로 ' +
+        '불릿을 달아라. 자격을 섞지 마라(정부 측 답변과 위원 질의는 성격이 다르다). ' +
+        '발언이 2건 이하인 자격은 머리글만 두고 불릿 1개로 줄여도 된다.\n' +
+        spans.map(function(sp) {
+          var isMember = sp.label === '과방위원';
+          var a = _ym(sp.from), b = _ym(sp.to);
+          var period = (a === b) ? a : (b === latestYm ? a + '~' : a + '~' + b);
+          return '**[' + sp.label + ' · ' + period + ' · ' + sp.n + '건 — ' +
+            (isMember ? '위원으로 질의' : '정부 측 답변') + ']**';
+        }).join('\n');
+    }
     var userMsg = '다음은 ' + p.name + ' (' + [p.party, p.position].filter(Boolean).join(' ') + ')의 과방위 발언 요약 목록이다.\n\n' + rows +
       '\n\n위 발언만을 근거로, 통신·전파 정책 관점의 쟁점별 입장 요약을 작성하라.\n' +
       '- 쟁점 3~6개를 골라 "**쟁점명** — 입장 2~3문장 (근거 발언 날짜)" 형식의 불릿으로.\n' +
       '- 상임위 질의는 비판조가 관행임을 감안해 단정을 피하고, 발언에 없는 입장은 쓰지 마라.\n' +
-      '- SKT/통신사에 직접 관련된 발언이 있으면 별도 불릿으로 표시하라.';
+      '- SKT/통신사에 직접 관련된 발언이 있으면 별도 불릿으로 표시하라.' + capRule;
     var res = await claudeFetch({
+      site: 'person_stance',
       method: 'POST',
       body: JSON.stringify({ model: 'claude-sonnet-5', max_tokens: 1000, thinking: { type: 'disabled' }, messages: [{ role: 'user', content: userMsg }] })
     });

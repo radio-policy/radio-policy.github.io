@@ -17,6 +17,32 @@ MEMBER_POS = {'위원','위원장','의원','위원장대리','조정위원장',
               '소위원장대리','소위원장직무대리','위원장직무대리','반장'}
 NAME_FIX = {'金炳旭':'김병욱','金成泰':'김성태','曺明姬':'조명희','柳榮夏':'유영하'}
 
+# 동명이인 분리 (2026-09-14, #169-보론2). speaker_key 가 발언자 이름이라 '다른 사람 둘'이
+# 한 행으로 합쳐졌다. 자격이 바뀐 사람(김현·이진숙·문미옥·김민석)은 한 카드 안에서 자격
+# 구간으로 구분하면 되지만, 아래 둘은 애초에 남남이라 행을 나눠야 한다.
+# 자동 판별은 불가능하다 — 이종호는 두 자격이 모두 비의원이라 직함 규칙에 걸리지 않는다.
+# 그래서 NAME_FIX 와 같은 수기 목록으로 둔다. 경계일은 두 사람의 발언 사이 공백에 둔다.
+#   {발언자명: [(접미사, 시작일 or None, 종료일 or None), ...]}
+SPLIT_PEOPLE = {
+    # 김성수 의원(20대 비례, 2016-06~2019-12, 58건) ↔ 김성수 과기혁신본부장(2021-02, 5건)
+    '김성수': [('의원',   None,         '2019-12-31'),
+               ('본부장', '2020-01-01', None)],
+    # 이종호 한국수력원자력 기술본부장(2016-09, 1건) ↔ 이종호 과기정통부장관(2022-05~, 53건)
+    '이종호': [('한수원', None,         '2016-12-31'),
+               ('과기부', '2017-01-01', None)],
+}
+
+
+def split_of(speaker: str, d: str):
+    """(speaker_key, speech_from, speech_to) — 분리 대상이 아니면 이름 그대로, 구간은 None."""
+    rules = SPLIT_PEOPLE.get(speaker)
+    if not rules:
+        return speaker, None, None
+    for suffix, fr, to in rules:
+        if (fr is None or d >= fr) and (to is None or d <= to):
+            return '%s#%s' % (speaker, suffix), fr, to
+    return speaker, None, None
+
 # 등록 문턱(2026-09-13): 의원·위원장은 1건이라도 등록(회의 1회만 참석해도 소관 인물),
 # 통신사 임원·전파통신 소관 실무 라인도 무조건 등록. 그 외 정부·참고인만 4건 이상.
 # 통신사 임원은 회의록 직함이 '증인' 하나뿐인 경우가 대부분이라(김영섭·황현식·하현회·최택진)
@@ -45,10 +71,14 @@ def fetch_all(sb, table, cols):
 def main():
     sb = make_client(os.environ['SUPABASE_URL'], os.environ['SUPABASE_SERVICE_KEY'])
     sp = fetch_all(sb, 'assembly_speeches', 'speaker,position,meeting_date')
-    agg = defaultdict(lambda: {'n':0,'mn':None,'mx':None,'pos':None,'poss':set(),'t20':False,'t21':False,'t22':False})
+    agg = defaultdict(lambda: {'n':0,'mn':None,'mx':None,'pos':None,'poss':set(),'t20':False,'t21':False,'t22':False,
+                               'match':None,'fr':None,'to':None})
     for r in sp:
-        k = r['speaker']; d = (r['meeting_date'] or '')
+        d = (r['meeting_date'] or '')
+        # 동명이인은 발언 날짜로 사람을 가른다. 나머지는 종전대로 이름이 곧 키다.
+        k, _fr, _to = split_of(r['speaker'], d)
         a = agg[k]; a['n'] += 1
+        a['match'] = r['speaker']; a['fr'] = _fr; a['to'] = _to
         if r['position']: a['poss'].add(r['position'])
         if d:
             a['mn'] = d if not a['mn'] or d < a['mn'] else a['mn']
@@ -65,11 +95,18 @@ def main():
         terms = '·'.join(t for t, f in (('20',a['t20']),('21',a['t21']),('22',a['t22'])) if f)
         row = {'speech_count':a['n'], 'first_speech':a['mn'], 'last_speech':a['mx'],
                'is_22':a['t22'], 'terms':(terms + '대') if terms else None,
-               'position':a['pos'] or (known.get(k) or {}).get('position')}
+               'position':a['pos'] or (known.get(k) or {}).get('position'),
+               'speaker_match':a['match'], 'speech_from':a['fr'], 'speech_to':a['to']}
         is_member = bool(a['poss'] & MEMBER_POS)
         # kind는 **현재 자격**(최신 발언 직함)으로 정한다. 과거 자격은 대시보드가 발언에서
         # 역할 이력으로 계산해 보여 준다(#166) — 한 사람을 두 행으로 쪼개지 않는 설계다.
-        row['kind'] = '의원' if (a['pos'] in MEMBER_POS) else '정부·참고인'
+        # kind 는 '마지막 발언의 직함'이 아니라 '의원 자격으로 발언한 적이 있는가'로 정한다.
+        # 마지막 1건으로 정하면 16건 중 15건이 방통위원장인 이진숙이 2026-07-30 '위원' 1건
+        # 때문에 의원 탭에 들어가고, 반대로 의원 발언 61건인 사람이 정부 탭으로 빠져 대표발의
+        # 법안 섹션이 통째로 숨는다(실측, #169-보론2). 정부·증인 자격은 지우지 않고 카드 안에서
+        # 자격 구간(_personRoleSpans)으로 따로 보여 준다 — 한 사람 안에서 구분하되 합치지 않는다.
+        # position(현재 직함)은 종전대로 최신 발언 기준이다.
+        row['kind'] = '의원' if is_member else '정부·참고인'
         if k in known:
             sb.table('people').update(row).eq('id', known[k]['id']).execute(); upd += 1
             continue
@@ -77,7 +114,10 @@ def main():
                     or (k in TELCO_NAMES and any(w in p for p in a['poss'] for w in WITNESS_POS)))
         is_policy = any(POLICY_POS.search(p) for p in a['poss'])
         if is_member or is_telco or is_policy or a['n'] >= 4:
-            row.update({'speaker_key':k, 'name':NAME_FIX.get(k, k)})
+            # 표시 이름은 분리 접미사를 떼고 실제 발언자명을 쓴다(뉴스·법안 매칭이 이름을 쓴다).
+            # 같은 이름 두 카드는 직함(position)으로 구분된다.
+            _nm = a['match'] or k
+            row.update({'speaker_key':k, 'name':NAME_FIX.get(_nm, _nm)})
             sb.table('people').insert(row).execute(); ins += 1
     for k, p in known.items():
         if k not in agg:

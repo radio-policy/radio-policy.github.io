@@ -32,6 +32,7 @@ except ImportError:
     pass
 
 from supabase import Client
+import sb_client
 from sb_client import make_client
 import notify   # 텔레그램 전송 공용 유틸 (개선⑪) — 전송부만 위임
 
@@ -354,6 +355,10 @@ def main():
 
     print(f'\n[완료] 신규 {new_count}건 | 개정 {updated_count}건 | 총 추적 {len(collected)}건'
           + ('  (첫 실행 — 텔레그램 생략)' if is_baseline else ''))
+    # 워치독이 볼 수 있게 하트비트를 남긴다 (#169-보론2). 종전에는 이 스크립트가 죽어도
+    # system_health 에 흔적이 없어 화면이 초록이었다.
+    sb_client.heartbeat(sb, 'last_law_crawl_run',
+                        f'new={new_count} updated={updated_count} tracked={len(collected)}')
 
 
 if __name__ == '__main__':

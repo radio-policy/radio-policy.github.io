@@ -1019,6 +1019,11 @@ def main():
         time.sleep(0.3)
 
     print(f"\n=== 완료: {done}/{len(targets)}건 등재 ===")
+    # 워치독 감시용 하트비트 (#169-보론2). 대상이 있었는데 하나도 못 올렸으면 fail 로 센다.
+    if not a.dry_run:
+        _failed = len(targets) - done
+        sb_client.heartbeat(sb, 'last_law_sync_run',
+                            f'targets={len(targets)} done={done} fail={_failed}')
 
     if done and not a.dry_run and not a.no_backfill:
         print("\n[임베딩 백필]")
