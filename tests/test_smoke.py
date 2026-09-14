@@ -828,3 +828,91 @@ class TestPersonRoleKind(unittest.TestCase):
         # 2026-09-13까지 빠져 있던 의원석 직함들
         for pos in ('소위원장대리', '소위원장직무대리', '위원장직무대리', '반장'):
             self.assertIn(pos, tp.MEMBER_POS, pos + ' 이 의원석 직함에 없다')
+
+
+class TestPruneOrphanTerms(unittest.TestCase):
+    """morning_briefing._prune_orphan_terms — 본문과 연결되지 않는 기술 용어 제거 (#161-보론13)
+
+    독립 채점에서 세 날 연속 지적: '솔트 타이푼'이 용어로 올라 있는데 그 사건은 두 섹션 어디에도
+    없었고, '저궤도 맨팩 안테나'는 출처 기사 자체가 실리지 않았다. 프롬프트로도 막지만
+    모델이 어기는 날이 있어 코드에서 한 번 더 거른다.
+    """
+
+    def _sample(self, terms):
+        body = ('[주요 뉴스]' + chr(10)
+                + '- 솔트 타이푼 침해 정황 확인 [ID:x]' + chr(10)
+                + '  -> AI-RAN 적용 사례도 함께 공개됐다' + chr(10) + chr(10))
+        seg = chr(10).join('* ' + t for t in terms)
+        return (body + '[새로 추가된 기술 용어]' + chr(10) + seg + chr(10) + chr(10)
+                + '[저장 결과]' + chr(10) + '뉴스 21건 / 기술 용어 ' + str(len(terms)) + '건')
+
+    def test_drops_terms_absent_from_body(self):
+        import morning_briefing as mb
+        t = self._sample(['솔트 타이푼: 중국 연계 해킹 조직',
+                          '저궤도 맨팩 안테나: 이동식 위성 안테나',
+                          'AI-RAN: 무선 접속망에 AI를 적용하는 구조'])
+        out = mb._prune_orphan_terms(t.replace('* ', '\u2022' + ' '))
+        self.assertIn('솔트 타이푼', out)
+        self.assertIn('AI-RAN', out)
+        self.assertNotIn('맨팩', out)
+
+    def test_fixes_saved_count(self):
+        import morning_briefing as mb
+        t = self._sample(['솔트 타이푼: 중국 연계 해킹 조직',
+                          '저궤도 맨팩 안테나: 이동식 위성 안테나'])
+        out = mb._prune_orphan_terms(t.replace('* ', '\u2022' + ' '))
+        self.assertIn('기술 용어 1건', out)
+
+    def test_no_section_is_passthrough(self):
+        import morning_briefing as mb
+        t = '[주요 뉴스]' + chr(10) + '- 아무 기사 [ID:x]'
+        self.assertEqual(mb._prune_orphan_terms(t), t)
+
+
+class TestBriefingBodyAndTitleGuards(unittest.TestCase):
+    """morning_briefing — 본문 미확보 판정·제목 복원·매체명 정규화 (#161-보론14)
+
+    셋 다 독립 채점에서 반복 지적된 것을 코드로 막는 장치다.
+    프롬프트로만 막으면 하루 3~4건씩 남는다는 것이 회차마다 확인됐다.
+    """
+
+    def test_menu_only_body_is_not_real(self):
+        import morning_briefing as mb
+        menu = ('최종편집 2026-09-13 16:38 (일) 로그인 회원가입 전체보기 산업 ICT·AI '
+                '소재에너지 모빌리티 식품유통 게임콘텐츠 바이오헬스 경제 금융 증시 부동산 정치 국제 사회')
+        self.assertFalse(mb._has_real_body({'content': menu}))
+
+    def test_real_article_passes(self):
+        import morning_briefing as mb
+        art = ('과학기술정보통신부는 13일 이동통신 3사에 대한 실태점검 결과를 발표했다. '
+               '점검 대상은 전년도 매출 1조원 이상 사업자이며 10월 1일부터 적용된다.')
+        self.assertTrue(mb._has_real_body({'content': art}))
+
+    def test_short_body_is_not_real(self):
+        import morning_briefing as mb
+        self.assertFalse(mb._has_real_body({'content': '짧은 안내문'}))
+
+    def test_truncated_title_is_restored(self):
+        import morning_briefing as mb
+        full = '류신환 위원 "일률적 규제나 정부 개입은 지양해야"'
+        uid = '11111111-2222-3333-4444-555555555555'
+        line = ('•' + ' ' + '🟡' + ' 류신환 위원 "일률적 규제나... (관련 보도 3건) '
+                + '— sbs [ID:' + uid + ']')
+        out = mb._restore_titles(line, [{'id': uid, 'title': full}])
+        self.assertIn(full, out)
+        self.assertIn('(관련 보도 3건)', out)
+        self.assertIn('[ID:' + uid + ']', out)
+
+    def test_intact_title_is_untouched(self):
+        import morning_briefing as mb
+        uid = '11111111-2222-3333-4444-555555555555'
+        line = '•' + ' ' + '🟡' + ' 멀쩡한 제목 — sbs [ID:' + uid + ']'
+        self.assertEqual(mb._restore_titles(line, [{'id': uid, 'title': '다른 제목'}]), line)
+
+    def test_source_slug_becomes_korean_name(self):
+        import morning_briefing as mb
+        self.assertEqual(mb._pretty_source('hellot'), '헬로티')
+        self.assertEqual(mb._pretty_source('ggilbo'), '금강일보')
+        # 매핑에 없으면 원래 값을 그대로 둔다(fail-soft)
+        self.assertEqual(mb._pretty_source('연합뉴스'), '연합뉴스')
+        self.assertEqual(mb._pretty_source('알수없는매체'), '알수없는매체')

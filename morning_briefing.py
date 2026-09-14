@@ -222,9 +222,22 @@ def cluster_briefing_items(items: list, for_date: datetime = None) -> list:
         from news_dedup import extract_keywords, cluster_star
 
         reps = []
+        swapped = 0
         for rep, members in cluster_star(items):   # 최신순 입력 → 최신 기사가 대표
+            # 최신이라는 이유만으로 뽑힌 대표의 본문이 사이트 메뉴·목차뿐인 경우가 있다.
+            # 그러면 그 사건은 12칸 중 한 칸을 쓰고도 요약할 내용이 없다(#161-보론14).
+            # 실측: 개정 개인정보 보호법 시행 당일, 대표로 뽑힌 기사의 본문이
+            # '많이 본 기사' 목록뿐이어서 요약 세 문장이 전부 근거 없이 쓰였다.
+            # 같은 묶음 안에 본문이 있는 기사가 있으면 그쪽을 대표로 바꾼다.
+            if not _has_real_body(rep):
+                better = next((m for m in members if _has_real_body(m)), None)
+                if better is not None:
+                    rep = better
+                    swapped += 1
             rep['_related'] = len(members)
             reps.append(rep)
+        if swapped:
+            print(f'[클러스터] 본문 없는 대표 {swapped}건 → 같은 묶음의 본문 있는 기사로 교체')
         print(f'[클러스터] {len(items)}건 → {len(reps)}묶음')
 
         # 전일 기보도 꼬리표 — 어제 브리핑에서 이미 다룬 사건이 이어지는 것임을 표시
@@ -259,16 +272,85 @@ _BRIEFING_SYSTEM = """당신은 SK텔레콤 Comm센터 기술정책팀의 통신
 
 작성 규칙:
 - [주요 뉴스]는 제공된 기사에서만 선별 (최대 12건, 긴급·보통 기사 우선)
-- **12건 중 6건 이상은 정책·규제 사안으로 채울 것** — 법령·시행령·고시 제개정, 정부·위원회 의결과 제재, 국회 논의, 주파수·번호·통신설비 제도, 침해사고 조사·수사, 요금 규제가 여기 해당한다
+- **기사 본문 안에 '며칠 뒤 시행되는 제도'가 적혀 있으면 그것도 사건이다** — 기사의 주제가 아니어도,
+  본문에 "오는 11일 시행되는 개정 개인정보 보호법, 매출의 10%까지" 같은 문장이 있으면 요약이나 [주목 포인트]에
+  반드시 남긴다. 시행일이 확정됐고 우리가 수범자인 제도를 본문에 두고도 빠뜨리는 것이 가장 큰 누락이다.
+- **오늘 시행·발효·공포·의결된 것이 있으면 무조건 [주요 뉴스] 첫 칸에 둔다** — 법·시행령·고시가 오늘부터 효력을 갖거나,
+  위원회가 오늘 의결했거나, 부처 예산안·종합계획·국가 로드맵이 오늘 발표된 사안이다. **시행 그 자체가 사건이다** —
+  "이미 예고된 내용이라 새롭지 않다"는 이유로 빼지 말 것.
+  (실측 누락: 2026-09-12 개정 개인정보 보호법 시행(매출 10% 과징금·72시간 통지), 2026-09-06 과기정통부 2027년 예산안 29.6조원)
+- **12건 중 8건 이상은 정책·규제 사안으로 채울 것** — 법령·시행령·고시 제개정, 정부·위원회 의결과 제재, 국회 논의, 주파수·번호·통신설비 제도, 침해사고 조사·수사, 요금 규제가 여기 해당한다
 - 다음은 정책 함의가 분명할 때만 넣는다: 단말 출시·사전예약·프로모션, 특정 지자체 단신(지역 와이파이 설치 등), 개별 기업 실적·주가, 해외 일반 산업 동향
+- **기획·해설·전망 기사는 [주요 뉴스]에 최대 1건** — 제목에 [기획]·[돋보기]·[○○즈업]·[포커스]가 붙었거나
+  당일 사건 없이 배경을 설명하는 기사다. 후보가 적은 날(주말·연휴)일수록 이런 기사가 칸을 메우기 쉬운데,
+  그 사이 긴급 등급 당일 사안이 [그 외]로 밀린다(실측: 기획 3건이 들어간 날 '모두의 AI 연내 출시'가 밀렸다).
+- **한 주제가 [주요 뉴스] 12칸 중 3칸 이상을 먹지 못한다** — 개인정보 유출, AI 사업, 단말 경쟁처럼 같은 갈래의 사안은
+  **최대 2칸**까지다. 실측 지적: 유출 사고가 3~4칸을 과점해 5G SA 전환·통신망 투자 같은 통신망 본류가 두 섹션 어디에도
+  들어가지 못한 날이 있었다. 남는 것은 [그 외 오늘의 움직임]으로 내린다.
+- **같은 법·같은 사업·같은 사고는 [주요 뉴스]에서 한 칸으로 묶는다** — 같은 개정법의 조항별 기사, 같은 정부 사업의 후속 보도가
+  여러 칸을 먹으면 다른 사건이 통째로 밀려난다(실측: 개인정보 관련이 12칸 중 4칸을 차지해 AIDC 시행령안이 빠졌다).
+  묶고 남은 것과 12칸에 못 들어간 사건은 아래 [그 외 오늘의 움직임]으로 내린다.
+- **같은 통계·같은 발표에서 나온 수치를 두 섹션에 나눠 싣지 말 것** — 같은 소비자물가 발표의 '휴대전화료 26.7%'를
+  위에, '통신 물가 1.8%'를 아래에 두면 기준(전년 동월비 vs 누적)이 다른 두 숫자가 나란히 모순으로 읽힌다.
+  한 칸에 합치고 **각 수치의 기간을 함께 적는다.**
+- **같은 사건을 [주요 뉴스]와 [그 외 오늘의 움직임]으로 갈라 싣지 말 것** — 한 법의 시행을 과징금 조항은 위에,
+  통지 의무는 아래에 나눠 넣으면 독자는 두 사건으로 읽는다. 같은 사건은 위 칸 하나로 합치고 조항을 그 안에 열거한다.
+  (실측: 같은 날 시행 개정법이 두 섹션으로, 같은 기획 기사 두 편이 두 섹션으로 갈렸다)
+- **한 매체가 [주요 뉴스] 12칸 중 3칸 이상을 차지하지 않게 한다** — 같은 사건을 다룬 다른 매체 기사로 대체한다.
+- **[그 외 오늘의 움직임]으로 내리면 안 되는 것**: 그날 최대 보도 묶음(관련 보도가 가장 많은 사건), 시행일·의결일이
+  정해진 제도, 자사가 당사자인 사안. 이것들은 반드시 [주요 뉴스]에 둔다.
+  (실측 지적: 당일 최대 묶음인 중국산 장비 전수점검 요구와 시행령 재입법예고가 한 줄 목록으로 밀렸다)
+- **[그 외 오늘의 움직임]에 10~14건을 채운다** — 12칸에 못 들어갔지만 그날 실제로 있었던 정책·제도·사고·사업 사안이다.
+  실측 지적: 긴급 등급 사건이 두 섹션 어디에도 없는 날이 반복됐다(5G 단독모드 전환, 중국산 장비 전수점검 요구,
+  금융권 알뜰폰 진입, 하위법령 시행령안 공개). 이 섹션은 한 건에 두 줄뿐이니 칸을 아끼지 말 것.
+- **[그 외 오늘의 움직임]도 정책 지면이다** — 기업 간 MOU·업무협약, 노조 논평, 전시회·세미나 예고, 수상 소식은
+  제도 사안을 밀어내면서 들어가지 않는다(실측: 12칸 중 5칸이 MOU·논평이었고 그 사이 수어통역방송 첫 실무지침,
+  정부 해킹 도입 검토, 상생협력법 겹규제가 빠졌다). 채울 제도 사안이 정말 없을 때만 마지막 자리에 둔다.
+- **전체 길이는 5,000자를 넘기지 않는다** — 넘치면 [그 외]의 정책 함의가 가장 옅은 항목부터 덜어낸다.
+  분량을 줄이려고 위 요약의 필수 다섯 요소를 깎지는 말 것. 순서는 항상 **항목을 덜어내는 쪽**이다.
+  제목·출처·한 줄 근거·링크만 적고 영향 분석과 🔴는 붙이지 않는다. **이 섹션이 비어 있으면 그날 동향의 절반이 사라진 것이다.**
+- **본문이 확보되지 않은 기사를 [주요 뉴스] 대표로 쓰지 말 것** — 같은 사건의 다른 기사 중 본문이 있는 것을 대표로 삼는다.
+  요약을 제목 반복이나 보도 건수로 메우게 되면 그 칸은 정보가 없는 칸이다(실측: 당일 최대 사안이 그렇게 실렸다).
+- **한 칸도 버리지 말 것** — 본문이 사이트 안내문·목차뿐인 기사, 제목만 있고 내용이 없는 행정 공고, 특정 인물 칼럼·인터뷰는
+  그 자리에 들어갈 정책 사안을 밀어낸다. 공고를 넣을 때는 **무엇이 바뀌는지**를 본문에서 찾아 요약에 적고, 찾지 못하면 그 항목을 뺀다.
 - 같은 사건·주제를 다룬 기사가 여러 건일 경우 가장 중요한 1건만 선별 (중복 주제 제외)
 - 제목 뒤 (관련 보도 N건)은 같은 사건을 다룬 기사 수 — 선별한 항목에 그대로 표기해 보도 규모가 보이게 할 것
 - **같은 사건이 여러 항목으로 나뉘어 들어올 수 있다**(예: 같은 과징금 건이 금액 표기만 다르게 2~3건). 이때는 (관련 보도 N건)이 가장 큰 1건만 [주요 뉴스]에 넣고 나머지는 버릴 것 — 사건이 같은지는 제목의 주체·사안으로 판단
-- 〔전일 기보도 이어짐〕 표시가 있는 기사는 **새로 알려진 사실이 있을 때만** 선별하고 **최대 2건까지만** 넣는다 — 진전 없는 재보도로 칸을 채우지 말 것. 선별하면 그 표시를 제목 뒤에 유지하고, 요약은 새로 알려진 내용만 짧게 쓸 것
+- 〔전일 기보도 이어짐〕 표시가 있는 기사는 **새로 알려진 사실이 있을 때만** 선별하고 **최대 2건까지만** 넣으며,
+  **[주요 뉴스] 5번 이후에 배치한다 — 1~4번에 두는 것은 어떤 경우에도 안 된다.** 앞자리는 그날 새로 생긴 사건의 자리다.
+  실측 지적: 5일 전 발표된 예산안 재게재가 1번을 차지하고, 그날 유일하게 새로 확인된 제도 개정이 2번으로 밀렸다.
+  **그날 새 사건이 4건이 안 되면 칸을 비우지 말고 [그 외]에서 당일 제도 사안을 끌어올려 앞을 채운다** — 진전 없는 재보도로 칸을 채우지 말 것. 선별하면 그 표시를 제목 뒤에 유지하고, 요약은 새로 알려진 내용만 짧게 쓸 것
 - 〔이월 — 아직 브리핑에 못 실린 사건〕 표시는 어제까지 한 번도 브리핑에 오르지 못한 사건이다. 정책·규제 사안이면 지금이라도 [주요 뉴스]에 넣고, 제목 뒤 표시는 지울 것(독자에게는 새 소식이다)
 - [주목 포인트]는 SKT Comm센터 정책·기술 관점에서 핵심 이슈 1~3개 도출
 - 반드시 제공된 본문 내용에 근거해서만 요약 작성 — 추측·외부 지식 금지
-- 각 뉴스에 본문 기반 한 줄 요약 포함
+- **등록일·보도일과 시행일·고시일을 섞지 말 것** — 공고문에는 '등록일'과 '고시 일자'가 따로 적혀 있다.
+  실측 오류: 등록일 8월 19일을 고시일로 적어 폐지 효력 시점이 일주일 어긋났고, 뒤따른 분석이
+  "지금 근거 표준이 사라진다"며 즉시 조치를 지시했다. **효력이 언제부터인지가 요약의 값이다.**
+- **본문이 특정한 범위를 넓히지 말 것** — 본문의 '1개 혼신원'을 '복수의 혼신'으로, '최우수 1건'을 발표 전체로
+  바꿔 쓰면 사실이 달라진다. 보도자료 부제보다 본문 서술을 따른다.
+- **본문에 없는 수식어를 붙이지 말 것** — "올해 마지막 신규과제" 같은 표현이 본문에 없으면 쓰지 않는다.
+  그 자리에는 본문에 실제로 있는 수치(연구비·기한·대상)를 넣는다.
+- **숫자와 날짜는 제공된 본문에 적힌 그대로만 쓴다** — 기억이나 환산으로 바꾸지 말 것.
+  실측 오류: 본문에 원제 'Repays $3.08 Billion'이 붙어 있는데 요약은 3억 8천만 달러로 적었고(8배 차이),
+  과징금 부과일을 본문에 없는 날짜로 썼다. 본문에 없으면 숫자를 쓰지 말고 문장에서 뺀다.
+- **전망·추정은 누가 한 말인지 밝힌다** — 증권사 보고서·애널리스트 전망·업계 관측을 출처 없이 적으면
+  규제기관 방침으로 읽힌다(실측: 하나증권 전망인 "내년 5G 추가 경매 가능성"이 주요 뉴스 3번에 정책 사실처럼 실렸다).
+- **수사·조사가 진행 중인 사안은 '의혹'·'혐의' 표기를 반드시 유지한다** — 본문이 "증거인멸 의혹, 경찰 수사 중"이라고
+  적었는데 요약에서 "쟁점은 증거인멸"이라고 단정형으로 옮기면, 사내 타 부서에는 확정 사실로 읽힌다.
+  경쟁사 사안일수록 본문의 유보 표현을 그대로 옮긴다.
+- **자극적·조롱조 표현은 중립어로 바꾼다** — 원문 헤드라인의 "털리고", "생색", "도마 위" 같은 표현을
+  그대로 옮기지 말 것. 사내 타 부서가 함께 보는 문서에서 타사 사고를 조롱조로 적지 않는다.
+- **제목을 '…'로 잘라 쓰지 말 것** — 화면에서 제목이 그대로 링크로 뜬다. 인용부호가 열린 채 끊기면
+  발언 취지가 반대로 읽힌다(실측: '류신환 위원 "일률적 규제나...'). 길면 줄이지 말고 그대로 싣는다.
+- 각 뉴스에 본문 기반 한 줄 요약 포함 — **한두 문장, 130자 이내**. 수식어·배경 설명·기자 해설을 빼되,
+  다음 다섯 가지는 글자 수를 줄이려고 버리지 말 것. **하나라도 빠지면 독자가 사안을 오해한다**:
+  ①적용 대상·범위(예: "전년도 이동통신 매출 1조원 이상 사업자") ②시점(시행일·의결일·집계 구간·소급 여부)
+  ③핵심 수치(금액·건수는 상한만이 아니라 구간과 정액 대안까지) ④소관 부처·기관 ⑤완화·예외·균형 단서
+  (예: "자율성 보장", "시행 이후 위반부터 적용", "미제출이 법 위반은 아니다")
+  실측 지적: 90자로 조였더니 개정법 요약이 과징금만 남고 72시간 통지 의무가 통째로 사라졌고,
+  과징금 "매출 최대 6%"만 남아 1~6% 구간과 1억~20억원 정액 대안이 지워졌다.
+- **한 발표에 여러 항목이 담겼으면 대표 1건만 옮기고 끝내지 말 것** — "적극행정 최우수 1건"만 쓰고
+  같은 발표의 저궤도 위성통신망·QoS 확대를 버리면 그 칸의 정보 대부분이 사라진다. 나머지는 "외 ○○·○○ 등"으로 열거한다.
 - [ID:기사id] 태그를 제목 뒤에 반드시 포함 (역저장에 사용)
 - 🔴 긴급 표시는 입력 뉴스 목록에서 🔴 아이콘이 붙은 기사에만 사용할 것 (크롤러·담당자 검증 분류 기준)
   ※ 입력에서 🔴인 기사를 [주요 뉴스]에 선별하면 🔴를 그대로 유지하고, 🟡·🟢 기사에 새로 🔴를 붙이지 말 것
@@ -281,12 +363,24 @@ _BRIEFING_SYSTEM = """당신은 SK텔레콤 Comm센터 기술정책팀의 통신
   → 한 줄 요약 (본문 근거, 1~2문장)
   🔗 URL
 
+[그 외 오늘의 움직임]
+• 제목 — 출처 [ID:기사id]
+  → 한 줄 근거 (본문 기반, **60자 이내** — 제목에 없는 사실을 적는다. 무엇이 신설·변경되는지,
+    누가 대상인지, 언제부터인지 중 실무에 가장 걸리는 하나. "행정절차법 제41조에 따라 의견 수렴" 같은
+    절차 상투구나 제목 반복으로 채우지 말 것)
+  🔗 URL
+
 [주목 포인트]
 • 핵심 이슈 1
 • 핵심 이슈 2
 
 [새로 추가된 기술 용어]
 • 용어: 정의
+  ※ **브리핑 본문 어느 항목과도 연결되지 않는 용어는 싣지 않는다** — 독자가 왜 오늘 이 용어인지 알 수 없다.
+  ※ **정의에 용어 자체를 되풀이하지 않는다** — "저궤도 위성 통신: 저궤도 위성을 이용한 통신 기술"은 정의가 아니다.
+     무엇에 쓰이는지·왜 지금 나왔는지를 한 구절 덧붙인다.
+  ※ 뜻을 확신할 수 없으면 그 용어를 빼라. 실측 오류: 제로 트러스트를 "신뢰도 기반 보안 프레임워크"로 적어
+     의미가 정반대가 됐다(실제는 아무것도 신뢰하지 않고 매번 검증하는 모델).
 
 [저장 결과]
 뉴스 N건 / 기술 용어 N건"""
@@ -322,6 +416,78 @@ def select_for_prompt(items: list, limit: int = 60) -> list:
     )[:limit]
 
 
+_BOILER_RE = re.compile(u'로그인|회원가입|전체보기|모바일웹|구독하기|바로가기|최종편집|발행일|'
+                        u'기사제보|무단전재|저작권자|많이 본 기사|주요뉴스|전체메뉴|댓글 정책|포토뉴스')
+_ENDER_RE = re.compile('다[.]|다["]|했다|밝혔다|말했다|이다|된다|한다|었다|겠다|습니다')
+
+
+def _has_real_body(it: dict) -> bool:
+    """본문이 실제 기사인지, 사이트 메뉴·목차뿐인지 가른다(#161-보론14).
+
+    실측 지적: 그날 선두 항목의 대표 기사 본문이 '많이 본 기사' 목록뿐이어서
+    요약 세 문장이 전부 인용 본문으로 검증되지 않았다.
+    판정은 **문장 종결 개수**로 한다 — 메뉴·목차는 토막 나열이라 종결어미가 거의 없고,
+    실제 기사는 짧아도 대여섯 문장은 된다.
+    앞머리 250자만 보는 방식은 쓰지 않는다: 전자신문 계열처럼 본문 앞에 메뉴가 길게 붙는
+    템플릿에서 정상 기사 30여 건이 통째로 오검출됐다(AI-RAN·AIDC 하위법령·최적요금제 등).
+    """
+    body = ' '.join((it.get('content') or '').split())
+    if len(body) < 50:
+        return False
+    # 정부 공고는 표로 온다 — 문장이 없어도 담당부서·기간·내용이 칸에 들어 있어 요약할 수 있다.
+    if body.count(chr(124)) >= 6:
+        return True
+    return len(_ENDER_RE.findall(body)) >= 2
+
+
+_SOURCE_ALIAS = {
+    'news1': '뉴스1', 'edaily': '이데일리', 'fnnews': '파이낸셜뉴스', 'dailian': '데일리안',
+    'digitaltoday': '디지털투데이', 'asiae': '아시아경제', 'etoday': '이투데이', 'newspim': '뉴스핌',
+    'heraldcorp': '헤럴드경제', 'ajunews': '아주경제', 'itdaily': 'IT데일리', 'hankooki': '데일리한국',
+    'enewstoday': '이뉴스투데이', 'metroseoul': '메트로신문', 'gukjenews': '국제뉴스',
+    'viva100': '브릿지경제', 'yonhapnewstv': '연합뉴스TV', 'm-i': '매일일보',
+    'businesspost': '비즈니스포스트', 'nocutnews': '노컷뉴스', 'koit': '정보통신신문',
+    'pinpointnews': '핀포인트뉴스', 'seoul': '서울신문', 'asiatime': '아시아타임즈',
+    'newsworks': '뉴스웍스', 'g-enews': '글로벌이코노믹', 'newdaily': '뉴데일리',
+    'financialpost': '파이낸셜포스트', 'hansbiz': '한스경제', 'shinailbo': '신아일보',
+    'segye': '세계일보', 'newscj': '천지일보', 'sentv': '서울경제TV', 'newstomato': '뉴스토마토',
+    'mtn': '머니투데이방송', 'hankookilbo': '한국일보', 'topstarnews': '톱스타뉴스',
+    'techm': '테크M', 'kukinews': '쿠키뉴스', 'tf': '더팩트', 'weeklytoday': '위클리오늘',
+    'einfomax': '연합인포맥스', 'pointdaily': '포인트데일리', 'thepublic': '더퍼블릭',
+    'econovill': '이코노믹리뷰', 'epnc': '테크월드뉴스', 'tokenpost': '토큰포스트',
+    'cstimes': '컨슈머타임스', 'aitimes': 'AI타임스', 'newsway': '뉴스웨이',
+    'popcornnews': '팝콘뉴스', 'srtimes': 'SR타임스', 'hellot': '헬로티',
+    'vegannews': '비건뉴스', 'ggilbo': '금강일보', 'legaltimes': '리걸타임즈',
+    'ebn': 'EBN', 'sbs': 'SBS', 'kbs': 'KBS', 'ytn': 'YTN', 'tvchosun': 'TV조선',
+    'zdnet korea': 'ZDNet코리아',
+    'safetimes': '세이프타임즈', 'ekn': '에너지경제', 'dealsite': '딜사이트',
+    'fpn119': '소방방재신문', 'chungnamilbo': '충남일보', 'thescoop': '더스쿠프',
+    'goodmorningcc': '굿모닝충청', 'ksilbo': '경상일보', 'businessplus': '비즈니스플러스',
+    'economist': '이코노미스트', 'sisaon': '시사오늘', 'ppss': 'ppss',
+    'kbmaeil': '경북매일', 'it-b': '아이티비즈', 'webeconomy': '웹이코노미',
+    'newsprime': '프라임경제', 'nongaek': '논객닷컴', 'idomin': '경남도민일보',
+    'sportsworldi': '스포츠월드', 'financialreview': '파이낸셜리뷰',
+    'm-economynews': '엠이코노미뉴스', 'etnews': '전자신문', 'inews24': '아이뉴스24',
+    'zdnet': 'ZDNet코리아', 'bloter': '블로터', 'ddaily': '디지털데일리',
+    'dt': '디지털타임스', 'mk': '매일경제', 'mt': '머니투데이', 'khan': '경향신문',
+    'donga': '동아일보', 'chosun': '조선일보', 'joongang': '중앙일보',
+    'hani': '한겨레', 'hankyung': '한국경제', 'sedaily': '서울경제',
+    'imaeil': '매일신문', 'kmib': '국민일보', 'munhwa': '문화일보',
+}
+
+
+def _pretty_source(name: str) -> str:
+    """도메인 슬러그로 저장된 매체명을 한글 표기로 바꾼다(#161-보론14).
+
+    news_feed.source의 80%(11,495건 중 9,162건)가 'hellot'·'ggilbo' 같은 도메인 본체다.
+    크롤러의 _NAVER_PRESS_DOMAINS에 없는 매체는 도메인을 그대로 쓰기 때문인데,
+    한 브리핑 안에서 '연합뉴스'와 'thepublic'이 섞여 사내 공유물의 마감 품질을 떨어뜨린다는
+    독립 채점 지적이 나왔다. 매핑에 없으면 원래 값을 그대로 둔다(fail-soft).
+    """
+    key = (name or '').strip()
+    return _SOURCE_ALIAS.get(key.lower(), key)
+
+
 def _pub_key(it: dict) -> float:
     """정렬용 발행시각 — 파싱 실패 시 0(맨 뒤)."""
     try:
@@ -345,11 +511,12 @@ def generate_briefing(items: list, new_terms: list, for_date: datetime = None) -
         body = (it.get('content') or '').replace('\n', ' ').strip()[:400]
         # 클러스터 대표에는 보도 규모·전일 연속 여부를 병기 (배경역사 #44)
         rel = it.get('_related', 0)
-        tags = ((f' (관련 보도 {rel + 1}건)' if rel else '')
+        tags = (('' if _has_real_body(it) else ' 〔본문 미확보 — 대표로 쓰지 말 것〕')
+                + (f' (관련 보도 {rel + 1}건)' if rel else '')
                 + (' 〔전일 기보도 이어짐〕' if it.get('_prev') else '')
                 + (' 〔이월 — 아직 브리핑에 못 실린 사건〕' if it.get('_carry') else ''))
         news_lines.append(
-            f"{icon} {it['title']}{tags} — {it.get('source','')} [ID:{it['id']}]\n"
+            f"{icon} {it['title']}{tags} — {_pretty_source(it.get('source',''))} [ID:{it['id']}]\n"
             f"   URL: {it.get('url','')}\n"
             f"   발행: {str(it.get('published_at',''))[:10]}\n"
             f"   본문: {body}"
@@ -398,11 +565,55 @@ def generate_briefing(items: list, new_terms: list, for_date: datetime = None) -
 
 _IMPACT_SYSTEM = """당신은 SKT Comm센터 기술정책팀의 정책 분석 AI입니다.
 긴급 분류된 기사 1건에 대해 SKT 관점의 영향 분석을 작성하세요.
-- 3~4문장, 제공된 본문에 근거한 내용만 (추측·과장 금지)
-- 영향이 불명확하면 '추가 정보 수집 필요'를 명시
+- **2~3문장, 250자 이내** (현재 평균 392자로 길다 — 요약 반복과 부재 설명이 분량을 먹는다)
+- 제공된 본문에 근거한 내용만 (추측·과장 금지)
+- **없는 것을 설명하는 데 문장을 쓰지 말 것** — "본문에는 실려 있지 않다", "기재돼 있지 않아", "추가 정보 수집이 필요하다"
+  같은 서술로 한 문장을 소비하지 않는다. 있는 것만 쓰고, 꼭 필요하면 마지막에 한 구절로 짧게 붙인다
+- **바로 위 한 줄 요약을 다시 쓰지 말 것** — 사건 설명은 이미 요약에 있다. 분석은 요약에 **없는 것**만 담는다:
+  ①우리에게 무엇이 걸리는가(적용 대상·의무·리스크) ②언제까지 무엇을 해야 하는가(기한·준비 항목)
+  ③비교 사례나 선례. 실측 지적: 분석 다섯 건 모두 첫 두세 문장이 요약의 재서술이고 새 정보는 마지막 한 줄뿐이었다
+- **제공된 본문을 끝까지 읽고 쓸 것** — 본문 후반에 있는 사실을 두고 "본문에 없다", "추가 정보 수집이 필요하다"고 쓰는
+  오류가 반복 지적됐다(실측: 정부 조치 착수·분기 매출 수치·유출 규모가 본문에 있는데도 없다고 서술).
+  그 문구는 본문을 다 읽고도 정말 없을 때만 쓰고, 그때는 무엇이 없는지 구체적으로 적는다
+- **본문이 말하지 않은 것을 구체화하지 말 것** — 본문이 "사업 구조를 반영하지 못한다"까지만 말했는데
+  "임대형으로 운영되는 AIDC는"이라고 한 단계 앞서 나가면 근거 없는 단정이 된다.
+  기준을 정할 주체도 본문대로 쓴다(하위법령이 규제심사 중이면 "사업자가 확정해야 한다"가 아니다).
 - 마지막 문장에 권고 대응 1가지 포함
 - 줄바꿈 없이 한 단락으로만 출력
 - "SKT 관점 영향 분석:" 같은 제목·머리말을 앞에 붙이지 말고 첫 문장부터 바로 쓸 것 (표시는 시스템이 이미 붙인다)"""
+
+
+_RANK_SELF = re.compile(r'SKT|SK텔레콤|에스케이텔레콤')
+_RANK_RULE = re.compile(r'주파수|재할당|경매|무선국|번호|설비|요금|약관|이용자보호|과징금|시정명령|제재|처분|'
+                        r'고시|시행령|시행규칙|개정|제정|입법|국회|의결|수사|조사|소송|판결')
+_RANK_RISK = re.compile(r'해킹|유출|침해|장애|먹통|증거인멸|보안')
+
+
+_RANK_DUE = re.compile(r'시행|발효|공포|의결|제정|개정안 통과|부과|상한|의무|기한|'
+                       r'\d+월\s*\d+일부터|내년\s*\d+월부터')
+_RANK_CARRIER = re.compile(r'통신사|이동통신사|이통3사|기간통신|전기통신사업자|부가통신|알뜰폰|'
+                           r'SKT|SK텔레콤|KT|LG유플러스')
+
+
+def _impact_rank(it: dict) -> tuple:
+    """영향 분석 대상 정렬 키 — 작을수록 먼저.
+
+    시행일이 확정됐고 통신사가 수범자인 제도 > 자사 당사자 > 제도·자원 > 보안 > 나머지.
+    5차 채점 지적(#161-보론13): 10월 1일 시행이 확정된 불법스팸 매출 6% 과징금(수범자가 통신사)에
+    분석이 없고 해저케이블에 붙었다. "언제부터 우리가 무엇을 해야 하나"가 분석의 값이므로
+    기한이 박힌 항목을 가장 앞에 둔다.
+    """
+    t = (it.get('title') or '') + ' ' + (it.get('content') or '')[:300]
+    tier = 4
+    if _RANK_RULE.search(t) and _RANK_DUE.search(t) and _RANK_CARRIER.search(t):
+        tier = 0
+    elif _RANK_SELF.search(t) and _RANK_RULE.search(t):
+        tier = 1
+    elif _RANK_RULE.search(t):
+        tier = 2
+    elif _RANK_RISK.search(t):
+        tier = 3
+    return (tier, -(it.get('_related') or 0))
 
 
 def add_urgent_analyses(items: list, briefing_text: str) -> str:
@@ -413,17 +624,48 @@ def add_urgent_analyses(items: list, briefing_text: str) -> str:
     urgent = [it for it in items if it.get('urgency') == '긴급' and f"[ID:{it['id']}]" in briefing_text]
     if not urgent:
         return briefing_text
+    # 대상 선정은 긴급 표시 순서가 아니라 **SKT 이해관계 순**이다(#161-보론10).
+    # 독립 채점 지적: 주파수 재할당·해저케이블처럼 이해가 큰 항목에 분석이 없고,
+    # 멤버십 등급 칼럼 같은 항목에 붙은 날이 있었다. 3건 고정도 5건으로 늘린다.
+    urgent.sort(key=_impact_rank)
+    # [주요 뉴스] 1번 항목은 무조건 분석 대상에 넣는다(#161-보론11) — 그날 시행·의결된 제도가
+    # 1번인데 분석이 다른 항목에만 붙은 날이 있었다(실측: 매출 10% 과징금 신설 당일).
+    _first = re.search(r'\[ID:([0-9a-f-]{36})\]', briefing_text)
+    if _first:
+        _fid = _first.group(1)
+        for _i, _it in enumerate(urgent):
+            if str(_it['id']) == _fid and _i > 0:
+                urgent.insert(0, urgent.pop(_i))
+                break
+    # 그날 최대 보도 묶음과 자사가 당사자인 사안은 분석 대상에서 빠지지 않게 끌어올린다(#161-보론14).
+    # 실측 지적: 후보 323건 중 100건이 몰린 당일 최대 사안이자 자사가 직접 당사자인 건에
+    # 분석이 없고, 분석 5건이 모두 다른 항목에 배정된 날이 있었다.
+    if urgent:
+        _top = max(urgent, key=lambda x: (x.get('_related') or 0))
+        if (_top.get('_related') or 0) > 0 and _top in urgent[5:]:
+            urgent.remove(_top)
+            urgent.insert(1, _top)
+        for _it in list(urgent[5:]):
+            if _RANK_SELF.search((_it.get('title') or '')):
+                urgent.remove(_it)
+                urgent.insert(2, _it)
+                break
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     lines = briefing_text.split('\n')
-    for it in urgent[:3]:
+    for it in urgent[:5]:
         try:
-            body = (it.get('content') or '').replace('\n', ' ').strip()[:1500]
+            # 1,500자로 자르면 본문 후반의 수치·조치가 모델 눈에 닿지 않는다 —
+            # '본문에 없다'는 서술과 환각이 동시에 늘어난 원인이다(#161-보론14).
+            body = (it.get('content') or '').replace('\n', ' ').strip()[:3000]
             resp = client.messages.create(
                 model='claude-haiku-4-5-20251001', max_tokens=400,
                 system=_IMPACT_SYSTEM,
                 messages=[{'role': 'user', 'content': f"제목: {it['title']}\n본문: {body}"}],
             )
             analysis = resp.content[0].text.strip().replace('\n', ' ')
+            # 생성된 분석의 수치가 본문에 있는지 대조해 경고를 남긴다(#161-보론14).
+            # 지우지는 않는다 — 한 숫자를 들어내면 문장이 무너지고, 판단은 운영자가 한다.
+            _warn_unbacked_numbers(str(it.get('title', '')), analysis, body)
         except Exception as e:
             print(f'  [영향 분석 오류] {str(it.get("title",""))[:30]}: {e}')
             continue
@@ -505,6 +747,166 @@ _LINK_RE = re.compile(r'^\s*🔗\s*(https?:\S+)\s*$')
 def _tg_esc(s: str) -> str:
     """텔레그램 HTML 이스케이프 — 이스케이프 누락 시 sendMessage가 400으로 전체 실패한다."""
     return s.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+
+
+def _dedup_terms(rows: list) -> list:
+    """같은 용어의 표기 변형을 하나로 — '솔트 타이푼'과 '소금 타이푼'이 같은 날 함께 실렸다(#161-보론11).
+    공백·중점·괄호를 지운 뒤 비교하고, 한쪽이 다른 쪽을 포함하면 더 긴 쪽(대개 정식 표기)을 남긴다."""
+    out = []
+    for r in rows:
+        key = re.sub(r'[\s·\-_()]', '', (r.get('term') or '')).lower()
+        if not key:
+            continue
+        dup = None
+        for i, kept in enumerate(out):
+            k2 = re.sub(r'[\s·\-_()]', '', (kept.get('term') or '')).lower()
+            # 유사도 기반 병합은 쓰지 않는다 — '설계전력'과 '계약전력'처럼 별개 용어가
+            # 합쳐진다(실측). 오역·이형 표기는 tech_terms 데이터에서 정리한다(#161-보론11).
+            if key == k2 or key in k2 or k2 in key:
+                dup = i
+                break
+        if dup is None:
+            out.append(r)
+        elif len(r.get('term') or '') > len(out[dup].get('term') or ''):
+            out[dup] = r
+    return out
+
+
+_NL = chr(10)
+_ID_IN_LINE_RE = re.compile(r'\[ID:([0-9a-f-]{36})\]')
+_WS = r'\s'
+_TERM_COUNT_RE = r'(뉴스 \d+건 / 기술 용어 )\d+(건)'
+
+
+_TITLE_HEAD_RE = re.compile(r'^(\s*[•-]\s*(?:🔴|🟡|🟢)?\s*)')
+_TITLE_CUT_RE = re.compile(r'(…|\.\.\.)\s*$')
+_TAG_PIECE_RE = re.compile(r'\(관련 보도 \d+건\)|〔[^〕]*〕')
+_TAG_MARKS = (' (관련 보도', ' \u3014')
+
+
+_NUM_RE = re.compile(r'[0-9][0-9,.]*')
+
+
+def _warn_unbacked_numbers(label: str, generated: str, body: str) -> None:
+    """생성문의 숫자가 제공 본문에 없으면 경고만 남긴다(#161-보론14).
+
+    지우지 않는 이유: 한 숫자를 들어내면 문장이 무너지고, 단위 환산처럼
+    정당한 경우도 있다. 판단은 사람이 하고, 코드는 눈에 띄게만 해 준다.
+    비교는 자릿수 구분 쉼표를 뗀 뒤 문자열 포함으로 본다(보수적).
+    """
+    flat = body.replace(',', '')
+    bad = []
+    for n in _NUM_RE.findall(generated or ''):
+        t = n.strip('.').replace(',', '')
+        if len(t) < 2:          # 한 자리 수는 오탐이 많다
+            continue
+        if t not in flat:
+            bad.append(n)
+    if bad:
+        print('[분석 경고] ' + label[:24] + ' — 본문에 없는 수치: ' + ', '.join(bad[:6]))
+
+
+def _restore_titles(text: str, items: list) -> str:
+    """모델이 '…'로 줄여 쓴 제목을 원제목으로 되돌린다(#161-보론14).
+
+    화면에서는 제목이 그대로 링크로 뜬다. 인용부호가 열린 채 끊기면
+    발언 취지가 반대로 읽힌다(실측: '류신환 위원 "일률적 규제나...').
+    프롬프트로 금지해도 하루 3~4건씩 남아 코드에서 되돌린다.
+    바꾸는 것은 잘린 제목뿐 — 태그·출처·[ID:]는 손대지 않는다.
+    """
+    # 제목에 꼬리표가 이미 붙어 오는 입력이 있다(briefing_offline 내보내기는
+    # '제목 + (관련 보도 N건)' 형태로 준다). 그대로 쓰면 복원할 때마다 꼬리표가
+    # 한 벌씩 더 붙어 배지가 줄줄이 늘어난다(#161-보론14 실측 4~5곳).
+    title_by_id = {str(it.get('id')): _TAG_PIECE_RE.sub('', it.get('title') or '').strip()
+                   for it in items}
+    out, fixed = [], 0
+    for line in text.split(chr(10)):
+        m = _ID_IN_LINE_RE.search(line)
+        if not m:
+            out.append(line)
+            continue
+        full = title_by_id.get(m.group(1))
+        head, rest_id = line[:m.start()], line[m.start():]
+        if ' — ' not in head:
+            out.append(line)
+            continue
+        left, _, source = head.rpartition(' — ')
+        hm = _TITLE_HEAD_RE.match(left)
+        prefix = hm.group(1) if hm else ''
+        body = left[len(prefix):]
+        cut = len(body)
+        for mark in _TAG_MARKS:
+            i = body.find(mark)
+            if 0 <= i < cut:
+                cut = i
+        title, tags = body[:cut], body[cut:]
+        # 꼬리표 중복 정리는 제목이 잘렸든 아니든 모든 줄에 적용한다 —
+        # 잘리지 않은 줄에 남은 중복이 채점에서 4~5곳씩 지적됐다.
+        seen, uniq = set(), []
+        for piece in _TAG_PIECE_RE.findall(tags):
+            if piece not in seen:
+                seen.add(piece)
+                uniq.append(piece)
+        tags = (' ' + ' '.join(uniq)) if uniq else ''
+        if not full or not _TITLE_CUT_RE.search(title):
+            rebuilt = prefix + title + tags + ' — ' + source + rest_id
+            out.append(rebuilt if rebuilt != line else line)
+            continue
+        rebuilt = prefix + full + tags + ' — ' + source + rest_id
+        # 원제목 자체가 '…'로 끝나는 기사가 있다(수집 시점에 이미 잘린 제목).
+        # 그때는 복원해도 값이 같으므로 '고쳤다'고 세지 않는다.
+        if rebuilt != line:
+            fixed += 1
+        out.append(rebuilt)
+    if fixed:
+        print('[제목] 잘린 제목 ' + str(fixed) + '건 원제목으로 복원')
+    return chr(10).join(out)
+
+
+def _prune_orphan_terms(text: str) -> str:
+    """[새로 추가된 기술 용어]에서 본문과 연결되지 않는 용어를 지운다(#161-보론13).
+
+    독립 채점에서 세 날 연속 지적된 것 — '솔트 타이푼'이 용어로 올라 있는데 정작 그 사건은
+    두 섹션 어디에도 없고, '저궤도 맨팩 안테나'는 출처 기사 자체가 실리지 않았다.
+    독자는 왜 오늘 이 용어가 나왔는지 알 수 없고, 용어만 떠 있으면 본문 누락이 도리어 드러난다.
+    프롬프트로도 막지만 모델이 어기는 날이 있어 코드에서 한 번 더 거른다.
+    판정은 느슨하게 — 공백을 지운 형태가 본문에 있으면 남긴다(영문 약어는 대소문자 무시).
+    """
+    head = '[새로 추가된 기술 용어]'
+    i = text.find(head)
+    if i < 0:
+        return text
+    body = text[:i]                       # 용어 섹션 위쪽이 '본문'
+    rest = text[i + len(head):]
+    end = rest.find(_NL + '[')        # 다음 섹션 머리
+    seg, tail = (rest[:end], rest[end:]) if end >= 0 else (rest, '')
+    body_flat = re.sub(_WS, '', body).lower()
+    kept, dropped = [], []
+    for line in seg.split(_NL):
+        t = line.strip()
+        if not t.startswith('•'):
+            kept.append(line)
+            continue
+        term = t.lstrip('•').split(':')[0].strip()
+        flat = re.sub(_WS, '', term).lower()
+        if flat and flat in body_flat:
+            kept.append(line)
+        else:
+            dropped.append(term)
+    if dropped:
+        print('[용어] 본문 미연결 ' + str(len(dropped)) + '건 제외: ' + ', '.join(dropped))
+    n_kept = sum(1 for l in kept if l.strip().startswith('•'))
+    if n_kept == 0:
+        # 헤더만 남은 빈 섹션을 내보내지 않는다 — 구조 항목 하나가 빈 채로 발송됐다는
+        # 채점 지적이 있었다. 섹션을 통째로 들어낸다.
+        out = (text[:i].rstrip() + _NL + _NL + tail.lstrip(_NL)) if tail else text[:i].rstrip()
+        print('[용어] 남은 용어가 없어 섹션을 제거')
+        return re.sub(_TERM_COUNT_RE, lambda m: m.group(1) + '0' + m.group(2), out)
+    out = text[:i] + head + _NL.join(kept) + tail
+    # [저장 결과]의 용어 건수도 실제 남은 수로 맞춘다
+    n = sum(1 for l in kept if l.strip().startswith('•'))
+    out = re.sub(_TERM_COUNT_RE, lambda m: m.group(1) + str(n) + m.group(2), out)
+    return out
 
 
 def _briefing_to_telegram_html(text: str) -> str:
@@ -595,7 +997,10 @@ def _briefing_to_html(text: str) -> str:
             out.append(f'<p style="margin:2px 0 2px 24px;color:#555;font-size:13px">{e}</p>')
         elif e.startswith('  🔗'):
             url = line.strip()[2:].strip()
-            out.append(f'<p style="margin:2px 0 8px 24px;font-size:12px"><a href="{url}" style="color:#534AB7">{url}</a></p>')
+            # URL 문자열을 그대로 노출하지 않는다(#161-보론12) — 텔레그램은 제목에 링크를 걸고
+            # 대시보드는 '원문 보기'로 접는데 이메일만 주소가 본문에 깔려 읽기를 방해했다.
+            out.append(f'<p style="margin:2px 0 8px 24px;font-size:12px">'
+                       f'<a href="{url}" style="color:#534AB7;text-decoration:none">🔗 원문 보기</a></p>')
         elif e == '':
             out.append('<br>')
         else:
@@ -1054,7 +1459,7 @@ def main():
         resp = sb.table('tech_terms').select('term,definition') \
             .gte('created_at', since) \
             .execute()
-        new_terms = resp.data or []
+        new_terms = _dedup_terms(resp.data or [])
         print(f'[용어] 오늘 신규 {len(new_terms)}건')
     except Exception as e:
         print(f'[용어 조회 오류] {e}')
@@ -1064,6 +1469,8 @@ def main():
     if not briefing_text:
         print('[종료] 브리핑 생성 실패')
         return
+    briefing_text = _restore_titles(briefing_text, items)
+    briefing_text = _prune_orphan_terms(briefing_text)
 
     # 폴백(본문 미확보) 모드면 안내 문구 삽입 — already_sent_today가 이 접두사로 '교체 허용' 판단
     if fallback_mode:
