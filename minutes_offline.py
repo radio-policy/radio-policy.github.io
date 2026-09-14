@@ -374,7 +374,7 @@ def export_candidates(sb, api_key: str, year: int, out_dir: str, max_cand: int,
             print('  [스킵·이미 내보냄] %s %s' % (ymd6, m['title'][:50]))
             stats['skip_file'] += 1
             continue
-        if not force and section_exists(sb, doc_name, ymd6, _sec_prefix(m)) \
+        if not force and am.section_exists_by_confer(sb, doc_name, m['confer_num']) \
                 and am.speeches_exist(sb, cn):
             print('  [스킵·DB에 섹션+발언 모두 있음] %s %s' % (ymd6, m['title'][:50]))
             stats['skip_db'] += 1
@@ -686,7 +686,7 @@ def import_judged(sb, in_dir: str, year: int, limit: int, dry: bool) -> dict:
         sec_prefix = _sec_prefix(m)
 
         # dedupe — run() 과 동일: 섹션/발언 독립 확인, 껍데기 섹션은 dup 아님
-        sec_exists = section_exists(sb, doc_name, ymd6, sec_prefix)
+        sec_exists = am.section_exists_by_confer(sb, doc_name, m['confer_num'])
         shell = am.shell_section_range(sb, doc_name, ymd6, sec_prefix) if sec_exists else None
         if shell:
             # 껍데기 범위가 정말 섹션 하나인지 확인 — 헤더가 청크 중간에 있는 문서에서는

@@ -804,8 +804,41 @@ def _audit_section_title(meeting: dict) -> str:
     return '국정감사 (%s)' % label
 
 
+def _body_label(meeting: dict) -> str:
+    """회의체 이름 — 전체회의는 '', 소위·안건조정위는 그 이름.
+
+    comm_name 은 모든 회의가 '과학기술정보방송통신위원회'로 같고, 소위 이름은 title 에만 있다.
+    2024-11-27 처럼 **같은 날 같은 차수의 소위가 둘**인 날이 있어 차수로는 가릴 수 없다."""
+    t = (meeting.get('title') or '')
+    comm = (meeting.get('comm_name') or '')
+    if comm and comm in t:
+        t = t.split(comm, 1)[1]
+    t = re.sub(r'\s*\([^)]*\d{4}\s*년[^)]*\)\s*$', '', t).strip()
+    # '…법안심사소위원회' → '…법안심사소위', '안건조정위원회' → '안건조정위' (제목 길이 절약)
+    return re.sub(r'위원회$', '위', t) if t else ''
+
+
+def section_exists_by_confer(sb, doc_name: str, confer_num) -> bool:
+    """섹션 끝의 '(원문: …id=NNNN)' 로 중복 판정 (2026-09-14, #169-보론3).
+
+    종전 키는 '회의일 + 제N차 ' 접두뿐이라, 같은 날 같은 차수로 열린 전체회의와 소위가
+    서로를 중복으로 걸러냈다 — 실측 12개 회의가 통째로 누락(2024-12-27 전체회의,
+    2025-01-06·02-25·12-10 전체회의 등). 국정감사에서는 같은 함정을 겪고 피감기관을
+    키에 넣어 고쳤는데(2026-08) 상임위 쪽은 그대로였다.
+    등재된 섹션 523건 전부가 원문 링크에 id 를 갖고 있어 고유번호 대조가 항상 성립한다.
+    조회 실패 시 True(등재 안 함) — 중복 유입 방지 우선, section_exists 와 같은 규약."""
+    try:
+        rows = sb.table('document_chunks').select('id').eq('doc_name', doc_name) \
+            .like('content', '%%id=%s)%%' % confer_num).limit(1).execute().data
+        return bool(rows)
+    except Exception as e:
+        print('  [dedupe 조회 오류 — 중복 방지 위해 스킵 처리] %s' % e)
+        return True
+
+
 def _section_title(meeting: dict) -> str:
-    """'제N차 (주요안건 축약 40자)' — 회의일+회차가 dedupe 키."""
+    """'제N차 [회의체] (주요안건 축약 40자)'. dedupe 키는 제목이 아니라 회의 고유번호다
+    (section_exists_by_confer) — 제목만으로는 같은 날 같은 차수를 가릴 수 없다."""
     if meeting.get('is_audit'):
         return _audit_section_title(meeting)
     agenda = meeting['agenda']
@@ -820,7 +853,9 @@ def _section_title(meeting: dict) -> str:
     first = first.strip()[:40]
     if len(agenda) > 1:
         first += ' 외 %d건' % (len(agenda) - 1)
-    return '제%s차 (%s)' % (meeting['dgr'] or '?', first or '안건 미상')
+    body = _body_label(meeting)
+    return '제%s차 %s(%s)' % (meeting['dgr'] or '?',
+                             (body + ' ') if body else '', first or '안건 미상')
 
 
 # ── LLM 응답 검증 (2026-08-14) ─────────────────────────────────
@@ -1607,7 +1642,8 @@ def run(sb, api_key: str, year: int, limit: int = 0, dry: bool = False,
         # 접두를 '국정감사'로만 잡으면 그날 두 번째 회의가 중복으로 걸러져 섹션이 통째로 누락된다
         # (실측: 2016·2017·2021·2024에서 4건 누락). 피감기관까지 포함한 제목을 키로 쓴다.
         sec_prefix = _section_title(m) if is_audit else '제%s차 ' % m['dgr']
-        sec_exists = section_exists(sb, doc_name, ymd6, sec_prefix)
+        # dedupe 는 고유번호로 본다 — 접두(제N차)는 같은 날 두 회의를 가르지 못한다(#169-보론3).
+        sec_exists = section_exists_by_confer(sb, doc_name, m['confer_num'])
         # 껍데기 섹션은 dup 으로 보지 않는다 — 그래야 이번 실행에서 지우고 다시 만든다.
         shell = shell_section_range(sb, doc_name, ymd6, sec_prefix) if sec_exists else None
         if shell:
