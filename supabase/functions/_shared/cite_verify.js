@@ -26,8 +26,11 @@
 
   const TAG_RE = /\[원문\s*확인됨[^\]]*\]/g;
   const CIRCLED = '①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳';
-  const TAG_MISSING = '[⚠️ 원문 미확인 — 검색 결과에 해당 조문 없음]';
-  const TAG_MISMATCH = '[⚠️ 원문과 다르게 설명됨 — 확인 필요]';
+  // 표시는 두 가지뿐이다(2026-09-14, #169-보론5). 읽는 사람이 할 일은 '못 찾음'·'다르게 설명됨'·
+  // '대조 못 함'이 모두 같다 — 원문을 직접 본다. 갈래는 verdict.status 로 남겨 요약 줄에만 쓴다.
+  const TAG_UNVERIFIED = '[원문 확인 안 됨]';
+  const TAG_MISSING = TAG_UNVERIFIED;    // 옛 이름 유지(외부 참조 호환)
+  const TAG_MISMATCH = TAG_UNVERIFIED;
   const LAW_SUFFIX_RE = /(법|법률|시행령|시행규칙|규칙|고시|규정|기준|세칙|지침|요령|훈령|예규|협정)$/;
   // 약칭 → 정식 문서명에 들어 있는 문자열 (family가 이 문자열을 포함하면 같은 법령으로 본다)
   const LAW_ALIASES = {
@@ -312,7 +315,13 @@
     for (let i = 0; i + W <= a.length; i += S) { n++; if (b.indexOf(a.slice(i, i + W)) !== -1) hits++; }
     return n ? hits / n : 0;
   }
-  const VERBATIM_MIN = 0.6;   // 이 이상 겹치면 "원문 그대로 인용" — 번호 파싱 없이 확인됨, Haiku 판정 생략
+  // 0.85 (2026-09-14, #169-보론5). 종전 0.6은 18자 조각의 40%가 원문에 없어도 '원문 그대로'로
+  // 보고 Haiku 판정을 건너뛰었다 — 실측: '1년 이내'→'2년 이내', 주체 '장관'→'방미통위'가 0.75다.
+  // 그 구간(0.6~0.85)이 가장 위험하다: 뼈대는 원문인데 수치·주체 한 곳이 바뀐 문장이 여기 떨어진다.
+  const VERBATIM_MIN = 0.85;
+  // 1등과 2등 겹침이 이만큼도 차이 나지 않으면 어느 조문인지 단정하지 않는다.
+  // 같은 문언이 두 조문에 있을 때 겹침 최대값은 동전 던지기가 된다(#169-보론4 실측).
+  const AMBIG_MARGIN = 0.08;   // 이 이상 겹치면 "원문 그대로 인용" — 번호 파싱 없이 확인됨, Haiku 판정 생략
 
   // 답변에서 표시를 전부 찾아 각 표시의 인용 대상을 붙인다
   function findCitations(answer) {
@@ -477,10 +486,18 @@
         if (!new RegExp('(^|\\n)\\s*' + it + '\\.\\s').test(chosenText))
           return { status: 'missing', reason: chosen.key + ' 제' + it + '호 원문 없음(조문 일부만 검색됨)', lawDoc: chosenLaw, doc: chosenDoc, key: chosen.key };
       }
+    } else if (items.length) {
+      // 호를 주장했는데 원문에 호 구조가 없다 — 청크 경계에서 줄바꿈이 사라지면
+      // ('…으로 한다.1. 가입자선로운영비용…') 위 정규식이 불발해 호 검사가 통째로 생략됐다(실측 12.4%).
+      // 검사를 못 한 것이지 맞다는 뜻이 아니므로 초록을 주지 않는다. (#169-보론5)
+      return { status: 'nocheck', reason: chosen.key + ' 제' + items.join('·') + '호 구조를 원문에서 찾지 못해 대조 불가',
+               lawDoc: chosenLaw, doc: chosenDoc, key: chosen.key, paras: paras, items: items };
     }
     // 인용문에 내용이 없으면(제목·번호뿐) 판정할 것이 없다 — 표시를 그대로 둔다
     if ((headingOnly ? normQ(cite.after || '') : beforeBody).length < 24)
-      return { status: 'ok', kind: 'article', lawDoc: chosenLaw, doc: chosenDoc, key: chosen.key, paras: paras, items: items, text: chosenText, overlap: chosenRatio, claim: claim, verbatim: true, reason: '조문 번호·제목만 표시(판정 대상 없음)' };
+      // 번호·제목만 적고 내용을 옮기지 않았다 — 대조할 주장이 없으므로 '확인됨'이 될 수 없다.
+      // (프롬프트에서도 이런 인용을 금지한다 — system_prompt [핵심 원칙] 1)
+      return { status: 'noclaim', kind: 'article', lawDoc: chosenLaw, doc: chosenDoc, key: chosen.key, paras: paras, items: items, text: chosenText, overlap: chosenRatio, claim: claim, reason: '조문 번호·제목만 적혀 대조할 내용이 없음' };
     return { status: 'ok', kind: 'article', lawDoc: chosenLaw, doc: chosenDoc, key: chosen.key, paras: paras, items: items, text: chosenText, overlap: chosenRatio, claim: claim };
   }
 
@@ -509,6 +526,23 @@
   // 표시 없는 통째 인용에 표시를 붙인다(#155-보론7, 11:39 답변 — 모델이 조문을 그대로 옮기고도 표시를 하나도 안 붙였다).
   // 원문과 60% 이상 그대로 겹치는 문단은 기계가 증명할 수 있으므로 「[원문 확인됨: 법령명 제N조]」를 문단 끝에 붙인다.
   // 제목(#)·표(|)·이미 표시가 있는 문단·짧은 문단은 건너뛴다. 항·호는 적지 않는다(어느 항인지 단정하지 않기 위해).
+  // 바로 옆 문단에 **모델이 직접 쓴** 표시가 있으면 그 조문을 신뢰한다.
+  //   실측(#169-보론4): 모델은 "…수리하여야 한다" 다음 문단에 '[원문 확인됨: 동법 제9조제5항]'을
+  //   써 뒀는데, 기계는 같은 문단에 '제5조의2'를 붙였다. 둘이 어긋나면 어느 쪽이 맞는지 모르므로
+  //   기계가 덧붙이지 않는다(모델 표시는 뒤이어 정상 검증 경로를 탄다).
+  //   인용 **본문 안**의 조문 번호는 보지 않는다 — 법령 문장은 다른 조문을 흔히 인용한다
+  //   (예: 전기통신사업법 제50조② 본문에 '제52조제1항과 제53조'가 나온다).
+  function neighborTagKeys(parts, i) {
+    const keys = [];
+    const re = /\[원문\s*확인됨[^\]]*?제\s*(\d+조(?:의\d+)?)/g;
+    for (const j of [i - 2, i + 2]) {
+      const seg = String(parts[j] || '');
+      let m;
+      while ((m = re.exec(seg)) !== null) if (keys.indexOf(m[1]) < 0) keys.push(m[1]);
+    }
+    return keys;
+  }
+
   function autoTagVerbatim(answer, chunks) {
     const text = String(answer || '');
     const arts = new Map();
@@ -533,10 +567,19 @@
       if (!p.trim() || /^\s*#/.test(p) || /^\s*\|/.test(p)) continue;
       if (/\[(원문\s*확인됨|⚠️ 원문|학습 데이터 기반|근거 조문 미확인)[^\]]*\]/.test(p)) continue;
       if (normQ(body).length < 40) continue;
-      let best = null, bestR = 0;
-      for (const [gk, t] of merged) { const r = quoteOverlap(body, t); if (r > bestR) { bestR = r; best = gk; } }
+      let best = null, bestR = 0, secondR = 0;
+      for (const [gk, t] of merged) {
+        const r = quoteOverlap(body, t);
+        if (r > bestR) { secondR = bestR; bestR = r; best = gk; }
+        else if (r > secondR) { secondR = r; }
+      }
       if (!best || bestR < VERBATIM_MIN) continue;
+      // ① 2등과 겨우 차이 나면 단정하지 않는다(같은 문언이 두 조문에 있는 경우)
+      if (bestR - secondR < AMBIG_MARGIN) continue;
       const doc = best.slice(0, best.lastIndexOf('|')), key = best.slice(best.lastIndexOf('|') + 1);
+      // ② 옆 문단에 모델이 쓴 표시가 있고 그 조문과 다르면 붙이지 않는다
+      const nb = neighborTagKeys(parts, i);
+      if (nb.length && nb.indexOf(key) < 0) continue;
       const tag = ' [원문 확인됨: ' + docFamily(doc) + ' 제' + key + ']';
       // 문단 끝의 굵게(**) 닫힘 안쪽에 넣지 않는다 — 끝 공백만 떼고 뒤에 붙인다
       parts[i] = p.replace(/\s+$/, '') + tag;
@@ -556,9 +599,16 @@
     const cites = findCitations(answer);
     if (!cites.length) return { answer: answer, verdicts: [], changed: 0, autoTagged: at.added };
     const results = cites.map(function (c) { return Object.assign({}, c, checkCitation(c, chunks, (args && args.annexSources) || [])); });
-    const maxJudge = args && args.maxJudge != null ? args.maxJudge : 8;
-    // 원문 그대로 인용(verbatim)은 판정할 것이 없다 — Haiku에 보내지 않는다(비용·오판 방지)
-    const toJudge = results.filter(function (r) { return r.status === 'ok' && r.text && !r.verbatim; }).slice(0, maxJudge);
+    // 8 → 24 (#169-보론5). 실측 답변 하나에 표시가 22개였는데 9번째부터 판정 없이 초록이었다.
+    // 판정은 여러 인용을 한 콜에 묶어 보내므로 상한을 올려도 호출 수는 늘지 않는다.
+    const maxJudge = args && args.maxJudge != null ? args.maxJudge : 24;
+    // 원문 그대로 인용(verbatim, 겹침 0.85↑)은 판정할 것이 없다 — Haiku에 보내지 않는다.
+    const judgeable = results.filter(function (r) { return r.status === 'ok' && r.text && !r.verbatim; });
+    const toJudge = judgeable.slice(0, maxJudge);
+    // 상한을 넘긴 것·판정기가 없는 것은 '대조 못 함'으로 남긴다 — 조용히 초록으로 두지 않는다.
+    judgeable.slice(maxJudge).forEach(function (r) { r.status = 'unjudged'; r.reason = '문구 판정 상한(' + maxJudge + '건) 초과'; });
+    if (toJudge.length && !(args && typeof args.callHaiku === 'function'))
+      toJudge.forEach(function (r) { r.status = 'unjudged'; r.reason = '판정기 미가동'; });
     if (toJudge.length && args && typeof args.callHaiku === 'function') {
       try {
         const items = toJudge.map(function (r, i) {
@@ -573,21 +623,24 @@
         const verdicts = await judgeCitations(items, args.callHaiku);
         toJudge.forEach(function (r, i) {
           const v = verdicts[String(i + 1)];
-          if (!v) return;
+          if (!v) { r.status = 'unjudged'; r.reason = '판정 결과 없음'; return; }
           r.judge = v;
           if (v.verdict === '불일치') { r.status = 'mismatch'; r.reason = v.reason; }
           else if (v.verdict !== '일치') r.status = 'unclear';
         });
       } catch (e) {
-        results.forEach(function (r) { if (r.status === 'ok' && r.text) r.judgeError = String(e && e.message || e); });
+        // 종전에는 judgeError 만 남기고 status 를 ok 로 두어, 판정기가 죽어도 전건이 초록이었다.
+        toJudge.forEach(function (r) {
+          if (r.status === 'ok') { r.status = 'unjudged'; r.reason = '판정 호출 실패'; }
+          r.judgeError = String(e && e.message || e);
+        });
       }
     }
     let out = answer, changed = 0;
     for (const r of results.slice().reverse()) {
-      let rep = null;
-      if (r.status === 'missing') rep = TAG_MISSING;
-      else if (r.status === 'mismatch') rep = TAG_MISMATCH;
-      if (!rep) continue;
+      // ok(= 실제로 대조해 맞음) 외에는 모두 하나의 표시로 바꾼다. 갈래는 verdict.status 에 남는다.
+      if (r.status === 'ok') continue;
+      let rep = TAG_UNVERIFIED;
       // 꼬리표에 대상이 적혀 있었으면 바꾼 표시에도 남긴다 — 어느 조문 얘기인지 읽는 사람이 알 수 있게
       const tgt = r.tagTarget ? String(r.tag).slice(1, -1).replace(/^원문\s*확인됨/, '').replace(/^[\s:：—\-–,]+/, '').trim() : '';
       if (tgt) rep = rep.slice(0, -1) + ' (' + tgt + ')]';
@@ -604,7 +657,7 @@
   }
 
   const CiteVerify = {
-    TAG_MISSING: TAG_MISSING, TAG_MISMATCH: TAG_MISMATCH,
+    TAG_UNVERIFIED: TAG_UNVERIFIED, TAG_MISSING: TAG_MISSING, TAG_MISMATCH: TAG_MISMATCH,
     articleKey: articleKey, docFamily: docFamily, mergeChunkTexts: mergeChunkTexts,
     expandArticles: expandArticles, pseudoChunksFromPrompt: pseudoChunksFromPrompt,
     buildCitingExcerpts: buildCitingExcerpts, citeRegex: citeRegex, excerptAround: excerptAround,

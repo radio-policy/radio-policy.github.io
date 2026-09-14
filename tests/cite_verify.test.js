@@ -105,9 +105,9 @@ function ok(name, cond, extra) {
   var sentItems = null;
   var vv = await CV.verifyCitations({ answer: '## 금지행위(제50조)\n\n' + q50 + '[원문 확인됨]', chunks: full, callHaiku: async function (s, u) { sentItems = u; return '[]'; } });
   eq('verbatim은 판정 생략', [vv.verdicts[0].status, vv.verdicts[0].verbatim, sentItems], ['ok', true, null]);
-  // 단항 조문에 "제1항"이라고 써도 잡지 않는다
+  // 단항 조문에 "제1항"이라고 써도 항 검사로 잡지 않는다 (내용을 안 옮겨 noclaim으로 끝난다 — #169-보론5)
   var single = CV.checkCitation(CV.findCitations('업무처리규정 제11조 제1항: 상당한 주의 [원문 확인됨]')[0], [C.c11], []);
-  eq('단항 조문의 항 표기는 허용', single.status, 'ok');
+  eq('단항 조문의 항 표기는 허용(항 검사로 missing 안 됨)', [single.status, /제1항 원문 없음/.test(single.reason || '')], ['noclaim', false]);
   // 별표
   var an = CV.findCitations('전파법 시행령 별표 3의 산식에 따르면 … [원문 확인됨]')[0];
   eq('별표 있음', CV.checkCitation(an, [], ['전파법 시행령 별표 3']).status, 'ok');
@@ -120,7 +120,8 @@ function ok(name, cond, extra) {
   var ps = CV.pseudoChunksFromPrompt(prompt);
   eq('프롬프트 핵심 조문 3개', ps.map(function (x) { return [CV.docFamily(x.doc_name), x.article_no]; }), [['전파법', '16조'], ['전파법 시행령', '18조'], ['전파법', '24조']]);
   var pc = CV.checkCitation(CV.findCitations('전파법 시행령 제18조에 따라 만료 6개월 전 신청 [원문 확인됨]')[0], ps, []);
-  eq('프롬프트 조문 인용은 ok', pc.status, 'ok');
+  // 프롬프트 핵심 조문도 대조 대상에 든다 — missing이 아니라 문서·조가 확정된다(내용을 안 옮겨 noclaim)
+  eq('프롬프트 조문 인용은 대조 대상(missing 아님)', [pc.status, pc.key, pc.lawDoc], ['noclaim', '18조', '전파법 시행령']);
 
   // ── expandArticles (fetchArticle 가짜) ──
   var store = { '전기통신사업법(법률)(제21652호)(20260519)|50조': [C.c50_136, C.c50_137, C.c50_138], '전기통신사업법(법률)(제21652호)(20260519)|32조의14': [C.c32_14] };
@@ -148,21 +149,26 @@ function ok(name, cond, extra) {
   var fakeHaiku = async function (system, user) { judged = user; return '```json\n[{"id":1,"verdict":"일치","reason":""},{"id":2,"verdict":"불일치","reason":"주체가 이통사인데 대리점으로 씀"},{"id":3,"verdict":"판단불가","reason":""}]\n```'; };
   var v = await CV.verifyCitations({ answer: FX.answer, chunks: full, annexSources: [], callHaiku: fakeHaiku });
   eq('종합: 판정 3건 상태', v.verdicts.map(function (x) { return x.status; }), ['ok', 'mismatch', 'unclear']);
-  eq('종합: 바뀐 표시 1개', v.changed, 1);
-  ok('종합: 50조 표시가 불일치 문구로', v.answer.indexOf('[⚠️ 원문과 다르게 설명됨 — 확인 필요]') !== -1 && v.answer.indexOf('[원문 확인됨, 참조4]') === -1);
-  ok('종합: 다른 표시는 그대로', v.answer.indexOf('[원문 확인됨] 즉 명칭이') !== -1 && v.answer.indexOf('[원문 확인됨, 참조1]') !== -1);
+  // 표시는 두 가지뿐 — ok 외에는 모두 [원문 확인 안 됨] (#169-보론5). 갈래는 verdict.status 로만 남는다.
+  eq('종합: 바뀐 표시 2개(불일치·판단불가)', v.changed, 2);
+  ok('종합: 50조 표시가 미확인 문구로', v.verdicts[1].status === 'mismatch'
+     && /예외입니다\. \[원문 확인 안 됨\]/.test(v.answer) && v.answer.indexOf('[원문 확인됨, 참조4]') === -1);
+  ok('종합: ok 표시만 그대로, 판단불가도 미확인으로', v.verdicts[2].status === 'unclear'
+     && v.answer.indexOf('[원문 확인됨] 즉 명칭이') !== -1
+     && /인정합니다\. \[원문 확인 안 됨\]/.test(v.answer) && v.answer.indexOf('[원문 확인됨, 참조1]') === -1);
   ok('종합: Haiku에 원문·인용문 3항목', /### 항목 3/.test(judged) && /\[원문\]\n제50조\(금지행위\)/.test(judged));
   // 그날 상황: 50조 missing → Haiku에는 2건만, 표시는 미확인 문구
   var v2 = await CV.verifyCitations({ answer: FX.answer, chunks: thatDay, annexSources: [], callHaiku: async function (s, u) { judged = u; return '[{"id":1,"verdict":"일치"},{"id":2,"verdict":"일치"}]'; } });
   eq('그날: 상태', v2.verdicts.map(function (x) { return x.status; }), ['ok', 'missing', 'ok']);
-  ok('그날: 미확인 문구', v2.answer.indexOf('[⚠️ 원문 미확인 — 검색 결과에 해당 조문 없음]') !== -1);
+  ok('그날: 미확인 문구', v2.answer.indexOf('[원문 확인 안 됨]') !== -1 && v2.answer.indexOf('[원문 확인됨, 참조4]') === -1);
   ok('그날: Haiku 2항목', /### 항목 2/.test(judged) && !/### 항목 3/.test(judged));
-  // Haiku 실패는 표시 유지(fail-open)
+  // Haiku 실패는 fail-closed — 판정 대상이던 인용은 전부 unjudged (#169-보론5, 종전에는 ok 유지)
   var v3 = await CV.verifyCitations({ answer: FX.answer, chunks: full, annexSources: [], callHaiku: async function () { throw new Error('boom'); } });
-  eq('Haiku 실패: 표시 유지', [v3.changed, v3.answer === FX.answer], [0, true]);
-  // callHaiku 없음 → 2안만
+  eq('Haiku 실패: 판정 대상 전건 unjudged', [v3.changed, v3.answer === FX.answer, v3.verdicts.map(function (x) { return x.status; })],
+     [3, false, ['unjudged', 'unjudged', 'unjudged']]);
+  // callHaiku 없음 → 대조(2안)는 하되 판정 대상은 초록으로 두지 않는다
   var v4 = await CV.verifyCitations({ answer: FX.answer, chunks: thatDay, annexSources: [] });
-  eq('판정 없이 대조만', v4.verdicts.map(function (x) { return x.status; }), ['ok', 'missing', 'ok']);
+  eq('판정기 없이 대조만: 판정 대상은 unjudged', v4.verdicts.map(function (x) { return x.status; }), ['unjudged', 'missing', 'unjudged']);
   eq('표시 없는 답변은 무변경', (await CV.verifyCitations({ answer: '표시 없음', chunks: full })).changed, 0);
 
   // ── #155-보론5: 꼬리표가 제목 줄에 붙고 내용은 그 아래 (11:20 대시보드 답변 — Haiku가 "번호만 표기"로 불일치 판정) ──
@@ -174,9 +180,9 @@ function ok(name, cond, extra) {
   var judgedClaim = null;
   await CV.verifyCitations({ answer: h, chunks: full, callHaiku: async function (s, u) { judgedClaim = u; return '[{"id":1,"verdict":"일치"}]'; } });
   ok('제목 줄 표시: Haiku에는 뒤 문단이 간다(제목만 보내지 않음)', judgedClaim === null || /① 대리점은/.test(judgedClaim), judgedClaim);
-  // 앞·뒤 모두 내용이 없으면 판정 생략
+  // 앞·뒤 모두 내용이 없으면 대조할 주장이 없다 → noclaim(초록 아님, #169-보론5)
   var only = CV.checkCitation(CV.findCitations('전기통신사업법 제32조의14 [원문 확인됨]\n\n다음 절')[0], full, []);
-  eq('번호만 표시: 판정 없이 ok', [only.status, only.verbatim], ['ok', true]);
+  eq('번호만 표시: 대조할 내용 없음(noclaim)', [only.status, !!only.verbatim], ['noclaim', false]);
 
   // ── #155-보론6: 꼬리표 안에 대상을 적는 형식 ──
   var t1 = CV.findCitations('**② 판매점 선임 사전승낙 [원문 확인됨: 전기통신사업법 제32조의14제1항]**\n① 대리점은 이동통신사업자의 서면에 의한 사전승낙 없이는 판매점을 선임할 수 없습니다.');
@@ -187,7 +193,7 @@ function ok(name, cond, extra) {
   eq('꼬리표 대상 우선(52조 아님)', [CV.checkCitation(t2[0], full, []).status, CV.checkCitation(t2[0], full, []).key], ['ok', '50조']);
   // 꼬리표 대상이 컨텍스트에 없으면 missing, 바뀐 표시에 대상이 남는다
   var t3 = await CV.verifyCitations({ answer: '이통사가 면책됩니다. [원문 확인됨: 전기통신사업법 제52조의3제2항]', chunks: full });
-  eq('꼬리표 대상 없음 → missing + 대상 표기', [t3.verdicts[0].status, t3.answer], ['missing', '이통사가 면책됩니다. [⚠️ 원문 미확인 — 검색 결과에 해당 조문 없음 (전기통신사업법 제52조의3제2항)]']);
+  eq('꼬리표 대상 없음 → missing + 대상 표기', [t3.verdicts[0].status, t3.answer], ['missing', '이통사가 면책됩니다. [원문 확인 안 됨 (전기통신사업법 제52조의3제2항)]']);
   // 꼬리표에 엉뚱한 조를 적었지만 인용문이 다른 조문 그대로면 겹침이 바로잡는다
   var t4 = CV.checkCitation(CV.findCitations(q50 + ' [원문 확인됨: 전기통신사업법 제32조의14]')[0], full, []);
   eq('꼬리표 오기 + 통째 인용: 겹치는 50조로 교정', [t4.status, t4.key, t4.verbatim], ['ok', '50조', true]);
@@ -199,13 +205,30 @@ function ok(name, cond, extra) {
   // ── #155-보론7: 표시 없는 통째 인용에 표시 자동 부착 (11:39 답변 — 표시 0개) ──
   var noTag = '## 2. 핵심 근거조문 — 전기통신사업법 제32조의14\n\n대리점은 이동통신사업자의 서면에 의한 사전승낙 없이는 판매점을 선임할 수 없으며, 사전승낙을 받지 아니한 자와 이동통신사업자와 이용자 간의 계약 체결 등에 관한 거래를 하여서는 아니 된다\n\n는 것이 제1항의 핵심입니다. 질문의 개인사업자가 판매점을 관리한다면 위반 소지가 있습니다.\n\n| 시나리오 | 판단 |\n|---|---|\n| 사전승낙 없음 | 위반 소지 |\n\n' + q50 + '고 규정되어 있습니다.';
   var at = CV.autoTagVerbatim(noTag, full);
-  eq('자동 부착: 통째 인용 2문단', at.added, 2);
-  ok('자동 부착: 32조의14·50조 표시, 제목·표·설명 문단은 그대로', /아니 된다 \[원문 확인됨: 전기통신사업법 제32조의14\]/.test(at.answer) && /본다고 규정되어 있습니다\. \[원문 확인됨: 전기통신사업법 제50조\]/.test(at.answer) && !/핵심 근거조문[^\n]*\[원문/.test(at.answer) && !/위반 소지가 있습니다\. \[/.test(at.answer) && !/\| 판단 \|[^\n]*\[/.test(at.answer), at.answer);
+  // VERBATIM_MIN 0.6 → 0.85 (#169-보론5): 32조의14 문단은 겹침 0.750이라 '원문 그대로'가 아니다 → 표시를 붙이지 않는다.
+  var ov32 = CV.quoteOverlap('대리점은 이동통신사업자의 서면에 의한 사전승낙 없이는 판매점을 선임할 수 없으며, 사전승낙을 받지 아니한 자와 이동통신사업자와 이용자 간의 계약 체결 등에 관한 거래를 하여서는 아니 된다', C.c32_14.content);
+  eq('자동 부착: 통째 인용 1문단(32조의14 문단은 겹침 0.75 < 0.85)', at.added, 1);
+  ok('자동 부착: 50조만 표시, 32조의14 문단·제목·표·설명 문단은 그대로', ov32 < 0.85 && CV.quoteOverlap(q50, merged) >= 0.85 && /본다고 규정되어 있습니다\. \[원문 확인됨: 전기통신사업법 제50조\]/.test(at.answer) && !/아니 된다 \[원문/.test(at.answer) && !/핵심 근거조문[^\n]*\[원문/.test(at.answer) && !/위반 소지가 있습니다\. \[/.test(at.answer) && !/\| 판단 \|[^\n]*\[/.test(at.answer), [ov32, at.answer]);
   var av = await CV.verifyCitations({ answer: noTag, chunks: full, callHaiku: async function () { throw new Error('호출되면 안 됨'); } });
-  eq('자동 부착 뒤 검증: 2건 verbatim ok, Haiku 없음', [av.autoTagged, av.verdicts.map(function (v) { return v.status + ':' + v.key + ':' + v.verbatim; })], [2, ['ok:32조의14:true', 'ok:50조:true']]);
+  eq('자동 부착 뒤 검증: 1건 verbatim ok, Haiku 없음', [av.autoTagged, av.verdicts.map(function (v) { return v.status + ':' + v.key + ':' + v.verbatim; })], [1, ['ok:50조:true']]);
   eq('autoTag=false면 안 붙인다', (await CV.verifyCitations({ answer: noTag, chunks: full, autoTag: false })).autoTagged, 0);
   eq('이미 표시 있는 문단은 안 건드림', CV.autoTagVerbatim(q50 + ' [원문 확인됨: 전기통신사업법 제50조제2항]', full).added, 0);
   eq('근거 없으면 무변화', CV.autoTagVerbatim(noTag, []).added, 0);
+
+  // ── 오지정 방지 (#169-보론4) — 실측: 위치정보법 제9조제5항 문장에 '제5조의2'가 붙었다 ──
+  //  ① 거의 같은 문언이 두 조문에 있으면 단정하지 않는다  ② 옆 문단의 모델 표시와 어긋나면 붙이지 않는다
+  var twinDoc = '위치정보의 보호 및 이용 등에 관한 법률(법률)(제20000호)(20260101)';
+  var twinBody = '제1항에 따른 신고 또는 제3항제3호에 해당하는 사항에 대한 변경신고를 받은 경우 그 내용을 검토하여 이 법에 적합하면 신고를 수리하여야 한다';
+  var twin5 = { id: 901, doc_name: twinDoc, article_no: '5조의2(소상공인등의 위치기반서비스사업 신고)', chunk_index: 1,
+                content: '제5조의2\n④ ' + twinBody + '.' };
+  var twin9 = { id: 902, doc_name: twinDoc, article_no: '9조(위치기반서비스사업의 신고)', chunk_index: 2,
+                content: '제9조\n⑤ ' + twinBody + '.' };
+  eq('오지정 방지: 쌍둥이 조문이면 자동 부착 안 함',
+     CV.autoTagVerbatim('방미통위는 ' + twinBody, [twin5, twin9]).added, 0);
+  eq('오지정 방지: 옆 문단 모델 표시와 어긋나면 안 붙임',
+     CV.autoTagVerbatim(twinBody + '\n\n. [원문 확인됨: 동법 제9조제5항]', [twin5]).added, 0);
+  eq('오지정 방지: 옆 문단 표시와 같은 조문이면 붙인다',
+     CV.autoTagVerbatim(twinBody + '\n\n. [원문 확인됨: 동법 제5조의2제4항]', [twin5]).added, 1);
 
   // ── 역참조 발췌 (#155-보론4) ──
   var art20 = { id: 27210, doc_name: C.c50_136.doc_name, article_no: '20조(등록의 취소 등)', chunk_index: 35, content: '제20조(등록의 취소 등)\n① 과학기술정보통신부장관은 기간통신사업자가 다음 각 호의 어느 하나에 해당하면 그 등록의 전부 또는 일부를 취소하거나 1년 이내의 기간을 정하여 사업의 전부 또는 일부의 정지를 명할 수 있다.\n1.  속임수나 그 밖의 부정한 방법으로 등록을 한 경우\n5의2.  제32조의4제5항에 따른 관리ㆍ감독 또는 같은 조 제6항에 따른 모니터링을 소홀히 하여 타인의 명의를 사용하거나 그 밖의 부정한 방법으로 전기통신역무 제공계약이 대통령령으로 정하는 기준 이상 다수 체결된 경우' };

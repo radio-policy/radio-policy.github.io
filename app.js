@@ -474,16 +474,34 @@ async function verifyCitationsRemote(answer, chunkIds, annexSources) {
   return res.json();
 }
 // 답변 하단 '인용 대조' 요약 한 줄 — 검증이 실제로 돈 답변에만 붙는다(정상 답변은 꼬리표 색만 바뀜)
+// 본문 표시는 [원문 확인됨] / [원문 확인 안 됨] 두 가지뿐이다(#169-보론5) — 이용자가 할 일은
+// 어느 갈래든 같다(원문 보기). 갈래는 이 요약 줄에서만 보여 준다: 운영자가 어디가 약한지 알아야
+// 고칠 수 있고(호 대조 불가가 많으면 KB 청킹 문제다), 검증이 아예 안 돈 경우도 여기서 드러난다.
+var CITE_STATUS_LABEL = {
+  missing: '조문 미검색', mismatch: '원문과 다름', unclear: '판단 보류', unparsed: '인용 미식별',
+  noclaim: '인용 내용 없음', nocheck: '호 대조 불가', unjudged: '판정 미실행'
+};
 function citeVerdictSummaryHtml(verdicts) {
+  // 한도 초과(429)·Edge 예외로 대조가 통째로 안 돈 경우 — 종전에는 아무 표시가 없어
+  // 검증된 답변과 화면이 똑같았다. 침묵이 가장 나쁜 실패다.
+  if (window._advCiteFailed)
+    return '<div class="rag-sources" style="margin-top:8px"><i class="ti ti-shield-off"></i>'
+      + '<span class="cite cite-miss">인용 대조 실행 안 됨</span>'
+      + ' — 표시는 AI가 붙인 것이므로 원문 링크로 확인해 주세요</div>';
   if (!verdicts || !verdicts.length) return '';
-  var n = { ok: 0, missing: 0, mismatch: 0, unclear: 0, unparsed: 0 };
-  verdicts.forEach(function(v) { if (n[v.status] !== undefined) n[v.status]++; });
-  var parts = ['원문 일치 ' + n.ok];
-  if (n.missing) parts.push('<span class="cite cite-miss">원문 미확인 ' + n.missing + '</span>');
-  if (n.mismatch) parts.push('<span class="cite cite-bad">다르게 설명됨 ' + n.mismatch + '</span>');
-  if (n.unclear) parts.push('판단 보류 ' + n.unclear);
-  if (n.unparsed) parts.push('인용 미식별 ' + n.unparsed);
-  return '<div class="rag-sources" style="margin-top:8px"><i class="ti ti-shield-check"></i>인용 대조(' + verdicts.length + '건): ' + parts.join(' · ') + '</div>';
+  var ok = 0, by = {};
+  verdicts.forEach(function(v) {
+    if (v.status === 'ok') { ok++; return; }
+    var k = CITE_STATUS_LABEL[v.status] || '확인 안 됨';
+    by[k] = (by[k] || 0) + 1;
+  });
+  var bad = verdicts.length - ok;
+  var detail = Object.keys(by).map(function(k) { return k + ' ' + by[k]; }).join(' · ');
+  return '<div class="rag-sources" style="margin-top:8px"><i class="ti ti-shield-check"></i>인용 대조('
+    + verdicts.length + '건): 확인 ' + ok
+    + (bad ? ' · <span class="cite cite-miss">확인 안 됨 ' + bad + '</span>'
+             + (detail ? ' (' + detail + ')' : '') : '')
+    + '</div>';
 }
 
 // ════════════════════════════════════════════
@@ -2681,6 +2699,7 @@ async function callClaude(userText, onDelta) {
   // 있었으면 Haiku가 원문과 설명의 일치를 판정한다. 없으면 「⚠️ 원문 미확인」, 다르면 「⚠️ 원문과 다르게 설명됨」.
   // 표시가 없는 답변은 verifyCitationsRemote가 그냥 null을 돌려준다. 실패해도 답변은 그대로(fail-open).
   window._advCiteVerdicts = null;
+  window._advCiteFailed = null;
   if (/\[원문\s*확인됨[^\]]*\]/.test(aiText) || (lastAdvChunkIds && lastAdvChunkIds.length && aiText.length > 200)) {
     if (typeof onDelta === 'function') onDelta(aiText + '\n\n⏳ 인용 조문을 원문과 대조하는 중…');
     try {
@@ -2690,7 +2709,12 @@ async function callClaude(userText, onDelta) {
         window._advCiteVerdicts = vr.verdicts || [];
         if (vr.changed) console.warn('인용 대조: 표시 ' + vr.changed + '건 교체', vr.verdicts);
       }
-    } catch(e) { console.warn('인용 검증 실패(답변은 그대로):', e); }
+    } catch(e) {
+      // 종전에는 console.warn 만 남겨, 검증이 돌지 않은 답변과 돈 답변이 화면에서 똑같았다(#169-보론5).
+      // 한도 초과(429)·Edge 예외가 모두 여기로 온다 — 그 사실을 답변 아래에 적는다.
+      window._advCiteFailed = String((e && e.message) || e).slice(0, 80);
+      console.warn('인용 검증 실패(답변은 그대로):', e);
+    }
   }
 
   chatHistory.push({ role: 'assistant', content: aiText });
@@ -3232,7 +3256,7 @@ async function sendChat() {
     }
 
     // 인용 대조 요약(#155) — 검증이 돈 답변에만 한 줄. 표시 자체는 본문 꼬리표 색으로 구분된다.
-    if (window._advCiteVerdicts && window._advCiteVerdicts.length) {
+    if (window._advCiteFailed || (window._advCiteVerdicts && window._advCiteVerdicts.length)) {
       const cvDiv = document.createElement('div');
       cvDiv.innerHTML = citeVerdictSummaryHtml(window._advCiteVerdicts);
       while (cvDiv.firstChild) msgEl.appendChild(cvDiv.firstChild);
