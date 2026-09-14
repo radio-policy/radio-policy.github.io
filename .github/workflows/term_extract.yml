@@ -6,7 +6,10 @@ name: 기술 용어 자동 추출 (뉴스 → Haiku 추출 → Sonnet 상세)
 # 주 트리거는 Supabase pg_cron(term-extract-trigger → dispatch_github_workflow); 아래 cron은 백업.
 on:
   schedule:
-    - cron: '0 20 * * *'
+    # 백업이므로 주 트리거(term-extract-trigger, 20:00 UTC)보다 25분 뒤에 둔다.
+    # 2026-09-14까지 '0 20'으로 같은 분이라 매일 두 번 실행됐다(term_extract.main() 에
+    # 12h 중복 실행 가드도 함께 넣었다).
+    - cron: '25 20 * * *'
   workflow_dispatch:
 
 jobs:

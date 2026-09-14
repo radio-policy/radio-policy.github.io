@@ -35,7 +35,7 @@ except ImportError:
     pass
 
 import anthropic
-from sb_client import make_client
+from sb_client import make_client, ran_recently
 import api_usage; api_usage.install()   # Anthropic usage 기록(#152) — 호출부 무변경, fail-open
 
 SUPABASE_URL      = os.environ['SUPABASE_URL']
@@ -99,6 +99,12 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--dry-run', action='store_true', help='DB 쓰기 없이 추출 결과만 출력')
     args = ap.parse_args()
+
+    # pg_cron 주 트리거(20:00 UTC)와 Actions 백업 cron이 같은 시각에 걸려 하루 두 번 돌고 있었다.
+    # 자세한 배경은 sb_client.ran_recently 주석 참조. dry-run은 가드하지 않는다.
+    if not args.dry_run and ran_recently(sb, 'last_term_extract_run', 12):
+        print('[용어 추출] 12시간 내 이미 실행됨 — 중복 실행 방지로 종료')
+        return
 
     news_list = fetch_recent_news()
     if not news_list:

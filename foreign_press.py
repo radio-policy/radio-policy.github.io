@@ -69,7 +69,7 @@ try:
 except ImportError:
     anthropic = None
 
-from sb_client import make_client
+from sb_client import make_client, ran_recently
 import api_usage; api_usage.install()   # Anthropic usage 기록(#152) — 호출부 무변경, fail-open
 
 KST = timezone(timedelta(hours=9))
@@ -412,6 +412,51 @@ def load_existing_urls(sb) -> set:
     return urls
 
 
+# ── 무관 판정 캐시 (2026-09-14) ────────────────────────────────────────────────
+# 해외 수집은 news_feed 에 '저장된' url 로만 중복을 걸러 왔다. 무관 판정분은 저장되지
+# 않으므로 어제 버린 기사를 매 실행 다시 판정했다(실측 09-13: scan=60 new=34 rel=0
+# irrel=34 — 34콜 쓰고 저장 0건). 국내 뉴스는 news_screen_cache 로 이미 막고 있어
+# 같은 표를 쓴다: url 공간이 겹치지 않고, 기준문이 바뀌면 criteria_hash 가 달라져
+# 자동 재판정된다. TTL 청소는 crawler.py 가 하므로 여기서는 지우지 않는다.
+# 모든 단계 fail-open — 캐시가 죽으면 종전처럼 전량 판정한다(돈만 더 쓰고 기사는 안 놓침).
+def _f_hash(s: str) -> str:
+    import hashlib
+    norm = re.sub(r'\s+', ' ', (s or '')).strip()
+    return hashlib.sha256(norm.encode('utf-8')).hexdigest()[:16]
+
+
+def load_screen_cache(sb, criteria_hash: str) -> dict:
+    """{url: title_hash} — 현재 기준문으로 무관 판정된 것만. 실패 시 빈 dict."""
+    out = {}
+    try:
+        page = 0
+        while True:
+            rows = sb.table('news_screen_cache').select('url,title_hash,criteria_hash') \
+                .range(page * 1000, page * 1000 + 999).execute().data
+            if not rows:
+                break
+            for r in rows:
+                if r.get('criteria_hash') == criteria_hash:
+                    out[r['url']] = r.get('title_hash')
+            if len(rows) < 1000:
+                break
+            page += 1
+    except Exception as e:
+        print('[해외 선별 캐시] 로드 실패(전량 판정으로 진행): %s' % str(e)[:80])
+        return {}
+    return out
+
+
+def save_screen_cache(sb, rows: list) -> None:
+    if not rows:
+        return
+    try:
+        sb.table('news_screen_cache').upsert(rows, on_conflict='url').execute()
+        print('[해외 선별 캐시] 무관 %d건 기록' % len(rows))
+    except Exception as e:
+        print('[해외 선별 캐시] 저장 실패(무시): %s' % str(e)[:80])
+
+
 def _heartbeat(sb, note: str):
     try:
         sb.table('system_health').upsert(
@@ -425,6 +470,13 @@ def _heartbeat(sb, note: str):
 
 def run(dry: bool = False, only: list = None) -> int:
     sb = make_client(os.environ['SUPABASE_URL'], os.environ['SUPABASE_SERVICE_KEY'])
+    # pg_cron 주 트리거와 Actions 백업 cron이 같은 20:30 UTC에 걸려 하루 두 번 전량 실행되고
+    # 있었다(2026-09-14 실측: 4일 연속, api_usage 282콜·752K 토큰 = 전체의 19.6%).
+    # 시각을 어긋내는 것만으로는 주 트리거가 성공해도 백업이 또 돈다 — 가드가 본체다.
+    # dry-run과 --only(사람이 일부러 돌리는 경우)는 가드하지 않는다.
+    if not dry and not only and ran_recently(sb, 'last_foreign_press_run', 12):
+        print('[해외 수집] 12시간 내 이미 실행됨 — 중복 실행 방지로 종료')
+        return 0
     criteria = load_foreign_criteria(sb)
     judge = make_judge(criteria)
     if judge is None:
@@ -435,14 +487,18 @@ def run(dry: bool = False, only: list = None) -> int:
         return 0
 
     existing = load_existing_urls(sb)
-    print('[해외 수집] 기존 news_feed url %d건, dry-run=%s' % (len(existing), dry))
+    criteria_hash = _f_hash(criteria)
+    screen_cache = load_screen_cache(sb, criteria_hash)
+    print('[해외 수집] 기존 news_feed url %d건, 무관 캐시 %d건, dry-run=%s'
+          % (len(existing), len(screen_cache), dry))
 
     rows_to_save = []
-    totals = {'scan': 0, 'new': 0, 'rel': 0, 'irrel': 0, 'fail': 0, 'promoted': 0}
+    cache_rows = []
+    totals = {'scan': 0, 'new': 0, 'cached': 0, 'rel': 0, 'irrel': 0, 'fail': 0, 'promoted': 0}
     for src, fetch_fn in SOURCES.items():
         if only and src not in only:
             continue
-        stats = {'scan': 0, 'new': 0, 'rel': 0, 'irrel': 0, 'fail': 0}
+        stats = {'scan': 0, 'new': 0, 'cached': 0, 'rel': 0, 'irrel': 0, 'fail': 0}
         try:
             feed_items = fetch_fn()
         except Exception as e:
@@ -454,6 +510,10 @@ def run(dry: bool = False, only: list = None) -> int:
         fresh = []
         for it in feed_items[:MAX_PER_SOURCE]:
             if it['url'] in existing or it['url'] in seen:
+                continue
+            # 같은 기준문으로 이미 '무관' 판정된 기사 — 제목이 그대로면 다시 묻지 않는다
+            if screen_cache.get(it['url']) == _f_hash(it['title']):
+                stats['cached'] += 1
                 continue
             seen.add(it['url'])
             fresh.append(it)
@@ -467,6 +527,10 @@ def run(dry: bool = False, only: list = None) -> int:
                 continue
             if not verdict['relevant']:
                 stats['irrel'] += 1
+                cache_rows.append({'url': it['url'],
+                                   'title_hash': _f_hash(it['title']),
+                                   'criteria_hash': criteria_hash,
+                                   'judged_at': datetime.now(timezone.utc).isoformat()})
                 print('  [무관 스킵][%s] %s' % (src, it['title'][:60]))
                 continue
             if not verdict['title_ko'] or not verdict['summary_ko']:
@@ -516,8 +580,8 @@ def run(dry: bool = False, only: list = None) -> int:
                             print('  [KB 승격][%s] %s' % (src, verdict['title_ko'][:60]))
                     except Exception as e:
                         print('  [KB 승격 실패 — 무시] %s' % str(e)[:80])
-        print('[%s] 스캔 %d, 신규 %d, 관련 %d, 무관 %d, 실패 %d'
-              % (src, stats['scan'], stats['new'], stats['rel'],
+        print('[%s] 스캔 %d, 신규 %d, 캐시스킵 %d, 관련 %d, 무관 %d, 실패 %d'
+              % (src, stats['scan'], stats['new'], stats['cached'], stats['rel'],
                  stats['irrel'], stats['fail']))
         for k in totals:
             totals[k] += stats.get(k, 0)
@@ -533,9 +597,12 @@ def run(dry: bool = False, only: list = None) -> int:
             totals['fail'] += len(rows_to_save)
             totals['rel'] -= len(rows_to_save)
 
-    note = 'scan=%d new=%d rel=%d irrel=%d fail=%d promoted=%d' % (
-        totals['scan'], totals['new'], totals['rel'], totals['irrel'], totals['fail'],
-        totals.get('promoted', 0))
+    if not dry:
+        save_screen_cache(sb, cache_rows)
+
+    note = 'scan=%d new=%d cached=%d rel=%d irrel=%d fail=%d promoted=%d' % (
+        totals['scan'], totals['new'], totals['cached'], totals['rel'], totals['irrel'],
+        totals['fail'], totals.get('promoted', 0))
     print('[해외 수집 완료] ' + note)
     if not dry:
         _heartbeat(sb, note)

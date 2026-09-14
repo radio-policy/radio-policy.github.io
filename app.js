@@ -294,7 +294,7 @@ async function loadAccountAdmin() {
   try {
     var tRes = await sb.from('teams').select('id,name,daily_limit,unlimited').order('id');
     var pRes = await sb.from('profiles')
-      .select('user_id,name,role,approved,active,daily_limit,unlimited,team_id')
+      .select('user_id,name,role,approved,active,daily_limit,unlimited,team_id,can_edit_issues')
       .order('created_at', { ascending: false });
     if (tRes.error) throw tRes.error;
     if (pRes.error) throw pRes.error;
@@ -349,6 +349,9 @@ function renderAccountAdmin(teams, profs) {
         '<label style="font-size:11px;color:var(--text-secondary)">한도 <input id="mb-lim-' + p.user_id + '" type="number" min="0" value="' + p.daily_limit + '" style="' + inputCss + ';width:56px"></label>' +
         '<label style="font-size:11px;color:var(--text-secondary)"><input id="mb-unl-' + p.user_id + '" type="checkbox"' + (p.unlimited ? ' checked' : '') + '> 무제한</label>' +
         '<label style="font-size:11px;color:var(--text-secondary)"><input id="mb-act-' + p.user_id + '" type="checkbox"' + (p.active ? ' checked' : '') + '> 활성</label>' +
+        // 이슈맵 편집은 가입 승인과 별개로 관리자가 따로 주는 권한이다(2026-09-14).
+        // 관리자는 이 칸과 무관하게 항상 편집할 수 있다(is_issue_editor()가 role='admin'을 통과시킨다).
+        '<label style="font-size:11px;color:var(--text-secondary)" title="이슈맵의 이슈·연결을 직접 고칠 수 있게 합니다. 관리자는 항상 가능합니다."><input id="mb-iss-' + p.user_id + '" type="checkbox"' + (p.can_edit_issues ? ' checked' : '') + (p.role === 'admin' ? ' disabled' : '') + '> 이슈맵 편집</label>' +
         '<button class="btn" style="font-size:11px;padding:3px 10px" onclick="saveMemberRow(\'' + p.user_id + '\')">저장</button>' +
       '</div></div>';
   }).join('') : '<div style="font-size:11px;color:var(--text-tertiary)">구성원이 없습니다.</div>';
@@ -395,7 +398,8 @@ async function saveMemberRow(userId) {
     role: document.getElementById('mb-role-' + userId).value,
     daily_limit: Number(document.getElementById('mb-lim-' + userId).value || 10),
     unlimited: document.getElementById('mb-unl-' + userId).checked,
-    active: document.getElementById('mb-act-' + userId).checked
+    active: document.getElementById('mb-act-' + userId).checked,
+    can_edit_issues: document.getElementById('mb-iss-' + userId).checked
   }, '구성원 저장');
 }
 async function saveTeamRow(teamId) {

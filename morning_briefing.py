@@ -542,7 +542,10 @@ def generate_briefing(items: list, new_terms: list, for_date: datetime = None) -
         # temperature 등 샘플링 파라미터 금지(400). 판정·번역·짧은 요약류는 Haiku 유지.
         resp = client.messages.create(
             model='claude-sonnet-5',
-            max_tokens=3500,
+            # 3500 → 6000 (2026-09-14). 실측 최장 브리핑이 7,265자(09-10)로 상한에 닿아 있었고,
+            # 09-14 브리핑은 '• 없음 (' 에서 잘린 채 저장·발송됐다. 출력 토큰은 실제 쓴 만큼만
+            # 과금되므로(일 1콜) 상한을 올려도 비용은 늘지 않는다.
+            max_tokens=6000,
             thinking={'type': 'disabled'},
             system=_BRIEFING_SYSTEM,
             messages=[{'role': 'user', 'content': user_msg}],
@@ -554,6 +557,17 @@ def generate_briefing(items: list, new_terms: list, for_date: datetime = None) -
                 break
         if not text:
             raise RuntimeError('text 블록 없음')
+        # 잘린 응답을 성공으로 통과시키지 않는다 — 상한을 올려도 언젠가 또 닿는다.
+        # 브리핑 자체는 버리지 않되(대부분 쓸 만하다) 잘렸다는 사실을 본문과 운영자 알림에 남긴다.
+        if getattr(resp, 'stop_reason', '') == 'max_tokens':
+            print('[브리핑] max_tokens 에서 잘림 — 본문 표시 + 운영자 알림')
+            text += '\n\n⚠️ 이 브리핑은 길이 제한에서 잘렸습니다 — 대시보드에서 원문 확인이 필요합니다.'
+            try:
+                import notify
+                notify.send_telegram('⚠️ [브리핑] 오늘 브리핑이 길이 제한(max_tokens)에서 잘렸습니다. '
+                                     'morning_briefing.py 의 max_tokens 상향 검토가 필요합니다.')
+            except Exception as _e:
+                print('[브리핑] 절단 알림 실패: %s' % _e)
         print(f'[브리핑] 생성 완료 (Sonnet 5, {len(text)}자)')
         return text
     except Exception as e:

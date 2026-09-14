@@ -65,9 +65,9 @@ check('short 사업법', L.lmaShortLawName('전기통신사업법') === '사업�
 check('short 방발법', L.lmaShortLawName('방송통신발전 기본법') === '방발법');
 check('short 망법', L.lmaShortLawName('정보통신망 이용촉진 및 정보보호 등에 관한 법률') === '망법');
 check('short 전파법', L.lmaShortLawName('전파법') === '전파법');
-check('short 시행령', L.lmaShortLawName('전기통신사업법 시행령') === '사업법 영', L.lmaShortLawName('전기통신사업법 시행령'));
-check('short 시행규칙', L.lmaShortLawName('방송통신발전 기본법 시행규칙') === '방발법 규칙');
-check('short 전파법 시행령', L.lmaShortLawName('전파법 시행령') === '전파법 영');
+check('short 시행령', L.lmaShortLawName('전기통신사업법 시행령') === '사업법 시행령', L.lmaShortLawName('전기통신사업법 시행령'));
+check('short 시행규칙', L.lmaShortLawName('방송통신발전 기본법 시행규칙') === '방발법 시행규칙');
+check('short 전파법 시행령', L.lmaShortLawName('전파법 시행령') === '전파법 시행령');
 check('short fallback long', L.lmaShortLawName('재난 시 무선통신시설 공동이용 범위 및 절차에 대한 고시') === '재난 시 무…', L.lmaShortLawName('재난 시 무선통신시설 공동이용 범위 및 절차에 대한 고시'));
 check('short fallback short', L.lmaShortLawName('주파수분배표') === '주파수분배표');
 var w = L.lmaWrapLabel('37조의2 재난 시 무선통신시설의 공동이용', 14);

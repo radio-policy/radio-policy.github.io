@@ -5,8 +5,11 @@ name: 해외 규제동향 수집 (FCC·Ofcom·BEREC·日총무성·ITU)
 # (radio_TEMP_foreign)만 담당해 PC가 꺼지면 그날 수집이 통째로 빠졌다.
 on:
   schedule:
-    # 매일 20:30 UTC = 05:30 KST — 06:05 모닝 브리핑보다 앞서야 그날치가 실린다
-    - cron: '30 20 * * *'
+    # 주 트리거는 Supabase pg_cron(foreign-press-trigger, 20:30 UTC). 아래는 백업이므로
+    # 25분 뒤인 20:55 UTC(05:55 KST)에 둔다 — 06:05 모닝 브리핑보다는 여전히 앞선다.
+    # 2026-09-14까지 '30 20'으로 주 트리거와 같은 분이라 매일 두 번 전량 실행됐다.
+    # 시각 분리만으로는 부족해 foreign_press.run() 에 12h 중복 실행 가드도 함께 넣었다.
+    - cron: '55 20 * * *'
   workflow_dispatch:
 
 jobs:

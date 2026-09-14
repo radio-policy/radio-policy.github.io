@@ -152,6 +152,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 | | **chat_logs** | anon은 **insert만**. 읽기는 **로그인 계정의 RLS 스코프**(#104) — 본인 / 팀장=자기 팀 / admin=전체(텔레그램 행은 user_id가 없어 admin만). 건수는 `chat_logs_month_count()` |
 | 로그인 필요 | **profiles·teams·advisory_usage·answer_feedback** | anon 정책 없음. authenticated에 역할별 SELECT(본인/팀/admin), profiles·teams UPDATE는 admin만. AI 호출은 `claude-proxy`가 JWT를 검증한다 (#104) |
 | | importance_feedback | select 공개. **insert·update는 승인 프로필만**(#133) |
+| | profiles.can_edit_issues (bool, 기본 false) | 이슈맵 편집 권한. 가입 승인(approved)과 별개로 **관리자가 따로 준다**. `is_issue_editor()` = role='admin' or can_edit_issues, `issues`·`issue_links` 쓰기 정책 5개가 이것을 건다. 계정 관리 화면의 '이슈맵 편집' 체크박스 (#169, 2026-09-14) |
 | | tech_terms | select 공개. **insert·update는 admin만**(#144, 2026-09-09 — 화면 쓰기는 관리자 '↺ 재생성'뿐). 자동 추출(term_extract.py)·백필은 service_role이라 무관 |
 | | law_terms | select 공개(anon·authenticated). **insert·update·delete 정책 없음** — 쓰는 곳은 law_terms_sync.py(service_role)뿐, 화면 쓰기 없음 (#156) |
 | | app_config | select 공개. update는 `press_keywords` 키만(#137의 `terms_last_extraction` 게이트는 #141로 폐지 — 정책·행 삭제) |
@@ -206,8 +207,8 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 | 7 | briefing-trigger-0620 | `20 21 * * *` | 06:20 | 위 백업 재시도 |
 | 12 | news-health-check | `0 12 * * *` | 21:00 | 무음 실패 알람(내부) check_news_health() |
 | 13 | watchdog-trigger | `35 12 * * *` | 21:35 | 외부 워치독 백업 dispatch |
-| 19 | foreign-press-trigger | `30 20 * * *` | 05:30 | **해외 규제동향 트리거(2026-08-25 신설)** → foreign_press.yml dispatch. FCC·Ofcom·BEREC·日총무성·ITU는 한국 IP가 불필요해 Actions에서 돈다 — 그전까지 PC 임시작업만 담당해 PC가 꺼지면 그날치가 통째로 빠졌다. 06:05 브리핑보다 앞서야 그날치가 실린다 |
-| 20 | term-extract-trigger | `0 20 * * *` | 05:00 | **기술 용어 자동 추출 트리거(2026-09-09 신설, #141)** → term_extract.yml dispatch. 새벽엔 PC가 꺼져 있어 Actions(Supabase·Anthropic만 쓰므로 한국 IP 불필요). Haiku 추출 + Sonnet 상세 최대 10건/일 — 06:00 브리핑 전에 그날치 완성 |
+| 19 | foreign-press-trigger | `30 20 * * *` | 05:30 | **해외 규제동향 트리거(2026-08-25 신설)** → foreign_press.yml dispatch. FCC·Ofcom·BEREC·日총무성·ITU는 한국 IP가 불필요해 Actions에서 돈다 — 그전까지 PC 임시작업만 담당해 PC가 꺼지면 그날치가 통째로 빠졌다. 06:05 브리핑보다 앞서야 그날치가 실린다. **백업 cron은 20:55(05:55)로 25분 뒤에 둔다 — 2026-09-14까지 같은 분이라 매일 두 번 돌았다(#169).** |
+| 20 | term-extract-trigger | `0 20 * * *` | 05:00 | **기술 용어 자동 추출 트리거(2026-09-09 신설, #141)** → term_extract.yml dispatch. 새벽엔 PC가 꺼져 있어 Actions(Supabase·Anthropic만 쓰므로 한국 IP 불필요). Haiku 추출 + Sonnet 상세 최대 10건/일 — 06:00 브리핑 전에 그날치 완성. **백업 cron은 20:25로 25분 뒤(#169).** |
 | 16 | watchdog-scan-3x | `10 */3 * * *` | 3시간마다 :10 (00:10·03:10·…·21:10) | **내부 워치독 전수 감시** `watchdog_scan(false)` — system_health 10키 키별 임계+note 실패신호, 재알림 억제, 이상 시 1건 요약(Vault `telegram_bot_token`). :10은 :00/:35 잡과 겹치지 않게 오프셋 |
 | 18 | admin-daily-report | `0 0 * * *` | 09:00 | **운영자 일일 리포트**(#100) — 구독자 목록·권한·수신 설정·명령 사용 통계 + **어제 AI 호출(자문/일반)·스크립트 토큰 한 줄**(#152). `trigger_admin_report()` → Vault `admin_report_cron_secret` |
 | 21 | ai-usage-burst-check | `15 * * * *` | 매시 :15 | **AI 호출 폭주 경보**(#152) `check_ai_usage_burst()` — 오늘 general 합계 >100이면 운영자 텔레그램 1회/일(Vault `telegram_bot_token`, 마지막 경보일은 system_health `ai_burst_alert`) |
@@ -1371,6 +1372,14 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **용어 설명 생성 경로를 다시 두 개로 만들지 말 것 (#153)** — `backfill_term_details.py`(05:00, Sonnet, 추출 직후 같은 실행에서 채움, `--limit 30`이라 신규분은 전부 즉시)가 단일 생성원. refetch의 매시 Haiku 경로는 같은 용어를 두 번 만들어 제거했다. 예외분(하루 30건 초과·수동 추가)은 다음 05:00 또는 관리자 ↺재생성.
 - **이슈맵 자동 제안은 하루 4회(05·11·15·20시, `ISSUE_SUGGEST_HOURS`) — 매시로 되돌리지 말 것 (#153)** — 한 시간치 2~3건으로 만든 파편 제안이 61% 기각됐고 경계 판정 Sonnet 콜이 매시 나갔다. 제안은 검토 큐라 6시간 지연 무해.
 - **app.js의 비스트리밍 Sonnet 호출에는 `thinking:{type:'disabled'}`를 반드시 넣을 것 (#153)** — 적응형 추론 기본 ON이라 사고 토큰 과금 + max_tokens 잠식(용어 SVG 잘림). 연결 테스트 ping은 Haiku(Sonnet이면 자문 한도 1회 차감).
+
+- **백업 테이블을 `CREATE TABLE AS SELECT`로 뜨고 그대로 두지 말 것 (#169)** — 사본에는 RLS가 따라오지 않고 anon·authenticated가 전권한을 들고 있다. 뜬 즉시 RLS를 켜거나, 작업이 끝나면 지운다(2026-09-14 실측: 관계도 백업 2개가 공개 anon 키로 읽혔다).
+- **새 RLS 쓰기 정책에 리터럴 `true`를 쓰지 말 것 (#169)** — 가입이 셀프서비스라 `{authenticated} / true`는 "승인 전 계정도 쓸 수 있다"는 뜻이다. `is_approved_user()`(열람·자문 자격) 또는 `is_issue_editor()`(관리자가 명시 부여) 중 맞는 것을 건다.
+- **권한 판단은 RLS 정책과 GRANT를 함께 볼 것 (#169)** — 정책이 열려 있어도 GRANT에 그 동작이 없으면 막힌다. 한쪽만 보고 "뚫렸다/안전하다"를 말하면 틀린다(`news_feed_upd_anon` 실측).
+- **AI 응답을 저장·발송하기 전에 `stop_reason`을 볼 것 (#169)** — `max_tokens`에서 잘린 응답도 예외 없이 성공으로 돌아온다. 2026-09-14 브리핑이 문장 중간에서 잘린 채 발송됐고 헬스체크는 '정상'으로 집계했다.
+- **Actions cron 백업을 pg_cron 주 트리거와 같은 분에 두지 말 것, 그리고 시각 분리만으로 끝내지 말 것 (#169)** — Actions는 1~2시간 늦게 발화하므로 시각만 어긋내면 못 막는다. `sb_client.ran_recently(sb, key, hours)` 가드를 스크립트 진입부에 넣는다(실측: foreign_press·term_extract가 4일 연속 하루 2회 전량 실행).
+- **AI 판정 결과를 버리는 수집기를 만들지 말 것 (#169)** — `foreign_press`는 '무관' 판정을 저장하지 않아 어제 버린 기사를 매 실행 다시 판정했다(09-13: 34콜 쓰고 저장 0건). 국내 뉴스의 `news_screen_cache`(url+제목 지문+기준문 지문) 방식을 쓴다.
+- **세션의 자기평가 점수를 공개·배포 판단의 근거로 쓰지 말 것 (#169)** — 같은 시스템이 자기채점 78점, 독립 채점 63.4점이었다. 기준문을 고정하고 작성자와 분리된 에이전트로 잰다.
 
 ## 알려진 제약사항
 
