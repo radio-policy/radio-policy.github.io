@@ -2405,7 +2405,7 @@ def suppress_repeat_alerts(urgent_items: list) -> list:
             if r.get('url') not in batch_urls:
                 prior.append({'title': r.get('title') or '', 'kw': extract_keywords(r.get('title') or '')})
 
-        passed, sup_rows = [], []
+        passed, sup_rows, passed_kw = [], [], []
         for it in urgent_items:
             kw = extract_keywords(it.get('title') or '')
             matched = None
@@ -2422,6 +2422,54 @@ def suppress_repeat_alerts(urgent_items: list) -> list:
                 })
             else:
                 passed.append(it)
+                passed_kw.append(kw)
+
+        # ── ①-2: 키워드로 못 잡은 '실행이 갈린' 재보도를 의미 판정으로 한 번 더 거른다 (2026-09-14) ──
+        #  왜 필요한가(실측): 네팔 구호인력 로밍 면제 사건은 같은 내용 기사가 10건 들어왔고 그중 2건이
+        #  긴급으로 분류됐는데, 10:03·10:49 실행으로 갈려 ①의 키워드 문턱(3개)만 거쳤다. 공유는 2개
+        #  (네팔·구호인력)뿐 — '로밍' vs '로밍요금', '통신업계' vs '이통'+'3사', '무료' vs '전액면제'로
+        #  같은 말이 다른 토큰이 되어 통과했고 한 시간 간격으로 두 통이 나갔다.
+        #  #92의 의미 판정은 아래 ②(같은 실행분 묶기)에만 붙어 있어 실행이 갈리면 적용되지 않았다.
+        #  후보는 키워드를 1개라도 공유하는 기보도로 한정한다 — 무관한 제목까지 태우면 오판도 비용도 는다.
+        #  실행당 Haiku 1회(후보가 있을 때만), 실패하면 원본 유지(fail-open).
+        if passed and prior and ANTHROPIC_API_KEY:
+            cand = []                                  # 후보 기보도(제목 중복 제거, 최대 10건)
+            seen_t = set()
+            for pv in prior:
+                if len(seen_t) >= 10:
+                    break
+                if pv['title'] and pv['title'] not in seen_t and any(kw & pv['kw'] for kw in passed_kw):
+                    seen_t.add(pv['title'])
+                    cand.append(pv)
+            if cand:
+                from news_dedup import group_same_event
+                titles = [it.get('title') or '' for it in passed] + [pv['title'] for pv in cand]
+                gidx = group_same_event(titles, ANTHROPIC_API_KEY)
+                if gidx:
+                    base = len(passed)
+                    drop = {}                          # passed 인덱스 → 묶인 기보도
+                    for g in gidx:
+                        news = [i for i in g if i < base]
+                        olds = [i - base for i in g if i >= base]
+                        if news and olds:
+                            for i in news:
+                                drop[i] = cand[olds[0]]
+                    if drop:
+                        kept, kept_kw = [], []
+                        for i, it in enumerate(passed):
+                            pv = drop.get(i)
+                            if pv is None:
+                                kept.append(it)
+                                kept_kw.append(passed_kw[i])
+                                continue
+                            sup_rows.append({
+                                'article_title': it.get('title') or '',
+                                'article_url': it.get('url') or '',
+                                'matched_title': pv['title'],
+                                'shared_keywords': '[의미판정] ' + ','.join(sorted(passed_kw[i] & pv['kw'])),
+                            })
+                        print(f'[긴급 억제] 의미 판정으로 실행 간 재보도 {len(drop)}건 추가 생략')
+                        passed, passed_kw = kept, kept_kw
 
         # 같은 실행분 내 유사 기사 묶기 — 사건 첫날 첫 실행에 재보도 수십 건이
         # 한꺼번에 들어오면 한 통에 수십 줄이 되는 것을 대표 1건으로 줄인다
