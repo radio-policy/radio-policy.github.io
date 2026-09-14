@@ -508,7 +508,9 @@ def generate_briefing(items: list, new_terms: list, for_date: datetime = None) -
     news_lines = []
     for it in select_for_prompt(items):
         icon = {'긴급': '🔴', '보통': '🟡', '참고': '🟢'}.get(it.get('urgency', '참고'), '🟢')
-        body = (it.get('content') or '').replace('\n', ' ').strip()[:400]
+        # 400자면 리드 문단까지밖에 안 들어간다 — 적용 범위·수치 구간·소급 여부 같은
+        # 요약의 핵심 조건은 본문 중반에 나온다(#161-보론16).
+        body = (it.get('content') or '').replace('\n', ' ').strip()[:900]
         # 클러스터 대표에는 보도 규모·전일 연속 여부를 병기 (배경역사 #44)
         rel = it.get('_related', 0)
         tags = (('' if _has_real_body(it) else ' 〔본문 미확보 — 대표로 쓰지 말 것〕')

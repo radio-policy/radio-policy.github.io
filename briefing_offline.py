@@ -111,7 +111,8 @@ def export(since: str, until: str, out: str):
                 'id': it['id'], 'icon': icon, 'title': it['title'] + tags,
                 'source': it.get('source', ''), 'url': it.get('url', ''),
                 'date': str(it.get('published_at', ''))[:10],
-                'body': (it.get('content') or '').replace('\n', ' ').strip()[:400],
+                # 본체 프롬프트와 같은 길이를 준다 — 어긋나면 검증이 운영을 재지 못한다(#161-보론16)
+                'body': (it.get('content') or '').replace('\n', ' ').strip()[:900],
             })
         law_part, body = split_law_section(row.get('content') or '')
         payload = {
