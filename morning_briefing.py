@@ -545,7 +545,9 @@ def generate_briefing(items: list, new_terms: list, for_date: datetime = None) -
             # 3500 → 6000 (2026-09-14). 실측 최장 브리핑이 7,265자(09-10)로 상한에 닿아 있었고,
             # 09-14 브리핑은 '• 없음 (' 에서 잘린 채 저장·발송됐다. 출력 토큰은 실제 쓴 만큼만
             # 과금되므로(일 1콜) 상한을 올려도 비용은 늘지 않는다.
-            max_tokens=6000,
+            # 6,000 → 12,000 (#161-보론17). [주요 뉴스] 12건 + [그 외] 10~14건으로 항목이
+            # 두 배가 됐고 본문 입력도 900자로 키웠다 — 6,000으로는 다시 잘릴 여지가 크다.
+            max_tokens=12000,
             thinking={'type': 'disabled'},
             system=_BRIEFING_SYSTEM,
             messages=[{'role': 'user', 'content': user_msg}],
