@@ -793,6 +793,7 @@ def _dedup_terms(rows: list) -> list:
 _NL = chr(10)
 _ID_IN_LINE_RE = re.compile(r'\[ID:([0-9a-f-]{36})\]')
 _WS = r'\s'
+_NO_TERM_RE = re.compile('^(없음|해당 없음|해당 사항 없음|신규 용어 없음|용어 없음)$')
 _TERM_COUNT_RE = r'(뉴스 \d+건 / 기술 용어 )\d+(건)'
 
 
@@ -906,6 +907,11 @@ def _prune_orphan_terms(text: str) -> str:
             kept.append(line)
             continue
         term = t.lstrip('•').split(':')[0].strip()
+        # '없음'·'신규 용어 없음' 같은 상태 표시는 용어가 아니다 — 지우지 않고 그대로 둔다.
+        # (지우면 섹션까지 사라져 다른 날과 표기가 갈린다. 실측 2026-09-14)
+        if _NO_TERM_RE.match(term):
+            kept.append(line)
+            continue
         flat = re.sub(_WS, '', term).lower()
         if flat and flat in body_flat:
             kept.append(line)
@@ -913,17 +919,20 @@ def _prune_orphan_terms(text: str) -> str:
             dropped.append(term)
     if dropped:
         print('[용어] 본문 미연결 ' + str(len(dropped)) + '건 제외: ' + ', '.join(dropped))
-    n_kept = sum(1 for l in kept if l.strip().startswith('•'))
-    if n_kept == 0:
+    # 줄이 하나라도 남아 있으면 섹션은 유지한다 — '없음' 표시도 한 줄이다.
+    # 건수에는 상태 표시를 세지 않는다(다른 날과 표기를 맞춘다).
+    bullets = [l for l in kept if l.strip().startswith('•')]
+    n_kept = sum(1 for l in bullets
+                 if not _NO_TERM_RE.match(l.strip().lstrip('•').split(':')[0].strip()))
+    if not bullets:
         # 헤더만 남은 빈 섹션을 내보내지 않는다 — 구조 항목 하나가 빈 채로 발송됐다는
         # 채점 지적이 있었다. 섹션을 통째로 들어낸다.
         out = (text[:i].rstrip() + _NL + _NL + tail.lstrip(_NL)) if tail else text[:i].rstrip()
         print('[용어] 남은 용어가 없어 섹션을 제거')
         return re.sub(_TERM_COUNT_RE, lambda m: m.group(1) + '0' + m.group(2), out)
     out = text[:i] + head + _NL.join(kept) + tail
-    # [저장 결과]의 용어 건수도 실제 남은 수로 맞춘다
-    n = sum(1 for l in kept if l.strip().startswith('•'))
-    out = re.sub(_TERM_COUNT_RE, lambda m: m.group(1) + str(n) + m.group(2), out)
+    # [저장 결과]의 용어 건수도 실제 남은 수로 맞춘다(상태 표시는 세지 않는다)
+    out = re.sub(_TERM_COUNT_RE, lambda m: m.group(1) + str(n_kept) + m.group(2), out)
     return out
 
 
