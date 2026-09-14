@@ -5745,7 +5745,7 @@ function renderPlainBulletItem(block) {
         if (lm) { u = lm[1]; used[k] = 1; break; }
       }
       var body = mdBold(l.replace(/^• /, ''));
-      if (u) body = '<a href="' + u + '" target="_blank" rel="noopener" style="color:inherit;text-decoration:none;border-bottom:1px solid var(--border)">' + body + '</a>';
+      if (u) body = '<a href="' + u + '" target="_blank" rel="noopener" class="brief-link">' + body + '</a>';
       out += '<div style="font-size:13px;line-height:1.8;padding-left:2px">• ' + body + '</div>';
     } else if (/^  → /.test(l)) {
       out += '<div style="font-size:12px;color:var(--text-secondary);padding-left:16px;line-height:1.6">→ ' + mdBold(l.replace(/^  → /, '')) + '</div>';
@@ -5883,7 +5883,7 @@ function renderBriefingNewsItem(block, importance, briefingIdx, itemIdx) {
   // 제목에 원문 링크를 건다(#161-보론18) — 텔레그램·이메일과 같은 규칙이다.
   // 링크가 없으면 종전대로 글씨만 남긴다.
   var titleInner = linkUrl
-    ? '<a href="' + linkUrl + '" target="_blank" rel="noopener" style="color:inherit;text-decoration:none;border-bottom:1px solid var(--border)">' + mdBold(titleLine) + '</a>'
+    ? '<a href="' + linkUrl + '" target="_blank" rel="noopener" class="brief-link">' + mdBold(titleLine) + '</a>'
     : mdBold(titleLine);
   var titleHtml = '<span data-news-title="1" style="font-weight:500;font-size:13px;line-height:1.6">' + titleInner + '</span>';
   var summaryHtml = summaryLines.map(function(s) {
