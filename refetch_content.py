@@ -7,7 +7,7 @@
 - 옵션: python refetch_content.py --all   (content 있어도 전부 재수집)
 """
 
-import os, sys, time, requests
+import os, re, sys, time, requests
 
 # Windows 스케줄러/cp949 콘솔에서 이모지 print 크래시 방지 (UnicodeEncodeError)
 try:
@@ -112,6 +112,29 @@ def _refetch_heartbeat(sb, note=''):
         print(f'[heartbeat 오류] {e}')
 
 
+_TITLE_CUT_RE = re.compile('(' + chr(0x2026) + r'|\.\.\.)\s*$')
+
+
+
+def _fix_title_only(sb, article: dict, url: str) -> bool:
+    """본문 추출이 실패한 기사의 제목만 고친다(#161-보론15). 성공하면 True."""
+    try:
+        import title_backfill as tbf
+        import crawler as _cr
+        resp = _cr._http_get(url, timeout=8)
+        resp.raise_for_status()
+        if 'rra.go.kr' in url:
+            resp.encoding = 'euc-kr'
+        old = (article.get("title") or "").strip()
+        new = tbf.extract_title(resp.text)
+        if tbf.better(old, new):
+            sb.table("news_feed").update({"title": new}).eq("id", article["id"]).execute()
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def main():
     regen_all = "--all" in sys.argv
     sb = make_client(SUPABASE_URL, SUPABASE_KEY)
@@ -148,14 +171,18 @@ def main():
                 and not (a.get("source") or "").startswith("방송미디어통신위원회 위원회 회의")]
         mode = "전체 재수집"
     else:
+        # 제목이 '…'로 끝나는 기사도 대상에 넣는다(#161-보론15) — 언론사가 목록용으로
+        # 축약해 준 제목을 그대로 받아 저장한 것이 전체의 17.9%였다. 브리핑은 제목에
+        # 링크를 거는 구조라, 인용부호가 열린 채 끊긴 제목이 그대로 클릭 대상이 된다.
         todo = [
             a for a in all_articles
             if a.get("url") and (
                 not a.get("content") or
-                len((a.get("content") or "").strip()) < 100
+                len((a.get("content") or "").strip()) < 100 or
+                _TITLE_CUT_RE.search((a.get("title") or "").strip())
             )
         ]
-        mode = "본문 없거나 100자 미만 기사"
+        mode = "본문 없거나 100자 미만, 또는 제목이 잘린 기사"
 
     if not todo:
         print("✅ 재수집할 기사가 없습니다.")
@@ -194,9 +221,14 @@ def main():
                     body = None
             if not body:
                 body, actual_date = crawler.fetch_article_body(resolved, source)
+            # 제목만 고치러 온 기사(본문은 이미 있음)는 본문 추출이 실패해도 제목은 고친다.
             if not body:
-                print("⏭  본문 없음 (셀렉터 미매칭 또는 접근 차단)")
-                skip += 1
+                fixed = _fix_title_only(sb, article, resolved)
+                print("📝 제목만 보정" if fixed else "⏭  본문 없음 (셀렉터 미매칭 또는 접근 차단)")
+                if fixed:
+                    ok += 1
+                else:
+                    skip += 1
                 continue
 
             # 실제 기사 날짜로 published_at 업데이트
@@ -205,6 +237,13 @@ def main():
                 "url": resolved,
                 "content_fetched_at": datetime.now(KST).isoformat()
             }
+
+            # 잘린 제목이면 원문 제목으로 되돌린다(#161-보론15).
+            # 교체 조건은 title_backfill.better()와 같다 — 더 길고, 말줄임이 아니고,
+            # 기존 제목의 앞부분을 포함할 때만. 실패해도 본문 저장은 그대로 진행한다.
+            if _TITLE_CUT_RE.search((article.get("title") or "").strip()):
+                if _fix_title_only(sb, article, resolved):
+                    print(" 📝 제목 보정", end="")
 
             # 실제 날짜 확인 → 60일 초과 시 삭제
             if actual_date:
