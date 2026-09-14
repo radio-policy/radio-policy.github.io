@@ -330,7 +330,9 @@ function lmaShortLawName(name) {
   if (!s) return '';
   if (LMA_SHORT_NAMES[s]) return LMA_SHORT_NAMES[s];
   var m = /^(.*?)\s*시행(령|규칙)$/.exec(s);
-  if (m) return lmaShortLawName(m[1]) + (m[2] === '령' ? ' 영' : ' 규칙');
+  //  "전파법 영"·"전파법 규칙"은 법제처 3단비교의 법-영-규칙 약칭이지만 화면에서는 실재하지
+  //  않는 법령명처럼 읽힌다(운영자 지적, 2026-09-14) → 계열 접미는 줄이지 않고 그대로 쓴다.
+  if (m) return lmaShortLawName(m[1]) + (m[2] === '령' ? ' 시행령' : ' 시행규칙');
   return s.length > 8 ? s.slice(0, 6) + '…' : s;
 }
 
