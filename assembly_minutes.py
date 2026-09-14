@@ -827,10 +827,15 @@ def section_exists_by_confer(sb, doc_name: str, confer_num) -> bool:
     키에 넣어 고쳤는데(2026-08) 상임위 쪽은 그대로였다.
     등재된 섹션 523건 전부가 원문 링크에 id 를 갖고 있어 고유번호 대조가 항상 성립한다.
     조회 실패 시 True(등재 안 함) — 중복 유입 방지 우선, section_exists 와 같은 규약."""
+    # 링크는 '…xml.do?id=43150&type=view)' 또는 '…id=43150)' 두 꼴이 있다. id 뒤 경계문자를
+    # 반드시 포함해야 한다 — '%%id=4315%%' 로 느슨하게 보면 43150·43151 이 모두 걸린다.
     try:
-        rows = sb.table('document_chunks').select('id').eq('doc_name', doc_name) \
-            .like('content', '%%id=%s)%%' % confer_num).limit(1).execute().data
-        return bool(rows)
+        for sep in ('&', ')'):
+            rows = sb.table('document_chunks').select('id').eq('doc_name', doc_name) \
+                .like('content', '%%id=%s%s%%' % (confer_num, sep)).limit(1).execute().data
+            if rows:
+                return True
+        return False
     except Exception as e:
         print('  [dedupe 조회 오류 — 중복 방지 위해 스킵 처리] %s' % e)
         return True
