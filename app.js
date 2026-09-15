@@ -10779,10 +10779,28 @@ async function loadLawMap(force) {
       });
       return all;
     }
-    var dataReady = Promise.all([
-      fetchAllRows('law_graph_nodes', 'id,name,node_type,description,doc_name,source'),
-      fetchAllRows('law_graph_edges', 'id,source_id,target_id,relation_type,description,source,weight')
-    ]);
+    // 한 번의 왕복으로 노드·엣지를 다 받는다 (2026-09-15, #170-보론6).
+    // `lawmap_snapshot()`(RPC, STABLE·SECURITY INVOKER)이 {nodes, edges}를 한 JSON으로 돌려준다 —
+    // PostgREST max-rows(1000) 때문에 나눠 받던 6회 왕복이 1회가 된다. 서버 실행 59ms / 1.2MB
+    // (anon statement_timeout 3초 대비 여유 50배). RLS는 호출자 권한이라 그대로 적용된다.
+    // **폴백을 지우지 말 것**: RPC가 없거나(구 DB) 실패하면 종전 페이지네이션으로 그대로 뜬다.
+    async function fetchGraph() {
+      try {
+        var snap = await sb.rpc('lawmap_snapshot');
+        if (!snap.error && snap.data && Array.isArray(snap.data.nodes) && Array.isArray(snap.data.edges)
+            && snap.data.nodes.length) {
+          return [snap.data.nodes, snap.data.edges];
+        }
+        console.warn('[관계도] lawmap_snapshot 응답이 비었거나 형식이 달라 페이지네이션으로 폴백합니다', snap.error || '');
+      } catch (e) {
+        console.warn('[관계도] lawmap_snapshot 호출 실패 — 페이지네이션으로 폴백합니다:', e && e.message ? e.message : e);
+      }
+      return Promise.all([
+        fetchAllRows('law_graph_nodes', 'id,name,node_type,description,doc_name,source'),
+        fetchAllRows('law_graph_edges', 'id,source_id,target_id,relation_type,description,source,weight')
+      ]);
+    }
+    var dataReady = fetchGraph();
     // 둘을 한 Promise.all로 기다린다 — 따로 await 하면 먼저 실패한 쪽이 던질 때 남은 쪽이
     // '처리되지 않은 거부'로 새어 콘솔에 잡음이 남는다.
     var both = await Promise.all([visReady, dataReady]);
