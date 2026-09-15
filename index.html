@@ -23,7 +23,7 @@
          설정·운영 상태는 상단바 우측 톱니·상태등으로 이동. -->
     <div class="nav-group">
       <div class="nav-label">모니터링</div>
-      <div class="nav-item active" tabindex="0" role="button" data-nav="monitor" onclick="go('news',this,'media')"><i class="ti ti-news"></i>통합 모니터링</div>
+      <div class="nav-item" tabindex="0" role="button" data-nav="monitor" onclick="go('news',this,'media')"><i class="ti ti-news"></i>통합 모니터링</div>
       <div class="nav-item" tabindex="0" role="button" data-nav="issuemap" onclick="go('issuemap',this)"><i class="ti ti-sitemap"></i>이슈맵</div>
       <div class="nav-item" tabindex="0" role="button" data-nav="briefing" onclick="go('briefing',this)"><i class="ti ti-coffee"></i>Daily Briefing</div>
       <div class="nav-item" tabindex="0" role="button" data-nav="terms" onclick="go('terms',this)"><i class="ti ti-book"></i>법적·기술 용어</div>
@@ -31,7 +31,7 @@
     <div class="nav-group">
       <div class="nav-label">AI 도우미</div>
       <div class="nav-item" tabindex="0" role="button" data-nav="chat" onclick="go('chat',this)"><i class="ti ti-message-circle"></i>AI 자문</div>
-      <div class="nav-item" tabindex="0" role="button" data-nav="lawmap" onclick="go('lawmap',this)"><i class="ti ti-topology-star-3"></i>법령 관계도</div>
+      <div class="nav-item active" tabindex="0" role="button" data-nav="lawmap" onclick="go('lawmap',this)"><i class="ti ti-topology-star-3"></i>법령 관계도</div>
     </div>
     <div class="nav-group">
       <div class="nav-label">법안 동향</div>
@@ -260,10 +260,11 @@
       </div>
 
       <!-- 법령 관계도 -->
-      <div class="panel" id="panel-lawmap">
+      <!-- 기본 첫 화면 (2026-09-15, #170) — JS가 go(DEFAULT_PAGE)로 다시 잡지만, 여기서도 active로 두어야 로드 순간 빈 화면·뉴스 깜빡임이 없다 -->
+      <div class="panel active" id="panel-lawmap">
         <!-- 머리말 (2026-09-15) — 첫 화면으로 열릴 수 있는 화면이라, 그림만 보고 "무엇인지" 알 수 있게 한 줄 설명·규모를 둔다 -->
         <div class="lawmap-caption">
-          <b>법률 → 시행령 → 시행규칙 → 고시 → 별표를 조문 단위로 연결한 지도</b>
+          <b>법률·시행령·시행규칙·고시·별표를 조문 단위로 잇고, 조문끼리 인용하는 관계까지 그린 지도</b>
           <span id="lawmap-caption-stats"></span>
         </div>
         <div style="display:flex;gap:8px;margin-bottom:10px;align-items:center;flex-wrap:wrap">
@@ -322,7 +323,7 @@
       </div>
 
       <!-- 뉴스 — 팀 중요도 기반 분류 -->
-      <div class="panel active" id="panel-news">
+      <div class="panel" id="panel-news">
         <div style="display:flex;gap:8px;margin-bottom:10px;align-items:center">
           <span style="font-size:11px;color:var(--text-secondary);flex:1">
             <b style="color:var(--text-primary)">자동 수집 뉴스</b>
@@ -1113,7 +1114,7 @@
 <script src="system_prompt.js?v=20260911c"></script>
 <!-- 인용 조문 통째 보강·[원문 확인됨] 검증 로직 — 텔레그램 rag.ts와 같은 파일(#155). GitLab Pages는 .gitlab-ci.yml cp 목록에 있어야 실린다 -->
 <script src="supabase/functions/_shared/cite_verify.js?v=20260914a"></script>
-<script src="app.js?v=20260915a"></script>
+<script src="app.js?v=20260915c"></script>
 <script src="lawmap_articles.js?v=20260914a"></script>
 </body>
 </html>

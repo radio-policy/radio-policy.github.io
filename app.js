@@ -10760,15 +10760,31 @@ async function loadLawMap(force) {
   }
 }
 
-// 관계도 머리말의 규모 숫자 (2026-09-15) — 화면에 그린 데이터를 그대로 센다(추가 조회 없음).
-// 별도 집계 쿼리를 두지 않는 이유: 화면의 노드·선과 숫자가 어긋나면 그 자리에서 틀린 것이 된다.
-function updateLawmapCaption() {
+// 관계도 머리말의 규모 숫자 (2026-09-15) — 노드·선 수는 화면에 그린 데이터를 그대로 센다.
+// 화면의 노드·선과 숫자가 어긋나면 그 자리에서 틀린 것이 되기 때문이다.
+// 다만 **선 하나는 조문 사이 인용 여러 건을 묶은 것**이라(선 굵기 = 그 건수), 선 수만 적으면
+// "연결이 3,938건뿐인가"로 읽힌다(운영자 지적). 그래서 선이 담은 조문 단위 건수를 괄호로 함께 적는다:
+//   citation 엣지의 weight 합(= 조문끼리 서로 인용한 횟수) + law_delegations(= 조문 단위 위임 쌍).
+// law_delegations만 화면 데이터에 없어 count 조회 1회(head, 행 미전송)를 하고 캐시한다. 실패하면 괄호를 뺀다.
+var _lawMapDelegCount = null;
+async function updateLawmapCaption() {
   var el = document.getElementById('lawmap-caption-stats');
   if (!el) return;
   var topics = 0, docs = 0;
   (_lawMapNodes || []).forEach(function(n) { if (n.node_type === 'topic') topics++; else docs++; });
+  var lines = (_lawMapEdges || []).length, cites = 0;
+  (_lawMapEdges || []).forEach(function(e) { if (e.source === 'citation') cites += (Number(e.weight) || 1); });
+  if (_lawMapDelegCount === null && sb) {
+    try {
+      var r = await sb.from('law_delegations').select('id', { count: 'exact', head: true });
+      _lawMapDelegCount = (r && !r.error && typeof r.count === 'number') ? r.count : 0;
+    } catch(e) { _lawMapDelegCount = 0; }
+  }
+  var articleLinks = cites + (_lawMapDelegCount || 0);
   var f = function(n) { return Number(n).toLocaleString('ko-KR'); };
-  el.textContent = '법령·고시 ' + f(docs) + '종 · 연결 ' + f((_lawMapEdges || []).length) + '건 · 주제 ' + f(topics) + '개';
+  el.textContent = '법령·고시 ' + f(docs) + '종 · 연결선 ' + f(lines) + '개'
+    + (articleLinks ? ' (조문 사이 인용·위임 ' + f(articleLinks) + '건)' : '')
+    + ' · 주제 ' + f(topics) + '개';
 }
 
 function fillLawMapTopicSelect() {
@@ -12044,21 +12060,21 @@ document.addEventListener('DOMContentLoaded', function() {
   loadSettingsUI();
   // loadPressJSON()은 진입 시 호출하지 않는다 — 보도자료 탭 진입(go('press') → loadPressFromSupabase)과
   // smartRefresh(panel-press)에서 로드된다. 첫 화면(뉴스)에서 불필요한 대량 조회 제거 (#61)
-  // 첫 화면 지정 (2026-09-15, #163) — `?p=lawmap`(또는 `#lawmap`)으로 열면 그 화면에서 시작한다.
-  // 공유·제출용 링크는 관계도처럼 이 시스템만 가진 화면으로 열고, 파라미터 없는 평소 접속은 종전대로 뉴스.
-  // 다른 화면으로 시작할 때는 뉴스 1만 건 조회를 하지 않아 첫 화면이 그만큼 빨리 뜬다
-  // (뉴스 목록은 go('news')가 그때 불러온다). 허용 값은 PAGE_TO_NAV 키뿐 — 없는 화면 이름은 무시.
+  // 첫 화면 (2026-09-15, #170) — 기본은 **법령 관계도**다. 뉴스 목록은 어느 AI 도구에나 있어
+  // 처음 들어온 사람에게 이 시스템이 무엇인지 드러내지 못한다(운영자 판단, 실적·대외 공유 기준).
+  // `?p=<화면>` 또는 `#<화면>`으로 다른 화면을 지정할 수 있다 — 뉴스로 시작하려면 `?p=news`.
+  // 허용 값은 PAGE_TO_NAV 키뿐이며, 없는 이름·파싱 실패는 기본값으로 떨어진다(fail-safe).
+  // 관계도로 시작하면 뉴스 1만 건 조회(#130)를 하지 않아 첫 화면이 그만큼 빨리 뜬다
+  // (뉴스 목록은 go('news')가 그때 불러온다).
+  var DEFAULT_PAGE = 'lawmap';
   var startPage = (function() {
     try {
       var p = (new URLSearchParams(location.search).get('p') || (location.hash || '').replace(/^#/, '') || '').trim();
-      return PAGE_TO_NAV[p] ? p : '';
-    } catch(e) { return ''; }
+      return PAGE_TO_NAV[p] ? p : DEFAULT_PAGE;
+    } catch(e) { return DEFAULT_PAGE; }
   })();
-  if (startPage && startPage !== 'news') {
-    go(startPage);
-  } else {
-    currentNewsSourceType = 'media'; loadNews(); renderGroupTabs('news');
-  }
+  if (startPage === 'news') currentNewsSourceType = 'media';   // go()가 sourceType 없이 불려도 기본은 언론 뉴스
+  go(startPage);
   // 로그인 상태를 먼저 확정해야 AI 기능 게이트가 올바로 잠긴다(fail-closed).
   // 세션 복원 전에는 aiReady()가 false이므로, 자동 AI 기능도 이 시점 전에는 돌지 않는다.
   refreshAuthState();
