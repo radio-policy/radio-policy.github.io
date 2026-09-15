@@ -10686,11 +10686,23 @@ function loadVisNetwork() {
   if (window.vis && window.vis.Network) return Promise.resolve();
   if (_visNetLoadPromise) return _visNetLoadPromise;
   _visNetLoadPromise = new Promise(function(resolve, reject) {
-    var s = document.createElement('script');
-    s.src = 'https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js';
-    s.onload = function() { resolve(); };
-    s.onerror = function() { _visNetLoadPromise = null; reject(new Error('vis-network 로드 실패 — 네트워크 상태를 확인하세요')); };
-    document.head.appendChild(s);
+    // 저장소에 동봉한 사본을 먼저 쓴다 (2026-09-15, #170-보론3). 종전에는 unpkg에서 받아왔는데,
+    // 이 파일(약 670KB)이 다 와야 데이터 조회가 시작되는 직렬 구간이라 첫 방문자에게 그대로 대기가 됐다.
+    // 외부 CDN은 우리가 못 고치는 변수(지연·차단·버전 삭제)이기도 하다 — 사내판은 아예 못 써서 이미 동봉해 쓴다.
+    // 폴백으로 unpkg를 남긴다: `.gitlab-ci.yml` cp 목록에서 이 파일이 빠지면 GitLab Pages에서 404가 나는데,
+    // 그때 관계도가 통째로 죽는 대신 느리게라도 뜨게 한다(대신 콘솔에 경고를 남겨 설정 누락을 드러낸다).
+    var CDN = 'https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js';
+    function add(src, onFail) {
+      var s = document.createElement('script');
+      s.src = src;
+      s.onload = function() { resolve(); };
+      s.onerror = onFail;
+      document.head.appendChild(s);
+    }
+    add('vendor/vis-network-9.1.9.min.js', function() {
+      console.warn('[관계도] 동봉본(vendor/vis-network-9.1.9.min.js) 로드 실패 — .gitlab-ci.yml cp 목록을 확인하세요. CDN으로 폴백합니다.');
+      add(CDN, function() { _visNetLoadPromise = null; reject(new Error('vis-network 로드 실패 — 네트워크 상태를 확인하세요')); });
+    });
   });
   return _visNetLoadPromise;
 }
@@ -10728,15 +10740,39 @@ async function loadLawMap(force) {
   el.innerHTML = '<div style="color:var(--text-secondary);font-size:12px;padding:16px">불러오는 중...</div>';
   try {
     await loadVisNetwork();
-    // 서버측 max-rows(1000행) 제한 회피 — 페이지네이션 전체 조회
+    // 서버측 max-rows(1000행) 제한 회피 — 페이지네이션 전체 조회.
+    // **페이지를 병렬로 받는다 (2026-09-15, #170-보론3).** 종전에는 앞 페이지 응답을 기다려야 다음 요청이
+    // 나가는 순차 루프라, 엣지 3,938행(4페이지)이 왕복 네 번 줄줄이 이어져 2.0초가 걸렸다(실측:
+    // 1.16→1.42→1.73→2.03초). 노드 1,322행은 2페이지라 1.2초. 그리기는 0.03초, 자리 잡기 0.3초이므로
+    // 첫 화면 대기의 거의 전부가 이 조회였다. 뉴스 목록(#108)에서 같은 문제를 같은 방식으로 이미 고쳤다.
+    // count(head, 행 미전송)로 페이지 수를 먼저 정하고 전 페이지를 동시에 쏜다 — 가장 느린 한 번만 기다린다.
+    // `order('id')` 필수: 정렬이 없으면 병렬 요청끼리 경계가 어긋나 행이 겹치거나 빠질 수 있다.
+    // 총 건수는 **첫 페이지 응답에 얹어서** 받는다(`count:'exact'`) — count만 따로 묻는 왕복을 없앤다.
+    // 실측(같은 조건 3회 평균): 순차 1,336ms · count 따로+전부 병렬 1,189ms · 첫 페이지에 count+나머지 병렬 1,093ms.
+    var LM_PAGE = 1000, LM_MAX_PAGES = 30;   // 30,000행 안전 상한(현재 엣지 3,938 — 여유 7배)
     async function fetchAllRows(table, cols) {
-      var all = [];
-      for (var off = 0; off < 20000; off += 1000) {
-        var resp = await sb.from(table).select(cols).range(off, off + 999);
+      var first = await sb.from(table).select(cols, { count: 'exact' }).order('id').range(0, LM_PAGE - 1);
+      if (first.error) throw first.error;
+      var all = (first.data || []).slice();
+      var total = first.count || all.length;
+      var pages = Math.ceil(total / LM_PAGE);
+      if (pages > LM_MAX_PAGES) {
+        // 자르되 조용히 넘어가지 않는다 — 여기 걸리면 상한을 다시 봐야 한다
+        console.warn('[관계도] ' + table + ' ' + total + '행이 안전상한(' + (LM_MAX_PAGES * LM_PAGE) + ')을 넘어 일부만 로드합니다');
+        pages = LM_MAX_PAGES;
+      }
+      if (pages <= 1) return all;
+      var reqs = [];
+      for (var p = 1; p < pages; p++) {
+        reqs.push(sb.from(table).select(cols).order('id').range(p * LM_PAGE, p * LM_PAGE + LM_PAGE - 1));
+      }
+      // Promise.all은 입력 순서를 보존하므로 그대로 이어붙이면 된다.
+      // 한 페이지라도 실패하면 throw — 부분 그래프를 정상인 척 그리지 않는다.
+      var pagesData = await Promise.all(reqs);
+      pagesData.forEach(function(resp) {
         if (resp.error) throw resp.error;
         all = all.concat(resp.data || []);
-        if ((resp.data || []).length < 1000) break;
-      }
+      });
       return all;
     }
     var r = await Promise.all([
