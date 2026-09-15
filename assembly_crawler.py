@@ -98,7 +98,7 @@ SUBSCRIBER_STATUS = {
 }
 ALERT_MAX_PER_GROUP = 10     # 묶음 메시지에서 그룹(전이 종류)당 나열하는 법안 수
 ALERT_MAX_CHARS = 3300       # subscriber_queue 3500자 절단·텔레그램 분할 전에 스스로 접는다
-DASHBOARD_BILLS_URL = 'https://radio-policy.gitlab.io/#assembly'
+DASHBOARD_BILLS_URL = 'https://radio-policy.github.io/#assembly'
 
 API_BASE = 'https://open.assembly.go.kr/portal/openapi/nzmimeepazxkubdpn'
 

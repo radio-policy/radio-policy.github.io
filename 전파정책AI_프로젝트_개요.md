@@ -21,7 +21,7 @@
 ### 핵심 링크
 | 구분 | 주소 |
 |---|---|
-| 대시보드 | https://radio-policy.gitlab.io/ |
+| 대시보드 | **https://radio-policy.github.io/** (정본) · 예비 https://radio-policy.gitlab.io/ |
 | 소스 | GitLab(주) https://gitlab.com/radio-policy/radio-policy.gitlab.io · GitHub(미러) https://github.com/radio-policy/radio-policy.github.io |
 | DB | https://zwkjedumfuhodckmtxxn.supabase.co |
 

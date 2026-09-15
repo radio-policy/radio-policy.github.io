@@ -13,7 +13,9 @@
 ## 프로젝트 개요
 
 SKT Comm센터 기술정책팀의 전파·통신 정책 모니터링 자동화 시스템.
-- 대시보드: https://radio-policy.gitlab.io/ (GitLab Pages, 정본) · 미러 https://radio-policy.github.io/ (GitHub Pages)
+- 대시보드: **https://radio-policy.github.io/ (GitHub Pages, 정본 — 알림·공유 링크 전부 이 주소)** · 예비 https://radio-policy.gitlab.io/ (GitLab Pages)
+  - **정본을 GitHub으로 되돌린 이유(2026-09-15, #170-보론5)**: GitHub Pages는 gzip 압축 + 인천 Fastly 엣지에서 응답하고, GitLab Pages는 **아무것도 압축하지 않는다**. 실측 `app.js` 216KB·0.19초 대 718KB·2.68초(14배), 그 밖에 index.html 95→22KB·styles.css 30→8KB. GitLab이 정본이던 것은 GitHub 계정이 잠겨 있던 2026-08-01~08-25(#109) 동안의 임시 조치였다. GitLab Pages는 예비 사이트로 계속 배포한다(`.gitlab-ci.yml` 유지).
+  - **저장소(git) 관계는 그대로다** — 주 GitLab · 미러 GitHub · push는 항상 둘 다. 바뀐 것은 **사람에게 보여 주는 주소**뿐이다.
 - 저장소: 주 GitLab `gitlab.com/radio-policy/radio-policy.gitlab.io` · 미러 GitHub `github.com/radio-policy/radio-policy.github.io` (조직 `radio-policy` 소유, 2026-09-03 개인 계정에서 이전 — 배경역사 #116)
 - 담당자: 유진웅 (you.jinwoong@gmail.com)
 
@@ -385,7 +387,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 - **넓게 보기·전체화면 (2026-09-06, 배경역사 #126)**: 대시보드 프레임은 `.app` 1100×680 카드라 프로젝터에서 작다. 상단바 "넓게 보기"(`toggleWide`, `body.ui-wide`, localStorage `ui_wide`) = 사이드바 접고 프레임을 화면 크기로(관계도 그래프·자문 영역 높이도 늘어남). 관계도 그래프(`#lawmap-graph`)·자문 영역(`#chat-wrap`)에는 "전체화면" 버튼(`toggleFullscreen`, Fullscreen API, Esc 종료; 그래프는 `fullscreenchange`에서 `setSize·fit` 재실행). 둘 다 기본 꺼짐. **전체화면은 사람의 실제 클릭에서만 열린다** — 자동화 클릭(내장 미리보기·크롬 확장)은 user activation이 없어 `TypeError: not granted`로 거부되므로 검증은 사람이 한 번 눌러야 한다. 카드는 전체화면에 포함하지 않는다(운영자 결정: 카드 안 보여도 됨).
 - **뉴스 목록은 1만 건이라 '다시 그리기'가 비용이다 (2026-09-07, 배경역사 #130)**: `renderNewsList`는 클릭·중요도 변경·검색마다 호출된다. 묶음(`_groupNews`)은 날짜별로 나눠 한 번만 훑고, 기사별 비교 재료(`_newsFeat`: 제목 키워드·사건 라벨 2-gram·태그)를 객체에 붙여 재사용하며, 결과는 `_newsGroupMemo`(키: `_newsCacheVer`·필터·소스·기관·검색어·건수)에 캐시한다. 화면은 처음 `NEWS_RENDER_STEP`(300) 그룹만 그리고 '더 보기'로 이어 붙인다. **목록 구성이 바뀌는 곳(loadNews·deleteNewsItem 등)은 반드시 `_newsCacheVer++`** — 안 올리면 지워진 기사가 묶음 캐시에 남는다. 중요도 변경(`setNewsImportance`)은 화면부터 바꾸고 DB는 뒤에서(실패 시 되돌림). 실측: 클릭→목록 갱신 14초 → 0.2초.
 
-- URL: https://radio-policy.gitlab.io/
+- URL: https://radio-policy.github.io/ (정본) · 예비 https://radio-policy.gitlab.io/
 - **수정 배포 시 index.html 캐시 버스터 `app.js?v=`·`styles.css?v=` 갱신 필수 (현재 `app.js?v=20260729a` / `styles.css?v=20260723b`)** — CSS 고칠 때 styles.css 버스터도 갱신해야 사용자 브라우저가 새로 받음
 - 아이콘은 Tabler Icons webfont(ti ti-*) — 존재하는 이름만(없으면 빈칸 렌더).
 - 메뉴 (2026-08-02 개편, 17→9 — 배경역사 #56): [모니터링] **통합 모니터링**(패널 상단 탭: 뉴스|정부 보도자료·공지|해외 규제동향) / Daily Briefing / **법적·기술 용어**(패널 안 칩 탭: **법적 용어 정의**(기본, law_terms 조문 원문·AI 0회)|기술 용어(tech_terms) — #156) · [AI 도우미] AI 자문 / 법령 관계도 (보고서 초안 제안은 #142로 삭제)· [법안 동향] 국회 법안 / 과방위 회의록 / **법령 개정 추적**(탭: 입법예고·개정 현황|조문 DIFF — 기존 lawtrack·diff 패널 무수정 재사용) · [지식베이스] **지식베이스**(탭: 법령·고시|보도자료|실무 안내|ITU-R|추가지식). **설정=상단 톱니 아이콘, 운영 상태=상단 상태등**(🟢/🔴 하트비트 종합, 클릭 시 패널 — refreshOpsLight). 탭 바는 기존 go() 라우팅을 호출하는 상위 컴포넌트(renderGroupTabs)라 패널·로드 함수는 무수정. 모바일 하단 5버튼 유지, 딥링크(pageTobn) 기존 값 유효. 보고서 초안 메뉴는 계속 주석 숨김.
@@ -1336,7 +1338,7 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
   ① **수집 주체를 하나로 정한다** — VM(과제 #38)이 이미 돌고 있으면 GitHub Actions 워크플로를 비활성화(Actions 탭에서 disable), 아직 PC로 돌리고 있으면 **PC의 `radio_TEMP_*` 5개를 비활성화**하고 GitHub Actions에 넘긴다. **둘 다 켜두지 말 것.**
   ② `temp_gh_law.bat`의 promote·watch 2줄 삭제(아래 항목).
   ③ **pg_cron 디스패치 잡 4개는 재개하지 않는다**(#94에서 중지) — Actions cron이 이미 주 트리거이므로 재개하면 3중 실행이 된다. GitHub Actions는 `workflow_dispatch` 수동 백업으로만 남긴다.
-  ④ 대시보드는 **GitLab(radio-policy.gitlab.io) 유지** — GitHub으로 되돌리면 주소 치환 31곳을 다시 해야 한다. GitHub Pages는 꺼두거나 방치(알림 링크가 전부 GitLab을 가리키므로 무해).
+  ④ ~~대시보드는 GitLab 유지~~ → **2026-09-15 폐지(#170-보론5), 대시보드 정본은 GitHub으로 되돌렸다.** 주소 치환 22곳을 실제로 했고, 이유는 속도다(GitHub은 gzip+인천 엣지, GitLab은 무압축 — app.js 0.19초 대 2.68초). GitLab Pages는 예비로 계속 배포한다.
   ⑤ `git push origin main`으로 GitHub도 미러로 되살린다(2중 백업). GitLab remote는 그대로 유지.
   ⑥ origin remote URL에 PAT이 평문으로 박혀 있으니 이 참에 토큰 재발급·URL 정리.
   ⑦ **Supabase 대시보드 로그인이 자동 복구된다** — GitHub OAuth 전용 계정이라 정지와 함께 잠겼던 것(티켓 SU-444210). 로그인이 돌아오면 보류 중이던 계정 분리(개인→회사 조직 이관)를 재개할 수 있다. (2026-08-20)

@@ -16,7 +16,8 @@ This repo's operating knowledge lives in two hand-maintained Korean documents, n
 
 SKT Comm Center 기술정책팀's radio/telecom **policy-monitoring automation system**, run by a single operator. Crawlers gather government notices, laws, national-assembly bills, and news into Supabase; a morning briefing goes out daily; a GitHub Pages dashboard offers RAG-based AI advisory and report-draft generation.
 
-- Dashboard: https://radio-policy.gitlab.io/ (GitLab Pages) · mirror https://radio-policy.github.io/
+- Dashboard: **https://radio-policy.github.io/ (GitHub Pages — canonical, all notification links point here)** · backup https://radio-policy.gitlab.io/
+  - GitHub Pages gzips and serves from a Fastly edge in Incheon; GitLab Pages serves everything uncompressed. Measured 2026-09-15: `app.js` 216KB/0.19s vs 718KB/2.68s. GitLab was canonical only while the GitHub account was flagged (2026-08-01~08-25, #109); it stays deployed as the backup site. **The git topology is unchanged — GitLab is still the primary repo, GitHub the mirror, and every push goes to both.**
 - Supabase project `zwkjedumfuhodckmtxxn` (ap-northeast-1 / Tokyo)
 
 ## Architecture (big picture)

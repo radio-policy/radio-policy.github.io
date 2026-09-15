@@ -40,7 +40,7 @@ from news_dedup import extract_keywords, cluster_star
 
 ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')
 VOYAGE_API_KEY = os.environ.get('VOYAGE_API_KEY', '')
-DASHBOARD_URL = 'https://radio-policy.gitlab.io/'   # 알림 링크는 GitLab 주소(정본) 사용
+DASHBOARD_URL = 'https://radio-policy.github.io/'   # 알림 링크는 GitHub 주소(정본) 사용 — 압축·인천 캐시로 GitLab보다 빠르다(#170-보론5)
 
 CLUSTER_MIN_ARTICLES = 5     # ⓐ 기준: 기사 수 & 서로 다른 날짜 수
 CLUSTER_MIN_DAYS = 2

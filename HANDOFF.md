@@ -192,7 +192,7 @@ git read-tree HEAD && git add <파일> && git commit -m "..." && git push origin
 
 ## 7. 참고 링크
 
-- 대시보드: https://radio-policy.gitlab.io/
+- 대시보드: https://radio-policy.github.io/ (정본, 2026-09-15~) · 예비 https://radio-policy.gitlab.io/
 - GitHub(미러): https://github.com/radio-policy/radio-policy.github.io (조직 radio-policy, 2026-09-03 이전) · 주 저장소 GitLab: https://gitlab.com/radio-policy/radio-policy.gitlab.io
 - Supabase: https://zwkjedumfuhodckmtxxn.supabase.co
 - 담당: 유진웅 (you.jinwoong@gmail.com)

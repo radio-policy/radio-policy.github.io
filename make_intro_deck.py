@@ -208,7 +208,7 @@ def build():
          [('법령 관계도 · 자동 수집 · 근거를 대조하는 AI 자문', 15, False, DIM)])
     text(s, MARGIN, Inches(5.85), Inches(11.0), Inches(1.0),
          [('SKT Comm.센터 기술정책팀   ·   2026. 9.', 12.5, False, RGBColor(0x7E, 0x88, 0x99)),
-          ('radio-policy.gitlab.io      ·      t.me/radio_policy_law_ai_bot', 12.5, True, WHITE)],
+          ('radio-policy.github.io      ·      t.me/radio_policy_law_ai_bot', 12.5, True, WHITE)],
          space_after=Pt(7))
 
     # ── 02 Agent 개요 (메일 1항) ──────────────────────────────
@@ -319,7 +319,7 @@ def build():
 
     # ── 06 대시보드 지도 (메일 2항) ───────────────────────────
     s = blank(prs); head(s, '대시보드 — 열람은 로그인 없이',
-                         'radio-policy.gitlab.io  ·  PC와 휴대폰 모두 지원', 6)
+                         'radio-policy.github.io  ·  PC와 휴대폰 모두 지원', 6)
     rows(s, [
         ('법령', '법령·고시 원문을 조문 단위로 검색 · 법령 관계도 · 개정 시 바뀐 조문 자동 비교 · 법적·기술 용어'),
         ('모니터링', '정책 뉴스(중요도 자동 분류, 60일 보관) · 매일 아침 브리핑 · 정부·해외 규제기관 공지와 보도자료'),
@@ -562,7 +562,7 @@ def build():
     rect(s, MARGIN, Inches(5.95), BODY_W, Inches(0.95), PANEL, LINE)
     text(s, MARGIN + Inches(0.35), Inches(6.15), BODY_W - Inches(0.7), Inches(0.6),
          [('문의 · 기능 요청 · 자료 추가', 12.5, True, INK),
-          ('SKT Comm.센터 기술정책팀   ·   radio-policy.gitlab.io   ·   '
+          ('SKT Comm.센터 기술정책팀   ·   radio-policy.github.io   ·   '
            't.me/radio_policy_law_ai_bot', 11.5, False, MUTED)], space_after=Pt(5))
 
     out = '전파정책AI_소개_20260913.pptx'
