@@ -10739,7 +10739,11 @@ async function loadLawMap(force) {
   if (_lawMapLoaded && !force) { return; }
   el.innerHTML = '<div style="color:var(--text-secondary);font-size:12px;padding:16px">불러오는 중...</div>';
   try {
-    await loadVisNetwork();
+    // 라이브러리와 데이터는 서로 독립이다 — **동시에 시작한다** (2026-09-15, #170-보론4).
+    // 종전에는 `await loadVisNetwork()`가 앞에 있어, 라이브러리(689KB)가 다 와야 첫 조회가 나갔다.
+    // 실사이트 실측(캐시 없는 첫 방문): 라이브러리 1.30→2.14초 → 그제야 조회 시작 → 데이터 완료 3.45초.
+    // 겹쳐 받으면 둘 중 느린 쪽만 기다린다. 그릴 때만 둘 다 필요하므로 아래에서 함께 기다린다.
+    var visReady = loadVisNetwork();
     // 서버측 max-rows(1000행) 제한 회피 — 페이지네이션 전체 조회.
     // **페이지를 병렬로 받는다 (2026-09-15, #170-보론3).** 종전에는 앞 페이지 응답을 기다려야 다음 요청이
     // 나가는 순차 루프라, 엣지 3,938행(4페이지)이 왕복 네 번 줄줄이 이어져 2.0초가 걸렸다(실측:
@@ -10775,10 +10779,14 @@ async function loadLawMap(force) {
       });
       return all;
     }
-    var r = await Promise.all([
+    var dataReady = Promise.all([
       fetchAllRows('law_graph_nodes', 'id,name,node_type,description,doc_name,source'),
       fetchAllRows('law_graph_edges', 'id,source_id,target_id,relation_type,description,source,weight')
     ]);
+    // 둘을 한 Promise.all로 기다린다 — 따로 await 하면 먼저 실패한 쪽이 던질 때 남은 쪽이
+    // '처리되지 않은 거부'로 새어 콘솔에 잡음이 남는다.
+    var both = await Promise.all([visReady, dataReady]);
+    var r = both[1];
     _lawMapNodes = r[0];
     _lawMapEdges = r[1];
     _lawMapLoaded = true;
