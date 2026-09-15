@@ -375,8 +375,24 @@ textarea:focus { border-color: var(--accent); }
 }
 
 /* ── 법령 관계도 (lawmap) ───────────────────────────── */
+/* 관계도 머리말 (2026-09-15) — 한 줄 설명 + 규모. 머리말이 늘어난 만큼 그래프 높이에서 뺀다(-400 → -442) */
+.lawmap-caption {
+  display: flex;
+  gap: 4px 10px;
+  flex-wrap: wrap;
+  align-items: baseline;
+  padding: 7px 12px;
+  margin-bottom: 8px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  border: 0.5px solid var(--border-light);
+}
+.lawmap-caption b { font-weight: 600; color: var(--text-primary); }
+.lawmap-caption span { color: var(--text-secondary); }
 .lawmap-graph {
-  height: calc(100vh - 400px);
+  height: calc(100vh - 442px);
   min-height: 280px;
   border: 0.5px solid var(--border-light);
   border-radius: var(--radius-lg);

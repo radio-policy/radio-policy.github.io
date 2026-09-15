@@ -10747,6 +10747,7 @@ async function loadLawMap(force) {
     _lawMapEdges = r[1];
     _lawMapLoaded = true;
     fillLawMapTopicSelect();
+    updateLawmapCaption();
     if (_lawMapNodes.length === 0) {
       el.innerHTML = '<div style="color:var(--text-secondary);font-size:12px;padding:16px">아직 관계 데이터가 없습니다. 위 질문창에 주제를 입력해 AI로 생성하거나, AI 자문을 이용하면 자동으로 쌓입니다.</div>';
       return;
@@ -10757,6 +10758,17 @@ async function loadLawMap(force) {
   } catch(e) {
     el.innerHTML = '<div style="color:#dc2626;font-size:12px;padding:16px">관계도 로드 실패: ' + lmEsc(e && e.message ? e.message : e) + '</div>';
   }
+}
+
+// 관계도 머리말의 규모 숫자 (2026-09-15) — 화면에 그린 데이터를 그대로 센다(추가 조회 없음).
+// 별도 집계 쿼리를 두지 않는 이유: 화면의 노드·선과 숫자가 어긋나면 그 자리에서 틀린 것이 된다.
+function updateLawmapCaption() {
+  var el = document.getElementById('lawmap-caption-stats');
+  if (!el) return;
+  var topics = 0, docs = 0;
+  (_lawMapNodes || []).forEach(function(n) { if (n.node_type === 'topic') topics++; else docs++; });
+  var f = function(n) { return Number(n).toLocaleString('ko-KR'); };
+  el.textContent = '법령·고시 ' + f(docs) + '종 · 연결 ' + f((_lawMapEdges || []).length) + '건 · 주제 ' + f(topics) + '개';
 }
 
 function fillLawMapTopicSelect() {
@@ -12032,7 +12044,21 @@ document.addEventListener('DOMContentLoaded', function() {
   loadSettingsUI();
   // loadPressJSON()은 진입 시 호출하지 않는다 — 보도자료 탭 진입(go('press') → loadPressFromSupabase)과
   // smartRefresh(panel-press)에서 로드된다. 첫 화면(뉴스)에서 불필요한 대량 조회 제거 (#61)
-  currentNewsSourceType = 'media'; loadNews(); renderGroupTabs('news');
+  // 첫 화면 지정 (2026-09-15, #163) — `?p=lawmap`(또는 `#lawmap`)으로 열면 그 화면에서 시작한다.
+  // 공유·제출용 링크는 관계도처럼 이 시스템만 가진 화면으로 열고, 파라미터 없는 평소 접속은 종전대로 뉴스.
+  // 다른 화면으로 시작할 때는 뉴스 1만 건 조회를 하지 않아 첫 화면이 그만큼 빨리 뜬다
+  // (뉴스 목록은 go('news')가 그때 불러온다). 허용 값은 PAGE_TO_NAV 키뿐 — 없는 화면 이름은 무시.
+  var startPage = (function() {
+    try {
+      var p = (new URLSearchParams(location.search).get('p') || (location.hash || '').replace(/^#/, '') || '').trim();
+      return PAGE_TO_NAV[p] ? p : '';
+    } catch(e) { return ''; }
+  })();
+  if (startPage && startPage !== 'news') {
+    go(startPage);
+  } else {
+    currentNewsSourceType = 'media'; loadNews(); renderGroupTabs('news');
+  }
   // 로그인 상태를 먼저 확정해야 AI 기능 게이트가 올바로 잠긴다(fail-closed).
   // 세션 복원 전에는 aiReady()가 false이므로, 자동 AI 기능도 이 시점 전에는 돌지 않는다.
   refreshAuthState();

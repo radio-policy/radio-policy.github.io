@@ -6,7 +6,7 @@
 <title>전파정책 전문가 AI — SKT Comm센터 기술정책팀</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <link rel="stylesheet" href="styles.css?v=20260914a">
+  <link rel="stylesheet" href="styles.css?v=20260915a">
 
 </head>
 <body>
@@ -261,6 +261,11 @@
 
       <!-- 법령 관계도 -->
       <div class="panel" id="panel-lawmap">
+        <!-- 머리말 (2026-09-15) — 첫 화면으로 열릴 수 있는 화면이라, 그림만 보고 "무엇인지" 알 수 있게 한 줄 설명·규모를 둔다 -->
+        <div class="lawmap-caption">
+          <b>법률 → 시행령 → 시행규칙 → 고시 → 별표를 조문 단위로 연결한 지도</b>
+          <span id="lawmap-caption-stats"></span>
+        </div>
         <div style="display:flex;gap:8px;margin-bottom:10px;align-items:center;flex-wrap:wrap">
           <input id="lawmap-q" type="text" placeholder="법령 관계가 궁금한 주제를 질문 — 예: 무선국 개설하면 어떤 비용이 드나?" style="flex:1;min-width:220px;padding:8px 12px;font-size:13px;border:0.5px solid var(--border-mid);border-radius:var(--radius-md);background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;outline:none" onkeydown="if(event.key==='Enter')askLawMap()">
           <button class="btn btn-primary" style="font-size:12px" onclick="askLawMap()"><i class="ti ti-search"></i> 관계도 찾기</button>
@@ -1108,7 +1113,7 @@
 <script src="system_prompt.js?v=20260911c"></script>
 <!-- 인용 조문 통째 보강·[원문 확인됨] 검증 로직 — 텔레그램 rag.ts와 같은 파일(#155). GitLab Pages는 .gitlab-ci.yml cp 목록에 있어야 실린다 -->
 <script src="supabase/functions/_shared/cite_verify.js?v=20260914a"></script>
-<script src="app.js?v=20260914h"></script>
+<script src="app.js?v=20260915a"></script>
 <script src="lawmap_articles.js?v=20260914a"></script>
 </body>
 </html>
