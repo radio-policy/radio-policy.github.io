@@ -605,6 +605,8 @@ def promote_due(sb, dry_run=False):
             .order('enf_date').execute().data) or []
     if not rows:
         print("승격 대상 없음(시행일 도래한 시행예정본 없음)")
+        if not dry_run:      # 대상 0건도 "돌았다"는 기록은 남긴다 (#171) — 없으면 워치독이 오경보
+            sb_client.heartbeat(sb, 'last_law_sync_run', 'promote done=0 (대상 없음)')
         return 0
 
     print(f"=== 시행일 도래 {len(rows)}건 승격 (dry-run={dry_run}) ===")
@@ -647,6 +649,13 @@ def promote_due(sb, dry_run=False):
         }, on_conflict='doc_name').execute()
         done += 1
     print(f"=== 승격 완료: {done}건 ===")
+    # 워치독 하트비트 — 여기에도 있어야 한다 (#171).
+    #  #169-보론2가 하트비트를 아래 '현행화' 경로 끝에만 달았는데, 11:00 체인이 매일 돌리는 것은
+    #  `--promote` 뿐이고 그 경로는 main()에서 promote_due 직후 return 한다. 그래서 하트비트가
+    #  한 번도 찍히지 않았고(note: "registered 2026-09-14 — 첫 실행 대기"), 등록 26시간 뒤부터
+    #  워치독이 매일 오경보를 냈다. 승격 대상이 0건이어도 "돌았다"는 사실은 남겨야 한다.
+    if not dry_run:
+        sb_client.heartbeat(sb, 'last_law_sync_run', f'promote done={done}')
     return done
 
 

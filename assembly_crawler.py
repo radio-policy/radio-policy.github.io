@@ -474,6 +474,10 @@ def format_new_bills_batch(items: list, max_lines: int = ALERT_MAX_PER_GROUP) ->
             ('발의 ' + format_date(bill.get('PROPOSE_DT', ''))) if bill.get('PROPOSE_DT') else '',
         ] if x)
         lines.append(_bill_line(bill, f' — {meta}' if meta else ''))
+        # 요지 한 줄 (#171) — 알림 대상만 조회하므로 실행당 최대 max_lines회, AI 0회
+        gist = bill_gist(fetch_bill_summary((bill.get('BILL_NO') or '').strip()))
+        if gist:
+            lines.append(f'  <i>{_esc(gist)}</i>')
     if len(items) > max_lines:
         lines.append(f'… 외 {len(items) - max_lines}건')
     lines.append(f'🔗 <a href="{DASHBOARD_BILLS_URL}">대시보드 국회 법안</a>')
@@ -560,6 +564,28 @@ def fetch_notices() -> list[dict]:
     except Exception as e:
         print(f'  [API 오류] 입법예고 목록: {e}')
         return []
+
+
+def bill_gist(summary: str, limit: int = 170) -> str:
+    """제안이유 원문 → 알림에 붙일 한 줄 요지 (AI 0회, 추가 조회 0회).
+
+    왜 필요한가(2026-09-15, #171): 알림이 법안명·마감일·소관위·링크뿐이라 **무슨 법인지 알 수 없었다.**
+    운영자가 밀린 6건을 두고 "제목을 보고 보낼지 결정하겠다"고 했을 때 제목만으로는 판단이 안 됐고,
+    제안이유를 따로 뽑아 본 뒤에야 6건 중 5건이 무관임이 드러났다.
+    제안이유는 이미 받아 DB(assembly_bills.summary)에 넣고 있었는데 알림만 쓰지 않고 있었다.
+
+    원문은 대개 "제안이유 … 주요내용 가. … 나. …" 꼴이라 **주요내용 뒤가 핵심**이다
+    (실측: 개인정보 보호법 개정안 → "가. 신고 포상금 … 나. 증거보전 명령 … 다. 자료 은닉 과징금").
+    그 머리말이 없으면(「제안이유 및 주요내용」이 한 덩어리인 형식) 앞부분을 그대로 쓴다."""
+    s = ' '.join((summary or '').split())
+    if not s:
+        return ''
+    m = re.search(r'주요\s*내용', s)
+    if m and len(s) - m.end() > 30:          # 뒤가 너무 짧으면 머리말만 있는 것 — 앞부분을 쓴다
+        s = s[m.end():].lstrip(' .·:,')
+    else:
+        s = re.sub(r'^제안\s*이유(\s*및\s*주요\s*내용)?\s*', '', s)
+    return (s[:limit] + '…') if len(s) > limit else s
 
 
 def fetch_bill_summary(bill_no: str) -> str:
@@ -693,7 +719,14 @@ def _judge_batch_haiku(client, criteria: str, batch: list[dict],
         '판정 규칙:\n'
         '1. 각 법안을 목록 내 다른 법안·순서와 무관하게 한 건씩 독립적으로 판정하라.\n'
         '2. 시스템 지시의 기준문을 문자 그대로 적용하라. 기준문에 없는 근거로 추측하지 말라.\n'
-        '3. 관련/무관이 애매하면 관련으로 판정하라(놓침보다 과잉 포함이 낫다).\n'
+        # 종전엔 여기가 그냥 "애매하면 관련"이었다. 기준문 끝의 ⚠️(「애매하면 채택」은 통신·ICT 접점이
+        # 실제로 의심될 때만)와 정면으로 부딪혔고, 사용자 프롬프트가 시스템 기준문을 이겼다.
+        # 실측(2026-09-15, #171): 농업·농촌 기본법·스마트농업법·농어업인 삶의 질 특별법이
+        # 제안이유의 'AI·IoT·정보통신기술' 낱말만으로 관련 판정 — 통신사업자 의무는 하나도 없었다.
+        '3. 애매하면 관련으로 판정하되, 그 전에 먼저 따져라 — "이 법안이 전기통신사업자·정보통신서비스\n'
+        '   제공자·플랫폼에 새로운 의무를 지우는가, 또는 통신·ICT 법령 자체를 개정하는가".\n'
+        '   그렇지 않은 것이 분명하면(특정 산업 내부 행정, 형사처벌, 복지·농림·교육 등) 무관으로 판정하라.\n'
+        '   정보통신·인공지능·디지털·데이터가 **소재나 수단으로만** 등장하는 것은 애매한 경우가 아니다.\n'
         '관련으로 판정된 법안의 bill_no만 record_notice_relevance 도구로 기록하라. '
         '관련이 하나도 없으면 빈 배열을 기록하라.\n\n'
         + json.dumps(items, ensure_ascii=False, indent=1)
@@ -967,12 +1000,13 @@ def run_notice_pass(dry_run: bool = False):
                 'notice_alert_stage': 0,
                 'updated_at':         datetime.now(KST).isoformat(),
             }
+            # 알림에도 요지를 붙이므로 dry-run 에서도 조회한다 — 그래야 dry-run 이 실제 알림과 같아진다
+            summary = fetch_bill_summary(row['bill_no'])  # 실패 시 '' — summarize 잡이 후속
+            if summary:
+                row['summary'] = summary
             if dry_run:
                 print(f'  (dry-run) 신규 행 insert: [{row["bill_no"]}] {name[:40]} (~{end_dt})')
             else:
-                summary = fetch_bill_summary(row['bill_no'])  # 실패 시 생략 — summarize 잡이 후속
-                if summary:
-                    row['summary'] = summary
                 sb.table('assembly_bills').insert(row).execute()
             new_rows += 1
 
@@ -985,6 +1019,9 @@ def run_notice_pass(dry_run: bool = False):
             days_left = _days_to_deadline(end_dt, today)
             dday = f', D-{days_left}' if days_left is not None else ''
             line = f'🗳️ 국회 입법예고 시작: {name} (~{end_dt or "?"}{dday}, {committee or "—"})'
+            gist = bill_gist(summary)        # 제목만으로는 무슨 법인지 알 수 없었다 (#171)
+            if gist:
+                line += f'\n{gist}'
             if url:
                 line += f'\n{url}'
             alert_lines.append(line)
