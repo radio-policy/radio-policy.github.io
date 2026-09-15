@@ -3503,7 +3503,7 @@ function smartRefresh() {
   var active = document.querySelector('.panel.active');
   var id = active ? active.id : 'panel-news';
   var map = {
-    'panel-news':     function() { loadNews(); },
+    'panel-news':     function() { loadNews(true); },   // 새로고침은 전량 재조회(#170-보론7)
     'panel-briefing': function() { loadBriefing(); },
     'panel-terms':    function() { if (typeof _termsTab !== 'undefined' && _termsTab === 'law') loadLawTerms(true); else loadTerms && loadTerms(); },
     'panel-press':    function() { loadPressJSON(); },
@@ -3761,63 +3761,100 @@ function classifyNewsImportance(news) {
   return '참고';
 }
 
-// ── 뉴스 로드 & 렌더링 ────────────────────────────────────
-async function loadNews() {
+// 뉴스 목록 로드 — **2단계 로드** (2026-09-15, #170-보론7).
+//  1단계: 최신 1,000건만 받아 **즉시 그린다**. 화면에 처음 보이는 것은 300묶음(≈215행)뿐이라 이걸로 충분하다.
+//  2단계: 나머지를 뒤에서 병렬로 받아 합치고 다시 그린다 — 검색·필터·묶기는 종전대로 **전체**를 대상으로 한다.
+// 왜: 종전에는 11,869건(12페이지 + count + 잠금)을 **다 받은 뒤에야** 화면이 떴다. 실측 요청 14회·6.4초,
+//     JSON 8.2MB. 목록에 쓰이는 것은 제목과 요약 앞 80자뿐인데 전량을 먼저 기다리는 구조였다.
+// 주의: 2단계가 끝나기 전에도 검색·필터는 동작하되 **최신분만** 걸린다. 그 사실을 상태줄에 표시하고
+//     끝나면 지운다 — 조용히 부분 결과를 보여주지 않는다(#108·#130 계보).
+// 되돌리지 말 것: 1단계에서 `count:'exact'`를 같이 받아 2단계 페이지 수를 정한다(왕복 1회 절약).
+var _newsFullLoaded = false;      // 2단계까지 끝났나
+var _newsFillPromise = null;      // 2단계 진행 중 Promise (중복 실행 방지)
+var NEWS_LIST_COLS = 'id,title,source,category,url,is_read,published_at,created_at,summary,importance,urgency,locked,briefed_date,content_fetched_at,tags,event';
+
+function _newsAbsorb(rows) {
+  // 중복 없이 합치고 최신순 정렬 + 중요도 분류. 잠금 기사 별도 조회분도 이 경로로 들어온다(#38).
+  var seen = new Set();
+  newsDataCache.forEach(function(n) { seen.add(n.id); });
+  (rows || []).forEach(function(n) {
+    if (seen.has(n.id)) return;
+    seen.add(n.id);
+    n._importance = n.importance || n.urgency || classifyNewsImportance(n);
+    newsDataCache.push(n);
+  });
+  newsDataCache.sort(function(a, b) { return (b.published_at || '').localeCompare(a.published_at || ''); });
+  _newsCacheVer++;   // 목록 구성이 바뀜 — 묶음 캐시 무효화(#130)
+}
+
+function _newsLoadingNote(msg) {
+  var el = document.getElementById('news-loading-note');
+  if (!el) return;
+  el.textContent = msg || '';
+  el.style.display = msg ? 'inline' : 'none';
+}
+
+async function loadNews(force) {
   if (!sb) return;
+  // 이미 전량 받아 뒀으면 다시 받지 않는다 (2026-09-15, #170-보론7).
+  // `go('news')`는 탭을 옮길 때마다 불린다 — 종전에는 그때마다 11,869행(8.2MB)을 다시 받았고,
+  // 2단계 로드가 들어온 뒤로는 캐시가 잠시 1,000행으로 줄어 **정부 보도자료 탭이 3건만 보이는**
+  // 눈에 띄는 증상까지 생겼다(실측). 새로고침 버튼은 force=true로 부른다(smartRefresh).
+  if (_newsFullLoaded && !force && newsDataCache.length) { renderNewsList(); return; }
+  if (_newsFillPromise && !force) { renderNewsList(); return; }   // 2단계 진행 중이면 그 결과를 기다린다
   try {
-    // 전량 페이지네이션 조회 — PostgREST 서버 max-rows가 1000이라 limit만 키워선 잘린다(#28).
-    // 60일 보존이라 행수가 수천 건까지 자라며, 상한 없이 전부 가져온다(안전 상한 10,000행).
-    // 목록 표시에 필요한 컬럼만 조회 — content(기사 본문)는 행당 수 KB로 초기 전송량의 대부분이라 제외.
-    // 상세 열람 시 showNewsDetail이 해당 1건만 온디맨드 조회하며, RAG 자문은 별도 쿼리로 content를 직접 가져온다 (#61).
-    // tags·event는 _groupNews의 묶기 조건에 쓰인다 — 빠지면 undefined가 돼 조건이 조용히 무력화된다
-    // (태그 조건은 항상 통과, 사건 라벨은 영영 제목 유사도로 폴백. 컬럼 추가 시 여기부터 볼 것)
-    var NEWS_LIST_COLS = 'id,title,source,category,url,is_read,published_at,created_at,summary,importance,urgency,locked,briefed_date,content_fetched_at,tags,event';
-    // 페이지를 **병렬로** 받는다(2026-09-03). 종전에는 앞 페이지 응답을 기다려야 다음 요청이
-    // 나가는 순차 루프라, 행이 늘면 왕복 횟수가 그대로 늘었다(8/21 6회 → 9/3 10회, 9,031행).
-    // 총 건수를 먼저 세어 페이지 수를 계산하므로 `off < 10000` 하드코딩도 없앴다 —
-    // 그 상한은 9,031행 시점에서 3일 뒤 도달 예정이었고, 넘으면 published_at 내림차순이라
-    // **오래된 뉴스가 에러 없이 잘리는** 조용한 실패가 될 참이었다(#48·#103·#108 계보).
     var PAGE = 1000, MAX_PAGES = 60;   // 안전장치: 60,000행(60일 보존 기준 여유 3배)
-    var cnt = await sb.from('news_feed').select('id', { count: 'exact', head: true });
-    if (cnt.error) throw cnt.error;
-    var total = cnt.count || 0;
+    // ── 1단계: 최신 1페이지 + 총 건수 (요청 1회) ──
+    var first = await sb.from('news_feed').select(NEWS_LIST_COLS, { count: 'exact' })
+      .order('published_at', { ascending: false, nullsFirst: false })
+      .range(0, PAGE - 1);
+    if (first.error) throw first.error;
+    newsDataCache = [];
+    _newsFullLoaded = false;
+    _newsAbsorb(first.data || []);
+    renderNewsList();                       // ← 여기서 화면이 뜬다
+
+    var total = first.count || newsDataCache.length;
     var pages = Math.ceil(total / PAGE);
     if (pages > MAX_PAGES) {
       // 자르되 조용히 넘어가지 않는다 — 여기 걸리면 보존기간·수집량을 다시 봐야 한다
       console.warn('[뉴스] 총 ' + total + '행이 안전상한(' + (MAX_PAGES * PAGE) + ')을 넘어 일부만 로드합니다');
       pages = MAX_PAGES;
     }
+    if (pages <= 1) {
+      // 잠금 기사만 보강하고 끝 (전량 조회가 잘려도 잠금분은 항상 포함 — #38)
+      _newsFullLoaded = true;
+      _newsLoadingNote('');
+      return;
+    }
+
+    // ── 2단계: 나머지 페이지 + 잠금 기사, 화면을 막지 않고 뒤에서 ──
+    _newsLoadingNote('전체 ' + total.toLocaleString('ko-KR') + '건 불러오는 중… (검색·필터는 최신분부터 적용)');
     var reqs = [];
-    for (var p = 0; p < pages; p++) {
-      var off = p * PAGE;
+    for (var p = 1; p < pages; p++) {
       reqs.push(sb.from('news_feed').select(NEWS_LIST_COLS)
         .order('published_at', { ascending: false, nullsFirst: false })
-        .range(off, off + PAGE - 1));
+        .range(p * PAGE, p * PAGE + PAGE - 1));
     }
-    // Promise.all은 입력 순서를 보존하므로 그대로 이어붙이면 정렬이 유지된다.
-    // 한 페이지라도 실패하면 reject → 아래 catch로 간다(부분 목록을 정상인 척 보여주지 않는다).
-    var pagesData = await Promise.all(reqs);
-    var all = [];
-    pagesData.forEach(function(page) {
-      if (page.error) throw page.error;
-      all = all.concat(page.data || []);
-    });
-    // 잠금 기사 별도 조회·병합 유지(배경역사 #38) — 전량 조회가 어떤 이유로든 잘려도 잠금 기사는 항상 포함
-    var lockedResp = await sb.from('news_feed').select(NEWS_LIST_COLS).eq('locked', true).limit(500);
-    var seen = new Set();
-    newsDataCache = [];
-    _newsCacheVer++;   // 목록 구성이 바뀜 — 묶음 캐시 무효화
-    all.concat(lockedResp.data || []).forEach(function(n) {
-      if (seen.has(n.id)) return; seen.add(n.id); newsDataCache.push(n);
-    });
-    newsDataCache.sort(function(a, b) { return (b.published_at || '').localeCompare(a.published_at || ''); });
-    // 중요도 분류 (캐시에 저장)
-    newsDataCache.forEach(function(n) { n._importance = n.importance || n.urgency || classifyNewsImportance(n); });
-    renderNewsList();
+    reqs.push(sb.from('news_feed').select(NEWS_LIST_COLS).eq('locked', true).limit(500));
+    _newsFillPromise = Promise.all(reqs).then(function(resps) {
+      var rest = [];
+      resps.forEach(function(r) {
+        if (r.error) throw r.error;
+        rest = rest.concat(r.data || []);
+      });
+      _newsAbsorb(rest);
+      _newsFullLoaded = true;
+      _newsLoadingNote('');
+      renderNewsList();
+    }).catch(function(e) {
+      console.warn('[뉴스] 나머지 로드 실패:', e);
+      _newsLoadingNote('전체를 불러오지 못했습니다 — 최신 ' + newsDataCache.length.toLocaleString('ko-KR') + '건만 보고 있습니다. 새로고침을 눌러 주세요.');
+    }).finally(function() { _newsFillPromise = null; });
   } catch(e) {
     console.warn('News load error:', e);
     var el = document.getElementById('news-list');
-    if (el) el.innerHTML = '<div style="color:var(--text-secondary);padding:20px;text-align:center;font-size:12px">뉴스 로드 실패: ' + e.message + '</div>';
+    if (el) el.innerHTML = '<div style="color:var(--text-secondary);padding:20px;text-align:center;font-size:12px">뉴스 로드 실패: ' + escHtml(e.message || String(e)) + '</div>';
   }
 }
 
