@@ -58,6 +58,26 @@ logged explicitly via `api_usage.record_usage()`. Bulk scripts refuse mass API r
 (one-off work belongs in a Claude session, cost 0). Smoke tests live in `tests/test_smoke.py`
 (stdlib unittest, no network) — run `python -m unittest discover -s tests` after touching shared logic.
 
+**사내 컨플루언스 쓰기 (2026-09-15 신설, #172)** — `https://confluence.tde.sktelecom.com`에 페이지를
+쓸 때는 **반드시 이 저장소의 `confluence_writer.py`**를 쓴다(원본은 `frequence/confluence/`, 가이드는
+그곳의 `CONFLUENCE_WRITE_GUIDE.md`). 표준 라이브러리만 쓰고 의존성이 없다.
+- 인증: `~/.confluence_pat`의 PAT를 Bearer 헤더로 (모듈이 자동 처리). **ascii 인코딩 저장 필수** — utf8로
+  저장하면 BOM이 붙어 401이 난다. `verify_ssl=False`가 기본(사내 CA가 파이썬 검증을 통과하지 못함)
+- 페이지 생성·수정은 **`cf.upsert(title, html)`** — 같은 공간에 동일 제목이 있으면 `create()`는 400이다.
+  기존 페이지를 고칠 때는 `cf.update(page_id, title, html)`이며 **본문 전체가 교체**된다(부분 수정 아님).
+  **반드시 `get_page()`로 현재 본문을 읽어 그 위에 고친 뒤 올릴 것** — 안 그러면 남의 편집분이 날아간다
+- 첨부는 `_confluence_attach.py`의 `upload(cf, page_id, path)` / 본문 참조는 `image_macro(filename, width)`.
+  **같은 파일명 재업로드는 400** — 기존 첨부를 갈아끼울 때는 `.../child/attachment/{id}/data`로 POST한다.
+  첨부는 **로컬 파일명 그대로** 올라가므로 본문에서 쓸 이름을 `upload(..., name=...)`로 넘길 것 —
+  이름이 한 글자라도 다르면 깨진 아이콘도 없이 **그림이 통째로 안 보인다**(2026-09-16 실측).
+  올린 뒤 `?expand=body.view`로 실제 `<img>`가 그려졌는지 확인한다(저장 성공 ≠ 그림 표시)
+- 본문은 storage 형식(XHTML). 허용: `<p> <h2> <h3> <ul><li><p>…</p></li></ul> <table><tbody><tr><th><td>
+  <a href> <strong> <em>`. `<div>`·`class`·`style`·`<br>` 남용 금지. 텍스트의 `& < >`는 반드시 이스케이프
+  (`esc()` 헬퍼) — 아니면 HTTP 400
+- **운영자가 편집기를 열어둔 동안 올리지 말 것** — 편집기가 그 시점 본문으로 초안을 잡아두므로, 그 사이
+  서버 본문을 바꾸면 둘을 섞으며 깨진다. 초안은 API로 지울 수도 고칠 수도 없다(둘 다 400)
+- 사내망 전용. 사내망 밖·클라우드 에이전트에서는 접속 자체가 안 된다
+
 **Shared DB client** — every Python script MUST create its Supabase client via `sb_client.make_client(url, key)`, never `create_client` directly. This forces HTTP/1.1 (supabase-py 2.31 negotiates HTTP/2, which the endpoint drops → `RemoteProtocolError: Server disconnected`). Applies to new scripts too.
 
 ## Commands
