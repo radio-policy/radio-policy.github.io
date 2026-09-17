@@ -519,6 +519,9 @@ let lastWebSources = [];
 // rag.ts answerAdvisory의 chunkIds와 같은 역할 — 한쪽만 고치지 말 것.
 let lastAdvChunkIds = [];
 
+// 우선 키워드·용언 어미 — rag.ts PRIORITY_KW_RE / VERB_TAIL과 동일 유지(한쪽만 고치면 봇/대시보드 검색이 갈라진다)
+var PRIORITY_KW_RE = /제\d+조|주파수|할당|재할당|전자파|ITU|5G|6G|EMC|SAR|고시|시행령|시행규칙|적합성|기술기준|무선국|면허|허가|신청|승인|폐업|폐지|이용기간|지원금|장려금|차별|이용자|대리점|판매점|유통점|약관|요금|금지행위|과징금|과태료|벌칙|벌금|사업자|기지국|검사|등록|신고|취소|회수|위탁|도매|접속|설비|번호이동|결합|계약|고지|공시|재난|손해배상|개인정보|위치정보|단말|보조금|할인|선택약정|전기통신|전파|무선|공동이용|역무|커버리지|경매/;
+var VERB_TAIL = /(하고|하는|하며|하여|되는|되어|하면|합니다|입니까|인지)$/;
 function extractKeywords(text) {
   // 한국어 조사·어미·불용어 제거
   var stopwords = ['이','가','은','는','을','를','의','에','에서','으로','로','과','와','도',
@@ -531,11 +534,12 @@ function extractKeywords(text) {
   var words = text.split(/[\s,\.·\·\(\)\[\]\「\」\『\』\<\>\:;\!\?]+/)
     .map(function(w) { return w.replace(/[^가-힣a-zA-Z0-9\.]/g, '').trim(); })
     .map(function(w) { var s = w.replace(josa, ''); return s.length >= 2 ? s : w; })
+    // 용언 어미 제거(#173): '운영하고'·'지급하는'이 어미째 키워드가 되면 ilike에 아무것도 안 걸린다
+    .map(function(w) { var s = w.replace(VERB_TAIL, ''); return s.length >= 2 ? s : w; })
     .filter(function(w) { return w.length >= 2 && !stopwords.includes(w); });
-  // 법령 키워드 우선 (조문번호, 주제어)
-  var priority = words.filter(function(w) {
-    return /제\d+조|주파수|할당|재할당|전자파|ITU|5G|6G|EMC|SAR|고시|시행령|시행규칙|적합성|기술기준|무선국|면허|허가|신청|승인|폐업|폐지|이용기간/.test(w);
-  });
+  // 법령 명사 우선(#173) — 상한 5개를 앞에서부터 자르므로, 질문 앞에 전제 문장이 붙으면
+  // '추가지원금·이용자' 같은 법령 어휘가 '직접·운영' 뒤로 밀려 잘렸다(2026-09-17 실측). rag.ts와 동일 유지.
+  var priority = words.filter(function(w) { return PRIORITY_KW_RE.test(w); });
   var rest = words.filter(function(w) { return !priority.includes(w); });
   var all = priority.concat(rest);
   // 중복 제거
@@ -573,6 +577,13 @@ var PRACTICE_TERMS = [
   // 기관명 별칭 (2026-09-11 #154): 방송통신위원회 → 방송미디어통신위원회 개편. 옛 고시·보도자료·회의록 본문은 옛 이름,
   // 2026년 고시·법령명은 새 이름이라 어느 쪽으로 물어도 양쪽이 잡혀야 한다. 다음 개편 때는 여기 한 줄만 더한다.
   [/방송미디어통신위원회|방송통신위원회|방미통위|방통위/, ['방송통신위원회', '방통위', '방송미디어통신위원회', '방미통위']],
+  // 유통·이용자보호 어휘(#173, 2026-09-17, rag.ts와 동일 유지): 질문은 '차별·다르게'라 쓰고 법은 '금지행위·부당한
+  // 이용자 차별'이라 쓴다. 한 단어가 아니라 조합으로 발동(설비 제공 차별 질문에 이용자 차별 조문이 끌려오지 않도록).
+  [/지원금.{0,12}(차별|다르게|차등)|(차별|다르게|차등).{0,12}지원금/, ['지원금의 차별 지급 금지', '금지행위', '부당한 이용자 차별']],
+  [/이용자.{0,12}(차별|다르게|차등)|(차별|차등).{0,12}이용자/, ['금지행위', '부당한 이용자 차별', '이용자의 이익']],
+  [/장려금|인건비|임대료|판촉비|인센티브|실적수당|리베이트/, ['공정한 유통 환경 조성', '장려금', '금지행위']],
+  [/대리점|판매점|유통점|직영/, ['대리점', '판매점', '판매점 선임에 대한 승낙', '공정한 유통 환경 조성']],
+  [/추가지원금|공시지원금|공통지원금|보조금/, ['지원금', '지원금의 차별 지급 금지']],
 ];
 // 시맨틱 검색용 질의 보강 — 원 질의는 지우지 않고 **뒤에 덧붙인다**(rag.ts expandQueryForSemantic와 동일)
 function expandQueryForSemantic(query) {
@@ -602,6 +613,15 @@ function lawSynonymKeywords(query) {
 // 질문 상투어 — 조문 제목 가점·주제 매칭에서 제외 ('절차'가 「규제심사 절차」 같은
 // 무관 조문 제목에 걸려 상위를 차지하는 것 방지. rag.ts와 동일 목록 유지)
 var GENERIC_QUERY_WORDS = ['방법', '방안', '절차', '하는', '관련', '대한'];
+// 제목 가점·키워드 조회 제외어(#173, 2026-09-17, rag.ts QUERY_TITLE_STOP과 동일 유지) — 두 글자 일반어('직접'·'실적'·
+// '시스템')가 조문 제목에 우연히 있으면 행위어 가중을 받아 무관 법령이 정밀검색 상위를 차지했다. 글자 수 규칙이 아니라
+// 목록이다 — 검사·할당·면허 같은 두 글자 법령 행위어는 계속 가점을 받아야 한다. 표제어 사전 출신 단어는 예외.
+var QUERY_TITLE_STOP = GENERIC_QUERY_WORDS.concat(['직접', '운영', '지급', '지원', '공식', '주체', '제공', '이용', '사용', '관리', '기준', '대상', '내용', '경우', '필요', '가능', '여부', '포함', '위반', '규정', '조항', '법령', '법률', '사항', '업무', '기관', '정부', '회사', '사업', '서비스', '시스템', '개선', '요구', '의무', '비용', '추가', '현재', '기존', '정책', '제도', '문제', '질문', '분석', '검토', '해당', '적용', '가입', '조건', '실적', '목표', '개인', '차원', '역할', '직원', '정규', '소속', '통신사', '이통사', '기반', '기본', '체계', '구조', '방식', '형태', '단계', '수준', '범위', '주요', '전체', '일부', '최대', '최소', '이상', '이하', '이후', '이전', '별도', '자체', '본인', '상대', '타인']);
+function isTitleStop(kw, query) {
+  if (QUERY_TITLE_STOP.indexOf(kw) === -1) return false;
+  var norm = kw.replace(/\s+/g, '').toLowerCase();
+  return !lawSynonymKeywords(query).some(function(s) { return s.replace(/\s+/g, '').toLowerCase() === norm; });
+}
 // 법령 위계 (동점 정렬용): 법률 > 대통령령 > 부령·총리령 > 고시·훈령 등 — rag.ts와 동일 유지
 function lawRank(docName) {
   var d = docName || '';
@@ -821,7 +841,8 @@ async function searchKeywords(query, lawOnly) {
   // 키워드별로 검색 (최대 10개 키워드, 키워드당 4청크) — 전 키워드 동시 조회 후 원래 순서로 병합
   var kwList = [];
   for (var ki = 0; ki < Math.min(keywords.length, 10); ki++) {
-    if (keywords[ki].length >= 2) kwList.push(keywords[ki]);
+    // 제외어(#173)는 ilike 조회를 하지 않는다 — 정렬 없는 limit 4가 임의 청크를 데려온다. 점수 계산에서는 그대로 센다.
+    if (keywords[ki].length >= 2 && !isTitleStop(keywords[ki], query)) kwList.push(keywords[ki]);
   }
   var kwResults = await Promise.all(kwList.map(function(kw) {
     return sb
@@ -907,7 +928,7 @@ async function searchKeywords(query, lawOnly) {
       // 단 '절차' 같은 질문 상투어는 제외 — 「규제심사 절차」 같은 무관 조문이 올라온다(실측).
       // 표제어 대응표(LAW_SYNONYMS) 출신 행위어는 더 크게: 법령이 실제 쓰는 어휘로 번역된 말이라
       // 원어 그대로의 우연 일치('조난통신 종료')보다 신뢰도가 높다.
-      if ((r.article_no || '').toLowerCase().includes(kw) && GENERIC_QUERY_WORDS.indexOf(keywords[ki]) === -1) {
+      if ((r.article_no || '').toLowerCase().includes(kw) && !isTitleStop(keywords[ki], query)) {
         score += synNormSet.has(kw) ? 4 : w * 2;
       }
     }
@@ -1028,6 +1049,7 @@ async function searchLawArticles(query, limit) {
   var synNorms = new Set(lawSynonymKeywords(query).map(function(s) { return s.replace(/\s+/g, '').toLowerCase(); }));
   var jobs = [];
   keywords.slice(0, 10).forEach(function(kw) {
+    if (isTitleStop(kw, query)) return;   // 제외어(#173)는 제목·본문 조회 모두 생략 — 행위 가중 0이면 주제 점수만 남아 순위에 못 든다
     var act = synNorms.has(kw.replace(/\s+/g, '').toLowerCase()) ? 7 : 5;
     jobs.push(hitQ('article_no', kw, 40).then(function(rows) { rows.forEach(function(r) { putHit(r, act); }); }));
     jobs.push(hitQ('content', kw, 10).then(function(rows) { rows.forEach(function(r) { putHit(r, 0); }); }));

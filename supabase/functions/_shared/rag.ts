@@ -25,6 +25,9 @@ const VOYAGE_URL = 'https://api.voyageai.com/v1/embeddings';
 const env = (k: string) => (Deno.env.get(k) || '').trim();
 
 // ── app.js extractKeywords 이식 (한국어 조사·불용어 제거, 법령 키워드 우선) ──
+// 우선 키워드·용언 어미·제목 가점 제외어 — 세 상수 모두 app.js와 동일 유지(한쪽만 고치면 봇/대시보드 검색이 갈라진다)
+const PRIORITY_KW_RE = /제\d+조|주파수|할당|재할당|전자파|ITU|5G|6G|EMC|SAR|고시|시행령|시행규칙|적합성|기술기준|무선국|면허|허가|신청|승인|폐업|폐지|이용기간|지원금|장려금|차별|이용자|대리점|판매점|유통점|약관|요금|금지행위|과징금|과태료|벌칙|벌금|사업자|기지국|검사|등록|신고|취소|회수|위탁|도매|접속|설비|번호이동|결합|계약|고지|공시|재난|손해배상|개인정보|위치정보|단말|보조금|할인|선택약정|전기통신|전파|무선|공동이용|역무|커버리지|경매/;
+const VERB_TAIL = /(하고|하는|하며|하여|되는|되어|하면|합니다|입니까|인지)$/;
 function extractKeywords(text: string): string[] {
   const stopwords = ['이','가','은','는','을','를','의','에','에서','으로','로','과','와','도',
     '만','그','이것','저것','그것','있다','없다','하다','되다','이다','어떻게','어떤',
@@ -35,9 +38,12 @@ function extractKeywords(text: string): string[] {
   const words = text.split(/[\s,.·()[\]「」『』<>:;!?]+/)
     .map((w) => w.replace(/[^가-힣a-zA-Z0-9.]/g, '').trim())
     .map((w) => { const s = w.replace(josa, ''); return s.length >= 2 ? s : w; })
+    // 용언 어미 제거(#173): '운영하고'·'지급하는'이 어미째 키워드가 되면 ilike에 아무것도 안 걸린다
+    .map((w) => { const s = w.replace(VERB_TAIL, ''); return s.length >= 2 ? s : w; })
     .filter((w) => w.length >= 2 && !stopwords.includes(w));
-  const pri = words.filter((w) =>
-    /제\d+조|주파수|할당|재할당|전자파|ITU|5G|6G|EMC|SAR|고시|시행령|시행규칙|적합성|기술기준|무선국|면허|허가|신청|승인|폐업|폐지|이용기간/.test(w));
+  // 법령 명사 우선(#173) — 상한 5개를 앞에서부터 자르므로, 질문 앞에 전제 문장이 붙으면
+  // '추가지원금·이용자' 같은 법령 어휘가 '직접·운영' 뒤로 밀려 잘렸다(2026-09-17 실측). app.js와 동일 유지.
+  const pri = words.filter((w) => PRIORITY_KW_RE.test(w));
   const all = pri.concat(words.filter((w) => !pri.includes(w)));
   return all.filter((v, i, a) => a.indexOf(v) === i).slice(0, 5);
 }
@@ -117,7 +123,9 @@ async function searchChunks(sb: SupabaseClient, apiKey: string, query: string): 
     return sb.rpc('match_chunks_semantic', { query_embedding: emb, match_threshold: 0.45, match_count: 8, only_current: true })
       .then((r) => r.data || []).catch(() => []);
   });
-  const kwP = Promise.all(keywords.slice(0, 10).map((kw) =>
+  // 제외어(#173)는 ilike 조회를 하지 않는다 — '직접'은 1,470청크에 있어 정렬 없는 limit 4가 임의 청크를 데려온다.
+  // 점수 계산에서는 그대로 센다(다른 키워드로 들어온 청크의 본문 일치까지 뺄 이유는 없다).
+  const kwP = Promise.all(keywords.slice(0, 10).filter((kw) => !isTitleStop(kw, query)).map((kw) =>
     sb.from('document_chunks')
       .select('id, doc_name, doc_category, chunk_index, content, notice_no, article_no, effective_date')
       .eq('is_approved', true).eq('status', 'current')
@@ -159,7 +167,7 @@ async function searchChunks(sb: SupabaseClient, apiKey: string, query: string): 
       if ((r.content || '').toLowerCase().includes(k)) score += w;
       if ((r.doc_name || '').toLowerCase().includes(k)) score += w;
       // 조문 표제어 일치 가점 — 질문 상투어('절차' 등)는 제외, LAW_SYNONYMS 출신 행위어는 가중
-      if ((r.article_no || '').toLowerCase().includes(k) && !GENERIC_QUERY_WORDS.includes(kw)) {
+      if ((r.article_no || '').toLowerCase().includes(k) && !isTitleStop(kw, query)) {
         score += synNormSet.has(k) ? 4 : w * 2;
       }
     }
@@ -517,6 +525,15 @@ const PRACTICE_TERMS: Array<[RegExp, string[]]> = [
   // 기관명 별칭 (2026-09-11 #154, app.js PRACTICE_TERMS 와 동일 유지): 방송통신위원회 → 방송미디어통신위원회 개편.
   // 옛 고시·보도자료·회의록은 옛 이름, 2026년 고시·법령명은 새 이름 — 어느 쪽으로 물어도 양쪽이 잡혀야 한다.
   [/방송미디어통신위원회|방송통신위원회|방미통위|방통위/, ['방송통신위원회', '방통위', '방송미디어통신위원회', '방미통위']],
+  // 유통·이용자보호 어휘(#173, 2026-09-17): 「추가지원금을 이용자에 따라 다르게 지급」 질문에서 제50조(금지행위)·
+  // 별표 4 제5호 마목(부당한 이용자 차별)이 한 번도 검색되지 않았다 — 질문은 '차별·다르게'라 쓰고 법은
+  // '금지행위·부당한 이용자 차별'이라 쓴다. 한 단어('차별')가 아니라 **조합**으로 발동한다(설비 제공 차별·
+  // 상호접속 차별 질문에 이용자 차별 조문이 끌려오지 않도록). app.js PRACTICE_TERMS와 동일 유지.
+  [/지원금.{0,12}(차별|다르게|차등)|(차별|다르게|차등).{0,12}지원금/, ['지원금의 차별 지급 금지', '금지행위', '부당한 이용자 차별']],
+  [/이용자.{0,12}(차별|다르게|차등)|(차별|차등).{0,12}이용자/, ['금지행위', '부당한 이용자 차별', '이용자의 이익']],
+  [/장려금|인건비|임대료|판촉비|인센티브|실적수당|리베이트/, ['공정한 유통 환경 조성', '장려금', '금지행위']],
+  [/대리점|판매점|유통점|직영/, ['대리점', '판매점', '판매점 선임에 대한 승낙', '공정한 유통 환경 조성']],
+  [/추가지원금|공시지원금|공통지원금|보조금/, ['지원금', '지원금의 차별 지급 금지']],
 ];
 
 /** 의미 검색용 질의 — 실무 용어가 있으면 법령 용어를 덧붙인다. 없으면 원문 그대로. */
@@ -530,6 +547,18 @@ export function expandQueryForSemantic(query: string): string {
 // 질문 상투어 — 조문 제목 가점·주제 매칭에서 제외 ('절차'가 「규제심사 절차」 같은
 // 무관 조문 제목에 걸려 상위를 차지하는 것 방지. app.js GENERIC_QUERY_WORDS와 동일 유지)
 const GENERIC_QUERY_WORDS = ['방법', '방안', '절차', '하는', '관련', '대한'];
+// 제목 가점·키워드 조회 제외어(#173, 2026-09-17) — 두 글자 일반어가 조문 **제목**에 우연히 있으면 행위어 가중(×5)을
+// 받아 정밀검색 1~3위를 차지했다: 질문의 '직접'이 정보통신공사업법 시행령 제32조(하도급대금 직접 지급)·보편적역무
+// 고시 제16조(직접제공사업자)·해상무선설비 고시 제6조(협대역직접인쇄전신장치)를 데려왔고, '실적'은 소프트웨어진흥법,
+// '시스템'은 무선설비규칙 스퓨리어스 조문을 데려왔다. 검색 22문항 A/B: 7문항 개선·악화 0. 글자 수 규칙이 아니라
+// **목록**이다 — 검사·할당·면허 같은 두 글자 법령 행위어는 계속 가점을 받아야 한다. 표제어 사전 출신 단어는 예외.
+// app.js QUERY_TITLE_STOP과 동일 유지.
+const QUERY_TITLE_STOP = GENERIC_QUERY_WORDS.concat(['직접', '운영', '지급', '지원', '공식', '주체', '제공', '이용', '사용', '관리', '기준', '대상', '내용', '경우', '필요', '가능', '여부', '포함', '위반', '규정', '조항', '법령', '법률', '사항', '업무', '기관', '정부', '회사', '사업', '서비스', '시스템', '개선', '요구', '의무', '비용', '추가', '현재', '기존', '정책', '제도', '문제', '질문', '분석', '검토', '해당', '적용', '가입', '조건', '실적', '목표', '개인', '차원', '역할', '직원', '정규', '소속', '통신사', '이통사', '기반', '기본', '체계', '구조', '방식', '형태', '단계', '수준', '범위', '주요', '전체', '일부', '최대', '최소', '이상', '이하', '이후', '이전', '별도', '자체', '본인', '상대', '타인']);
+function isTitleStop(kw: string, query: string): boolean {
+  if (!QUERY_TITLE_STOP.includes(kw)) return false;
+  const norm = kw.replace(/\s+/g, '').toLowerCase();
+  return !lawSynonymKeywords(query).some((s) => s.replace(/\s+/g, '').toLowerCase() === norm);
+}
 // 법령 위계 (동점 정렬용): 법률 > 대통령령 > 부령·총리령 > 고시·훈령 등 — app.js lawRank와 동일 유지
 function lawRank(docName: string | undefined): number {
   const d = docName || '';
@@ -596,6 +625,7 @@ export async function searchLawArticles(sb: SupabaseClient, query: string, limit
   const synNorms = new Set(lawSynonymKeywords(query).map((s) => s.replace(/\s+/g, '').toLowerCase()));
   const jobs: Promise<void>[] = [];
   for (const kw of keywords.slice(0, 10)) {
+    if (isTitleStop(kw, query)) continue;   // 제외어(#173)는 제목·본문 조회 모두 생략 — 행위 가중 0이면 주제 점수만 남아 순위에 못 든다
     const act = synNorms.has(kw.replace(/\s+/g, '').toLowerCase()) ? 7 : 5;
     jobs.push(hit('article_no', kw, 40).then((rows) => rows.forEach((r) => put(r, act))));
     jobs.push(hit('content', kw, 10).then((rows) => rows.forEach((r) => put(r, 0))));
