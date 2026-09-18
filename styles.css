@@ -31,7 +31,7 @@
   }
 }
 body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg-tertiary); color: var(--text-primary); min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px; }
-.app { display: flex; width: 100%; max-width: 1100px; height: 680px; border: 0.5px solid var(--border-light); border-radius: var(--radius-lg); overflow: hidden; background: var(--bg-primary); box-shadow: 0 4px 24px rgba(0,0,0,0.08); }
+.app { display: flex; width: 100%; max-width: 1100px; height: clamp(680px, calc(100vh - 48px), 1100px); /* 창이 크면 카드도 같이 (2026-09-19) — 680 고정은 큰 화면에서 카드 아래가 놀았다 */ border: 0.5px solid var(--border-light); border-radius: var(--radius-lg); overflow: hidden; background: var(--bg-primary); box-shadow: 0 4px 24px rgba(0,0,0,0.08); }
 
 /* Sidebar */
 .sidebar { width: 210px; min-width: 210px; background: var(--bg-secondary); border-right: 0.5px solid var(--border-light); display: flex; flex-direction: column; padding: 16px 0; overflow-y: auto; min-height: 0; }
@@ -398,12 +398,12 @@ textarea:focus { border-color: var(--accent); }
 .lawmap-caption span { color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; }
 /* 그래프 높이는 창(100vh)이 아니라 카드의 남는 높이 — #panel-lawmap 세로 flex 안에서 flex:1 (2026-09-19)
    100vh 기준 calc 는 브라우저 확대·작은 창에서 최소값으로 주저앉고 카드 아래가 비었다 */
-#panel-lawmap.active { display: flex; flex-direction: column; min-height: 100%; box-sizing: border-box; }
+#panel-lawmap.active { display: flex; flex-direction: column; height: 100%; box-sizing: border-box; }
 #panel-lawmap > * { flex-shrink: 0; }
 .lawmap-graph {
-  flex: 1 1 0;   /* 기준 0 = 확정 크기 → 안의 캔버스 height:100% 가 풀린다 (1 0 auto 면 내용물 크기라 % 가 안 풀림) */
+  flex: 0 0 calc(100% - 240px);   /* 카드 높이 − 240px = 위 줄들(약 140px) + 상세 상자 머리(약 80px 보이게). 아래에 설명이 있다는 걸 눈치채도록 (2026-09-19 운영자) */
   height: auto;
-  min-height: 500px;   /* 그래프 칸은 최소 500px — 상세 상자는 아래로 내려가 카드 안에서 스크롤 (2026-09-19 운영자) */
+  min-height: 320px;
   border: 0.5px solid var(--border-light);
   border-radius: var(--radius-lg);
   background: var(--bg-primary);
