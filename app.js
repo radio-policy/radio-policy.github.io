@@ -10912,8 +10912,8 @@ async function updateLawmapCaption() {
   }
   var articleLinks = cites + (_lawMapDelegCount || 0);
   var f = function(n) { return Number(n).toLocaleString('ko-KR'); };
+  // 한 줄 머리말(2026-09-19): 조문 사이 인용·위임 건수는 범례·상세에 있으니 여기서는 뺀다
   el.textContent = '법령·고시 ' + f(docs) + '종 · 연결선 ' + f(lines) + '개'
-    + (articleLinks ? ' (조문 사이 인용·위임 ' + f(articleLinks) + '건)' : '')
     + ' · 주제 ' + f(topics) + '개';
 }
 

@@ -379,9 +379,11 @@ textarea:focus { border-color: var(--accent); }
 .lawmap-caption {
   display: flex;
   gap: 4px 10px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;   /* 한 줄 (2026-09-19) — 두 줄이던 56px 을 그래프에 돌린다 */
+  white-space: nowrap;
+  overflow: hidden;
   align-items: baseline;
-  padding: 7px 12px;
+  padding: 4px 12px;
   margin-bottom: 8px;
   font-size: 12.5px;
   line-height: 1.45;
@@ -390,7 +392,7 @@ textarea:focus { border-color: var(--accent); }
   border: 0.5px solid var(--border-light);
 }
 .lawmap-caption b { font-weight: 600; color: var(--text-primary); }
-.lawmap-caption span { color: var(--text-secondary); }
+.lawmap-caption span { color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; }
 /* 그래프 높이는 창(100vh)이 아니라 카드의 남는 높이 — #panel-lawmap 세로 flex 안에서 flex:1 (2026-09-19)
    100vh 기준 calc 는 브라우저 확대·작은 창에서 최소값으로 주저앉고 카드 아래가 비었다 */
 #panel-lawmap.active { display: flex; flex-direction: column; min-height: 100%; box-sizing: border-box; }
