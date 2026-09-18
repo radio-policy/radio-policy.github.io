@@ -11164,9 +11164,23 @@ function renderLawMapGraph(focusId) {
   };
   if (_lawMapNet) { try { _lawMapNet.destroy(); } catch(e) {} }
   _lawMapNet = new vis.Network(el, data, options);
+  // 칸 크기가 나중에 바뀌면(flex 레이아웃·넓게 보기·전체화면) 캔버스를 다시 맞춘다 (2026-09-19)
+  // — vis-network 는 창 resize 만 듣고 컨테이너 크기 변화는 모른다. 칸만 커지고 그림은 옛 크기로 위에 작게 남았던 것.
+  if (!el._lmRO && typeof ResizeObserver !== 'undefined') {
+    var _lmT = null;
+    el._lmRO = new ResizeObserver(function() {
+      clearTimeout(_lmT);
+      _lmT = setTimeout(function() {
+        if (!_lawMapNet) return;
+        // 픽셀로 준다 — % 는 flex 칸에서 풀리지 않을 수 있다(캔버스가 104px 로 남던 실측)
+        try { _lawMapNet.setSize(el.clientWidth + 'px', el.clientHeight + 'px'); _lawMapNet.redraw(); _lawMapNet.fit({ animation: false, maxZoomLevel: 1.8 }); } catch(e) {}
+      }, 120);
+    });
+    el._lmRO.observe(el);
+  }
   // 안정화가 끝나면 physics를 꺼서 노드가 계속 흔들리지 않게 함 (전체 인용망 '춤추는' 현상 방지)
   _lawMapNet.once('stabilizationIterationsDone', function() {
-    try { _lawMapNet.setOptions({ physics: false }); _lawMapNet.fit({ animation: false }); } catch(e) {}
+    try { _lawMapNet.setOptions({ physics: false }); _lawMapNet.setSize(el.clientWidth + 'px', el.clientHeight + 'px'); _lawMapNet.fit({ animation: false }); } catch(e) {}
   });
   _lawMapNet.on('click', function(p) {
     if (!(p.nodes && p.nodes.length)) return;

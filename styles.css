@@ -396,7 +396,7 @@ textarea:focus { border-color: var(--accent); }
 #panel-lawmap.active { display: flex; flex-direction: column; min-height: 100%; box-sizing: border-box; }
 #panel-lawmap > * { flex-shrink: 0; }
 .lawmap-graph {
-  flex: 1 0 auto;
+  flex: 1 1 0;   /* 기준 0 = 확정 크기 → 안의 캔버스 height:100% 가 풀린다 (1 0 auto 면 내용물 크기라 % 가 안 풀림) */
   height: auto;
   min-height: 280px;
   border: 0.5px solid var(--border-light);
