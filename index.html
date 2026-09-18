@@ -6,7 +6,7 @@
 <title>전파·통신 정책 AI — SKT Comm센터 사업협력실</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <link rel="stylesheet" href="styles.css?v=20260915a">
+  <link rel="stylesheet" href="styles.css?v=20260919a">
 
 </head>
 <body>
@@ -73,11 +73,8 @@
 
       <!-- AI 자문 -->
       <div class="panel" id="panel-chat">
-        <div class="chat-wrap" id="chat-wrap" style="height:calc(100vh - 200px); max-height: 520px;">
-          <div style="display:flex;justify-content:flex-end;gap:6px;margin-bottom:8px;flex-shrink:0">
-            <button class="btn" onclick="openChatHistory()"><i class="ti ti-history"></i>자문 이력</button>
-            <button class="btn fs-btn" onclick="toggleFullscreen('chat-wrap')" title="이 화면만 전체화면 (Esc로 종료)"><i class="ti ti-maximize"></i>전체화면</button>
-          </div>
+        <div class="chat-wrap" id="chat-wrap" style="height:calc(100vh - 180px); max-height: 820px;">
+          <!-- 「자문 이력·전체화면」 버튼은 그룹 탭 바 오른쪽에 그린다(app.js renderGroupTabs, 2026-09-19) — 여기 두면 한 줄을 먹는다 -->
           <div class="chat-area" id="chat-area">
             <div class="msg msg-ai">
               <div class="msg-name">전파·통신 정책 AI</div>
@@ -109,7 +106,7 @@
               답변이 도움이 되었는지 <strong>👍👎 버튼</strong>으로 알려주세요(선택 사항) — 시스템 개선에 참고합니다. 그럼, 궁금하신 사항을 입력해 주세요.
             </div>
           </div>
-          <div style="margin-top:8px">
+          <div style="margin-top:8px" id="chat-faq">
             <div class="section-title">자주 묻는 질문</div>
             <div class="tag-list">
               <span class="tag" onclick="askQ('무선국 등록면허세 부과 기준과 면제·감면 조건을 설명해줘')">등록면허세 부과·감면</span>
@@ -1117,7 +1114,7 @@
 <script src="system_prompt.js?v=20260911c"></script>
 <!-- 인용 조문 통째 보강·[원문 확인됨] 검증 로직 — 텔레그램 rag.ts와 같은 파일(#155). GitLab Pages는 .gitlab-ci.yml cp 목록에 있어야 실린다 -->
 <script src="supabase/functions/_shared/cite_verify.js?v=20260914a"></script>
-<script src="app.js?v=20260917a"></script>
+<script src="app.js?v=20260919a"></script>
 <script src="lawmap_articles.js?v=20260914a"></script>
 </body>
 </html>

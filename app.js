@@ -2884,6 +2884,8 @@ function appendMsg(role, text) {
     div.innerHTML = `<div class="msg-name">전파·통신 정책 AI</div>${renderMd(text)}`;
   } else {
     div.textContent = text;
+    // 첫 질문 뒤에는 「자주 묻는 질문」 칩을 접어 답변 칸을 넓힌다(2026-09-19). 새로고침하면 다시 보인다
+    var faq = document.getElementById('chat-faq'); if (faq) faq.style.display = 'none';
   }
   area.appendChild(div);
   area.scrollTop = area.scrollHeight;
@@ -6960,7 +6962,7 @@ function renderGroupTabs(page) {
   if (!bar) {
     bar = document.createElement('div');
     bar.className = 'group-tabbar';
-    bar.style.cssText = 'display:flex;gap:2px;margin-bottom:14px;border-bottom:1px solid var(--border);overflow-x:auto';
+    bar.style.cssText = 'display:flex;align-items:center;gap:2px;margin-bottom:14px;border-bottom:1px solid var(--border);overflow-x:auto';
     panel.insertBefore(bar, panel.firstChild);
   }
   var act = _activeGroupTabKey(group, page);
@@ -6973,7 +6975,14 @@ function renderGroupTabs(page) {
       + (on ? 'color:var(--accent);border-bottom:2px solid var(--accent);font-weight:600'
             : 'color:var(--text-secondary);border-bottom:2px solid transparent')
       + '">' + t.label + '</div>';
-  }).join('');
+  }).join('')
+  // AI 자문 화면의 「자문 이력·전체화면」은 탭 바 오른쪽에 — 자문 영역 안에 두면 한 줄을 먹는다(2026-09-19)
+  + (page === 'chat'
+      ? '<div style="margin-left:auto;display:flex;gap:6px;align-items:center;padding-bottom:4px;flex-shrink:0">'
+        + '<button class="btn" onclick="openChatHistory()"><i class="ti ti-history"></i>자문 이력</button>'
+        + '<button class="btn fs-btn" onclick="toggleFullscreen(\'chat-wrap\')" title="이 화면만 전체화면 (Esc로 종료)"><i class="ti ti-maximize"></i>전체화면</button>'
+        + '</div>'
+      : '');
 }
 
 // ════════════════════════════════════════════

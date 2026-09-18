@@ -391,8 +391,13 @@ textarea:focus { border-color: var(--accent); }
 }
 .lawmap-caption b { font-weight: 600; color: var(--text-primary); }
 .lawmap-caption span { color: var(--text-secondary); }
+/* 그래프 높이는 창(100vh)이 아니라 카드의 남는 높이 — #panel-lawmap 세로 flex 안에서 flex:1 (2026-09-19)
+   100vh 기준 calc 는 브라우저 확대·작은 창에서 최소값으로 주저앉고 카드 아래가 비었다 */
+#panel-lawmap.active { display: flex; flex-direction: column; min-height: 100%; box-sizing: border-box; }
+#panel-lawmap > * { flex-shrink: 0; }
 .lawmap-graph {
-  height: calc(100vh - 442px);
+  flex: 1 0 auto;
+  height: auto;
   min-height: 280px;
   border: 0.5px solid var(--border-light);
   border-radius: var(--radius-lg);
@@ -523,7 +528,7 @@ body.ui-wide { align-items: stretch; }
 body.ui-wide .app { max-width: none; height: calc(100vh - 16px); margin: 8px; border-radius: var(--radius-md); }
 body.ui-wide .sidebar { display: none; }
 body.ui-wide .chat-wrap { max-height: none !important; height: calc(100vh - 150px) !important; }
-body.ui-wide .lawmap-graph { height: calc(100vh - 330px); }
+/* body.ui-wide .lawmap-graph — 넓게 보기도 flex:1 로 채우므로 별도 높이 불필요 (2026-09-19) */
 body.ui-wide .topbar-title::before { content: "☰ "; color: var(--text-tertiary); }
 /* 한 영역만 전체화면(Fullscreen API): 배경·여백을 채워 검은 화면이 되지 않게 */
 :fullscreen { background: var(--bg-primary) !important; }
