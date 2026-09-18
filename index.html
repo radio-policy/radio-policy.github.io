@@ -6,7 +6,7 @@
 <title>전파·통신 정책 AI — SKT Comm센터 사업협력실</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <link rel="stylesheet" href="styles.css?v=20260919c">
+  <link rel="stylesheet" href="styles.css?v=20260919e">
 
 </head>
 <body>
@@ -73,7 +73,7 @@
 
       <!-- AI 자문 -->
       <div class="panel" id="panel-chat">
-        <div class="chat-wrap" id="chat-wrap" style="height:calc(100vh - 180px); max-height: 820px;">
+        <div class="chat-wrap" id="chat-wrap"><!-- 높이는 styles.css #panel-chat flex 로 카드의 남는 높이 전부 (2026-09-19) -->
           <!-- 「자문 이력·전체화면」 버튼은 그룹 탭 바 오른쪽에 그린다(app.js renderGroupTabs, 2026-09-19) — 여기 두면 한 줄을 먹는다 -->
           <div class="chat-area" id="chat-area">
             <div class="msg msg-ai">
@@ -1114,7 +1114,7 @@
 <script src="system_prompt.js?v=20260911c"></script>
 <!-- 인용 조문 통째 보강·[원문 확인됨] 검증 로직 — 텔레그램 rag.ts와 같은 파일(#155). GitLab Pages는 .gitlab-ci.yml cp 목록에 있어야 실린다 -->
 <script src="supabase/functions/_shared/cite_verify.js?v=20260914a"></script>
-<script src="app.js?v=20260919d"></script>
+<script src="app.js?v=20260919e"></script>
 <script src="lawmap_articles.js?v=20260914a"></script>
 </body>
 </html>

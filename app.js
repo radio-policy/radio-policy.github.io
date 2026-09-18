@@ -11173,7 +11173,8 @@ function renderLawMapGraph(focusId) {
       _lmT = setTimeout(function() {
         if (!_lawMapNet) return;
         // 픽셀로 준다 — % 는 flex 칸에서 풀리지 않을 수 있다(캔버스가 104px 로 남던 실측)
-        try { _lawMapNet.setSize(el.clientWidth + 'px', el.clientHeight + 'px'); _lawMapNet.redraw(); _lawMapNet.fit({ animation: false, maxZoomLevel: 1.8 }); } catch(e) {}
+        // 확대 상한 없음 — 주제 하나(노드 6개)도 칸에 꽉 맞게. 1.8 상한은 작은 그래프를 가운데 작게 남겼다(운영자 9/19)
+        try { _lawMapNet.setSize(el.clientWidth + 'px', el.clientHeight + 'px'); _lawMapNet.redraw(); _lawMapNet.fit({ animation: false }); } catch(e) {}
       }, 120);
     });
     el._lmRO.observe(el);

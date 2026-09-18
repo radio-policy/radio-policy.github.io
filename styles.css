@@ -104,7 +104,10 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 .file-size { font-size: 11px; color: var(--text-tertiary); margin-top: 1px; }
 
 /* Chat */
-.chat-wrap { display: flex; flex-direction: column; height: 100%; }
+/* 자문 칸은 카드(.app)의 남는 높이 전부 — 100vh 기준 높이는 카드보다 커져 입력창이 카드 밖으로 밀렸다 (2026-09-19) */
+#panel-chat.active { display: flex; flex-direction: column; height: 100%; box-sizing: border-box; }
+#panel-chat > .group-tabbar { flex-shrink: 0; }
+.chat-wrap { display: flex; flex-direction: column; flex: 1 1 0; min-height: 0; height: auto; }
 .chat-area { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; min-height: 0; }
 .msg { padding: 10px 14px; border-radius: var(--radius-md); font-size: 13px; line-height: 1.65; max-width: 85%; }
 .msg-user { background: var(--accent-light); color: var(--accent-dark); align-self: flex-end; }
@@ -400,7 +403,7 @@ textarea:focus { border-color: var(--accent); }
 .lawmap-graph {
   flex: 1 1 0;   /* 기준 0 = 확정 크기 → 안의 캔버스 height:100% 가 풀린다 (1 0 auto 면 내용물 크기라 % 가 안 풀림) */
   height: auto;
-  min-height: 280px;
+  min-height: 500px;   /* 그래프 칸은 최소 500px — 상세 상자는 아래로 내려가 카드 안에서 스크롤 (2026-09-19 운영자) */
   border: 0.5px solid var(--border-light);
   border-radius: var(--radius-lg);
   background: var(--bg-primary);
@@ -529,7 +532,7 @@ mark.kb-hit { background: rgba(245, 197, 24, .38); color: inherit; border-radius
 body.ui-wide { align-items: stretch; }
 body.ui-wide .app { max-width: none; height: calc(100vh - 16px); margin: 8px; border-radius: var(--radius-md); }
 body.ui-wide .sidebar { display: none; }
-body.ui-wide .chat-wrap { max-height: none !important; height: calc(100vh - 150px) !important; }
+/* body.ui-wide .chat-wrap — 넓게 보기도 flex 로 카드를 채우므로 별도 높이 불필요 (2026-09-19) */
 /* body.ui-wide .lawmap-graph — 넓게 보기도 flex:1 로 채우므로 별도 높이 불필요 (2026-09-19) */
 body.ui-wide .topbar-title::before { content: "☰ "; color: var(--text-tertiary); }
 /* 한 영역만 전체화면(Fullscreen API): 배경·여백을 채워 검은 화면이 되지 않게 */
