@@ -279,10 +279,14 @@ def _fb_line(r: dict) -> str:
 
 
 _feedback_fixed_cache = None
+# 등급당 사례 수. 4 → 12(#175-보론): 선별 콜 system이 3,145토큰이라 캐시 최소(4,096, **도구 776토큰 포함해 계산됨**)에
+# 못 미쳐 캐시가 조용히 안 걸렸다(count_tokens는 도구를 1,100으로 세어 4,245로 보였지만 캐시 회계는 3,921). 사례를 늘려
+# system을 ≈3,900토큰으로 키운다 — 패딩이 아니라 판정 재료라 선별·긴급도 둘 다에 유익하고, 캐시라 요금은 0.1배.
+FEEDBACK_PER_CLASS = 12
 
 
 def _feedback_fixed_block() -> str:
-    """기사와 무관한 피드백 블록(#175): ① 증류 규칙 ② 등급별 균형 최신 사례(등급당 최대 4건).
+    """기사와 무관한 피드백 블록(#175): ① 증류 규칙 ② 등급별 균형 최신 사례(등급당 최대 FEEDBACK_PER_CLASS건).
     실행 안에서 바이트 단위로 동일 — 긴급도 콜의 **캐시 접두**가 된다. 정렬은 importance_feedback.updated_at 내림차순
     (DB 정렬)이라 피드백이 추가·수정될 때만 바뀐다(그때 캐시 1회 재작성). 시각·난수를 넣지 말 것."""
     global _feedback_fixed_cache
@@ -295,7 +299,7 @@ def _feedback_fixed_block() -> str:
     picked, per_class = [], {}
     for r in rows:
         c = r['user_importance']
-        if per_class.get(c, 0) >= 4:
+        if per_class.get(c, 0) >= FEEDBACK_PER_CLASS:
             continue
         picked.append(r)
         per_class[c] = per_class.get(c, 0) + 1
@@ -1697,8 +1701,10 @@ def _screen_batch_haiku(client, criteria: str, batch: list):
             # 같은 실행의 2번째 배치부터, 그리고 다음 실행(30분 뒤)까지 0.1배 요금으로 읽힌다.
             # 검증: api_usage.cache_read가 0이 아니어야 한다 — 0이면 system이 매번 달라지고 있는 것.
             # Haiku 4.5의 최소 캐시 길이는 **4,096토큰**(지침 #152 정정) — tools+system 접두가 그보다 짧으면 에러 없이
-            # 조용히 캐시되지 않는다. 2026-09-20 실측 4,245토큰(피드백 53건 포함)이라 여유가 150토큰뿐이다 —
-            # 기준문을 줄이거나 피드백이 줄면 미달할 수 있으니 api_usage.cache_write/cache_read로 확인할 것.
+            # 조용히 캐시되지 않는다. ⚠️ count_tokens는 도구 스키마를 캐시 회계보다 크게 센다(1,100 vs 776) — 첫 배포는
+            # count_tokens 4,245로 보였지만 실제 회계 3,921이라 03:52 첫 실행에서 cache_write=0이었다(#175-보론).
+            # 등급당 피드백 사례 4→12(FEEDBACK_PER_CLASS)로 system을 ≈4,250(캐시 회계 ≈5,030)으로 키워 해결.
+            # 기준문·피드백이 줄면 다시 미달할 수 있으니 배포 뒤 api_usage.cache_write/cache_read로 반드시 확인할 것.
             system=[{'type': 'text', 'text': _screen_system(criteria),
                      'cache_control': {'type': 'ephemeral', 'ttl': '1h'}}],
             tools=[NEWS_SCREEN_TOOL],
