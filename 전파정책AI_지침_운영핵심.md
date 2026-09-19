@@ -25,7 +25,7 @@ SKT Comm센터 기술정책팀의 전파·통신 정책 모니터링 자동화 �
 C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 ├── sb_client.py                # Supabase 클라이언트 공용 생성기 — HTTP/2 끄고 HTTP/1.1+재시도(make_client). 모든 스크립트가 create_client 대신 사용(RemoteProtocolError 끊김 회피)
 ├── requirements.txt            # 의존성 버전 고정(lock, 61개). 모든 워크플로가 `pip install -r requirements.txt`로 설치 — 자동 최신화 사고 방지(배경역사 #15)
-├── crawler.py                  # 메인 크롤러(GitHub Actions 매시간) — 네이버 검색 OpenAPI(키 없으면 Google RSS 폴백), **키워드 54개 확대수집 → 무관 판정 캐시 대조(news_screen_cache, #78) → Haiku 1차 관련성 선별(app_config.news_relevance_criteria, 무관은 저장 안 함+캐시 기록, fail-open 키워드 폴백, 부처 인사는 무조건 통과, #66)** — 선별이 분야 태그(#76)·사건 라벨(event, #77)도 함께 매김 → 통과분만 본문 수집·**Haiku 긴급도 개별 분류**(피드백 학습), 긴급 재알림 억제 — ⚠️ **선별 콜 통합(#82)은 2026-08-04 되돌렸다(#84).** 긴급률이 9.9%→0.7%로 무너졌고, 「SKT 5G 과장광고 과징금, 대법원 간다」가 8/3 긴급 → 8/4 보통으로 갈린 A/B가 근거다. 원인은 ①선별이 **본문 수집 전**이라 네이버 요약 300자만 본다(본문 중앙값 1,329자) ②배치 판정이라 제목별 유사 피드백 5건을 못 쓴다. **재통합하려면 긴급률을 9.9%와 반드시 대조할 것**(suppress_repeat_alerts, #44). 운영자 긴급 알림에 태그 표시(구독자에겐 비표시)
+├── crawler.py                  # 메인 크롤러(GitHub Actions **10분마다**, pg_cron `*/10` dispatch — 2026-09-20 #174, 그 전 매시) — 네이버 검색 OpenAPI(키 없으면 Google RSS 폴백), **키워드 54개 확대수집 → 무관 판정 캐시 대조(news_screen_cache, #78) → Haiku 1차 관련성 선별(app_config.news_relevance_criteria, 무관은 저장 안 함+캐시 기록, fail-open 키워드 폴백, 부처 인사는 무조건 통과, #66)** — 선별이 분야 태그(#76)·사건 라벨(event, #77)도 함께 매김 → 통과분만 본문 수집·**Haiku 긴급도 개별 분류**(피드백 학습), 긴급 재알림 억제 — ⚠️ **선별 콜 통합(#82)은 2026-08-04 되돌렸다(#84).** 긴급률이 9.9%→0.7%로 무너졌고, 「SKT 5G 과장광고 과징금, 대법원 간다」가 8/3 긴급 → 8/4 보통으로 갈린 A/B가 근거다. 원인은 ①선별이 **본문 수집 전**이라 네이버 요약 300자만 본다(본문 중앙값 1,329자) ②배치 판정이라 제목별 유사 피드백 5건을 못 쓴다. **재통합하려면 긴급률을 9.9%와 반드시 대조할 것**(suppress_repeat_alerts, #44). 운영자 긴급 알림에 태그 표시(구독자에겐 비표시)
 ├── morning_briefing.py         # 모닝 브리핑 생성·발송(06:00 KST). **app_config.briefing_excluded_urls(JSON 배열)의 URL은 제외(#85)** — 오탐 기사를 브리핑에서만 빼는 수단. 삭제(대시보드·자문에서도 사라짐)·published_at 조작(사실 왜곡)·등급 하향(24h 전체를 보므로 무효)을 다 버리고 택한 방식. 조회 실패는 빈 집합(fail-open) — 🔴=DB 긴급도, 같은 사건 클러스터링(대표 1건+관련 N건, #44), SKT 영향 분석, 신규 입법예고 📢 섹션, 본문 0건 시 요약→제목 폴백(빈 브리핑 방지), 기사 0건 시 시각무관 1일1회 '🕊️무뉴스' 통지+placeholder(_handle_no_news)
 ├── news_dedup.py               # 같은 사건 재보도 판정 공용 유틸(제목 키워드, API 비용 0) — crawler·morning_briefing 공유. 임계 3·별-형 클러스터링 근거는 파일 주석 (#44). **`group_same_event`(Haiku)는 어휘가 갈린 같은 사건을 묶는 2층 — 같은 실행분 묶기(#92)와 실행이 갈린 재보도(#170) 양쪽에서 쓴다**
 ├── regenerate_briefings.py     # 과거 브리핑을 클러스터링 적용본으로 재생성(수동). morning_briefing 함수 재사용, 입법예고 섹션 보존. **실행 전 daily_briefings_backup에 원본 백업 필수** (#46)
@@ -34,7 +34,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 │                               #   RRA(국립전파연구원)·MSIT(과기정통부)·CRMS(중앙전파관리소, 함수명은 crawl_kmcc)·KCC(방미통위=방송미디어통신위원회, 구 방통위)·ETRI·KISDI
 │                               #   ※ MSIT는 보도자료·입법행정예고·훈령예규고시 + **공고(공지사항 mPid=121&mId=310)**: 주파수 할당·재할당 공고 원문이 실리는 게시판(2026-08-02 추가). 사업공고(311)는 R&D 모집 잡음이라 제외
 │                               #   ※ crawl_kcc()는 방미통위 보도자료(kcc.go.kr, **2026-09-11부터 대상 비움 — kmcc_meeting.py가 전건 수집**), crawl_kmcc()는 중앙전파관리소(crms.go.kr — 이름은 역사적 오기, #53)
-├── kmcc_meeting.py             # **방미통위(방송미디어통신위원회) 회의 의사일정 + 위원회 결과(무조건) + 관련성 통과 보도자료** → news_feed(source '방송미디어통신위원회 위원회 회의' / '… 보도자료') + 구독자 큐 topic=kmcc. GitHub Actions daily_crawl.yml 매시 :17 crawler.py 뒤 단계(continue-on-error). 의사일정 PDF는 Haiku 표 복원(요약 금지), 위원회 결과는 Haiku 요지 ≤10줄, 일반 보도자료는 AI 없음·본문만. heartbeat(last_kmcc_meeting_run). `--operator-test`=운영자 봇 시험 발송, `--pages N --no-notify`=초기 적재 (#154)
+├── kmcc_meeting.py             # **방미통위(방송미디어통신위원회) 회의 의사일정 + 위원회 결과(무조건) + 관련성 통과 보도자료** → news_feed(source '방송미디어통신위원회 위원회 회의' / '… 보도자료') + 구독자 큐 topic=kmcc. GitHub Actions daily_crawl.yml **10분마다**(pg_cron `*/10`, #174; 새 글 없으면 AI 0콜) crawler.py 뒤 단계(continue-on-error). 큐 적재 직후 즉시 배달 호출(CRON_SECRET 필요). 의사일정 PDF는 Haiku 표 복원(요약 금지), 위원회 결과는 Haiku 요지 ≤10줄, 일반 보도자료는 AI 없음·본문만. heartbeat(last_kmcc_meeting_run). `--operator-test`=운영자 봇 시험 발송, `--pages N --no-notify`=초기 적재 (#154)
 ├── announce_kmcc_topic.py      # 일회성 — 구독자 전원에게 '📺 방미통위 동향' 토픽 신설 안내(2026-09-11 10:00 발송). 재실행 금지
 ├── law_crawler.py              # 법제처 DRF API 법령·고시 모니터링(11:00 KST). 엔드포인트 www.law.go.kr/DRF/lawSearch.do, OC=radiopolicyai
 ├── assembly_crawler.py         # 국회 법안 모니터링(열린국회정보 API, 22대) + 국회 입법예고 추적 패스(#56). **키워드 검색은 페이지 끝까지 순회**(`_fetch_bill_rows`, #121 — pIndex=1 한 페이지만 읽으면 100건 넘는 키워드가 조용히 잘림) + `fetch_committee_bills`(COMMITTEE=과학기술정보방송통신위원회 전수 스윕)로 이름에 키워드가 없는 과방위 소관 법안까지 포착(#121)
@@ -204,7 +204,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 |---|---|---|---|---|
 | 1 | briefing-health-check | `0 1 * * *` | 10:00 | 브리핑 상태 점검(경고 전용) |
 | 2 | news-feed-cleanup | `0 15 * * *` | 00:00 | 60일 초과 뉴스 자동 삭제(created_at>60d AND locked=false) — PC 불필요 |
-| 9 | crawl-trigger-hourly | `47 * * * *` | 매시 :47 | 뉴스 크롤러 트리거(주 트리거) → daily_crawl.yml dispatch |
+| 9 | crawl-trigger-hourly | `*/10 * * * *` | **10분마다**(2026-09-20 #174, 그 전 매시 :47) | 뉴스 크롤러+방미통위 트리거(주 트리거) → daily_crawl.yml dispatch. 이름은 역사적(jobid 유지). 워크플로 `concurrency` 그룹이 겹침을 줄 세운다 |
 | 10 | assembly-crawl-trigger | `30 1 * * *` | 10:30 | 국회 크롤러 백업 트리거 |
 | 11 | law-crawl-trigger | `30 2 * * *` | 11:30 | 법령·입법예고 크롤러 백업 트리거 |
 | 8 | briefing-trigger-0605 | `5 21 * * *` | 06:05 | 모닝 브리핑 자동 트리거(없으면 dispatch) |
@@ -725,14 +725,19 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
   ⚠️ **해외규제·국회·회의록·법령DIFF도 배치화하지 말 것** — 판정 물량이 하루 0~35건뿐이라 추가 절감이
   월 2~3천 원인데, 해외규제는 06:05 브리핑까지 35분뿐이고 국회는 당일 알림이 있다.
 - **비용 구조(2026-08-13 실측)**: 평상시 **월 ~8만 원**(Haiku 판정이 대부분, 자문 Sonnet은 월 ~1.5만 원).
-  ⚠️ **프롬프트 캐싱은 현재 무효** — Haiku 4.5의 최소 캐시 길이는 **4,096토큰**(종전 기록 2,048은 오류, #152 정정)이라
-  긴급도 콜(1.5~1.9k)은 영구히 미달이고, 선별 콜 고정부(4.3~4.5k)도 경계선이다. 미달이면 `cache_control`을 붙여도
-  에러 없이 `cache_creation_input_tokens=0`으로 조용히 안 잡힌다 — 콘솔의 「캐싱 적중률 0%」가 그것이다.
-  캐시를 시도할 땐 반드시 `api_usage.cache_write>0`을 첫 실행에서 확인하고, 0이면 되돌릴 것(#152 W7).
+  ⚠️ **프롬프트 캐싱은 선별 콜에만 적용(2026-09-20 W7, #174)** — Haiku 4.5의 최소 캐시 길이는 **4,096토큰**(종전 기록 2,048은
+  오류, #152 정정)이라 긴급도 콜(1.5~1.9k)은 영구히 미달이다. 선별 콜은 판정 규칙을 사용자 메시지에서 system으로 옮겨
+  tools+system 접두를 **4,245토큰**(피드백 53건 포함)으로 만들어 1시간 캐시(`ttl:'1h'`)에 싣는다 — **여유가 150토큰뿐**이라
+  기준문·피드백이 줄면 미달한다. 미달이면 `cache_control`을 붙여도 에러 없이 `cache_creation_input_tokens=0`으로 조용히
+  안 잡힌다 — 콘솔의 「캐싱 적중률 0%」가 그것이다. 배포·기준문 편집 뒤에는 반드시 `api_usage.cache_write>0`(첫 배치)와
+  `cache_read>0`(둘째 배치·다음 실행)을 확인하고, 0이면 원인을 찾을 것. 10분 주기와 한 쌍이다(캐시 없이 10분이면 고정부 요금이
+  배치 수만큼 되살아난다).
 - **비용 구조(2026-09-10 재실측, #152)**: 정기 실행 **$2.5~3/일 ≈ 월 $75~90**. 몸통은 뉴스 Haiku 세 가지 — 선별 배치
   (평일 60배치/일, $30~40) > 요약 생성(146/일, $11~14) ≈ 긴급도 개별 판정(300/일, $12~14) > Sonnet 정기 $10 > 기타 Haiku $5~8.
-  **긴급도 개별 판정은 Actions에서 제목만 본다**(본문 수집 전, `_screen_text`도 pop됨 — #84 A/B 당시에도 동일). 선별 콜은
-  긴급도 규칙·피드백 토큰과 urgency 출력을 매 배치 지불하면서 결과를 버린다(1953행이 덮어씀) — W3 그림자 컬럼으로 기록 예정.
+  **긴급도 개별 판정은 Actions에서 제목만 본다**(본문 수집 전, `_screen_text`도 pop됨 — #84 A/B 당시에도 동일).
+  선별 콜의 긴급도 규칙·urgency 출력은 **2026-09-20(#174) 제거** — 그림자 1,534건(9/14~20)에서 선별 등급과 개별 판정의
+  일치가 56%(선별=참고 661건 중 개별 긴급 16·보통 312)라 "선별=참고면 개별 생략" 게이트는 **기각**, 대신 선별 콜에서
+  긴급도 부분을 뺐다(`news_feed.urgency_screen`은 이후 항상 ''이며 컬럼은 남김). 선별 비용 실측 월 ≈$29 → 캐시+10분 주기로 ≈$19.
   ⚠️ **일회성 폭주가 정기 절감을 지운다**: 9/1·9/3 #118 버그 + KB 대량 등록 OKF 생성 = 이달 $12~17. 방지 장치(#152):
   general 백스톱 100/일·60/시(`charge_ai_usage`), 매시 폭주 경보(cron 21), 운영 상태 탭 "오늘 대시보드 AI 호출" 행(관리자),
   일일 리포트 AI 줄, 대량 스크립트 `--allow-api` 게이트(`press_backfill.py`, `law_diff_gen.py --backfill`,
@@ -1323,7 +1328,7 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **DH_KEY_TOO_SMALL 자동 재시도(_http_get)를 rra.go.kr 전용으로 되돌리지 말 것** — 도메인 무관 우회.
 - **law_crawler 엔드포인트를 open.law.go.kr/LSO/...로 되돌리지 말 것** — 정식은 www.law.go.kr/DRF/lawSearch.do.
 - **법령/국회 키워드에 '혼신' 재추가 금지** — '이혼신고' 오탐. '전파간섭'으로 유지.
-- **daily_crawl.yml 스케줄을 예전 다중 슬롯으로 되돌리지 말 것** — `17 * * * *`(백업)+Supabase :47(주 트리거)로 단순화.
+- **daily_crawl.yml 스케줄을 예전 다중 슬롯으로 되돌리지 말 것** — `17 * * * *`(백업)+Supabase `*/10`(주 트리거, 2026-09-20 #174; 그 전 :47)로 단순화. 10분 주기는 프롬프트 캐시(W7)와 한 쌍이다 — 캐시를 끄고 주기만 남기면 선별 고정부 요금이 배치 수만큼 되살아난다.
 - **GitHub 크롤 백업 슬롯(:17)을 정시·15분 단위로 옮기지 말 것** — 혼잡대 드롭↑.
 - **모닝 브리핑 cron을 23~00 UTC(08~09 KST)로 되돌리지 말 것** — 최혼잡 드롭. 21 UTC대(06시 KST) 유지.
 - **추가 지식 "파일 업로드"를 custom_knowledge로 보내지 말 것** — 파일은 document_chunks(추가지식)로.
@@ -1461,7 +1466,10 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 SUPABASE_URL, SUPABASE_SERVICE_KEY, ANTHROPIC_API_KEY,
 EMAIL_FROM, EMAIL_PASSWORD, EMAIL_TO, RESEND_API_KEY,
 TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, LAW_OC_KEY(=radiopolicyai),
-ASSEMBLY_API_KEY, NAVER_CLIENT_ID, NAVER_CLIENT_SECRET, SUBSCRIBER_BOT_TOKEN
+ASSEMBLY_API_KEY, NAVER_CLIENT_ID, NAVER_CLIENT_SECRET, SUBSCRIBER_BOT_TOKEN,
+CRON_SECRET (= Edge Secret CRON_SECRET = Vault subscriber_cron_secret. 크롤러·kmcc가 큐 적재 직후 send-subscriber-briefing을
+  즉시 호출할 때 씀. **2026-09-20에야 등록됐다(#174)** — 워크플로가 참조만 하고 시크릿이 없으면 값이 비어 즉시 배달이 조용히
+  안 나가고 :25 정기 배달만 된다. 시크릿을 추가·이관할 때 이 목록과 워크플로 env를 함께 대조할 것)
 ※ 로컬은 동일 키를 .env에(.gitignore 등록).
 ※ Vault github_pat(fine-grained PAT, `radio-policy-commit-org`, resource owner = 조직 `radio-policy`, 만료 2027-09-04) 필수권한: Repository — Contents(R/W)·Metadata(자동)·Actions(R/W). 재생성 시 Actions 누락 주의(배경역사 #18), 저장소 소유자와 토큰 소유자가 같아야 함(#116).
 ```
