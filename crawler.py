@@ -274,39 +274,61 @@ def _get_distilled_rules() -> str:
     return _distilled_rules_cache
 
 
-def get_feedback_examples(title: str = '') -> str:
-    """분류 대상 기사에 맞춘 피드백 블록 생성:
-    ① 증류 규칙 (20건 이상 누적 시) ② 제목 키워드가 겹치는 유사 사례 최대 5건
-    ③ 등급별 균형 최신 사례 (등급당 최대 4건). 전부 메모리 연산 — 기사당 추가 비용 없음."""
+def _fb_line(r: dict) -> str:
+    return f"- \"{r['title'][:70]}\" → {_REVERSE_PRIORITY.get(r['user_importance'], r['user_importance'])}"
+
+
+_feedback_fixed_cache = None
+
+
+def _feedback_fixed_block() -> str:
+    """기사와 무관한 피드백 블록(#175): ① 증류 규칙 ② 등급별 균형 최신 사례(등급당 최대 4건).
+    실행 안에서 바이트 단위로 동일 — 긴급도 콜의 **캐시 접두**가 된다. 정렬은 importance_feedback.updated_at 내림차순
+    (DB 정렬)이라 피드백이 추가·수정될 때만 바뀐다(그때 캐시 1회 재작성). 시각·난수를 넣지 말 것."""
+    global _feedback_fixed_cache
+    if _feedback_fixed_cache is not None:
+        return _feedback_fixed_cache
     rows = _load_feedback_rows()
     if not rows:
+        _feedback_fixed_cache = ''
         return ''
-    tt = _fb_tokens(title)
-    similar = []
-    if tt:
-        scored = [(len(tt & _fb_tokens(r['title'])), r) for r in rows]
-        similar = [r for sc, r in sorted(scored, key=lambda x: -x[0]) if sc >= 2][:5]
-    picked = list(similar)
-    seen = {r['title'] for r in similar}
-    per_class = {}
+    picked, per_class = [], {}
     for r in rows:
         c = r['user_importance']
-        if r['title'] in seen or per_class.get(c, 0) >= 4:
+        if per_class.get(c, 0) >= 4:
             continue
         picked.append(r)
-        seen.add(r['title'])
         per_class[c] = per_class.get(c, 0) + 1
-    lines = [
-        f"- \"{r['title'][:70]}\" → {_REVERSE_PRIORITY.get(r['user_importance'], r['user_importance'])}"
-        for r in picked[:17]
-    ]
     block = ''
     rules = _get_distilled_rules()
     if rules:
         block += "\n\n[담당자 분류 규칙 — 누적 피드백에서 추출. 최우선 적용]\n" + rules
     block += ("\n\n[담당자 분류 피드백 — 실제 담당자가 직접 수정한 사례. 유사한 기사는 반드시 이 기준을 우선 적용]\n"
-              + "\n".join(lines))
+              + "\n".join(_fb_line(r) for r in picked))
+    _feedback_fixed_cache = block
     return block
+
+
+def _feedback_similar_block(title: str) -> str:
+    """기사 제목과 키워드가 2개 이상 겹치는 담당자 사례 최대 5건(#175). 기사마다 달라지므로 캐시 접두 **뒤**에 둔다.
+    고정 블록에 이미 실린 사례는 뺀다(같은 줄 중복 방지). 없으면 ''."""
+    rows = _load_feedback_rows()
+    tt = _fb_tokens(title)
+    if not rows or not tt:
+        return ''
+    fixed = _feedback_fixed_block()
+    scored = [(len(tt & _fb_tokens(r['title'])), r) for r in rows]
+    similar = [r for sc, r in sorted(scored, key=lambda x: -x[0]) if sc >= 2]
+    lines = [_fb_line(r) for r in similar if _fb_line(r) not in fixed][:5]
+    if not lines:
+        return ''
+    return "\n\n[이 기사와 유사한 담당자 피드백 사례 — 반드시 우선 적용]\n" + "\n".join(lines)
+
+
+def get_feedback_examples(title: str = '') -> str:
+    """피드백 블록 전체 = 고정 블록 + 기사별 유사 사례. 선별 콜은 title=''로 고정 블록만 쓴다.
+    (#175 전에는 유사 사례를 앞에, 균형 사례를 뒤에 한 문자열로 붙였다 — 기사마다 문자열이 달라 캐시가 불가능했다.)"""
+    return _feedback_fixed_block() + _feedback_similar_block(title)
 
 
 def classify_urgency(title: str, content: str = '') -> str:
@@ -325,10 +347,19 @@ def classify_urgency(title: str, content: str = '') -> str:
 
     try:
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        # 프롬프트 캐시(#175, 2026-09-20): system을 두 블록으로 나눈다 — [기준문 + 고정 피드백 블록](캐시 1h) 뒤에
+        # [이 기사와 유사한 사례](기사마다 다름, 캐시 밖). 종전에는 한 문자열이라 기사마다 달라 캐시가 안 걸렸다
+        # (콜당 입력 ≈4,700토큰을 매번 정가로 지불, 월 ≈$34). 캐시 접두 실측은 배경역사 #175 — Haiku 4.5 최소 4,096.
+        # 검증: api_usage(site=crawler.py:classify_urgency)의 cache_read>0. 0이면 접두가 4,096 미만이거나 매번 달라지는 것.
+        sys_blocks = [{'type': 'text', 'text': _URGENCY_SYSTEM + _feedback_fixed_block(),
+                       'cache_control': {'type': 'ephemeral', 'ttl': '1h'}}]
+        similar = _feedback_similar_block(title)
+        if similar:
+            sys_blocks.append({'type': 'text', 'text': similar})
         resp = client.messages.create(
             model='claude-haiku-4-5-20251001',
             max_tokens=10,
-            system=_URGENCY_SYSTEM + get_feedback_examples(title),
+            system=sys_blocks,
             messages=[{'role': 'user', 'content': user_msg}],
         )
         answer = resp.content[0].text.strip()
