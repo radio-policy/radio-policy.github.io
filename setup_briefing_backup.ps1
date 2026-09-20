@@ -1,4 +1,4 @@
-# 모닝 브리핑 로컬 백업 — 매일 09:40 KST (집 PC 본선; 회사 PC 예비는 09:50으로, 2026-09-20 집 PC 이전)
+# 모닝 브리핑 로컬 백업 — 매일 09:40 KST (lampmanH-pc 본선; 회사 PC 예비는 09:50으로, 2026-09-20 lampmanH-pc 이전)
 # GitHub Actions 스케줄 전체 누락 대비 (2026-06-11 확인: 3중 cron + daily_crawl 백업 모두 skip)
 # already_sent_today()가 중복 발송 차단 → GitHub이 정상 발송했으면 아무것도 안 함
 # -StartWhenAvailable: 09:40에 PC가 꺼져 있었으면 부팅 후 즉시 실행

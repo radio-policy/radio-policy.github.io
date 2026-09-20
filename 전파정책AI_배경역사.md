@@ -1717,7 +1717,7 @@ Supabase pg_cron만으로 도는 순수 DB 함수. system_health 10키를 **키�
 | last_minutes_run | 17시 체인 | 26h | 동일 체인 |
 | last_foreign_press_run | 매일 05:30 | 30h | 단일 트리거/일 + 변동 여유 |
 | last_itu_watch_run | 매월 1일 | 960h(40일) | 월 1회, 한 달 건너뜀 일부 허용 |
-| last_refetch_run | 매시(본문, PC) | 26h | PC 변동 커 보수적. 코어 생사 신호는 last_crawl_run이 이미 커버 |
+| last_refetch_run | 매시(본문, PC) | 26h → **3h**(2026-09-20 #179 보론) | 처음엔 PC 변동이 커 보수적으로 잡았으나 lampmanH-pc(24시간) 본선 뒤 외부 워치독과 같은 3h로 맞춤 |
 | last_subscriber_briefing_run | 매시 :25 | 3h | 매시 |
 
 임계는 **실측 나이 + 실제 주기 + 여유**로 잡았다. 신설 시점 최대가 last_crawl_run 62%·foreign 61%
@@ -4546,7 +4546,7 @@ AI가 지어낼 위험 — #60 OCR 반려와 같은 원리로, 틀린 사실의 
 삼켜지면 "추가 보강 없음"으로 보고된다(이슈 7 실측 — 재시도로 해결, 로그에는 남음).
 
 **#116 GitHub 저장소 조직 이전 — pg_cron 트리거 6시간 무음 실패 + 미러 CORS 재발 (2026-09-03).**
-운영자가 집 PC에서 미러 주소를 루트 도메인(`radio-policy.github.io`)으로 만들기 위해 저장소를
+운영자가 lampmanH-pc에서 미러 주소를 루트 도메인(`radio-policy.github.io`)으로 만들기 위해 저장소를
 `youjinwoong/radio-policy-ai` → 조직 `radio-policy/radio-policy.github.io`로 이전했다(GitLab 정본은
 무변경, 구 주소에는 리다이렉트 저장소). 인수인계 문서는 "소스 무수정·봇 무영향"으로 판단했으나
 세션 조사에서 두 가지가 어긋나 있었다. ①**pg_cron → workflow_dispatch가 04:47 KST부터 매시 403**
@@ -6923,13 +6923,13 @@ title 확인, 사이드바 "AI 자문: 로그인 후 사용 / 데이터베이스
 운영자 SOP → 관계도 첫 화면 안내 한 줄 → 회의록 검색 Enter → KB의 내부 발표자료 파일 정체 확인. 동적 본문(브리핑·뉴스 텍스트)의
 약칭은 이번에 손대지 않았다 — 정적 라벨만.
 
-**#178 (2026-09-20) 외부판 PC 작업을 집 PC로 — 스케줄러 스크립트의 회사 PC 경로 하드코딩 제거, 회의록 오프라인 금지 시간 16:30~17:30.**
-사용자 결정: 집 개인 PC(Windows, 24시간)를 본선으로, 회사 노트북은 예비로. 사내 다리(RadioPolicy-News·Snapshot)는 사내판 세션이
+**#178 (2026-09-20) 외부판 PC 작업을 lampmanH-pc로 — 스케줄러 스크립트의 회사 PC 경로 하드코딩 제거, 회의록 오프라인 금지 시간 16:30~17:30.**
+사용자 결정: lampmanH-pc(Windows, 24시간)를 본선으로, 회사 노트북은 예비로. 사내 다리(RadioPolicy-News·Snapshot)는 사내판 세션이
 먼저 옮겼고(사내판 `docs/집PC_다리_설치_260920.md`), 외부판 PC 작업 5개(정부크롤러 체인 17:00 / RefetchContent 매시 22분 /
-BriefingBackup 09:40 / AssemblySummary 10:30 / CRMS동기화 매월 1일 16:30)의 인수인계는 사내판 `docs/집PC_외부판작업_이전_260920.md`.
+BriefingBackup 09:40 / AssemblySummary 10:30 / CRMS동기화 매월 1일 16:30)의 인수인계는 사내판 `docs/lampmanH-pc_외부판작업_이전_260920.md`.
 옮기기 전에 저장소부터 고쳐야 했다 — `run_hidden.py`(21행 `PY = r"C:\Users\SKTelecom\…\Python312\python.exe"`),
 `run_gov_crawler.bat`·`run_crms_sync.bat`·`run_briefing_backup.bat`(python.exe 절대경로+`cd /d C:\Users\SKTelecom\…`),
-`setup_*.ps1`(시작 위치·스크립트 절대경로)이 전부 회사 PC의 사용자명과 설치 경로를 박고 있어 집 PC에서는 그대로 안 돈다.
+`setup_*.ps1`(시작 위치·스크립트 절대경로)이 전부 회사 PC의 사용자명과 설치 경로를 박고 있어 lampmanH-pc에서는 그대로 안 돈다.
 사내 다리 스크립트가 `%~dp0`와 런처만 써서 무수정으로 옮겨진 것과 같은 방식으로 바꿨다.
 - `run_hidden.py`: `PY = os.path.join(os.path.dirname(sys.executable), "python.exe")`(래퍼를 띄운 pythonw.exe 옆) + `os.chdir(자기 폴더)`.
   스케줄러 액션의 '시작 위치'가 비어 있어도 .env·로그가 저장소 폴더 기준으로 잡힌다.
@@ -6937,31 +6937,37 @@ BriefingBackup 09:40 / AssemblySummary 10:30 / CRMS동기화 매월 1일 16:30)�
 - `setup_*.ps1` 3개: `$root = $PSScriptRoot`, `$pyw = (py -3.12 -c "…pythonw.exe")`(없으면 throw), 액션은 `pythonw run_hidden.py <script>`로
   실제 회사 PC 등록 형태(#70)와 맞췄다. `setup_scheduler.ps1`(뉴스 크롤러 매시)은 Actions로 옮겨져 미등록인 legacy임을 머리에 적었다.
 - **인수인계 문서의 `py -3`은 쓰지 않았다** — 회사 PC에서 `py -0p`로 확인하니 `py -3`은 3.13(`*` 기본)으로 풀린다. bare `python`이
-  3.13으로 가서 ModuleNotFoundError로 무음 실패한 #22와 정확히 같은 함정. `py -3.12`로 버전을 고정하면 집 PC(3.12만 설치)와
+  3.13으로 가서 ModuleNotFoundError로 무음 실패한 #22와 정확히 같은 함정. `py -3.12`로 버전을 고정하면 lampmanH-pc(3.12만 설치)와
   회사 PC(3.12·3.13 공존) 어디서나 패키지가 있는 3.12로 간다. 지침 #22 규칙을 "전체 경로 고정"에서 "`py -3.12` 고정 + 경로 하드코딩 금지"로 고쳤다.
-- 회의록 오프라인 파이프라인(#120)의 "17:00~17:30 임포트 금지"는 **16:30~17:30**으로 넓혔다 — 집 PC 체인이 16:30, 회사 PC 예비 체인이
+- 회의록 오프라인 파이프라인(#120)의 "17:00~17:30 임포트 금지"는 **16:30~17:30**으로 넓혔다 — lampmanH-pc 체인이 16:30, 회사 PC 예비 체인이
   17:00에 돌아 두 체인의 assembly_minutes와 겹칠 수 있는 구간이 30분 늘었다. CLAUDE.md·지침 2곳·배경역사 #120 운영 규칙 문구를 함께 고쳤다.
-집 PC 쪽 등록(사용자 계정으로, SYSTEM+`pip --user` 충돌 재발 방지)·`.env` USB 복사·회사 PC 예비 시각 뒤로 미루기(Refetch 52분·
+lampmanH-pc 쪽 등록(사용자 계정으로, SYSTEM+`pip --user` 충돌 재발 방지)·`.env` USB 복사·회사 PC 예비 시각 뒤로 미루기(Refetch 52분·
 브리핑 09:50·요약 10:45·CRMS 16:45)는 인수인계 문서 3·4절대로 사용자가 진행한다. 이 커밋은 저장소 파일만 바꾼다 — 회사 PC 작업
 스케줄러 등록은 손대지 않았다(등록된 액션이 Python312 pythonw 전체 경로를 그대로 가리키므로 새 `run_hidden.py`와 그대로 호환).
 
-**#179 (2026-09-20) 집 PC 이전 완료 — 회사 노트북 예약작업 비활성 예비, 외부 워치독에 PC heartbeat 감시 추가.**
-사용자가 인수인계 문서(사내판 `docs/집PC_외부판작업_이전_260920.md`) 3·4절을 마쳤다. 집 PC(Windows, **사용자 계정**, 24시간,
+**#179 (2026-09-20) lampmanH-pc 이전 완료 — 회사 노트북 예약작업 비활성 예비, 외부 워치독에 PC heartbeat 감시 추가.**
+사용자가 인수인계 문서(사내판 `docs/lampmanH-pc_외부판작업_이전_260920.md`) 3·4절을 마쳤다. lampmanH-pc(Windows, **사용자 계정**, 24시간,
 `C:\Claude\Radio-policy\radio-policy-ai`, `py -3.12`, 커밋 372e627)에 정부크롤러 체인 **16:30** · RefetchContent **매시 22분** ·
 BriefingBackup **09:40** · AssemblySummary **10:30** · CRMS동기화 **매월 1일 16:30**을 등록했고, 손 실행으로 `last_refetch_run`·
-`last_law_diff_run` heartbeat가 집 PC 시각으로 바뀌는 것을 확인했다. 회사 노트북의 같은 작업 5개와 로컬미리보기는 **등록은 남기고
-전부 비활성**(예비)으로 바꿨다. 사내 다리 2개(RadioPolicy-News·Snapshot)도 집 PC로 갔다. 인수인계 문서 4절의 "회사 PC 시각을 뒤로
+`last_law_diff_run` heartbeat가 lampmanH-pc 시각으로 바뀌는 것을 확인했다. 회사 노트북의 같은 작업 5개와 로컬미리보기는 **등록은 남기고
+전부 비활성**(예비)으로 바꿨다. 사내 다리 2개(RadioPolicy-News·Snapshot)도 lampmanH-pc로 갔다. 인수인계 문서 4절의 "회사 PC 시각을 뒤로
 미룬다"(Refetch 52분·브리핑 09:50·요약 10:45·CRMS 16:45)는 **쓰지 않았다** — 두 대가 번갈아 도는 예비가 아니라 **비활성 예비**로
-결정했기 때문이다. 켜져 있을 때만 이어받는 구조는 assembly_minutes 임포트 단일·순차 규칙과 Haiku 2배 비용이 걸리고, 집 PC가 24시간이라
+결정했기 때문이다. 켜져 있을 때만 이어받는 구조는 assembly_minutes 임포트 단일·순차 규칙과 Haiku 2배 비용이 걸리고, lampmanH-pc가 24시간이라
 이어받을 일이 사실상 없다.
 이 세션에서 실DB로 대조한 heartbeat(2026-09-20 KST): `last_refetch_run` 14:48 · `last_gov_notice_run` 14:49 · `last_press_ingest` 14:52 ·
 `last_law_diff_run` 14:53 · `last_minutes_run` 14:57(new=3 dup=33 — 두 대가 같은 회의를 이중 등재하지 않았다). 회사 노트북 작업은
-전부 비활성이고 17:00 전이라 이 시각들은 집 PC 손 실행분이다. 운영 상태 탭은 이 `system_health` 행을 그대로 그린다.
+전부 비활성이고 17:00 전이라 이 시각들은 lampmanH-pc 손 실행분이다. 운영 상태 탭은 이 `system_health` 행을 그대로 그린다.
 **외부 워치독 보강.** `health_watchdog.py`(GitHub Actions 21:30)는 ②에서 Actions 워크플로 run 이력만 보므로 Actions 밖에서 도는 PC
 작업(gov 체인·본문 재수집)이 서도 알 길이 없었다. 내부 `watchdog_scan`(pg_cron 3시간마다)이 `watchdog_targets`로 같은 키를 보긴 하나
 Supabase cron이 서면 함께 선다. 그래서 ③을 더했다: `system_health`를 REST로 읽어 `last_gov_notice_run` **26h** · `last_refetch_run`
-**3h**를 넘으면 "<작업> 마지막 실행 N시간 전 (임계 Nh) — 집 PC 확인", 키가 없으면 "heartbeat 기록 없음 — 집 PC 확인". ①에서
-Supabase 접속 불가를 이미 경고했으면 중복을 피해 건너뛴다. 내부 표의 `last_refetch_run` 임계는 26h로 남아 있다(매시 작업이라 3h가
-맞지만 DML이라 운영자 결정 뒤 별도 반영). 지침의 트리거 3층 표·워치독 이원화·점검 체크리스트·하지 말아야 할 것, CLAUDE.md 스케줄
+**3h**를 넘으면 "<작업> 마지막 실행 N시간 전 (임계 Nh) — lampmanH-pc 확인", 키가 없으면 "heartbeat 기록 없음 — lampmanH-pc 확인". ①에서
+Supabase 접속 불가를 이미 경고했으면 중복을 피해 건너뛴다. 내부 표(`watchdog_targets`)의 `last_refetch_run` 임계도 같은 세션에서 26h→**3h**로 맞췄다(운영자
+지시, Python으로 UPDATE — MCP는 읽기 전용). 지침의 트리거 3층 표·워치독 이원화·점검 체크리스트·하지 말아야 할 것, CLAUDE.md 스케줄
 문단을 함께 고쳤다. **교훈**: 실행 위치를 옮기면 감시자도 그 위치를 알아야 한다 — 워치독 메시지에 "어느 PC를 보라"를 박아 두지
 않으면 경고를 받고도 회사 노트북부터 뒤진다.
+
+**#179-보론 호칭 통일 — 'lampmanH-pc'를 `lampmanH-pc`로 (2026-09-20).** 운영자 지시: 문서·코드·알림 문구에서 개인 자택 장비임이
+드러나는 표현을 피한다. `health_watchdog.py`의 텔레그램 문구("… — lampmanH-pc 확인")·CLAUDE.md·지침·배경역사(#116·#178·#179)·
+`run_hidden.py`·`setup_briefing_backup.ps1` 주석의 "lampmanH-pc"를 전부 호스트명 `lampmanH-pc`로 바꿨고, 사내판 인수인계 문서 참조도
+`docs/lampmanH-pc_외부판작업_이전_260920.md`로 고쳤다(사내판 저장소에서 파일명이 그렇게 바뀜). 앞으로 이 장비는 문서·알림 어디서나
+`lampmanH-pc`로만 부른다 — 지침 하지 말아야 할 것에 한 줄로 박았다.
