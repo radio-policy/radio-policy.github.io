@@ -6944,3 +6944,24 @@ BriefingBackup 09:40 / AssemblySummary 10:30 / CRMS동기화 매월 1일 16:30)�
 집 PC 쪽 등록(사용자 계정으로, SYSTEM+`pip --user` 충돌 재발 방지)·`.env` USB 복사·회사 PC 예비 시각 뒤로 미루기(Refetch 52분·
 브리핑 09:50·요약 10:45·CRMS 16:45)는 인수인계 문서 3·4절대로 사용자가 진행한다. 이 커밋은 저장소 파일만 바꾼다 — 회사 PC 작업
 스케줄러 등록은 손대지 않았다(등록된 액션이 Python312 pythonw 전체 경로를 그대로 가리키므로 새 `run_hidden.py`와 그대로 호환).
+
+**#179 (2026-09-20) 집 PC 이전 완료 — 회사 노트북 예약작업 비활성 예비, 외부 워치독에 PC heartbeat 감시 추가.**
+사용자가 인수인계 문서(사내판 `docs/집PC_외부판작업_이전_260920.md`) 3·4절을 마쳤다. 집 PC(Windows, **사용자 계정**, 24시간,
+`C:\Claude\Radio-policy\radio-policy-ai`, `py -3.12`, 커밋 372e627)에 정부크롤러 체인 **16:30** · RefetchContent **매시 22분** ·
+BriefingBackup **09:40** · AssemblySummary **10:30** · CRMS동기화 **매월 1일 16:30**을 등록했고, 손 실행으로 `last_refetch_run`·
+`last_law_diff_run` heartbeat가 집 PC 시각으로 바뀌는 것을 확인했다. 회사 노트북의 같은 작업 5개와 로컬미리보기는 **등록은 남기고
+전부 비활성**(예비)으로 바꿨다. 사내 다리 2개(RadioPolicy-News·Snapshot)도 집 PC로 갔다. 인수인계 문서 4절의 "회사 PC 시각을 뒤로
+미룬다"(Refetch 52분·브리핑 09:50·요약 10:45·CRMS 16:45)는 **쓰지 않았다** — 두 대가 번갈아 도는 예비가 아니라 **비활성 예비**로
+결정했기 때문이다. 켜져 있을 때만 이어받는 구조는 assembly_minutes 임포트 단일·순차 규칙과 Haiku 2배 비용이 걸리고, 집 PC가 24시간이라
+이어받을 일이 사실상 없다.
+이 세션에서 실DB로 대조한 heartbeat(2026-09-20 KST): `last_refetch_run` 14:48 · `last_gov_notice_run` 14:49 · `last_press_ingest` 14:52 ·
+`last_law_diff_run` 14:53 · `last_minutes_run` 14:57(new=3 dup=33 — 두 대가 같은 회의를 이중 등재하지 않았다). 회사 노트북 작업은
+전부 비활성이고 17:00 전이라 이 시각들은 집 PC 손 실행분이다. 운영 상태 탭은 이 `system_health` 행을 그대로 그린다.
+**외부 워치독 보강.** `health_watchdog.py`(GitHub Actions 21:30)는 ②에서 Actions 워크플로 run 이력만 보므로 Actions 밖에서 도는 PC
+작업(gov 체인·본문 재수집)이 서도 알 길이 없었다. 내부 `watchdog_scan`(pg_cron 3시간마다)이 `watchdog_targets`로 같은 키를 보긴 하나
+Supabase cron이 서면 함께 선다. 그래서 ③을 더했다: `system_health`를 REST로 읽어 `last_gov_notice_run` **26h** · `last_refetch_run`
+**3h**를 넘으면 "<작업> 마지막 실행 N시간 전 (임계 Nh) — 집 PC 확인", 키가 없으면 "heartbeat 기록 없음 — 집 PC 확인". ①에서
+Supabase 접속 불가를 이미 경고했으면 중복을 피해 건너뛴다. 내부 표의 `last_refetch_run` 임계는 26h로 남아 있다(매시 작업이라 3h가
+맞지만 DML이라 운영자 결정 뒤 별도 반영). 지침의 트리거 3층 표·워치독 이원화·점검 체크리스트·하지 말아야 할 것, CLAUDE.md 스케줄
+문단을 함께 고쳤다. **교훈**: 실행 위치를 옮기면 감시자도 그 위치를 알아야 한다 — 워치독 메시지에 "어느 PC를 보라"를 박아 두지
+않으면 경고를 받고도 회사 노트북부터 뒤진다.
