@@ -6,7 +6,7 @@
 <title>전파·통신 정책 AI — SKT Comm센터 사업협력실</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <link rel="stylesheet" href="styles.css?v=20260920a">
+  <link rel="stylesheet" href="styles.css?v=20260920b">
 
 </head>
 <body>
@@ -36,7 +36,7 @@
     <div class="nav-group">
       <div class="nav-label">법안 동향</div>
       <div class="nav-item" tabindex="0" role="button" data-nav="assembly" onclick="go('assembly',this)"><i class="ti ti-building-bank"></i>국회 법안</div>
-      <div class="nav-item" tabindex="0" role="button" data-nav="minutes" onclick="go('minutes',this)"><i class="ti ti-microphone-2"></i>과방위 회의록</div>
+      <div class="nav-item" tabindex="0" role="button" data-nav="minutes" onclick="go('minutes',this)"><i class="ti ti-microphone-2"></i><abbr class="gl" title="국회 과학기술정보방송통신위원회">과방위</abbr> 회의록</div>
       <!-- 인물 프로필 — 의원·정부 발언 이력 (2026-08-27) -->
       <div class="nav-item" tabindex="0" role="button" data-nav="people" onclick="go('people',this)"><i class="ti ti-users"></i>인물</div>
       <div class="nav-item" tabindex="0" role="button" data-nav="lawrev" onclick="go('lawtrack',this)"><i class="ti ti-file-certificate"></i>법령 개정 추적</div>
@@ -59,7 +59,7 @@
       <span class="topbar-title" id="topbar-title">뉴스</span>
       <div class="topbar-actions" style="align-items:center">
         <!-- 상태등·톱니 — .btn이 아닌 인라인 요소라 모바일(.topbar-actions .btn 숨김 규칙)에서도 보인다 -->
-        <span class="ops-light" onclick="go('opsstatus',null)" title="운영 상태" style="cursor:pointer;font-size:11px;display:inline-flex;align-items:center;gap:3px;color:var(--text-secondary);padding:4px 6px;white-space:nowrap">⚪ <span>확인중</span></span>
+        <span class="ops-light" data-login-only data-show="inline-flex" onclick="go('opsstatus',null)" title="운영 상태" style="cursor:pointer;font-size:11px;display:none;align-items:center;gap:3px;color:var(--text-secondary);padding:4px 6px;white-space:nowrap">⚪ <span>확인중</span></span>
         <!-- 계정 — 인라인 요소로 두어 모바일에서도 보이게 (.btn 숨김 규칙 회피) -->
         <span id="acct-label" onclick="onAccountClick()" title="계정" style="cursor:pointer;font-size:11px;display:inline-flex;align-items:center;gap:3px;color:var(--text-secondary);padding:4px 6px;white-space:nowrap"><i class="ti ti-user"></i>로그인</span>
         <span id="acct-logout" onclick="doLogout()" title="로그아웃" style="display:none;cursor:pointer;font-size:11px;color:var(--text-secondary);padding:4px 8px;white-space:nowrap;border:0.5px solid var(--border-mid);border-radius:var(--radius-md)"><i class="ti ti-logout"></i> 로그아웃</span>
@@ -421,8 +421,8 @@
                수동 업로드는 '추가 지식 입력' 탭으로 일원화. -->
         </div>
 
-        <!-- 수집 키워드 관리 (접이식 — app_config key='press_keywords') -->
-        <div class="card" style="cursor:default;padding:0;margin-bottom:16px">
+        <!-- 수집 키워드 관리 (접이식 — app_config key='press_keywords'). 로그인 전용(#177): 비로그인 화면에 편집 UI가 보이던 것 -->
+        <div class="card" data-login-only style="display:none;cursor:default;padding:0;margin-bottom:16px">
           <div onclick="togglePressKeywordCard()" style="display:flex;align-items:center;gap:8px;padding:11px 16px;cursor:pointer;user-select:none">
             <i class="ti ti-filter" style="font-size:15px;color:var(--text-secondary)"></i>
             <span style="font-size:13px;font-weight:600;color:var(--text-primary)">수집 키워드 관리</span>
@@ -454,7 +454,7 @@
           <span class="tag selected" onclick="filterPressAgency(this,'전체')">전체</span>
           <span class="tag" onclick="filterPressAgency(this,'과기정통부')">과기정통부</span>
           <span class="tag" onclick="filterPressAgency(this,'전파연구원')">전파연구원</span>
-          <span class="tag" onclick="filterPressAgency(this,'방통위')">방미통위</span><!-- 키 '방통위'는 doc_name 접두(역사적 이름), 라벨만 현행화 #154 -->
+          <span class="tag" onclick="filterPressAgency(this,'방통위')"><abbr class="gl" title="방송미디어통신위원회 (구 방송통신위원회)">방미통위</abbr></span><!-- 키 '방통위'는 doc_name 접두(역사적 이름), 라벨만 현행화 #154 -->
           <span class="tag" onclick="filterPressAgency(this,'전파관리소')">전파관리소</span>
           <span class="tag" onclick="filterPressAgency(this,'ETRI')">ETRI</span>
           <span class="tag" onclick="filterPressAgency(this,'KISDI')">KISDI</span>
@@ -847,7 +847,7 @@
       <!-- 해외 규제동향 — 독립 메뉴로 승격 (2026-08-02 운영자 지시, #54) -->
       <div class="panel" id="panel-overseas">
         <div style="display:flex;gap:8px;margin-bottom:14px;align-items:center">
-          <span style="font-size:12px;color:var(--text-secondary)">FCC · Ofcom · BEREC · 日총무성 · ITU — AI 관련성 판정 + 한글 요약 · 매일 05:30 수집 · 60일 보관</span>
+          <span style="font-size:12px;color:var(--text-secondary)"><abbr class="gl" title="미국 연방통신위원회">FCC</abbr> · <abbr class="gl" title="영국 통신규제청">Ofcom</abbr> · <abbr class="gl" title="유럽 전자통신규제기구">BEREC</abbr> · 日총무성 · <abbr class="gl" title="국제전기통신연합">ITU</abbr> —AI 관련성 판정 + 한글 요약 · 매일 05:30 수집 · 60일 보관</span>
         </div>
         <div id="overseas-list">
           <div style="color:var(--text-secondary);padding:20px;text-align:center;font-size:12px">불러오는 중...</div>
@@ -926,7 +926,7 @@
         <i class="ti ti-building-bank"></i>국회 법안
       </button>
       <button class="mobile-submenu-item" onclick="go('minutes',null);setBottomNav('bn-bills');closeMobileSubMenu('bills-sub')">
-        <i class="ti ti-microphone-2"></i>과방위 회의록
+        <i class="ti ti-microphone-2"></i><abbr class="gl" title="국회 과학기술정보방송통신위원회">과방위</abbr> 회의록
       </button>
       <!-- 인물 프로필 (2026-08-27) -->
       <button class="mobile-submenu-item" onclick="go('people',null);setBottomNav('bn-bills');closeMobileSubMenu('bills-sub')">
@@ -962,7 +962,7 @@
       <button class="mobile-submenu-item" onclick="go('settings',null);setBottomNav('bn-more');closeMobileSubMenu('more-sub')">
         <i class="ti ti-settings"></i>설정
       </button>
-      <button class="mobile-submenu-item" onclick="go('opsstatus',null);setBottomNav('bn-more');closeMobileSubMenu('more-sub')">
+      <button class="mobile-submenu-item" data-login-only style="display:none" onclick="go('opsstatus',null);setBottomNav('bn-more');closeMobileSubMenu('more-sub')">
         <i class="ti ti-activity"></i>운영 상태
       </button>
     </div>
@@ -1114,7 +1114,7 @@
 <script src="system_prompt.js?v=20260911c"></script>
 <!-- 인용 조문 통째 보강·[원문 확인됨] 검증 로직 — 텔레그램 rag.ts와 같은 파일(#155). GitLab Pages는 .gitlab-ci.yml cp 목록에 있어야 실린다 -->
 <script src="supabase/functions/_shared/cite_verify.js?v=20260920a"></script>
-<script src="app.js?v=20260920a"></script>
+<script src="app.js?v=20260920b"></script>
 <script src="lawmap_articles.js?v=20260914a"></script>
 </body>
 </html>

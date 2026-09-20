@@ -122,6 +122,10 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 /* 인용 꼬리표(#155): [원문 확인됨]=초록, [⚠️ 원문 미확인]=회색, [⚠️ 원문과 다르게 설명됨]=주황, [학습 데이터 기반]=보라 */
 .cite { display: inline-block; font-size: 11px; line-height: 1.5; padding: 0 5px; border-radius: 4px; white-space: normal; vertical-align: baseline; } /* nowrap→normal(#176): 판정기 메모가 붙어 표시가 길어짐 */
 .cite-ok { background: #e3f4e6; color: #1f7a36; }
+/* 약칭 풀이(#177): 점선 밑줄만 — PC는 title 툴팁, 휴대폰은 탭하면 .gl-tip 말풍선(app.js 끝) */
+abbr.gl { text-decoration: underline dotted; text-underline-offset: 2px; cursor: help; }
+.gl-tip { position: fixed; z-index: 9999; max-width: 280px; padding: 6px 9px; font-size: 12px; line-height: 1.45; border-radius: 6px;
+  background: #222; color: #fff; box-shadow: 0 2px 8px rgba(0,0,0,.25); pointer-events: none; }
 .cite-miss { background: #ececec; color: #666; }
 .cite-bad { background: #fdebd0; color: #a34d00; font-weight: 600; }
 .cite-learn { background: var(--accent-light); color: var(--accent-dark); }

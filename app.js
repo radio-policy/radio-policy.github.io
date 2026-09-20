@@ -260,6 +260,11 @@ function applyAuthUI() {
   document.querySelectorAll('[data-admin-only]').forEach(function(el) {
     el.style.display = isAdminUser() ? '' : 'none';
   });
+  // 로그인 전용 영역(#177, 2026-09-20 운영자 결정) — 운영 상태·KB 품질·수집 키워드 편집처럼 운영자용 화면은 비로그인에게
+  // 메뉴부터 숨긴다(9/17 심사자 시승: 내부 발표자료 파일명·편집 UI가 외부인에게 보였다). data-show = 보일 때의 display 값.
+  document.querySelectorAll('[data-login-only]').forEach(function(el) {
+    el.style.display = currentUser ? (el.getAttribute('data-show') || '') : 'none';
+  });
   applySettingsLock();   // 설정 잠금도 로그인 상태를 따라간다(이중 잠금 없음)
   updateStatusDots();
   refreshQuotaLine();
@@ -6731,7 +6736,7 @@ async function loadOpsStatus() {
     var briefOk = !!(briefRow && briefRow.briefing_date === todayKst);
 
     var rows = '';
-    rows += opsRow('크롤러 실행 (heartbeat)', opsAgoText(lastCrawl),
+    rows += opsRow('크롤러 실행 (마지막 실행)', opsAgoText(lastCrawl),
                    lastCrawl ? crawlerOk : null,
                    crawlNote ? ('최근 결과: ' + crawlNote) : '매시간 자동 실행');
     rows += opsRow('뉴스 마지막 입력', opsAgoText(lastNews),
@@ -6741,21 +6746,21 @@ async function loadOpsStatus() {
                    briefOk ? ('생성됨 (' + briefRow.briefing_date + ')') : '미생성',
                    briefOk ? true : (kstHour < 9 ? null : false),
                    '매일 06:00 KST');
-    rows += opsRow('입법예고·정부고시 크롤러 (heartbeat)', opsAgoText(lastGov),
+    rows += opsRow('입법예고·정부고시 크롤러 (마지막 실행)', opsAgoText(lastGov),
                    lastGov ? govOk : null,
                    lastGov ? '매일 17:00 PC 실행 — 새 예고 없어도 정상' : 'PC 17:00 스케줄러 (heartbeat 대기)');
     rows += opsRow('└ 입법예고 최근 새 항목', opsAgoText(lastLaw), null, '매칭되는 새 입법예고가 드물어 간격 큼(정상)');
-    rows += opsRow('본문 수집 (refetch, heartbeat)', opsAgoText(lastRefetch), null,
-                   lastRefetch ? ('최근 결과: ' + hbNote('last_refetch_run')) : 'PC 본문 수집 (heartbeat 대기)');
+    rows += opsRow('본문 재수집 (PC 작업, 마지막 실행)', opsAgoText(lastRefetch), null,
+                   lastRefetch ? ('최근 결과: ' + hbNote('last_refetch_run')) : 'PC 본문 재수집 (실행 기록 대기)');
     // 방미통위 회의 의사일정·위원회 결과 (kmcc_meeting.py, Actions 매시 :17 뉴스 뒤 단계 — #154).
     // watchdog_scan 은 아직 이 키를 안 본다(2주 안정 뒤 추가 검토) — 이 행이 유일한 감시 창이다.
     var lastKmcc = hbTime('last_kmcc_meeting_run');
-    rows += opsRow('방미통위 회의·결과 수집 (heartbeat)', opsAgoText(lastKmcc),
+    rows += opsRow('방미통위 회의·결과 수집 (마지막 실행)', opsAgoText(lastKmcc),
                    lastKmcc ? (hoursAgo(lastKmcc) < 3) : null,
                    lastKmcc ? ('최근 결과: ' + hbNote('last_kmcc_meeting_run')) : 'Actions 매시 (heartbeat 대기)');
     // 법적 용어 정의 재추출 (law_terms_sync.py, law_crawl.yml 11:00 마지막 단계 — #156). watchdog_scan 미감시, 이 행이 감시 창.
     var lastLT = hbTime('last_law_terms_sync');
-    rows += opsRow('법적 용어 정의 추출 (heartbeat)', opsAgoText(lastLT),
+    rows += opsRow('법적 용어 정의 추출 (마지막 실행)', opsAgoText(lastLT),
                    lastLT ? (hoursAgo(lastLT) < 30 && hbNote('last_law_terms_sync').indexOf('fail=1') < 0) : null,
                    lastLT ? ('최근 결과: ' + hbNote('last_law_terms_sync')) : 'Actions 11:00 law_crawl.yml (heartbeat 대기)');
     rows += opsRow('국회 법안 최근 갱신', opsAgoText(lastBill), null, '매일 10:00');
@@ -6891,6 +6896,11 @@ var PAGE_TO_NAV = {
 };
 
 function go(page, navEl, sourceType) {
+  // 운영 상태는 로그인 뒤에만(#177) — 주소·버튼 어느 경로로 와도 설정(로그인) 화면으로 보낸다
+  if (page === 'opsstatus' && !currentUser) {
+    page = 'settings'; navEl = null;
+    setTimeout(function() { alert('운영 상태는 로그인 후 볼 수 있습니다.'); }, 50);
+  }
   document.querySelectorAll('.panel').forEach(function(p) { p.classList.remove('active'); });
   document.querySelectorAll('.nav-item').forEach(function(n) { n.classList.remove('active'); });
   var panel = document.getElementById('panel-' + page);
@@ -7021,7 +7031,7 @@ async function refreshOpsLight() {
   els.forEach(function(el) {
     if (ok === null) { el.innerHTML = '⚪ <span>확인중</span>'; el.title = '상태 조회 실패 — 클릭해 운영 상태 확인'; return; }
     el.innerHTML = ok ? '🟢 <span>정상</span>' : '🔴 <span>점검</span>';
-    el.title = ok ? '크롤러 하트비트 정상 — 클릭하면 운영 상태' : '하트비트 지연 감지 — 클릭해 운영 상태 확인';
+    el.title = ok ? '크롤러 정상 실행 중 — 클릭하면 운영 상태' : '크롤러 실행 지연 감지 — 클릭해 운영 상태 확인';
   });
 }
 
@@ -12284,3 +12294,24 @@ document.addEventListener('fullscreenchange', function() {
   });
 });
 (function() { try { if (localStorage.getItem('ui_wide') === '1') applyWide(true); } catch(e) {} })();
+
+// ── 약칭 풀이 툴팁(#177) — <abbr class="gl" title="…"> 는 PC에서 마우스를 올리면 브라우저 툴팁이 뜨지만 휴대폰엔 마우스가 없다.
+//    탭하면 같은 풀이를 작은 말풍선으로 3초 보여준다. 괄호 풀이 대신 툴팁을 쓰는 이유: 표 셀·메뉴처럼 폭이 정해진 자리에서
+//    화면이 깨지지 않게(운영자 결정 2026-09-20).
+(function() {
+  var tip = null, timer = null;
+  function hide() { if (tip) { tip.remove(); tip = null; } if (timer) { clearTimeout(timer); timer = null; } }
+  document.addEventListener('click', function(ev) {
+    var a = ev.target && ev.target.closest ? ev.target.closest('abbr.gl') : null;
+    hide();
+    if (!a || !a.title) return;
+    tip = document.createElement('div');
+    tip.className = 'gl-tip';
+    tip.textContent = a.title;
+    document.body.appendChild(tip);
+    var r = a.getBoundingClientRect();
+    tip.style.left = Math.max(8, Math.min(window.innerWidth - tip.offsetWidth - 8, r.left)) + 'px';
+    tip.style.top = (r.bottom + 6) + 'px';
+    timer = setTimeout(hide, 3000);
+  }, true);
+})();
