@@ -104,7 +104,7 @@ Deno.serve(async (req) => {
         : null,
     });
     console.log('[인용 검증]', user.email || user.id, 'auto+' + (vr.autoTagged || 0), JSON.stringify(vr.verdicts.map((v: { key: string; status: string; reason: string }) => [v.key, v.status, v.reason])));
-    return json(200, { answer: vr.answer, verdicts: vr.verdicts, changed: vr.changed, autoTagged: vr.autoTagged || 0 }, cors);
+    return json(200, { answer: vr.answer, verdicts: vr.verdicts, changed: vr.changed, autoTagged: vr.autoTagged || 0, citedDocs: vr.citedDocs || [] }, cors);
   } catch (e) {
     console.error('[인용 검증 실패]', e);
     return json(200, { answer, verdicts: [], changed: 0, error: String(e) }, cors);   // fail-open: 답변은 그대로

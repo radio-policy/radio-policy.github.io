@@ -6,7 +6,7 @@
 <title>전파·통신 정책 AI — SKT Comm센터 사업협력실</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <link rel="stylesheet" href="styles.css?v=20260919f">
+  <link rel="stylesheet" href="styles.css?v=20260920a">
 
 </head>
 <body>
@@ -48,7 +48,7 @@
     <div class="sidebar-bottom">
       <div class="version">v0.2 — 실제 연동</div>
       <div class="conn-status"><div class="conn-dot" id="sb-dot"></div><span id="sb-status">Supabase 미연결</span></div>
-      <div class="conn-status" style="margin-top:2px"><div class="conn-dot" id="ai-dot"></div><span id="ai-status">Claude API 미설정</span></div>
+      <div class="conn-status" style="margin-top:2px"><div class="conn-dot" id="ai-dot"></div><span id="ai-status">AI 자문: 로그인 후 사용</span></div>
       <div class="conn-status" style="margin-top:2px"><div class="conn-dot" id="rag-dot"></div><span id="rag-status">RAG 키워드 검색</span></div>
     </div>
   </div>
@@ -406,7 +406,7 @@
       <div class="panel" id="panel-briefing">
         <div style="display:flex;gap:8px;margin-bottom:14px;align-items:center">
           <div>
-            <div style="font-size:13px;color:var(--text-secondary)">매일 오전 8시 자동 수집 · 최근 30일 이력</div>
+            <div style="font-size:13px;color:var(--text-secondary)">매일 06:00 자동 생성 · 최근 30일 이력</div>
           </div>
         </div>
         <div id="briefing-list"><div style="color:var(--text-secondary);padding:20px;text-align:center">불러오는 중...</div></div>
@@ -1113,8 +1113,8 @@
 <script>if(typeof pdfjsLib!=='undefined'){pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';}</script>
 <script src="system_prompt.js?v=20260911c"></script>
 <!-- 인용 조문 통째 보강·[원문 확인됨] 검증 로직 — 텔레그램 rag.ts와 같은 파일(#155). GitLab Pages는 .gitlab-ci.yml cp 목록에 있어야 실린다 -->
-<script src="supabase/functions/_shared/cite_verify.js?v=20260914a"></script>
-<script src="app.js?v=20260919e"></script>
+<script src="supabase/functions/_shared/cite_verify.js?v=20260920a"></script>
+<script src="app.js?v=20260920a"></script>
 <script src="lawmap_articles.js?v=20260914a"></script>
 </body>
 </html>

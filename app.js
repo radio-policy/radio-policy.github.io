@@ -474,12 +474,12 @@ async function verifyCitationsRemote(answer, chunkIds, annexSources) {
   return res.json();
 }
 // 답변 하단 '인용 대조' 요약 한 줄 — 검증이 실제로 돈 답변에만 붙는다(정상 답변은 꼬리표 색만 바뀜)
-// 본문 표시는 [원문 확인됨] / [원문 확인 안 됨] 두 가지뿐이다(#169-보론5) — 이용자가 할 일은
+// 본문 표시는 세 상태(#176): [원문 확인됨] / [원문 없음 — …] / [원문과 다름 — 판정기 메모: …] — 이용자가 할 일은
 // 어느 갈래든 같다(원문 보기). 갈래는 이 요약 줄에서만 보여 준다: 운영자가 어디가 약한지 알아야
 // 고칠 수 있고(호 대조 불가가 많으면 KB 청킹 문제다), 검증이 아예 안 돈 경우도 여기서 드러난다.
 var CITE_STATUS_LABEL = {
-  missing: '조문 미검색', mismatch: '원문과 다름', unclear: '판단 보류', unparsed: '인용 미식별',
-  noclaim: '인용 내용 없음', nocheck: '호 대조 불가', unjudged: '판정 미실행'
+  missing: '원문 없음', mismatch: '원문과 다름', unclear: '판정 보류', unparsed: '인용 미식별',
+  noclaim: '인용 내용 없음', nocheck: '호 대조 못 함', unjudged: '판정 미실행', dup: '중복 표시 삭제'
 };
 function citeVerdictSummaryHtml(verdicts) {
   // 한도 초과(429)·Edge 예외로 대조가 통째로 안 돈 경우 — 종전에는 아무 표시가 없어
@@ -490,16 +490,19 @@ function citeVerdictSummaryHtml(verdicts) {
       + ' — 표시는 AI가 붙인 것이므로 원문 링크로 확인해 주세요</div>';
   if (!verdicts || !verdicts.length) return '';
   var ok = 0, by = {};
+  var counted = 0;
   verdicts.forEach(function(v) {
+    if (v.status === 'dup') return;                 // 중복 표시는 지웠으므로 세지 않는다(#176)
+    counted++;
     if (v.status === 'ok') { ok++; return; }
-    var k = CITE_STATUS_LABEL[v.status] || '확인 안 됨';
+    var k = CITE_STATUS_LABEL[v.status] || '확인 못 함';
     by[k] = (by[k] || 0) + 1;
   });
-  var bad = verdicts.length - ok;
+  var bad = counted - ok;
   var detail = Object.keys(by).map(function(k) { return k + ' ' + by[k]; }).join(' · ');
   return '<div class="rag-sources" style="margin-top:8px"><i class="ti ti-shield-check"></i>인용 대조('
-    + verdicts.length + '건): 확인 ' + ok
-    + (bad ? ' · <span class="cite cite-miss">확인 안 됨 ' + bad + '</span>'
+    + counted + '건): 확인 ' + ok
+    + (bad ? ' · <span class="cite cite-miss">확인 못 함 ' + bad + '</span>'
              + (detail ? ' (' + detail + ')' : '') : '')
     + '</div>';
 }
@@ -2718,7 +2721,7 @@ async function callClaude(userText, onDelta) {
   aiText = aiText.replace(/<lawmap>[\s\S]*?<\/lawmap>/g, '').replace(/<lawmap>[\s\S]*$/, '').replace(/\s+$/, '');
 
   // [원문 확인됨] 검증(#155-2·3안) — 표시가 붙은 인용의 원문이 실제로 근거 청크에 있었는지 서버가 대조하고,
-  // 있었으면 Haiku가 원문과 설명의 일치를 판정한다. 없으면 「⚠️ 원문 미확인」, 다르면 「⚠️ 원문과 다르게 설명됨」.
+  // 있었으면 Haiku가 원문과 설명의 일치를 판정한다. 없으면 「원문 없음」, 다르면 「원문과 다름 — 판정기 메모」(#176).
   // 표시가 없는 답변은 verifyCitationsRemote가 그냥 null을 돌려준다. 실패해도 답변은 그대로(fail-open).
   window._advCiteVerdicts = null;
   window._advCiteFailed = null;
@@ -2729,6 +2732,7 @@ async function callClaude(userText, onDelta) {
       if (vr && typeof vr.answer === 'string' && vr.answer) {
         aiText = vr.answer;
         window._advCiteVerdicts = vr.verdicts || [];
+        window._advCitedDocs = vr.citedDocs || [];   // 참조 문서 배지를 인용 문서 우선으로(#176)
         if (vr.changed) console.warn('인용 대조: 표시 ' + vr.changed + '건 교체', vr.verdicts);
       }
     } catch(e) {
@@ -2764,7 +2768,11 @@ function renderMd(text) {
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     .replace(/`(.+?)`/g, '<code>$1</code>')
     // 인용 꼬리표(#155): 확인됨=초록 / 미확인=회색 / 다르게 설명됨=주황 / 학습 데이터=보라. 글자는 그대로, 색만.
+    // 표시 세 상태(#176): 확인됨(초록) / 원문 없음(회색 — 직접 확인) / 원문과 다름(빨강 — 틀렸을 수 있음). 옛 문구도 회색으로 남긴다.
     .replace(/\[(원문 확인됨[^\]]*)\]/g, '<span class="cite cite-ok">[$1]</span>')
+    .replace(/\[(원문 없음[^\]]*)\]/g, '<span class="cite cite-miss">[$1]</span>')
+    .replace(/\[(원문과 다름[^\]]*)\]/g, '<span class="cite cite-bad">[$1]</span>')
+    .replace(/\[(원문 확인 안 됨[^\]]*)\]/g, '<span class="cite cite-miss">[$1]</span>')
     .replace(/\[(⚠️ 원문 미확인[^\]]*)\]/g, '<span class="cite cite-miss">[$1]</span>')
     .replace(/\[(⚠️ 원문과 다르게 설명됨[^\]]*)\]/g, '<span class="cite cite-bad">[$1]</span>')
     .replace(/\[(학습 데이터 기반[^\]]*|근거 조문 미확인[^\]]*)\]/g, '<span class="cite cite-learn">[$1]</span>');
@@ -3229,6 +3237,12 @@ async function sendChat() {
 
     // RAG 출처 표시 — 법령·문서와 뉴스는 근거 성격이 달라 한 배지에 섞지 않는다
     const _advSrc = splitSources(lastRagSources);
+    // 답변이 실제로 인용해 확인된 문서를 배지 맨 앞으로(#176) — 6개만 보여주므로 순서가 곧 노출이다
+    if (window._advCitedDocs && window._advCitedDocs.length && _advSrc.laws) {
+      var _cited = window._advCitedDocs;
+      var _isCited = function(s) { return _cited.some(function(d) { return s === d || d.indexOf(s) === 0 || s.indexOf(d) === 0; }); };
+      _advSrc.laws = _advSrc.laws.filter(_isCited).concat(_advSrc.laws.filter(function(s) { return !_isCited(s); }));
+    }
     if (_advSrc.laws.length + _advSrc.annex.length + _advSrc.kb.length + _advSrc.news.length > 0) {
       const inDiv = document.createElement('div');
       inDiv.className = 'rag-sources';
@@ -3327,6 +3341,7 @@ async function sendChat() {
           sources: (lastWebSources || []).concat(lastRagSources),
           channel: 'dashboard',
           chunk_ids: lastAdvChunkIds,
+          cite_verdicts: window._advCiteVerdicts || null,   // 검증기 판정 목록(#176) — 오탐률 측정 재료
           // RLS의 INSERT 정책이 user_id = auth.uid()를 강제한다 — 빠뜨리면 기록 자체가 거부된다
           user_id: currentUser ? currentUser.id : null
         });
@@ -6083,7 +6098,7 @@ async function loadBriefing() {
       .order('briefing_date', { ascending: false });
     if (error) throw error;
     if (!data || data.length === 0) {
-      listEl.innerHTML = '<div style="color:var(--text-secondary);padding:40px;text-align:center">아직 브리핑이 없습니다.<br>매일 오전 8시에 자동으로 생성됩니다.</div>';
+      listEl.innerHTML = '<div style="color:var(--text-secondary);padding:40px;text-align:center">아직 브리핑이 없습니다.<br>매일 06:00에 자동으로 생성됩니다.</div>';
       return;
     }
     // 먼저 전체 파싱 결과를 수집 (elemId 보장)
@@ -6644,9 +6659,11 @@ function updateStatusDots() {
   if (sbDot) sbDot.style.background = sbOk ? 'var(--green)' : '#d1d5db';
   if (aiDot) aiDot.style.background = aiOk ? 'var(--green)' : '#d1d5db';
   if (ragDot) ragDot.style.background = ragOk ? 'var(--green)' : '#d1d5db';
-  if (sbStatus) sbStatus.textContent = sbOk ? 'Supabase 연결됨' : 'Supabase 미연결';
-  if (aiStatus) aiStatus.textContent = aiOk ? 'Claude API 설정됨' : 'Claude API 미설정';
-  if (ragStatus) ragStatus.textContent = ragOk ? 'RAG 활성 (하이브리드 검색)' : 'RAG 하이브리드 검색';
+  if (sbStatus) sbStatus.textContent = sbOk ? '데이터베이스 연결됨' : '데이터베이스 미연결';
+  // 외부인·비로그인에게 "Claude API 미설정"은 "AI가 꺼져 있나?"로 읽힌다(9/17 심사자 시승 기록). 내부 상태가 아니라
+  // 사용자 관점의 말로 쓴다 — 실제 뜻: 브라우저에 키를 두지 않고 로그인 뒤 서버(claude-proxy)를 거친다.
+  if (aiStatus) aiStatus.textContent = aiOk ? 'AI 자문 사용 가능' : 'AI 자문: 로그인 후 사용';
+  if (ragStatus) ragStatus.textContent = ragOk ? '법령·뉴스 검색 연결됨' : '법령·뉴스 검색';
 }
 
 // ════════════════════════════════════════════

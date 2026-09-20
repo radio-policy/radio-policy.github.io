@@ -1073,7 +1073,7 @@ async function buildAssemblyTrendContext(sb: SupabaseClient, query: string): Pro
 // chunkIds = 프롬프트에 들어간 청크의 document_chunks.id. 만족도 👎를 받았을 때
 // "그때 무엇을 근거로 답했나"를 되짚으려면 문서명(sources)만으로는 부족하다 — 같은 법령에서
 // 어느 조문이 걸렸는지가 검색 품질의 실제 단서다.
-export interface AdvisoryResult { answer: string; sources: string[]; webSources: WebRef[]; chunkIds: number[] }
+export interface AdvisoryResult { answer: string; sources: string[]; webSources: WebRef[]; chunkIds: number[]; verdicts: unknown[] }
 
 // ── 자문 실행 (진입점) ──
 export async function answerAdvisory(sb: SupabaseClient, systemPrompt: string, question: string): Promise<AdvisoryResult> {
@@ -1181,12 +1181,16 @@ export async function answerAdvisory(sb: SupabaseClient, systemPrompt: string, q
   // 다르면 「⚠️ 원문과 다르게 설명됨」으로 표시를 바꾼다. 시스템 프롬프트의 핵심 조문 5개도 대조 대상.
   // 검증 자체가 실패하면 답변은 그대로 나간다(fail-open). 대시보드는 verify-citations Edge가 같은 모듈을 쓴다.
   let answer = rawAnswer;
+  let verdicts: unknown[] = [];          // chat_logs.cite_verdicts 에 남긴다 — 검증기 오탐률 측정 재료(#176)
+  let citedDocs: string[] = [];          // 답변이 실제로 인용해 확인된 문서 — 출처 목록을 이 순서로 앞세운다(#176)
   try {
     const vr = await CiteVerify.verifyCitations({
       answer: rawAnswer, chunks: (extra2 as unknown as Chunk[]).concat(chunks2).concat(citing.chunks), annexSources: annex.sources, systemPrompt,
       callHaiku: (sys: string, u: string) => callHaikuText(sb, apiKey, sys, u, 'rag.ts:citeJudge', 900),
     });
     answer = vr.answer;
+    verdicts = vr.verdicts || [];
+    citedDocs = (vr.citedDocs || []) as string[];
     if (vr.verdicts.length || vr.autoTagged) console.log('[인용 검증]', 'auto+' + (vr.autoTagged || 0), JSON.stringify(vr.verdicts.map((v: { key: string; status: string; reason: string }) => [v.key, v.status, v.reason])));
   } catch (e) { console.warn('인용 검증 실패(답변 그대로):', e); }
 
@@ -1201,10 +1205,17 @@ export async function answerAdvisory(sb: SupabaseClient, systemPrompt: string, q
   for (const c of chunks2) if (c.doc_name && !sources.includes(c.doc_name)) sources.push(c.doc_name);
   for (const r of kb) { const t = '[요약] ' + (r.title || '').trim(); if (r.title && !sources.includes(t)) sources.push(t); }
   for (const s of news.sources) if (!sources.includes(s)) sources.push(s);
+  // 답변이 실제로 인용해 확인된 문서를 맨 앞으로(#176) — 텔레그램 footer는 앞 6개만 보여주는데, 9/17 실측에서
+  // 6칸 중 5칸이 답변에 안 쓰인 검색 잡음이었다. 나머지 순서(정밀검색→별표→RAG→요약→뉴스)는 그대로.
+  if (citedDocs.length) {
+    const isCited = (s: string) => citedDocs.some((d) => s === d || d.startsWith(s) || s.startsWith(d));
+    const front = sources.filter(isCited), rest = sources.filter((s) => !isCited(s));
+    sources.length = 0; sources.push(...front, ...rest);
+  }
   // 근거 청크 id — sources와 같은 순서(조문 정밀검색분 먼저, 그다음 RAG, 끝에 보강 조각). 숫자 id만 남긴다.
   const chunkIds: number[] = [];
   for (const h of (extra2 as unknown as Chunk[]).concat(chunks2 as Chunk[]).concat(addedIds.concat(citing.ids).map((id) => ({ id } as Chunk)))) {
     if (typeof h.id === 'number' && !chunkIds.includes(h.id)) chunkIds.push(h.id);
   }
-  return { answer, sources, webSources: webRefs, chunkIds };
+  return { answer, sources, webSources: webRefs, chunkIds, verdicts };
 }

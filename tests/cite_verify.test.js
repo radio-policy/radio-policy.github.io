@@ -149,18 +149,18 @@ function ok(name, cond, extra) {
   var fakeHaiku = async function (system, user) { judged = user; return '```json\n[{"id":1,"verdict":"일치","reason":""},{"id":2,"verdict":"불일치","reason":"주체가 이통사인데 대리점으로 씀"},{"id":3,"verdict":"판단불가","reason":""}]\n```'; };
   var v = await CV.verifyCitations({ answer: FX.answer, chunks: full, annexSources: [], callHaiku: fakeHaiku });
   eq('종합: 판정 3건 상태', v.verdicts.map(function (x) { return x.status; }), ['ok', 'mismatch', 'unclear']);
-  // 표시는 두 가지뿐 — ok 외에는 모두 [원문 확인 안 됨] (#169-보론5). 갈래는 verdict.status 로만 남는다.
+  // 표시는 세 상태(#176): 확인됨 / 원문 없음(missing·그 밖) / 원문과 다름(mismatch, 판정기 메모). 갈래는 verdict.status 에도 남는다.
   eq('종합: 바뀐 표시 2개(불일치·판단불가)', v.changed, 2);
   ok('종합: 50조 표시가 미확인 문구로', v.verdicts[1].status === 'mismatch'
-     && /예외입니다\. \[원문 확인 안 됨\]/.test(v.answer) && v.answer.indexOf('[원문 확인됨, 참조4]') === -1);
+     && /예외입니다\. \[원문과 다름 — 판정기 메모: 주체가/.test(v.answer) && v.answer.indexOf('[원문 확인됨, 참조4]') === -1);
   ok('종합: ok 표시만 그대로, 판단불가도 미확인으로', v.verdicts[2].status === 'unclear'
      && v.answer.indexOf('[원문 확인됨] 즉 명칭이') !== -1
-     && /인정합니다\. \[원문 확인 안 됨\]/.test(v.answer) && v.answer.indexOf('[원문 확인됨, 참조1]') === -1);
+     && /인정합니다\. \[원문 없음 — 자동 대조 못 함, 직접 확인\]/.test(v.answer) && v.answer.indexOf('[원문 확인됨, 참조1]') === -1);
   ok('종합: Haiku에 원문·인용문 3항목', /### 항목 3/.test(judged) && /\[원문\]\n제50조\(금지행위\)/.test(judged));
   // 그날 상황: 50조 missing → Haiku에는 2건만, 표시는 미확인 문구
   var v2 = await CV.verifyCitations({ answer: FX.answer, chunks: thatDay, annexSources: [], callHaiku: async function (s, u) { judged = u; return '[{"id":1,"verdict":"일치"},{"id":2,"verdict":"일치"}]'; } });
   eq('그날: 상태', v2.verdicts.map(function (x) { return x.status; }), ['ok', 'missing', 'ok']);
-  ok('그날: 미확인 문구', v2.answer.indexOf('[원문 확인 안 됨]') !== -1 && v2.answer.indexOf('[원문 확인됨, 참조4]') === -1);
+  ok('그날: 원문 없음 문구', v2.answer.indexOf('[원문 없음 — 검색 자료에 해당 조문 없음]') !== -1 && v2.answer.indexOf('[원문 확인됨, 참조4]') === -1);
   ok('그날: Haiku 2항목', /### 항목 2/.test(judged) && !/### 항목 3/.test(judged));
   // Haiku 실패는 fail-closed — 판정 대상이던 인용은 전부 unjudged (#169-보론5, 종전에는 ok 유지)
   var v3 = await CV.verifyCitations({ answer: FX.answer, chunks: full, annexSources: [], callHaiku: async function () { throw new Error('boom'); } });
@@ -193,7 +193,7 @@ function ok(name, cond, extra) {
   eq('꼬리표 대상 우선(52조 아님)', [CV.checkCitation(t2[0], full, []).status, CV.checkCitation(t2[0], full, []).key], ['ok', '50조']);
   // 꼬리표 대상이 컨텍스트에 없으면 missing, 바뀐 표시에 대상이 남는다
   var t3 = await CV.verifyCitations({ answer: '이통사가 면책됩니다. [원문 확인됨: 전기통신사업법 제52조의3제2항]', chunks: full });
-  eq('꼬리표 대상 없음 → missing + 대상 표기', [t3.verdicts[0].status, t3.answer], ['missing', '이통사가 면책됩니다. [원문 확인 안 됨 (전기통신사업법 제52조의3제2항)]']);
+  eq('꼬리표 대상 없음 → missing + 대상 표기', [t3.verdicts[0].status, t3.answer], ['missing', '이통사가 면책됩니다. [원문 없음 — 검색 자료에 해당 조문 없음 (전기통신사업법 제52조의3제2항)]']);
   // 꼬리표에 엉뚱한 조를 적었지만 인용문이 다른 조문 그대로면 겹침이 바로잡는다
   var t4 = CV.checkCitation(CV.findCitations(q50 + ' [원문 확인됨: 전기통신사업법 제32조의14]')[0], full, []);
   eq('꼬리표 오기 + 통째 인용: 겹치는 50조로 교정', [t4.status, t4.key, t4.verbatim], ['ok', '50조', true]);
@@ -250,6 +250,15 @@ function ok(name, cond, extra) {
   eq('발췌에 없는 호는 missing', CV.checkCitation(CV.findCitations('전기통신사업법 제20조 제1항 제3호 [원문 확인됨]')[0], full.concat(ce.chunks), []).status, 'missing');
   eq('역참조 없음', (await CV.buildCitingExcerpts([C.c11], fetchCiting, {})).text, '');
   eq('역참조 상한 total', (await CV.buildCitingExcerpts([C.c32_14, C.c50_138, { id: 27241, doc_name: C.c50_136.doc_name, article_no: '32조의4(부정이용)', chunk_index: 74, content: '…' }], fetchCiting, { maxTotal: 1 })).chunks.length, 1);
+
+  // ── #176: 토막 문단 표시 — 인용문 문단 뒤 토막("을 명시하고 있습니다.")에 붙은 표시는 앞 문단을 인용문으로 쓰고, 같은 조 표시가 이미 있으면 중복 삭제 ──
+  var stub = '시행령이 금지 사유를 구체화합니다.\n\n' + q50 + ' [원문 확인됨: 전기통신사업법 제50조]\n\n고 하면서,\n\n1. 첫째 사유, 2. 둘째 사유, 3. 셋째 사유를 아주 길게 열거하고 있는 문단입니다\n\n을 명시하고 있습니다. [원문 확인됨: 전기통신사업법 제50조제1항]\n\n## 다음 절\n\n결합판매 관련 별도 고시가 적용됩니다.';
+  var sc = CV.findCitations(stub);
+  ok('토막 표시: 앞 문단이 인용문(뒤 절 아님)', sc.length === 2 && /셋째 사유/.test(sc[1].claimOverride || '') && !/결합판매/.test(sc[1].claimOverride || ''), sc[1] && sc[1].claimOverride);
+  var stub2 = q50 + ' [원문 확인됨: 전기통신사업법 제50조]\n\n을 규정합니다. [원문 확인됨: 전기통신사업법 제50조제1항]';
+  var sv = await CV.verifyCitations({ answer: stub2, chunks: full, callHaiku: async function () { return '[{"id":1,"verdict":"일치"}]'; } });
+  eq('토막 표시 중복: 직전 문단에 같은 조 표시 → dup 삭제', [sv.verdicts.map(function (x) { return x.status; }), /을 규정합니다\.$/.test(sv.answer.trim())], [['ok', 'dup'], true]);
+  ok('citedDocs: 확인된 문서 목록', Array.isArray(sv.citedDocs) && sv.citedDocs.length === 1 && /전기통신사업법/.test(sv.citedDocs[0]), sv.citedDocs);
 
   console.log('\n' + (total - fails) + '/' + total + ' passed');
   process.exit(fails ? 1 : 0);

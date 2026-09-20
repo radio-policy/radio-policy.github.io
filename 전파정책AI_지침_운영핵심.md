@@ -89,7 +89,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
 | law_terms | **법적 용어 정의**(#156): 현행 문서의 정의 조문 항목을 원문 그대로 1행씩(term·term_key·term_alias·law_name·law_type·doc_name·article_no·item_no·definition·effective_date·synced_at). unique(doc_name,article_no,item_no). 대시보드는 term_key로 묶어 표시(법률>대통령령>부령>고시 순 대표). **파생 테이블 — 매일 11:00 law_terms_sync.py가 전량 재생성, SQL 직접 편집 금지**. RLS select 공개·쓰기 정책 없음(service_role만) |
 | app_config | 키-값 설정. `system_prompt`(봇 자문 프롬프트), `press_keywords`(보도자료 수집 키워드 JSON 배열 — 대시보드 '수집 키워드 관리' 카드가 편집), `press_relevance_criteria`(매일 수집 AI 관련성 판정 기준문), `assembly_notice_criteria`(국회 입법예고 Haiku 판정 기준문)·`assembly_notice_rejected`(기각 캐시 JSON — 자동 관리) 등. **claude_key는 anon 노출되는 브라우저용 — 서버측 재사용 금지** |
 | custom_knowledge | 팀 추가 지식(수동 입력). AI 자문 키워드 매칭 참조 |
-| chat_logs | AI 자문 이력. **2026-08-20(#103)부터 네 경로 공통 정본 답변 로그** — 대시보드 자문·텔레그램 /ask·/law 자연어·/law 조문 직조회. `channel`(만족도 집계 축)·`chat_id`(텔레그램 이용자)·`chunk_ids`(jsonb, 그때 실제로 프롬프트에 들어간 근거 청크 id — 불만족 분석 재료) 컬럼 추가. 자문 이력 목록은 `category='텔레그램-조문조회'`만 제외(기계적 원문 출력이라 성격이 다름 — 피드백 탭에서는 보인다). 삭제 가능. `sources`(text)는 **두 종류를 접두사로 구분해** 담는다 — 법령·문서명은 그대로, 수집 뉴스는 `[뉴스] 제목 (매체, 날짜)`. 화면·내보내기에서 `splitSources()`로 갈라 별도 표기(법령은 6개 초과분 `… 등 N개`). **뉴스는 본문 발췌로 실제 반영된 건만** 기록(제목 목록 30건은 근거 아님). 스키마 변경 없이 반영 여부를 사후 검증하려는 구조. (배경역사 #35) |
+| chat_logs | AI 자문 이력. `cite_verdicts` jsonb(#176) = 인용 검증기 판정 목록(status: ok/missing/mismatch/unclear/unjudged/nocheck/noclaim/unparsed/dup) — 검증기 오탐률은 이 컬럼을 세어 잰다. **2026-08-20(#103)부터 네 경로 공통 정본 답변 로그** — 대시보드 자문·텔레그램 /ask·/law 자연어·/law 조문 직조회. `channel`(만족도 집계 축)·`chat_id`(텔레그램 이용자)·`chunk_ids`(jsonb, 그때 실제로 프롬프트에 들어간 근거 청크 id — 불만족 분석 재료) 컬럼 추가. 자문 이력 목록은 `category='텔레그램-조문조회'`만 제외(기계적 원문 출력이라 성격이 다름 — 피드백 탭에서는 보인다). 삭제 가능. `sources`(text)는 **두 종류를 접두사로 구분해** 담는다 — 법령·문서명은 그대로, 수집 뉴스는 `[뉴스] 제목 (매체, 날짜)`. 화면·내보내기에서 `splitSources()`로 갈라 별도 표기(법령은 6개 초과분 `… 등 N개`). **뉴스는 본문 발췌로 실제 반영된 건만** 기록(제목 목록 30건은 근거 아님). 스키마 변경 없이 반영 여부를 사후 검증하려는 구조. (배경역사 #35) |
 | teams / profiles / advisory_usage | 대시보드 계정 체계(#104). `teams`=3팀(경쟁제도팀·기술정책팀·AI정책팀, 팀 합산 일일 한도). `profiles`=auth.users 1:1(이름·팀·role(admin/leader/member)·개인 한도·unlimited·**approved**(관리자 승인 전 AI 잠김)·active). 가입 시 트리거가 승인대기 프로필 자동 생성. `advisory_usage`=(user_id, day, kind) 일일 사용량, kind는 advisory(Sonnet 호출 전부 — #141부터 스트리밍 불문)/general(Haiku, 백스톱 **100/일 + 60/시간**, #152 — 종전 300; 정당한 대량 작업은 관리자 profile.unlimited로 우회). 쓰기는 service_role RPC 전용 |
 | api_usage / ai_usage_hour | **API 토큰 계측(#152, 2026-09-10)**. `api_usage`=(ts, host actions/pc/edge, site '<스크립트>.py:<함수>', model, input/cache_read/cache_write/output 토큰) — Python 스크립트가 `api_usage.install()`로 SDK `Messages.create`를 감싸 호출마다 1행 기록(fail-open, 120일 보관). **Edge도 기록한다(#155, host=edge)**: `rag.ts:callSonnet`(텔레그램 자문 Sonnet)·`rag.ts:citeJudge`·`rag.ts:expandQueryKeywords`·`rag.ts:answerLawQuery`·`verify-citations:citeJudge`·`dashboard:<x-site>`(claude-proxy 경유 전부, 자문은 `dashboard:advisory`, 라벨 없는 호출은 `dashboard:unknown`) — 자문 1건 실비는 이제 추정이 아니라 이 표로 본다. 관리자만 SELECT. `ai_usage_hour`=(user_id, hour, count) 시간당 general 카운터(`charge_ai_usage` 내부용). 집계 RPC `ops_ai_usage_today()`(운영 상태 탭) |
 | answer_feedback | 답변 만족도 👍👎(#103). **세 경로 공통 한 테이블** — `channel`(telegram_ask/telegram_law/dashboard)로 구분해 경로별 불만족률 비교. `log_id` 유니크 FK→chat_logs(재투표는 upsert로 갱신, 로그 삭제 시 set null이라 평점·경로는 보존). `rating` 1/-1, `reason`은 대시보드 👎 사유(텔레그램은 버튼만 → null). **RLS 켜짐 + anon 정책 없음** — 쓰기는 `submit_answer_feedback` RPC, 읽기는 `admin_list_answer_feedback`(관리자 비밀번호). 화면: AI 자문 > '답변 피드백' 탭 |
@@ -269,10 +269,15 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
    첫 「제N조(의M)」를 주인공으로, 그 조에 붙은 항(제N항·조 바로 뒤 원문자)·호(N호·N호의M)를 모은다(뒤에 나오는 다른 조는 인용문 속
    교차참조로 보고 무시). 법령명은 조 앞 단어(괄호 건너뜀, `동법·같은 법·법`은 직전 인용 상속, 약칭표 `LAW_ALIASES`)를 문서 family와 맞춘다 —
    못 맞추면 법령 미상(어느 문서든 허용). 항·호는 **원문에 그 구조(①…/「N.  」)가 있을 때만** 검사한다(단항 조문의 "제1항" 표기는 허용).
-   조 없음·항 없음·호 없음 → `[⚠️ 원문 미확인 — 검색 결과에 해당 조문 없음]`. 시스템 프롬프트의 「■ … 제N조 [원문 확인됨]」 블록은
+   조 없음·항 없음·호 없음 → `[원문 없음 — 검색 자료에 해당 조문 없음 (대상)]`(#176, 2026-09-20 문구). 시스템 프롬프트의 「■ … 제N조 [원문 확인됨]」 블록은
    `pseudoChunksFromPrompt`로 대조 대상에 넣는다(안 넣으면 정당한 인용이 미확인이 된다). 인용을 못 읽으면(`unparsed`) 표시를 건드리지 않는다.
 3. **Haiku 판정** `judgeCitations` — 원문이 있었던 인용만(최대 8건, 1회 호출) 「인용문 vs 원문」을 JSON으로 판정. `불일치`만
-   `[⚠️ 원문과 다르게 설명됨 — 확인 필요]`로 교체, `판단불가`·호출 실패는 표시 유지(fail-open). 비용 ≈ 자문 1건당 10~15원.
+   `[원문과 다름 — 판정기 메모: (판정 사유 ≤80자) (대상)]`로 교체(#176), `판단불가`·호출 실패·호 구조 없음·내용 없음은
+   `[원문 없음 — 자동 대조 못 함, 직접 확인 (대상)]`(초록으로 두지 않음, #169-보론5). 비용 ≈ 자문 1건당 10~15원.
+   **토막 문단 표시(#176)**: 꼬리표에만 대상이 있고 그 줄 본문이 24자 미만이면(「고 하면서,」·「을 열거하고 있습니다.」) 앞 문단
+   (본문 있는 첫 문단, 최대 3개, 직전 표시 경계 무시)을 인용문으로 쓴다. 그 문단에 같은 조의 표시가 이미 있으면 이 표시는
+   중복(`dup`)이라 **지운다** — 9/17 대시보드 답변의 '확인 안 됨' 5건이 전부 이 오탐이었다. 판정 목록은 `chat_logs.cite_verdicts`에
+   남기고(오탐률 재료), 확인된 문서(`citedDocs`)는 텔레그램 footer·대시보드 배지의 맨 앞에 놓는다.
 
 **인용 대상 고르기는 "첫 조 번호"가 아니라 "겹침"이다 (#155-보론3).** 11:05 대시보드 답변이 조문을 통째로 옮기며 꼬리표를 붙였는데,
 문장 안의 교차참조(제52조·제53조, 제32조의12…)가 첫 번호로 잡혀 4개 중 3개가 「미확인」·「다르게 설명됨」으로 잘못 낮춰졌다(정작 대상은 앞 줄
@@ -1116,7 +1121,7 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **새 자문 진입점을 만들면 반드시 `cite_verify.js`의 `expandArticles`(프롬프트 전)와 `verifyCitations`(답변 후)를 거칠 것** — 이 둘을 거치지 않은 「[원문 확인됨]」은 모델 자기 신고로 돌아가, "표시가 붙으면 따로 검증할 필요 없다"는 사용자 약속이 깨진다(9/10 제50조 실측). (#155)
 - **`_shared/cite_verify.js`를 고치면 `telegram-webhook`·`verify-citations` 둘 다 배포하고 `index.html`의 그 스크립트 캐시버스터를 올릴 것** — 세 곳이 같은 파일을 각각 번들·로드한다. `.gitlab-ci.yml` cp 목록에서 이 경로를 빼면 GitLab Pages에서만 404가 난다(#125와 같은 함정). (#155)
 - **루트 `.nojekyll`을 지우지 말 것** — GitHub Pages는 Jekyll 규칙으로 **밑줄로 시작하는 폴더(`supabase/functions/_shared/`)를 통째로 빼고** 빌드한다. 파일이 저장소에 있고 GitLab에서는 200인데 GitHub 미러만 404였던 실측(2026-09-11). 브라우저는 모듈이 없으면 검증만 건너뛰어 증상이 조용하다. (#155)
-- **검증 꼬리표 문구(`[⚠️ 원문 미확인 …]`·`[⚠️ 원문과 다르게 설명됨 …]`)를 바꾸면 `app.js renderMd` 색 규칙·시스템 프롬프트 3-③·테스트를 함께 바꿀 것** — 문자열 일치로 색이 붙는다. (#155)
+- **검증 꼬리표 문구(`[원문 없음 — …]`·`[원문과 다름 — 판정기 메모: …]`, #176)를 바꾸면 `app.js renderMd` 색 규칙·`CITE_STATUS_LABEL`·시스템 프롬프트 1·3-③·테스트(`tests/cite_verify.test.js`)를 함께 바꾸고, 공유 파일이라 telegram-webhook·verify-citations 둘 다 재배포 + index.html의 `cite_verify.js?v=` 갱신** — 문자열 일치로 색이 붙는다. (#155, #176)
 - **인용 검증에서 `unparsed`(인용을 못 읽음)를 미확인으로 바꾸지 말 것** — 표시가 조문과 떨어져 붙은 정상 답변까지 경고가 붙어 경고가 신호가 아니게 된다. (#155)
 - **자문 실비를 글자수로 추정하지 말 것 — `api_usage`(host=edge)에 기록된다** (#155)
 - **보도자료 청크의 `effective_date`를 '시행일'로 표기·해석하지 말 것 — 발표일이다.** `buildRagContext`의 라벨 분기(rag.ts·app.js 동일)를 없애면 모델이 발표일을 제도 시행일로 읽는다. 새 보도자료 적재 경로를 만들면 `effective_date`를 반드시 채울 것(비면 "언제 것인지 모르는 개정 추진 소식"이 되어 3/24 의결 건을 '추진 중'으로 답한 사고가 재발). (#155-보론2)
@@ -1418,7 +1423,7 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **`people.kind`를 '마지막 발언의 직함'으로 정하지 말 것 (#169-보론2)** — '의원 자격으로 발언한 적이 있는가'로 정한다. 마지막 1건 기준이면 15:1로 방통위원장인 사람이 의원 탭에 들어가고, 의원 발언 61건인 사람의 대표발의 법안 섹션이 통째로 숨는다.
 - **동명이인을 자동 판별하려 하지 말 것 (#169-보론2)** — 이종호는 두 자격이 모두 비의원이라 직함 규칙에 안 걸린다. `tools_people_refresh.py`의 `SPLIT_PEOPLE` 수기 목록에 (접미사, 시작일, 종료일)로 적는다. 자격이 바뀐 사람(김현·이진숙·문미옥·김민석)은 **나누지 않는다** — 한 카드 안 자격 구분이 맞다.
 - **`people` 발언 조회에 `speaker_key`를 그대로 쓰지 말 것 (#169-보론2)** — 동명이인은 `김성수#의원`처럼 접미사가 붙는다. 조인은 `speaker_match`, 구간은 `speech_from`~`speech_to`(app.js `_personSpeechQuery`).
-- **「[원문 확인됨]」은 기계가 실제로 대조한 것에만 붙일 것 (#169-보론5)** — 대조를 못 한 경우(인용 파싱 실패·판정 상한 초과·판정기 실패·호 구조 없음·번호와 제목만 적힌 인용)는 전부 `[원문 확인 안 됨]`이다. 표시는 이 두 가지뿐이고, 갈래는 `verdict.status`로만 남겨 요약 줄에 쓴다 — 이용자가 할 일이 같으면 표시도 하나다.
+- **「[원문 확인됨]」은 기계가 실제로 대조한 것에만 붙일 것 (#169-보론5)** — 대조를 못 한 경우(인용 파싱 실패·판정 상한 초과·판정기 실패·호 구조 없음·번호와 제목만 적힌 인용)는 초록이 아니다. 표시는 세 상태(#176): 확인됨 / `[원문 없음 — …]`(직접 확인) / `[원문과 다름 — 판정기 메모: …]`(틀렸을 수 있음). 갈래는 `verdict.status`와 `chat_logs.cite_verdicts`에 남긴다.
 - **`VERBATIM_MIN`을 0.85 아래로 내리지 말 것 (#169-보론5)** — 0.6~0.85는 "뼈대는 원문인데 수치·주체가 바뀐" 구간이다(실측: '1년'→'2년' 0.75, '장관'→'방미통위' 0.75). 이 구간은 Haiku 판정으로 보내고, 통째 인용(판정 생략)은 0.85 이상만 인정한다.
 - **`autoTagVerbatim`이 겹침 1등만 보고 태그를 붙이게 하지 말 것 (#169-보론4)** — 2등과의 격차(`AMBIG_MARGIN`)와 옆 문단의 모델 표시를 함께 본다. 단, **인용 본문 안의 조문 번호는 문맥으로 쓰지 말 것** — 법령 문장은 다른 조문을 흔히 인용한다(제50조② 본문에 '제52조제1항').
 - **대외 문서에는 운영자가 명시적으로 결정한 것만 적을 것 (#169-보론6)** — 세션 대화에서 설계가 좁혀졌더라도 그것은 정리이지 결정이 아니다. 운영자가 의도적으로 모호하게 둔 문장을 확정 표현으로 바꾸지 말 것(2026-09-14 메일 4항에서 세 번 되돌렸다).

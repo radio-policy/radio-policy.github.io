@@ -26,11 +26,32 @@
 
   const TAG_RE = /\[원문\s*확인됨[^\]]*\]/g;
   const CIRCLED = '①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳';
-  // 표시는 두 가지뿐이다(2026-09-14, #169-보론5). 읽는 사람이 할 일은 '못 찾음'·'다르게 설명됨'·
-  // '대조 못 함'이 모두 같다 — 원문을 직접 본다. 갈래는 verdict.status 로 남겨 요약 줄에만 쓴다.
-  const TAG_UNVERIFIED = '[원문 확인 안 됨]';
-  const TAG_MISSING = TAG_UNVERIFIED;    // 옛 이름 유지(외부 참조 호환)
-  const TAG_MISMATCH = TAG_UNVERIFIED;
+  // 표시는 세 상태(2026-09-20 운영자 결정, #176). 읽는 사람이 표시만 보고 "믿어라 / 직접 확인해라 / 틀렸을 수 있다"
+  // 셋 중 하나로 읽어야 한다. (#169-보론5의 '[원문 확인 안 됨]' 단일 표시는 '못 찾음'과 '틀림'을 구분 못 해 폐기)
+  //   ok       → [원문 확인됨: …]                         (그대로)
+  //   missing  → [원문 없음 — 검색 자료에 해당 조문 없음 (대상)]   AI 기억으로 쓴 것일 수 있으니 직접 확인
+  //   mismatch → [원문과 다름 — 판정기 메모: … (대상)]        틀렸을 가능성 높음, 무엇이 다른지 한 줄
+  //   그 밖(판정 보류·호출 실패·호 구조 못 찾음·대조할 문장 없음)은 드물고 읽는 사람이 할 일이 같아 '원문 없음' 머리에
+  //   꼬리만 달리 적는다: [원문 없음 — 자동 대조 못 함, 직접 확인 (대상)]
+  const TAG_MISSING = '[원문 없음 — 검색 자료에 해당 조문 없음]';
+  const TAG_UNCHECKED = '[원문 없음 — 자동 대조 못 함, 직접 확인]';
+  const TAG_MISMATCH_HEAD = '[원문과 다름 — 판정기 메모: ';
+  const TAG_UNVERIFIED = TAG_MISSING;    // 옛 이름 유지(외부 참조 호환)
+  const TAG_MISMATCH = TAG_MISMATCH_HEAD + '…]';
+  function buildTag(status, reason, target) {
+    const tail = target ? ' (' + target + ')]' : ']';
+    if (status === 'mismatch') {
+      const memo = String(reason || '').replace(/\s+/g, ' ').replace(/[\[\]]/g, '').trim().slice(0, 80) || '원문과 다르게 설명됨';
+      return TAG_MISMATCH_HEAD + memo + tail;
+    }
+    if (status === 'missing') return TAG_MISSING.slice(0, -1) + tail;
+    return TAG_UNCHECKED.slice(0, -1) + tail;
+  }
+  // 인용문 본문 길이(정규화) — 조 번호·괄호 제목·법령명을 뺀 나머지. 24자 미만이면 "번호·제목뿐"으로 본다.
+  function stripCiteBody(s) {
+    return normQ(String(s || '').replace(/제\s?\d+\s?조(?:\s?의\s?\d+)?(?:\s?\([^)]*\))?/g, '')
+      .replace(/[가-힣A-Za-z0-9·ㆍ\s]{0,40}?(법률|법|시행령|시행규칙|규칙|고시|규정|기준|세칙|지침)(?=\s|$|[,:.)])/g, ''));
+  }
   const LAW_SUFFIX_RE = /(법|법률|시행령|시행규칙|규칙|고시|규정|기준|세칙|지침|요령|훈령|예규|협정)$/;
   // 약칭 → 정식 문서명에 들어 있는 문자열 (family가 이 문자열을 포함하면 같은 법령으로 본다)
   const LAW_ALIASES = {
@@ -400,6 +421,33 @@
           for (const x of c.candidates) if (x.lawInfo && x.lawInfo.inherit) x.lawInherit = lastLaw;
         }
       }
+      // 토막 문단 표시(#176, 2026-09-20): 모델이 인용문을 한 문단에 쓰고 표시는 다음 문단의 토막("고 하면서,"·
+      // "을 열거하고 있습니다.")에 붙이는 습관이 있다. 9/17 대시보드 답변의 '확인 안 됨' 5건이 전부 이 오탐이었다 —
+      // 토막을 인용문으로 잡거나(내용 없음) 표시 뒤 문단(다음 절)을 인용문으로 잡았다(엉뚱한 불일치).
+      // 규칙: 꼬리표에만 대상이 있고(줄 자체에 조 번호 없음) 그 줄의 본문이 24자 미만이면, **앞으로** 거슬러 올라가
+      // 본문이 있는 첫 문단(최대 3개, 직전 표시 경계를 넘어도 됨)을 인용문으로 쓴다. 그 문단에 같은 조의 표시가
+      // 이미 있으면(직전 인용문의 자동 확인 등) 이 표시는 중복이라 지운다. 제목 줄 표시(#155-보론5)는 줄에 조 번호가
+      // 있어 여기 걸리지 않고 종전대로 뒤 문단을 본다.
+      if (c.tagTarget && !(parsed.mentions && parsed.mentions.length) && stripCiteBody(c.line).length < 24) {
+        let pEnd = text.lastIndexOf('\n\n', tagStart), looked = 0;
+        while (pEnd > 0 && looked < 3) {
+          const pStart = text.lastIndexOf('\n\n', pEnd - 1);
+          const para = text.slice(pStart === -1 ? 0 : pStart + 2, pEnd);
+          // ⚠️ TAG_RE(전역 정규식)를 여기서 쓰면 lastIndex가 0으로 초기화돼 바깥 while이 처음부터 다시 돌며 무한 루프가 된다
+          const body = para.replace(/\[원문\s*확인됨[^\]]*\]/g, '');
+          if (stripCiteBody(body).length >= 24) {
+            c.claimOverride = body;
+            const prevKeys = [];
+            const kre = /\[원문\s*확인됨[^\]]*?제\s*(\d+조(?:의\d+)?)/g;
+            let km;
+            while ((km = kre.exec(para)) !== null) prevKeys.push(km[1]);
+            if (prevKeys.indexOf(c.tagTarget.key) !== -1) c.dupOfPrev = true;
+            break;
+          }
+          if (para.trim()) looked++;
+          pEnd = pStart;
+        }
+      }
       cites.push(c);
       prevEnd = tagEnd;
       if (c.kind === 'article' && c.lawInfo && c.lawInfo.candidates) lastLaw = c.lawInfo;
@@ -432,12 +480,10 @@
       return mergeChunkTexts(list.map(function (c) { return c.content || ''; }));
     };
     // 인용문: 표시 앞 문장. 앞이 제목·조 번호뿐(내용 40자 미만)이면 표시 뒤 문단이 인용문이다(#155-보론5).
-    const before = cite.segment || '';
+    // 토막 문단 표시면 앞 문단(claimOverride, #176)이 인용문이다
+    const before = cite.claimOverride || cite.segment || '';
     // 내용 길이 = 조 번호·괄호 제목·법령명을 뺀 나머지(정규화 24자 미만이면 "제목·번호뿐")
-    const stripCite = function (s) {
-      return normQ(String(s || '').replace(/제\s?\d+\s?조(?:\s?의\s?\d+)?(?:\s?\([^)]*\))?/g, '')
-        .replace(/[가-힣A-Za-z0-9·ㆍ\s]{0,40}?(법률|법|시행령|시행규칙|규칙|고시|규정|기준|세칙|지침)(?=\s|$|[,:.)])/g, ''));
-    };
+    const stripCite = stripCiteBody;
     const beforeBody = stripCite(before);
     const headingOnly = beforeBody.length < 24 && normQ(cite.after || '').length >= 24;
     const claim = headingOnly ? cite.after : before;
@@ -597,8 +643,12 @@
     const at = (args && args.autoTag === false) ? { answer: String((args && args.answer) || ''), added: 0 } : autoTagVerbatim((args && args.answer) || '', chunks);
     const answer = at.answer;
     const cites = findCitations(answer);
-    if (!cites.length) return { answer: answer, verdicts: [], changed: 0, autoTagged: at.added };
-    const results = cites.map(function (c) { return Object.assign({}, c, checkCitation(c, chunks, (args && args.annexSources) || [])); });
+    if (!cites.length) return { answer: answer, verdicts: [], changed: 0, autoTagged: at.added, citedDocs: [] };
+    const results = cites.map(function (c) {
+      // 직전 인용 문단에 같은 조의 표시가 이미 있는 토막 표시는 중복 — 판정하지 않고 지운다(#176)
+      if (c.dupOfPrev) return Object.assign({}, c, { status: 'dup', reason: '직전 인용 문단의 표시와 중복', key: c.tagTarget.key });
+      return Object.assign({}, c, checkCitation(c, chunks, (args && args.annexSources) || []));
+    });
     // 8 → 24 (#169-보론5). 실측 답변 하나에 표시가 22개였는데 9번째부터 판정 없이 초록이었다.
     // 판정은 여러 인용을 한 콜에 묶어 보내므로 상한을 올려도 호출 수는 늘지 않는다.
     const maxJudge = args && args.maxJudge != null ? args.maxJudge : 24;
@@ -638,16 +688,22 @@
     }
     let out = answer, changed = 0;
     for (const r of results.slice().reverse()) {
-      // ok(= 실제로 대조해 맞음) 외에는 모두 하나의 표시로 바꾼다. 갈래는 verdict.status 에 남는다.
+      // ok(= 실제로 대조해 맞음)는 그대로. 나머지는 세 상태 표시(#176)로 바꾸고, 중복(dup)은 지운다.
       if (r.status === 'ok') continue;
-      let rep = TAG_UNVERIFIED;
       // 꼬리표에 대상이 적혀 있었으면 바꾼 표시에도 남긴다 — 어느 조문 얘기인지 읽는 사람이 알 수 있게
       const tgt = r.tagTarget ? String(r.tag).slice(1, -1).replace(/^원문\s*확인됨/, '').replace(/^[\s:：—\-–,]+/, '').trim() : '';
-      if (tgt) rep = rep.slice(0, -1) + ' (' + tgt + ')]';
-      out = out.slice(0, r.tagStart) + rep + out.slice(r.tagEnd); changed++;
+      if (r.status === 'dup') {
+        const lead = /\s$/.test(out.slice(0, r.tagStart)) ? r.tagStart - 1 : r.tagStart;
+        out = out.slice(0, lead) + out.slice(r.tagEnd); changed++;
+        continue;
+      }
+      out = out.slice(0, r.tagStart) + buildTag(r.status, r.reason, tgt) + out.slice(r.tagEnd); changed++;
     }
+    // 답변이 실제로 인용해 확인된 문서 — 출처 목록을 이 순서로 앞세우는 데 쓴다(#176)
+    const citedDocs = [];
+    for (const r of results) if (r.status === 'ok' && r.doc && citedDocs.indexOf(r.doc) === -1) citedDocs.push(r.doc);
     return {
-      answer: out, changed: changed, autoTagged: at.added,
+      answer: out, changed: changed, autoTagged: at.added, citedDocs: citedDocs,
       verdicts: results.map(function (r) {
         return { tag: r.tag, kind: r.kind, key: r.key || (r.annex ? '별표 ' + r.annex : null), law: r.lawDoc || r.lawText || null,
           paras: r.paras || [], items: r.items || [], status: r.status, reason: r.reason || null, judge: r.judge || null, doc: r.doc || null,
@@ -657,7 +713,7 @@
   }
 
   const CiteVerify = {
-    TAG_UNVERIFIED: TAG_UNVERIFIED, TAG_MISSING: TAG_MISSING, TAG_MISMATCH: TAG_MISMATCH,
+    TAG_UNVERIFIED: TAG_UNVERIFIED, TAG_MISSING: TAG_MISSING, TAG_MISMATCH: TAG_MISMATCH, TAG_UNCHECKED: TAG_UNCHECKED, buildTag: buildTag,
     articleKey: articleKey, docFamily: docFamily, mergeChunkTexts: mergeChunkTexts,
     expandArticles: expandArticles, pseudoChunksFromPrompt: pseudoChunksFromPrompt,
     buildCitingExcerpts: buildCitingExcerpts, citeRegex: citeRegex, excerptAround: excerptAround,
