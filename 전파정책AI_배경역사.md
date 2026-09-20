@@ -4770,7 +4770,7 @@ register_kb_section + renumber_doc). 부분 청크 갱신을 버린 이유: 개�
 그 회의의 칩을 갱신하고, 하나라도 어긋나면 회의 전체를 스킵하고 로그에 남긴다. 틀린 칩은 없는 칩보다
 나쁘다(#82 위임표와 같은 원칙). `--no-refetch`로 이 단계를 끌 수 있다.
 
-**운영 규칙.** 17:00~17:30에는 임포트 금지 — gov 크롤러 체인의 assembly_minutes와 같은 회의를 동시에
+**운영 규칙.** 17:00~17:30(2026-09-20 #178부터 **16:30~17:30**)에는 임포트 금지 — gov 크롤러 체인의 assembly_minutes와 같은 회의를 동시에
 등록해 **섹션이 두 개** 생긴 사고가 있었다. 내보내기(뷰어 fetch) 병렬은 3~4 프로세스 이하(#99 잘린
 응답), 임포트는 단일 프로세스·순차(chunk_index 재번호가 겹치면 꼬인다). 세션 배치: 재요약 238건 →
 서브에이전트 25개(8~10건씩 동시), 20·21대 → 40개를 20개씩 2파. 끝나면 `backfill_embeddings.py`
@@ -6922,3 +6922,25 @@ title 확인, 사이드바 "AI 자문: 로그인 후 사용 / 데이터베이스
 남은 심사 대응: 로그인 없는 자문 갤러리 → 운영 상태 탭 계기판(이용·검증 오탐률 — `chat_logs.cite_verdicts`가 재료) → 백업
 운영자 SOP → 관계도 첫 화면 안내 한 줄 → 회의록 검색 Enter → KB의 내부 발표자료 파일 정체 확인. 동적 본문(브리핑·뉴스 텍스트)의
 약칭은 이번에 손대지 않았다 — 정적 라벨만.
+
+**#178 (2026-09-20) 외부판 PC 작업을 집 PC로 — 스케줄러 스크립트의 회사 PC 경로 하드코딩 제거, 회의록 오프라인 금지 시간 16:30~17:30.**
+사용자 결정: 집 개인 PC(Windows, 24시간)를 본선으로, 회사 노트북은 예비로. 사내 다리(RadioPolicy-News·Snapshot)는 사내판 세션이
+먼저 옮겼고(사내판 `docs/집PC_다리_설치_260920.md`), 외부판 PC 작업 5개(정부크롤러 체인 17:00 / RefetchContent 매시 22분 /
+BriefingBackup 09:40 / AssemblySummary 10:30 / CRMS동기화 매월 1일 16:30)의 인수인계는 사내판 `docs/집PC_외부판작업_이전_260920.md`.
+옮기기 전에 저장소부터 고쳐야 했다 — `run_hidden.py`(21행 `PY = r"C:\Users\SKTelecom\…\Python312\python.exe"`),
+`run_gov_crawler.bat`·`run_crms_sync.bat`·`run_briefing_backup.bat`(python.exe 절대경로+`cd /d C:\Users\SKTelecom\…`),
+`setup_*.ps1`(시작 위치·스크립트 절대경로)이 전부 회사 PC의 사용자명과 설치 경로를 박고 있어 집 PC에서는 그대로 안 돈다.
+사내 다리 스크립트가 `%~dp0`와 런처만 써서 무수정으로 옮겨진 것과 같은 방식으로 바꿨다.
+- `run_hidden.py`: `PY = os.path.join(os.path.dirname(sys.executable), "python.exe")`(래퍼를 띄운 pythonw.exe 옆) + `os.chdir(자기 폴더)`.
+  스케줄러 액션의 '시작 위치'가 비어 있어도 .env·로그가 저장소 폴더 기준으로 잡힌다.
+- `.bat` 4개(`run_assembly_summary.bat`도 같은 하드코딩+bare `python`이라 함께): `cd /d "%~dp0"` + `set PY=py -3.12`. ASCII+CRLF 바이트 검증(#22 규칙).
+- `setup_*.ps1` 3개: `$root = $PSScriptRoot`, `$pyw = (py -3.12 -c "…pythonw.exe")`(없으면 throw), 액션은 `pythonw run_hidden.py <script>`로
+  실제 회사 PC 등록 형태(#70)와 맞췄다. `setup_scheduler.ps1`(뉴스 크롤러 매시)은 Actions로 옮겨져 미등록인 legacy임을 머리에 적었다.
+- **인수인계 문서의 `py -3`은 쓰지 않았다** — 회사 PC에서 `py -0p`로 확인하니 `py -3`은 3.13(`*` 기본)으로 풀린다. bare `python`이
+  3.13으로 가서 ModuleNotFoundError로 무음 실패한 #22와 정확히 같은 함정. `py -3.12`로 버전을 고정하면 집 PC(3.12만 설치)와
+  회사 PC(3.12·3.13 공존) 어디서나 패키지가 있는 3.12로 간다. 지침 #22 규칙을 "전체 경로 고정"에서 "`py -3.12` 고정 + 경로 하드코딩 금지"로 고쳤다.
+- 회의록 오프라인 파이프라인(#120)의 "17:00~17:30 임포트 금지"는 **16:30~17:30**으로 넓혔다 — 집 PC 체인이 16:30, 회사 PC 예비 체인이
+  17:00에 돌아 두 체인의 assembly_minutes와 겹칠 수 있는 구간이 30분 늘었다. CLAUDE.md·지침 2곳·배경역사 #120 운영 규칙 문구를 함께 고쳤다.
+집 PC 쪽 등록(사용자 계정으로, SYSTEM+`pip --user` 충돌 재발 방지)·`.env` USB 복사·회사 PC 예비 시각 뒤로 미루기(Refetch 52분·
+브리핑 09:50·요약 10:45·CRMS 16:45)는 인수인계 문서 3·4절대로 사용자가 진행한다. 이 커밋은 저장소 파일만 바꾼다 — 회사 PC 작업
+스케줄러 등록은 손대지 않았다(등록된 액션이 Python312 pythonw 전체 경로를 그대로 가리키므로 새 `run_hidden.py`와 그대로 호환).

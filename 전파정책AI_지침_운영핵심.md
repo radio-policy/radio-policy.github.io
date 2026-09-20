@@ -22,7 +22,7 @@ SKT Comm센터 기술정책팀의 전파·통신 정책 모니터링 자동화 �
 ## 로컬 파일 위치
 
 ```
-C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\
+C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\      (회사 노트북 — 예비. 집 PC 본선은 C:\rp\radio-policy-ai, 2026-09-20 #178)
 ├── sb_client.py                # Supabase 클라이언트 공용 생성기 — HTTP/2 끄고 HTTP/1.1+재시도(make_client). 모든 스크립트가 create_client 대신 사용(RemoteProtocolError 끊김 회피)
 ├── requirements.txt            # 의존성 버전 고정(lock, 61개). 모든 워크플로가 `pip install -r requirements.txt`로 설치 — 자동 최신화 사고 방지(배경역사 #15)
 ├── crawler.py                  # 메인 크롤러(GitHub Actions **10분마다**, pg_cron `*/10` dispatch — 2026-09-20 #174, 그 전 매시) — 네이버 검색 OpenAPI(키 없으면 Google RSS 폴백), **키워드 54개 확대수집 → 무관 판정 캐시 대조(news_screen_cache, #78) → Haiku 1차 관련성 선별(app_config.news_relevance_criteria, 무관은 저장 안 함+캐시 기록, fail-open 키워드 폴백, 부처 인사는 무조건 통과, #66)** — 선별이 분야 태그(#76)·사건 라벨(event, #77)도 함께 매김 → 통과분만 본문 수집·**Haiku 긴급도 개별 분류**(피드백 학습), 긴급 재알림 억제 — ⚠️ **선별 콜 통합(#82)은 2026-08-04 되돌렸다(#84).** 긴급률이 9.9%→0.7%로 무너졌고, 「SKT 5G 과장광고 과징금, 대법원 간다」가 8/3 긴급 → 8/4 보통으로 갈린 A/B가 근거다. 원인은 ①선별이 **본문 수집 전**이라 네이버 요약 300자만 본다(본문 중앙값 1,329자) ②배치 판정이라 제목별 유사 피드백 5건을 못 쓴다. **재통합하려면 긴급률을 9.9%와 반드시 대조할 것**(suppress_repeat_alerts, #44). 운영자 긴급 알림에 태그 표시(구독자에겐 비표시)
@@ -943,7 +943,7 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
     `assembly_speeches.topic`에 SK 칩 소급(모든 `chunk_seq < len(blocks)` + `normalize_speaker(blocks[cs].name)
     == speaker`; 불일치는 스킵+로그). `_done.json`으로 재개 가능. subscriber_notify 미임포트·큐 적재 없음.
     끝나면 `backfill_embeddings.py`로 재등록 청크(~700) 재임베딩.
-  - ⚠️ **17:00~17:30에는 오프라인 임포트 금지**(gov 크롤러 체인과 겹쳐 섹션 중복 사고). 내보내기(뷰어 fetch)
+  - ⚠️ **16:30~17:30에는 오프라인 임포트 금지**(gov 크롤러 체인과 겹쳐 섹션 중복 사고; 집 PC 본선 16:30 + 회사 PC 예비 17:00 — 2026-09-20 #178로 30분 넓힘). 내보내기(뷰어 fetch)
     병렬은 **3~4 프로세스 이하**(#99 잘린 응답). **임포트는 단일 프로세스·순차**(chunk_index 재번호).
   - 세션 배치: 재요약 ~238회의 → 서브에이전트 ~25개(8~10건씩, 동시) / 20·21대 ~300~330회의 → ~40개를
     20개씩 2파(wave).
@@ -1259,7 +1259,8 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **Windows 작업 스케줄러 작업의 동작 경로를 옛 폴더(`…\frequence\전파정책전문가`)로 두지 말 것 — `radio-policy-ai`로 유지** — 폴더 이전 후 경로 미갱신 시 구 bat·없는 스크립트(gov_playwright_crawler.py) 호출로 0x1 실패. (배경역사 #19)
 - **전파정책_정부크롤러 작업의 StartWhenAvailable(놓친 실행 보충)·배터리 허용을 끄지 말 것** — 매일 17:00 1회 실행이라 PC가 그 시각에 꺼져 있으면(금요일 조기 퇴근·주말·연휴) 그날 수집이 통째로 빠지고 보충도 안 됨 → 다음 부팅 직후 자동 보충이 유일한 안전망. 2026-07-04~06 주말 공백으로 heartbeat 3일 경고 재발한 사고의 재발 방지책. (배경역사 #22 후속)
 - **`.bat`은 ASCII+CRLF만 — 편집했으면 반드시 바이트로 검증(비ASCII=0·bareLF=0), git status를 믿지 말 것** — 한국어 로케일 cmd가 UTF-8 한국어+LF 배치를 오파싱해 `echo [%date% %time%]` 줄을 `time` 명령으로 실행→대화형 프롬프트 무한 대기→heartbeat 무음 중단. `.gitattributes`의 eol 정규화 때문에 working tree가 LF로 훼손돼도 git status는 clean으로 보여 git으로는 탐지 불가. (배경역사 #22)
-- **PC 스케줄러 작업·배치에서 bare `python` 호출 금지 — Python312 전체 경로(`C:\Users\SKTelecom\AppData\Local\Programs\Python\Python312\python.exe`) 고정** — 공유 PC에 다른 Python(3.13)이 설치되면 PATH를 가려 bs4 등 ModuleNotFoundError로 매일 무음 실패. 패키지는 3.12에만 설치돼 있음. (배경역사 #22)
+- **PC 스케줄러 작업·배치에서 bare `python`·`py -3` 호출 금지 — `py -3.12`(런처 버전 고정)로 호출** — 공유 PC에 다른 Python(3.13)이 설치되면 PATH를 가려 bs4 등 ModuleNotFoundError로 매일 무음 실패. 패키지는 3.12에만 설치돼 있고, `py -3`도 최신인 3.13으로 풀린다(2026-09-20 실측). (배경역사 #22)
+- **스케줄러 스크립트에 회사 PC 경로(`C:\Users\SKTelecom\…`·Python312 전체 경로)를 다시 박지 말 것(#178, 2026-09-20)** — 집 PC(24시간, 본선)로 옮기며 `.bat`은 `cd /d "%~dp0"`+`py -3.12`, `run_hidden.py`는 자기 pythonw.exe 옆 python.exe+자기 폴더로 chdir, `setup_*.ps1`은 `$PSScriptRoot`+`py -3.12`로 pythonw 경로 산출로 바꿨다. 사용자명·설치 경로가 다른 PC에서 같은 파일이 그대로 돌아야 한다. 스케줄러 액션의 '프로그램'만 그 PC의 Python 3.12 `pythonw.exe`로 잡으면 된다.
 - **gov_notice_crawler.py를 통째로 GitHub Actions로 옮기지 말 것 — 다만 이유는 '정부 사이트 해외 IP 차단'이 아니라 `opinion.lawmaking.go.kr` 한 곳 때문이다(2026-09-01 실측으로 정정)** — 12개 대상 페이지를 같은 방식(curl_cffi `impersonate='chrome110'`)으로 한국 PC와 GitHub Actions 러너에서 각각 재 봤더니, RRA 4곳·과기정통부 2곳·전파관리소 2곳·방통위·ETRI·KISDI **11곳은 Actions에서도 전부 정상**이었다. 실패한 것은 **입법예고(opinion.lawmaking.go.kr) 1곳뿐**이고, 그 실패도 오류가 아니라 **HTTP 200에 본문 4,464바이트·0행**(한국 PC는 95,569바이트·20행)이라는 **조용한 빈 껍데기 응답** — 데이터센터 IP 거부의 전형이며 2회 연속 재현됐다. 차단 축은 '해외냐'가 아니라 **'데이터센터 대역이냐'**다: 2026-08-28~31 운영자가 PC를 필리핀에 두고 돌렸을 때 나흘 내내 정상 수집됐다(총 68~71건, VPN 없음). 따라서 **해외 일반 ISP IP는 무해**하다. 이관하려면 크롤러를 쪼개 입법예고만 PC에 남겨야 하는데, 한 파일 안에서 수집·저장·알림·요약 백필이 엮여 있어 분리 비용이 이득보다 크다 — **현행 유지가 결론**이다. 재측정은 `python tools_gov_reachability.py`(읽기 전용, DB·알림 무변경), 원격은 `gov_reachability_test.yml`을 workflow_dispatch로 돌린 뒤 **check-run 주석**(`/check-runs/{job_id}/annotations`)에서 결과를 읽는다 — 잡 로그 API는 302 리다이렉트라 `net.http_get`으로 못 읽는다. (배경역사 #113)
 - **방통위 수집에 RADIO_KEYWORDS만 쓰지 말 것(`KCC_KEYWORDS` 유지)** — 방통위 보도자료는 재허가·이사 임명·위원회 결과 등 방송 거버넌스가 대부분이라 전파 키워드로 거르면 매칭 0건이 된다. 기술정책팀에 의미 있는 축은 단말기·지원금·스팸·이용자보호다. (배경역사 #51)
 - **게시판 링크의 `;jsessionid=...` 제거를 빼지 말 것** — 안 떼면 실행할 때마다 URL이 달라져 같은 기사가 매번 신규로 저장된다.
@@ -1519,7 +1520,7 @@ python minutes_offline.py --export-resummary --out DIR                 # 재요�
 #   → 세션이 …judged.json({meeting_summary, meeting_overview}) 작성
 python minutes_offline.py --import-resummary --in DIR [--no-refetch] [--force] [--limit N] [--dry-run]   # 섹션 통째 재등록 + SK 칩 소급(정렬 검사 통과분만), _done.json 재개
 python backfill_embeddings.py                                          # 재등록 청크 재임베딩(마지막에 1회)
-※ 17:00~17:30 실행 금지(gov 체인 충돌). export 병렬 ≤3~4, import는 단일·순차. 큐 적재 없음.
+※ 16:30~17:30 실행 금지(집 PC 16:30·회사 PC 17:00 gov 체인 충돌, #178). export 병렬 ≤3~4, import는 단일·순차. 큐 적재 없음.
 ```
 
 ---

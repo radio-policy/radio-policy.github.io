@@ -7,9 +7,13 @@ WM_CLOSE(CTRL_CLOSE)를 보내 시작 ~2초 만에 종료시킴 → 결과코드
 스크립트 내용과 무관하게 창이 보이면 죽고, 창이 없으면 완주함이 실측으로 확인됨.
 
 사용(작업 스케줄러 액션):
-  프로그램:  C:\\Users\\SKTelecom\\AppData\\Local\\Programs\\Python\\Python312\\pythonw.exe
+  프로그램:  <Python 3.12 설치 폴더>\\pythonw.exe
+             (경로 확인: py -3.12 -c "import sys,os;print(os.path.join(os.path.dirname(sys.executable),'pythonw.exe'))")
   인수:      run_hidden.py <대상스크립트.py> [로그파일]
-  시작 위치: C:\\Users\\SKTelecom\\Desktop\\frequence\\radio-policy-ai
+  시작 위치: 이 파일이 있는 저장소 폴더 (래퍼가 스스로 자기 폴더로 chdir 하므로 비워 둬도 됨)
+
+- 2026-09-20(#178) 회사 PC 경로 하드코딩 제거 — 집 PC(사용자명·설치 경로가 다름)에서도 그대로 돌게
+  python.exe는 이 래퍼를 띄운 pythonw.exe 옆에서 찾고, 작업 폴더는 이 파일의 폴더로 맞춘다.
 
 - pythonw.exe(GUI 서브시스템)라 래퍼 자신도 창이 전혀 없음
 - 자식 python.exe는 CREATE_NO_WINDOW로 실행 → 콘솔은 있으나 창이 없어 표적이 안 됨
@@ -18,7 +22,10 @@ WM_CLOSE(CTRL_CLOSE)를 보내 시작 ~2초 만에 종료시킴 → 결과코드
 """
 import subprocess, sys, os, datetime
 
-PY = r"C:\Users\SKTelecom\AppData\Local\Programs\Python\Python312\python.exe"
+# 래퍼를 띄운 인터프리터(pythonw.exe) 옆의 python.exe — 설치 경로를 박지 않아 어느 PC에서나 같은 파일이 돈다(#178).
+# 스케줄러 액션의 "프로그램"이 Python 3.12의 pythonw.exe여야 패키지가 있는 3.12로 자식이 뜬다(3.13 함정, 배경역사 #22).
+PY = os.path.join(os.path.dirname(sys.executable), "python.exe")
+HERE = os.path.dirname(os.path.abspath(__file__))
 CREATE_NO_WINDOW = 0x08000000
 MAX_LOG_BYTES = 5 * 1024 * 1024  # 5MB 넘으면 새로 시작
 
@@ -26,6 +33,7 @@ def main():
     if len(sys.argv) < 2:
         sys.exit(2)
     script = sys.argv[1]
+    os.chdir(HERE)  # 스케줄러 '시작 위치'와 무관하게 저장소 폴더에서 실행(.env·로그 경로 기준, #178)
     logpath = sys.argv[2] if len(sys.argv) > 2 else (
         os.path.splitext(os.path.basename(script))[0] + "_sched.log")
     mode = "a"
