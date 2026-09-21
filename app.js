@@ -9544,7 +9544,24 @@ async function loadPeople(force) {
 }
 
 function peopleSetTab(t) { _peopleTab = t; renderPeopleList(); }
-function peopleSearch(v) { _peopleQuery = String(v || '').trim(); renderPeopleList(); }
+// 검색은 **결과 영역만** 다시 그린다 (2026-09-21) — 머리줄째 innerHTML로 갈아치우면 입력칸 자체가
+// 새로 만들어져 글자마다 포커스가 날아간다(영문은 한 글자만 들어가고, 한글은 조합이 끊겨 아예 못 친다).
+// 덤으로 _issueScrollTop이 글자마다 화면을 맨 위로 올리던 것도 사라진다.
+// 한글 조합 중에도 그대로 거른다 — 입력칸을 안 건드리므로 조합이 깨지지 않는다.
+// (조합 중을 건너뛰면 마지막 음절이 조합 상태로 남아 '최형'을 쳐도 '최'까지만 걸러진다.
+//  compositionend는 인라인 속성으로 붙지 않는 이벤트라 그 방식도 안 된다 — 실측 2026-09-21.)
+// 낱자 구간('최ㅎ')은 매칭에서 떼고 보므로 '해당 없음'이 스치지 않는다(_peopleResultsHtml).
+// 80ms 모아 한 번만 그리는 것은 빠르게 칠 때 240장을 매 글자 다시 그리지 않으려는 것.
+var _peopleSearchT = null;
+function peopleSearch(v) {
+  _peopleQuery = String(v || '').trim();
+  clearTimeout(_peopleSearchT);
+  _peopleSearchT = setTimeout(function() {
+    var box = document.getElementById('people-results');
+    if (box) box.innerHTML = _peopleResultsHtml();
+    else renderPeopleList();
+  }, 80);
+}
 
 function _personCard(p) {
   var sub = [p.party, p.position, p.terms].filter(Boolean).join(' · ');
@@ -9559,16 +9576,30 @@ function _personCard(p) {
   '</div>';
 }
 
-function renderPeopleList() {
-  var el = document.getElementById('people-body');
-  if (!el) return;
-  _peopleView = 'list'; selectedPersonId = null;
+// 목록 본문(탭·검색어 반영). 머리줄과 떼어 두어야 검색 중 입력칸을 건드리지 않는다.
+function _peopleResultsHtml() {
   var all = _peopleCache || [];
-  var q = _peopleQuery;
+  // 한글 조합 중에는 끝에 낱자가 붙는다('최ㅎ'). 이름에는 절대 없는 글자라 그대로 맞추면
+  // 음절이 완성될 때까지 '해당 없음'이 깜빡인다 — 꼬리 낱자는 떼고 맞춘다.
+  var q = _peopleQuery.replace(/[\u3131-\u3163]+$/, '');
   var inTab = all.filter(function(p) { return p.kind === _peopleTab && (!q || p.name.indexOf(q) >= 0 || String(p.position || '').indexOf(q) >= 0); });
   var cur = inTab.filter(function(p) { return p.is_22; });
   var past = inTab.filter(function(p) { return !p.is_22; })
     .sort(function(a, b) { return String(b.last_speech || '').localeCompare(String(a.last_speech || '')); });
+  var h = '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:8px">' +
+    (cur.length ? cur.map(_personCard).join('') : '<div style="font-size:12px;color:var(--text-tertiary);padding:12px">해당 없음</div>') + '</div>';
+  if (past.length) {
+    h += '<details style="margin-top:14px"><summary style="cursor:pointer;font-size:12px;color:var(--text-secondary)">지난 대수 인물 ' + past.length + '명</summary>' +
+      '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:8px;margin-top:8px">' + past.map(_personCard).join('') + '</div></details>';
+  }
+  return h;
+}
+
+function renderPeopleList() {
+  var el = document.getElementById('people-body');
+  if (!el) return;
+  _peopleView = 'list'; selectedPersonId = null;
+  var q = _peopleQuery;
   function tabBtn(t, label) {
     var on = _peopleTab === t;
     return '<button class="btn" onclick="peopleSetTab(\'' + t + '\')" style="font-size:12px;padding:4px 14px;' +
@@ -9576,16 +9607,12 @@ function renderPeopleList() {
   }
   var h = '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">' +
     tabBtn('의원', '의원') + tabBtn('정부·참고인', '정부·참고인') +
-    '<input type="text" placeholder="이름·직함 검색" value="' + escHtml(q) + '" oninput="peopleSearch(this.value)" ' +
+    '<input type="text" placeholder="이름·직함 검색" value="' + escHtml(q) + '" ' +
+      'oninput="peopleSearch(this.value)" ' +
       'style="margin-left:auto;font-size:12px;padding:5px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-secondary);color:var(--text-primary);width:150px">' +
     '</div>' +
     '<div style="font-size:11px;color:var(--text-tertiary);margin-bottom:10px">과방위 회의록 발언자 기준(의원·위원장은 1건부터, 통신사 임원은 전원, 그 밖은 4건 이상) · 현역 = 22대(2024-06~) 발언 존재 · 정당은 활동 당시 소속</div>';
-  h += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:8px">' +
-    (cur.length ? cur.map(_personCard).join('') : '<div style="font-size:12px;color:var(--text-tertiary);padding:12px">해당 없음</div>') + '</div>';
-  if (past.length) {
-    h += '<details style="margin-top:14px"><summary style="cursor:pointer;font-size:12px;color:var(--text-secondary)">지난 대수 인물 ' + past.length + '명</summary>' +
-      '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:8px;margin-top:8px">' + past.map(_personCard).join('') + '</div></details>';
-  }
+  h += '<div id="people-results">' + _peopleResultsHtml() + '</div>';
   el.innerHTML = h;
   _issueScrollTop(el);
 }
