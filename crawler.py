@@ -2434,7 +2434,9 @@ def suppress_repeat_alerts(urgent_items: list) -> list:
     ① 최근 3일 내 이미 DB에 있던 긴급 기사와 제목 유사(공유 키워드 3+) → 억제.
        단, 국면 신호 단어(소송·고발·상고…)가 새로 등장한 제목은 통과(새 전개).
     ② 이번 실행분 안에서도 유사 기사는 대표 1건으로 묶고 '(관련 보도 N건)' 병기.
-    ①·② 모두 alert_suppress_log에 남긴다(②는 shared_keywords='[실행내묶음]', 2026-09-21~) —
+    ③ 사건 대표(실제 알림이 나간 기사)가 24시간을 넘었으면 재보도 1건을 '리마인드'로 통과(#181, 2026-09-21).
+       억제가 사슬로 이어져(실측 80%) 며칠짜리 사건이 영영 안 오던 것을 하루 1건으로 되살린다.
+    ①·②·③ 모두 alert_suppress_log에 남긴다(②는 shared_keywords='[실행내묶음]', ③은 '[리마인드]', 2026-09-21~) —
        이 로그가 곧 '알림으로 나가지 않은 기사' 목록이고, 사내판 다리(export_news.py)가
        이것으로 TOKTOK 대표 1건을 가린다(#180). Haiku 판정 층 추가 여부는 계속 실측 후 결정.
     어떤 오류든 나면 원본 그대로 반환(fail-open) — 판정이 죽어서 알림까지 죽으면 안 된다."""
@@ -2446,15 +2448,55 @@ def suppress_repeat_alerts(urgent_items: list) -> list:
         # 이번 실행에서 방금 저장한 기사는 비교 대상에서 빼야 한다 (자기 자신과 비교 방지)
         batch_urls = {i.get('url') for i in urgent_items}
         cutoff_3d = (datetime.now(KST) - timedelta(days=3)).isoformat()
-        prior = []
-        resp = sb.table('news_feed').select('title,url') \
+        prior, prior_at = [], {}
+        resp = sb.table('news_feed').select('title,url,created_at') \
             .eq('urgency', '긴급').gte('created_at', cutoff_3d) \
             .order('created_at', desc=True).limit(1000).execute()
         for r in (resp.data or []):
             if r.get('url') not in batch_urls:
                 prior.append({'title': r.get('title') or '', 'kw': extract_keywords(r.get('title') or '')})
+                prior_at.setdefault(r.get('title') or '', r.get('created_at'))   # 정렬이 최신순 = 가장 최근 것
 
-        passed, sup_rows, passed_kw = [], [], []
+        # ── 하루 1회 리마인드 (2026-09-21 #181) ──────────────────────────────
+        # 억제는 사슬로 이어진다 — 실측(30일) 억제 821건 중 660건(80%)이 '이미 억제된 기사'에
+        # 걸려서 막혔다. 그래서 며칠씩 이어지는 사건은 첫 알림 뒤 영영 다시 오지 않는다
+        # (9/21 LGU+ 해킹 은폐: 긴급 8건 전부 억제, 뿌리는 9/18 기사). 사건의 **대표**(실제로
+        # 알림이 나간 기사)가 24시간을 넘었으면 재보도 1건을 '리마인드'로 통과시킨다.
+        # 통과분은 alert_suppress_log에 `[리마인드]`로 남긴다 — 미발송이 아니라 발송 기록이며,
+        # 사슬을 여기서 끊어 다음 24시간을 새로 센다. 사내판 다리도 이 접두사로 구분한다(#180).
+        REMIND_AFTER_H = 24
+        sup_chain = {}                       # 억제된 제목 → 그때 걸린 기존 제목(사슬 한 칸)
+        try:
+            cutoff_10d = (datetime.now(KST) - timedelta(days=10)).isoformat()
+            _lg = (sb.table('alert_suppress_log').select('article_title,matched_title,shared_keywords')
+                   .gte('created_at', cutoff_10d).order('created_at').execute().data) or []
+            for r in _lg:
+                if str(r.get('shared_keywords') or '').startswith('[리마인드]'):
+                    continue                 # 리마인드는 '나간 기사' — 사슬을 끊는다
+                if r.get('article_title'):
+                    sup_chain[r['article_title']] = r.get('matched_title') or ''
+        except Exception as e:
+            print(f'[긴급 억제] 억제 사슬 조회 실패 — 이번 실행은 리마인드 없이 종전대로: {e}')
+
+        def _rep_age_h(matched_title: str):
+            """사건 대표(마지막으로 실제 알림이 나간 기사)의 경과 시간(h). 모르면 None(=3일 창 밖)."""
+            cur, seen = matched_title, set()
+            while cur and cur in sup_chain and cur not in seen:
+                seen.add(cur)
+                cur = sup_chain[cur]
+            at = prior_at.get(cur)
+            if not at:
+                return None                  # 3일 창 밖의 대표 = 72시간 초과 → 리마인드 대상
+            try:
+                t = datetime.fromisoformat(str(at).replace('Z', '+00:00'))
+                return (datetime.now(KST) - t).total_seconds() / 3600
+            except Exception:
+                return None
+
+        def _remind_label(age_h):
+            return '이어지는 사건' if age_h is None else f'{int(age_h // 24) + 1}일째'
+
+        passed, sup_rows, remind_rows, passed_kw = [], [], [], []
         for it in urgent_items:
             kw = extract_keywords(it.get('title') or '')
             matched = None
@@ -2463,6 +2505,18 @@ def suppress_repeat_alerts(urgent_items: list) -> list:
                     matched = pv
                     break
             if matched:
+                age_h = _rep_age_h(matched['title'])
+                if age_h is None or age_h >= REMIND_AFTER_H:
+                    it['_remind'] = _remind_label(age_h)          # 하루 1회 리마인드로 통과
+                    remind_rows.append({
+                        'article_title': it.get('title') or '',
+                        'article_url': it.get('url') or '',
+                        'matched_title': matched['title'],
+                        'shared_keywords': f"[리마인드] {it['_remind']}",
+                    })
+                    passed.append(it)
+                    passed_kw.append(kw)
+                    continue
                 sup_rows.append({
                     'article_title': it.get('title') or '',
                     'article_url': it.get('url') or '',
@@ -2511,13 +2565,25 @@ def suppress_repeat_alerts(urgent_items: list) -> list:
                                 kept.append(it)
                                 kept_kw.append(passed_kw[i])
                                 continue
+                            age_h = _rep_age_h(pv['title'])
+                            if age_h is None or age_h >= REMIND_AFTER_H:
+                                it['_remind'] = _remind_label(age_h)   # 여기서도 하루 1회는 통과
+                                remind_rows.append({
+                                    'article_title': it.get('title') or '',
+                                    'article_url': it.get('url') or '',
+                                    'matched_title': pv['title'],
+                                    'shared_keywords': f"[리마인드] {it['_remind']}",
+                                })
+                                kept.append(it)
+                                kept_kw.append(passed_kw[i])
+                                continue
                             sup_rows.append({
                                 'article_title': it.get('title') or '',
                                 'article_url': it.get('url') or '',
                                 'matched_title': pv['title'],
                                 'shared_keywords': '[의미판정] ' + ','.join(sorted(passed_kw[i] & pv['kw'])),
                             })
-                        print(f'[긴급 억제] 의미 판정으로 실행 간 재보도 {len(drop)}건 추가 생략')
+                        print(f'[긴급 억제] 의미 판정으로 실행 간 재보도 {len(drop)}건 판정(리마인드 포함)')
                         passed, passed_kw = kept, kept_kw
 
         # 같은 실행분 내 유사 기사 묶기 — 사건 첫날 첫 실행에 재보도 수십 건이
@@ -2545,6 +2611,11 @@ def suppress_repeat_alerts(urgent_items: list) -> list:
         reps = []
         for rep, members in groups:
             rep['_related'] = len(members)
+            if not rep.get('_remind'):
+                for m in members:                     # 묶음 안의 리마인드 표시는 대표가 이어받는다
+                    if m.get('_remind'):
+                        rep['_remind'] = m['_remind']
+                        break
             reps.append(rep)
             # 대표에 병합된 기사도 '알림으로 나가지 않은 기사'다 — 2026-09-21부터 로그에 남긴다.
             # 사내판 다리(export_news.py)가 alert_suppress_log만 보고 대표 1건을 가려내기 때문이며,
@@ -2557,11 +2628,13 @@ def suppress_repeat_alerts(urgent_items: list) -> list:
                     'shared_keywords': '[실행내묶음]',
                 })
 
-        if sup_rows:
+        if remind_rows:
+            print(f'[긴급 억제] 대표가 24시간을 넘겨 리마인드로 통과 {len(remind_rows)}건')
+        if sup_rows or remind_rows:
             n_run = sum(1 for r in sup_rows if r['shared_keywords'] == '[실행내묶음]')
             print(f'[긴급 억제] 알림 미발송 {len(sup_rows)}건 기록 (3일 내 기보도 {len(sup_rows) - n_run}건 · 실행내 묶음 {n_run}건)')
             try:
-                sb.table('alert_suppress_log').insert(sup_rows).execute()
+                sb.table('alert_suppress_log').insert(sup_rows + remind_rows).execute()
             except Exception as e:
                 print(f'[긴급 억제] 로그 저장 실패(무시): {e}')
         merged = len(passed) - len(reps)
@@ -2596,7 +2669,9 @@ def send_telegram(urgent_items: list):
         url = item.get('url', '')
         rel = item.get('_related', 0)
         rel_txt = f' (관련 보도 {rel}건)' if rel else ''
-        lines.append(f'<b>{i}. {_esc(title)}</b>{_esc(rel_txt)}')
+        rem = item.get('_remind') or ''                      # 하루 1회 리마인드 표시 (#181)
+        rem_txt = f'🔁[{rem}] ' if rem else ''
+        lines.append(f'<b>{i}. {_esc(rem_txt)}{_esc(title)}</b>{_esc(rel_txt)}')
         lines.append(f'   출처: {_esc(source)}')
         lines.append(f'   🏷 {_esc(tag_labels(item.get("tags")))}')
         if url:
@@ -2619,7 +2694,8 @@ def send_telegram(urgent_items: list):
         for i, item in enumerate(urgent_items, 1):
             rel = item.get('_related', 0)
             rel_txt = f' (관련 보도 {rel}건)' if rel else ''
-            plain_lines.append(f"{i}. {item.get('title', '')}{rel_txt}")
+            rem = item.get('_remind') or ''
+            plain_lines.append(f"{i}. {('🔁[' + rem + '] ') if rem else ''}{item.get('title', '')}{rel_txt}")
             plain_lines.append(f"   출처: {item.get('source', '')}")
             plain_lines.append(f"   🏷 {tag_labels(item.get('tags'))}")
             plain_lines.append(f"   🔗 {item.get('url', '')}\n")

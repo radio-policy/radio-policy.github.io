@@ -271,7 +271,8 @@ def format_news_item(item) -> str:
     """
     rel = item.get('_related', 0)
     rel_txt = f' <i>(관련 보도 {rel}건)</i>' if rel else ''
-    title, url = esc(item.get('title', '')), esc(item.get('url', ''))
+    rem = item.get('_remind') or ''                      # 하루 1회 리마인드 표시 (#181)
+    title, url = esc(('🔁[' + rem + '] ' if rem else '') + str(item.get('title', ''))), esc(item.get('url', ''))
     head = f'<a href="{url}">{title}</a>' if url else f'<b>{title}</b>'
     return f'{head}{rel_txt}\n   <i>{esc(item.get("source", ""))}</i>'
 
