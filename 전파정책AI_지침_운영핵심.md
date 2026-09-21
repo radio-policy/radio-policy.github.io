@@ -93,7 +93,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\      (회사 노트북 —
 | teams / profiles / advisory_usage | 대시보드 계정 체계(#104). `teams`=3팀(경쟁제도팀·기술정책팀·AI정책팀, 팀 합산 일일 한도). `profiles`=auth.users 1:1(이름·팀·role(admin/leader/member)·개인 한도·unlimited·**approved**(관리자 승인 전 AI 잠김)·active). 가입 시 트리거가 승인대기 프로필 자동 생성. `advisory_usage`=(user_id, day, kind) 일일 사용량, kind는 advisory(Sonnet 호출 전부 — #141부터 스트리밍 불문)/general(Haiku, 백스톱 **100/일 + 60/시간**, #152 — 종전 300; 정당한 대량 작업은 관리자 profile.unlimited로 우회). 쓰기는 service_role RPC 전용 |
 | api_usage / ai_usage_hour | **API 토큰 계측(#152, 2026-09-10)**. `api_usage`=(ts, host actions/pc/edge, site '<스크립트>.py:<함수>', model, input/cache_read/cache_write/output 토큰) — Python 스크립트가 `api_usage.install()`로 SDK `Messages.create`를 감싸 호출마다 1행 기록(fail-open, 120일 보관). **Edge도 기록한다(#155, host=edge)**: `rag.ts:callSonnet`(텔레그램 자문 Sonnet)·`rag.ts:citeJudge`·`rag.ts:expandQueryKeywords`·`rag.ts:answerLawQuery`·`verify-citations:citeJudge`·`dashboard:<x-site>`(claude-proxy 경유 전부, 자문은 `dashboard:advisory`, 라벨 없는 호출은 `dashboard:unknown`) — 자문 1건 실비는 이제 추정이 아니라 이 표로 본다. 관리자만 SELECT. `ai_usage_hour`=(user_id, hour, count) 시간당 general 카운터(`charge_ai_usage` 내부용). 집계 RPC `ops_ai_usage_today()`(운영 상태 탭) |
 | answer_feedback | 답변 만족도 👍👎(#103). **세 경로 공통 한 테이블** — `channel`(telegram_ask/telegram_law/dashboard)로 구분해 경로별 불만족률 비교. `log_id` 유니크 FK→chat_logs(재투표는 upsert로 갱신, 로그 삭제 시 set null이라 평점·경로는 보존). `rating` 1/-1, `reason`은 대시보드 👎 사유(텔레그램은 버튼만 → null). **RLS 켜짐 + anon 정책 없음** — 쓰기는 `submit_answer_feedback` RPC, 읽기는 `admin_list_answer_feedback`(관리자 비밀번호). 화면: AI 자문 > '답변 피드백' 탭 |
-| alert_suppress_log | 긴급 재알림 억제 내역(어떤 기존 기사와 유사해 막았는지, 공유 키워드). **`shared_keywords`가 `[의미판정]`으로 시작하면 키워드가 아니라 Haiku가 같은 사건으로 본 것(#170).** service만 접근(정책 없음) (#44) |
+| alert_suppress_log | 긴급 재알림 억제 내역(어떤 기존 기사와 유사해 막았는지, 공유 키워드). **`shared_keywords`가 `[의미판정]`으로 시작하면 키워드가 아니라 Haiku가 같은 사건으로 본 것(#170), `[실행내묶음]`이면 같은 실행분에서 대표에 병합된 것(2026-09-21 #180).** 이 표는 곧 **'알림으로 나가지 않은 기사' 목록**이며 사내판 다리가 이것으로 TOKTOK 대표 1건을 가린다 — 쓰기는 service(크롤러)만, 읽기는 `alert_suppress_log_sel`(anon·authenticated SELECT, #180) (#44) |
 | system_health | 운영 heartbeat(key별 1행). last_crawl_run=뉴스크롤러 / last_gov_notice_run=입법예고·정부고시 / last_refetch_run=본문수집 / **last_kmcc_meeting_run=방미통위 의사일정·보도자료(매시, note `agenda=N result=M press=P new=K queued=Q fail=F`, #154 — 2026-09-14 watchdog_scan 감시 등록, #169)** / **last_law_terms_sync=법적 용어 정의 추출(11:00, note `docs= terms= deleted= unparsed= dup= fail=`, #156 — 2026-09-14 watchdog_scan 감시 등록, #169)**. 워치독 '고장 vs 없음' 구분 + 운영상태 탭. RLS+anon select |
 | kb_documents | 법령·규제 **요약/실무 문서**(regulatory-kb OKF 번들, 문서당 1행). concept_type·law_type·law_number·enforcement_date·status(current/superseded)·body_md 컬럼. path 유니크(정체 키). **document_chunks(조문 원문)와 별개 레이어** — 조문 인용은 그쪽, 요약·적용범위·실무는 이쪽. RLS+anon select. **법안 요약은 넣지 않는다**(2026-09-04 #122 — #121에서 넣었던 concept_type='Bill' 109건은 같은 날 삭제): 자문 근거는 확정 법령(시행예정본 포함)만, 국회 법안은 동향 전용. |
 | kb_chunks | kb_documents 본문 청크 + embedding(**voyage-law-2** 1024, HNSW). doc_id FK(cascade). 자문이 시맨틱+trgm으로 조회 |
@@ -166,7 +166,8 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\      (회사 노트북 —
 | | lawmap_proposals | select: admin 전체 / 본인 제안. **insert는 승인 프로필(본인 명의)**, update·delete는 admin만 (#147) |
 | 조건부 | **app_config** | select 전체 / insert·update는 **`key in ('claude_key','press_keywords')` 행만** |
 | | **document_chunks** | select / insert는 **`is_approved=false` 강제**(승인 대기로만 들어옴) |
-| service 전용 | telegram_subscribers·subscriber_queue·alert_suppress_log·changes·documents·system_status | 정책 0개 |
+| service 전용 | telegram_subscribers·subscriber_queue·changes·documents·system_status | 정책 0개 |
+| | **alert_suppress_log** | `alert_suppress_log_sel` — anon·authenticated **SELECT만**(쓰기는 service). 사내판 다리(anon 키)가 '알림 대표 여부'를 읽어야 해서 2026-09-21 열었다. 내용은 공개 기사 제목·URL·공유 키워드뿐 (#180) |
 | | **answer_feedback** | 정책 0개 — 쓰기는 `submit_answer_feedback` RPC(anon 실행 가능, 조회 불가), 읽기는 `admin_list_answer_feedback`(비밀번호). 공개 페이지에 남의 평점·불만 사유를 노출하지 않으려는 구조 (#103) |
 
 - **app_config 행 제한의 이유**: `system_prompt`는 telegram-webhook Edge Function이 봇 자문
@@ -1078,12 +1079,12 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 
 ## 사내 컨플루언스 쓰기 (confluence_writer, 2026-09-15 신설 — 배경역사 #172)
 - **모듈은 `confluence_writer.py`**(표준 라이브러리만, 의존성 없음). 원본과 가이드는 `frequence/confluence/`의 `confluence_writer.py`·`CONFLUENCE_WRITE_GUIDE.md`. 첨부는 `_confluence_attach.py`.
-- **인증은 `~/.confluence_pat`의 PAT** — PowerShell로 저장할 때 `-Encoding ascii` 필수. utf8이면 BOM이 붙어 401. `verify_ssl=False`가 기본(사내 CA가 파이썬 OpenSSL 검증을 통과하지 못함 — 사내망 전용이라 허용).
+- **인증은 `~/.confluence_pat`의 PAT** — PowerShell로 저장할 때 `-Encoding ascii` 필수. utf8이면 BOM이 붙어 401. `verify_ssl=False`가 기본(사내 CA가 파이썬 OpenSSL 검증을 통과하지 못함 — 사내 인증을 통과해야만 열리는 사이트라 허용).
 - **토큰은 발급자 권한 그대로 동작한다** — 본인이 못 보는 공간에는 못 쓰고, 파일이 유출되면 본인 권한이 그대로 노출된다. 공유 금지.
 - **`update()`는 본문 전체 교체다.** 반드시 `get_page()`로 현재 본문을 읽어 그 위에 고쳐 올린다. 새 페이지는 `upsert()`(같은 공간 동일 제목이면 `create()`는 400).
 - **본문은 storage 형식(XHTML)** — 텍스트의 `& < >`를 이스케이프하지 않으면 HTTP 400. `esc()` 헬퍼를 쓴다. `<div>`·`class`·`style`은 피한다.
 - **첨부 갈아끼우기는 별도 경로** — 같은 파일명으로 다시 POST하면 400. `/rest/api/content/{pageId}/child/attachment/{attachmentId}/data`로 올린다. 헤더에 `X-Atlassian-Token: nocheck`가 없으면 403.
-- **사내망 전용** — 사내망 밖·클라우드 에이전트는 접속 불가.
+- **접속 조건은 사내망이 아니라 2차 인증이다** — 사내 계정 2차 인증만 통과하면 사내망 밖의 PC에서도 쓸 수 있다(2026-09-21 운영자 확인, lampmanH-pc 접속 중). 2차 인증을 받을 수 없는 클라우드 에이전트만 불가.
 
 ## 인물 프로필 (people, 2026-08-27 신설 — 배경역사 #112)
 
@@ -1306,6 +1307,7 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **뉴스 중복 판정 임계(공유 키워드 3)를 2로 낮추지 말 것** — 「KT 해킹 540억」과 「KT 5G 과장광고 139억 소송」이 'KT+과징금' 2개 공유로 한 사건이 되어 **두 번째 사건의 첫 알림이 삼켜진다**(실측). 반대로 4로 올리면 재보도 억제율이 급락. (배경역사 #44)
 - **브리핑 클러스터링을 전이 연결 방식으로 바꾸지 말 것** — "540억 이어 5G 소송도 패소" 같은 다리 기사가 서로 다른 사건을 한 묶음(실측 261건)으로 이어 브리핑에서 사건 하나가 통째로 사라진다. 별-형(씨앗 비교, news_dedup.cluster_star)만 사용. (배경역사 #44)
 - **재알림 억제·클러스터링의 fail-open을 없애지 말 것** — 판정 코드가 죽으면 전부 알림/원본 그대로가 정상 동작. 억제 기능의 장애가 알림 장애로 번지면 안 된다. (배경역사 #44)
+- **`alert_suppress_log` 기록을 줄이거나 SELECT 정책을 되돌리지 말 것** — 2026-09-21부터 이 표는 억제분뿐 아니라 **같은 실행분에서 대표에 병합된 기사(`[실행내묶음]`)까지** 담는 '알림 미발송 목록'이고, 사내판 TOKTOK 알림이 이것만 보고 사건당 대표 1건을 고른다. 기록을 빼면 사내 알림이 다시 사건당 수 통씩 나간다. 반대로 **사내판이 알림 판정을 자체 구현하는 것도 금지** — 판정은 외부판 한 곳에서만 한다. (배경역사 #180)
 - **별표 동반 인출(`buildAnnexContext`)의 상한 3종을 풀지 말 것** — 질문당 별표 2개 / 별표당 6청크 / 첫 청크 필수. 별표 하나가 최대 **812청크**(항행안전무선시설 별표1)라 상한을 풀면 프롬프트가 65만 자로 터진다. 첫 청크에만 표의 열 이름이 있어, 빼면 `│1만원 │― │―│`처럼 무슨 숫자인지 모르는 조각만 들어간다. (배경역사 #43)
 - **`「다른 법령」 별표 N` 인용은 따라가지 말 것** — 같은 문서의 같은 번호 별표를 붙이면 엉뚱한 표가 들어간다(인용 978건 중 90건이 타 법령). (배경역사 #43)
 - **별표 검색이 안 될 때 "제목 머리말 붙여 재적재"로 해결하려 하지 말 것** — 실측으로 기각됐다. 머리말 추가 후 유사도 0.408→0.406(변화 없음), 임계값 0.45 미달 그대로. 첫 청크엔 이미 제목이 원문에 있고, 「변경신고」↔「변경허가」처럼 **제도가 다르면 어휘로 못 좁힌다.** 인용 관계를 규칙으로 따라가는 쪽이 답. (배경역사 #43)

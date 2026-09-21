@@ -2434,7 +2434,9 @@ def suppress_repeat_alerts(urgent_items: list) -> list:
     ① 최근 3일 내 이미 DB에 있던 긴급 기사와 제목 유사(공유 키워드 3+) → 억제.
        단, 국면 신호 단어(소송·고발·상고…)가 새로 등장한 제목은 통과(새 전개).
     ② 이번 실행분 안에서도 유사 기사는 대표 1건으로 묶고 '(관련 보도 N건)' 병기.
-    억제 내역은 alert_suppress_log에 남긴다 — 1~2주 실측 후 Haiku 판정 층 추가 여부 결정.
+    ①·② 모두 alert_suppress_log에 남긴다(②는 shared_keywords='[실행내묶음]', 2026-09-21~) —
+       이 로그가 곧 '알림으로 나가지 않은 기사' 목록이고, 사내판 다리(export_news.py)가
+       이것으로 TOKTOK 대표 1건을 가린다(#180). Haiku 판정 층 추가 여부는 계속 실측 후 결정.
     어떤 오류든 나면 원본 그대로 반환(fail-open) — 판정이 죽어서 알림까지 죽으면 안 된다."""
     if not urgent_items:
         return urgent_items
@@ -2544,9 +2546,20 @@ def suppress_repeat_alerts(urgent_items: list) -> list:
         for rep, members in groups:
             rep['_related'] = len(members)
             reps.append(rep)
+            # 대표에 병합된 기사도 '알림으로 나가지 않은 기사'다 — 2026-09-21부터 로그에 남긴다.
+            # 사내판 다리(export_news.py)가 alert_suppress_log만 보고 대표 1건을 가려내기 때문이며,
+            # 여기 없으면 같은 사건의 첫 실행분이 TOKTOK으로 여러 통 나간다(#180). 알림 내용은 그대로다.
+            for m in members:
+                sup_rows.append({
+                    'article_title': m.get('title') or '',
+                    'article_url': m.get('url') or '',
+                    'matched_title': rep.get('title') or '',
+                    'shared_keywords': '[실행내묶음]',
+                })
 
         if sup_rows:
-            print(f'[긴급 억제] 재보도 {len(sup_rows)}건 알림 생략 (3일 내 기보도 사건과 유사)')
+            n_run = sum(1 for r in sup_rows if r['shared_keywords'] == '[실행내묶음]')
+            print(f'[긴급 억제] 알림 미발송 {len(sup_rows)}건 기록 (3일 내 기보도 {len(sup_rows) - n_run}건 · 실행내 묶음 {n_run}건)')
             try:
                 sb.table('alert_suppress_log').insert(sup_rows).execute()
             except Exception as e:

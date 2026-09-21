@@ -76,7 +76,7 @@ logged explicitly via `api_usage.record_usage()`. Bulk scripts refuse mass API r
   (`esc()` 헬퍼) — 아니면 HTTP 400
 - **운영자가 편집기를 열어둔 동안 올리지 말 것** — 편집기가 그 시점 본문으로 초안을 잡아두므로, 그 사이
   서버 본문을 바꾸면 둘을 섞으며 깨진다. 초안은 API로 지울 수도 고칠 수도 없다(둘 다 400)
-- 사내망 전용. 사내망 밖·클라우드 에이전트에서는 접속 자체가 안 된다
+- 사내 계정 2차 인증만 통과하면 **사내망 밖의 PC에서도 접속된다**(2026-09-21 운영자 확인, lampmanH-pc도 접속 중). 2차 인증을 못 받는 클라우드 에이전트만 불가
 
 **Shared DB client** — every Python script MUST create its Supabase client via `sb_client.make_client(url, key)`, never `create_client` directly. This forces HTTP/1.1 (supabase-py 2.31 negotiates HTTP/2, which the endpoint drops → `RemoteProtocolError: Server disconnected`). Applies to new scripts too.
 
