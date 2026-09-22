@@ -217,7 +217,7 @@ def format_minutes_digest(meeting_date: str, title: str, summary: str, sp_rows: 
         head = f'· {"🔶 " if chip else ""}{who}' + (f' <i>{tail}</i>' if tail else '')
         # 요지는 인용구로 — 이름 줄과 같은 들여쓰기로 나란히 두면 여전히 한 덩어리로 읽힌다
         # (운영자 2차 지적 2026-09-22). 인용구의 세로줄이 '누가/무엇을'을 갈라 준다.
-        valid.append({'group': group, 'seq': seq, 'line': head,
+        valid.append({'group': group, 'seq': seq, 'line': head, 'chip': chip,
                       'body': f'<blockquote>{esc(s)}</blockquote>'})
 
     summary_line = esc(summary).strip()
@@ -235,7 +235,9 @@ def format_minutes_digest(meeting_date: str, title: str, summary: str, sp_rows: 
     for rows in groups.values():
         rows.sort(key=lambda v: v['seq'])
     # 자사 언급 행이 든 그룹을 맨 앞에 — 운영자 지시(2026-09-03): SK텔레콤 관련 발언은 반드시 보여야 한다.
-    order = sorted(groups, key=lambda g: (0 if any(SKT_CHIP in v['line'] for v in groups[g]) else 1,
+    # 판정은 v['chip'] 플래그로 — 줄 문자열에서 칩 문구를 찾던 종전 방식은 표시 서식이 바뀌면
+    # 조용히 깨진다(2026-09-22 실측: 칩 문구를 맨 위 한 줄로 옮기자 자사 그룹이 뒤로 밀렸다).
+    order = sorted(groups, key=lambda g: (0 if any(v['chip'] for v in groups[g]) else 1,
                                           -len(groups[g]), groups[g][0]['seq']))
 
     # ── 줄 배분: 1차 그룹당 1줄, 2차 남은 줄을 큰 그룹부터 ──
