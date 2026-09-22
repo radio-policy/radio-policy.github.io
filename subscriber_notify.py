@@ -215,7 +215,10 @@ def format_minutes_digest(meeting_date: str, title: str, summary: str, sp_rows: 
         tail = ' · '.join(x for x in (esc(_tidy_position(r.get('position'))),
                                       SKT_CHIP if chip else '') if x)
         head = f'· {"🔶 " if chip else ""}{who}' + (f' <i>{tail}</i>' if tail else '')
-        valid.append({'group': group, 'seq': seq, 'line': head, 'body': esc(s)})
+        # 요지는 인용구로 — 이름 줄과 같은 들여쓰기로 나란히 두면 여전히 한 덩어리로 읽힌다
+        # (운영자 2차 지적 2026-09-22). 인용구의 세로줄이 '누가/무엇을'을 갈라 준다.
+        valid.append({'group': group, 'seq': seq, 'line': head,
+                      'body': f'<blockquote>{esc(s)}</blockquote>'})
 
     summary_line = esc(summary).strip()
     if skt_flag and summary_line and SKT_CHIP not in summary_line:

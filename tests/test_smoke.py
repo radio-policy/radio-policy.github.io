@@ -410,7 +410,8 @@ class TestMinutesDigest(unittest.TestCase):
                  'summary': '가' * (MINUTES_LINE_CHARS + 50), 'chunk_seq': 1}]
         out = self._digest(sp_rows=rows)
         self.assertEqual(self._bullets(out)[0], '· <b>장문</b>')
-        self.assertEqual(self._bodies(out)[0], '가' * MINUTES_LINE_CHARS + '…')
+        self.assertEqual(self._bodies(out)[0],
+                         '<blockquote>' + '가' * MINUTES_LINE_CHARS + '…</blockquote>')
         self.assertNotIn('… 외', out)                         # 전부 표시 → 외 N건 없음
 
     def test_date_fallback_and_no_topic(self):
@@ -419,7 +420,7 @@ class TestMinutesDigest(unittest.TestCase):
         out = self._digest(meeting_date='4월말', sp_rows=rows)
         self.assertTrue(out.startswith('🏛️ <b>과방위 회의록 · 4월말 '))
         self.assertIn('🔹 <b>기타</b> <i>1건</i>', out)
-        self.assertIn('· <b>무주제</b>\n주제 없는 발언', out)
+        self.assertIn('· <b>무주제</b>\n<blockquote>주제 없는 발언</blockquote>', out)
 
     def test_empty_returns_blank(self):
         self.assertEqual(self._digest(summary='', sp_rows=[]), '')
