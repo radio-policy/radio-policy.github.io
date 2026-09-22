@@ -9,7 +9,11 @@ on:
 jobs:
   crawl:
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    # 50분이던 것을 90분으로 (2026-09-22). 정상일 때 체인 전체가 29분(law_crawler 2분 +
+    # law_watch 27분)이라 여유가 21분뿐이었고, 법제처 API가 느려진 날 law_crawler 혼자
+    # 32분을 먹자 law_watch가 18분 만에 잘렸다(run 35679673519, 감시 271건 중 10건만 처리).
+    # 잘리면 그날 현행성 점검이 통째로 없어지고 heartbeat도 안 찍혀 워치독이 26h 경보를 낸다.
+    timeout-minutes: 90
 
     steps:
       - uses: actions/checkout@v4

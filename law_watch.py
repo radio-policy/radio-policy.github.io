@@ -372,6 +372,7 @@ def main():
           f"(제외 카테고리·excluded 제외)\n")
 
     outdated, unmatched, upcoming, auto_excluded, ok = [], [], [], [], 0
+    api_failed = []          # 법제처 API 무응답 — 판정 불가라 행을 건드리지 않고 넘긴 문서
     today = datetime.now(KST).strftime('%Y%m%d')
 
     for i, (doc_name, cat) in enumerate(targets, 1):
@@ -391,17 +392,33 @@ def main():
 
         target = api_target_of(meta['law_type_token'])
         rows = drf_law_search(meta['law_name'], target)
+        # drf_law_search는 '검색은 됐는데 결과 0건'이면 [], 'API가 응답을 안 함'이면 None을
+        # 돌려준다. 이 둘을 같이 취급하면 멀쩡한 문서가 '법제처에 없음(unmatched)'으로
+        # 기록된다 — 2026-09-22 법제처가 느렸던 날 10건이 그렇게 오염됐다. API 실패는
+        # 아무것도 모르는 상태이므로 행을 건드리지 않고 넘긴다(다음 실행이 다시 본다).
+        if rows is None:
+            api_failed.append(doc_name)
+            print(f"  [{i}/{len(targets)}] API실패 {meta['law_name'][:38]} — 상태 보존")
+            continue
         hit = pick_exact(rows, meta['law_name'], meta.get('full_name'))
         # 1차 실패 시 기관명 별칭으로 재검색 (정부조직 개편으로 규칙명이 바뀐 경우)
+        alt_api_failed = False
         if not hit:
             for alt in alias_variants(meta['law_name']):
                 rows = drf_law_search(alt, target)
+                if rows is None:                     # 별칭 조회 중 API가 죽어도 마찬가지
+                    alt_api_failed = True
+                    break
                 hit = pick_exact(rows, alt)
                 if hit:
                     meta['law_name'] = alt          # 이후 단계(현행화)도 새 명칭 기준
                     meta['full_name'] = None
                     print(f"      (기관명 변경 반영 → {alt})")
                     break
+        if not hit and alt_api_failed:
+            api_failed.append(doc_name)
+            print(f"  [{i}/{len(targets)}] API실패 {meta['law_name'][:38]} — 상태 보존")
+            continue
 
         rec = {
             'doc_name': doc_name,
@@ -460,6 +477,7 @@ def main():
     print(f"  최신 상태 : {ok}건")
     print(f"  구버전    : {len(outdated)}건")
     print(f"  미매칭    : {len(unmatched)}건  (법령명은 파싱됐으나 법제처 검색 실패 — 수동 확인)")
+    print(f"  API 실패  : {len(api_failed)}건  (법제처 무응답 — 판정 못 해 상태 보존, 다음 실행이 재시도)")
     print(f"  자동 제외 : {len(auto_excluded)}건  (법령 문서가 아님 — 보도자료 등)")
     pending_total = sum(len(f) for _, f in upcoming)
     print(f"  시행예정본: {pending_total}건 / 법령 {len(upcoming)}건")
@@ -505,7 +523,10 @@ def main():
         sb_client.heartbeat(
             sb, 'last_law_watch_run',
             f'watched={len(targets)} ok={ok} outdated={len(outdated)} '
-            f'unmatched={len(unmatched)} upcoming={len(upcoming)}')
+            f'unmatched={len(unmatched)} upcoming={len(upcoming)} '
+            # 'apifail=N'은 워치독의 'fail=[1-9]' 패턴에 걸린다(의도한 것) — 법제처가 죽어
+            # 그날 점검이 반쪽이 된 것을 '돌았으니 정상'으로 넘기지 않기 위해서다.
+            f'apifail={len(api_failed)}')
 
     print("\n=== 완료 ===")
 
