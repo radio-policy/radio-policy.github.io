@@ -518,9 +518,9 @@ python lawmap_edge_check.py [--no-notify|--notify-all] [--since-hours 30]   # �
 #     기본은 최근 30시간 생성 엣지의 문제만 운영자 봇 무음 알림, 전체 결과는 lawmap_edge_check_sched.log. 정정은 사람이 한다(스크립트는 DB를 쓰지 않음).
 python clean_pdf_artifacts.py [--apply]       # 기존 document_chunks PDF 편집흔적 일괄 청소(dry-run 기본. content만, embedding 유지)
 python sync_kb_to_bundle.py [--dry-run]       # 웹 생성 OKF(DB) → regulatory-kb 번들 역동기화(월 1회 권장, import_regulatory_kb 전 필수)
-python law_watch.py [--dry-run|--no-notify]   # 법령 현행화 감시(등재본 vs 법제처 현행본 대조 + 시행예정본 발견 → 알림). GitHub Actions 매일 11시
+python law_watch.py [--dry-run|--no-notify]   # 법령 현행화 감시(등재본 vs 법제처 현행본 대조 + 시행예정본 발견 → 알림). GitHub Actions 매일 11시. 판정 못 한 건(법제처 무응답)은 행을 안 건드리고 heartbeat에 `apifail=N` — 워치독이 잡는다 (#183)
 python itu_rec_watch.py [--dry-run]           # ITU-R 권고 개정 감시(보유 판 vs ITU "In force" 판 대조 → 알림만, PDF 자동 수집 없음). GitHub Actions 매월 1일 12시. 감시 대상은 DB에서 읽어 하드코딩 없음 (#49)
-python law_sync.py --list                     # 현행화 대상 목록
+python law_sync.py --list                     # 현행화 대상 목록. **--all-outdated는 11:00 체인이 law_watch 직후 자동 실행**(#183, 2026-09-22) — 수동 실행은 체인 실패분 복구용. 대상 선정 시 **현행 청크 0개 + 같은 law_id의 다른 현행본 있음 = 유령 행**으로 보고 law_watch에서 지운다(대체본이 없으면 신본 등재 실패일 수 있어 행을 남기고 복구를 시도한다 — 점검 ⑤ 사고)
 python law_sync.py --all-outdated             # 개정 감지분 일괄 현행화(조문 API 취득→청킹→등재→구버전 정리→임베딩 백필)
 python law_sync.py --pending                  # 시행예정본 전건을 status='pending'으로 적재(자문 검색 제외 상태로 보관)
 python law_sync.py --promote                  # 시행일 도래분을 current로 승격(GitHub Actions 매일 자동 — 수동 실행 불필요)
@@ -536,8 +536,10 @@ python import_regulatory_kb.py --only <path조각> [...]   # OKF 요약 일부�
             law_terms_sync.py       정의 조문 → law_terms 전량 재추출(승격·교체된 판 반영, AI 0회 — #156). law_watch 앞에 둔다(감시가 잡 한도를 다 쓰면 뒤 단계는 건너뛰어짐)
             law_watch.py            지식베이스 스캔(동적 발견) → 법제처 현행본 대조
                                     + 시행예정 통합본 전건을 law_pending에 기록 → 텔레그램 알림
+            law_sync.py --all-outdated  감시가 찾은 구버전을 그 자리에서 교체(#183, 2026-09-22 신설)
+                                    → 조문 취득·등재·구버전 정리·임베딩 백필까지 한 단계에서
 [개정 감지] 대시보드 설정 탭 '법령 현행화 상태'에서 확인
-[현행화]   PC에서 law_sync.py --all-outdated  → 조문 취득·등재·구버전 정리·임베딩 백필
+[수동 현행화] PC에서 law_sync.py --doc-name "<문서명>"  → 특정 1건만(체인 실패분 복구용)
 [예정본]   PC에서 law_sync.py --pending       → 시행예정본을 status='pending'으로 적재
 [후속]     build_law_citation_graph.py (인용망) / OKF는 초기=세션, 이후 개정분=승인 훅 API 자동
 ```

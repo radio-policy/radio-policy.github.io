@@ -63,7 +63,7 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: python law_terms_sync.py
 
-      # 지식베이스 등재 법령이 법제처 현행본과 어긋나는지 대조(감시만 — 교체는 PC에서 law_sync.py)
+      # 지식베이스 등재 법령이 법제처 현행본과 어긋나는지 대조(감시만 — 교체는 다음 단계)
       - name: Watch knowledge-base law currency
         continue-on-error: true
         env:
@@ -73,3 +73,18 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python law_watch.py
+
+      # 감시가 찾아낸 구버전을 실제로 교체한다 (2026-09-22 신설, #183).
+      # 그동안 이 단계가 없어 law_watch의 "이어서 자동 현행화됩니다"라는 알림 문구가
+      # 사실이 아니었고, 구버전 5건이 최대 3주까지 자문 근거로 쓰였다(고시 1건 12일).
+      # 반드시 law_watch 뒤에 둘 것 — 대상은 law_watch가 방금 갱신한 sync_status='outdated'다.
+      # VOYAGE_API_KEY는 law_sync가 끝에 부르는 backfill_embeddings.py용(없으면 새 조문이
+      # 검색에 안 잡힌다). 실패해도 체인의 앞 단계 결과는 이미 남았으므로 continue-on-error.
+      - name: Sync outdated laws to current version
+        continue-on-error: true
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          LAW_OC_KEY: ${{ secrets.LAW_OC_KEY }}
+          VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
+        run: python law_sync.py --all-outdated

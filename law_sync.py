@@ -995,6 +995,41 @@ def main():
     outdated = (sb.table('law_watch').select('*')
                 .eq('sync_status', 'outdated').order('law_name').execute().data) or []
 
+    # 이미 교체된 문서의 '유령 행' 정리 (2026-09-22, #183).
+    # law_watch는 status='current' 청크만 훑으므로, 다른 경로(시행예정본 승격 등)로 교체된
+    # 구본의 행은 다시 검사되지 않고 sync_status='outdated'인 채 영원히 남는다. 정보통신망법
+    # 21305가 9/11 승격 뒤 그 상태였다. 그대로 두면 --all-outdated가 **매일** 그 법령의
+    # 현행본(21445) 청크를 지웠다 다시 넣으며 임베딩을 재생성하고, 삽입 전 잠깐 현행 조문이
+    # 0개가 된다 — 체인에 자동 현행화를 넣은 이상 이 정리가 없으면 매일 사고가 난다.
+    # ⚠ 현행 청크가 0개라고 무조건 지우면 안 된다 — 두 경우가 섞인다.
+    #   ⓐ 다른 판으로 이미 교체됨(진짜 유령 행) → 지운다
+    #   ⓑ 신본 등재가 실패해 그 법령이 통째로 비어 있음 → 지우면 감시에서 영영 사라진다
+    #      (지침 '사고 후 점검 ⑤'의 실제 사고). 이때는 행을 남기고 현행화 대상으로 넘겨
+    #      이번 실행이 복구하게 한다.
+    # 같은 법령의 다른 판이 현행으로 살아 있는지는 law_id로 본다(판이 바뀌어도 동일).
+    live = []
+    for r in outdated:
+        n = ((sb.table('document_chunks').select('id', count='exact')
+              .eq('doc_name', r['doc_name']).eq('status', 'current')
+              .limit(1).execute()).count) or 0
+        if n:
+            live.append(r)
+            continue
+        repl = 0
+        if r.get('law_id'):
+            repl = ((sb.table('document_chunks').select('id', count='exact')
+                     .eq('law_id', r['law_id']).eq('status', 'current')
+                     .neq('doc_name', r['doc_name']).limit(1).execute()).count) or 0
+        if not repl:
+            print(f"  ! 현행 청크 0개인데 대체본도 없음 — 행 보존, 이번 실행이 복구 시도: "
+                  f"{r['doc_name'][:52]}")
+            live.append(r)
+            continue
+        print(f"  · 유령 행 정리(현행 청크 0개 — 이미 교체됨): {r['doc_name'][:62]}")
+        if not a.dry_run:
+            sb.table('law_watch').delete().eq('doc_name', r['doc_name']).execute()
+    outdated = live
+
     if a.list or not (a.doc_name or a.all_outdated):
         print(f"현행화 대상 {len(outdated)}건:")
         for r in outdated:
