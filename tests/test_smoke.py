@@ -12,8 +12,11 @@ import 시 Supabase 클라이언트를 '생성'하지만 네트워크 호출은 
 """
 
 import os
+import re
 import sys
 import unittest
+
+SKT_CHIP_TXT = 'SK텔레콤 언급'
 from datetime import date, datetime, timedelta
 from unittest import mock
 
@@ -276,6 +279,7 @@ class TestMinutesDigest(unittest.TestCase):
     URL = 'https://record.assembly.go.kr/assembly/viewer/minutes/xml.do?id=56569&type=view'
     TITLE = '제3차 (전기통신사업법 <개정> & 방송법)'
     SUMMARY = '주파수 공급 & 요금 인하를 놓고 여야 질의 집중'
+    _RE_NAME_ONLY = re.compile(r'^· <b>[^<>]+</b>$')      # 직위 없는 발언자 줄
 
     @staticmethod
     def _rows():
@@ -314,20 +318,27 @@ class TestMinutesDigest(unittest.TestCase):
 
     @staticmethod
     def _bullets(out):
+        """발언자 줄(2026-09-22 개편: 발언자 줄과 요지 줄이 분리됐다)."""
         return [ln for ln in out.split('\n') if ln.startswith('· ')]
 
     @staticmethod
+    def _bodies(out):
+        lines = out.split('\n')
+        return [lines[i + 1] for i, ln in enumerate(lines) if ln.startswith('· ')]
+
+    @staticmethod
     def _headings(out):
-        return [ln for ln in out.split('\n')[1:] if ln.startswith('<b>')]
+        return [ln for ln in out.split('\n') if ln.startswith('🔹 ')]
 
     def test_header_and_escaping(self):
         out = self._digest()
-        self.assertTrue(out.startswith('🏛️ <b>과방위 회의록 · 4/28 '))
-        first = out.split('\n')[0]
-        self.assertIn('&amp; 방송법', first)
-        self.assertIn('&lt;개정&gt;', first)
-        self.assertNotIn('<개정>', first)
-        self.assertIn('주파수 공급 &amp; 요금 인하를 놓고 여야 질의 집중', out.split('\n')[1])
+        lines = out.split('\n')
+        # 회의명과 안건은 서로 다른 줄 — 굵은 첫 줄이 길어지지 않게(2026-09-22)
+        self.assertEqual(lines[0], '🏛️ <b>과방위 회의록 · 4/28 제3차</b>')
+        self.assertEqual(lines[1], '<i>전기통신사업법 &lt;개정&gt; &amp; 방송법</i>')
+        self.assertNotIn('<개정>', out)
+        self.assertEqual(lines[2],
+                         '<blockquote>주파수 공급 &amp; 요금 인하를 놓고 여야 질의 집중</blockquote>')
 
     def test_line_allocation_and_groups(self):
         from subscriber_notify import DASHBOARD_URL
@@ -336,12 +347,11 @@ class TestMinutesDigest(unittest.TestCase):
         self.assertEqual(len(bullets), 10)               # 기본 max_lines
         self.assertIn('… 외 2건', out)                    # 유효 12건 − 표시 10건
         heads = self._headings(out)
-        self.assertEqual(heads[0], '<b>주파수</b>')       # 최다 그룹이 먼저
-        self.assertEqual(heads, ['<b>주파수</b>', '<b>요금</b>', '<b>AI</b>'])
-        for h in heads:
-            self.assertRegex(h, r'^<b>[^<>]+</b>$')
+        # 최다 그룹이 먼저. 소제목에 그룹 전체 건수를 단다. 'AI'는 '인공지능'으로 합친다(_GROUP_ALIAS)
+        self.assertEqual(heads, ['🔹 <b>주파수</b> <i>6건</i>', '🔹 <b>요금</b> <i>4건</i>',
+                                 '🔹 <b>인공지능</b> <i>2건</i>'])
         # 그룹 안 정렬은 chunk_seq 순
-        seqs = [int(ln.rsplit('요지 ', 1)[1].split(' ')[0]) for ln in bullets[:6]]
+        seqs = [int(ln.rsplit('요지 ', 1)[1].split(' ')[0]) for ln in self._bodies(out)[:6]]
         self.assertEqual(seqs, sorted(seqs))
         # 링크
         self.assertIn(f'<a href="{self.URL.replace("&", "&amp;")}">원문</a>', out)
@@ -354,28 +364,31 @@ class TestMinutesDigest(unittest.TestCase):
 
     def test_skt_chip_row_and_flag(self):
         out = self._digest()
-        chip_lines = [ln for ln in self._bullets(out) if ln.startswith('· 칩위원')]
+        chip_lines = [ln for ln in self._bullets(out) if '칩위원' in ln]
         self.assertEqual(len(chip_lines), 1)
-        self.assertTrue(chip_lines[0].endswith(' (SK텔레콤 언급)'))
+        self.assertTrue(chip_lines[0].startswith('· 🔶 <b>칩위원</b>'))   # 표식이 줄머리에
+        self.assertIn(SKT_CHIP_TXT, chip_lines[0])
         # 다른 줄엔 칩이 붙지 않는다
-        others = [ln for ln in self._bullets(out) if not ln.startswith('· 칩위원')]
-        self.assertTrue(all(not ln.endswith(' (SK텔레콤 언급)') for ln in others))
-        # 직위 None인 행은 이름 뒤에 공백 없이 콜론
-        self.assertTrue(any(': ' in ln and ' 위원:' not in ln for ln in others))
+        others = [ln for ln in self._bullets(out) if '칩위원' not in ln]
+        self.assertTrue(all(SKT_CHIP_TXT not in ln and '🔶' not in ln for ln in others))
+        # 직위 None인 행은 이름만
+        self.assertTrue(any(self._RE_NAME_ONLY.match(ln) for ln in others))
 
         flagged = self._digest(skt_flag=True)
-        line2 = flagged.split('\n')[1]
-        self.assertTrue(line2.endswith(' (SK텔레콤 언급)'))
-        self.assertEqual(line2.count('SK텔레콤 언급'), 1)
+        line3 = flagged.split('\n')[2]
+        self.assertTrue(line3.endswith(f' ({SKT_CHIP_TXT})</blockquote>'))
+        self.assertEqual(line3.count(SKT_CHIP_TXT), 1)
         # 요약이 이미 칩을 달고 있으면 중복 부착 없음
-        already = self._digest(skt_flag=True, summary=self.SUMMARY + ' (SK텔레콤 언급)')
-        self.assertEqual(already.split('\n')[1].count('SK텔레콤 언급'), 1)
+        already = self._digest(skt_flag=True, summary=self.SUMMARY + f' ({SKT_CHIP_TXT})')
+        self.assertEqual(already.split('\n')[2].count(SKT_CHIP_TXT), 1)
 
     def test_max_lines_three(self):
         out = self._digest(max_lines=3)
         self.assertEqual(len(self._bullets(out)), 3)          # 그룹당 1줄씩
         self.assertIn('… 외 9건', out)
-        self.assertEqual(self._headings(out), ['<b>주파수</b>', '<b>요금</b>', '<b>AI</b>'])
+        self.assertEqual(self._headings(out), ['🔹 <b>주파수</b> <i>6건</i>',
+                                               '🔹 <b>요금</b> <i>4건</i>',
+                                               '🔹 <b>인공지능</b> <i>2건</i>'])
 
     def test_tiny_budget_keeps_footer_and_tags_intact(self):
         out = self._digest(budget=300)
@@ -385,10 +398,10 @@ class TestMinutesDigest(unittest.TestCase):
         self.assertEqual(out.count('<b>'), out.count('</b>'))
         self.assertIn('… 외 ', out)
         self.assertLess(len(self._bullets(out)), 10)
-        # 빈 그룹 제목이 남아 있으면 안 된다
+        # 빈 그룹 제목이 남아 있으면 안 된다 — 소제목 바로 다음 줄은 발언자 줄이어야 한다
         lines = out.split('\n')
         for i, ln in enumerate(lines):
-            if ln.startswith('<b>') and i > 0:
+            if ln.startswith('🔹 '):
                 self.assertTrue(lines[i + 1].startswith('· '), f'빈 그룹 제목: {ln}')
 
     def test_long_summary_trimmed(self):
@@ -396,9 +409,8 @@ class TestMinutesDigest(unittest.TestCase):
         rows = [{'speaker': '장문', 'position': None, 'topic': '주파수',
                  'summary': '가' * (MINUTES_LINE_CHARS + 50), 'chunk_seq': 1}]
         out = self._digest(sp_rows=rows)
-        ln = self._bullets(out)[0]
-        self.assertTrue(ln.endswith('…'))
-        self.assertEqual(ln, '· 장문: ' + '가' * MINUTES_LINE_CHARS + '…')
+        self.assertEqual(self._bullets(out)[0], '· <b>장문</b>')
+        self.assertEqual(self._bodies(out)[0], '가' * MINUTES_LINE_CHARS + '…')
         self.assertNotIn('… 외', out)                         # 전부 표시 → 외 N건 없음
 
     def test_date_fallback_and_no_topic(self):
@@ -406,8 +418,8 @@ class TestMinutesDigest(unittest.TestCase):
                  'summary': '주제 없는 발언', 'chunk_seq': None}]
         out = self._digest(meeting_date='4월말', sp_rows=rows)
         self.assertTrue(out.startswith('🏛️ <b>과방위 회의록 · 4월말 '))
-        self.assertIn('<b>기타</b>', out)
-        self.assertIn('· 무주제: 주제 없는 발언', out)
+        self.assertIn('🔹 <b>기타</b> <i>1건</i>', out)
+        self.assertIn('· <b>무주제</b>\n주제 없는 발언', out)
 
     def test_empty_returns_blank(self):
         self.assertEqual(self._digest(summary='', sp_rows=[]), '')
@@ -676,8 +688,13 @@ class TestKmccMeeting(unittest.TestCase):
         html = km.format_agenda_html(meta, {'일시': '2026. 9. 9.(수) 14:30'}, [('의결사항', items)],
                                      'https://www.kmcc.go.kr/x?a=1&b=2', 'https://www.kmcc.go.kr/download.do?fileSeq=1')
         self.assertLessEqual(len(html), km.HTML_BUDGET)
-        self.assertTrue(html.startswith('📋 <b>방미통위 제34차 회의 의사일정 · 9/9 14:30</b>'))
+        # 제목 줄은 회의명만, 날짜·시각·건수는 다음 줄(2026-09-22 개편)
+        self.assertTrue(html.startswith('📋 <b>방미통위 제34차 회의 의사일정</b>\n'
+                                        '<i>9/9(수) 14:30 · 의결사항 20건</i>'))
+        self.assertIn('⚖️ <b>의결사항</b>', html)
+        self.assertIn('<b>① 안건 &amp; 제목 0</b>', html)      # 원문자 번호 — 'N. '가 아니어야 한다
         self.assertNotRegex(html, r'(?m)^\d+\. ')
+        self.assertEqual(html.count('<blockquote>'), html.count('</blockquote>'))
         self.assertIn('&amp; 제목', html)
         self.assertIn('… 외 ', html)
         self.assertIn('>원문</a>', html)
@@ -692,8 +709,9 @@ class TestKmccMeeting(unittest.TestCase):
         self.assertTrue(lines[1].startswith('[기타] 둘째'))
         self.assertLessEqual(len(lines[2]), km.RESULT_LINE_CHARS + 1)
         html = km.format_result_html({'nth': 34}, datetime(2026, 9, 9, tzinfo=km.KST), lines, 'https://www.kmcc.go.kr/y')
-        self.assertTrue(html.startswith('🏛️ <b>방미통위 제34차 위원회 결과 · 9/9</b>'))
-        self.assertIn('\n· [의결] 첫째', html)
+        self.assertTrue(html.startswith('🏛️ <b>방미통위 제34차 위원회 결과</b>\n<i>9/9</i>'))
+        self.assertIn('\n\n<b>[의결]</b> 첫째', html)      # 말머리는 굵게, 줄 사이는 빈 줄
+        self.assertIn('\n\n<b>[기타]</b> 둘째', html)
         self.assertLessEqual(len(html), km.HTML_BUDGET)
 
     def test_press_html(self):

@@ -268,39 +268,87 @@ def _footer(rest: int, url: str, pdf_url: str = '') -> str:
 
 
 def _agenda_header(meta: dict, head: dict, revised: bool = False) -> str:
+    """제목 줄만 굵게. 날짜·시각은 다음 줄로 내린다 — 굵은 글씨가 길수록 읽기 어렵다(2026-09-22)."""
     kind = '서면회의' if meta.get('kind') == '서면회의' else '회의'
+    rev = ' (수정)' if revised else ''
+    return f'📋 <b>방미통위 제{meta["nth"]}차 {kind} 의사일정{rev}</b>'
+
+
+def _agenda_when(meta: dict, head: dict) -> str:
+    """'9/23(수) 14:30' — 요일은 원문 일시('2026. 9. 23.(수) 14:30')에서 그대로 가져온다."""
     when = _md(meta.get('meeting_date'))
-    tm = re.search(r'(\d{1,2}:\d{2})', head.get('일시', '') or '')
+    src = head.get('일시', '') or ''
+    dow = re.search(r'\(([월화수목금토일])\)', src)
+    if when and dow:
+        when += f'({dow.group(1)})'
+    tm = re.search(r'(\d{1,2}:\d{2})', src)
     if tm:
         when = (when + ' ' + tm.group(1)).strip()
-    tail = f' · {esc(when)}' if when else ''
-    rev = ' (수정)' if revised else ''
-    return f'📋 <b>방미통위 제{meta["nth"]}차 {kind} 의사일정{rev}{tail}</b>'
+    return when
+
+
+# 의안명 끝의 ' - 대상 -' 꼬리(예: '… 시정조치에 관한 건 - ㈜케이티, … -')를 떼어
+# 별도 줄로 내린다. 제목 줄이 굵게 세 줄씩 흐르는 것이 가독성을 가장 크게 해쳤다.
+_SUBJ_TAIL_RE = re.compile(r'^(.*?[^\s-])\s*[-–—]\s*(.+?)\s*[-–—]\s*$')
+
+
+def _split_subject(subj: str) -> tuple:
+    m = _SUBJ_TAIL_RE.match((subj or '').strip())
+    return (m.group(1).strip(), m.group(2).strip()) if m else ((subj or '').strip(), '')
+
+
+_CIRCLED = '①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮'
+
+
+def _num(i: int) -> str:
+    """1-base 번호 표식. 'N. '으로 시작하는 줄은 발송 측 mergeQueueBlocks가 항목으로
+    오인해 묶으므로(ITEM_START_RE) 원문자를 쓴다."""
+    return _CIRCLED[i - 1] if 1 <= i <= len(_CIRCLED) else f'({i})'
+
+
+_SECTION_ICON = (('의결', '⚖️'), ('보고', '📄'), ('의견', '💬'), ('토의', '💬'))
+
+
+def _section_icon(name: str) -> str:
+    return next((ic for key, ic in _SECTION_ICON if key in (name or '')), '▫️')
 
 
 def format_agenda_html(meta: dict, head: dict, sections: list, url: str, pdf_url: str = '',
                        revised: bool = False, budget: int = HTML_BUDGET) -> str:
+    """안건 1건 = 한 덩어리(제목·대상·내용·담당). 덩어리 사이를 빈 줄로 띄우는 것이 핵심이다.
+
+    2026-09-22 개편 — 종전에는 제목 전체가 굵은 글씨로 서너 줄 흐르고 안건 사이에 빈 줄이
+    없어 전부 한 덩어리로 보였다(운영자 지적). 바뀐 점: ①절(의결/보고)을 소제목으로 세우고
+    ②안건마다 빈 줄로 끊고 ③'[의결] 가.' 접두 대신 원문자 번호를 쓰고 ④'- 대상 -' 꼬리와
+    담당과를 제목에서 떼어 각각 제 줄로 내리고 ⑤본문은 인용구로 감싸 제목과 구분한다.
+    """
     parts = [_agenda_header(meta, head, revised)]
-    counts = ' · '.join(f'{esc(n)} {len(items)}건' for n, items in sections if items)
-    if counts:
-        parts.append(f'<i>{counts}</i>')
-    parts.append('')
+    sub = [x for x in (esc(_agenda_when(meta, head)),
+                       ' · '.join(f'{esc(n)} {len(items)}건' for n, items in sections if items))
+           if x]
+    if sub:
+        parts.append(f'<i>{" · ".join(sub)}</i>')
     total = sum(len(items) for _, items in sections)
     shown, stop = 0, False
     for name, items in sections:
-        tag = '의결' if '의결' in name else ('보고' if '보고' in name else name[:2])
-        for gu, subj, body, dept, open_ in items:
-            block = [f'<b>[{esc(tag)}] {esc(gu)}. {esc(subj)}</b>']
+        head_block = ['', f'{_section_icon(name)} <b>{esc(name)}</b>']
+        for i, (gu, subj, body, dept, open_) in enumerate(items, 1):
+            subject, target = _split_subject(subj)
+            # 절 소제목 바로 밑 첫 안건은 붙이고, 둘째부터 빈 줄로 띄운다.
+            block = (list(head_block) if head_block else ['']) + [f'<b>{_num(i)} {esc(subject)}</b>']
+            if target:
+                block.append(f'<i>{esc(target)}</i>')
             if body:
-                block.append(f'· {esc(body)}')
+                block.append(f'<blockquote>{esc(body)}</blockquote>')
             meta_line = ' · '.join(x for x in (esc(dept), esc(open_)) if x)
             if meta_line:
-                block.append(f'· {meta_line}')
+                block.append(f'<i>{meta_line}</i>')
             projected = len('\n'.join(parts + block)) + 2 + len(_footer(total - shown - 1, url, pdf_url))
             if projected > budget:
                 stop = True
                 break
             parts.extend(block)
+            head_block = []          # 절 소제목은 그 절의 첫 안건에만
             shown += 1
         if stop:
             break
@@ -323,13 +371,19 @@ def format_agenda_fallback_html(meta: dict, raw_text: str, url: str, pdf_url: st
 
 def format_result_html(meta: dict, post_date, lines: list, url: str, budget: int = HTML_BUDGET) -> str:
     when = _md(post_date) if post_date else ''
-    parts = [f'🏛️ <b>방미통위 제{meta["nth"]}차 위원회 결과{(" · " + esc(when)) if when else ""}</b>', '']
+    parts = [f'🏛️ <b>방미통위 제{meta["nth"]}차 위원회 결과</b>']
+    if when:
+        parts.append(f'<i>{esc(when)}</i>')
     total, shown = len(lines), 0
     for s in lines:
-        cand = f'· {esc(s)}'
-        if len('\n'.join(parts + [cand])) + 2 + len(_footer(total - shown - 1, url)) > budget:
+        # 각 줄은 '[의결] 본문' 꼴(parse_result_lines). 말머리는 굵게 떼어 스캔이 되게 하고
+        # 줄 사이를 빈 줄로 띄운다 — 붙여 놓으면 한 문단으로 읽힌다(2026-09-22 개편).
+        m = re.match(r'^\[([^\]]{1,10})\]\s*(.*)$', str(s or '').strip())
+        cand = (['', f'<b>[{esc(m.group(1))}]</b> {esc(m.group(2))}'] if m
+                else ['', f'· {esc(s)}'])
+        if len('\n'.join(parts + cand)) + 2 + len(_footer(total - shown - 1, url)) > budget:
             break
-        parts.append(cand)
+        parts.extend(cand)
         shown += 1
     if parts[-1] != '':
         parts.append('')

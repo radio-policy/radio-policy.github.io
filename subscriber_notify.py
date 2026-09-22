@@ -16,6 +16,7 @@
   - 호출 위치 주의: 긴급 뉴스는 반드시 suppress_repeat_alerts()+클러스터링을 **거친 뒤** 호출한다.
 """
 import os
+import re
 import html as _html
 from datetime import datetime, timedelta, timezone
 
@@ -118,6 +119,31 @@ MINUTES_DIGEST_BUDGET = 2500       # queue_for_subscribers의 3500 절단(태그
 MINUTES_DIGEST_MAX_LINES = 10      # 발언 요지 줄 수 상한 (운영자 결정 2026-09-03)
 MINUTES_LINE_CHARS = 140
 SKT_CHIP = 'SK텔레콤 언급'
+# 같은 주제가 두 이름으로 들어와 그룹이 쪼개지는 것을 막는다(2026-09-15 회의록 실측:
+# 'AI' 10건과 '인공지능' 7건이 각각 소제목을 차지해 다이제스트가 소제목 밭이 됐다).
+_GROUP_ALIAS = {'AI': '인공지능', '에이아이': '인공지능'}
+
+
+# 긴 기관명은 관례 약칭으로, 붙어 나오는 직위는 띄어쓴다(pdftotext·회의록 원문이 붙여 준다).
+# 예: '과학기술정보통신부제2차관' → '과기정통부 제2차관',
+#     '방송미디어통신위원회방송미디어진흥국장' → '방미통위 방송미디어진흥국장'
+_ORG_ABBR = (('과학기술정보통신부', '과기정통부'), ('방송미디어통신위원회', '방미통위'),
+             ('방송통신위원회', '방통위'), ('개인정보보호위원회', '개인정보위'),
+             ('공정거래위원회', '공정위'), ('국립전파연구원', '전파연구원'))
+_POS_SPLIT = re.compile(r'^(.*?(?:부|처|청|위원회|연구원|진흥원))(제\d+차관|차관|장관|'
+                        r'[가-힣]{2,}?(?:국장|실장|과장|단장|본부장|정책관))$')
+
+
+def _tidy_position(pos) -> str:
+    p = str(pos or '').strip()
+    if not p:
+        return ''
+    m = _POS_SPLIT.match(p)
+    if m:
+        p = f'{m.group(1)} {m.group(2)}'
+    for long, short in _ORG_ABBR:
+        p = p.replace(long, short)
+    return p
 
 
 def _fmt_md(meeting_date) -> str:
@@ -127,6 +153,21 @@ def _fmt_md(meeting_date) -> str:
     if len(parts) == 3 and parts[1].isdigit() and parts[2].isdigit():
         return f'{int(parts[1])}/{int(parts[2])}'
     return esc(raw)
+
+
+def _split_minutes_title(title) -> tuple:
+    """'제1차 …소위(전기통신사업법 …(김현 의원 대표발의)(의안번호 2219087 외 33건)'
+    → ('제1차 …소위', '전기통신사업법 …(김현 의원 대표발의) 외 33건'). 둘 다 이스케이프해 돌려준다.
+    괄호가 짝이 안 맞는 원문이 흔하므로(실측) 첫 '(' 에서만 자르고 나머지는 손대지 않는다."""
+    t = str(title or '').strip()
+    head, _, rest = t.partition('(')
+    if not rest:
+        return esc(t), ''
+    rest = re.sub(r'\(의안번호\s*\d+\s*', ' ', rest)
+    while rest.endswith(')') and rest.count(')') > rest.count('('):   # 앞에서 '(' 를 뗀 만큼만
+        rest = rest[:-1]
+    rest = re.sub(r'\s{2,}', ' ', rest).strip()
+    return esc(head.strip()), esc(rest)
 
 
 def format_minutes_digest(meeting_date: str, title: str, summary: str, sp_rows: list,
@@ -160,21 +201,21 @@ def format_minutes_digest(meeting_date: str, title: str, summary: str, sp_rows: 
             continue
         topic = str(r.get('topic') or '')
         kws = [k.strip() for k in topic.split(',') if k.strip()]
-        group = next((k for k in kws if k != SKT_CHIP), '기타')
+        group = _GROUP_ALIAS.get(k := next((k for k in kws if k != SKT_CHIP), '기타'), k)
         try:
             seq = int(r.get('chunk_seq') or 0)
         except (TypeError, ValueError):
             seq = 0
         if len(s) > MINUTES_LINE_CHARS:
             s = s[:MINUTES_LINE_CHARS].rstrip() + '…'
-        who = esc(r.get('speaker'))
-        pos = esc(r.get('position')).strip()
-        if pos:
-            who = f'{who} {pos}'
-        line = f'· {who}: {esc(s)}'
-        if SKT_CHIP in kws:
-            line += f' ({SKT_CHIP})'
-        valid.append({'group': group, 'seq': seq, 'line': line})
+        # 2026-09-22 개편 — 종전에는 '· 이름 직위: 요지…'가 한 줄로 이어져 문단 벽이 됐다.
+        # 이름 줄과 요지 줄을 나누고(줄 사이는 빈 줄), 직위는 기울임으로 눌러 이름이 먼저 보이게 한다.
+        chip = SKT_CHIP in kws
+        who = f'<b>{esc(r.get("speaker"))}</b>'
+        tail = ' · '.join(x for x in (esc(_tidy_position(r.get('position'))),
+                                      SKT_CHIP if chip else '') if x)
+        head = f'· {"🔶 " if chip else ""}{who}' + (f' <i>{tail}</i>' if tail else '')
+        valid.append({'group': group, 'seq': seq, 'line': head, 'body': esc(s)})
 
     summary_line = esc(summary).strip()
     if skt_flag and summary_line and SKT_CHIP not in summary_line:
@@ -223,24 +264,29 @@ def format_minutes_digest(meeting_date: str, title: str, summary: str, sp_rows: 
         bits.append(f'<a href="{DASHBOARD_URL}">대시보드</a>')
         return ' · '.join(bits)
 
-    parts = [f'🏛️ <b>과방위 회의록 · {_fmt_md(meeting_date)} {esc(title).strip()}</b>']
+    # 제목은 '소위명(법안명(대표발의)(의안번호 N 외 M건)' 꼴로 길다. 굵은 첫 줄에 통째로 넣으면
+    # 네댓 줄이 통으로 굵게 흘러 무엇이 회의명인지 보이지 않는다 → 회의명과 안건을 나눈다(2026-09-22).
+    conf, agenda = _split_minutes_title(title)
+    parts = [f'🏛️ <b>과방위 회의록 · {_fmt_md(meeting_date)} {conf}</b>']
+    if agenda:
+        parts.append(f'<i>{agenda}</i>')
     if summary_line:
-        parts.append(summary_line)
-    parts.append('')   # 헤더 블록과 발언 블록 사이 빈 줄
+        parts.append(f'<blockquote>{summary_line}</blockquote>')
 
     shown, stop = 0, False
     for g in order:
         if stop or alloc[g] <= 0:
             break
-        heading_pending = f'<b>{esc(g)}</b>'
+        heading_pending = ['', f'🔹 <b>{esc(g)}</b> <i>{len(groups[g])}건</i>']
         for v in groups[g][:alloc[g]]:
-            candidate = ([heading_pending] if heading_pending else []) + [v['line']]
+            # 소제목 바로 밑 첫 항목은 붙이고, 같은 그룹의 둘째부터 빈 줄로 띄운다.
+            candidate = (list(heading_pending) if heading_pending else ['']) + [v['line'], v['body']]
             projected = len('\n'.join(parts + candidate)) + 2 + len(footer(shown + 1))
             if projected > budget:
                 stop = True
                 break
             parts.extend(candidate)
-            heading_pending = ''
+            heading_pending = []
             shown += 1
 
     if parts[-1] != '':
