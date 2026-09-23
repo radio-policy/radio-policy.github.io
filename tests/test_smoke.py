@@ -1086,3 +1086,137 @@ class TestBriefingBodyAndTitleGuards(unittest.TestCase):
         # 매핑에 없으면 원래 값을 그대로 둔다(fail-soft)
         self.assertEqual(mb._pretty_source('연합뉴스'), '연합뉴스')
         self.assertEqual(mb._pretty_source('알수없는매체'), '알수없는매체')
+
+
+class TestOkfDriftCheck(unittest.TestCase):
+    """㉑ okf_drift_check — OKF 요약(kb_documents) ↔ 조문 현행본(law_watch) 판 대조 (#197)"""
+
+    KB = [
+        {'title': '개인정보 보호법 시행령', 'law_type': '대통령령', 'law_number': '제36121호',
+         'enforcement_date': '2026-08-20', 'path': 'laws/privacy-act/enforcement_decree_36121.md'},
+        {'title': '전파법 시행규칙', 'law_type': '과학기술정보통신부령', 'law_number': '제156호',
+         'enforcement_date': '2025-10-01', 'path': 'laws/radio-act/enforcement_rule.md'},
+        {'title': '방송통신기자재등의 적합성평가에 관한 고시 (과기정통부고시 제2026-10호)',
+         'law_type': '과학기술정보통신부고시', 'law_number': '제2026-10호',
+         'enforcement_date': '2026-02-10', 'path': 'laws/radio-act/ca/msit_2026_10.md'},
+        {'title': '방송통신기자재등의 적합성평가에 관한 고시 (국립전파연구원고시 제2026-4호)',
+         'law_type': '국립전파연구원고시', 'law_number': '제2026-4호',
+         'enforcement_date': '2026-07-24', 'path': 'laws/radio-act/ca/rra_2026_4.md'},
+        {'title': '방송통신기자재등의 적합성평가에 관한 고시 (과기정통부고시 제2025-56호) [시행예정 2026.11.6.]',
+         'law_type': '과학기술정보통신부고시', 'law_number': '제2025-56호',
+         'enforcement_date': '2026-11-06', 'path': 'laws/radio-act/ca/msit_2025_56.md'},
+        {'title': '금지행위 위반에 대한 과징금 부과 세부기준', 'law_type': '방송통신위원회고시',
+         'law_number': '제2026-11호', 'enforcement_date': '2026-05-18', 'path': 'laws/tba/penalty.md'},
+        {'title': 'ITU-R 권고 M.1036', 'law_type': 'ITU-R 권고', 'law_number': 'M.1036-6',
+         'enforcement_date': None, 'path': 'itu/m1036.md'},
+    ]
+    WATCH = [
+        {'doc_name': '개인정보 보호법 시행령(대통령령)(제36671호)(20260911)'},
+        {'doc_name': '전파법 시행규칙(과학기술정보통신부령)(제00156호)(20251001)'},
+        {'doc_name': '방송통신기자재등의 적합성평가에 관한 고시(국립전파연구원고시)(제2026-4호)(20260724)'},
+        {'doc_name': '금지행위 위반에 대한 과징금 부과 세부기준(방송미디어통신위원회고시)(제2026-11호)(20260518)'},
+    ]
+
+    def test_norm_no_ignores_leading_zeros_and_labels(self):
+        import okf_drift_check as od
+        self.assertEqual(od.norm_no('제00156호'), od.norm_no('제156호'))
+        self.assertEqual(od.norm_no('제2026-4호'), '2026-4')
+        self.assertNotEqual(od.norm_no('제2026-4호'), od.norm_no('제2026-10호'))
+
+    def test_drift_only_for_real_version_mismatch(self):
+        import okf_drift_check as od
+        drift = od.find_drift(self.KB, self.WATCH, today='20260924')
+        titles = [d['title'] for d in drift]
+        # 진짜 어긋남: 요약 36121(8/20) vs 조문 36671(9/11)
+        self.assertEqual(titles, ['개인정보 보호법 시행령'])
+        self.assertEqual(drift[0]['cur_no'], '제36671호')
+        self.assertEqual(drift[0]['kb_enf'], '20260820')
+
+    def test_zero_padded_number_is_not_drift(self):
+        import okf_drift_check as od
+        self.assertEqual(od.find_drift([self.KB[1]], self.WATCH, today='20260924'), [])
+
+    def test_same_title_other_agency_is_not_compared(self):
+        """적합성평가 고시: kb 과기정통부판은 law_watch 전파연구원 행과 짝짓지 않는다(대조 불가 ≠ 어긋남)"""
+        import okf_drift_check as od
+        self.assertEqual(od.find_drift([self.KB[2], self.KB[3]], self.WATCH, today='20260924'), [])
+
+    def test_future_enforcement_summary_is_skipped(self):
+        import okf_drift_check as od
+        watch = self.WATCH + [{'doc_name': '방송통신기자재등의 적합성평가에 관한 고시(과학기술정보통신부고시)(제2026-10호)(20260210)'}]
+        self.assertEqual(od.find_drift([self.KB[4]], watch, today='20260924'), [])
+        # 시행일이 도래하면 그때부터 대조 대상 — 같은 소관의 조문(2026-10호)과 다르므로 어긋남
+        self.assertEqual(len(od.find_drift([self.KB[4]], watch, today='20261110')), 1)
+
+    def test_agency_rename_alias_matches(self):
+        """방송통신위원회 → 방송미디어통신위원회 개명: kb 옛 이름과 law_watch 새 이름을 같은 소관으로 본다"""
+        import okf_drift_check as od
+        self.assertEqual(od.find_drift([self.KB[5]], self.WATCH, today='20260924'), [])
+
+    def test_rows_without_number_are_ignored(self):
+        import okf_drift_check as od
+        self.assertEqual(od.find_drift([self.KB[6]], self.WATCH, today='20260924'), [])
+
+    def test_signature_changes_with_set(self):
+        import okf_drift_check as od
+        a = od.find_drift(self.KB, self.WATCH, today='20260924')
+        self.assertNotEqual(od.drift_signature(a), od.drift_signature([]))
+        self.assertEqual(od.drift_signature(a), od.drift_signature(list(a)))
+
+    def test_message_has_resolution_and_instruction(self):
+        import okf_drift_check as od
+        drift = od.find_drift(self.KB, self.WATCH, today='20260924')
+        msg = od.format_message(drift)
+        self.assertIn('OKF 요약 갱신 필요 1건', msg)
+        self.assertIn('제36671호', msg)
+        self.assertIn('세션에서', msg)
+        self.assertIn('해소', od.format_message([]))
+
+
+class TestLawSyncReport(unittest.TestCase):
+    """㉒ law_sync 교체 완료 통지 서식 (#197) — 청크 급변 경고·실패·OKF 어긋남"""
+
+    def _report(self, old_count, new_count):
+        return [{'law_name': '항공안전법', 'old_no': '제21268호', 'old_enf': '20260701',
+                 'new_no': '제21822호', 'new_enf': '20260917',
+                 'old_count': old_count, 'new_count': new_count, 'deleted': [], 'note': ''}]
+
+    def test_normal_change_has_no_warning(self):
+        import law_sync
+        msg = law_sync.format_sync_report(self._report(73, 83), [], drift=[], keep_old=True, now='09/24 11:40')
+        self.assertIn('법령 자동 현행화 완료 1건', msg)
+        self.assertIn('제21268호(20260701) → <b>제21822호</b>(20260917) · 청크 73→83', msg)
+        self.assertIn('구판 보존(--keep-old)', msg)
+        self.assertNotIn('급변', msg)
+        self.assertIn('OKF 요약은 모두 조문 판과 일치', msg)
+
+    def test_chunk_jump_is_flagged(self):
+        """청크 300→12: 동명이법·취득 누락 의심 — 무인 교체가 조용히 지나가지 않게 표시"""
+        import law_sync
+        msg = law_sync.format_sync_report(self._report(300, 12), [], drift=[], now='09/24 11:40')
+        self.assertIn('청크 수 급변', msg)
+        msg2 = law_sync.format_sync_report(self._report(50, 120), [], drift=[], now='09/24 11:40')
+        self.assertIn('청크 수 급변', msg2)
+
+    def test_failures_and_drift_are_listed(self):
+        import law_sync
+        drift = [{'title': '항공안전법', 'kb_no': '제21268호', 'kb_enf': '20260701',
+                  'cur_no': '제21822호', 'cur_enf': '20260917', 'path': 'x.md', 'doc_name': 'd'}]
+        msg = law_sync.format_sync_report(self._report(73, 83), [('전파법', '법제처 미매칭')],
+                                          drift=drift, now='09/24 11:40')
+        self.assertIn('현행화 실패 1건', msg)
+        self.assertIn('전파법: 법제처 미매칭', msg)
+        self.assertIn('OKF 요약 갱신 필요 1건', msg)
+        self.assertIn('세션에서', msg)
+
+    def test_drift_check_failure_is_visible(self):
+        import law_sync
+        msg = law_sync.format_sync_report(self._report(73, 83), [], drift=None, now='09/24 11:40')
+        self.assertIn('OKF 요약 대조 실패', msg)
+
+    def test_reentry_note_is_shown(self):
+        import law_sync
+        rep = self._report(73, 83)
+        rep[0]['note'] = '재진입 정리(current 구본 1건 강등)'
+        msg = law_sync.format_sync_report(rep, [], drift=[], now='09/24 11:40')
+        self.assertIn('재진입 정리', msg)

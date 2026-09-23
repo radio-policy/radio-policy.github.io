@@ -52,9 +52,16 @@ except Exception:
     pass
 
 import sb_client
+import notify as tg_notify   # 교체 완료 통지(운영자 봇) — 전송부만 위임 (#197)
 from law_watch import (norm_name, parse_doc_name, api_target_of,
                        drf_law_search, pick_exact, row_fields,
                        norm_law_no, alias_variants)
+
+# 이번 실행의 교체 결과 — 끝에 운영자 텔레그램 한 통으로 보낸다 (#197, 2026-09-24).
+# 11:00 체인이 무인으로 교체하므로 "무엇이 무엇으로 바뀌었고 청크가 얼마나 달라졌는지"를
+# 사람이 볼 수 있어야 한다(동명이법·취득 누락은 청크 수 급변으로 드러난다).
+SYNC_REPORT = []   # dict(law_name, old_no, old_enf, new_no, new_enf, old_count, new_count, deleted, note)
+SYNC_FAILS = []    # (law_name, 사유)
 
 SB_URL = os.getenv("SUPABASE_URL")
 SB_KEY = os.getenv("SUPABASE_SERVICE_KEY")
@@ -415,6 +422,19 @@ def sync_one(sb, watch_row, args):
         print(f"  기존 버전 {len(existing)}건: " +
               ", ".join(f"{k.split('(')[-2] if '(' in k else k}" for k in list(existing)[:3]))
 
+    if new_doc in existing and existing[new_doc]['count'] != len(chunks):
+        # 재진입 시 청크 수 대조 (#197, 2026-09-24). 앞선 실행이 삽입 도중 죽으면(50건 배치 사이
+        # 네트워크 단절·statement timeout) 신본이 '일부만' 든 채 남는다. 아래 재진입 분기는 문서명만
+        # 보고 '이미 등재됨'으로 넘기므로, 그 반쪽 신본이 영영 현행이 된다(삽입 검증은 같은 실행
+        # 안에서만 돈다). 청크 수가 이번 취득과 다르면 반쪽으로 보고 지운 뒤 정상 경로로 다시 넣는다.
+        have = existing[new_doc]['count']
+        print(f"  ! 재진입: 등재된 신본 청크 {have}개 ≠ 이번 취득 {len(chunks)}개 — 반쪽 등재로 보고 다시 넣음")
+        if args.dry_run:
+            print("  [dry-run] DB 변경 없음")
+            return True
+        _delete_doc_chunks(sb, new_doc)
+        existing.pop(new_doc)
+
     if new_doc in existing:
         # 신본이 이미 있어도 그냥 건너뛰면 안 된다 — 앞선 실행이 '삽입 성공 → 강등 실패'로
         # 죽었을 수 있고, 그때 구본이 current로 영영 남는다(재진입 구멍). 상태만 정리한다.
@@ -445,6 +465,12 @@ def sync_one(sb, watch_row, args):
         }, on_conflict='doc_name').execute()
         if doc_name != new_doc:
             sb.table('law_watch').delete().eq('doc_name', doc_name).execute()
+        SYNC_REPORT.append({
+            'law_name': law_name, 'old_no': meta['law_no'], 'old_enf': meta['enf_date'],
+            'new_no': law_no, 'new_enf': enf,
+            'old_count': (existing.get(doc_name) or {}).get('count'),
+            'new_count': existing[new_doc]['count'], 'deleted': [],
+            'note': f'재진입 정리(current 구본 {len(stale)}건 강등)'})
         return True
 
     if args.dry_run:
@@ -483,11 +509,15 @@ def sync_one(sb, watch_row, args):
         print(f"  ✓ 시행예정본 {len(pend)}건 → pending (보존, 시행일 도래 시 현행 승격)")
 
     # ③ 보존 상한 초과분 삭제 — superseded만 대상(pending=미래 시행본은 항상 보존)
+    #    11:00 체인은 --keep-old로 돌아 여기를 타지 않는다(무인 삭제 금지, #197) — 초과분 정리는
+    #    사람이 --doc-name으로 돌릴 때만.
+    deleted = []
     if not args.keep_old:
         olds = sorted(((k, v) for k, v in existing.items() if k in sup),
                       key=lambda kv: kv[1]['enf'], reverse=True)
         for old_doc, info in olds[KEEP_VERSIONS - 1:]:
             _delete_doc_chunks(sb, old_doc)
+            deleted.append(old_doc)
             print(f"  ✓ 보존 상한 초과 삭제: {old_doc[:60]} ({info['count']}청크)")
 
     # ③-b 교체 이력 기록 — law_diff_gen이 (구본 → 신본) 조문 DIFF를 만들 근거 (2026-09-01)
@@ -522,7 +552,72 @@ def sync_one(sb, watch_row, args):
     }, on_conflict='doc_name').execute()
     if doc_name != new_doc:
         sb.table('law_watch').delete().eq('doc_name', doc_name).execute()
+    SYNC_REPORT.append({
+        'law_name': law_name, 'old_no': meta['law_no'], 'old_enf': meta['enf_date'],
+        'new_no': law_no, 'new_enf': enf,
+        'old_count': (existing.get(doc_name) or {}).get('count'),
+        'new_count': len(payload), 'deleted': deleted, 'note': ''})
     return True
+
+
+# ── 교체 완료 통지 (#197) ─────────────────────────────────
+
+CHUNK_JUMP_LOW, CHUNK_JUMP_HIGH = 0.5, 2.0   # 청크 수가 이 배율 밖이면 '급변' 표시(동명이법·취득 누락 의심)
+
+
+def format_sync_report(report, fails, drift=None, keep_old=True, now=None):
+    """교체 결과 → 운영자 텔레그램 HTML. 순수 함수(스모크 테스트 대상).
+
+    drift: okf_drift_check.find_drift 결과(None=대조 못 함). 교체된 법령의 OKF 요약이 옛 판인 것을
+    같은 메시지에 싣는다 — 조문은 바뀌었는데 요약은 안 바뀐 상태를 사람이 바로 보게.
+    """
+    now = now or datetime.now(timezone(timedelta(hours=9))).strftime('%m/%d %H:%M')
+    lines = []
+    if report:
+        lines.append(f"🔄 <b>법령 자동 현행화 완료 {len(report)}건</b> ({now})"
+                     + (" · 구판 보존(--keep-old)" if keep_old else ""))
+        for r in report:
+            oc, nc = r.get('old_count'), r.get('new_count')
+            cnt = f" · 청크 {oc if oc is not None else '?'}→{nc}"
+            warn = ''
+            if oc and nc and not (oc * CHUNK_JUMP_LOW <= nc <= oc * CHUNK_JUMP_HIGH):
+                warn = " ⚠️ <b>청크 수 급변</b> — 동명이법·취득 누락 확인"
+            lines.append(f"· {r['law_name']}: {r['old_no']}({r['old_enf']}) → <b>{r['new_no']}</b>({r['new_enf']}){cnt}{warn}")
+            if r.get('note'):
+                lines.append(f"  <i>{r['note']}</i>")
+            for d in r.get('deleted') or []:
+                lines.append(f"  삭제: {d[:60]}")
+    if fails:
+        lines.append(f"❌ <b>현행화 실패 {len(fails)}건</b>" + ("" if report else f" ({now})"))
+        for nm, why in fails:
+            lines.append(f"· {nm}: {why}")
+    if drift is None:
+        lines += ["", "<i>OKF 요약 대조 실패 — okf_drift_check.py --dry-run 으로 확인</i>"]
+    elif drift:
+        import okf_drift_check
+        lines += ["", f"📝 <b>OKF 요약 갱신 필요 {len(drift)}건</b> — 조문은 새 판, 요약은 옛 판"]
+        lines += okf_drift_check.format_drift_lines(drift)
+        lines.append("<i>요약은 세션에서 새 판 기준으로 재작성(지침 §OKF 요약 갱신 절차) — API 아님</i>")
+    else:
+        lines += ["", "✅ OKF 요약은 모두 조문 판과 일치"]
+    return "\n".join(lines)
+
+
+def _notify_sync_result(sb, args):
+    """교체 결과 + OKF 어긋남을 운영자 봇으로. 실패해도 본작업(교체·백필)에 영향 없음(fail-open)."""
+    import okf_drift_check
+    drift = None
+    try:
+        drift, _, _ = okf_drift_check.run_check(sb)
+    except Exception as e:
+        print(f"  (OKF 대조 실패 — 통지에는 '대조 실패'로) {str(e)[:120]}")
+    text = format_sync_report(SYNC_REPORT, SYNC_FAILS, drift, keep_old=args.keep_old)
+    ok = tg_notify.send_telegram(text, parse_mode='HTML', disable_web_page_preview=True)
+    print("  ✓ 교체 결과 통지" if ok else "  ! 교체 결과 통지 실패")
+    if ok and drift is not None:
+        # 같은 목록을 뒤따르는 okf_drift_check --notify 가 또 보내지 않도록 서명을 남긴다
+        sb_client.heartbeat(sb, okf_drift_check.HEALTH_KEY,
+                            f'drift={len(drift)} sig={okf_drift_check.drift_signature(drift)}')
 
 
 # ── 시행예정본 적재·승격 ──────────────────────────────────
@@ -1058,8 +1153,11 @@ def main():
         try:
             if sync_one(sb, r, a):
                 done += 1
+            else:
+                SYNC_FAILS.append((r.get('law_name'), '미완료 — 실행 출력 참조(법제처 미매칭·조문 없음 등)'))
         except Exception as e:
             print(f"  ! 실패({r.get('law_name')}): {str(e)[:140]}")
+            SYNC_FAILS.append((r.get('law_name'), str(e)[:120]))
         time.sleep(0.3)
 
     print(f"\n=== 완료: {done}/{len(targets)}건 등재 ===")
@@ -1074,6 +1172,10 @@ def main():
         subprocess.run([sys.executable, str(ROOT / 'backfill_embeddings.py')], check=False)
         print("\n※ 관계도 인용망 재구축 권장: python build_law_citation_graph.py")
         print("※ OKF 요약은 세션에서 작성(초기 정비 방침) — 지침 §법령·규제 요약 레이어")
+
+    # 교체 완료 통지 (#197) — 무인 교체가 무엇을 바꿨는지 + OKF 요약 어긋남을 한 통으로
+    if not a.dry_run and (SYNC_REPORT or SYNC_FAILS):
+        _notify_sync_result(sb, a)
 
 
 if __name__ == '__main__':

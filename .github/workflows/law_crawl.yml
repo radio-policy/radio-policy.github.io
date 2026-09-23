@@ -80,6 +80,10 @@ jobs:
       # 반드시 law_watch 뒤에 둘 것 — 대상은 law_watch가 방금 갱신한 sync_status='outdated'다.
       # VOYAGE_API_KEY는 law_sync가 끝에 부르는 backfill_embeddings.py용(없으면 새 조문이
       # 검색에 안 잡힌다). 실패해도 체인의 앞 단계 결과는 이미 남았으므로 continue-on-error.
+      # 안전장치 3종 (#197, 2026-09-24, 운영자 결정 — 지침 '무인 자동화 전 OKF 자동 갱신' 규칙을 조건부 허용으로 개정):
+      #  ① --keep-old: 구판을 superseded로만 두고 보존 상한 초과분 삭제는 무인으로 돌리지 않는다(정리는 사람이 --doc-name으로)
+      #  ② 재진입 시 청크 수 대조(law_sync.py 안): 앞선 실행이 반쯤 넣고 죽은 신본을 '이미 등재됨'으로 넘기지 않는다
+      #  ③ 교체 완료 텔레그램(무엇이 무엇으로, 청크 수 변화, OKF 요약 어긋남) — TELEGRAM_* 필요
       - name: Sync outdated laws to current version
         continue-on-error: true
         env:
@@ -87,4 +91,18 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           LAW_OC_KEY: ${{ secrets.LAW_OC_KEY }}
           VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
-        run: python law_sync.py --all-outdated
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python law_sync.py --all-outdated --keep-old
+
+      # OKF 요약(kb_documents)이 조문 현행본과 판이 어긋난 법령 대조 (#197). AI 0회, Supabase만.
+      # --promote 승격도 어긋남을 만들므로(지방세법 시행령 9/18) 교체 스텝과 별도로 매일 돈다.
+      # 어긋남 집합이 지난번과 달라진 날만 운영자 텔레그램(같은 목록 반복 금지 — #183 ⑤ 교훈).
+      - name: Check OKF summary drift
+        continue-on-error: true
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python okf_drift_check.py --notify
