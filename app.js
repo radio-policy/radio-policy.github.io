@@ -760,6 +760,7 @@ async function _expandQueryKeywordsRaw(query) {
   try {
     if (!aiReady()) return [];
     var res = await claudeFetch({
+      site: 'query_expand',
       method: 'POST',
       body: JSON.stringify({
         model: 'claude-haiku-4-5-20251001',
@@ -1988,6 +1989,7 @@ async function _fetchTermDetail(t) {
     '</diagram>\n\n' +
     '<related>관련용어1,관련용어2,관련용어3</related>';
   var res = await claudeFetch({
+    site: 'term_detail',
     method:'POST',
     // thinking 명시 OFF(#153): Sonnet 5는 적응형 추론이 기본 ON이라 사고 토큰이 과금되고 max_tokens를 잠식해 SVG가 잘릴 수 있다.
     body:JSON.stringify({model:'claude-sonnet-5',max_tokens:6000,thinking:{type:'disabled'},system:systemMsg,messages:[{role:'user',content:userMsg}]})
@@ -4548,6 +4550,7 @@ async function summarizeNews(newsId) {
       '\n\n본문:\n' + bodySnippet;
 
     var res = await claudeFetch({
+      site: 'news_summary',
       method: 'POST',
       body: JSON.stringify({
         model: 'claude-haiku-4-5-20251001',
@@ -4632,6 +4635,7 @@ async function analyzeNewsImpact(newsId, force) {
       (bodySnippet ? '\n\n본문:\n' + bodySnippet : '');
 
     var res = await claudeFetch({
+      site: 'news_impact',
       method: 'POST',
       body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 800, system: sysMsg, messages: [{ role: 'user', content: userMsg }] })
     });
@@ -5466,6 +5470,7 @@ async function runDiffAnalysis() {
     }
 
     var res = await claudeFetch({
+      site: 'diff_analysis',
       method: 'POST',
       // thinking:disabled — Sonnet 5 적응형 추론이 응답 첫 블록을 빈 thinking 블록으로 만들어 content[0].text가 비어 파싱 실패했음(무음 오류).
       body: JSON.stringify({ model: 'claude-sonnet-5', max_tokens: 4000, thinking: { type: 'disabled' }, system: sysMsg, messages: [{ role: 'user', content: userMsg }] })
@@ -6024,6 +6029,7 @@ async function analyzeBriefingItemEl(el, titleText) {
       (bodySnippet ? '\n\n본문:\n' + bodySnippet : '');
 
     var res = await claudeFetch({
+      site: 'briefing_item',
       method: 'POST',
       body: JSON.stringify({
         model: 'claude-haiku-4-5-20251001', max_tokens: 800,
@@ -6448,6 +6454,7 @@ async function generateOkfForDoc(docName, category) {
     ' / law_number=' + meta.law_number + ' / enforcement_date=' + meta.enf +
     ' / concept_type=' + conceptType + ' / competent_authority=\n\n[원문 발췌]\n' + lawText;
   var res = await claudeFetch({
+    site: 'okf_generate',
     method: 'POST',
     body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 4096, system: sysPrompt,
       messages: [{ role: 'user', content: userMsg }] })
@@ -6583,6 +6590,7 @@ async function testConnection() {
   if (aiReady()) {
     try {
       const res = await claudeFetch({
+        site: 'conn_test',
         method: 'POST',
         // Haiku로(#153) — Sonnet이면 프록시가 자문 한도 1회를 차감한다(#141 모델명 기준). 연결 확인에 Sonnet은 불필요.
         body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 10, messages: [{ role: 'user', content: 'ping' }] })
@@ -9363,6 +9371,7 @@ async function generateIssueImpact(issueId) {
 
   try {
     var res = await claudeFetch({
+      site: 'issue_impact',
       method: 'POST',
       body: JSON.stringify({ model: 'claude-sonnet-5', max_tokens: 1200, thinking: { type: 'disabled' },
         system: SKT_IMPACT_SYSTEM_PROMPT, messages: [{ role:'user', content: userMsg }] })
@@ -11406,6 +11415,7 @@ async function callLawmapAI(userMsg) {
   var cfg = getConfig();
   if (!aiReady()) throw new Error(aiGateMsg());
   var res = await claudeFetch({
+    site: 'lawmap_ai',
     method: 'POST',
     // thinking:disabled — Sonnet 5 적응형 추론이 첫 블록을 thinking으로 만들어 비스트리밍 파싱이 깨지는 함정 회피 (지침 do-not)
     body: JSON.stringify({ model: 'claude-sonnet-5', max_tokens: 2500, thinking: { type: 'disabled' }, system: LAWMAP_GEN_SYSTEM, messages: [{ role: 'user', content: userMsg }] })
