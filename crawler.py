@@ -27,7 +27,7 @@ import ssl
 from requests.adapters import HTTPAdapter
 from bs4 import BeautifulSoup
 from supabase import Client
-from sb_client import make_client
+from sb_client import make_client, ran_recently
 import api_usage; api_usage.install()   # Anthropic usage 기록(#152) — 호출부 무변경, fail-open
 import notify   # 텔레그램 전송 공용 유틸 (개선⑪) — 전송부만 위임
 import anthropic
@@ -3061,9 +3061,16 @@ def main():
     # 운영자 검토 큐라 최대 6시간 지연은 무해. 시각은 :47 pg_cron 주 트리거 기준.
     try:
         _kst_hour = datetime.now(timezone(timedelta(hours=9))).hour
-        if _kst_hour in ISSUE_SUGGEST_HOURS:
+        # 10분 크롤(#174) 뒤로 시(hour) 조건만으로는 그 시간대에 6번씩 돌았다(하루 24회, 09-20~23 실측) —
+        # 5시간 가드를 함께 건다(#194).
+        if _kst_hour in ISSUE_SUGGEST_HOURS and ran_recently(sb, 'last_issue_suggest_run', 5):
+            print(f'[이슈 제안] {_kst_hour}시 — 이번 시간대에 이미 실행됨, 건너뜀')
+        elif _kst_hour in ISSUE_SUGGEST_HOURS:
             from issue_suggest import run_suggest
             run_suggest(sb)
+            sb.table('system_health').upsert(
+                {'key': 'last_issue_suggest_run', 'updated_at': datetime.now(timezone.utc).isoformat(),
+                 'note': f'{_kst_hour}시 실행'}, on_conflict='key').execute()
         else:
             print(f'[이슈 제안] {_kst_hour}시 — 실행 시각({sorted(ISSUE_SUGGEST_HOURS)}) 아님, 건너뜀')
     except Exception as e:
