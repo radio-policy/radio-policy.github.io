@@ -13,6 +13,7 @@ run_backfill()을 호출한다. 청크 형식은 기존 수동 업로드분과 �
 """
 
 import io
+import math
 import os
 import re
 import sys
@@ -1017,6 +1018,29 @@ def _heartbeat(sb, note: str):
         print('[heartbeat 오류] %s' % e)
 
 
+# 매일 수집 창(#195) — 종전엔 매일 최근 15일 전부를 훑어, 무관 판정분(저장 안 함)을 15일 동안 매일 다시 내려받아
+# 재판정했다(하루 판정 ~30회의 대부분). 창을 '마지막 정상 완료 − 여유 3일'로 좁히고, PC가 며칠 꺼졌다 켜지면
+# 자동으로 넓어져 밀린 것을 따라잡는다(최대 15일). 여유 3일은 기관이 며칠 늦게 올린 보도자료용.
+PRESS_WINDOW_MAX_DAYS = 15
+PRESS_WINDOW_MARGIN_DAYS = 3
+PRESS_WINDOW_KEY = 'last_press_window_ok'   # 모든 기관 목록 1페이지를 정상 조회한 실행만 갱신
+
+
+def _press_window_days(sb) -> int:
+    """이번 실행이 훑을 일수. 기록 없음·조회 실패는 최대(15일) — fail-open."""
+    try:
+        r = sb.table('system_health').select('updated_at').eq('key', PRESS_WINDOW_KEY).maybe_single().execute()
+        ts = (getattr(r, 'data', None) or {}).get('updated_at')
+        if not ts:
+            return PRESS_WINDOW_MAX_DAYS
+        prev = datetime.fromisoformat(str(ts).replace('Z', '+00:00'))
+        gap = (datetime.now(timezone.utc) - prev).total_seconds() / 86400
+        return max(PRESS_WINDOW_MARGIN_DAYS, min(PRESS_WINDOW_MAX_DAYS, math.ceil(gap) + PRESS_WINDOW_MARGIN_DAYS))
+    except Exception as e:
+        print('[보도자료] 수집 창 조회 실패 — 15일로 진행: %s' % e)
+        return PRESS_WINDOW_MAX_DAYS
+
+
 def _collect_one(sb, slug: str, item: dict, extract_fn, stats: dict, dry: bool = False,
                  judge=None) -> bool:
     # 배치 선판정(#96)이 이미 뽑아둔 본문이 있으면 재추출하지 않는다 —
@@ -1076,6 +1100,9 @@ def run_daily(sb, keywords: list = None, max_per_agency: int = 15, dry: bool = F
     mode = '전수+AI판정' if judge else '키워드(AI 불가 폴백)'
     print('[보도자료 수집] 모드=%s, 키워드 %d개' % (mode, len(kw)))
     total_stats = {'new': 0, 'dup': 0, 'fail': 0, 'skip': 0}
+    window = _press_window_days(sb)
+    list_failed = []                 # 1페이지 목록 조회 실패 기관 — 하나라도 있으면 창 기록을 전진시키지 않는다
+    print('[보도자료 수집] 창 %d일' % window)
     for slug, (display, list_fn, extract_fn) in AGENCIES.items():
         stats = {'new': 0, 'dup': 0, 'fail': 0, 'skip': 0}
         items, seen = [], set()
@@ -1087,10 +1114,12 @@ def run_daily(sb, keywords: list = None, max_per_agency: int = 15, dry: bool = F
                         items.append(it)
             except Exception as e:
                 print('[보도자료][%s] %d페이지 목록 오류: %s' % (slug, page, str(e)[:80]))
+                if page == 1:
+                    list_failed.append(slug)
                 break
         recent = []
         for it in items:
-            if it['date'] and (datetime.now(KST) - it['date']).days > 15:
+            if it['date'] and (datetime.now(KST) - it['date']).days > window:
                 continue
             recent.append(it)
         # AI 판정 모드면 전수, 폴백 모드면 제목 키워드 매칭분만
@@ -1137,12 +1166,21 @@ def run_daily(sb, keywords: list = None, max_per_agency: int = 15, dry: bool = F
         for k in total_stats:
             total_stats[k] += stats[k]
         time.sleep(1)
-    note = 'mode=%s new=%d dup=%d skip=%d fail=%d' % (
-        'ai' if judge else 'kw', total_stats['new'], total_stats['dup'],
+    note = 'mode=%s window=%dd new=%d dup=%d skip=%d fail=%d' % (
+        'ai' if judge else 'kw', window, total_stats['new'], total_stats['dup'],
         total_stats['skip'], total_stats['fail'])
     print('[보도자료 수집 완료] ' + note)
     if not dry:
         _heartbeat(sb, note)
+        if list_failed:
+            print('[보도자료] 목록 조회 실패 기관 %s — 수집 창 기록을 전진시키지 않음(다음 실행이 더 넓게 훑는다)' % list_failed)
+        else:
+            try:
+                sb.table('system_health').upsert(
+                    {'key': PRESS_WINDOW_KEY, 'updated_at': datetime.now(timezone.utc).isoformat(), 'note': note},
+                    on_conflict='key').execute()
+            except Exception as e:
+                print('[보도자료] 수집 창 기록 실패(다음 실행은 넓게): %s' % e)
     return total_stats['new']
 
 

@@ -875,6 +875,28 @@ class TestKmccSubjectSplit(unittest.TestCase):
         self.assertEqual(km._split_subject('2026-2027 방송평가 기본계획'), ('2026-2027 방송평가 기본계획', ''))
 
 
+class TestPressWindow(unittest.TestCase):
+    """#195: 보도자료 매일 수집 창 = 마지막 정상 완료 경과일(올림) + 3일, 최소 3·최대 15, 기록 없음·오류는 15."""
+
+    @staticmethod
+    def _sb(ts):
+        sb = mock.Mock()
+        q = sb.table.return_value.select.return_value.eq.return_value.maybe_single.return_value
+        q.execute.return_value = None if ts is None else mock.Mock(data={'updated_at': ts})
+        return sb
+
+    def test_window(self):
+        import press_ingest as pi
+        from datetime import timezone as tz
+        now = datetime.now(tz.utc)
+        self.assertEqual(pi._press_window_days(self._sb(None)), 15)
+        self.assertEqual(pi._press_window_days(self._sb((now - timedelta(hours=23)).isoformat())), 4)
+        self.assertEqual(pi._press_window_days(self._sb((now - timedelta(days=5, hours=2)).isoformat())), 9)
+        self.assertEqual(pi._press_window_days(self._sb((now - timedelta(days=30)).isoformat())), 15)
+        bad = mock.Mock(); bad.table.side_effect = RuntimeError('down')
+        self.assertEqual(pi._press_window_days(bad), 15)
+
+
 class TestSpeakerNormalize(unittest.TestCase):
     """#164: 호환 한자(U+F900~) 발언자명이 표준 한자로 모여야 인물 명부가 갈라지지 않는다."""
 

@@ -718,7 +718,7 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **파일**: `press_ingest.py`(공용 모듈 — 기관 어댑터·추출기·등재·AI판정), `press_backfill.py`(일회성 백필),
   `export_press_sections.py`(검토용 섹션 추출). gov_notice_crawler.py 말미가 매일 17시 `run_daily()` 호출
   → 신규 있으면 `backfill_embeddings.py` 자동 실행.
-- **매일 수집 = 전수 + AI 판정**: 각 기관 목록 1~2페이지의 최근 15일분을 키워드 없이 전부 내려받아
+- **매일 수집 = 전수 + AI 판정**: 각 기관 목록 1~2페이지의 **수집 창**(#195: 마지막 정상 완료 경과일 + 3일, 최소 3·최대 15일, `system_health.last_press_window_ok`)분을 키워드 없이 전부 내려받아
   Haiku가 제목+본문으로 관련성 판정(기준문=app_config.press_relevance_criteria). API 불가 시
   키워드(app_config.press_keywords) 매칭으로 폴백(fail-open).
   **예외(#154)**: 제목이 `YYYY년 제N차 위원회 결과`(방미통위)면 `ALWAYS_INGEST_RE`로 판정을 건너뛰고 무조건 등재 — 배치 선판정에서도 제외.
@@ -1126,6 +1126,7 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **AI 자문 "Failed to fetch"**: 무거운 질문 2분+ idle 끊김 → stream:true로 해결됨. 사내망 프록시·확장프로그램·F12 네트워크 확인.
 
 ## 하지 말아야 할 것 (규칙 + 한 줄 이유 / 상세는 배경역사 문서)
+- **보도자료 매일 수집 창을 고정 15일로 되돌리지 말 것 (#195, 2026-09-24)** — 무관 판정분은 저장하지 않으므로 15일 창이면 같은 보도자료를 15일 동안 매일 내려받아 재판정한다. 창 기록(`last_press_window_ok`)은 **모든 기관 목록 1페이지가 정상 조회된 실행만** 전진시킨다 — 한 기관이라도 목록이 죽었으면 다음 실행이 더 넓게 훑어 따라잡는다. 기록 없음·조회 실패는 15일(fail-open).
 - **10분 크롤 안에서 '하루 N회' 작업을 시(hour) 조건만으로 거르지 말 것 (#194, 2026-09-24)** — 크롤이 10분 간격(#174)이라 `hour in {…}`는 그 시간대에 6번 참이다. 이슈 제안(`ISSUE_SUGGEST_HOURS`, #153 하루 4회)이 09-20부터 하루 24회 돌았다(Sonnet 판정 4~10→19~26회/일). 시 조건 + `ran_recently(sb, key, hours)` 가드 + 실행 뒤 `system_health` 기록(`last_issue_suggest_run`)을 함께 쓴다.
 - **법안 단계 알림 대상을 라벨 집합으로 다시 적지 말 것 — `bill_stage.notify_operator_stage`/`notify_subscriber_stage` 술어 한 벌 (#193, 2026-09-24)** — 본회의 가결은 API 원문 `원안가결`·`수정가결`로 저장되는데 손으로 적은 운영자 집합엔 쓰이지 않는 '본회의 통과'만 있어 **본회의 가결이 운영자에게 안 갔다**. 술어는 제외 목록 방식(접수·소관위 회부·폐기류만 제외)이라 처음 보는 결과코드도 알린다. **폐기류(대안반영폐기·부결·철회·*폐기)는 운영자·구독자 모두 알리지 않는다**(2026-09-24 운영자 결정 — 대안반영폐기는 대안에 흡수된 것이라 '폐기' 알림이 오해를 부르고, 대안의 위원회 의결 알림이 따로 간다).
 - **DB에서 읽은 글을 `innerHTML`에 넣을 때는 `escHtml`을 거칠 것 — 요약·영향분석도 예외 아님 (#191, 2026-09-24)** — `news_feed.summary`·`impact_analysis`는 승인 계정이 쓸 수 있는 칸이라, 이스케이프 없이 그리면 계정 하나로 관리자 세션을 노리는 저장형 XSS 통로가 된다. 로그인 계정의 news_feed UPDATE도 화면이 쓰는 8칸으로 한정했다 — 칸을 새로 쓰는 화면 기능을 만들면 GRANT도 추가.
