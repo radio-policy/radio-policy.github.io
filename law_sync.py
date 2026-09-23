@@ -597,7 +597,7 @@ def format_sync_report(report, fails, drift=None, keep_old=True, now=None):
         import okf_drift_check
         lines += ["", f"📝 <b>OKF 요약 갱신 필요 {len(drift)}건</b> — 조문은 새 판, 요약은 옛 판"]
         lines += okf_drift_check.format_drift_lines(drift)
-        lines.append("<i>요약은 세션에서 새 판 기준으로 재작성(지침 §OKF 요약 갱신 절차) — API 아님</i>")
+        lines.append("<i>다음 단계 okf_refresh.py가 자동 재작성(#198) — 실패·보류분은 세션에서</i>")
     else:
         lines += ["", "✅ OKF 요약은 모두 조문 판과 일치"]
     return "\n".join(lines)

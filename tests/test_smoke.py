@@ -1220,3 +1220,98 @@ class TestLawSyncReport(unittest.TestCase):
         rep[0]['note'] = '재진입 정리(current 구본 1건 강등)'
         msg = law_sync.format_sync_report(rep, [], drift=[], now='09/24 11:40')
         self.assertIn('재진입 정리', msg)
+
+
+class TestOkfRefresh(unittest.TestCase):
+    """㉓ okf_refresh — OKF 요약 자동 갱신의 순수 부품 (#198): path·호수·조문 차이·출력 검증·통지"""
+
+    def test_kb_law_number_normalizes_api_style(self):
+        import okf_refresh as orf
+        self.assertEqual(orf.kb_law_number('제00160호'), '제160호')
+        self.assertEqual(orf.kb_law_number('제2026-26호'), '제2026-26호')
+        self.assertEqual(orf.ymd_dash('20260910'), '2026-09-10')
+
+    def test_new_doc_path_replaces_version_tag(self):
+        import okf_refresh as orf
+        self.assertEqual(orf.new_doc_path('laws/privacy-act/enforcement_decree_36121.md', '제36671호'),
+                         'laws/privacy-act/enforcement_decree_36671.md')
+        self.assertEqual(orf.new_doc_path('laws/tba/notices/prohibited_conduct_handling.md', '제2026-26호'),
+                         'laws/tba/notices/prohibited_conduct_handling_2026_26.md')
+        self.assertEqual(orf.new_doc_path('laws/radio-act/ca/msit_2026_10.md', '제2026-12호'),
+                         'laws/radio-act/ca/msit_2026_12.md')
+        # 같은 호수로 다시 돌면 이름이 겹치지 않게
+        self.assertNotEqual(orf.new_doc_path('laws/x/a_36671.md', '제36671호'), 'laws/x/a_36671.md')
+
+    def test_retitle_only_when_number_in_title(self):
+        import okf_refresh as orf
+        self.assertEqual(orf.retitle('개인정보 보호법 시행령', '제36121호', '제36671호'), '개인정보 보호법 시행령')
+        self.assertEqual(orf.retitle('적합성평가 고시 (과기정통부고시 제2026-10호)', '제2026-10호', '제2026-12호'),
+                         '적합성평가 고시 (과기정통부고시 제2026-12호)')
+
+    def test_article_diff_classifies_changes(self):
+        import okf_refresh as orf
+        old = [('제1조', '목적'), ('제2조', '정의 가'), ('제3조', '삭제될 조문'), ('', '부칙')]
+        new = [('제1조', '목적'), ('제2조', '정의 나'), ('제4조', '신설'), ('', '부칙')]
+        d = orf.article_diff(old, new)
+        self.assertEqual(d['added'], ['제4조'])
+        self.assertEqual(d['removed'], ['제3조'])
+        self.assertEqual(d['changed'], ['제2조'])
+        self.assertIn('개정된 제2조', d['text'])
+        self.assertIn('정의 가', d['text'])          # 구판 원문이 실린다
+        self.assertNotIn('정의 나', d['text'])       # 새 판은 전문 블록에 있으므로 중복 안 함
+
+    def test_article_diff_ignores_whitespace_only(self):
+        import okf_refresh as orf
+        d = orf.article_diff([('제1조', '목적  이다')], [('제1조', '목적 이다')])
+        self.assertEqual(d['changed'], [])
+
+    def _md(self, body_len=1200, with_citations=True, fence=False, no=' 제2026-26호'):
+        body = ('# 요약\n\n**제2026-26호(2026-09-10 시행) 개정 요지**: 제5조 개정.\n\n' + ('가' * body_len)
+                + '\n\n# 실무 체크리스트\n\n- [ ] 확인\n' + ('\n# Citations\n\n[1] 문서\n' if with_citations else ''))
+        md = ('---\ntype: Notice\ntitle: 규정\nlaw_number:' + no + '\nenforcement_date: 2026-09-10\nstatus: current\n---\n\n' + body)
+        return ('```markdown\n' + md + '\n```') if fence else md
+
+    def test_validate_output_accepts_normal_document(self):
+        import okf_refresh as orf
+        meta = {'new_no': '제2026-26호'}
+        fm, body = orf.validate_output(self._md(), '나' * 1000, 'laws/x/y_2026_26.md', meta)
+        self.assertEqual(fm.get('law_number'), '제2026-26호')
+        self.assertTrue(body.startswith('# 요약'))
+        # 코드펜스로 감싸 와도 벗겨서 통과
+        fm2, _ = orf.validate_output(self._md(fence=True), '나' * 1000, 'laws/x/y.md', meta)
+        self.assertEqual(fm2.get('status'), 'current')
+
+    def test_validate_output_rejects_truncated_and_bloated(self):
+        import okf_refresh as orf
+        meta = {'new_no': '제2026-26호'}
+        with self.assertRaises(ValueError):          # Citations 없음 = 끝까지 생성 안 됨
+            orf.validate_output(self._md(with_citations=False), '나' * 1000, 'laws/x/y.md', meta)
+        with self.assertRaises(ValueError):          # 분량 급변(구판 1만 자 → 1천 자)
+            orf.validate_output(self._md(), '나' * 10000, 'laws/x/y.md', meta)
+        with self.assertRaises(ValueError):          # 새 호수가 어디에도 없음
+            orf.validate_output(self._md(no=' 제2026-11호').replace('제2026-26호', '제2026-11호'),
+                                '나' * 1000, 'laws/x/y.md', meta)
+        with self.assertRaises(ValueError):          # frontmatter 없음
+            orf.validate_output('# 요약\n' + '가' * 1200 + '\n# Citations\n', '나' * 1000, 'laws/x/y.md', meta)
+
+    def test_validate_output_fills_placeholder_number(self):
+        """시험 실행 실측: 규칙문의 '제N호'를 제목에 그대로 베낀 문서 → 실제 호수로 바꿔 통과"""
+        import okf_refresh as orf
+        md = self._md().replace('**제2026-26호(2026-09-10 시행) 개정 요지**', '**제N호(2026-09-10 시행) 개정 요지**')
+        _, body = orf.validate_output(md, '나' * 1000, 'laws/x/y.md', {'new_no': '제2026-26호'})
+        self.assertIn('**제2026-26호(2026-09-10 시행) 개정 요지**', body)
+        self.assertNotIn('제N호', body)
+
+    def test_report_lists_cost_diff_and_failures(self):
+        import okf_refresh as orf
+        done = [{'title': '업무처리규정', 'old_no': '제2026-11호', 'new_no': '제2026-26호', 'new_enf': '2026-09-10',
+                 'old_len': 11910, 'new_len': 12300, 'chunks': 17, 'cost': 0.21,
+                 'diff': {'added': ['제9조의2'], 'removed': [], 'changed': ['제5조']}}]
+        msg = orf.format_refresh_report(done, [('전파법', '분량 급변')], [('지방세법 시행령', '입력 초과 — 세션 처리')],
+                                        now='09/24 11:45')
+        self.assertIn('OKF 요약 자동 갱신 1건', msg)
+        self.assertIn('$0.21', msg)
+        self.assertIn('신설 1·삭제 0·개정 1', msg)
+        self.assertIn('자동 갱신 실패 1건', msg)
+        self.assertIn('보류 1건', msg)
+        self.assertIn('superseded로 보존', msg)

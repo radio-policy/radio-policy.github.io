@@ -95,7 +95,23 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python law_sync.py --all-outdated --keep-old
 
+      # OKF 요약 자동 갱신 (#198, 2026-09-24 운영자 결정 ⓓ '완전 자동'): 조문이 새 판으로 바뀐 법령의 요약을
+      # Sonnet이 '새 판 전문 + 구판 요약(구조 참고)'으로 전면 재작성 → 새 path로 적재, 구판 행은 superseded 보존.
+      # 실행당 5건 상한(비용 ≈ $2~3), 나머지는 다음 날. 입력 60만 토큰 초과 법령은 보류(세션 처리). 결과는 텔레그램.
+      # 번들(regulatory-kb)에는 안 쓴다 — sync_kb_to_bundle.py가 역동기화(웹 생성 OKF와 같은 경로).
+      - name: Refresh OKF summaries for replaced laws (Sonnet)
+        continue-on-error: true
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python okf_refresh.py
+
       # OKF 요약(kb_documents)이 조문 현행본과 판이 어긋난 법령 대조 (#197). AI 0회, Supabase만.
+      # okf_refresh 뒤에 두어 자동 갱신 뒤에도 남은 것(실패·보류)만 알린다.
       # --promote 승격도 어긋남을 만들므로(지방세법 시행령 9/18) 교체 스텝과 별도로 매일 돈다.
       # 어긋남 집합이 지난번과 달라진 날만 운영자 텔레그램(같은 목록 반복 금지 — #183 ⑤ 교훈).
       - name: Check OKF summary drift

@@ -142,8 +142,8 @@ def format_message(drift) -> str:
         return f"✅ <b>OKF 요약 어긋남 해소</b> ({now}) — 요약과 조문 판이 모두 일치"
     lines = [f"📝 <b>OKF 요약 갱신 필요 {len(drift)}건</b> ({now}) — 조문은 새 판, 요약은 옛 판", ""]
     lines += format_drift_lines(drift)
-    lines += ["", "<i>처리: 세션에서 새 판 조문 기준으로 요약 재작성 → manifest → import_regulatory_kb.py --only "
-              "(지침 §법령 개정 시 OKF 요약 갱신 절차). API로 만들지 않는다.</i>"]
+    lines += ["", "<i>처리: 11:00 체인의 okf_refresh.py가 자동 재작성(실행당 5건, #198). 실패·보류분은 세션에서 "
+              "새 판 기준으로 재작성(지침 §법령 개정 시 OKF 요약 갱신 절차).</i>"]
     return "\n".join(lines)
 
 
