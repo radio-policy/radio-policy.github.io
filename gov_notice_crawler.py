@@ -698,7 +698,7 @@ def _notify_opinion_items(new_items: list):
             + items_html
             + '<hr style="margin-top:24px">'
             '<p style="color:#999;font-size:11px">SKT Comm센터 기술정책팀 전파정책 AI<br>'
-            '<a href="https://radio-policy.github.io/">대시보드</a></p>'
+            '<a href="https://radio-policy.github.io/?p=lawtrack">대시보드</a></p>'
             '</body></html>'
         )
         payload = json.dumps({

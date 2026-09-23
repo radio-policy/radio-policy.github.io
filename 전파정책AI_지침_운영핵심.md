@@ -1126,6 +1126,7 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **AI 자문 "Failed to fetch"**: 무거운 질문 2분+ idle 끊김 → stream:true로 해결됨. 사내망 프록시·확장프로그램·F12 네트워크 확인.
 
 ## 하지 말아야 할 것 (규칙 + 한 줄 이유 / 상세는 배경역사 문서)
+- **알림·메일의 대시보드 링크는 반드시 `?p=<화면>`을 붙일 것 (#190, 2026-09-24)** — 첫 화면이 법령 관계도(#170)라 주소만 있는 링크는 브리핑·뉴스 알림에서 눌러도 관계도가 열린다. 브리핑=`briefing`, 긴급 뉴스=`news`, 입법예고=`lawtrack`, 회의록=`minutes`, 조문 비교=`diff`, 이슈=`issuemap`, 국회 법안=`#assembly`. 허용 값은 app.js `PAGE_TO_NAV` 키.
 - **과방위 회의록 수집(`assembly_minutes.py`)을 '올해만' 도는 구조로 되돌리지 말 것 (#189, 2026-09-24)** — 회의록은 회의 뒤 수 주 늦게 공개된다. `years_to_run()`이 1~2월엔 전년도도 함께 돌려 12월 회의록을 받는다(등재분은 dedupe로 건너뛰어 AI 0회 — 국감 dedupe는 #187에서 고친 뒤라야 성립). 검색 쪽 `ASSEM_MAX_YEAR`도 자동 계산.
 - **긴급도 판정(`classify_urgency`)에서 네이버 요약(`_URGENCY_SUMMARY`) 전달을 빼지 말 것 (#188, 2026-09-24)** — 10분 크롤은 Actions(미국 IP)라 본문 칸이 비어 있어, 요약이 없으면 긴급도가 **제목 한 줄**만 보고 매겨진다. 요약은 DB에 넣지 않는다(content에 넣으면 refetch_content의 '100자 미만=재수집' 조건이 깨진다). **2026-10-08 판정**: 기준 긴급률 8.5~11.9%(09-07~09-21 주간) 대비 ±5%p 안이고 운영자 상향(보통→긴급) 사례가 줄면 유지, 나빠지면 되돌림.
 - **SECURITY DEFINER 함수를 만들면 같은 마이그레이션에 `REVOKE EXECUTE ON FUNCTION … FROM PUBLIC, anon, authenticated`를 넣을 것 (#186, 2026-09-24)** — Postgres는 새 함수에 PUBLIC 실행권을 기본으로 주고 Supabase는 anon·authenticated에도 준다. 소유자 권한으로 도는 발송 함수가 공개 anon 키로 `/rest/v1/rpc/…` 호출 가능했다(`trigger_subscriber_briefing`·`trigger_admin_report`·`watchdog_scan` — 구독자 브리핑·운영자 리포트·감시 경보). pg_cron은 소유자 postgres로 돌므로 회수해도 영향 없다. 확인은 `has_function_privilege('anon', oid, 'EXECUTE')`가 false인지로 한다(proacl에 anon이 없어도 PUBLIC으로 상속된다).

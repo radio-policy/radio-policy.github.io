@@ -7253,3 +7253,13 @@ PostgREST 벌크 upsert가 모든 객체의 키 집합이 같아야 하기 때�
 Edge 인스턴스는 기동 시 계산하므로 연초 몇 시간 늦을 수 있으나 무해. `assembly-search`·`telegram-webhook` 재배포,
 기동 확인(OPTIONS 200 / 자체 401). 스모크 `TestMinutesYearRollover`(93 OK). 지침 897행의 '해가 바뀌면 올릴 것' 수작업 안내 삭제.
 
+
+**#190 (2026-09-24) 알림의 대시보드 링크가 전부 관계도로 열리던 문제.**
+운영자 지적("대시보드 연결하기를 누르면 메인 화면(법률 관계도)이 연결된다"). 2026-09-15(#170)에 첫 화면을 법령
+관계도로 바꾼 뒤, 주소만 있는 링크(`https://radio-policy.github.io/`)는 어느 알림에서 눌러도 관계도가 열렸다.
+국회 알림(`#assembly`)만 예외였다. 대시보드는 원래 `?p=<화면>`(또는 `#<화면>`)을 읽어 그 화면으로 시작한다.
+조치: 구독자 브리핑(Edge, 3번 작업에서 `?p=briefing`)에 이어 파이썬 8개 파일 18곳 — 아침 브리핑 텔레그램·메일·재발송
+→ `briefing`, 긴급 뉴스 텔레그램·메일 → `news`, 신규 입법예고 메일 → `lawtrack`, 과방위 회의록 구독자 알림 → `minutes`,
+법령 DIFF → `diff`, 이슈 제안·현안 전환 → `issuemap`. 검증: 실사이트에서 6개 주소가 각각 `panel-briefing`·`panel-news`·
+`panel-lawtrack`·`panel-minutes`·`panel-diff`·`panel-issuemap`으로 열림을 확인(발송 시험 없음).
+

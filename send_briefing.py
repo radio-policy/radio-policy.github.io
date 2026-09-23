@@ -100,7 +100,7 @@ def send_email(briefing_text: str):
 <hr style="margin-top:24px">
 <p style="color:#999;font-size:11px">
 이 메일은 자동 발송됩니다. SKT Comm센터 기술정책팀<br>
-대시보드: <a href="https://radio-policy.github.io/">https://radio-policy.github.io/</a>
+대시보드: <a href="https://radio-policy.github.io/?p=briefing">https://radio-policy.github.io/?p=briefing</a>
 </p>
 </body></html>'''
     extra_to = 'lampman@sktelecom.com'
@@ -127,7 +127,7 @@ def send_telegram(briefing_text: str):
     text = briefing_text[:4000]
     if len(briefing_text) > 4000:
         text += '\n\n...(전문은 대시보드 참조)'
-    text += '\n\n📊 https://radio-policy.github.io/'
+    text += '\n\n📊 https://radio-policy.github.io/?p=briefing'
     if notify.send_telegram(text, chat_id=CHAT_ID, disable_web_page_preview=True):
         print('[텔레그램] 발송 완료')
 
