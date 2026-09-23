@@ -67,3 +67,29 @@ def stage_columns(bill: dict) -> dict:
 def is_terminal_label(proc_result: str) -> bool:
     """저장된 proc_result가 종결(가결·폐기·철회·부결…)인가 — ALIVE_LABELS 밖이면 종결."""
     return _s(proc_result) not in ALIVE_LABELS
+
+
+# ── 단계 변경 알림 대상 (#193, 2026-09-24 운영자 결정) ──
+# 종전엔 assembly_crawler에 라벨 집합을 손으로 적었는데, 운영자 집합에 실제 저장값인 '원안가결'·'수정가결'
+# (본회의 PROC_RESULT 원문)이 없고 쓰이지 않는 '본회의 통과'만 있어 **본회의 가결이 운영자에게 안 갔다**.
+# 집합 대신 술어로 정한다 — 처음 보는 결과코드도 기본 '알림'(화이트리스트가 아니라 제외 목록).
+_NO_ALERT_LABELS = {'접수', '소관위 회부'}   # 회부는 입법예고 경로(#56)가 따로 알린다
+
+
+def is_dropped_label(proc_result: str) -> bool:
+    """폐기류(대안반영폐기·임기만료폐기 등 '폐기' 포함, 부결, 철회) — 2026-09-24부터 운영자·구독자 모두 알리지 않는다.
+    대안반영폐기는 내용이 대안에 흡수된 것이라 '폐기'로 알리면 오해를 부르고, 대안의 위원회 의결 알림이 따로 간다."""
+    v = _s(proc_result)
+    return '폐기' in v or v in ('부결', '철회')
+
+
+def notify_operator_stage(proc_result: str) -> bool:
+    """운영자 봇에 알릴 단계 — 상정(소관위 심사중) 이후 전부(본회의 가결·공포 포함), 폐기류 제외."""
+    v = _s(proc_result)
+    return bool(v) and v not in _NO_ALERT_LABELS and not is_dropped_label(v)
+
+
+def notify_subscriber_stage(proc_result: str) -> bool:
+    """구독자에게 알릴 단계 — 위원회 의결 이후(법사위·본회의 가결·공포)만. 상정은 할 일이 없는 단계(#140)."""
+    return notify_operator_stage(proc_result) and _s(proc_result) != '소관위 심사중'
+

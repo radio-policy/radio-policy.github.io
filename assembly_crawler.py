@@ -81,21 +81,14 @@ KEYWORDS = [
     '메타버스',
 ]
 
-# 상태 변경 시 알림을 보낼 중요 단계
-NOTABLE_STATUS = {
-    '소관위 심사중', '위원회 의결', '법사위 회부', '법사위 심사중', '본회의 심의',
-    '본회의 통과', '대안반영폐기', '부결', '철회',
-    '정부이송', '공포',
-}
+# 상태 변경 시 알림을 보낼 단계 — 라벨 집합이 아니라 bill_stage 술어 한 벌(#193). 종전 집합엔 본회의 가결의 실제 저장값
+# '원안가결'·'수정가결'이 없어 운영자에게 안 갔다. 폐기류(대안반영폐기·부결·철회)는 2026-09-24부터 양쪽 모두 제외.
+NOTABLE_STATUS = bill_stage.notify_operator_stage
 
 # 구독자에게 보내는 상태 변경 (2026-09-09, #140 운영자 결정): "통과 가능성이 높은 단계 진입"(위원회 통과 이후)과
 # 폐기만. 상정(소관위 회부→심사중)은 구독자가 할 일이 없는 단계라 보내지 않는다 — 대시보드 스트립·'최근 7일 단계 이동'이 맡는다.
 # 운영자 봇은 NOTABLE_STATUS(상정 포함) 전부. 둘 다 법안 1건당 1통이 아니라 **실행당 한 통**으로 묶는다(9/9 상정 57건 → 구독자 7명에게 수백 줄 다이제스트 사고).
-SUBSCRIBER_STATUS = {
-    '위원회 의결', '법사위 회부', '법사위 심사중', '본회의 심의',
-    '본회의 통과', '원안가결', '수정가결', '정부이송', '공포',
-    '대안반영폐기', '부결', '철회',
-}
+SUBSCRIBER_STATUS = bill_stage.notify_subscriber_stage
 ALERT_MAX_PER_GROUP = 10     # 묶음 메시지에서 그룹(전이 종류)당 나열하는 법안 수
 ALERT_MAX_CHARS = 3300       # subscriber_queue 3500자 절단·텔레그램 분할 전에 스스로 접는다
 DASHBOARD_BILLS_URL = 'https://radio-policy.github.io/#assembly'
@@ -488,7 +481,8 @@ def format_status_batch(changes: list, allowed: set, max_per_group: int = ALERT_
                         max_chars: int = ALERT_MAX_CHARS) -> str:
     """상태 변경 묶음 — changes: [(bill, prev, new, keywords)]. new가 allowed에 든 것만, 전이 종류별로 묶어
     그룹당 max_per_group건 나열 + '외 N건'. 전체가 max_chars를 넘으면 남은 그룹은 건수만 적는다. 없으면 ''."""
-    picked = [c for c in changes if c[2] in allowed]
+    ok = allowed if callable(allowed) else (lambda v: v in allowed)
+    picked = [c for c in changes if ok(c[2])]
     if not picked:
         return ''
     groups: dict = {}
@@ -1143,7 +1137,7 @@ def main(dry_run: bool = False, suppress_status_alerts: bool = False):
     print(f'\n[완료] 신규 {new_count}건 | 상태변경 {changed_count}건 | 총 추적 {len(collected)}건')
 
     # ── 알림 묶음 (#140): 신규 발의는 운영자+구독자 같은 한 통, 상태 변경은 운영자(NOTABLE_STATUS 전부)와
-    #    구독자(SUBSCRIBER_STATUS: 위원회 통과 이후·폐기만) 내용을 달리해 각각 한 통.
+    #    구독자(SUBSCRIBER_STATUS: 위원회 통과 이후만, 폐기류는 양쪽 제외 — #193) 내용을 달리해 각각 한 통.
     #    --suppress-status-alerts(단계 규칙 변경 직후 백필)는 상태 변경 묶음만 건너뛴다(#122).
     new_msg = format_new_bills_batch(new_items)
     op_msg = '' if suppress_status_alerts else format_status_batch(changes, NOTABLE_STATUS)

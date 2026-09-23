@@ -507,7 +507,7 @@ class TestLawmapEdgeCheck(unittest.TestCase):
 
 
 class TestAssemblyAlertBatch(unittest.TestCase):
-    """assembly_crawler 알림 묶음(#140) — 실행당 한 통, 구독자는 위원회 통과 이후·폐기만, 그룹당 10건 + 외 N건"""
+    """assembly_crawler 알림 묶음(#140·#193) — 실행당 한 통, 구독자는 위원회 통과 이후만, 폐기류는 양쪽 제외, 그룹당 10건 + 외 N건"""
 
     def _bill(self, i, name='전기통신사업법 일부개정법률안'):
         return {'BILL_ID': f'PRC_{i}', 'BILL_NO': f'22{i:05d}', 'BILL_NAME': name, 'PROPOSER': '홍길동의원 등 10인',
@@ -516,15 +516,18 @@ class TestAssemblyAlertBatch(unittest.TestCase):
     def test_subscriber_filter_and_grouping(self):
         import assembly_crawler as ac
         changes = [(self._bill(i), '소관위 회부', '소관위 심사중', []) for i in range(57)]
-        changes += [(self._bill(100), '소관위 심사중', '위원회 의결', []), (self._bill(101, '전파법 일부개정법률안'), '소관위 심사중', '대안반영폐기', [])]
+        changes += [(self._bill(100), '소관위 심사중', '위원회 의결', []), (self._bill(101, '전파법 일부개정법률안'), '소관위 심사중', '대안반영폐기', []),
+                    (self._bill(102), '법사위 심사중', '수정가결', [])]
         sub = ac.format_status_batch(changes, ac.SUBSCRIBER_STATUS)
         self.assertIn('[법안 상태 변경 2건]', sub)
         self.assertNotIn('소관위 심사중</b>', sub)          # 상정 전이는 구독자에게 안 감
         self.assertIn('소관위 심사중 → 위원회 의결</b> (1건)', sub)
-        self.assertIn('→ 대안반영폐기</b> (1건)', sub)
-        self.assertLess(sub.index('위원회 의결</b>'), sub.index('대안반영폐기</b>'))   # 의미 큰 순
+        self.assertNotIn('대안반영폐기', sub)                # 폐기류는 구독자 제외(#193)
+        self.assertLess(sub.index('수정가결</b>'), sub.index('위원회 의결</b>'))   # 의미 큰 순: 가결 먼저
         op = ac.format_status_batch(changes, ac.NOTABLE_STATUS)
         self.assertIn('[법안 상태 변경 59건]', op)
+        self.assertIn('법사위 심사중 → 수정가결</b> (1건)', op)   # 본회의 가결이 운영자에게 간다(#193)
+        self.assertNotIn('대안반영폐기', op)                 # 폐기류는 운영자도 제외
         self.assertIn('소관위 회부 → 소관위 심사중</b> (57건)', op)
         self.assertIn('… 외 47건', op)
         self.assertEqual(op.count('• <a href='), 12)         # 10 + 1 + 1
@@ -550,6 +553,22 @@ class TestAssemblyAlertBatch(unittest.TestCase):
         m = ac.format_status_batch(changes, ac.SUBSCRIBER_STATUS, max_chars=1500)
         self.assertLess(len(m), 2200)
         self.assertIn('(대시보드에서 확인)', m)
+
+
+class TestBillStageAlertTargets(unittest.TestCase):
+    """#193: 실DB proc_result 8종 + 미지 코드의 알림 대상 판정."""
+
+    def test_targets(self):
+        import bill_stage as bs
+        op = {'소관위 심사중': True, '위원회 의결': True, '수정가결': True, '원안가결': True, '공포': True,
+              '대안반영폐기': False, '철회': False, '부결': False, '임기만료폐기': False,
+              '소관위 회부': False, '접수': False, '': False, '새로운코드': True}
+        for k, v in op.items():
+            self.assertEqual(bs.notify_operator_stage(k), v, k)
+        self.assertFalse(bs.notify_subscriber_stage('소관위 심사중'))
+        self.assertTrue(bs.notify_subscriber_stage('원안가결'))
+        self.assertTrue(bs.notify_subscriber_stage('위원회 의결'))
+        self.assertFalse(bs.notify_subscriber_stage('대안반영폐기'))
 
 
 class TestApiUsage(unittest.TestCase):
