@@ -258,6 +258,15 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\      (회사 노트북 —
 임베딩 백필: 신규 업로드 후 PC에서 python backfill_embeddings.py (NULL만). 그 전엔 "임베딩 대기" 배지.
 ```
 
+**검색 DB 함수 정비 (#185, 2026-09-23 — 마이그레이션 `rag_search_tuning_step1/2/2b`, 호출부 무수정).**
+`match_chunks_semantic`·`match_kb_chunks_semantic`에 함수 속성 `SET hnsw.ef_search = 100`(기본 40 → 후필터 뒤 8건 미달·자기 자신도 못 찾던 표본 회복,
+20건 표본 전수 계산과 100% 일치). `match_law_articles_semantic`은 **2단**(안쪽 순수 거리 정렬로 HNSW 후보 `max(match_count*30, 300)`건, `SET hnsw.ef_search = 300`,
+바깥에서 가산점 재정렬) — 종전엔 정렬식에 가산점이 섞여 HNSW를 못 타고 4.2만 벡터를 전부 읽었다(버퍼 59.6만 블록 → 4.5천, 441→284ms 웜 기준). 후보 폭
+300은 실측 근거: 조문 가산점 −0.08이 서식·별지(+0.05)를 이기던 거리순 122·207위 본조문이 80건 창에서는 빠졌다. `news_feed(created_at desc)` 인덱스 추가.
+⚠️ **`search_chunks_trgm`에 `<%` 연산자 조건을 넣지 말 것** — GIN이 잡히긴 하나 한국어 본문에서 임계 0.10은 47K행 중 37K행을 통과시켜 걸러 주는 게 없고 연산자 평가만 늘어 3.1s→8.7s로 **더 느려졌다**(적용 후 즉시 롤백). 실행계획기의 cost 추정(10,859→211)이 실측과 정반대였다 — **DB 함수는 `EXPLAIN (ANALYZE, BUFFERS)` 실측과 표본 집합 대조 없이 채택하지 않는다.** trgm 5~6초는 SQL로 못 줄이므로 클라이언트가 Haiku 확장을 기다리지 않고 trgm·시맨틱을 먼저 시작하는 병렬화가 맞는 대응.
+⚠️ 함수 속성 `SET <확장 GUC>`는 마이그레이션 세션에서 그 확장 함수를 한 번 먼저 호출해 라이브러리를 로드한 뒤에만 통과한다(`permission denied to set parameter` = 자리표시자 GUC).
+부분 HNSW 인덱스(`where status='current' and is_approved`)는 미적용 — 쓰기 잠금이 수 분 걸리는 빌드라 야간·디스크 확인 후.
+
 **「[원문 확인됨]」은 기계가 보증한다 (#155, 2026-09-11 — 봇·대시보드 공통, `supabase/functions/_shared/cite_verify.js` 한 파일).**
 종전에는 프롬프트 지시로 모델이 스스로 붙이는 자기 신고였다(#146 A안). 9/10 텔레그램 자문이 전기통신사업법 제50조①5호·5호의2를
 "차별적 지원금"이라 설명하며 표시를 붙였는데, 실제 컨텍스트에는 제50조 뒷조각(8호~③)만 있었다. 세 단계로 고정:

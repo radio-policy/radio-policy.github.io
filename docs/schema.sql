@@ -393,6 +393,7 @@ alter table public.answer_feedback enable row level security;
 -- ===========================================================================
 create unique index if not exists idx_news_feed_url_unique on public.news_feed using btree (url); -- 중복 방지(고유) — 실DB와 동일(UNIQUE). 크롤러는 upsert(on_conflict='url')와 한 쌍
 create index if not exists idx_news_feed_locked          on public.news_feed using btree (locked) where (locked = true);
+create index if not exists news_feed_created_at_idx      on public.news_feed using btree (created_at desc); -- #185 check_news_health max(created_at) 전수 스캔 제거
 
 create index if not exists assembly_bills_proc_result_idx on public.assembly_bills using btree (proc_result);
 create index if not exists assembly_bills_propose_dt_idx  on public.assembly_bills using btree (propose_dt desc);
@@ -436,6 +437,7 @@ create or replace function public.match_chunks_semantic(
 returns table(id bigint, doc_name text, doc_category text, chunk_index integer,
   content text, notice_no text, article_no text, effective_date text, similarity double precision)
 language sql stable security definer
+set hnsw.ef_search = 100   -- #185 (2026-09-23): 기본 40이면 후필터(status·임계) 뒤 8건 미달·41위 정답 누락. 함수 호출 동안만 적용
 as $$
   select id, doc_name, doc_category, chunk_index, content,
          notice_no, article_no, effective_date,
@@ -447,8 +449,47 @@ as $$
   order by embedding <=> query_embedding
   limit match_count;
 $$;
+-- ※ 마이그레이션에서 `set hnsw.ef_search`를 쓰려면 같은 세션에서 `select '[1,0]'::vector <=> '[0,1]'::vector;`를 먼저 실행해
+--    pgvector 라이브러리를 로드할 것(안 하면 permission denied to set parameter). pg_trgm GUC도 같다(#185).
+
+-- 3-1b) 조문 전용 시맨틱(자문·/law 공통, #88 가중치 → #185 2단화) -------------
+-- 안쪽: 순수 거리 정렬로 HNSW 후보 max(match_count*30, 300)건 / 바깥: 가산점(조문 −0.08, 부칙·서식·별지 +0.05, 파일문서 +0.10) 재정렬.
+-- 종전 `order by 거리 ± 가산점`은 인덱스 정렬식이 아니라 4.2만 벡터 전수 읽기(버퍼 59.6만 블록/호출)였다.
+-- 후보 300은 실측: 거리순 122·207위 본조문이 가산점으로 상위 8에 들던 표본이 80건 창에서는 빠졌다. similarity 반환값은 원본(가산점 미반영).
+create or replace function public.match_law_articles_semantic(
+  query_embedding extensions.vector,
+  match_threshold double precision default 0.0,
+  match_count integer default 8,
+  only_current boolean default true)
+returns table(id bigint, doc_name text, doc_category text, chunk_index integer,
+  content text, notice_no text, article_no text, effective_date text, similarity double precision)
+language sql stable security definer
+set hnsw.ef_search = 300
+as $$
+  select id, doc_name, doc_category, chunk_index, content,
+         notice_no, article_no, effective_date,
+         (1 - dist)::float as similarity
+  from (
+    select id, doc_name, doc_category, chunk_index, content, notice_no, article_no, effective_date,
+           (embedding <=> query_embedding) as dist
+    from public.document_chunks
+    where embedding is not null and is_approved
+      and (not only_current or status = 'current')
+      and article_no is not null
+    order by embedding <=> query_embedding
+    limit greatest(match_count * 30, 300)
+  ) c
+  where (1 - dist) > match_threshold
+  order by dist
+    - (case when article_no ~ '^\d+조' then 0.08 else 0 end)
+    + (case when article_no ~ '^(부칙|서식|별지)' then 0.05 else 0 end)
+    + (case when doc_name ~* '\.(pdf|md|docx|hwp)$' then 0.10 else 0 end)
+  limit match_count;
+$$;
 
 -- 3-2) 부분문자열(trgm) 검색 -------------------------------------------------
+-- ⚠ `query_text <% content` 조건을 넣지 말 것(#185): GIN은 잡히지만 한국어 본문에서 임계 0.10이 47K행 중 37K행을 통과시켜
+--    걸러 주는 게 없고 연산자 평가만 늘어 3.1s→8.7s로 느려졌다(적용 즉시 롤백). 이 함수의 5~6초는 SQL로 못 줄인다 — 클라이언트 병렬화로 대응.
 create or replace function public.search_chunks_trgm(
   query_text text,
   match_threshold double precision default 0.12,

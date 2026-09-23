@@ -7167,3 +7167,38 @@ law_watch 쪽 전수 정리는 하지 않았다(현재 그런 행은 0건 — �
 **검증.** 실데이터 2건(방미통위 제37차 의사일정 9/23, 과방위 9/15 제1차 정보통신방송미디어법안심사소위)로
 렌더해 `N. ` 줄 0개·태그 짝 일치를 확인하고 **운영자 봇으로만** 보내 눈으로 확인했다(구독자 큐 무접촉).
 스모크 테스트 89개 통과(⑪ TestMinutesDigest·TestKmccMeeting 단언을 새 서식으로 갱신).
+
+
+**#185 (2026-09-23) 자문 검색 DB 함수 정비 — 실측이 추정을 뒤집은 날.**
+심층 조사(21개 영역·에이전트 75개)에서 실DB `EXPLAIN`으로 확인된 병목 세 가지를 세션 SQL(마이그레이션
+`rag_search_tuning_step1_trgm_index_efsearch`·`step2_law_semantic_two_stage`·`step2b_law_semantic_window_300`)로
+손봤다. 호출부(app.js·rag.ts·사내판)는 한 줄도 바꾸지 않았다.
+
+**된 것.** ① `news_feed(created_at desc)` 인덱스 — `check_news_health`의 `max(created_at)`이 15MB 전수 → 1.4ms.
+② `match_chunks_semantic`·`match_kb_chunks_semantic`에 함수 속성 `SET hnsw.ef_search = 100`. 기본 40이면 HNSW가
+40건만 넘긴 뒤 status·임계 필터를 거쳐 8건이 안 차거나 41위 정답을 영영 못 봤다(rag.ts:724 주석의 실측).
+벡터 표본 20건 중 1건(4960)은 **자기 자신조차 상위 8에 없었는데** 100으로 올리자 20건 전부 전수 계산과 일치.
+③ `match_law_articles_semantic` 2단화 — 종전 `order by 거리 ± 가산점`은 인덱스 정렬식이 아니라 4.2만 벡터(행당
+4KB TOAST)를 전부 읽었다(버퍼 59.6만 블록/호출, 이게 `shared_buffers` 512MB에서 HNSW 페이지를 밀어내 뒤따르는
+검색까지 느리게 했다). 안쪽은 순수 거리 정렬로 후보만 뽑고 바깥에서 가산점 재정렬. 처음 후보 80건으로 했더니
+표본 74778에서 거리순 122·207위 **본조문**이 빠졌다 — 조문 −0.08 가산점이 서식·별지(+0.05)를 이기는, 가산점의
+취지 그대로인 사례였다. 후보 `max(match_count*30, 300)`·`ef_search 300`으로 넓히자 첫 표본 19/20 일치(1건은
+같은 별표 1의 거리 0.002 차 동점 교환), 새 표본 20/20 집합 일치. 버퍼 4.5천 블록, 284ms.
+
+**안 된 것 — 롤백.** `search_chunks_trgm`에 `query_text <% content` 조건을 넣어 GIN을 태우려 했다. 실행계획기는
+cost 10,859→211이라 했고 인덱스도 실제로 잡혔다(Bitmap Index Scan). 그런데 한국어 본문에서 임계 0.10은 47K행 중
+37K행을 통과시켜 걸러 주는 게 없고, 연산자 평가가 하나 더 붙어 3.1s→8.7s로 **느려졌다.** 결과 집합이 달라
+보인 3건은 점수 0.588 동점 8건 중 다른 8건을 고른 것(기존부터 있던 임의 N건 현상)이라 품질 차이는 아니었다.
+즉시 원본 정의로 되돌렸다(`step1_rollback_trgm_operator`). 유사도를 행당 한 번만 계산하는 변형도 재 봤으나
+5.4s vs 6.1s로 잡음 수준 — trgm 5~6초는 SQL로 못 줄인다. 대응은 클라이언트 쪽(E7-4: Haiku 확장 await 앞에서
+trgm·시맨틱 시작)이다.
+
+**교훈 둘.** (1) 실행계획기의 cost는 방향조차 틀릴 수 있다 — DB 함수 변경은 `EXPLAIN (ANALYZE, BUFFERS)`
+실측과 표본 집합 대조(전수 계산 함수 `match_chunks_semantic_exact`가 정답지 역할)를 통과해야 채택한다.
+(2) 함수 속성 `SET hnsw.ef_search`·`SET pg_trgm.*`는 마이그레이션 세션에서 그 확장의 함수를 먼저 한 번
+호출해 라이브러리를 로드하지 않으면 `permission denied to set parameter`로 실패한다(자리표시자 GUC 취급).
+`SELECT '[1,0]'::vector <=> '[0,1]'::vector;` 한 줄이면 된다.
+
+**남은 것.** 부분 HNSW 인덱스(`where status='current' and is_approved`, 381MB → 추정 320MB)는 마이그레이션이
+트랜잭션이라 CONCURRENTLY를 못 쓰고 쓰기 잠금이 수 분 걸리므로 야간·디스크 확인 후 별도 실행. 검증 도구는
+`frequence/자문_SQL튜닝_실행안_260923.md`(절차)와 이 항목의 표본 방식(벡터 표본 `id % 997 = 3` 20건 등).
