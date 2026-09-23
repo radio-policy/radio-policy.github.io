@@ -7202,3 +7202,22 @@ trgm·시맨틱 시작)이다.
 **남은 것.** 부분 HNSW 인덱스(`where status='current' and is_approved`, 381MB → 추정 320MB)는 마이그레이션이
 트랜잭션이라 CONCURRENTLY를 못 쓰고 쓰기 잠금이 수 분 걸리므로 야간·디스크 확인 후 별도 실행. 검증 도구는
 `frequence/자문_SQL튜닝_실행안_260923.md`(절차)와 이 항목의 표본 방식(벡터 표본 `id % 997 = 3` 20건 등).
+
+
+**#186 (2026-09-24) 발송용 SECURITY DEFINER 함수 3개 — 공개 anon 키로 실행 가능하던 것 회수.**
+`사외사내_개선안_및_운영효율화_방안_260923.md` §2 상위 1번. 실DB `has_function_privilege`로 확인한 결과
+`trigger_subscriber_briefing()`(pg_cron 매시 :25, 구독자 브리핑 발송)·`trigger_admin_report()`(매일 00:00 UTC, 운영자 일일 리포트)·
+`watchdog_scan(boolean)`(3시간마다, 감시 경보)가 anon·authenticated에게 EXECUTE가 열려 있었다. 앞의 둘은 proacl에
+`anon=X`가 명시돼 있었고, `watchdog_scan`은 proacl에 anon이 없는데도 `=X/postgres`(PUBLIC)로 상속돼 실행 가능했다 —
+proacl만 읽으면 '안전'으로 오판한다. 세 함수 모두 SECURITY DEFINER라 대시보드 소스에 공개된 anon 키로
+`/rest/v1/rpc/<함수>`를 부르면 소유자 권한으로 발송이 일어나는 구조였다(실제 악용 흔적은 확인하지 않았다).
+같은 패턴의 다른 8개 함수는 이미 잠겨 있었다.
+
+**조치.** 마이그레이션 `revoke_public_exec_sender_fns` — `REVOKE EXECUTE … FROM PUBLIC, anon, authenticated`.
+호출자는 pg_cron(실행 사용자 postgres = 소유자)뿐이고 app.js·파이썬·Edge 어디에도 `.rpc()` 호출이 없음을 grep으로 확인했다.
+service_role은 유지(수동 실행용).
+
+**검증.** 적용 직후 proacl = `{postgres=X/postgres,service_role=X/postgres}`, anon·authenticated false / postgres·service_role true.
+적용 뒤 첫 정시 실행(09-24 01:25 KST `subscriber-briefing-hourly`)이 succeeded, Edge 응답 200 `ok:true` — 동작 무영향 확인.
+
+**규칙화.** 지침 '하지 말아야 할 것' 맨 위에 'SECURITY DEFINER 함수는 같은 마이그레이션에서 REVOKE' 한 줄.

@@ -250,7 +250,7 @@ Deno.serve(async (req: Request) => {
       // 늦게 받는 사람이 "그 사이 뉴스가 빠졌다"고 오해할 수 있다(내일 브리핑에 포함됨).
       briefingParts[briefingParts.length - 1] +=
         `\n\n<i>※ 오늘 ${madeAt} 기준으로 작성된 브리핑입니다. 이후 소식은 내일 브리핑에 포함됩니다.</i>` +
-        `\n📊 <a href="${DASHBOARD_URL}">대시보드에서 전문 보기</a>`;
+        `\n📊 <a href="${DASHBOARD_URL}?p=briefing">대시보드에서 전문 보기</a>`;
     }
 
     // ── 큐(긴급·법안) — 최근 48시간분만 한 번 읽고 구독자별로 시점 필터 ──

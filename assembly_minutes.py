@@ -829,6 +829,11 @@ def section_exists_by_confer(sb, doc_name: str, confer_num) -> bool:
     조회 실패 시 True(등재 안 함) — 중복 유입 방지 우선, section_exists 와 같은 규약."""
     # 링크는 '…xml.do?id=43150&type=view)' 또는 '…id=43150)' 두 꼴이 있다. id 뒤 경계문자를
     # 반드시 포함해야 한다 — '%%id=4315%%' 로 느슨하게 보면 43150·43151 이 모두 걸린다.
+    # 국감 confer_num 은 'audit-51996' 꼴(assembly_speeches 네임스페이스)이지만 본문 링크는
+    # 'id=51996' 이다 — 접두를 떼지 않으면 등재된 국감 회의가 매번 신규로 보여 Sonnet 재판정(#187).
+    confer_num = str(confer_num or '')
+    if confer_num.startswith(AUDIT_CONFER_PREFIX):
+        confer_num = confer_num[len(AUDIT_CONFER_PREFIX):]
     try:
         for sep in ('&', ')'):
             rows = sb.table('document_chunks').select('id').eq('doc_name', doc_name) \

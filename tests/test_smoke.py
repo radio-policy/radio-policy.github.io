@@ -800,6 +800,38 @@ class TestUrgencyShadow(unittest.TestCase):
         self.assertEqual(crawler._AI_PRIORITY_MAP.get('알수없는값', ''), '')
 
 
+class TestMinutesConferDedupe(unittest.TestCase):
+    """#187: 국감 confer_num('audit-N')도 본문 링크의 'id=N'으로 중복 판정해야 한다."""
+
+    @staticmethod
+    def _fake_sb(hit_pattern):
+        seen = []
+        class _Q:
+            def __init__(self): self.pat = None
+            def select(self, *a): return self
+            def eq(self, *a): return self
+            def like(self, col, pat): self.pat = pat; seen.append(pat); return self
+            def limit(self, *a): return self
+            def execute(self):
+                return mock.Mock(data=[{'id': 1}] if self.pat == hit_pattern else [])
+        sb = mock.Mock()
+        sb.table.side_effect = lambda name: _Q()
+        return sb, seen
+
+    def test_audit_prefix_stripped(self):
+        import assembly_minutes as am
+        sb, seen = self._fake_sb('%id=51996&%')
+        self.assertTrue(am.section_exists_by_confer(sb, '과방위_회의록_2024.md', 'audit-51996'))
+        self.assertFalse(any('audit-' in p for p in seen))
+
+    def test_committee_number_unchanged(self):
+        import assembly_minutes as am
+        sb, seen = self._fake_sb('%id=43150)%')
+        self.assertTrue(am.section_exists_by_confer(sb, '과방위_회의록_2025.md', '43150'))
+        sb2, _ = self._fake_sb('%id=99999)%')
+        self.assertFalse(am.section_exists_by_confer(sb2, '과방위_회의록_2025.md', '43150'))
+
+
 class TestSpeakerNormalize(unittest.TestCase):
     """#164: 호환 한자(U+F900~) 발언자명이 표준 한자로 모여야 인물 명부가 갈라지지 않는다."""
 
