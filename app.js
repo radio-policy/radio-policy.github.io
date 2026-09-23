@@ -2399,7 +2399,11 @@ function isPressQuery(query) {
 // (과거엔 원소에 content/id가 있다고 가정해 TypeError로 자문이 죽었음 — 데이터 소스가
 //  JSON→Supabase로 바뀐 잔재. 본문 조회 실패 항목은 결과에서 제외해 원천 차단.)
 async function searchPressReleases(query) {
-  if (!pressData || !sb) return [];
+  if (!sb) return [];
+  // 보도자료 목록은 탭을 열어야 로드된다(#61) — 탭을 안 연 사용자의 자문에서 이 검색이 조용히 0건이던 결손(#192).
+  // 세션 첫 보도자료성 질문에서만 1~2초 더 든다(실측 1.4초, 1,128건).
+  if (!pressData) { try { await loadPressJSON(); } catch(e) { console.warn('보도자료 목록 로드 실패:', e); } }
+  if (!pressData) return [];
   var keywords = extractKeywords(query);
   if (keywords.length === 0) return [];
   var scored = [];
@@ -2423,9 +2427,11 @@ async function searchPressReleases(query) {
         return { item: item, body: item.content };
       }
       if (!item.doc_name) return null;
-      // ilike 패턴·PostgREST 구문을 깨는 문자(%,_,쉼표,괄호) 전까지의 제목 앞부분으로 본문 조회
-      var m = (item.title || '').match(/^[^%_,()]+/);
-      var frag = m ? m[0].trim().substring(0, 20).trim() : '';
+      // ilike 패턴·PostgREST 구문을 깨는 문자(%,_,쉼표,괄호)로 제목을 나눠 **가장 긴 조각**으로 본문 조회(#192).
+      // 종전엔 '첫 쉼표 앞'이라 「과기정통부, 주파수 …」가 '과기정통부'로 줄어 그 기관 아무 조각이나 붙었다.
+      var frag = (item.title || '').split(/[%_,()]+/).map(function(x) { return x.trim(); })
+        .sort(function(a, b) { return b.length - a.length; })[0] || '';
+      frag = frag.substring(0, 20).trim();
       if (frag.length < 4) return null;
       var cr = await sb.from('document_chunks')
         .select('content')
@@ -2435,6 +2441,12 @@ async function searchPressReleases(query) {
       if (cr.error || !cr.data || cr.data.length === 0) return null;
       var body = cr.data.map(function(c) { return c.content || ''; }).join('\n').trim();
       if (!body) return null;
+      // 한 조각에 여러 보도자료가 들어 있을 수 있다 — 제목이 나오는 섹션 머리('## YYMMDD')부터 자른다(#192)
+      var at = body.indexOf(frag);
+      if (at > 0) {
+        var head = body.lastIndexOf('## ', at);
+        body = body.slice(head >= 0 ? head : at);
+      }
       return { item: item, body: body };
     } catch(e) {
       console.warn('보도자료 본문 조회 실패(항목 제외):', item.title, e);
