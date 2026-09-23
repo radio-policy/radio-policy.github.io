@@ -721,11 +721,27 @@ class TestKmccMeeting(unittest.TestCase):
               'meta': {'dept': '대전분소'}}
         html = km.format_press_html(it, '공고 & 안내\n' + '본문 ' * 300)
         self.assertLessEqual(len(html), km.HTML_BUDGET)
-        self.assertTrue(html.startswith('📰 <b>방미통위 보도자료 · 9/11</b>'))
+        # 날짜·담당부서는 머리줄 밑 기울임 한 줄로 묶는다(2026-09-23 개편)
+        self.assertTrue(html.startswith('📰 <b>방미통위 보도자료</b>\n<i>9/11 · 대전분소</i>'))
         self.assertIn('<b>공고 &amp; 안내</b>', html)
-        self.assertIn('· 대전분소', html)
-        self.assertIn('· 본문 본문', html)
+        self.assertIn('<blockquote>본문 본문', html)      # 본문은 인용구로
         self.assertIn('…', html)
+        self.assertEqual(html.count('<blockquote>'), html.count('</blockquote>'))
+
+    def test_press_html_subtitle_and_sentence_cut(self):
+        """부제('- … -')는 제목 밑 제 줄로, 본문은 문장 끝에서 자른다 (#184-보론3)."""
+        km = self.km
+        it = {'title': '제목', 'url': 'https://www.kmcc.go.kr/n', 'post_date': None, 'meta': {}}
+        body = '제목\n- 부제 한 줄 -\n' + '이어지는 문장이다. ' * 120 + '여기는 잘린다'
+        html = km.format_press_html(it, body)
+        self.assertIn('<i>부제 한 줄</i>', html)
+        self.assertNotIn('- 부제 한 줄 -', html)
+        self.assertNotIn('여기는 잘린다', html)
+        body_line = [ln for ln in html.split('\n') if ln.startswith('<blockquote>')][0]
+        self.assertTrue(body_line.endswith('다. …</blockquote>'), body_line[-40:])
+        # 문장 끝이 너무 앞에만 있으면 종전처럼 글자 수로 자른다
+        long1 = km._snip('가' * 50 + '다.' + '나' * 400, 200)
+        self.assertTrue(long1.endswith('…') and not long1.endswith('다. …'))
 
     def test_should_queue_window(self):
         km = self.km

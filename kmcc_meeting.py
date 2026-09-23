@@ -84,7 +84,8 @@ PAGE_PARAM   = '&cp=%d'                       # kcc 계열 CMS 페이지 파라�
 SRC_AGENDA = '방송미디어통신위원회 위원회 회의'
 SRC_PRESS  = '방송미디어통신위원회 보도자료'   # 위원회 결과(result)·일반 보도자료(press) 공통
 SRC_BY_KIND = {'agenda': SRC_AGENDA, 'result': SRC_PRESS, 'press': SRC_PRESS}
-PRESS_SNIPPET = 400        # 일반 보도자료 텔레그램 본문 앞부분 길이
+PRESS_SNIPPET = 600        # 일반 보도자료 텔레그램 본문 앞부분 길이 (400 → 600, 2026-09-23:
+                           # 400자면 첫 문단에서 끊겨 요지가 안 들어왔다. 예산 2500자에 여유 충분)
 TOPIC = 'kmcc'
 HAIKU = 'claude-haiku-4-5-20251001'
 HB_KEY = 'last_kmcc_meeting_run'
@@ -313,6 +314,24 @@ def _section_icon(name: str) -> str:
     return next((ic for key, ic in _SECTION_ICON if key in (name or '')), '▫️')
 
 
+# 문장 끝: 한국어 '다.'와 일반 마침표(뒤에 공백/끝이 오는 것만 — 약어·소수점 오인 방지)
+_SENT_END_RE = re.compile(r'다\.|[.!?](?=\s|$)')
+
+
+def _snip(text: str, limit: int) -> str:
+    """limit 이내에서 **문장 끝으로** 자른다. 글자 수로 뚝 자르면 '제작지원작(4…'처럼
+    낱말·괄호 중간에서 끊긴다(2026-09-23 실측). 한계의 절반도 못 채우는 위치뿐이면
+    종전대로 글자 수로 자른다 — 문장이 길어 본문이 통째로 날아가는 것을 막는다."""
+    t = (text or '').strip()
+    if len(t) <= limit:
+        return t
+    cut = t[:limit]
+    ends = [m.end() for m in _SENT_END_RE.finditer(cut)]
+    if ends and ends[-1] >= limit * 0.5:
+        return cut[:ends[-1]].rstrip() + ' …'
+    return cut.rstrip() + '…'
+
+
 def format_agenda_html(meta: dict, head: dict, sections: list, url: str, pdf_url: str = '',
                        revised: bool = False, budget: int = HTML_BUDGET) -> str:
     """안건 1건 = 한 덩어리(제목·대상·내용·담당). 덩어리 사이를 빈 줄로 띄우는 것이 핵심이다.
@@ -401,20 +420,29 @@ def format_result_fallback_html(meta: dict, post_date, body: str, url: str, budg
 
 
 def format_press_html(item: dict, body: str, budget: int = HTML_BUDGET) -> str:
-    """일반 보도자료 1건 — 제목·담당부서·본문 앞부분·링크. AI 없음."""
+    """일반 보도자료 1건 — 제목·부제·담당부서·본문 앞부분·링크. AI 없음.
+
+    2026-09-23 개편(#184-보론3) — 의사일정·회의록과 같은 기준으로 맞췄다. 종전에는 담당부서와
+    본문이 같은 '· ' 불릿이라 층위가 없고, 400자 본문이 한 덩어리로 흘렀으며, 본문 맨 앞의
+    부제('- … 11편 선정 -')가 문장 속에 묻혔다.
+    """
     when = _md(item.get('post_date')) if item.get('post_date') else ''
     dept = (item.get('meta') or {}).get('dept', '')
-    head = f'📰 <b>방미통위 보도자료 · {esc(when)}</b>' if when else '📰 <b>방미통위 보도자료</b>'
-    parts = [head, '', f'<b>{esc(item["title"])}</b>']
-    if dept:
-        parts.append(f'· {esc(dept)}')
+    sub = ' · '.join(x for x in (esc(when), esc(dept)) if x)
+    parts = ['📰 <b>방미통위 보도자료</b>']
+    if sub:
+        parts.append(f'<i>{sub}</i>')
+    parts += ['', f'<b>{esc(item["title"])}</b>']
     text = re.sub(r'\s+', ' ', (body or '').strip())
     if text.startswith(item['title'].strip()):
         text = text[len(item['title'].strip()):].strip()   # 본문 첫 줄이 제목 반복인 경우(실측)
+    # 보도자료 본문은 '- 부제 -'로 시작하는 일이 많다(실측). 제목 밑 제 줄로 올린다.
+    m = re.match(r'^[-–—]\s*(.+?)\s*[-–—]\s*(?=[가-힣A-Za-z0-9‘“(])', text)
+    if m:
+        parts.append(f'<i>{esc(m.group(1))}</i>')
+        text = text[m.end():].strip()
     if text:
-        if len(text) > PRESS_SNIPPET:
-            text = text[:PRESS_SNIPPET].rstrip() + '…'
-        parts.append(f'· {esc(text)}')
+        parts.append(f'<blockquote>{esc(_snip(text, PRESS_SNIPPET))}</blockquote>')
     parts.append('')
     parts.append(_footer(0, item['url']))
     out = '\n'.join(parts)
