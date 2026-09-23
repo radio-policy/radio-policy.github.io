@@ -4505,6 +4505,9 @@ async function showNewsDetail(newsId) {
 
 // ── 주요 내용 요약 렌더링 헬퍼 ──────────────────────────────────
 function renderSummaryHtml(text) {
+  // DB 유래 텍스트(news_feed.summary·impact_analysis)라 반드시 이스케이프 — 저장형 XSS 방지(#191).
+  // 요약·영향분석은 순수 텍스트 규약이라 보이는 모양은 그대로다.
+  text = escHtml(text || '');
   // 줄바꿈 기준으로 단락 분리, 각 항목을 불릿으로 표시
   var lines = text.split(/\n+/).map(function(l) { return l.trim(); }).filter(function(l) { return l.length > 0; });
   if (lines.length <= 1) {
@@ -4618,7 +4621,7 @@ function _renderImpactBox(box, n, text, fromSaved) {
   var html;
   if (impactText) {
     html = renderSummaryHtml(impactText) +
-      (priorityText ? '<div style="font-size:11px;color:' + rule.color + ';font-weight:600;margin-top:6px">⚡ ' + priorityText + '</div>' : '');
+      (priorityText ? '<div style="font-size:11px;color:' + rule.color + ';font-weight:600;margin-top:6px">⚡ ' + escHtml(priorityText) + '</div>' : '');
   } else {
     html = text
       ? renderSummaryHtml(text.trim())

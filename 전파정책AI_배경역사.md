@@ -7263,3 +7263,18 @@ Edge 인스턴스는 기동 시 계산하므로 연초 몇 시간 늦을 수 있
 법령 DIFF → `diff`, 이슈 제안·현안 전환 → `issuemap`. 검증: 실사이트에서 6개 주소가 각각 `panel-briefing`·`panel-news`·
 `panel-lawtrack`·`panel-minutes`·`panel-diff`·`panel-issuemap`으로 열림을 확인(발송 시험 없음).
 
+
+**#191 (2026-09-24) 뉴스 요약·영향분석 저장형 XSS + 로그인 계정 news_feed UPDATE 칸 한정.**
+`사외사내_개선안_및_운영효율화_방안_260923.md` §2 상위 12번. `app.js` `renderSummaryHtml`은 `news_feed.summary`·
+`impact_analysis`(DB 유래)를 이스케이프 없이 `innerHTML`로 그렸고, 영향분석의 `<priority>` 문구도 그대로 붙였다.
+실DB 권한을 보니 anon은 UPDATE 정책이 없어 이미 막혀 있었고(지침 155행의 '`news_feed_upd_anon`' 서술은 실DB와 어긋난 옛 기록),
+**승인된 로그인 계정은 테이블 전 칸 UPDATE**가 가능했다 — 계정 하나가 요약 칸에 스크립트를 심으면 그 뉴스를 펼친 관리자의
+세션이 노출되고, 제목·원문 url도 바꿔 피싱 링크로 만들 수 있었다(악용 흔적은 확인하지 않음; 저장된 요약 5,371건에 태그 0건).
+**조치** ① `renderSummaryHtml` 첫 줄에서 `escHtml`, priority 문구도 `escHtml`. 요약은 순수 텍스트 규약이라 표시 변화 없음
+(node로 정상 요약·공격 문구 렌더 확인). 영향분석 저장본 8건 중 4건에 모델이 붙인 부가 태그(`<details>`·`<rationale>` 등)가 있으나
+화면은 `<impact>` 안쪽만 그리므로 무영향. 캐시버스터 `app.js?v=20260924a`.
+② 마이그레이션 `news_feed_update_columns_limit` — authenticated의 테이블 UPDATE 회수 후 화면이 쓰는 8칸
+(`is_read, content, summary, impact_analysis, impact_analyzed_at, locked, importance, urgency`)만 GRANT; anon의 content·summary
+컬럼 권한도 회수(is_read만). 크롤러·Edge(news-archive-search·operator-webhook)는 service_role이라 무영향.
+`importance`·`urgency`·`locked`는 여전히 `news_feed_edit_guard` 트리거가 `is_admin()`을 요구한다(#159).
+
