@@ -335,19 +335,26 @@ def get_feedback_examples(title: str = '') -> str:
     return _feedback_fixed_block() + _feedback_similar_block(title)
 
 
-def classify_urgency(title: str, content: str = '') -> str:
+def classify_urgency(title: str, content: str = '', summary: str = '') -> str:
     """
     Claude Haiku로 기사 긴급도 AI 판단.
     API 키 없거나 오류 시 키워드 기반 폴백.
+    summary = 네이버 검색 요약(≤300자). 본문이 없을 때만 판정 재료로 쓴다(#188).
     반환값: '긴급' | '보통' | '참고'
     """
     if not ANTHROPIC_API_KEY:
         # API 키 없을 때 간단 폴백
-        text = title + ' ' + (content or '')[:300]
+        text = title + ' ' + ((content or '')[:300] or (summary or ''))
         return '보통' if any(k in text for k in _FALLBACK_MOBILE) else '참고'
 
     snippet = re.sub(r'\s+', ' ', content or '').strip()[:600]
-    user_msg = f"제목: {title}\n본문: {snippet}" if snippet else f"제목: {title}"
+    summ = re.sub(r'\s+', ' ', summary or '').strip()[:300]
+    if snippet:
+        user_msg = f"제목: {title}\n본문: {snippet}"
+    elif summ:
+        user_msg = f"제목: {title}\n요약: {summ}"
+    else:
+        user_msg = f"제목: {title}"
 
     try:
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
@@ -1899,9 +1906,19 @@ def screen_news_items(items: list) -> list:
         it.setdefault('event', '')        # 사건 라벨 미판정은 빈 문자열(대시보드는 이때 제목 유사도로 되돌아간다)
         it.setdefault('urgency_screen', '')   # 그림자 기록(#162) — 인사 자동통과·키워드 폴백 경로는 여기서 채운다
         _spectrum_safety_net(it)          # 판정 누락 보정 — 아래 함수 주석 참조
+    for it in passed:                     # 긴급도 판정 재료로 요약을 남긴다 — 키가 아니라 별도 dict(upsert 키 집합 불변)
+        _st = (it.get('_screen_text') or '').strip()
+        if _st and it.get('url'):
+            _URGENCY_SUMMARY[it['url']] = _st
     for it in items:
         it.pop('_screen_text', None)      # 제거는 전체 대상 — 반환 규약(판정 전용 키는 여기서 전부 제거) 유지
     return passed
+
+
+# 긴급도 판정용 네이버 요약(url → ≤300자). Actions(미국 IP)는 본문을 못 긁어 content가 비므로
+# 이것이 없으면 긴급도는 **제목 한 줄**만 보고 매겨진다(2026-09-24 확인, #188). DB에는 저장하지 않는다 —
+# content에 넣으면 refetch_content.py의 '100자 미만 = 재수집 대상' 조건이 깨진다.
+_URGENCY_SUMMARY: dict = {}
 
 
 # ═══════════════════════════════════════════════════════
@@ -2038,6 +2055,8 @@ def save_new_items(items: list, existing_data: tuple) -> list:
     #    8/4(통합)은 보통. 원인은 판정 재료와 개인화 두 가지다:
     #      ① 선별은 파이프라인상 **본문 수집 전**이라 네이버 요약 300자(_screen_text)만 본다.
     #         「공정위가 상고했다」 같은 핵심이 요약에서 잘린다. 본문(중앙값 1,329자)은 여기서만 쓴다.
+    #         ⚠️ 단 **PC 실행일 때만** 그렇다. 10분 크롤은 Actions(미국 IP)라 본문 칸이 비어 있어
+    #         이 판정이 제목만 봤다(2026-09-24 확인). 그래서 본문이 없으면 선별 때의 요약을 넘긴다(#188).
     #         → 선별에 본문을 주려면 무관 기사 500건의 본문까지 매시간 긁어야 해서 캐시 절감이 무너진다.
     #      ② 개별 판정은 get_feedback_examples(title)로 **제목별 유사 사례 5건**을 넣지만,
     #         배치 판정은 여러 기사를 한 번에 보므로 공통 사례만 쓴다.
@@ -2045,7 +2064,8 @@ def save_new_items(items: list, existing_data: tuple) -> list:
     #    선별 콜은 urgency를 여전히 뱉지만(스키마 유지) **여기서 쓰지 않는다** — 프롬프트 보강으로
     #    통합을 되살릴 실험 여지를 남겨 둔 것. 되살릴 땐 반드시 긴급률을 배포 전(9.9%)과 비교할 것.
     for item in valid:
-        val = classify_urgency(item.get('title', ''), item.get('content', '') or '')
+        val = classify_urgency(item.get('title', ''), item.get('content', '') or '',
+                               _URGENCY_SUMMARY.get(item.get('url', ''), ''))
         item['urgency'] = val
         item['importance'] = val
 
