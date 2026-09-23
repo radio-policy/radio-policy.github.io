@@ -1807,6 +1807,15 @@ def run(sb, api_key: str, year: int, limit: int = 0, dry: bool = False,
     return stats
 
 
+def years_to_run(year_arg, now_kst) -> list:
+    """연도 롤오버(#189): 회의록은 회의 뒤 수 주 늦게 공개된다. 1~2월에 올해만 보면 전년 12월 회의록이
+    영영 수집되지 않으므로 --year 미지정 시 전년도도 함께 돈다(등재분은 dedupe로 건너뛰어 AI 0회)."""
+    if year_arg:
+        return [year_arg]
+    y = now_kst.year
+    return [y - 1, y] if now_kst.month <= 2 else [y]
+
+
 def main():
     ap = argparse.ArgumentParser(description='국회 과방위 회의록 수집기')
     ap.add_argument('--dry-run', action='store_true', help='DB 쓰기 없이 실측만')
@@ -1835,9 +1844,10 @@ def main():
               '--allow-api 를 명시하세요.' % year)
         return
     sb = make_client(os.environ['SUPABASE_URL'], os.environ['SUPABASE_SERVICE_KEY'])
-    run(sb, api_key, year, limit=args.limit, dry=args.dry_run,
-        audit=not args.no_audit, audit_only=args.audit_only, notify=not args.no_notify,
-        operator_alert=not args.no_operator_alert)
+    for y in years_to_run(args.year, datetime.now(KST)):
+        run(sb, api_key, y, limit=args.limit, dry=args.dry_run,
+            audit=not args.no_audit, audit_only=args.audit_only, notify=not args.no_notify,
+            operator_alert=not args.no_operator_alert)
 
 
 if __name__ == '__main__':

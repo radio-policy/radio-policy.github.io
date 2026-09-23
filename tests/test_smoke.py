@@ -832,6 +832,17 @@ class TestMinutesConferDedupe(unittest.TestCase):
         self.assertFalse(am.section_exists_by_confer(sb2, '과방위_회의록_2025.md', '43150'))
 
 
+class TestMinutesYearRollover(unittest.TestCase):
+    """#189: 1~2월엔 전년도 회의록도 조회, --year 지정 시 그 해만."""
+
+    def test_rollover(self):
+        import assembly_minutes as am
+        self.assertEqual(am.years_to_run(None, datetime(2027, 1, 5)), [2026, 2027])
+        self.assertEqual(am.years_to_run(None, datetime(2027, 2, 28)), [2026, 2027])
+        self.assertEqual(am.years_to_run(None, datetime(2027, 3, 1)), [2027])
+        self.assertEqual(am.years_to_run(2019, datetime(2027, 1, 5)), [2019])
+
+
 class TestSpeakerNormalize(unittest.TestCase):
     """#164: 호환 한자(U+F900~) 발언자명이 표준 한자로 모여야 인물 명부가 갈라지지 않는다."""
 

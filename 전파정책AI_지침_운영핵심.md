@@ -894,8 +894,8 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
     실측 범위이며, `1900MHz`의 `00`을 연도로 삼던 사고를 막던 `(?<![0-9])` 가드는 그대로 유지된다.
     상대 기간은 `yearFrom`/`yearTo`로 들어가 `startDate`/`endDate`에 실린다(단일 `year`와 배타적).
     ⚠️ **파싱 순서가 의미를 갖는다** — 상대 기간을 단일 연도보다 **먼저** 봐야 "최근 5년간"의 `5년`이
-    2005년으로 오인되지 않는다. ⚠️ **해가 바뀌면 `ASSEM_MAX_YEAR`를 올릴 것**(안 올리면 "최근 N년"이
-    올해를 빼고 센다). ⚠️ 대수와 마찬가지로 **기간도 Haiku에게 묻지 않는다** — AI 경로에서 규칙이 뽑은
+    2005년으로 오인되지 않는다. `ASSEM_MAX_YEAR`는 KST 현재 연도로 **자동 계산**된다(#189 — 종전
+    상수 2026은 해가 바뀌면 "최근 N년"이 올해를 빼고 셌다). 다시 상수로 되돌리지 말 것. ⚠️ 대수와 마찬가지로 **기간도 Haiku에게 묻지 않는다** — AI 경로에서 규칙이 뽑은
     `yearFrom/yearTo`를 다시 실어 주지 않으면 기간 제한이 조용히 사라진다(#100 계열 함정).  - 형태소 분석이 없는 **원문 문자열 검색**이다 — 회의록에 나온 낱말 그대로여야 잡힌다. 파서가 검색어를
     2개까지만 넘기는 이유(AND 검색이라 낱말이 늘수록 0건).
 - **자사(SK텔레콤) 언급은 주제 불문 무조건 수록 (2026-08-14, #97)**: 키워드·Haiku 판정을 건너뛰고 확정하며
@@ -1126,6 +1126,7 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **AI 자문 "Failed to fetch"**: 무거운 질문 2분+ idle 끊김 → stream:true로 해결됨. 사내망 프록시·확장프로그램·F12 네트워크 확인.
 
 ## 하지 말아야 할 것 (규칙 + 한 줄 이유 / 상세는 배경역사 문서)
+- **과방위 회의록 수집(`assembly_minutes.py`)을 '올해만' 도는 구조로 되돌리지 말 것 (#189, 2026-09-24)** — 회의록은 회의 뒤 수 주 늦게 공개된다. `years_to_run()`이 1~2월엔 전년도도 함께 돌려 12월 회의록을 받는다(등재분은 dedupe로 건너뛰어 AI 0회 — 국감 dedupe는 #187에서 고친 뒤라야 성립). 검색 쪽 `ASSEM_MAX_YEAR`도 자동 계산.
 - **긴급도 판정(`classify_urgency`)에서 네이버 요약(`_URGENCY_SUMMARY`) 전달을 빼지 말 것 (#188, 2026-09-24)** — 10분 크롤은 Actions(미국 IP)라 본문 칸이 비어 있어, 요약이 없으면 긴급도가 **제목 한 줄**만 보고 매겨진다. 요약은 DB에 넣지 않는다(content에 넣으면 refetch_content의 '100자 미만=재수집' 조건이 깨진다). **2026-10-08 판정**: 기준 긴급률 8.5~11.9%(09-07~09-21 주간) 대비 ±5%p 안이고 운영자 상향(보통→긴급) 사례가 줄면 유지, 나빠지면 되돌림.
 - **SECURITY DEFINER 함수를 만들면 같은 마이그레이션에 `REVOKE EXECUTE ON FUNCTION … FROM PUBLIC, anon, authenticated`를 넣을 것 (#186, 2026-09-24)** — Postgres는 새 함수에 PUBLIC 실행권을 기본으로 주고 Supabase는 anon·authenticated에도 준다. 소유자 권한으로 도는 발송 함수가 공개 anon 키로 `/rest/v1/rpc/…` 호출 가능했다(`trigger_subscriber_briefing`·`trigger_admin_report`·`watchdog_scan` — 구독자 브리핑·운영자 리포트·감시 경보). pg_cron은 소유자 postgres로 돌므로 회수해도 영향 없다. 확인은 `has_function_privilege('anon', oid, 'EXECUTE')`가 false인지로 한다(proacl에 anon이 없어도 PUBLIC으로 상속된다).
 - **텔레그램 알림에서 항목 사이 빈 줄을 빼지 말 것 / 제목을 통째로 굵게 쓰지 말 것 (#184, 2026-09-22)** — 방미통위 의사일정·과방위 회의록이 그랬다가 **한 덩어리 글 벽**이 됐다(운영자 지적). 규칙: ①항목 사이 빈 줄 ②굵게는 **제목 한 줄까지**(날짜·건수·담당과는 `<i>`로 내린다) ③본문은 `<blockquote>`로 감싸 제목과 구분 ④번호는 **원문자(①②③)** — `N. ` 로 시작하는 줄은 발송 측 `mergeQueueBlocks`(`ITEM_START_RE`)가 항목으로 오인해 다른 메시지와 묶어 버린다. 예산은 `HTML_BUDGET`/`MINUTES_DIGEST_BUDGET` 2500자 유지(큐 3500 맹목 절단 회피).

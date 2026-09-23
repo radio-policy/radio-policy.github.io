@@ -60,12 +60,13 @@ const DAE_TO_TH: Record<number, string> = { 20: '22', 21: '23', 22: '24' };
 // 보유 회의록의 실제 연도 범위 (2026-09-08 실측: assembly_speeches 2016~2026, 발언 6,720건).
 // 2자리 연도('19년')를 4자리로 펼칠 때와 "최근 N년"의 범위를 자를 때의 **기준일 뿐**이다 —
 // 2단 원문 검색은 이 6,720건이 아니라 국회 시스템 원문 전체를 대상으로 한다(1단만 DB).
-// ⚠️ 해가 바뀌면 ASSEM_MAX_YEAR를 올려야 "최근 N년"이 올해를 포함한다.
+// 끝 연도는 KST 현재 연도로 자동 계산(#189) — 종전 상수 2026은 2027-01에 "최근 N년"에서 올해를 빼고
+// '27년'을 연도로 못 알아봤다. 2026 아래로는 내려가지 않게 max를 둔다(시계 이상 대비).
 export const ASSEM_MIN_YEAR = 2016;
-export const ASSEM_MAX_YEAR = 2026;
-const ASSEM_DATA_YEARS = ASSEM_MAX_YEAR - ASSEM_MIN_YEAR + 1;   // 11
+export const ASSEM_MAX_YEAR = Math.max(2026, new Date(Date.now() + 9 * 3600 * 1000).getUTCFullYear());
+const ASSEM_DATA_YEARS = ASSEM_MAX_YEAR - ASSEM_MIN_YEAR + 1;   // 2026년 11
 
-/** '19'·'2019' → 2019. 보유 범위(16~26년) 밖이면 undefined — 연도가 아니라고 본다.
+/** '19'·'2019' → 2019. 보유 범위(16년~올해) 밖이면 undefined — 연도가 아니라고 본다.
  *  범위를 두는 이유: '1900MHz'의 00이나 '5년간'의 5가 연도로 둔갑하는 것을 막는다(실측 사고). */
 function normYear(raw: string): number | undefined {
   const n = Number(raw);
