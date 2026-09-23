@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This repo's operating knowledge lives in two hand-maintained Korean documents, not in code comments. Read them before any non-trivial change:
 
-- **[전파정책AI_지침_운영핵심.md](전파정책AI_지침_운영핵심.md)** — operational core: system structure, full DB schema, pg_cron schedule, the "must-check" runbook, and a 40+ item **"하지 말아야 할 것"(do-not) guardrail list**. Every entry is a scar from a real incident. Apply on every task.
+- **[전파정책AI_지침_운영핵심.md](전파정책AI_지침_운영핵심.md)** — operational core: system structure, full DB schema, pg_cron schedule, the "must-check" runbook, and a ~280-item **"하지 말아야 할 것"(do-not) guardrail list** (newest first). Every entry is a scar from a real incident. How to read it (2026-09-24, the file is ~1,560 lines): **structural changes** (new script/workflow/schedule/table/notification path, flow change) → read the whole do-not section; **small fixes** (one-line bug, wording, a constant) → grep it for the names you touch (table/script/function/key) **and** read the newest ~40 entries at its top. **When unsure which kind it is, read the whole section.**
 - **[전파정책AI_배경역사.md](전파정책AI_배경역사.md)** — background/history: the detailed why behind each guardrail, past-incident postmortems (#15–#19), dates, commit hashes.
 - **[HANDOFF.md](HANDOFF.md)** — account-handoff procedure (multiple people share this same PC/folder under one Windows account).
 
