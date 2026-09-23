@@ -897,6 +897,44 @@ class TestPressWindow(unittest.TestCase):
         self.assertEqual(pi._press_window_days(bad), 15)
 
 
+class TestDashboardCacheBuster(unittest.TestCase):
+    """index.html 캐시 번호(?v=YYYYMMDD…)가 각 정적 파일의 마지막 수정일보다 이르면 실패 (2026-09-24).
+    system_prompt.js 번호가 09-11에 멈춘 채 파일이 세 번 바뀌어, 캐시가 남은 브라우저는 옛 자문 지시문을 썼다.
+    커밋 전 수정분(작업 트리·스테이징)은 번호가 오늘(KST)이어야 한다. git이 없거나 기록이 없으면 건너뛴다."""
+
+    FILES = ('app.js', 'styles.css', 'system_prompt.js', 'supabase/functions/_shared/cite_verify.js')
+
+    def _git(self, *args):
+        import subprocess
+        r = subprocess.run(['git', '-C', _ROOT] + list(args), capture_output=True, text=True, encoding='utf-8')
+        return r.returncode, (r.stdout or '').strip()
+
+    def test_buster_not_older_than_file(self):
+        from datetime import timezone as tz
+        try:
+            rc, _ = self._git('rev-parse', '--git-dir')
+        except Exception:
+            self.skipTest('git 없음')
+        if rc != 0:
+            self.skipTest('git 저장소 아님')
+        html = open(os.path.join(_ROOT, 'index.html'), encoding='utf-8').read()
+        kst = tz(timedelta(hours=9))
+        today = datetime.now(kst).strftime('%Y%m%d')
+        for f in self.FILES:
+            m = re.search(re.escape(f) + r'\?v=(\d{8})', html)
+            self.assertIsNotNone(m, f'index.html에 {f}?v= 없음')
+            buster = m.group(1)
+            dirty = self._git('diff', '--quiet', 'HEAD', '--', f)[0] != 0
+            if dirty:
+                self.assertEqual(buster, today, f'{f}: 커밋 전 수정이 있는데 캐시 번호가 {buster} — 오늘({today})로 올릴 것')
+                continue
+            rc, ct = self._git('log', '-1', '--format=%ct', '--', f)
+            if rc != 0 or not ct:
+                continue
+            last = datetime.fromtimestamp(int(ct), kst).strftime('%Y%m%d')
+            self.assertGreaterEqual(buster, last, f'{f}: 마지막 수정 {last} > 캐시 번호 {buster} — index.html의 ?v=를 올릴 것')
+
+
 class TestSpeakerNormalize(unittest.TestCase):
     """#164: 호환 한자(U+F900~) 발언자명이 표준 한자로 모여야 인물 명부가 갈라지지 않는다."""
 
