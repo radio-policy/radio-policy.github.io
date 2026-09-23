@@ -290,7 +290,8 @@ def _agenda_when(meta: dict, head: dict) -> str:
 
 # 의안명 끝의 ' - 대상 -' 꼬리(예: '… 시정조치에 관한 건 - ㈜케이티, … -')를 떼어
 # 별도 줄로 내린다. 제목 줄이 굵게 세 줄씩 흐르는 것이 가독성을 가장 크게 해쳤다.
-_SUBJ_TAIL_RE = re.compile(r'^(.*?[^\s-])\s*[-–—]\s*(.+?)\s*[-–—]\s*$')
+# 가르는 하이픈은 앞뒤가 띄어진 것만 — 종전 비탐욕 매칭은 '2026-2027 방송평가 …'를 '2026'에서 잘랐다.
+_SUBJ_TAIL_RE = re.compile(r'^(.*[^\s-])\s+[-–—]\s+(.+?)\s*[-–—]\s*$')
 
 
 def _split_subject(subj: str) -> tuple:

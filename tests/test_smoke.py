@@ -862,6 +862,19 @@ class TestMinutesYearRollover(unittest.TestCase):
         self.assertEqual(am.years_to_run(2019, datetime(2027, 1, 5)), [2019])
 
 
+class TestKmccSubjectSplit(unittest.TestCase):
+    """안건명 ' - 대상 -' 꼬리 분리 — 제목 안의 붙은 하이픈(2026-2027, SK-브로드밴드)은 자르지 않는다."""
+
+    def test_split(self):
+        import kmcc_meeting as km
+        self.assertEqual(km._split_subject('2026-2027 방송평가 기본계획 수립에 관한 건 - 지상파방송사 -'),
+                         ('2026-2027 방송평가 기본계획 수립에 관한 건', '지상파방송사'))
+        self.assertEqual(km._split_subject('시정조치에 관한 건 - ㈜케이티, ㈜엘지유플러스 -'),
+                         ('시정조치에 관한 건', '㈜케이티, ㈜엘지유플러스'))
+        self.assertEqual(km._split_subject('시정조치에 관한 건 - SK-브로드밴드 -'), ('시정조치에 관한 건', 'SK-브로드밴드'))
+        self.assertEqual(km._split_subject('2026-2027 방송평가 기본계획'), ('2026-2027 방송평가 기본계획', ''))
+
+
 class TestSpeakerNormalize(unittest.TestCase):
     """#164: 호환 한자(U+F900~) 발언자명이 표준 한자로 모여야 인물 명부가 갈라지지 않는다."""
 
