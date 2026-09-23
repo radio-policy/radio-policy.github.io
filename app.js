@@ -3365,7 +3365,6 @@ async function sendChat() {
         if (ins.error) throw ins.error;
         if (logId) msgEl.appendChild(buildFeedbackWidget(logId));
       } catch(e) { console.warn('자문 이력(chat_logs) 저장 실패(답변은 정상):', e); }
-      refreshDashboard();
     }
   } catch(e) {
     loader.remove();
@@ -3588,52 +3587,6 @@ function smartRefresh() {
   if (typeof refreshOpsLight === 'function') refreshOpsLight();   // 상단바 상태등도 함께 갱신
 }
 
-async function refreshDashboard() {
-  if (!sb) return;
-  try {
-    const now = new Date();
-    const firstDay = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
-
-    // 건수는 숫자만 나가는 RPC로 — chat_logs 본문은 운영자 전용이라 anon 직접 조회가 막혀 있다
-    const { data: consultCount } = await sb.rpc('chat_logs_month_count');
-
-    const { count: newsCount } = await sb.from('news_feed')
-      .select('*', { count: 'exact', head: true })
-      .eq('is_read', false);
-
-    document.getElementById('stat-consult').textContent = consultCount ?? 0;
-    document.getElementById('stat-consult-sub').textContent = '이번달 AI 자문 횟수';
-    document.getElementById('stat-news').textContent = newsCount ?? 0;
-    document.getElementById('stat-news-sub').textContent = '미확인 뉴스';
-
-    // 최근 자문 미리보기도 질문 전문이 그대로 보이므로 이력과 같은 관문을 둔다(2026-08-20).
-    // 관리자 계정이면 바로 보여주고, 아니면 잠금 안내만.
-    // ※ #recent-logs·#stat-consult는 메뉴 개편(2026-08-03)으로 홈 패널이 사라지며 DOM에서
-    //   빠진 상태다 — 아래는 홈을 되살릴 때를 위한 방어이고 현재는 실행되지 않는다.
-    const container = document.getElementById('recent-logs');
-    let logs = [];
-    if (isAdminUser()) {
-      const lr = await sb.rpc('admin_list_chat_logs', { p_limit: 3 });
-      if (!lr.error) logs = lr.data || [];
-    } else if (container) {
-      container.innerHTML = '<div class="card" style="cursor:pointer" onclick="openChatHistory()">' +
-        '<div class="card-header"><span class="card-title" style="font-size:12px">' +
-        '<i class="ti ti-lock"></i> 최근 자문 — 운영자 전용</span></div>' +
-        '<div class="card-meta">클릭해 관리자 비밀번호로 열기</div></div>';
-    }
-
-    if (logs && logs.length > 0 && container) {
-      container.innerHTML = logs.map(l => {
-        const date = new Date(l.created_at).toLocaleDateString('ko-KR', {month:'2-digit',day:'2-digit'});
-        const catColor = { '주파수':'badge-purple','전자파':'badge-blue','ITU-R':'badge-blue','적합성평가':'badge-teal','기술기준':'badge-teal','일반':'badge-amber' };
-        return `<div class="card" style="cursor:pointer;margin-bottom:8px" onclick="openChatHistoryDetail('${l.id}')">
-          <div class="card-header"><span class="card-title" style="font-size:12px">${l.question.slice(0,40)}${l.question.length>40?'…':''}</span><span class="badge ${catColor[l.category]||'badge-amber'}">${l.category||'일반'}</span></div>
-          <div class="card-meta"><i class="ti ti-calendar"></i>${date}</div>
-        </div>`;
-      }).join('');
-    }
-  } catch(e) { console.warn('Dashboard refresh error:', e); }
-}
 
 // ════════════════════════════════════════════
 //  News — 팀 중요도 기반 분류 & 액션 아이템 패널
