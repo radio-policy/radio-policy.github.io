@@ -36,7 +36,7 @@ except ImportError:
     pass
 
 from supabase import Client
-from sb_client import make_client
+from sb_client import make_client, heartbeat as sb_heartbeat
 import notify   # 텔레그램 전송 공용 유틸 (개선⑪) — 전송부만 위임
 
 # ── 환경변수 ──────────────────────────────────────────────
@@ -291,16 +291,7 @@ def main():
     note = 'targets=%d ok=%d revised=%d failed=%d' % (len(targets), ok, len(revised), len(failures))
     if targets and ok == 0:
         note = 'FAILED all fetch — ' + note   # 운영 상태 탭에서 전량 실패가 눈에 띄도록
-    try:
-        sb.table('system_health').upsert(
-            {'key': 'last_itu_watch_run',
-             'updated_at': datetime.now(timezone.utc).isoformat(),
-             'note': note},
-            on_conflict='key'
-        ).execute()
-        print('[heartbeat] system_health.last_itu_watch_run 갱신 (%s)' % note)
-    except Exception as e:
-        print('[heartbeat 오류] %s' % e)
+    sb_heartbeat(sb, 'last_itu_watch_run', note)
 
     print('=' * 60)
 

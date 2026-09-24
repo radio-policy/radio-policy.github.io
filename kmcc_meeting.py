@@ -668,16 +668,6 @@ def update_row(sb, row_id, content: str, summary: str, now: datetime) -> bool:
     return True
 
 
-def heartbeat(sb, note: str) -> None:
-    try:
-        sb.table('system_health').upsert(
-            {'key': HB_KEY, 'updated_at': datetime.now(timezone.utc).isoformat(), 'note': note},
-            on_conflict='key').execute()
-        print('[heartbeat] system_health.%s 갱신 — %s' % (HB_KEY, note))
-    except Exception as e:
-        print('[heartbeat 오류] %s' % e)
-
-
 # ═══════════════════════════════════════════════════════
 #  수집 루프
 # ═══════════════════════════════════════════════════════
@@ -840,7 +830,7 @@ def main():
     since = datetime.strptime(args.since, '%Y-%m-%d').date() if args.since else None
     sb = None
     if not args.dry_run:
-        from sb_client import make_client
+        from sb_client import make_client, heartbeat as sb_heartbeat
         sb = make_client(os.environ['SUPABASE_URL'], os.environ['SUPABASE_SERVICE_KEY'])
     st = run(sb, pages=args.pages, dry=args.dry_run, notify_q=not args.no_notify,
              since=since, allow_api=args.allow_api, ai_preview=args.ai)
@@ -848,7 +838,7 @@ def main():
         st['agenda'], st['result'], st['press'], st['skip'], st['new'], st['queued'], st['fail'])
     print('[방미통위 수집 완료] ' + note)
     if not args.dry_run and sb is not None:
-        heartbeat(sb, note)
+        sb_heartbeat(sb, HB_KEY, note)
 
 
 if __name__ == '__main__':

@@ -38,7 +38,7 @@ try:
 except ImportError:
     pass
 
-from sb_client import make_client
+from sb_client import make_client, heartbeat as sb_heartbeat
 import press_ingest
 
 KST = timezone(timedelta(hours=9))
@@ -122,14 +122,7 @@ def main():
         print('[임베딩 백필 종료] rc=%d' % rc)
 
     # heartbeat (일회성이지만 기록해 두면 운영 상태 탭에서 추적 가능)
-    try:
-        sb.table('system_health').upsert(
-            {'key': 'last_press_ingest',
-             'updated_at': datetime.now(timezone.utc).isoformat(),
-             'note': 'backfill new=%d' % total_new},
-            on_conflict='key').execute()
-    except Exception as e:
-        print('[heartbeat 오류] %s' % e)
+    sb_heartbeat(sb, 'last_press_ingest', 'backfill new=%d' % total_new)
 
     print('[백필 완료]')
 

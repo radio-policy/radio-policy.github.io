@@ -35,7 +35,7 @@ except ImportError:
     pass
 
 import anthropic
-from sb_client import make_client, ran_recently
+from sb_client import make_client, ran_recently, heartbeat as sb_heartbeat
 import api_usage; api_usage.install()   # Anthropic usage 기록(#152) — 호출부 무변경, fail-open
 
 SUPABASE_URL      = os.environ['SUPABASE_URL']
@@ -48,17 +48,6 @@ NEWS_LIMIT = 30
 
 sb = make_client(SUPABASE_URL, SUPABASE_KEY)
 ai = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-
-
-def heartbeat(note: str) -> None:
-    try:
-        sb.table('system_health').upsert(
-            {'key': 'last_term_extract_run',
-             'updated_at': datetime.now(timezone.utc).isoformat(),
-             'note': note},
-            on_conflict='key').execute()
-    except Exception as e:
-        print('[heartbeat 오류] %s' % e)
 
 
 def fetch_recent_news() -> str:
@@ -110,7 +99,7 @@ def main():
     if not news_list:
         print('[용어 추출] 최근 %d일 뉴스 없음 — 스킵' % NEWS_DAYS)
         if not args.dry_run:
-            heartbeat('news=0 new=0')
+            sb_heartbeat(sb, 'last_term_extract_run', 'news=0 new=0')
         return
     have = existing_terms()
     terms = extract(news_list)
@@ -144,7 +133,7 @@ def main():
     note = 'news=%d cand=%d new=%d' % (len(news_list.splitlines()), len(terms), saved)
     print('[용어 추출 완료] ' + note)
     if not args.dry_run:
-        heartbeat(note)
+        sb_heartbeat(sb, 'last_term_extract_run', note)
 
 
 if __name__ == '__main__':

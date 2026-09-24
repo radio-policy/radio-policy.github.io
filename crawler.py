@@ -27,7 +27,7 @@ import ssl
 from requests.adapters import HTTPAdapter
 from bs4 import BeautifulSoup
 from supabase import Client
-from sb_client import make_client, ran_recently
+from sb_client import make_client, ran_recently, heartbeat as sb_heartbeat
 import api_usage; api_usage.install()   # Anthropic usage 기록(#152) — 호출부 무변경, fail-open
 import notify   # 텔레그램 전송 공용 유틸 (개선⑪) — 전송부만 위임
 import anthropic
@@ -2123,16 +2123,7 @@ def main():
 
     # ── 크롤러 heartbeat ── (check_news_health가 '크롤러 정상 vs 고장' 구분에 사용)
     # 신규 0건이어도 '크롤러는 돌았다'를 기록 → 주말 등 '뉴스 없음' 오경보 방지. 실패해도 무시.
-    try:
-        sb.table('system_health').upsert(
-            {'key': 'last_crawl_run',
-             'updated_at': datetime.now(timezone.utc).isoformat(),
-             'note': f'new={len(new_items)} total={len(all_items)}'},
-            on_conflict='key'
-        ).execute()
-        print('[heartbeat] system_health.last_crawl_run 갱신')
-    except Exception as e:
-        print(f'[heartbeat 오류] {e}')
+    sb_heartbeat(sb, 'last_crawl_run', f'new={len(new_items)} total={len(all_items)}')
 
     # ── 이슈맵 자동 제안 파이프 (2026-08-26, P4) ──
     # fail-open 격리: 제안 파이프의 어떤 실패도 크롤러 본연의 수집·통지에 영향을 주면 안 된다.
@@ -2148,9 +2139,7 @@ def main():
         elif _kst_hour in ISSUE_SUGGEST_HOURS:
             from issue_suggest import run_suggest
             run_suggest(sb)
-            sb.table('system_health').upsert(
-                {'key': 'last_issue_suggest_run', 'updated_at': datetime.now(timezone.utc).isoformat(),
-                 'note': f'{_kst_hour}시 실행'}, on_conflict='key').execute()
+            sb_heartbeat(sb, 'last_issue_suggest_run', f'{_kst_hour}시 실행')
         else:
             print(f'[이슈 제안] {_kst_hour}시 — 실행 시각({sorted(ISSUE_SUGGEST_HOURS)}) 아님, 건너뜀')
     except Exception as e:

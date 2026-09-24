@@ -269,6 +269,55 @@ class TestSbClientHttp11(unittest.TestCase):
         self.assertEqual(getattr(pool, '_retries', 3), 3)     # 재시도 3회
 
 
+class TestSharedHeartbeatAndRetry(unittest.TestCase):
+    """#217 — heartbeat·재시도 공용화(개선안 §4-2-12 단계 C). 복사본이 14개 파일 16곳까지 늘었던 것을
+    구조로 막는다: system_health 쓰기는 sb_client.heartbeat 한 곳에서만."""
+
+    def test_no_heartbeat_copies(self):
+        pat = re.compile(r"""table\(\s*['"]system_health['"]\s*\)\s*\.\s*upsert""")
+        offenders = []
+        for name in sorted(os.listdir(_ROOT)):
+            if not name.endswith('.py') or name == 'sb_client.py':
+                continue
+            with open(os.path.join(_ROOT, name), encoding='utf-8', errors='replace') as f:
+                if pat.search(f.read()):
+                    offenders.append(name)
+        self.assertEqual(offenders, [],
+                         'system_health 는 sb_client.heartbeat(sb, key, note)로만 쓴다 — 복사본 금지 (#217)')
+
+    def test_heartbeat_fail_open(self):
+        import sb_client
+
+        class Boom:
+            def table(self, *_a, **_k):
+                raise RuntimeError('db down')
+        sb_client.heartbeat(Boom(), 'last_x_run', 'n=1')   # 예외가 새어 나오면 실패
+
+    def test_with_retry(self):
+        import retry_util
+        calls = []
+
+        class Resp:
+            def __init__(self, ok): self.ok = ok
+            def raise_for_status(self):
+                if not self.ok:
+                    raise RuntimeError('503')
+
+        seq = [Resp(False), Resp(True)]
+        with mock.patch.object(retry_util.time, 'sleep', lambda s: calls.append(s)):
+            r = retry_util.with_retry(lambda: seq.pop(0), retries=3, delay=5)
+        self.assertTrue(r.ok)                 # raise_for_status 실패도 재시도 대상
+        self.assertEqual(calls, [5])
+
+        calls.clear()
+        with mock.patch.object(retry_util.time, 'sleep', lambda s: calls.append(s)):
+            with self.assertRaises(ValueError):
+                retry_util.with_retry(lambda: (_ for _ in ()).throw(ValueError('x')), retries=3, delay=2)
+        self.assertEqual(calls, [2, 2])       # 3회 시도, 사이 2번 대기, 마지막은 그대로 raise
+
+        self.assertEqual(retry_util.with_retry(lambda: {'a': 1}), {'a': 1})   # 응답이 아닌 값은 그대로
+
+
 class TestMinutesDigest(unittest.TestCase):
     """⑪ subscriber_notify.format_minutes_digest — 과방위 회의록 다이제스트 순수 포맷터
 

@@ -29,6 +29,7 @@ def heartbeat(sb: Client, key: str, note: str) -> None:
              'updated_at': _dt.datetime.now(_dt.timezone.utc).isoformat(),
              'note': note},
             on_conflict='key').execute()
+        print('[heartbeat] system_health.%s 갱신 — %s' % (key, note))
     except Exception as e:
         print('[heartbeat 오류 — 무시] %s: %s' % (key, str(e)[:80]))
 

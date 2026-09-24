@@ -18,7 +18,7 @@ except Exception:
 
 from datetime import datetime, timezone, timedelta
 from bs4 import BeautifulSoup
-from sb_client import make_client
+from sb_client import make_client, heartbeat as sb_heartbeat
 
 # .env 파일 자동 로딩 (로컬 실행 시)
 try:
@@ -98,20 +98,6 @@ def resolve_url(url: str) -> str:
     return url
 
 
-def _refetch_heartbeat(sb, note=''):
-    """운영 상태 탭 '본문 수집(refetch) 마지막 실행' 기록. 실패해도 무시."""
-    try:
-        sb.table('system_health').upsert(
-            {'key': 'last_refetch_run',
-             'updated_at': datetime.now(timezone.utc).isoformat(),
-             'note': note},
-            on_conflict='key'
-        ).execute()
-        print('[heartbeat] system_health.last_refetch_run 갱신')
-    except Exception as e:
-        print(f'[heartbeat 오류] {e}')
-
-
 _TITLE_CUT_RE = re.compile('(' + chr(0x2026) + r'|\.\.\.)\s*$')
 
 
@@ -188,7 +174,7 @@ def main():
 
     if not todo:
         print("✅ 재수집할 기사가 없습니다.")
-        _refetch_heartbeat(sb, '할 일 없음')
+        sb_heartbeat(sb, 'last_refetch_run', '할 일 없음')
         return
 
     print(f"📋 {mode}: {len(todo)}건\n")
@@ -336,7 +322,7 @@ def main():
     # 관리자는 용어 모달의 ↺재생성으로 즉시 생성할 수 있다.
 
     # ── heartbeat ── (운영 상태 탭 '본문 수집(refetch) 마지막 실행')
-    _refetch_heartbeat(sb, f'ok={ok} fail={fail} skip={skip}')
+    sb_heartbeat(sb, 'last_refetch_run', f'ok={ok} fail={fail} skip={skip}')
 
 
 if __name__ == "__main__":

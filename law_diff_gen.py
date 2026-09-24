@@ -49,7 +49,7 @@ try:
 except Exception:
     pass
 
-from sb_client import make_client   # create_client 직접 사용 금지 — HTTP/1.1 강제 (지침)
+from sb_client import make_client, heartbeat as sb_heartbeat   # create_client 직접 사용 금지 — HTTP/1.1 강제 (지침)
 import api_usage; api_usage.install()   # Anthropic usage 기록(#152) — 호출부 무변경, fail-open
 import notify   # 텔레그램 전송 공용 유틸 (개선⑪) — 전송부만 위임
 
@@ -1315,19 +1315,12 @@ def main():
 
     # heartbeat — 운영 상태 탭 추적용. 신규 0건이어도 기록, 실패해도 무시. (dry-run 제외)
     if not args.dry_run:
-        try:
-            sb.table('system_health').upsert(
-                {'key': 'last_law_diff_run',
-                 'updated_at': datetime.now(timezone.utc).isoformat(),
-                 'note': 'created=%d converted=%d skipped=%d nochange=%d failed=%d '
-                         'excluded=%d assembly=%d'
-                         % (len(results['created']), results['converted'], results['skipped'],
-                            results['nochange'], results['failed'], len(results['excluded']),
-                            results['assembly'])},
-                on_conflict='key').execute()
-            print('[heartbeat] system_health.last_law_diff_run 갱신')
-        except Exception as e:
-            print(f'[heartbeat 오류] {e}')
+        sb_heartbeat(sb, 'last_law_diff_run',
+                     'created=%d converted=%d skipped=%d nochange=%d failed=%d '
+                     'excluded=%d assembly=%d'
+                     % (len(results['created']), results['converted'], results['skipped'],
+                        results['nochange'], results['failed'], len(results['excluded']),
+                        results['assembly']))
 
 
 if __name__ == '__main__':

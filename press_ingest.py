@@ -20,6 +20,8 @@ import sys
 import json
 import html as html_mod
 import time
+from retry_util import with_retry
+from sb_client import heartbeat as sb_heartbeat
 import shutil
 import zipfile
 import tempfile
@@ -267,62 +269,41 @@ def load_press_keywords(sb) -> list:
 # ═══════════════════════════════════════════════════════
 
 def _get(url: str, timeout: int = 25, encoding: str = None):
-    for attempt in range(1, MAX_RETRY + 1):
-        try:
-            if USE_CURL_CFFI:
-                res = requests.get(url, impersonate='chrome110', timeout=timeout)
-            else:
-                res = requests.get(url, headers=HEADERS, timeout=timeout)
-            res.raise_for_status()
-            if encoding:
-                res.encoding = encoding
-            else:
-                res.encoding = getattr(res, 'apparent_encoding', None) or 'utf-8'
-            return res
-        except Exception as e:
-            if attempt < MAX_RETRY:
-                time.sleep(RETRY_DELAY)
-            else:
-                raise
+    def once():
+        if USE_CURL_CFFI:
+            return requests.get(url, impersonate='chrome110', timeout=timeout)
+        return requests.get(url, headers=HEADERS, timeout=timeout)
+    res = with_retry(once, retries=MAX_RETRY, delay=RETRY_DELAY)
+    if encoding:
+        res.encoding = encoding
+    else:
+        res.encoding = getattr(res, 'apparent_encoding', None) or 'utf-8'
+    return res
 
 
 def _post_download(url: str, data: dict, referer: str, timeout: int = 60) -> bytes:
     """첨부파일 POST 다운로드 (MSIT fileDown.do — Referer 필수, 배경역사 #53)."""
     headers = dict(HEADERS)
     headers['Referer'] = referer
-    for attempt in range(1, MAX_RETRY + 1):
-        try:
-            if USE_CURL_CFFI:
-                res = requests.post(url, data=data, headers={'Referer': referer},
-                                    impersonate='chrome110', timeout=timeout)
-            else:
-                res = requests.post(url, data=data, headers=headers, timeout=timeout)
-            res.raise_for_status()
-            return res.content
-        except Exception as e:
-            if attempt < MAX_RETRY:
-                time.sleep(RETRY_DELAY)
-            else:
-                raise
+
+    def once():
+        if USE_CURL_CFFI:
+            return requests.post(url, data=data, headers={'Referer': referer},
+                                 impersonate='chrome110', timeout=timeout)
+        return requests.post(url, data=data, headers=headers, timeout=timeout)
+    return with_retry(once, retries=MAX_RETRY, delay=RETRY_DELAY).content
 
 
 def _get_download(url: str, referer: str, timeout: int = 60) -> bytes:
     headers = dict(HEADERS)
     headers['Referer'] = referer
-    for attempt in range(1, MAX_RETRY + 1):
-        try:
-            if USE_CURL_CFFI:
-                res = requests.get(url, headers={'Referer': referer},
-                                   impersonate='chrome110', timeout=timeout)
-            else:
-                res = requests.get(url, headers=headers, timeout=timeout)
-            res.raise_for_status()
-            return res.content
-        except Exception:
-            if attempt < MAX_RETRY:
-                time.sleep(RETRY_DELAY)
-            else:
-                raise
+
+    def once():
+        if USE_CURL_CFFI:
+            return requests.get(url, headers={'Referer': referer},
+                                impersonate='chrome110', timeout=timeout)
+        return requests.get(url, headers=headers, timeout=timeout)
+    return with_retry(once, retries=MAX_RETRY, delay=RETRY_DELAY).content
 
 
 # ═══════════════════════════════════════════════════════
@@ -858,21 +839,15 @@ def kisdi_list(page: int) -> list:
     if page == 1:
         return _kisdi_parse(_get(KISDI_LIST_URL).text)
     data = {'key': KISDI_BOARD_KEY, 'pageIndex': str(page), 'bbsSn': '', 'sc': '', 'sw': ''}
-    for attempt in range(1, MAX_RETRY + 1):
-        try:
-            if USE_CURL_CFFI:
-                res = requests.post(KISDI_LIST_URL, data=data,
-                                    impersonate='chrome110', timeout=25)
-            else:
-                res = requests.post(KISDI_LIST_URL, data=data, headers=HEADERS, timeout=25)
-            res.raise_for_status()
-            res.encoding = 'utf-8'
-            return _kisdi_parse(res.text)
-        except Exception:
-            if attempt < MAX_RETRY:
-                time.sleep(RETRY_DELAY)
-            else:
-                raise
+
+    def once():
+        if USE_CURL_CFFI:
+            return requests.post(KISDI_LIST_URL, data=data,
+                                 impersonate='chrome110', timeout=25)
+        return requests.post(KISDI_LIST_URL, data=data, headers=HEADERS, timeout=25)
+    res = with_retry(once, retries=MAX_RETRY, delay=RETRY_DELAY)
+    res.encoding = 'utf-8'
+    return _kisdi_parse(res.text)
 
 
 def kisdi_extract(item: dict) -> str:
@@ -1006,17 +981,6 @@ def register_press(sb, agency: str, dt: datetime, title: str, body: str, url: st
 # ═══════════════════════════════════════════════════════
 #  실행 루틴
 # ═══════════════════════════════════════════════════════
-
-def _heartbeat(sb, note: str):
-    try:
-        sb.table('system_health').upsert(
-            {'key': 'last_press_ingest',
-             'updated_at': datetime.now(timezone.utc).isoformat(),
-             'note': note},
-            on_conflict='key').execute()
-    except Exception as e:
-        print('[heartbeat 오류] %s' % e)
-
 
 # 매일 수집 창(#195) — 종전엔 매일 최근 15일 전부를 훑어, 무관 판정분(저장 안 함)을 15일 동안 매일 다시 내려받아
 # 재판정했다(하루 판정 ~30회의 대부분). 창을 '마지막 정상 완료 − 여유 3일'로 좁히고, PC가 며칠 꺼졌다 켜지면
@@ -1171,16 +1135,11 @@ def run_daily(sb, keywords: list = None, max_per_agency: int = 15, dry: bool = F
         total_stats['skip'], total_stats['fail'])
     print('[보도자료 수집 완료] ' + note)
     if not dry:
-        _heartbeat(sb, note)
+        sb_heartbeat(sb, 'last_press_ingest', note)
         if list_failed:
             print('[보도자료] 목록 조회 실패 기관 %s — 수집 창 기록을 전진시키지 않음(다음 실행이 더 넓게 훑는다)' % list_failed)
         else:
-            try:
-                sb.table('system_health').upsert(
-                    {'key': PRESS_WINDOW_KEY, 'updated_at': datetime.now(timezone.utc).isoformat(), 'note': note},
-                    on_conflict='key').execute()
-            except Exception as e:
-                print('[보도자료] 수집 창 기록 실패(다음 실행은 넓게): %s' % e)
+            sb_heartbeat(sb, PRESS_WINDOW_KEY, note)   # 실패해도 무시 — 다음 실행이 넓게 훑을 뿐
     return total_stats['new']
 
 

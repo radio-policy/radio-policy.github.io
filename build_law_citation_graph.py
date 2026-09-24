@@ -51,6 +51,7 @@ except ImportError:
     pass
 
 from sb_client import make_client
+from retry_util import with_retry
 
 SUPABASE_URL = os.environ['SUPABASE_URL']
 SUPABASE_KEY = os.environ['SUPABASE_SERVICE_KEY']
@@ -264,16 +265,8 @@ def fetch_chunks(doc_names):
 
 def _drf_get(url, params, timeout=30, max_retry=3, delay=2):
     """DRF 호출 재시도 (law_crawler와 동일 정책 — 일시 오류로 누락 방지)"""
-    for attempt in range(1, max_retry + 1):
-        try:
-            resp = requests.get(url, params=params, timeout=timeout)
-            resp.raise_for_status()
-            return resp
-        except Exception as e:
-            if attempt < max_retry:
-                time.sleep(delay)
-            else:
-                raise
+    return with_retry(lambda: requests.get(url, params=params, timeout=timeout),
+                      retries=max_retry, delay=delay)
 
 
 def _mid_dot(s: str) -> str:

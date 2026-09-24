@@ -258,15 +258,6 @@ def build_rows(chunks, run_ts):
     return rows, stats
 
 
-def heartbeat(sb, note):
-    try:
-        sb.table('system_health').upsert(
-            {'key': HEARTBEAT_KEY, 'updated_at': datetime.now(timezone.utc).isoformat(), 'note': note},
-            on_conflict='key').execute()
-    except Exception as e:
-        print('[heartbeat 오류] %s' % e)
-
-
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--dry-run', action='store_true', help='파싱 결과만 출력, DB 무변경')
@@ -274,7 +265,7 @@ def main():
     ap.add_argument('--limit', type=int, default=0, help='처리할 (문서,조문) 수 상한 (0=전부)')
     args = ap.parse_args()
 
-    from sb_client import make_client
+    from sb_client import make_client, heartbeat as sb_heartbeat
     sb = make_client(os.environ['SUPABASE_URL'], os.environ['SUPABASE_SERVICE_KEY'])
     run_ts = datetime.now(timezone.utc).isoformat()
 
@@ -322,7 +313,7 @@ def main():
     note = 'docs=%d terms=%d deleted=%d unparsed=%d dup=%d fail=%d' % (
         len(st['docs']), len(rows), deleted, len(st['unparsed']), st['dup'], fail)
     print('[법적 용어] 완료 - ' + note)
-    heartbeat(sb, note)
+    sb_heartbeat(sb, HEARTBEAT_KEY, note)
 
 
 if __name__ == '__main__':

@@ -34,6 +34,7 @@ except ImportError:
 from supabase import Client
 import sb_client
 from sb_client import make_client
+from retry_util import with_retry
 import notify   # 텔레그램 전송 공용 유틸 (개선⑪) — 전송부만 위임
 
 # ── 환경변수 ──────────────────────────────────────────────
@@ -99,17 +100,8 @@ def _api_get_with_retry(params: dict, timeout: int = 10,
                         max_retry: int = 3, delay: int = 5):
     """법제처 API 호출 + 일시 오류 재시도 — 하루 1회 잡이라 1회 실패가
     하루치 누락으로 직결되는 것을 방지 (gov_notice_crawler와 동일 정책, 배경역사 #23)"""
-    for attempt in range(1, max_retry + 1):
-        try:
-            resp = requests.get(LAW_API_BASE, params=params, timeout=timeout)
-            resp.raise_for_status()
-            return resp
-        except Exception as e:
-            if attempt < max_retry:
-                print(f'  [재시도 {attempt}/{max_retry}] {e}')
-                time.sleep(delay)
-            else:
-                raise
+    return with_retry(lambda: requests.get(LAW_API_BASE, params=params, timeout=timeout),
+                      retries=max_retry, delay=delay, label='법제처 API')
 
 
 def fetch_laws(keyword: str, target: str, display: int = 20) -> list:

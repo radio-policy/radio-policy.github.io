@@ -38,7 +38,8 @@ except ImportError:
 
 from bs4 import BeautifulSoup
 from supabase import Client
-from sb_client import make_client
+from sb_client import make_client, heartbeat as sb_heartbeat
+from retry_util import with_retry
 import api_usage; api_usage.install()   # Anthropic usage 기록(#152) — 호출부 무변경, fail-open
 import notify   # 텔레그램 전송 공용 유틸 (개선⑪) — 전송부만 위임
 
@@ -72,20 +73,11 @@ RETRY_DELAY = 5
 
 
 def fetch_with_retry(url: str, timeout: int = 20):
-    for attempt in range(1, MAX_RETRY + 1):
-        try:
-            if USE_CURL_CFFI:
-                res = requests.get(url, impersonate='chrome110', timeout=timeout)
-            else:
-                res = requests.get(url, headers=HEADERS, timeout=timeout)
-            res.raise_for_status()
-            return res
-        except Exception as e:
-            if attempt < MAX_RETRY:
-                print('  [재시도 %d/%d] %s... (%s)' % (attempt, MAX_RETRY, url[:50], e))
-                time.sleep(RETRY_DELAY)
-            else:
-                raise
+    def once():
+        if USE_CURL_CFFI:
+            return requests.get(url, impersonate='chrome110', timeout=timeout)
+        return requests.get(url, headers=HEADERS, timeout=timeout)
+    return with_retry(once, retries=MAX_RETRY, delay=RETRY_DELAY, label=url[:50] + '...')
 
 
 def parse_date(s: str) -> str:
@@ -1003,16 +995,7 @@ def main():
     print('[완료] 신규 %d건 저장' % saved)
 
     # ── heartbeat ── (운영 상태 탭 '입법예고/정부고시 크롤러 마지막 실행'). 신규 0건이어도 기록, 실패해도 무시.
-    try:
-        sb.table('system_health').upsert(
-            {'key': 'last_gov_notice_run',
-             'updated_at': datetime.now(timezone.utc).isoformat(),
-             'note': 'saved=%d total=%d' % (saved, len(all_items))},
-            on_conflict='key'
-        ).execute()
-        print('[heartbeat] system_health.last_gov_notice_run 갱신')
-    except Exception as e:
-        print('[heartbeat 오류] %s' % e)
+    sb_heartbeat(sb, 'last_gov_notice_run', 'saved=%d total=%d' % (saved, len(all_items)))
 
     # ── 보도자료 본문 수집 (6개 기관 → document_chunks, 배경역사 #53) ──
     # news_feed 수집과 독립: 여기서 실패해도 위 고시·입법예고 결과에는 영향 없음.

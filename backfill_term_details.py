@@ -18,7 +18,6 @@ import re
 import sys
 import time
 import argparse
-from datetime import datetime, timezone
 
 # Windows 스케줄러/cp949 콘솔 이모지 크래시 방지 (배경역사 #19)
 try:
@@ -35,7 +34,7 @@ except ImportError:
 
 import anthropic
 from supabase import Client
-from sb_client import make_client
+from sb_client import make_client, heartbeat as sb_heartbeat
 import api_usage; api_usage.install()   # Anthropic usage 기록(#152) — 호출부 무변경, fail-open
 
 SUPABASE_URL      = os.environ['SUPABASE_URL']
@@ -47,17 +46,6 @@ THINKING = {'type': 'disabled'}
 
 sb: Client = make_client(SUPABASE_URL, SUPABASE_KEY)
 ai = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-
-
-def heartbeat(note: str) -> None:
-    try:
-        sb.table('system_health').upsert(
-            {'key': 'last_term_backfill_run',
-             'updated_at': datetime.now(timezone.utc).isoformat(),
-             'note': note},
-            on_conflict='key').execute()
-    except Exception as e:
-        print('[heartbeat 오류] %s' % e)
 
 
 def _empty(v) -> bool:
@@ -177,7 +165,7 @@ def main():
 
     note = f'targets={total_targets} done={done} failed={failed} limit={args.limit}'
     print(f'[용어 상세 백필] 완료 - {note}')
-    heartbeat(note)
+    sb_heartbeat(sb, 'last_term_backfill_run', note)
 
 
 if __name__ == '__main__':

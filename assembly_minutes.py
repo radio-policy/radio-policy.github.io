@@ -55,7 +55,8 @@ except ImportError:
 import requests
 from bs4 import BeautifulSoup
 
-from sb_client import make_client
+from sb_client import make_client, heartbeat as sb_heartbeat
+from retry_util import with_retry
 import api_usage; api_usage.install()   # Anthropic usage 기록(#152) — 호출부 무변경, fail-open
 from press_ingest import (
     load_press_keywords, make_ai_judge, register_kb_section, section_exists,
@@ -179,17 +180,12 @@ HEADERS = {
 # ═══════════════════════════════════════════════════════════
 
 def _api_get(url: str, params: dict, retries: int = 3) -> dict:
-    for attempt in range(1, retries + 1):
-        try:
-            r = requests.get(url, params=params, timeout=20)
-            r.raise_for_status()
-            return r.json()
-        except Exception as e:
-            if attempt < retries:
-                print('  [재시도 %d/%d] %s' % (attempt, retries, str(e)[:80]))
-                time.sleep(5)
-            else:
-                raise
+    # JSON 해석까지 재시도 안에서 — 일시 오류 때 HTML 오류 페이지가 오는 경우도 다시 시도(종전과 동일)
+    def once():
+        r = requests.get(url, params=params, timeout=20)
+        r.raise_for_status()
+        return r.json()
+    return with_retry(once, retries=retries, label='열린국회 API')
 
 
 def _rows_of(data: dict, api_id: str) -> list:
@@ -1551,17 +1547,6 @@ def _enqueue_digest(sb, m, title, summary, sp_rows, url, skt_flag, notify, body)
         return False
 
 
-def _heartbeat(sb, note: str):
-    try:
-        sb.table('system_health').upsert(
-            {'key': 'last_minutes_run',
-             'updated_at': datetime.now(timezone.utc).isoformat(),
-             'note': note},
-            on_conflict='key').execute()
-    except Exception as e:
-        print('[heartbeat 오류] %s' % e)
-
-
 def _is_recent(conf_date: str, days: int) -> bool:
     """회의일이 오늘(KST)로부터 days일 이내인가. 파싱 실패는 False(큐 적재 쪽은 fail-closed)."""
     try:
@@ -1799,7 +1784,7 @@ def run(sb, api_key: str, year: int, limit: int = 0, dry: bool = False,
         year, stats['new'], stats['dup'], stats['fail'], stats['sp'])
     print('[과방위 회의록 완료] ' + note)
     if not dry:
-        _heartbeat(sb, note)
+        sb_heartbeat(sb, 'last_minutes_run', note)
         # 운영자 봇 알림 — 신규 등재가 있을 때만. 구독자 큐와 별개(#136).
         if operator_alert and new_items:
             ok = _alert_operator_new_minutes(new_items, year)

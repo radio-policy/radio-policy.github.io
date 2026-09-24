@@ -69,7 +69,8 @@ try:
 except ImportError:
     anthropic = None
 
-from sb_client import make_client, ran_recently
+from sb_client import make_client, ran_recently, heartbeat as sb_heartbeat
+from retry_util import with_retry
 import api_usage; api_usage.install()   # Anthropic usage 기록(#152) — 호출부 무변경, fail-open
 
 KST = timezone(timedelta(hours=9))
@@ -110,21 +111,14 @@ FOREIGN_CRITERIA_FALLBACK = (
 # ═══════════════════════════════════════════════════════
 
 def _get(url: str, timeout: int = 25, encoding: str = None):
-    for attempt in range(1, MAX_RETRY + 1):
-        try:
-            if USE_CURL_CFFI:
-                res = requests.get(url, impersonate='chrome110', timeout=timeout)
-            else:
-                res = requests.get(url, headers=HEADERS, timeout=timeout)
-            res.raise_for_status()
-            if encoding:
-                res.encoding = encoding
-            return res
-        except Exception:
-            if attempt < MAX_RETRY:
-                time.sleep(RETRY_DELAY)
-            else:
-                raise
+    def once():
+        if USE_CURL_CFFI:
+            return requests.get(url, impersonate='chrome110', timeout=timeout)
+        return requests.get(url, headers=HEADERS, timeout=timeout)
+    res = with_retry(once, retries=MAX_RETRY, delay=RETRY_DELAY)
+    if encoding:
+        res.encoding = encoding
+    return res
 
 
 # ═══════════════════════════════════════════════════════
@@ -457,17 +451,6 @@ def save_screen_cache(sb, rows: list) -> None:
         print('[해외 선별 캐시] 저장 실패(무시): %s' % str(e)[:80])
 
 
-def _heartbeat(sb, note: str):
-    try:
-        sb.table('system_health').upsert(
-            {'key': 'last_foreign_press_run',
-             'updated_at': datetime.now(timezone.utc).isoformat(),
-             'note': note},
-            on_conflict='key').execute()
-    except Exception as e:
-        print('[heartbeat 오류] %s' % e)
-
-
 def run(dry: bool = False, only: list = None) -> int:
     sb = make_client(os.environ['SUPABASE_URL'], os.environ['SUPABASE_SERVICE_KEY'])
     # pg_cron 주 트리거와 Actions 백업 cron이 같은 20:30 UTC에 걸려 하루 두 번 전량 실행되고
@@ -483,7 +466,7 @@ def run(dry: bool = False, only: list = None) -> int:
         # 번역·요약 없이는 저장 형식을 만들 수 없음 — fail-closed (뉴스 크롤러와 달리
         # 원문이 외국어라 키워드 폴백이 성립하지 않는다)
         print('[중단] ANTHROPIC_API_KEY 또는 anthropic 라이브러리 없음 — 판정·번역 불가')
-        _heartbeat(sb, 'skip: no ANTHROPIC_API_KEY')
+        sb_heartbeat(sb, 'last_foreign_press_run', 'skip: no ANTHROPIC_API_KEY')
         return 0
 
     existing = load_existing_urls(sb)
@@ -605,7 +588,7 @@ def run(dry: bool = False, only: list = None) -> int:
         totals['fail'], totals.get('promoted', 0))
     print('[해외 수집 완료] ' + note)
     if not dry:
-        _heartbeat(sb, note)
+        sb_heartbeat(sb, 'last_foreign_press_run', note)
         # KB 승격분 임베딩 백필 (NULL만 채움 — 멱등)
         if totals.get('promoted', 0) > 0:
             import subprocess

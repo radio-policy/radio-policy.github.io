@@ -37,7 +37,8 @@ except ImportError:
     anthropic = None
 
 from supabase import Client
-from sb_client import make_client
+from sb_client import make_client, heartbeat as sb_heartbeat
+from retry_util import with_retry
 import api_usage; api_usage.install()   # Anthropic usage 기록(#152) — 호출부 무변경, fail-open
 import notify   # 텔레그램 전송 공용 유틸 (개선⑪) — 전송부만 위임
 
@@ -141,18 +142,8 @@ def _fetch_bill_rows(extra_params: dict, label: str, page_size: int = 100) -> li
         params.update(extra_params)
         try:
             # 하루 1회 잡 — 일시 오류 1회가 하루치 누락으로 직결되지 않도록 3회 재시도 (배경역사 #23)
-            resp = None
-            for attempt in range(1, 4):
-                try:
-                    resp = requests.get(API_BASE, params=params, timeout=15)
-                    resp.raise_for_status()
-                    break
-                except Exception as e:
-                    if attempt < 3:
-                        print(f'  [재시도 {attempt}/3] {label} p{page}: {e}')
-                        time.sleep(5)
-                    else:
-                        raise
+            resp = with_retry(lambda: requests.get(API_BASE, params=params, timeout=15),
+                              label=f'{label} p{page}')
             data = resp.json()
             rows: list[dict] = []
             # 응답 구조: [{head: [...]}, {row: [...]}] — 결과 없음(INFO-200)이면 키 자체가 없다
@@ -534,18 +525,8 @@ def fetch_notices() -> list[dict]:
         'pSize': 1000,
     }
     try:
-        resp = None
-        for attempt in range(1, 4):
-            try:
-                resp = requests.get(NOTICE_API, params=params, timeout=15)
-                resp.raise_for_status()
-                break
-            except Exception as e:
-                if attempt < 3:
-                    print(f'  [재시도 {attempt}/3] 입법예고 목록: {e}')
-                    time.sleep(5)
-                else:
-                    raise
+        resp = with_retry(lambda: requests.get(NOTICE_API, params=params, timeout=15),
+                          label='입법예고 목록')
         data = resp.json()
         # 응답 구조: [{head: [...]}, {row: [...]}]
         for item in data.get('nknalejkafmvgzmpt', []):
@@ -866,17 +847,6 @@ def send_operator_alert(lines: list[str]) -> bool:
     return ok
 
 
-def notice_heartbeat(note: str):
-    try:
-        sb.table('system_health').upsert(
-            {'key': 'last_assembly_run',
-             'updated_at': datetime.now(timezone.utc).isoformat(),
-             'note': note},
-            on_conflict='key').execute()
-    except Exception as e:
-        print(f'[heartbeat 오류] {e}')
-
-
 def _days_to_deadline(end_dt: str, today) -> int | None:
     """'YYYY-MM-DD' → 오늘(KST) 기준 잔여 일수. 파싱 실패 시 None."""
     try:
@@ -893,7 +863,7 @@ def run_notice_pass(dry_run: bool = False):
     if not notices:
         print('  진행중 입법예고 0건(또는 API 오류) — 패스 종료')
         if not dry_run:
-            notice_heartbeat('notices active=0 (skip)')
+            sb_heartbeat(sb, 'last_assembly_run', 'notices active=0 (skip)')
         return
 
     active_ids = {n.get('BILL_ID', '') for n in notices if n.get('BILL_ID')}
@@ -1053,7 +1023,7 @@ def run_notice_pass(dry_run: bool = False):
     if dry_run:
         print(f'  (dry-run) heartbeat 생략: {note}')
     else:
-        notice_heartbeat(note)
+        sb_heartbeat(sb, 'last_assembly_run', note)
     print(f'[입법예고 추적] 완료 — {note}')
 
 
