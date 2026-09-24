@@ -193,11 +193,12 @@ def verify(since):
     _, out = git('diff', '--name-only', since, 'HEAD')
     for f in [x for x in out.splitlines() if x]:
         path = os.path.join(ROOT, f)
-        local = open(path, 'rb').read()[-200:] if os.path.isfile(path) else None
+        # 저장소는 LF로 보관하고 체크아웃만 CRLF(.gitattributes *.bat eol=crlf) — 줄바꿈을 맞춰 비교한다
+        local = open(path, 'rb').read().replace(b'\r\n', b'\n')[-200:] if os.path.isfile(path) else None
         for r in ('gitlab', 'origin'):
             rc, _ = git('diff', '--quiet', '%s/main' % r, '--', f)
             rr = subprocess.run(['git', '-C', ROOT, 'show', '%s/main:%s' % (r, f)], capture_output=True)
-            remote = rr.stdout[-200:] if rr.returncode == 0 else None
+            remote = rr.stdout.replace(b'\r\n', b'\n')[-200:] if rr.returncode == 0 else None
             tail_ok = (local == remote) if local is not None else (remote is None)
             if rc != 0 or not tail_ok:
                 ok = False
