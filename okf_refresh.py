@@ -86,6 +86,8 @@ SYSTEM_PROMPT = (
     "제공되지 않았으면 '조문 본문의 실질 변경은 확인되지 않음(별표·부칙 확인 필요)'처럼 사실대로 쓴다.\n"
     "5. [새 판 전문]에 없는 내용은 쓰지 않는다. 확실하지 않으면 쓰지 않는다. 과장 없이 사실만.\n"
     "6. 분량은 구판 요약과 비슷하게(±30%). '# Citations'로 끝낸다.\n"
+    "7. 입력 블록 이름([메타]·[구판 요약 문서 전문]·[직전 판과의 조문 차이]·[새 판 전문])을 본문에 쓰지 않는다 — "
+    "독자는 그 블록을 보지 못한다. '새 판 조문에 따르면', '직전 판 대비'처럼 풀어 쓴다.\n"
 )
 
 
@@ -197,8 +199,13 @@ def validate_output(md: str, old_body: str, new_path: str, meta):
     ok, why = ikb.check_body_complete(new_path, body)
     if not ok:
         raise ValueError(why)
-    if '[새 판 전문]' in body or '[구판 요약' in body:
-        raise ValueError('프롬프트 표지가 본문에 섞임')
+    # 입력 블록 이름의 '언급'은 표현만 바꾼다(첫 체인 실행에서 국가재정법 시행령이 이걸로 기각돼 $0.38이 버려졌다, #198-보론).
+    # 기각은 블록이 통째로 섞인 경우([메타] 머리와 그 값 줄)만.
+    if re.search(r'\[메타\]\s*\n\s*title=', body):
+        raise ValueError('프롬프트 블록이 본문에 통째로 섞임')
+    for label, plain in (('[새 판 전문]', '새 판 조문'), ('[직전 판과의 조문 차이]', '직전 판과의 조문 차이')):
+        body = body.replace(label, plain)
+    body = re.sub(r'\[구판 요약 문서 전문[^\]\n]*\]', '구판 요약', body)
     # 시험 실행(2026-09-24)에서 규칙문의 '제N호'를 그대로 베낀 사례 — 자리표시가 남으면 실제 호수로
     body = body.replace('제N호(', meta['new_no'] + '(').replace('제N호 ', meta['new_no'] + ' ')
     lo, hi = len(old_body or '') * 0.5, max(len(old_body or '') * 2.5, 3000)

@@ -1302,6 +1302,19 @@ class TestOkfRefresh(unittest.TestCase):
         self.assertIn('**제2026-26호(2026-09-10 시행) 개정 요지**', body)
         self.assertNotIn('제N호', body)
 
+    def test_validate_output_rewrites_block_labels_but_rejects_whole_block(self):
+        """첫 체인 실행 실측: '[새 판 전문]에 따르면' 같은 언급만으로 기각돼 $0.38이 버려짐 → 언급은 풀어 쓰고 통째 혼입만 기각"""
+        import okf_refresh as orf
+        meta = {'new_no': '제2026-26호'}
+        md = self._md().replace('제5조 개정.', '제5조 개정([새 판 전문]에 따르면, [직전 판과의 조문 차이] 참조).')
+        _, body = orf.validate_output(md, '나' * 1000, 'laws/x/y.md', meta)
+        self.assertIn('새 판 조문에 따르면', body)
+        self.assertNotIn('[새 판 전문]', body)
+        self.assertNotIn('[직전 판과의 조문 차이]', body)
+        md2 = self._md().replace('제5조 개정.', '제5조 개정.\n[메타]\ntitle=규정 / law_type=고시\n')
+        with self.assertRaises(ValueError):
+            orf.validate_output(md2, '나' * 1000, 'laws/x/y.md', meta)
+
     def test_report_lists_cost_diff_and_failures(self):
         import okf_refresh as orf
         done = [{'title': '업무처리규정', 'old_no': '제2026-11호', 'new_no': '제2026-26호', 'new_enf': '2026-09-10',
