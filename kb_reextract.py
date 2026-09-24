@@ -73,14 +73,13 @@ except Exception:
 ROOT = Path(__file__).parent
 sys.path.insert(0, str(ROOT))
 import sb_client  # noqa: E402
+import kb_store  # noqa: E402  조각 규칙·삽입 검증 공용 (#218)
 
 SB_URL = os.getenv("SUPABASE_URL")
 SB_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 OC_KEY = os.getenv("LAW_OC_KEY")
 
-CHUNK_SIZE = 800          # upload_law_pdf.py와 동일 — 규약 일치 필수
-CHUNK_OVERLAP = 100
-MIN_CHUNK = 50
+# 조각 크기(800/100/50)는 kb_store.PDF_CHUNK_* 한 곳 — upload_law_pdf.py와 규약 공유 (#218)
 
 DRF_SEARCH = "https://www.law.go.kr/DRF/lawSearch.do"
 DRF_SERVICE = "https://www.law.go.kr/DRF/lawService.do"
@@ -324,26 +323,7 @@ def law_attachment_best(doc_name: str, api_target: str = "admrul") -> tuple:
 
 
 # ── 청킹 (upload_law_pdf.py 규약과 동일) ──────────────────────────────
-def chunk_text(text: str) -> list:
-    header = re.compile(r"(?=^제\d+조(?:의\d+)?\()", re.MULTILINE)
-    splits = header.split(text)
-    if len(splits) < 5:
-        splits = [text]
-    chunks = []
-    for block in splits:
-        block = block.strip()
-        if not block:
-            continue
-        m = re.match(r"제(\d+조(?:의\d+)?\([^)]*\))", block)
-        article_no = m.group(1) if m else None
-        if len(block) <= CHUNK_SIZE:
-            chunks.append({"content": block, "article_no": article_no})
-        else:
-            start = 0
-            while start < len(block):
-                chunks.append({"content": block[start:start + CHUNK_SIZE], "article_no": article_no})
-                start += CHUNK_SIZE - CHUNK_OVERLAP
-    return [c for c in chunks if len(c["content"].strip()) > MIN_CHUNK]
+chunk_text = kb_store.chunk_pdf_text   # upload_law_pdf.chunk_text와 같은 함수 (#218)
 
 
 # ── DB ───────────────────────────────────────────────────────────────
@@ -388,9 +368,9 @@ def replace_doc(sb, doc_name, chunks, doc_category, keep_meta):
             if keep_meta.get(k) is not None:
                 row[k] = keep_meta[k]
         rows.append(row)
-    for i in range(0, len(rows), 50):
-        sb.table("document_chunks").insert(rows[i:i + 50]).execute()
-    return len(rows)
+    # 삽입 검증 포함(#218) — 위에서 현행 조각을 먼저 지웠으므로 부분 적재면 반드시 멈춰야 한다
+    # (백업 JSON은 --restore로 되돌린다)
+    return kb_store.insert_chunks(sb, rows)
 
 
 # ── 명령 ─────────────────────────────────────────────────────────────
@@ -427,8 +407,7 @@ def cmd_restore(sb, path):
     doc_name, rows = d["doc_name"], d["rows"]
     sb.table("document_chunks").delete().eq("doc_name", doc_name).eq("status", "current").execute()
     payload = [{k: v for k, v in r.items() if k != "id"} for r in rows]
-    for i in range(0, len(payload), 50):
-        sb.table("document_chunks").insert(payload[i:i + 50]).execute()
+    kb_store.insert_chunks(sb, payload)   # 삽입 검증 포함
     print(f"복원 완료: {doc_name} — {len(payload)}청크 (임베딩은 백필 필요)")
 
 

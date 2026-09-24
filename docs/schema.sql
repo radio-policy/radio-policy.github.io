@@ -570,6 +570,22 @@ as $$
   order by doc_name;
 $$;
 
+-- KB 문서명 목록(#218, kb_store.list_docs) — 파이썬이 조각을 페이지로 훑던 것을 대체. 서버 전용.
+create or replace function public.kb_doc_names(p_status text default null, p_category text default null)
+returns table(doc_name text, doc_category text)
+language sql stable
+set search_path = public, pg_catalog
+as $$
+  select c.doc_name, min(c.doc_category) as doc_category
+  from public.document_chunks c
+  where (p_status is null or c.status = p_status)
+    and (p_category is null or c.doc_category = p_category)
+  group by c.doc_name
+  order by c.doc_name;
+$$;
+revoke all on function public.kb_doc_names(text, text) from public, anon, authenticated;
+grant execute on function public.kb_doc_names(text, text) to service_role;
+
 -- ===========================================================================
 -- 3b. 법령 자동 현행화 (law_watch.py / law_sync.py, 2026-07-29~30)
 -- ===========================================================================

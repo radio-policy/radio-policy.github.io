@@ -33,6 +33,7 @@ except Exception:
 from dotenv import load_dotenv
 
 from sb_client import make_client
+import kb_store   # 조각 규칙·삽입 검증 공용 (#218)
 from embed_util import get_embeddings
 
 load_dotenv()
@@ -41,24 +42,13 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 VOYAGE_API_KEY = os.getenv("VOYAGE_API_KEY")
 
-CHUNK_SIZE = 700          # press_ingest.CHUNK_SIZE와 동일 — 어긋나면 검색 품질이 갈린다
 DOC_CATEGORY = "이슈사례"
 EMBED_BATCH = 64
 INSERT_BATCH = 3          # HNSW 인덱스 갱신 부하 — 크게 잡으면 statement timeout(57014)
 
 
-def chunk_text(text: str, size: int = CHUNK_SIZE) -> list:
-    """size 근처의 개행에서 끊는 무겹침 분할 (press_ingest._chunk_text와 동일 규약)."""
-    chunks, pos, n = [], 0, len(text)
-    while pos < n:
-        end = min(pos + size, n)
-        if end < n:
-            nl = text.rfind("\n", pos + int(size * 0.7), end)
-            if nl > pos:
-                end = nl + 1
-        chunks.append(text[pos:end])
-        pos = end
-    return [c for c in chunks if c.strip()]
+# 보도자료와 같은 700자 무겹침 규칙이어야 검색 품질이 갈리지 않는다 — kb_store 한 곳 (#218)
+chunk_text = kb_store.chunk_by_newline
 
 
 def slugify_title(s: str) -> str:
@@ -134,10 +124,8 @@ def main() -> int:
     } for i, c in enumerate(chunks)]
     # document_chunks는 4만 행 + HNSW 인덱스라 벡터를 한 번에 많이 넣으면 statement timeout이 난다
     # (컴퓨트 RAM 2GB). 작게 나눠 넣는다.
-    for i in range(0, len(rows), INSERT_BATCH):
-        sb.table("document_chunks").insert(rows[i:i + INSERT_BATCH]).execute()
-        print("  등재 %d/%d" % (min(i + INSERT_BATCH, len(rows)), len(rows)))
-    print("  등재 완료: %d청크" % len(rows))
+    kb_store.insert_chunks(sb, rows, batch=INSERT_BATCH, progress=True)   # 삽입 검증 포함(#218)
+    print("  등재 완료: %d청크 (검증 완료)" % len(rows))
 
     if args.issue:
         iss = sb.table("issues").select("id,title").eq("id", args.issue).maybe_single().execute().data

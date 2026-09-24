@@ -52,6 +52,7 @@ except Exception:
 from sb_client import make_client, heartbeat as sb_heartbeat   # create_client 직접 사용 금지 — HTTP/1.1 강제 (지침)
 import api_usage; api_usage.install()   # Anthropic usage 기록(#152) — 호출부 무변경, fail-open
 import notify   # 텔레그램 전송 공용 유틸 (개선⑪) — 전송부만 위임
+import kb_store   # KB 문서명 목록 공용 (#218)
 
 SB_URL = os.getenv('SUPABASE_URL')
 SB_KEY = os.getenv('SUPABASE_SERVICE_KEY')
@@ -179,22 +180,18 @@ def _kb_law_keys(sb):
     if _KB_LAW_KEYS is not None:
         return _KB_LAW_KEYS
     try:
-        keys, off = set(), 0
-        while True:
-            rows = (sb.table('document_chunks').select('doc_name')
-                    .eq('status', 'current').range(off, off + 999).execute().data) or []
-            for r in rows:
-                m = re.match(r'^(.+?)\(', r.get('doc_name') or '')
-                if not m:
-                    continue
-                nm = m.group(1).strip()
-                keys.add(_norm_law_name(nm))
-                base = re.sub(r'\s*(시행령|시행규칙|시행에 관한.*)$', '', nm).strip()
-                if base:
-                    keys.add(_norm_law_name(base))
-            off += 1000
-            if len(rows) < 1000 or off > 40000:
-                break
+        # 문서명 목록은 kb_store.list_docs 1회(#218). 종전 조각 스캔은 순서 없는 페이지 + 4만 행 상한이라
+        # 현행 조각이 4만을 넘은 뒤(2026-09 41,906) 끝부분 문서를 조용히 빠뜨릴 수 있었다.
+        keys = set()
+        for doc_name in kb_store.list_docs(sb, status='current'):
+            m = re.match(r'^(.+?)\(', doc_name or '')
+            if not m:
+                continue
+            nm = m.group(1).strip()
+            keys.add(_norm_law_name(nm))
+            base = re.sub(r'\s*(시행령|시행규칙|시행에 관한.*)$', '', nm).strip()
+            if base:
+                keys.add(_norm_law_name(base))
         _KB_LAW_KEYS = keys
         print(f'  [KB 대조] 등재 법령 키 {len(keys)}개 로드')
     except Exception as e:

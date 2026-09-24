@@ -40,16 +40,17 @@ except ImportError:
 
 from sb_client import make_client, heartbeat as sb_heartbeat
 import press_ingest
+import kb_store   # KB 문서명 목록 공용 (#218)
 
 KST = timezone(timedelta(hours=9))
 
 
 def delete_existing_press(sb) -> int:
     """doc_category='보도자료' 청크 전량 삭제. 삭제 건수 반환."""
-    rows = sb.table('document_chunks').select('doc_name') \
-        .eq('doc_category', '보도자료').execute().data or []
-    total = len(rows)
-    docs = sorted({r['doc_name'] for r in rows})
+    # 종전엔 조각을 페이지 없이 한 번에 읽어 1,000행 상한에 걸렸다(건수·문서 목록 과소 표시) — #218
+    docs = sorted(kb_store.list_docs(sb, category='보도자료'))
+    total = sb.table('document_chunks').select('id', count='exact') \
+        .eq('doc_category', '보도자료').limit(1).execute().count or 0
     print('[삭제 대상] %d청크 / 문서 %d개' % (total, len(docs)))
     for d in docs:
         print('  - %s' % d)

@@ -38,6 +38,7 @@ except ImportError:
 from supabase import Client
 from sb_client import make_client, heartbeat as sb_heartbeat
 import notify   # 텔레그램 전송 공용 유틸 (개선⑪) — 전송부만 위임
+import kb_store   # KB 문서명 목록 공용 (#218)
 
 # ── 환경변수 ──────────────────────────────────────────────
 SUPABASE_URL       = os.environ['SUPABASE_URL']
@@ -80,21 +81,8 @@ def fetch_targets():
     반환: (targets, skipped_report, skipped_format)
     같은 권고가 여러 chunk로 쪼개져 있으므로 시리즈번호 기준으로 1건으로 합친다.
     """
-    rows, start, PAGE = [], 0, 1000
-    while True:
-        # chunk 수가 1000을 넘으면 기본 limit에 잘려 감시 대상이 조용히 누락되므로 페이지네이션한다.
-        res = (sb.table('document_chunks')
-                 .select('doc_name')
-                 .eq('doc_category', 'ITU-R')
-                 .range(start, start + PAGE - 1)
-                 .execute())
-        batch = res.data or []
-        rows += batch
-        if len(batch) < PAGE:
-            break
-        start += PAGE
-
-    names = sorted({r['doc_name'] for r in rows if r.get('doc_name')})
+    # 문서명 목록은 kb_store.list_docs 1회(#218) — 종전엔 조각을 순서 없이 1,000행씩 나눠 읽었다
+    names = sorted(n for n in kb_store.list_docs(sb, category='ITU-R') if n)
 
     targets, skipped_report, skipped_format = {}, [], []
     for name in names:

@@ -29,6 +29,7 @@ except Exception:
     pass
 
 import sb_client
+import kb_store   # 조각 삽입·검증 / law_watch 등록 공용 (#218)
 from law_watch import drf_law_search, pick_exact, row_fields, alias_variants, norm_name
 from law_sync import (fetch_law_articles, fetch_admrul_articles, chunk_articles,
                        build_doc_name, _law_type_label)
@@ -338,24 +339,15 @@ def add_one(sb, law_name, category, target_hint, dry_run=False):
         'law_id': law_id, 'law_mst': mst, 'status': 'current',
         'is_approved': True,
     } for i, c in enumerate(chunks)]
-    for i in range(0, len(payload), 50):
-        sb.table('document_chunks').insert(payload[i:i + 50]).execute()
+    try:
+        kb_store.insert_chunks(sb, payload)   # 삽입 검증 포함
+    except RuntimeError as e:
+        return 'fail', str(e)
 
-    got = ((sb.table('document_chunks').select('id', count='exact')
-            .eq('doc_name', new_doc).limit(1).execute()).count) or 0
-    if got != len(payload):
-        return 'fail', f"삽입 검증 실패: {len(payload)}청크 중 {got}청크만 확인"
-
-    sb.table('law_watch').upsert({
-        'doc_name': new_doc, 'law_name': law_name,
-        'law_type_token': type_token, 'api_target': target,
-        'law_id': law_id, 'registered_mst': mst,
-        'registered_law_no': law_no, 'registered_enf': enf,
-        'latest_mst': mst, 'latest_law_no': law_no, 'latest_enf': enf,
-        'watch_status': 'watching', 'sync_status': 'current',
-        'last_checked_at': now, 'updated_at': now,
-        'note': f'add_laws_batch 신규 적재 ({datetime.now():%Y-%m-%d})',
-    }, on_conflict='doc_name').execute()
+    kb_store.register_watch(sb, doc_name=new_doc, law_name=law_name,
+                            law_type_token=type_token, api_target=target,
+                            law_id=law_id, mst=mst, law_no=law_no, enf=enf, now=now,
+                            note=f'add_laws_batch 신규 적재 ({datetime.now():%Y-%m-%d})')
 
     return 'ok', f"{new_doc} ({len(payload)}청크)"
 

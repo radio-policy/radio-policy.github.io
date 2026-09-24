@@ -45,6 +45,7 @@ except Exception:
     pass
 
 import sb_client
+import kb_store   # KB 문서명 목록 공용 (#218)
 import notify as tg_notify   # 텔레그램 전송 공용 유틸 (개선⑪) — 전송부만 위임
                              # (이 파일에 동명 함수 notify()가 있어 별칭으로 import)
 
@@ -137,20 +138,9 @@ def fetch_all_doc_rows(sb):
 
     구버전(superseded)·시행예정본(pending)까지 긁으면 그것들이 법제처 현행본과 달라
     매번 '개정 감지'로 잘못 잡히고, --all-outdated가 이미 최신인 법령을 다시 받아온다.
-    PostgREST 1000행 절단 회피를 위한 range 페이지네이션(지침 가드레일).
+    DB 함수 kb_doc_names 1회(#218) — 종전엔 조각 4만여 행을 1,000행씩 42번 훑었다(4.6초).
     """
-    seen, start, page = {}, 0, 1000
-    while True:
-        r = (sb.table('document_chunks')
-             .select('doc_name, doc_category')
-             .eq('status', 'current')
-             .order('id').range(start, start + page - 1).execute())
-        rows = r.data or []
-        for row in rows:
-            seen.setdefault(row['doc_name'], row.get('doc_category'))
-        if len(rows) < page:
-            return seen
-        start += page
+    return kb_store.list_docs(sb, status='current')
 
 
 def drf_law_search(query: str, target: str, ef: bool = False):

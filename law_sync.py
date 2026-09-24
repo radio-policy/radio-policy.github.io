@@ -52,6 +52,7 @@ except Exception:
     pass
 
 import sb_client
+import kb_store   # 조각 삽입·검증 / law_watch 등록 공용 (#218)
 import notify as tg_notify   # 교체 완료 통지(운영자 봇) — 전송부만 위임 (#197)
 from law_watch import (norm_name, parse_doc_name, api_target_of,
                        drf_law_search, pick_exact, row_fields,
@@ -454,19 +455,11 @@ def sync_one(sb, watch_row, args):
             st = 'pending' if (existing[old_doc].get('enf') or '') > today0 else 'superseded'
             _update_doc_chunks(sb, old_doc, {'status': st})
             print(f"  ✓ {st}: {old_doc[:64]}")
-        now0 = datetime.now(timezone.utc).isoformat()
-        sb.table('law_watch').upsert({
-            'doc_name': new_doc, 'law_name': law_name,
-            'law_type_token': meta['law_type_token'], 'api_target': target,
-            'law_id': law_id, 'registered_mst': mst,
-            'registered_law_no': law_no, 'registered_enf': enf,
-            'latest_mst': mst, 'latest_law_no': law_no, 'latest_enf': enf,
-            'watch_status': 'watching', 'sync_status': 'current',
-            'last_checked_at': now0, 'updated_at': now0,
-            'note': f'재진입 상태 정리 ({datetime.now():%Y-%m-%d})',
-        }, on_conflict='doc_name').execute()
-        if doc_name != new_doc:
-            sb.table('law_watch').delete().eq('doc_name', doc_name).execute()
+        kb_store.register_watch(sb, doc_name=new_doc, law_name=law_name,
+                                law_type_token=meta['law_type_token'], api_target=target,
+                                law_id=law_id, mst=mst, law_no=law_no, enf=enf,
+                                note=f'재진입 상태 정리 ({datetime.now():%Y-%m-%d})',
+                                replaces=doc_name)
         SYNC_REPORT.append({
             'law_name': law_name, 'old_no': meta['law_no'], 'old_enf': meta['enf_date'],
             'new_no': law_no, 'new_enf': enf,
@@ -488,13 +481,8 @@ def sync_one(sb, watch_row, args):
         'law_id': law_id, 'law_mst': mst, 'status': 'current',
         'is_approved': True,
     } for i, c in enumerate(chunks)]
-    for i in range(0, len(payload), 50):
-        sb.table('document_chunks').insert(payload[i:i + 50]).execute()
-    # 삽입 검증 — 부분 삽입이 '완료'로 위장되는 것을 막는다(reingest_one과 동일 가드)
-    got = ((sb.table('document_chunks').select('id', count='exact')
-            .eq('doc_name', new_doc).limit(1).execute()).count) or 0
-    if got != len(payload):
-        raise RuntimeError(f"삽입 검증 실패: {len(payload)}청크 중 {got}청크만 확인 — 재실행 필요")
+    # 삽입 검증 포함 — 부분 삽입이 '완료'로 위장되는 것을 막는다(어긋나면 RuntimeError)
+    kb_store.insert_chunks(sb, payload)
     print(f"  ✓ 신규 등재 {len(payload)}청크 (검증 완료)")
 
     # ② 기존 버전 상태 정리 — 시행일이 미래면 pending(시행예정본), 과거면 superseded
@@ -542,18 +530,11 @@ def sync_one(sb, watch_row, args):
         print(f"  ✓ 교체 이력 기록 (DIFF 대상): {base_doc[:48]} → {new_doc[:48]}")
 
     # ④ law_watch 갱신 — 기존 행은 새 문서명으로 이관
-    sb.table('law_watch').upsert({
-        'doc_name': new_doc, 'law_name': law_name,
-        'law_type_token': meta['law_type_token'], 'api_target': target,
-        'law_id': law_id, 'registered_mst': mst,
-        'registered_law_no': law_no, 'registered_enf': enf,
-        'latest_mst': mst, 'latest_law_no': law_no, 'latest_enf': enf,
-        'watch_status': 'watching', 'sync_status': 'current',
-        'last_checked_at': now, 'updated_at': now,
-        'note': f'law_sync 자동 현행화 ({datetime.now():%Y-%m-%d})',
-    }, on_conflict='doc_name').execute()
-    if doc_name != new_doc:
-        sb.table('law_watch').delete().eq('doc_name', doc_name).execute()
+    kb_store.register_watch(sb, doc_name=new_doc, law_name=law_name,
+                            law_type_token=meta['law_type_token'], api_target=target,
+                            law_id=law_id, mst=mst, law_no=law_no, enf=enf, now=now,
+                            note=f'law_sync 자동 현행화 ({datetime.now():%Y-%m-%d})',
+                            replaces=doc_name)
     SYNC_REPORT.append({
         'law_name': law_name, 'old_no': meta['law_no'], 'old_enf': meta['enf_date'],
         'new_no': law_no, 'new_enf': enf,
@@ -678,9 +659,8 @@ def load_pending_one(sb, row, args):
         'law_id': law_id, 'law_mst': mst, 'status': 'pending',
         'is_approved': True,
     } for i, c in enumerate(chunks)]
-    for i in range(0, len(payload), 50):
-        sb.table('document_chunks').insert(payload[i:i + 50]).execute()
-    print(f"  ✓ 시행예정본 등재 {len(payload)}청크 (status=pending — 자문 검색 제외)")
+    kb_store.insert_chunks(sb, payload)   # 삽입 검증 포함(#218 — 종전엔 이 경로만 검증이 없었다)
+    print(f"  ✓ 시행예정본 등재 {len(payload)}청크 (status=pending — 자문 검색 제외, 검증 완료)")
 
     now = datetime.now(timezone.utc).isoformat()
     sb.table('law_pending').update({
@@ -734,16 +714,12 @@ def promote_due(sb, dry_run=False):
             'sync_state': 'promoted', 'promoted_at': now, 'updated_at': now,
         }).eq('id', r['id']).execute()
         # ③ law_watch에 현행본으로 등록 — 다음 감시부터 이 문서가 기준이 된다
-        sb.table('law_watch').upsert({
-            'doc_name': doc, 'law_name': law_name,
-            'law_type_token': r.get('law_type_token'), 'api_target': r.get('api_target') or 'law',
-            'law_id': r.get('law_id'), 'registered_mst': r['mst'],
-            'registered_law_no': r.get('law_no'), 'registered_enf': r['enf_date'],
-            'latest_mst': r['mst'], 'latest_law_no': r.get('law_no'), 'latest_enf': r['enf_date'],
-            'watch_status': 'watching', 'sync_status': 'current',
-            'last_checked_at': now, 'updated_at': now,
-            'note': f'시행일 도래 자동 승격 ({datetime.now():%Y-%m-%d})',
-        }, on_conflict='doc_name').execute()
+        kb_store.register_watch(sb, doc_name=doc, law_name=law_name,
+                                law_type_token=r.get('law_type_token'),
+                                api_target=r.get('api_target') or 'law',
+                                law_id=r.get('law_id'), mst=r['mst'], law_no=r.get('law_no'),
+                                enf=r['enf_date'], now=now,
+                                note=f'시행일 도래 자동 승격 ({datetime.now():%Y-%m-%d})')
         done += 1
     print(f"=== 승격 완료: {done}건 ===")
     # 워치독 하트비트 — 여기에도 있어야 한다 (#171).
@@ -954,18 +930,11 @@ def reingest_one(sb, doc_name, args):
         'effective_date': enf, 'notice_no': (law_no if target != 'law' else None),
         'law_id': law_id, 'law_mst': mst, 'status': 'current', 'is_approved': True,
     } for i, c in enumerate(chunks)]
-    for i in range(0, len(payload), 50):
-        sb.table('document_chunks').insert(payload[i:i + 50]).execute()
-
-    # 삽입 검증 — 배치 중간에 statement timeout이 나면 앞부분만 들어가고 예외가 나는데,
+    # 삽입 검증 포함 — 배치 중간에 statement timeout이 나면 앞부분만 들어가고 예외가 나는데,
     # 예외를 삼키는 상위 루프가 있으면 "부분 삽재"가 완료로 위장된다. 실제로 대한민국
     # 주파수 분배표가 1,089청크 중 150청크(배치 3개)만 들어간 채 방치돼 있었고,
     # 이미 law_id가 있어 이후 재적재 대상에서도 빠져 아무도 알아채지 못했다.
-    got = ((sb.table('document_chunks').select('id', count='exact')
-            .eq('doc_name', new_doc).limit(1).execute()).count) or 0
-    if got != len(payload):
-        raise RuntimeError(f"삽입 검증 실패: {len(payload)}청크를 넣었는데 {got}청크만 확인됨 "
-                           f"— 부분 삽입 상태이므로 재실행 필요 ({new_doc[:50]})")
+    kb_store.insert_chunks(sb, payload)
     print(f"  ✓ API본 등재 {len(payload)}청크 (검증 완료)")
 
     # 신본 등재가 끝난 뒤에야 구본을 내린다(위 주석의 순서 이유).
@@ -976,18 +945,11 @@ def reingest_one(sb, doc_name, args):
         _update_doc_chunks(sb, old_doc, {'status': 'superseded'})
         print(f"  ✓ 구 PDF본 → superseded: {old_doc[:66]}")
 
-    sb.table('law_watch').upsert({
-        'doc_name': new_doc, 'law_name': meta['law_name'],
-        'law_type_token': meta['law_type_token'], 'api_target': target,
-        'law_id': law_id, 'registered_mst': mst,
-        'registered_law_no': law_no, 'registered_enf': enf,
-        'latest_mst': mst, 'latest_law_no': law_no, 'latest_enf': enf,
-        'watch_status': 'watching', 'sync_status': 'current',
-        'last_checked_at': now, 'updated_at': now,
-        'note': f'PDF본 → API 재적재 ({datetime.now():%Y-%m-%d})',
-    }, on_conflict='doc_name').execute()
-    if doc_name != new_doc:
-        sb.table('law_watch').delete().eq('doc_name', doc_name).execute()
+    kb_store.register_watch(sb, doc_name=new_doc, law_name=meta['law_name'],
+                            law_type_token=meta['law_type_token'], api_target=target,
+                            law_id=law_id, mst=mst, law_no=law_no, enf=enf, now=now,
+                            note=f'PDF본 → API 재적재 ({datetime.now():%Y-%m-%d})',
+                            replaces=doc_name)
     # 시행예정본이 이 문서를 가리키고 있으면 새 문서명으로 이관
     sb.table('law_pending').update({'watch_doc_name': new_doc, 'updated_at': now}) \
         .eq('watch_doc_name', doc_name).execute()

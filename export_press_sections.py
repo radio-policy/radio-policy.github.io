@@ -17,6 +17,7 @@ except Exception:
 from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env'))
 from sb_client import make_client
+import kb_store   # KB 문서명 목록 공용 (#218)
 
 SECTION_RE = re.compile(r'(?m)^## (\d{6}) (.+)$')
 
@@ -29,17 +30,7 @@ def main():
     args = ap.parse_args()
 
     sb = make_client(os.environ['SUPABASE_URL'], os.environ['SUPABASE_SERVICE_KEY'])
-    # PostgREST 는 무정렬 조회를 1,000행에서 자르므로 반드시 페이징 (배경역사 #50 유형)
-    names, page = set(), 0
-    while True:
-        rows = (sb.table('document_chunks').select('doc_name')
-                .eq('doc_category', '보도자료').order('id')
-                .range(page * 1000, page * 1000 + 999).execute().data)
-        names.update(r['doc_name'] for r in rows)
-        if len(rows) < 1000:
-            break
-        page += 1
-    docs = sorted(names)
+    docs = sorted(kb_store.list_docs(sb, category='보도자료'))   # 문서명 목록 1회 (#218)
     sections = []
     for doc in docs:
         # 문서 전체를 청크 순서로 이어붙여 섹션 단위로 분해

@@ -21,6 +21,7 @@ import json
 import html as html_mod
 import time
 from retry_util import with_retry
+import kb_store   # 조각 규칙·삽입 검증 공용 (#218)
 from sb_client import heartbeat as sb_heartbeat
 import shutil
 import zipfile
@@ -75,7 +76,7 @@ HEADERS = {
 
 MAX_RETRY = 3
 RETRY_DELAY = 5
-CHUNK_SIZE = 700          # 기존 수동 업로드분과 동일 (실측)
+CHUNK_SIZE = kb_store.NEWLINE_CHUNK_SIZE   # 700 — 기존 수동 업로드분과 동일 (실측), issue_case_ingest와 공용 (#218)
 BODY_MAX = 15000          # 항목당 본문 상한 (비정상 거대 문서 방어)
 BODY_MIN = 120            # 이보다 짧으면 추출 실패로 간주
 # 배치 판정(#96) 최소 건수 — 이보다 적으면 제출·폴링 왕복이 절감액보다 비싸다.
@@ -880,20 +881,8 @@ def _like_escape(s: str) -> str:
     return s.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
 
 
-def _chunk_text(text: str, size: int = CHUNK_SIZE) -> list:
-    """size 근처의 개행에서 끊는 무겹침 분할 (기존 수동분과 동일한 이어붙임 복원 전제)."""
-    chunks = []
-    pos = 0
-    n = len(text)
-    while pos < n:
-        end = min(pos + size, n)
-        if end < n:
-            nl = text.rfind('\n', pos + int(size * 0.7), end)
-            if nl > pos:
-                end = nl + 1
-        chunks.append(text[pos:end])
-        pos = end
-    return [c for c in chunks if c.strip()]
+# size 근처의 개행에서 끊는 무겹침 분할(이어붙이면 원문 복원) — kb_store 한 곳 (#218)
+_chunk_text = kb_store.chunk_by_newline
 
 
 _SECTION_HEAD_RE = re.compile(r'^## (\d{6}) ', re.M)
@@ -964,7 +953,7 @@ def register_kb_section(sb, doc_name: str, doc_category: str, ymd6: str, title: 
             # 헤더는 첫 조각에만 남으므로 메타로 모든 조각에 싣는다(기존분은 press_date_backfill.py).
             'effective_date': ymd6_to_ymd8(ymd6) or None,
         })
-    sb.table('document_chunks').insert(rows).execute()
+    kb_store.insert_chunks(sb, rows)   # 삽입 검증 포함(#218) — 기존 문서 뒤 이어붙임도 chunk_index 범위로 센다
     return True
 
 

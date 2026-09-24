@@ -16,6 +16,7 @@ import os
 import re
 from pathlib import Path
 from dotenv import load_dotenv
+import kb_store   # 조각 규칙·삽입 검증 공용 (#218)
 
 # cp949 콘솔·파이프에서 이모지/한글 print 크래시 방지 (지침 가드레일 #19 —
 # 이 크래시가 마지막 임베딩 백필 단계를 조용히 건너뛰게 만든 사고가 있었음)
@@ -30,8 +31,7 @@ load_dotenv()
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 
-CHUNK_SIZE = 800
-CHUNK_OVERLAP = 100
+# 조각 크기(800/100)는 kb_store.PDF_CHUNK_* 한 곳 (#218 — kb_reextract와 공용)
 
 
 def law_title_from_doc_name(doc_name: str) -> str:
@@ -77,32 +77,9 @@ def extract_text_from_pdf(pdf_path: str) -> str:
         return extract_text_from_pdf(pdf_path)
 
 
-def chunk_text(text: str) -> list:
-    """텍스트를 청크로 분할 (조문 헤더 경계 우선, 없으면 크기 기준)
-    조문 헤더는 줄 시작의 제N조(제목) 형식만 인식 — 인용 번호 오태깅 방지 (2026-06-12).
-    """
-    header_pattern = re.compile(r'(?=^제\d+조(?:의\d+)?\()', re.MULTILINE)
-    splits = header_pattern.split(text)
-    if len(splits) < 5:
-        splits = [text]
-
-    chunks = []
-    for block in splits:
-        block = block.strip()
-        if not block:
-            continue
-        m = re.match(r'제(\d+조(?:의\d+)?\([^)]*\))', block)
-        article_no = m.group(1) if m else None
-        if len(block) <= CHUNK_SIZE:
-            chunks.append({'content': block, 'article_no': article_no})
-        else:
-            start = 0
-            while start < len(block):
-                end = start + CHUNK_SIZE
-                chunks.append({'content': block[start:end], 'article_no': article_no})
-                start += CHUNK_SIZE - CHUNK_OVERLAP
-
-    return [c for c in chunks if len(c['content'].strip()) > 50]
+# 조문 헤더(줄 시작의 제N조(제목)) 경계 우선, 없으면 크기 기준 — 인용 번호 오태깅 방지 (2026-06-12).
+# kb_reextract와 같은 규칙이어야 재추출이 원본과 맞으므로 kb_store 한 곳에 둔다 (#218).
+chunk_text = kb_store.chunk_pdf_text
 
 
 def parse_chunk_metadata(content: str, doc_name: str) -> dict:
@@ -146,13 +123,7 @@ def upload_to_supabase(doc_name: str, doc_category: str, chunks: list) -> bool:
         row.update(parse_chunk_metadata(chunk['content'], doc_name))
         rows.append(row)
 
-    batch_size = 50
-    total = len(rows)
-    for i in range(0, total, batch_size):
-        batch = rows[i:i + batch_size]
-        client.table("document_chunks").insert(batch).execute()
-        print(f"  업로드: {min(i + batch_size, total)}/{total}", end="\r")
-    print()
+    kb_store.insert_chunks(client, rows, progress=True)   # 삽입 검증 포함(#218)
 
     existing_doc = client.table("documents").select("id").eq("name", doc_name).execute()
     doc_meta = {"name": doc_name, "type": doc_category, "status": "최신"}

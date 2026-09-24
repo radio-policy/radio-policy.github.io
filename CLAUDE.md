@@ -58,7 +58,10 @@ SKT Comm Center 기술정책팀's radio/telecom **policy-monitoring automation s
 only and "3 tries, wait, re-raise" loops through `retry_util.with_retry(fn, retries=, delay=, label=)` (#217 — a smoke
 test fails on any `table('system_health').upsert` outside sb_client.py); Edge CORS lives in `supabase/functions/_shared/http.ts`
 (`corsHeaders(origin, extraHeaders)`, imported by claude-proxy/verify-citations/news-archive-search/operator-webhook — redeploy
-all four after editing it; assembly-search keeps `'*'` on purpose). **Every Python script that calls Anthropic
+all four after editing it; assembly-search keeps `'*'` on purpose). KB loading goes through `kb_store` (#218):
+`insert_chunks` (batched insert + per-doc chunk_index-range count check), `register_watch` (law_watch current-version
+row), `chunk_pdf_text` / `chunk_by_newline` (the only chunk rules), `list_docs` (RPC `kb_doc_names`, service_role only —
+never page through document_chunks to collect doc names). **Every Python script that calls Anthropic
 must have `import api_usage; api_usage.install()`** (#152, 2026-09-10) — it wraps the SDK once and logs each
 call's token usage to the `api_usage` table (site = calling function, fail-open); Message Batches results are
 logged explicitly via `api_usage.record_usage()`. Bulk scripts refuse mass API runs without `--allow-api`

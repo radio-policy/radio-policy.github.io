@@ -63,6 +63,7 @@ import sys
 import json
 import time
 import argparse
+import kb_store   # KB 문서명 목록 공용 (#218)
 from pathlib import Path
 from datetime import datetime
 
@@ -1188,9 +1189,8 @@ def import_resummary(sb, in_dir: str, year: int, limit: int, dry: bool,
     # 대상 문서: 판정 JSON 이 있는 문서. dry-run 에서는 연도 필터에 맞는 모든 회의록 문서를 점검한다.
     doc_names = {v['base']['doc_name'] for v in judged.values()}
     if dry:
-        for r in am._fetch_all(sb.table('document_chunks').select('doc_name')
-                               .eq('doc_category', am.DOC_CATEGORY).order('doc_name')):
-            dn = r['doc_name'] or ''
+        for dn in kb_store.list_docs(sb, category=am.DOC_CATEGORY):
+            dn = dn or ''
             if dn.endswith(REBUILD_SUFFIX) or (year and dn != _doc_name(year)):
                 continue
             doc_names.add(dn)

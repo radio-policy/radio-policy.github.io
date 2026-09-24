@@ -24,6 +24,7 @@ sys.stdout.reconfigure(encoding='utf-8')   # Windows 스케줄러 cp949 캡처 �
 from dotenv import load_dotenv
 load_dotenv()
 from sb_client import make_client
+import kb_store   # KB 문서명 목록 공용 (#218)
 from press_ingest import derive_chunk_dates
 
 PAGE = 1000
@@ -52,18 +53,8 @@ def main() -> int:
     if args.doc:
         docs = [args.doc]
     else:
-        # PostgREST 기본 상한 1,000행 — 한 번에 select하면 앞 1,000행에 든 문서만 잡힌다(실측: 18문서 중 12개).
-        # 문서명 순으로 페이지를 넘기며 전부 모은다.
-        names, start = set(), 0
-        while True:
-            r = sb.table('document_chunks').select('doc_name').eq('doc_category', '보도자료') \
-                .order('doc_name').range(start, start + PAGE - 1).execute()
-            batch = r.data or []
-            names.update(x['doc_name'] for x in batch)
-            if len(batch) < PAGE:
-                break
-            start += PAGE
-        docs = sorted(names)
+        # 문서명 목록 1회(#218) — 조각을 한 번에 select하면 앞 1,000행에 든 문서만 잡힌다(실측: 18문서 중 12개)
+        docs = sorted(kb_store.list_docs(sb, category='보도자료'))
     print('[대상 문서] %d건' % len(docs))
 
     total_set = total_skip = total_nodate = 0
