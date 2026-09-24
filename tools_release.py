@@ -12,6 +12,8 @@
   ③ 봇 지침서 — system_prompt.js 추출값과 app_config.system_prompt SHA-256 대조(#210과 같은 규칙)
   ④ GitLab Pages — index.html이 부르는 로컬 파일이 .gitlab-ci.yml 복사 목록에 있는지(#125)
   ⑤ .bat — 바뀐 .bat의 bareLF·비ASCII 바이트(#22; git status는 LF로 깨진 .bat을 깨끗하다고 보여 준다)
+  ⑥ DB 권한 — public 테이블·시퀀스·뷰 중 anon/authenticated/service_role 어느 역할도 GRANT가 없는 것(#214;
+     2026-10-30부터 Supabase가 새 테이블에 자동 GRANT를 주지 않으므로, 세션이 MCP로 만든 테이블이 API에서 42501이 난다)
 """
 import os
 import re
@@ -179,6 +181,49 @@ def check_bat(changed):
     return todo
 
 
+# ── ⑥ DB 권한(GRANT) — 새 테이블에 자동 GRANT가 없어지는 2026-10-30 이후 실수 방지(#214) ──
+GRANT_SQL = """
+select c.relkind, c.relname
+from pg_class c join pg_namespace n on n.oid = c.relnamespace
+where n.nspname = 'public' and c.relkind in ('r', 'p', 'v', 'S')
+  and coalesce(c.relacl::text, '') !~ '(anon|authenticated|service_role)='
+order by c.relkind, c.relname
+""".strip()
+
+
+def check_grants():
+    tok = os.environ.get('SUPABASE_ACCESS_TOKEN', '').strip()
+    if not tok:
+        return ['⑥ SUPABASE_ACCESS_TOKEN 없음 — DB 권한 점검 건너뜀']
+    try:
+        req = urllib.request.Request(
+            'https://api.supabase.com/v1/projects/%s/database/query' % PROJECT_REF,
+            data=json.dumps({'query': GRANT_SQL}).encode('utf-8'), method='POST',
+            headers={'Authorization': 'Bearer ' + tok, 'Content-Type': 'application/json',
+                     'User-Agent': 'tools_release'})
+        with urllib.request.urlopen(req, timeout=20) as r:
+            rows = json.loads(r.read().decode('utf-8'))
+    except Exception as e:  # noqa: BLE001
+        return ['⑥ DB 권한 조회 실패: %s' % str(e)[:80]]
+    if not rows:
+        print('  ⑥ DB 권한 정상 — GRANT 없는 public 테이블·시퀀스·뷰 없음')
+        return []
+    kind = {'r': '테이블', 'p': '테이블', 'v': '뷰', 'S': '시퀀스'}
+    todo = []
+    for row in rows:
+        name, k = row['relname'], row['relkind']
+        if k == 'S':
+            fix = 'grant usage, select on public.%s to anon, authenticated, service_role;' % name
+        elif k == 'v':
+            fix = 'grant select on public.%s to anon, authenticated;' % name
+        else:
+            fix = ('grant select on public.%s to anon; grant select, insert, update, delete on public.%s '
+                   'to authenticated, service_role;' % (name, name))
+        todo.append('⑥ %s public.%s 에 어느 역할도 GRANT 없음 → Data API 42501. 역할별로 줄여 실행(#214):\n     %s'
+                    % (kind[k], name, fix))
+    return todo
+
+
 # ── push 뒤 원격 대조 ──
 def verify(since):
     for r in ('gitlab', 'origin'):
@@ -224,6 +269,7 @@ def main():
     todo += check_prompt()   # 파일이 안 바뀌어도 DB 쪽이 어긋나 있을 수 있어 늘 본다
     todo += check_gitlab_ci()
     todo += check_bat(changed)
+    todo += check_grants()   # 테이블은 git 밖(MCP)에서 생기므로 바뀐 파일과 무관하게 늘 본다
     print()
     if todo:
         print('할 일 %d건:' % len(todo))

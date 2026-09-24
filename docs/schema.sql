@@ -801,3 +801,29 @@ group by doc_name having count(*) >= 3
 order by parse_pct asc limit 15;
 
 grant select on public.kb_quality_low_docs, public.kb_quality_article_parse to anon, authenticated;
+
+-- ============================================================================
+--  Data API 권한 (2026-10-30 Supabase 변경 대응, 배경역사 #214)
+--  2026-05-30 이후 만든 프로젝트(기존 프로젝트는 10/30부터)는 public의 새 테이블·시퀀스·뷰에
+--  anon/authenticated/service_role 권한이 자동으로 붙지 않는다. 위에서 만든 표를 대시보드·크롤러가
+--  읽고 쓸 수 있도록, 아직 어느 역할에도 권한이 없는 객체에만 권한을 준다(이미 권한이 있는 표는
+--  건드리지 않으므로 다시 실행해도 안전하고, 역할을 일부러 좁혀 둔 표를 넓히지 않는다).
+-- ============================================================================
+do $$
+declare r record;
+begin
+  for r in
+    select c.relname, c.relkind
+    from pg_class c join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'public' and c.relkind in ('r', 'p', 'v', 'S')
+      and coalesce(c.relacl::text, '') !~ '(anon|authenticated|service_role)='
+  loop
+    if r.relkind = 'S' then
+      execute format('grant usage, select on sequence public.%I to anon, authenticated, service_role', r.relname);
+    elsif r.relkind = 'v' then
+      execute format('grant select on public.%I to anon, authenticated, service_role', r.relname);
+    else
+      execute format('grant select, insert, update, delete on public.%I to anon, authenticated, service_role', r.relname);
+    end if;
+  end loop;
+end $$;

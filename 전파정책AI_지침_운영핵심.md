@@ -65,6 +65,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\      (회사 노트북 —
 ## Supabase DB
 
 - **Project ID**: zwkjedumfuhodckmtxxn / **URL**: https://zwkjedumfuhodckmtxxn.supabase.co / **Region**: ap-northeast-1(도쿄)
+- **테이블·시퀀스·뷰를 새로 만들 때는 같은 마이그레이션에 역할별 GRANT를 명시(2026-10-30~, #214)** — Supabase가 그날부터 public 새 객체에 anon·authenticated·service_role 자동 GRANT를 주지 않는다(기존 47개 테이블은 무관). `service_role`도 예외가 아니라 빠뜨리면 크롤러·Edge Function이 42501. 역할 범위는 기존 표(`telegram_usage`는 service_role만, `law_terms`는 select만 등)처럼 필요한 만큼만. `tools_release.py` ⑥이 GRANT 없는 객체를 잡는다.
 
 ### 주요 테이블
 
@@ -507,7 +508,7 @@ AI 자문 /ask       | 운영자 승인(chat_id별 1회) + 일일 20회 상한. 
 # 본문 수집 의존성(PC 최초 1회): pip install trafilatura
 
 # 코드 수정 후 배포 (캐시 버스터 갱신 필수). git add는 항상 파일명 지정 (-A/. 금지)
-py -3.12 tools_release.py     # 커밋 전 점검(#212): 캐시 번호·Edge 재배포 대상(import 추적, verify_jwt 반영)·봇 지침서·GitLab CI 복사 목록·.bat 바이트 — 점검·제안만
+py -3.12 tools_release.py     # 커밋 전 점검(#212): 캐시 번호·Edge 재배포 대상(import 추적, verify_jwt 반영)·봇 지침서·GitLab CI 복사 목록·.bat 바이트·GRANT 없는 public 객체(#214) — 점검·제안만
 git add [파일명] && git commit -m "설명" && git push gitlab main   # 회사 PC는 gitlab 원격에 pushurl 2개(GitLab→GitHub) — 한 번에 두 원격(#212)
 py -3.12 tools_release.py --verify   # push 뒤: 두 원격 fetch → HEAD 일치 + 최근 커밋 파일 diff 0·끝부분 동일
 # pushurl 미설정 기계(맥북 등)는 종전대로 git push gitlab main && git push origin main
@@ -1148,6 +1149,7 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **AI 자문 "Failed to fetch"**: 무거운 질문 2분+ idle 끊김 → stream:true로 해결됨. 사내망 프록시·확장프로그램·F12 네트워크 확인.
 
 ## 하지 말아야 할 것 (규칙 + 한 줄 이유 / 상세는 배경역사 문서)
+- **public에 테이블·시퀀스·뷰를 만들면서 역할별 GRANT를 같은 마이그레이션에 넣는 것을 빠뜨리지 말 것 — `service_role`도 포함 (#214, 2026-09-25 공지·2026-10-30 적용)** — Supabase가 10/30부터 기존 프로젝트의 public 새 객체에 자동 GRANT(`ALTER DEFAULT PRIVILEGES`)를 걷는다. 빠뜨리면 대시보드(anon·authenticated)뿐 아니라 service_role 키를 쓰는 Python 크롤러·Edge Function도 42501 permission denied — 에러 hint에 실행할 GRANT 문이 붙으므로 조용한 실패는 아니지만, 크롤러가 예외를 삼키면 heartbeat만 갱신되고 0건(#19 유형)으로 보인다. 기존 테이블 47개는 무관. 종전 동작 복구(default privileges 재부여·대시보드 "Automatically expose new tables")는 보안 취지를 버리는 것이라 채택하지 않았다(운영자 결정). `tools_release.py` ⑥(Management API `database/query`)이 GRANT 없는 객체를 커밋 전 잡고, `docs/schema.sql` 끝의 멱등 GRANT 블록이 신규 프로젝트(강의용·5/30 이후 생성분은 이미 새 동작)를 살린다. (배경역사 #214)
 - **이슈맵 테이블(`issues`·`issue_links`)의 컬럼·`item_type`을 바꾸거나 새로 만들면서 사내판 인계를 빠뜨리지 말 것 (#110-보론, 2026-09-24)** — 사내판 `export_snapshot.py`(사내 저장소)가 두 테이블을 **매일 17:00 전량 교체**로 가져가고, 콘솔 「이슈맵」(외부판 `loadIssueMap` 이식본 `ported.js`, 열람 전용)이 그대로 그린다. 새 item_type(예: 의원 프로필 연결)이나 컬럼 변경은 사내 화면이 **오류 없이 조용히 빠뜨린다** → 맥북 사내판 세션에 ported.js 수정을 인계할 것. 데이터만 바꾸는 작업(이슈 신설·기사 이동·요약 재작성·행 삭제)은 다음 스냅샷에 자동 반영되므로 사내 작업 없음. 외부판 저장소 문서만 보고 "사내판에 이슈맵 없음"으로 단정했다가 틀린 사례가 이 항목의 발단. (배경역사 #110-보론)
 - **`tools_release.py`에 배포·파일 수정 기능을 넣지 말 것 — 점검·제안만(#212, 2026-09-25, §4-2-11 운영자 결정)** — Edge 배포는 외부 반영이라 세션·운영자가 목록을 보고 직접 실행한다. 새 정적 파일을 index.html에 붙이면 `STATIC`(캐시 번호 대상)에도 넣을 것. 같은 항목: 회사 PC의 `gitlab` 원격은 pushurl 2개(GitLab→GitHub)라 `git push gitlab main` 한 번이 두 원격 push다 — 이때 `origin/main` 추적 표시는 안 바뀌므로 원격 대조는 `tools_release.py --verify`(두 원격 fetch)로 할 것. 17시 체인의 `tools_people_refresh.py`에서 '발언 0건이면 중단' 가드를 빼지 말 것(조회 이상 한 번에 명부 전원이 발언 0이 된다). (배경역사 #212)
 - **워치독 ③-3 AI 비용 계측 경보(캐시 적중률 < 80%·24시간 비용 > 7일 중앙값×2 且 ≥ $1, #211, 2026-09-24, §4-2-8)를 빼거나 임계를 올려 조용하게 만들지 말 것 — 오경보가 잦으면 원인 사이트를 `SELF_REPORTED`에 넣는 식으로 좁힐 것** — 9/18~19 선별·긴급도 캐시가 100% 빗나가 호출당 입력 4,800~13,700토큰이었는데 `api_usage`를 직접 열기 전까지 아무도 몰랐다. 새로 1시간 캐시를 거는 콜을 추가하면 `CACHED_SITES`에도 넣을 것. 같은 항목에서 `claude-proxy`는 끊긴 스트림도 `…:aborted`로 기록한다 — `record` 1회 가드(정상 flush와 중복 기록 방지)를 없애지 말 것. (배경역사 #211)
