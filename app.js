@@ -820,9 +820,8 @@ var PERDOC_LIMIT = { '추가지식': 8, 'default': 3 };
 // 전체 상위 컷 12→15: 추가지식 1편이 8을 차지해도 다른 문서 몫이 7 남게 (종전 최악 9에서 소폭 감소에 그침).
 var TOTAL_CHUNK_CUT = 15;
 
-async function searchKeywords(query, lawOnly) {
+async function searchKeywords(query) {
   if (!sb) return [];
-  if (lawOnly === undefined) lawOnly = false;
   var baseKeywords = extractKeywords(query);
   // trgm·시맨틱은 확장어를 쓰지 않으므로 Haiku 확장을 **기다리지 않고 먼저** 시작한다(B-2, #201, 2026-09-24).
   // trgm 5~6초(#185, SQL로는 못 줄임)와 임베딩 왕복이 확장 1~2초와 겹친다. 병합 순서는 아래에서 고정하므로 결과 동일.
@@ -2413,82 +2412,6 @@ async function onDeleteCustomFile(docName, btn) {
   }
 }
 
-// ── 보도자료 질의 판별·검색 (0313a8f에서 복원 — 08d29f1에서 유실) ──
-function isPressQuery(query) {
-  return /보도자료|보도|발표|공지|공고|과기정통부|국립전파연구원|전파연구원|방송통신위원회|방통위|방송미디어통신위원회|방미통위|중앙전파관리소|전파관리소|ETRI|KISDI/.test(query);
-}
-// 보도자료 검색 — pressData(제목·날짜·doc_name·agency만 보유)에서 제목 매칭으로 후보를
-// 고른 뒤, 본문은 document_chunks에서 doc_name+제목 일부 ilike로 실조회해 채운다.
-// (과거엔 원소에 content/id가 있다고 가정해 TypeError로 자문이 죽었음 — 데이터 소스가
-//  JSON→Supabase로 바뀐 잔재. 본문 조회 실패 항목은 결과에서 제외해 원천 차단.)
-async function searchPressReleases(query) {
-  if (!sb) return [];
-  // 보도자료 목록은 탭을 열어야 로드된다(#61) — 탭을 안 연 사용자의 자문에서 이 검색이 조용히 0건이던 결손(#192).
-  // 세션 첫 보도자료성 질문에서만 1~2초 더 든다(실측 1.4초, 1,128건).
-  if (!pressData) { try { await loadPressJSON(); } catch(e) { console.warn('보도자료 목록 로드 실패:', e); } }
-  if (!pressData) return [];
-  var keywords = extractKeywords(query);
-  if (keywords.length === 0) return [];
-  var scored = [];
-  for (var i = 0; i < pressData.length; i++) {
-    var item = pressData[i];
-    var title = (item.title || '').toLowerCase();
-    var score = 0;
-    for (var k = 0; k < keywords.length; k++) {
-      if (title.includes(keywords[k].toLowerCase())) score++;
-    }
-    if (score > 0) scored.push({ item: item, score: score });
-  }
-  scored.sort(function(a, b) { return b.score - a.score; });
-  var candidates = scored.slice(0, 4);
-
-  var settled = await Promise.all(candidates.map(async function(r) {
-    var item = r.item;
-    try {
-      // 업로드 직후 메모리에 추가된 항목은 content를 이미 갖고 있다 — 그대로 사용
-      if (typeof item.content === 'string' && item.content.trim()) {
-        return { item: item, body: item.content };
-      }
-      if (!item.doc_name) return null;
-      // ilike 패턴·PostgREST 구문을 깨는 문자(%,_,쉼표,괄호)로 제목을 나눠 **가장 긴 조각**으로 본문 조회(#192).
-      // 종전엔 '첫 쉼표 앞'이라 「과기정통부, 주파수 …」가 '과기정통부'로 줄어 그 기관 아무 조각이나 붙었다.
-      var frag = (item.title || '').split(/[%_,()]+/).map(function(x) { return x.trim(); })
-        .sort(function(a, b) { return b.length - a.length; })[0] || '';
-      frag = frag.substring(0, 20).trim();
-      if (frag.length < 4) return null;
-      var cr = await sb.from('document_chunks')
-        .select('content')
-        .eq('doc_name', item.doc_name)
-        .ilike('content', '%' + frag + '%')
-        .limit(2);
-      if (cr.error || !cr.data || cr.data.length === 0) return null;
-      var body = cr.data.map(function(c) { return c.content || ''; }).join('\n').trim();
-      if (!body) return null;
-      // 한 조각에 여러 보도자료가 들어 있을 수 있다 — 제목이 나오는 섹션 머리('## YYMMDD')부터 자른다(#192)
-      var at = body.indexOf(frag);
-      if (at > 0) {
-        var head = body.lastIndexOf('## ', at);
-        body = body.slice(head >= 0 ? head : at);
-      }
-      return { item: item, body: body };
-    } catch(e) {
-      console.warn('보도자료 본문 조회 실패(항목 제외):', item.title, e);
-      return null;
-    }
-  }));
-
-  return settled.filter(function(x) { return x; }).map(function(x) {
-    var item = x.item;
-    var excerpt = x.body.slice(0, 800).trim();  // 관련 본문 발췌 (최대 800자)
-    return {
-      id: 'press_' + (item.doc_name || '') + '_' + item.date,
-      doc_name: item.title,
-      doc_category: (item.agency && item.agency !== '기타' ? item.agency : '정부') + ' 보도자료',
-      content: '[날짜: ' + item.date + ']\n' + excerpt
-    };
-  });
-}
-
 // ── 자문 컨텍스트 조립(검색·보강 단계) — callClaude에서 분리(#201, 2026-09-24 B-2).
 //    Sonnet 호출 없이 검색·통째 보강·역참조·별표·시행예정·요약·뉴스 조각만 만든다. 회귀 하네스
 //    (tests/rag_regress_browser.js)가 이 함수를 API 0회로 돌려 단계별 청크 id를 변경 전후로 대조한다.
@@ -2523,33 +2446,17 @@ async function buildAdvisoryContext(userText) {
         .catch(function(e) { console.warn('관계도 주제 목록 조회 실패(건너뜀):', e); return []; })
     : Promise.resolve([]);
 
-  // RAG: 관련 문서 청크 검색 (보도자료는 원본 JSON, 법령은 Supabase)
+  // RAG: 관련 문서 청크 검색 — 봇(rag.ts searchChunks)과 같은 일반 3중 하이브리드 하나뿐이다.
+  // 종전의 보도자료 전용 분기(isPressQuery → 제목 매칭 4건 + 일반 검색을 6개로 절단)는 #204(2026-09-24, B-3)에서
+  // 폐지했다 — 보도자료 본문은 #53(2026-08-02)부터 document_chunks에 있어 일반 검색이 찾고(q19 실측: 보도자료 7 + 법령 6),
+  // 분기는 근거를 15→6으로 줄이기만 했다. 다시 만들지 말 것.
   lastRagSources = [];
   lastWebSources = [];
   lastAdvChunkIds = [];
-  var ragChunks = [];
-
-  if (isPressQuery(userText)) {
-    // 보도자료 질문: 원본 JSON에서 검색 — 법령 검색과 동시에 시작(B-2), 병합 순서는 그대로
-    var pressP = searchPressReleases(userText);
-    var pressLawP = searchKeywords(userText, true);
-    var pressResults = await pressP;
-    if (pressResults.length > 0) {
-      ragChunks = pressResults;
-      lastRagSources = pressResults.map(function(c) { return c.doc_name; });
-      console.log('보도자료 원본 검색:', pressResults.length + '개');
-    }
-    // 보도자료이지만 법령도 관련 있을 경우 Supabase도 병행
-    var lawChunks = await pressLawP;
-    ragChunks = ragChunks.concat(lawChunks).slice(0, 6);
+  var ragChunks = await searchKeywords(userText);
+  if (ragChunks.length > 0) {
     lastRagSources = ragChunks.map(function(c) { return c.doc_name; });
-  } else {
-    // 일반 법령·고시 질문: Supabase 검색
-    ragChunks = await searchKeywords(userText, false);
-    if (ragChunks.length > 0) {
-      lastRagSources = ragChunks.map(function(c) { return c.doc_name; });
-      console.log('RAG 검색 결과:', ragChunks.length + '개 청크 (' + lastRagSources.join(', ') + ')');
-    }
+    console.log('RAG 검색 결과:', ragChunks.length + '개 청크 (' + lastRagSources.join(', ') + ')');
   }
 
   // 조문 보강 (rag.ts answerAdvisory와 동일 구조) — 정밀검색이 찾은 조문 중 위 RAG에
@@ -2627,7 +2534,7 @@ async function buildAdvisoryContext(userText) {
   if (ce.chunks && ce.chunks.length) console.log('역참조 발췌:', ce.chunks.length + '건');
 
   // 근거 청크 id 스냅샷 — 출처 목록과 같은 순서(조문 정밀검색분 먼저, 그다음 RAG, 끝에 보강·역참조 조각).
-  // 보도자료 의사청크는 id가 'press_…' 문자열이라 document_chunks 조회가 불가능하므로 제외한다
+  // 숫자 id만 남긴다(종전 보도자료 의사청크 'press_…' 문자열은 #204로 사라졌지만 방어는 유지)
   // (문서명은 lastRagSources에 그대로 남는다).
   lastAdvChunkIds = [];
   (lawExtra || []).concat(ragChunks).concat(_advAddedIds.concat(_advCitingIds).map(function(id) { return { id: id }; })).forEach(function(c) {
@@ -11527,7 +11434,7 @@ async function generateLawMapTopic() {
   if (typeof isAdminUser !== 'function' || !isAdminUser()) { alert('이 기능은 관리자만 사용할 수 있습니다.'); return; }
   setLawMapStatus('🤖 RAG 근거 수집 + AI 생성 중… (20~40초)');
   try {
-    var chunks = await searchKeywords(q, false);
+    var chunks = await searchKeywords(q);
     var ctx = (chunks || []).slice(0, 8).map(function(c) {
       return '[' + c.doc_name + (c.article_no ? ' ' + c.article_no : '') + ']\n' + (c.content || '').slice(0, 500);
     }).join('\n\n');
@@ -11764,7 +11671,7 @@ async function lawmapProposalEnrich(pid) {
   _lmpNote(pid, '🔄 AI 보강 중… (20~40초, 1회 과금)');
   try {
     var curLines = data.relations.map(function(r) { return data.topic + ' → ' + r.law + ' : ' + (r.relation || '') + (r.basis ? ' (' + r.basis + ')' : ''); }).join('\n');
-    var chunks = await searchKeywords(data.topic, false);
+    var chunks = await searchKeywords(data.topic);
     var ctx = (chunks || []).slice(0, 6).map(function(c) {
       return '[' + c.doc_name + (c.article_no ? ' ' + c.article_no : '') + ']\n' + (c.content || '').slice(0, 400);
     }).join('\n\n');
@@ -11919,7 +11826,7 @@ async function enrichLawMapTopic() {
       var b = _lawMapNodes.find(function(n) { return n.id === e.target_id; });
       return (a ? a.name : '?') + ' → ' + (b ? b.name : '?') + ' : ' + (e.description || e.relation_type || '');
     }).join('\n');
-    var chunks = await searchKeywords(topic.name, false);
+    var chunks = await searchKeywords(topic.name);
     var ctx = (chunks || []).slice(0, 6).map(function(c) {
       return '[' + c.doc_name + (c.article_no ? ' ' + c.article_no : '') + ']\n' + (c.content || '').slice(0, 400);
     }).join('\n\n');
