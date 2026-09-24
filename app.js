@@ -60,7 +60,6 @@ function saveConfig(c) { localStorage.setItem(CFG_KEY, JSON.stringify(c)); }
 // 종전에는 app_config.claude_key를 anon으로 읽어 브라우저가 api.anthropic.com을 직접 호출했는데,
 // 그 테이블은 anon 조회가 열려 있어 **인터넷 누구나 키를 꺼내 갈 수 있는 상태**였다.
 // 이제 모든 AI 호출은 claudeFetch() → claude-proxy Edge Function을 거치고, 키는 서버에만 있다.
-async function loadRemoteConfig() { /* claude_key 로드 폐지 — claude-proxy가 대신한다 */ }
 
 // ════════════════════════════════════════════
 //  Supabase
@@ -94,7 +93,6 @@ function aiReady() {
   return !!(currentUser && currentProfile && currentProfile.approved && currentProfile.active);
 }
 function isAdminUser()  { return !!(currentProfile && currentProfile.role === 'admin'  && currentProfile.approved && currentProfile.active); }
-function isLeaderUser() { return !!(currentProfile && currentProfile.role === 'leader' && currentProfile.approved && currentProfile.active); }
 
 /** 왜 막혔는지 한 문장으로 — 로그인 안 함 / 승인 대기 / 비활성 구분 */
 function aiGateMsg() {
@@ -1618,11 +1616,6 @@ function newChat() {
 
 
 
-// ════════════════════════════════════════════
-//  기술 용어 — 뉴스에서 자동 추출 (수동 실행)
-// ════════════════════════════════════════════
-// 용어 정규화: 공백 제거 + 소문자 변환 (2.6 GHz == 2.6ghz 중복 방지)
-function normalizeTerm(s) { return (s||'').toLowerCase().replace(/\s+/g, ''); }
 
 // (제거됨 2026-09-09, #141) extractTermsFromNews — 수동 '뉴스에서 용어 추출' 버튼. 새벽 자동 추출(term_extract.py)이 대체.
 
@@ -3194,11 +3187,6 @@ async function deleteChatHistoryItem(id, btn) {
   }
 }
 
-// 홈 대시보드 최근 자문 카드 → 이력 모달 열고 바로 상세 표시
-function openChatHistoryDetail(id) {
-  document.getElementById('chat-history-modal').style.display = 'flex';
-  viewChatHistoryItem(id);
-}
 
 async function sendChat() {
   const input = document.getElementById('chat-input');
@@ -4670,9 +4658,6 @@ async function analyzeNewsImpact(newsId, force) {
   }
 }
 
-async function markRead(id) {
-  if (sb) { try { await sb.from('news_feed').update({ is_read: true }).eq('id', id); } catch(e) { console.warn('읽음 표시 저장 실패:', e); } }
-}
 
 // 구 filterNews 호환용 (혹시 다른 곳에서 호출 시)
 function filterNews(el, cat) { filterNewsByImportance(el, cat); }
@@ -5787,23 +5772,6 @@ function openLawDiff(idx) {
 //  Daily Briefing — Supabase daily_briefings 표시
 // ════════════════════════════════════════════
 
-// 브리핑 텍스트용 중요도 분류 (구조화된 news 객체 없이 raw 텍스트로 판별)
-function classifyBriefingItemImportance(text) {
-  var hay = text.toLowerCase();
-  var urgentKws = IMPORTANCE_RULES['긴급'].keywords;
-  for (var i = 0; i < urgentKws.length; i++) {
-    if (hay.includes(urgentKws[i].toLowerCase())) return '긴급';
-  }
-  var isRelevant = SKT_RELEVANT_TOPICS.some(function(t) { return hay.includes(t.toLowerCase()); });
-  var isNegative = NEGATIVE_SIGNALS.some(function(s) { return hay.includes(s.toLowerCase()); });
-  if (isRelevant && isNegative) return '긴급';
-  var normalKws = IMPORTANCE_RULES['보통'].keywords;
-  for (var i = 0; i < normalKws.length; i++) {
-    if (hay.includes(normalKws[i].toLowerCase())) return '보통';
-  }
-  if (isRelevant) return '보통';
-  return '참고';
-}
 
 // 비뉴스 섹션(주목 포인트·기술 용어 등) bullet 항목 렌더링
 // 마크다운 굵게(**...**) → <strong> (esc 이후 적용 — 우리가 넣는 안전한 태그)
@@ -7244,14 +7212,6 @@ function renderPressList(list) {
   el.innerHTML = html;
 }
 
-function askAboutPress(el) {
-  var title = el.getAttribute('data-title');
-  go('chat');
-  setTimeout(function() {
-    var inp = document.getElementById('chat-input');
-    if (inp) { inp.value = '"' + title + '" 보도자료의 주요 내용을 요약해 주세요.'; inp.focus(); }
-  }, 300);
-}
 
 // document_chunks(doc_name)에서 '## YYMMDD 제목' 섹션 하나를 찾아 정리된 텍스트와 원문 URL을 돌려준다.
 // 보도자료 상세(openPressDetail)와 회의록 상세(openMinuteDetail)가 공유. (2026-09-04 분리)
@@ -12194,20 +12154,6 @@ function askLawMapToChat(name, nodeType) {
   }
 }
 
-// 채팅 미니 관계도 클릭 → 관계도 탭에서 해당 주제 포커스
-async function goLawMapTopicByName(topicName) {
-  go('lawmap', null);
-  if (!_lawMapLoaded) await loadLawMap();
-  else await loadLawMap(true); // 방금 자문에서 저장된 신규 관계 반영
-  var t = _lawMapNodes.find(function(n) { return n.node_type === 'topic' && n.name === topicName; });
-  if (t) {
-    var sel = document.getElementById('lawmap-topic-select');
-    if (sel) sel.value = t.id;
-    renderLawMapGraph(t.id);
-    setLawMapStatus('주제 <b>' + lmEsc(t.name) + '</b> — 관련 법령·계열 표시 중');
-    showLawMapNodeDetail(t.id);
-  }
-}
 
 // 자문 답변 하단용 정적 SVG 미니 관계도 (주제 중심 방사형, vis-network 불필요)
 function renderMiniLawMap(topic, relations) {

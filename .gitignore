@@ -13,6 +13,7 @@ document_chunks_export.jsonl
 document_chunks_sample.jsonl
 okf_probe*.json
 archive/logs_260827/
+archive/untracked_260925/
 speech_rebuild/
 
 # 공개 미러(GitHub)에 올라가면 안 되는 것 (2026-09-19)
