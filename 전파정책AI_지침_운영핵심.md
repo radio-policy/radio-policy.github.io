@@ -507,7 +507,10 @@ AI 자문 /ask       | 운영자 승인(chat_id별 1회) + 일일 20회 상한. 
 # 본문 수집 의존성(PC 최초 1회): pip install trafilatura
 
 # 코드 수정 후 배포 (캐시 버스터 갱신 필수). git add는 항상 파일명 지정 (-A/. 금지)
-git add [파일명] && git commit -m "설명" && git push origin main
+py -3.12 tools_release.py     # 커밋 전 점검(#212): 캐시 번호·Edge 재배포 대상(import 추적, verify_jwt 반영)·봇 지침서·GitLab CI 복사 목록·.bat 바이트 — 점검·제안만
+git add [파일명] && git commit -m "설명" && git push gitlab main   # 회사 PC는 gitlab 원격에 pushurl 2개(GitLab→GitHub) — 한 번에 두 원격(#212)
+py -3.12 tools_release.py --verify   # push 뒤: 두 원격 fetch → HEAD 일치 + 최근 커밋 파일 diff 0·끝부분 동일
+# pushurl 미설정 기계(맥북 등)는 종전대로 git push gitlab main && git push origin main
 # 원격 검증: git show HEAD:index.html | findstr "app.js?v="
 
 # 세션 커밋: 3단계 검증을 붙이면 허용 (2026-07-31 완화 — 배경역사 #37).
@@ -533,10 +536,11 @@ python backfill_embeddings.py                 # 임베딩 백필(document_chunks
 python backfill_term_details.py               # 기술용어 상세 백필(tech_terms 설명·개념도·관련용어, 빈 것만. 모델은 app.js와 동일하게 유지)
 python law_terms_sync.py [--dry-run|--doc <문서명 조각>]   # 법적 용어 정의 재추출(law_terms, AI 0회). Actions 11:00 law_crawl.yml(승격 직후 단계)가 자동 실행 — 수동은 PC에서 law_sync.py로 법령을 교체한 날·파서 수정 검증용. 월 1회 점검: 제목이 '정의)'로 끝나는데 4종 밖인 조문이 있는지 `select distinct article_no from document_chunks where status='current' and article_no ~ '정의\)' and article_no !~ '^[0-9]+조(의[0-9]+)?\((정의|용어의 ?정의|용어정의|용어의 ?뜻)\)$'` (#156)
 python build_law_citation_graph.py            # 법령 관계도 인용망 재구축(citation·family 엣지만 — 멱등. 새 법령 업로드 후 실행)
-#  ⚠️ 단독 예약이 아니다 — run_gov_crawler.bat 체인의 6번째 단계로 **매일 17시 자동 실행**된다(#106).
+#  ⚠️ 단독 예약이 아니다 — run_gov_crawler.bat 체인의 7번째 단계로 **매일 17시 자동 실행**된다(#106; #212에서 4번째에 인물 명부 갱신이 끼어 6→7).
 #     그래서 관계도의 citation 노드·엣지를 SQL로 손보면 그날 17시에 원복된다. "결과물(DB)이 아니라
 #     결과물을 만드는 빌더를 고칠 것." 표기 차이로 갈라진 노드는 별칭표(CITE_ALIAS)가 근본 해결이다.
-python lawmap_edge_check.py [--no-notify|--notify-all] [--since-hours 30]   # 관계도 주제 엣지 점검(읽기 전용, #123) — 17시 체인 7번째(마지막) 단계.
+python tools_people_refresh.py               # 인물 명부(people) 집계 — 발언 수·기간·현역·직함 재계산 + 새 발언자 등록(AI 0회, stance_summary 무접촉). 17시 체인 4번째(assembly_minutes 바로 뒤, #212), 바뀐 행만 씀·발언 0건 조회 시 무변경 중단
+python lawmap_edge_check.py [--no-notify|--notify-all] [--since-hours 30]   # 관계도 주제 엣지 점검(읽기 전용, #123) — 17시 체인 8번째(마지막) 단계.
 #     설명의 자기 조문이 대상 문서 원문(document_chunks.article_no, 모든 판 합집합)에 있는지 대조. ERR(자리표시·조문 없음·조문 미존재)/WARN(일부 미존재·타 법령 조문만·미보유 무표기).
 #     기본은 최근 30시간 생성 엣지의 문제만 운영자 봇 무음 알림, 전체 결과는 lawmap_edge_check_sched.log. 정정은 사람이 한다(스크립트는 DB를 쓰지 않음).
 python clean_pdf_artifacts.py [--apply]       # 기존 document_chunks PDF 편집흔적 일괄 청소(dry-run 기본. content만, embedding 유지)
@@ -1145,6 +1149,7 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 
 ## 하지 말아야 할 것 (규칙 + 한 줄 이유 / 상세는 배경역사 문서)
 - **이슈맵 테이블(`issues`·`issue_links`)의 컬럼·`item_type`을 바꾸거나 새로 만들면서 사내판 인계를 빠뜨리지 말 것 (#110-보론, 2026-09-24)** — 사내판 `export_snapshot.py`(사내 저장소)가 두 테이블을 **매일 17:00 전량 교체**로 가져가고, 콘솔 「이슈맵」(외부판 `loadIssueMap` 이식본 `ported.js`, 열람 전용)이 그대로 그린다. 새 item_type(예: 의원 프로필 연결)이나 컬럼 변경은 사내 화면이 **오류 없이 조용히 빠뜨린다** → 맥북 사내판 세션에 ported.js 수정을 인계할 것. 데이터만 바꾸는 작업(이슈 신설·기사 이동·요약 재작성·행 삭제)은 다음 스냅샷에 자동 반영되므로 사내 작업 없음. 외부판 저장소 문서만 보고 "사내판에 이슈맵 없음"으로 단정했다가 틀린 사례가 이 항목의 발단. (배경역사 #110-보론)
+- **`tools_release.py`에 배포·파일 수정 기능을 넣지 말 것 — 점검·제안만(#212, 2026-09-25, §4-2-11 운영자 결정)** — Edge 배포는 외부 반영이라 세션·운영자가 목록을 보고 직접 실행한다. 새 정적 파일을 index.html에 붙이면 `STATIC`(캐시 번호 대상)에도 넣을 것. 같은 항목: 회사 PC의 `gitlab` 원격은 pushurl 2개(GitLab→GitHub)라 `git push gitlab main` 한 번이 두 원격 push다 — 이때 `origin/main` 추적 표시는 안 바뀌므로 원격 대조는 `tools_release.py --verify`(두 원격 fetch)로 할 것. 17시 체인의 `tools_people_refresh.py`에서 '발언 0건이면 중단' 가드를 빼지 말 것(조회 이상 한 번에 명부 전원이 발언 0이 된다). (배경역사 #212)
 - **워치독 ③-3 AI 비용 계측 경보(캐시 적중률 < 80%·24시간 비용 > 7일 중앙값×2 且 ≥ $1, #211, 2026-09-24, §4-2-8)를 빼거나 임계를 올려 조용하게 만들지 말 것 — 오경보가 잦으면 원인 사이트를 `SELF_REPORTED`에 넣는 식으로 좁힐 것** — 9/18~19 선별·긴급도 캐시가 100% 빗나가 호출당 입력 4,800~13,700토큰이었는데 `api_usage`를 직접 열기 전까지 아무도 몰랐다. 새로 1시간 캐시를 거는 콜을 추가하면 `CACHED_SITES`에도 넣을 것. 같은 항목에서 `claude-proxy`는 끊긴 스트림도 `…:aborted`로 기록한다 — `record` 1회 가드(정상 flush와 중복 기록 방지)를 없애지 말 것. (배경역사 #211)
 - **봇 지침서 동기화 감시(`ops_system_prompt_hash()` RPC + 운영 상태 '봇 지침서(프롬프트) 동기화' 줄 + `health_watchdog.py` ③-2, #210, 2026-09-24, B-9 운영자 결정 '한 줄 + 텔레그램')를 빼거나, RPC가 프롬프트 **내용**을 돌려주게 바꾸지 말 것** — 봇(`/ask`)·`verify-citations`는 `app_config.system_prompt`, 대시보드는 `system_prompt.js`를 써서 `sync_system_prompt.py`를 잊으면 봇만 옛 프롬프트로 도는데 아무 표시가 없었다. 행은 RLS(`app_config_sel`: key <> 'system_prompt')로 클라이언트에 숨겨져 있으므로 RPC는 길이·SHA-256만(anon 실행 불가, authenticated·service_role만). 워치독은 매일 21:30 체크아웃된 파일과 DB 값을 대조해 다르면 운영자 봇 경고 — **프롬프트를 고친 세션은 커밋·푸시와 같은 자리에서 `python sync_system_prompt.py`까지 할 것**(안 하면 그날 밤 경고). (배경역사 #210)
 - **대시보드 자문의 대화 이력 상한(`trimAdvHistory`: 직전 3턴·이전 대화 합계 24,000자, #209, 2026-09-24, B-8 운영자 결정)을 풀어 `chatHistory` 전체를 다시 보내지 말 것** — 근거 자료(system)는 지금 질문 것만 들어가는데 이전 답은 매번 비캐시 입력으로 따라붙어, 질문이 쌓일수록 비용·지연이 늘고 근거 없는 옛 답이 재사용됐다. 화면·`chatHistory`는 그대로 두고 **보내는 messages만** 자른다. 앞 대화가 빠진 답변 아래엔 안내 한 줄, 탭 바의 「새 대화」(`newChat`)가 이력·화면을 비운다(기록은 chat_logs에 남음). 텔레그램 `/ask`는 원래 단일 질문(#86)이라 해당 없음. (배경역사 #209)

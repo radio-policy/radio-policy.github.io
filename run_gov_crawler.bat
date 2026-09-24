@@ -10,6 +10,10 @@ echo [%date% %time%] === law_diff start === >> gov_crawler_log.txt
 %PY% law_diff_gen.py >> gov_crawler_log.txt 2>&1
 echo [%date% %time%] === minutes start === >> gov_crawler_log.txt
 %PY% assembly_minutes.py >> gov_crawler_log.txt 2>&1
+rem people roster refresh after minutes import (no AI; writes changed rows only, #212)
+echo [%date% %time%] === people_refresh start === >> gov_crawler_log.txt
+%PY% tools_people_refresh.py >> gov_crawler_log.txt 2>&1
+echo [%date% %time%] people_refresh exit=%ERRORLEVEL% >> gov_crawler_log.txt
 rem law relation pipeline (order matters: law delegations -> notice delegations -> graph)
 echo [%date% %time%] === law_delegations start === >> gov_crawler_log.txt
 %PY% sync_law_delegations.py >> sync_law_delegations_sched.log 2>&1

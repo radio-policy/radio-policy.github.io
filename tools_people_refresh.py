@@ -71,6 +71,11 @@ def fetch_all(sb, table, cols):
 def main():
     sb = make_client(os.environ['SUPABASE_URL'], os.environ['SUPABASE_SERVICE_KEY'])
     sp = fetch_all(sb, 'assembly_speeches', 'speaker,position,meeting_date')
+    # 17시 체인에서 매일 돈다(§4-2-11, #212). 발언을 0건으로 읽으면(조회 이상) 아래 '발언0 처리'가
+    # 명부 전원을 0으로 만든다 — 아무것도 쓰지 않고 멈춘다.
+    if not sp:
+        print('[명부 갱신] assembly_speeches 0건 — 조회 이상으로 보고 중단(명부 무변경)')
+        return
     agg = defaultdict(lambda: {'n':0,'mn':None,'mx':None,'pos':None,'poss':set(),'t20':False,'t21':False,'t22':False,
                                'match':None,'fr':None,'to':None})
     for r in sp:
@@ -87,9 +92,11 @@ def main():
             if d < '2020-05-30': a['t20'] = True
             elif d < '2024-05-30': a['t21'] = True
             else: a['t22'] = True
-    people = fetch_all(sb, 'people', 'id,speaker_key,position')
+    _cols = ('speech_count','first_speech','last_speech','is_22','terms','position','speaker_match',
+             'speech_from','speech_to','kind')
+    people = fetch_all(sb, 'people', 'id,speaker_key,' + ','.join(_cols))
     known = {p['speaker_key']: p for p in people}
-    upd = ins = zero = 0
+    upd = ins = zero = same = 0
     for k, a in agg.items():
         if k == '미상': continue
         terms = '·'.join(t for t, f in (('20',a['t20']),('21',a['t21']),('22',a['t22'])) if f)
@@ -108,6 +115,12 @@ def main():
         # position(현재 직함)은 종전대로 최신 발언 기준이다.
         row['kind'] = '의원' if is_member else '정부·참고인'
         if k in known:
+            # 바뀐 행만 쓴다 — 매일 244행 전부 PATCH하지 않도록(날짜는 문자열 앞 10자로 비교)
+            old = known[k]
+            if all(str(old.get(c))[:10] == str(row.get(c))[:10] if c in ('first_speech','last_speech','speech_from','speech_to')
+                   else old.get(c) == row.get(c) for c in _cols):
+                same += 1
+                continue
             sb.table('people').update(row).eq('id', known[k]['id']).execute(); upd += 1
             continue
         is_telco = (any(TELCO_ORG.search(p) for p in a['poss'])
@@ -120,9 +133,9 @@ def main():
             row.update({'speaker_key':k, 'name':NAME_FIX.get(_nm, _nm)})
             sb.table('people').insert(row).execute(); ins += 1
     for k, p in known.items():
-        if k not in agg:
+        if k not in agg and p.get('speech_count'):
             sb.table('people').update({'speech_count':0}).eq('id', p['id']).execute(); zero += 1
-    print('[명부 갱신] 갱신 %d · 신규 %d · 발언0 처리 %d' % (upd, ins, zero))
+    print('[명부 갱신] 갱신 %d · 그대로 %d · 신규 %d · 발언0 처리 %d' % (upd, same, ins, zero))
 
 if __name__ == '__main__':
     main()
