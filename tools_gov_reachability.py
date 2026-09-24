@@ -57,6 +57,67 @@ TARGETS = [
     ('입법예고(lawmaking)', 'https://opinion.lawmaking.go.kr/gcom/ogLmPp?isOgYn=Y&opYn=Y&pageIndex=1', 'table tbody tr'),
 ]
 
+# ── 뉴스 본문 (2026-09-24 추가) ────────────────────────────────────────────────
+# crawler.py는 Actions에서 본문 수집을 건너뛴다(2026-06-04 커밋 334ff2c, 사유 "한국 뉴스 사이트 차단" —
+# 실측 기록 없음). 그 결과 10분 크롤의 긴급도 판정이 제목(+네이버 요약)만 보게 됐다(#188).
+# 여기서는 크롤러와 같은 조건(일반 파이썬 HTTP + 브라우저 UA, TLS 위장 없음)으로 먼저 열어 보고,
+# 실패하면 curl_cffi 위장으로 한 번 더 열어 본다 — "막힌다"와 "위장하면 열린다"를 가른다.
+# 판정: 본문 후보 요소의 텍스트가 300자 이상이면 성공. 표본은 최근 7일 news_feed 상위 도메인.
+NEWS_BODY_CSS = ('#dic_area, #article-view-content-div, #articleBody, div.article_body, '
+                 '#news-contents, div.article-body, div[itemprop="articleBody"], article')
+NEWS_TARGETS = [
+    ('네이버 뉴스',     'https://n.news.naver.com/mnews/article/666/0000124771?sid=103'),
+    ('디지털투데이',    'https://www.digitaltoday.co.kr/news/articleView.html?idxno=702579'),
+    ('이투데이',        'https://www.etoday.co.kr/news/view/2629191'),
+    ('아주경제',        'https://www.ajunews.com/view/20260924105444887'),
+    ('뉴스핌',          'https://www.newspim.com/news/view/20260923000857'),
+    ('서울경제TV',      'https://www.sentv.co.kr/article/view/sentv202609230083'),
+    ('IT조선',          'https://it.chosun.com/news/articleView.html?idxno=2023092170777'),
+]
+NEWS_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36'
+
+
+def _body_len(html: str) -> int:
+    soup = BeautifulSoup(html, 'html.parser')
+    best = 0
+    for el in soup.select(NEWS_BODY_CSS):
+        best = max(best, len(re.sub(r'\s+', ' ', el.get_text(' ', strip=True))))
+    return best
+
+
+def _plain_get(url: str):
+    """crawler.py의 requests.get과 같은 부류(파이썬 TLS 지문, 브라우저 UA만)."""
+    import urllib.request
+    req = urllib.request.Request(url, headers={'User-Agent': NEWS_UA, 'Accept-Language': 'ko,en;q=0.8'})
+    with urllib.request.urlopen(req, timeout=25) as r:
+        raw = r.read()
+        enc = r.headers.get_content_charset() or 'utf-8'
+        return r.status, raw.decode(enc, errors='replace')
+
+
+def probe_news(name: str, url: str):
+    """(일반 성공, 위장 성공|None, 메모). 위장은 일반이 실패했을 때만 시도한다."""
+    plain_ok, plain_note = False, ''
+    try:
+        status, html = _plain_get(url)
+        n = _body_len(html)
+        plain_ok = status == 200 and n >= 300
+        plain_note = 'HTTP %s/본문%d자' % (status, n)
+    except Exception as e:
+        plain_note = type(e).__name__ + (':' + str(getattr(e, 'code', '') or '')).rstrip(':')
+    imp_ok, imp_note = None, ''
+    if not plain_ok and IMPERSONATE:
+        try:
+            res = requests.get(url, impersonate='chrome110', timeout=25)
+            n = _body_len(res.text)
+            imp_ok = res.status_code == 200 and n >= 300
+            imp_note = 'HTTP %s/본문%d자' % (res.status_code, n)
+        except Exception as e:
+            imp_ok, imp_note = False, type(e).__name__
+    print('  %-14s 일반 %-4s %-22s' % (name, 'OK' if plain_ok else '실패', plain_note)
+          + ('' if imp_ok is None else '  위장 %-4s %s' % ('OK' if imp_ok else '실패', imp_note)))
+    return plain_ok, imp_ok, plain_note
+
 
 def probe(name: str, url: str, selector: str):
     """(성공여부, 실패사유) 반환. 실패사유는 Actions 주석에 실어 원격에서 읽는다."""
@@ -123,6 +184,25 @@ def main() -> int:
     if failed:
         summary += ' | 실패: ' + ', '.join(failed)
     print('::notice title=gov-reachability::' + summary)
+
+    # ── 뉴스 본문 진단 — 결과는 별도 주석(news-reachability)으로만 남기고 종료 코드에는 안 넣는다
+    #    (정부 진단의 conclusion 의미를 그대로 두기 위해).
+    print()
+    print('뉴스 본문 접속 진단 (crawler.py가 Actions에서 건너뛰는 단계)')
+    news = []
+    for i, (name, url) in enumerate(NEWS_TARGETS):
+        if i:
+            time.sleep(1)
+        news.append((name,) + probe_news(name, url))
+    plain_n = sum(1 for _n, p, _i, _w in news if p)
+    imp_n = sum(1 for _n, _p, im, _w in news if im)
+    news_summary = '일반 %d/%d' % (plain_n, len(news))
+    if IMPERSONATE:
+        news_summary += ' | 위장 추가성공 %d' % imp_n
+    news_summary += ' | ' + ', '.join('%s=%s' % (n, '일반OK' if p else ('위장OK' if im else '실패:' + w))
+                                      for n, p, im, w in news)
+    print('결과:', news_summary)
+    print('::notice title=news-reachability::' + news_summary)
 
     # 전부 통과해야 성공으로 본다 — 원격에서는 conclusion만 보고도 판정할 수 있게.
     return 0 if ok_n == total else 1
