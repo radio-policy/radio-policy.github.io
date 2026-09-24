@@ -1302,6 +1302,13 @@ class TestLawSyncReport(unittest.TestCase):
         self.assertNotIn('급변', msg)
         self.assertIn('OKF 요약은 모두 조문 판과 일치', msg)
 
+    def test_default_now_path(self):
+        """운영 호출(_notify_sync_result)은 now를 넘기지 않는다 — 그 경로의 timedelta 미import로
+        교체한 날마다 완료 통지가 NameError로 죽고 있었다(#197~#219). 테스트가 now를 늘 넘겨 놓쳤다."""
+        import law_sync
+        msg = law_sync.format_sync_report(self._report(73, 83), [], drift=[], keep_old=True)
+        self.assertRegex(msg, r'\(\d\d/\d\d \d\d:\d\d\)')
+
     def test_chunk_jump_is_flagged(self):
         """청크 300→12: 동명이법·취득 누락 의심 — 무인 교체가 조용히 지나가지 않게 표시"""
         import law_sync

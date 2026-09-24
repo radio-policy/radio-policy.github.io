@@ -35,7 +35,7 @@ import json
 import argparse
 import subprocess
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")
@@ -771,7 +771,13 @@ def _update_doc_chunks(sb, doc_name, patch):
 
     id 커서로 페이지네이션한다. 커서 없이 limit만 걸고 '이미 처리한 id'를 메모리에서
     제외하면, 같은 200행이 계속 조회되다 빈 목록이 되어 조용히 절반만 갱신된다.
+
+    superseded로 내릴 때는 임베딩도 같은 UPDATE에서 비운다(#219) — 검색은 전부 현행만 보므로 구판 벡터는
+    HNSW 자리만 차지하고, status만 바꾸는 UPDATE는 HOT가 아니라 같은 벡터가 인덱스에 한 번 더 들어갔다
+    (2,951행·401MB까지 누적). 다시 current로 올리면 backfill_embeddings가 NULL을 채운다.
     """
+    if patch.get('status') == 'superseded' and 'embedding' not in patch:
+        patch = {**patch, 'embedding': None}
     last = 0
     while True:
         rows = (sb.table('document_chunks').select('id')
