@@ -8,7 +8,7 @@ pages:
     - mkdir -p public
     - cp index.html styles.css app.js system_prompt.js lawmap_articles.js public/   # 새 정적 파일은 여기에도 추가해야 GitLab Pages에 실린다(GitHub Pages는 저장소 전체를 서빙) — #125에서 404로 실측
     - mkdir -p public/vendor && cp vendor/vis-network-9.1.9.min.js public/vendor/   # 관계도 라이브러리 동봉본(#170-보론3) — 빠지면 unpkg로 폴백되며 첫 화면이 느려진다(콘솔 경고)
-    - mkdir -p public/supabase/functions/_shared && cp supabase/functions/_shared/cite_verify.js public/supabase/functions/_shared/   # 텔레그램·대시보드 공용 인용 검증 모듈(#155) — index.html이 이 경로로 로드
+    - mkdir -p public/supabase/functions/_shared && cp supabase/functions/_shared/cite_verify.js supabase/functions/_shared/rag_core.js public/supabase/functions/_shared/   # 텔레그램·대시보드 공용 모듈(인용 검증 #155, 검색 규칙 #215) — index.html이 이 경로로 로드
   artifacts:
     paths:
       - public

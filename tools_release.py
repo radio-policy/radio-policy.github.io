@@ -32,7 +32,7 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 PROJECT_REF = 'zwkjedumfuhodckmtxxn'
 FN_DIR = 'supabase/functions'
 STATIC = ('app.js', 'styles.css', 'system_prompt.js', 'lawmap_articles.js',
-          'supabase/functions/_shared/cite_verify.js')
+          'supabase/functions/_shared/cite_verify.js', 'supabase/functions/_shared/rag_core.js')
 KST = timezone(timedelta(hours=9))
 
 
@@ -130,6 +130,8 @@ def check_edge(changed):
                     % (fn, ', '.join(os.path.basename(w) for w in why), fn, PROJECT_REF, flag))
     if 'supabase/functions/_shared/cite_verify.js' in changed:
         todo.append('② cite_verify.js 변경 — node tests/cite_verify.test.js 도 돌릴 것')
+    if 'supabase/functions/_shared/rag_core.js' in changed:
+        todo.append('② rag_core.js 변경 — node tests/rag_core.test.js + 회귀 세트(tests/rag_regress_deno.ts) 전후 대조')
     return todo
 
 

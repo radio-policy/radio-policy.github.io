@@ -902,7 +902,8 @@ class TestDashboardCacheBuster(unittest.TestCase):
     system_prompt.js 번호가 09-11에 멈춘 채 파일이 세 번 바뀌어, 캐시가 남은 브라우저는 옛 자문 지시문을 썼다.
     커밋 전 수정분(작업 트리·스테이징)은 번호가 오늘(KST)이어야 한다. git이 없거나 기록이 없으면 건너뛴다."""
 
-    FILES = ('app.js', 'styles.css', 'system_prompt.js', 'supabase/functions/_shared/cite_verify.js')
+    FILES = ('app.js', 'styles.css', 'system_prompt.js', 'supabase/functions/_shared/cite_verify.js',
+             'supabase/functions/_shared/rag_core.js')
 
     def _git(self, *args):
         import subprocess

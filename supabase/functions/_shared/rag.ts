@@ -1,11 +1,11 @@
 // ============================================================================
 //  공용: AI 자문 RAG 파이프라인 (app.js 자문 경로의 서버판 — telegram-webhook에서 사용)
 //
-//  대시보드 app.js의 3중 하이브리드(키워드확장+ilike / trgm / 시맨틱)와 kb 요약 검색을
-//  핵심 경로만 TS로 이식했다. v1 단순화로 제외한 것(대시보드에만 있음):
-//  별표(annex) 추적 / 시행예정(pending) / custom_knowledge / 뉴스 컨텍스트 / law_graph·lawmap.
-//  임계값·가중치는 app.js와 동일하게 유지한다 (융합은 RRF — 종전 #23 합산식에서 교체.
-//  RRF·행위 표제어 가중·법령 위계 동점 규칙을 고치면 app.js searchKeywords/searchLawArticles도 같이).
+//  검색의 **순수 규칙**(키워드 추출·법령 어휘 대응표·제외어·RRF 융합·조문 정밀검색 순위·컨텍스트 문구·상한 상수)은
+//  `_shared/rag_core.js` 한 파일에 있고 app.js와 이 파일이 같은 파일을 읽는다(#215, 2026-09-25, 개선안 §4-2-12 단계 A).
+//  이 파일에는 DB 조회·Haiku 확장·임베딩·Sonnet 스트림·텔레그램 전용 지시(3,000자·5,000토큰)만 남는다.
+//  규칙을 고치려면 rag_core.js를 고치고 이 함수(telegram-webhook)를 재배포. 여기서 같은 이름을 다시 정의하지 말 것
+//  (tests/rag_core.test.js 구조 가드). 종전에는 '동일 유지' 주석으로만 지켰고 실제로 3곳이 갈라져 있었다(배경역사 #215).
 //
 //  키: ANTHROPIC_API_KEY·VOYAGE_API_KEY는 Edge Function Secrets에서만 읽는다.
 //  app_config(claude_key, anon 노출)를 서버에서 재사용하지 말 것 — 지침 do-not.
@@ -14,9 +14,13 @@
 import type { SupabaseClient } from 'jsr:@supabase/supabase-js@2';
 // [원문 확인됨] 검증 모듈(#155) — 브라우저·node 테스트와 같은 파일을 쓰므로 globalThis로 받는다
 import './cite_verify.js';
+// 자문 검색의 순수 규칙(#215) — 브라우저·node 테스트와 같은 파일이라 역시 globalThis로 받는다
+import './rag_core.js';
 import { recordApiUsage, callHaikuText, mergeUsage, type ApiUsage } from './usage.ts';
 // deno-lint-ignore no-explicit-any
 const CiteVerify = (globalThis as any).CiteVerify;
+// deno-lint-ignore no-explicit-any
+const RagCore = (globalThis as any).RagCore;
 
 const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
 const VOYAGE_URL = 'https://api.voyageai.com/v1/embeddings';
@@ -31,29 +35,8 @@ export const testHooks: {
   embed?: (query: string, model: string) => Promise<number[] | null>;
 } = {};
 
-// ── app.js extractKeywords 이식 (한국어 조사·불용어 제거, 법령 키워드 우선) ──
-// 우선 키워드·용언 어미·제목 가점 제외어 — 세 상수 모두 app.js와 동일 유지(한쪽만 고치면 봇/대시보드 검색이 갈라진다)
-const PRIORITY_KW_RE = /제\d+조|주파수|할당|재할당|전자파|ITU|5G|6G|EMC|SAR|고시|시행령|시행규칙|적합성|기술기준|무선국|면허|허가|신청|승인|폐업|폐지|이용기간|지원금|장려금|차별|이용자|대리점|판매점|유통점|약관|요금|금지행위|과징금|과태료|벌칙|벌금|사업자|기지국|검사|등록|신고|취소|회수|위탁|도매|접속|설비|번호이동|결합|계약|고지|공시|재난|손해배상|개인정보|위치정보|단말|보조금|할인|선택약정|전기통신|전파|무선|공동이용|역무|커버리지|경매/;
-const VERB_TAIL = /(하고|하는|하며|하여|되는|되어|하면|합니다|입니까|인지)$/;
-function extractKeywords(text: string): string[] {
-  const stopwords = ['이','가','은','는','을','를','의','에','에서','으로','로','과','와','도',
-    '만','그','이것','저것','그것','있다','없다','하다','되다','이다','어떻게','어떤',
-    '무엇','언제','어디','왜','누가','대해','관해','통해','위해','따라','대한','관한',
-    '통한','위한','있는','없는','하는','되는','인','이란','이라는','라는','라고',
-    '이고','이며','하고','이나','또는','그리고','하지만','그러나','따라서'];
-  const josa = /(에서는|으로는|에서의|이라는|에서도|에서|에는|으로|로는|보다|부터|까지|처럼|마다|조차|밖에|은|는|이|가|을|를|의|에|와|과|도|만)$/;
-  const words = text.split(/[\s,.·()[\]「」『』<>:;!?]+/)
-    .map((w) => w.replace(/[^가-힣a-zA-Z0-9.]/g, '').trim())
-    .map((w) => { const s = w.replace(josa, ''); return s.length >= 2 ? s : w; })
-    // 용언 어미 제거(#173): '운영하고'·'지급하는'이 어미째 키워드가 되면 ilike에 아무것도 안 걸린다
-    .map((w) => { const s = w.replace(VERB_TAIL, ''); return s.length >= 2 ? s : w; })
-    .filter((w) => w.length >= 2 && !stopwords.includes(w));
-  // 법령 명사 우선(#173) — 상한 5개를 앞에서부터 자르므로, 질문 앞에 전제 문장이 붙으면
-  // '추가지원금·이용자' 같은 법령 어휘가 '직접·운영' 뒤로 밀려 잘렸다(2026-09-17 실측). app.js와 동일 유지.
-  const pri = words.filter((w) => PRIORITY_KW_RE.test(w));
-  const all = pri.concat(words.filter((w) => !pri.includes(w)));
-  return all.filter((v, i, a) => a.indexOf(v) === i).slice(0, 5);
-}
+// 법령 검색용 키워드 추출(조사·어미 제거, 법령 명사 우선, 상한 5) — rag_core.js (#215)
+const extractKeywords: (text: string) => string[] = RagCore.extractKeywords;
 
 // ── Haiku 쿼리 확장 (실패 시 빈 배열 → 기본 키워드만) ──
 async function expandQueryKeywords(apiKey: string, query: string, sb?: SupabaseClient): Promise<string[]> {
@@ -104,12 +87,7 @@ interface Chunk {
   _score?: number; _trgm_score?: number; _semantic_score?: number; _hybrid_score?: number;
 }
 
-// 문서당 청크 상한 (doc_category별 차등 — app.js searchKeywords와 동일 유지, 한쪽만 고치면 봇/대시보드 답이 갈라진다):
-// '추가지식' = 운영자가 일부러 넣은 논문·근거메모 → 8청크까지 깊게 참고 (일괄 3에서는 표지·방법론만
-// 잡히고 핵심 결론이 컷 밖으로 밀리는 실측). 그 외(보도자료·뉴스·회의록 등) = 3 (한 문서 독식 방지).
-const PERDOC_LIMIT: Record<string, number> = { '추가지식': 8, 'default': 3 };
-// 전체 상위 컷 12→15: 추가지식 1편이 8을 차지해도 다른 문서 몫이 7 남게 (종전 최악 9에서 소폭 감소에 그침).
-const TOTAL_CHUNK_CUT = 15;
+// 문서당 청크 상한(추가지식 8·그 외 3)·전체 상한 15는 rag_core.js rankChunks 안에서 적용된다 (#215)
 
 // 검색 갈래별 기록(#203, 2026-09-24) — [{fn, ms, rows, error}]. buildAdvisoryContext가 배열을 만들어 각 검색
 // 함수에 넘기고 answerAdvisory가 chat_logs.search_meta에 남긴다. 모듈 전역이 아니라 인자로 넘기는 이유:
@@ -183,67 +161,8 @@ async function searchChunks(sb: SupabaseClient, apiKey: string, query: string, m
   merge(await trgmP as Chunk[], '_trgm_score', 'trgm_score');
   merge(await semP as Chunk[], '_semantic_score', 'similarity');
 
-  // ── RRF(Reciprocal Rank Fusion) 융합 (app.js searchKeywords와 동일 유지) ──
-  // 종전에는 키워드 정규화(0~1)+trgm+시맨틱×2를 그대로 합산해 척도가 다른 점수끼리 싸웠다
-  // (시맨틱 상위=논문이어도 합산 우승). 각 검색을 '순위'로 환산해 1/(K+순위) 합으로 융합하면
-  // 척도 문제가 사라진다(K=60 관례) — "몇 개의 검색에서 얼마나 상위였나"가 결정한다.
-  const synNormSet = new Set(lawSynonymKeywords(query).map((s) => s.toLowerCase()));
-  for (const r of results) {
-    let score = 0;
-    for (const kw of keywords.slice(0, 10)) {
-      const w = baseKeywords.includes(kw) ? 2 : 1;
-      const k = kw.toLowerCase();
-      if ((r.content || '').toLowerCase().includes(k)) score += w;
-      if ((r.doc_name || '').toLowerCase().includes(k)) score += w;
-      // 조문 표제어 일치 가점 — 질문 상투어('절차' 등)는 제외, LAW_SYNONYMS 출신 행위어는 가중
-      if ((r.article_no || '').toLowerCase().includes(k) && !isTitleStop(kw, query)) {
-        score += synNormSet.has(k) ? 4 : w * 2;
-      }
-    }
-    r._score = score;          // RRF 순위 산출용 (절대값은 융합에 안 쓴다)
-    r._hybrid_score = 0;
-  }
-  const RRF_K = 60;
-  const addRrf = (list: Chunk[]) => {
-    list.forEach((r, idx) => { r._hybrid_score = (r._hybrid_score || 0) + 1 / (RRF_K + idx + 1); });
-  };
-  addRrf(results.filter((r) => (r._score || 0) > 0).slice().sort((a, b) => (b._score || 0) - (a._score || 0)));
-  addRrf(results.filter((r) => (r._trgm_score || 0) > 0).slice().sort((a, b) => (b._trgm_score || 0) - (a._trgm_score || 0)));
-  addRrf(results.filter((r) => (r._semantic_score || 0) > 0).slice().sort((a, b) => (b._semantic_score || 0) - (a._semantic_score || 0)));
-  // 일반 가점·감점: 파일 확장자 문서(논문·계획서류) 감점 + **article_no 종류별 등급**(#90).
-  // 크기 0.5/(K+1) = 목록 1개 1위 기여의 절반 — 논문이 조문을 이기려면 한 목록 상위만큼 더 필요.
-  // 종전에는 article_no가 있으면 종류 불문 같은 가점이었다. 그런데 실DB에서 article_no 보유
-  // 18,349개 중 **조문은 41%(7,587)뿐**이고 별표 5,538·부칙 1,704·별지 1,421·붙임 1,191·
-  // 서식 908이 조문과 동급 가점을 받고 있었다 — 「주파수 재할당 대가」 15자리를 별표 7개가
-  // 먹고(그중 전자파적합성 별표 5는 가정용 전기기기라 완전 무관), 「개인정보 유출」은 부칙이
-  // 2자리를 차지했다. 등급을 나눈 A/B 실측: 75자리 중 8자리 교체, **악화 사례 0건**.
-  // 별표·붙임은 **배제가 아니라 가점만 뗀다**(#88과 같은 원칙) — 진짜 정본인 별표
-  // (전파법 시행령 별표 2·3 = 주파수할당대가 산정기준)는 시맨틱·키워드 점수로 여전히 올라온다.
-  const FILE_DOC_RE = /\.(pdf|md|docx|hwp)$/i;
-  const UNIT = 0.5 / (RRF_K + 1);
-  const articleBonus = (art?: string): number => {
-    if (!art) return 0;                                   // 보도자료·회의록 — 가점 없음(감점도 없음)
-    if (/^\d+조/.test(art)) return UNIT;                  // 조문
-    if (/^(별표|붙임)/.test(art)) return 0;                // 표·부속 — 중립
-    if (/^(부칙|서식|별지)/.test(art)) return -UNIT;       // 개정 이력·서식 — 운영자: "우선순위가 아니다"
-    return 0;
-  };
-  for (const r of results) {
-    r._hybrid_score = (r._hybrid_score || 0) + articleBonus(r.article_no);
-    if (FILE_DOC_RE.test(r.doc_name || '')) r._hybrid_score = (r._hybrid_score || 0) - UNIT;
-  }
-  results.sort((a, b) => (b._hybrid_score || 0) - (a._hybrid_score || 0));
-  // 문서당 청크 상한 — doc_category별 차등 (PERDOC_LIMIT): 추가지식 ≤8, 그 외 ≤3 (독식 방지)
-  const perDoc: Record<string, number> = {};
-  const picked: Chunk[] = [];
-  for (const r of results) {
-    if (picked.length >= TOTAL_CHUNK_CUT) break;
-    const dn = r.doc_name || '';
-    const cap = PERDOC_LIMIT[r.doc_category || ''] || PERDOC_LIMIT['default'];
-    perDoc[dn] = (perDoc[dn] || 0) + 1;
-    if (perDoc[dn] <= cap) picked.push(r);
-  }
-  return picked;
+  // ── RRF 융합·조문 종류별 가점·문서당 상한 — rag_core.js rankChunks (#215, app.js와 같은 함수) ──
+  return RagCore.rankChunks(results, keywords, baseKeywords, query) as Chunk[];
 }
 
 // ── kb 요약 검색 (app.js searchKbSummaries 이식: trgm×5 + 시맨틱(law-2)×10 융합, 상위 5) ──
@@ -273,27 +192,15 @@ async function searchKbSummaries(sb: SupabaseClient, query: string, meta?: Searc
 }
 
 // ── 컨텍스트 조립 (app.js buildRagContext / buildKbContext 이식) ──
-function buildRagContext(chunks: Chunk[]): string {
-  if (!chunks.length) return '';
-  const items = chunks.map((c, i) => {
-    const meta: string[] = [];
-    if (c.article_no) meta.push('조항: ' + c.article_no);
-    if (c.notice_no) meta.push('고시번호: ' + c.notice_no);
-    // 보도자료는 effective_date가 '발표일'이다(#155-보론2) — 시행일이라 적으면 모델이 제도 시행일로 오독한다
-    if (c.effective_date) meta.push((/보도자료/.test(c.doc_category || '') ? '발표일: ' : '시행일: ') + c.effective_date);
-    const metaStr = meta.length ? ' [' + meta.join(' | ') + ']' : '';
-    return `[참조 ${i + 1}] 출처: ${c.doc_name} (${c.doc_category || ''})${metaStr}\n${c.content}`;
-  });
-  return '\n\n---\n\n[RAG 검색 결과 — 질문과 관련된 실제 법령·고시 원문]\n아래 내용은 질문과 의미적으로 유사한 문서 청크를 검색한 결과입니다. 반드시 아래 원문을 최우선으로 인용하고, 조항 번호와 내용이 일치하는지 확인하여 답변하세요:\n\n' + items.join('\n\n---\n\n');
-}
+const buildRagContext: (chunks: Chunk[]) => string = RagCore.buildRagContext;   // 조문 참조 블록 문구 — rag_core.js (#215)
 // ── 별표 동반 인출 (app.js buildAnnexContext 이식 — #90) ─────────────────────
 // 법령 조문은 실제 숫자를 안 담고 별표로 넘긴다: 전파법 시행령 제14조는 "별표 3에 따라
 // 산정한다"고만 하고 산식은 별표 3에 있다. 조문만 근거로 주면 봇은 「별표 3에 따라
 // 산정합니다」로 끝나고 정작 물어본 금액·요율·기준을 답하지 못한다.
 // 대시보드에는 이 경로가 있었는데(315개 별표가 이 경로로 닿는다) **봇에는 아예 없었다.**
 // app.js와 동일 유지 — 한쪽만 고치지 말 것. 상한 값도 같게 둔다.
-const ANNEX_MAX_UNITS = 2;     // 질문당 별표 개수
-const ANNEX_MAX_CHUNKS = 6;    // 별표당 청크 (별표 하나가 최대 812청크라 상한 필수)
+const ANNEX_MAX_UNITS: number = RagCore.ANNEX_MAX_UNITS;     // 질문당 별표 개수 — rag_core.js
+const ANNEX_MAX_CHUNKS: number = RagCore.ANNEX_MAX_CHUNKS;   // 별표당 청크 — rag_core.js
 
 interface AnnexRow { chunk_index: number; article_no?: string; content?: string }
 
@@ -401,23 +308,7 @@ async function buildAnnexContext(sb: SupabaseClient, chunks: Chunk[], question: 
   }
 }
 
-function buildKbContext(rows: KbRow[]): string {
-  if (!rows.length) return '';
-  const items = rows.map((r, i) => {
-    const meta: string[] = [];
-    if (r.law_type) meta.push(r.law_type);
-    if (r.law_number) meta.push('법령번호: ' + r.law_number);
-    if (r.enforcement_date) meta.push('시행일: ' + r.enforcement_date);
-    const metaStr = meta.length ? ' [' + meta.join(' | ') + ']' : '';
-    return `[법령요약 ${i + 1}] ${r.title || ''}${metaStr}\n${r.content || ''}`;
-  });
-  // 2026-09-25 통일(#214): 지시문은 대시보드(app.js buildKbContext)판 3문장 — 서버판을 만들 때(2026-08-01) 1문장으로 줄여 적혀 있었다
-  return '\n\n---\n\n[법령·규제 요약 지식베이스 — 현행 법령·고시·훈령 요약/실무]\n' +
-    '아래는 우리 팀이 정리한 법령·고시·훈령의 요약·적용범위·실무 체크리스트·소관부처 문서(현행본)입니다. ' +
-    '법의 취지·실무 대응·담당부처를 물을 때 활용하세요. ' +
-    '단, 정확한 조문 번호·문구 인용은 위 RAG 조문 원문을 최우선으로 하고, 이 요약은 실무 맥락 보강용으로 쓰세요:\n\n' +
-    items.join('\n\n---\n\n');
-}
+const buildKbContext: (rows: KbRow[]) => string = RagCore.buildKbContext;   // 법령요약 블록 문구 — rag_core.js (#215)
 
 // ── Sonnet 호출: 스트리밍으로 받아 서버에서 누적 ──
 // (스트리밍 유지 이유: 비스트리밍 회귀 금지 가드레일과 일관 + Sonnet5 적응형 추론의
@@ -429,7 +320,7 @@ type SystemBlock = { type: 'text'; text: string; cache_control?: { type: 'epheme
 //  어디에도 안 남았다 — footer에는 내부 RAG 문서명만 나열돼 "참고가 전부 법령" 사고.)
 export interface WebRef { url: string; title: string }
 // 스트림 절단 보호(#205, B-7): 무수신 3분이면 끊고, 끊겨도 받은 부분은 돌려준다(cut에 사유). stopReason·sawStop은 호출측이 경고를 붙이는 재료.
-const STREAM_IDLE_MS = 180_000;
+const STREAM_IDLE_MS: number = RagCore.STREAM_IDLE_MS;   // 3분 — rag_core.js
 async function callSonnet(apiKey: string, system: string | SystemBlock[], question: string): Promise<{ text: string; webRefs: WebRef[]; usage: ApiUsage; stopReason: string | null; sawStop: boolean; cut: string | null }> {
   const res = await fetch(ANTHROPIC_URL, {
     method: 'POST',
@@ -510,7 +401,7 @@ async function callSonnet(apiKey: string, system: string | SystemBlock[], questi
 }
 
 // ── 인용 조문 통째 보강(#155-1안)에 쓰는 조각 조회 — verify-citations·app.js fetchArticleChunks와 동일 조건 ──
-const EXPAND_OPTS = { maxArticles: 10, maxChunksPerArticle: 4, maxAddedChunks: 14 };
+const EXPAND_OPTS = RagCore.EXPAND_OPTS;   // app.js CITE_EXPAND_OPTS와 같은 객체 — rag_core.js
 async function fetchArticleChunks(sb: SupabaseClient, docName: string, key: string): Promise<Chunk[]> {
   const r = await sb.from('document_chunks').select('id, doc_name, article_no, chunk_index, content')
     .eq('doc_name', docName).eq('status', 'current').eq('is_approved', true)
@@ -518,7 +409,7 @@ async function fetchArticleChunks(sb: SupabaseClient, docName: string, key: stri
   return (r.data || []) as Chunk[];
 }
 // ── 역참조 발췌(#155-보론4)에 쓰는 조회 — 같은 문서에서 '제<key>'를 본문에 담은 조문 조각. app.js fetchCitingChunks와 동일 조건 ──
-const CITING_OPTS = { maxPerArticle: 4, maxTotal: 8, maxLen: 300 };
+const CITING_OPTS = RagCore.CITING_OPTS;
 async function fetchCitingChunks(sb: SupabaseClient, docName: string, key: string): Promise<Chunk[]> {
   const r = await sb.from('document_chunks').select('id, doc_name, article_no, chunk_index, content')
     .eq('doc_name', docName).eq('status', 'current').eq('is_approved', true)
@@ -535,100 +426,13 @@ async function fetchCitingChunks(sb: SupabaseClient, docName: string, key: strin
 // (article_no로 거르는 이유: doc_category '기타'에 고시와 박사논문이 섞여 카테고리로는 못 거른다)
 export interface LawHit { id: number; doc_name: string; article_no?: string; content: string; _hits: number }
 
-// 정책 어휘 → 법령 조문 표제어 대응표.
-// LLM 확장만으로는 이 간극을 못 넘는다(실측: Haiku·Sonnet 모두 "3G 종료"에서 '휴업·폐업'을 못 냄).
-// 법은 '서비스 종료'라 쓰지 않는다 — 전기통신사업법은 '휴업·폐업', 전파법은 '폐지·운용휴지'다.
-// 이 표만 더해도 전파법 시행령 51조·전파법 25조의2가 최상위로 올라온다(실측).
-const LAW_SYNONYMS: Record<string, string[]> = {
-  '종료': ['휴업', '폐업', '폐지', '휴지', '운용휴지'],
-  '중단': ['휴업', '휴지', '정지', '중지'],
-  '폐지': ['폐업', '폐지', '휴지'],
-  '개시': ['개설', '허가', '등록', '신고'],
-  '시작': ['개설', '허가', '등록'],
-  '변경': ['변경허가', '변경등록', '변경신고'],
-  '취소': ['취소', '정지', '철회'],
-  '반납': ['반납', '회수', '재할당'],
-};
-
-// 질문에 정책 동사가 있으면 대응하는 법령 표제어를 돌려준다 (app.js lawSynonymKeywords와 동일 유지)
-function lawSynonymKeywords(query: string): string[] {
-  const out: string[] = [];
-  for (const [k, syns] of Object.entries(LAW_SYNONYMS)) {
-    if (query.includes(k)) for (const s of syns) if (!out.includes(s)) out.push(s);
-  }
-  for (const [re, terms] of PRACTICE_TERMS) {
-    if (re.test(query)) for (const t of terms) if (!out.includes(t)) out.push(t);
-  }
-  return out;
-}
-
-// ── 실무 용어 → 법령 용어 (2026-08-04, #83) ──────────────────────────────────
-//  임베딩 모델은 한국어 법령으로 학습돼 **업계에서만 쓰는 외래어를 조문에 연결하지 못한다.**
-//  실측(match_law_articles_semantic, voyage-4-lite):
-//    "리파밍 관련 법 조항이 어떤게 있지?" → 1위 약관규제법 제30조 0.441 (전부 잡음)
-//    "주파수 회수 또는 주파수 재배치"      → 1위 전파법 제6조의2   0.543 (정답)
-//  즉 검색 엔진은 멀쩡한데 **질문의 어휘가 법령에 없는 것**이 원인이다. 「5G 커버리지 맵」이
-//  안 잡히던 사건(#79)과 같은 계열 — 실무 용어와 법령 용어의 간극은 글자·의미 어느 쪽으로도
-//  못 넘는다. 그래서 **검색 전에 질의 문자열 자체를 법령 용어로 보강**한다.
-//  · 확신하는 대응만 넣는다. 틀린 대응은 엉뚱한 조문을 1위로 올려 없는 것보다 나쁘다.
-//  · 원 질의는 지우지 않고 뒤에 덧붙인다(원 표현이 맞는 경우를 잃지 않도록).
-const PRACTICE_TERMS: Array<[RegExp, string[]]> = [
-  [/리파밍|리파-밍|re-?farming/i,      ['주파수회수', '주파수재배치', '주파수 회수', '주파수 재배치']],
-  [/커버리지|coverage/i,               ['이용가능 지역', '서비스 제공 지역']],
-  [/주파수\s*경매|경매/,               ['대가에 의한 주파수할당', '주파수할당']],
-  [/알뜰폰|MVNO/i,                     ['도매제공', '도매제공의무사업자']],
-  [/재할당/,                           ['주파수할당', '이용기간']],
-  // 세대 서비스 종료(2G·3G…)는 사업 폐업(LAW_SYNONYMS '종료')만으로는 주파수 쪽 조문이 안 잡힌다
-  // — 할당받은 주파수의 처리(회수·할당취소·이용기간)까지 한 묶음인 제도라 함께 보강한다 (2026-08-07)
-  [/(2G|3G|4G|5G|LTE|WCDMA|세대)\s*(이동통신|서비스)?\s*종료/i, ['주파수회수', '주파수할당의 취소', '이용기간']],
-  // 기관명 별칭 (2026-09-11 #154, app.js PRACTICE_TERMS 와 동일 유지): 방송통신위원회 → 방송미디어통신위원회 개편.
-  // 옛 고시·보도자료·회의록은 옛 이름, 2026년 고시·법령명은 새 이름 — 어느 쪽으로 물어도 양쪽이 잡혀야 한다.
-  [/방송미디어통신위원회|방송통신위원회|방미통위|방통위/, ['방송통신위원회', '방통위', '방송미디어통신위원회', '방미통위']],
-  // 유통·이용자보호 어휘(#173, 2026-09-17): 「추가지원금을 이용자에 따라 다르게 지급」 질문에서 제50조(금지행위)·
-  // 별표 4 제5호 마목(부당한 이용자 차별)이 한 번도 검색되지 않았다 — 질문은 '차별·다르게'라 쓰고 법은
-  // '금지행위·부당한 이용자 차별'이라 쓴다. 한 단어('차별')가 아니라 **조합**으로 발동한다(설비 제공 차별·
-  // 상호접속 차별 질문에 이용자 차별 조문이 끌려오지 않도록). app.js PRACTICE_TERMS와 동일 유지.
-  [/지원금.{0,12}(차별|다르게|차등)|(차별|다르게|차등).{0,12}지원금/, ['지원금의 차별 지급 금지', '금지행위', '부당한 이용자 차별']],
-  [/이용자.{0,12}(차별|다르게|차등)|(차별|차등).{0,12}이용자/, ['금지행위', '부당한 이용자 차별', '이용자의 이익']],
-  [/장려금|인건비|임대료|판촉비|인센티브|실적수당|리베이트/, ['공정한 유통 환경 조성', '장려금', '금지행위']],
-  [/대리점|판매점|유통점|직영/, ['대리점', '판매점', '판매점 선임에 대한 승낙', '공정한 유통 환경 조성']],
-  [/추가지원금|공시지원금|공통지원금|보조금/, ['지원금', '지원금의 차별 지급 금지']],
-];
-
-/** 의미 검색용 질의 — 실무 용어가 있으면 법령 용어를 덧붙인다. 없으면 원문 그대로. */
-export function expandQueryForSemantic(query: string): string {
-  const add: string[] = [];
-  for (const [re, terms] of PRACTICE_TERMS) {
-    if (re.test(query)) for (const t of terms) if (!add.includes(t)) add.push(t);
-  }
-  return add.length ? `${query} ${add.join(' ')}` : query;
-}
-// 질문 상투어 — 조문 제목 가점·주제 매칭에서 제외 ('절차'가 「규제심사 절차」 같은
-// 무관 조문 제목에 걸려 상위를 차지하는 것 방지. app.js GENERIC_QUERY_WORDS와 동일 유지)
-const GENERIC_QUERY_WORDS = ['방법', '방안', '절차', '하는', '관련', '대한'];
-// 제목 가점·키워드 조회 제외어(#173, 2026-09-17) — 두 글자 일반어가 조문 **제목**에 우연히 있으면 행위어 가중(×5)을
-// 받아 정밀검색 1~3위를 차지했다: 질문의 '직접'이 정보통신공사업법 시행령 제32조(하도급대금 직접 지급)·보편적역무
-// 고시 제16조(직접제공사업자)·해상무선설비 고시 제6조(협대역직접인쇄전신장치)를 데려왔고, '실적'은 소프트웨어진흥법,
-// '시스템'은 무선설비규칙 스퓨리어스 조문을 데려왔다. 검색 22문항 A/B: 7문항 개선·악화 0. 글자 수 규칙이 아니라
-// **목록**이다 — 검사·할당·면허 같은 두 글자 법령 행위어는 계속 가점을 받아야 한다. 표제어 사전 출신 단어는 예외.
-// app.js QUERY_TITLE_STOP과 동일 유지.
-const QUERY_TITLE_STOP = GENERIC_QUERY_WORDS.concat(['직접', '운영', '지급', '지원', '공식', '주체', '제공', '이용', '사용', '관리', '기준', '대상', '내용', '경우', '필요', '가능', '여부', '포함', '위반', '규정', '조항', '법령', '법률', '사항', '업무', '기관', '정부', '회사', '사업', '서비스', '시스템', '개선', '요구', '의무', '비용', '추가', '현재', '기존', '정책', '제도', '문제', '질문', '분석', '검토', '해당', '적용', '가입', '조건', '실적', '목표', '개인', '차원', '역할', '직원', '정규', '소속', '통신사', '이통사', '기반', '기본', '체계', '구조', '방식', '형태', '단계', '수준', '범위', '주요', '전체', '일부', '최대', '최소', '이상', '이하', '이후', '이전', '별도', '자체', '본인', '상대', '타인']);
-function isTitleStop(kw: string, query: string): boolean {
-  if (!QUERY_TITLE_STOP.includes(kw)) return false;
-  const norm = kw.replace(/\s+/g, '').toLowerCase();
-  return !lawSynonymKeywords(query).some((s) => s.replace(/\s+/g, '').toLowerCase() === norm);
-}
-// 법령 위계 (동점 정렬용): 법률 > 대통령령 > 부령·총리령 > 고시·훈령 등 — app.js lawRank와 동일 유지
-function lawRank(docName: string | undefined): number {
-  const d = docName || '';
-  if (/\(법률\)/.test(d)) return 4;
-  if (/\(대통령령\)/.test(d)) return 3;
-  if (/(부령|총리령)\)/.test(d)) return 2;
-  return 1;
-}
-// 도메인 사전확률: 이 KB는 전파·통신 정책용이라, 행위·주제 점수가 같으면 전파·통신 계열
-// 법령이 국가재정법·위치정보법 같은 부수 수록 문서보다 근거일 확률이 높다 (질문과 무관한 상수 가점)
-const DOMAIN_DOC_RE = /전파|통신|무선|주파수/;
+// 법령 어휘 대응표(LAW_SYNONYMS·PRACTICE_TERMS)·제외어(QUERY_TITLE_STOP)·법령 위계·도메인 사전확률 — 전부 rag_core.js (#215).
+// 아래는 이 파일이 직접 부르는 것만 이름을 붙인다. 표 자체는 여기 없다.
+const lawSynonymKeywords: (query: string) => string[] = RagCore.lawSynonymKeywords;
+/** 의미 검색용 질의 — 실무 용어가 있으면 법령 용어를 덧붙인다. 없으면 원문 그대로. (rag_core.js) */
+export const expandQueryForSemantic: (query: string) => string = RagCore.expandQueryForSemantic;
+const isTitleStop: (kw: string, query: string) => boolean = RagCore.isTitleStop;
+const lawRank: (docName: string | undefined) => number = RagCore.lawRank;
 
 export async function searchLawArticles(sb: SupabaseClient, query: string, limit = 5, meta?: SearchMeta): Promise<LawHit[]> {
   const apiKey = env('ANTHROPIC_API_KEY');
@@ -672,13 +476,8 @@ export async function searchLawArticles(sb: SupabaseClient, query: string, limit
   // 있는 경우('조난통신 종료 통보')는 대개 다른 제도라, 번역된 표제어보다 낮게 본다.
   // (실측: 이 차등이 없으면 "3G 종료"에서 선박국 운용종료·조난통신 조문이
   //  전기통신사업법 19조(사업의 휴업·폐업)·전파법 25조의2를 밀어낸다)
-  const synNorms = new Set(lawSynonymKeywords(query).map((s) => s.replace(/\s+/g, '').toLowerCase()));
-  const kwActive: string[] = [], actOf: number[] = [];
-  for (const kw of keywords.slice(0, 10)) {
-    if (isTitleStop(kw, query)) continue;   // 제외어(#173)는 제목·본문 조회 모두 생략 — 행위 가중 0이면 주제 점수만 남아 순위에 못 든다
-    kwActive.push(kw);
-    actOf.push(synNorms.has(kw.replace(/\s+/g, '').toLowerCase()) ? 7 : 5);
-  }
+  // 제외어(#173) 뺀 조회 키워드 + 행위 가중(사전 출신 7·그 외 5) — rag_core.js titleActWeights
+  const { kwActive, actOf }: { kwActive: string[]; actOf: number[] } = RagCore.titleActWeights(keywords, query);
   type LawRow = { kw_ord: number; hit_col: string; id: number; doc_name: string; article_no?: string; content: string };
   const lawRows: LawRow[] = kwActive.length
     ? await metaRpc(sb, meta, 'search_law_articles_kw', { p_keywords: kwActive, p_title_limit: 40, p_content_limit: 10 })
@@ -689,41 +488,8 @@ export async function searchLawArticles(sb: SupabaseClient, query: string, limit
     put({ id: r.id, doc_name: r.doc_name, article_no: r.article_no, content: r.content, _hits: 0 }, r.hit_col === 'title' ? actOf[r.kw_ord - 1] : 0);
   }
 
-  // 주제 일치는 부분문자열로 본다 — '기간통신사업'과 '전기통신사업법'은 앞글자가 달라
-  // 접두 비교로는 안 잡히고 '통신사업'이라는 공통 조각으로만 이어진다.
-  const topics = (query.match(/[가-힣A-Za-z0-9]{2,}/g) || [])
-    .filter((t) => !GENERIC_QUERY_WORDS.includes(t));
-  for (const h of acc.values()) {
-    const hay = h.doc_name + ' ' + (h.article_no || '');
-    let best = 0;
-    for (const t of topics) {
-      if (t.length <= 3) { if (hay.includes(t)) best = Math.max(best, t.length); continue; }
-      for (let i = 0; i < t.length; i++) {
-        for (let j = t.length; j - i >= 4; j--) {
-          if (hay.includes(t.slice(i, j))) { best = Math.max(best, j - i); break; }
-        }
-      }
-    }
-    h._top = best;
-    // 행위를 우선하되 주제로 갈래를 좁히고, 동점은 도메인(전파·통신 계열) 문서를 앞세운다
-    h._hits = h._act * 2 + best + (DOMAIN_DOC_RE.test(h.doc_name) ? 1 : 0);
-  }
-  // 정렬: 점수 → (동점이면) 법령 위계(법률>대통령령>부령>고시) → 문서명·조문번호(결정적 순서).
-  // 위계 동점 처리는 특정 법 우대가 아니라 일반 규칙 — 같은 점수면 상위 법령의 조문이 근거로 더 낫다.
-  const sorted = [...acc.values()].sort((a, b) => {
-    if (b._hits !== a._hits) return b._hits - a._hits;
-    const lr = lawRank(b.doc_name) - lawRank(a.doc_name);
-    if (lr !== 0) return lr;
-    if (a.doc_name !== b.doc_name) return a.doc_name < b.doc_name ? -1 : 1;
-    return (a.article_no || '') < (b.article_no || '') ? -1 : 1;
-  });
-  // 같은 조문이 여러 청크로 쪼개져 있으면 대표 1건만 — 목록이 중복으로 채워지는 것 방지
-  const byArticle = new Map<string, LawHit>();
-  for (const h of sorted) {
-    const key = h.doc_name + '|' + (h.article_no || '');
-    if (!byArticle.has(key)) byArticle.set(key, h);
-  }
-  return [...byArticle.values()].slice(0, limit);
+  // 주제 점수(부분문자열)·정렬(점수→법령 위계→문서명·조문번호)·같은 조문 대표 1건·상한 — rag_core.js rankLawHits (#215)
+  return RagCore.rankLawHits(acc.values(), query, limit) as LawHit[];
 }
 
 // ── /law 자연어 모드 — 법령 한정 답변 (2026-08-03) ──
@@ -901,24 +667,7 @@ export async function answerLawQuery(sb: SupabaseClient, query: string): Promise
 // 정부가 이용자 보호로 신중하고 IoT 회선이 변수라는 최신 동향이고, 그건 news_feed에 있다.
 // 키워드 추출은 법령용(extractKeywords)과 분리 — 법령 불용어를 쓰면 '통신사·영향' 같은
 // 저변별력 단어가 살아남아 엉뚱한 기사를 끌어온다(app.js와 동일 원칙).
-function extractNewsKeywords(text: string): string[] {
-  // 2026-09-25 통일(#214): 불용어·분야어는 대시보드(app.js)판과 합집합('분석해줘·설명해줘…'·WiFi·품질평가·해킹·유출·지하철·철도는
-  // 대시보드에만, '방법'·3G·2G·종료·폐지·휴지·IoT는 여기에만 있었다), 조사에 '나는' 추가, 분야어 밖 단어는 긴 단어 먼저(대시보드와 동일).
-  const stop = ['같은','같이','최대','최소','정도','이유','영향','분석','분석해','분석해줘','차이',
-    '통신사','통신','관련','현황','상황','내용','문제','방법','방안','대응','전망','의미','비교','평가','수준','규모',
-    '최근','요즘','지금','현재','올해','작년','국내','해외','업계','우리','회사','부분','경우','전체',
-    '해줘','알려줘','설명','설명해줘','정리','정리해줘','작성','검토','어떻게','어떤','무엇','언제','어디','왜',
-    '있다','없다','하다','되다','이다','대해','관해','통해','위해','따라','대한','관한','그리고','하지만'];
-  const tail = /(이라는데|이라는|이라며|이라고|인데도|에서는|으로는|에서의|에서도|라는데|인데|인가|인지|라며|라고|는데|에서|에는|으로|로는|보다|부터|까지|처럼|마다|조차|밖에|이나|나는|은|는|이|가|을|를|의|에|와|과|도|만)$/;
-  const domain = /주파수|대역|백홀|기지국|중계기|와이파이|WiFi|5G|6G|3G|2G|LTE|위성|전파|간섭|품질평가|재할당|할당|요금|보조금|단말|로밍|알뜰폰|MVNO|망중립|해킹|유출|과징금|지하철|철도|국회|고시|시행령|입법예고|종료|폐지|휴지|IoT/i;
-  const words = text.split(/[\s,.·()[\]「」『』<>:;!?"']+/)
-    .map((w) => w.replace(/[^가-힣a-zA-Z0-9]/g, '').trim())
-    .map((w) => { const s = w.replace(tail, ''); return domain.test(s) ? s : (domain.test(w) ? w : (s.length >= 2 ? s : w)); })
-    .filter((w) => w.length >= 2 && !stop.includes(w));
-  const uniq = words.filter((v, i, a) => a.indexOf(v) === i);
-  const rest = uniq.filter((w) => !domain.test(w)).sort((a, b) => b.length - a.length);
-  return uniq.filter((w) => domain.test(w)).concat(rest).slice(0, 6);
-}
+const extractNewsKeywords: (text: string) => string[] = RagCore.extractNewsKeywords;   // 뉴스 전용 키워드(법령용과 분리) — rag_core.js
 
 interface NewsRow { title: string; source?: string; published_at?: string; content?: string }
 
@@ -1006,7 +755,7 @@ async function buildNewsContext(sb: SupabaseClient, query: string, meta?: Search
 // 비용 0 — 질의 임베딩을 추가로 만들지 않는다. assembly_speeches(~1.1천건)·assembly_bills(~230건)는
 // 규모가 작고 summary가 정제돼 있어 ilike만으로 상위 적중이 나온다(실측). 점수 규칙 3가지는
 // app.js 주석 참조(topic 태그 역방향 +3 / 희소 topic 앵커 / 법안 strong→fallback).
-const ASM_RARE_MAX = 40;   // assembly_speeches 약 1,100건 기준 희소어 상한(≈4%)
+const ASM_RARE_MAX: number = RagCore.ASM_RARE_MAX;   // 국회 발언 희소어 상한 — rag_core.js
 
 interface SpeechRow {
   speaker?: string; position?: string; meeting_date?: string;
