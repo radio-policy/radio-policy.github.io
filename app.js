@@ -819,6 +819,8 @@ async function getQueryEmbedding(query, model) {
 var PERDOC_LIMIT = { '추가지식': 8, 'default': 3 };
 // 전체 상위 컷 12→15: 추가지식 1편이 8을 차지해도 다른 문서 몫이 7 남게 (종전 최악 9에서 소폭 감소에 그침).
 var TOTAL_CHUNK_CUT = 15;
+// 자문 스트림 무수신 한도(ms) — '전체 시간'이 아니라 '한 조각도 안 오는 시간'. 3분(#205, B-7). rag.ts STREAM_IDLE_MS와 동일 유지.
+var STREAM_IDLE_MS = 180000;
 
 async function searchKeywords(query) {
   if (!sb) return [];
@@ -2624,6 +2626,10 @@ async function callClaude(userText, onDelta) {
   var cited = [];
   var seenUrl = new Set();
   var stopReason = null;
+  var sawStop = false;        // message_stop(끝 신호) 수신 여부 — 없이 멈추면 잘린 것(#205, B-7)
+  var streamCut = null;       // 절단 사유(연결 끊김·무수신) — 받은 부분은 버리지 않고 이 사유를 답변 끝에 붙인다
+  var reader = null;
+  var idleTimer = null;
   // 인용 수집은 부가 정보 — 여기서 터져도 답변 표시는 살아야 하므로 통째로 삼킨다(fail-open)
   function addCitation(c) {
     try {
@@ -2634,11 +2640,17 @@ async function callClaude(userText, onDelta) {
   }
 
   try {
-    const reader = res.body.getReader();
+    reader = res.body.getReader();
     const decoder = new TextDecoder('utf-8');
     var buf = '';
     while (true) {
-      const chunk = await reader.read();
+      // 무수신 감시(#205): 토큰·ping이 STREAM_IDLE_MS 동안 하나도 안 오면 연결이 죽은 것으로 보고 끊는다.
+      // 전체 소요 시간과 무관 — 글자가 계속 오는 2~5분 답변은 매 조각마다 타이머가 되돌아간다.
+      const chunk = await Promise.race([
+        reader.read(),
+        new Promise(function(_, rej) { idleTimer = setTimeout(function() { rej(new Error('IDLE_TIMEOUT')); }, STREAM_IDLE_MS); })
+      ]);
+      clearTimeout(idleTimer);
       if (chunk.done) break;
       buf += decoder.decode(chunk.value, { stream: true });
       var events = buf.split(/\r?\n\r?\n/);
@@ -2670,6 +2682,8 @@ async function callClaude(userText, onDelta) {
             if (evt.content_block.type === 'text' && aiText && !/\n\s*$/.test(aiText)) aiText += '\n\n';
           } else if (evt.type === 'message_delta' && evt.delta && evt.delta.stop_reason) {
             stopReason = evt.delta.stop_reason;
+          } else if (evt.type === 'message_stop') {
+            sawStop = true;
           } else if (evt.type === 'error') {
             throw new Error((evt.error && evt.error.message) || '스트리밍 오류');
           }
@@ -2677,9 +2691,17 @@ async function callClaude(userText, onDelta) {
       }
     }
   } catch(streamErr) {
-    chatHistory.pop();
-    throw streamErr;
+    clearTimeout(idleTimer);
+    try { if (reader) reader.cancel(); } catch(e) { /* 이미 닫힘 */ }
+    // #205(B-7): 받은 부분이 있으면 버리지 않는다 — 종전엔 오류만 띄우고 절반쯤 온 답도 사라졌다.
+    // 사유를 답변 끝에 적고(아래) 정상 후처리(관계도·인용 검증·기록)로 넘긴다. 받은 게 없으면 종전대로 실패.
+    if (!aiText.trim()) { chatHistory.pop(); throw streamErr; }
+    streamCut = (streamErr && streamErr.message === 'IDLE_TIMEOUT')
+      ? '서버에서 ' + Math.round(STREAM_IDLE_MS / 1000) + '초 동안 아무 응답이 없어 수신을 중단'
+      : '수신 중 연결이 끊김 (' + String((streamErr && streamErr.message) || streamErr).slice(0, 80) + ')';
+    console.warn('스트림 절단 — 받은 부분 보존:', streamCut);
   }
+  if (!streamCut && !sawStop && !stopReason) streamCut = '끝 신호 없이 수신이 멈춤(잘렸을 수 있음)';
 
   // <lawmap> 블록 추출·제거 (관계도 자동 축적 — 화면·히스토리에는 블록 없이 저장)
   lastLawmapData = null;
@@ -2724,6 +2746,10 @@ async function callClaude(userText, onDelta) {
   // 길이 제한으로 잘린 경우 안내 (히스토리에는 원문만 저장 → "계속" 입력 시 이어서 생성)
   if (stopReason === 'max_tokens') {
     aiText += '\n\n---\n\n> ⚠️ 답변이 길이 제한으로 잘렸습니다. **"계속"**이라고 입력하면 이어서 답변합니다.';
+  }
+  // 절단 표시(#205, B-7) — 기록(chat_logs.answer)에도 함께 남아 잘린 답이 정상으로 집계되지 않는다
+  if (streamCut) {
+    aiText += '\n\n---\n\n> ⚠️ 답변이 도중에 끊겼습니다 — ' + streamCut + '. 위 내용은 받은 부분까지이며, 같은 질문을 다시 하면 처음부터 답합니다.';
   }
   return aiText;
 }

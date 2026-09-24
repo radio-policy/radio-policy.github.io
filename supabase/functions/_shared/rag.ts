@@ -421,7 +421,9 @@ type SystemBlock = { type: 'text'; text: string; cache_control?: { type: 'epheme
 // (2026-08-03 이전에는 text_delta만 담고 인용을 버려서, 웹에서 온 수치·현황의 출처가
 //  어디에도 안 남았다 — footer에는 내부 RAG 문서명만 나열돼 "참고가 전부 법령" 사고.)
 export interface WebRef { url: string; title: string }
-async function callSonnet(apiKey: string, system: string | SystemBlock[], question: string): Promise<{ text: string; webRefs: WebRef[]; usage: ApiUsage }> {
+// 스트림 절단 보호(#205, B-7): 무수신 3분이면 끊고, 끊겨도 받은 부분은 돌려준다(cut에 사유). stopReason·sawStop은 호출측이 경고를 붙이는 재료.
+const STREAM_IDLE_MS = 180_000;
+async function callSonnet(apiKey: string, system: string | SystemBlock[], question: string): Promise<{ text: string; webRefs: WebRef[]; usage: ApiUsage; stopReason: string | null; sawStop: boolean; cut: string | null }> {
   const res = await fetch(ANTHROPIC_URL, {
     method: 'POST',
     headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
@@ -445,8 +447,18 @@ async function callSonnet(apiKey: string, system: string | SystemBlock[], questi
   const reader = res.body!.getReader();
   const decoder = new TextDecoder();
   let buf = '';
+  let stopReason: string | null = null;
+  let sawStop = false;
+  let cut: string | null = null;
+  let idleTimer: ReturnType<typeof setTimeout> | undefined;
+  try {
   while (true) {
-    const { done, value } = await reader.read();
+    // 무수신 감시 — 토큰·ping이 3분간 하나도 안 오면 연결이 죽은 것으로 보고 끊는다(전체 소요 시간과 무관, #205)
+    const { done, value } = await Promise.race([
+      reader.read(),
+      new Promise<never>((_, rej) => { idleTimer = setTimeout(() => rej(new Error('IDLE_TIMEOUT')), STREAM_IDLE_MS); }),
+    ]);
+    clearTimeout(idleTimer);
     if (done) break;
     buf += decoder.decode(value, { stream: true });
     const events = buf.split('\n\n');
@@ -469,12 +481,25 @@ async function callSonnet(apiKey: string, system: string | SystemBlock[], questi
           // 웹검색 전후의 text 블록이 붙어 "…검색하겠습니다.# 분석:"이 되지 않게 블록 사이에 빈 줄 (app.js와 동일)
           else if (d.type === 'content_block_start' && d.content_block?.type === 'text' && text && !/\n\s*$/.test(text)) text += '\n\n';
           else if (d.type === 'message_start' && d.message?.usage) usage = mergeUsage(usage, d.message.usage);
-          else if (d.type === 'message_delta' && d.usage) usage = mergeUsage(usage, d.usage);
+          else if (d.type === 'message_delta') {
+            if (d.usage) usage = mergeUsage(usage, d.usage);
+            if (d.delta?.stop_reason) stopReason = d.delta.stop_reason;   // max_tokens 잘림 표시 재료(#205)
+          }
+          else if (d.type === 'message_stop') sawStop = true;              // 끝 신호 — 없이 멈추면 잘린 것(#205)
         } catch { /* keep-alive 등 무시 */ }
       }
     }
   }
-  return { text, webRefs, usage };
+  } catch (e) {
+    clearTimeout(idleTimer);
+    try { await reader.cancel(); } catch { /* 이미 닫힘 */ }
+    if (!text.trim()) throw e;   // 받은 게 없으면 종전대로 실패
+    cut = (e as Error)?.message === 'IDLE_TIMEOUT'
+      ? `서버에서 ${Math.round(STREAM_IDLE_MS / 1000)}초 동안 아무 응답이 없어 수신을 중단`
+      : `수신 중 연결이 끊김 (${String((e as Error)?.message ?? e).slice(0, 80)})`;
+    console.warn('[callSonnet] 스트림 절단 — 받은 부분 보존:', cut);
+  }
+  return { text, webRefs, usage, stopReason, sawStop, cut };
 }
 
 // ── 인용 조문 통째 보강(#155-1안)에 쓰는 조각 조회 — verify-citations·app.js fetchArticleChunks와 동일 조건 ──
@@ -1226,8 +1251,14 @@ export async function answerAdvisory(sb: SupabaseClient, systemPrompt: string, q
   ];
   if (systemVariable) system.push({ type: 'text', text: systemVariable }); // 빈 text 블록은 API가 거부
 
-  const { text: rawAnswer, webRefs, usage } = await callSonnet(apiKey, system, question);
+  const sonnet = await callSonnet(apiKey, system, question);
+  const { webRefs, usage } = sonnet;
+  let rawAnswer = sonnet.text;
   await recordApiUsage(sb, 'rag.ts:callSonnet', 'claude-sonnet-5', usage);
+  // 잘린 답이 정상인 척하지 않게 표시(#205, B-7). 세 경우: 연결 절단 / 길이 상한(max_tokens 5000) / 끝 신호 없이 멈춤.
+  if (sonnet.cut) rawAnswer += `\n\n⚠️ 답변이 도중에 끊겼습니다 — ${sonnet.cut}. 위 내용은 받은 부분까지입니다.`;
+  else if (sonnet.stopReason === 'max_tokens') rawAnswer += '\n\n…(길이 제한으로 잘림 — 질문을 좁혀 다시 물어보세요)';
+  else if (!sonnet.sawStop) rawAnswer += '\n\n⚠️ 답변 수신이 끝 신호 없이 멈췄습니다(잘렸을 수 있음).';
 
   // [원문 확인됨] 검증(#155-2·3안) — 표시가 붙은 인용의 조문(법령명·조·항·호·별표)이 실제로 위 컨텍스트에
   // 있었는지 대조하고(2안), 있었으면 Haiku가 원문과 설명이 맞는지 판정한다(3안). 없으면 「⚠️ 원문 미확인」,
@@ -1239,7 +1270,7 @@ export async function answerAdvisory(sb: SupabaseClient, systemPrompt: string, q
   try {
     const vr = await CiteVerify.verifyCitations({
       answer: rawAnswer, chunks: (extra2 as unknown as Chunk[]).concat(chunks2).concat(citing.chunks), annexSources: annex.sources, systemPrompt,
-      callHaiku: (sys: string, u: string) => callHaikuText(sb, apiKey, sys, u, 'rag.ts:citeJudge', 900),
+      callHaiku: (sys: string, u: string) => callHaikuText(sb, apiKey, sys, u, 'rag.ts:citeJudge', 3000)   // 900은 24건 판정 JSON에 빠듯(#205),
     });
     answer = vr.answer;
     verdicts = vr.verdicts || [];

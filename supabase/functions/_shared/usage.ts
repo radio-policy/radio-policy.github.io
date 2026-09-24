@@ -50,7 +50,9 @@ export async function callHaikuText(sb: SupabaseClient, apiKey: string, system: 
     const err = await res.json().catch(() => ({}));
     throw new Error((err as { error?: { message?: string } }).error?.message || `Anthropic HTTP ${res.status}`);
   }
-  const data = await res.json() as { content?: { type: string; text?: string }[]; usage?: ApiUsage };
+  const data = await res.json() as { content?: { type: string; text?: string }[]; usage?: ApiUsage; stop_reason?: string };
   await recordApiUsage(sb, site, HAIKU_MODEL, data.usage);
+  // 상한에 잘리면 JSON 판정이 통째로 못 읽히므로 로그에 남긴다(#205, B-6). 호출측(citeJudge)은 3000으로 부른다.
+  if (data.stop_reason === 'max_tokens') console.warn(`[callHaikuText] 출력이 max_tokens(${maxTokens})에 잘림 — site=${site}`);
   return (data.content || []).find((b) => b.type === 'text')?.text || '';
 }
