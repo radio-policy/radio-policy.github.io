@@ -269,6 +269,16 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\      (회사 노트북 —
 ⚠️ 함수 속성 `SET <확장 GUC>`는 마이그레이션 세션에서 그 확장 함수를 한 번 먼저 호출해 라이브러리를 로드한 뒤에만 통과한다(`permission denied to set parameter` = 자리표시자 GUC).
 부분 HNSW 인덱스(`where status='current' and is_approved`)는 미적용 — 쓰기 잠금이 수 분 걸리는 빌드라 야간·디스크 확인 후.
 
+**검색·보강 단계 분리 + 직렬 대기 해소 (#201, 2026-09-24 — B-2).** app.js `callClaude`·rag.ts `answerAdvisory`의 Sonnet 호출 앞부분은
+`buildAdvisoryContext`(양쪽 같은 이름)로 떼어져 있다 — 검색·통째 보강·역참조·별표·시행예정·요약·뉴스 조각까지 만들고 프롬프트 조립은
+호출부가 한다. 동시 시작 규칙: trgm·시맨틱 RPC는 Haiku 확장을 기다리지 않고 먼저(확장어를 안 쓴다), 역참조·별표·시행예정은 보강 뒤
+동시에, `cite_verify.js`의 조각 조회는 6건 묶음으로 동시에 보내되 처리는 순위순. 프롬프트 조립 순서는 그대로다.
+**회귀 세트**(`tests/fixtures/rag_regression_set.json` 실질문 20건 + 고정 확장어, 하네스 `tests/rag_regress_browser.js`·`tests/rag_regress_deno.ts`,
+비교 `tests/rag_regress_diff.py`)로 변경 전후 단계별 청크 id를 대조한다 — API 0회, 임베딩 캐시 파일은 git 제외. 결정적 모드(order 없는 limit에
+order('id'))는 하네스만의 장치이고 운영 정렬 규칙은 B-5에서 정한다.
+⚠️ **trgm RPC는 6~9초라 8초 statement_timeout에 자주 걸린다**(#201 실측: 20회 중 2~8회 `57014`, kb trgm도 2~4회) — 두 RPC 모두 fail-open이라
+답변은 그대로 나가고 trgm 갈래만 조용히 빠진다. 대응(부하 축소·한도·Edge 우회·갈래 폐지)은 운영자 결정 대기.
+
 **「[원문 확인됨]」은 기계가 보증한다 (#155, 2026-09-11 — 봇·대시보드 공통, `supabase/functions/_shared/cite_verify.js` 한 파일).**
 종전에는 프롬프트 지시로 모델이 스스로 붙이는 자기 신고였다(#146 A안). 9/10 텔레그램 자문이 전기통신사업법 제50조①5호·5호의2를
 "차별적 지원금"이라 설명하며 표시를 붙였는데, 실제 컨텍스트에는 제50조 뒷조각(8호~③)만 있었다. 세 단계로 고정:
@@ -1132,6 +1142,9 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **AI 자문 "Failed to fetch"**: 무거운 질문 2분+ idle 끊김 → stream:true로 해결됨. 사내망 프록시·확장프로그램·F12 네트워크 확인.
 
 ## 하지 말아야 할 것 (규칙 + 한 줄 이유 / 상세는 배경역사 문서)
+- **자문 검색·보강 흐름(app.js·rag.ts `buildAdvisoryContext`, `cite_verify.js` `expandArticles`·`buildCitingExcerpts`)을 고치면 회귀 세트를 변경 전후로 돌려 대조할 것 (#201, 2026-09-24)** — `tests/fixtures/rag_regression_set.json`(실질문 20건+고정 확장어) + `tests/rag_regress_browser.js`(대시보드)·`tests/rag_regress_deno.ts`(텔레그램)·`tests/rag_regress_diff.py`. Anthropic API 0회. **잡음 바닥은 같은 코드 2회로 먼저 잰다**(결정적 모드에서도 trgm 동점·타임아웃으로 16/20이 달랐다) — 차이가 rpc 기록의 `57014`·동점 교환·순서만 다름으로 설명되면 동일로 본다. 두 하네스를 **동시에 돌리지 말 것**(부하로 trgm이 더 자주 타임아웃).
+- **`buildAdvisoryContext`의 동시 시작(trgm·시맨틱은 확장 전, 역참조·별표·시행예정은 보강 뒤 동시, 보강 조회 6건 묶음)을 순차 await로 되돌리지 말 것 (#201)** — 처리 순서는 코드가 순위순으로 고정하므로 결과 동일, 문항당 ≈1.4초(확장 지연 1.5초 기준)·전체 −9~14%. 배경역사 #23의 병렬 규칙과 같은 원칙.
+- **trgm RPC(`search_chunks_trgm`·`search_kb_chunks_trgm`)의 0건을 '해당 없음'으로 읽지 말 것 — 8초 statement_timeout(`57014`)일 수 있다 (#201)** — 실측 중앙값 7.8초, 20회 중 2~8회 타임아웃, `.catch(() => [])`라 답변은 정상처럼 나간다. 역할 한도: anon 3초·authenticated 8초·authenticator(service_role 세션) 8초. 처리 방안은 운영자 결정 대기(배경역사 #201) — 그 전까지 trgm 관련 실측은 rpc 오류코드를 함께 볼 것.
 - **컨플루언스 도구(`confluence_writer.py`·`_confluence_attach.py`)와 사내 배포 문서(`docs/사내공유_*`)를 커밋하지 말 것 (#172-보론, 2026-09-24)** — 저장소는 공개이고 GitHub Pages가 `.py`·`.md`까지 전부 내보낸다(`radio-policy.github.io/crawler.py` 200 실측). 커밋하면 사내 공간 키·페이지 번호, 사내 전달문의 계정·결제 구조가 누구나 여는 웹에 올라간다. 사내 보고서를 외부 서버에 두지 않는 #142와 같은 원칙. `.gitignore`에 등록돼 있다.
 - **Actions에서 뉴스 본문 수집을 다시 건너뛰게 하지 말 것 — '미국 IP 차단'은 실측으로 부정됐다 (#200, 2026-09-24)** — 2026-06-04(334ff2c)의 스킵은 측정 없는 가정이었고 진짜 원인은 선별이 없던 시절 매시 최대 500건을 8초 타임아웃으로 긁던 실행 시간이었다. 2026-09-24 `tools_gov_reachability.py` 뉴스 진단(Actions 데이터센터 IP): 최근 7일 상위 7도메인 중 6곳 본문 열림 = 한국 IP와 동일, TLS 위장 불필요. 지금은 선별 통과분만 긁어 10분 창당 중앙값 2·p90 9·최대 54건(최악 ≈8분 < timeout 30분, concurrency 그룹). 실패·100자 미만은 content를 비워 lampmanH-pc refetch가 재수집하고 판정은 요약 폴백(#188). `[본문 수집] 성공 N·실패 M` 로그를 지우지 말 것 — 데이터센터 IP 차단은 오류가 아니라 빈 껍데기 응답으로 오므로(#113) 실패 건수가 유일한 경보다. 뉴스 수집을 lampmanH-pc로 옮기지도 말 것 — 본문은 Actions에서도 얻으므로 얻는 게 없고 10분 수집·긴급 알림이 PC 단일 장애점이 된다. 재측정은 `gov_reachability_test.yml` dispatch → check-run 주석 `news-reachability`.
 - **워치독(`watchdog_scan`)을 '이상 조합이 바뀌면 발송'으로 되돌리지 말 것 — '새 항목이 생겼을 때만' (#199, 2026-09-24)** — 해소로 조합이 줄어도 발송하면, 다음 실행까지 남는 항목(법제처 무응답 `apifail=2`)이 옆 항목이 생기고 사라질 때마다 같이 실려 하룻밤에 4통이 왔다(09-23 21:10·00:10·03:10·09:10). 상태는 md5가 아니라 키 목록으로 저장해 차집합을 구한다. 새 스크립트가 **'돌았지만 할 일 없음'으로 일찍 끝나는 경로에도 heartbeat를 남길 것** — 구독자 발송 함수가 창 밖에서 그냥 끝나 매일 새벽 무갱신 오탐이 났다.

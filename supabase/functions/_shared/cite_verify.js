@@ -106,11 +106,22 @@
       groups.get(gk).members.push(c);
     });
     const full = new Map();
-    for (const gk of order) {
+    // 조각 조회는 묶음(wave)으로 동시에 보내고 처리는 순위순으로 한다(B-2, #201, 2026-09-24). 종전에는 조문마다 한 번씩
+    // await라 왕복이 줄줄이 더해졌다. 예산·선택 규칙이 순위순으로 그대로 적용되므로 결과는 동일하고, 상한에 걸려
+    // 처리하지 않은 묶음 뒤쪽 조회 결과는 버린다(낭비 ≤ wave−1건).
+    const wave = opts.fetchConcurrency != null ? opts.fetchConcurrency : 6;
+    for (let w0 = 0; w0 < order.length && full.size < maxArticles && budget > 0; w0 += wave) {
+      const batch = order.slice(w0, w0 + wave);
+      const fetched = await Promise.all(batch.map(function (bk) {
+        const bg = groups.get(bk);
+        return Promise.resolve().then(function () { return fetchArticle(bg.doc, bg.key); })
+          .then(function (r) { return r || []; }, function () { return []; });
+      }));
+      for (let bi = 0; bi < batch.length; bi++) {
       if (full.size >= maxArticles || budget <= 0) break;
+      const gk = batch[bi];
       const g = groups.get(gk);
-      let rows = [];
-      try { rows = (await fetchArticle(g.doc, g.key)) || []; } catch (e) { rows = []; }
+      let rows = fetched[bi];
       rows = rows.filter(function (r) { return articleKey(r.article_no) === g.key; })
         .sort(function (a, b) { return (a.chunk_index || 0) - (b.chunk_index || 0); });
       if (rows.length <= 1) continue;                     // 한 조각짜리 조문 — 보강할 것이 없다
@@ -143,6 +154,7 @@
       const omitted = rows.length - picked.length;
       if (omitted > 0) text += '\n(※ 이 조문은 전체 ' + rows.length + '조각 중 ' + picked.length + '조각만 실었습니다. 보이지 않는 항·호가 있을 수 있습니다.)';
       full.set(gk, { content: text, ids: picked.map(function (r) { return r.id; }), parts: picked.length, whole: omitted === 0 });
+      }
     }
     const out = [], addedIds = [], done = new Set();
     const knownIds = new Set((chunks || []).map(function (c) { return c && c.id; }));
@@ -202,10 +214,18 @@
       if (!have.has(gk)) { have.add(gk); targets.push({ doc: c.doc_name, key: k }); }
     }
     const out = [], ids = [], seen = new Set();
-    for (const t of targets) {
+    // expandArticles와 같은 묶음 조회(B-2, #201) — 처리는 targets 순서대로, 상한(maxTotal)에 닿으면 나머지 결과는 버린다.
+    const wave = opts.fetchConcurrency != null ? opts.fetchConcurrency : 6;
+    for (let w0 = 0; w0 < targets.length && out.length < maxTotal; w0 += wave) {
+      const batch = targets.slice(w0, w0 + wave);
+      const fetched = await Promise.all(batch.map(function (bt) {
+        return Promise.resolve().then(function () { return fetchCiting(bt.doc, bt.key); })
+          .then(function (r) { return r || []; }, function () { return []; });
+      }));
+      for (let bi = 0; bi < batch.length; bi++) {
       if (out.length >= maxTotal) break;
-      let rows = [];
-      try { rows = (await fetchCiting(t.doc, t.key)) || []; } catch (e) { rows = []; }
+      const t = batch[bi];
+      let rows = fetched[bi];
       const re = citeRegex(t.key);
       let n = 0;
       rows.sort(function (a, b) { return (a.chunk_index || 0) - (b.chunk_index || 0); });
@@ -221,6 +241,7 @@
         seen.add(gk); n++;
         out.push({ doc_name: r.doc_name, article_no: r.article_no, cites: t.key, excerpt: ex });
         if (typeof r.id === 'number') ids.push(r.id);
+      }
       }
     }
     if (!out.length) return { text: '', chunks: [], ids: [] };

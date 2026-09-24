@@ -804,27 +804,13 @@ async function searchKeywords(query, lawOnly) {
   if (!sb) return [];
   if (lawOnly === undefined) lawOnly = false;
   var baseKeywords = extractKeywords(query);
-  var expanded = await expandQueryKeywords(query);
-  // 기본 키워드 → 법령 표제어(LAW_SYNONYMS) → 확장 키워드 순으로 합친다.
-  // 표제어를 확장보다 앞에 두는 이유: 아래 slice(0,10) 상한에서 LLM 확장어에 밀려
-  // '휴업·폐업' 같은 결정적 법령 어휘가 잘리면 안 되기 때문(어휘 간극은 LLM이 못 메운다).
-  var keywords = [];
-  var seenKw = new Set();
-  baseKeywords.concat(lawSynonymKeywords(query)).concat(expanded).forEach(function(w) {
-    var norm = w.replace(/\s+/g, '').toLowerCase();
-    if (norm.length >= 2 && !seenKw.has(norm)) { seenKw.add(norm); keywords.push(w); }
-  });
-  if (keywords.length === 0) return [];
-
-  var seen = new Set();
-  var results = [];
-
-  // trgm + 시맨틱 검색 병렬 실행 (키워드 루프와 동시 진행)
+  // trgm·시맨틱은 확장어를 쓰지 않으므로 Haiku 확장을 **기다리지 않고 먼저** 시작한다(B-2, #201, 2026-09-24).
+  // trgm 5~6초(#185, SQL로는 못 줄임)와 임베딩 왕복이 확장 1~2초와 겹친다. 병합 순서는 아래에서 고정하므로 결과 동일.
+  // only_current를 명시적으로 넘긴다 — 기본값에 기대면 인자 개수가 다른 오버로드가
+  // 생겼을 때 status 필터 없는 쪽으로 조용히 해석된다(배경역사 #31 후속 사고).
   var trgmPromise = null;
   var semanticPromise = null;
   if (query && query.length >= 3) {
-    // only_current를 명시적으로 넘긴다 — 기본값에 기대면 인자 개수가 다른 오버로드가
-    // 생겼을 때 status 필터 없는 쪽으로 조용히 해석된다(배경역사 #31 후속 사고).
     trgmPromise = sb.rpc('search_chunks_trgm', {
       query_text: query,
       match_threshold: 0.12,
@@ -846,8 +832,22 @@ async function searchKeywords(query, lawOnly) {
       });
     });
   }
+  var expanded = await expandQueryKeywords(query);
+  // 기본 키워드 → 법령 표제어(LAW_SYNONYMS) → 확장 키워드 순으로 합친다.
+  // 표제어를 확장보다 앞에 두는 이유: 아래 slice(0,10) 상한에서 LLM 확장어에 밀려
+  // '휴업·폐업' 같은 결정적 법령 어휘가 잘리면 안 되기 때문(어휘 간극은 LLM이 못 메운다).
+  var keywords = [];
+  var seenKw = new Set();
+  baseKeywords.concat(lawSynonymKeywords(query)).concat(expanded).forEach(function(w) {
+    var norm = w.replace(/\s+/g, '').toLowerCase();
+    if (norm.length >= 2 && !seenKw.has(norm)) { seenKw.add(norm); keywords.push(w); }
+  });
+  if (keywords.length === 0) return [];
 
-  // 키워드별로 검색 (최대 10개 키워드, 키워드당 4청크) — 전 키워드 동시 조회 후 원래 순서로 병합
+  var seen = new Set();
+  var results = [];
+
+  // 키워드별로 검색 (최대 10개 키워드, 키워드당 4청크) — 전 키워드 동시 조회 후 원래 순서로 병합 (trgm·시맨틱은 위에서 이미 진행 중)
   var kwList = [];
   for (var ki = 0; ki < Math.min(keywords.length, 10); ki++) {
     // 제외어(#173)는 ilike 조회를 하지 않는다 — 정렬 없는 limit 4가 임의 청크를 데려온다. 점수 계산에서는 그대로 센다.
@@ -2468,9 +2468,11 @@ async function searchPressReleases(query) {
   });
 }
 
-async function callClaude(userText, onDelta) {
-  if (!aiReady()) throw new Error(aiGateMsg());
-
+// ── 자문 컨텍스트 조립(검색·보강 단계) — callClaude에서 분리(#201, 2026-09-24 B-2).
+//    Sonnet 호출 없이 검색·통째 보강·역참조·별표·시행예정·요약·뉴스 조각만 만든다. 회귀 하네스
+//    (tests/rag_regress_browser.js)가 이 함수를 API 0회로 돌려 단계별 청크 id를 변경 전후로 대조한다.
+//    조립 순서·내용은 callClaude 안에 있던 그대로 — 여기서 순서를 바꾸면 rag.ts buildAdvisoryContext도 같이.
+async function buildAdvisoryContext(userText) {
   // 보조 컨텍스트 검색 4종을 먼저 동시에 시작 (조문 RAG와 병렬 실행 — 프롬프트 조합 순서는 아래에서 고정)
   const customP     = searchCustomKnowledge(userText).catch(function(e) { console.warn('추가지식 검색 실패(건너뜀):', e); return ''; });
   const newsP       = fetchRecentNewsContext(userText).catch(function(e) { console.warn('뉴스 컨텍스트 실패(건너뜀):', e); return ''; });
@@ -2506,15 +2508,17 @@ async function callClaude(userText, onDelta) {
   var ragChunks = [];
 
   if (isPressQuery(userText)) {
-    // 보도자료 질문: 원본 JSON에서 검색
-    var pressResults = await searchPressReleases(userText);
+    // 보도자료 질문: 원본 JSON에서 검색 — 법령 검색과 동시에 시작(B-2), 병합 순서는 그대로
+    var pressP = searchPressReleases(userText);
+    var pressLawP = searchKeywords(userText, true);
+    var pressResults = await pressP;
     if (pressResults.length > 0) {
       ragChunks = pressResults;
       lastRagSources = pressResults.map(function(c) { return c.doc_name; });
       console.log('보도자료 원본 검색:', pressResults.length + '개');
     }
     // 보도자료이지만 법령도 관련 있을 경우 Supabase도 병행
-    var lawChunks = await searchKeywords(userText, true);
+    var lawChunks = await pressLawP;
     ragChunks = ragChunks.concat(lawChunks).slice(0, 6);
     lastRagSources = ragChunks.map(function(c) { return c.doc_name; });
   } else {
@@ -2582,15 +2586,23 @@ async function callClaude(userText, onDelta) {
 
   // 역참조 발췌(#155-보론4) — 검색된 조문을 인용하는 같은 법령의 다른 조문(제재·조사·준용)에서 인용 문장만.
   // 발췌 원본 조각 id는 lastAdvChunkIds에 넣어 verify-citations가 그 조문으로 검증한다. rag.ts와 동일 유지.
+  // 역참조·시행예정·별표는 셋 다 '보강이 끝난 ragChunks·lawExtra'만 읽고 서로 독립이라 **동시에 시작**한다(B-2, #201).
+  // 종전에는 한 건씩 await라 각각의 DB 왕복이 줄줄이 더해졌다. 프롬프트 조립 순서는 아래에서 그대로 고정.
+  var citingP = (window.CiteVerify && sb)
+    ? CiteVerify.buildCitingExcerpts((lawExtra || []).concat(ragChunks), fetchCitingChunks, CITING_OPTS)
+        .catch(function(e) { console.warn('역참조 발췌 실패(건너뜀):', e); return { text: '', chunks: [], ids: [] }; })
+    : Promise.resolve({ text: '', chunks: [], ids: [] });
+  var pendingP = buildPendingContext(ragChunks);                              // 인용 조문의 시행예정 개정본(Phase 3)
+  // 인용 조문이 가리키는 별표 원문 (배경역사 #43). 입력은 RAG + 조문 정밀검색분(#90) —
+  // ragChunks만 넘기면 조문 섹션에만 있는 조문(예: 전파법 시행령 제14조 「별표 3에 따라
+  // 산정한다」)의 인용을 놓친다. ragChunks를 앞에 둬야 상한 2개가 상위 RAG 조문에 먼저 간다.
+  // rag.ts buildAdvisoryContext 호출부와 동일 유지 — 한쪽만 고치지 말 것.
+  var annexP = buildAnnexContext(ragChunks.concat(lawExtra || []), userText);
   var citingContext = '', _advCitingIds = [];
-  if (window.CiteVerify && sb) {
-    try {
-      var ce = await CiteVerify.buildCitingExcerpts((lawExtra || []).concat(ragChunks), fetchCitingChunks, CITING_OPTS);
-      citingContext = ce.text || '';
-      _advCitingIds = ce.ids || [];
-      if (ce.chunks.length) console.log('역참조 발췌:', ce.chunks.length + '건');
-    } catch(e) { console.warn('역참조 발췌 실패(건너뜀):', e); }
-  }
+  var ce = await citingP;
+  citingContext = ce.text || '';
+  _advCitingIds = ce.ids || [];
+  if (ce.chunks && ce.chunks.length) console.log('역참조 발췌:', ce.chunks.length + '건');
 
   // 근거 청크 id 스냅샷 — 출처 목록과 같은 순서(조문 정밀검색분 먼저, 그다음 RAG, 끝에 보강·역참조 조각).
   // 보도자료 의사청크는 id가 'press_…' 문자열이라 document_chunks 조회가 불가능하므로 제외한다
@@ -2608,21 +2620,30 @@ async function callClaude(userText, onDelta) {
   if (lastNewsSources.length) lastRagSources = lastRagSources.concat(lastNewsSources);
   const lawTrackContext = await lawTrackP;                        // 최근 법령 개정·입법예고 동향
   const assemblyContext = await assemblyP;                        // 국회 동향(발언·법안) — 참고 배경
-  const kbContext     = buildKbContext(await kbP);                // 법령·규제 요약 지식베이스(regulatory-kb, 현행본)
+  const kbRows        = await kbP;
+  const kbContext     = buildKbContext(kbRows);                   // 법령·규제 요약 지식베이스(regulatory-kb, 현행본)
   if (lastKbSources.length) lastRagSources = lastRagSources.concat(lastKbSources);
-  const pendingContext = await buildPendingContext(ragChunks);    // 인용 조문의 시행예정 개정본(Phase 3)
-  // 인용 조문이 가리키는 별표 원문 (배경역사 #43). 입력은 RAG + 조문 정밀검색분(#90) —
-  // ragChunks만 넘기면 조문 섹션에만 있는 조문(예: 전파법 시행령 제14조 「별표 3에 따라
-  // 산정한다」)의 인용을 놓친다. ragChunks를 앞에 둬야 상한 2개가 상위 RAG 조문에 먼저 간다.
-  // rag.ts answerAdvisory 호출부와 동일 유지 — 한쪽만 고치지 말 것.
-  const annexContext  = await buildAnnexContext(ragChunks.concat(lawExtra || []), userText);
+  const pendingContext = await pendingP;                          // 위에서 동시에 시작한 시행예정 개정본
+  const annexContext  = await annexP;                             // 위에서 동시에 시작한 별표 원문
   if (lastAnnexSources.length) lastRagSources = lastRagSources.concat(lastAnnexSources.map(function(s) { return ANNEX_SRC_PREFIX + s; }));
   // 배지용 스냅샷 — lastPendingNotice는 보고서 초안 경로와 공유하는 전역이라,
   // 자문 스트리밍(수 분) 중 보고서를 생성하면 답변 완료 시점엔 다른 값이 들어 있다.
   window._advPendingNotice = lastPendingNotice;
+  return {
+    ragContext: ragContext, lawArticleContext: lawArticleContext, citingContext: citingContext, annexContext: annexContext,
+    pendingContext: pendingContext, kbContext: kbContext, customContext: customContext, newsContext: newsContext,
+    lawTrackContext: lawTrackContext, assemblyContext: assemblyContext, lawTopics: await lawTopicsP,
+    // 회귀 하네스용 단계별 재료 — 프롬프트 조립에는 쓰지 않는다
+    ragChunks: ragChunks, lawExtra: lawExtra, addedIds: _advAddedIds, citingIds: _advCitingIds, kbRows: kbRows
+  };
+}
+
+async function callClaude(userText, onDelta) {
+  if (!aiReady()) throw new Error(aiGateMsg());
+  const ctx = await buildAdvisoryContext(userText);
   const webSearchGuide = '\n\n---\n\n[웹 검색 도구 사용 지침]\n해외 규제·제도 비교, 최신 정책 동향 등 위 참조 자료(법령 RAG·추가 지식·뉴스)에 없는 사실 정보가 필요하면 web_search 도구로 확인 후 답변하세요. 특히 "한국 고유", "유일한", "주요국 중 한국만" 등 국가 간 비교 단정 표현은 검색으로 확인하기 전에는 사용하지 마세요. 국내 법령 해석은 RAG 원문을 최우선으로 하고 웹 검색은 보조로만 사용하세요.\n국내 최신 동향(속도·요금·투자·품질평가 수치, 사업 추진 단계 등)은 위 [질문 관련 최신 기사]·[최근 수집 뉴스 동향]을 최우선 근거로 삼고, 웹 검색 결과가 수집 뉴스와 상충하면(수치가 다르거나 시점이 더 과거이면) 수집 뉴스를 따르세요.';
   // 법령 관계도 자동 축적: 답변 말미에 기계용 <lawmap> 블록을 덧붙이게 함 (별도 API 호출 없음 — 출력 몇 줄 추가뿐)
-  const lawTopics = await lawTopicsP;
+  const lawTopics = ctx.lawTopics;
   const lawmapGuide = '\n\n---\n\n[법령 관계도 블록 지침]\n' +
     '이번 질문이 법령·고시·규제 근거가 있는 정책/법령 질문이면, 답변 본문을 모두 마친 뒤 맨 마지막 줄에 아래 형식의 블록을 정확히 한 줄로 출력하세요 (블록 앞뒤에 설명·마크다운 금지):\n' +
     '<lawmap>{"topic":"주제명(2~12자)","description":"주제 한줄 설명","relations":[{"law":"법령·고시명","type":"law|decree|rules|notice|etc","relation":"관계 한줄","basis":"제N조","law_desc":"법령 한줄 설명"}]}</lawmap>\n' +
@@ -2637,7 +2658,7 @@ async function callClaude(userText, onDelta) {
   // 가변부(lawmapGuide는 lawTopics 목록이 변함 + RAG·뉴스 등 질문마다 다른 컨텍스트)는
   // 캐시 블록 '뒤'에 둬야 적중한다 — 가변 요소를 고정부 앞·중간에 끼우지 말 것.
   const systemStable   = SYSTEM_PROMPT + webSearchGuide;
-  const systemVariable = lawmapGuide + ragContext + lawArticleContext + citingContext + annexContext + pendingContext + kbContext + customContext + newsContext + lawTrackContext + assemblyContext;
+  const systemVariable = lawmapGuide + ctx.ragContext + ctx.lawArticleContext + ctx.citingContext + ctx.annexContext + ctx.pendingContext + ctx.kbContext + ctx.customContext + ctx.newsContext + ctx.lawTrackContext + ctx.assemblyContext;
   const systemWithRag = [
     { type: 'text', text: systemStable, cache_control: { type: 'ephemeral' } },
     { type: 'text', text: systemVariable }

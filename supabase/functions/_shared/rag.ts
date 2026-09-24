@@ -24,6 +24,13 @@ const VOYAGE_URL = 'https://api.voyageai.com/v1/embeddings';
 // env는 반드시 trim — 콘솔 붙여넣기로 들어간 줄바꿈이 API 키에 남으면 헤더가 깨진다
 const env = (k: string) => (Deno.env.get(k) || '').trim();
 
+// 회귀 하네스 전용 훅(#201, 2026-09-24) — tests/rag_regress_deno.ts가 Haiku 확장어·Voyage 임베딩을 고정 픽스처로
+// 바꿔 끼워 Anthropic API 0회로 검색 경로를 재현한다. 운영 경로(Edge)는 아무도 설정하지 않으므로 비어 있다.
+export const testHooks: {
+  expand?: (query: string) => Promise<string[]>;
+  embed?: (query: string, model: string) => Promise<number[] | null>;
+} = {};
+
 // ── app.js extractKeywords 이식 (한국어 조사·불용어 제거, 법령 키워드 우선) ──
 // 우선 키워드·용언 어미·제목 가점 제외어 — 세 상수 모두 app.js와 동일 유지(한쪽만 고치면 봇/대시보드 검색이 갈라진다)
 const PRIORITY_KW_RE = /제\d+조|주파수|할당|재할당|전자파|ITU|5G|6G|EMC|SAR|고시|시행령|시행규칙|적합성|기술기준|무선국|면허|허가|신청|승인|폐업|폐지|이용기간|지원금|장려금|차별|이용자|대리점|판매점|유통점|약관|요금|금지행위|과징금|과태료|벌칙|벌금|사업자|기지국|검사|등록|신고|취소|회수|위탁|도매|접속|설비|번호이동|결합|계약|고지|공시|재난|손해배상|개인정보|위치정보|단말|보조금|할인|선택약정|전기통신|전파|무선|공동이용|역무|커버리지|경매/;
@@ -50,6 +57,7 @@ function extractKeywords(text: string): string[] {
 
 // ── Haiku 쿼리 확장 (실패 시 빈 배열 → 기본 키워드만) ──
 async function expandQueryKeywords(apiKey: string, query: string, sb?: SupabaseClient): Promise<string[]> {
+  if (testHooks.expand) return testHooks.expand(query);
   try {
     const res = await fetch(ANTHROPIC_URL, {
       method: 'POST',
@@ -74,6 +82,7 @@ async function expandQueryKeywords(apiKey: string, query: string, sb?: SupabaseC
 
 // ── Voyage 임베딩 (voyage-embed 함수와 동일 호출을 인라인 — 같은 프로젝트 Secret 사용) ──
 async function getQueryEmbedding(query: string, model = 'voyage-4-lite'): Promise<number[] | null> {
+  if (testHooks.embed) return testHooks.embed(query, model);
   const key = env('VOYAGE_API_KEY');
   if (!key) return null;
   try {
@@ -105,6 +114,16 @@ const TOTAL_CHUNK_CUT = 15;
 // ── 3중 하이브리드 조문 검색 (app.js searchKeywords 이식, 상위 15개) ──
 async function searchChunks(sb: SupabaseClient, apiKey: string, query: string): Promise<Chunk[]> {
   const baseKeywords = extractKeywords(query);
+  // trgm·시맨틱은 확장어를 쓰지 않으므로 Haiku 확장을 **기다리지 않고 먼저** 시작한다(B-2, #201, 2026-09-24).
+  // trgm 5~6초(#185, SQL로는 못 줄임)와 임베딩 왕복이 확장 1~2초와 겹친다. 병합 순서는 아래에서 고정하므로 결과 동일.
+  // only_current 명시 — 기본값에 기대면 status 필터 없는 오버로드로 조용히 해석될 수 있음(배경역사 #31 후속)
+  const trgmP = sb.rpc('search_chunks_trgm', { query_text: query, match_threshold: 0.12, match_count: 8, only_current: true })
+    .then((r) => r.data || []).catch(() => []);
+  const semP = getQueryEmbedding(query).then((emb) => {
+    if (!emb) return [];
+    return sb.rpc('match_chunks_semantic', { query_embedding: emb, match_threshold: 0.45, match_count: 8, only_current: true })
+      .then((r) => r.data || []).catch(() => []);
+  });
   const expanded = await expandQueryKeywords(apiKey, query, sb);
   // 기본 → 법령 표제어(LAW_SYNONYMS) → LLM 확장 순 (app.js searchKeywords와 동일 유지)
   const keywords: string[] = [];
@@ -115,14 +134,6 @@ async function searchChunks(sb: SupabaseClient, apiKey: string, query: string): 
   }
   if (!keywords.length) return [];
 
-  // only_current 명시 — 기본값에 기대면 status 필터 없는 오버로드로 조용히 해석될 수 있음(배경역사 #31 후속)
-  const trgmP = sb.rpc('search_chunks_trgm', { query_text: query, match_threshold: 0.12, match_count: 8, only_current: true })
-    .then((r) => r.data || []).catch(() => []);
-  const semP = getQueryEmbedding(query).then((emb) => {
-    if (!emb) return [];
-    return sb.rpc('match_chunks_semantic', { query_embedding: emb, match_threshold: 0.45, match_count: 8, only_current: true })
-      .then((r) => r.data || []).catch(() => []);
-  });
   // 제외어(#173)는 ilike 조회를 하지 않는다 — '직접'은 1,470청크에 있어 정렬 없는 limit 4가 임의 청크를 데려온다.
   // 점수 계산에서는 그대로 센다(다른 키워드로 들어온 청크의 본문 일치까지 뺄 이유는 없다).
   const kwP = Promise.all(keywords.slice(0, 10).filter((kw) => !isTitleStop(kw, query)).map((kw) =>
@@ -1076,9 +1087,19 @@ async function buildAssemblyTrendContext(sb: SupabaseClient, query: string): Pro
 export interface AdvisoryResult { answer: string; sources: string[]; webSources: WebRef[]; chunkIds: number[]; verdicts: unknown[] }
 
 // ── 자문 실행 (진입점) ──
-export async function answerAdvisory(sb: SupabaseClient, systemPrompt: string, question: string): Promise<AdvisoryResult> {
+// 자문 컨텍스트(검색·보강 단계)의 산출물 — answerAdvisory가 이걸로 프롬프트를 조립한다.
+export interface AdvisoryContext {
+  chunks: Chunk[]; extra: LawHit[]; addedIds: number[];
+  annex: { text: string; sources: string[] }; citing: { text: string; chunks: Chunk[]; ids: number[] };
+  kb: KbRow[]; news: { text: string; sources: string[] }; asm: string; lawContext: string; systemVariable: string;
+}
+
+// ── 자문 컨텍스트 조립(검색·보강 단계) — answerAdvisory에서 분리(#201, 2026-09-24 B-2).
+//    Sonnet 호출 없이 검색·통째 보강·역참조·별표·요약·뉴스 조각만 만든다. 회귀 하네스
+//    (tests/rag_regress_deno.ts)가 testHooks로 확장어·임베딩을 고정해 API 0회로 돌리고 단계별 청크 id를 대조한다.
+//    조립 순서·내용은 answerAdvisory 안에 있던 그대로 — 여기서 순서를 바꾸면 app.js buildAdvisoryContext도 같이.
+export async function buildAdvisoryContext(sb: SupabaseClient, question: string): Promise<AdvisoryContext> {
   const apiKey = env('ANTHROPIC_API_KEY');
-  if (!apiKey) throw new Error('ANTHROPIC_API_KEY 미설정');
 
   // 6갈래를 동시에: 조문 RAG / 법령요약 / 조문 정밀검색(키워드) / 조문 의미검색 / 뉴스 동향 / 국회 동향(참고 배경)
   const kbP = searchKbSummaries(sb, question);
@@ -1139,16 +1160,30 @@ export async function answerAdvisory(sb: SupabaseClient, systemPrompt: string, q
   // 입력은 RAG + 조문 정밀검색분. RAG만 넘기면 조문 섹션에만 있는 조문(예: 전파법 시행령
   // 제14조 「별표 3에 따라 산정한다」)의 인용을 놓친다. chunks를 앞에 둬야 상한 2개가
   // 상위 RAG 조문에 먼저 돌아간다. app.js 호출부와 동일 유지 — 한쪽만 고치지 말 것.
-  const annex = await buildAnnexContext(sb, chunks2.concat(extra2 as unknown as Chunk[]), question);
+  // 별표와 역참조는 둘 다 '보강이 끝난 chunks2·extra2'만 읽고 서로 독립이라 **동시에 시작**한다(B-2, #201).
+  // 종전에는 한 건씩 await라 각각의 DB 왕복이 줄줄이 더해졌다. 프롬프트 조립 순서는 아래에서 그대로 고정. app.js와 동일 유지.
+  const annexP = buildAnnexContext(sb, chunks2.concat(extra2 as unknown as Chunk[]), question);
 
   // 역참조 발췌(#155-보론4) — 검색된 조문을 인용하는 같은 법령의 다른 조문(제재·조사·준용)에서 인용 문장만.
   // 「대리점·판매점 관리」 질문에 제20조(등록취소 사유)·제51조(조사 대상)는 질문 어휘로 검색되지 않지만
   // "제32조의4제5항에 따른 …"처럼 검색된 조문을 가리키므로 이 경로로 닿는다. app.js와 동일 유지.
-  let citing: { text: string; chunks: Chunk[]; ids: number[] } = { text: '', chunks: [], ids: [] };
-  try {
-    citing = await CiteVerify.buildCitingExcerpts((extra2 as unknown as Chunk[]).concat(chunks2), (d: string, k: string) => fetchCitingChunks(sb, d, k), CITING_OPTS);
-    if (citing.chunks.length) console.log(`[역참조 발췌] ${citing.chunks.length}건`);
-  } catch (e) { console.warn('역참조 발췌 실패(건너뜀):', e); }
+  const emptyCiting: { text: string; chunks: Chunk[]; ids: number[] } = { text: '', chunks: [], ids: [] };
+  const citingP: Promise<{ text: string; chunks: Chunk[]; ids: number[] }> = Promise.resolve()
+    .then(() => CiteVerify.buildCitingExcerpts((extra2 as unknown as Chunk[]).concat(chunks2), (d: string, k: string) => fetchCitingChunks(sb, d, k), CITING_OPTS))
+    .catch((e: unknown) => { console.warn('역참조 발췌 실패(건너뜀):', e); return emptyCiting; });
+  const annex = await annexP;
+  const citing = await citingP;
+  if (citing.chunks.length) console.log(`[역참조 발췌] ${citing.chunks.length}건`);
+
+  // 국회 동향은 '근거'가 아니라 '배경'이라 맨 뒤 — 조문·요약·기사보다 앞에 두지 말 것
+  const systemVariable = buildRagContext(chunks2) + lawContext + citing.text + annex.text + buildKbContext(kb) + news.text + asm;
+  return { chunks: chunks2, extra: extra2, addedIds, annex, citing, kb, news, asm, lawContext, systemVariable };
+}
+
+export async function answerAdvisory(sb: SupabaseClient, systemPrompt: string, question: string): Promise<AdvisoryResult> {
+  const apiKey = env('ANTHROPIC_API_KEY');
+  if (!apiKey) throw new Error('ANTHROPIC_API_KEY 미설정');
+  const { chunks: chunks2, extra: extra2, addedIds, annex, citing, kb, news, systemVariable } = await buildAdvisoryContext(sb, question);
 
   const telegramGuide = '\n\n---\n\n[텔레그램 답변 형식 지침]\n' +
     '이 답변은 텔레그램 메시지로 전송됩니다. 다음을 지키세요:\n' +
@@ -1166,8 +1201,6 @@ export async function answerAdvisory(sb: SupabaseClient, systemPrompt: string, q
   // 분리해 cache_control:{type:'ephemeral'} 부착 → tools(web_search)+고정 지침이 함께 캐시된다.
   // 가변부(질문마다 바뀌는 RAG·조문·요약·뉴스)는 캐시 블록 '뒤'에 둬야 적중한다.
   const systemStable = systemPrompt + telegramGuide;
-  // 국회 동향은 '근거'가 아니라 '배경'이라 맨 뒤 — 조문·요약·기사보다 앞에 두지 말 것
-  const systemVariable = buildRagContext(chunks2) + lawContext + citing.text + annex.text + buildKbContext(kb) + news.text + asm;
   const system: SystemBlock[] = [
     { type: 'text', text: systemStable, cache_control: { type: 'ephemeral' } },
   ];

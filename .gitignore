@@ -19,6 +19,10 @@ speech_rebuild/
 node_modules/
 docs/confluence_backup/
 
+# 자문 검색 회귀 하네스 산출물(#201) — 임베딩 캐시·스냅샷은 실DB 시점 의존이라 저장소에 넣지 않는다
+tests/fixtures/rag_regress_embed_cache.json
+tests/fixtures/rag_regress_out/
+
 # 사내 컨플루언스 도구·사내 배포 문서(#172-보론) — 저장소가 공개이고 Pages가 모든 파일을 내보낸다
 confluence_writer.py
 _confluence_attach.py
