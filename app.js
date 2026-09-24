@@ -1583,6 +1583,39 @@ function buildKbContext(rows) {
 let chatHistory = [];
 let isSending = false;
 
+// 대화 이력 상한(B-8, #209): 종전엔 한 화면의 질문·답을 전부 매번 다시 보내, 질문이 쌓일수록 입력 토큰(비캐시)이
+// 불었고 — 근거 자료는 지금 질문 것만 들어가므로 — 오래된 답이 근거 없이 따라다녔다. 모델에는 직전 3턴,
+// 그리고 이전 대화 합계 24,000자 이내만 보낸다(오래된 것부터 뺌). 화면·chatHistory는 그대로 둔다.
+const ADV_HIST_TURNS = 3;
+const ADV_HIST_CHARS = 24000;
+function trimAdvHistory(hist) {
+  var cur = hist[hist.length - 1];
+  var pairs = [];
+  for (var i = 0; i + 1 < hist.length - 1; i += 2) pairs.push([hist[i], hist[i + 1]]);
+  var keep = [], chars = 0;
+  for (var j = pairs.length - 1; j >= 0 && keep.length < ADV_HIST_TURNS; j--) {
+    var c = String(pairs[j][0].content).length + String(pairs[j][1].content).length;
+    if (chars + c > ADV_HIST_CHARS) break;
+    chars += c;
+    keep.unshift(pairs[j]);
+  }
+  var msgs = [];
+  keep.forEach(function(p) { msgs.push(p[0], p[1]); });
+  msgs.push(cur);
+  return { messages: msgs, dropped: pairs.length - keep.length };
+}
+
+// 「새 대화」(B-8) — 이력과 화면을 비우고 첫 인사말(chat-area의 첫 말풍선)과 자주 묻는 질문만 남긴다.
+// 앞선 질문·답은 chat_logs에 이미 저장돼 「자문 이력」에서 다시 볼 수 있다.
+function newChat() {
+  if (isSending) { alert('답변을 받는 중에는 새 대화를 시작할 수 없습니다.'); return; }
+  chatHistory = [];
+  var area = document.getElementById('chat-area');
+  if (area) { while (area.children.length > 1) area.removeChild(area.lastChild); area.scrollTop = 0; }
+  var faq = document.getElementById('chat-faq'); if (faq) faq.style.display = '';
+  var inp = document.getElementById('chat-input'); if (inp && !inp.disabled) inp.focus();
+}
+
 
 
 // ════════════════════════════════════════════
@@ -2577,6 +2610,8 @@ async function callClaude(userText, onDelta) {
   ];
 
   chatHistory.push({ role: 'user', content: userText });
+  const _hist = trimAdvHistory(chatHistory);
+  window._advHistDropped = _hist.dropped;
 
   const res = await claudeFetch({
     method: 'POST',
@@ -2591,7 +2626,7 @@ async function callClaude(userText, onDelta) {
       stream: true,
       system: systemWithRag,
       tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 3 }],
-      messages: chatHistory
+      messages: _hist.messages   // 직전 3턴·24,000자 이내만(B-8, #209)
     })
   });
 
@@ -3274,6 +3309,16 @@ async function sendChat() {
       const cvDiv = document.createElement('div');
       cvDiv.innerHTML = citeVerdictSummaryHtml(window._advCiteVerdicts);
       while (cvDiv.firstChild) msgEl.appendChild(cvDiv.firstChild);
+    }
+
+    // 이력 상한(B-8, #209)으로 앞 대화가 빠진 답변에만 한 줄 — AI가 앞 내용을 잊은 까닭이 보이게
+    if (window._advHistDropped > 0) {
+      const hdDiv = document.createElement('div');
+      hdDiv.className = 'rag-sources';
+      hdDiv.style.cssText = 'font-size:10px;opacity:.75';
+      hdDiv.innerHTML = '<i class="ti ti-info-circle"></i>앞선 대화 ' + window._advHistDropped +
+        '개는 AI가 참고하지 않았습니다(최근 ' + ADV_HIST_TURNS + '개만 이어 받음). 주제가 바뀌면 「새 대화」를 누르세요.';
+      msgEl.appendChild(hdDiv);
     }
 
     // 법령 관계도 자동 축적: 답변의 <lawmap> 블록 → DB 저장 + 답변 밑 미니 관계도 표시 (추가 API 호출 없음)
@@ -6940,6 +6985,7 @@ function renderGroupTabs(page) {
   // AI 자문 화면의 「자문 이력·전체화면」은 탭 바 오른쪽에 — 자문 영역 안에 두면 한 줄을 먹는다(2026-09-19)
   + (page === 'chat'
       ? '<div style="margin-left:auto;display:flex;gap:6px;align-items:center;padding-bottom:4px;flex-shrink:0">'
+        + '<button class="btn" onclick="newChat()" title="대화를 비우고 새 주제로 시작 (앞선 질문·답은 자문 이력에 남음)"><i class="ti ti-plus"></i>새 대화</button>'
         + '<button class="btn" onclick="openChatHistory()"><i class="ti ti-history"></i>자문 이력</button>'
         + '<button class="btn fs-btn" onclick="toggleFullscreen(\'chat-wrap\')" title="이 화면만 전체화면 (Esc로 종료)"><i class="ti ti-maximize"></i>전체화면</button>'
         + '</div>'
