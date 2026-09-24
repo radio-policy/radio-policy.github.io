@@ -158,6 +158,27 @@ if not any(p.startswith("⛔") for p in problems):
     except Exception as e:
         problems.append("system_health heartbeat 조회 실패: %s" % e)
 
+# ── ③-2 봇 지침서 동기화 (B-9, #210) ──
+# 텔레그램 /ask·인용 검증기는 app_config.system_prompt를, 대시보드는 저장소 system_prompt.js를 쓴다.
+# 파일만 고치고 sync_system_prompt.py를 잊으면 봇만 옛 프롬프트로 돈다 — 체크아웃된 파일과 DB 값을 대조한다.
+# 추출 규칙은 sync_system_prompt.extract_prompt와 같다(첫 " ~ 마지막 " 을 JSON 문자열로). 대시보드 운영 상태에도 같은 줄.
+if not any(p.startswith("⛔") for p in problems):
+    try:
+        import hashlib
+        _js = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "system_prompt.js"), encoding="utf-8").read()
+        _file_prompt = json.loads(_js[_js.index('"'):_js.rindex('"') + 1])
+        rows = http_get_json(SUPABASE_URL + "/rest/v1/app_config?select=value&key=eq.system_prompt", sb_headers)
+        _db_prompt = rows[0].get("value") if rows else None
+        if not _db_prompt:
+            problems.append("봇 지침서(app_config.system_prompt) 없음 — python sync_system_prompt.py 실행 필요")
+        elif hashlib.sha256(_db_prompt.encode("utf-8")).digest() != hashlib.sha256(_file_prompt.encode("utf-8")).digest():
+            problems.append("봇 지침서가 system_prompt.js와 다름(파일 %d자 / 봇 %d자) — python sync_system_prompt.py 실행 필요"
+                            % (len(_file_prompt), len(_db_prompt)))
+        else:
+            print("[워치독] 봇 지침서 동기화 정상 (%d자)" % len(_file_prompt))
+    except Exception as e:
+        problems.append("봇 지침서 동기화 확인 실패: %s" % e)
+
 # ── ④ 결과 → 텔레그램(이상 있을 때만, 정상이면 무음) ──
 if problems:
     msg = "⚠️ [전파정책 헬스 워치독] 이상 감지 (%s KST):\n- %s" % (

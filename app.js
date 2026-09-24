@@ -6762,6 +6762,25 @@ async function loadOpsStatus() {
         }
       } catch (e2) { /* 표시용 — 실패해도 패널은 살린다 */ }
     }
+    // 봇 지침서 동기화(B-9, #210) — 텔레그램 /ask·인용 검증기는 app_config.system_prompt를, 대시보드는 이 파일을 쓴다.
+    // system_prompt.js만 고치고 sync_system_prompt.py를 잊으면 봇만 옛 프롬프트로 돈다(무증상). 행은 RLS로 숨겨져
+    // 있어 RPC가 길이·SHA-256만 준다. 같은 대조를 health_watchdog.py(매일 21:30)가 하고 다르면 텔레그램 경고.
+    try {
+      var sp = await sb.rpc('ops_system_prompt_hash');
+      var d = sp && sp.data;
+      if (d && typeof SYSTEM_PROMPT === 'string') {
+        var buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(SYSTEM_PROMPT));
+        var fileHash = Array.from(new Uint8Array(buf)).map(function(b) { return b.toString(16).padStart(2, '0'); }).join('');
+        var fileLen = Array.from(SYSTEM_PROMPT).length;   // 코드포인트 수 — DB length()와 같은 기준
+        var same = !!(d.ok && d.sha256 === fileHash);
+        rows += opsRow('봇 지침서(프롬프트) 동기화',
+                       same ? '같음 (' + fileLen.toLocaleString('ko-KR') + '자)'
+                            : (d.ok ? '다름 — 파일 ' + fileLen.toLocaleString('ko-KR') + '자 / 봇 ' + (d.len || 0).toLocaleString('ko-KR') + '자' : '봇 지침서 없음'),
+                       same,
+                       same ? '텔레그램 봇·인용 검증기가 대시보드와 같은 지침서를 씀'
+                            : 'python sync_system_prompt.py 실행 필요 (대시보드 캐시가 옛 파일이면 새로고침 후 다시 확인)');
+      }
+    } catch (e3) { /* 표시용 */ }
 
     el.innerHTML =
       '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">' +
