@@ -32,7 +32,8 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 PROJECT_REF = 'zwkjedumfuhodckmtxxn'
 FN_DIR = 'supabase/functions'
 STATIC = ('app.js', 'styles.css', 'system_prompt.js', 'lawmap_articles.js',
-          'supabase/functions/_shared/cite_verify.js', 'supabase/functions/_shared/rag_core.js')
+          'supabase/functions/_shared/cite_verify.js', 'supabase/functions/_shared/rag_core.js',
+          'supabase/functions/_shared/urgency_rules.js')
 KST = timezone(timedelta(hours=9))
 
 

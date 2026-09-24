@@ -30,6 +30,7 @@ from supabase import Client
 from sb_client import make_client, ran_recently, heartbeat as sb_heartbeat
 import api_usage; api_usage.install()   # Anthropic usage 기록(#152) — 호출부 무변경, fail-open
 import notify   # 텔레그램 전송 공용 유틸 (개선⑪) — 전송부만 위임
+import urgency_rules   # 긴급도 공통 낱말 규칙 매처(#216) — 사내판·대시보드 JS와 같은 계약
 import anthropic
 
 # ── 환경변수 ────────────────────────────────────────────
@@ -93,6 +94,8 @@ _URGENCY_CRITERIA = """[0단계 — 영역 게이트] 먼저 이 기사가 **이
   · 진행 중인 침해사고·제재 사건의 수사·조사·소송 경과와 선고·처분 일정
   ⚠️ 성과 홍보·구축 완료·예방 캠페인·주의보는 사고 보도가 아니다 → 금주검토 이하
   ⚠️ 이미 끝난 과거 사고를 돌아보는 회고·통계·순위 기사도 사고 보도가 아니다 → 금주검토
+- **국정감사에 SK텔레콤이(또는 통신3사가 일괄로) 증인·참고인으로 채택·신청·소환·출석하는 보도** — 채택 단계든
+  출석 당일이든 즉시대응. 타사만 소환된 국감 기사는 이 항목이 아니다(다른 항목으로 판단).
 - **제도가 실제로 움직인 것** — 법·시행령·고시·기준의 제개정과 시행, 정부·위원회의 의결·처분·행정지도,
   국회의 법안 처리, 요금·약관 규제, 무선국·통신설비 제도 변경
   · **이용자보호 업무 평가의 결과·등급 공표**는 특정 사업자 성과 보도처럼 보여도 제도 사안이다 → 즉시대응
@@ -1137,6 +1140,34 @@ def load_news_criteria() -> str:
     return NEWS_RELEVANCE_CRITERIA_FALLBACK
 
 
+_URGENCY_RULES = None   # 실행당 1회 로드(모듈 전역 캐시)
+
+
+def load_urgency_rules() -> list:
+    """표 urgency_rules의 공통 규칙(team_id null, enabled)을 position 순으로. 실패·형식 오류·0건이면 비상 사본(#216).
+    1단계는 공통 규칙만 적용한다 — 팀 규칙은 팀 값 저장소(2단계)가 생겨야 적용할 자리가 있다."""
+    global _URGENCY_RULES
+    if _URGENCY_RULES is not None:
+        return _URGENCY_RULES
+    rules, src = None, 'db'
+    try:
+        rows = sb.table('urgency_rules').select('*').is_('team_id', 'null').eq('enabled', True)             .order('position').order('id').execute().data or []
+        errs = urgency_rules.validate_rules(rows)
+        if errs:
+            print(f'[규칙] 표 형식 오류 {len(errs)}건 — 비상 사본 사용: {errs[:3]}')
+        elif rows:
+            rules = rows
+        else:
+            print('[규칙] 표에 켜진 공통 규칙 0건 — 비상 사본 사용')
+    except Exception as e:
+        print(f'[규칙] 표 조회 실패 — 비상 사본 사용: {str(e)[:80]}')
+    if rules is None:
+        rules, src = urgency_rules.URGENCY_RULES_FALLBACK, 'fallback'
+    print(f'[규칙] {len(rules)}개 로드({src})')
+    _URGENCY_RULES = rules
+    return rules
+
+
 def _screen_text_of(item: dict) -> str:
     """판정 재료 — 수집 시 담아 둔 요약(_screen_text), 없으면 content 앞부분."""
     txt = (item.get('_screen_text') or item.get('content') or '')
@@ -1464,6 +1495,37 @@ _URGENCY_SUMMARY: dict = {}
 #  Supabase 저장
 # ═══════════════════════════════════════════════════════
 
+def grade_urgency(valid: list, rules: list, classify=None) -> dict:
+    """⑤ 긴급도 — 공통 낱말 규칙(#216) + Haiku 판정을 합쳐 item['urgency'/'importance'/'urgency_rule']을 채운다.
+    규칙은 AI보다 먼저 맞춰 본다(제목 + 네이버 요약만, 본문 금지). set 적중 = 그 값, AI 콜 생략 /
+    min 적중 = AI를 돌린 뒤 하한만(max) / 적중 id는 값이 안 바뀌어도 urgency_rule에 남긴다(출처 표시·사내 정본).
+    알림·큐·브리핑은 저장값을 쓰므로 따로 고칠 곳이 없다. 반환 = 로그용 집계."""
+    classify = classify or classify_urgency
+    hits, changed_n, skipped_ai = {}, 0, 0
+    for item in valid:
+        summary = _URGENCY_SUMMARY.get(item.get('url', ''), '')
+        hit = urgency_rules.match_urgency_rules(rules, item.get('title', ''), summary)
+        if hit and hit['mode'] == 'set':
+            val = hit['level']                              # 공통 AI 생략
+            skipped_ai += 1
+        else:
+            val = classify(item.get('title', ''), item.get('content', '') or '', summary)
+            if hit:                                         # min — AI 값에 하한
+                val, _, changed = urgency_rules.combine(hit, val)
+                changed_n += int(changed)
+        if hit:
+            hits[hit['id']] = hits.get(hit['id'], 0) + 1
+        item['urgency'] = val
+        item['importance'] = val
+        item['urgency_rule'] = hit['id'] if hit else None   # 모든 행에 키(벌크 upsert 키 집합 동일, #82)
+    if hits:
+        print(f'[규칙] 적중 {sum(hits.values())}건 (' + ', '.join(f'{k}×{v}' for k, v in hits.items()) +
+              f', 값 변경 {changed_n}건, AI 생략 {skipped_ai}건)')
+    else:
+        print('[규칙] 적중 0건')
+    return {'hits': hits, 'changed': changed_n, 'skipped_ai': skipped_ai}
+
+
 def save_new_items(items: list, existing_data: tuple) -> list:
     """규칙1: 15일 이내 & 날짜 확인된 신규 기사만 저장
     existing_data: (existing_urls: set, existing_titles: set)
@@ -1611,11 +1673,8 @@ def save_new_items(items: list, existing_data: tuple) -> list:
     #    월 $33을 아끼려다 긴급 알림(이 시스템의 존재 이유)을 잃는 거래라 원복했다.
     #    선별 콜은 urgency를 여전히 뱉지만(스키마 유지) **여기서 쓰지 않는다** — 프롬프트 보강으로
     #    통합을 되살릴 실험 여지를 남겨 둔 것. 되살릴 땐 반드시 긴급률을 배포 전(9.9%)과 비교할 것.
-    for item in valid:
-        val = classify_urgency(item.get('title', ''), item.get('content', '') or '',
-                               _URGENCY_SUMMARY.get(item.get('url', ''), ''))
-        item['urgency'] = val
-        item['importance'] = val
+    #    ⑤-1 공통 낱말 규칙(#216, 표 urgency_rules)을 AI 판정과 합친다 — grade_urgency 주석 참조.
+    grade_urgency(valid, load_urgency_rules())
 
     try:
         # upsert(on_conflict=url, ignore_duplicates): 크롤러 동시 실행 시

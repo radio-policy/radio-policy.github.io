@@ -1,0 +1,619 @@
+[
+ {
+  "name": "① 걸림 — SKT·KT 보안책임자 증인석(AI 긴급 그대로)",
+  "rules": [
+   {
+    "id": "skt_gukgam_witness",
+    "min": "긴급",
+    "any": [
+     "SK텔레콤",
+     "SKT",
+     "통신3사",
+     "이통3사",
+     "통신 3사",
+     "이통 3사",
+     "이동통신 3사"
+    ],
+    "and_any": [
+     [
+      "국감",
+      "국정감사"
+     ],
+     [
+      "증인",
+      "참고인",
+      "소환",
+      "출석",
+      "국감행",
+      "국감장"
+     ]
+    ],
+    "none": [],
+    "note": "국정감사 증인·참고인 채택·소환·출석 — 전 팀 공통 긴급"
+   }
+  ],
+  "title": "[2026 국감 증인-과방위①] SKT·KT 보안책임자 증인석…",
+  "summary": "",
+  "ai": "긴급",
+  "expect": {
+   "level": "긴급",
+   "rule_id": "skt_gukgam_witness",
+   "changed": false
+  }
+ },
+ {
+  "name": "① 걸림 — 이통3사 국감소환",
+  "rules": [
+   {
+    "id": "skt_gukgam_witness",
+    "min": "긴급",
+    "any": [
+     "SK텔레콤",
+     "SKT",
+     "통신3사",
+     "이통3사",
+     "통신 3사",
+     "이통 3사",
+     "이동통신 3사"
+    ],
+    "and_any": [
+     [
+      "국감",
+      "국정감사"
+     ],
+     [
+      "증인",
+      "참고인",
+      "소환",
+      "출석",
+      "국감행",
+      "국감장"
+     ]
+    ],
+    "none": [],
+    "note": "국정감사 증인·참고인 채택·소환·출석 — 전 팀 공통 긴급"
+   }
+  ],
+  "title": "이통3사·듀오·티빙…'유출'기업 대거 국감소환",
+  "summary": "",
+  "ai": "긴급",
+  "expect": {
+   "level": "긴급",
+   "rule_id": "skt_gukgam_witness",
+   "changed": false
+  }
+ },
+ {
+  "name": "① 걸림 — 통신 3사 국감행(보통→긴급)",
+  "rules": [
+   {
+    "id": "skt_gukgam_witness",
+    "min": "긴급",
+    "any": [
+     "SK텔레콤",
+     "SKT",
+     "통신3사",
+     "이통3사",
+     "통신 3사",
+     "이통 3사",
+     "이동통신 3사"
+    ],
+    "and_any": [
+     [
+      "국감",
+      "국정감사"
+     ],
+     [
+      "증인",
+      "참고인",
+      "소환",
+      "출석",
+      "국감행",
+      "국감장"
+     ]
+    ],
+    "none": [],
+    "note": "국정감사 증인·참고인 채택·소환·출석 — 전 팀 공통 긴급"
+   }
+  ],
+  "title": "통신 3사, CISO급 나란히 국감행···해킹 1년 '보안 쇄신' 검증",
+  "summary": "",
+  "ai": "보통",
+  "expect": {
+   "level": "긴급",
+   "rule_id": "skt_gukgam_witness",
+   "changed": true
+  }
+ },
+ {
+  "name": "② 안 걸림 — KT만 증인(SKT 없음)",
+  "rules": [
+   {
+    "id": "skt_gukgam_witness",
+    "min": "긴급",
+    "any": [
+     "SK텔레콤",
+     "SKT",
+     "통신3사",
+     "이통3사",
+     "통신 3사",
+     "이통 3사",
+     "이동통신 3사"
+    ],
+    "and_any": [
+     [
+      "국감",
+      "국정감사"
+     ],
+     [
+      "증인",
+      "참고인",
+      "소환",
+      "출석",
+      "국감행",
+      "국감장"
+     ]
+    ],
+    "none": [],
+    "note": "국정감사 증인·참고인 채택·소환·출석 — 전 팀 공통 긴급"
+   }
+  ],
+  "title": "KT, 국감서 보안체계 점검…이상운 CISO 증인 채택",
+  "summary": "",
+  "ai": "보통",
+  "expect": {
+   "level": "보통",
+   "rule_id": null,
+   "changed": false
+  }
+ },
+ {
+  "name": "② 안 걸림 — 소환류 낱말 없음",
+  "rules": [
+   {
+    "id": "skt_gukgam_witness",
+    "min": "긴급",
+    "any": [
+     "SK텔레콤",
+     "SKT",
+     "통신3사",
+     "이통3사",
+     "통신 3사",
+     "이통 3사",
+     "이동통신 3사"
+    ],
+    "and_any": [
+     [
+      "국감",
+      "국정감사"
+     ],
+     [
+      "증인",
+      "참고인",
+      "소환",
+      "출석",
+      "국감행",
+      "국감장"
+     ]
+    ],
+    "none": [],
+    "note": "국정감사 증인·참고인 채택·소환·출석 — 전 팀 공통 긴급"
+   }
+  ],
+  "title": "SK텔레콤 독과점…해킹에 흔들린 아성 [연도별 국감]",
+  "summary": "",
+  "ai": "보통",
+  "expect": {
+   "level": "보통",
+   "rule_id": null,
+   "changed": false
+  }
+ },
+ {
+  "name": "② 안 걸림 — 국감 쟁점 기사(증인류 없음)",
+  "rules": [
+   {
+    "id": "skt_gukgam_witness",
+    "min": "긴급",
+    "any": [
+     "SK텔레콤",
+     "SKT",
+     "통신3사",
+     "이통3사",
+     "통신 3사",
+     "이통 3사",
+     "이동통신 3사"
+    ],
+    "and_any": [
+     [
+      "국감",
+      "국정감사"
+     ],
+     [
+      "증인",
+      "참고인",
+      "소환",
+      "출석",
+      "국감행",
+      "국감장"
+     ]
+    ],
+    "none": [],
+    "note": "국정감사 증인·참고인 채택·소환·출석 — 전 팀 공통 긴급"
+   }
+  ],
+  "title": "[2026 국감] 통신3사, '보안 투자' '소비자 혜택 축소' 쟁점",
+  "summary": "",
+  "ai": "참고",
+  "expect": {
+   "level": "참고",
+   "rule_id": null,
+   "changed": false
+  }
+ },
+ {
+  "name": "③ min이 긴급을 내리지 않음",
+  "rules": [
+   {
+    "id": "min_normal",
+    "mode": "min",
+    "level": "보통",
+    "any_words": [
+     "주파수"
+    ]
+   }
+  ],
+  "title": "주파수 재할당 대가 산정 착수",
+  "summary": "",
+  "ai": "긴급",
+  "expect": {
+   "level": "긴급",
+   "rule_id": "min_normal",
+   "changed": false
+  }
+ },
+ {
+  "name": "④ set이 내림",
+  "rules": [
+   {
+    "id": "set_low",
+    "mode": "set",
+    "level": "참고",
+    "any_words": [
+     "부고"
+    ]
+   }
+  ],
+  "title": "[부고] 홍길동 씨 부친상 — SKT 국감 증인",
+  "summary": "",
+  "ai": "긴급",
+  "expect": {
+   "level": "참고",
+   "rule_id": "set_low",
+   "changed": true
+  }
+ },
+ {
+  "name": "⑤ none 제외",
+  "rules": [
+   {
+    "id": "assembly",
+    "mode": "min",
+    "level": "보통",
+    "any_words": [
+     "과방위"
+    ],
+    "none_words": [
+     "부고"
+    ]
+   }
+  ],
+  "title": "[부고] 전 과방위 전문위원 모친상",
+  "summary": "",
+  "ai": "참고",
+  "expect": {
+   "level": "참고",
+   "rule_id": null,
+   "changed": false
+  }
+ },
+ {
+  "name": "⑥ 첫 적중 min이 이미 그 이상 → 값 그대로·id 기록·뒤 규칙 미적용",
+  "rules": [
+   {
+    "id": "first_min",
+    "mode": "min",
+    "level": "보통",
+    "any_words": [
+     "과방위"
+    ]
+   },
+   {
+    "id": "second_min",
+    "mode": "min",
+    "level": "긴급",
+    "any_words": [
+     "국정감사"
+    ]
+   }
+  ],
+  "title": "과방위 국정감사 일정 확정",
+  "summary": "",
+  "ai": "보통",
+  "expect": {
+   "level": "보통",
+   "rule_id": "first_min",
+   "changed": false
+  }
+ },
+ {
+  "name": "⑦ NFD 입력(맥 파일명식 자모 분리)",
+  "rules": [
+   {
+    "id": "skt_gukgam_witness",
+    "min": "긴급",
+    "any": [
+     "SK텔레콤",
+     "SKT",
+     "통신3사",
+     "이통3사",
+     "통신 3사",
+     "이통 3사",
+     "이동통신 3사"
+    ],
+    "and_any": [
+     [
+      "국감",
+      "국정감사"
+     ],
+     [
+      "증인",
+      "참고인",
+      "소환",
+      "출석",
+      "국감행",
+      "국감장"
+     ]
+    ],
+    "none": [],
+    "note": "국정감사 증인·참고인 채택·소환·출석 — 전 팀 공통 긴급"
+   }
+  ],
+  "title": "SK텔레콤 대표 국정감사 증인 채택",
+  "summary": "",
+  "ai": "보통",
+  "expect": {
+   "level": "긴급",
+   "rule_id": "skt_gukgam_witness",
+   "changed": true
+  }
+ },
+ {
+  "name": "⑦-2 NFD 요약에서 적중",
+  "rules": [
+   {
+    "id": "skt_gukgam_witness",
+    "min": "긴급",
+    "any": [
+     "SK텔레콤",
+     "SKT",
+     "통신3사",
+     "이통3사",
+     "통신 3사",
+     "이통 3사",
+     "이동통신 3사"
+    ],
+    "and_any": [
+     [
+      "국감",
+      "국정감사"
+     ],
+     [
+      "증인",
+      "참고인",
+      "소환",
+      "출석",
+      "국감행",
+      "국감장"
+     ]
+    ],
+    "none": [],
+    "note": "국정감사 증인·참고인 채택·소환·출석 — 전 팀 공통 긴급"
+   }
+  ],
+  "title": "과방위 국감 명단 확정",
+  "summary": "SKT 보안책임자가 증인으로 출석한다",
+  "ai": "보통",
+  "expect": {
+   "level": "긴급",
+   "rule_id": "skt_gukgam_witness",
+   "changed": true
+  }
+ },
+ {
+  "name": "⑧ 평면 and_any(그룹 하나) — 적중",
+  "rules": [
+   {
+    "id": "flat",
+    "min": "긴급",
+    "any": [
+     "SKT"
+    ],
+    "and_any": [
+     "국감",
+     "국정감사"
+    ]
+   }
+  ],
+  "title": "SKT 국정감사 대응 태스크포스",
+  "summary": "",
+  "ai": "보통",
+  "expect": {
+   "level": "긴급",
+   "rule_id": "flat",
+   "changed": true
+  }
+ },
+ {
+  "name": "⑧ 평면 and_any(그룹 하나) — 그룹 낱말 없음",
+  "rules": [
+   {
+    "id": "flat",
+    "min": "긴급",
+    "any": [
+     "SKT"
+    ],
+    "and_any": [
+     "국감",
+     "국정감사"
+    ]
+   }
+  ],
+  "title": "SKT 신규 요금제 출시",
+  "summary": "",
+  "ai": "보통",
+  "expect": {
+   "level": "보통",
+   "rule_id": null,
+   "changed": false
+  }
+ },
+ {
+  "name": "⑨ min 적중 + AI가 더 높음 → AI 값",
+  "rules": [
+   {
+    "id": "min_normal",
+    "mode": "min",
+    "level": "보통",
+    "any_words": [
+     "기지국"
+    ]
+   }
+  ],
+  "title": "기지국 장애로 전국 통화 먹통",
+  "summary": "",
+  "ai": "긴급",
+  "expect": {
+   "level": "긴급",
+   "rule_id": "min_normal",
+   "changed": false
+  }
+ },
+ {
+  "name": "⑩ min 적중 + AI가 더 낮음 → 하한",
+  "rules": [
+   {
+    "id": "min_normal",
+    "mode": "min",
+    "level": "보통",
+    "any_words": [
+     "기지국"
+    ]
+   }
+  ],
+  "title": "지자체 기지국 설치 안내",
+  "summary": "",
+  "ai": "참고",
+  "expect": {
+   "level": "보통",
+   "rule_id": "min_normal",
+   "changed": true
+  }
+ },
+ {
+  "name": "⑪ set 적중 → set 값(AI 무시)",
+  "rules": [
+   {
+    "id": "set_urgent",
+    "mode": "set",
+    "level": "긴급",
+    "any_words": [
+     "재할당"
+    ]
+   }
+  ],
+  "title": "3G 주파수 재할당 공고",
+  "summary": "",
+  "ai": "참고",
+  "expect": {
+   "level": "긴급",
+   "rule_id": "set_urgent",
+   "changed": true
+  }
+ },
+ {
+  "name": "⑪-2 set 적중 + AI와 같음 → 변경 없음",
+  "rules": [
+   {
+    "id": "set_urgent",
+    "mode": "set",
+    "level": "긴급",
+    "any_words": [
+     "재할당"
+    ]
+   }
+  ],
+  "title": "3G 주파수 재할당 공고",
+  "summary": "",
+  "ai": "긴급",
+  "expect": {
+   "level": "긴급",
+   "rule_id": "set_urgent",
+   "changed": false
+  }
+ },
+ {
+  "name": "대소문자 그대로(skt ≠ SKT)",
+  "rules": [
+   {
+    "id": "skt_gukgam_witness",
+    "min": "긴급",
+    "any": [
+     "SK텔레콤",
+     "SKT",
+     "통신3사",
+     "이통3사",
+     "통신 3사",
+     "이통 3사",
+     "이동통신 3사"
+    ],
+    "and_any": [
+     [
+      "국감",
+      "국정감사"
+     ],
+     [
+      "증인",
+      "참고인",
+      "소환",
+      "출석",
+      "국감행",
+      "국감장"
+     ]
+    ],
+    "none": [],
+    "note": "국정감사 증인·참고인 채택·소환·출석 — 전 팀 공통 긴급"
+   }
+  ],
+  "title": "skt 국정감사 증인 채택",
+  "summary": "",
+  "ai": "보통",
+  "expect": {
+   "level": "보통",
+   "rule_id": null,
+   "changed": false
+  }
+ },
+ {
+  "name": "규칙 목록 비어 있음",
+  "rules": [],
+  "title": "SKT 국정감사 증인 채택",
+  "summary": "",
+  "ai": "보통",
+  "expect": {
+   "level": "보통",
+   "rule_id": null,
+   "changed": false
+  }
+ }
+]

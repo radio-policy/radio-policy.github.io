@@ -3509,7 +3509,7 @@ function classifyNewsImportance(news) {
 // 되돌리지 말 것: 1단계에서 `count:'exact'`를 같이 받아 2단계 페이지 수를 정한다(왕복 1회 절약).
 var _newsFullLoaded = false;      // 2단계까지 끝났나
 var _newsFillPromise = null;      // 2단계 진행 중 Promise (중복 실행 방지)
-var NEWS_LIST_COLS = 'id,title,source,category,url,is_read,published_at,created_at,summary,importance,urgency,locked,briefed_date,content_fetched_at,tags,event';
+var NEWS_LIST_COLS = 'id,title,source,category,url,is_read,published_at,created_at,summary,importance,urgency,locked,briefed_date,content_fetched_at,tags,event,urgency_rule';   // urgency_rule = 적중 긴급도 규칙 id(#216)
 
 function _newsAbsorb(rows) {
   // 중복 없이 합치고 최신순 정렬 + 중요도 분류. 잠금 기사 별도 조회분도 이 경로로 들어온다(#38).
@@ -3551,6 +3551,7 @@ async function loadNews(force) {
     _newsFullLoaded = false;
     _newsAbsorb(first.data || []);
     renderNewsList();                       // ← 여기서 화면이 뜬다
+    loadUrgencySources(force);              // 상세의 등급 출처 표시(규칙 note·담당자 수정) — 화면을 막지 않고 뒤에서(#216)
 
     var total = first.count || newsDataCache.length;
     var pages = Math.ceil(total / PAGE);
@@ -4056,6 +4057,7 @@ async function setNewsImportance(newsId, newVal) {
       fb.ai_importance = oldVal;
       await sb.from('importance_feedback').insert(fb);
     }
+    _urFb.add(String(newsId)); _urRefreshSource(newsId);   // 등급 출처 → 담당자 수정(#216)
     // 당일 브리핑에 포함된 기사면 브리핑 원문의 🔴 표시도 동기화 — 화면을 막지 않고 뒤에서
     syncBriefingUrgency(newsId, newVal).catch(function(e2) { console.warn('[브리핑 동기화] 실패(무시):', e2); });
   } catch(e) {
@@ -4097,6 +4099,257 @@ async function syncBriefingUrgency(newsId, newVal) {
   }
 }
 
+// ════════════════════════════════════════════
+//  긴급도 낱말 규칙 (#216, 2026-09-25) — 출처 표시 + 규칙 편집기
+//  크롤러가 표 urgency_rules(공통 = team_id null)의 규칙을 제목 + 네이버 요약에 돌려 저장값을 정한다
+//  (min = 하한, set = 지정, 첫 적중 규칙 하나가 정함, 적중 id는 news_feed.urgency_rule). 매처는
+//  _shared/urgency_rules.js(UrgencyRules) — Python urgency_rules.py와 같은 케이스 파일로 검증한다.
+//  편집기는 뉴스 화면 머리줄의 「긴급도 설정」 버튼이 여는 창(2026-09-25 운영자 결정 — 목록을 가리지 않게,
+//  설정 탭은 관리자 전용이라 2단계 팀장이 못 들어오므로 설정 탭에 두지 않는다).
+//  화면 게이트는 안내용이고 관문은 RLS(공통 = is_admin(), 팀 = 팀장 자기 팀). 삭제는 없다 — 끄기(enabled=false)만.
+// ════════════════════════════════════════════
+var _urRules = [];              // 표 전체(공통·팀·꺼진 것 포함) — id→note 표시와 편집기 공용
+var _urFb = new Set();          // 담당자가 중요도를 고친 news_id (importance_feedback)
+var _urSrcPromise = null;
+var _urEditing = null;          // 편집 중인 규칙 id (null = 새 규칙)
+var _urFormOpen = false;
+
+function loadUrgencySources(force) {
+  if (!sb) return Promise.resolve();
+  if (_urSrcPromise && !force) return _urSrcPromise;
+  _urSrcPromise = (async function() {
+    var r = await sb.from('urgency_rules').select('*').order('position').order('id');
+    if (!r.error) _urRules = r.data || [];
+    else console.warn('[긴급도 규칙] 조회 실패:', r.error.message);
+    var fb = new Set(), PAGE = 1000;
+    for (var p = 0; p < 20; p++) {
+      var f = await sb.from('importance_feedback').select('news_id').order('id').range(p * PAGE, p * PAGE + PAGE - 1);
+      if (f.error) { console.warn('[긴급도 규칙] 담당자 수정 조회 실패:', f.error.message); break; }
+      (f.data || []).forEach(function(x) { if (x.news_id) fb.add(String(x.news_id)); });
+      if (!f.data || f.data.length < PAGE) break;
+    }
+    _urFb = fb;
+  })().catch(function(e) { console.warn('[긴급도 규칙] 로드 실패:', e); _urSrcPromise = null; });
+  return _urSrcPromise;
+}
+
+function _urLvLabel(v) { return v === '긴급' ? '중요' : v; }
+
+// 상세 모달 배지 옆 — 이 등급이 어디서 왔나: 담당자 수정 > 규칙 > AI 판정
+function _urgencySourceHtml(n) {
+  if (!n) return '';
+  var st = 'font-size:10px;color:var(--text-tertiary);white-space:nowrap';
+  if (_urFb.has(String(n.id))) return '<span style="' + st + '" title="담당자가 직접 고친 값">· 담당자 수정</span>';
+  if (n.urgency_rule) {
+    var rule = _urRules.find(function(x) { return x.id === n.urgency_rule; });
+    var note = rule ? (rule.note || rule.id) : n.urgency_rule;
+    return '<span style="' + st + '" title="긴급도 규칙 ' + escHtml(n.urgency_rule) + ' — 제목·요약 낱말로 정한 하한/지정">· 규칙: ' + escHtml(note) + '</span>';
+  }
+  if (n.urgency || n.importance) return '<span style="' + st + '" title="수집 때 AI가 판정한 값">· AI 판정</span>';
+  return '';
+}
+
+function _urRefreshSource(newsId) {
+  var el = document.getElementById('imp-src-' + newsId);
+  var n = newsDataCache.find(function(x) { return String(x.id) === String(newsId); });
+  if (el) el.innerHTML = _urgencySourceHtml(n);
+}
+
+// ── 편집기 ──
+function openUrgencyRules() {
+  var m = document.getElementById('ur-modal');
+  if (!m) return;
+  m.style.display = 'flex';
+  var list = document.getElementById('ur-list');
+  if (list && !list.innerHTML) list.innerHTML = '<div style="font-size:12px;color:var(--text-tertiary);padding:8px 0">불러오는 중...</div>';
+  loadUrgencySources(true).then(renderUrgencyRules);
+}
+function closeUrgencyRules() {
+  var m = document.getElementById('ur-modal');
+  if (m) m.style.display = 'none';
+  cancelUrgencyRuleEdit();
+  _urMsg('');
+}
+
+function _urMsg(text, isError) {
+  var el = document.getElementById('ur-msg');
+  if (!el) return;
+  el.style.display = text ? 'block' : 'none';
+  el.textContent = text || '';
+  el.style.color = isError ? '#ef4444' : 'var(--text-secondary)';
+}
+
+function _urChips(words) {
+  return (words || []).map(function(w) {
+    return '<span style="display:inline-block;font-size:10.5px;padding:1px 6px;margin:1px 2px;border-radius:4px;background:var(--bg-secondary);border:0.5px solid var(--border-secondary)">' + escHtml(w) + '</span>';
+  }).join('');
+}
+
+function _urGroups(andAny) {
+  return UrgencyRules.ruleView({ id: 'x', mode: 'min', level: '보통', any_words: ['x'], and_any: andAny || [] }).groups;
+}
+
+function renderUrgencyRules() {
+  var el = document.getElementById('ur-list');
+  if (!el) return;
+  var admin = isAdminUser();
+  var rows = _urRules.filter(function(r) { return r.team_id == null; });
+  if (!rows.length) { el.innerHTML = '<div style="font-size:12px;color:var(--text-tertiary);padding:8px 0">등록된 공통 규칙이 없습니다.</div>'; return; }
+  el.innerHTML = rows.map(function(r) {
+    var lv = IMPORTANCE_RULES[r.level] || {};
+    var groups = _urGroups(r.and_any);
+    return '<div style="padding:8px 10px;margin-bottom:6px;border:0.5px solid var(--border-secondary);border-radius:var(--radius-md);' + (r.enabled ? '' : 'opacity:.5') + '">' +
+      '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">' +
+        '<span style="font-size:10px;color:var(--text-muted)" title="순서 — 작을수록 먼저, 처음 걸린 규칙 하나가 정한다">' + escHtml(String(r.position)) + '</span>' +
+        '<span style="font-size:11px;font-weight:700;white-space:nowrap;color:' + (lv.color || 'inherit') + '">' + (r.mode === 'set' ? '지정 ' : '최소 ') + escHtml(_urLvLabel(r.level)) + '</span>' +
+        '<span style="font-size:12px;color:var(--text-primary);font-weight:600">' + escHtml(r.note || r.id) + '</span>' +
+        (r.enabled ? '' : '<span style="font-size:10px;color:#b45309">꺼짐</span>') +
+        '<code style="font-size:10px;color:var(--text-muted);margin-left:auto">' + escHtml(r.id) + '</code>' +
+        (admin ? '<button class="btn" style="font-size:10.5px;padding:2px 8px" data-rid="' + escHtml(r.id) + '" onclick="editUrgencyRule(this.getAttribute(\'data-rid\'))">편집</button>' : '') +
+      '</div>' +
+      '<div style="font-size:11px;color:var(--text-secondary);margin-top:4px;line-height:1.7">' +
+        '<b style="font-weight:600">낱말</b> ' + _urChips(r.any_words) +
+        groups.map(function(g) { return '<br><b style="font-weight:600">그리고</b> ' + _urChips(g); }).join('') +
+        ((r.none_words || []).length ? '<br><b style="font-weight:600">제외</b> ' + _urChips(r.none_words) : '') +
+      '</div></div>';
+  }).join('');
+}
+
+function _urSplit(s) {
+  return (s || '').split(/[,，\n]/).map(function(w) { return w.trim(); }).filter(Boolean);
+}
+
+function _urFormRow() {
+  // 폼 → 규칙 행(표 모양). id는 새 규칙이면 영문 이름 + _YYMMDD로 자동, 기존 규칙이면 그대로(잠금)
+  var g = function(id) { var e = document.getElementById(id); return e ? e.value : ''; };
+  var andLines = (g('ur-f-and') || '').split('\n').map(_urSplit).filter(function(a) { return a.length; });
+  var id = _urEditing;
+  if (!id) {
+    var slug = (g('ur-f-slug') || 'rule').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'rule';
+    var d = new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(2, 10).replace(/-/g, '');
+    id = slug + '_' + d;
+    var base = id, k = 2;
+    while (_urRules.some(function(x) { return x.id === id; })) id = base + '_' + (k++);   // 지운 id 재사용 금지 — 꺼진 행도 표에 남는다
+  }
+  return {
+    id: id, team_id: null,
+    position: parseInt(g('ur-f-pos'), 10) || 100,
+    mode: g('ur-f-mode'), level: g('ur-f-level'),
+    any_words: _urSplit(g('ur-f-any')), and_any: andLines, none_words: _urSplit(g('ur-f-none')),
+    note: (g('ur-f-note') || '').trim(),
+    enabled: !!(document.getElementById('ur-f-enabled') || {}).checked,
+  };
+}
+
+function editUrgencyRule(id) {
+  if (!isAdminUser()) { _urMsg('공통 규칙은 관리자만 고칠 수 있습니다.', true); return; }
+  var r = id ? _urRules.find(function(x) { return x.id === id; }) : null;
+  _urEditing = r ? r.id : null;
+  var form = document.getElementById('ur-form');
+  if (!form) return;
+  var maxPos = _urRules.reduce(function(m, x) { return Math.max(m, x.position || 0); }, 0);
+  var set = function(k, v) { var e = document.getElementById(k); if (e) e.value = v; };
+  set('ur-f-slug', ''); set('ur-f-note', r ? r.note : '');
+  set('ur-f-pos', r ? r.position : maxPos + 10);
+  set('ur-f-mode', r ? r.mode : 'min'); set('ur-f-level', r ? r.level : '보통');
+  set('ur-f-any', r ? (r.any_words || []).join(', ') : '');
+  set('ur-f-and', r ? _urGroups(r.and_any).map(function(g) { return g.join(', '); }).join('\n') : '');
+  set('ur-f-none', r ? (r.none_words || []).join(', ') : '');
+  var en = document.getElementById('ur-f-enabled'); if (en) en.checked = r ? !!r.enabled : true;
+  var idEl = document.getElementById('ur-f-id');
+  if (idEl) idEl.textContent = r ? r.id + ' (고정 — 규칙 id는 바꾸지 않는다)' : '저장할 때 자동 생성 (영문 이름 + 날짜)';
+  var slugRow = document.getElementById('ur-f-slug-row'); if (slugRow) slugRow.style.display = r ? 'none' : '';
+  form.style.display = 'block';
+  _urFormOpen = true;
+  var pv = document.getElementById('ur-preview'); if (pv) pv.innerHTML = '';
+  _urMsg('');
+}
+
+function cancelUrgencyRuleEdit() {
+  var form = document.getElementById('ur-form');
+  if (form) form.style.display = 'none';
+  _urFormOpen = false; _urEditing = null;
+  var pv = document.getElementById('ur-preview'); if (pv) pv.innerHTML = '';
+}
+
+// 「최근 기사에 적용해 보기」 — 저장 전, 편집 중인 규칙을 넣은 공통 목록을 불러온 기사 제목 + 요약에 돌린다.
+// 비교 기준은 지금 저장된 등급이다(AI 원값이 아님) — 값 변경 = 이 목록이면 달라질 기사.
+function previewUrgencyRules() {
+  var pv = document.getElementById('ur-preview');
+  if (!pv) return;
+  var rules = _urRules.filter(function(r) { return r.team_id == null; });
+  var target = null;
+  if (_urFormOpen) {
+    target = _urFormRow();
+    var errs = UrgencyRules.validateRules([target]);
+    if (errs.length) { pv.innerHTML = '<div style="color:#ef4444;font-size:11px">' + escHtml(errs.join(' / ')) + '</div>'; return; }
+    rules = rules.filter(function(r) { return r.id !== target.id; }).concat([target]);
+  }
+  rules = rules.filter(function(r) { return r.enabled; })
+    .sort(function(a, b) { return (a.position - b.position) || (a.id < b.id ? -1 : 1); });
+  if (!newsDataCache.length) { pv.innerHTML = '<div style="font-size:11px;color:var(--text-tertiary)">불러온 기사가 없습니다.</div>'; return; }
+  var hits = [], perRule = {}, changed = 0, total = 0;
+  newsDataCache.forEach(function(n) {
+    var cur = n.urgency || n.importance || '참고';
+    var hit = UrgencyRules.matchUrgencyRules(rules, n.title || '', n.summary || '');
+    if (!hit) return;
+    var res = UrgencyRules.combine(hit, cur);
+    perRule[hit.id] = (perRule[hit.id] || 0) + 1;
+    total++;
+    if (res.changed) changed++;
+    if (!target || hit.id === target.id) hits.push({ n: n, cur: cur, res: res });
+  });
+  var head = '<div style="font-size:11.5px;color:var(--text-primary);margin-bottom:4px">불러온 기사 ' + newsDataCache.length.toLocaleString('ko-KR') + '건 중 ' +
+    '적중 ' + total + '건 · 값 변경 ' + changed + '건' +
+    (target ? ' · <b>이 규칙이 정하는 기사 ' + hits.length + '건</b>' : '') + '</div>' +
+    '<div style="font-size:10.5px;color:var(--text-tertiary);margin-bottom:6px">' +
+    Object.keys(perRule).map(function(k) { return escHtml(k) + ' ×' + perRule[k]; }).join(' · ') + '</div>';
+  var list = '';
+  if (target) {
+    hits.sort(function(a, b) { return (b.res.changed - a.res.changed) || (b.n.published_at || '').localeCompare(a.n.published_at || ''); });
+    list = hits.slice(0, 40).map(function(h) {
+      return '<div style="font-size:11px;padding:3px 0;border-top:0.5px solid var(--border-tertiary);display:flex;gap:6px">' +
+        '<span style="white-space:nowrap;color:' + (h.res.changed ? '#b45309' : 'var(--text-muted)') + '">' +
+          escHtml(_urLvLabel(h.cur)) + (h.res.changed ? '→' + escHtml(_urLvLabel(h.res.level)) : '') + '</span>' +
+        '<span style="color:var(--text-muted);white-space:nowrap">' + escHtml((h.n.published_at || '').slice(5, 10)) + '</span>' +
+        '<span style="color:var(--text-primary)">' + escHtml(h.n.title || '') + '</span></div>';
+    }).join('') || '<div style="font-size:11px;color:var(--text-tertiary)">이 규칙이 정하는 기사가 없습니다 — 앞 규칙이 먼저 잡았거나 낱말이 안 걸립니다.</div>';
+    if (hits.length > 40) list += '<div style="font-size:10.5px;color:var(--text-tertiary)">… 외 ' + (hits.length - 40) + '건</div>';
+  }
+  pv.innerHTML = head + list +
+    '<div style="font-size:10.5px;color:var(--text-tertiary);margin-top:6px">⚠️ 한국어는 부분 문자열로 맞춘다 — 2~3자 낱말은 「그리고」 줄과 함께 쓰고, 오탐이 없는지 목록을 읽어 볼 것.</div>';
+}
+
+async function saveUrgencyRule(btn) {
+  if (!sb) return;
+  if (!isAdminUser()) { _urMsg('공통 규칙은 관리자만 저장할 수 있습니다.', true); return; }
+  var row = _urFormRow();
+  var errs = UrgencyRules.validateRules([row]);
+  if (!row.note) errs.push('설명(화면에 보이는 문장)을 적어 주세요');
+  if (errs.length) { _urMsg(errs.join(' / '), true); return; }
+  if (btn) btn.disabled = true;
+  _urMsg('저장 중...');
+  try {
+    var resp;
+    if (_urEditing) {
+      var upd = Object.assign({}, row); delete upd.id; delete upd.team_id;
+      resp = await sb.from('urgency_rules').update(upd).eq('id', row.id).select('id');
+    } else {
+      resp = await sb.from('urgency_rules').insert(row).select('id');
+    }
+    if (resp.error) throw resp.error;
+    if (!resp.data || !resp.data.length) throw new Error('저장된 행이 없습니다(권한 확인)');
+    await loadUrgencySources(true);
+    renderUrgencyRules();
+    cancelUrgencyRuleEdit();
+    _urMsg('저장됨 — 다음 뉴스 수집(10분 간격)부터 새 기사에 적용됩니다. 이미 저장된 기사는 바뀌지 않습니다.');
+  } catch(e) {
+    _urMsg('저장 실패: ' + (e.message || e), true);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 async function showNewsDetail(newsId) {
   selectedNewsId = newsId;
   var n = newsDataCache.find(function(x) { return String(x.id) === String(newsId); });
@@ -4129,6 +4382,7 @@ async function showNewsDetail(newsId) {
     '<div style="border-left:3px solid ' + rule.color + ';padding-left:10px;margin-bottom:14px">' +
       '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;flex-wrap:wrap;row-gap:6px">' +
         '<span id="importance-badge-' + n.id + '" style="font-size:11px;font-weight:700;color:' + rule.color + ';background:' + rule.bg + ';padding:2px 8px;border-radius:4px;white-space:nowrap">' + rule.label + '</span>' +
+        '<span id="imp-src-' + n.id + '">' + _urgencySourceHtml(n) + '</span>' +
         '<span style="font-size:11px;color:var(--text-tertiary);white-space:nowrap">' + date + '</span>' +
         '<div style="margin-left:auto;display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">' + lockBtn + delBtn + urlBtn + '</div>' +
       '</div>' +

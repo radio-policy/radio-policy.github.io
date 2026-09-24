@@ -946,13 +946,75 @@ class TestPressWindow(unittest.TestCase):
         self.assertEqual(pi._press_window_days(bad), 15)
 
 
+class TestUrgencyRules(unittest.TestCase):
+    """긴급도 낱말 규칙 매처(#216) — 공용 케이스 파일 전건. JS판은 node tests/urgency_rules.test.js가 같은 파일을 돈다."""
+
+    def setUp(self):
+        import json
+        import urgency_rules
+        self.ur = urgency_rules
+        with open(os.path.join(_ROOT, 'tests', 'fixtures', 'urgency_rules_cases.json'), encoding='utf-8') as f:
+            self.cases = json.load(f)
+
+    def test_cases(self):
+        self.assertGreaterEqual(len(self.cases), 11)
+        for c in self.cases:
+            with self.subTest(c['name']):
+                self.assertEqual(self.ur.validate_rules(c['rules']), [])
+                got = self.ur.apply_urgency_rules(c['rules'], c['title'], c['summary'], c['ai'])
+                e = c['expect']
+                self.assertEqual(got, (e['level'], e['rule_id'], e['changed']))
+
+    def test_nfd_case_is_really_nfd(self):
+        import unicodedata
+        self.assertTrue(any(not unicodedata.is_normalized('NFC', c['title'] + c['summary']) for c in self.cases),
+                        '케이스 파일의 NFD 입력이 NFC로 바뀌었다 — 편집기 저장 탓, 생성 스크립트로 다시 만들 것')
+
+    def test_fallback_valid(self):
+        fb = self.ur.URGENCY_RULES_FALLBACK
+        self.assertEqual(self.ur.validate_rules(fb), [])
+        self.assertEqual([r['id'] for r in fb], ['obituary', 'skt_gukgam_witness', 'ministry_personnel',
+                                                  'assembly_law', 'ministry_telecom'])
+        self.assertEqual([r['position'] for r in fb], sorted(r['position'] for r in fb))
+
+    def test_crawler_grade_urgency(self):
+        """크롤러 합성: set = AI 생략, min = AI 뒤 하한, 미적중 = AI 값, 모든 행에 urgency_rule 키."""
+        import crawler
+        rules = [{'id': 'set_x', 'mode': 'set', 'level': '참고', 'any_words': ['부고']},
+                 {'id': 'min_x', 'mode': 'min', 'level': '긴급', 'any_words': ['SKT'], 'and_any': [['국감'], ['증인']]}]
+        calls = []
+
+        def fake(title, content, summary):
+            calls.append(title)
+            return '보통'
+        items = [{'title': '[부고] 홍길동 부친상', 'url': 'u1'},
+                 {'title': 'SKT 국감 증인 채택', 'url': 'u2'},
+                 {'title': '기지국 소식', 'url': 'u3'}]
+        stat = crawler.grade_urgency(items, rules, classify=fake)
+        self.assertEqual([i['urgency'] for i in items], ['참고', '긴급', '보통'])
+        self.assertEqual([i['importance'] for i in items], ['참고', '긴급', '보통'])
+        self.assertEqual([i['urgency_rule'] for i in items], ['set_x', 'min_x', None])
+        self.assertEqual(calls, ['SKT 국감 증인 채택', '기지국 소식'])   # set 적중은 AI 콜 생략
+        self.assertEqual(stat, {'hits': {'set_x': 1, 'min_x': 1}, 'changed': 1, 'skipped_ai': 1})
+        self.assertEqual(len({frozenset(i) for i in items}), 1, '벌크 upsert는 모든 행의 키 집합이 같아야 한다')
+
+    def test_validate_catches(self):
+        v = self.ur.validate_rules
+        self.assertTrue(v([{'id': 'a', 'mode': 'max', 'level': '보통', 'any_words': ['x']}]))
+        self.assertTrue(v([{'id': 'a', 'mode': 'min', 'level': '높음', 'any_words': ['x']}]))
+        self.assertTrue(v([{'id': 'a', 'mode': 'min', 'level': '보통', 'any_words': []}]))
+        self.assertTrue(v([{'id': 'a', 'mode': 'min', 'level': '보통', 'any_words': ['x'], 'and_any': [[]]}]))
+        self.assertTrue(v([{'id': 'a', 'min': '보통', 'any': ['x']}, {'id': 'a', 'min': '보통', 'any': ['y']}]))
+        self.assertEqual(v([{'id': 'a', 'min': '보통', 'any': ['x'], 'and_any': ['y', 'z']}]), [])
+
+
 class TestDashboardCacheBuster(unittest.TestCase):
     """index.html 캐시 번호(?v=YYYYMMDD…)가 각 정적 파일의 마지막 수정일보다 이르면 실패 (2026-09-24).
     system_prompt.js 번호가 09-11에 멈춘 채 파일이 세 번 바뀌어, 캐시가 남은 브라우저는 옛 자문 지시문을 썼다.
     커밋 전 수정분(작업 트리·스테이징)은 번호가 오늘(KST)이어야 한다. git이 없거나 기록이 없으면 건너뛴다."""
 
     FILES = ('app.js', 'styles.css', 'system_prompt.js', 'supabase/functions/_shared/cite_verify.js',
-             'supabase/functions/_shared/rag_core.js')
+             'supabase/functions/_shared/rag_core.js', 'supabase/functions/_shared/urgency_rules.js')
 
     def _git(self, *args):
         import subprocess

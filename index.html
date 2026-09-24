@@ -326,6 +326,8 @@
             <b style="color:var(--text-primary)">자동 수집 뉴스</b>
             <span style="opacity:.8"> — SKT 관련성 기준 중요도 자동 분류</span>
           </span>
+          <!-- 긴급도 규칙 설정(#216) — 목록을 가리지 않게 버튼만 두고 창으로 연다(2026-09-25 운영자 결정). 로그인 전용 -->
+          <button class="btn" data-login-only data-show="inline-flex" style="display:none;font-size:11px;padding:4px 10px;white-space:nowrap" onclick="openUrgencyRules()" title="제목·요약 낱말로 중요도 하한/지정하는 규칙 보기·편집"><i class="ti ti-adjustments-alt"></i> 긴급도 설정</button>
         </div>
 
         <!-- 수집 대상 언론·기관 (카테고리별) -->
@@ -970,6 +972,57 @@
 
 <!-- 보도자료 상세 모달 -->
 <!-- 로그인 / 가입 신청 (2026-08-20) — 열람은 로그인 없이 가능하고, AI 생성 기능만 이 관문을 거친다 -->
+<!-- 긴급도 규칙 설정 창 (#216, 2026-09-25) — 표 urgency_rules 편집기. 뉴스 화면 머리줄의 「긴급도 설정」 버튼이 연다.
+     설정 탭에 두지 않은 이유: 설정 탭은 관리자 전용이라 2단계에서 팀장이 자기 팀 규칙을 못 고친다(운영자 결정).
+     공통 규칙 편집은 관리자만(관문은 RLS), 「내 팀」은 2단계(팀별 등급 저장)와 함께 켠다 -->
+<div id="ur-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:1500;align-items:flex-start;justify-content:center;padding:24px 16px;overflow-y:auto" onclick="if(event.target===this)closeUrgencyRules()">
+  <div style="background:var(--bg-primary);border-radius:var(--radius-lg);width:100%;max-width:760px;border:0.5px solid var(--border-light);overflow:hidden">
+    <div style="display:flex;align-items:center;gap:8px;padding:12px 16px;border-bottom:0.5px solid var(--border-light)">
+      <div style="font-size:14px;font-weight:600;color:var(--text-primary)"><i class="ti ti-adjustments-alt"></i> 긴급도 규칙</div>
+      <span style="font-size:11px;color:var(--text-tertiary)">모든 이용자·알림·브리핑에 적용</span>
+      <button class="btn" style="margin-left:auto" onclick="closeUrgencyRules()"><i class="ti ti-x"></i>닫기</button>
+    </div>
+    <div id="ur-body" style="padding:4px 16px 14px">
+
+            <div style="display:flex;flex-wrap:wrap;gap:6px;margin:10px 0 8px">   <!-- .tag-list는 모바일에서 숨겨지므로 쓰지 않는다 -->
+              <span class="tag selected">공통</span>
+              <span class="tag" style="opacity:.45;cursor:not-allowed" title="팀별 등급 저장이 열리면 사용">내 팀 <span style="font-size:10px">(팀별 등급 저장이 열리면 사용)</span></span>
+            </div>
+            <div style="font-size:11px;color:var(--text-tertiary);margin-bottom:8px;line-height:1.6">
+              뉴스 수집 때 AI 판정과 함께 적용됩니다. <b>최소</b> = 그 등급 아래로 내려가지 않게(AI가 더 높게 보면 AI 값), <b>지정</b> = 그 등급으로 고정(AI 생략).
+              순서가 작은 규칙부터 보고 <b>처음 걸린 규칙 하나</b>가 정합니다. 낱말 줄의 하나 이상 + 「그리고」 줄마다 하나 이상 + 「제외」 없음일 때 걸립니다.
+              삭제는 없고 끄기만 있습니다. 이미 저장된 기사는 바뀌지 않습니다.
+            </div>
+            <div id="ur-list"></div>
+            <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap">
+              <button class="btn" style="font-size:12px" onclick="previewUrgencyRules()"><i class="ti ti-player-play"></i> 최근 기사에 적용해 보기</button>
+              <button class="btn" id="ur-add-btn" data-admin-only style="font-size:12px;display:none" onclick="editUrgencyRule(null)"><i class="ti ti-plus"></i> 새 규칙</button>
+            </div>
+            <div id="ur-form" style="display:none;margin-top:10px;padding:10px 12px;background:var(--bg-secondary);border-radius:var(--radius-md)">
+              <div style="font-size:11px;color:var(--text-tertiary);margin-bottom:6px">규칙 id: <code id="ur-f-id" style="font-size:10.5px"></code></div>
+              <div id="ur-f-slug-row" style="margin-bottom:6px"><span class="input-label">영문 이름(선택 — id 앞부분)</span><input class="input-field" id="ur-f-slug" type="text" placeholder="예: skt_fine" /></div>
+              <span class="input-label">설명 (화면의 「규칙: …」에 그대로 보임)</span><input class="input-field" id="ur-f-note" type="text" />
+              <div style="display:flex;gap:8px;flex-wrap:wrap">
+                <div><span class="input-label">방식</span><select class="input-field" id="ur-f-mode"><option value="min">최소(하한)</option><option value="set">지정</option></select></div>
+                <div><span class="input-label">등급</span><select class="input-field" id="ur-f-level"><option value="긴급">중요(긴급)</option><option value="보통">보통</option><option value="참고">참고</option></select></div>
+                <div><span class="input-label">순서</span><input class="input-field" id="ur-f-pos" type="number" style="width:90px" /></div>
+                <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--text-secondary);margin-top:18px"><input type="checkbox" id="ur-f-enabled" /> 켜짐</label>
+              </div>
+              <span class="input-label">낱말 (쉼표로 구분 — 하나 이상 걸리면)</span><input class="input-field" id="ur-f-any" type="text" />
+              <span class="input-label">그리고 (한 줄에 한 묶음, 쉼표로 구분 — 줄마다 하나 이상 걸려야)</span><textarea class="input-field" id="ur-f-and" rows="3" style="height:auto"></textarea>
+              <span class="input-label">제외 (쉼표로 구분 — 하나라도 있으면 안 걸림)</span><input class="input-field" id="ur-f-none" type="text" />
+              <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+                <button class="btn" style="font-size:12px" onclick="previewUrgencyRules()"><i class="ti ti-player-play"></i> 이 규칙으로 적용해 보기</button>
+                <button class="btn btn-primary" style="font-size:12px" onclick="saveUrgencyRule(this)"><i class="ti ti-device-floppy"></i> 저장</button>
+                <button class="btn" style="font-size:12px" onclick="cancelUrgencyRuleEdit()">취소</button>
+              </div>
+            </div>
+            <div id="ur-msg" style="display:none;font-size:11px;margin-top:8px"></div>
+            <div id="ur-preview" style="margin-top:8px;max-height:360px;overflow-y:auto"></div>
+    </div>
+  </div>
+</div>
+
 <div id="login-modal" data-tab="login" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:1600;align-items:center;justify-content:center;padding:20px" onclick="if(event.target===this)closeLoginModal()">
   <div style="background:var(--bg-primary);border-radius:var(--radius-lg);width:100%;max-width:380px;border:0.5px solid var(--border-light);overflow:hidden">
     <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:0.5px solid var(--border-light)">
@@ -1115,7 +1168,8 @@
 <!-- 인용 조문 통째 보강·[원문 확인됨] 검증 로직 — 텔레그램 rag.ts와 같은 파일(#155). GitLab Pages는 .gitlab-ci.yml cp 목록에 있어야 실린다 -->
 <script src="supabase/functions/_shared/cite_verify.js?v=20260924a"></script>
 <script src="supabase/functions/_shared/rag_core.js?v=20260925a"></script>   <!-- 자문 검색 순수 규칙(#215) — app.js보다 먼저 -->
-<script src="app.js?v=20260925c"></script>
+<script src="supabase/functions/_shared/urgency_rules.js?v=20260925a"></script>   <!-- 긴급도 규칙 매처(#216) — app.js보다 먼저 -->
+<script src="app.js?v=20260925d"></script>
 <script src="lawmap_articles.js?v=20260914a"></script>
 </body>
 </html>
