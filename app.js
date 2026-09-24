@@ -868,30 +868,27 @@ async function searchKeywords(query) {
   var seen = new Set();
   var results = [];
 
-  // 키워드별로 검색 (최대 10개 키워드, 키워드당 4청크) — 전 키워드 동시 조회 후 원래 순서로 병합 (trgm·시맨틱은 위에서 이미 진행 중)
+  // 키워드별 검색 (최대 10개 키워드, 키워드당 4청크) — RPC 1회 `search_chunks_keywords`(B-5, #208, 2026-09-24).
+  // 종전에는 키워드마다 document_chunks ilike limit 4를 정렬 없이 따로 보냈다(≤10회) — "그 단어가 든 아무 청크 4개"라
+  // 같은 질문도 실행마다 다른 청크가 왔고 봇·대시보드 결과가 갈렸다. 서버 선별 규칙(운영자 결정 (가)):
+  //   질문 키워드를 많이 담은 청크 → 그 키워드가 조문 제목에 있는 청크 → 조문(제N조) → id. 앞 키워드가 집은 청크는
+  //   뒤 키워드가 다시 집지 않는다(키워드당 새 청크 4건). 승인·current 필터는 RPC 안(trgm·시맨틱과 동일 기준).
+  // 결과는 키워드 순 → 순위 순으로 정렬돼 오므로 그대로 병합한다. rag.ts searchChunks와 동일 유지.
   var kwList = [];
   for (var ki = 0; ki < Math.min(keywords.length, 10); ki++) {
-    // 제외어(#173)는 ilike 조회를 하지 않는다 — 정렬 없는 limit 4가 임의 청크를 데려온다. 점수 계산에서는 그대로 센다.
+    // 제외어(#173)는 조회하지 않는다 — 흔한 말은 임의 청크를 데려온다. 점수 계산에서는 그대로 센다.
     if (keywords[ki].length >= 2 && !isTitleStop(keywords[ki], query)) kwList.push(keywords[ki]);
   }
-  var kwResults = await Promise.all(kwList.map(function(kw) {
-    return sb
-      .from('document_chunks')
-      .select('id, doc_name, doc_category, chunk_index, content, notice_no, article_no, effective_date')
-      .eq('is_approved', true)  // 승인 게이트: trgm·시맨틱 RPC와 동일하게 승인 전 문서 제외
-      .eq('status', 'current')  // 구버전(superseded)·시행예정본(pending) 제외 — RPC 2종과 동일 기준
-      .ilike('content', '%' + kw + '%')
-      .limit(4)
-      .then(function(resp) { return resp.data || []; })
-      .catch(function(e) { console.warn('키워드 검색 오류:', kw, e); return []; });
-  }));
-  kwResults.forEach(function(rows) {
-    for (var ri = 0; ri < rows.length; ri++) {
-      var row = rows[ri];
-      if (!seen.has(row.id)) {
-        seen.add(row.id);
-        results.push(row);
-      }
+  var kwRows = kwList.length
+    ? await metaRpc('search_chunks_keywords', { p_keywords: kwList, p_per_kw: 4 })
+        .then(function(resp) { return resp.data || []; })
+        .catch(function(e) { console.warn('키워드 검색 오류:', e); return []; })
+    : [];
+  kwRows.forEach(function(row) {
+    delete row.kw_ord;
+    if (!seen.has(row.id)) {
+      seen.add(row.id);
+      results.push(row);
     }
   });
 
@@ -1047,26 +1044,15 @@ async function searchLawArticles(query, limit) {
   expanded.forEach(push);
   if (!keywords.length) return [];
 
-  // .pdf/.md 등 파일 문서 제외 — '실행계획(안).pdf'도 '6조'라는 article_no를 갖고 있어
-  // 조문번호 유무만으로는 못 거른다(실측). 법령·고시 문서명은 확장자로 끝나지 않는다.
-  var FILE_SUFFIX = ['%.pdf', '%.md', '%.docx', '%.hwp'];
-  var hitQ = function(col, kw, take) {
-    var q = sb.from('document_chunks')
-      .select('id, doc_name, article_no, content')
-      .eq('is_approved', true).eq('status', 'current')
-      .not('article_no', 'is', null)
-      .ilike(col, '%' + kw + '%');
-    FILE_SUFFIX.forEach(function(f) { q = q.not('doc_name', 'ilike', f); });
-    return q.limit(take)
-      .then(function(r) { return r.data || []; })
-      .catch(function(e) { console.warn('조문 정밀검색 오류:', kw, e); return []; });
-  };
+  // 조회는 RPC 1회 `search_law_articles_kw`(B-5, #208, 2026-09-24) — 종전 키워드당 (제목 ilike 40 + 본문 ilike 10) ≤20회.
+  // 서버가 제목 적중·본문 적중을 hit_col로 구분해 돌려준다. .pdf/.md 등 파일 문서 제외('실행계획(안).pdf'도 '6조'라는
+  // article_no를 갖고 있어 조문번호 유무만으로는 못 거른다)와 article_no NOT NULL·승인·current 필터는 RPC 안에 있다.
+  // 선별 규칙(운영자 결정 (가)): 제목 적중은 제목에 담긴 질문 키워드 수 → 본문 키워드 수 → id, 본문 적중은 그 반대.
+  // ★ 상한 40·10은 그대로(#51): 40으로 받아야 '폐업'에서 전기통신사업법 19조가 빠지지 않았다(실측: 6에서 누락, 40에서 포함).
 
   // 점수는 '행위'와 '주제'를 분리해 매긴다(rag.ts 실측으로 도달한 구조).
   //   행위 = 폐업·휴지 같은 조문 표제어 → 조문 제목에 걸리면 결정적(×5)
   //   주제 = 기간통신사업·무선국 같은 대상 → 문서명·조문제목에 걸리면 가산
-  // ★ limit을 작게 주면 안 된다: PostgREST는 정렬 없이 임의의 N건을 돌려주므로
-  //   '폐업'으로 6건만 받으면 엉뚱한 법이 자리를 채우고 정작 근거 조문이 빠진다(실측: 6에서 누락, 40에서 포함).
   var acc = new Map();
   var putHit = function(r, act) {
     var cur = acc.get(r.id);
@@ -1077,14 +1063,22 @@ async function searchLawArticles(query, limit) {
   // 예: 종료→휴업·폐업)은 7, 그 외(질문 원어·LLM 확장)는 5. 원어가 조문 제목에 우연히
   // 있는 경우('조난통신 종료 통보')는 대개 다른 제도라, 번역된 표제어보다 낮게 본다.
   var synNorms = new Set(lawSynonymKeywords(query).map(function(s) { return s.replace(/\s+/g, '').toLowerCase(); }));
-  var jobs = [];
+  var kwActive = [], actOf = [];
   keywords.slice(0, 10).forEach(function(kw) {
     if (isTitleStop(kw, query)) return;   // 제외어(#173)는 제목·본문 조회 모두 생략 — 행위 가중 0이면 주제 점수만 남아 순위에 못 든다
-    var act = synNorms.has(kw.replace(/\s+/g, '').toLowerCase()) ? 7 : 5;
-    jobs.push(hitQ('article_no', kw, 40).then(function(rows) { rows.forEach(function(r) { putHit(r, act); }); }));
-    jobs.push(hitQ('content', kw, 10).then(function(rows) { rows.forEach(function(r) { putHit(r, 0); }); }));
+    kwActive.push(kw);
+    actOf.push(synNorms.has(kw.replace(/\s+/g, '').toLowerCase()) ? 7 : 5);
   });
-  await Promise.all(jobs);
+  var lawRows = kwActive.length
+    ? await metaRpc('search_law_articles_kw', { p_keywords: kwActive, p_title_limit: 40, p_content_limit: 10 })
+        .then(function(r) { return r.data || []; })
+        .catch(function(e) { console.warn('조문 정밀검색 오류:', e); return []; })
+    : [];
+  // 반환 순서(키워드 → 제목 적중 → 본문 적중 → 순위)대로 넣는다 — 같은 조문의 대표 청크가 실행마다 같아진다
+  lawRows.forEach(function(r) {
+    putHit({ id: r.id, doc_name: r.doc_name, article_no: r.article_no, content: r.content },
+           r.hit_col === 'title' ? actOf[r.kw_ord - 1] : 0);
+  });
 
   // 주제 일치는 부분문자열로 본다 — '기간통신사업'과 '전기통신사업법'은 앞글자가 달라
   // 접두 비교로는 안 잡히고 '통신사업'이라는 공통 조각으로만 이어진다.
@@ -1129,25 +1123,11 @@ async function fetchLawTrackContext() {
   // AI 자문 보조용: 최근 법령·고시 개정 + 입법예고 동향(요약). 조문 인용은 지식베이스 원문 우선.
   if (!sb) return '';
   try {
-    var resp = await sb.from('law_amendments')
-      .select('law_nm,law_type,ann_type,public_dt,enf_dt,summary')
-      .order('public_dt', { ascending: false }).limit(500);
-    var rows = resp.data || [];
+    // RPC `law_track_recent`(B-5, #208, 2026-09-24): 종전에는 law_amendments 전량(286행)을 받아 브라우저에서
+    // 법령별 최신 1건 → 입법예고 전부 + 시행예정 + 최근 180일 → 공포일 내림차순 25건으로 걸렀다. 같은 규칙을 서버가 적용해 25행만 보낸다.
+    var resp = await metaRpc('law_track_recent', { p_days: 180, p_limit: 25 });
+    var items = resp.data || [];
     var dg = function(v) { return String(v || '').replace(/\D/g, ''); };
-    var latest = {};
-    rows.forEach(function(r) {
-      if (r.law_type === 'lsAnc') { latest['lsAnc::' + (r.law_nm || '')] = r; return; }
-      var k = r.law_nm || '';
-      if (!latest[k] || dg(r.public_dt) > dg(latest[k].public_dt)) latest[k] = r;
-    });
-    var now = new Date();
-    var todayStr = now.toISOString().slice(0,10).replace(/-/g,'');
-    var d180 = new Date(now - 180 * 86400000).toISOString().slice(0,10).replace(/-/g,'');
-    var items = Object.keys(latest).map(function(k) { return latest[k]; }).filter(function(r) {
-      if (r.law_type === 'lsAnc') return true;
-      if (dg(r.enf_dt) >= todayStr) return true;
-      return dg(r.public_dt) >= d180;
-    }).sort(function(a, b) { return dg(b.public_dt).localeCompare(dg(a.public_dt)); }).slice(0, 25);
     if (!items.length) return '';
     var fmt = function(v) { var d = dg(v); return d.length === 8 ? d.slice(0,4)+'.'+d.slice(4,6)+'.'+d.slice(6) : '—'; };
     var lines = items.map(function(r) {

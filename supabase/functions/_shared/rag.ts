@@ -150,21 +150,23 @@ async function searchChunks(sb: SupabaseClient, apiKey: string, query: string, m
   }
   if (!keywords.length) return [];
 
-  // 제외어(#173)는 ilike 조회를 하지 않는다 — '직접'은 1,470청크에 있어 정렬 없는 limit 4가 임의 청크를 데려온다.
-  // 점수 계산에서는 그대로 센다(다른 키워드로 들어온 청크의 본문 일치까지 뺄 이유는 없다).
-  const kwP = Promise.all(keywords.slice(0, 10).filter((kw) => !isTitleStop(kw, query)).map((kw) =>
-    sb.from('document_chunks')
-      .select('id, doc_name, doc_category, chunk_index, content, notice_no, article_no, effective_date')
-      .eq('is_approved', true).eq('status', 'current')
-      .ilike('content', '%' + kw + '%').limit(4)
-      .then((r) => r.data || []).catch(() => [])));
+  // 키워드 팬아웃은 RPC 1회 `search_chunks_keywords`(B-5, #208, 2026-09-24) — 종전 키워드당 document_chunks ilike limit 4를
+  // 정렬 없이 따로 보냈다(≤10회, "그 단어가 든 아무 청크 4개"라 실행마다 달랐고 봇·대시보드가 갈렸다). 서버 선별 규칙(운영자 결정 (가)):
+  // 질문 키워드를 많이 담은 청크 → 그 키워드가 조문 제목에 있는 청크 → 조문(제N조) → id, 앞 키워드가 집은 청크는 뒤 키워드가 다시
+  // 집지 않는다(키워드당 새 청크 4건). 승인·current 필터는 RPC 안. 제외어(#173)는 조회하지 않는다('직접'은 1,470청크에 있어
+  // 임의 청크를 데려온다) — 점수 계산에서는 그대로 센다. app.js searchKeywords와 동일 유지.
+  const kwList = keywords.slice(0, 10).filter((kw) => !isTitleStop(kw, query));
+  type KwRow = Chunk & { kw_ord?: number };
+  const kwRows: KwRow[] = kwList.length
+    ? await metaRpc(sb, meta, 'search_chunks_keywords', { p_keywords: kwList, p_per_kw: 4 })
+        .then((r) => (r?.data || []) as KwRow[]).catch(() => [] as KwRow[])
+    : [];
 
   const seen = new Set<number>();
   const results: Chunk[] = [];
-  for (const rows of await kwP) {
-    for (const row of rows as Chunk[]) {
-      if (!seen.has(row.id)) { seen.add(row.id); results.push(row); }
-    }
+  for (const row of kwRows) {   // 키워드 순 → 순위 순으로 정렬돼 온다
+    delete row.kw_ord;
+    if (!seen.has(row.id)) { seen.add(row.id); results.push(row); }
   }
   const merge = (rows: Chunk[], field: '_trgm_score' | '_semantic_score', src: 'trgm_score' | 'similarity') => {
     for (const row of rows) {
@@ -623,7 +625,7 @@ function lawRank(docName: string | undefined): number {
 // 법령이 국가재정법·위치정보법 같은 부수 수록 문서보다 근거일 확률이 높다 (질문과 무관한 상수 가점)
 const DOMAIN_DOC_RE = /전파|통신|무선|주파수/;
 
-export async function searchLawArticles(sb: SupabaseClient, query: string, limit = 5): Promise<LawHit[]> {
+export async function searchLawArticles(sb: SupabaseClient, query: string, limit = 5, meta?: SearchMeta): Promise<LawHit[]> {
   const apiKey = env('ANTHROPIC_API_KEY');
   const base = extractKeywords(query);
   const expanded = apiKey ? await expandQueryKeywords(apiKey, query, sb) : [];   // 키 없으면 기본 키워드만(페일소프트)
@@ -641,18 +643,10 @@ export async function searchLawArticles(sb: SupabaseClient, query: string, limit
   expanded.forEach(push);
   if (!keywords.length) return [];
 
-  // .pdf/.md 등 파일 문서 제외 — '실행계획(안).pdf'도 '6조'라는 article_no를 갖고 있어
-  // 조문번호 유무만으로는 못 거른다(실측). 법령·고시 문서명은 확장자로 끝나지 않는다.
-  const FILE_SUFFIX = ['%.pdf', '%.md', '%.docx', '%.hwp'];
-  const hit = (col: string, kw: string, take: number) => {
-    let q = sb.from('document_chunks')
-      .select('id, doc_name, article_no, content')
-      .eq('is_approved', true).eq('status', 'current')
-      .not('article_no', 'is', null)
-      .ilike(col, '%' + kw + '%');
-    for (const f of FILE_SUFFIX) q = q.not('doc_name', 'ilike', f);
-    return q.limit(take).then((r) => (r.data || []) as LawHit[]).catch(() => [] as LawHit[]);
-  };
+  // 조회는 RPC 1회 `search_law_articles_kw`(B-5, #208, 2026-09-24) — 종전 키워드당 (제목 ilike 40 + 본문 ilike 10) ≤20회.
+  // 서버가 제목 적중·본문 적중을 hit_col로 구분해 돌려준다. .pdf/.md 등 파일 문서 제외('실행계획(안).pdf'도 '6조'라는
+  // article_no를 갖고 있어 조문번호 유무만으로는 못 거른다)와 article_no NOT NULL·승인·current 필터는 RPC 안에 있다.
+  // 선별 규칙(운영자 결정 (가)): 제목 적중은 제목에 담긴 질문 키워드 수 → 본문 키워드 수 → id, 본문 적중은 그 반대.
 
   // 점수는 '행위'와 '주제'를 분리해 매긴다(실측으로 도달한 구조).
   //   행위 = 폐업·휴지 같은 조문 표제어 → 조문 제목에 걸리면 결정적(×5)
@@ -660,9 +654,8 @@ export async function searchLawArticles(sb: SupabaseClient, query: string, limit
   // 둘을 합치지 않고 나누는 이유: 주제만 맞는 문서(기간통신사업 양수·합병 고시)가
   // 행위가 맞는 조문(전기통신사업법 19조 사업의 휴업·폐업)을 밀어내는 일이 있었다.
   //
-  // ★ limit을 작게 주면 안 된다: PostgREST는 정렬 없이 임의의 N건을 돌려주므로
-  //   '폐업'으로 6건만 받으면 위치정보법·지방세법이 자리를 채우고 정작 전기통신사업법 19조가
-  //   빠진다(실측 — limit 6에서 누락, 40에서 포함).
+  // ★ 상한 40·10은 그대로(#51): 40으로 받아야 '폐업'에서 전기통신사업법 19조가 빠지지 않았다
+  //   (종전 정렬 없는 조회 실측 — limit 6에서 누락, 40에서 포함. 위치정보법·지방세법이 자리를 채웠다).
   const acc = new Map<number, LawHit & { _act: number; _top: number }>();
   const put = (r: LawHit, act: number) => {
     const cur = acc.get(r.id);
@@ -675,14 +668,21 @@ export async function searchLawArticles(sb: SupabaseClient, query: string, limit
   // (실측: 이 차등이 없으면 "3G 종료"에서 선박국 운용종료·조난통신 조문이
   //  전기통신사업법 19조(사업의 휴업·폐업)·전파법 25조의2를 밀어낸다)
   const synNorms = new Set(lawSynonymKeywords(query).map((s) => s.replace(/\s+/g, '').toLowerCase()));
-  const jobs: Promise<void>[] = [];
+  const kwActive: string[] = [], actOf: number[] = [];
   for (const kw of keywords.slice(0, 10)) {
     if (isTitleStop(kw, query)) continue;   // 제외어(#173)는 제목·본문 조회 모두 생략 — 행위 가중 0이면 주제 점수만 남아 순위에 못 든다
-    const act = synNorms.has(kw.replace(/\s+/g, '').toLowerCase()) ? 7 : 5;
-    jobs.push(hit('article_no', kw, 40).then((rows) => rows.forEach((r) => put(r, act))));
-    jobs.push(hit('content', kw, 10).then((rows) => rows.forEach((r) => put(r, 0))));
+    kwActive.push(kw);
+    actOf.push(synNorms.has(kw.replace(/\s+/g, '').toLowerCase()) ? 7 : 5);
   }
-  await Promise.all(jobs);
+  type LawRow = { kw_ord: number; hit_col: string; id: number; doc_name: string; article_no?: string; content: string };
+  const lawRows: LawRow[] = kwActive.length
+    ? await metaRpc(sb, meta, 'search_law_articles_kw', { p_keywords: kwActive, p_title_limit: 40, p_content_limit: 10 })
+        .then((r) => (r?.data || []) as LawRow[]).catch(() => [] as LawRow[])
+    : [];
+  // 반환 순서(키워드 → 제목 적중 → 본문 적중 → 순위)대로 넣는다 — 같은 조문의 대표 청크가 실행마다 같아진다
+  for (const r of lawRows) {
+    put({ id: r.id, doc_name: r.doc_name, article_no: r.article_no, content: r.content, _hits: 0 }, r.hit_col === 'title' ? actOf[r.kw_ord - 1] : 0);
+  }
 
   // 주제 일치는 부분문자열로 본다 — '기간통신사업'과 '전기통신사업법'은 앞글자가 달라
   // 접두 비교로는 안 잡히고 '통신사업'이라는 공통 조각으로만 이어진다.
@@ -1149,7 +1149,7 @@ export async function buildAdvisoryContext(sb: SupabaseClient, question: string)
   // 6갈래를 동시에: 조문 RAG / 법령요약 / 조문 정밀검색(키워드) / 조문 의미검색 / 뉴스 동향 / 국회 동향(참고 배경)
   const kbP = searchKbSummaries(sb, question, meta);
   const newsP = buildNewsContext(sb, question, meta);
-  const lawP = searchLawArticles(sb, question, 5);
+  const lawP = searchLawArticles(sb, question, 5, meta);
   // 조문 **의미** 검색 (#89) — /law에는 있는데 자문에만 없던 갈래. 어휘가 어긋나면 키워드는 못 넘는다.
   // 실측(자문 경로): 「기지국 개설 허가 절차」의 키워드 5개는 해상무선통신망 제12조·전파관리 세칙
   // 제27조(민원)로 새고 정답인 전파법 21조(무선국 개설허가 등의 절차)를 못 찾았다. 「주파수 재할당
