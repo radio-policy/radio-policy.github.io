@@ -54,7 +54,11 @@ SKT Comm Center 기술정책팀's radio/telecom **policy-monitoring automation s
 **Shared utilities (2026-08-02, #58)** — new code MUST reuse these instead of re-implementing:
 `notify.send_telegram(text, *, chat_id, parse_mode, disable_web_page_preview)` for Telegram (handles
 3800-char splitting, retries, 429 Retry-After; `health_watchdog.py` stays deliberately independent) and
-`embed_util.get_embeddings(texts, ...)` for Voyage embeddings. **Every Python script that calls Anthropic
+`embed_util.get_embeddings(texts, ...)` for Voyage embeddings. Heartbeats go through `sb_client.heartbeat(sb, key, note)`
+only and "3 tries, wait, re-raise" loops through `retry_util.with_retry(fn, retries=, delay=, label=)` (#217 — a smoke
+test fails on any `table('system_health').upsert` outside sb_client.py); Edge CORS lives in `supabase/functions/_shared/http.ts`
+(`corsHeaders(origin, extraHeaders)`, imported by claude-proxy/verify-citations/news-archive-search/operator-webhook — redeploy
+all four after editing it; assembly-search keeps `'*'` on purpose). **Every Python script that calls Anthropic
 must have `import api_usage; api_usage.install()`** (#152, 2026-09-10) — it wraps the SDK once and logs each
 call's token usage to the `api_usage` table (site = calling function, fail-open); Message Batches results are
 logged explicitly via `api_usage.record_usage()`. Bulk scripts refuse mass API runs without `--allow-api`

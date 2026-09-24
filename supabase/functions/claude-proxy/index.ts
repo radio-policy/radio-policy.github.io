@@ -26,6 +26,7 @@
 
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
 import { createClient } from 'jsr:@supabase/supabase-js@2';
+import { corsHeaders } from '../_shared/http.ts';
 import { recordApiUsage, mergeUsage, type ApiUsage } from '../_shared/usage.ts';
 
 // env는 반드시 trim — 콘솔에 붙여넣을 때 줄바꿈이 딸려 들어가면 인증이 조용히 어긋난다(#51)
@@ -34,29 +35,10 @@ const env = (k: string) => (Deno.env.get(k) || '').trim();
 const ANTHROPIC_KEY = env('ANTHROPIC_API_KEY');
 const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
 
-// 대시보드 정본(GitLab Pages) + 예비(GitHub Pages 미러) + 로컬 검증용. 그 외 출처는 CORS로 막는다.
-// ★ 두 Pages는 같은 커밋에서 상시 동일하게 유지되므로 둘 다 허용해야 한다. GitHub 주소가 빠져
-//   있던 동안 그쪽으로 접속하면 preflight만 통과하고 POST가 막혀 AI 기능 전체가 죽었다
-//   (증상은 화면에 "Failed to fetch" 한 줄뿐이라 원인 찾기가 어렵다). 2026-08-26 발견·수정.
-const ALLOWED_ORIGINS = [
-  'https://radio-policy.gitlab.io',
-  'https://radio-policy.github.io',
-  'http://localhost:8000',
-  'http://127.0.0.1:8000',
-];
+// CORS 허용 출처 목록은 _shared/http.ts 한 곳(#217) — 이 함수만 'x-site' 헤더를 더 받는다.
 // 모델 화이트리스트 — 임의 모델·초장문 요청으로 비용이 튀는 것을 막는다
 const ALLOWED_MODELS = ['claude-sonnet-5', 'claude-haiku-4-5-20251001'];
 const MAX_TOKENS_CAP = 32000;
-
-function corsHeaders(origin: string | null): Record<string, string> {
-  const allow = origin && ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0];
-  return {
-    'Access-Control-Allow-Origin': allow,
-    'Access-Control-Allow-Headers': 'authorization, content-type, x-site',
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
-    'Vary': 'Origin',
-  };
-}
 
 /** 대시보드는 Anthropic 오류 형식(err.error.message)을 그대로 화면에 띄운다 — 같은 모양으로 돌려준다. */
 function errJson(status: number, type: string, message: string, cors: Record<string, string>) {
@@ -67,7 +49,7 @@ function errJson(status: number, type: string, message: string, cors: Record<str
 }
 
 Deno.serve(async (req) => {
-  const cors = corsHeaders(req.headers.get('origin'));
+  const cors = corsHeaders(req.headers.get('origin'), ['x-site']);
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors });
   if (req.method !== 'POST') return errJson(405, 'method', 'POST만 허용됩니다.', cors);
   if (!ANTHROPIC_KEY) return errJson(500, 'config', 'ANTHROPIC_API_KEY 미설정', cors);

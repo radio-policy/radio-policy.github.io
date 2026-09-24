@@ -21,6 +21,7 @@
 
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
 import { createClient } from 'jsr:@supabase/supabase-js@2';
+import { corsHeaders } from '../_shared/http.ts';
 
 const env = (k: string) => (Deno.env.get(k) || '').trim();
 
@@ -28,26 +29,10 @@ const ANTHROPIC_KEY = env('ANTHROPIC_API_KEY');
 const NAVER_ID = env('NAVER_CLIENT_ID');
 const NAVER_SECRET = env('NAVER_CLIENT_SECRET');
 
-// claude-proxy와 같은 목록을 유지한다 — 한쪽만 고치면 그 주소에서 기능이 조용히 죽는다
-const ALLOWED_ORIGINS = [
-  'https://radio-policy.gitlab.io',
-  'https://radio-policy.github.io',
-  'http://localhost:8000',
-  'http://127.0.0.1:8000',
-];
+// CORS 허용 출처 목록은 _shared/http.ts 한 곳(#217)
 
 const MAX_LINK = 30;        // 1회 보강당 연결 상한
 const MAX_CANDIDATES = 120; // 판정에 넘길 후보 상한(토큰·시간 통제)
-
-function corsHeaders(origin: string | null): Record<string, string> {
-  const allow = origin && ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0];
-  return {
-    'Access-Control-Allow-Origin': allow,
-    'Access-Control-Allow-Headers': 'authorization, content-type',
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
-    'Vary': 'Origin',
-  };
-}
 
 function errJson(status: number, message: string, cors: Record<string, string>) {
   return new Response(JSON.stringify({ error: { message } }), {
