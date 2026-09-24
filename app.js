@@ -526,6 +526,26 @@ let lastWebSources = [];
 // 문서명만으로는 "같은 법령의 어느 조문이 걸렸나"를 되짚을 수 없어 id를 따로 남긴다.
 // rag.ts answerAdvisory의 chunkIds와 같은 역할 — 한쪽만 고치지 말 것.
 let lastAdvChunkIds = [];
+// 검색 갈래별 기록(#203, 2026-09-24) — [{fn, ms, rows, error}]. buildAdvisoryContext가 시작마다 비우고
+// chat_logs.search_meta에 남긴다. trgm RPC가 statement_timeout(57014)으로 0건이 되는 fail-open 경로를
+// 사후에 셀 수 있는 유일한 기록이다. rag.ts의 SearchMeta와 같은 형식 — 한쪽만 고치지 말 것.
+let lastAdvSearchMeta = null;
+function metaRpc(fn, params) {
+  var t0 = performance.now();
+  var rec = function(r, err) {
+    if (!lastAdvSearchMeta) return;
+    lastAdvSearchMeta.push({ fn: fn, ms: Math.round(performance.now() - t0),
+      rows: (r && Array.isArray(r.data)) ? r.data.length : null,
+      error: err ? String(err.message || err) : ((r && r.error) ? (r.error.code || r.error.message || 'error') : null) });
+  };
+  return sb.rpc(fn, params).then(function(r) { rec(r); return r; }, function(e) { rec(null, e); throw e; });
+}
+function metaNote(fn, t0, r) {   // RPC가 아닌 조회(news_feed ilike)용 — 같은 형식으로 기록
+  if (!lastAdvSearchMeta) return;
+  lastAdvSearchMeta.push({ fn: fn, ms: Math.round(performance.now() - t0),
+    rows: (r && Array.isArray(r.data)) ? r.data.length : null,
+    error: (r && r.error) ? (r.error.code || r.error.message || 'error') : null });
+}
 
 // 우선 키워드·용언 어미 — rag.ts PRIORITY_KW_RE / VERB_TAIL과 동일 유지(한쪽만 고치면 봇/대시보드 검색이 갈라진다)
 var PRIORITY_KW_RE = /제\d+조|주파수|할당|재할당|전자파|ITU|5G|6G|EMC|SAR|고시|시행령|시행규칙|적합성|기술기준|무선국|면허|허가|신청|승인|폐업|폐지|이용기간|지원금|장려금|차별|이용자|대리점|판매점|유통점|약관|요금|금지행위|과징금|과태료|벌칙|벌금|사업자|기지국|검사|등록|신고|취소|회수|위탁|도매|접속|설비|번호이동|결합|계약|고지|공시|재난|손해배상|개인정보|위치정보|단말|보조금|할인|선택약정|전기통신|전파|무선|공동이용|역무|커버리지|경매/;
@@ -811,7 +831,7 @@ async function searchKeywords(query, lawOnly) {
   var trgmPromise = null;
   var semanticPromise = null;
   if (query && query.length >= 3) {
-    trgmPromise = sb.rpc('search_chunks_trgm', {
+    trgmPromise = metaRpc('search_chunks_trgm', {
       query_text: query,
       match_threshold: 0.12,
       match_count: 8,
@@ -822,7 +842,7 @@ async function searchKeywords(query, lawOnly) {
     // 시맨틱: Edge Function으로 임베딩 → pgvector 코사인 유사도
     semanticPromise = getQueryEmbedding(query).then(function(emb) {
       if (!emb) return [];
-      return sb.rpc('match_chunks_semantic', {
+      return metaRpc('match_chunks_semantic', {
         query_embedding: emb,
         match_threshold: 0.45,
         match_count: 8,
@@ -1531,11 +1551,11 @@ async function buildPendingContext(chunks) {
 async function searchKbSummaries(query) {
   try {
     if (!sb || !query || query.trim().length < 2) return [];
-    var trgmP = sb.rpc('search_kb_chunks_trgm', { query_text: query, match_threshold: 0.10, match_count: 6, only_current: true })
+    var trgmP = metaRpc('search_kb_chunks_trgm', { query_text: query, match_threshold: 0.10, match_count: 6, only_current: true })
       .then(function(r) { return r.data || []; }).catch(function(e) { console.warn('kb trgm 오류(건너뜀):', e); return []; });
     var semP = getQueryEmbedding(query, 'voyage-law-2').then(function(emb) {
       if (!emb) return [];
-      return sb.rpc('match_kb_chunks_semantic', { query_embedding: emb, match_threshold: 0.35, match_count: 6, only_current: true })
+      return metaRpc('match_kb_chunks_semantic', { query_embedding: emb, match_threshold: 0.35, match_count: 6, only_current: true })
         .then(function(r) { return r.data || []; }).catch(function(e) { console.warn('kb 시맨틱 오류(건너뜀):', e); return []; });
     });
     var trgm = await trgmP, sem = await semP;
@@ -2085,19 +2105,20 @@ async function fetchRecentNewsContext(query) {
       keywords.forEach(function(kw) {
         var esc = String(kw).replace(/[%_,]/g, ' ').trim();
         if (esc.length < 2) return;
+        var t0n = performance.now();
         // 제목 일치(가중 3) — 질문이 특정 기사를 가리킬 때 가장 강한 신호
         qs.push(sb.from('news_feed').select('title, source, published_at, content')
           .or('published_at.gte.' + cutoffStr + ',locked.eq.true')
           .ilike('title', '%' + esc + '%')
           .order('published_at', { ascending: false }).limit(10)
-          .then(function(r) { return { w: 3, rows: r.data || [] }; })
+          .then(function(r) { metaNote('news_title_ilike', t0n, r); return { w: 3, rows: r.data || [] }; })
           .catch(function() { return { w: 3, rows: [] }; }));
         // 본문 일치(가중 1)
         qs.push(sb.from('news_feed').select('title, source, published_at, content')
           .or('published_at.gte.' + cutoffStr + ',locked.eq.true')
           .ilike('content', '%' + esc + '%').not('content', 'is', null)
           .order('published_at', { ascending: false }).limit(10)
-          .then(function(r) { return { w: 1, rows: r.data || [] }; })
+          .then(function(r) { metaNote('news_content_ilike', t0n, r); return { w: 1, rows: r.data || [] }; })
           .catch(function() { return { w: 1, rows: [] }; }));
       });
       var cand = {};
@@ -2473,6 +2494,7 @@ async function searchPressReleases(query) {
 //    (tests/rag_regress_browser.js)가 이 함수를 API 0회로 돌려 단계별 청크 id를 변경 전후로 대조한다.
 //    조립 순서·내용은 callClaude 안에 있던 그대로 — 여기서 순서를 바꾸면 rag.ts buildAdvisoryContext도 같이.
 async function buildAdvisoryContext(userText) {
+  lastAdvSearchMeta = [];   // 검색 갈래별 기록 시작(#203)
   // 보조 컨텍스트 검색 4종을 먼저 동시에 시작 (조문 RAG와 병렬 실행 — 프롬프트 조합 순서는 아래에서 고정)
   const customP     = searchCustomKnowledge(userText).catch(function(e) { console.warn('추가지식 검색 실패(건너뜀):', e); return ''; });
   const newsP       = fetchRecentNewsContext(userText).catch(function(e) { console.warn('뉴스 컨텍스트 실패(건너뜀):', e); return ''; });
@@ -2490,7 +2512,7 @@ async function buildAdvisoryContext(userText) {
   const lawSemP     = getQueryEmbedding(expandQueryForSemantic(userText))
     .then(function(emb) {
       if (!emb || !sb) return [];
-      return sb.rpc('match_law_articles_semantic', { query_embedding: emb, match_threshold: 0.0, match_count: 8, only_current: true })
+      return metaRpc('match_law_articles_semantic', { query_embedding: emb, match_threshold: 0.0, match_count: 8, only_current: true })
         .then(function(r) { return r.data || []; });
     })
     .catch(function(e) { console.warn('조문 의미검색 실패(건너뜀):', e); return []; });
@@ -2634,7 +2656,8 @@ async function buildAdvisoryContext(userText) {
     pendingContext: pendingContext, kbContext: kbContext, customContext: customContext, newsContext: newsContext,
     lawTrackContext: lawTrackContext, assemblyContext: assemblyContext, lawTopics: await lawTopicsP,
     // 회귀 하네스용 단계별 재료 — 프롬프트 조립에는 쓰지 않는다
-    ragChunks: ragChunks, lawExtra: lawExtra, addedIds: _advAddedIds, citingIds: _advCitingIds, kbRows: kbRows
+    ragChunks: ragChunks, lawExtra: lawExtra, addedIds: _advAddedIds, citingIds: _advCitingIds, kbRows: kbRows,
+    searchMeta: lastAdvSearchMeta
   };
 }
 
@@ -3382,6 +3405,7 @@ async function sendChat() {
           channel: 'dashboard',
           chunk_ids: lastAdvChunkIds,
           cite_verdicts: window._advCiteVerdicts || null,   // 검증기 판정 목록(#176) — 오탐률 측정 재료
+          search_meta: lastAdvSearchMeta || null,            // 검색 갈래별 기록(#203) — trgm 타임아웃 등 fail-open 실패 가시화
           // RLS의 INSERT 정책이 user_id = auth.uid()를 강제한다 — 빠뜨리면 기록 자체가 거부된다
           user_id: currentUser ? currentUser.id : null
         });

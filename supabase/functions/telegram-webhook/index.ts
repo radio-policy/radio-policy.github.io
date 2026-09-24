@@ -662,7 +662,7 @@ async function handleAsk(chatId: number, from: { username?: string; first_name?:
       const { data: cfg } = await sb.from('app_config').select('value').eq('key', 'system_prompt').maybeSingle();
       const systemPrompt = (cfg?.value as string) || '';
       if (!systemPrompt) throw new Error('app_config.system_prompt 미등록 — python sync_system_prompt.py 실행 필요');
-      const { answer, sources, webSources, chunkIds, verdicts } = await answerAdvisory(sb, systemPrompt, q);
+      const { answer, sources, webSources, chunkIds, verdicts, searchMeta } = await answerAdvisory(sb, systemPrompt, q);
       let html = mdToTelegramHtml(answer);
       // 출처 표기 두 갈래 (2026-08-03 "참고가 전부 법령" 사고):
       //  🌐 = 모델이 본문에 실제 인용한 웹 문서(진짜 근거) — 수치·현황은 대개 여기서 온다
@@ -688,6 +688,7 @@ async function handleAsk(chatId: number, from: { username?: string; first_name?:
         question: q, answer, category: '텔레그램', sources: logSources,
         channel: 'telegram_ask', chat_id: chatId, chunk_ids: chunkIds,
         cite_verdicts: verdicts,   // 검증기 판정 목록(#176) — 오탐률은 이 컬럼을 세어 잰다
+        search_meta: searchMeta,   // 검색 갈래별 기록(#203) — trgm 타임아웃 등 fail-open 실패 가시화
       });
       logged = true;   // 성공 행을 남겼다 — 이후 전송이 실패해도 아래 실패 로그를 겹쳐 쓰지 않는다
       await sendAnswerWithFeedback(chatId, html, logId);

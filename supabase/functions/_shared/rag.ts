@@ -111,18 +111,34 @@ const PERDOC_LIMIT: Record<string, number> = { '추가지식': 8, 'default': 3 }
 // 전체 상위 컷 12→15: 추가지식 1편이 8을 차지해도 다른 문서 몫이 7 남게 (종전 최악 9에서 소폭 감소에 그침).
 const TOTAL_CHUNK_CUT = 15;
 
+// 검색 갈래별 기록(#203, 2026-09-24) — [{fn, ms, rows, error}]. buildAdvisoryContext가 배열을 만들어 각 검색
+// 함수에 넘기고 answerAdvisory가 chat_logs.search_meta에 남긴다. 모듈 전역이 아니라 인자로 넘기는 이유:
+// Edge isolate는 요청을 동시에 처리하므로 전역이면 두 자문의 기록이 섞인다. app.js metaRpc와 같은 형식.
+export type SearchMeta = { fn: string; ms: number; rows: number | null; error: string | null }[];
+type RpcResult = { data?: unknown; error?: { code?: string; message?: string } | null } | null;
+function metaRpc(sb: SupabaseClient, meta: SearchMeta | undefined, fn: string, params: Record<string, unknown>) {
+  const t0 = performance.now();
+  const rec = (r: RpcResult, err?: unknown) => {
+    if (!meta) return;
+    meta.push({ fn, ms: Math.round(performance.now() - t0), rows: Array.isArray(r?.data) ? (r!.data as unknown[]).length : null,
+      error: err ? String((err as Error).message || err) : (r?.error ? (r.error.code || r.error.message || 'error') : null) });
+  };
+  // Promise.resolve로 감싸 진짜 Promise를 돌려준다(PostgrestBuilder.then은 PromiseLike라 .catch 타입이 없다)
+  return Promise.resolve(sb.rpc(fn, params) as unknown as PromiseLike<RpcResult>).then((r) => { rec(r); return r; }, (e: unknown) => { rec(null, e); throw e; });
+}
+
 // ── 3중 하이브리드 조문 검색 (app.js searchKeywords 이식, 상위 15개) ──
-async function searchChunks(sb: SupabaseClient, apiKey: string, query: string): Promise<Chunk[]> {
+async function searchChunks(sb: SupabaseClient, apiKey: string, query: string, meta?: SearchMeta): Promise<Chunk[]> {
   const baseKeywords = extractKeywords(query);
   // trgm·시맨틱은 확장어를 쓰지 않으므로 Haiku 확장을 **기다리지 않고 먼저** 시작한다(B-2, #201, 2026-09-24).
   // trgm 5~6초(#185, SQL로는 못 줄임)와 임베딩 왕복이 확장 1~2초와 겹친다. 병합 순서는 아래에서 고정하므로 결과 동일.
   // only_current 명시 — 기본값에 기대면 status 필터 없는 오버로드로 조용히 해석될 수 있음(배경역사 #31 후속)
-  const trgmP = sb.rpc('search_chunks_trgm', { query_text: query, match_threshold: 0.12, match_count: 8, only_current: true })
-    .then((r) => r.data || []).catch(() => []);
+  const trgmP = metaRpc(sb, meta, 'search_chunks_trgm', { query_text: query, match_threshold: 0.12, match_count: 8, only_current: true })
+    .then((r) => r?.data || []).catch(() => []);
   const semP = getQueryEmbedding(query).then((emb) => {
     if (!emb) return [];
-    return sb.rpc('match_chunks_semantic', { query_embedding: emb, match_threshold: 0.45, match_count: 8, only_current: true })
-      .then((r) => r.data || []).catch(() => []);
+    return metaRpc(sb, meta, 'match_chunks_semantic', { query_embedding: emb, match_threshold: 0.45, match_count: 8, only_current: true })
+      .then((r) => r?.data || []).catch(() => []);
   });
   const expanded = await expandQueryKeywords(apiKey, query, sb);
   // 기본 → 법령 표제어(LAW_SYNONYMS) → LLM 확장 순 (app.js searchKeywords와 동일 유지)
@@ -230,14 +246,14 @@ async function searchChunks(sb: SupabaseClient, apiKey: string, query: string): 
 
 // ── kb 요약 검색 (app.js searchKbSummaries 이식: trgm×5 + 시맨틱(law-2)×10 융합, 상위 5) ──
 interface KbRow { doc_id: string; chunk_idx: number; title?: string; content?: string; law_type?: string; law_number?: string; enforcement_date?: string; trgm_score?: number; similarity?: number; _score?: number; }
-async function searchKbSummaries(sb: SupabaseClient, query: string): Promise<KbRow[]> {
+async function searchKbSummaries(sb: SupabaseClient, query: string, meta?: SearchMeta): Promise<KbRow[]> {
   try {
-    const trgmP = sb.rpc('search_kb_chunks_trgm', { query_text: query, match_threshold: 0.10, match_count: 6, only_current: true })
-      .then((r) => r.data || []).catch(() => []);
+    const trgmP = metaRpc(sb, meta, 'search_kb_chunks_trgm', { query_text: query, match_threshold: 0.10, match_count: 6, only_current: true })
+      .then((r) => r?.data || []).catch(() => []);
     const semP = getQueryEmbedding(query, 'voyage-law-2').then((emb) => {
       if (!emb) return [];
-      return sb.rpc('match_kb_chunks_semantic', { query_embedding: emb, match_threshold: 0.35, match_count: 6, only_current: true })
-        .then((r) => r.data || []).catch(() => []);
+      return metaRpc(sb, meta, 'match_kb_chunks_semantic', { query_embedding: emb, match_threshold: 0.35, match_count: 6, only_current: true })
+        .then((r) => r?.data || []).catch(() => []);
     });
     const trgm = await trgmP as KbRow[], sem = await semP as KbRow[];
     const seen: Record<string, KbRow> = {};
@@ -873,7 +889,7 @@ function extractNewsKeywords(text: string): string[] {
 
 interface NewsRow { title: string; source?: string; published_at?: string; content?: string }
 
-async function buildNewsContext(sb: SupabaseClient, query: string): Promise<{ text: string; sources: string[] }> {
+async function buildNewsContext(sb: SupabaseClient, query: string, meta?: SearchMeta): Promise<{ text: string; sources: string[] }> {
   try {
     const cutoff = new Date(Date.now() - 60 * 86400 * 1000).toISOString().slice(0, 10);   // 최근 60일
     const listP = sb.from('news_feed').select('title, source, published_at')
@@ -889,15 +905,17 @@ async function buildNewsContext(sb: SupabaseClient, query: string): Promise<{ te
     for (const kw of kws) {
       const esc = kw.replace(/[%_,]/g, ' ').trim();
       if (esc.length < 2) continue;
+      const t0n = performance.now();
+      const note = (fn: string, r: RpcResult) => { if (meta) meta.push({ fn, ms: Math.round(performance.now() - t0n), rows: Array.isArray(r?.data) ? (r!.data as unknown[]).length : null, error: r?.error ? (r.error.code || r.error.message || 'error') : null }); };
       qs.push(sb.from('news_feed').select('title, source, published_at, content')
         .or('published_at.gte.' + cutoff + ',locked.eq.true')
         .ilike('title', '%' + esc + '%').order('published_at', { ascending: false }).limit(10)
-        .then((r) => ({ w: 3, rows: (r.data || []) as NewsRow[] })).catch(() => ({ w: 3, rows: [] as NewsRow[] })));
+        .then((r) => { note('news_title_ilike', r); return { w: 3, rows: (r.data || []) as NewsRow[] }; }).catch(() => ({ w: 3, rows: [] as NewsRow[] })));
       qs.push(sb.from('news_feed').select('title, source, published_at, content')
         .or('published_at.gte.' + cutoff + ',locked.eq.true')
         .ilike('content', '%' + esc + '%').not('content', 'is', null)
         .order('published_at', { ascending: false }).limit(10)
-        .then((r) => ({ w: 1, rows: (r.data || []) as NewsRow[] })).catch(() => ({ w: 1, rows: [] as NewsRow[] })));
+        .then((r) => { note('news_content_ilike', r); return { w: 1, rows: (r.data || []) as NewsRow[] }; }).catch(() => ({ w: 1, rows: [] as NewsRow[] })));
     }
     const cand = new Map<string, { row: NewsRow; score: number }>();
     for (const p of await Promise.all(qs)) {
@@ -1084,7 +1102,7 @@ async function buildAssemblyTrendContext(sb: SupabaseClient, query: string): Pro
 // chunkIds = 프롬프트에 들어간 청크의 document_chunks.id. 만족도 👎를 받았을 때
 // "그때 무엇을 근거로 답했나"를 되짚으려면 문서명(sources)만으로는 부족하다 — 같은 법령에서
 // 어느 조문이 걸렸는지가 검색 품질의 실제 단서다.
-export interface AdvisoryResult { answer: string; sources: string[]; webSources: WebRef[]; chunkIds: number[]; verdicts: unknown[] }
+export interface AdvisoryResult { answer: string; sources: string[]; webSources: WebRef[]; chunkIds: number[]; verdicts: unknown[]; searchMeta: SearchMeta }
 
 // ── 자문 실행 (진입점) ──
 // 자문 컨텍스트(검색·보강 단계)의 산출물 — answerAdvisory가 이걸로 프롬프트를 조립한다.
@@ -1092,6 +1110,7 @@ export interface AdvisoryContext {
   chunks: Chunk[]; extra: LawHit[]; addedIds: number[];
   annex: { text: string; sources: string[] }; citing: { text: string; chunks: Chunk[]; ids: number[] };
   kb: KbRow[]; news: { text: string; sources: string[] }; asm: string; lawContext: string; systemVariable: string;
+  searchMeta: SearchMeta;   // 검색 갈래별 기록(#203)
 }
 
 // ── 자문 컨텍스트 조립(검색·보강 단계) — answerAdvisory에서 분리(#201, 2026-09-24 B-2).
@@ -1100,10 +1119,11 @@ export interface AdvisoryContext {
 //    조립 순서·내용은 answerAdvisory 안에 있던 그대로 — 여기서 순서를 바꾸면 app.js buildAdvisoryContext도 같이.
 export async function buildAdvisoryContext(sb: SupabaseClient, question: string): Promise<AdvisoryContext> {
   const apiKey = env('ANTHROPIC_API_KEY');
+  const meta: SearchMeta = [];   // 검색 갈래별 기록 시작(#203)
 
   // 6갈래를 동시에: 조문 RAG / 법령요약 / 조문 정밀검색(키워드) / 조문 의미검색 / 뉴스 동향 / 국회 동향(참고 배경)
-  const kbP = searchKbSummaries(sb, question);
-  const newsP = buildNewsContext(sb, question);
+  const kbP = searchKbSummaries(sb, question, meta);
+  const newsP = buildNewsContext(sb, question, meta);
   const lawP = searchLawArticles(sb, question, 5);
   // 조문 **의미** 검색 (#89) — /law에는 있는데 자문에만 없던 갈래. 어휘가 어긋나면 키워드는 못 넘는다.
   // 실측(자문 경로): 「기지국 개설 허가 절차」의 키워드 5개는 해상무선통신망 제12조·전파관리 세칙
@@ -1111,11 +1131,11 @@ export async function buildAdvisoryContext(sb: SupabaseClient, question: string)
   // 대가 산정 기준」은 전파법 10·11·12·13·15조가 연번으로 자리를 채워 정작 「대가 산정」 조문
   // (세부사항 9조·시행령 14조·법 16조)이 하나도 없었다. 이 갈래가 셋 다 찾아온다.
   const lawSemP = getQueryEmbedding(expandQueryForSemantic(question)).then((emb) => emb
-    ? sb.rpc('match_law_articles_semantic', { query_embedding: emb, match_threshold: 0.0, match_count: 8, only_current: true })
-        .then((r) => (r.data || []) as Chunk[])
+    ? metaRpc(sb, meta, 'match_law_articles_semantic', { query_embedding: emb, match_threshold: 0.0, match_count: 8, only_current: true })
+        .then((r) => (r?.data || []) as Chunk[])
     : [] as Chunk[]).catch(() => [] as Chunk[]);
   const asmP = buildAssemblyTrendContext(sb, question);
-  const chunks = await searchChunks(sb, apiKey, question);
+  const chunks = await searchChunks(sb, apiKey, question, meta);
   const [kb, news, lawHits, lawSem, asm] = [await kbP, await newsP, await lawP, await lawSemP, await asmP];
 
   // 조문 보강 — searchLawArticles(키워드 확장 + 조문 단위 필터)가 찾은 조문 중
@@ -1177,13 +1197,13 @@ export async function buildAdvisoryContext(sb: SupabaseClient, question: string)
 
   // 국회 동향은 '근거'가 아니라 '배경'이라 맨 뒤 — 조문·요약·기사보다 앞에 두지 말 것
   const systemVariable = buildRagContext(chunks2) + lawContext + citing.text + annex.text + buildKbContext(kb) + news.text + asm;
-  return { chunks: chunks2, extra: extra2, addedIds, annex, citing, kb, news, asm, lawContext, systemVariable };
+  return { chunks: chunks2, extra: extra2, addedIds, annex, citing, kb, news, asm, lawContext, systemVariable, searchMeta: meta };
 }
 
 export async function answerAdvisory(sb: SupabaseClient, systemPrompt: string, question: string): Promise<AdvisoryResult> {
   const apiKey = env('ANTHROPIC_API_KEY');
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY 미설정');
-  const { chunks: chunks2, extra: extra2, addedIds, annex, citing, kb, news, systemVariable } = await buildAdvisoryContext(sb, question);
+  const { chunks: chunks2, extra: extra2, addedIds, annex, citing, kb, news, systemVariable, searchMeta } = await buildAdvisoryContext(sb, question);
 
   const telegramGuide = '\n\n---\n\n[텔레그램 답변 형식 지침]\n' +
     '이 답변은 텔레그램 메시지로 전송됩니다. 다음을 지키세요:\n' +
@@ -1250,5 +1270,5 @@ export async function answerAdvisory(sb: SupabaseClient, systemPrompt: string, q
   for (const h of (extra2 as unknown as Chunk[]).concat(chunks2 as Chunk[]).concat(addedIds.concat(citing.ids).map((id) => ({ id } as Chunk)))) {
     if (typeof h.id === 'number' && !chunkIds.includes(h.id)) chunkIds.push(h.id);
   }
-  return { answer, sources, webSources: webRefs, chunkIds, verdicts };
+  return { answer, sources, webSources: webRefs, chunkIds, verdicts, searchMeta };
 }
