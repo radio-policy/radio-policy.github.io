@@ -17,6 +17,7 @@ crawler.py 말미에서 매시 호출된다(try/except 격리 — 실패해도 �
   norm_key 일치 → skip / 임베딩 코사인 ≥0.80 → 신규 제안 대신 기존 active 이슈에
   자동 연결(잠금 포함), proposed·rejected와 ≥0.72면 skip(재제안 금지 — 기각도
   0.72를 쓴다, 0.80은 클러스터 벡터 특성상 새는 것 실측 2026-09-03).
+  제안 직전 생성 제목·정의 벡터로 한 번 더: active ≥0.80 → 연결, 그다음 rejected ≥0.80 → skip(#206).
 
 비용: 제안 확정 시에만 Haiku 1콜(제목·정의·카테고리). 평시 매시 실행 비용 ≈ 0.
 """
@@ -52,6 +53,8 @@ SIM_RELATED = 0.60           # 0.60~0.80은 '관련 후보' — Haiku가 이슈 
                              # 표현이 달라도 관련인 기사(예: 3G 이슈의 '심사 착수' 보도)를 놓치지 않게
 SIM_PROPOSED_DUP = 0.72      # 제안끼리의 교차 문턱 — 짧은 제목은 유사도가 낮게 나와 0.80로는
                              # 같은 주제 제안이 한 실행에 여럿 통과했다(실측: '모두의 AI' 2건)
+SIM_REJECTED_REPROPOSE = 0.80  # 생성 제목·정의 벡터 기준 기각 재제안 문턱(#206). 실측 2026-09-24:
+                             # 재제안 3건 0.853~0.861, 활성·대기 이슈 vs 그보다 먼저 기각된 이슈 최대 0.716
 MAX_PROPOSALS_PER_RUN = 5    # 1회 실행당 제안 상한 — 첫 가동·급증 시 텔레그램 폭주 방지.
                              # 넘친 후보는 버리는 게 아니라 다음 시간 실행에서 재평가된다.
 DORMANT_DAYS = 30
@@ -243,6 +246,15 @@ def _propose(sb, issues, title, definition, category, norm_key, reason, dry,
             if not dry and news_rows:
                 _link_news(sb, i['id'], news_rows, added_by='auto')
             return False
+    # 기각 재제안 재검사(#206) — 클러스터 단계의 기각 대조(대표 제목 벡터 0.72·어휘 3개)는
+    # 지저분한 대표 제목 탓에 새는데, 생성 제목은 기각 이슈와 거의 같게 나온다(실측: 9/24 10:29 기각분이
+    # 11:02 실행에서 0.853~0.861로 재제안). active 병합 검사 뒤에 둬야 활성 이슈 후속이 기각에 막히지 않는다.
+    for i in issues:
+        if i['state'] == 'rejected' and i.get('embedding'):
+            sim = _cosine(vec, i['embedding'])
+            if sim >= SIM_REJECTED_REPROPOSE:
+                print(f'[기각 재제안 — 건너뜀] {title}  (≈ [{i["id"]}] {i["title"][:20]}, {sim:.3f})')
+                return False
     _proposed_this_run += 1
     print(f'[제안] {title}  ({reason.get("kind")}, stage_hint={stage_hint})')
     if dry:
