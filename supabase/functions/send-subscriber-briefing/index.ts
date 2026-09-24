@@ -230,6 +230,13 @@ Deno.serve(async (req: Request) => {
     if (!isWeekday) q = q.eq('days', 'daily');   // 주말은 '매일' 설정자만
     const subs = ((await q).data || []) as Sub[];
     if (!subs.length) {
+      // 수신 창 밖(23~05시)에도 '돌았음'을 남긴다 (#199, 2026-09-24). 안 남기면 heartbeat가 22:25에서 멈춰
+      // 워치독(임계 3h)이 매일 새벽 "4.7h 무갱신"을 낸다 — 발송은 정상인데 기록만 없는 오탐.
+      await sb.from('system_health').upsert({
+        key: 'last_subscriber_briefing_run',
+        updated_at: new Date().toISOString(),
+        note: `${date} ${hour}시 · 발송 0 · 수신 창 밖(대상 0)`,
+      }, { onConflict: 'key' });
       return new Response(JSON.stringify({ ok: true, date, hour, sent: 0, reason: 'no due subscriber' }), { headers: { 'Content-Type': 'application/json' } });
     }
 
