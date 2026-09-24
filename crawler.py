@@ -1915,7 +1915,7 @@ def screen_news_items(items: list) -> list:
     return passed
 
 
-# 긴급도 판정용 네이버 요약(url → ≤300자). Actions(미국 IP)는 본문을 못 긁어 content가 비므로
+# 긴급도 판정용 네이버 요약(url → ≤300자). 본문 수집이 실패한 기사(#200 이전에는 Actions 전건)에서
 # 이것이 없으면 긴급도는 **제목 한 줄**만 보고 매겨진다(2026-09-24 확인, #188). DB에는 저장하지 않는다 —
 # content에 넣으면 refetch_content.py의 '100자 미만 = 재수집 대상' 조건이 깨진다.
 _URGENCY_SUMMARY: dict = {}
@@ -1996,29 +1996,38 @@ def save_new_items(items: list, existing_data: tuple) -> list:
         print('[저장] 선별 통과 항목 없음')
         return []
 
-    # ③ 본문 수집 및 발행일 확정
-    # GitHub Actions(미국 IP)에서는 한국 뉴스 사이트 차단 → RSS 요약만 저장
-    # PC에서 실행 시 fetch_article_body로 전체 본문 수집
-    if IS_GITHUB_ACTIONS:
-        print(f'[본문 수집] GitHub Actions 환경 — RSS 요약 저장 후 PC refetch 위임')
-        for item in unique_new:
+    # ③ 본문 수집 및 발행일 확정 — Actions·PC 공통 (2026-09-24, #200)
+    #    2026-06-04(334ff2c)부터 Actions에서는 "미국 IP라 한국 뉴스 사이트가 막힌다"며 이 단계를 건너뛰었는데,
+    #    실측 기록이 없던 가정이었다. 2026-09-24 tools_gov_reachability.py 뉴스 진단: Actions 데이터센터 IP에서
+    #    상위 도메인 7곳 중 6곳 본문 열림(한국 IP와 동일, 위장 불필요). 당시 진짜 문제는 선별이 없던 시절
+    #    매시 최대 500건을 8초 타임아웃으로 긁던 실행 시간이었고, 지금은 선별 통과분만이라 10분 창당
+    #    중앙값 2건·p90 9건·최대 54건(최악 ≈8분 < job timeout 30분, concurrency 그룹이 겹침 방지).
+    #    본문이 있어야 ⑤ 긴급도 판정이 제목+요약이 아니라 본문(600자)을 본다.
+    #    실패·빈 껍데기(#113 유형: HTTP 200에 본문 없음)는 content를 비워 두어 refetch_content(lampmanH-pc)의
+    #    '100자 미만=재수집' 조건이 그대로 살고, 판정은 #188 요약 폴백으로 간다. 건수는 반드시 로그에 남긴다.
+    print(f'[본문 수집] {"GitHub Actions" if IS_GITHUB_ACTIONS else "PC"} 환경 — {len(unique_new)}건 본문 수집 시작...')
+    body_ok = body_fail = 0
+    for item in unique_new:
+        if item.get('url'):
+            body, article_date = fetch_article_body(item['url'], item.get('source', ''))
+            if body and len(body.strip()) >= 100:
+                item['content'] = body
+                body_ok += 1
+            else:
+                body_fail += 1          # content는 기존값(None 또는 RSS 요약) 유지 → refetch 대상
+            item['content_fetched_at'] = now_kst.isoformat()
+            current_pub = item.get('published_at', '')
+            if not current_pub and article_date:
+                item['published_at'] = article_date
+                print(f'  [날짜보정] {item.get("title","")[:30]}... → {article_date}')
+            elif not current_pub:
+                item['published_at'] = ''
+            time.sleep(1)
+        else:
             item['content_fetched_at'] = now_kst.isoformat()
             if not item.get('published_at'):
                 item['published_at'] = ''
-    else:
-        print(f'[본문 수집] PC 환경 — {len(unique_new)}건 본문 직접 수집 시작...')
-        for item in unique_new:
-            if item.get('url'):
-                body, article_date = fetch_article_body(item['url'], item.get('source', ''))
-                item['content'] = body if body else item.get('content')
-                item['content_fetched_at'] = now_kst.isoformat()
-                current_pub = item.get('published_at', '')
-                if not current_pub and article_date:
-                    item['published_at'] = article_date
-                    print(f'  [날짜보정] {item.get("title","")[:30]}... → {article_date}')
-                elif not current_pub:
-                    item['published_at'] = ''
-                time.sleep(1)
+    print(f'[본문 수집] 성공 {body_ok}건 · 실패/100자 미만 {body_fail}건 (실패분은 refetch_content가 재수집)')
 
     # ④ 72시간 초과 또는 발행일 불명 제외 (규칙1)
     valid, skipped_unknown, skipped_old = [], 0, 0
@@ -2055,8 +2064,8 @@ def save_new_items(items: list, existing_data: tuple) -> list:
     #    8/4(통합)은 보통. 원인은 판정 재료와 개인화 두 가지다:
     #      ① 선별은 파이프라인상 **본문 수집 전**이라 네이버 요약 300자(_screen_text)만 본다.
     #         「공정위가 상고했다」 같은 핵심이 요약에서 잘린다. 본문(중앙값 1,329자)은 여기서만 쓴다.
-    #         ⚠️ 단 **PC 실행일 때만** 그렇다. 10분 크롤은 Actions(미국 IP)라 본문 칸이 비어 있어
-    #         이 판정이 제목만 봤다(2026-09-24 확인). 그래서 본문이 없으면 선별 때의 요약을 넘긴다(#188).
+    #         ⚠️ 2026-06-04~2026-09-24에는 Actions가 본문 수집을 건너뛰어 이 판정이 제목만 봤다(#188에서 확인,
+    #         요약 폴백 추가). #200부터 Actions도 본문을 긁으므로 본문이 있으면 본문(600자), 없으면 요약으로 판정.
     #         → 선별에 본문을 주려면 무관 기사 500건의 본문까지 매시간 긁어야 해서 캐시 절감이 무너진다.
     #      ② 개별 판정은 get_feedback_examples(title)로 **제목별 유사 사례 5건**을 넣지만,
     #         배치 판정은 여러 기사를 한 번에 보므로 공통 사례만 쓴다.
