@@ -179,6 +179,68 @@ if not any(p.startswith("⛔") for p in problems):
     except Exception as e:
         problems.append("봇 지침서 동기화 확인 실패: %s" % e)
 
+# ── ③-3 AI 비용 계측 경보 (§4-2-8) ──
+# api_usage는 기록만 하고 아무도 안 보면 캐시가 깨져도 모른다 — 9/18~19에 선별·긴급도 콜의 캐시가
+# 100% 빗나가 호출당 입력이 4,800~13,700토큰이었는데, 표를 직접 열어 보기 전까지 몰랐다(#174·#175로 해결).
+#   ⓐ 캐시 적중률: 1시간 캐시를 쓰는 두 콜의 최근 24시간 적중(cache_read>0) 비율 < 80%면 경고(표본 10건 이상).
+#   ⓑ 비용 급증: 최근 24시간 추정 비용 > 그 전 7일(24시간 단위) 중앙값 × 2 이고 $1 이상이면 경고 + 상위 3곳.
+# 단가는 추정용(청구서 아님). 캐시 쓰기는 1시간 캐시 기준 입력 2배, 읽기 0.1배.
+CACHED_SITES = ("crawler.py:_screen_batch_haiku", "crawler.py:classify_urgency")
+PRICES = {"haiku": (1.0, 5.0), "sonnet": (2.0, 10.0), "opus": (5.0, 25.0)}   # $/백만 토큰 (입력, 출력)
+# 실행마다 자기 비용을 텔레그램으로 알리는 작업은 급증 계산에서 뺀다(중복 경고 방지) — okf_refresh(#198, 교체 있는 날만 ≈$2)
+SELF_REPORTED = ("okf_refresh.py:",)
+
+
+def _usage_cost(r):
+    m = (r.get("model") or "").lower()
+    pin, pout = next((v for k, v in PRICES.items() if k in m), PRICES["sonnet"])
+    n = lambda k: r.get(k) or 0
+    return (n("input_tokens") * pin + n("cache_read") * pin * 0.1
+            + n("cache_write") * pin * 2 + n("output_tokens") * pout) / 1e6
+
+
+if not any(p.startswith("⛔") for p in problems):
+    try:
+        since = (NOW - datetime.timedelta(days=8)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        rows, off = [], 0
+        while True:   # PostgREST 1,000행 상한 — 나눠 읽는다(하루 ≈700행)
+            page = http_get_json(
+                SUPABASE_URL + "/rest/v1/api_usage?select=ts,site,model,input_tokens,cache_read,cache_write,output_tokens"
+                "&ts=gte.%s&order=id&limit=1000&offset=%d" % (since, off), sb_headers)
+            rows += page
+            if len(page) < 1000:
+                break
+            off += 1000
+        day_cost = [0.0] * 8          # [0] = 최근 24시간, [1..7] = 그 전 날들
+        site_cost, hit = {}, {s: [0, 0] for s in CACHED_SITES}
+        for r in rows:
+            d = int(hours_since(r["ts"]) // 24)
+            if not 0 <= d < 8:
+                continue
+            if (r.get("site") or "").startswith(SELF_REPORTED):
+                continue
+            c = _usage_cost(r)
+            day_cost[d] += c
+            if d == 0:
+                site_cost[r.get("site") or "?"] = site_cost.get(r.get("site") or "?", 0) + c
+                if r.get("site") in hit:
+                    hit[r["site"]][1] += 1
+                    hit[r["site"]][0] += 1 if (r.get("cache_read") or 0) > 0 else 0
+        for s, (h, t) in hit.items():
+            if t >= 10 and h / t < 0.8:
+                problems.append("AI 캐시 적중률 저하: %s %d/%d(%.0f%%) — system 블록이 매번 바뀌거나 최소 길이 미달 의심(#175)"
+                                % (s.split(":")[1], h, t, 100.0 * h / t))
+        prev = sorted(day_cost[1:])
+        median = prev[3]
+        if day_cost[0] >= 1.0 and day_cost[0] > median * 2:
+            top = sorted(site_cost.items(), key=lambda kv: -kv[1])[:3]
+            problems.append("AI 비용 급증: 최근 24시간 ≈$%.2f (직전 7일 중앙값 $%.2f) — 상위 %s"
+                            % (day_cost[0], median, ", ".join("%s $%.2f" % kv for kv in top)))
+        print("[워치독] AI 비용 24h ≈$%.2f (7일 중앙값 $%.2f), 캐시 적중 %s"
+              % (day_cost[0], median, ", ".join("%s %d/%d" % (s.split(":")[1], h, t) for s, (h, t) in hit.items())))
+    except Exception as e:
+        problems.append("AI 비용 계측 확인 실패: %s" % e)
+
 # ── ④ 결과 → 텔레그램(이상 있을 때만, 정상이면 무음) ──
 if problems:
     msg = "⚠️ [전파정책 헬스 워치독] 이상 감지 (%s KST):\n- %s" % (

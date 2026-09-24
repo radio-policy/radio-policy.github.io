@@ -179,12 +179,24 @@ Deno.serve(async (req) => {
     const dec = new TextDecoder();
     let acc = '';
     let usage: ApiUsage = {};
+    // 중간 끊김(창 닫기·무수신 3분 중단 #205) 대비(§4-2-8): 출력 누계는 끝의 message_delta에만 오므로
+    // 지나간 출력 글자 수를 세어 두었다가, 끊기면 그걸로 어림한다(한국어 ≈1.2토큰/자, #198 실측).
+    let outChars = 0;
+    let recorded = false;
+    const record = async (s: string, u: ApiUsage) => {
+      if (recorded) return;
+      recorded = true;
+      await recordApiUsage(sb, s, model, u);
+    };
     const scan = (line: string) => {
       if (!line.startsWith('data:')) return;
       try {
         const d = JSON.parse(line.slice(5).trim());
         if (d.type === 'message_start' && d.message?.usage) usage = mergeUsage(usage, d.message.usage);
         else if (d.type === 'message_delta' && d.usage) usage = mergeUsage(usage, d.usage);
+        else if (d.type === 'content_block_delta' && d.delta) {
+          outChars += String(d.delta.text ?? d.delta.partial_json ?? d.delta.thinking ?? '').length;
+        }
       } catch { /* keep-alive·조각난 줄 */ }
     };
     const tap = new TransformStream<Uint8Array, Uint8Array>({
@@ -198,12 +210,19 @@ Deno.serve(async (req) => {
         } catch { /* 기록용 — 무시 */ }
       },
       async flush() {
-        try { if (acc) scan(acc); await recordApiUsage(sb, site, model, usage); } catch { /* 무시 */ }
+        try { if (acc) scan(acc); await record(site, usage); } catch { /* 무시 */ }
       },
     });
     // waitUntil로 붙잡지 않으면 응답 반환 시점에 런타임이 함수를 정리해 스트림이 끊긴다
+    // 끊기면 flush가 안 불려 기록이 통째로 빠졌다(§4-2-8) — 받은 입력·캐시 + 출력 어림을 ':aborted' 라벨로 남긴다.
     EdgeRuntime.waitUntil(
-      upstream.body.pipeThrough(tap).pipeTo(writable).catch((e) => console.error('[스트림 중단]', e)),
+      upstream.body.pipeThrough(tap).pipeTo(writable).catch(async (e) => {
+        console.error('[스트림 중단]', e);
+        try {
+          const est = Math.round(outChars * 1.2);
+          await record(site + ':aborted', { ...usage, output_tokens: Math.max(usage.output_tokens || 0, est) });
+        } catch { /* 무시 */ }
+      }),
     );
     return new Response(readable, {
       headers: {
