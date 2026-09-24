@@ -18,3 +18,8 @@ speech_rebuild/
 # 공개 미러(GitHub)에 올라가면 안 되는 것 (2026-09-19)
 node_modules/
 docs/confluence_backup/
+
+# 사내 컨플루언스 도구·사내 배포 문서(#172-보론) — 저장소가 공개이고 Pages가 모든 파일을 내보낸다
+confluence_writer.py
+_confluence_attach.py
+docs/사내공유_*

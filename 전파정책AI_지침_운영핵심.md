@@ -1095,7 +1095,7 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **화면을 고치면 그 장의 캡처도 다시 뜰 것** — 2026-09-13 회의록 화면을 바꾼 당일 캡처가 이미 낡았다.
 
 ## 사내 컨플루언스 쓰기 (confluence_writer, 2026-09-15 신설 — 배경역사 #172)
-- **모듈은 `confluence_writer.py`**(표준 라이브러리만, 의존성 없음). 원본과 가이드는 `frequence/confluence/`의 `confluence_writer.py`·`CONFLUENCE_WRITE_GUIDE.md`. 첨부는 `_confluence_attach.py`.
+- **모듈은 `confluence_writer.py`**(표준 라이브러리만, 의존성 없음). 원본과 가이드는 `frequence/confluence/`의 `confluence_writer.py`·`CONFLUENCE_WRITE_GUIDE.md`. 첨부는 `_confluence_attach.py`. 둘 다 저장소 폴더에 복사해 쓰되 **커밋하지 않는다**(`.gitignore` 등록 — 공개 저장소, #172-보론).
 - **인증은 `~/.confluence_pat`의 PAT** — PowerShell로 저장할 때 `-Encoding ascii` 필수. utf8이면 BOM이 붙어 401. `verify_ssl=False`가 기본(사내 CA가 파이썬 OpenSSL 검증을 통과하지 못함 — 사내 인증을 통과해야만 열리는 사이트라 허용).
 - **토큰은 발급자 권한 그대로 동작한다** — 본인이 못 보는 공간에는 못 쓰고, 파일이 유출되면 본인 권한이 그대로 노출된다. 공유 금지.
 - **`update()`는 본문 전체 교체다.** 반드시 `get_page()`로 현재 본문을 읽어 그 위에 고쳐 올린다. 새 페이지는 `upsert()`(같은 공간 동일 제목이면 `create()`는 400).
@@ -1132,6 +1132,7 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **AI 자문 "Failed to fetch"**: 무거운 질문 2분+ idle 끊김 → stream:true로 해결됨. 사내망 프록시·확장프로그램·F12 네트워크 확인.
 
 ## 하지 말아야 할 것 (규칙 + 한 줄 이유 / 상세는 배경역사 문서)
+- **컨플루언스 도구(`confluence_writer.py`·`_confluence_attach.py`)와 사내 배포 문서(`docs/사내공유_*`)를 커밋하지 말 것 (#172-보론, 2026-09-24)** — 저장소는 공개이고 GitHub Pages가 `.py`·`.md`까지 전부 내보낸다(`radio-policy.github.io/crawler.py` 200 실측). 커밋하면 사내 공간 키·페이지 번호, 사내 전달문의 계정·결제 구조가 누구나 여는 웹에 올라간다. 사내 보고서를 외부 서버에 두지 않는 #142와 같은 원칙. `.gitignore`에 등록돼 있다.
 - **Actions에서 뉴스 본문 수집을 다시 건너뛰게 하지 말 것 — '미국 IP 차단'은 실측으로 부정됐다 (#200, 2026-09-24)** — 2026-06-04(334ff2c)의 스킵은 측정 없는 가정이었고 진짜 원인은 선별이 없던 시절 매시 최대 500건을 8초 타임아웃으로 긁던 실행 시간이었다. 2026-09-24 `tools_gov_reachability.py` 뉴스 진단(Actions 데이터센터 IP): 최근 7일 상위 7도메인 중 6곳 본문 열림 = 한국 IP와 동일, TLS 위장 불필요. 지금은 선별 통과분만 긁어 10분 창당 중앙값 2·p90 9·최대 54건(최악 ≈8분 < timeout 30분, concurrency 그룹). 실패·100자 미만은 content를 비워 lampmanH-pc refetch가 재수집하고 판정은 요약 폴백(#188). `[본문 수집] 성공 N·실패 M` 로그를 지우지 말 것 — 데이터센터 IP 차단은 오류가 아니라 빈 껍데기 응답으로 오므로(#113) 실패 건수가 유일한 경보다. 뉴스 수집을 lampmanH-pc로 옮기지도 말 것 — 본문은 Actions에서도 얻으므로 얻는 게 없고 10분 수집·긴급 알림이 PC 단일 장애점이 된다. 재측정은 `gov_reachability_test.yml` dispatch → check-run 주석 `news-reachability`.
 - **워치독(`watchdog_scan`)을 '이상 조합이 바뀌면 발송'으로 되돌리지 말 것 — '새 항목이 생겼을 때만' (#199, 2026-09-24)** — 해소로 조합이 줄어도 발송하면, 다음 실행까지 남는 항목(법제처 무응답 `apifail=2`)이 옆 항목이 생기고 사라질 때마다 같이 실려 하룻밤에 4통이 왔다(09-23 21:10·00:10·03:10·09:10). 상태는 md5가 아니라 키 목록으로 저장해 차집합을 구한다. 새 스크립트가 **'돌았지만 할 일 없음'으로 일찍 끝나는 경로에도 heartbeat를 남길 것** — 구독자 발송 함수가 창 밖에서 그냥 끝나 매일 새벽 무갱신 오탐이 났다.
 - **OKF 자동 갱신(`okf_refresh.py`)을 '바뀐 문장만 수정' 방식으로 바꾸지 말 것 — '새 판 전문 + 구판 요약 참고 → 전면 재작성'이 운영자 결정 (#198, 2026-09-24)** — 최소 수정은 옛 문장이 섞여 남고 DIFF가 못 보는 별표 개정을 놓친다(#116-보론). 전문을 통째로 읽히면 둘 다 없다. 구판 요약은 구조·실무 메모·링크를 잇는 참고 입력이고, 직전 판 조문 차이는 '개정 요지'를 지어내지 않게 하는 근거다. 시험 실행(금지행위 업무처리규정)에서 실제 변경(제28조② 준용 근거 규정→고시)만 짚고 나머지 동일이라고 정확히 썼다.

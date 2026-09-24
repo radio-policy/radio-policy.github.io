@@ -59,8 +59,10 @@ logged explicitly via `api_usage.record_usage()`. Bulk scripts refuse mass API r
 (stdlib unittest, no network) — run `python -m unittest discover -s tests` after touching shared logic.
 
 **사내 컨플루언스 쓰기 (2026-09-15 신설, #172)** — `https://confluence.tde.sktelecom.com`에 페이지를
-쓸 때는 **반드시 이 저장소의 `confluence_writer.py`**를 쓴다(원본은 `frequence/confluence/`, 가이드는
-그곳의 `CONFLUENCE_WRITE_GUIDE.md`). 표준 라이브러리만 쓰고 의존성이 없다.
+쓸 때는 **반드시 `confluence_writer.py`**를 쓴다(원본과 가이드 `CONFLUENCE_WRITE_GUIDE.md`는 각 PC의
+`frequence/confluence/`). 표준 라이브러리만 쓰고 의존성이 없다. 저장소 폴더에 복사해 쓰되 **이 모듈과
+`_confluence_attach.py`, 사내 배포 문서(`docs/사내공유_*`)는 커밋하지 않는다**(`.gitignore` 등록) — 저장소가
+공개이고 GitHub Pages가 `.py`·`.md`까지 모든 파일을 내보내므로, 사내 공간 키·페이지 번호가 외부에 열린다(#172-보론).
 - 인증: `~/.confluence_pat`의 PAT를 Bearer 헤더로 (모듈이 자동 처리). **ascii 인코딩 저장 필수** — utf8로
   저장하면 BOM이 붙어 401이 난다. `verify_ssl=False`가 기본(사내 CA가 파이썬 검증을 통과하지 못함)
 - 페이지 생성·수정은 **`cf.upsert(title, html)`** — 같은 공간에 동일 제목이 있으면 `create()`는 400이다.
