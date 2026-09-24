@@ -394,9 +394,11 @@ def sync_one(sb, watch_row, args):
     print(f"\n■ {law_name}")
     print(f"  등재본: {meta['law_no']} ({meta['enf_date']})  →  현행본: {law_no} ({enf})")
 
-    # 조문 취득
+    # 조문 취득 — 시행일(enf)을 반드시 넘긴다(#207). MST만 주면(target=law) 같은 MST의 가장 늦은
+    # 시행일 통합본이 와서, 현행 자리에 미래 조문이 들어간다(전기통신사업법 21652호: 5/19 현행에
+    # 10/1·11/20 조문, 2026-09-24 실측).
     if target == 'law':
-        articles, basic = fetch_law_articles(mst)
+        articles, basic = fetch_law_articles(mst, ef_date=enf)
         type_token = _law_type_label(meta, basic)
         org = None
         law_id = str(hit.get('법령ID') or '')
@@ -887,7 +889,7 @@ def reingest_one(sb, doc_name, args):
         return False
 
     if target == 'law':
-        articles, basic = fetch_law_articles(mst)
+        articles, basic = fetch_law_articles(mst, ef_date=enf)   # 시행일 필수(#207, sync_one 주석)
         type_token = _law_type_label(meta, basic)
         org, law_id = None, str(hit.get('법령ID') or '')
     else:
