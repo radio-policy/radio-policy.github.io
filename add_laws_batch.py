@@ -296,7 +296,7 @@ def add_one(sb, law_name, category, target_hint, dry_run=False):
     mst, law_no, enf = row_fields(hit, target)
     try:
         if target == 'law':
-            articles, basic = fetch_law_articles(mst)
+            articles, basic = fetch_law_articles(mst, ef_date=enf)   # 시행일 필수(#207, law_sync.sync_one 주석)
             type_token = basic.get('법령구분명') or hit.get('법령구분명')
             org = None
             law_id = str(hit.get('법령ID') or '')
