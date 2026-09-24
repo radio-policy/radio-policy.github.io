@@ -7529,3 +7529,23 @@ service_role로 부르되 한도를 늘린 별도 세션 ④ trgm 갈래 폐지(
 **배포.** `telegram-webhook`·`verify-citations` 재배포 + `cite_verify.js?v=20260924a`·`app.js?v=20260924e`. 사내판: `advise_rag.py`는 자체 파이썬 검색이라
 B-2 코드는 무관하나, 사내 조각 검색이 같은 trgm RPC를 쓰는지 확인 필요(맥북 세션에 질문 전달). q19(보도자료 분기)의 RAG가 6건으로
 잘리는 것은 B-3 그대로 확인됐다.
+
+**#202 (2026-09-24) 입법예고 알림이 '기존 추적 법안' 경로에서 죽고 heartbeat까지 멈췄다 — #171 요지 붙이기의 변수 범위 실수.**
+**발견.** 09-24 19:45 점검에서 `system_health.last_assembly_run`이 09-23 14:27에 멈춰 있었다. 워치독 18:10 회차가 #199 규칙대로
+`last_assembly_run:late`를 🆕로 한 통 보냈다(15:10은 새 항목 없음으로 무발송). 그런데 GitHub `assembly_crawl.yml`은 이날 두 번
+(10:30 dispatch·14:46 schedule) 모두 **성공(초록)**이었고 `Run assembly crawler` 단계도 success — 법안 패스는 돌았다(`assembly_bills`
+갱신 10:32, 2건). 입법예고 패스만 heartbeat를 못 남긴 것이다. `fetch_notices()`는 실패해도 `active=0 (skip)` heartbeat를 쓰므로
+API 장애도 아니었다.
+**재현.** Actions 로그는 인증이 필요해 못 읽는다. 이 PC에서 프록시를 지우고 `run_notice_pass(dry_run=True)`(DB 무변경·알림 없음)를
+돌리자 즉시 `UnboundLocalError: cannot access local variable 'summary'`(1016행 `gist = bill_gist(summary)`). `summary`는 **신규 행
+insert 분기에서만** `fetch_bill_summary()`로 정의되는데(#171, 09-15), 요지를 붙이는 `stage == 0` 분기는 기존 행에도 들어온다.
+오늘 처음 걸린 법안은 2221481 개인정보 보호법 일부개정법률안 — 10:32 키워드 법안 패스가 먼저 insert(입법예고 ~10-02, stage 0)한
+뒤 같은 실행의 입법예고 목록에 올라 기존 행 경로로 들어왔다. #171 이후 stage 1이 된 4건은 모두 신규 행 경로였다(잠복 9일).
+예외는 main의 `[입법예고 패스 오류]` try/except가 삼켜 종료 코드 0 → 잡 성공. 알림 1건(운영자+구독자 `assembly` 큐)이 안 나갔고
+heartbeat도 없었다.
+**고침.** 기존 행 분기에서 `summary = ex['summary']`를 쓰고, 비어 있고 이번에 알릴 차례(prev_stage 0)면 `fetch_bill_summary` 1회
+조회 후 `updates['summary']`로 함께 저장. dry-run 재현으로 알림 1건이 정상 조립되는 것을 확인. 다음 10:30 실행이 알림·heartbeat를
+회복한다(운영자가 원하면 `dispatch_github_workflow('assembly_crawl.yml')`로 앞당길 수 있다).
+**교훈.** ① 잡 성공 ≠ 스크립트 정상 — 패스 단위 try/except는 전체를 살리는 대신 실패를 숨기므로 heartbeat가 유일한 판정이고,
+워치독 'late'가 그 역할을 했다(#199 규칙의 첫 🆕). ② 새 변수를 한 분기에만 두는 실수는 스모크(무네트워크)로는 안 잡힌다 —
+분기가 갈리는 함수는 dry-run 재현이 가장 빠른 진단이다. 사내판: 국회 크롤러는 외부판 전용(사내는 다리로 결과만 받음) — 불필요.

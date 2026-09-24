@@ -971,6 +971,14 @@ def run_notice_pass(dry_run: bool = False):
                 updates['notice_url'] = url
             if committee and not (ex.get('committee') or '').strip():
                 updates['committee'] = committee
+            # 알림 요지(bill_gist)는 아래 stage 0 분기에서 summary를 쓴다 — 기존 행(키워드 수집이 먼저 넣은 법안)도
+            # 여기서 정의해야 한다. 종전엔 신규 행 분기에서만 정의해 UnboundLocalError로 패스가 죽고 heartbeat까지
+            # 멈췄다(#202, 2026-09-24). 저장된 요지가 없고 이번에 알릴 차례(stage 0)일 때만 1회 조회해 함께 저장한다.
+            summary = (ex.get('summary') or '').strip()
+            if not summary and prev_stage == 0:
+                summary = fetch_bill_summary(n.get('BILL_NO') or ex.get('bill_no') or '')
+                if summary:
+                    updates['summary'] = summary
             if updates:
                 updates['updated_at'] = datetime.now(KST).isoformat()
                 if dry_run:
