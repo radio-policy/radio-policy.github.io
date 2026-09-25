@@ -8540,6 +8540,7 @@ function renderIssueMapList() {
       var pr = i.proposal_reason || {};
       if (pr.cluster_size) reason = '기사 ' + pr.cluster_size + '건' + (pr.days ? ' · ' + pr.days + '일' : '') + (pr.urgent_count ? ' · 긴급 ' + pr.urgent_count : '');
       else if (pr.signal)  reason = String(pr.signal);
+      else if (pr.detail)  reason = String(pr.detail);   // 규제 제안 — 제목이 주제형이라 법령명·의안번호는 여기서 보인다(#231)
       h += '<div style="display:flex;align-items:center;gap:8px;background:var(--bg-secondary);border-radius:var(--radius-md);padding:8px 12px;margin-bottom:6px;flex-wrap:wrap">' +
         '<span style="font-size:12px;flex:1;min-width:160px"><span style="color:var(--text-tertiary);font-size:11px">#' + i.id + '</span> ' + escHtml(i.title) +
           (reason ? ' <span style="font-size:11px;color:var(--text-tertiary)">— ' + escHtml(reason) + '</span>' : '') + '</span>' +

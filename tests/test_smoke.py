@@ -1447,3 +1447,104 @@ class TestOkfRefresh(unittest.TestCase):
         self.assertIn('자동 갱신 실패 1건', msg)
         self.assertIn('보류 1건', msg)
         self.assertIn('superseded로 보존', msg)
+
+
+class TestIssueSuggestReg(unittest.TestCase):
+    """#231 이슈맵 규제 계열(법안·DIFF) 제안 — 법령 이름표 대신 번호 동일성·요약 내용·경계 판정·주제형 제목.
+    네트워크 0: 임베딩·판정·제목은 가짜로 바꾼다."""
+
+    def setUp(self):
+        import issue_suggest as isg
+        self.isg = isg
+        isg._proposed_this_run = 0
+
+    def test_law_only_title(self):
+        f = self.isg._is_law_only_title
+        # 실제 기각·제안 제목(#27·#28·#158·#187)과 흔한 변형
+        for t in ('정보통신망 이용촉진 및 정보보호 등에 관한 법률 일부개정법률안', '방송통신발전 기본법 일부개정법률안',
+                  '전기통신사업법 일부개정법률안', '항공안전법 개정', '개인정보 보호법 시행령 개정',
+                  '전파법 시행령 개정안', '정보통신망 이용촉진 및 정보보호 등에 관한 법률 개정', ''):
+            self.assertTrue(f(t), t)
+        self.assertTrue(f('정보통신망법', '정보통신망법'))
+        # 주제형·'법령 — 주제'형 활성 제목과 헷갈리기 쉬운 제목은 통과해야 한다
+        for t in ('고위험 IoT 기기 정보보호인증 의무화', '통신비밀보호법 개정 — 수사·기소 분리 후속 정비',
+                  '전파법 시행령 개정 — 무선국 검사 자율화', 'AIDC 특별법 시행령 제정 — 인정 기준·전력 특례',
+                  '대리점·판매점 부정계약 관리·감독 — 전기통신사업법 개정·시행령', '정부, 대한민국 AI 윤리원칙 제정',
+                  'LGU+, 유선망 자율운영 글로벌 평가기준 제정', 'AI 데이터센터 특별법 내년 3월 시행',
+                  '단통법 폐지 후속 — 지원금 규율·유통환경 시책', '침해사고 증거 임의 삭제 금지 의무화'):
+            self.assertFalse(f(t), t)
+
+    def test_reg_keys(self):
+        law = {'75': {'id': 75, 'origin': 'assembly', 'new_doc': '2221546', 'law_name': '정보통신망법', 'law_no': None},
+               '41': {'id': 41, 'origin': 'gov', 'new_doc': 'x', 'law_name': '개인정보 보호법', 'law_no': '21445'},
+               '42': {'id': 42, 'origin': 'gov', 'new_doc': 'y', 'law_name': '개인정보  보호법', 'law_no': '21445'},
+               '61': {'id': 61, 'origin': 'gov', 'new_doc': 'https://…', 'law_name': '전기통신사업법 시행령', 'law_no': None}}
+        k = self.isg._reg_keys
+        self.assertEqual(k('bill', '2221546', law), {'bill:2221546'})
+        self.assertEqual(k('diff', 75, law), {'diff:75', 'bill:2221546'})      # 국회 개정안 조문 대비 ↔ 그 법안
+        self.assertTrue(k('diff', 41, law) & k('diff', 42, law))              # 같은 공포 법령(시행일만 다른 판)
+        self.assertEqual(k('diff', 61, law), {'diff:61'})                      # 정부 입법예고안은 번호가 없다
+
+    def test_identity_prefers_active_and_remembers_rejected(self):
+        isg = self.isg
+        law = {'75': {'origin': 'assembly', 'new_doc': '2221546'}}
+        issues = [{'id': 27, 'state': 'rejected', 'proposal_reason': {'bill_no': '2220743'}},
+                  {'id': 198, 'state': 'active', 'proposal_reason': {'diff_id': 75}},
+                  {'id': 5, 'state': 'rejected', 'proposal_reason': {'bill_no': '2221546'}}]
+        keys = isg._issue_reg_keys(issues, [], law)
+        st, iss = isg._reg_identity(issues, keys, {'bill:2221546'})
+        self.assertEqual((st, iss['id']), ('active', 198))                     # 기각 짝보다 active 우선
+        st, iss = isg._reg_identity(issues, keys, {'bill:2220743'})
+        self.assertEqual((st, iss['id']), ('rejected', 27))                    # 링크가 지워져도 제안 사유로 기억
+        self.assertIsNone(isg._reg_identity(issues, keys, {'bill:2220816'}))  # 같은 법 다른 법안은 남남
+
+    def test_relate_batch_failure_is_not_unrelated(self):
+        isg = self.isg
+        iss = {'id': 1, 'title': 't', 'definition': 'd'}
+        with mock.patch.object(isg, 'ANTHROPIC_API_KEY', ''):
+            self.assertIsNone(isg._haiku_relate_batch([(0, 'x', iss)], None, kind='reg'))
+            self.assertEqual(isg._haiku_relate_batch([(0, 'x', iss)], [[{'title': 'x'}]]), set())   # 뉴스는 종전대로
+
+    def _run(self, judge_result):
+        import io, contextlib
+        isg = self.isg
+        e = lambda *v: list(v)
+        issues = [
+            {'id': 1, 'state': 'active', 'title': '이슈A', 'definition': '', 'embedding': e(1, 0, 0, 0)},
+            {'id': 2, 'state': 'active', 'title': '이슈B', 'definition': '해당 없음: 다른 것', 'embedding': e(0, 1, 0, 0)},
+            {'id': 3, 'state': 'rejected', 'title': '기각R', 'definition': '', 'embedding': e(0, 0, 1, 0),
+             'proposal_reason': {'bill_no': 'B1'}},
+        ]
+        vec = {'s1': e(0.1, 0.1, 0.1, 1), 's2': e(1, 0.05, 0, 0), 's3': e(0, 0.6, 0.5, 0),
+               's4': e(0.1, 0.1, 0.1, 1), 's5': e(0, 0, 1, 0.1)}
+
+        def fake_embed(texts, input_type='query'):
+            return [vec.get(t, e(0, 0, 0, 1)) for t in texts]
+
+        def item(n):
+            return {'label': f'bill B{n}', 'name': f'법{n} 일부개정법률안', 'summary': f's{n}',
+                    'keys': {f'bill:B{n}'},
+                    'link': {'item_type': 'bill', 'item_id': f'B{n}', 'item_date': None, 'title': f'법{n}'},
+                    'reason': {'kind': 'assembly_notice', 'bill_no': f'B{n}', 'detail': f'국회 입법예고 · 법{n}'}}
+        out = io.StringIO()
+        with mock.patch.object(isg, '_embed', fake_embed), \
+                mock.patch.object(isg, '_haiku_relate_batch', lambda pairs, groups, kind='news': judge_result(pairs)), \
+                mock.patch.object(isg, '_reg_title', lambda name, summary: '주제형 제목 ' + summary), \
+                contextlib.redirect_stdout(out):
+            isg._reg_process(None, issues, [item(n) for n in (1, 2, 3, 4, 5)], {}, [], dry=True)
+        return issues, out.getvalue()
+
+    def test_reg_process_flow(self):
+        issues, log = self._run(lambda pairs: {pairs[0][0]})
+        self.assertIn('[건너뜀 — 같은 항목이 rejected 이슈에 있음] bill B1', log)   # ① 번호(기각 기억)
+        self.assertIn('[기존 이슈 연결·내용] bill B2 → [1]', log)                   # ② 내용 ≥0.80
+        self.assertIn('[기존 이슈 연결·관련판정] bill B3 → [2]', log)               # ③ 경계(배제 기준 이슈) → 판정
+        self.assertIn('[건너뜀 — 내용 중복] bill B5', log)                          # ② 기각 내용 ≥0.72
+        new = [i for i in issues if i['state'] == 'proposed']
+        self.assertEqual([i['title'] for i in new], ['주제형 제목 s4'])              # ④ 주제형 제목으로 1건만
+        self.assertEqual(new[0]['proposal_reason']['bill_no'], 'B4')
+
+    def test_reg_process_judge_failure_holds(self):
+        issues, log = self._run(lambda pairs: None)
+        self.assertIn('[보류 — 관련 판정 실패] bill B3', log)
+        self.assertEqual([i['title'] for i in issues if i['state'] == 'proposed'], ['주제형 제목 s4'])

@@ -13,11 +13,17 @@ crawler.py 말미에서 매시 호출된다(try/except 격리 — 실패해도 �
   ⓑ 무보도 규제 — law_diffs urgency='high' 신규 건 + 국회 입법예고(핵심 법령 계열).
      언론이 안 떠들어도 이슈가 되게 한다(운영자 확정 2026-08-26).
 
-중복 억제 3중:
+중복 억제 3중(뉴스 클러스터):
   norm_key 일치 → skip / 임베딩 코사인 ≥0.80 → 신규 제안 대신 기존 active 이슈에
   자동 연결(잠금 포함), proposed·rejected와 ≥0.72면 skip(재제안 금지 — 기각도
   0.72를 쓴다, 0.80은 클러스터 벡터 특성상 새는 것 실측 2026-09-03).
   제안 직전 생성 제목·정의 벡터로 한 번 더: active ≥0.80 → 연결, 그다음 rejected ≥0.80 → skip(#206).
+
+규제 계열(법안·DIFF)은 법령 이름을 동일성 열쇠로 쓰지 않는다(#231, 2026-09-26):
+  ① 번호 — 같은 의안번호·국회 개정안 조문대비↔그 법안·같은 공포번호면 같은 항목(active는 연결, 대기·기각은 skip)
+  ② 요약 내용 벡터 — active ≥0.80 연결(배제 기준 이슈는 판정), proposed·rejected ≥0.72 skip
+  ③ active와 0.40~0.80이면 Sonnet 관련 판정 → 속하면 연결, 아니면 제안
+  ④ 제안 제목은 Haiku 주제형(법령명만의 제목 금지 — 승인 시 과거 뉴스 검색어가 된다)
 
 비용: 제안 확정 시에만 Haiku 1콜(제목·정의·카테고리). 평시 매시 실행 비용 ≈ 0.
 """
@@ -55,6 +61,10 @@ SIM_PROPOSED_DUP = 0.72      # 제안끼리의 교차 문턱 — 짧은 제목�
                              # 같은 주제 제안이 한 실행에 여럿 통과했다(실측: '모두의 AI' 2건)
 SIM_REJECTED_REPROPOSE = 0.80  # 생성 제목·정의 벡터 기준 기각 재제안 문턱(#206). 실측 2026-09-24:
                              # 재제안 3건 0.853~0.861, 활성·대기 이슈 vs 그보다 먼저 기각된 이슈 최대 0.716
+SIM_REG_RELATED = 0.40       # 규제 항목(법안·DIFF) 요약 벡터가 active 이슈와 이 이상·SIM_MERGE 미만이면 Sonnet
+                             # 관련 판정(#231). 실측 2026-09-26: 실제 소속 0.49~0.67(2220816→#119 0.49,
+                             # diff 70→#51 0.60, diff 6→#121 0.67), 무관 0.33~0.45 — 문턱 아래는 판정 없이 제안으로 간다.
+                             # 같은 법·다른 내용끼리는 요약 벡터 0.29~0.62, 기각 이슈 vs 원래 법안 0.86~0.88
 MAX_PROPOSALS_PER_RUN = 5    # 1회 실행당 제안 상한 — 첫 가동·급증 시 텔레그램 폭주 방지.
                              # 넘친 후보는 버리는 게 아니라 다음 시간 실행에서 재평가된다.
 DORMANT_DAYS = 30
@@ -94,6 +104,35 @@ def _iso(dt):
 
 def _norm_key(title: str) -> str:
     return '|'.join(sorted(extract_keywords(title))[:6])
+
+
+# 법령 이름뿐인 제목 — 승인 시 과거 뉴스 검색어가 되면 그 법의 온갖 기사를 끌어온다(#198 실측: 법령명 검색
+# 후보 150건 중 주제 기사 0건, 주제형 제목은 23건 중 9건). 끝이 '…법·령·규칙·고시·규정 (일부|전부)개정·제정(안)'이고
+# 주제 구분자(—·:·,)가 없는 제목, 또는 정식 명칭('…에 관한 법률')을 담은 제목(#231).
+_LAW_ONLY_TITLE_RE = re.compile(
+    r'^[^—–:,]*?(?:법|법률|령|규칙|고시|규정)\s*(?:일부|전부)?\s*(?:개정|제정)(?:법률안|령안|안)?\s*$')
+
+
+def _is_law_only_title(title: str, law_name: str = '') -> bool:
+    t = (title or '').strip()
+    flat = re.sub(r'\s+', '', t)
+    if not flat:
+        return True
+    ln = re.sub(r'\s+', '', law_name or '')
+    if ln and flat in (ln, ln + '개정', ln + '개정안', ln + '일부개정법률안'):
+        return True
+    return bool(_LAW_ONLY_TITLE_RE.search(t)) or '에관한법률' in flat
+
+
+def _fetch_all(build):
+    """PostgREST 1,000행 절단 대비 전량 페이징 — build()가 정렬을 포함한 새 쿼리를 만든다(정렬 없는 range는 행을 흘린다)."""
+    out, ofs = [], 0
+    while True:
+        page = build().range(ofs, ofs + 999).execute().data or []
+        out.extend(page)
+        if len(page) < 1000:
+            return out
+        ofs += 1000
 
 
 def _has_exclusion(iss):
@@ -176,9 +215,11 @@ def _notify(text, buttons=None):
 
 
 def _load_issues(sb):
-    rows = sb.table('issues').select(
-        'id,title,definition,category,state,stage,dormant,norm_key,embedding,stage_log,last_activity_at'
-    ).execute().data or []
+    # 전량 페이징 — 기각 이슈가 하루 수 건씩 쌓여 1,000행을 넘는 날 오래된 기각분이 조용히 빠지면
+    # 재제안 억제가 풀린다. proposal_reason은 규제 항목 동일성(의안번호·diff_id)의 근거(#231).
+    rows = _fetch_all(lambda: sb.table('issues').select(
+        'id,title,definition,category,state,stage,dormant,norm_key,embedding,stage_log,last_activity_at,'
+        'proposal_reason').order('id'))
     for r in rows:
         r['embedding'] = _parse_vec(r.get('embedding'))
     return rows
@@ -221,9 +262,17 @@ def _link_news(sb, issue_id, news_rows, added_by='auto'):
 _proposed_this_run = 0
 
 
+def _link_reg(sb, issue_id, link):
+    """법안·DIFF를 이슈에 연결 — link: {item_type, item_id, item_date, title}. 중복은 upsert가 흡수한다."""
+    sb.table('issue_links').upsert({'issue_id': issue_id, **link, 'added_by': 'auto'},
+                                   on_conflict='issue_id,item_type,item_id').execute()
+
+
 def _propose(sb, issues, title, definition, category, norm_key, reason, dry,
-             stage_hint='발생', news_rows=None):
-    """제안 1건 생성 + 텔레그램 [승인][기각]. 반환: 생성 여부."""
+             stage_hint='발생', news_rows=None, link_item=None):
+    """제안 1건 생성 + 텔레그램 [승인][기각]. 반환: 만든 이슈 id(dry면 'dryN'), 만들지 않았으면 False.
+    link_item: 규제 계열의 근거 법안·DIFF 링크(#231) — 제안과 함께 연결해 두고(기각 시 webhook이 지운다),
+    병합 재검사로 기존 이슈에 붙을 때는 그 이슈에 연결한다."""
     global _proposed_this_run
     if _proposed_this_run >= MAX_PROPOSALS_PER_RUN:
         print(f'[제안 상한 도달 — 이월] {title}')
@@ -242,9 +291,16 @@ def _propose(sb, issues, title, definition, category, norm_key, reason, dry,
     for i in issues:
         if i['state'] == 'active' and i.get('embedding') \
                 and _cosine(vec, i['embedding']) >= SIM_MERGE:
+            if link_item and _has_exclusion(i):
+                # 배제 기준 이슈에는 결정적 연결을 하지 않는다(#157) — 규제 항목은 판정 경로(③)에서만 붙는다
+                print(f'[제안→병합 재검사] "{title}" ≈ active [{i["id"]}] {i["title"][:20]} — 배제 기준 이슈라 '
+                      f'연결·제안 모두 보류(세션 확인)')
+                return False
             print(f'[제안→병합 재검사] "{title}" ≈ active [{i["id"]}] {i["title"][:20]} — 제안 대신 연결')
             if not dry and news_rows:
                 _link_news(sb, i['id'], news_rows, added_by='auto')
+            if not dry and link_item:
+                _link_reg(sb, i['id'], link_item)
             return False
     # 기각 재제안 재검사(#206) — 클러스터 단계의 기각 대조(대표 제목 벡터 0.72·어휘 3개)는
     # 지저분한 대표 제목 탓에 새는데, 생성 제목은 기각 이슈와 거의 같게 나온다(실측: 9/24 10:29 기각분이
@@ -261,8 +317,8 @@ def _propose(sb, issues, title, definition, category, norm_key, reason, dry,
         # dry에서도 가짜 항목을 쌓아 교차 검사가 live와 같게 동작하게 한다
         issues.append({'id': f'dry{_proposed_this_run}', 'title': title, 'state': 'proposed',
                        'stage': stage_hint, 'norm_key': norm_key, 'embedding': vec,
-                       'dormant': False, 'stage_log': []})
-        return True
+                       'dormant': False, 'stage_log': [], 'proposal_reason': reason})
+        return f'dry{_proposed_this_run}'
     row = sb.table('issues').insert({
         'title': title, 'definition': definition, 'category': category,
         'state': 'proposed', 'stage': stage_hint, 'norm_key': norm_key,
@@ -272,11 +328,16 @@ def _propose(sb, issues, title, definition, category, norm_key, reason, dry,
     if not iid:
         return False
     issues.append({'id': iid, 'title': title, 'state': 'proposed', 'stage': stage_hint,
-                   'norm_key': norm_key, 'embedding': vec, 'dormant': False, 'stage_log': []})
+                   'norm_key': norm_key, 'embedding': vec, 'dormant': False, 'stage_log': [],
+                   'proposal_reason': reason})
     if news_rows:
         # 승인 전에도 근거 기사는 연결해 둔다(승인 시 재작업 불필요). 잠금은 승인 후가 원칙이나
         # 60일 삭제 경쟁이 있으므로 여기서 잠근다 — 기각 시 webhook이 잠금을 해제한다.
         _link_news(sb, iid, news_rows, added_by='auto')
+    if link_item:
+        # 근거 법안·DIFF도 제안과 함께 연결 — 종전엔 승인 뒤 다음 실행의 이름표 일치로만 붙어,
+        # 제목을 고친 이슈는 제 법안을 영영 못 찾았다(#231)
+        _link_reg(sb, iid, link_item)
     body = (f'📌 이슈 제안: {title}\n'
             f'{definition or ""}\n'
             f'근거: {reason.get("detail", "")}\n{DASHBOARD_URL}')
@@ -284,7 +345,7 @@ def _propose(sb, issues, title, definition, category, norm_key, reason, dry,
         {'text': '✅ 승인', 'callback_data': f'iss|approve|{iid}'},
         {'text': '❌ 기각', 'callback_data': f'iss|reject|{iid}'},
     ])
-    return True
+    return iid
 
 
 def _match_states(issues, norm_key, vec):
@@ -311,37 +372,59 @@ def _match_states(issues, norm_key, vec):
     return nk_state, best_active, sim_active, sim_proposed, sim_rejected
 
 
-def _haiku_relate_batch(pairs, groups):
-    """경계(0.60~0.80) 후보를 Haiku 1콜로 일괄 판정.
-    pairs: [(cluster_idx, rep_title, candidate_issue)] → 관련 확정된 cluster_idx 집합.
-    실패 시 빈 집합(보수적 — 관련이 아니라고 보고 다음 시간에 재평가)."""
-    if not pairs or not ANTHROPIC_API_KEY:
+def _haiku_relate_batch(pairs, groups, kind='news'):
+    """경계(0.60~0.80) 후보를 Sonnet 1콜로 일괄 판정.
+    pairs: [(idx, 제목·내용, candidate_issue)] → 관련 확정된 idx 집합.
+    kind='news'(뉴스 클러스터): 실패 시 빈 집합(보수적 — 관련이 아니라고 보고 다음 시간에 재평가).
+    kind='reg'(법안·DIFF, #231): 실패·파싱 불가면 None — 판정 대상은 '관련 없음'이면 곧장 제안으로 가므로,
+    실패를 '관련 없음'과 구별해 호출부가 다음 실행으로 미룬다."""
+    fail = set() if kind == 'news' else None
+    if not pairs:
         return set()
+    if not ANTHROPIC_API_KEY:
+        return fail
     try:
         import anthropic
         lines = []
         for k, (ci, title, iss) in enumerate(pairs):
+            if kind == 'reg':
+                lines.append(f'{k + 1}. 법안·개정: "{title}"'
+                             + f'\n   이슈: [{iss["id"]}] {iss["title"]}'
+                             + (f' — {iss.get("definition") or ""}' if iss.get('definition') else ''))
+                continue
             extra = ' / '.join(r['title'][:40] for r in groups[ci][1:3])
             lines.append(f'{k + 1}. 기사: "{title}"'
                          + (f' (같은 묶음: {extra})' if extra else '')
                          + f'\n   이슈: [{iss["id"]}] {iss["title"]}'
                          + (f' — {iss.get("definition") or ""}' if iss.get('definition') else ''))
+        if kind == 'reg':
+            system = ('통신·전파 정책 이슈 관리 보조자다. 각 항목의 법안·개정이 짝지어진 이슈에 '
+                      '**직접 속하는지**(그 이슈가 다루는 제도·사건의 입법·개정·하위법령인지) 판정한다. '
+                      '이슈 정의문에 "해당 없음"으로 적힌 범위면 아니오다. '
+                      '같은 법령·같은 분야라는 이유만으로는 아니오다. 애매하면 아니오다. '
+                      'JSON 하나만 출력한다: {"belong": [속하는 항목 번호]} — 없으면 {"belong": []}. '
+                      '다른 말 금지.')
+        else:
+            system = ('통신·전파 정책 이슈 관리 보조자다. 각 항목의 기사가 짝지어진 이슈에 '
+                      '**직접 속하는지**(같은 사건·같은 절차의 후속 보도인지) 판정한다. '
+                      '같은 회사·같은 업계·같은 분야라는 이유만으로는 아니오다. 애매하면 아니오다. '
+                      # 자유 텍스트에서 숫자를 줍는 파싱은 "1번은 아님" 같은 부정문의 숫자까지 주워
+                      # 오연결을 만든다(실측: 무관 클러스터 31건이 잘못 붙을 뻔) — JSON으로 고정.
+                      'JSON 하나만 출력한다: {"belong": [속하는 항목 번호]} — 없으면 {"belong": []}. '
+                      '다른 말 금지.')
         # 관련 판정은 Sonnet(운영자 승인 2026-08-26) — 결과가 영구 잠금·이슈 오염으로 이어지는
         # 고부담 판정이고 시간당 1콜이라 비용 미미. 대량 1차 선별(크롤러)과 다른 비용 구조.
         # Sonnet 5는 temperature를 거부하고 적응형 추론이 기본 ON — thinking을 명시적으로 끈다
         # (판정은 짧은 결정이라 추론 불필요, 켜두면 지연·비용만 늘고 content 파싱이 꼬인다)
         resp = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY).messages.create(
             model='claude-sonnet-5', max_tokens=400, thinking={'type': 'disabled'},
-            system=('통신·전파 정책 이슈 관리 보조자다. 각 항목의 기사가 짝지어진 이슈에 '
-                    '**직접 속하는지**(같은 사건·같은 절차의 후속 보도인지) 판정한다. '
-                    '같은 회사·같은 업계·같은 분야라는 이유만으로는 아니오다. 애매하면 아니오다. '
-                    # 자유 텍스트에서 숫자를 줍는 파싱은 "1번은 아님" 같은 부정문의 숫자까지 주워
-                    # 오연결을 만든다(실측: 무관 클러스터 31건이 잘못 붙을 뻔) — JSON으로 고정.
-                    'JSON 하나만 출력한다: {"belong": [속하는 항목 번호]} — 없으면 {"belong": []}. '
-                    '다른 말 금지.'),
+            system=system,
             messages=[{'role': 'user', 'content': '\n'.join(lines)}])
         text = ''.join(b.text for b in resp.content if getattr(b, 'text', None))
         m = re.search(r'\{[\s\S]*\}', text)
+        if kind == 'reg' and (not m or getattr(resp, 'stop_reason', None) == 'max_tokens'):
+            print(f'  [관련 판정 응답 불가(보류)] {text[:80]!r}')
+            return None
         nums = (json.loads(m.group(0)).get('belong') or []) if m else []
         keep = set()
         for n in nums:
@@ -351,7 +434,7 @@ def _haiku_relate_batch(pairs, groups):
         return keep
     except Exception as e:
         print(f'  [관련 판정 실패(보류)] {e}')
-        return set()
+        return fail
 
 
 # 주간 모음·브리핑류 기사 — 통신 3사 이름이 늘 나열돼 회사명만으로 클러스터 임계(3)를
@@ -521,75 +604,208 @@ def _suggest_from_news(sb, issues, dry):
                  dry, stage_hint=hint, news_rows=group)
 
 
-def _reg_dedup(issues, norm_key, vec):
-    """규제 계열(법령명 — 고정 명칭이라 고정밀)의 중복 판정. active 우선(개선 2)."""
-    nk_state, best_active, sim_a, sim_p, sim_r = _match_states(issues, norm_key, vec)
-    if nk_state and nk_state[0] == 'active':
-        return ('norm_key', nk_state[1])
-    if sim_a >= SIM_MERGE:
-        return (f'sim={sim_a:.2f}', best_active)
-    if (nk_state and nk_state[0] in ('proposed', 'rejected')) \
-            or sim_p >= SIM_PROPOSED_DUP or sim_r >= SIM_PROPOSED_DUP:
-        return ('dup', None)
-    return (None, None)
+def _reg_keys(item_type, item_id, law_by_id):
+    """규제 항목의 동일성 열쇠(#231) — 법령 '이름'이 아니라 번호로 같은 항목을 가린다.
+    종전 열쇠(법령명 제목의 norm_key)는 같은 법의 다른 내용을 한 항목으로 봐서, #27 기각 뒤 정보통신망법
+    법안 3건이 조용히 빠지고 diff 70(유출 통지·CPO 시행령)이 이름표만 같은 #52(마이데이터)에 붙었다.
+      · 법안: bill:<의안번호>
+      · DIFF: diff:<id> + 국회 개정안 조문 대비(origin=assembly)면 그 법안 bill:<new_doc>,
+              정부 판이면 같은 공포 법령 act:<법령명>|<공포번호>(시행일만 다른 판 — diff 41·42)"""
+    keys = {f'{item_type}:{item_id}'}
+    if item_type == 'diff':
+        d = law_by_id.get(str(item_id)) or {}
+        if d.get('origin') == 'assembly' and d.get('new_doc'):
+            keys.add('bill:' + str(d['new_doc']))
+        elif d.get('law_no'):
+            keys.add('act:' + re.sub(r'\s+', '', d.get('law_name') or '') + '|' + str(d['law_no']))
+    return keys
+
+
+def _issue_reg_keys(issues, reg_links, law_by_id):
+    """이슈별 규제 열쇠 — 제안 사유(기각하면 링크는 webhook이 지우지만 사유는 남는다) + 연결된 법안·DIFF."""
+    keys = {}
+    for i in issues:
+        pr = i.get('proposal_reason') or {}
+        ks = set()
+        if pr.get('bill_no'):
+            ks |= _reg_keys('bill', pr['bill_no'], law_by_id)
+        if pr.get('diff_id') is not None:
+            ks |= _reg_keys('diff', pr['diff_id'], law_by_id)
+        keys[i['id']] = ks
+    for r in reg_links:
+        keys.setdefault(r['issue_id'], set()).update(_reg_keys(r['item_type'], r['item_id'], law_by_id))
+    return keys
+
+
+def _reg_identity(issues, issue_keys, keys):
+    """같은 항목이 이미 들어 있는 이슈 — active 우선(개선 2), 그다음 proposed·rejected. 없으면 None."""
+    found = {}
+    for i in issues:
+        if issue_keys.get(i['id'], set()) & keys:
+            found.setdefault(i['state'], i)
+    for st in ('active', 'proposed', 'rejected'):
+        if st in found:
+            return st, found[st]
+    return None
+
+
+def _reg_title(law_name: str, summary: str):
+    """규제 항목 → 주제형 이슈 제목(#231). 제목은 승인 시 과거 뉴스 검색어가 된다 — 법령명 제목은 그 법의
+    온갖 기사를 끌어와 #198이 무관 기사 7건·출처 틀린 요약으로 오염됐다. '무엇이 바뀌는지'를 제목으로 쓴다.
+    실패·잘림·법령명만 나온 제목은 None — 제안을 미루고 다음 실행에서 다시 짓는다(법령명 폴백 금지)."""
+    if not ANTHROPIC_API_KEY or not (summary or '').strip():
+        return None
+    try:
+        import anthropic
+        resp = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY).messages.create(
+            model='claude-haiku-4-5-20251001', max_tokens=200,
+            system=('통신·전파 정책 이슈 관리 보조자다. 법령 개정안·입법예고 한 건의 요지를 보고 이슈 제목을 짓는다. '
+                    'JSON 하나만 출력한다: {"title": "무엇이 바뀌는지 드러나는 주제형 제목(25자 이내)"}. '
+                    '법령 이름·"개정"·"일부개정법률안"만으로 된 제목은 금지 — 바뀌는 의무·금지·권한·대상을 제목에 쓴다. '
+                    '요지에 없는 숫자·날짜·대상은 쓰지 않는다. JSON 외 다른 말 금지.'),
+            messages=[{'role': 'user', 'content': f'법령: {law_name}\n요지: {(summary or "")[:800]}'}])
+        if getattr(resp, 'stop_reason', None) == 'max_tokens':
+            print('  [제목 생성 잘림(보류)]')
+            return None
+        text = ''.join(b.text for b in resp.content if getattr(b, 'text', None))
+        m = re.search(r'\{[\s\S]*\}', text)
+        title = ((json.loads(m.group(0)).get('title') or '') if m else '').strip()
+        if not title or not re.search(r'[가-힣]', title) or _is_law_only_title(title, law_name):
+            print(f'  [제목 부적합(보류)] {title!r}')
+            return None
+        return title[:60]
+    except Exception as e:
+        print(f'  [제목 생성 실패(보류)] {e}')
+        return None
+
+
+def _reg_process(sb, issues, items, law_by_id, reg_links, dry):
+    """규제 후보 판정(#231): ① 번호 동일성 → ② 요약 내용 벡터 → ③ 경계 Sonnet 관련 판정 → ④ 주제형 제목 제안.
+    items: [{label, name, summary, keys, link, reason}] — 이미 연결된 항목은 호출부가 뺀다."""
+    if not items:
+        return
+    issue_keys = _issue_reg_keys(issues, reg_links, law_by_id)
+    todo = []
+    for it in items:
+        hit = _reg_identity(issues, issue_keys, it['keys'])
+        if hit:
+            st, iss = hit
+            if st == 'active':
+                if not dry:
+                    _link_reg(sb, iss['id'], it['link'])
+                print(f'[기존 이슈 연결·같은 항목] {it["label"]} → [{iss["id"]}] {iss["title"][:24]}')
+            else:
+                print(f'[건너뜀 — 같은 항목이 {st} 이슈에 있음] {it["label"]} ≈ [{iss["id"]}] {iss["title"][:24]}')
+            continue
+        if not it['summary']:
+            print(f'[보류 — 요약 없음] {it["label"]} {it["name"][:30]}')
+            continue
+        todo.append(it)
+    if not todo:
+        return
+    # 법령 이름 없이 요약 내용만 — 이름을 넣으면 같은 법의 다른 내용끼리 유사도가 올라간다(실측 +0.03~0.08)
+    vecs = _embed([it['summary'][:300] for it in todo])
+    judge = []
+    for k, (it, vec) in enumerate(zip(todo, vecs)):
+        _, best_a, sim_a, sim_p, sim_r = _match_states(issues, None, vec)
+        it['sim'] = (sim_a, sim_p, sim_r)
+        if best_a is not None and sim_a >= SIM_MERGE and not _has_exclusion(best_a):
+            if not dry:
+                _link_reg(sb, best_a['id'], it['link'])
+            it['done'] = True
+            print(f'[기존 이슈 연결·내용] {it["label"]} → [{best_a["id"]}] {best_a["title"][:24]} (sim {sim_a:.2f})')
+        elif best_a is not None and sim_a >= SIM_REG_RELATED:
+            # 0.80 이상인데 배제 기준 이슈인 경우도 여기로 — 정의문을 읽는 판정만 붙일 수 있다(#157)
+            judge.append((k, f'{it["name"]} — {it["summary"][:300]}', best_a))
+    if judge:
+        related = _haiku_relate_batch(judge, None, kind='reg')
+        for k, _, iss in judge:
+            it = todo[k]
+            if related is None:
+                it['done'] = True   # 판정 실패는 '관련 없음'이 아니다 — 제안하지 않고 다음 실행에서 다시 본다
+                print(f'[보류 — 관련 판정 실패] {it["label"]} (후보 [{iss["id"]}])')
+            elif k in related:
+                if not dry:
+                    _link_reg(sb, iss['id'], it['link'])
+                it['done'] = True
+                print(f'[기존 이슈 연결·관련판정] {it["label"]} → [{iss["id"]}] {iss["title"][:24]} '
+                      f'(sim {it["sim"][0]:.2f})')
+            else:
+                print(f'[관련 판정 — 소속 아님] {it["label"]} ≠ [{iss["id"]}] (sim {it["sim"][0]:.2f})')
+    for it in todo:
+        if it.get('done'):
+            continue
+        sim_a, sim_p, sim_r = it['sim']
+        if sim_p >= SIM_PROPOSED_DUP or sim_r >= SIM_PROPOSED_DUP:
+            print(f'[건너뜀 — 내용 중복] {it["label"]} (대기 {sim_p:.2f} · 기각 {sim_r:.2f})')
+            continue
+        hit = _reg_identity(issues, issue_keys, it['keys'])   # 같은 실행에서 방금 제안된 짝(국회 DIFF↔법안)
+        if hit:
+            print(f'[건너뜀 — 같은 항목이 {hit[0]} 이슈에 있음] {it["label"]} ≈ [{hit[1]["id"]}]')
+            continue
+        if _proposed_this_run >= MAX_PROPOSALS_PER_RUN:
+            print(f'[제안 상한 도달 — 이월] {it["label"]}')   # 제목 생성(AI) 전에 끊는다 — 버릴 결과를 만들지 않는다
+            continue
+        title = _reg_title(it['name'], it['summary'])
+        if not title:
+            print(f'[제안 보류 — 제목 생성 불가] {it["label"]}')
+            continue
+        iid = _propose(sb, issues, title, _clip_sentence(it['summary']) or None, '규제·CR', _norm_key(title),
+                       it['reason'], dry, stage_hint='현안', link_item=it['link'])
+        if iid:
+            issue_keys[iid] = set(it['keys'])
+
+
+def _reg_items(diffs, bills, law_by_id, linked):
+    """판정 후보 목록 — 이미 어느 이슈에든 연결된 항목과 핵심 법령 밖 법안은 뺀다."""
+    items = []
+    for d in diffs:
+        if ('diff', str(d['id'])) in linked:
+            continue
+        kind = d.get('diff_kind')
+        enf = _fmt_enf(d.get('enf_date')) or '?'
+        # proposed(입법예고안)의 enf_date는 의견 마감일이다 — '시행'으로 적으면 오독(#198 알림 '시행 20261002')
+        if d.get('origin') == 'assembly':
+            detail = f'국회 개정안 조문 대비 · {d["law_name"]}(의안 {d.get("new_doc")}) · 의견 마감 {enf}'
+        elif kind == 'proposed':
+            detail = f'정부 입법예고 · {d["law_name"]} · 의견 마감 {enf} — 보도 유무와 무관'
+        else:
+            detail = f'중요 개정 · {d["law_name"]}({kind}) · 시행 {enf} — 보도 유무와 무관'
+        items.append({
+            'label': f'diff {d["id"]}', 'name': d['law_name'], 'summary': (d.get('summary') or '').strip(),
+            'keys': _reg_keys('diff', d['id'], law_by_id),
+            'link': {'item_type': 'diff', 'item_id': str(d['id']), 'item_date': _fmt_enf(d.get('enf_date')),
+                     'title': f'{d["law_name"]} 개정 ({kind})'},
+            'reason': {'kind': 'law_diff_high', 'diff_id': d['id'], 'law_name': d['law_name'], 'detail': detail},
+        })
+    for b in bills:
+        if ('bill', b['bill_no']) in linked or not _CORE_LAW.search(b.get('bill_name') or ''):
+            continue
+        items.append({
+            'label': f'bill {b["bill_no"]}', 'name': b['bill_name'], 'summary': (b.get('summary') or '').strip(),
+            'keys': _reg_keys('bill', b['bill_no'], law_by_id),
+            'link': {'item_type': 'bill', 'item_id': b['bill_no'],
+                     'item_date': (b.get('notice_end_dt') or '')[:10] or None, 'title': b['bill_name']},
+            'reason': {'kind': 'assembly_notice', 'bill_no': b['bill_no'],
+                       'detail': f'국회 입법예고 · {b["bill_name"]}(의안 {b["bill_no"]}) · 의견 마감 {b.get("notice_end_dt")}'},
+        })
+    return items
 
 
 def _suggest_from_regs(sb, issues, dry):
-    """ⓑ 무보도 규제 — 보도가 없어도 중요 개정·입법예고는 이슈가 된다."""
+    """ⓑ 무보도 규제 — 보도가 없어도 중요 개정·입법예고는 이슈가 된다. 판정은 _reg_process(#231)."""
     since = _iso(_now() - timedelta(days=7))
-    linked = {r['item_id'] for r in (sb.table('issue_links').select('item_id')
-              .eq('item_type', 'diff').execute().data or [])}
-    diffs = sb.table('law_diffs').select('id,law_name,summary,enf_date,diff_kind') \
-        .eq('urgency', 'high').gte('created_at', since).execute().data or []
-    for d in diffs:
-        if str(d['id']) in linked:
-            continue
-        title = f'{d["law_name"]} 개정'
-        nk = _norm_key(title)
-        vec = _embed([title + ' ' + (d.get('summary') or '')[:200]])[0]
-        skip, target = _reg_dedup(issues, nk, vec)
-        if target is not None:
-            if not dry:
-                sb.table('issue_links').upsert({
-                    'issue_id': target['id'], 'item_type': 'diff', 'item_id': str(d['id']),
-                    'item_date': _fmt_enf(d.get('enf_date')),
-                    'title': f'{d["law_name"]} 개정 ({d.get("diff_kind")})', 'added_by': 'auto',
-                }, on_conflict='issue_id,item_type,item_id').execute()
-            print(f'[기존 이슈 연결·diff] {title} → [{target["id"]}]')
-            continue
-        if skip:
-            continue
-        _propose(sb, issues, title[:60], _clip_sentence(d.get('summary')) or None, '규제·CR', nk,
-                 {'kind': 'law_diff_high', 'diff_id': d['id'],
-                  'detail': f'중요 개정(urgency high) · 시행 {d.get("enf_date") or "?"} — 보도 유무와 무관'},
-                 dry, stage_hint='현안')
-
+    law_rows = _fetch_all(lambda: sb.table('law_diffs').select('id,law_name,law_no,origin,new_doc').order('id'))
+    law_by_id = {str(r['id']): r for r in law_rows}
+    reg_links = _fetch_all(lambda: sb.table('issue_links').select('id,issue_id,item_type,item_id')
+                           .in_('item_type', ['bill', 'diff']).order('id'))
+    linked = {(r['item_type'], str(r['item_id'])) for r in reg_links}
+    diffs = sb.table('law_diffs').select('id,law_name,summary,enf_date,diff_kind,origin,new_doc') \
+        .eq('urgency', 'high').gte('created_at', since).order('id').execute().data or []
     bills = sb.table('assembly_bills').select('bill_no,bill_name,notice_end_dt,summary') \
         .not_.is_('notice_end_dt', 'null').gte('notice_end_dt', _now().strftime('%Y-%m-%d')) \
-        .execute().data or []
-    linked_bills = {r['item_id'] for r in (sb.table('issue_links').select('item_id')
-                    .eq('item_type', 'bill').execute().data or [])}
-    for b in bills:
-        if b['bill_no'] in linked_bills or not _CORE_LAW.search(b.get('bill_name') or ''):
-            continue
-        nk = _norm_key(b['bill_name'])
-        vec = _embed([b['bill_name']])[0]
-        skip, target = _reg_dedup(issues, nk, vec)
-        if target is not None:
-            if not dry:
-                sb.table('issue_links').upsert({
-                    'issue_id': target['id'], 'item_type': 'bill', 'item_id': b['bill_no'],
-                    'item_date': (b.get('notice_end_dt') or '')[:10] or None,
-                    'title': b['bill_name'], 'added_by': 'auto',
-                }, on_conflict='issue_id,item_type,item_id').execute()
-            print(f'[기존 이슈 연결·bill] {b["bill_name"][:30]} → [{target["id"]}]')
-            continue
-        if skip:
-            continue
-        _propose(sb, issues, b['bill_name'][:60], _clip_sentence(b.get('summary')) or None, '규제·CR', nk,
-                 {'kind': 'assembly_notice', 'bill_no': b['bill_no'],
-                  'detail': f'국회 입법예고 · 의견 마감 {b.get("notice_end_dt")}'},
-                 dry, stage_hint='현안')
+        .order('bill_no').execute().data or []
+    _reg_process(sb, issues, _reg_items(diffs, bills, law_by_id, linked), law_by_id, reg_links, dry)
 
 
 def _fmt_enf(enf):
