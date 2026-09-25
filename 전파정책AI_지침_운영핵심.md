@@ -149,7 +149,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\      (회사 노트북 —
 
 ### Storage
 
-- **uploads (private)**: 추가지식·보고서 원본 보관. anon insert/select/delete(화면 업로드·삭제가 직접 쓰므로 유지 — 로그인 미도입 방침). 다운로드는 createSignedUrl(60초). public화 금지.
+- **uploads (private)**: 추가지식·ITU-R 업로드 원본 보관. 정책(#226, 2026-09-26): 올리기 `uploads_ins_approved`(authenticated + `is_approved_user()`), 지우기 `uploads_del_admin`(`is_admin()`), 읽기(목록·서명 URL) `uploads_sel_all`(anon+authenticated — 공개 목록의 원본 다운로드는 열람). 화면은 `upsert:false`(UPDATE 정책 없이 INSERT만). 종전 anon 전용 3정책은 로그인 도입(8/20) 뒤 **로그인한 운영자의 올리기·내려받기·지우기를 조용히 실패**시키고 있었다. 다운로드는 createSignedUrl(60초). public화 금지.
 
 ### RLS (2026-08-02 전면 재정비 — 개선⑩ 1단계, 배경역사 #57)
 
@@ -164,7 +164,9 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\      (회사 노트북 —
 | | daily_briefings | select. **update는 승인 프로필만**(#133, 긴급도 수정 시 본문 동기화) |
 | | deleted_news | select. **insert는 승인 프로필만**(#133, **append-only**) |
 | | **news_feed** | select 공개. **anon update는 막혀 있다** — UPDATE 정책이 `news_feed_upd_auth`(authenticated, `is_approved_user()`) 하나뿐이고 `news_feed_upd_anon`은 없다(2026-09-24 실DB 확인; 컬럼 권한은 `is_read`만 남김). 승인 프로필의 update는 **컬럼 권한으로 8칸만**(`is_read`·`content`·`summary`·`impact_analysis`·`impact_analyzed_at`·`locked`·`importance`·`urgency`, #191) — 제목·url·출처·날짜는 service_role만. 요약·영향분석 저장이 이 통로이며, 화면은 이 두 칸을 반드시 `escHtml` 후 그린다(`renderSummaryHtml`). 다만 **중요도(`importance`·`urgency`)·잠금(`locked`) 변경과 delete는 관리자만**(2026-09-13 #159: `news_feed_edit_guard` 트리거가 세 컬럼 변경 시 `is_admin()` 요구, `news_feed_del`·`deleted_news_ins`·`imp_fb_ins/upd` 정책도 `is_admin()`; 크롤러 등 `service_role`·`postgres`는 트리거 통과 — 막으면 매시 등급 기록이 전부 실패). 종전엔 anon이 전 컬럼 update·delete 가능 → 인터넷 누구나 중요도 변경·기사 삭제 가능했다(#133) |
-| | **chat_logs** | anon은 **insert만**. 읽기는 **로그인 계정의 RLS 스코프**(#104) — 본인 / 팀장=자기 팀 / admin=전체(텔레그램 행은 user_id가 없어 admin만). 건수는 `chat_logs_month_count()` |
+| | **chat_logs** | **anon 쓰기 없음**(정책·표 권한 모두, #226). insert는 `chat_logs_ins_auth` = authenticated + `user_id = auth.uid() and is_approved_user()`(승인·활성 본인 명의만, #226 — 종전 이 줄의 "anon은 insert만"은 옛 서술). 텔레그램 행은 Edge(service_role). 읽기는 **로그인 계정의 RLS 스코프**(#104) — 본인 / 팀장=자기 팀 / admin=전체(텔레그램 행은 user_id가 없어 admin만). 건수는 `chat_logs_month_count()` |
+| | **document_chunks** (화면 업로드) | select 공개. insert는 `doc_chunks_ins_approved` = authenticated + `is_approved_user()` + `is_approved=false`(승인 대기로만, #226 — 종전 anon 포함). update·delete 정책 없음 → 승인·삭제·임베딩 저장은 `admin_*` RPC(SECURITY DEFINER). 크롤러·적재 스크립트는 service_role |
+| | **kb_quality_ack** | select 공개. insert는 `kb_quality_ack_ins_admin` = `is_admin()`(운영 상태 KB 품질 '확인함', #226 — 종전 anon·true) |
 | 로그인 필요 | **profiles·teams·advisory_usage·answer_feedback** | anon 정책 없음. authenticated에 역할별 SELECT(본인/팀/admin), profiles·teams UPDATE는 admin만. AI 호출은 `claude-proxy`가 JWT를 검증한다 (#104) |
 | | importance_feedback | select 공개. **insert·update는 승인 프로필만**(#133) |
 | | profiles.can_edit_issues (bool, 기본 false) | 이슈맵 편집 권한. 가입 승인(approved)과 별개로 **관리자가 따로 준다**. `is_issue_editor()` = role='admin' or can_edit_issues, `issues`·`issue_links` 쓰기 정책 5개가 이것을 건다. 계정 관리 화면의 '이슈맵 편집' 체크박스 (#169, 2026-09-14) |
@@ -1161,6 +1163,7 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **AI 자문 "Failed to fetch"**: 무거운 질문 2분+ idle 끊김 → stream:true로 해결됨. 사내망 프록시·확장프로그램·F12 네트워크 확인.
 
 ## 하지 말아야 할 것 (규칙 + 한 줄 이유 / 상세는 배경역사 문서)
+- **anon(공개 키)에 쓰기 정책·쓰기 권한을 새로 주지 말 것 / Storage 정책을 `to anon`만으로 만들지 말 것 / 화면의 insert·upload 결과(`error`)를 무시하지 말 것 (#226, 2026-09-26, §4-4-8)** — 공개 키는 페이지에 있어 누구나 쓴다: `document_chunks`(승인 대기줄)·`kb_quality_ack`(품질 목록 숨기기)·uploads(아무 파일 올리기·지우기)가 비로그인에게 열려 있었다. 반대로 anon 전용 Storage 정책은 로그인한 사람(authenticated)을 막아 운영자의 보관함이 8/20부터 조용히 실패했다(#108과 같은 함정). 쓰기는 authenticated + `is_approved_user()`/`is_admin()`, 표 권한은 anon에서 INSERT·UPDATE·DELETE·TRUNCATE를 빼고 SELECT만(#214 명시 원칙). 정책만 바꾸면 결과를 안 보는 화면이 '성공'처럼 보이니 버튼 게이트(`data-login-only`·`aiReady()`)와 오류 검사를 같은 커밋에. 검증은 공개 키 PostgREST 쓰기 → 42501·Storage 403, 로그인 관리자 콘솔 시험 → ok. (배경역사 #226)
 - **GitHub 워크플로 실행 목록을 `?status=`(또는 event·created·branch·actor)로 걸러 '최신 성공'을 판정하지 말 것 (#225, 2026-09-26)** — 걸러 묻는 목록은 GitHub 검색 색인을 거쳐 늦게 갱신될 수 있다. 09-25 21:35 `health_watchdog.py`가 morning_briefing.yml의 최신 성공으로 09-01 실행을 받아 "591.5시간 전" 오경보(실제는 09-25 06:05 성공). 거르지 않은 `?per_page=100`에서 `conclusion=="success"` 첫 행을 찾고, 없을 때만 걸러 묻는다. `gh_api_get`으로 사람이 볼 때도 같은 원칙. (배경역사 #225)
 - **대시보드 `sb.auth.onAuthStateChange` 콜백에서 이벤트를 가리지 않고 `refreshAuthState()`를 부르지 말 것 / `SIGNED_IN`을 '방금 로그인함'으로 가정하지 말 것 (#224, 2026-09-26, §4-3-12)** — supabase-js 2.117은 구독 즉시 `INITIAL_SESSION`, 페이지 초기화 직후와 **탭이 다시 보일 때마다** `SIGNED_IN`, 약 1시간마다 `TOKEN_REFRESHED`를 쏜다. 관리자는 갱신 1회마다 설정 화면 자료(계정 목록·팀·법령 감시)까지 다시 읽어 로드당 조회가 2배, 탭을 오갈 때마다 또 돌았다. 지금 규칙: `INITIAL_SESSION` 무시, 나머지는 **돌고 있는 갱신이 끝난 뒤** 같은 사람이면 `TOKEN_REFRESHED` 무시·`SIGNED_IN`은 승인·활성(`aiReady()`)일 때만 무시(승인 대기자는 계속 재확인). 콜백 안에서 sb 메서드를 바로 부르지 않는다(setTimeout — 공식 교착 회피). 토큰은 호출마다 `getSession()`으로 새로 읽으니 캐시하지 말 것. (배경역사 #224)
 - **일부 화면에서만 쓰는 외부 라이브러리를 index.html에 동기 `<script>`로 넣지 말 것 / CDN 주소에 `@latest`를 쓰지 말 것 (#223, 2026-09-26, §4-3-11)** — 동기 태그는 app.js 실행을 그 다운로드·실행 뒤로 밀고 방문자 모두에게 받게 한다(업로드·Word 저장 3종이 압축 전 1.06MB였다). 업로드 계열은 app.js `UPLOAD_LIBS`에 적고 쓰는 함수 첫 줄에서 `await loadUploadLib('<이름>')`(관계도 vis-network는 `loadVisNetwork()`). `@latest`는 별칭이 CDN 사정으로 바뀌어 아이콘·API가 예고 없이 달라질 수 있고 캐시도 7일뿐이다(아이콘 CSS는 `@2.47.0` 고정 — 3.x는 경로가 달라 `@latest`가 2.47.0에 멈춰 있었다). 판 올림은 화면 눈검사와 함께 따로. (배경역사 #223)

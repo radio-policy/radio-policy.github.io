@@ -6870,6 +6870,7 @@ async function loadKbQualityCard() {
 async function ackKbDoc(idx) {
   var d = KB_LOW_ROWS[idx];
   if (!d || !sb) return;
+  if (!isAdminUser()) { alert('확인함 처리는 관리자만 할 수 있습니다.'); return; }   // DB 규칙 kb_quality_ack_ins_admin(#226)
   if (!confirm('“' + d.doc_name + '”\n\n문제없음으로 확인 처리하여 KB 품질 목록에서 제외할까요?')) return;
   try {
     var res = await sb.from('kb_quality_ack')
@@ -7714,6 +7715,13 @@ async function onDeleteCustom(id, btn) {
 let _pdfUploadCtx = 'law'; // 'law' | 'press'
 
 function openPdfUpload(ctx) {
+  // 업로드는 승인 계정만(#226, 2026-09-26) — DB 규칙(doc_chunks_ins_approved·uploads_ins_approved)과 같은 조건.
+  // 여기서 막지 않으면 비로그인 업로드가 끝까지 진행된 뒤 저장 단계에서야 실패한다.
+  if (!aiReady()) {
+    alert(currentUser ? '파일 업로드는 승인된 계정만 할 수 있습니다. ' + aiGateMsg()
+                      : '파일 업로드는 로그인 후 이용할 수 있습니다. 우측 상단에서 로그인해 주세요.');
+    return;
+  }
   _pdfUploadCtx = ctx;
   var modal = document.getElementById('pdf-upload-modal');
   var title = document.getElementById('pdf-modal-title');
@@ -7951,8 +7959,9 @@ async function doPdfUpload() {
             .replace(/[^\x00-\x7F]/g, '')      // 비ASCII 제거 (Storage 키 안전)
             .replace(/[^\w.\-]/g, '_') || 'file';
           thisFilePath = 'custom/' + Date.now() + '_' + keyBase + '.' + ext;
+          // upsert:false — 경로에 시각이 붙어 겹치지 않고, 덮어쓰기(UPDATE) 규칙 없이 INSERT 규칙만으로 된다(#226)
           var up = await sb.storage.from('uploads').upload(thisFilePath, file, {
-            upsert: true,
+            upsert: false,
             contentType: file.type || undefined
           });
           if (up.error) { console.warn('원본 파일 보관 실패:', up.error.message); thisFilePath = null; }
@@ -8012,7 +8021,9 @@ async function doPdfUpload() {
       // 5. 청크 배치 삽입 (50개씩)
       var BATCH = 50;
       for (var i = 0; i < allRows.length; i += BATCH) {
-        await sb.from('document_chunks').insert(allRows.slice(i, i + BATCH));
+        // 저장 실패를 확인한다(#226) — 종전에는 결과를 안 봐서 RLS 거부도 '업로드 완료'로 보였다.
+        var insRes = await sb.from('document_chunks').insert(allRows.slice(i, i + BATCH));
+        if (insRes.error) throw new Error(file.name + ': 청크 저장 실패 — ' + insRes.error.message);
         _setPdfProgress(
           Math.round((fileProgress + (i + BATCH) / allRows.length / totalFiles) * 80 + 10),
           '(' + (fi+1) + '/' + totalFiles + ') 업로드 중... (' + Math.min(i + BATCH, allRows.length) + '/' + allRows.length + '개 청크)'
