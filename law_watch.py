@@ -143,13 +143,19 @@ def fetch_all_doc_rows(sb):
     return kb_store.list_docs(sb, status='current')
 
 
+# 법제처 연결 재사용 (#개선 §4-3-7). 문서마다 새 TLS 연결을 맺던 것을 한 연결로 —
+# Actions(미국)→law.go.kr은 왕복이 길어 연결 수립만 요청당 0.5초 안팎이 든다.
+# law_sync·add_laws_batch도 drf_law_search를 import하므로 같이 이득을 본다(동작 동일).
+_HTTP = requests.Session()
+
+
 def drf_law_search(query: str, target: str, ef: bool = False):
     """법제처 검색 → 결과 리스트(dict). ef=True면 시행일법령(eflaw)."""
     params = {'OC': OC_KEY, 'target': 'eflaw' if ef else target,
               'type': 'JSON', 'query': query, 'display': 20}
     for attempt in range(3):
         try:
-            r = requests.get(DRF_SEARCH, params=params, timeout=30)
+            r = _HTTP.get(DRF_SEARCH, params=params, timeout=30)
             r.raise_for_status()
             d = r.json()
             key = 'LawSearch' if 'LawSearch' in d else list(d.keys())[0]
@@ -244,7 +250,7 @@ def _mst_key(mst):
     return (1, int(s)) if s.isdigit() else (0, 0)
 
 
-def find_pending_rows(meta, target: str, current_hit, today: str):
+def find_pending_rows(meta, target: str, current_hit, today: str, admrul_rows=None):
     """해당 법령의 시행예정 통합본 '전부'를 시행일 오름차순으로 반환.
 
     법령(law)  : 일반 검색(target=law)은 현행본만 주므로 eflaw(시행일법령)로 조회한다.
@@ -252,6 +258,10 @@ def find_pending_rows(meta, target: str, current_hit, today: str):
                  (정보통신망법 MST 285199 → 20261001 / 20270401) 식별자는 (MST, 시행일).
     행정규칙   : admrul 검색이 현행본과 시행예정본을 함께 돌려주므로 추가 조회 없이
                  결과에서 시행일 > 오늘 인 행을 고른다.
+                 admrul_rows = 호출자가 현행본 판정에 쓴 바로 그 검색 결과(같은 검색어·
+                 같은 target). 주면 같은 검색을 다시 하지 않는다(§4-3-7 — 종전엔 행정규칙
+                 178건마다 동일 검색 2회). 호출자는 별칭으로 맞췄으면 meta를 이미 별칭명
+                 /full_name=None으로 바꿔 두므로 아래 match_rows 기준도 그대로 맞는다.
     """
     # 대조 기준 이름을 검색어와 함께 추적한다 — 별칭으로 재검색해 놓고 원래 이름과
     # 대조하면, 기관명이 이름 중간에 박힌 규칙('…방송통신위원회 규칙'류)은 결과가
@@ -259,6 +269,8 @@ def find_pending_rows(meta, target: str, current_hit, today: str):
     match_name, match_full = meta['law_name'], meta.get('full_name')
     if target == 'law':
         rows = drf_law_search(meta['law_name'], 'law', ef=True) or []
+    elif admrul_rows is not None:
+        rows = admrul_rows
     else:
         rows = drf_law_search(meta['law_name'], 'admrul') or []
         if not match_rows(rows, match_name, match_full):
@@ -284,31 +296,51 @@ def find_pending_rows(meta, target: str, current_hit, today: str):
     return [best[k] for k in sorted(best)]
 
 
-def save_pending(sb, meta, target: str, watch_doc_name: str, law_id: str, futures, today: str):
+def save_pending(sb, meta, target: str, watch_doc_name: str, law_id: str, futures, today: str,
+                 detected=None):
     """law_pending upsert + 이번에 안 잡힌 미적재 예정본 정리."""
     now = datetime.now(timezone.utc).isoformat()
     keep = set()
+    batch = []
     for f in futures:
         mst, law_no, enf = f['fields']
         keep.add((mst, enf))
-        sb.table('law_pending').upsert({
+        batch.append({
             'law_name': meta['law_name'], 'law_id': law_id or None,
             'law_type_token': meta['law_type_token'], 'api_target': target,
             'watch_doc_name': watch_doc_name,
             'mst': mst, 'law_no': law_no, 'enf_date': enf,
             'updated_at': now,
-        }, on_conflict='law_name,mst,enf_date', ignore_duplicates=False).execute()
-    retire_pending(sb, meta['law_name'], keep, today)
+        })
+    if batch:   # 행마다 같은 키 9개 — 한 번에 upsert(누락 칸 NULL 덮어쓰기 위험 없음)
+        sb.table('law_pending').upsert(batch, on_conflict='law_name,mst,enf_date',
+                                       ignore_duplicates=False).execute()
+    retire_pending(sb, meta['law_name'], keep, today, detected=detected)
 
 
-def retire_pending(sb, law_name: str, keep, today: str):
+def load_detected_pending(sb):
+    """law_pending의 detected 행 전부를 law_name별로 한 번에(§4-3-7 — 종전엔 문서마다 1회 조회).
+    detected 행은 수십 건 수준(2026-09-25 실측 14건)이라 한 번 읽어 두면 된다."""
+    out = {}
+    rows = (sb.table('law_pending').select('id, law_name, mst, enf_date, sync_state')
+            .eq('sync_state', 'detected').execute().data) or []
+    for r in rows:
+        out.setdefault(r['law_name'], []).append(r)
+    return out
+
+
+def retire_pending(sb, law_name: str, keep, today: str, detected=None):
     """법제처 목록에서 사라진 예정본을 obsolete 처리.
 
     이미 적재(loaded)·승격(promoted)된 행은 건드리지 않는다 — 조문이 DB에 실재하므로
     상태를 지우면 추적을 잃는다. 시행일이 도래한 detected 행도 남긴다(승격 대상).
+    detected = load_detected_pending() 결과(주면 DB 조회 생략). 없으면 종전처럼 조회.
     """
-    rows = (sb.table('law_pending').select('id, mst, enf_date, sync_state')
-            .eq('law_name', law_name).eq('sync_state', 'detected').execute().data) or []
+    if detected is not None:
+        rows = detected.get(law_name, [])
+    else:
+        rows = (sb.table('law_pending').select('id, mst, enf_date, sync_state')
+                .eq('law_name', law_name).eq('sync_state', 'detected').execute().data) or []
     now = datetime.now(timezone.utc).isoformat()
     for r in rows:
         if (r['mst'], r['enf_date']) in keep or r['enf_date'] <= today:
@@ -317,6 +349,27 @@ def retire_pending(sb, law_name: str, keep, today: str):
             'sync_state': 'obsolete', 'updated_at': now,
             'note': f'법제처 시행예정 목록에서 사라짐({today})',
         }).eq('id', r['id']).execute()
+
+
+WATCH_FLUSH_EVERY = 25   # law_watch 기록을 이만큼 모아 한 번에 — 잡이 중간에 잘려도 잃는 건 최대 25건
+
+
+def flush_watch(sb, buf):
+    """모아 둔 law_watch 행을 키 구성별로 묶어 upsert.
+
+    ⚠️ 키 구성이 다른 행을 한 배열로 보내면 postgrest-py가 columns=합집합을 붙이고
+    기본값 default_to_null=True라 **빠진 칸을 NULL로 덮어쓴다** — 예정본이 없는 문서의
+    pending_*·미매칭 문서의 law_id/latest_* 가 지워진다(종전 행 단위 upsert는 안 건드림).
+    그래서 frozenset(keys)가 같은 행끼리만 묶는다(동작을 종전과 똑같이 유지).
+    """
+    if not buf:
+        return
+    groups = {}
+    for rec in buf:
+        groups.setdefault(frozenset(rec.keys()), []).append(rec)
+    for recs in groups.values():
+        sb.table('law_watch').upsert(recs, on_conflict='doc_name').execute()
+    buf.clear()
 
 
 def notify(lines):
@@ -364,103 +417,117 @@ def main():
     outdated, unmatched, upcoming, auto_excluded, ok = [], [], [], [], 0
     api_failed = []          # 법제처 API 무응답 — 판정 불가라 행을 건드리지 않고 넘긴 문서
     today = datetime.now(KST).strftime('%Y%m%d')
+    detected = None if a.dry_run else load_detected_pending(sb)   # 문서마다 조회하던 것을 1회로
+    watch_buf = []                                                  # law_watch 기록 모음(WATCH_FLUSH_EVERY건마다 반영)
 
-    for i, (doc_name, cat) in enumerate(targets, 1):
-        meta = parse_doc_name(doc_name)
-        if not meta:
-            # 법종 괄호가 아예 없음 = 법령 문서가 아님(보도자료·사내자료 등)
-            # → 자동 제외 처리해 다음 실행부터 조용히 건너뜀 (알림 노이즈 방지)
-            auto_excluded.append(doc_name)
-            if not a.dry_run:
-                sb.table('law_watch').upsert({
-                    'doc_name': doc_name, 'watch_status': 'excluded',
-                    'sync_status': 'unknown', 'note': '법령 문서명 관례 아님 — 자동 제외',
-                    'last_checked_at': datetime.now(timezone.utc).isoformat(),
-                    'updated_at': datetime.now(timezone.utc).isoformat(),
-                }, on_conflict='doc_name').execute()
-            continue
-
-        target = api_target_of(meta['law_type_token'])
-        rows = drf_law_search(meta['law_name'], target)
-        # drf_law_search는 '검색은 됐는데 결과 0건'이면 [], 'API가 응답을 안 함'이면 None을
-        # 돌려준다. 이 둘을 같이 취급하면 멀쩡한 문서가 '법제처에 없음(unmatched)'으로
-        # 기록된다 — 2026-09-22 법제처가 느렸던 날 10건이 그렇게 오염됐다. API 실패는
-        # 아무것도 모르는 상태이므로 행을 건드리지 않고 넘긴다(다음 실행이 다시 본다).
-        if rows is None:
-            api_failed.append(doc_name)
-            print(f"  [{i}/{len(targets)}] API실패 {meta['law_name'][:38]} — 상태 보존")
-            continue
-        hit = pick_exact(rows, meta['law_name'], meta.get('full_name'))
-        # 1차 실패 시 기관명 별칭으로 재검색 (정부조직 개편으로 규칙명이 바뀐 경우)
-        alt_api_failed = False
-        if not hit:
-            for alt in alias_variants(meta['law_name']):
-                rows = drf_law_search(alt, target)
-                if rows is None:                     # 별칭 조회 중 API가 죽어도 마찬가지
-                    alt_api_failed = True
-                    break
-                hit = pick_exact(rows, alt)
-                if hit:
-                    meta['law_name'] = alt          # 이후 단계(현행화)도 새 명칭 기준
-                    meta['full_name'] = None
-                    print(f"      (기관명 변경 반영 → {alt})")
-                    break
-        if not hit and alt_api_failed:
-            api_failed.append(doc_name)
-            print(f"  [{i}/{len(targets)}] API실패 {meta['law_name'][:38]} — 상태 보존")
-            continue
-
-        rec = {
-            'doc_name': doc_name,
-            'law_name': meta['law_name'],
-            'law_type_token': meta['law_type_token'],
-            'api_target': target,
-            'registered_law_no': meta['law_no'],
-            'registered_enf': meta['enf_date'],
-            'last_checked_at': datetime.now(timezone.utc).isoformat(),
-            'updated_at': datetime.now(timezone.utc).isoformat(),
-        }
-
-        if not hit:
-            unmatched.append((doc_name, f"법제처 미검색({meta['law_name']})"))
-            rec.update({'watch_status': 'unmatched', 'sync_status': 'unknown',
-                        'note': '법제처에서 동일 명칭 법령을 찾지 못함'})
-        else:
-            mst, law_no, enf = row_fields(hit, target)
-            rec.update({
-                'watch_status': 'watching',
-                'law_id': str(hit.get('법령ID') or hit.get('행정규칙ID') or ''),
-                'latest_mst': mst, 'latest_law_no': law_no, 'latest_enf': enf,
-            })
-            same = norm_law_no(meta['law_no']) and norm_law_no(meta['law_no']) == norm_law_no(law_no)
-            if same:
-                rec['sync_status'] = 'current'
-                ok += 1
-            else:
-                rec['sync_status'] = 'outdated'
-                outdated.append((doc_name, meta['law_name'], meta['law_no'], meta['enf_date'], law_no, enf))
-
-            # 시행예정본 — 있는 대로 전부 law_pending에 기록(다단 시행 수용)
-            futures = find_pending_rows(meta, target, hit, today)
-            if futures:
+    try:
+        for i, (doc_name, cat) in enumerate(targets, 1):
+            meta = parse_doc_name(doc_name)
+            if not meta:
+                # 법종 괄호가 아예 없음 = 법령 문서가 아님(보도자료·사내자료 등)
+                # → 자동 제외 처리해 다음 실행부터 조용히 건너뜀 (알림 노이즈 방지)
+                auto_excluded.append(doc_name)
                 if not a.dry_run:
-                    save_pending(sb, meta, target, doc_name, rec['law_id'], futures, today)
-                # law_watch의 pending_* 3칼럼은 '가장 이른 1건' 요약(대시보드 배지용).
-                # 전체 목록은 law_pending을 본다.
-                p_mst, p_no, p_enf = futures[0]['fields']
-                rec.update({'pending_mst': p_mst, 'pending_law_no': p_no, 'pending_enf': p_enf})
-                upcoming.append((meta['law_name'], futures))
-            elif not a.dry_run:
-                # 예정본이 사라졌으면(개정 철회·이미 시행) 미적재분 정리
-                retire_pending(sb, meta['law_name'], keep=set(), today=today)
+                    watch_buf.append({
+                        'doc_name': doc_name, 'watch_status': 'excluded',
+                        'sync_status': 'unknown', 'note': '법령 문서명 관례 아님 — 자동 제외',
+                        'last_checked_at': datetime.now(timezone.utc).isoformat(),
+                        'updated_at': datetime.now(timezone.utc).isoformat(),
+                    })
+                continue
 
+            target = api_target_of(meta['law_type_token'])
+            rows = drf_law_search(meta['law_name'], target)
+            # drf_law_search는 '검색은 됐는데 결과 0건'이면 [], 'API가 응답을 안 함'이면 None을
+            # 돌려준다. 이 둘을 같이 취급하면 멀쩡한 문서가 '법제처에 없음(unmatched)'으로
+            # 기록된다 — 2026-09-22 법제처가 느렸던 날 10건이 그렇게 오염됐다. API 실패는
+            # 아무것도 모르는 상태이므로 행을 건드리지 않고 넘긴다(다음 실행이 다시 본다).
+            if rows is None:
+                api_failed.append(doc_name)
+                print(f"  [{i}/{len(targets)}] API실패 {meta['law_name'][:38]} — 상태 보존")
+                continue
+            hit = pick_exact(rows, meta['law_name'], meta.get('full_name'))
+            # 1차 실패 시 기관명 별칭으로 재검색 (정부조직 개편으로 규칙명이 바뀐 경우)
+            alt_api_failed = False
+            if not hit:
+                for alt in alias_variants(meta['law_name']):
+                    rows = drf_law_search(alt, target)
+                    if rows is None:                     # 별칭 조회 중 API가 죽어도 마찬가지
+                        alt_api_failed = True
+                        break
+                    hit = pick_exact(rows, alt)
+                    if hit:
+                        meta['law_name'] = alt          # 이후 단계(현행화)도 새 명칭 기준
+                        meta['full_name'] = None
+                        print(f"      (기관명 변경 반영 → {alt})")
+                        break
+            if not hit and alt_api_failed:
+                api_failed.append(doc_name)
+                print(f"  [{i}/{len(targets)}] API실패 {meta['law_name'][:38]} — 상태 보존")
+                continue
+
+            rec = {
+                'doc_name': doc_name,
+                'law_name': meta['law_name'],
+                'law_type_token': meta['law_type_token'],
+                'api_target': target,
+                'registered_law_no': meta['law_no'],
+                'registered_enf': meta['enf_date'],
+                'last_checked_at': datetime.now(timezone.utc).isoformat(),
+                'updated_at': datetime.now(timezone.utc).isoformat(),
+            }
+
+            if not hit:
+                unmatched.append((doc_name, f"법제처 미검색({meta['law_name']})"))
+                rec.update({'watch_status': 'unmatched', 'sync_status': 'unknown',
+                            'note': '법제처에서 동일 명칭 법령을 찾지 못함'})
+            else:
+                mst, law_no, enf = row_fields(hit, target)
+                rec.update({
+                    'watch_status': 'watching',
+                    'law_id': str(hit.get('법령ID') or hit.get('행정규칙ID') or ''),
+                    'latest_mst': mst, 'latest_law_no': law_no, 'latest_enf': enf,
+                })
+                same = norm_law_no(meta['law_no']) and norm_law_no(meta['law_no']) == norm_law_no(law_no)
+                if same:
+                    rec['sync_status'] = 'current'
+                    ok += 1
+                else:
+                    rec['sync_status'] = 'outdated'
+                    outdated.append((doc_name, meta['law_name'], meta['law_no'], meta['enf_date'], law_no, enf))
+
+                # 시행예정본 — 있는 대로 전부 law_pending에 기록(다단 시행 수용)
+                # 행정규칙은 방금 현행본 판정에 쓴 검색 결과(rows — 별칭 재검색이면 그 결과)를
+                # 그대로 넘겨 같은 검색을 다시 하지 않는다(§4-3-7). 법령은 eflaw라 별도 조회.
+                futures = find_pending_rows(meta, target, hit, today,
+                                            admrul_rows=rows if target == 'admrul' else None)
+                if futures:
+                    if not a.dry_run:
+                        save_pending(sb, meta, target, doc_name, rec['law_id'], futures, today,
+                                     detected=detected)
+                    # law_watch의 pending_* 3칼럼은 '가장 이른 1건' 요약(대시보드 배지용).
+                    # 전체 목록은 law_pending을 본다.
+                    p_mst, p_no, p_enf = futures[0]['fields']
+                    rec.update({'pending_mst': p_mst, 'pending_law_no': p_no, 'pending_enf': p_enf})
+                    upcoming.append((meta['law_name'], futures))
+                elif not a.dry_run:
+                    # 예정본이 사라졌으면(개정 철회·이미 시행) 미적재분 정리
+                    retire_pending(sb, meta['law_name'], keep=set(), today=today,
+                                   detected=detected)
+
+            if not a.dry_run:
+                watch_buf.append(rec)
+                if len(watch_buf) >= WATCH_FLUSH_EVERY:
+                    flush_watch(sb, watch_buf)
+
+            tag = rec.get('sync_status', '?')
+            mark = {'current': 'OK', 'outdated': '구버전', 'unknown': '미매칭'}.get(tag, tag)
+            print(f"  [{i}/{len(targets)}] {mark:6s} {meta['law_name'][:38]}")
+            time.sleep(0.15)   # 법제처 API 예의
+    finally:
+        # 잡이 timeout으로 취소돼도(GitHub은 SIGINT부터 보낸다 — #183) 모아 둔 기록은 남긴다
         if not a.dry_run:
-            sb.table('law_watch').upsert(rec, on_conflict='doc_name').execute()
-
-        tag = rec.get('sync_status', '?')
-        mark = {'current': 'OK', 'outdated': '구버전', 'unknown': '미매칭'}.get(tag, tag)
-        print(f"  [{i}/{len(targets)}] {mark:6s} {meta['law_name'][:38]}")
-        time.sleep(0.15)   # 법제처 API 예의
+            flush_watch(sb, watch_buf)
 
     # ── 요약 ──
     print(f"\n=== 결과 ===")
