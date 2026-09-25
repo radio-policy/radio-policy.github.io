@@ -8042,3 +8042,12 @@ Fable 재검토 포인트((Fable 5.1, 엑스트라)): 요약 벡터 문턱 0.40/
 단위 `tests/test_news_known.py` 9건(청크 호출·삭제 포함 여부·실패/이상/전면 실패·선별 캐시 3단 폴백·구조 가드 — news_known 밖 `table('news_feed').select('url,title')` 금지) → 전체 170 OK. DB 설계도 재생성(20_functions·60_grants·MANIFEST·migrations 1).
 사내판: 불필요 — 사내 저장소 origin/main grep: 뉴스 수집·중복 대조 코드가 없다(사내는 `export_news.py`로 외부 news_feed를 받아 간다, ported.js의 deleted_news는 삭제 버튼의 insert뿐).
 남은 것: ① lampmanH-pc `git pull origin main` — 정부 공고 크롤러는 PC 체인(16:30)이라 pull 전까지 옛 코드(1,000행)로 돈다, 영향은 저장 건수 표시뿐. ② 정부 공고·해외 수집도 deleted_news를 볼지(운영자가 지운 정부 공고가 15일 안이면 다시 들어오는지) — 동작 변경이라 운영자 판단. Fable 재검토 포인트((Fable 5.1, 엑스트라)): 이상 가드 문턱(후보 200·기존 0), 제목 정확 일치가 `title_backfill`·`refetch_content`의 제목 복원(#161-보론15)과 만나는 경우(종전과 같은 의미지만 설계 차원 재확인), RPC 1,000건 청크·security invoker 선택.
+보론(같은 날 07:04 반영 뒤 관찰, 커밋 b087e61): Actions 크롤 3회 모두 heartbeat `new=N`(알림 경로로 넘긴 건수)과 같은 구간 news_feed 실제 삽입 건수가 일치 — 이미 있는 기사를 새 기사로 착각한 건 0(재알림 없음).
+
+| 실행(KST) | note | 실제 삽입 |
+|---|---|---|
+| 07:11 | new=3 total=1110 | 3 |
+| 07:18(GitHub 예비 :17) | new=0 total=1110 | 0 |
+| 07:21 | new=1 total=1111 | 1 |
+
+`pg_stat_statements`: `news_known_items` 36→42회(실행당 2 — 후보 ≈1,110건이 1,000건 청크 2개), `news_screen_cache_lookup` 64→67회(실행당 1), 평균 22.7ms·3.3ms — 전량 조회로 되돌아간 실행 없음.
