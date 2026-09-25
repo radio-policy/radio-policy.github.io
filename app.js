@@ -117,7 +117,22 @@ async function loadMyProfile() {
   } catch (e) { console.warn('프로필 조회 실패:', e); return 'error'; }
 }
 
-async function refreshAuthState() {
+// 동시에 여러 번 불려도(페이지 로드 직후 직접 호출 + onAuthStateChange) 실제 갱신은 한 번만 돈다(§4-3-12).
+// 종전에는 두 호출이 겹쳐 profiles 조회·get_my_quota·applyAuthUI 가 2번씩 돌고, 두 번째 loadMyProfile 이
+// 첫 번째가 채운 currentProfile 을 잠깐 null 로 되돌리는 경합도 있었다.
+// 도는 중에 또 불리면 끝난 뒤 **한 번 더** 돈다 — 로그인 직후처럼 상태가 실제로 바뀐 호출을 옛 결과로 삼키지 않기 위해.
+var _authRefreshing = null;
+var _authRerun = false;
+function refreshAuthState() {
+  if (_authRefreshing) { _authRerun = true; return _authRefreshing; }
+  _authRefreshing = (async function() {
+    try {
+      do { _authRerun = false; await _refreshAuthStateOnce(); } while (_authRerun);
+    } finally { _authRefreshing = null; }
+  })();
+  return _authRefreshing;
+}
+async function _refreshAuthStateOnce() {
   if (!sb) return;
   try {
     var s = await sb.auth.getSession();
@@ -3805,7 +3820,7 @@ function _renderSingleItem(n) {
     'title="기사 삭제" ' +
     'style="cursor:pointer;font-size:11px;vertical-align:middle;color:var(--text-tertiary);opacity:.4">' +
     '<i class="ti ti-trash"></i></span>';
-  return '<div class="news-item" onclick="showNewsDetail(\'' + n.id + '\')" style="cursor:pointer;border-left:' + rule.border + ';' + (isSelected ? 'background:var(--bg-secondary);border-radius:var(--radius-md)' : '') + '">' +
+  return '<div class="news-item" data-nid="' + escHtml(String(n.id)) + '" onclick="showNewsDetail(\'' + n.id + '\')" style="cursor:pointer;border-left:' + rule.border + ';' + (isSelected ? 'background:var(--bg-secondary);border-radius:var(--radius-md)' : '') + '">' +
     '<div class="news-dot ' + (n.is_read ? 'dot-read' : 'dot-new') + '"></div>' +
     '<div style="flex:1;min-width:0;overflow:hidden">' +
       '<div class="news-item-header" style="display:flex;align-items:center;gap:5px;margin-bottom:3px;flex-wrap:wrap">' +
@@ -3899,7 +3914,7 @@ function renderNewsList() {
             var rule = IMPORTANCE_RULES[n._importance] || IMPORTANCE_RULES['참고'];
             var safeU = safeUrl(n.url);
             var urlIcon = safeU ? ' <a href="' + safeU + '" target="_blank" onclick="event.stopPropagation()" style="color:var(--accent);font-size:11px"><i class="ti ti-external-link"></i></a>' : '';
-            return '<div onclick="showNewsDetail(\'' + n.id + '\')" style="display:flex;align-items:flex-start;gap:8px;padding:8px 0;border-bottom:0.5px solid var(--border-tertiary);cursor:pointer">' +
+            return '<div data-nid="' + escHtml(String(n.id)) + '" onclick="showNewsDetail(\'' + n.id + '\')" style="display:flex;align-items:flex-start;gap:8px;padding:8px 0;border-bottom:0.5px solid var(--border-tertiary);cursor:pointer">' +
               '<div class="news-dot ' + (n.is_read ? 'dot-read' : 'dot-new') + '" style="flex-shrink:0;margin-top:4px"></div>' +
               '<span style="font-size:12px;font-weight:700;color:' + rule.color + ';background:' + rule.bg + ';padding:1px 6px;border-radius:4px;flex-shrink:0">' + rule.label + '</span>' +
               '<div style="flex:1;min-width:0;overflow:hidden">' +
@@ -4351,13 +4366,33 @@ async function saveUrgencyRule(btn) {
   }
 }
 
+// 목록을 다시 그리지 않고 선택 표시·읽음 점만 제자리에서 바꾼다(§4-3-12).
+// 종전에는 클릭마다 renderNewsList()가 필터·정렬(1.4만 건)과 최대 300묶음 HTML(≈0.9MB, 노드 7.5천 개)을 통째로
+// 다시 만들었다(실측 PC 65ms, 휴대폰은 수 배). 묶음 계산 자체는 #130 메모로 이미 재사용된다.
+// 단건 카드(_renderSingleItem)의 선택 배경 규칙과 같은 값을 쓴다 — 그 규칙을 바꾸면 여기도 같이 바꾼다.
+function _markNewsSelectedInPlace(prevId, newId) {
+  var list = document.getElementById('news-list');
+  if (!list) return;
+  function sel(id) { return list.querySelector('.news-item[data-nid="' + String(id).replace(/"/g, '') + '"]'); }
+  if (prevId != null && String(prevId) !== String(newId)) {
+    var p = sel(prevId);
+    if (p) { p.style.background = ''; p.style.borderRadius = ''; }
+  }
+  var c = sel(newId);
+  if (c) { c.style.background = 'var(--bg-secondary)'; c.style.borderRadius = 'var(--radius-md)'; }
+  list.querySelectorAll('[data-nid="' + String(newId).replace(/"/g, '') + '"] > .news-dot').forEach(function(d) {
+    d.classList.remove('dot-new'); d.classList.add('dot-read');
+  });
+}
+
 async function showNewsDetail(newsId) {
+  var prevSelected = selectedNewsId;
   selectedNewsId = newsId;
   var n = newsDataCache.find(function(x) { return String(x.id) === String(newsId); });
   if (!n) return;
 
-  // 목록 선택 표시 업데이트
-  renderNewsList();
+  // 목록 선택 표시 업데이트 — 전체 재렌더 대신 제자리 갱신
+  _markNewsSelectedInPlace(prevSelected, newsId);
 
   var rule   = IMPORTANCE_RULES[n._importance] || IMPORTANCE_RULES['참고'];
   var date   = (n.published_at || n.created_at || '').slice(0, 10);
@@ -4432,8 +4467,12 @@ async function showNewsDetail(newsId) {
   if (panel)   { panel.style.display = 'block'; }
   if (content) { content.innerHTML = html; }
 
-  // 읽음 처리
-  if (sb) { sb.from('news_feed').update({ is_read: true }).eq('id', n.id).then(function() {}); }
+  // 읽음 처리 — 이미 읽은 기사는 다시 쓰지 않고, 쓰기 권한이 있는 승인 계정만 보낸다(§4-3-12).
+  // news_feed UPDATE 정책(news_feed_upd_auth)은 authenticated + is_approved_user() 뿐이라, 비로그인·미승인
+  // 클릭의 UPDATE 는 오류 없이 0행으로 끝나는 헛요청이었다(실측: 14,049건 중 읽음 463건). aiReady() = 그 정책과 같은 조건.
+  if (sb && !n.is_read && aiReady()) {
+    sb.from('news_feed').update({ is_read: true }).eq('id', n.id).then(function() {});
+  }
   n.is_read = true;
 
   // content는 목록 조회(select)에서 제외했으므로(초기 전송량 절감, #61) 상세 열람 시 해당 1건만 온디맨드 조회.
@@ -12352,8 +12391,26 @@ document.addEventListener('DOMContentLoaded', function() {
   // 세션 복원 전에는 aiReady()가 false이므로, 자동 AI 기능도 이 시점 전에는 돌지 않는다.
   refreshAuthState();
   if (sb) {
-    sb.auth.onAuthStateChange(function() {
-      refreshAuthState();
+    // supabase-js v2 는 구독 즉시 INITIAL_SESSION 을 쏜다(실측 2026-09-25) — 바로 위 직접 호출과 같은 일이라 건너뛴다.
+    // TOKEN_REFRESHED(약 1시간마다)는 같은 사람의 토큰만 바뀐 것이라 프로필·한도를 다시 읽지 않는다.
+    // 콜백 안에서 곧바로 sb 메서드를 부르지 않고 한 틱 미룬다(공식 문서의 교착 회피 권고).
+    // SIGNED_IN 은 로그인 때만이 아니라 페이지 초기화 직후(`_initialize` → `_recoverAndRefresh`)와 탭이 다시 보일 때마다
+    // 온다(2.117 소스 확인 2026-09-26) — 이미 불러온 같은 사람이고 승인·활성이면 건너뛴다(운영자 결정). 초기화·로그인 때는
+    // 바로 위 직접 호출(또는 로그인 코드의 호출)이 아직 도는 중이라 같은 사람인지 알 수 없으므로, **그 호출이 끝난 뒤** 판단한다.
+    // 승인 대기·비활성 계정은 계속 다시 읽어 승인되면 새로고침 없이 풀린다. 사용 중 비활성화·권한 회수는 새로고침 전까지
+    // 화면에만 남고, AI 호출은 claude-proxy 가 매번 막는다. (관리자는 갱신 1회마다 설정 화면 자료 — 계정 목록·팀·법령 감시 —
+    // 까지 다시 읽으므로 applySettingsLock, 건너뛰는 효과가 크다.)
+    sb.auth.onAuthStateChange(function(event, session) {
+      if (event === 'INITIAL_SESSION') return;
+      var uid = session && session.user ? session.user.id : null;
+      setTimeout(function() {
+        Promise.resolve(_authRefreshing).catch(function() {}).then(function() {
+          var sameUser = !!(uid && currentUser && currentUser.id === uid);
+          if (event === 'TOKEN_REFRESHED' && sameUser) return;
+          if (event === 'SIGNED_IN' && sameUser && aiReady()) return;
+          refreshAuthState();
+        });
+      }, 0);
     });
   }
   refreshOpsLight();   // 상단바 상태등 — 페이지 로드 시 1회 (이후 smartRefresh마다 갱신)
