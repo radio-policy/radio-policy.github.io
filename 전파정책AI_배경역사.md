@@ -7847,3 +7847,10 @@ app.js(`?v=20260926a`): `loadPressJSON`·`loadAssemblyMinutes`·`loadSpeakers`·
 남긴 것: 관리자의 설정 화면 자료 선로드(`loadSettingsFields`가 설정 화면을 열지 않아도 도는 것)는 이번 범위 밖 — 이제 로드·로그인당 1회라 급하지 않다. is_read는 여전히 '누구든 한 명이 읽음' 공용 플래그(사람별 읽음은 새 표 필요, 별도 결정).
 교훈: 인증 라이브러리의 이벤트 이름을 뜻대로 믿지 말 것 — `SIGNED_IN`은 '세션이 (다시) 확인됨'이다. 판단에 필요한 상태를 채우는 호출이 돌고 있으면 그 호출이 끝난 뒤에 판단한다.
 사내판: 불필요(선택) — ported.js에도 같은 뉴스 클릭 재렌더·무조건 is_read가 있으나 사내 인증 구조가 달라 인증 부분은 해당 없음. 다음 ported.js 재이식(§4-3-6) 때 따라가게 둔다.
+
+**#225 (2026-09-26) 헬스 워치독 오경보 — "morning_briefing.yml 마지막 성공 591.5시간 전"인데 브리핑은 매일 정상.**
+발단: 운영자가 09-25 21:35 워치독 텔레그램("morning_briefing.yml 마지막 성공 591.5시간 전 (임계 26h)")을 보고 "모닝브리핑은 9/25에도 왔다"고 지적. 591.5시간 전 = 09-01 06:05 KST(08-31 21:05 UTC dispatch 실행).
+원인: `workflow_last_success_hours`가 `…/workflows/<wf>/runs?status=success&per_page=1`로 물었다. GitHub 문서상 status·event·created·branch·actor·head_sha·check_suite_id로 거른 목록은 검색(최대 1,000건) 경로라 갱신이 늦을 수 있다. 조사 시점(09-26 02시)에는 같은 질의가 정상(09-24 23:57 UTC)을 돌려줬고, 거르지 않은 목록의 최근 12회(09-22~25)는 전부 success — 21:35 실행 때만 색인이 낡은 답을 준 것으로 판단. 같은 이름 워크플로 중복(workflow id 289167047 하나)·저장소 경로 문제는 없음.
+조치(health_watchdog.py 한 함수, 워치독은 일부러 공용 유틸 없이 독립 유지): 거르지 않은 `?per_page=100`에서 `conclusion=="success"`인 행 중 가장 최근을 쓰고, 100개 안에 성공이 없을 때만 종전 `status=success` 질의로 나이를 잰다. 10분 주기 daily_crawl도 100개 = 약 17시간이라 crawl_running(14h) 판정에 충분. 실측(함수만 떼어 실제 API, 텔레그램 무발송): daily_crawl 0.06h·morning_briefing 17.3h·law_crawl 10.3h·assembly_crawl 11.5h·없는 워크플로 None.
+교훈: '최신 1건'을 서버 필터에 맡기면 필터 백엔드의 일관성까지 믿게 된다 — 판정의 근거가 되는 최신값은 정렬만 된 원본 목록에서 직접 고른다.
+사내판: 불필요 — 사내판에는 GitHub Actions 워치독이 없다.

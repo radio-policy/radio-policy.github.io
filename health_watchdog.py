@@ -63,16 +63,22 @@ if GH_TOKEN:
 
 
 def workflow_last_success_hours(wf):
-    """워크플로우의 마지막 '성공' 실행 이후 경과 시간(시간). 알 수 없으면 None."""
+    """워크플로우의 마지막 '성공' 실행 이후 경과 시간(시간). 알 수 없으면 None.
+
+    `?status=success`로 걸러 묻지 않는다(#225, 2026-09-26) — GitHub 문서상 status·event·created 등으로 거른
+    목록은 **검색 색인**을 거쳐 늦게 갱신될 수 있고, 09-25 21:35 실행이 morning_briefing.yml의 '최신 성공'으로
+    09-01 실행을 받아 "591.5시간 전" 오경보를 냈다(같은 시각 거르지 않은 목록엔 09-25 성공이 있었다).
+    거르지 않은 최근 100개에서 conclusion=success 첫 행을 찾고, 100개 안에 없을 때만 걸러 묻는다(나이 계산용).
+    """
+    base = "https://api.github.com/repos/%s/actions/workflows/%s/runs" % (REPO, wf)
     try:
-        data = http_get_json(
-            "https://api.github.com/repos/%s/actions/workflows/%s/runs?status=success&per_page=1" % (REPO, wf),
-            gh_headers,
-        )
-        runs = data.get("workflow_runs", [])
-        if not runs:
+        runs = http_get_json(base + "?per_page=100", gh_headers).get("workflow_runs", [])
+        ok = [r for r in runs if r.get("conclusion") == "success"]
+        if not ok:
+            ok = http_get_json(base + "?status=success&per_page=1", gh_headers).get("workflow_runs", [])
+        if not ok:
             return None
-        return hours_since(runs[0]["created_at"])
+        return min(hours_since(r["created_at"]) for r in ok)
     except Exception:
         return None
 
