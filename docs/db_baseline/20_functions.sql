@@ -1,6 +1,8 @@
 -- functions — tools_db_baseline.py가 실DB에서 생성(손으로 고치지 말 것), 비밀 마스킹됨
 
 set check_function_bodies = off;
+select '[1,0]'::vector <=> '[0,1]'::vector;   -- vector 라이브러리 선로드
+select extensions.word_similarity('a', 'a');   -- pg_trgm 라이브러리 선로드
 
 CREATE OR REPLACE FUNCTION public.admin_delete_chat_log(p_id uuid)
  RETURNS integer

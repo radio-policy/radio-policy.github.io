@@ -115,8 +115,12 @@ FILES = [('extensions', '00_extensions.sql'), ('sequences', '05_sequences.sql'),
          ('grants', '60_grants.sql'), ('role_settings', '65_role_settings.sql'), ('cron', '70_cron.sql'),
          ('storage', '80_storage.sql'), ('vault_names', '90_vault_names.txt')]
 PREAMBLE = {
-    # SQL 함수 본문은 만들 때 표·뷰 존재를 검사한다 — 복구 순서에 걸리지 않게 끈다
-    'functions': 'set check_function_bodies = off;\n\n',
+    # SQL 함수 본문은 만들 때 표·뷰 존재를 검사한다 — 복구 순서에 걸리지 않게 끈다.
+    # 함수 속성 SET hnsw.*·pg_trgm.*는 그 확장 라이브러리가 세션에 올라와 있어야 통과한다(#185 — 없으면
+    # 'permission denied to set parameter'; 2026-09-26 복구 연습에서 벡터 검색 함수 3개가 이것으로 실패).
+    'functions': ("set check_function_bodies = off;\n"
+                  "select '[1,0]'::vector <=> '[0,1]'::vector;   -- vector 라이브러리 선로드\n"
+                  "select extensions.word_similarity('a', 'a');   -- pg_trgm 라이브러리 선로드\n\n"),
 }
 
 README = """# DB 설계도 (docs/db_baseline) — 자동 생성, 손으로 고치지 말 것
@@ -142,8 +146,13 @@ README = """# DB 설계도 (docs/db_baseline) — 자동 생성, 손으로 고�
 8. Auth 설정(이메일 확인 끄기 `mailer_autoconfirm` — 지침 #104), GitHub Secrets·PC `.env`의 URL·키 교체
 9. 데이터는 이 폴더에 없다 — Supabase 백업(Pro 일일 백업)에서 되살리거나 크롤러 재수집
 
+복구 연습(2026-09-26, 빈 브랜치 DB에 1~3·6 적용, cron은 적용 후 되돌림): 다시 뜬 설계도가 표·외래키·함수·뷰·인덱스·
+트리거·정책·권한·역할 설정·버킷까지 원본과 한 글자도 다르지 않았다. 다른 것은 예상한 셋뿐 — cron(되돌림)·Vault(값 재입력
+전)·`pg_net` 위치(새 프로젝트엔 `extensions` 스키마에 미리 설치돼 `with schema public`이 건너뛰어짐; 함수는 `net.*`라 동작 같음).
+
 `migrations/`는 참고용 변경 이력(Supabase `schema_migrations` 원문, 비밀 마스킹). 5/28 이전 표·SQL Editor 손 DDL이
-빠져 있어 **이력을 재생해서는 복구되지 않는다** — 복구는 위 번호 파일로 한다.
+빠져 있어 **이력을 재생해서는 복구되지 않는다** — 복구는 위 번호 파일로 한다(같은 복구 연습에서 브랜치가 이력 재생에
+실패했다 — MIGRATIONS_FAILED).
 """
 
 
@@ -217,11 +226,14 @@ def _load_env_values():
         pass
 
 
+_REF = PROJECT_REF   # --ref로 바꾼다(복구 연습 브랜치를 같은 규칙으로 떠서 원본과 대조할 때)
+
+
 def query(sql):
     tok = os.environ.get('SUPABASE_ACCESS_TOKEN', '').strip()
     if not tok:
         raise SystemExit('SUPABASE_ACCESS_TOKEN 없음(.env) — 중단')
-    req = urllib.request.Request('https://api.supabase.com/v1/projects/%s/database/query' % PROJECT_REF,
+    req = urllib.request.Request('https://api.supabase.com/v1/projects/%s/database/query' % _REF,
                                  data=json.dumps({'query': sql}).encode('utf-8'), method='POST',
                                  headers={'Authorization': 'Bearer ' + tok, 'Content-Type': 'application/json',
                                           'User-Agent': 'tools_db_baseline'})
@@ -292,7 +304,13 @@ def main():
     ap.add_argument('--out', default=OUT_DEFAULT, help='출력 폴더(저장소 기준 상대 또는 절대 경로)')
     ap.add_argument('--dry-run', action='store_true', help='개수·마스킹 결과만 출력')
     ap.add_argument('--check', action='store_true', help='파일과 실DB 대조만(쓰지 않음, 다르면 exit 1)')
+    ap.add_argument('--ref', default=PROJECT_REF,
+                    help='대상 프로젝트 ref(기본 운영 DB). 복구 연습 브랜치를 --check로 원본 파일과 대조할 때')
     a = ap.parse_args()
+    global _REF
+    _REF = a.ref
+    if a.ref != PROJECT_REF and not (a.check or a.dry_run):
+        raise SystemExit('--ref로 운영 외 DB를 뜰 때는 --check 또는 --dry-run만(설계도 폴더를 덮지 않게)')
     out, counts, bad = build(verbose=True)
     print(out['MANIFEST.txt'].rstrip())
     print('마스킹:', counts)
