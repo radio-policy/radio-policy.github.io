@@ -23,12 +23,16 @@ def load(path):
 
 
 def main():
-    args = [a for a in sys.argv[1:] if not a.startswith('--')]
+    argv = sys.argv[1:]
     fields = 'rag,extra,added,citing,annex,pending,kb,news'
-    if '--fields' in sys.argv:
-        fields = sys.argv[sys.argv.index('--fields') + 1]
+    if '--fields' in argv:
+        # 값까지 떼어 낸 뒤 파일 인자를 센다 — 종전엔 값('a,b')이 세 번째 파일로 잡혀 사용법만 출력됐다
+        i = argv.index('--fields')
+        fields = argv[i + 1] if i + 1 < len(argv) else ''
+        del argv[i:i + 2]
+    args = [a for a in argv if not a.startswith('--')]
     fields = [f for f in fields.split(',') if f]
-    if len(args) != 2:
+    if len(args) != 2 or not fields:
         print(__doc__)
         sys.exit(2)
     a, da = load(args[0])
