@@ -927,6 +927,21 @@ def _http_get(url: str, timeout: int = 8):
             return s.get(url, headers=HEADERS, timeout=timeout)
         raise
 
+# 본문 칸 대신 '본문이 아닌 상자'가 걸린 텍스트 — 그 상자의 머리말로 '시작'하는지만 본다(#232, 사내판 인계 2026-09-26).
+#  · 사이드바 목록: ebn·보안뉴스(기사관리 시스템의 첫 <article>이 '많이 본 기사' 상자·상단 '최신뉴스' 목록)와
+#    korea.kr('실시간 인기뉴스' 상자)은 147건 전부 목록을 본문으로 저장했고, 66건이 다른 기사 제목들로 긴급도 판정을 받았다.
+#  · 공공누리 저작권 안내: korea.kr 카드뉴스·'사실은 이렇습니다'는 글 본문이 없어 trafilatura가 이 안내문을 집는다.
+# 앞머리 N자 안의 메뉴 단어를 세는 방식은 쓰지 않는다 — 본문 앞에 메뉴가 붙는 템플릿(전자신문 계열, 비즈니스포스트
+# '…JOB+ 최신뉴스 검색…')의 정상 기사를 통째로 버린다(#161-보론14와 같은 교훈).
+_NON_BODY_RE = re.compile(
+    r'^\s*(?:많이\s*본\s*(?:기사|뉴스)|실시간\s*인기\s*(?:기사|뉴스)|최신\s*뉴스'
+    r'|(?:저작권법\s*제37조\s*및\s*)?-\s*제37조\s*\(출처의\s*명시\))')
+
+
+def _is_non_body(text: str) -> bool:
+    return bool(_NON_BODY_RE.match(text or ''))
+
+
 def fetch_article_body(url: str, source: str) -> tuple:
     """기사 URL에서 본문 텍스트와 발행일 추출. 반환: (body: str, published_at: str)"""
     try:
@@ -1017,7 +1032,17 @@ def fetch_article_body(url: str, source: str) -> tuple:
                 if _key in source:
                     src_selectors = _sels
                     break
-        candidates = naver_selectors + src_selectors + [
+        # 사이드바 상자가 본문 칸보다 먼저 걸리는 사이트 — 주소로 본문 칸을 먼저 본다(#232).
+        # ebn·보안뉴스는 첫 <article>이 '많이 본 기사' 상자·상단 '최신뉴스' 목록, korea.kr은 div.article이 '실시간 인기뉴스'.
+        # 기사관리 시스템 본문 칸(#article-view-content-div)을 아래 공용 후보에 넣지 않는다 — 넣으면 첫 <article>이
+        # 짧아 div.article-body(부제+본문)를 잡던 사이트까지 결과가 바뀐다(표본 30곳 중 8곳, 부제 줄이 빠짐). 결과 불변 원칙.
+        if 'korea.kr' in url:
+            site_selectors = ['div.view_cont', 'div.article_body']
+        elif 'ebn.co.kr' in url or 'boannews.com' in url:
+            site_selectors = ['#article-view-content-div']
+        else:
+            site_selectors = []
+        candidates = naver_selectors + site_selectors + src_selectors + [
             'article', 'div.article', 'div.news-content',
             'div.view_cont', 'div.view-content', 'div#content',
             'div.article-body', 'div.news_body', 'div.article_txt'
@@ -1032,7 +1057,8 @@ def fetch_article_body(url: str, source: str) -> tuple:
             tag = soup.select_one(sel)
             if tag:
                 text = tag.get_text(separator=' ', strip=True)
-                if len(text) > 100 and not _is_nav(text):
+                # 목록 상자로 시작하는 칸은 본문이 아니다 — 다음 후보를 본다(#232)
+                if len(text) > 100 and not _is_nav(text) and not _is_non_body(text):
                     body = text[:1500]
                     break
 
@@ -1041,7 +1067,8 @@ def fetch_article_body(url: str, source: str) -> tuple:
             try:
                 import trafilatura
                 extracted = trafilatura.extract(resp.text, include_comments=False, include_tables=False)
-                if extracted and len(extracted.strip()) > 100 and not _is_nav(extracted.strip()):
+                if extracted and len(extracted.strip()) > 100 and not _is_nav(extracted.strip()) \
+                        and not _is_non_body(extracted.strip()):
                     body = extracted.strip()[:1500]
             except Exception:
                 pass

@@ -1548,3 +1548,62 @@ class TestIssueSuggestReg(unittest.TestCase):
         issues, log = self._run(lambda pairs: None)
         self.assertIn('[보류 — 관련 판정 실패] bill B3', log)
         self.assertEqual([i['title'] for i in issues if i['state'] == 'proposed'], ['주제형 제목 s4'])
+
+
+class TestSidebarListBody(unittest.TestCase):
+    """#232 본문 자리에 사이드바 목록(사내판 인계) — 목록 머리말로 '시작'하는 칸은 본문이 아니다.
+    네트워크 0: _http_get을 가짜 페이지로 바꾼다."""
+
+    def test_is_non_body(self):
+        import crawler
+        for t in ('많이 본 기사 [가스텍 2026] 정기선 회장', ' 많이본뉴스 1 제목', '실시간 인기뉴스 09.22. 16:17 기준 …',
+                  '최신뉴스 “사람은 지휘하고 AI가 뛴다”',
+                  # korea.kr 카드뉴스·'사실은 이렇습니다' — 글 본문이 없어 trafilatura가 공공누리 안내문을 집는다
+                  '- 제37조(출처의 명시) - ① 이 관에 따라 저작물을 이용하는 자는',
+                  '저작권법 제37조 및 - 제37조(출처의 명시) - ① 이 관에 따라'):
+            self.assertTrue(crawler._is_non_body(t), t)
+        # 본문 앞 메뉴에 '최신뉴스'가 섞인 템플릿(비즈니스포스트)·기사 뒤 탭 이름(이투데이)·저작권법을 다룬 기사는 아니다
+        for t in ('삼성전자와 SK하이닉스 [출처=연합뉴스] ◆연휴 앞두고도', '글로벌 기후대응 Who Is? JOB+ 최신뉴스 검색 닫기 …',
+                  '우회해 달라고 당부했다. 관련 뉴스 주요 뉴스 많이 본 뉴스', '저작권법 제37조는 출처 명시 의무를 정한다.',
+                  '', None):
+            self.assertFalse(crawler._is_non_body(t), t)
+
+    def _fetch(self, url, html, source=''):
+        import crawler
+
+        class _Resp:
+            text = html
+            encoding = 'utf-8'
+
+            def raise_for_status(self):
+                pass
+        with mock.patch.object(crawler, '_http_get', lambda u, timeout=8: _Resp()):
+            return crawler.fetch_article_body(url, source)[0]
+
+    def test_site_rules_pick_real_body(self):
+        body = '본문 첫 문장이다. ' * 20
+        ebn = ('<html><body><article class="box-skin">많이 본 기사 ' + '다른 기사 제목 ' * 20 + '</article>'
+               '<article id="article-view-content-div">' + body + '</article></body></html>')
+        self.assertTrue(self._fetch('https://www.ebn.co.kr/news/articleView.html?idxno=1', ebn, 'ebn')
+                        .startswith('본문 첫 문장'))
+        korea = ('<html><body><div class="article box">실시간 인기뉴스 09.22. 기준 ' + '제목 ' * 40 + '</div>'
+                 '<div class="view_cont">' + body + '</div></body></html>')
+        self.assertTrue(self._fetch('https://www.korea.kr/news/policyNewsView.do?newsId=1', korea, 'korea')
+                        .startswith('본문 첫 문장'))
+
+    def test_list_candidate_skipped_elsewhere(self):
+        body = '본문 첫 문장이다. ' * 20
+        html = ('<html><body><article>최신뉴스 ' + '다른 기사 제목 ' * 20 + '</article>'
+                '<div class="article-body">' + body + '</div></body></html>')
+        self.assertTrue(self._fetch('https://example.com/news/articleView.html?idxno=1', html, 'example')
+                        .startswith('본문 첫 문장'))
+        only_list = '<html><body><article>많이 본 기사 ' + '제목 ' * 60 + '</article></body></html>'
+        self.assertEqual(self._fetch('https://example.com/a', only_list, 'example'), '')   # 비움 → 요약 폴백·재수집 대상
+
+    def test_other_sites_unchanged(self):
+        # 첫 <article>이 짧은 기자 칸인 기사관리 시스템 사이트는 종전처럼 div.article-body(부제+본문)를 잡는다 —
+        # 공용 후보에 #article-view-content-div를 끼우면 부제가 빠진다(표본 30곳 중 8곳, 결과 불변 위반)
+        html = ('<html><body><article class="item">홍길동 기자</article><div class="article-body">부제 줄입니다 '
+                '<article id="article-view-content-div">' + '본문 문장이다. ' * 20 + '</article></div></body></html>')
+        self.assertTrue(self._fetch('https://www.pressman.kr/news/articleView.html?idxno=1', html, 'pressman')
+                        .startswith('부제 줄입니다'))
