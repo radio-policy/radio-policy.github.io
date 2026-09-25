@@ -1,0 +1,9 @@
+-- vault_names — tools_db_baseline.py가 실DB에서 생성(손으로 고치지 말 것), 비밀 마스킹됨
+
+admin_report_cron_secret  -- 운영자 일일 구독자 리포트 Edge Function 호출용 (2026-08-14)
+
+github_pat  -- 
+
+subscriber_cron_secret  -- 구독자 브리핑 cron → Edge Function 인증
+
+telegram_bot_token  -- 

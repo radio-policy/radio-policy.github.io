@@ -81,7 +81,8 @@
 | `health_watchdog.py` | 외부 헬스 워치독 (Supabase 독립) |
 | `index.html` / `app.js` / `styles.css` | 대시보드 프론트엔드 |
 | `system_prompt.js` | 대시보드 AI 자문 시스템 프롬프트 |
-| `docs/voyage-embed.ts` | Edge Function 소스(템플릿) |
+| `supabase/functions/` | Edge Function 소스(배포 목록과 1:1 — voyage-embed 포함, #227) |
+| `docs/db_baseline/` · `tools_db_baseline.py` | DB 설계도(표·함수·권한·예약 작업 정의, 비밀 마스킹) — 복구 정본 (#227) |
 | `backfill_embeddings.py` / `backfill_report_embeddings.py` | 임베딩 백필 |
 | `.github/workflows/` | daily_crawl·morning_briefing·law_crawl·assembly_crawl·backfill·cleanup·health_watchdog |
 

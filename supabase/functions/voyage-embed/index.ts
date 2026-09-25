@@ -2,16 +2,7 @@
 //  Supabase Edge Function : voyage-embed
 //  역할: 질문(텍스트)을 Voyage AI로 보내 1024차원 임베딩(숫자 배열)으로 변환.
 //        대시보드 AI 자문(시맨틱 검색)이 호출합니다.
-//
-//  배포 방법 (둘 중 하나)
-//   A) Supabase 대시보드 → Edge Functions → 'Create a new function'
-//      → 이름을 정확히  voyage-embed  로 입력 → 아래 코드 전체를 붙여넣고 Deploy
-//   B) (개발자) supabase CLI:  supabase functions deploy voyage-embed
-//
-//  배포 후 반드시 Secret 등록:
-//   대시보드 → Project Settings → Edge Functions → Secrets (또는 CLI)
-//      VOYAGE_API_KEY = (본인 Voyage 키)
-//   * verify_jwt 는 꺼둔 상태로 사용합니다(대시보드에서 anon 호출).
+//  model 파라미터(하위호환): 미지정=voyage-4-lite(조문/document_chunks), 'voyage-law-2'(법령요약/kb_chunks).
 // ============================================================================
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
@@ -26,7 +17,6 @@ const corsHeaders = {
 };
 
 Deno.serve(async (req: Request) => {
-  // CORS preflight
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
   }
@@ -47,9 +37,6 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    // 모델 선택(하위호환): 미지정 시 기존과 동일한 voyage-4-lite.
-    //   조문 원문(document_chunks) 질의 = voyage-4-lite / 법령요약(kb_chunks) 질의 = voyage-law-2.
-    // 두 모델 모두 1024차원이라 벡터 컬럼 호환. 단, 저장·질의 모델은 반드시 일치해야 함.
     const ALLOWED_MODELS = ['voyage-4-lite', 'voyage-law-2'];
     const useModel = ALLOWED_MODELS.includes(model) ? model : 'voyage-4-lite';
 

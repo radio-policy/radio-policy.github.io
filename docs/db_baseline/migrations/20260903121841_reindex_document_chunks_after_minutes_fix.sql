@@ -1,0 +1,4 @@
+-- 20260903121841 reindex_document_chunks_after_minutes_fix
+
+REINDEX INDEX document_chunks_content_trgm_idx;
+REINDEX INDEX document_chunks_embedding_hnsw_idx;;

@@ -69,7 +69,7 @@ FULL_REVISION_RATIO = 0.7   # 변경조문/전체조문이 이 비율 초과면 
 DASHBOARD_URL = 'https://radio-policy.github.io/?p=diff'
 KST = timezone(timedelta(hours=9))
 
-# docs/schema.sql:451 norm_article_key의 파이썬 포팅 — "제48조의3(침해사고 대응)" → "48조의3"
+# DB 함수 norm_article_key(docs/db_baseline/20_functions.sql)의 파이썬 포팅 — "제48조의3(침해사고 대응)" → "48조의3"
 ART_KEY_RE = re.compile(r'^제?\s*([0-9]+조(?:의[0-9]+)?)')
 # 새 판에서 "제n조 삭제" 형태로 남는 조문은 deleted 취급 (fetch_pending_articles와 동일 취지)
 DELETED_RE = re.compile(r'^제\s*[0-9]+조(?:의[0-9]+)?(?:\([^)]*\))?\s*삭제')

@@ -14,6 +14,8 @@
   ⑤ .bat — 바뀐 .bat의 bareLF·비ASCII 바이트(#22; git status는 LF로 깨진 .bat을 깨끗하다고 보여 준다)
   ⑥ DB 권한 — public 테이블·시퀀스·뷰 중 anon/authenticated/service_role 어느 역할도 GRANT가 없는 것(#214;
      2026-10-30부터 Supabase가 새 테이블에 자동 GRANT를 주지 않으므로, 세션이 MCP로 만든 테이블이 API에서 42501이 난다)
+  ⑦ DB 설계도 — docs/db_baseline/(tools_db_baseline.py)이 실DB 정의와 다른지(#227; DB는 git 밖에서 바뀌므로
+     바꾼 세션이 커밋할 때 설계도도 함께 갱신하게)
 """
 import os
 import re
@@ -227,6 +229,27 @@ def check_grants():
     return todo
 
 
+def check_baseline():
+    if not os.environ.get('SUPABASE_ACCESS_TOKEN', '').strip():
+        return ['⑦ SUPABASE_ACCESS_TOKEN 없음 — DB 설계도 대조 건너뜀']
+    try:
+        import tools_db_baseline as tdb
+        out, _, bad = tdb.build()
+        changed, added, removed = tdb.diff_against(os.path.join(ROOT, tdb.OUT_DEFAULT), out)
+    except (Exception, SystemExit) as e:  # noqa: BLE001
+        return ['⑦ DB 설계도 대조 실패: %s' % str(e)[:120]]
+    if bad:
+        return ['⑦ DB 설계도: 마스킹 뒤에도 비밀 후보가 남음 %s — tools_db_baseline.py 규칙부터 볼 것(파일 쓰지 말 것)'
+                % sorted(bad)]
+    diff = changed + added + removed
+    if not diff:
+        print('  ⑦ DB 설계도 최신 — docs/db_baseline = 실DB')
+        return []
+    shown = ', '.join(diff[:6]) + (' 외 %d개' % (len(diff) - 6) if len(diff) > 6 else '')
+    return ['⑦ DB 설계도가 실DB와 다름(%d개: %s) → py -3.12 tools_db_baseline.py 후 git add docs/db_baseline/<바뀐 파일>'
+            % (len(diff), shown)]
+
+
 # ── push 뒤 원격 대조 ──
 def verify(since):
     for r in ('gitlab', 'origin'):
@@ -273,6 +296,7 @@ def main():
     todo += check_gitlab_ci()
     todo += check_bat(changed)
     todo += check_grants()   # 테이블은 git 밖(MCP)에서 생기므로 바뀐 파일과 무관하게 늘 본다
+    todo += check_baseline()   # 같은 이유로 늘 본다
     print()
     if todo:
         print('할 일 %d건:' % len(todo))
