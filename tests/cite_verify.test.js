@@ -260,6 +260,69 @@ function ok(name, cond, extra) {
   eq('토막 표시 중복: 직전 문단에 같은 조 표시 → dup 삭제', [sv.verdicts.map(function (x) { return x.status; }), /을 규정합니다\.$/.test(sv.answer.trim())], [['ok', 'dup'], true]);
   ok('citedDocs: 확인된 문서 목록', Array.isArray(sv.citedDocs) && sv.citedDocs.length === 1 && /전기통신사업법/.test(sv.citedDocs[0]), sv.citedDocs);
 
+  // ── #230: 역참조 — 다른 법령 조문 오인 제외·정의 조문 제외·제재 조문 별도 칸(2026-09-26 96760b6b 재현 기반) ──
+  [['「정보통신망 이용촉진 및 정보보호 등에 관한 법률」', true], ['… 및 같은 법 ', true], ['법 ', true], ['이 법 ', false],
+   ['법 제89조의2, 제89조의3 및 ', true], ['「전자정부법」 제36조제1항 및 ', true], ['「위치정보의 보호 및 이용 등에 관한 법률 시행령」(이하 "영"이라 한다) ', true],
+   ['전파법 ', true], ['업무처리규정 ', true], ['방법 ', false], ['① 과학기술정보통신부장관은 ', false],
+   ['방송미디어통신위원회는 제32조의12제1항, 제32조의13제2항ㆍ제3항ㆍ제5항, ', false], ['제52조제1항과 ', false], ['전기통신사업자와 ', false]
+  ].forEach(function (t) { eq('isOtherLawRef ' + JSON.stringify(t[0]), CV.isOtherLawRef(t[0]), t[1]); });
+  eq('selfCiteIndexes: 같은 법 제52조는 자기 법령 아님', CV.selfCiteIndexes('「정보통신망 이용촉진 및 정보보호 등에 관한 법률」제45조의3에 따른 정보보호 최고책임자 및 같은 법 제52조에 따른 한국인터넷진흥원', '52조'), []);
+  eq('selfCiteIndexes: 제52조제1항에 따른 명령', CV.selfCiteIndexes('① 과학기술정보통신부장관은 제52조제1항에 따른 명령을', '52조'), [15]);
+  ok('isSanctionTitle', CV.isSanctionTitle('104조(과태료)') && CV.isSanctionTitle('52조의3(이동통신사업자 등에 대한 과징금 부과)') && CV.isSanctionTitle('95조의2(벌칙)')
+     && !CV.isSanctionTitle('51조(사실조사 등)') && !CV.isSanctionTitle('106조(벌칙 적용에서 공무원 의제)'));
+  var DOC = '전기통신사업법(법률)(제21652호)(20260519)';
+  var t2 = { id: 97064, doc_name: DOC, article_no: '2조(정의)', chunk_index: 4, content: '24. "대리점"이란 …' };
+  var t3214 = { id: 97140, doc_name: DOC, article_no: '32조의14(판매점 선임에 대한 승낙 등)', chunk_index: 80, content: '① 대리점은 …' };
+  var r51 = { id: 97187, doc_name: DOC, article_no: '51조(사실조사 등)', chunk_index: 127, content: '① 방송미디어통신위원회는 … 제32조의14제1항ㆍ제3항ㆍ제5항 … 조사를 하게 할 수 있다.' };
+  var r5203 = { id: 97199, doc_name: DOC, article_no: '52조의3(이동통신사업자 등에 대한 과징금 부과)', chunk_index: 139, content: '① 방송미디어통신위원회는 이동통신사업자 … 제32조의14제3항 … 을 위반한 경우에는 … 100분의 3 이하에 해당하는 금액을 과징금으로 부과할 수 있다.' };
+  var r104a = { id: 97286, doc_name: DOC, article_no: '104조(과태료)', chunk_index: 226, content: '④ 다음 각 호의 어느 하나에 해당하는 자에게는 1천500만원 이하의 과태료를 부과한다.\n1. 제32조의13제4항을 위반하여 표준 협정서를 신고하지 아니한 자\n⑤ 다음 각 호의 어느 하나에 해당하는 자에게는 1천만원 이하의 과태료를 부과한다.\n1. 제10조제2항에 따른 신고를 하지 아니한 자' };
+  var r104b = { id: 97288, doc_name: DOC, article_no: '104조(과태료)', chunk_index: 228, content: '4의10. 제32조의13제9항에 따른 점검을 거부한 자\n4의11. 제32조의14제1항에 따른 사전승낙을 받지 아니하고 대리점과 … 거래를 한 자\n4의12. 제32조의14제1항을 위반하여 이동통신사업자의 사전승낙을 받지 아니한 자와 거래를 한 자' };
+  var rOther = { id: 97104, doc_name: DOC, article_no: '22조의5(부가통신사업자의 불법촬영물 등 유통방지)', chunk_index: 60, content: '2. 「정보통신망 이용촉진 및 정보보호 등에 관한 법률」 제32조의14에 따른 기관' };
+  var rReview = { id: 97300, doc_name: DOC, article_no: '105조의2(규제의 재검토)', chunk_index: 240, content: '3. 제32조의14에 따른 사전승낙: 2025년 1월 1일' };
+  var citedKeys = [];
+  var store230 = { '32조의14': [rOther, r51, r5203, r104b, rReview] };
+  var fetch230 = async function (doc, key) { citedKeys.push(key); return store230[key] || []; };
+  var art230 = async function (doc, key) { return key === '104조' ? [r104a, r104b] : key === '52조의3' ? [r5203] : []; };
+  var ce230 = await CV.buildCitingExcerpts([t2, t3214], fetch230, { fetchArticle: art230 });
+  eq('#230 역참조: 정의 조문(제2조)은 대상에서 제외(조회도 안 함)', citedKeys, ['32조의14']);
+  eq('#230 역참조: 제재 2건 먼저(과태료·과징금은 문서 순서, 과징금 앞) + 일반 1건, 다른 법령·규제 재검토 제외',
+     ce230.chunks.map(function (x) { return CV.articleKey(x.article_no); }), ['52조의3', '104조', '51조']);
+  eq('#230 역참조: sanctions 수', ce230.sanctions, 2);
+  ok('#230 제재 발췌: 항 머리(⑤ 1천만원) + 4의11·4의12, 무관한 ④ 줄 없음',
+     /\[제재 2\] .*제104조\(과태료\) — 제32조의14 인용\n⑤ 다음 각 호의 어느 하나에 해당하는 자에게는 1천만원 이하의 과태료를 부과한다\.\n4의11\. .*\n4의12\. /.test(ce230.text) && ce230.text.indexOf('1천500만원') === -1, ce230.text);
+  eq('#230 역참조 원본 조각 id: 제재 머리·인용 줄 조각 + 일반', ce230.ids, [97199, 97286, 97288, 97187]);
+  // 발췌 의사청크로 제재 인용 검증이 통과한다(항·호 구조가 발췌에 있음)
+  var s104 = CV.findCitations('사전승낙 없는 자와 거래한 대리점은 1천만원 이하의 과태료 대상입니다(전기통신사업법 제104조제5항제4호의12) [원문 확인됨: 전기통신사업법 제104조제5항제4호의12]');
+  eq('#230 제재 발췌로 제104조⑤4의12 인용 ok', CV.checkCitation(s104[0], ce230.chunks, []).status, 'ok');
+  eq('#230 sanctionExcerpt: 순위 높은 대상의 줄이 길이 상한 안에 먼저',
+     CV.sanctionExcerpt(r104a.content + '\n' + r104b.content, ['32조의14', '32조의13'], 160).split('\n')[1].slice(0, 5), '4의11.');
+
+  // ── #230: 표시 없는 인용 대조 ──
+  var q2 = '전기통신사업법 제2조는 \n\n"장려금"이란 이동통신단말장치 제조업자가 이동통신사업자, 대리점 또는 판매점 등에 제공하는 경제적 이익\n\n으로 정의합니다.\n\n' +
+           '2026.9.21.자 보도에 따르면 \n\n현장 점검을 거부하거나 이미 제재를 받고 있던 두 개 판매점에 처음으로 사전승낙 철회가 내려졌다\n\n고 합니다.\n\n' +
+           '또한 제32조의14제1항은 "대리점은 이동통신사업자의 서면에 의한 사전승낙 없이는 판매점을 선임할 수 없으며"라고 정합니다.';
+  var tq = CV.tagUntaggedQuotes(q2);
+  eq('#230 무표시 인용: 인용 문단 1 + 따옴표 1(보도 인용은 조문 번호가 없어 제외)', tq.added, 2);
+  ok('#230 무표시 인용: 표시 대상은 앞 문장의 조문', tq.answer.indexOf('[원문 확인됨: 전기통신사업법 제2조' + CV.QUOTE_MARK + ']') !== -1
+     && tq.answer.indexOf('판매점을 선임할 수 없으며" [원문 확인됨: 제32조의14제1항' + CV.QUOTE_MARK + ']') !== -1, tq.answer);
+  var def2 = { id: 97064, doc_name: DOC, article_no: '2조(정의)', chunk_index: 4, content: '28. "장려금"이란 다음 각 목의 어느 하나에 해당하는 것을 말한다.\n가. 이동통신단말장치 제조업자가 이동통신사업자(그 계열회사를 포함한다), 대리점 또는 판매점 등에 이동통신단말장치 판매에 관하여 제공하는 모든 경제적 이익' };
+  var a3214 = { id: 97140, doc_name: DOC, article_no: '32조의14(판매점 선임에 대한 승낙 등)', chunk_index: 80, content: '① 대리점은 이동통신사업자의 서면에 의한 사전승낙 없이는 판매점을 선임할 수 없으며, 사전승낙을 받지 아니한 자와 … 거래를 하여서는 아니 된다.' };
+  var judged = [];
+  var vq = await CV.verifyCitations({ answer: q2, chunks: [def2, a3214], callHaiku: async function (sys, user) {
+    judged.push(user);
+    return '[{"id":1,"verdict":"불일치","reason":"판매에 관하여·모든 누락"}]';
+  } });
+  eq('#230 무표시 인용: 판정 결과(장려금 → 다름, 제32조의14 → 원문 그대로 확인)', vq.verdicts.map(function (v) { return [v.key, v.status, v.auto || null]; }),
+     [['2조', 'mismatch', 'quote'], ['32조의14', 'ok', 'quote']]);
+  ok('#230 무표시 인용: 표시 문구 — 다름은 세 상태 표시, 확인됨은 법령명 채움, 표지 문자 없음',
+     vq.answer.indexOf('[원문과 다름 — 판정기 메모: 판매에 관하여·모든 누락 (전기통신사업법 제2조)]') !== -1
+     && vq.answer.indexOf('[원문 확인됨: 전기통신사업법 제32조의14제1항]') !== -1 && vq.answer.indexOf(CV.QUOTE_MARK) === -1, vq.answer);
+  ok('#230 무표시 인용: 판정기에는 인용 문단만(앞 문장·보도 인용 제외)', judged.length === 1 && judged[0].indexOf('보도') === -1 && /\[인용문\]\n"장려금"이란 .*경제적 이익\n\[원문\]/.test(judged[0]), judged[0]);
+  eq('#230 무표시 인용: quoteTagged', vq.quoteTagged, 2);
+  // 대조할 것이 없는 기계 표시는 흔적 없이 지운다(조문이 검색 결과에 없는 '보도'가 아니라 번호만 있는 경우)
+  var vq2 = await CV.verifyCitations({ answer: '전기통신사업법 제2조는 \n\n아래 표와 같이 정리할 수 있습니다\n\n로 정의합니다.', chunks: [def2], callHaiku: async function () { return '[]'; } });
+  ok('#230 무표시 인용: 표지 문자는 어떤 경우에도 남지 않는다', vq2.answer.indexOf(CV.QUOTE_MARK) === -1, vq2.answer);
+
   console.log('\n' + (total - fails) + '/' + total + ' passed');
   process.exit(fails ? 1 : 0);
 })().catch(function (e) { console.error(e); process.exit(2); });

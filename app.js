@@ -508,10 +508,11 @@ function citeVerdictSummaryHtml(verdicts) {
       + ' — 표시는 AI가 붙인 것이므로 원문 링크로 확인해 주세요</div>';
   if (!verdicts || !verdicts.length) return '';
   var ok = 0, by = {};
-  var counted = 0;
+  var counted = 0, quoted = 0;
   verdicts.forEach(function(v) {
     if (v.status === 'dup') return;                 // 중복 표시는 지웠으므로 세지 않는다(#176)
     counted++;
+    if (v.auto === 'quote') quoted++;               // 표시 없이 옮긴 인용을 검증기가 찾아 대조한 것(#230)
     if (v.status === 'ok') { ok++; return; }
     var k = CITE_STATUS_LABEL[v.status] || '확인 못 함';
     by[k] = (by[k] || 0) + 1;
@@ -519,7 +520,7 @@ function citeVerdictSummaryHtml(verdicts) {
   var bad = counted - ok;
   var detail = Object.keys(by).map(function(k) { return k + ' ' + by[k]; }).join(' · ');
   return '<div class="rag-sources" style="margin-top:8px"><i class="ti ti-shield-check"></i>인용 대조('
-    + counted + '건): 확인 ' + ok
+    + counted + '건' + (quoted ? ', 표시 없던 인용 ' + quoted + '건 포함' : '') + '): 확인 ' + ok
     + (bad ? ' · <span class="cite cite-miss">확인 못 함 ' + bad + '</span>'
              + (detail ? ' (' + detail + ')' : '') : '')
     + '</div>';
@@ -2276,8 +2277,9 @@ async function buildAdvisoryContext(userText) {
   // 발췌 원본 조각 id는 lastAdvChunkIds에 넣어 verify-citations가 그 조문으로 검증한다. rag.ts와 동일 유지.
   // 역참조·시행예정·별표는 셋 다 '보강이 끝난 ragChunks·lawExtra'만 읽고 서로 독립이라 **동시에 시작**한다(B-2, #201).
   // 종전에는 한 건씩 await라 각각의 DB 왕복이 줄줄이 더해졌다. 프롬프트 조립 순서는 아래에서 그대로 고정.
+  // 제재 조문(벌칙·과태료·과징금)은 별도 칸으로 먼저 싣고, 금액이 적힌 항 머리 문장을 찾으려 그 조문 전체를 읽는다(fetchArticle, #230).
   var citingP = (window.CiteVerify && sb)
-    ? CiteVerify.buildCitingExcerpts((lawExtra || []).concat(ragChunks), fetchCitingChunks, CITING_OPTS)
+    ? CiteVerify.buildCitingExcerpts((lawExtra || []).concat(ragChunks), fetchCitingChunks, Object.assign({}, CITING_OPTS, { fetchArticle: fetchArticleChunks }))
         .catch(function(e) { console.warn('역참조 발췌 실패(건너뜀):', e); return { text: '', chunks: [], ids: [] }; })
     : Promise.resolve({ text: '', chunks: [], ids: [] });
   var pendingP = buildPendingContext(ragChunks);                              // 인용 조문의 시행예정 개정본(Phase 3)
@@ -2290,7 +2292,7 @@ async function buildAdvisoryContext(userText) {
   var ce = await citingP;
   citingContext = ce.text || '';
   _advCitingIds = ce.ids || [];
-  if (ce.chunks && ce.chunks.length) console.log('역참조 발췌:', ce.chunks.length + '건');
+  if (ce.chunks && ce.chunks.length) console.log('역참조 발췌:', ce.chunks.length + '건(제재 ' + (ce.sanctions || 0) + ')');
 
   // 근거 청크 id 스냅샷 — 출처 목록과 같은 순서(조문 정밀검색분 먼저, 그다음 RAG, 끝에 보강·역참조 조각).
   // 숫자 id만 남긴다(종전 보도자료 의사청크 'press_…' 문자열은 #204로 사라졌지만 방어는 유지)

@@ -16,6 +16,10 @@
 //                         판정. 불일치면 「[⚠️ 원문과 다르게 설명됨 — 확인 필요]」로 바꾼다.
 //                         판단불가·호출 실패는 표시를 그대로 둔다(fail-open).
 //
+//  #230(2026-09-26, 운영자 결정) — ① 역참조 발췌가 다른 법령 조문(「…」·같은 법·(시행령의) 법 제N조)을 가리킨 줄을 인용으로
+//   치지 않고, 정의·목적·목록 조문을 빼고, 제재 조문(벌칙·과태료·과징금 등)은 별도 칸으로 먼저 싣는다(금액이 적힌 항 머리 포함)
+//   ② 표시 없는 인용 문단·따옴표 인용도 같은 경로로 대조한다(tagUntaggedQuotes — 판정 기준은 그대로).
+//
 //  한 파일을 세 곳이 그대로 쓴다 — Deno Edge(rag.ts, verify-citations), 브라우저(index.html <script>),
 //  node 테스트(tests/cite_verify.test.js). 그래서 TS 문법·export 없이 globalThis.CiteVerify 에 붙인다.
 //  GitLab Pages는 나열된 파일만 싣는다 — .gitlab-ci.yml의 cp 목록에 이 경로가 있어야 한다.
@@ -177,17 +181,63 @@
   // "제32조의4제5항에 따른 …"처럼 검색된 조문을 가리키므로 이 경로로 닿는다. AI 요약이 아니라 원문 발췌라 비용 0·오류 0.
   //   chunks: 순위순 조문 청크(정밀검색분 먼저)
   //   fetchCiting(doc_name, key) → 같은 문서에서 content에 '제'+key가 든 조각 [{id, doc_name, article_no, chunk_index, content}]
-  //   반환 { text: 프롬프트 블록, chunks: 검증용 의사 청크(_excerpt=true), ids: 발췌 원본 조각 id }
+  //   opts.fetchArticle(doc_name, key) → 그 조문의 모든 조각(제재 조문의 항 머리 문장을 찾는 데 쓴다, 없으면 인용 조각 안에서만 찾는다)
+  //   반환 { text: 프롬프트 블록, chunks: 검증용 의사 청크(_excerpt=true), ids: 발췌 원본 조각 id, sanctions: 제재 조문 수 }
+  //
+  // #230(2026-09-26) 보강 — 96760b6b 자문(대리점·판매점 사이 개인사업자) 재현에서 8칸이 이렇게 쓰였다:
+  //  ① 6칸이 **다른 법령** 조문을 가리킨 줄이었다 — 「정보통신망법」…같은 법 제52조, 「벤처투자 촉진에 관한 법률」 제2조를
+  //     '제52조·제2조 인용'으로 잡았다(citeRegex는 앞의 법령명을 보지 않는다).
+  //  ② 4칸이 정의 조문(제2조) 인용 — 법령 거의 모든 조문이 정의 조문을 가리켜 칸만 먹는다.
+  //  ③ 제재 조문은 법령 끝(벌칙 장)에 있어 chunk_index 오름차순·조문당 4칸에서 늘 잘린다 — 제32조의14를 인용하는 조문 6개 중
+  //     제104조(과태료)가 6번째, 제50조는 제53조(과징금)·제99조(벌칙)·제104조가 5~9번째. 같은 질문 세 번 모두 제104조 0건.
+  //  그래서: 다른 법령 참조 줄은 인용으로 치지 않고, 정의·목적 조문은 대상에서 빼고, 제재 조문(벌칙·과태료·과징금·이행강제금·
+  //  양벌·몰수·추징)은 별도 칸(maxSanction)으로 먼저 뽑아 그 호가 속한 항의 머리 문장(금액·형량)까지 붙인다.
   function citeRegex(key) {
     // '32조의4'는 '제32조의40'과, '32조'는 '제32조의4'와 구분한다
     const esc = key.replace(/조의(\d+)$/, '조의$1').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     return new RegExp('제' + esc + (/조의\d+$/.test(key) ? '(?!\\d)' : '(?!의\\d)(?!\\d)'));
   }
-  function excerptAround(content, re, maxLen) {
+  const CITING_SKIP_TITLE_RE = /\((?:정의|목적|용어의\s*정의|용어정의|용어의\s*뜻)\)/;
+  // 발췌하지 않는 인용 조문 — 조문 번호만 늘어놓은 목록 조문(규제 재검토 기한·고유식별정보 처리 사무)과 목적 조문.
+  // 20문항 재현에서 이런 줄('제29조제9항 … 등록 요건: 2022년 1월 1일')이 칸을 차지했다(#230).
+  const CITER_SKIP_TITLE_RE = /\((?:목적|규제의\s*재검토|(?:민감정보\s*및\s*)?고유식별정보의\s*처리)\)/;
+  function isSanctionTitle(articleNo) {
+    const t = String(articleNo || '');
+    return /(벌칙|과태료|과징금|양벌|이행강제금|몰수|추징)/.test(t) && !/벌칙\s*적용/.test(t);   // '벌칙 적용에서 공무원 의제'는 제재가 아니다
+  }
+  // 같은 대상 안에서 먼저 뽑는 순서 — 위반 자체의 제재(벌칙·과태료·과징금·양벌)가 명령 불이행 강제(이행강제금)·몰수보다 앞.
+  // 96760b6b 재현: 제50조를 인용하는 제재 조문은 문서 순서로 제51조의2(자료제출 이행강제금)가 제53조(금지행위 과징금)보다 앞이다.
+  function sanctionTier(articleNo) { return /(벌칙|과태료|과징금|양벌)/.test(String(articleNo || '')) ? 0 : 1; }
+  // 조문 번호 바로 앞(before)이 다른 법령을 가리키는가 — 「…」 제N조 / 같은 법·동법 제N조 / (시행령·고시 안의) 법·영 제N조 /
+  // 「」 없이 적은 법령명(전파법 제10조). 자기 법령은 법령명 없이 '제N조' 또는 '이 법 제N조'로 적는다.
+  function isOtherLawRef(before) {
+    let b = String(before || '').replace(/\s+$/, '');
+    // 나열의 뒷 조문은 나열 머리의 법령을 따른다 — 「법 제89조의2, 제89조의3 및 제90조부터」의 제90조는 법(상위 법률) 조문.
+    // 앞의 조·항·호와 이음말(,ㆍ 및 또는 부터 까지)만으로 된 꼬리를 걷어 내고(그 안에 '제N조'가 있을 때만) 나열 머리 앞을 본다.
+    const run = b.match(/(?:제\s?\d+\s?(?:조(?:의\s?\d+)?|항|호(?:의\s?\d+)?)|[가-하]목|각\s?호|본문|단서|전단|후단|[,ㆍ·]|및|또는|부터|까지|이나|와|과|\s)+$/);
+    if (run && /제\s?\d+\s?조/.test(run[0])) b = b.slice(0, run.index).replace(/\s+$/, '');
+    if (/[」』]$/.test(b)) return true;
+    // 「위치정보의 보호 및 이용 등에 관한 법률 시행령」(이하 "영"이라 한다) 제3조 — 괄호 하나를 건너 다시 본다
+    const pb = b.replace(/\([^()]*\)$/, '').replace(/\s+$/, '');
+    if (pb !== b && /[」』]$/.test(pb)) return true;
+    const m = b.match(/([가-힣A-Za-z0-9·ㆍ]+)$/);
+    if (!m) return false;
+    const w = m[1];
+    if (/^(법|영|령|규칙|시행령|시행규칙|고시|규정|동법|동령)$/.test(w))
+      return !/(^|[^가-힣])이$/.test(b.slice(0, b.length - w.length).replace(/\s+$/, ''));
+    return w.length >= 3 && /(법|법률|시행령|시행규칙|고시|규정|기준|지침)$/.test(w);
+  }
+  // content에서 key를 **자기 법령으로** 인용한 위치들
+  function selfCiteIndexes(content, key) {
     const s = String(content || '');
-    const m = s.match(re);
-    if (!m) return '';
-    const at = m.index;
+    const re = new RegExp(citeRegex(key).source, 'g');
+    const out = [];
+    let m;
+    while ((m = re.exec(s)) !== null) if (!isOtherLawRef(s.slice(Math.max(0, m.index - 80), m.index))) out.push(m.index);
+    return out;
+  }
+  function excerptAt(content, at, maxLen) {
+    const s = String(content || '');
     let start = s.lastIndexOf('\n', at);
     start = start === -1 ? 0 : start + 1;
     let end = s.indexOf('\n', at);
@@ -200,57 +250,169 @@
     }
     return unit;
   }
+  function excerptAround(content, re, maxLen) {
+    const s = String(content || '');
+    const m = s.match(re);
+    return m ? excerptAt(s, m.index, maxLen) : '';
+  }
+  // 제재 조문 발췌 — 인용 줄(호)마다 그 줄이 속한 항의 머리 문장을 앞에 둔다. 금액·형량은 머리 문장에 있다
+  // (예: 제104조⑤ "다음 각 호의 어느 하나에 해당하는 자에게는 1천만원 이하의 과태료를 부과하고, …" + 4의11. 제32조의14제1항…).
+  // 머리 = 인용 줄에서 위로 올라가 처음 만나는 '①~⑳' 줄 또는 '제N조(…) 본문' 줄. 인용 줄 자체가 항이면(제53조① …) 머리는 없다.
+  // 길이 상한(maxLen) 안에서 고르는 순서: 순위가 높은 대상(keys 앞쪽)을 인용한 줄 → 그 조문을 '위반'한 자를 적은 줄 → 문서 순서.
+  // 제104조처럼 호가 수십 개인 조문에서 질문과 무관한 줄(제50조를 곁가지로 언급한 ①5호)이 칸을 먹지 않게 한다. 표시는 문서 순서.
+  function sanctionExcerpt(fullText, keys, maxLen) {
+    const lines = String(fullText || '').split('\n');
+    const hits = [];
+    for (let i = 0; i < lines.length; i++) {
+      const L = lines[i];
+      let at = -1, rank = -1;
+      for (let k = 0; k < keys.length && at < 0; k++) { const ix = selfCiteIndexes(L, keys[k]); if (ix.length) { at = ix[0]; rank = k; } }
+      if (at < 0) continue;
+      let h = -1;
+      for (let j = i; j >= 0; j--) {
+        if (/^\s*[①-⑳]/.test(lines[j]) || /^\s*제\d+조(?:의\d+)?\s*\([^)]*\)\s*\S/.test(lines[j])) { h = j; break; }
+      }
+      hits.push({ i: i, h: h !== i ? h : -1, rank: rank, viol: /위반|하지\s*아니한|거부|금지행위를\s*한/.test(L.slice(at)) ? 0 : 1,
+        item: excerptAt(L, at, 220), head: h >= 0 && h !== i ? excerptAt(lines[h], 0, 260) : '' });
+    }
+    const order = hits.slice().sort(function (a, b) { return a.rank - b.rank || a.viol - b.viol || a.i - b.i; });
+    const pickedHeads = new Set(), picked = [];
+    let total = 0;
+    for (const x of order) {
+      const add = (x.head && !pickedHeads.has(x.h) ? x.head.length + 1 : 0) + x.item.length + 1;
+      if (total + add > maxLen && picked.length) continue;
+      picked.push(x); total += add;
+      if (x.head) pickedHeads.add(x.h);
+    }
+    picked.sort(function (a, b) { return a.i - b.i; });
+    const outLines = [];
+    let lastHead = null;
+    for (const x of picked) {
+      if (x.head && x.h !== lastHead) { outLines.push(x.head); lastHead = x.h; }
+      outLines.push(x.item);
+    }
+    const dropped = hits.length - picked.length;
+    return outLines.join('\n') + (dropped ? '\n…(이 조문에서 같은 조문을 인용하는 줄 ' + dropped + '개 더 있음)' : '');
+  }
   async function buildCitingExcerpts(chunks, fetchCiting, opts) {
     opts = opts || {};
     const maxPer = opts.maxPerArticle != null ? opts.maxPerArticle : 4;
     const maxTotal = opts.maxTotal != null ? opts.maxTotal : 8;
     const maxLen = opts.maxLen != null ? opts.maxLen : 300;
+    const maxSanction = opts.maxSanction != null ? opts.maxSanction : 6;
+    const maxSanctionPer = opts.maxSanctionPerArticle != null ? opts.maxSanctionPerArticle : 2;
+    const sanctionLen = opts.sanctionMaxLen != null ? opts.sanctionMaxLen : 900;
+    const fetchArticle = typeof opts.fetchArticle === 'function' ? opts.fetchArticle : null;
     const have = new Set();          // 이미 컨텍스트에 있는 doc|key — 발췌 불필요
     const targets = [];
     for (const c of chunks || []) {
       const k = articleKey(c && c.article_no);
       if (!k || !c.doc_name) continue;
       const gk = c.doc_name + '|' + k;
-      if (!have.has(gk)) { have.add(gk); targets.push({ doc: c.doc_name, key: k }); }
+      if (have.has(gk)) continue;
+      have.add(gk);
+      if (CITING_SKIP_TITLE_RE.test(String(c.article_no || ''))) continue;   // 정의·목적 조문은 대상에서 뺀다(#230)
+      targets.push({ doc: c.doc_name, key: k });
     }
-    const out = [], ids = [], seen = new Set();
-    // expandArticles와 같은 묶음 조회(B-2, #201) — 처리는 targets 순서대로, 상한(maxTotal)에 닿으면 나머지 결과는 버린다.
+    // 조회는 expandArticles와 같은 묶음(B-2, #201) — 필요한 묶음까지만 받는다(뒤 대상은 상한에 닿으면 조회하지 않는다).
     const wave = opts.fetchConcurrency != null ? opts.fetchConcurrency : 6;
-    for (let w0 = 0; w0 < targets.length && out.length < maxTotal; w0 += wave) {
-      const batch = targets.slice(w0, w0 + wave);
-      const fetched = await Promise.all(batch.map(function (bt) {
-        return Promise.resolve().then(function () { return fetchCiting(bt.doc, bt.key); })
-          .then(function (r) { return r || []; }, function () { return []; });
-      }));
-      for (let bi = 0; bi < batch.length; bi++) {
-      if (out.length >= maxTotal) break;
-      const t = batch[bi];
-      let rows = fetched[bi];
+    const fetched = new Array(targets.length);
+    async function rowsOf(i) {
+      if (fetched[i] === undefined) {
+        const w0 = i - (i % wave);
+        const batch = targets.slice(w0, w0 + wave);
+        const res = await Promise.all(batch.map(function (bt) {
+          return Promise.resolve().then(function () { return fetchCiting(bt.doc, bt.key); })
+            .then(function (r) { return r || []; }, function () { return []; });
+        }));
+        res.forEach(function (r, j) {
+          fetched[w0 + j] = r.slice().sort(function (a, b) { return (a.chunk_index || 0) - (b.chunk_index || 0); });
+        });
+      }
+      return fetched[i];
+    }
+    const citerOk = function (r, t) {
+      const rk = articleKey(r.article_no);
+      if (!rk || rk === t.key) return null;                                    // 자기 자신
+      if (/^(부칙|별표|서식|별지|붙임)/.test(String(r.article_no || '')) || CITER_SKIP_TITLE_RE.test(String(r.article_no || ''))) return null;
+      const gk = r.doc_name + '|' + rk;
+      if (have.has(gk)) return null;                                           // 이미 실린 조문
+      const at = selfCiteIndexes(r.content, t.key);
+      return at.length ? { gk: gk, at: at[0] } : null;                         // 다른 법령 조문만 가리키면 인용 아님(#230)
+    };
+    // ① 제재 조문 — 대상 순위순, 대상당 새 조문 maxSanctionPer개, 전체 maxSanction개. 이미 뽑힌 제재 조문이 다음 대상도
+    //    인용하면 칸을 더 쓰지 않고 인용 줄만 합친다(제104조가 제32조의13·제32조의14·제50조를 모두 인용).
+    //    대상당 2개: 96760b6b 재현에서 3개면 제52조(시정조치) 하나가 이행강제금·과징금(사업정지 갈음)·벌칙으로 칸을 채워
+    //    정작 제50조 위반 과징금(제53조)이 밀려났다.
+    const sanc = new Map();           // gk → {doc_name, article_no, key, keys:[], rows:[]}
+    for (let i = 0; i < targets.length; i++) {
+      if (sanc.size >= maxSanction && fetched[i] === undefined) break;        // 칸이 찼으면 받은 결과 안에서만 합친다
+      const t = targets[i];
+      const rows = (await rowsOf(i)).filter(function (r) { return isSanctionTitle(r.article_no); })
+        .sort(function (a, b) { return sanctionTier(a.article_no) - sanctionTier(b.article_no) || (a.chunk_index || 0) - (b.chunk_index || 0); });
+      let n = 0;
+      for (const r of rows) {
+        const ok = citerOk(r, t);
+        if (!ok) continue;
+        let e = sanc.get(ok.gk);
+        if (!e) {
+          if (sanc.size >= maxSanction || n >= maxSanctionPer) continue;
+          e = { doc_name: r.doc_name, article_no: r.article_no, key: articleKey(r.article_no), keys: [], rows: [] };
+          sanc.set(ok.gk, e); n++;
+        }
+        if (e.keys.indexOf(t.key) === -1) e.keys.push(t.key);
+        if (!e.rows.some(function (x) { return x.id === r.id; })) e.rows.push(r);
+      }
+    }
+    const sList = Array.from(sanc.values());
+    const fulls = await Promise.all(sList.map(function (e) {
+      if (!fetchArticle) return Promise.resolve(null);
+      return Promise.resolve().then(function () { return fetchArticle(e.doc_name, e.key); })
+        .then(function (r) { return (r || []).filter(function (x) { return articleKey(x.article_no) === e.key; }); }, function () { return null; });
+    }));
+    const sOut = [], ids = [];
+    sList.forEach(function (e, si) {
+      const all = (fulls[si] && fulls[si].length ? fulls[si] : e.rows).slice().sort(function (a, b) { return (a.chunk_index || 0) - (b.chunk_index || 0); });
+      const ex = sanctionExcerpt(mergeChunkTexts(all.map(function (x) { return x.content || ''; })), e.keys, sanctionLen);
+      if (!ex) return;
+      sOut.push({ doc_name: e.doc_name, article_no: e.article_no, cites: e.keys, excerpt: ex });
+      // 원본 조각 id — 발췌에 들어간 줄(머리·인용 줄)이 있는 조각만(대시보드 검증이 이 조각들로 원문을 다시 읽는다)
+      const exLines = ex.split('\n').map(function (l) { return l.replace(/^…|…$/g, '').slice(0, 40); }).filter(function (l) { return l.length >= 8; });
+      for (const x of all) {
+        if (typeof x.id !== 'number' || ids.indexOf(x.id) !== -1) continue;
+        if (exLines.some(function (l) { return String(x.content || '').indexOf(l) !== -1; })) ids.push(x.id);
+      }
+    });
+    // ② 그 밖의 역참조(조사·준용·시정명령 등) — 종전 규칙 그대로(대상당 maxPer, 전체 maxTotal), 제재 칸에 든 조문은 뺀다
+    const out = [], seen = new Set(sanc.keys());
+    for (let i = 0; i < targets.length && out.length < maxTotal; i++) {
+      const t = targets[i];
+      const rows = await rowsOf(i);
       const re = citeRegex(t.key);
       let n = 0;
-      rows.sort(function (a, b) { return (a.chunk_index || 0) - (b.chunk_index || 0); });
       for (const r of rows) {
         if (n >= maxPer || out.length >= maxTotal) break;
-        const rk = articleKey(r.article_no);
-        if (!rk || rk === t.key) continue;                                   // 자기 자신
-        if (/^(부칙|별표|서식|별지|붙임)/.test(String(r.article_no || ''))) continue;
-        const gk = r.doc_name + '|' + rk;
-        if (have.has(gk) || seen.has(gk)) continue;                          // 이미 실린 조문·중복
-        const ex = excerptAround(r.content, re, maxLen);
+        const ok = citerOk(r, t);
+        if (!ok || seen.has(ok.gk)) continue;                                  // 중복
+        const ex = excerptAt(r.content, ok.at, maxLen);
         if (!ex) continue;
-        seen.add(gk); n++;
+        seen.add(ok.gk); n++;
         out.push({ doc_name: r.doc_name, article_no: r.article_no, cites: t.key, excerpt: ex });
-        if (typeof r.id === 'number') ids.push(r.id);
-      }
+        if (typeof r.id === 'number' && ids.indexOf(r.id) === -1) ids.push(r.id);
       }
     }
-    if (!out.length) return { text: '', chunks: [], ids: [] };
-    const text = '\n\n---\n\n[검색된 조문을 인용하는 다른 조문 — 발췌]\n' +
-      '아래는 위 조문을 가리키는 같은 법령의 다른 조문(제재·조사·준용 등)에서 **인용 문장만** 잘라 온 것입니다. 전문이 아니므로 ' +
+    if (!out.length && !sOut.length) return { text: '', chunks: [], ids: [], sanctions: 0 };
+    let text = '';
+    if (sOut.length) text += '\n\n---\n\n[검색된 조문을 위반했을 때의 제재 조문 — 발췌]\n' +
+      '아래는 위 조문을 인용하는 같은 법령의 벌칙·과태료·과징금 등 제재 조문에서 **그 조문을 인용한 호와 그 호가 속한 항의 머리 문장(금액·형량)**만 ' +
+      '잘라 온 것입니다. 위반 시 제재를 설명할 때는 이 발췌를 근거로 「법령명 제N조제M항제K호」까지 적고, 발췌에 없는 제재·금액을 기억으로 채우지 마세요.\n\n' +
+      sOut.map(function (x, i) { return '[제재 ' + (i + 1) + '] ' + x.doc_name + ' 제' + x.article_no + ' — 제' + x.cites.join('·제') + ' 인용\n' + x.excerpt; }).join('\n\n');
+    if (out.length) text += '\n\n---\n\n[검색된 조문을 인용하는 다른 조문 — 발췌]\n' +
+      '아래는 위 조문을 가리키는 같은 법령의 다른 조문(조사·준용·시정명령 등)에서 **인용 문장만** 잘라 온 것입니다. 전문이 아니므로 ' +
       '이 발췌에 없는 항·호의 내용을 추정하지 마세요. 인용할 때는 「법령명 제N조」와 발췌에 보이는 항·호까지만 적으세요.\n\n' +
       out.map(function (x, i) { return '[역참조 ' + (i + 1) + '] ' + x.doc_name + ' 제' + x.article_no + ' — 제' + x.cites + ' 인용\n' + x.excerpt; }).join('\n\n');
-    const pseudo = out.map(function (x) { return { id: null, doc_name: x.doc_name, article_no: x.article_no, chunk_index: 0, content: x.excerpt, _excerpt: true }; });
-    return { text: text, chunks: pseudo, ids: ids };
+    const pseudo = sOut.concat(out).map(function (x) { return { id: null, doc_name: x.doc_name, article_no: x.article_no, chunk_index: 0, content: x.excerpt, _excerpt: true }; });
+    return { text: text, chunks: pseudo, ids: ids, sanctions: sOut.length };
   }
 
   // 시스템 프롬프트의 「■ 전파법 제16조(재할당) [원문 확인됨] …」 블록 → 의사 청크.
@@ -469,6 +631,13 @@
           pEnd = pStart;
         }
       }
+      // 기계가 붙인 인용 대조 표시(#230)는 그 인용 문단(문장 안 따옴표 인용이면 따옴표 속)만 인용문으로 본다 — 인용 줄에 조 번호가 없으면
+      // segment가 앞 문단들로 넓어져 모델의 해설까지 판정기에 넘어갔다(96760b6b 모의: 제50조 인용문에 앞 절의 장려금 해설이 섞임)
+      if (m[0].indexOf(QUOTE_MARK) !== -1) {
+        const pre = text.slice(Math.max(prevEnd, paraStart), tagStart).replace(/\s+$/, '');
+        const qm = pre.match(/["“]([^"”\n]{25,})["”]$/);   // 문장 안 따옴표 인용이면 따옴표 속만
+        c.claimOverride = qm ? qm[1] : pre;
+      }
       cites.push(c);
       prevEnd = tagEnd;
       if (c.kind === 'article' && c.lawInfo && c.lawInfo.candidates) lastLaw = c.lawInfo;
@@ -655,20 +824,82 @@
     return { answer: parts.join(''), added: added };
   }
 
+  // 표시 없는 인용 대조(#230, 2026-09-26 운영자 결정 — 판정 기준은 그대로): 모델이 조문을 인용 문단이나 따옴표로 옮기고도
+  // 표시를 붙이지 않으면 검증기가 보지 않았다. 96760b6b 답변은 「전기통신사업법 제2조는 / (인용 문단) / 으로 정의합니다」 꼴의
+  // 무표시 인용 4개 중 2개가 원문과 달랐다(장려금 정의에서 '판매에 관하여'·'모든' 누락, 제50조①5의2와 ②를 섞은 합성문).
+  // 조문 번호가 인용 바로 앞에 있는 것만 골라 보이지 않는 표지(QUOTE_MARK)가 든 표시를 붙이고, 모델 표시와 같은 경로
+  // (원문 그대로 → 확인됨 / 아니면 Haiku 판정)로 보낸다. 끝에서 확인됨은 표시를 남기고(기계가 대조했으므로), 다름·원문 없음·대조 못 함은
+  // 세 상태 표시로 바꾸고, 대조할 것이 없으면(번호 못 읽음·내용 없음·중복) 표시를 지운다 — 경고로 만들지 않는다(#155 unparsed 원칙).
+  // 판정 기준에 '인용 형태면 생략도 불일치' 줄을 더하는 안은 기각: 시험에서 멀쩡한 요약 인용(제52조① 조치 나열을 '등'으로 줄임)까지
+  // 불일치로 잡았다. 현행 기준으로는 장려금·제50조 2건 불일치, 제52조 일치.
+  const QUOTE_MARK = '⁠';   // 단어 결합자(보이지 않음) — 기계가 붙인 표시 식별용, 결과 답변에는 남기지 않는다
+  const ART_REF_RE = /제\s?\d+\s?조(?:\s?의\s?\d+)?(?:\s?제\s?\d+\s?항)?(?:\s?제\s?\d+\s?호(?:\s?의\s?\d+)?)?/g;
+  const INTRO_TOPIC_RE = /(?:은|는|에서|에는|에\s?따르면|에\s?의하면)\s*[:：]?\s*$/;
+  const INTRO_ASFOLLOWS_RE = /(?:다음과|아래와)\s?같이\s?(?:규정|정의|명시|정하)[가-힣\s]{0,12}[.:：]\s*$/;
+  const CONT_RE = /^\s*(?:고|라고|이라고|로|으로|를|을|이라는|라는|와|과)(?=[\s,.]|$)/;
+  // 인용 앞 문장의 마지막 조문 참조 → 표시 안에 적을 대상(법령명은 앞 낱말이 법령명일 때만, '동법'이면 이어받기)
+  function introCiteLabel(intro, maxTail) {
+    const s = String(intro || '').replace(/\*\*/g, '');
+    let m, last = null;
+    ART_REF_RE.lastIndex = 0;
+    while ((m = ART_REF_RE.exec(s)) !== null) last = m;
+    if (!last || s.length - (last.index + last[0].length) > maxTail) return null;
+    const info = lawNameBefore(s.slice(0, last.index));
+    const law = info && info.inherit ? '동법' : (info && info.candidates ? info.text : '');
+    return (law ? law + ' ' : '') + last[0].replace(/\s+/g, '');
+  }
+  function tagUntaggedQuotes(answer) {
+    const text = String(answer || '');
+    const parts = text.split(/(\n[ \t]*\n)/);   // 문단과 구분자를 번갈아 보존
+    const hasTag = function (p) { return /\[(원문\s*확인됨|원문 없음|원문과 다름|⚠️ 원문|학습 데이터 기반|근거 조문 미확인)[^\]]*\]/.test(p); };
+    const skip = function (p) { return !p.trim() || /^\s*#/.test(p) || /^\s*\|/.test(p) || hasTag(p); };
+    let added = 0;
+    for (let i = 0; i < parts.length; i += 2) {
+      const p = parts[i];
+      if (skip(p)) continue;
+      // ① 인용 문단: 앞 문단이 「…제N조제M항은」·「…제N조는 다음과 같이 규정합니다.」로 끝나는 따로 선 문단
+      const prev = i >= 2 ? parts[i - 2] : '';
+      const next = i + 2 < parts.length ? parts[i + 2] : '';
+      if (stripCiteBody(p).length >= 24 && prev && !hasTag(prev)) {
+        const pv = prev.replace(/\*\*/g, '').replace(/\s+$/, '');
+        let label = null;
+        if (INTRO_TOPIC_RE.test(pv) && CONT_RE.test(next)) label = introCiteLabel(pv.replace(INTRO_TOPIC_RE, ''), 12);
+        else if (INTRO_ASFOLLOWS_RE.test(pv)) label = introCiteLabel(pv.replace(INTRO_ASFOLLOWS_RE, ''), 40);
+        if (label) {
+          parts[i] = p.replace(/\s+$/, '') + ' [원문 확인됨: ' + label + QUOTE_MARK + ']';
+          added++;
+          continue;
+        }
+      }
+      // ② 문장 안 따옴표 인용: 「제N조제M항은 "…(25자 이상)…"고 규정」 — 닫는 따옴표 바로 뒤에 붙인다
+      parts[i] = p.replace(/(제\s?\d+\s?조[^"“”\n]{0,24}?(?:은|는|에서|에는|에\s?따르면)\s*)(["“])([^"”\n]{25,}?)(["”])(?=\s*(?:고|라고|이라고|로|으로|를|을|이라는|라는)(?:[\s,.]|$))/g,
+        function (all, intro, q1, body, q2, off) {
+          const label = introCiteLabel(p.slice(0, off) + intro, 12);
+          if (!label) return all;
+          added++;
+          return intro + q1 + body + q2 + ' [원문 확인됨: ' + label + QUOTE_MARK + ']';
+        });
+    }
+    return { answer: parts.join(''), added: added };
+  }
+
   // 종합: 답변 → 표시 검증·교체
-  //   { answer, chunks, annexSources, systemPrompt, callHaiku, maxJudge }
-  //   → { answer, verdicts: [{tag, kind, key, law, status, reason, judge}], changed }
+  //   { answer, chunks, annexSources, systemPrompt, callHaiku, maxJudge, autoTag, quoteTag }
+  //   → { answer, verdicts: [{tag, kind, key, law, status, reason, judge, auto}], changed, autoTagged, quoteTagged, citedDocs }
   async function verifyCitations(args) {
     const chunks = ((args && args.chunks) || []).concat(args && args.systemPrompt ? pseudoChunksFromPrompt(args.systemPrompt) : []);
     // 표시 없는 통째 인용에 먼저 표시를 붙인다(autoTag=false로 끌 수 있음) — 그 뒤 검증은 모델이 붙인 표시와 같은 경로
     const at = (args && args.autoTag === false) ? { answer: String((args && args.answer) || ''), added: 0 } : autoTagVerbatim((args && args.answer) || '', chunks);
-    const answer = at.answer;
+    // 그다음 표시 없는 인용 문단·따옴표 인용에 대조용 표시(#230, quoteTag=false로 끌 수 있음)
+    const qt = (args && args.quoteTag === false) ? { answer: at.answer, added: 0 } : tagUntaggedQuotes(at.answer);
+    const answer = qt.answer;
     const cites = findCitations(answer);
-    if (!cites.length) return { answer: answer, verdicts: [], changed: 0, autoTagged: at.added, citedDocs: [] };
+    if (!cites.length) return { answer: answer, verdicts: [], changed: 0, autoTagged: at.added, quoteTagged: 0, citedDocs: [] };
     const results = cites.map(function (c) {
+      const auto = String(c.tag).indexOf(QUOTE_MARK) !== -1;
       // 직전 인용 문단에 같은 조의 표시가 이미 있는 토막 표시는 중복 — 판정하지 않고 지운다(#176)
-      if (c.dupOfPrev) return Object.assign({}, c, { status: 'dup', reason: '직전 인용 문단의 표시와 중복', key: c.tagTarget.key });
-      return Object.assign({}, c, checkCitation(c, chunks, (args && args.annexSources) || []));
+      if (c.dupOfPrev) return Object.assign({}, c, { status: 'dup', reason: '직전 인용 문단의 표시와 중복', key: c.tagTarget.key, auto: auto });
+      return Object.assign({}, c, checkCitation(c, chunks, (args && args.annexSources) || []), { auto: auto });
     });
     // 8 → 24 (#169-보론5). 실측 답변 하나에 표시가 22개였는데 9번째부터 판정 없이 초록이었다.
     // 판정은 여러 인용을 한 콜에 묶어 보내므로 상한을 올려도 호출 수는 늘지 않는다.
@@ -707,28 +938,46 @@
         });
       }
     }
-    let out = answer, changed = 0;
+    let out = answer, changed = 0, quoteTagged = 0;
+    const cut = function (r) {   // 표시를 지운다(앞 공백 하나 포함)
+      const lead = /\s$/.test(out.slice(0, r.tagStart)) ? r.tagStart - 1 : r.tagStart;
+      out = out.slice(0, lead) + out.slice(r.tagEnd);
+    };
     for (const r of results.slice().reverse()) {
-      // ok(= 실제로 대조해 맞음)는 그대로. 나머지는 세 상태 표시(#176)로 바꾸고, 중복(dup)은 지운다.
-      if (r.status === 'ok') continue;
       // 꼬리표에 대상이 적혀 있었으면 바꾼 표시에도 남긴다 — 어느 조문 얘기인지 읽는 사람이 알 수 있게
-      const tgt = r.tagTarget ? String(r.tag).slice(1, -1).replace(/^원문\s*확인됨/, '').replace(/^[\s:：—\-–,]+/, '').trim() : '';
-      if (r.status === 'dup') {
-        const lead = /\s$/.test(out.slice(0, r.tagStart)) ? r.tagStart - 1 : r.tagStart;
-        out = out.slice(0, lead) + out.slice(r.tagEnd); changed++;
+      const tgt = r.tagTarget ? String(r.tag).replace(QUOTE_MARK, '').slice(1, -1).replace(/^원문\s*확인됨/, '').replace(/^[\s:：—\-–,]+/, '').trim() : '';
+      if (r.auto) {
+        // 기계가 붙인 인용 대조 표시(#230): 대조할 것이 없던 것은 흔적 없이 지우고, 확인된 것은 법령명을 채워 남긴다
+        if (r.status === 'dup' || r.status === 'unparsed' || r.status === 'noclaim') { cut(r); continue; }
+        quoteTagged++;
+        if (r.status === 'ok') {
+          const law = r.lawDoc || (r.doc ? docFamily(r.doc) : '');
+          const named = /(법|법률|령|규칙|고시|규정|기준|세칙|지침)\s/.test(tgt + ' ') && !/^동법\s/.test(tgt);
+          const label = law && !named ? law + ' ' + tgt.replace(/^동법\s*/, '') : tgt;
+          out = out.slice(0, r.tagStart) + '[원문 확인됨: ' + label + ']' + out.slice(r.tagEnd);
+          continue;
+        }
+        out = out.slice(0, r.tagStart) + buildTag(r.status, r.reason, tgt) + out.slice(r.tagEnd); changed++;
         continue;
       }
+      // ok(= 실제로 대조해 맞음)는 그대로. 나머지는 세 상태 표시(#176)로 바꾸고, 중복(dup)은 지운다.
+      if (r.status === 'ok') continue;
+      if (r.status === 'dup') { cut(r); changed++; continue; }
       out = out.slice(0, r.tagStart) + buildTag(r.status, r.reason, tgt) + out.slice(r.tagEnd); changed++;
     }
     // 답변이 실제로 인용해 확인된 문서 — 출처 목록을 이 순서로 앞세우는 데 쓴다(#176)
     const citedDocs = [];
     for (const r of results) if (r.status === 'ok' && r.doc && citedDocs.indexOf(r.doc) === -1) citedDocs.push(r.doc);
+    // 지운 기계 표시는 기록에서도 뺀다(판정 대상이 아니었다)
+    const kept = results.filter(function (r) { return !(r.auto && (r.status === 'dup' || r.status === 'unparsed' || r.status === 'noclaim')); });
     return {
-      answer: out, changed: changed, autoTagged: at.added, citedDocs: citedDocs,
-      verdicts: results.map(function (r) {
-        return { tag: r.tag, kind: r.kind, key: r.key || (r.annex ? '별표 ' + r.annex : null), law: r.lawDoc || r.lawText || null,
+      answer: out, changed: changed, autoTagged: at.added, quoteTagged: quoteTagged, citedDocs: citedDocs,
+      verdicts: kept.map(function (r) {
+        const v = { tag: String(r.tag).replace(QUOTE_MARK, ''), kind: r.kind, key: r.key || (r.annex ? '별표 ' + r.annex : null), law: r.lawDoc || r.lawText || null,
           paras: r.paras || [], items: r.items || [], status: r.status, reason: r.reason || null, judge: r.judge || null, doc: r.doc || null,
           verbatim: !!r.verbatim, overlap: typeof r.overlap === 'number' ? Math.round(r.overlap * 100) / 100 : null };
+        if (r.auto) v.auto = 'quote';
+        return v;
       }),
     };
   }
@@ -738,6 +987,8 @@
     articleKey: articleKey, docFamily: docFamily, mergeChunkTexts: mergeChunkTexts,
     expandArticles: expandArticles, pseudoChunksFromPrompt: pseudoChunksFromPrompt,
     buildCitingExcerpts: buildCitingExcerpts, citeRegex: citeRegex, excerptAround: excerptAround,
+    isOtherLawRef: isOtherLawRef, isSanctionTitle: isSanctionTitle, selfCiteIndexes: selfCiteIndexes, sanctionExcerpt: sanctionExcerpt,
+    tagUntaggedQuotes: tagUntaggedQuotes, introCiteLabel: introCiteLabel, QUOTE_MARK: QUOTE_MARK,
     lawNameBefore: lawNameBefore, familyMatches: familyMatches, resolveLaw: resolveLaw, quoteOverlap: quoteOverlap,
     parseSegment: parseSegment, findCitations: findCitations, checkCitation: checkCitation,
     judgeCitations: judgeCitations, verifyCitations: verifyCitations, autoTagVerbatim: autoTagVerbatim,

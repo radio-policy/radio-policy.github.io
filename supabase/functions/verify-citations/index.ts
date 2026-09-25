@@ -89,8 +89,8 @@ Deno.serve(async (req) => {
         ? (sys: string, u: string) => callHaikuText(sb, ANTHROPIC_KEY, sys, u, 'verify-citations:citeJudge', 3000)   // 900은 24건 판정 JSON에 빠듯(#205)
         : null,
     });
-    console.log('[인용 검증]', user.email || user.id, 'auto+' + (vr.autoTagged || 0), JSON.stringify(vr.verdicts.map((v: { key: string; status: string; reason: string }) => [v.key, v.status, v.reason])));
-    return json(200, { answer: vr.answer, verdicts: vr.verdicts, changed: vr.changed, autoTagged: vr.autoTagged || 0, citedDocs: vr.citedDocs || [] }, cors);
+    console.log('[인용 검증]', user.email || user.id, 'auto+' + (vr.autoTagged || 0), 'quote+' + (vr.quoteTagged || 0), JSON.stringify(vr.verdicts.map((v: { key: string; status: string; reason: string }) => [v.key, v.status, v.reason])));
+    return json(200, { answer: vr.answer, verdicts: vr.verdicts, changed: vr.changed, autoTagged: vr.autoTagged || 0, quoteTagged: vr.quoteTagged || 0, citedDocs: vr.citedDocs || [] }, cors);
   } catch (e) {
     console.error('[인용 검증 실패]', e);
     return json(200, { answer, verdicts: [], changed: 0, error: String(e) }, cors);   // fail-open: 답변은 그대로

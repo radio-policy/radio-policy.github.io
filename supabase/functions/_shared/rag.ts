@@ -969,13 +969,15 @@ export async function buildAdvisoryContext(sb: SupabaseClient, question: string)
   // 역참조 발췌(#155-보론4) — 검색된 조문을 인용하는 같은 법령의 다른 조문(제재·조사·준용)에서 인용 문장만.
   // 「대리점·판매점 관리」 질문에 제20조(등록취소 사유)·제51조(조사 대상)는 질문 어휘로 검색되지 않지만
   // "제32조의4제5항에 따른 …"처럼 검색된 조문을 가리키므로 이 경로로 닿는다. app.js와 동일 유지.
-  const emptyCiting: { text: string; chunks: Chunk[]; ids: number[] } = { text: '', chunks: [], ids: [] };
-  const citingP: Promise<{ text: string; chunks: Chunk[]; ids: number[] }> = Promise.resolve()
-    .then(() => CiteVerify.buildCitingExcerpts((extra2 as unknown as Chunk[]).concat(chunks2), (d: string, k: string) => fetchCitingChunks(sb, d, k), CITING_OPTS))
+  // 제재 조문(벌칙·과태료·과징금)은 별도 칸으로 먼저 싣고, 금액이 적힌 항 머리 문장을 찾으려 그 조문 전체를 읽는다(fetchArticle, #230).
+  const emptyCiting: { text: string; chunks: Chunk[]; ids: number[]; sanctions?: number } = { text: '', chunks: [], ids: [], sanctions: 0 };
+  const citingP: Promise<{ text: string; chunks: Chunk[]; ids: number[]; sanctions?: number }> = Promise.resolve()
+    .then(() => CiteVerify.buildCitingExcerpts((extra2 as unknown as Chunk[]).concat(chunks2), (d: string, k: string) => fetchCitingChunks(sb, d, k),
+      { ...CITING_OPTS, fetchArticle: (d: string, k: string) => fetchArticleChunks(sb, d, k) }))
     .catch((e: unknown) => { console.warn('역참조 발췌 실패(건너뜀):', e); return emptyCiting; });
   const annex = await annexP;
   const citing = await citingP;
-  if (citing.chunks.length) console.log(`[역참조 발췌] ${citing.chunks.length}건`);
+  if (citing.chunks.length) console.log(`[역참조 발췌] ${citing.chunks.length}건(제재 ${citing.sanctions || 0})`);
 
   // 국회 동향은 '근거'가 아니라 '배경'이라 맨 뒤 — 조문·요약·기사보다 앞에 두지 말 것
   const systemVariable = buildRagContext(chunks2) + lawContext + citing.text + annex.text + buildKbContext(kb) + news.text + asm;
@@ -1032,7 +1034,7 @@ export async function answerAdvisory(sb: SupabaseClient, systemPrompt: string, q
     answer = vr.answer;
     verdicts = vr.verdicts || [];
     citedDocs = (vr.citedDocs || []) as string[];
-    if (vr.verdicts.length || vr.autoTagged) console.log('[인용 검증]', 'auto+' + (vr.autoTagged || 0), JSON.stringify(vr.verdicts.map((v: { key: string; status: string; reason: string }) => [v.key, v.status, v.reason])));
+    if (vr.verdicts.length || vr.autoTagged) console.log('[인용 검증]', 'auto+' + (vr.autoTagged || 0), 'quote+' + (vr.quoteTagged || 0), JSON.stringify(vr.verdicts.map((v: { key: string; status: string; reason: string }) => [v.key, v.status, v.reason])));
   } catch (e) { console.warn('인용 검증 실패(답변 그대로):', e); }
 
   // 출처 순서: **조문 정밀검색분(extra)을 먼저** — 텔레그램 footer는 앞 6개만 보여주므로(#89),
