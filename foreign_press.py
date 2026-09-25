@@ -478,6 +478,10 @@ def run(dry: bool = False, only: list = None) -> int:
     rows_to_save = []
     cache_rows = []
     totals = {'scan': 0, 'new': 0, 'cached': 0, 'rel': 0, 'irrel': 0, 'fail': 0, 'promoted': 0}
+    # 실패한 기관 이름 — heartbeat note 끝에 fail_src=로 남긴다. watchdog_scan 경보가 note를 그대로
+    # 보여 주므로 Actions 로그를 열지 않고도 어느 기관인지 안다(2026-09-26, 09-25 fail=1이 기관 불명).
+    # '실패'라는 낱말은 넣지 말 것 — watchdog_scan이 note의 '실패 N'도 실패 건수로 읽는다.
+    fail_src = []
     for src, fetch_fn in SOURCES.items():
         if only and src not in only:
             continue
@@ -487,6 +491,7 @@ def run(dry: bool = False, only: list = None) -> int:
         except Exception as e:
             print('[%s] 목록 수집 실패: %s' % (src, str(e)[:100]))
             totals['fail'] += 1
+            fail_src.append('%s:목록' % src)
             continue
         stats['scan'] = len(feed_items)
         seen = set()
@@ -568,6 +573,8 @@ def run(dry: bool = False, only: list = None) -> int:
                  stats['irrel'], stats['fail']))
         for k in totals:
             totals[k] += stats.get(k, 0)
+        if stats['fail']:
+            fail_src.append('%s:판정%d' % (src, stats['fail']))
         time.sleep(1)
 
     if rows_to_save and not dry:
@@ -579,6 +586,7 @@ def run(dry: bool = False, only: list = None) -> int:
             print('[저장 오류] %s' % e)
             totals['fail'] += len(rows_to_save)
             totals['rel'] -= len(rows_to_save)
+            fail_src.append('저장:%d' % len(rows_to_save))
 
     if not dry:
         save_screen_cache(sb, cache_rows)
@@ -586,6 +594,8 @@ def run(dry: bool = False, only: list = None) -> int:
     note = 'scan=%d new=%d cached=%d rel=%d irrel=%d fail=%d promoted=%d' % (
         totals['scan'], totals['new'], totals['cached'], totals['rel'], totals['irrel'],
         totals['fail'], totals.get('promoted', 0))
+    if fail_src:
+        note += ' fail_src=' + ','.join(fail_src)
     print('[해외 수집 완료] ' + note)
     if not dry:
         sb_heartbeat(sb, 'last_foreign_press_run', note)
