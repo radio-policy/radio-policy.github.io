@@ -1161,6 +1161,7 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **AI 자문 "Failed to fetch"**: 무거운 질문 2분+ idle 끊김 → stream:true로 해결됨. 사내망 프록시·확장프로그램·F12 네트워크 확인.
 
 ## 하지 말아야 할 것 (규칙 + 한 줄 이유 / 상세는 배경역사 문서)
+- **일부 화면에서만 쓰는 외부 라이브러리를 index.html에 동기 `<script>`로 넣지 말 것 / CDN 주소에 `@latest`를 쓰지 말 것 (#223, 2026-09-26, §4-3-11)** — 동기 태그는 app.js 실행을 그 다운로드·실행 뒤로 밀고 방문자 모두에게 받게 한다(업로드·Word 저장 3종이 압축 전 1.06MB였다). 업로드 계열은 app.js `UPLOAD_LIBS`에 적고 쓰는 함수 첫 줄에서 `await loadUploadLib('<이름>')`(관계도 vis-network는 `loadVisNetwork()`). `@latest`는 별칭이 CDN 사정으로 바뀌어 아이콘·API가 예고 없이 달라질 수 있고 캐시도 7일뿐이다(아이콘 CSS는 `@2.47.0` 고정 — 3.x는 경로가 달라 `@latest`가 2.47.0에 멈춰 있었다). 판 올림은 화면 눈검사와 함께 따로. (배경역사 #223)
 - **`law_watch`의 기록 묶음(`flush_watch`)에서 칸 구성이 다른 행을 한 배열로 upsert하지 말 것 (#222, 2026-09-26, §4-3-7)** — postgrest-py `upsert(list)`는 columns=키 합집합 + `default_to_null=True`라 **빠진 칸을 NULL로 덮어쓴다**(예정본 없는 문서의 `pending_*`, 미매칭 문서의 `law_id`·`latest_*`가 지워짐). `frozenset(keys)`가 같은 행끼리만 묶는다. 다른 표에서 여러 행 upsert를 새로 만들 때도 같은 함정. 고친 뒤엔 실행 전후 표를 떠서 시각 칸 외 값 변화 0·NULL화 0을 대조한다. (배경역사 #222)
 - **`law_crawl.yml`의 `guard` 잡을 빼거나, 건너뛰기 조건을 '정식 실행 성공' 하나로 줄이지 말 것 / 조회 실패 시 건너뛰는 쪽으로 바꾸지 말 것 (#222)** — 빼면 GitHub 예약이 매일 16시에 체인을 한 번 더 돌려 절반이 취소된다. 감시 단계는 `continue-on-error`라 체인이 success여도 감시가 죽었을 수 있어 `last_law_watch_run` heartbeat 날짜도 함께 본다. 예약 실행은 예비라 모를 때는 도는 쪽이 맞다. (배경역사 #222)
 - **보도자료·회의록 섹션 형식(`## YYMMDD 제목` 머리·`요약:` 줄·`(원문: URL)`)을 바꾸면서 목록 RPC(`press_index`·`minutes_index`·`doc_sections`, #221, 2026-09-26, §4-3-2)를 같이 고치는 것을 빠뜨리지 말 것 / 이 RPC들을 `returns table`로 바꾸지 말 것** — 규칙이 app.js 폴백과 DB 함수 두 벌이라, DB 쪽만 옛 형식이면 오류가 아니라 **조용히 틀린 목록**이 나온다(폴백은 오류일 때만 탄다). 표 반환은 PostgREST 1,000행 상한에 잘린다(보도자료 1,142줄) — jsonb 한 값 유지. 고친 뒤엔 같은 페이지에서 RPC 경로와 `sb.rpc` 강제 실패(폴백) 경로의 결과 JSON을 대조한다. (배경역사 #221)
@@ -1564,7 +1565,7 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 | Resend | 이메일 | 100/일 |
 | Telegram Bot | 알림 | 무제한. **봇 2개** — 운영자용(`TELEGRAM_BOT_TOKEN`)·구독자용 `정책AI 도우미`(`SUBSCRIBER_BOT_TOKEN`, @radio_policy_law_ai_bot) |
 | trafilatura(pip) | 본문 추출 | 로컬 설치 |
-| pdf.js·mammoth·JSZip(CDN) | 브라우저 파일 파싱 | 보고서 등록·지식 업로드 공용 |
+| pdf.js·mammoth·JSZip(CDN) | 브라우저 파일 파싱·자문 Word 저장 | 지식 업로드·DIFF 수동 분석·자문 Word 저장 공용. 첫 화면에서 받지 않고 쓸 때 `loadUploadLib()`가 받는다 — 주소·버전은 app.js `UPLOAD_LIBS` 한 곳(#223) |
 | 법제처 DRF | 법령·고시 | LAW_OC_KEY=radiopolicyai |
 | opinion.lawmaking.go.kr | 입법예고 | 로컬 수집, 키 불필요 |
 | 열린국회정보 API | 국회 법안 | ASSEMBLY_API_KEY |

@@ -2801,7 +2801,8 @@ function exportChatPdf() {
 
 async function exportChatDocx() {
   if (!_chatDetail) return;
-  if (!window.JSZip) { alert('Word 변환 라이브러리(JSZip)가 로드되지 않았습니다.'); return; }
+  try { await loadUploadLib('jszip'); }
+  catch (e) { alert('Word 변환 라이브러리(JSZip)를 불러오지 못했습니다. 네트워크 상태를 확인한 뒤 다시 시도하세요.'); return; }
   var html = '<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40">' +
     '<head><meta charset="utf-8">' + _chatExportStyle() + '</head><body>' + _chatContentHtml() + '</body></html>';
   try {
@@ -5257,7 +5258,8 @@ async function _loadDiffFile(type, file) {
 
 async function _readFileAsText(file) {
   if (file.name.toLowerCase().endsWith('.pdf')) {
-    if (typeof pdfjsLib === 'undefined') throw new Error('PDF 파서가 로드되지 않았습니다. 잠시 후 다시 시도하거나 .txt 파일로 변환해 업로드하세요.');
+    try { await loadUploadLib('pdfjs'); }
+    catch (e) { throw new Error('PDF 파서를 불러오지 못했습니다. 잠시 후 다시 시도하거나 .txt 파일로 변환해 업로드하세요.'); }
     var buf = await file.arrayBuffer();
     var pdf = await pdfjsLib.getDocument({ data: buf }).promise;
     var pages = [];
@@ -7739,7 +7741,7 @@ async function _extractMdText(file) {
 }
 
 async function _extractPptxText(file) {
-  if (typeof JSZip === 'undefined') throw new Error('JSZip 라이브러리 미로드');
+  await loadUploadLib('jszip');   // 실패 시 '… 로드 실패' 오류가 그대로 호출부로 간다
   var arrayBuffer = await file.arrayBuffer();
   var zip = await JSZip.loadAsync(arrayBuffer);
   var slideTexts = [];
@@ -7760,7 +7762,7 @@ async function _extractPptxText(file) {
 }
 
 async function _extractDocxText(file) {
-  if (typeof mammoth === 'undefined') throw new Error('mammoth 라이브러리 미로드');
+  await loadUploadLib('mammoth');
   var arrayBuffer = await file.arrayBuffer();
   var result = await mammoth.extractRawText({ arrayBuffer: arrayBuffer });
   return (result && result.value) ? result.value : '';
@@ -7793,6 +7795,7 @@ function _setPdfProgress(pct, text) {
 }
 
 async function _extractPdfText(file) {
+  await loadUploadLib('pdfjs');
   var arrayBuffer = await file.arrayBuffer();
   var loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
   var pdf = await loadingTask.promise;
@@ -10854,6 +10857,37 @@ function guessLawNodeType(name) {
   if (/(고시|공고|훈령|예규|지침|기준)/.test(name)) return 'notice';
   if (/법$/.test(name)) return 'law';
   return 'etc';
+}
+
+// 업로드·Word 저장 전용 라이브러리 지연 로드 (§4-3-11) — 종전에는 index.html 이 첫 화면에서 동기 <script>로
+// 받았다(압축 전 1.06MB, 압축 후 ≈242KB). 이 셋은 파일 업로드·DIFF 수동 분석·자문 Word 저장에서만 쓰인다.
+// 아래 loadVisNetwork 와 같은 방식(프라미스 1개를 기억해 두 번 받지 않음, 실패하면 기억을 지워 재시도 가능).
+var UPLOAD_LIBS = {
+  pdfjs:   { src: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js', ready: function() { return typeof pdfjsLib !== 'undefined'; },
+             after: function() { pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'; } },
+  jszip:   { src: 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js', ready: function() { return typeof JSZip !== 'undefined'; } },
+  mammoth: { src: 'https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js', ready: function() { return typeof mammoth !== 'undefined'; } }
+};
+var _uploadLibPromises = {};
+function loadScriptOnce(src) {
+  return new Promise(function(resolve, reject) {
+    var s = document.createElement('script');
+    s.src = src;
+    s.onload = function() { resolve(); };
+    s.onerror = function() { s.remove(); reject(new Error('라이브러리 로드 실패: ' + src)); };
+    document.head.appendChild(s);
+  });
+}
+function loadUploadLib(name) {
+  var lib = UPLOAD_LIBS[name];
+  if (!lib) return Promise.reject(new Error('알 수 없는 라이브러리: ' + name));
+  if (lib.ready()) return Promise.resolve();
+  if (_uploadLibPromises[name]) return _uploadLibPromises[name];
+  _uploadLibPromises[name] = loadScriptOnce(lib.src).then(function() {
+    if (!lib.ready()) throw new Error(name + ' 로드 후에도 전역 객체가 없습니다');
+    if (lib.after) lib.after();
+  }).catch(function(e) { _uploadLibPromises[name] = null; throw e; });
+  return _uploadLibPromises[name];
 }
 
 // vis-network 지연 로드 — lawmap 탭 첫 진입 시에만 CDN에서 1회 로드 (다른 탭 성능 무영향)
