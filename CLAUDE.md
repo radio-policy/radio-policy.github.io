@@ -73,6 +73,8 @@ logged explicitly via `api_usage.record_usage()`. Bulk scripts refuse mass API r
 `frequence/confluence/`). 표준 라이브러리만 쓰고 의존성이 없다. 저장소 폴더에 복사해 쓰되 **이 모듈과
 `_confluence_attach.py`, 사내 배포 문서(`docs/사내공유_*`)는 커밋하지 않는다**(`.gitignore` 등록) — 저장소가
 공개이고 GitHub Pages가 `.py`·`.md`까지 모든 파일을 내보내므로, 사내 공간 키·페이지 번호가 외부에 열린다(#172-보론).
+`.gitignore`는 새 파일만 막는다 — 이미 추적 중인 사내공유 메일·인계문·실적 자료 등 **현재 저장소의 자료는 2026-09-26 운영자가
+공개 가능으로 판단해 그대로 둔다**(#228, 이동을 다시 제안하지 말 것). 새 문서의 공개 여부는 그때 운영자에게 묻는다.
 - 인증: `~/.confluence_pat`의 PAT를 Bearer 헤더로 (모듈이 자동 처리). **ascii 인코딩 저장 필수** — utf8로
   저장하면 BOM이 붙어 401이 난다. `verify_ssl=False`가 기본(사내 CA가 파이썬 검증을 통과하지 못함)
 - 페이지 생성·수정은 **`cf.upsert(title, html)`** — 같은 공간에 동일 제목이 있으면 `create()`는 400이다.
