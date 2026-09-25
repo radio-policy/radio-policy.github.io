@@ -129,7 +129,7 @@ def main():
     rows, page = [], 0
     while True:
         r = sb.table('news_feed').select('id,title,url') \
-            .order('published_at', desc=True).range(page * 1000, page * 1000 + 999).execute().data or []
+            .order('published_at', desc=True).order('id').range(page * 1000, page * 1000 + 999).execute().data or []
         rows += r
         if len(r) < 1000 or page > 14:
             break

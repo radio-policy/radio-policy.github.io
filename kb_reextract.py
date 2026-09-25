@@ -379,7 +379,7 @@ def cmd_scan(sb, max_chars):
     off = 0
     while True:
         d = (sb.table("document_chunks").select("doc_name, doc_category, content")
-             .eq("status", "current").range(off, off + 999).execute().data) or []
+             .eq("status", "current").order("id").range(off, off + 999).execute().data) or []
         if not d:
             break
         for r in d:

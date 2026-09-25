@@ -395,7 +395,7 @@ def load_existing_urls(sb) -> set:
     urls = set()
     page = 0
     while True:
-        rows = sb.table('news_feed').select('url') \
+        rows = sb.table('news_feed').select('url').order('id') \
             .range(page * 1000, page * 1000 + 999).execute().data
         if not rows:
             break
@@ -425,7 +425,7 @@ def load_screen_cache(sb, criteria_hash: str) -> dict:
     try:
         page = 0
         while True:
-            rows = sb.table('news_screen_cache').select('url,title_hash,criteria_hash') \
+            rows = sb.table('news_screen_cache').select('url,title_hash,criteria_hash').order('url') \
                 .range(page * 1000, page * 1000 + 999).execute().data
             if not rows:
                 break

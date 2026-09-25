@@ -392,14 +392,17 @@ def classify_urgency(title: str, content: str = '', summary: str = '') -> str:
 #  유틸 함수
 # ═══════════════════════════════════════════════════════
 
-def _fetch_all_rows(table: str, columns: str) -> list:
+def _fetch_all_rows(table: str, columns: str, order: str = 'id') -> list:
     """PostgREST는 무제한 select도 최대 1,000행만 돌려준다 — 반드시 페이지네이션.
     (2026-08-03 사고: news_feed가 1,086건이 되자 최신 86건이 잘려 '기존' 판정에서
     빠졌고, 이미 알림한 긴급 기사를 신규로 착각해 재발송. 총량이 상한을 넘는 첫날
-    조용히 터지는 유형이라 전량 조회는 이 헬퍼만 쓸 것.)"""
+    조용히 터지는 유형이라 전량 조회는 이 헬퍼만 쓸 것.)
+    order는 표의 유일 열(기본 id, news_screen_cache는 url) — 정렬이 없거나 겹치면 요청마다
+    행 순서가 달라져 페이지 경계에서 행이 빠지거나 겹친다(#233, 사내 export_news 28건 누락과 같은 부류)."""
     rows, page, step = [], 0, 1000
     while True:
-        res = sb.table(table).select(columns).range(page * step, (page + 1) * step - 1).execute()
+        res = (sb.table(table).select(columns).order(order)
+               .range(page * step, (page + 1) * step - 1).execute())
         chunk = res.data or []
         rows.extend(chunk)
         if len(chunk) < step:
@@ -1224,7 +1227,7 @@ def _screen_hash(s: str) -> str:
 def _load_screen_cache(criteria_hash: str) -> dict:
     """{url: title_hash} — 현재 기준문으로 판정된 행만. 실패 시 빈 dict(전량 판정으로 진행)."""
     try:
-        rows = _fetch_all_rows('news_screen_cache', 'url,title_hash,criteria_hash')
+        rows = _fetch_all_rows('news_screen_cache', 'url,title_hash,criteria_hash', order='url')
         return {r['url']: r['title_hash'] for r in rows
                 if r.get('criteria_hash') == criteria_hash}
     except Exception as e:

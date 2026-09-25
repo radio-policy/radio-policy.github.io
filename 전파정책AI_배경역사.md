@@ -7984,3 +7984,34 @@ Fable 재검토 포인트((Fable 5.1, 엑스트라)): 요약 벡터 문턱 0.40/
 남은 것: ① lampmanH-pc `git pull origin main` → 뒤에 `refetch_232`(scratchpad 스크립트, 세션이 다시 만들어도 됨: `_is_non_body` 본문 행을 새 코드로 다시 받고 못 받으면 비움) 재실행으로 korea.kr 3건(과 그사이 옛 재수집이 채운 행) 정리 ② 기사 뒤 목록은 보류 ③ 공용 후보에 본문 칸을 앞세우면 11곳 본문이 깨끗해지지만 부제가 빠지는 선택 — 필요하면 운영자 판단.
 사내판: 코드 수정 불필요, 회신만 — 사내는 뉴스를 `export_news.py`로 외부 `news_feed`에서 받는다(created_at 델타 + 본문 갱신 `content_fetched_at` 델타, 200자 초과만). 이번 147건 교체분은 다음 델타에 넘어간다. 사내 판정 입력 필터는 방어막으로 두면 되고, 머리말에 '최신뉴스'(보안뉴스)·공공누리 안내문을 더할지는 사내 판단 — 회신문 `frequence/사내판_회신_232_사이드바본문_260926.md`(저장소 밖).
 보론(같은 날 05:5x~06:2x, 마무리): 운영자가 lampmanH-pc에서 `git pull origin main`(36a10bd→b3545b3 fast-forward·오류 없음, PC 체인 영향 파일은 crawler.py뿐) → korea.kr 3건 비움(05:57, DB 전체 목록·안내문 본문 0건) → 06:22 lampmanH-pc 재수집 뒤에도 비운 채, 05:50 이후 수집분 목록·안내문 본문 0건(그 3건은 발행일이 09-14~22라 재수집 창 '최근 500건' 밖이었다). 사내 회신 세 번: ①147건 갱신 도착, 남은 ebn 3건(07-23·27)은 외부 60일 정리로 이미 삭제 — 사내 사본만 보관(사내 필터가 버림) ②사내 필터 머리말에 '최신뉴스'·공공누리 안내문 추가 ③korea.kr 5e87b71b(08-19)가 사내에 처음부터 없던 원인 = 사내 `export_news.py`가 `created_at` 단독 정렬로 1,000줄씩 끊어 받아 동시각 묶음(외부 60일 14,052행 중 13,249행이 묶음) 경계에서 흘림 — 외부판이 날짜별 건수·원인 짐작을 주자 사내가 id 대조로 28건 누락 확정(모두 9/13 전량 반입 이전, 델타 구간 0), 유일 정렬(`created_at,id`)·하루 1회 60일 id 대조로 고쳐 9/27 00:05에 보충. 같은 부류가 외부판에도 있다(`crawler._fetch_all_rows` 정렬 없음 — 기존 URL·삭제 기사·선별 캐시 조회, `foreign_press.py` 2곳, `title_backfill.py`, 대시보드 뉴스 목록의 `published_at` 단독 정렬) → 별도 항목으로 운영자 결정 대기.
+
+**#233 (2026-09-26) 페이지 조회의 유일 정렬 — 정렬 없음·겹치는 정렬 8곳에 `id`(또는 `url`)를 붙임 (#232 보론의 사내 28건 누락과 같은 부류, 운영자 결정 A+B).**
+발단: 사내 `export_news.py`가 `created_at` 단독 정렬로 1,000줄씩 끊어 받다 같은 시각 묶음 경계에서 기사 28건을 흘린 것이 확정됐다(#232 보론). PostgREST 페이지 조회는 요청마다 따로 도는 쿼리라, 정렬이 없거나 정렬 값이 겹치면 두 요청 사이에 행 순서가 달라질 수 있고(그 사이 다른 작업이 행을 고치면 물리 위치가 바뀐다, 동점끼리의 순서는 보장되지 않는다) 경계에서 행이 빠지거나 두 번 온다 — 오류 없이. 지침 #66 규칙('range에는 반드시 order')은 정렬의 **유무**만 말했고, 그 규칙이 모범으로 든 `crawler._fetch_all_rows`는 정작 정렬이 없었다.
+전수 조사(`.range(` 51곳 — 파이썬 25파일 + app.js, Edge 함수 0곳)와 실DB 실측:
+
+| 묶음 | 위치 | 실측 | 빠지면 |
+|---|---|---|---|
+| A. 정렬 없음 | `crawler._fetch_all_rows` — news_feed(url·title)·deleted_news·news_screen_cache | 14,068행(15요청)·318행·30,919행(31요청) | 이미 알린 기사를 새 기사로 보고 재알림(8/3 사고 유형, upsert는 무시돼도 `valid`로 알림 경로에 감)·지운 기사 재수집·선별 AI 재판정 |
+| | `foreign_press.load_existing_urls`·`load_screen_cache` | 같은 두 표 | 같음 |
+| | 도구 `clean_pdf_artifacts.fetch_all_chunks`·`kb_reextract cmd_scan` | 조각 50,797행·현행 41,911행 | 청소·점검 대상 누락 |
+| B. 겹치는 정렬 | 대시보드 `loadNews` 1·2단계(`published_at`, 2단계는 병렬 요청) | 발표 시각이 다른 기사와 같은 행 4,141 | 목록에서 기사 누락·중복 |
+| | 대시보드 발언 목록 폴백(`meeting_date`, RPC 실패 때만) | 6,784행 | 발언 누락 |
+| | 도구 `title_backfill.py`(`published_at`) | 뉴스와 같음 | 제목 보정 대상 누락 |
+| C. 문서 안 조각 번호 | `.eq('doc_name')` + `order('chunk_index')` 10곳(app.js 4·law_diff_gen·okf_refresh·kb_reextract fetch_chunks·press_date_backfill·export_press_sections·assembly_minutes 번호 재정렬) | `(doc_name, chunk_index)` 겹침 0행(상태별도 0), 1,000조각 넘는 문서 7개 | 지금은 없음 |
+
+조치(A+B): 정렬 끝에 유일 열 — `_fetch_all_rows(table, columns, order='id')`(선별 캐시는 PK가 url이라 `order='url'`), foreign_press 두 곳 `id`·`url`, 도구 두 곳 `id`, 대시보드 뉴스 `published_at desc nullslast, id desc`(1·2단계 같게)·발언 `meeting_date desc, id`, title_backfill `published_at desc, id`. C는 기각 — 실DB 겹침 0이고 넣을 때 `kb_store.insert_chunks`가 문서별 번호 범위 건수로 같은 번호 중복을 잡는다(#218). 다시 제안하지 말 것.
+검증:
+
+| 대상 | 받은 행 | 표 전체 | 고유 | 시간 |
+|---|---|---|---|---|
+| `_fetch_all_rows` news_feed | 14,068 | 14,068 | 14,068 | 2.2초 |
+| `_fetch_all_rows` deleted_news | 318 | 318 | — | 0.1초 |
+| `_fetch_all_rows` news_screen_cache | 30,919 | 30,919 | 30,919 | 3.1초 |
+| `foreign_press.load_existing_urls` | 14,068 | 14,068 | — | 1.2초 |
+| 선별 캐시(기준문 지문별, crawler·foreign_press) | 30,805·114 | 30,805·114 | — | — |
+| 대시보드 `loadNews(true)`(로컬 미리보기, `app.js?v=20260926h`) | 14,068 | 14,068 | id 14,068 | 1단계 0.27초·전체 1.6초 |
+| 대시보드 발언 폴백 같은 조회 | 6,784 | 6,784 | 6,784 | 1.0초 |
+
+도구 두 곳의 마지막 페이지(`order by id offset 41000·45000`)는 pkey 인덱스 스캔 60ms·40ms, 대시보드 뉴스 정렬은 `idx_news_feed_published_at` 위 Incremental Sort(추가 정렬 가벼움). 요청 주소 `order=published_at.desc.nullslast,id.desc` 확인. 스모크 161 OK, `node --check app.js` OK.
+남은 것·관찰: `title_backfill.py`는 16페이지(16,000행)에서 멈춘다(`page > 14`) — 뉴스가 14,068행이라 곧 닿는다. 수동 도구라 지금은 두고, 다시 쓸 때 상한을 본다.
+사내판: 불필요 — 사내 저장소 origin/main(이 PC 사본, 읽기만)을 grep했다. 사내가 외부 DB에서 받는 `export_snapshot.py`는 표마다 `id`(app_config는 `key`) 정렬, `export_custom_knowledge.py`는 `doc_name,chunk_index`(겹침 0 — C와 같은 판단), `export_news.py`는 사내가 #232 회신 뒤 이미 고쳤다. 콘솔 `ported.js`의 페이지 조회는 Supabase가 아니라 사내 `app.py`의 PostgREST 흉내(JSONL을 메모리에 올려 파이썬 안정 정렬 후 자름)로 가서 요청마다 순서가 같다.

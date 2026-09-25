@@ -48,6 +48,7 @@ def fetch_all_chunks():
     while True:
         r = (sb.table("document_chunks")
              .select("id, doc_name, content")
+             .order("id")
              .range(offset, offset + page - 1)
              .execute())
         batch = r.data or []

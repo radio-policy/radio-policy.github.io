@@ -3561,8 +3561,10 @@ async function loadNews(force) {
   try {
     var PAGE = 1000, MAX_PAGES = 60;   // 안전장치: 60,000행(60일 보존 기준 여유 3배)
     // ── 1단계: 최신 1페이지 + 총 건수 (요청 1회) ──
+    // 정렬 끝의 id는 빼지 말 것 — 발표 시각이 같은 기사가 4,141행(09-26 실측)이라 시각만으로는
+    // 페이지마다 순서가 달라져 경계에서 기사가 빠지거나 겹친다(#233). 1·2단계 정렬은 반드시 같게.
     var first = await sb.from('news_feed').select(NEWS_LIST_COLS, { count: 'exact' })
-      .order('published_at', { ascending: false, nullsFirst: false })
+      .order('published_at', { ascending: false, nullsFirst: false }).order('id', { ascending: false })
       .range(0, PAGE - 1);
     if (first.error) throw first.error;
     newsDataCache = [];
@@ -3590,7 +3592,7 @@ async function loadNews(force) {
     var reqs = [];
     for (var p = 1; p < pages; p++) {
       reqs.push(sb.from('news_feed').select(NEWS_LIST_COLS)
-        .order('published_at', { ascending: false, nullsFirst: false })
+        .order('published_at', { ascending: false, nullsFirst: false }).order('id', { ascending: false })
         .range(p * PAGE, p * PAGE + PAGE - 1));
     }
     reqs.push(sb.from('news_feed').select(NEWS_LIST_COLS).eq('locked', true).limit(500));
@@ -10584,7 +10586,7 @@ async function loadSpeakers(force) {
     while (true) {
       var resp = await sb.from('assembly_speeches')
         .select('speaker, position, party, meeting_date, agenda, topic, summary, source_url')
-        .order('meeting_date', { ascending: false })
+        .order('meeting_date', { ascending: false }).order('id')   // 같은 날 발언이 많다 — id로 유일 정렬(#233)
         .range(pageStart, pageStart + 999);
       if (resp.error) throw resp.error;
       rows = rows.concat(resp.data || []);
