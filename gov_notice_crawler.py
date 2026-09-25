@@ -42,6 +42,7 @@ from sb_client import make_client, heartbeat as sb_heartbeat
 from retry_util import with_retry
 import api_usage; api_usage.install()   # Anthropic usage 기록(#152) — 호출부 무변경, fail-open
 import notify   # 텔레그램 전송 공용 유틸 (개선⑪) — 전송부만 위임
+import news_known   # 뉴스 중복 대조 공용(#234)
 
 try:
     import anthropic
@@ -159,11 +160,11 @@ def parse_date(s: str) -> str:
     return ''  # 파싱 실패 — 호출자가 fallback 처리
 
 
-def get_existing_urls() -> tuple:
-    res = sb.table('news_feed').select('url,title').execute()
-    urls   = {r['url']   for r in (res.data or []) if r.get('url')}
-    titles = {r['title'] for r in (res.data or []) if r.get('title')}
-    return urls, titles
+def get_existing_urls(items: list) -> tuple:
+    """이번 후보 중 news_feed에 이미 있는 URL·제목 (#234). 종전엔 페이지 없이 select 한 번이라
+    14,068행 중 1,000행만 보고 있었다(#66 위반 — URL 유일 제약이 중복 저장은 막아 저장 건수만 부풀었다).
+    deleted_news는 종전처럼 보지 않는다(뉴스 크롤러와 통일하는 것은 동작 변경 — 배경역사 #23 이월 과제)."""
+    return news_known.known_or_full(sb, items, include_deleted=False, label='기존')
 
 
 def detect_category(title: str) -> str:
@@ -970,9 +971,6 @@ def main():
     print('[정부 고시·예규 크롤러 시작] ' + now_str)
     print('=' * 50)
 
-    existing_urls, existing_titles = get_existing_urls()
-    print('[기존] %d건' % len(existing_urls))
-
     # 보도자료 수집 키워드 갱신 (app_config 원본 — 실패 시 폴백 유지)
     try:
         import press_ingest
@@ -991,6 +989,7 @@ def main():
     all_items += crawl_opinion_lawmaking()
     print('[수집] 총 %d건' % len(all_items))
 
+    existing_urls, existing_titles = get_existing_urls(all_items)   # 수집 뒤 후보만 대조(#234)
     saved = save_items(all_items, existing_urls, existing_titles)
     print('[완료] 신규 %d건 저장' % saved)
 

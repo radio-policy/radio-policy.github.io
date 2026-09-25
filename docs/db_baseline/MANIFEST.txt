@@ -2,14 +2,14 @@ extensions        8
 sequences        11
 tables           49
 foreign_keys     12
-functions        63
+functions        65
 views             2
 indexes          54
 triggers          6
 policies         79
-grants          135
+grants          137
 role_settings     5
 cron             16
 storage           2
 vault_names       4
-migrations      164
+migrations      165

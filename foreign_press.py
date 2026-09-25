@@ -72,6 +72,7 @@ except ImportError:
 from sb_client import make_client, ran_recently, heartbeat as sb_heartbeat
 from retry_util import with_retry
 import api_usage; api_usage.install()   # Anthropic usage 기록(#152) — 호출부 무변경, fail-open
+import news_known   # 뉴스 중복 대조 공용(#234)
 
 KST = timezone(timedelta(hours=9))
 
@@ -390,19 +391,11 @@ def fetch_body(item: dict) -> str:
 #  실행
 # ═══════════════════════════════════════════════════════
 
-def load_existing_urls(sb) -> set:
-    """news_feed 기존 url 셋 (60일 롤링이라 전량 조회 부담 낮음 — crawler.py와 동일 관례)"""
-    urls = set()
-    page = 0
-    while True:
-        rows = sb.table('news_feed').select('url').order('id') \
-            .range(page * 1000, page * 1000 + 999).execute().data
-        if not rows:
-            break
-        urls.update(r['url'] for r in rows if r.get('url'))
-        if len(rows) < 1000:
-            break
-        page += 1
+def load_existing_urls(sb, items: list, label: str) -> set:
+    """후보(items) url 중 news_feed에 이미 있는 것 (#234 DB 함수 대조, 실패 시 전량 조회 — crawler.py와 같은 공용).
+    해외 수집은 종전처럼 url만 보고 deleted_news는 보지 않는다."""
+    urls, _ = news_known.known_or_full(sb, [{'url': it.get('url')} for it in items],
+                                       include_deleted=False, label=label)
     return urls
 
 
@@ -419,26 +412,10 @@ def _f_hash(s: str) -> str:
     return hashlib.sha256(norm.encode('utf-8')).hexdigest()[:16]
 
 
-def load_screen_cache(sb, criteria_hash: str) -> dict:
-    """{url: title_hash} — 현재 기준문으로 무관 판정된 것만. 실패 시 빈 dict."""
-    out = {}
-    try:
-        page = 0
-        while True:
-            rows = sb.table('news_screen_cache').select('url,title_hash,criteria_hash').order('url') \
-                .range(page * 1000, page * 1000 + 999).execute().data
-            if not rows:
-                break
-            for r in rows:
-                if r.get('criteria_hash') == criteria_hash:
-                    out[r['url']] = r.get('title_hash')
-            if len(rows) < 1000:
-                break
-            page += 1
-    except Exception as e:
-        print('[해외 선별 캐시] 로드 실패(전량 판정으로 진행): %s' % str(e)[:80])
-        return {}
-    return out
+def load_screen_cache(sb, criteria_hash: str, urls: list) -> dict:
+    """{url: title_hash} — 후보 urls 중 현재 기준문으로 무관 판정된 것만(#234 DB 함수 대조, 실패 시 전량 조회).
+    그것도 실패하면 빈 dict(전량 판정)."""
+    return news_known.screen_cache(sb, urls, criteria_hash)
 
 
 def save_screen_cache(sb, rows: list) -> None:
@@ -469,11 +446,9 @@ def run(dry: bool = False, only: list = None) -> int:
         sb_heartbeat(sb, 'last_foreign_press_run', 'skip: no ANTHROPIC_API_KEY')
         return 0
 
-    existing = load_existing_urls(sb)
     criteria_hash = _f_hash(criteria)
-    screen_cache = load_screen_cache(sb, criteria_hash)
-    print('[해외 수집] 기존 news_feed url %d건, 무관 캐시 %d건, dry-run=%s'
-          % (len(existing), len(screen_cache), dry))
+    # 기존 url·무관 캐시는 기관별 후보만 DB 함수로 대조한다(#234 — 종전엔 두 표 전량 46요청)
+    print('[해외 수집] dry-run=%s' % dry)
 
     rows_to_save = []
     cache_rows = []
@@ -494,9 +469,12 @@ def run(dry: bool = False, only: list = None) -> int:
             fail_src.append('%s:목록' % src)
             continue
         stats['scan'] = len(feed_items)
+        cand = feed_items[:MAX_PER_SOURCE]
+        existing = load_existing_urls(sb, cand, label='%s 기존' % src)
+        screen_cache = load_screen_cache(sb, criteria_hash, [it['url'] for it in cand])
         seen = set()
         fresh = []
-        for it in feed_items[:MAX_PER_SOURCE]:
+        for it in cand:
             if it['url'] in existing or it['url'] in seen:
                 continue
             # 같은 기준문으로 이미 '무관' 판정된 기사 — 제목이 그대로면 다시 묻지 않는다

@@ -8015,3 +8015,30 @@ Fable 재검토 포인트((Fable 5.1, 엑스트라)): 요약 벡터 문턱 0.40/
 도구 두 곳의 마지막 페이지(`order by id offset 41000·45000`)는 pkey 인덱스 스캔 60ms·40ms, 대시보드 뉴스 정렬은 `idx_news_feed_published_at` 위 Incremental Sort(추가 정렬 가벼움). 요청 주소 `order=published_at.desc.nullslast,id.desc` 확인. 스모크 161 OK, `node --check app.js` OK.
 남은 것·관찰: `title_backfill.py`는 16페이지(16,000행)에서 멈춘다(`page > 14`) — 뉴스가 14,068행이라 곧 닿는다. 수동 도구라 지금은 두고, 다시 쓸 때 상한을 본다.
 사내판: 불필요 — 사내 저장소 origin/main(이 PC 사본, 읽기만)을 grep했다. 사내가 외부 DB에서 받는 `export_snapshot.py`는 표마다 `id`(app_config는 `key`) 정렬, `export_custom_knowledge.py`는 `doc_name,chunk_index`(겹침 0 — C와 같은 판단), `export_news.py`는 사내가 #232 회신 뒤 이미 고쳤다. 콘솔 `ported.js`의 페이지 조회는 Supabase가 아니라 사내 `app.py`의 PostgREST 흉내(JSONL을 메모리에 올려 파이썬 안정 정렬 후 자름)로 가서 요청마다 순서가 같다.
+
+**#234 (2026-09-26) 뉴스 중복 대조를 후보만 DB에 묻는 1왕복으로 — 개선안 §2-13 2단계 + 정부 공고 크롤러 1,000행 절단 발견 (운영자 결정: 지금 진행, 검증 통과 시 바로 반영 — Fable 소진 중 (Opus 5.5, 엑스트라) 대행, Fable 재검토 대상).**
+발단: 개선안 260923 상위 13 '10분 크롤의 실행당 고정비'. 1단계(캐시 정리·pip 캐시)는 9/24 실측상 효과 없어 건너뛰었고(운영자 동의), 2단계는 '중복 대조를 정확 일치 RPC 1왕복으로 — 최근 N일 창으로 좁히지 말 것'으로 Fable 묶음에 있었다. 세션은 '얻는 것이 작다(10분 중 5초, 요청 과금 없음), 건드리는 곳은 재알림 방지 핵심'이라 보류를 권했으나 운영자가 진행을 택했다(Fable 소진 규칙에 따라 Opus 대행).
+종전 구조: 크롤러가 실행마다 news_feed(url·title) 14,071행·deleted_news 318행·news_screen_cache 30,919행을 1,000행씩 **47요청**(약 5초, 하루 ≈6,700요청)으로 내려받아 파이썬 집합을 만들고, 이번 후보가 그 안에 있는지만 봤다. 판정은 후보 각각의 포함 여부뿐이므로 후보만 넘겨 겹치는 것을 돌려받아도 결과가 같다.
+조치:
+- DB 함수 2개(마이그레이션 `news_known_items_rpc_234`, `language sql stable`, security invoker, `search_path` 고정, **service_role 전용** — `has_function_privilege` anon·authenticated false 확인): `news_known_items(p_urls, p_titles, p_include_deleted)` → `{urls, titles}`(후보를 distinct unnest → `in (select … from news_feed)` 해시 서브플랜), `news_screen_cache_lookup(p_urls, p_criteria_hash)` → `{url: title_hash}`(PK 인덱스). 둘 다 jsonb 한 값(#221 — 1,000행 상한 무관), 정확 일치, 기간 창 없음.
+- 공용 모듈 `news_known.py`: `known_or_full`(1,000건씩 호출 → 실패하거나 **후보 url 200건 이상인데 기존 0건**이면 전량 조회로 확인 — 10분 전 실행과 겹치는 기사가 하나도 없을 수는 없다), `screen_cache`(실패 → 전량 → 그것도 실패면 빈 dict, 종전 fail-open), `fetch_all_rows`(되돌아갈 길, #233 유일 정렬). news_feed 전량 조회까지 실패하면 **예외** — 빈 명단으로 진행하면 모든 후보가 '새 기사'가 된다.
+- crawler.py: 기존 대조를 수집 **뒤**로 옮겨 후보를 넘긴다(`get_existing_urls(all_items)`), 선별 캐시는 선별 후보 url만. `_fetch_all_rows`는 news_known 래퍼로 남김(지침 #66·#233이 가리키는 이름).
+- foreign_press.py: 기관별 후보(최대 15건)마다 url만 대조(`include_deleted=False` — 종전대로 deleted_news 안 봄).
+- gov_notice_crawler.py(lampmanH-pc): **발견** — `get_existing_urls`가 페이지 없이 `select('url,title').execute()` 한 번이라 **14,068행 중 1,000행만** 보고 있었다(#66 위반, #233 전수 조사는 `.range(`만 찾아 놓쳤다). url 유일 제약 + `upsert(ignore_duplicates)` 덕에 중복 저장은 없었고(정부 출처 제목 중복 0건 실측) heartbeat `saved=`만 부풀었다. 같은 모듈로 교체, deleted_news는 종전대로 안 봄(통일은 동작 변경 — #23 이월 과제 그대로).
+검증(DB 쓰기 0·AI 0):
+
+| 확인 | 결과 |
+|---|---|
+| 실DB 전 기사 + 삭제 기사 + 가짜 700건(한글·%·따옴표·이모지) — 뉴스 방식 | url 14,382·제목 14,343 판정이 전량∩후보와 완전 동일, 가짜 0건, 16왕복 3.2초 |
+| 같은 후보 — 정부·해외 방식(삭제 제외) | 동일, 삭제 전용 url 311건 미포함 |
+| 평소 규모(기존 1,000 + 새 100) | 동일, **0.27초** (종전 약 5.4초·47요청) |
+| 실제 네이버 수집 1,121건(`crawl_naver_news`, 저장 없음) | url 380·제목 327 동일, 중복 제거 뒤 새 후보 739건이 순서까지 동일, 0.54초 |
+| 선별 캐시(기준문 지문 2종, 전 캐시 url + 가짜) | 114·30,779건 동일 |
+| DB 함수 강제 실패 → 전량 조회 | 판정 동일, 선별 캐시도 동일 |
+| 이상 결과(기존 0건) 가드 | 전량 조회로 확인해 판정 동일 |
+| DB 전면 실패 | 예외(빈 명단 진행 없음) |
+| anon 키로 호출 | 두 함수 모두 permission denied |
+
+단위 `tests/test_news_known.py` 9건(청크 호출·삭제 포함 여부·실패/이상/전면 실패·선별 캐시 3단 폴백·구조 가드 — news_known 밖 `table('news_feed').select('url,title')` 금지) → 전체 170 OK. DB 설계도 재생성(20_functions·60_grants·MANIFEST·migrations 1).
+사내판: 불필요 — 사내 저장소 origin/main grep: 뉴스 수집·중복 대조 코드가 없다(사내는 `export_news.py`로 외부 news_feed를 받아 간다, ported.js의 deleted_news는 삭제 버튼의 insert뿐).
+남은 것: ① lampmanH-pc `git pull origin main` — 정부 공고 크롤러는 PC 체인(16:30)이라 pull 전까지 옛 코드(1,000행)로 돈다, 영향은 저장 건수 표시뿐. ② 정부 공고·해외 수집도 deleted_news를 볼지(운영자가 지운 정부 공고가 15일 안이면 다시 들어오는지) — 동작 변경이라 운영자 판단. Fable 재검토 포인트((Fable 5.1, 엑스트라)): 이상 가드 문턱(후보 200·기존 0), 제목 정확 일치가 `title_backfill`·`refetch_content`의 제목 복원(#161-보론15)과 만나는 경우(종전과 같은 의미지만 설계 차원 재확인), RPC 1,000건 청크·security invoker 선택.

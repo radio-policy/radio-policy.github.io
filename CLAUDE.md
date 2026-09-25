@@ -61,7 +61,11 @@ test fails on any `table('system_health').upsert` outside sb_client.py); Edge CO
 all four after editing it; assembly-search keeps `'*'` on purpose — it is public, so its input is capped at 300 chars and its Haiku fallback parse is logged to `api_usage`, #229). KB loading goes through `kb_store` (#218):
 `insert_chunks` (batched insert + per-doc chunk_index-range count check), `register_watch` (law_watch current-version
 row), `chunk_pdf_text` / `chunk_by_newline` (the only chunk rules), `list_docs` (RPC `kb_doc_names`, service_role only —
-never page through document_chunks to collect doc names). **Every Python script that calls Anthropic
+never page through document_chunks to collect doc names). News duplicate checks go through `news_known` (#234):
+`known_or_full(sb, items, include_deleted=)` / `screen_cache(sb, urls, criteria_hash)` ask the service_role-only RPCs
+`news_known_items` / `news_screen_cache_lookup` with this run's candidates only (exact match, no "recent N days" window),
+fall back to the full ordered download on failure, and raise rather than continue with an empty set (crawler,
+foreign_press, gov_notice_crawler; a smoke test fails on a full `news_feed` url·title select outside it). **Every Python script that calls Anthropic
 must have `import api_usage; api_usage.install()`** (#152, 2026-09-10) — it wraps the SDK once and logs each
 call's token usage to the `api_usage` table (site = calling function, fail-open); Message Batches results are
 logged explicitly via `api_usage.record_usage()`. Bulk scripts refuse mass API runs without `--allow-api`

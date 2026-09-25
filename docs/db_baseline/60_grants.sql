@@ -587,6 +587,12 @@ grant EXECUTE on function public.news_feed_edit_guard() to authenticated;
 grant EXECUTE on function public.news_feed_edit_guard() to public;
 grant EXECUTE on function public.news_feed_edit_guard() to service_role;
 
+revoke all on function public.news_known_items(p_urls text[], p_titles text[], p_include_deleted boolean) from public, anon, authenticated, service_role;
+grant EXECUTE on function public.news_known_items(p_urls text[], p_titles text[], p_include_deleted boolean) to service_role;
+
+revoke all on function public.news_screen_cache_lookup(p_urls text[], p_criteria_hash text) from public, anon, authenticated, service_role;
+grant EXECUTE on function public.news_screen_cache_lookup(p_urls text[], p_criteria_hash text) to service_role;
+
 revoke all on function public.norm_article_key(a text) from public, anon, authenticated, service_role;
 grant EXECUTE on function public.norm_article_key(a text) to anon;
 grant EXECUTE on function public.norm_article_key(a text) to authenticated;

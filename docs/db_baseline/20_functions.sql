@@ -986,6 +986,42 @@ begin
 end $function$
 ;
 
+CREATE OR REPLACE FUNCTION public.news_known_items(p_urls text[], p_titles text[], p_include_deleted boolean DEFAULT true)
+ RETURNS jsonb
+ LANGUAGE sql
+ STABLE
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+  select jsonb_build_object(
+    'urls', coalesce((
+      select jsonb_agg(u.url)
+      from (select distinct x.url from unnest(coalesce(p_urls, '{}'::text[])) as x(url) where x.url <> '') u
+      where u.url in (select n.url from public.news_feed n)
+         or (p_include_deleted and u.url in (select d.url from public.deleted_news d))
+    ), '[]'::jsonb),
+    'titles', coalesce((
+      select jsonb_agg(t.title)
+      from (select distinct x.title from unnest(coalesce(p_titles, '{}'::text[])) as x(title) where x.title <> '') t
+      where t.title in (select n.title from public.news_feed n)
+         or (p_include_deleted and t.title in (select d.title from public.deleted_news d))
+    ), '[]'::jsonb)
+  );
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.news_screen_cache_lookup(p_urls text[], p_criteria_hash text)
+ RETURNS jsonb
+ LANGUAGE sql
+ STABLE
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+  select coalesce(jsonb_object_agg(c.url, c.title_hash), '{}'::jsonb)
+  from public.news_screen_cache c
+  where c.url = any(coalesce(p_urls, '{}'::text[]))
+    and c.criteria_hash = p_criteria_hash;
+$function$
+;
+
 CREATE OR REPLACE FUNCTION public.norm_article_key(a text)
  RETURNS text
  LANGUAGE sql

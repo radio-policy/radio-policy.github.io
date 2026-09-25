@@ -31,6 +31,7 @@ from sb_client import make_client, ran_recently, heartbeat as sb_heartbeat
 import api_usage; api_usage.install()   # Anthropic usage 기록(#152) — 호출부 무변경, fail-open
 import notify   # 텔레그램 전송 공용 유틸 (개선⑪) — 전송부만 위임
 import urgency_rules   # 긴급도 공통 낱말 규칙 매처(#216) — 사내판·대시보드 JS와 같은 계약
+import news_known      # 뉴스 중복 대조 공용(#234) — 후보만 DB 함수로, 실패 시 전량 조회
 import anthropic
 
 # ── 환경변수 ────────────────────────────────────────────
@@ -398,31 +399,16 @@ def _fetch_all_rows(table: str, columns: str, order: str = 'id') -> list:
     빠졌고, 이미 알림한 긴급 기사를 신규로 착각해 재발송. 총량이 상한을 넘는 첫날
     조용히 터지는 유형이라 전량 조회는 이 헬퍼만 쓸 것.)
     order는 표의 유일 열(기본 id, news_screen_cache는 url) — 정렬이 없거나 겹치면 요청마다
-    행 순서가 달라져 페이지 경계에서 행이 빠지거나 겹친다(#233, 사내 export_news 28건 누락과 같은 부류)."""
-    rows, page, step = [], 0, 1000
-    while True:
-        res = (sb.table(table).select(columns).order(order)
-               .range(page * step, (page + 1) * step - 1).execute())
-        chunk = res.data or []
-        rows.extend(chunk)
-        if len(chunk) < step:
-            return rows
-        page += 1
+    행 순서가 달라져 페이지 경계에서 행이 빠지거나 겹친다(#233). 본체는 news_known(#234)."""
+    return news_known.fetch_all_rows(sb, table, columns, order)
 
 
-def get_existing_urls() -> set:
-    """Supabase에 이미 저장된 URL + 제목 목록 조회 (Google RSS 중복 방지)
-    + 사용자가 대시보드에서 삭제한 기사(deleted_news)도 포함해 재수집 방지"""
-    data = _fetch_all_rows('news_feed', 'url,title')
-    urls   = {row['url']   for row in data if row.get('url')}
-    titles = {row['title'] for row in data if row.get('title')}
-    try:
-        ddata = _fetch_all_rows('deleted_news', 'url,title')
-        urls   |= {row['url']   for row in ddata if row.get('url')}
-        titles |= {row['title'] for row in ddata if row.get('title')}
-    except Exception as e:
-        print(f'[삭제목록] deleted_news 조회 실패(무시): {e}')
-    return urls, titles
+def get_existing_urls(items: list) -> tuple:
+    """이번 후보(items) 중 이미 저장된 URL·제목 (Google RSS 중복 방지)
+    + 사용자가 대시보드에서 삭제한 기사(deleted_news)도 포함해 재수집 방지.
+    후보만 DB 함수로 대조한다(#234 — 종전엔 세 표 전량 47요청). 실패하면 전량 조회로 되돌아가고,
+    news_feed 전량 조회까지 실패하면 예외를 올린다(빈 명단으로 진행하면 전부 '새 기사'가 된다)."""
+    return news_known.known_or_full(sb, items, include_deleted=True, label='기존')
 
 
 def detect_category(title: str) -> str:
@@ -1224,15 +1210,10 @@ def _screen_hash(s: str) -> str:
     return hashlib.sha256(norm.encode('utf-8')).hexdigest()[:16]
 
 
-def _load_screen_cache(criteria_hash: str) -> dict:
-    """{url: title_hash} — 현재 기준문으로 판정된 행만. 실패 시 빈 dict(전량 판정으로 진행)."""
-    try:
-        rows = _fetch_all_rows('news_screen_cache', 'url,title_hash,criteria_hash', order='url')
-        return {r['url']: r['title_hash'] for r in rows
-                if r.get('criteria_hash') == criteria_hash}
-    except Exception as e:
-        print(f'[선별 캐시] 로드 실패(전량 판정으로 진행): {str(e)[:80]}')
-        return {}
+def _load_screen_cache(criteria_hash: str, urls: list) -> dict:
+    """{url: title_hash} — 후보 urls 중 현재 기준문으로 판정된 행만(#234 DB 함수 대조, 실패 시 전량 조회).
+    그것도 실패하면 빈 dict(전량 판정으로 진행)."""
+    return news_known.screen_cache(sb, urls, criteria_hash)
 
 
 def _save_screen_cache(rows: list) -> None:
@@ -1424,7 +1405,8 @@ def screen_news_items(items: list) -> list:
     screen_cache = {}
     if cand_idx and client:
         criteria_hash = _screen_hash(criteria)
-        screen_cache = _load_screen_cache(criteria_hash)
+        screen_cache = _load_screen_cache(
+            criteria_hash, [(items[n].get('url') or '').strip() for n in cand_idx])
         if screen_cache:
             remain = []
             for n in cand_idx:
@@ -2139,10 +2121,7 @@ def main():
     print(f'[시작] {now_str}')
     print(f'{"="*50}')
 
-    # ── 크롤링 (GitHub Actions 매시간 실행) ────────────
-    existing_urls, existing_titles = get_existing_urls()
-    print(f'[기존] Supabase 저장 항목 {len(existing_urls)}건')
-
+    # ── 크롤링 (GitHub Actions 10분마다 실행) ────────────
     all_items: list = []
 
     # 1순위: 네이버 뉴스 검색
@@ -2157,6 +2136,9 @@ def main():
 
     # 정부기관은 PC Cowork gov_notice_crawler.py(매일 17:00)가 담당
     print(f'[수집] 총 {len(all_items)}건')
+
+    # 기존 대조는 수집 뒤 후보만 (#234) — 판정은 후보의 포함 여부뿐이라 전량 명단과 결과가 같다
+    existing_urls, existing_titles = get_existing_urls(all_items)
 
     new_items = save_new_items(all_items, (existing_urls, existing_titles))
     print(f'[신규] {len(new_items)}건')
