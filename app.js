@@ -7030,14 +7030,28 @@ async function loadPressJSON() {
   if (!sb) { if (listEl) listEl.innerHTML = '<div style="padding:20px;color:#f66">Supabase 미연결</div>'; return; }
 
   try {
-    // 1) 보도자료 전체 청크 조회 — ## YYMMDD 패턴 포함 청크만 ({n} 대신 명시적 반복)
-    // 주의: Supabase는 요청당 최대 1,000행이라 .limit(2000)도 1,000에서 잘린다(무정렬이면
-    // 어떤 1,000이 올지도 임의 → 최근분 누락). 백필로 6기관 1,100+섹션이 되면서 실제로
-    // 발생 — 반드시 order+range 페이징으로 전량 수집 (2026-08-02, #53)
+    // 0) 목록 전용 RPC press_index() — '##'로 시작하는 줄만 [doc_name, 줄]로 받아 온다(§4-3-2, #221).
+    //    청크 id·줄 순서 그대로라 아래 제목 파싱(정규식·첫 등장 중복 제거)이 종전과 같은 결과를 낸다.
+    //    jsonb 한 값으로 받는 이유: 표 반환 RPC도 PostgREST 1,000행 상한에 잘린다(보도자료 1,142줄).
+    //    종전 경로(본문 청크 1,141개·1.56MB JSON)는 RPC가 없거나 실패할 때의 폴백으로 남긴다
+    //    (사내판 ported.js 의 sb 심에는 이 RPC가 없으므로 폴백이 그대로 동작해야 한다).
+    //    ⚠️ 섹션 머리 형식('## YYMMDD 제목')을 바꾸면 DB 함수 press_index·doc_sections도 같이 고칠 것.
     var titleChunks = [];
     var queryErr    = null;
     var pageStart   = 0;
-    while (true) {
+    var viaRpc = false;
+    try {
+      var ir = await sb.rpc('press_index');
+      if (!ir.error && Array.isArray(ir.data) && ir.data.length) {
+        titleChunks = ir.data.map(function(r) { return { doc_name: r[0], content: r[1] }; });
+        viaRpc = true;
+      }
+    } catch (e) { /* 폴백 */ }
+    // 1) (폴백) 보도자료 전체 청크 조회 — ## YYMMDD 패턴 포함 청크만 ({n} 대신 명시적 반복)
+    // 주의: Supabase는 요청당 최대 1,000행이라 .limit(2000)도 1,000에서 잘린다(무정렬이면
+    // 어떤 1,000이 올지도 임의 → 최근분 누락). 백필로 6기관 1,100+섹션이 되면서 실제로
+    // 발생 — 반드시 order+range 페이징으로 전량 수집 (2026-08-02, #53)
+    while (!viaRpc) {
       var resp = await sb
         .from('document_chunks')
         .select('doc_name, content')
@@ -7210,10 +7224,21 @@ async function fetchPressSection(title, date, docName) {
   // '2026-01-15' → '260115'
   var yymmdd = date.replace(/-/g, '').substring(2);
 
-  // 문서 하나가 2,000청크를 넘을 수 있어(과기정통부 백필) 500 limit → range 페이징 (#53)
+  // 0) 그 날짜 섹션만 서버에서 잘라 받는다(doc_sections RPC, §4-3-2, #221) — 문서 전체(최대 1,958청크·2.7MB)를
+  //    받지 않는다. RPC가 없거나 0건이면 아래 종전 경로(문서 전체 → 제목 폴백 포함)로 간다.
   var chunks = [];
+  try {
+    var ds = await sb.rpc('doc_sections', { p_doc: docName, p_ymd: yymmdd });
+    if (!ds.error && Array.isArray(ds.data) && ds.data.length) {
+      // jsonb 문자열 배열(섹션 순서). 섹션들을 이어 붙이면 아래 분리·제목 대조 로직이 그대로 돈다.
+      chunks = ds.data.map(function(s, i) { return { chunk_index: i, content: (i ? '\n' : '') + s }; });
+    }
+  } catch (e) { /* 폴백 */ }
+
+  // 문서 하나가 2,000청크를 넘을 수 있어(과기정통부 백필) 500 limit → range 페이징 (#53)
   var pageStart = 0;
-  while (true) {
+  var gotSections = chunks.length > 0;   // 폴백 페이징 중에 chunks 가 차도 루프가 끊기지 않도록 별도 플래그
+  while (!gotSections) {
     var cr = await sb.from('document_chunks')
       .select('chunk_index, content')
       .eq('doc_name', docName)
@@ -9939,11 +9964,35 @@ async function loadAssemblyMinutes(force) {
   if (!_assemblyMinutesCache || force) {
     listEl.innerHTML = '<div style="color:var(--text-secondary);padding:12px;text-align:center;font-size:12px">불러오는 중...</div>';
     try {
-      // 회의록 전체 청크를 문서별로 이어붙여 섹션 단위 파싱 (order+range 페이징 — 1,000행 컷 #53).
-      // 헤더-청크만 읽으면 '요약:' 줄이 다음 청크에 걸릴 때 놓치므로 전체를 읽는다(문서가 작아 부담 없음).
+      // 0) 목록 전용 RPC minutes_index() — 섹션 합치기·파싱을 서버에서 하고 제목·요약·원문 URL만 받는다(§4-3-2, #221).
+      //    종전: 6,396청크·10.1MB JSON(압축 후 ≈3MB)·요청 7회 → 550행·0.2MB(압축 ≈40KB)·요청 1회(실측 2026-09-26).
+      //    행은 [doc_name, ymd, title, summary, src_url] (문서명·섹션 순서). RPC가 없거나 실패하면
+      //    (사내판 ported.js 심 포함) 아래 종전 경로로 폴백한다.
+      //    ⚠️ 아래 폴백의 섹션 규칙('## YYMMDD 제목'·'요약:'·'(원문: URL)')을 바꾸면 DB 함수 minutes_index도 같이 고칠 것.
+      var viaRpc = null;
+      try {
+        var mi = await sb.rpc('minutes_index');
+        if (!mi.error && Array.isArray(mi.data) && mi.data.length) viaRpc = mi.data;
+      } catch (e0) { /* 폴백 */ }
+      if (viaRpc) {
+        var mlist = viaRpc.map(function(r) {
+          return {
+            title: String(r[2] || '').trim(),
+            date: '20' + r[1].slice(0, 2) + '-' + r[1].slice(2, 4) + '-' + r[1].slice(4, 6),
+            doc_name: r[0],
+            // 구버전 수집분의 '# 요약' 접두 중복 표시 방어 (#54) — 종전 경로와 같은 정리
+            summary: r[3] ? String(r[3]).replace(/^[#\s]*(요약\s*[:：]?\s*)+/, '').trim() : '',
+            src_url: r[4] || null
+          };
+        });
+        mlist.sort(function(a, b) { return b.date.localeCompare(a.date); });
+        _assemblyMinutesCache = mlist;
+      }
+      // 1) (폴백) 회의록 전체 청크를 문서별로 이어붙여 섹션 단위 파싱 (order+range 페이징 — 1,000행 컷 #53).
+      // 헤더-청크만 읽으면 '요약:' 줄이 다음 청크에 걸릴 때 놓치므로 전체를 읽는다.
       var chunks = [];
       var pageStart = 0;
-      while (true) {
+      while (!viaRpc) {
         var resp = await sb.from('document_chunks')
           .select('doc_name, chunk_index, content')
           .eq('doc_category', '회의록')
@@ -9979,7 +10028,7 @@ async function loadAssemblyMinutes(force) {
         });
       });
       minutes.sort(function(a, b) { return b.date.localeCompare(a.date); });
-      _assemblyMinutesCache = minutes;
+      if (!viaRpc) _assemblyMinutesCache = minutes;
     } catch (e) {
       listEl.innerHTML = '<div style="color:#f66;padding:12px;text-align:center;font-size:12px">회의록 불러오기 실패: ' + escHtml((e && e.message) || String(e)) + '</div>';
       return;
@@ -10223,6 +10272,7 @@ async function openMinuteDetail(mt) {
 // ── 발언자별 보기 (assembly_speeches, 2026-08-03) ──────────────
 // 회의별 보기(document_chunks 회의록)와 별개 경로. 발언자 단위 구조화 조회.
 var _speechesBySpeaker = null;   // { speaker: [rows...] }
+var _speakerIndex = null;        // { speaker: { n, variants[] } } — speaker_index() RPC 경로일 때만(§4-3-2)
 var _minutesView = 'meeting';
 
 // 발언자 이름 정규화. String.prototype.normalize 가 없는 환경도 죽지 않게 감싼다.
@@ -10442,6 +10492,37 @@ async function loadSpeakers(force) {
   if (_speechesBySpeaker && !force) return;
   sel.innerHTML = '<option value="">불러오는 중...</option>';
   try {
+    // 0) 드롭다운은 이름·건수만 있으면 된다 — speaker_index() RPC(§4-3-2, #221): 6,779행·3.4MB → 425행·7.8KB(압축 2.5KB).
+    //    RPC는 원표기별 [speaker, 건수]만 주고, 이름 병합(NFC·trim)은 아래 종전 규칙 그대로 여기서 한다.
+    //    발언 본문은 발언자를 고를 때 그 사람 것만 받는다(renderSpeakerSpeeches). RPC 실패 시 종전 전량 경로.
+    //    people 테이블로 대신하지 않는다 — 248명이라 발언자 425명 중 182명이 빠진다(실측 2026-09-25).
+    _speakerIndex = null;
+    try {
+      var si = await sb.rpc('speaker_index');
+      if (!si.error && Array.isArray(si.data) && si.data.length) {
+        _speakerIndex = {};
+        si.data.forEach(function(r) {
+          var k = _nfc(r[0]).trim();
+          if (!k) return;
+          var e = _speakerIndex[k] || (_speakerIndex[k] = { n: 0, variants: [] });
+          e.n += Number(r[1]) || 0;
+          e.variants.push(r[0]);   // 원표기 그대로 — 선택 시 .in('speaker', variants)로 조회
+        });
+      }
+    } catch (e0) { _speakerIndex = null; }
+    if (_speakerIndex) {
+      _speechesBySpeaker = {};   // 이름별 발언은 선택 시 채운다
+      var inames = Object.keys(_speakerIndex).sort(function(a, b) {
+        return _speakerIndex[b].n - _speakerIndex[a].n || a.localeCompare(b, 'ko');
+      });
+      sel.innerHTML = '<option value="">발언자 선택 (' + inames.length + '명)</option>' +
+        inames.map(function(n) {
+          return '<option value="' + escHtml(n) + '">' + escHtml(n) + ' (' + _speakerIndex[n].n + ')</option>';
+        }).join('');
+      if (out) out.innerHTML = '<div style="color:var(--text-secondary);padding:12px;text-align:center;font-size:12px">발언자를 선택하세요</div>';
+      return;
+    }
+    // 1) (폴백) 전량 조회
     var rows = [];
     var pageStart = 0;
     while (true) {
@@ -10483,10 +10564,32 @@ async function loadSpeakers(force) {
   }
 }
 
-function renderSpeakerSpeeches(name) {
+async function renderSpeakerSpeeches(name) {
   var out = document.getElementById('speaker-speeches');
   if (!out) return;
   name = _nfc(name);   // 맵 키가 NFC라 조회 키도 맞춰야 한다
+  // 색인(speaker_index) 경로: 이 사람 발언을 처음 고를 때만 받아 캐시한다(현재 최다 314행이나 소급 적재로
+  // 1,000행을 넘을 수 있으니 order+range 페이징 — #53).
+  if (name && _speakerIndex && _speakerIndex[name] && _speechesBySpeaker && !_speechesBySpeaker[name]) {
+    out.innerHTML = '<div style="color:var(--text-secondary);padding:12px;text-align:center;font-size:12px">불러오는 중...</div>';
+    var srows = [];
+    for (var sp = 0; ; sp += 1000) {
+      var fr = await sb.from('assembly_speeches')
+        .select('speaker, position, party, meeting_date, agenda, topic, summary, source_url')
+        .in('speaker', _speakerIndex[name].variants)
+        .order('meeting_date', { ascending: false }).order('id')
+        .range(sp, sp + 999);
+      if (fr.error) {
+        out.innerHTML = '<div style="color:#f66;padding:12px;text-align:center;font-size:12px">발언 불러오기 실패: ' + escHtml(fr.error.message || String(fr.error)) + '</div>';
+        return;
+      }
+      srows = srows.concat(fr.data || []);
+      if (!fr.data || fr.data.length < 1000) break;
+    }
+    _speechesBySpeaker[name] = srows;
+    var selNow = document.getElementById('speaker-select');
+    if (selNow && _nfc(selNow.value) !== name) return;   // 받는 사이 다른 사람을 골랐으면 그리지 않는다
+  }
   if (!name || !_speechesBySpeaker || !_speechesBySpeaker[name]) {
     out.innerHTML = '<div style="color:var(--text-secondary);padding:12px;text-align:center;font-size:12px">발언자를 선택하세요</div>';
     return;

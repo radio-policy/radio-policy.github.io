@@ -586,6 +586,83 @@ $$;
 revoke all on function public.kb_doc_names(text, text) from public, anon, authenticated;
 grant execute on function public.kb_doc_names(text, text) to service_role;
 
+-- 대시보드 목록 전용 RPC 4개(#221, §4-3-2) — 목록 화면이 원문 청크 전량을 받던 것을 대체.
+-- 넷 다 jsonb 한 값: 집합 반환 RPC도 PostgREST max_rows(1000)에 잘린다(보도자료 1,142줄).
+-- 섹션 형식('## YYMMDD 제목'·'요약:'·'(원문: URL)')을 바꾸면 app.js 폴백과 함께 고칠 것.
+create or replace function public.press_index()
+returns jsonb
+language sql stable
+set search_path = public
+as $$
+  select coalesce(jsonb_agg(jsonb_build_array(c.doc_name, l.line) order by c.id, l.ord), '[]'::jsonb)
+  from document_chunks c
+  cross join lateral regexp_split_to_table(c.content, E'\n') with ordinality as l(line, ord)
+  where c.doc_category = '보도자료'
+    and c.content ~ '## [0-9]{6}'
+    and left(l.line, 2) = '##'
+$$;
+
+create or replace function public.minutes_index()
+returns jsonb
+language sql stable
+set search_path = public
+as $$
+  with d as (
+    select c.doc_name, string_agg(c.content, '' order by c.chunk_index) as full_text
+    from document_chunks c
+    where c.doc_category = '회의록'
+    group by c.doc_name
+  ), s as (
+    select d.doc_name, t.sec, t.ord
+    from d cross join lateral regexp_split_to_table(d.full_text, '\n(?=## \d{6} )') with ordinality as t(sec, ord)
+  )
+  select coalesce(jsonb_agg(jsonb_build_array(
+           s.doc_name,
+           substring(s.sec from '^## (\d{6}) '),
+           substring(s.sec from '^## \d{6} ([^\r\n]+)'),
+           substring(left(s.sec, 900) from '(?n)^요약:\s*(.+)$'),
+           substring(s.sec from '\(원문:\s*(https?:[^\s)]+)\)'))
+         order by s.doc_name, s.ord), '[]'::jsonb)
+  from s
+  where s.sec ~ '^## \d{6} [^\r\n]'
+$$;
+
+create or replace function public.doc_sections(p_doc text, p_ymd text)
+returns jsonb
+language sql stable
+set search_path = public
+as $$
+  with f as (
+    select string_agg(c.content, '' order by c.chunk_index) as t
+    from document_chunks c
+    where c.doc_name = p_doc
+  )
+  select coalesce(jsonb_agg(t.sec order by t.ord), '[]'::jsonb)
+  from f cross join lateral regexp_split_to_table(f.t, '\n(?=## \d{6})') with ordinality as t(sec, ord)
+  where p_ymd ~ '^\d{6}$'
+    and left(t.sec, 9) = '## ' || p_ymd
+$$;
+
+create or replace function public.speaker_index()
+returns jsonb
+language sql stable
+set search_path = public
+as $$
+  select coalesce(jsonb_agg(jsonb_build_array(s.speaker, s.n)), '[]'::jsonb)
+  from (select speaker, count(*) as n
+        from assembly_speeches
+        where speaker is not null
+        group by speaker) s
+$$;
+revoke all on function public.press_index()               from public;
+revoke all on function public.minutes_index()             from public;
+revoke all on function public.doc_sections(text, text)    from public;
+revoke all on function public.speaker_index()             from public;
+grant execute on function public.press_index()            to anon, authenticated, service_role;
+grant execute on function public.minutes_index()          to anon, authenticated, service_role;
+grant execute on function public.doc_sections(text, text) to anon, authenticated, service_role;
+grant execute on function public.speaker_index()          to anon, authenticated, service_role;
+
 -- ===========================================================================
 -- 3b. 법령 자동 현행화 (law_watch.py / law_sync.py, 2026-07-29~30)
 -- ===========================================================================
