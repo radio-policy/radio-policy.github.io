@@ -806,7 +806,7 @@
              가장 많이 쓰이는 기능(텔레그램 /assem 30일 44건)을 눌러 보기 전에는 몰랐다.
              '검색'이라는 이름이 검색창과 탭에 두 번 뜨지 않도록 원문 검색 탭은 없앴다. -->
         <div style="display:flex;gap:8px;margin-bottom:6px;align-items:center;flex-wrap:wrap">
-          <input id="asm-search-q" type="text" placeholder="예: 2019년 국정감사에서 무선국 관련해서 발언한 내용을 찾아줘"
+          <input id="asm-search-q" type="text" maxlength="300" placeholder="예: 2019년 국정감사에서 무선국 관련해서 발언한 내용을 찾아줘"
                  style="flex:1;min-width:240px;padding:8px 12px;font-size:13px;border:0.5px solid var(--border-mid);border-radius:var(--radius-md);background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;outline:none"
                  onkeyup="if(event.key==='Enter'&&!event.isComposing)searchAssemblySpeech()" aria-label="국회 발언 검색">
           <button class="btn btn-primary" style="font-size:12px" onclick="searchAssemblySpeech()"><i class="ti ti-search"></i> 발언 찾기</button>

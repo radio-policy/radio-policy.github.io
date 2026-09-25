@@ -58,7 +58,7 @@ SKT Comm Center 기술정책팀's radio/telecom **policy-monitoring automation s
 only and "3 tries, wait, re-raise" loops through `retry_util.with_retry(fn, retries=, delay=, label=)` (#217 — a smoke
 test fails on any `table('system_health').upsert` outside sb_client.py); Edge CORS lives in `supabase/functions/_shared/http.ts`
 (`corsHeaders(origin, extraHeaders)`, imported by claude-proxy/verify-citations/news-archive-search/operator-webhook — redeploy
-all four after editing it; assembly-search keeps `'*'` on purpose). KB loading goes through `kb_store` (#218):
+all four after editing it; assembly-search keeps `'*'` on purpose — it is public, so its input is capped at 300 chars and its Haiku fallback parse is logged to `api_usage`, #229). KB loading goes through `kb_store` (#218):
 `insert_chunks` (batched insert + per-doc chunk_index-range count check), `register_watch` (law_watch current-version
 row), `chunk_pdf_text` / `chunk_by_newline` (the only chunk rules), `list_docs` (RPC `kb_doc_names`, service_role only —
 never page through document_chunks to collect doc names). **Every Python script that calls Anthropic

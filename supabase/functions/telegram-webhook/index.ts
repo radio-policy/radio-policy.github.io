@@ -290,7 +290,7 @@ async function handleAssemSearch(chatId: number, arg: string): Promise<void> {
 
   let parsed: AssemQuery;
   try {
-    parsed = await parseAssemQuery(text, Deno.env.get('ANTHROPIC_API_KEY') || '');
+    parsed = await parseAssemQuery(text, Deno.env.get('ANTHROPIC_API_KEY') || '', sb, 'telegram:assem-parse');
   } catch (e) {
     console.error('[assem 파싱 실패]', e);
     await sendTelegramHtml(BOT_TOKEN, chatId, '⚠️ 질의 해석에 실패했습니다. 잠시 후 다시 시도해 주세요.');

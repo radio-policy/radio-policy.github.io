@@ -24,7 +24,7 @@
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import {
-  parseAssemQuery, searchAssemblyWithFallback, attachContext, searchStoredSpeeches,
+  parseAssemQuery, searchAssemblyWithFallback, attachContext, searchStoredSpeeches, ASSEM_PARSE_MAX_CHARS,
   type AssemKind, type AssemQuery, type AssemStoredResult,
 } from '../_shared/assembly_search.ts';
 
@@ -58,21 +58,26 @@ Deno.serve(async (req: Request) => {
   try { body = await req.json(); } catch { return json({ error: 'bad json' }, 400); }
 
   const limit = Math.min(Math.max(Number(body.limit) || 10, 1), MAX_LIMIT);
+  // 로그인 없이 누구나 부르는 창구라 입력 길이를 묶는다(#229, §4-4-12) — 긴 글이 통째로 Haiku 입력이 되던 비용 구멍.
+  const text = String(body.text || '').trim();
+  if (text.length > ASSEM_PARSE_MAX_CHARS) {
+    return json({ error: `검색 문장은 ${ASSEM_PARSE_MAX_CHARS}자 이내로 입력해 주세요.` }, 400);
+  }
 
   try {
     let q: AssemQuery;
     if (body.query) {
       // 필드를 직접 준 경우 — 파싱하지 않는다(대시보드의 '발언자/검색어' 분리 입력).
       q = {
-        speaker: (body.speaker || '').trim(),
-        query: body.query.trim(),
+        speaker: String(body.speaker || '').trim().slice(0, 40),
+        query: String(body.query).trim().slice(0, 100),
         year: body.year || undefined,
         kinds: (body.kinds || []).filter(
           (k): k is AssemKind => k === '상임위' || k === '국정감사') as AssemKind[],
       };
       if (!q.kinds?.length) q.kinds = undefined;
     } else {
-      q = await parseAssemQuery(body.text || '', Deno.env.get('ANTHROPIC_API_KEY') || '');
+      q = await parseAssemQuery(text, Deno.env.get('ANTHROPIC_API_KEY') || '', sb, 'assembly-search:parse');
       if (!q.query) {
         return json({ total: 0, hits: [], parsed: q, notice: '찾을 낱말을 알아내지 못했습니다.' });
       }

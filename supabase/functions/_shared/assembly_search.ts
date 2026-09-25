@@ -24,6 +24,7 @@
 // ============================================================================
 
 import type { SupabaseClient } from 'jsr:@supabase/supabase-js@2';
+import { recordApiUsage } from './usage.ts';
 
 export const ASSEM_SEARCH_URL = 'https://record.assembly.go.kr/assembly/mnts/search/search.do';
 export const ASSEM_VIEWER_URL = 'https://record.assembly.go.kr/assembly/viewer/minutes/xml.do?id=';
@@ -221,13 +222,19 @@ export function parseAssemQueryRule(text: string): AssemQuery {
            kinds: kinds.length ? kinds : undefined };
 }
 
-/** Haiku 보조 파싱 — 규칙 파서가 핵심어를 못 뽑았을 때만. 실패 시 규칙 결과를 그대로 쓴다(fail-open). */
-export async function parseAssemQuery(text: string, apiKey?: string): Promise<AssemQuery> {
+/** Haiku에 넘기는 질의 길이 상한(#229, §4-4-12). 대시보드 창구는 이보다 긴 문장을 400으로 거절하고,
+ *  텔레그램 /assem 은 여기서 잘라 보낸다 — 불용어로 채운 긴 글이 통째로 Haiku 입력이 되던 비용 구멍. */
+export const ASSEM_PARSE_MAX_CHARS = 300;
+
+/** Haiku 보조 파싱 — 규칙 파서가 핵심어를 못 뽑았을 때만. 실패 시 규칙 결과를 그대로 쓴다(fail-open).
+ *  sb를 주면 토큰 사용량을 api_usage(host=edge, site)에 남긴다(#229 — 종전엔 기록이 없어 #211 비용 감시에 안 잡혔다). */
+export async function parseAssemQuery(text: string, apiKey?: string, sb?: SupabaseClient, site = 'assembly_search:parse'): Promise<AssemQuery> {
   const rule = parseAssemQueryRule(text);
   const key = (apiKey || '').trim();
   // 빈 입력에 Haiku 를 태우면 프롬프트의 스키마 예시("의원 성명", "핵심 낱말")를 그대로 돌려줘
   // 화면 조건 칩에 그 문구가 뜬다(실측). 애초에 부를 이유가 없다.
   if (rule.query || !key || !text.trim()) return rule;
+  text = text.slice(0, ASSEM_PARSE_MAX_CHARS);
   try {
     const res = await fetch(ANTHROPIC_URL, {
       method: 'POST',
@@ -249,6 +256,7 @@ export async function parseAssemQuery(text: string, apiKey?: string): Promise<As
       signal: AbortSignal.timeout(15_000),
     });
     const j = await res.json();
+    if (sb) await recordApiUsage(sb, site, 'claude-haiku-4-5-20251001', j?.usage);   // 실패는 삼킨다(usage.ts)
     let txt = '';
     for (const b of (j?.content || [])) if (b?.type === 'text') { txt = b.text || ''; break; }
     const m = txt.match(/\{[\s\S]*\}/);

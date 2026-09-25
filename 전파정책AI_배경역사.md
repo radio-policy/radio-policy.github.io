@@ -7882,3 +7882,10 @@ DB(마이그레이션 `anon_write_lockdown_20260926`, 한 트랜잭션): `doc_ch
 결정: 운영자가 현재 저장소의 자료는 모두 공개 가능하다고 판단 → 이동·치환 없음. 보안 평가의 🔴 항목이던 `confluence-search`는 #227에서 이미 삭제. 지침 do-not(#172-보론)에 '`.gitignore`는 새 파일만 막는다'와 이 결정을 적어, 다음 세션이 같은 이동을 다시 제안하지 않게 했다. 새로 넣는 문서의 공개 여부는 그때 운영자가 정한다.
 남긴 것: git 이력의 옛 Voyage 키(6/11 30c7fec에 들어갔다 같은 날 5302633에서 제거, 현재 .env 키와 다름) — 폐기 여부를 세션이 옛 키로 호출해 확인하려 했으나 도구 권한(자격 증명 탐색)에 막혔다 → **운영자가 Voyage 콘솔(API Keys)에서 현재 키 외 옛 키가 없는지 확인**. 미추적 `archive/instructions/`·`presentations/`·`seminars/`·KMI csv는 커밋할 때 파일명을 명시하는 규칙이라 그대로 둔다.
 사내판: 불필요 — 사내판으로 옮길 문서가 없다.
+보론(같은 날): 운영자가 Voyage 콘솔에서 확인 — API 키가 1개뿐이라 옛 키는 이미 폐기된 상태. 확인 끝.
+
+**#229 (2026-09-26) 개선안 §4-4-12 — 국회 회의록 원문 검색(assembly-search)의 비용 구멍: 입력 300자 상한 + Haiku 파싱 사용량 기록 (운영자 결정 (나)).**
+발단: 로그인 없이 누구나 부르는 창구(verify_jwt는 anon 키도 통과, CORS `'*'` 유지 결정 #217)인데 `text` 길이 제한이 없었다. 규칙 파서가 핵심어를 못 뽑으면 입력 전체가 Haiku로 넘어가므로(#219에서 #217의 'AI를 부르지 않는다' 서술 정정) 불용어로 채운 긴 글 1회가 수만 토큰이 될 수 있었고, 그 호출은 `fetch` 직접 호출이라 `api_usage`에 남지 않아 #211 비용 감시에도 안 잡혔다. 공개 데이터(국회 회의록·발언 요지)만 돌려주므로 정보 노출은 없다. 로그인 게이트(다)는 '열람은 공개'(#104)·`'*'` 유지 결정과 충돌해 기각.
+적용: `_shared/assembly_search.ts` — `ASSEM_PARSE_MAX_CHARS`=300, `parseAssemQuery(text, apiKey, sb?, site)`가 Haiku에 넘기는 글을 300자로 자르고 응답 usage를 `recordApiUsage`로 기록(실패는 삼킴). `assembly-search/index.ts` — `text` 300자 초과는 400 「검색 문장은 300자 이내로 입력해 주세요.」, 직접 지정 경로의 `query` 100자·`speaker` 40자 상한, site `assembly-search:parse`. `telegram-webhook` — site `telegram:assem-parse`(텔레그램은 거절하지 않고 잘라 보냄). `index.html` 입력칸 `maxlength="300"`. 두 함수 재배포(verify_jwt: assembly-search true·telegram-webhook false 유지 확인).
+검증(로컬 미리보기, 비로그인 = 공개 경로): 평소 질의 「2019년 국정감사 무선국」 정상(원문 17건·정리해 둔 발언 17건, 해석 칩 2019·국정감사·무선국), 301자 → 400 + 안내문, 규칙 파서가 빈손인 질의 「관련해서 발언한 내용을 찾아줘」 → Haiku 1회가 `api_usage`에 `edge / assembly-search:parse` 192·39토큰(≈$0.0004)으로 기록. 텔레그램 `/assem`은 같은 공용 파서라 배포(번들) 성공으로 갈음 — 실발송 시험은 하지 않았다.
+사내판: 불필요 — 사내판에는 국회 원문 검색 Edge가 없고 다리는 DB 읽기만 한다.
