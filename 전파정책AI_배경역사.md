@@ -8231,4 +8231,7 @@ null이면 종전 url 규칙, 칸이 없으면(400) 그 칸만 빼고 조회. po
 검증: 새·교체 설명 12건을 쓰기 전에 `lawmap_edge_check.judge`(야간 점검과 같은 규칙) + 자기 조문 전부 원문 존재 + 별표 존재로 점검, 대시보드 파서(lawmap_articles.js `lmaBasisKeys`·
 `lmaExtractAnnexRefs`, node)로도 같은 조문·별표. 초안 중 '제외되는 제7조'가 근거 동그라미로 잡히는 것·대가와 무관한 신청서류 조문(영 제12조)이 딸려 오는 것을 보고 문안을 고쳤다.
 쓰기 뒤 손댄 6개 주제 30엣지 전부 OK(표기 정정 후 WARN 0), 공개 대시보드 조문 단위 보기로 5개 주제 — 원문에 없는 조문 0, 콘솔 오류 0.
-사내판: 불필요 — 관계도는 외부판에만 있다(docs/사내이식_계획.md §4).
+사내판: 불필요(작업 없음) — 사내 콘솔에도 관계도 열람 화면이 있다(`ported.js`의 loadLawMap·askLawMap 등, `static/lawmap_articles.js`). 그러나 사내 `export_snapshot.py`가
+`law_graph_nodes`·`law_graph_edges`를 매일 전량 가져가므로 이번 데이터 변경은 다음 스냅샷에 자동 반영되고, `lawmap_proposals`는 사내 `app.py`의 EMPTY_TABLES라 검토 대기 흐름은
+사내에 없다(사내 저장소 origin/main grep, 09-26 20시). ⚠️ 정정: 처음 보고·커밋 4a7ffb1·e0c2a57 메시지에는 "관계도는 외부판에만 있다(docs/사내이식_계획.md §4)"로 적었는데,
+그 문서(09-11)가 이후 이식을 반영하지 못한 것이었다 — 사내 저장소를 grep하지 않고 '불필요'를 쓴 잘못(메모리 규칙 위반). 계획 문서 §4에 현황 주석을 달았다.
