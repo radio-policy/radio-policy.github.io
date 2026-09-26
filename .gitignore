@@ -14,6 +14,10 @@ document_chunks_sample.jsonl
 okf_probe*.json
 archive/logs_260827/
 archive/untracked_260925/
+# 종료된 발표·세미나·옛 지침 사본 등 로컬 보관 — 공개하지 않는다(개인 메일 주소·내부 세미나 포함, 2026-09-26 운영자 결정)
+archive/local_260926/
+# Supabase CLI 상태 파일(연결 프로젝트·CLI 버전)
+supabase/.temp/
 speech_rebuild/
 
 # 공개 미러(GitHub)에 올라가면 안 되는 것 (2026-09-19)
