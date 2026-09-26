@@ -9641,9 +9641,11 @@ function _peopleResultsHtml() {
   // 음절이 완성될 때까지 '해당 없음'이 깜빡인다 — 꼬리 낱자는 떼고 맞춘다.
   var q = _peopleQuery.replace(/[\u3131-\u3163]+$/, '');
   var inTab = all.filter(function(p) { return p.kind === _peopleTab && (!q || p.name.indexOf(q) >= 0 || String(p.position || '').indexOf(q) >= 0); });
-  var cur = inTab.filter(function(p) { return p.is_22; });
-  var past = inTab.filter(function(p) { return !p.is_22; })
-    .sort(function(a, b) { return String(b.last_speech || '').localeCompare(String(a.last_speech || '')); });
+  // 이름 가나다순(2026-09-27 운영자 결정 — 사람을 찾는 화면이라). 종전 현역은 발언 수 순이었는데 동점끼리 순서가
+  // 정해져 있지 않아 새로고침마다 흔들렸고, 지난 대수는 마지막 발언 최근 순이었다. 동명이인은 id로 고정.
+  var byName = function(a, b) { return String(a.name || '').localeCompare(String(b.name || ''), 'ko') || (a.id - b.id); };
+  var cur = inTab.filter(function(p) { return p.is_22; }).sort(byName);
+  var past = inTab.filter(function(p) { return !p.is_22; }).sort(byName);
   var h = '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:8px">' +
     (cur.length ? cur.map(_personCard).join('') : '<div style="font-size:12px;color:var(--text-tertiary);padding:12px">해당 없음</div>') + '</div>';
   if (past.length) {
@@ -9669,7 +9671,7 @@ function renderPeopleList() {
       'oninput="peopleSearch(this.value)" ' +
       'style="margin-left:auto;font-size:12px;padding:5px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-secondary);color:var(--text-primary);width:150px">' +
     '</div>' +
-    '<div style="font-size:11px;color:var(--text-tertiary);margin-bottom:10px">과방위 회의록 발언자 기준(의원·위원장은 1건부터, 통신사 임원은 전원, 그 밖은 4건 이상) · 현역 = 22대(2024-06~) 발언 존재 · 정당은 활동 당시 소속</div>';
+    '<div style="font-size:11px;color:var(--text-tertiary);margin-bottom:10px">과방위 회의록 발언자 기준(의원·위원장은 1건부터, 통신사 임원은 전원, 그 밖은 4건 이상) · 현역 = 22대(2024-06~) 발언 존재 · 정당은 활동 당시 소속 · 이름 가나다순</div>';
   h += '<div id="people-results">' + _peopleResultsHtml() + '</div>';
   el.innerHTML = h;
   _issueScrollTop(el);
