@@ -323,6 +323,70 @@ function ok(name, cond, extra) {
   var vq2 = await CV.verifyCitations({ answer: '전기통신사업법 제2조는 \n\n아래 표와 같이 정리할 수 있습니다\n\n로 정의합니다.', chunks: [def2], callHaiku: async function () { return '[]'; } });
   ok('#230 무표시 인용: 표지 문자는 어떤 경우에도 남지 않는다', vq2.answer.indexOf(CV.QUOTE_MARK) === -1, vq2.answer);
 
+  // ── #240: 표시가 가리킨 대상이 검색 자료에 없으면 '원문 없음' — 번호만 같은 다른 조문·다른 법령으로 넘어가지 않는다 ──
+  // (2026-09-26 18:53·18:56 대시보드 실측: 맞는 인용 2건이 빨간 '원문과 다름'이 되고, 다음 답이 그 표시를 보고 유효 근거를 버렸다)
+  var ACT = '전기통신사업법(법률)(제21652호)(20260519)', DEC = '전기통신사업법 시행령(대통령령)(제36000호)(20260519)';
+  var DIS = '재난 및 안전관리 기본법 시행령(대통령령)(제36516호)(20260722)', DISACT = '재난 및 안전관리 기본법(법률)(제20000호)(20260101)';
+  var a50 = { id: 1, doc_name: ACT, article_no: '50조(금지행위)', chunk_index: 1, content: '① 전기통신사업자는 … 다음 각 호의 어느 하나에 해당하는 행위를 하여서는 아니 된다.\n5. 이용약관과 다르게 전기통신서비스를 제공하거나 전기통신이용자의 이익을 해치는 행위' };
+  var d50 = { id: 2, doc_name: DIS, article_no: '50조(강제대피 또는 강제퇴거 등)', chunk_index: 1, content: '① 시장·군수·구청장은 법 제42조에 따라 강제대피를 명하는 경우 … 지원을 요청할 수 있다.' };
+  var d53 = { id: 3, doc_name: DISACT, article_no: '53조(재난대응)', chunk_index: 1, content: '재난관리책임기관의 장은 … 응급조치를 하여야 한다. 이 조문은 재난 대응 절차를 정한 것으로 과징금과 무관하다.' };
+  var q53 = '- 금지행위 위반: "방송미디어통신위원회는 제50조제1항을 위반한 행위가 있는 경우에는 해당 전기통신사업자에게 매출액의 100분의 3 이하에 해당하는 금액을 과징금으로 부과할 수 있다." [원문 확인됨: 전기통신사업법 제53조제1항]';
+  var w1 = [];
+  var v240a = await CV.verifyCitations({ answer: q53, chunks: [a50, d50, d53], callHaiku: async function (s, u) { w1.push(u); return '[{"id":1,"verdict":"불일치","reason":"완전히 다른 법령"}]'; } });
+  eq('#240 표시 대상(제53조) 없음 → 인용문 속 교차참조 제50조·다른 법령 제53조로 넘어가지 않고 원문 없음',
+     [v240a.verdicts[0].status, v240a.verdicts[0].key, w1.length], ['missing', '53조', 0]);
+  ok('#240 표시 대상 없음 → 표시 문구는 원문 없음 + 대상', v240a.answer.indexOf('[원문 없음 — 검색 자료에 해당 조문 없음 (전기통신사업법 제53조제1항)]') !== -1, v240a.answer);
+
+  // 표시에 별표가 적혀 있으면 앞 문장의 '법 제50조제1항제5호'가 아니라 그 별표 — 있는지만 본다(판정기 안 부름)
+  var qAnnex = '**① 전기통신사업법 제50조제1항제5호 및 시행령 [별표 4] 5호 마목4)**\n\n"협정 등에 따라 이용자와의 계약체결 등을 대리 또는 위탁받아 처리하는 자에게 수수료 등 경제적 이익을 부당하거나 과도하게 제공하여 이용자의 차별을 유도하는 행위"\n\n를 규정하고 있습니다. [원문 확인됨: 전기통신사업법 시행령 별표 4]';
+  var w2 = [];
+  var v240b = await CV.verifyCitations({ answer: qAnnex, chunks: [a50], annexSources: ['전기통신사업법 시행령 별표 4'], callHaiku: async function (s, u) { w2.push(u); return '[{"id":1,"verdict":"불일치","reason":"x"}]'; } });
+  eq('#240 표시의 별표 대상 우선(법 제50조와 대조 안 함) → 확인됨', [v240b.verdicts[0].kind, v240b.verdicts[0].key, v240b.verdicts[0].status, v240b.verdicts[0].law, w2.length],
+     ['annex', '별표 4', 'ok', '전기통신사업법 시행령', 0]);
+  // 별표 존재 확인도 그 법령의 것만 — 다른 법령의 같은 번호 별표로는 확인됨이 되지 않는다
+  var v240c = await CV.verifyCitations({ answer: qAnnex, chunks: [a50], annexSources: ['개인정보 보호법 시행령 별표 4'] });
+  eq('#240 다른 법령의 별표 4만 있으면 원문 없음', [v240c.verdicts[0].status, /\(전기통신사업법 시행령 별표 4\)\]/.test(v240c.answer)], ['missing', true]);
+  // 별지 서식 — 청크의 article_no 「별지 3(…)」과 맞춘다
+  var fm = { id: 4, doc_name: '이동통신사업자 등의 자료제출 방법 등에 대한 고시(방송미디어통신위원회고시)(제2026-1호)(20260101)', article_no: '별지 3(장려금 지급 현황)', chunk_index: 9, content: '장려금 지급 현황 서식' };
+  var cfm = CV.findCitations('제출 서식은 다음과 같습니다. [원문 확인됨: 이동통신사업자 등의 자료제출 방법 등에 대한 고시 별지 제3호서식]')[0];
+  eq('#240 별지 서식 대상: 있으면 확인됨', [cfm.kind, cfm.annexType, cfm.annex, CV.checkCitation(cfm, [fm], []).status], ['annex', '별지', '3', 'ok']);
+  eq('#240 별지 서식 대상: 다른 법령 것만 있으면 원문 없음', CV.checkCitation(cfm, [Object.assign({}, fm, { doc_name: '전파법 시행규칙(부령)(제1호)(20260101)' })], []).status, 'missing');
+
+  // 법령 이름을 적었는데 검색 자료에 그 법령이 없으면 원문 없음(옛 형식 표시 포함) — 시스템 프롬프트의 전파법 제16조와 대조하지 않는다
+  var r16 = { id: 5, doc_name: '전파법(법률)(제1호)(20260101)', article_no: '16조(재할당)', chunk_index: 1, content: '① 과학기술정보통신부장관은 이용기간이 끝난 주파수를 … 재할당할 수 있다.' };
+  var cMu = CV.findCitations('**무선설비규칙 제16조(예비전원 및 예비품 등)** [원문 확인됨]는 의무선박국과 의무항공기국은 주 전원이 고장난 경우 예비전원을 갖추어야 한다고 정합니다.')[0];
+  eq('#240 이름 적은 법령(무선설비규칙)이 검색 자료에 없으면 원문 없음', CV.checkCitation(cMu, [r16], []).status, 'missing');
+  // 모델이 문서명 끝에 '고시'를 덧붙여도 그 문서로 맞춘다(dd26eb98 실측: 옛 코드는 전파법 시행령 제14조와 대조)
+  var GS = '주파수할당 신청 절차 및 방법 등 세부사항(과학기술정보통신부고시)(제2026-23호)(20260101)';
+  var g14 = { id: 6, doc_name: GS, article_no: '14조(재할당의 신청)', chunk_index: 3, content: '주파수를 할당받은 자가 재할당을 받으려면 이용기간 만료 6개월 전까지 신청서를 제출하여야 한다.' };
+  var s14 = { id: 7, doc_name: '전파법 시행령(대통령령)(제1호)(20260101)', article_no: '14조(주파수할당 대가의 산정)', chunk_index: 2, content: '법 제11조에 따른 주파수할당 대가는 별표 3의 산정기준에 따라 산정한다.' };
+  var cG = CV.findCitations('| **주파수할당 신청 절차 및 방법 등 세부사항 고시(제2026-23호) 제14조** [원문 확인됨] | 재할당 신청은 이용기간 만료 6개월 전까지 신청서를 내야 한다고 정함 |')[0];
+  var rG = CV.checkCitation(cG, [s14, g14], []);
+  eq('#240 이름 끝 「고시」 덧붙임 → 그 고시의 제14조', [rG.status, rG.lawDoc], ['ok', '주파수할당 신청 절차 및 방법 등 세부사항']);
+  // 줄여 쓴 이름은 낱말이 순서대로 다 든 문서가 하나일 때만
+  eq('#240 줄인 이름(주파수할당 신청 절차 고시) → 하나뿐이면 그 문서', CV.resolveLaw(CV.lawNameBefore('주파수할당 신청 절차 고시 '), [CV.docFamily(GS), '전파법 시행령']), '주파수할당 신청 절차 및 방법 등 세부사항');
+  eq('#240 줄인 이름이 두 문서에 맞으면 못 맞춘 것', CV.resolveLaw(CV.lawNameBefore('주파수 이용 지침 '), ['주파수 이용계획 수립 지침', '주파수 이용권 관리 지침']), null);
+  eq('#240 끝 일치가 여러 문서면 그 후보는 버린다(기술기준)', CV.resolveLaw(CV.lawNameBefore('기술기준 '), ['무선설비 기술기준', '방송통신설비의 안전성·신뢰성 및 통신규약에 대한 기술기준']), null);
+  eq('#240 줄인 이름의 가운뎃점(지정·관리 ↔ 지정 및 관리)', CV.resolveLaw(CV.lawNameBefore('## 3. 세부기준 — 통신시설 등급 지정·관리 기준 '), ['주요통신사업자의 통신시설 등급 지정 및 관리 기준', '무선통신보조설비의 화재안전성능기준', '방송통신설비의 기술기준에 관한 규정']), '주요통신사업자의 통신시설 등급 지정 및 관리 기준');
+  eq('#240 낫표 속 법령 이름', CV.resolveLaw(CV.lawNameBefore('설치 장소는 「전기통신사업법」 '), ['전기통신사업법', '전파법']), '전기통신사업법');
+  eq('#240 시행령은 떼지 않는다(법만 있으면 시행령 인용은 못 맞춤)', CV.resolveLaw(CV.lawNameBefore('방송통신발전 기본법 시행령 '), ['방송통신발전 기본법']), null);
+  eq('#240 법 이름이 시행령 문서에만 순서대로 들어 있어도 시행령으로 맞추지 않는다', CV.resolveLaw(CV.lawNameBefore('방송통신발전 기본법 '), ['방송통신발전 기본법 시행령']), null);
+
+  // '시행령 제N조'·'법 제N조'·맨 '제N조'는 앞에 이름이 나온 법령 계열에서만 찾는다
+  var fams240 = ['전기통신사업법', '전기통신사업법 시행령', '재난 및 안전관리 기본법 시행령'];
+  var ctxAct = CV.lawNameBefore('전기통신사업법 ');
+  eq('#240 「및 시행령」 → 앞 법령의 시행령(재난안전법 시행령 아님)', CV.lawScope(CV.lawNameBefore('전기통신사업법 제50조 및 시행령 '), ctxAct, fams240), ['전기통신사업법 시행령']);
+  eq('#240 「같은 법 시행령」도 이어받은 법령의 시행령', CV.lawScope(CV.lawNameBefore('같은 법 시행령 '), ctxAct, fams240), ['전기통신사업법 시행령']);
+  eq('#240 「법 제N조」는 앞 법령이 시행령이어도 모법', CV.lawScope(CV.lawNameBefore('법 '), CV.lawNameBefore('전기통신사업법 시행령 '), fams240), ['전기통신사업법']);
+  eq('#240 이름 없는 제N조 → 앞 법령 먼저, 그다음 같은 계열', CV.lawScope(null, CV.lawNameBefore('전기통신사업법 시행령 '), fams240), ['전기통신사업법 시행령', '전기통신사업법']);
+  eq('#240 이어받을 법령이 없으면 종전처럼 어느 문서든(null)', CV.lawScope(null, null, fams240), null);
+  eq('#240 이름 적은 법령이 없으면 빈 목록(원문 없음)', CV.lawScope(CV.lawNameBefore('무선설비규칙 '), null, fams240), []);
+  eq('#240 기계 표시 대상 이름: 「시행령 제42조」는 시행령을 남긴다', CV.introCiteLabel('전기통신사업법 제50조 및 시행령 제42조는 ', 12), '시행령 제42조');
+  eq('#240 기계 표시 대상 이름: 낫표 속 법령', CV.introCiteLabel('「전기통신사업법」 제2조는 ', 12), '전기통신사업법 제2조');
+  var qBare = '전기통신사업법 제50조제1항은 금지행위를 정합니다. [원문 확인됨: 전기통신사업법 제50조제1항]\n\n또한 제53조는 "재관리책임기관의 장은 응급조치를 하여야 한다"고 합니다. [원문 확인됨]';
+  var cb = CV.findCitations(qBare);
+  eq('#240 옛 형식 표시의 맨 「제53조」 → 앞 인용의 전기통신사업법에서만 찾음(재난안전법 제53조 아님)', CV.checkCitation(cb[1], [a50, d53], []).status, 'missing');
+
   console.log('\n' + (total - fails) + '/' + total + ' passed');
   process.exit(fails ? 1 : 0);
 })().catch(function (e) { console.error(e); process.exit(2); });
