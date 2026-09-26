@@ -296,7 +296,7 @@ C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai\      (회사 노트북 —
 **회귀 세트**(`tests/fixtures/rag_regression_set.json` 실질문 20건 + 고정 확장어, 하네스 `tests/rag_regress_browser.js`·`tests/rag_regress_deno.ts`,
 비교 `tests/rag_regress_diff.py`)로 변경 전후 단계별 청크 id를 대조한다 — API 0회, 임베딩 캐시 파일은 git 제외. 결정적 모드(order 없는 limit에
 order('id'))는 하네스만의 장치였고, 운영 선별 규칙은 **B-5(#208)에서 서버 RPC로 확정**했다(키워드 수 → 조문 제목 적중 → 조문 → 도메인 → id). 브라우저 하네스는 anon 3초 한도라 새 RPC가 타임아웃되므로 **검색 A/B는 Deno 하네스(service_role)로 판정**한다.
-Deno 하네스 규칙 A/B 선택지(#244): `--set <경로>`(다른 질문 세트) · `--no-expand`(확장어 없이 — Haiku 실패 경로·사내 이식본 조건) · `--rpc-cache <경로>`(같은 함수·인자의 RPC 결과를 기록해 재사용 — 규칙 변경이 인자를 바꾸지 않는 trgm·의미검색·요약 갈래는 양쪽이 같은 결과를 받아 **같은 코드 2회가 86/86 동일**, 잡음 0; 파일은 git 제외 폴더에). 출력 `lab`(청크 이름표)을 `rag_regress_diff.py`가 이름으로 보여 준다. 규칙마다 토글을 단 실험 사본(git 제외 `tests/fixtures/rag_regress_out/ab/_shared/`)을 `--rag`로 읽혀 한 항목씩 잰다 — 사본 토글 끔 = 운영 코드 동일부터 확인.
+Deno 하네스 규칙 A/B 선택지(#244): `--set <경로>`(다른 질문 세트 — **사내 대조 33문항 `tests/fixtures/rag_regression_internal33.json`**, 사내가 rag_core 권고를 잰 것과 같은 문구·세션 고정 확장어, 09-27 영구 편입) · `--no-expand`(확장어 없이 — Haiku 실패 경로·사내 이식본 조건) · `--rpc-cache <경로>`(같은 함수·인자의 RPC 결과를 기록해 재사용 — 규칙 변경이 인자를 바꾸지 않는 trgm·의미검색·요약 갈래는 양쪽이 같은 결과를 받아 **같은 코드 2회가 86/86 동일**, 잡음 0; 파일은 git 제외 폴더에). 출력 `lab`(청크 이름표)을 `rag_regress_diff.py`가 이름으로 보여 준다. 규칙마다 토글을 단 실험 사본(git 제외 `tests/fixtures/rag_regress_out/ab/_shared/`)을 `--rag`로 읽혀 한 항목씩 잰다 — 사본 토글 끔 = 운영 코드 동일부터 확인.
 ⚠️ **trgm RPC는 6~9초라 8초 statement_timeout에 자주 걸린다**(#201 실측: 20회 중 2~8회 `57014`, kb trgm도 2~4회) — 두 RPC 모두 fail-open이라
 답변은 그대로 나가고 trgm 갈래만 조용히 빠진다. **운영자 결정 ②(#203, 2026-09-24)**: `authenticated`·`service_role` 역할 한도 15초(anon 3초 유지) + 갈래별 기록 `chat_logs.search_meta`. 한 달 기록 뒤 갈래 폐지(④) 여부 재판단.
 
