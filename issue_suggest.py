@@ -18,6 +18,9 @@ crawler.py 말미에서 매시 호출된다(try/except 격리 — 실패해도 �
   자동 연결(잠금 포함), proposed·rejected와 ≥0.72면 skip(재제안 금지 — 기각도
   0.72를 쓴다, 0.80은 클러스터 벡터 특성상 새는 것 실측 2026-09-03).
   제안 직전 생성 제목·정의 벡터로 한 번 더: active ≥0.80 → 연결, 그다음 rejected ≥0.80 → skip(#206).
+  묶음 기사 과반이 한 active 이슈에 이미 붙어 있으면 그 이슈로 연결, 과반 미달이어도 3건(OVERLAP_JUDGE_MIN)
+  이상이면 제안하지 않고 그 이슈와 관련 판정(#243). 세션이 기각하며 다른 이슈로 합친 제안
+  (proposal_reason.merged_into)과 같은 주제면 skip하지 않고 합친 곳과 관련 판정(#243).
 
 규제 계열(법안·DIFF)은 법령 이름을 동일성 열쇠로 쓰지 않는다(#231, 2026-09-26):
   ① 번호 — 같은 의안번호·국회 개정안 조문대비↔그 법안·같은 공포번호면 같은 항목(active는 연결, 대기·기각은 skip)
@@ -61,6 +64,10 @@ SIM_PROPOSED_DUP = 0.72      # 제안끼리의 교차 문턱 — 짧은 제목�
                              # 같은 주제 제안이 한 실행에 여럿 통과했다(실측: '모두의 AI' 2건)
 SIM_REJECTED_REPROPOSE = 0.80  # 생성 제목·정의 벡터 기준 기각 재제안 문턱(#206). 실측 2026-09-24:
                              # 재제안 3건 0.853~0.861, 활성·대기 이슈 vs 그보다 먼저 기각된 이슈 최대 0.716
+OVERLAP_JUDGE_MIN = 3        # 과반 미달이어도 묶음 기사 이만큼이 한 active 이슈에 이미 연결돼 있으면 제안하지 않고
+                             # 그 이슈와 관련 판정(#243). 실측 2026-09-26(지난 30일 매일 20시 재현): 과반 미달·겹침 ≥3
+                             # 묶음 근처에서 나온 제안 21건 전부 기각(승인 0) — #199(8/26 ↔ #171)·#196(7/20 ↔ #5)·
+                             # #194(6/17 ↔ #46)·#174(3/8 ↔ #119). 2건 겹침은 44·65건짜리 뒤섞인 묶음에도 흔해 뺀다.
 SIM_REG_RELATED = 0.40       # 규제 항목(법안·DIFF) 요약 벡터가 active 이슈와 이 이상·SIM_MERGE 미만이면 Sonnet
                              # 관련 판정(#231). 실측 2026-09-26: 실제 소속 0.49~0.67(2220816→#119 0.49,
                              # diff 70→#51 0.60, diff 6→#121 0.67), 무관 0.33~0.45 — 문턱 아래는 판정 없이 제안으로 간다.
@@ -141,6 +148,43 @@ def _has_exclusion(iss):
     넣어도 세 경로가 정의문을 안 봐서 #9(GSMA 행사 50건)·#30(불꽃축제 53건)이 재오염된
     실측(2026-09-12, #157)."""
     return '해당 없음' in ((iss or {}).get('definition') or '')
+
+
+def _merge_target(iss, by_id):
+    """세션이 기각하며 합친 곳(proposal_reason.merged_into)을 따라가 active 이슈를 돌려준다(#243).
+    합친 곳이 없거나 active가 아니면 None — 그때는 종전대로 기각 재제안 금지만 한다."""
+    cur, seen = iss, {iss.get('id')}
+    for _ in range(5):
+        mi = (cur.get('proposal_reason') or {}).get('merged_into')
+        if mi in (None, ''):
+            return None
+        try:
+            cur = by_id.get(int(mi))
+        except (TypeError, ValueError):
+            return None
+        if cur is None or cur.get('id') in seen:
+            return None
+        if cur.get('state') == 'active':
+            return cur
+        seen.add(cur.get('id'))
+    return None
+
+
+def _merged_hit(issues, by_id, vec, norm_key=None, kw_rep=None):
+    """합친 곳이 있는 기각 이슈 중 이 후보와 같은 주제로 보이는 것 → (기각 이슈, 합친 active 이슈), 없으면 None.
+    같은 주제 = norm_key 일치·벡터 ≥SIM_PROPOSED_DUP·제목 어휘 3개 이상 공유(kw_rep를 줄 때만) — 기각 재제안을
+    막는 세 대조와 같은 잣대. 여럿이면 벡터가 가장 가까운 것."""
+    best, best_sim = None, -1.0
+    for i in issues:
+        if i.get('state') != 'rejected' or not (i.get('proposal_reason') or {}).get('merged_into'):
+            continue
+        sim = _cosine(vec, i['embedding']) if (vec and i.get('embedding')) else 0.0
+        if (norm_key and i.get('norm_key') == norm_key) or sim >= SIM_PROPOSED_DUP \
+                or (kw_rep and len(kw_rep & extract_keywords(i['title'])) >= 3):
+            tgt = _merge_target(i, by_id)
+            if tgt is not None and sim > best_sim:
+                best, best_sim = (i, tgt), sim
+    return best
 
 
 def _clip_sentence(text, limit=500):
@@ -305,12 +349,34 @@ def _propose(sb, issues, title, definition, category, norm_key, reason, dry,
     # 기각 재제안 재검사(#206) — 클러스터 단계의 기각 대조(대표 제목 벡터 0.72·어휘 3개)는
     # 지저분한 대표 제목 탓에 새는데, 생성 제목은 기각 이슈와 거의 같게 나온다(실측: 9/24 10:29 기각분이
     # 11:02 실행에서 0.853~0.861로 재제안). active 병합 검사 뒤에 둬야 활성 이슈 후속이 기각에 막히지 않는다.
+    rej, rej_sim = None, 0.0
     for i in issues:
         if i['state'] == 'rejected' and i.get('embedding'):
             sim = _cosine(vec, i['embedding'])
-            if sim >= SIM_REJECTED_REPROPOSE:
-                print(f'[기각 재제안 — 건너뜀] {title}  (≈ [{i["id"]}] {i["title"][:20]}, {sim:.3f})')
+            if sim >= SIM_REJECTED_REPROPOSE and sim > rej_sim:
+                rej, rej_sim = i, sim
+    if rej is not None:
+        # 합친 기각(#243) — 세션이 다른 active 이슈로 합친 제안이면 그 후속은 건너뛰지 말고 합친 곳에 판정 연결.
+        # 종전엔 여기서 조용히 빠져 합친 이슈에 후속 보도가 쌓이지 않았다. 판정은 이 한 건만 즉석 1콜(드묾).
+        tgt = _merge_target(rej, {x['id']: x for x in issues})
+        if tgt is not None:
+            if link_item:
+                ok = _haiku_relate_batch([(0, f'{title} — {definition or ""}'[:400], tgt)], None, kind='reg')
+            else:
+                ok = _haiku_relate_batch([(0, title, tgt)], [news_rows or []])
+            if ok and 0 in ok:
+                print(f'[기각 병합처 연결] "{title}" ≈ 기각 [{rej["id"]}] ({rej_sim:.3f}) → 합친 곳 '
+                      f'[{tgt["id"]}] {tgt["title"][:20]}')
+                if not dry and news_rows:
+                    _link_news(sb, tgt['id'], news_rows, added_by='auto')
+                if not dry and link_item:
+                    _link_reg(sb, tgt['id'], link_item)
                 return False
+            print(f'[기각 재제안 — 건너뜀] {title}  (≈ [{rej["id"]}] {rej["title"][:20]}, {rej_sim:.3f}; '
+                  f'합친 곳 [{tgt["id"]}] 판정 {"실패(보류)" if ok is None else "소속 아님"})')
+            return False
+        print(f'[기각 재제안 — 건너뜀] {title}  (≈ [{rej["id"]}] {rej["title"][:20]}, {rej_sim:.3f})')
+        return False
     _proposed_this_run += 1
     print(f'[제안] {title}  ({reason.get("kind")}, stage_hint={stage_hint})')
     if dry:
@@ -489,8 +555,8 @@ def _suggest_from_news(sb, issues, dry):
         # 신호라 제안 경로를 원천 차단하고 미연결분만 그 이슈로 붙인다.
         # (무임승차 거품 하루 4건 실측: 제안 25·29·32·33, 2026-08-27)
         _cnt = Counter(iid for r in group for iid in linked_to.get(str(r['id']), ()) if iid in active_ids)
+        _top_iss, _top_n = _cnt.most_common(1)[0] if _cnt else (None, 0)
         if _cnt:
-            _top_iss, _top_n = _cnt.most_common(1)[0]
             # 겹침 최소 2건 — 2건짜리 클러스터의 1건 겹침(1/2)까지 무판정 연결하면 과확장
             if _top_n >= 2 and _top_n * 2 >= len(group):
                 _fresh = [r for r in group if _top_iss not in linked_to.get(str(r['id']), ())]
@@ -530,10 +596,28 @@ def _suggest_from_news(sb, issues, dry):
             n = 0 if dry else _link_news(sb, target['id'], group)
             print(f'[연결] "{group[0]["title"][:28]}" → [{target["id"]}] ({len(group)}건, sim {sim_a:.2f})')
             continue
+        # ①-2 겹침 판정(#243) — 과반은 못 돼도 묶음 기사 OVERLAP_JUDGE_MIN건 이상이 한 active 이슈에 이미 붙어
+        #    있으면 그 이슈의 후속 물결이다. 대표 제목이 낚시형이면 대표 벡터(0.28)도 생성 제목 재검사(0.664 — 세션이
+        #    승인하며 제목·정의를 넓혀 벡터가 원래 보도에서 멀어졌다)도 놓쳐 중복 제안이 됐다(#199: 26건 중 8건이
+        #    #171에 연결돼 있었다). 제안하지 않고 그 이슈와 관련 판정만 — 떨어지면 다음 실행에서 다시 본다(아래 경계 후보와 같다).
+        if _top_n >= OVERLAP_JUDGE_MIN:
+            borderline.append((ci, group[0]['title'], by_id[_top_iss]))
+            print(f'[겹침→판정] "{group[0]["title"][:28]}" → [{_top_iss}] (겹침 {_top_n}/{len(group)})')
+            continue
         if best_active is not None and sim_a >= SIM_RELATED:
             borderline.append((ci, group[0]['title'], best_active))
             # 관련 판정 결과를 기다린다 — 판정에서 떨어지면 아래 제안 후보로도 안 간다
             # (관련도 아니고 제안 기준도 못 넘는 어중간한 클러스터는 다음 시간에 재평가)
+            continue
+
+        # ②-0 합친 기각(#243) — 세션이 기각하며 다른 active 이슈로 합친 제안(proposal_reason.merged_into)과 같은
+        #    주제면 아래 기각 대조에 막혀 어디에도 안 붙고 조용히 빠지던 것을, 합친 곳과 관련 판정으로 돌린다.
+        #    어휘 3개 대조는 아래 파편 대조처럼 제도 신호가 없을 때만(정책 이슈가 기각 파편 어휘에 막히지 않게).
+        _mh = _merged_hit(issues, by_id, vecs[ci], nk,
+                          None if _POLICY_SIGNAL.search(titles_all) else kw_rep)
+        if _mh is not None:
+            borderline.append((ci, group[0]['title'], _mh[1]))
+            print(f'[기각 병합처→판정] "{group[0]["title"][:28]}" ≈ 기각 [{_mh[0]["id"]}] → 합친 곳 [{_mh[1]["id"]}]')
             continue
 
         # ② 제안 판정 — 발제 기준 + 제안·기각과의 중복 억제
@@ -579,6 +663,8 @@ def _suggest_from_news(sb, issues, dry):
         if ci in related:
             n = 0 if dry else _link_news(sb, iss['id'], groups[ci])
             print(f'[연결·관련판정] "{title[:28]}" → [{iss["id"]}] ({len(groups[ci])}건)')
+        else:
+            print(f'[관련 판정 — 소속 아님] "{title[:28]}" ≠ [{iss["id"]}]')
 
     # ④ 제안 생성 — 관련 판정으로 기존 이슈에 붙은 클러스터는 제외
     for ci, nk in to_propose:
@@ -685,15 +771,18 @@ def _reg_process(sb, issues, items, law_by_id, reg_links, dry):
     if not items:
         return
     issue_keys = _issue_reg_keys(issues, reg_links, law_by_id)
+    by_id = {i['id']: i for i in issues}
     todo = []
     for it in items:
         hit = _reg_identity(issues, issue_keys, it['keys'])
         if hit:
             st, iss = hit
-            if st == 'active':
+            tgt = _merge_target(iss, by_id) if st == 'rejected' else None   # 합친 기각(#243) — 같은 번호면 합친 곳에
+            if st == 'active' or tgt is not None:
                 if not dry:
-                    _link_reg(sb, iss['id'], it['link'])
-                print(f'[기존 이슈 연결·같은 항목] {it["label"]} → [{iss["id"]}] {iss["title"][:24]}')
+                    _link_reg(sb, (tgt or iss)['id'], it['link'])
+                print(f'[기존 이슈 연결·같은 항목{"(합친 곳)" if tgt else ""}] {it["label"]} → '
+                      f'[{(tgt or iss)["id"]}] {(tgt or iss)["title"][:24]}')
             else:
                 print(f'[건너뜀 — 같은 항목이 {st} 이슈에 있음] {it["label"]} ≈ [{iss["id"]}] {iss["title"][:24]}')
             continue
@@ -717,6 +806,12 @@ def _reg_process(sb, issues, items, law_by_id, reg_links, dry):
         elif best_a is not None and sim_a >= SIM_REG_RELATED:
             # 0.80 이상인데 배제 기준 이슈인 경우도 여기로 — 정의문을 읽는 판정만 붙일 수 있다(#157)
             judge.append((k, f'{it["name"]} — {it["summary"][:300]}', best_a))
+        else:
+            # 합친 기각과 내용이 같으면(≥0.72) 아래 '내용 중복'으로 빠지기 전에 합친 곳과 판정(#243)
+            mh = _merged_hit(issues, by_id, vec)
+            if mh is not None:
+                judge.append((k, f'{it["name"]} — {it["summary"][:300]}', mh[1]))
+                print(f'[기각 병합처→판정] {it["label"]} ≈ 기각 [{mh[0]["id"]}] → 합친 곳 [{mh[1]["id"]}]')
     if judge:
         related = _haiku_relate_batch(judge, None, kind='reg')
         for k, _, iss in judge:

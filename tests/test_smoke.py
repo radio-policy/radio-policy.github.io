@@ -1754,6 +1754,146 @@ class TestIssueSuggestReg(unittest.TestCase):
         self.assertIn('[보류 — 관련 판정 실패] bill B3', log)
         self.assertEqual([i['title'] for i in issues if i['state'] == 'proposed'], ['주제형 제목 s4'])
 
+    def test_reg_merged_rejection_goes_to_target(self):
+        """#243 — 기각하며 합친 제안(merged_into)과 같은 번호면 합친 곳에 연결, 내용이 같으면(≥0.72) 합친 곳과 판정."""
+        import io, contextlib
+        isg = self.isg
+        e = lambda *v: list(v)
+        issues = [{'id': 1, 'state': 'active', 'title': '합친 곳', 'definition': '', 'embedding': e(1, 0, 0, 0)},
+                  {'id': 3, 'state': 'rejected', 'title': '기각R', 'definition': '', 'embedding': e(0, 0, 1, 0),
+                   'proposal_reason': {'bill_no': 'B1', 'merged_into': 1}}]
+        vec = {'s1': e(0, 0, 1, 0), 's5': e(0, 0, 1, 0.1)}
+        judged = []
+
+        def judge(pairs, groups, kind='news'):
+            judged.extend((p[0], p[2]['id']) for p in pairs)
+            return {pairs[0][0]}
+
+        items = [{'label': f'bill B{n}', 'name': f'법{n}', 'summary': f's{n}', 'keys': {f'bill:B{n}'},
+                  'link': {'item_type': 'bill', 'item_id': f'B{n}', 'item_date': None, 'title': f'법{n}'},
+                  'reason': {'kind': 'assembly_notice', 'bill_no': f'B{n}', 'detail': ''}} for n in (1, 5)]
+        out = io.StringIO()
+        with mock.patch.object(isg, '_embed', lambda texts, input_type='query': [vec[t] for t in texts]), \
+                mock.patch.object(isg, '_haiku_relate_batch', judge), contextlib.redirect_stdout(out):
+            isg._reg_process(None, issues, items, {}, [], dry=True)
+        log = out.getvalue()
+        self.assertIn('[기존 이슈 연결·같은 항목(합친 곳)] bill B1 → [1]', log)
+        self.assertIn('[기각 병합처→판정] bill B5 ≈ 기각 [3] → 합친 곳 [1]', log)
+        self.assertIn('[기존 이슈 연결·관련판정] bill B5 → [1]', log)
+        self.assertEqual(judged, [(0, 1)])
+        self.assertFalse([i for i in issues if i['state'] == 'proposed'])
+
+
+class TestIssueSuggestOverlapMerged(unittest.TestCase):
+    """#243 이슈맵 반복 제안 재발 방지 — A 과반 미달 겹침 판정, B 합친 기각(merged_into)의 후속을 합친 곳과 판정.
+    네트워크 0: DB·클러스터·임베딩·판정·프로필을 가짜로 바꾼다."""
+
+    class _Q:
+        def __init__(self, data):
+            self._data = data
+
+        def __getattr__(self, name):
+            return lambda *a, **k: self
+
+        def execute(self):
+            return type('R', (), {'data': self._data})()
+
+    class _SB:
+        def __init__(self, tables):
+            self._t = tables
+
+        def table(self, name):
+            return TestIssueSuggestOverlapMerged._Q(self._t.get(name, []))
+
+    def setUp(self):
+        import issue_suggest as isg
+        self.isg = isg
+        isg._proposed_this_run = 0
+
+    def _run(self, issues, linked_ids, judge_result, rep_vec, gen_vec=None):
+        """묶음 1개(기사 10건, 대표 제목 '낚시형 대표 제목') — linked_ids 기사는 active 이슈 171에 이미 연결."""
+        import io, contextlib
+        isg = self.isg
+        news = [{'id': f'n{k}', 'title': ('낚시형 대표 제목' if k == 0 else f'감면 사각지대 후속 {k}'),
+                 'published_at': f'2026-09-2{k % 5}T00:00:00+00:00', 'urgency': '보통'} for k in range(10)]
+        links = [{'item_id': f'n{k}', 'issue_id': 171} for k in linked_ids]
+        sb = self._SB({'news_feed': news, 'issue_links': links})
+        calls = {'judge': [], 'profile': 0}
+
+        def judge(pairs, groups, kind='news'):
+            calls['judge'].append([(p[1], p[2]['id']) for p in pairs])
+            return judge_result(pairs)
+
+        def profile(rep, members):
+            calls['profile'] += 1
+            return {'title': '취약계층 통신비 감면 사각지대', 'definition': '감면 미신청', 'category': '규제·CR'}
+
+        def embed(texts, input_type='query'):
+            return [rep_vec if t == '낚시형 대표 제목' else (gen_vec or [0, 0, 0, 1]) for t in texts]
+        out = io.StringIO()
+        with mock.patch.object(isg, 'cluster_star', lambda rows: [(rows[0], rows[1:])]), \
+                mock.patch.object(isg, '_embed', embed), mock.patch.object(isg, '_haiku_relate_batch', judge), \
+                mock.patch.object(isg, '_haiku_profile', profile), contextlib.redirect_stdout(out):
+            isg._suggest_from_news(sb, issues, dry=True)
+        return out.getvalue(), calls, [i for i in issues if i['state'] == 'proposed']
+
+    @staticmethod
+    def _issues(merged=None):
+        iss = [{'id': 171, 'state': 'active', 'title': '취약계층 통신요금 감면 — 사각지대 해소·비용 부담 개편',
+                'definition': '', 'embedding': [1, 0, 0, 0], 'norm_key': 'a'}]
+        if merged is not None:
+            iss.append({'id': 199, 'state': 'rejected', 'title': '취약계층 210만명 통신비 감면 사각지대',
+                        'definition': '', 'embedding': [0, 0, 1, 0], 'norm_key': 'b',
+                        'proposal_reason': {'kind': 'news_cluster', 'merged_into': merged}})
+        return iss
+
+    def test_overlap_below_majority_judges_instead_of_proposing(self):
+        # #199 재현: 과반 미달(3/10)·대표 벡터 무관(0) — 종전엔 제안으로 샜다
+        log, calls, new = self._run(self._issues(), [1, 2, 3], lambda pairs: set(), [0, 0, 0, 1])
+        self.assertIn('[겹침→판정]', log)
+        self.assertEqual(calls['judge'], [[('낚시형 대표 제목', 171)]])
+        self.assertIn('[관련 판정 — 소속 아님]', log)
+        self.assertEqual((calls['profile'], new), (0, []))            # 판정에서 떨어져도 제안하지 않는다
+        log, calls, new = self._run(self._issues(), [1, 2, 3], lambda pairs: {pairs[0][0]}, [0, 0, 0, 1])
+        self.assertIn('[연결·관련판정] "낚시형 대표 제목" → [171] (10건)', log)
+        self.assertEqual(new, [])
+
+    def test_overlap_two_keeps_old_path_and_majority_still_links(self):
+        log, calls, new = self._run(self._issues(), [1, 2], lambda pairs: set(), [0, 0, 0, 1])
+        self.assertNotIn('[겹침→판정]', log)
+        self.assertEqual(calls['profile'], 1)
+        self.assertEqual(len(new), 1)                                  # 2건 겹침은 종전대로 제안 경로
+        log, calls, new = self._run(self._issues(), [1, 2, 3, 4, 5], lambda pairs: set(), [0, 0, 0, 1])
+        self.assertIn('[연결·과반겹침]', log)                           # 과반은 판정 없이 연결(종전)
+        self.assertEqual(calls['judge'], [[]])
+
+    def test_merged_rejection_cluster_goes_to_target(self):
+        # 합친 기각 #199와 대표 벡터가 같으면(≥0.72) 건너뛰지 않고 합친 곳 #171과 판정
+        log, calls, new = self._run(self._issues(merged=171), [], lambda pairs: {pairs[0][0]}, [0, 0, 1, 0])
+        self.assertIn('[기각 병합처→판정] "낚시형 대표 제목" ≈ 기각 [199] → 합친 곳 [171]', log)
+        self.assertIn('[연결·관련판정] "낚시형 대표 제목" → [171]', log)
+        self.assertEqual((calls['profile'], new), (0, []))
+
+    def test_merged_into_non_active_keeps_skip(self):
+        iss = self._issues(merged=5) + [{'id': 5, 'state': 'rejected', 'title': 'x', 'definition': '',
+                                        'embedding': None, 'proposal_reason': {}}]
+        log, calls, new = self._run(iss, [], lambda pairs: set(), [0, 0, 1, 0])
+        self.assertNotIn('병합처', log)
+        self.assertEqual((calls['judge'], calls['profile'], new), ([[]], 0, []))   # 종전대로 기각 대조에서 빠짐
+
+    def test_propose_recheck_links_merged_target(self):
+        # 대표 벡터로는 못 잡고(0) 생성 제목 벡터가 합친 기각 #199와 ≥0.80 → 즉석 판정 후 합친 곳에 연결
+        log, calls, new = self._run(self._issues(merged=171), [], lambda pairs: {p[0] for p in pairs}, [0, 0, 0, 1],
+                                    gen_vec=[0, 0, 1, 0])
+        self.assertIn('[기각 병합처 연결] "취약계층 통신비 감면 사각지대" ≈ 기각 [199]', log)
+        self.assertEqual(calls['judge'][-1], [('취약계층 통신비 감면 사각지대', 171)])
+        self.assertEqual(new, [])
+        log, calls, new = self._run(self._issues(merged=171), [], lambda pairs: set(), [0, 0, 0, 1],
+                                    gen_vec=[0, 0, 1, 0])
+        self.assertIn('[기각 재제안 — 건너뜀]', log)
+        self.assertIn('합친 곳 [171] 판정 소속 아님', log)
+        self.assertEqual(new, [])
+
 
 class TestSidebarListBody(unittest.TestCase):
     """#232 본문 자리에 사이드바 목록(사내판 인계) — 목록 머리말로 '시작'하는 칸은 본문이 아니다.
