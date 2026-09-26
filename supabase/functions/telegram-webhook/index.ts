@@ -202,6 +202,20 @@ const START_TEXT =
 
 // ── 조문 원문 조회 (비용 0) ──
 const ARTICLE_RE = /^(.{2,40}?)\s*제?\s*(\d+)\s*조(?:\s*의\s*(\d+))?\s*$/;
+// /law 안에서만 쓰는 넓은 꼴(#247): 항·호 표기(「…제5조제3항」)와 '원문 보여줘'류 요청 꼬리(「…제3조를 찾아줘」)까지 즉답으로.
+// 실사용: 09-10 「전기통신사업법 제3조를 찾아줘」·09-15 「재난문자방송 기준 및 운영규정 제5조제3항」이 위 꼴에 안 맞아
+// 자연어 모드(승인·하루 10회·Haiku)로 갔다 — 원문을 보여 달라는 요청이었다. 꼬리에 다른 말이 붙으면(「…제3조 설명해줘」·
+// 「…위반 시 과징금」) 여기 안 맞고 자연어 모드로 간다. 평문(슬래시 없는) 자동 인식은 종전 ARTICLE_RE 그대로 — 평문은 자문이 기본.
+const ARTICLE_LOOSE_RE = /^(.{2,40}?)\s*제?\s*(\d+)\s*조(?:\s*의\s*(\d+))?(?:\s*제?\s*(\d+)\s*항)?(?:\s*제?\s*(\d+)\s*호)?(?:\s*(?:의|을|를)?\s*(?:원문|전문|본문|내용|조문))?\s*(?:을|를|은|는|이|가)?\s*(?:좀\s*)?(?:(?:찾아|보여|알려|띄워|검색해|조회해)\s*(?:줘|주세요|줄래|줄래요|주십시오|주라|봐\s*줘|봐|볼래|요)?)?[\s.?!~]*$/;
+type ArticleRef = { name: string; art: string; sub?: string; hang?: string; ho?: string; loose: boolean };
+// 조 번호가 둘 이상인 문장(「전파법 제16조와 시행령 제18조」)은 법령명 자리에 앞 조문까지 들어가 즉답이 못 찾는다(종전엔 '미등재'로 끝났다)
+// → 즉답으로 보지 않고 자연어·자문 경로로 보낸다. 거기서 두 조문을 이름·번호로 가져온다(rag_core.js fetchNamedArticles, #246·#247).
+function parseArticleRef(q: string, allowLoose: boolean): ArticleRef | null {
+  const strict = ARTICLE_RE.exec(q);
+  const m = strict || (allowLoose ? ARTICLE_LOOSE_RE.exec(q) : null);
+  if (!m || /\d\s*조/.test(m[1])) return null;
+  return { name: m[1].trim(), art: m[2], sub: m[3], hang: strict ? undefined : m[4], ho: strict ? undefined : m[5], loose: !strict };
+}
 
 // 약칭 → 정식 법령명. /law는 doc_name ilike 부분일치인데, "정보통신망법"처럼 정식명에
 // 그 문자열이 통째로 들어 있지 않은 통칭은 전멸한다(첫 조회 실패 = 이탈). 조회 전에 치환한다.
@@ -461,8 +475,12 @@ async function handleLawQuery(chatId: number, q: string): Promise<Promise<void> 
       '조문 번호를 알 때는 <code>/law 전기통신사업법 19조</code> 처럼 쓰면 원문이 바로 나옵니다.');
     return;
   }
-  const m = query.match(ARTICLE_RE);
-  if (m) { await handleArticleLookup(chatId, m[1].trim(), m[2], m[3]); return; }
+  const ref = parseArticleRef(query, true);
+  if (ref) {
+    // 넓은 꼴로만 맞았는데 DB에 없으면 자연어 모드로 넘긴다 — 「무선국 준공 관련 전파법 제24조를 찾아줘」처럼 앞 낱말까지
+    // 법령명으로 읽혀 못 찾는 문장을 '미등재'로 끝내지 않게(#247). 종전 꼴(「전파법 16조」)은 종전대로 미등재 안내.
+    if (await handleArticleLookup(chatId, ref) || !ref.loose) return;
+  }
 
   // 자연어 질의 → 법령 한정 답변 (2026-08-03 개편 — 운영자: "몇조가 뭐냐고 묻는 게 아니라
   // 궁금한 사항이 어떤 법과 관련돼 있는지 알고 싶은 게 대부분").
@@ -561,8 +579,10 @@ export function plainifyArticle(text: string): string {
     .trim();
 }
 
-async function handleArticleLookup(chatId: number, rawDocName: string, artNo: string, subNo?: string): Promise<void> {
-  await logUsage(chatId, 'law_article', `${rawDocName} ${artNo}조${subNo ? '의' + subNo : ''}`);
+// 반환: 찾았으면 true. 못 찾았을 때 넓은 꼴(ref.loose)이면 안내 없이 false — 호출측이 자연어 모드로 넘긴다(#247).
+async function handleArticleLookup(chatId: number, ref: ArticleRef): Promise<boolean> {
+  const { name: rawDocName, art: artNo, sub: subNo, hang, ho } = ref;
+  await logUsage(chatId, 'law_article', `${rawDocName} ${artNo}조${subNo ? '의' + subNo : ''}${hang ? ` ${hang}항` : ''}${ho ? ` ${ho}호` : ''}`);
   const docName = resolveLawName(rawDocName);   // 약칭이면 정식명으로 치환 후 조회 (미등재 안내·법령센터 링크도 정식명 기준)
   // ⚠️ DB의 article_no는 **「12조(교육과목 및 시간)」처럼 '제'가 없는 형식**이다(#92).
   // 실측: `article_no like '제%조%'` 0건 / `~ '^\d+조'` 7,587건. 종전에는 `제${artNo}조`로
@@ -585,11 +605,12 @@ async function handleArticleLookup(chatId: number, rawDocName: string, artNo: st
       return subNo ? a.startsWith(wantedDb) : (a === wantedDb || a.startsWith(wantedDb + '('));
     });
   if (!rows.length) {
+    if (ref.loose) return false;   // 넓은 꼴 — 안내 없이 자연어 모드로(호출측)
     await sendTelegramHtml(BOT_TOKEN, chatId,
       `📖 "<b>${escapeHtml(docName)} ${escapeHtml(wanted)}</b>" — DB에 등재되지 않았습니다.\n` +
       `이 시스템 DB에는 전파 분야 법령·고시 위주로 등재되어 있습니다.\n` +
       `🔗 <a href="https://www.law.go.kr/lsSc.do?query=${encodeURIComponent(docName)}">국가법령정보센터에서 확인</a>`);
-    return;
+    return false;
   }
   // 법령명이 여럿 걸리면(본법·시행령·시행규칙) 이름이 가장 짧은 것(본법) 우선, 나머지는 안내
   const names = [...new Set(rows.map((r) => r.doc_name))].sort((a, b) => a.length - b.length);
@@ -600,6 +621,12 @@ async function handleArticleLookup(chatId: number, rawDocName: string, artNo: st
   if (head.notice_no) meta.push(head.notice_no);
   let body = `📖 <b>${escapeHtml(head.doc_name)} ${escapeHtml(head.article_no || wanted)}</b>\n`;
   if (meta.length) body += `<i>${escapeHtml(meta.join(' · '))}</i>\n`;
+  // 항·호를 적어 물었으면(#247) 조문 전체를 보여 주고 어느 부분인지 한 줄로 짚는다 — 항 머리 번호는 원문에서 ①②③ 꼴
+  if (hang) {
+    const n = Number(hang);
+    const mark = n >= 1 && n <= 20 ? '①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳'[n - 1] : `제${n}항`;
+    body += `<i>요청하신 제${n}항${ho ? ` 제${ho}호는` : '은'} 아래 조문의 ${mark} 부분입니다.</i>\n`;
+  }
   const plain = plainifyArticle(picked.map((r) => r.content).join('\n'));
   body += '\n' + escapeHtml(plain);
   if (names.length > 1) body += `\n\n<i>같은 조가 있는 다른 문서: ${escapeHtml(names.slice(1).join(', '))} — "${escapeHtml(names[1])} ${wanted}"처럼 문서명을 정확히 지정해 다시 검색하세요.</i>`;
@@ -611,6 +638,7 @@ async function handleArticleLookup(chatId: number, rawDocName: string, artNo: st
     channel: 'telegram_law', chat_id: chatId, chunk_ids: picked.map((r) => r.id),
   });
   await sendAnswerWithFeedback(chatId, body, logId);
+  return true;
 }
 
 // ── AI 자문 (승인제 + 일일 상한 + 백그라운드 실행) ──
@@ -1114,7 +1142,7 @@ Deno.serve(async (req: Request) => {
     } else if (text.startsWith('/law') || text.startsWith('/법령')) {
       const bg = await handleLawQuery(chatId, text.replace(/^\/(law|법령)\s*/, ''));
       if (bg) (globalThis as { EdgeRuntime?: { waitUntil: (p: Promise<void>) => void } }).EdgeRuntime?.waitUntil(bg);
-    } else if (ARTICLE_RE.test(text) && !text.startsWith('/')) {
+    } else if (parseArticleRef(text, false) && !text.startsWith('/')) {
       await handleLawQuery(chatId, text);   // 평문 "전기통신사업법 19조" 자동 인식 (조번호 패턴 = 즉답 경로만)
     } else if (text.startsWith('/ask')) {
       const bg = await handleAsk(chatId, from, text.replace(/^\/ask\s*/, ''));

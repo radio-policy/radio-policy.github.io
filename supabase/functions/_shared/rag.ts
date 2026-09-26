@@ -432,7 +432,8 @@ async function fetchCitingChunks(sb: SupabaseClient, docName: string, key: strin
 // ① Haiku 확장으로 어휘 간극을 메우고 ② 조문번호 있는 청크만 봐서 논문·보도자료를 배제하면
 // 최상위가 '전파법 25조의2(무선국의 폐지 및 운용 휴지)'로 정확히 잡힌다.
 // (article_no로 거르는 이유: doc_category '기타'에 고시와 박사논문이 섞여 카테고리로는 못 거른다)
-export interface LawHit { id: number; doc_name: string; article_no?: string; content: string; chunk_index?: number; _hits: number }
+// _named·_ids는 /law 지목 조문(#247)만 — 조각을 이어 붙인 한 항목과 그 조각 id들(chat_logs.chunk_ids에 전부 남긴다)
+export interface LawHit { id: number; doc_name: string; article_no?: string; content: string; chunk_index?: number; _hits: number; _named?: boolean; _ids?: number[] }
 
 // 법령 어휘 대응표(LAW_SYNONYMS·PRACTICE_TERMS)·제외어(QUERY_TITLE_STOP)·법령 위계·도메인 사전확률 — 전부 rag_core.js (#215).
 // 아래는 이 파일이 직접 부르는 것만 이름을 붙인다. 표 자체는 여기 없다.
@@ -507,9 +508,11 @@ export async function searchLawArticles(sb: SupabaseClient, query: string, limit
 // 모아 Haiku(법령 나열·관련 이유 설명은 좁은 일이라 Sonnet 불필요, 건당 ~$0.01)로 답한다.
 // 반환에 chunkIds를 함께 실어 보낸다 — 호출자(telegram-webhook)가 chat_logs에 근거를 남겨
 // 만족도 👎 분석 때 "어느 조문을 집었길래 틀렸나"를 되짚을 수 있게 한다(2026-08-20).
-export async function answerLawQuery(sb: SupabaseClient, query: string): Promise<{ answer: string; chunkIds: number[] } | null> {
-  const apiKey = env('ANTHROPIC_API_KEY');
-  if (!apiKey) return null;
+// 검색·조립(buildLawQueryContext)과 Haiku 호출(answerLawQuery)을 나눈다(#247) — 확인 스크립트가 testHooks로
+// 확장어·임베딩을 고정하고 buildLawQueryContext만 불러 Anthropic API 0회로 전후를 대조한다(자문의 #201과 같은 방식).
+type LawQueryContext = { merged: LawHit[]; kb: KbRow[]; system: string };
+const NAMED_LAW_CHARS = 3000;   // /law 지목 조문 한 항목 상한(#247) — 현행 조문 7,969개 중 99%가 3,070자 이하, 그 밖 항목은 800자
+export async function buildLawQueryContext(sb: SupabaseClient, query: string): Promise<LawQueryContext | null> {
   // 조문 검색을 **세 갈래**로 돌린다 (2026-08-03 사고에서 도달한 구조).
   //  ① 키워드(searchLawArticles) — 질문 어휘가 조문에 그대로 있을 때 정확하다.
   //  ② 의미(match_law_articles_semantic) — 어휘가 어긋나도 뜻으로 찾는다. **조문만** 대상.
@@ -520,7 +523,16 @@ export async function answerLawQuery(sb: SupabaseClient, query: string): Promise
   // 임베딩 모델을 voyage-law-2로 바꿔도 7위까지만 올라왔다(실측 A/B). 진짜 원인은 **검색 대상**
   // 이었다 — 부칙·별표·서식이 상위를 독식하고 있었다. ②를 조문 전용으로 좁혀 대부분 해결되고,
   // 남는 사각지대는 ③이 덮는다.
-  const [hits, semantic, kb] = await Promise.all([
+  // ④ 번호로 지목한 조문(#247, 규칙은 자문과 같은 rag_core.js fetchNamedArticles — #246) — 「전파법 제16조와 시행령 제18조 차이」처럼
+  //    문장 속에 법령명과 조 번호가 있으면 그 조문을 이름·번호로 바로 가져와 맨 앞에 둔다. 발단: 09-10 「전기통신사업법 제3조를 찾아줘」가
+  //    자연어 모드로 와서 다른 법의 제3조만 검색됐는데 Haiku가 제3조 본문을 기억으로 적었다(DB엔 있었다 — 지금 검색은 #208·#244 뒤라
+  //    3번째로 잡지만 순위에 기대는 구조는 같다). 대조: 「…제50조 위반 시 과징금」은 제50조가 아예 없었다. /law에는 자문의 통째 보강
+  //    (expandArticles)이 없으므로 조회해 둔 같은 조의 조각을 전부 이어 붙인다 — 조회 함수를 감싸 결과를 받아 두므로 DB 왕복은 늘지 않는다.
+  const namedArt = new Map<string, Promise<Chunk[]>>();
+  const namedP: Promise<Chunk[]> = RagCore.fetchNamedArticles(query, (k: string) => fetchArticleKeyRows(sb, k),
+    (d: string, k: string) => { const p = fetchArticleChunks(sb, d, k); namedArt.set(d + '|' + k, p); return p; })
+    .catch(() => [] as Chunk[]);
+  const [hitsAll, semantic, kb, namedFirst] = await Promise.all([
     // 8→12 (2026-08-07): "3G 종료"처럼 한 질문이 여러 제도(사업 폐업·무선국 폐지·주파수 회수)에
     // 걸치면 8자리를 계열끼리 다퉈 시행령 조문이 밀려났다(실측 — 시행령 24조·51조 누락).
     searchLawArticles(sb, query, 12),
@@ -535,11 +547,26 @@ export async function answerLawQuery(sb: SupabaseClient, query: string): Promise
           .then((r) => (r.data || []) as Chunk[])
       : [] as Chunk[]).catch(() => [] as Chunk[]),
     searchKbSummaries(sb, expandQueryForSemantic(query)).catch(() => [] as KbRow[]),
+    namedP,
   ]);
+
+  // 지목 조문 — 조각을 chunk_index 순으로 이어 한 항목으로. 그 조의 조각은 아래 세 갈래에서 빼서 같은 조문이 두 번 들어가지 않게 한다.
+  const named: LawHit[] = [];
+  const namedIds = new Set<number>();
+  for (const c of namedFirst) {
+    const key = CiteVerify.articleKey(c.article_no);
+    const rows = ((await namedArt.get(c.doc_name + '|' + key)) || [c])
+      .filter((r) => r.doc_name === c.doc_name && CiteVerify.articleKey(r.article_no) === key)
+      .sort((a, b) => (a.chunk_index || 0) - (b.chunk_index || 0));
+    rows.forEach((r) => namedIds.add(r.id));
+    named.push({ id: c.id, doc_name: c.doc_name, article_no: c.article_no, content: rows.map((r) => r.content).join('\n'),
+      chunk_index: c.chunk_index, _hits: 0, _named: true, _ids: rows.map((r) => r.id) });
+  }
+  const hits = hitsAll.filter((h) => !namedIds.has(h.id));
 
   // 의미 검색분에서 **조문만** 남긴다 — article_no가 없는 것(보도자료 등)과 파일 문서(논문·계획서)는
   // /law의 답이 아니다. 그 필터는 searchLawArticles가 쓰는 기준과 같게 유지한다.
-  const haveIds = new Set(hits.map((h) => h.id));
+  const haveIds = new Set([...hits.map((h) => h.id), ...namedIds]);
   const semExtra: LawHit[] = (semantic || [])
     .filter((c) => c.article_no && !haveIds.has(c.id) && !/\.(pdf|md|docx|hwp)$/i.test(c.doc_name || ''))
     .slice(0, 6)
@@ -587,14 +614,16 @@ export async function answerLawQuery(sb: SupabaseClient, query: string): Promise
     }
   }
 
-  const merged = hits.concat(semExtra, bridged);
-  if (!merged.length && !kb.length) return null;   // 검색 0건 — 호출자가 미등재 안내
+  const searched = hits.concat(semExtra, bridged);
+  if (!named.length && !searched.length && !kb.length) return null;   // 검색 0건 — 호출자가 미등재 안내
 
   // 프롬프트에 넣는 순서를 **법 위계 순**(법률>대통령령>부령>고시)으로 맞춘다. 검색 점수 순으로
   // 넣으면 시행령이 앞서고 상위 법률이 뒤로 밀려, 모델이 시행령만 인용하고 근거 법률을 빠뜨린다
   // (2026-08-03 실측: "개인정보 유출 신고 기한" 답변에 시행령 40·39조만 나오고 법 34조 누락).
   // 같은 위계 안에서는 원래 순서(검색 관련도)를 유지 — 안정 정렬.
-  merged.sort((a, b) => lawRank(b.doc_name) - lawRank(a.doc_name));
+  // 지목 조문(④)은 정렬 밖에서 맨 앞에, 질문에 적힌 순서대로 — 사용자가 이름과 번호로 직접 물은 조문이다.
+  searched.sort((a, b) => lawRank(b.doc_name) - lawRank(a.doc_name));
+  const merged = named.concat(searched);
 
   const ctxParts: string[] = [];
   if (merged.length) {
@@ -612,7 +641,11 @@ export async function answerLawQuery(sb: SupabaseClient, query: string): Promise
       if (m?.[3]) meta.push(m[3]);
       if (m?.[4]) meta.push(`시행일 ${m[4].slice(0, 4)}-${m[4].slice(4, 6)}-${m[4].slice(6, 8)}`);
       const head = meta.length ? `${name} [${meta.join(' | ')}]` : (h.doc_name || '');
-      return `[조문 ${i + 1}] ${head}${h.article_no ? '\n조항: ' + h.article_no : ''}\n${(h.content || '').slice(0, 800)}`;
+      // 지목 조문은 조문 전체(NAMED_LAW_CHARS까지), 그 밖은 종전대로 800자
+      const body = h._named
+        ? (h.content || '').slice(0, NAMED_LAW_CHARS) + ((h.content || '').length > NAMED_LAW_CHARS ? '\n…(이하 생략)' : '')
+        : (h.content || '').slice(0, 800);
+      return `[조문 ${i + 1}] ${head}${h._named ? ' — 질문이 지목한 조문' : ''}${h.article_no ? '\n조항: ' + h.article_no : ''}\n${body}`;
     }).join('\n\n---\n\n'));
   }
   if (kb.length) {
@@ -642,9 +675,20 @@ export async function answerLawQuery(sb: SupabaseClient, query: string): Promise
     '  부칙은 **과거 개정 하나하나의 이력**이며 한 법령에 수십 개가 있습니다. 부칙에 적힌 "공포 후 N개월" 같은 문구는 **그 개정분의 시행 시점**일 뿐, 법 전체의 현행 시행일이 아닙니다. 부칙 시행일을 법의 시행일로 제시하지 마세요.\n' +
     '  특정 개정(예: 「제20067호 개정은 언제부터인가」)을 물은 경우에만 해당 부칙을 근거로 답하고, 어느 개정의 것인지 반드시 밝히세요.\n' +
     '- 검색 결과에 없는 법령명·조항 번호를 만들어내지 마세요. 검색 결과가 질문과 맞지 않으면 "등재 법령에서 직접 관련 조문을 찾지 못했습니다"라고 말하고, 걸린 것 중 가까운 것만 언급하세요.\n' +
+    // 지목 조문이 있을 때만 붙는다(#247) — 없는 질문의 프롬프트는 종전과 글자 하나 다르지 않다
+    (named.length ? '- 머리에 「질문이 지목한 조문」이라고 표시된 조문은 사용자가 법령명과 번호로 직접 물은 조문입니다. 빠뜨리지 말고 먼저 다루세요(위의 법 체계 순서보다 앞).\n' : '') +
     '- 시사점·전략 제언·최신 동향·뉴스·해외 사례는 쓰지 마세요 — 법령 내용만 다룹니다(그런 질문은 /ask 몫).\n' +
     '- 텔레그램 전송용: 표·코드블록 금지, 굵게(**)와 불릿(-)만, 전체 1,800자 이내.\n\n' +
     '---\n\n' + ctxParts.join('\n\n---\n\n');
+  return { merged, kb, system };
+}
+
+export async function answerLawQuery(sb: SupabaseClient, query: string): Promise<{ answer: string; chunkIds: number[] } | null> {
+  const apiKey = env('ANTHROPIC_API_KEY');
+  if (!apiKey) return null;
+  const ctx = await buildLawQueryContext(sb, query);
+  if (!ctx) return null;   // 검색 0건 — 호출자가 미등재 안내
+  const { merged, system } = ctx;
 
   const res = await fetch(ANTHROPIC_URL, {
     method: 'POST',
@@ -666,7 +710,7 @@ export async function answerLawQuery(sb: SupabaseClient, query: string): Promise
   const text = (data.content || []).find((b) => b.type === 'text')?.text || '';
   if (!text.trim()) return null;
   const chunkIds: number[] = [];
-  for (const h of merged) if (typeof h.id === 'number' && !chunkIds.includes(h.id)) chunkIds.push(h.id);
+  for (const h of merged) for (const id of (h._ids || [h.id])) if (typeof id === 'number' && !chunkIds.includes(id)) chunkIds.push(id);
   return { answer: text.trim(), chunkIds };
 }
 
