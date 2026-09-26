@@ -5,6 +5,8 @@
 var fs = require('fs');
 var path = require('path');
 var ROOT = path.join(__dirname, '..');
+// 번호로 지목한 조문(#245)은 인용 검증기의 법령명 읽기(lawNameBefore·lawScope)를 쓴다 — 브라우저·Edge처럼 먼저 싣는다
+require(path.join(ROOT, 'supabase', 'functions', '_shared', 'cite_verify.js'));
 var RC = require(path.join(ROOT, 'supabase', 'functions', '_shared', 'rag_core.js'));
 
 var fails = 0, total = 0;
@@ -25,7 +27,7 @@ var NAMES = ['PRIORITY_KW_RE', 'VERB_TAIL', 'extractKeywords', 'LAW_SYNONYMS', '
   'expandQueryForSemantic', 'GENERIC_QUERY_WORDS', 'QUERY_TITLE_STOP', 'isTitleStop', 'lawRank', 'DOMAIN_DOC_RE',
   'extractNewsKeywords', 'PERDOC_LIMIT', 'TOTAL_CHUNK_CUT', 'STREAM_IDLE_MS', 'EXPAND_OPTS', 'CITING_OPTS',
   'ANNEX_MAX_UNITS', 'ANNEX_MAX_CHUNKS', 'ASM_RARE_MAX', 'RRF_K', 'articleBonus', 'rankChunks', 'titleActWeights',
-  'rankLawHits', 'buildRagContext', 'buildKbContext'];
+  'rankLawHits', 'NAMED_ARTICLE_MAX', 'namedArticleRefs', 'pickNamedArticles', 'fetchNamedArticles', 'buildRagContext', 'buildKbContext'];
 NAMES.forEach(function (n) { ok('export ' + n, RC[n] !== undefined); });
 
 // ── 법령 키워드 추출 ──
@@ -131,6 +133,60 @@ eq('titleActWeights', RC.titleActWeights(['종료', '휴업', '직접', '3G'], '
   eq('rankLawHits limit', RC.rankLawHits(hits, '종료', 2).length, 2);
 })();
 
+// ── 번호로 지목한 조문 직접 인출(#245) ──
+(function () {
+  var refs = function (q) {
+    return RC.namedArticleRefs(q).map(function (r) {
+      var i = r.info ? (r.info.candidates ? r.info.candidates[r.info.candidates.length - 1] : (r.info.subord ? 'subord:' + r.info.subord : 'inherit')) : null;
+      return [r.key, i, r.ctx ? r.ctx.candidates[r.ctx.candidates.length - 1] : null];
+    });
+  };
+  eq('namedArticleRefs 법령명+제N조', refs('전파법 제16조'), [['16조', '전파법', null]]);
+  eq('namedArticleRefs 시행령만 적으면 앞 법령 이어받기', refs('전파법 제16조와 시행령 제18조는 무엇이 다른가'), [['16조', '전파법', null], ['18조', 'subord:시행령', '전파법']]);
+  eq('namedArticleRefs 제 생략(37조)', refs('전기통신사업법 37조 망공동이용은 5G 공동망만 해당하는 건가?'), [['37조', '전기통신사업법', null]]);
+  eq('namedArticleRefs 조의N·낫표·항호', refs('「전기통신사업법」 제32조의14제1항제2호'), [['32조의14', '전기통신사업법', null]]);
+  eq('namedArticleRefs 이름 없는 번호는 뺌', refs('제16조가 뭐야'), []);
+  eq('namedArticleRefs 금액(조 원·조N천억)은 뺌', refs('할당대가 3조 원 규모인데 2조5천억은 전파법 제11조 기준인가'), [['11조', '전파법', null]]);
+  eq('namedArticleRefs 나열·동법 이어받기', refs('전파법 제16조, 제17조 및 동법 시행령 제18조'),
+    [['16조', '전파법', null], ['17조', null, '전파법'], ['18조', 'subord:시행령', '전파법']]);
+  eq('namedArticleRefs 16조 1항(뒤 숫자가 항)', refs('전파법 16조 1항'), [['16조', '전파법', null]]);
+
+  var D = { law: '전파법(법률)(제21065호)(20260102)', dec: '전파법 시행령(대통령령)(제35801호)(20251001)', etc: '전기통신기본법(법률)(제16019호)(20190625)',
+    net: '정보통신망 이용촉진 및 정보보호 등에 관한 법률(법률)(제21445호)(20260911)', pdf: '실행계획(안).pdf' };
+  var rows = {
+    '16조': [{ doc_name: D.etc, article_no: '16조(가)' }, { doc_name: D.law, article_no: '16조(재할당)' }, { doc_name: D.law, article_no: '16조의2(주파수 재할당 대가)' },
+             { doc_name: D.dec, article_no: '16조(나)' }, { doc_name: D.pdf, article_no: '16조' }],
+    '18조': [{ doc_name: D.dec, article_no: '18조(재할당 신청)' }, { doc_name: D.law, article_no: '18조(다)' }],
+    '48조의3': [{ doc_name: D.net, article_no: '48조의3(침해사고의 신고 등)' }],
+  };
+  var pick = function (q) { return RC.pickNamedArticles(RC.namedArticleRefs(q), rows).map(function (p) { return p.doc_name.split('(')[0] + ' ' + p.key; }); };
+  eq('pickNamedArticles 법·시행령 한 질문', pick('전파법 제16조와 시행령 제18조는 무엇이 다른가'), ['전파법 16조', '전파법 시행령 18조']);
+  eq('pickNamedArticles 앞 법령 없는 시행령은 안 고름', pick('시행령 제18조 내용'), []);
+  eq('pickNamedArticles 약칭(정보통신망법)', pick('정보통신망법 제48조의3 신고 기한'), ['정보통신망 이용촉진 및 정보보호 등에 관한 법률 48조의3']);
+  eq('pickNamedArticles 번호를 가진 문서가 없으면 안 고름', pick('전파법 제99조'), []);
+  eq('pickNamedArticles 16조의2는 16조로 치지 않음', RC.pickNamedArticles(RC.namedArticleRefs('전파법 제16조'), { '16조': [{ doc_name: D.law, article_no: '16조의2(x)' }] }), []);
+  // '개정 전파법(안).pdf'는 문서군 '개정 전파법'이라 이름 끝 일치로 '전파법'에 붙을 수 있다 — 파일 문서 필터가 막는다
+  eq('pickNamedArticles 파일 문서 제외', RC.pickNamedArticles(RC.namedArticleRefs('전파법 제16조'), { '16조': [{ doc_name: '개정 전파법(안).pdf', article_no: '16조(재할당)' }] }), []);
+})();
+
+// 조회 순서·첫 조각만(통째 보강이 나머지를 합친다)·실패 시 빈 배열 — 비동기라 끝에서 기다린다
+var asyncTests = (async function () {
+  var calls = [];
+  var got = await RC.fetchNamedArticles('전파법 제16조',
+    function (k) { calls.push('rows:' + k); return Promise.resolve([{ doc_name: '전파법(법률)(a)(b)', article_no: '16조(재할당)' }]); },
+    function (d, k) {
+      calls.push('art:' + d.split('(')[0] + ':' + k);
+      return Promise.resolve([
+        { id: 2, doc_name: d, article_no: '16조(재할당)', chunk_index: 33, content: '뒤' },
+        { id: 1, doc_name: d, article_no: '16조(재할당)', chunk_index: 32, content: '제16조(재할당) ①' },
+        { id: 3, doc_name: d, article_no: '16조의2(대가)', chunk_index: 34, content: '딴 조' }]);
+    });
+  eq('fetchNamedArticles 첫 조각 하나·지목 표시', got.map(function (r) { return [r.id, r._named]; }), [[1, true]]);
+  eq('fetchNamedArticles 조회 순서', calls, ['rows:16조', 'art:전파법:16조']);
+  eq('fetchNamedArticles 조 언급 없으면 조회 안 함', await RC.fetchNamedArticles('주파수 재할당 대가', function () { throw new Error('불림'); }, function () { throw new Error('불림'); }), []);
+  eq('fetchNamedArticles 조회 실패는 빈 배열', await RC.fetchNamedArticles('전파법 제16조', function () { return Promise.reject(new Error('x')); }, function () { return []; }), []);
+})();
+
 // ── 컨텍스트 문구 ──
 (function () {
   var t = RC.buildRagContext([
@@ -166,5 +222,7 @@ eq('titleActWeights', RC.titleActWeights(['종료', '휴업', '직접', '3G'], '
   });
 })();
 
-console.log('\n' + (fails ? 'FAIL ' + fails + '/' + total : 'ALL OK ' + total + '/' + total));
-process.exit(fails ? 1 : 0);
+asyncTests.catch(function (e) { fails++; total++; console.log('FAIL  비동기 검사 예외 ' + (e && e.message)); }).then(function () {
+  console.log('\n' + (fails ? 'FAIL ' + fails + '/' + total : 'ALL OK ' + total + '/' + total));
+  process.exit(fails ? 1 : 0);
+});

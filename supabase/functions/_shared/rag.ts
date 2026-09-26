@@ -408,6 +408,14 @@ async function fetchArticleChunks(sb: SupabaseClient, docName: string, key: stri
     .like('article_no', key + '%').order('chunk_index', { ascending: true }).limit(40);
   return (r.data || []) as Chunk[];
 }
+// ── 번호로 지목한 조문(#245)의 이름 맞추기 재료 — 그 번호의 조문을 가진 현행 문서(조문 제목은 'N조(제목)', #92).
+//    '16조%'면 16조의2 등도 오지만 rag_core.js pickNamedArticles가 번호를 다시 대조한다. app.js fetchArticleKeyRows와 동일 조건.
+async function fetchArticleKeyRows(sb: SupabaseClient, key: string): Promise<{ doc_name: string; article_no: string }[]> {
+  const r = await sb.from('document_chunks').select('doc_name, article_no')
+    .eq('status', 'current').eq('is_approved', true)
+    .like('article_no', key + '%').order('id', { ascending: true }).limit(1000);
+  return (r.data || []) as { doc_name: string; article_no: string }[];
+}
 // ── 역참조 발췌(#155-보론4)에 쓰는 조회 — 같은 문서에서 '제<key>'를 본문에 담은 조문 조각. app.js fetchCitingChunks와 동일 조건 ──
 const CITING_OPTS = RagCore.CITING_OPTS;
 async function fetchCitingChunks(sb: SupabaseClient, docName: string, key: string): Promise<Chunk[]> {
@@ -424,7 +432,7 @@ async function fetchCitingChunks(sb: SupabaseClient, docName: string, key: strin
 // ① Haiku 확장으로 어휘 간극을 메우고 ② 조문번호 있는 청크만 봐서 논문·보도자료를 배제하면
 // 최상위가 '전파법 25조의2(무선국의 폐지 및 운용 휴지)'로 정확히 잡힌다.
 // (article_no로 거르는 이유: doc_category '기타'에 고시와 박사논문이 섞여 카테고리로는 못 거른다)
-export interface LawHit { id: number; doc_name: string; article_no?: string; content: string; _hits: number }
+export interface LawHit { id: number; doc_name: string; article_no?: string; content: string; chunk_index?: number; _hits: number }
 
 // 법령 어휘 대응표(LAW_SYNONYMS·PRACTICE_TERMS)·제외어(QUERY_TITLE_STOP)·법령 위계·도메인 사전확률 — 전부 rag_core.js (#215).
 // 아래는 이 파일이 직접 부르는 것만 이름을 붙인다. 표 자체는 여기 없다.
@@ -917,19 +925,29 @@ export async function buildAdvisoryContext(sb: SupabaseClient, question: string)
         .then((r) => (r?.data || []) as Chunk[])
     : [] as Chunk[]).catch(() => [] as Chunk[]);
   const asmP = buildAssemblyTrendContext(sb, question);
+  // 번호로 지목한 조문 직접 인출(#245) — 「전파법 제16조」를 이름과 번호로 바로 가져온다(검색 순위와 무관). 규칙은 rag_core.js.
+  // search_meta에는 질문에 조 언급이 있을 때만 남긴다(rows 0 = 이름을 못 맞췄거나 그 조문이 KB에 없음).
+  const namedT0 = performance.now(), namedRefs = RagCore.namedArticleRefs(question).length;
+  const namedP: Promise<Chunk[]> = RagCore.fetchNamedArticles(question, (k: string) => fetchArticleKeyRows(sb, k), (d: string, k: string) => fetchArticleChunks(sb, d, k))
+    .then((rows: Chunk[]) => { if (namedRefs) meta.push({ fn: 'named_articles', ms: Math.round(performance.now() - namedT0), rows: rows.length, error: null }); return rows; })
+    .catch((e: unknown) => { meta.push({ fn: 'named_articles', ms: Math.round(performance.now() - namedT0), rows: null, error: String((e as Error)?.message || e) }); return [] as Chunk[]; });
   const chunks = await searchChunks(sb, apiKey, question, meta);
-  const [kb, news, lawHits, lawSem, asm] = [await kbP, await newsP, await lawP, await lawSemP, await asmP];
+  const [kb, news, lawHits, lawSem, asm, named] = [await kbP, await newsP, await lawP, await lawSemP, await asmP, await namedP];
 
   // 조문 보강 — searchLawArticles(키워드 확장 + 조문 단위 필터)가 찾은 조문 중
   // 위 RAG에 안 들어온 것을 덧붙인다. RAG는 논문·보도자료도 섞여 정작 근거 조문을 놓치는 일이 있다.
+  // 번호로 지목한 조문(#245)을 맨 앞에 — RAG에 이미 든 조각은 빼고(같은 조의 나머지 조각은 아래 통째 보강이 한 덩어리로 합친다).
+  // 키워드 5 + 의미 5 상한은 그 뒤에 그대로 둔다(지목 조문이 그 칸을 먹지 않게).
   const have = new Set(chunks.map((c) => c.id));
-  const extra = lawHits.filter((h) => !have.has(h.id));
+  const namedHits = named.filter((c) => !have.has(c.id)).map((c) => ({ id: c.id, doc_name: c.doc_name, article_no: c.article_no, content: c.content, chunk_index: c.chunk_index, _hits: 0 }) as LawHit);
+  namedHits.forEach((h) => have.add(h.id));
+  const extra = namedHits.concat(lawHits.filter((h) => !have.has(h.id)));
   // 의미검색분을 뒤에 잇는다. 필터는 /law의 semExtra와 같게 유지 — **조문만**(별표·부칙·서식은
   // 이미 위 RAG가 훑는 대상이고, 별표는 통째로 길어 컨텍스트를 잡아먹는다), 파일 문서 제외.
   const seenArt = new Set(extra.map((h) => h.doc_name + '|' + (h.article_no || '')));
   extra.forEach((h) => have.add(h.id));
   for (const c of lawSem) {
-    if (extra.length >= 10) break;                        // 키워드 5 + 의미 5 상한
+    if (extra.length >= 10 + namedHits.length) break;     // 키워드 5 + 의미 5 상한(지목 조문은 별도)
     const key = c.doc_name + '|' + (c.article_no || '');
     if (!/^\d+조/.test(c.article_no || '')) continue;      // 조문만
     if (have.has(c.id) || seenArt.has(key)) continue;      // RAG·키워드분과 중복 제거

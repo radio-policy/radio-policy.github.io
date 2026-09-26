@@ -461,6 +461,14 @@ async function fetchArticleChunks(docName, key) {
     .like('article_no', key + '%').order('chunk_index', { ascending: true }).limit(40);
   return r.data || [];
 }
+// 번호로 지목한 조문(#245)의 이름 맞추기 재료 — 그 번호의 조문을 가진 현행 문서(조문 제목은 'N조(제목)', #92). rag.ts와 동일 조건
+async function fetchArticleKeyRows(key) {
+  if (!sb) return [];
+  var r = await sb.from('document_chunks').select('doc_name, article_no')
+    .eq('status', 'current').eq('is_approved', true)
+    .like('article_no', key + '%').order('id', { ascending: true }).limit(1000);
+  return r.data || [];
+}
 // 역참조 발췌(#155-보론4)에 쓰는 조회 — rag.ts fetchCitingChunks와 동일 조건
 var CITING_OPTS = RagCore.CITING_OPTS;
 async function fetchCitingChunks(docName, key) {
@@ -2199,6 +2207,12 @@ async function buildAdvisoryContext(userText) {
         .then(function(r) { return r.data || []; });
     })
     .catch(function(e) { console.warn('조문 의미검색 실패(건너뜀):', e); return []; });
+  // 번호로 지목한 조문 직접 인출(#245) — 「전파법 제16조」를 이름과 번호로 바로 가져온다(검색 순위와 무관). 규칙은 rag_core.js.
+  // search_meta에는 질문에 조 언급이 있을 때만 남긴다(rows 0 = 이름을 못 맞췄거나 그 조문이 KB에 없음). rag.ts와 동일 유지.
+  var namedT0 = performance.now(), namedRefs = RagCore.namedArticleRefs(userText).length;
+  const namedP      = RagCore.fetchNamedArticles(userText, fetchArticleKeyRows, fetchArticleChunks)
+    .then(function(rows) { if (namedRefs) metaNote('named_articles', namedT0, { data: rows }); return rows; })
+    .catch(function(e) { console.warn('지목 조문 조회 실패(건너뜀):', e); metaNote('named_articles', namedT0, { error: { message: String(e && e.message || e) } }); return []; });
   // 법령 관계도: 기존 주제명 목록(주제명 분열 방지용) — 실패해도 자문은 정상 진행
   const lawTopicsP  = sb
     ? sb.from('law_graph_nodes').select('name').eq('node_type', 'topic').limit(120)
@@ -2223,13 +2237,17 @@ async function buildAdvisoryContext(userText) {
   // 안 들어온 것을 덧붙인다. RAG는 논문·보도자료도 섞여 정작 근거 조문을 놓치는 일이 있다.
   var lawHits = await lawArtP;
   var haveIds = new Set(ragChunks.map(function(c) { return c.id; }));
-  var lawExtra = lawHits.filter(function(h) { return !haveIds.has(h.id); });
+  // 번호로 지목한 조문(#245)을 맨 앞에 — RAG에 이미 든 조각은 빼고(같은 조의 나머지 조각은 아래 통째 보강이 한 덩어리로 합친다).
+  // 키워드 5 + 의미 5 상한은 그 뒤에 그대로 둔다(지목 조문이 그 칸을 먹지 않게). rag.ts와 동일 유지.
+  var namedHits = (await namedP).filter(function(c) { return !haveIds.has(c.id); });
+  namedHits.forEach(function(c) { haveIds.add(c.id); });
+  var lawExtra = namedHits.concat(lawHits.filter(function(h) { return !haveIds.has(h.id); }));
   // 의미검색분을 뒤에 잇는다. 필터는 /law의 semExtra와 같게 유지 — **조문만**(별표·부칙·서식은
   // 이미 위 RAG가 훑는 대상이고, 별표는 통째로 길어 컨텍스트를 잡아먹는다), 파일 문서 제외.
   var lawSem = await lawSemP;
   var seenArt = new Set(lawExtra.map(function(h) { return h.doc_name + '|' + (h.article_no || ''); }));
   lawExtra.forEach(function(h) { haveIds.add(h.id); });
-  for (var li = 0; li < lawSem.length && lawExtra.length < 10; li++) {   // 키워드 5 + 의미 5 상한
+  for (var li = 0; li < lawSem.length && lawExtra.length < 10 + namedHits.length; li++) {   // 키워드 5 + 의미 5 상한(지목 조문은 별도)
     var lc = lawSem[li];
     var lkey = lc.doc_name + '|' + (lc.article_no || '');
     if (!/^\d+조/.test(lc.article_no || '')) continue;

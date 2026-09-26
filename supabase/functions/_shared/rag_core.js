@@ -320,6 +320,92 @@
     return Array.from(byArticle.values()).slice(0, limit || 5);
   }
 
+  // ── 번호로 지목한 조문 직접 인출 (#245, 2026-09-27) ─────────────────────────
+  // 「전파법 제16조」처럼 법령명과 조 번호를 적은 질문이 그 조문을 못 가져왔다(#244 곁가지 — 확장어 있음·없음 두 조건 모두).
+  // DB 조문 제목은 '16조(재할당)'처럼 '제'가 없어(#92) 키워드 '제16조'가 목표 조문 제목에 걸리지 않고, 다른 법령 별표의
+  // '별표 3 (제16조 관련)'에 걸려 정밀검색 5칸을 별표가 차지했다. 본문 검색에서는 「전파법」 제16조를 **인용하는** 다른 문서가
+  // '전파법'·'제16조'를 둘 다 담아 이긴다 — 조문 자신은 본문에 제 법령 이름을 쓰지 않는다. 점수를 고쳐 이기게 하는 대신
+  // 봇 /law 조문 즉답처럼 이름과 번호로 직접 가져온다. 법령명 읽기(lawNameBefore)·동법/시행령 이어받기·이름 맞추기(lawScope)는
+  // 인용 검증기(cite_verify.js, #240)와 같은 함수를 쓴다 — 질문 속 인용과 답변 속 인용을 같은 규칙으로 읽는다.
+  // 법령 이름이 앞에 전혀 없는 '제16조'는 고르지 않는다(현행 문서 130여 개에 16조가 있다).
+  const NAMED_ARTICLE_MAX = 4;
+  // '제'는 생략 가능('전기통신사업법 37조'). 금액('3조 원'·'2조5천억')은 뒤 낱말로 거른다 — 앞에 법령명이 없으면 어차피 버린다.
+  const NAMED_ART_RE = /(?:제\s?)?(\d+)\s?조(?:\s?의\s?(\d+))?(?!\s?(?:\d+\s?(?:천|백|억|만)|원|억|천|만|달러))/g;
+  // 질문에서 조 언급을 등장 순서대로 — {key:'16조'|'16조의2', info: 바로 앞 법령명(lawNameBefore), ctx: 앞서 이름이 나온 법령}.
+  // 법령명도 앞선 법령도 없는 언급은 뺀다. CiteVerify가 없는 환경(사내 콘솔 등)에서는 빈 배열.
+  function namedArticleRefs(query) {
+    const CV = root.CiteVerify;
+    if (!CV) return [];
+    const s = String(query || '');
+    const refs = [];
+    let lastNamed = null, m;
+    NAMED_ART_RE.lastIndex = 0;
+    while ((m = NAMED_ART_RE.exec(s))) {
+      const info = CV.lawNameBefore(s.slice(0, m.index));
+      if (info || lastNamed) refs.push({ key: m[1] + '조' + (m[2] ? '의' + m[2] : ''), info: info, ctx: lastNamed });
+      if (info && info.candidates) lastNamed = info;
+    }
+    return refs;
+  }
+  // 언급마다 문서 하나를 고른다. rowsByKey = {key: [{doc_name, article_no}]} — 그 번호의 조문을 가진 현행 문서(호출측 조회).
+  // 이름 맞추기 대상(문서군)은 '요청한 번호의 조문을 가진 문서'로 한정한다 — 조문이 없는 법령에 붙을 일이 없다.
+  // '시행령 제18조'·'동법 제17조'는 앞서 이름이 나온 법령이 있을 때만(없으면 아무 시행령에나 붙는다).
+  function pickNamedArticles(refs, rowsByKey) {
+    const CV = root.CiteVerify;
+    if (!CV) return [];
+    const famsOf = {}, docOf = {}, all = [];
+    Object.keys(rowsByKey || {}).forEach(function (key) {
+      const fams = famsOf[key] = [];
+      (rowsByKey[key] || []).forEach(function (r) {
+        if (!r || FILE_DOC_RE.test(r.doc_name || '') || CV.articleKey(r.article_no) !== key) return;
+        const f = CV.docFamily(r.doc_name);
+        if (!f) return;
+        if (fams.indexOf(f) === -1) fams.push(f);
+        if (all.indexOf(f) === -1) all.push(f);
+        if (!docOf[f] || r.doc_name > docOf[f]) docOf[f] = r.doc_name;   // 같은 이름이 여럿이면 문서명 끝 시행일이 늦은 쪽
+      });
+    });
+    const out = [], seen = {};
+    (refs || []).forEach(function (ref) {
+      if (out.length >= NAMED_ARTICLE_MAX || !famsOf[ref.key] || !famsOf[ref.key].length) return;
+      if (!ref.info && !ref.ctx) return;
+      if (ref.info && (ref.info.subord || ref.info.inherit) && !(ref.ctx && ref.ctx.candidates)) return;
+      const scope = CV.lawScope(ref.info, ref.ctx, all);
+      if (!scope) return;   // null = 법령 미상(어느 문서든) — 번호만으로는 고르지 않는다
+      const fam = scope.find(function (f) { return famsOf[ref.key].indexOf(f) !== -1; });
+      if (!fam) return;
+      const k = docOf[fam] + '|' + ref.key;
+      if (seen[k]) return;
+      seen[k] = 1;
+      out.push({ doc_name: docOf[fam], key: ref.key });
+    });
+    return out;
+  }
+  // 조회까지 — fetchKeyRows(key) → [{doc_name, article_no}], fetchArticle(doc_name, key) → 그 조의 조각들(expandArticles와 같은 함수).
+  // 반환: 고른 조문마다 **첫 조각 하나**(조문 머리 '제16조(재할당) ①…'), 질문의 언급 순. 나머지 조각은 호출측의 통째 보강
+  // (CiteVerify.expandArticles)이 이 조각에 합친다 — 조각을 전부 넣으면 보강이 '이미 다 있다'며 건너뛰어 한 조문이 여러 칸으로
+  // 갈라진다(첫 A/B 실측: [조문 1]·[조문 2]가 같은 제16조). 조회 실패는 빈 배열(검색은 그대로 진행).
+  async function fetchNamedArticles(query, fetchKeyRows, fetchArticle) {
+    const CV = root.CiteVerify;
+    const refs = namedArticleRefs(query);
+    if (!CV || !refs.length) return [];
+    const keys = [];
+    refs.forEach(function (r) { if (keys.indexOf(r.key) === -1 && keys.length < NAMED_ARTICLE_MAX) keys.push(r.key); });
+    const soft = function (fn) { return Promise.resolve().then(fn).then(function (r) { return r || []; }, function () { return []; }); };
+    const rows = await Promise.all(keys.map(function (k) { return soft(function () { return fetchKeyRows(k); }); }));
+    const rowsByKey = {};
+    keys.forEach(function (k, i) { rowsByKey[k] = rows[i]; });
+    const picks = pickNamedArticles(refs, rowsByKey);
+    const got = await Promise.all(picks.map(function (p) { return soft(function () { return fetchArticle(p.doc_name, p.key); }); }));
+    const out = [];
+    picks.forEach(function (p, i) {
+      const rows = got[i].filter(function (r) { return r && r.doc_name === p.doc_name && CV.articleKey(r.article_no) === p.key; })
+        .sort(function (a, b) { return (a.chunk_index || 0) - (b.chunk_index || 0); });
+      if (rows.length) out.push(Object.assign({}, rows[0], { _named: true }));
+    });
+    return out;
+  }
+
   // ── 프롬프트 컨텍스트 문구 ─────────────────────────────────────────────
   // 조문 참조 블록. 2026-09-25 통일(운영자 결정): 대시보드가 6월부터 붙이던 "(시맨틱: NN%)" 점수 표기는 뺀다 —
   // 참조 순서 자체가 융합 점수순이고, 점수는 trgm·시맨틱으로 잡힌 조각에만 붙어 키워드로 잡힌 조각이 약해 보이는 편향이 있었다.
@@ -366,6 +452,8 @@
     ASM_RARE_MAX: ASM_RARE_MAX,
     RRF_K: RRF_K, articleBonus: articleBonus, rankChunks: rankChunks,
     titleActWeights: titleActWeights, rankLawHits: rankLawHits,
+    NAMED_ARTICLE_MAX: NAMED_ARTICLE_MAX, namedArticleRefs: namedArticleRefs, pickNamedArticles: pickNamedArticles,
+    fetchNamedArticles: fetchNamedArticles,
     buildRagContext: buildRagContext, buildKbContext: buildKbContext,
   };
   root.RagCore = RagCore;
