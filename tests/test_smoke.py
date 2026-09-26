@@ -211,6 +211,37 @@ class TestExcludeKeywordsFallbackOnly(unittest.TestCase):
         self.assertEqual(passed, [])
 
 
+class TestIssuemapOriginMarker(unittest.TestCase):
+    """#236 이슈맵 보강 옛 기사 표시(news_feed.origin='issuemap') — 넣는 곳은 표시를 채우고, created_at으로
+    '새 기사'를 고르는 곳은 표시된 기사를 뺀다. 코드 문자열 검사(네트워크 0 — term_extract는 import 시 키를 요구)."""
+
+    def _src(self, rel):
+        with open(os.path.join(_ROOT, rel), encoding='utf-8') as f:
+            return f.read()
+
+    def test_insert_path_sets_origin_and_recent_guard(self):
+        src = self._src('supabase/functions/news-archive-search/index.ts')
+        self.assertIn("origin: 'issuemap'", src)
+        self.assertIn('c.date > recentCut', src)       # 최근 3일 기사는 넣지 않는다(크롤러 몫)
+
+    def test_created_at_consumers_exclude_marker(self):
+        import inspect
+        import crawler
+        self.assertIn(".is_('origin', 'null')", inspect.getsource(crawler.suppress_repeat_alerts))
+        self.assertIn(".is_('origin', 'null')", self._src('term_extract.py'))
+        self.assertIn(".is_('origin', 'null')", self._src('tools_urgency_rules_backfill.py'))
+        tw = self._src('supabase/functions/telegram-webhook/index.ts')
+        i = tw.index('async function sendMoreNews')
+        self.assertIn(".is('origin', null)", tw[i:i + 2500])
+        hw = self._src('health_watchdog.py')
+        self.assertIn('select=created_at&origin=is.null', hw)      # 수집 점검
+        self.assertIn('UNMARKED_OLD_MIN', hw)                       # 표시 없는 옛 기사 유입 감시
+        self.assertIn("sb.from('news_feed').select('created_at').is('origin', null)", self._src('app.js'))
+        fn = self._src('docs/db_baseline/20_functions.sql')
+        j = fn.index('FUNCTION public.check_news_health()')
+        self.assertIn('FROM news_feed WHERE origin IS NULL', fn[j:j + 1500])
+
+
 class TestNotifySplit(unittest.TestCase):
     """⑤ notify 분할 로직 — 4096 초과 텍스트의 조각 수·무손실 + env 미설정 False"""
 

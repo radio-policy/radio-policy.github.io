@@ -759,6 +759,8 @@ async function sendMoreNews(cbId: string, chatId: number, fromMs: number, toMs: 
       .gt('created_at', new Date(fromMs).toISOString())
       .lte('created_at', new Date(toMs).toISOString())
       .eq('urgency', '보통')
+      // 이슈맵 보강 기사(origin='issuemap')는 created_at이 넣은 시각이라 빼야 옛 기사가 '더 보기'에 안 나온다(#236)
+      .is('origin', null)
       // 2차 정렬 키 필수 — published_at이 같은 행이 흔한데(같은 사건 동시 보도) 1차 키만
       // 두면 조회마다 순서가 흔들려 그룹 시드가 바뀌고 페이지 경계가 밀린다.
       .order('published_at', { ascending: false })

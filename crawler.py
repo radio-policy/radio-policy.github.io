@@ -1788,8 +1788,9 @@ def suppress_repeat_alerts(urgent_items: list) -> list:
         batch_urls = {i.get('url') for i in urgent_items}
         cutoff_3d = (datetime.now(KST) - timedelta(days=3)).isoformat()
         prior, prior_at = [], {}
+        # origin is null — 이슈맵 보강 옛 기사(created_at = 넣은 시각)가 긴급이 되면 3일간 같은 사건의 새 알림을 막는다(#236)
         resp = sb.table('news_feed').select('title,url,created_at') \
-            .eq('urgency', '긴급').gte('created_at', cutoff_3d) \
+            .eq('urgency', '긴급').gte('created_at', cutoff_3d).is_('origin', 'null') \
             .order('created_at', desc=True).limit(1000).execute()
         for r in (resp.data or []):
             if r.get('url') not in batch_urls:

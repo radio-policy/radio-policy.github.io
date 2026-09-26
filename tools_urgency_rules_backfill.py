@@ -45,8 +45,9 @@ def fetch_news(sb, since_iso, until_iso, with_rule=True):
     cols = 'id,title,summary,urgency,importance,created_at' + (',urgency_rule' if with_rule else '')
     out, start = [], 0
     while True:
+        # origin is null — 이슈맵 보강 옛 기사는 소급 대상이 아니다(9/25 --apply가 35행을 참고→보통으로 올림, #236)
         q = sb.table('news_feed').select(cols) \
-            .gte('created_at', since_iso)
+            .gte('created_at', since_iso).is_('origin', 'null')
         if until_iso:
             q = q.lt('created_at', until_iso)
         rows = q.order('created_at').order('id').range(start, start + PAGE - 1).execute().data or []

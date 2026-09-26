@@ -91,7 +91,8 @@ crawl_running = (crawl_h is not None and crawl_h < 14)
 sb_headers = {"apikey": SUPABASE_KEY, "Authorization": "Bearer " + SUPABASE_KEY}
 try:
     rows = http_get_json(
-        SUPABASE_URL + "/rest/v1/news_feed?select=created_at&order=created_at.desc&limit=1",
+        # origin=is.null — 이슈맵 보강 옛 기사는 '마지막 입력'에서 뺀다(크롤러 고장을 가리지 않게, #236)
+        SUPABASE_URL + "/rest/v1/news_feed?select=created_at&origin=is.null&order=created_at.desc&limit=1",
         sb_headers,
     )
     if not rows:
@@ -246,6 +247,30 @@ if not any(p.startswith("⛔") for p in problems):
               % (day_cost[0], median, ", ".join("%s %d/%d" % (s.split(":")[1], h, t) for s, (h, t) in hit.items())))
     except Exception as e:
         problems.append("AI 비용 계측 확인 실패: %s" % e)
+
+# ── ③-4 표시 없는 옛 기사 유입 감시 (#236) ──
+# 이슈맵 보강은 옛 기사를 '지금' 넣으므로 news_feed.origin='issuemap' 표시가 없으면 created_at으로 새 기사를 고르는 곳
+# (용어 추출·구독자 '더 보기'·재알림 억제·수집 점검, 사내 알림·판정)이 옛 기사를 새 기사로 본다(9/24 144행 사고).
+# 표시는 넣는 코드가 채워야 해서 새 경로가 잊으면 조용히 재발한다 — 보강 삽입의 모양(읽음·잠금 상태로 들어옴 +
+# 발행 3일 넘은 기사)으로 잡는다. 정상 수집은 읽지 않음·잠금 없음으로 들어와 이 모양이 없다(최근 60일 0건, 09-26 실측).
+UNMARKED_OLD_MIN = 3   # 운영자가 늦게 모인 기사를 하루 안에 읽고 잠그는 드문 경우까지 경고하지 않게
+
+if not any(p.startswith("⛔") for p in problems):
+    try:
+        since24 = (NOW - datetime.timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        rows = http_get_json(
+            SUPABASE_URL + "/rest/v1/news_feed?select=title,created_at,published_at"
+            "&origin=is.null&is_read=is.true&locked=is.true&created_at=gte.%s&limit=1000" % since24, sb_headers)
+        unmarked = [r for r in rows if r.get("published_at")
+                    and hours_since(r["published_at"]) - hours_since(r["created_at"]) > 72]
+        if len(unmarked) >= UNMARKED_OLD_MIN:
+            problems.append("표시 없는 옛 기사 %d건이 읽음·잠금 상태로 들어옴(최근 24시간) — 이슈맵 보강 경로가 "
+                            "news_feed.origin='issuemap'을 안 채운 것으로 보임(#236). 예: %s"
+                            % (len(unmarked), (unmarked[0].get("title") or "")[:40]))
+        else:
+            print("[워치독] 표시 없는 옛 기사 유입 %d건 (정상)" % len(unmarked))
+    except Exception as e:
+        problems.append("표시 없는 옛 기사 감시 확인 실패: %s" % e)
 
 # ── ④ 결과 → 텔레그램(이상 있을 때만, 정상이면 무음) ──
 if problems:

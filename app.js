@@ -6688,7 +6688,8 @@ async function loadOpsStatus() {
     var kstHour = kstNow.getUTCHours();
 
     var r = await Promise.all([
-      sb.from('news_feed').select('created_at').order('created_at', { ascending: false }).limit(1),
+      // origin is null — 이슈맵 보강 옛 기사는 '뉴스 마지막 입력'에서 뺀다(크롤러 고장을 가리지 않게, #236)
+      sb.from('news_feed').select('created_at').is('origin', null).order('created_at', { ascending: false }).limit(1),
       sb.from('system_health').select('key,updated_at,note'),
       sb.from('daily_briefings').select('briefing_date,created_at').order('created_at', { ascending: false }).limit(1),
       sb.from('law_amendments').select('created_at').eq('law_type', 'lsAnc').order('created_at', { ascending: false }).limit(1),

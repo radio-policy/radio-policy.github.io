@@ -52,8 +52,10 @@ ai = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
 def fetch_recent_news() -> str:
     cutoff = (datetime.now(timezone.utc) - timedelta(days=NEWS_DAYS)).strftime('%Y-%m-%d')
+    # origin is null — 이슈맵 보강 기사(옛 기사를 지금 넣음)는 빼야 한다: 9/25 입력 30건 중 22건이 그것이라
+    # 2023년 기사에서 용어가 나왔다(#236)
     rows = (sb.table('news_feed').select('title,source,published_at')
-            .gte('created_at', cutoff)
+            .gte('created_at', cutoff).is_('origin', 'null')
             .order('created_at', desc=True).limit(NEWS_LIMIT).execute().data) or []
     return '\n'.join('[%s] %s (%s)' % ((r.get('published_at') or '')[:10], r.get('title') or '', r.get('source') or '')
                      for r in rows)

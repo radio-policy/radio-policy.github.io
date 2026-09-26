@@ -427,7 +427,8 @@ DECLARE
   tok          text;
   msg          text;
 BEGIN
-  SELECT max(created_at) INTO last_news FROM news_feed;
+  -- 이슈맵 보강 기사(origin='issuemap', 옛 기사를 지금 넣음)는 '마지막 입력'에서 뺀다 — 크롤러 고장을 가리지 않게(#236)
+  SELECT max(created_at) INTO last_news FROM news_feed WHERE origin IS NULL;
   hours_stale := EXTRACT(EPOCH FROM (now() - coalesce(last_news, 'epoch')))/3600;
 
   -- 크롤러 heartbeat: 최근 3시간 내 실행 기록이 있으면 '크롤러 정상'으로 간주

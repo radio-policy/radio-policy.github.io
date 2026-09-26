@@ -561,6 +561,7 @@ create table if not exists public.news_feed (
   impact_analyzed_at timestamp with time zone,
   urgency_screen text,
   urgency_rule text,
+  origin text,
   constraint news_feed_pkey PRIMARY KEY (id)
 );
 alter table public.news_feed enable row level security;

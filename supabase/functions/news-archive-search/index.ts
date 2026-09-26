@@ -240,6 +240,12 @@ Deno.serve(async (req) => {
   const excluded = cands.filter((_, i) => !keepIdx.has(i)).map((c) => ({ title: c.title, url: c.url, date: c.date }));
 
   // ── ⑤ 저장 + 이슈 연결 + 잠금 ──
+  // 새로 넣는 행은 origin='issuemap'(#236) — created_at이 넣은 시각이라 표시가 없으면 용어 추출·'더 보기'·재알림 억제·
+  // 수집 점검이 옛 기사를 새 기사로 본다. 발행일 없는 기사·최근 3일 기사는 넣지 않는다(세션 도구 ihelp.link_news와
+  // 같은 규칙) — 최근 기사는 크롤러가 정식으로 모아 긴급 판정·알림·본문 수집을 받아야 하는데, 먼저 넣으면 크롤러가
+  // url 중복으로 건너뛴다. 이미 있는 행(크롤러가 모은 기사)은 날짜와 무관하게 연결만 한다.
+  const recentCut = new Date(Date.now() - 3 * 86400000).toISOString().slice(0, 10);
+  let skippedRecent = 0;
   const linkedOut: { title: string; url: string; date: string | null }[] = [];
   for (const c of picked) {
     try {
@@ -247,10 +253,11 @@ Deno.serve(async (req) => {
       const { data: exist } = await sb.from('news_feed').select('id').eq('url', c.url).maybeSingle();
       let newsId = exist?.id as string | undefined;
       if (!newsId) {
+        if (!c.date || c.date > recentCut) { skippedRecent++; continue; }
         const { data: ins, error: insErr } = await sb.from('news_feed').insert({
           title: c.title, source: c.source, category: '기타', url: c.url,
-          published_at: c.date ? `${c.date}T00:00:00Z` : null,
-          summary: c.desc || null, locked: true, is_read: true,
+          published_at: `${c.date}T00:00:00Z`,
+          summary: c.desc || null, locked: true, is_read: true, origin: 'issuemap',
         }).select('id').single();
         if (insErr) continue;
         newsId = ins.id;
@@ -271,6 +278,6 @@ Deno.serve(async (req) => {
 
   return new Response(JSON.stringify({
     ok: true, scanned: found.length, candidates: cands.length,
-    linked: linkedOut, excluded: excluded.slice(0, 60),
+    linked: linkedOut, excluded: excluded.slice(0, 60), skipped_recent: skippedRecent,
   }), { headers: { ...cors, 'content-type': 'application/json' } });
 });
