@@ -8139,3 +8139,20 @@ note를 함께 읽어 `aborted=`가 있으면 날짜 대신 'aborted'를 돌려 
 범위 밖: 같은 날 law_crawler 31분도 같은 원인(요청마다 대기)이나 체인 한도 안이라 손대지 않았다. guard의 GitHub 실행 목록 질의가 `?status=success&event=…&created=…`
 (#225가 금지한 '걸러 묻기')인 것은 색인이 늦으면 0건 → 예비 실행이 도는 **안전한 쪽**으로만 틀려 그대로 두었다.
 사내판: 불필요 — 법령 감시는 외부판 Actions 체인에서만 돈다(사내는 KB 스냅샷을 받는다).
+
+
+**#239 (2026-09-26) 사내 반입이 지운 기사 목록(deleted_news)을 자동으로 따라간다 — 외부판 규칙 정리 + `deleted_news.news_id` 칸 (사내판 인계, 운영자 결정 '권고대로' ①~④).**
+배경: #236 보론에서 "운영자 결정으로 news_feed 행을 지우면 사내에 인계로 알린다"고 적었다 — 사내 반입이 deleted_news를 읽지 않아서였다. 사내가 09-26 19시에
+반입 스크립트(export_news.py, lampmanH-pc 10분)를 바꿔, 매 회차 deleted_news의 새 행(id가 지난번보다 큰 것)만 읽어 사내 사본의 같은 기사를 지운다(과거 329행은 출발점만 잡고
+따라가지 않음). 같은 기사 = url 일치(url이 비면 title) + 삭제 시각 전 60일 안에 생긴 행 + 외부 news_feed에 그 id가 지금 없음. 마지막 조건은 url만으로 지운 행을 특정할 수 없어서다
+(08-03 01:24 일괄 삭제 기록과 url이 같은 행이 news_feed에 여러 건 살아 있음 — 같은 url 행이 둘이었거나, `deleteNewsItem`이 deleted_news를 먼저 쓰고 news_feed 삭제가 실패한 경우).
+사내 부탁 4건과 조치:
+① 지침 문구 — '대시보드 삭제는 사내가 자동 추종, 세션 SQL·도구로 지울 때는 deleted_news에 (url, title, news_id)를 기록하거나 사내에 인계'로 좁혔다(#236 항목의 해당 문장은 #239를 가리키게).
+② 60일 자동 정리 세 경로는 deleted_news에 기록하지 않는다 — 실측으로 세 경로 확인: pg_cron `news-feed-cleanup`(15:00 UTC, `created_at < now()-60일 and locked=false`),
+`refetch_content.py` 일괄 정리(128행~)·개별 발행일 정리(236행~). 사내는 오래된 기사를 자기 기준으로 보관하므로 여기서 기록하면 사내 사본이 매일 대량으로 지워진다. 바꿀 땐 사내에 먼저.
+③ 사내는 한 회차 새 기록이 50행을 넘으면 지우지 않고 멈춘다(사람이 확인하고 푼다) — 50행 넘는 일괄 삭제(8/3 같은 대정리)는 미리 알린다. 오늘 판촉 11건 삭제(#235 보론)는 그 아래.
+④ `deleted_news.news_id uuid`(nullable, 외래키 없음 — news_feed 행은 곧바로 지워진다) 추가(마이그레이션 `deleted_news_news_id_239`), `deleteNewsItem`이 `news_id: n.id`를 함께 적는다.
+같은 줄의 insert 결과 `error`도 이제 콘솔에 남긴다(#226 — 종전엔 throw만 잡아 RLS·칸 오류가 조용히 묻혔다; 삭제 흐름은 그대로). app.js?v=20260926j. 표 단위 권한이라 새 칸에 GRANT 변경 없음.
+검증: 실DB 칸 확인, 로컬 미리보기에서 새 app.js 로드·콘솔 오류 0·`deleteNewsItem` 본문에 news_id·error 확인, 공개 키로 `select id,news_id` 성공(이전 행 null), 스모크 `test_dashboard_delete_records_news_id`(182 OK),
+DB 설계도 재생성. 실제 삭제 시험은 하지 않았다(운영 기사를 지워야 함) — 다음 대시보드 삭제 때 deleted_news 새 행에 news_id가 차는지 조회로 확인.
+사내판: 필요 — 사내 반입이 news_id가 있으면 그것으로 맞추도록 바꾸고(사내 부탁 ④의 후속), 사내 콘솔 `ported.js` 삭제 버튼(1315행)도 같은 칸을 적게(인계문은 운영자가 맥북 세션에 전달).

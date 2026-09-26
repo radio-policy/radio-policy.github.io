@@ -3998,8 +3998,12 @@ async function deleteNewsItem(newsId) {
   if (n.locked) msg += '\n\n⚠️ 잠금된 기사입니다. 삭제하면 AI 자문에서도 더 이상 참조되지 않습니다.';
   if (!confirm(msg)) return;
   try {
-    // 재수집 방지: 크롤러가 같은 URL·제목을 다시 저장하지 않도록 블록리스트 기록
-    try { await sb.from('deleted_news').insert({ url: n.url || null, title: n.title || null }); } catch(e2) { console.warn('deleted_news 기록 실패(같은 기사 재수집될 수 있음):', e2); }
+    // 재수집 방지: 크롤러가 같은 URL·제목을 다시 저장하지 않도록 블록리스트 기록.
+    // news_id(#239)는 사내 반입이 이 기록으로 사내 사본의 같은 기사를 지울 때 url 대신 정확히 맞추는 열쇠다.
+    try {
+      var dn = await sb.from('deleted_news').insert({ url: n.url || null, title: n.title || null, news_id: n.id || null });
+      if (dn.error) console.warn('deleted_news 기록 실패(같은 기사 재수집될 수 있음):', dn.error);
+    } catch(e2) { console.warn('deleted_news 기록 실패(같은 기사 재수집될 수 있음):', e2); }
     var resp = await sb.from('news_feed').delete().eq('id', newsId);
     if (resp.error) throw resp.error;
     newsDataCache = newsDataCache.filter(function(x) { return String(x.id) !== String(newsId); });

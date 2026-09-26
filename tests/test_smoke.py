@@ -288,6 +288,13 @@ class TestIssuemapOriginMarker(unittest.TestCase):
         self.assertIn("origin: 'issuemap'", src)
         self.assertIn('c.date > recentCut', src)       # 최근 3일 기사는 넣지 않는다(크롤러 몫)
 
+    def test_dashboard_delete_records_news_id(self):
+        """#239: 대시보드 삭제가 지운 기사 목록에 기사 id도 적는다 — 사내 반입이 url 대신 id로 사내 사본을 지운다."""
+        src = self._src('app.js')
+        i = src.index('async function deleteNewsItem')
+        body = src[i:i + 1500]
+        self.assertIn("from('deleted_news').insert({ url: n.url || null, title: n.title || null, news_id: n.id || null })", body)
+
     def test_deleted_list_is_paged(self):
         """#237: 지운 기사 목록을 페이지 없이 한 번에 받으면 1,000행에서 잘려 지운 기사가 이슈로 되살아난다."""
         src = self._src('supabase/functions/news-archive-search/index.ts')

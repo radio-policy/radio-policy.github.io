@@ -195,6 +195,7 @@ create table if not exists public.deleted_news (
   url text,
   title text,
   deleted_at timestamp with time zone default now() not null,
+  news_id uuid,
   constraint deleted_news_pkey PRIMARY KEY (id)
 );
 alter table public.deleted_news enable row level security;
