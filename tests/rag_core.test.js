@@ -147,6 +147,14 @@ eq('titleActWeights', RC.titleActWeights(['종료', '휴업', '직접', '3G'], '
   eq('namedArticleRefs 조의N·낫표·항호', refs('「전기통신사업법」 제32조의14제1항제2호'), [['32조의14', '전기통신사업법', null]]);
   eq('namedArticleRefs 이름 없는 번호는 뺌', refs('제16조가 뭐야'), []);
   eq('namedArticleRefs 금액(조 원·조N천억)은 뺌', refs('할당대가 3조 원 규모인데 2조5천억은 전파법 제11조 기준인가'), [['11조', '전파법', null]]);
+  // #246-보론(2026-09-27 사내 회신): '제'가 붙은 번호는 금액 거르기를 안 한다 — 종전엔 아래가 모두 빈 배열이었다
+  eq('namedArticleRefs 제N조 원문(원≠금액)', refs('전파법 제16조 원문 보여줘'), [['16조', '전파법', null]]);
+  eq('namedArticleRefs 제N조 원칙·원인', refs('전파법 제3조 원칙과 전기통신사업법 제50조 원인'), [['3조', '전파법', null], ['50조', '전기통신사업법', '전파법']]);
+  eq('namedArticleRefs 제N조만(조사 만)', refs('전파법 제16조만 보면'), [['16조', '전파법', null]]);
+  eq('namedArticleRefs 제N조 뒤 금액', refs('전파법 제16조 3천억 원'), [['16조', '전파법', null]]);
+  eq('namedArticleRefs 제 없는 N조 원문', refs('전기통신사업법 37조 원문'), [['37조', '전기통신사업법', null]]);
+  eq('namedArticleRefs 제 없는 N조 원을(금액)은 뺌', refs('전파법 제16조에 따라 대가 3조 원을 냈다'), [['16조', '전파법', null]]);
+  eq('namedArticleRefs 제 없는 N조만(금액과 못 가름)은 뺌', refs('전기통신사업법 37조만 보면'), []);
   eq('namedArticleRefs 나열·동법 이어받기', refs('전파법 제16조, 제17조 및 동법 시행령 제18조'),
     [['16조', '전파법', null], ['17조', null, '전파법'], ['18조', 'subord:시행령', '전파법']]);
   eq('namedArticleRefs 16조 1항(뒤 숫자가 항)', refs('전파법 16조 1항'), [['16조', '전파법', null]]);

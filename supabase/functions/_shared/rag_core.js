@@ -330,7 +330,10 @@
   // 법령 이름이 앞에 전혀 없는 '제16조'는 고르지 않는다(현행 문서 130여 개에 16조가 있다).
   const NAMED_ARTICLE_MAX = 4;
   // '제'는 생략 가능('전기통신사업법 37조'). 금액('3조 원'·'2조5천억')은 뒤 낱말로 거른다 — 앞에 법령명이 없으면 어차피 버린다.
-  const NAMED_ART_RE = /(?:제\s?)?(\d+)\s?조(?:\s?의\s?(\d+))?(?!\s?(?:\d+\s?(?:천|백|억|만)|원|억|천|만|달러))/g;
+  // 금액 거르기는 '제'가 **없는** 번호에만 건다(#246-보론, 2026-09-27 사내 회신): 금액에는 '제'가 붙지 않는데, 종전에는 '제'가 있어도
+  // 뒤의 '원'·'만'을 금액으로 봐서 「전파법 제16조 원문 보여줘」「제3조 원칙」「제50조 원인」「제16조만 보면」이 빈 배열이었다.
+  // '제' 없는 번호도 원문·원칙·원인·원래·원본·원안은 금액이 아니다. '제' 없는 'N조만'은 금액('3조만 투자')과 못 가르므로 그대로 뺀다.
+  const NAMED_ART_RE = /제\s?(\d+)\s?조(?:\s?의\s?(\d+))?|(\d+)\s?조(?:\s?의\s?(\d+))?(?!\s?(?:\d+\s?(?:천|백|억|만)|원(?![문칙인래본안])|억|천|만|달러))/g;
   // 질문에서 조 언급을 등장 순서대로 — {key:'16조'|'16조의2', info: 바로 앞 법령명(lawNameBefore), ctx: 앞서 이름이 나온 법령}.
   // 법령명도 앞선 법령도 없는 언급은 뺀다. CiteVerify가 없는 환경(사내 콘솔 등)에서는 빈 배열.
   function namedArticleRefs(query) {
@@ -342,7 +345,8 @@
     NAMED_ART_RE.lastIndex = 0;
     while ((m = NAMED_ART_RE.exec(s))) {
       const info = CV.lawNameBefore(s.slice(0, m.index));
-      if (info || lastNamed) refs.push({ key: m[1] + '조' + (m[2] ? '의' + m[2] : ''), info: info, ctx: lastNamed });
+      const no = m[1] || m[3], sub = m[2] || m[4];   // 앞 둘 = '제'가 붙은 꼴, 뒤 둘 = '제' 없는 꼴
+      if (info || lastNamed) refs.push({ key: no + '조' + (sub ? '의' + sub : ''), info: info, ctx: lastNamed });
       if (info && info.candidates) lastNamed = info;
     }
     return refs;

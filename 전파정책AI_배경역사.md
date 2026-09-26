@@ -8486,3 +8486,15 @@ index.html `app.js?v=20260927a`·`rag_core.js?v=20260927a`, `tests/rag_core.test
 반영: `rag.ts`(`buildLawQueryContext`·`answerLawQuery`·`NAMED_LAW_CHARS`·`LawHit._named/_ids`), `telegram-webhook/index.ts`(`ARTICLE_LOOSE_RE`·`parseArticleRef`·`handleLawQuery`·`handleArticleLookup` 반환값), telegram-webhook 재배포.
 rag_core.js·cite_verify.js·app.js는 그대로(캐시 버스터 없음).
 사내판: 불필요 — 바뀐 곳은 봇 `/law` 전용 두 파일이고, 사내가 싣는 rag_core.js·cite_verify.js와 app.js 쪽 함수는 그대로다(09-27 사내 문의에 회신).
+
+**#246-보론 (2026-09-27) 번호로 지목한 조문 — '제N조' 뒤의 '원'·'만'을 금액으로 보던 결함 (사내 회신으로 발견, 운영자 결정 '지금 고쳐').**
+사내판이 #246을 1:1 이식하며 원문 대조로 찾았다: `NAMED_ART_RE`의 금액 거르기 `(?!\s?(?:…|원|억|천|만|달러))`가 '조' 뒤를 무조건 봐서
+「전파법 제16조 원문 보여줘」「전파법 제3조 원칙」「전기통신사업법 제50조 원인」「전파법 제16조 3천억 원」이 빈 배열이었다(「제16조의 원문」은 됨).
+외부 재현에서 「전파법 제16조**만** 보면」(조사 '만')도 같은 이유로 빠지는 것을 더 찾았다. 대시보드 자문·봇 /ask·/law 자연어 모드(#247) 셋 다 해당.
+수정: 금액에는 '제'가 붙지 않으므로 **'제'가 붙은 번호는 금액 거르기를 하지 않는다**(정규식을 '제' 있는 꼴 | '제' 없는 꼴 두 갈래로, 거르기는 뒤 갈래에만).
+'제' 없는 꼴도 원문·원칙·원인·원래·원본·원안은 금액이 아니다(`원(?![문칙인래본안])`). '제' 없는 'N조만'은 금액('3조만 투자')과 못 가르므로 그대로 뺀다.
+확인: `tests/rag_core.test.js` 104→111(위 사례 + '3조 원을'은 계속 금액·'37조만'은 계속 제외). 회귀 세트 20·사내 33·/law 대조 18, **71문항 전부 뽑히는 번호가 전후 동일** —
+이 정규식의 결과는 번호 목록 하나로만 이어지므로(fetchNamedArticles·search_meta 건수) 검색 결과도 동일해 Deno 하네스 A/B는 생략했다.
+반영: `rag_core.js` `NAMED_ART_RE`·`namedArticleRefs`(번호·의N을 두 갈래에서 읽음), index.html `rag_core.js?v=20260927b`, telegram-webhook 재배포. 사내판: 재이식(사내가 요청 — 알림).
+사내 회신의 관찰 2건(「단통법 제4조」가 과징금 부과 세부기준 고시 제4조로 맞춰짐 — 단통법은 폐지돼 현행 문서가 없고 약칭 대응이 고시로 샘 /
+'…세부사항 제9조'처럼 이름이 법령 꼬리로 안 끝나면 `lawNameBefore`가 못 읽음)은 인용 검증기와 공용인 이름 읽기 규칙이라 **Fable 재검토 #240·#246 묶음**으로 넘긴다.
