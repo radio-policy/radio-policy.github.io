@@ -8106,3 +8106,17 @@ Fable 재검토 포인트((Fable 5.1, 엑스트라)): 요약 벡터 문턱 0.40/
 검증: 표시 388행(9/24분 144·9/26분 3), 다른 origin 값 0, 표시 뒤 '마지막 입력' = 크롤러 행과 같음, `check_news_health` 정의에 조건 확인. 스모크 `TestIssuemapOriginMarker` 2건(넣는 곳 표시·3일 가드, 소비처 6곳·설계도의 함수 조건) → 전체 176 OK. DB 설계도 재생성(10_tables·20_functions·MANIFEST·migrations 1). Edge 재배포 news-archive-search·telegram-webhook.
 남은 것·관찰: ① 사내 — **09-26 18시 반영 완료(사내 회신)**: export_news.py COLS에 origin(urgency_rule과 같은 칸별 400 내성), 신규 판정·알림에서 'issuemap' 제외(72시간 가드는 늦게 모인 크롤러 행용으로 유지), 이미 반입된 행의 origin은 사내 하루 한 번 60일 비교(importance·urgency·urgency_rule + origin)가 다른 행을 다시 받아 9/27 00:05에 채움(드라이런으로 388행 확인), 판촉 11건은 사내 17:25 반입분을 id로 삭제(사내 알림 없음). 사내 요청: 운영자 결정으로 지운 기사는 인계로 알릴 것(사내 반입은 deleted_news를 안 읽음 — 읽게 바꾸는 것은 사내 다음 후보이고, 그때 '60일 자동 정리는 deleted_news에 남지 않는다'를 전제로 쓴다 → 전제가 바뀌면 알릴 것, 지침 반영). ② ihelp·news-archive-search가 deleted_news를 페이지 없이 읽는다(318행 — 1,000행 넘으면 지운 기사가 되살아남, 곁가지). ③ 해제 뒤 60일 정리로 사라지는 보강 행은 사내에 삭제가 전해지지 않는다 — 해제할 때 사내에 알리는 절차(사내 회신: '보정분을 지우거나 되돌릴 때는 따로 알려 달라'). Fable 재검토 포인트: 기존 행 표시식(388)의 경계, 워치독 모양 규칙(읽음·잠금·3일·3건), 소비처 목록이 빠짐없는지(created_at 전수 조사 기준), 3일 가드가 보강 품질에 주는 영향.
 사내판: 필요 — 위 ①(인계문은 운영자가 맥북 세션에 전달).
+
+
+**#237 (2026-09-26) 지운 기사 목록(`deleted_news`)을 페이지 없이 한 번에 받던 두 곳 — 이슈맵 과거 뉴스 보강(`news-archive-search`)·세션 도구 `ihelp.link_news`.**
+#236 조사 곁가지(대기 목록 7-0 ③). 둘 다 `select('url')` 한 번으로 목록을 받아 1,000행 상한(PostgREST max_rows)에 걸리는 구조였다.
+지금은 329행이라 빠진 것은 없지만, 넘는 순간 일부 삭제분이 오류 없이 빠지고 운영자가 지운 기사가 이슈에 다시 연결·영구 잠금(locked)된다.
+크롤러 쪽은 #233(유일 정렬 페이지)·#234(후보만 묻는 RPC)로 이미 막혀 있었다. 두 곳은 url을 정규화(www·utm·ref·끝 슬래시)한 뒤 대조하므로
+정확 일치 RPC `news_known_items`로는 바꿀 수 없어 **id 순 페이지 전량 조회**로 고쳤다: Edge는 `fetchDeletedUrls`(1,000행씩, 실패는 throw),
+ihelp는 `news_known.fetch_all_rows(sb, 'deleted_news', 'id,url')`. 동작 변경 하나 — **조회 실패 때 빈 목록으로 보강을 계속하던 것을 503으로 멈춘다**
+(#234 '빈 명단으로 진행 금지'와 같은 원칙). 승인 흐름은 막지 않는다: operator-webhook은 보강 응답을 기록만 하고 AI 보강(enrichIssue)을 이어 가며,
+대시보드 「과거 뉴스 보강」은 오류 문구를 띄운다.
+검증: deno check 통과(처음 쓴 `ReturnType<typeof createClient>`는 제네릭 불일치로 실패 → 다른 함수들처럼 `SupabaseClient`), 배포 v11(verify_jwt=true 유지),
+네이버·구글 모두 0건인 검색어로 실호출 → 200·`scanned:0`·이슈 연결 수 전후 동일(AI 0회·쓰기 0), pg_stat_statements에 새 질의 `select id,url … order by id` 확인,
+ihelp 실DB 329행 = 정규화 키 329개 = 종전 조회 329행. 스모크 `test_deleted_list_is_paged`(178 OK). 사내판 ported.js는 deleted_news에 쓰기만 해 해당 없음.
+사내판: 불필요 — 사내 반입·콘솔은 deleted_news를 읽지 않는다.

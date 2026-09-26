@@ -224,6 +224,12 @@ class TestIssuemapOriginMarker(unittest.TestCase):
         self.assertIn("origin: 'issuemap'", src)
         self.assertIn('c.date > recentCut', src)       # 최근 3일 기사는 넣지 않는다(크롤러 몫)
 
+    def test_deleted_list_is_paged(self):
+        """#237: 지운 기사 목록을 페이지 없이 한 번에 받으면 1,000행에서 잘려 지운 기사가 이슈로 되살아난다."""
+        src = self._src('supabase/functions/news-archive-search/index.ts')
+        self.assertIn(".from('deleted_news').select('id,url').order('id').range(", src)
+        self.assertNotIn(".from('deleted_news').select('url')", src)
+
     def test_created_at_consumers_exclude_marker(self):
         import inspect
         import crawler

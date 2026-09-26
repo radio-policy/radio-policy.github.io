@@ -20,7 +20,7 @@
 // ============================================================================
 
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
-import { createClient } from 'jsr:@supabase/supabase-js@2';
+import { createClient, type SupabaseClient } from 'jsr:@supabase/supabase-js@2';
 import { corsHeaders } from '../_shared/http.ts';
 
 const env = (k: string) => (Deno.env.get(k) || '').trim();
@@ -59,6 +59,22 @@ function urlKey(u: string): string {
 }
 
 type Cand = { title: string; url: string; date: string | null; source: string; desc: string };
+
+/** 운영자가 지운 기사(deleted_news)의 url 전부. PostgREST는 요청당 1,000행이라 id 순서 페이지로 받는다(#237) —
+ *  한 번에 select하면 1,000행을 넘는 순간 뒤쪽 삭제분이 오류 없이 빠져 지운 기사가 이슈로 되살아난다.
+ *  대조는 urlKey 정규화 뒤라 후보만 DB에 묻는 방식(news_known_items)은 못 쓴다. 조회 실패는 throw —
+ *  빈 목록으로 진행하면 결과가 같다(#234 원칙). */
+async function fetchDeletedUrls(sb: SupabaseClient): Promise<string[]> {
+  const out: string[] = [];
+  const step = 1000;
+  for (let from = 0; ; from += step) {
+    const { data, error } = await sb.from('deleted_news').select('id,url').order('id').range(from, from + step - 1);
+    if (error) throw new Error(error.message);
+    const rows = (data || []) as { url: string | null }[];
+    rows.forEach((r) => { if (r.url) out.push(r.url); });
+    if (rows.length < step) return out;
+  }
+}
 
 async function searchNaver(query: string, sort: 'sim' | 'date'): Promise<Cand[]> {
   if (!NAVER_ID || !NAVER_SECRET) return [];
@@ -172,12 +188,15 @@ Deno.serve(async (req) => {
   const found = (await Promise.all(jobs)).flat();
 
   // ── ③ 중복·기존·삭제분 제외 ──
-  const [{ data: linked }, { data: deleted }] = await Promise.all([
-    sb.from('issue_links').select('item_id').eq('issue_id', issueId).eq('item_type', 'news'),
-    sb.from('deleted_news').select('url'),
-  ]);
+  let deletedUrls: string[];
+  try {
+    deletedUrls = await fetchDeletedUrls(sb);
+  } catch (e) {
+    return errJson(503, `삭제 기사 목록을 읽지 못해 보강을 멈췄습니다(지운 기사가 되살아나지 않게). 잠시 뒤 다시 시도해 주세요. (${String((e as Error)?.message || e).slice(0, 120)})`, cors);
+  }
+  const { data: linked } = await sb.from('issue_links').select('item_id').eq('issue_id', issueId).eq('item_type', 'news');
   const linkedIds = new Set((linked || []).map((r: { item_id: string }) => r.item_id));
-  const deadKeys = new Set((deleted || []).map((r: { url: string }) => urlKey(r.url)));
+  const deadKeys = new Set(deletedUrls.map(urlKey));
 
   const { data: linkedRows } = linkedIds.size
     ? await sb.from('news_feed').select('id,url').in('id', [...linkedIds])
