@@ -8120,3 +8120,22 @@ ihelp는 `news_known.fetch_all_rows(sb, 'deleted_news', 'id,url')`. 동작 변�
 네이버·구글 모두 0건인 검색어로 실호출 → 200·`scanned:0`·이슈 연결 수 전후 동일(AI 0회·쓰기 0), pg_stat_statements에 새 질의 `select id,url … order by id` 확인,
 ihelp 실DB 329행 = 정규화 키 329개 = 종전 조회 329행. 스모크 `test_deleted_list_is_paged`(178 OK). 사내판 ported.js는 deleted_news에 쓰기만 해 해당 없음.
 사내판: 불필요 — 사내 반입·콘솔은 deleted_news를 읽지 않는다.
+
+
+**#238 (2026-09-26) 법령 감시가 법제처 연속 무응답에 58분을 붙잡던 것 — 연속 5건이면 멈춤 + heartbeat 'aborted' 표시 + 예비 실행 재가동 (운영자 결정: ①연속 5건 ②표시+guard 수정 ③알림은 워치독에 맡김 ④멈추면 단계 실패 표시 — 모두 권고안). ⚠️ Fable 재검토 대상 — 흐름 변경(Fable형)을 Fable 소진 중 (Opus 5.5, 엑스트라)로 설계·구현·검증까지 했다(재검토 짝 (Fable 5.1, 엑스트라)).**
+#222(§4-3-7) 준비물의 선택지 E('연속 API 실패 N건이면 조기 종료 + heartbeat', 당시 '동작 변경 — 별도 결정'으로 보류)를 09-26 11:30 사건 뒤 꺼냈다.
+그날 Actions→법제처가 응답하지 않아 law_crawler가 31.3분(전날 1.7분), 감시 단계가 58.5분 동안 law_watch 한 행도 쓰지 못했다(무응답 1건 = 30초 timeout×3회 + 2·4초 대기
+≈96초 × 약 36건). 90분 한도에 걸려 체인이 취소되며 교체(law_sync --all-outdated)·OKF 갱신·대조가 그날 빠졌고, 16시 예비 실행(guard가 정식 실패를 보고 돌림)이
+5.3분 만에 회복했다(#222 보론).
+조치: ① `API_FAIL_ABORT`=5 — 문서 단위 연속 무응답(1차 검색 None, 또는 별칭 재검색 None)이 5건이면 반복을 멈춘다. 응답을 받은 문서(결과 0건·미매칭 포함)는
+연속 수를 0으로 되돌린다 — 9/22 '느린 날'처럼 흩어진 실패로는 멈추지 않는다. 멈춘 뒤 남은 문서는 건드리지 않는다(종전 apifail과 같은 '상태 보존').
+② heartbeat note 끝에 `aborted=1 skipped=N`. guard는 종전에 heartbeat **날짜만** 봤으므로, 표시 없이 찍으면 '오늘 감시 완료'로 읽혀 16시 예비 실행을 건너뛴다 —
+note를 함께 읽어 `aborted=`가 있으면 날짜 대신 'aborted'를 돌려 예비 실행이 돈다. (부분 실패 apifail>0이지만 멈추지 않은 날은 종전대로 건너뜀 — 다음 날 재시도.)
+③ 알림 추가 없음 — `apifail=5`가 watchdog_scan의 `(fail|failed)=[1-9]` 규칙에 걸려 3시간 점검(:10 UTC 배수, 11:3x 멈춤이면 12:10 KST)에 새 항목으로 알린다.
+④ 멈추면 종료 코드 1 — 감시 단계는 `continue-on-error`라 그 단계만 실패로 표시되고 뒤 단계는 11시대에 그대로 돈다(오늘 같은 날이면 약 8분 뒤).
+검증: 스모크 `TestLawWatchAbort` 3건 — 가짜 DB·API로 `main()`을 실제로 돌려 ① 전부 무응답이면 5번째 호출에서 멈추고 note에 `apifail=5 aborted=1 skipped=7`·종료 코드 1,
+② 4건마다 응답하면 12건 모두 돌고 `aborted` 없음, ③ guard에 `select=updated_at,note`·`"aborted=" in` 확인(전체 181 OK). guard 한 줄 파서를 정상·중단·빈 응답·note null
+네 입력으로 직접 실행해 날짜/aborted/빈 값/날짜 확인. 실제 법제처 장애 재현은 하지 않았다 — 다음 무응답 날의 Actions 로그(`✖ 중단`)와 16시 예비 실행으로 확인한다.
+범위 밖: 같은 날 law_crawler 31분도 같은 원인(요청마다 대기)이나 체인 한도 안이라 손대지 않았다. guard의 GitHub 실행 목록 질의가 `?status=success&event=…&created=…`
+(#225가 금지한 '걸러 묻기')인 것은 색인이 늦으면 0건 → 예비 실행이 도는 **안전한 쪽**으로만 틀려 그대로 두었다.
+사내판: 불필요 — 법령 감시는 외부판 Actions 체인에서만 돈다(사내는 KB 스냅샷을 받는다).

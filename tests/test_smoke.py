@@ -41,6 +41,70 @@ class TestLawWatchNormName(unittest.TestCase):
         self.assertEqual(law_watch.norm_name('  운용‧관리•규정  '), '운용·관리·규정')
 
 
+class TestLawWatchAbort(unittest.TestCase):
+    """#238 법제처 연속 무응답 API_FAIL_ABORT건이면 감시를 멈추고 heartbeat에 'aborted=1' + 종료 코드 1,
+    law_crawl.yml guard는 그 표시를 보면 예비 실행을 건너뛰지 않는다. 가짜 DB·API로 main()을 돌린다(네트워크 0)."""
+
+    def _run(self, responder, n_docs=12):
+        import contextlib, io
+        import law_watch
+        docs = {f'시험법{k:02d}(법률)(제1호)(20260101).pdf': '법률' for k in range(n_docs)}
+        calls, notes = [], []
+
+        def fake_search(query, target, ef=False):
+            calls.append(query)
+            return responder(query)
+
+        class _Q:
+            def __getattr__(self, _):
+                return lambda *a, **k: self
+            data = []
+
+        fake_sb = mock.Mock()
+        fake_sb.table.return_value = _Q()
+        with mock.patch.object(law_watch, 'SB_URL', 'x'), mock.patch.object(law_watch, 'SB_KEY', 'x'), \
+                mock.patch.object(law_watch, 'OC_KEY', 'x'), \
+                mock.patch.object(law_watch.sb_client, 'make_client', lambda *a: fake_sb), \
+                mock.patch.object(law_watch.sb_client, 'heartbeat', lambda sb, key, note: notes.append((key, note))), \
+                mock.patch.object(law_watch, 'fetch_all_doc_rows', lambda sb: docs), \
+                mock.patch.object(law_watch, 'load_detected_pending', lambda sb: {}), \
+                mock.patch.object(law_watch, 'flush_watch', lambda sb, buf: buf.clear()), \
+                mock.patch.object(law_watch, 'drf_law_search', fake_search), \
+                mock.patch.object(law_watch.time, 'sleep', lambda s: None), \
+                mock.patch.object(sys, 'argv', ['law_watch.py', '--no-notify']), \
+                contextlib.redirect_stdout(io.StringIO()):
+            code = 0
+            try:
+                law_watch.main()
+            except SystemExit as e:
+                code = e.code
+        return calls, notes, code
+
+    def test_consecutive_failures_abort(self):
+        import law_watch
+        calls, notes, code = self._run(lambda q: None)
+        self.assertEqual(len(calls), law_watch.API_FAIL_ABORT)          # 5건째에서 멈춤
+        self.assertEqual(code, 1)
+        self.assertEqual(notes[0][0], 'last_law_watch_run')
+        self.assertIn(f'apifail={law_watch.API_FAIL_ABORT} aborted=1 skipped={12 - law_watch.API_FAIL_ABORT}', notes[0][1])
+
+    def test_response_resets_counter(self):
+        # 4건마다 한 번 응답(결과 0건 = 응답은 옴)하면 연속이 5에 못 닿아 끝까지 돈다
+        resp = {f'시험법{k:02d}' for k in range(0, 12, 4)}
+        calls, notes, code = self._run(lambda q: [] if q in resp else None)
+        self.assertEqual(len(calls), 12)
+        self.assertIn(code, (0, None))
+        self.assertIn('apifail=9', notes[0][1])
+        self.assertNotIn('aborted', notes[0][1])
+
+    def test_guard_reads_aborted_marker(self):
+        with open(os.path.join(_ROOT, '.github', 'workflows', 'law_crawl.yml'), encoding='utf-8') as f:
+            yml = f.read()
+        guard = yml[yml.index('  guard:'):yml.index('  crawl:')]
+        self.assertIn('select=updated_at,note', guard)
+        self.assertIn('"aborted=" in', guard)
+
+
 class TestLawDiffArticles(unittest.TestCase):
     """② law_diff_gen.diff_articles — 조문 3분류(modified/added/deleted)"""
 

@@ -352,6 +352,10 @@ def retire_pending(sb, law_name: str, keep, today: str, detected=None):
 
 
 WATCH_FLUSH_EVERY = 25   # law_watch 기록을 이만큼 모아 한 번에 — 잡이 중간에 잘려도 잃는 건 최대 25건
+# 법제처 연속 무응답이 이만큼이면 감시를 멈춘다(#238). 무응답 1건 = 30초×3회+대기 ≈96초라 09-26 11:30엔 36건 연속
+# 실패로 58분을 붙잡아 체인이 90분 한도에 취소됐다(교체·OKF까지 빠짐). 멈추면 heartbeat에 'aborted=1'을 남기고
+# 종료 코드 1 — law_crawl.yml guard가 이 표시를 보고 16시 예비 실행을 다시 돌리고, 워치독은 apifail=N을 실패로 잡는다.
+API_FAIL_ABORT = 5
 
 
 def flush_watch(sb, buf):
@@ -416,6 +420,8 @@ def main():
 
     outdated, unmatched, upcoming, auto_excluded, ok = [], [], [], [], 0
     api_failed = []          # 법제처 API 무응답 — 판정 불가라 행을 건드리지 않고 넘긴 문서
+    consec_fail = 0          # 연속 무응답 수 — 응답을 받은 문서가 나오면 0으로(API_FAIL_ABORT)
+    aborted, skipped = False, 0   # 연속 무응답으로 멈췄는지 · 멈춰서 점검하지 못한 남은 문서 수
     today = datetime.now(KST).strftime('%Y%m%d')
     detected = None if a.dry_run else load_detected_pending(sb)   # 문서마다 조회하던 것을 1회로
     watch_buf = []                                                  # law_watch 기록 모음(WATCH_FLUSH_EVERY건마다 반영)
@@ -444,7 +450,11 @@ def main():
             # 아무것도 모르는 상태이므로 행을 건드리지 않고 넘긴다(다음 실행이 다시 본다).
             if rows is None:
                 api_failed.append(doc_name)
+                consec_fail += 1
                 print(f"  [{i}/{len(targets)}] API실패 {meta['law_name'][:38]} — 상태 보존")
+                if consec_fail >= API_FAIL_ABORT:
+                    aborted, skipped = True, len(targets) - i
+                    break
                 continue
             hit = pick_exact(rows, meta['law_name'], meta.get('full_name'))
             # 1차 실패 시 기관명 별칭으로 재검색 (정부조직 개편으로 규칙명이 바뀐 경우)
@@ -463,8 +473,13 @@ def main():
                         break
             if not hit and alt_api_failed:
                 api_failed.append(doc_name)
+                consec_fail += 1
                 print(f"  [{i}/{len(targets)}] API실패 {meta['law_name'][:38]} — 상태 보존")
+                if consec_fail >= API_FAIL_ABORT:
+                    aborted, skipped = True, len(targets) - i
+                    break
                 continue
+            consec_fail = 0
 
             rec = {
                 'doc_name': doc_name,
@@ -535,6 +550,9 @@ def main():
     print(f"  구버전    : {len(outdated)}건")
     print(f"  미매칭    : {len(unmatched)}건  (법령명은 파싱됐으나 법제처 검색 실패 — 수동 확인)")
     print(f"  API 실패  : {len(api_failed)}건  (법제처 무응답 — 판정 못 해 상태 보존, 다음 실행이 재시도)")
+    if aborted:
+        print(f"  ✖ 중단    : 법제처 연속 {API_FAIL_ABORT}건 무응답 — 남은 {skipped}건 미점검(상태 보존, "
+              f"16시 예비 실행이 다시 본다)")
     print(f"  자동 제외 : {len(auto_excluded)}건  (법령 문서가 아님 — 보도자료 등)")
     pending_total = sum(len(f) for _, f in upcoming)
     print(f"  시행예정본: {pending_total}건 / 법령 {len(upcoming)}건")
@@ -583,8 +601,13 @@ def main():
             f'unmatched={len(unmatched)} upcoming={len(upcoming)} '
             # 'apifail=N'은 워치독의 'fail=[1-9]' 패턴에 걸린다(의도한 것) — 법제처가 죽어
             # 그날 점검이 반쪽이 된 것을 '돌았으니 정상'으로 넘기지 않기 위해서다.
-            f'apifail={len(api_failed)}')
+            f'apifail={len(api_failed)}'
+            # 'aborted=1'은 law_crawl.yml guard가 읽는다 — 있으면 16시 예비 실행을 건너뛰지 않는다(#238).
+            + (f' aborted=1 skipped={skipped}' if aborted else ''))
 
+    if aborted:
+        print("\n=== 중단 (법제처 연속 무응답) ===")
+        sys.exit(1)   # 단계는 continue-on-error — 체인의 뒤 단계(교체·OKF·대조)는 그대로 돈다
     print("\n=== 완료 ===")
 
 

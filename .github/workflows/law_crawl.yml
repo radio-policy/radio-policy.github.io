@@ -31,10 +31,12 @@ jobs:
           if [ "$EVENT" != "schedule" ]; then echo "run=true" >> "$GITHUB_OUTPUT"; exit 0; fi
           today=$(date -u +%F)
           n=$(gh api "repos/$REPO/actions/workflows/law_crawl.yml/runs?event=workflow_dispatch&status=success&created=%3E%3D$today" --jq '.total_count' 2>/dev/null || true)
-          hb=$(curl -sf "$SUPABASE_URL/rest/v1/system_health?key=eq.last_law_watch_run&select=updated_at" \
+          # 감시가 법제처 연속 무응답으로 멈춘 날은 heartbeat에 'aborted=1'이 붙는다(#238) — 그날은 날짜 대신
+          # 'aborted'를 돌려 예비 실행이 다시 돌게 한다.
+          hb=$(curl -sf "$SUPABASE_URL/rest/v1/system_health?key=eq.last_law_watch_run&select=updated_at,note" \
                  -H "apikey: $SUPABASE_SERVICE_KEY" -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" \
-               | python3 -c 'import json,sys; d=json.load(sys.stdin); print((d[0]["updated_at"] if d else "")[:10])' 2>/dev/null || true)
-          echo "오늘(UTC) $today · 정식 실행 성공 ${n:-?}건 · 법령 감시 heartbeat 날짜 ${hb:-?}"
+               | python3 -c 'import json,sys; d=json.load(sys.stdin); r=d[0] if d else {}; print("aborted" if "aborted=" in (r.get("note") or "") else (r.get("updated_at") or "")[:10])' 2>/dev/null || true)
+          echo "오늘(UTC) $today · 정식 실행 성공 ${n:-?}건 · 법령 감시 heartbeat ${hb:-?} (aborted = 법제처 무응답으로 중단)"
           if [ "${n:-0}" -gt 0 ] 2>/dev/null && [ "$hb" = "$today" ]; then
             echo "run=false" >> "$GITHUB_OUTPUT"
             echo "::notice title=예비 실행 건너뜀::오늘 정식 실행 성공(${n}건)·법령 감시 완료 — 체인을 다시 돌리지 않는다(#222)"
@@ -101,6 +103,7 @@ jobs:
         run: python law_terms_sync.py
 
       # 지식베이스 등재 법령이 법제처 현행본과 어긋나는지 대조(감시만 — 교체는 다음 단계)
+      # 법제처가 연속 5건 무응답이면 멈추고 종료 코드 1(#238) — 이 단계만 실패로 표시되고 뒤 단계는 그대로 돈다.
       - name: Watch knowledge-base law currency
         continue-on-error: true
         env:
