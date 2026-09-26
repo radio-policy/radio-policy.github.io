@@ -9,10 +9,18 @@
 // ANTHROPIC_API_KEY는 더미('test')로 넣는다 — searchLawArticles가 키 유무로 확장 사용을 가르는데, 훅이 먼저 가로채므로 호출은 없다.
 // 결정적 모드(기본): document_chunks 조회 중 order 없는 limit(키워드 ilike limit 4)에 order('id')를 붙여 임의 4건 잡음을 걷어낸다
 // (브라우저 하네스와 같은 규칙). --raw 는 운영 그대로. --rag 는 비교용 사본 모듈(예: 변경 전 코드)을 대신 읽는다.
+// 규칙 A/B용(2026-09-26, 사내 권고 rag_core 보강 A/B):
+//   --set <경로>      다른 질문 세트(형식은 회귀 세트와 같음, 저장소 루트 기준 경로)
+//   --no-expand       확장어 없이(Haiku 확장 실패·사내 이식본과 같은 조건) — 픽스처의 expanded를 무시하고 빈 배열
+//   --rpc-cache <경로> RPC 결과를 '함수명+인자' 열쇠로 기록하고, 같은 열쇠가 다시 오면 기록을 돌려준다(오류 난 결과는 기록 안 함).
+//                     규칙 변경이 인자를 바꾸지 않는 갈래(trgm·의미검색·요약)는 A/B 양쪽이 같은 결과를 받아 잡음이 0이 되고,
+//                     키워드가 바뀐 갈래(search_chunks_keywords 등)만 새로 조회된다. 파일이 커지므로 git 제외 폴더에 둘 것.
+// 출력의 lab = 청크 id → '문서명 앞부분 조문' 이름표(rag_regress_diff.py가 있으면 이름으로 보여 준다).
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 
 const ROOT = new URL('../', import.meta.url);
-const setPath = new URL('fixtures/rag_regression_set.json', ROOT + 'tests/');
+const argvEarly = (name: string) => { const i = Deno.args.indexOf(name); return i >= 0 ? Deno.args[i + 1] : ''; };
+const setPath = argvEarly('--set') ? new URL(argvEarly('--set'), ROOT) : new URL('fixtures/rag_regression_set.json', ROOT + 'tests/');
 const cachePath = new URL('fixtures/rag_regress_embed_cache.json', ROOT + 'tests/');
 const outDir = new URL('fixtures/rag_regress_out/', ROOT + 'tests/');
 
@@ -46,8 +54,9 @@ const expandMap = new Map<string, string[]>(set.questions.map((q: { question: st
 
 // --expand-delay N : Haiku 확장의 실제 지연(1~2초)을 흉내 낸다 — 확장 대기와 trgm·시맨틱을 겹치는 효과(B-2)는 이 지연이 있어야 보인다
 const expandDelay = Number(argv('--expand-delay') || 0);
+const noExpand = args.includes('--no-expand');
 rag.testHooks.expand = (query: string) => {
-  const e = expandMap.get(query);
+  const e = noExpand ? [] : expandMap.get(query);
   if (!e) throw new Error('픽스처에 없는 질문: ' + query);
   if (!expandDelay) return Promise.resolve(e.slice());
   return new Promise<string[]>((res) => setTimeout(() => res(e.slice()), expandDelay));
@@ -91,16 +100,33 @@ if (deterministic) {
 // RPC 호출을 질문별로 기록한다(함수명·행수·오류코드·ms) — trgm이 statement_timeout(57014)으로 0건이 되는 fail-open 경로를
 // 결과 차이의 원인으로 식별하기 위해. 2026-09-24 실측: 두 하네스를 동시에 돌리면 trgm 5~6초가 8초 한도를 넘겨 조용히 비었다.
 let rpcLog: Record<string, unknown>[] = [];
+const rpcCachePath = argv('--rpc-cache') ? new URL(argv('--rpc-cache'), ROOT) : null;
+let rpcCache: Record<string, { data: unknown; error: unknown }> = {};
+if (rpcCachePath) { try { rpcCache = JSON.parse(await Deno.readTextFile(rpcCachePath)); } catch { rpcCache = {}; } }
+let rpcCacheAdded = 0, rpcCacheHit = 0;
+// 열쇠: 함수명 + 인자 JSON. 임베딩 벡터는 길어서 FNV-1a 지문으로 줄인다(같은 캐시 임베딩이면 같은 지문).
+const fnv = (s: string) => { let h = 0x811c9dc5; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; } return h.toString(16); };
+const rpcKey = (fn: string, params: unknown) => fn + '|' + JSON.stringify(params, (k, v) => (Array.isArray(v) && v.length > 64 && typeof v[0] === 'number') ? 'vec:' + v.length + ':' + fnv(JSON.stringify(v)) : v);
 {
   // deno-lint-ignore no-explicit-any
   const anySb = sb as any;
   const origRpc = anySb.rpc.bind(anySb);
   anySb.rpc = (fn: string, params?: unknown, opts?: unknown) => {
     const t0 = performance.now();
+    const key = rpcCachePath ? rpcKey(fn, params) : '';
+    if (rpcCachePath && rpcCache[key]) {
+      const hit = rpcCache[key] as { data?: unknown[]; error?: unknown };
+      rpcCacheHit++;
+      rpcLog.push({ fn, ms: 0, rows: Array.isArray(hit.data) ? hit.data.length : null, error: null, cached: true });
+      // 호출측이 결과를 고쳐 쓰므로(merge의 _trgm_score 등) 매번 새 사본을 돌려준다
+      return { then: (onOk?: (v: unknown) => unknown, onErr?: (e: unknown) => unknown) =>
+        Promise.resolve({ data: structuredClone(hit.data), error: null }).then(onOk, onErr) };
+    }
     const builder = origRpc(fn, params, opts);
     const origThen = builder.then.bind(builder);
     builder.then = (onOk?: (v: unknown) => unknown, onErr?: (e: unknown) => unknown) => origThen((r: { data?: unknown[]; error?: { code?: string; message?: string } }) => {
       rpcLog.push({ fn, ms: Math.round(performance.now() - t0), rows: Array.isArray(r?.data) ? r.data.length : null, error: r?.error ? (r.error.code || r.error.message) : null });
+      if (rpcCachePath && r && !r.error) { rpcCache[key] = { data: structuredClone(r.data ?? null), error: null }; rpcCacheAdded++; }
       return onOk ? onOk(r) : r;
     }, onErr);
     return builder;
@@ -115,7 +141,7 @@ console.log = (...a: unknown[]) => {
 };
 
 const ids = (list: { id?: unknown }[]) => (list || []).map((c) => c && c.id);
-const out = { tag, at: new Date().toISOString(), rag: ragPath.pathname, deterministic, expandDelayMs: expandDelay, results: [] as Record<string, unknown>[], cacheMiss: [] as string[], totalMs: 0 };
+const out = { tag, at: new Date().toISOString(), rag: ragPath.pathname, set: setPath.pathname, noExpand, deterministic, expandDelayMs: expandDelay, results: [] as Record<string, unknown>[], cacheMiss: [] as string[], totalMs: 0 };
 for (const q of set.questions) {
   if (only && !only.has(q.id)) continue;
   logLines = []; rpcLog = [];
@@ -126,6 +152,11 @@ for (const q of set.questions) {
   const annex = ctx.annex as { text: string; sources: string[] } | undefined;
   const citing = ctx.citing as { text: string; ids: number[] } | undefined;
   const news = ctx.news as { text: string; sources: string[] } | undefined;
+  const lab: Record<string, string> = {};
+  for (const c of ([] as { id?: unknown; doc_name?: string; article_no?: string }[])
+    .concat((ctx.chunks as []) || [], (ctx.extra as []) || [], (citing?.chunks as []) || [])) {
+    if (c && c.id != null) lab[String(c.id)] = String(c.doc_name || '').split('(')[0].slice(0, 30) + ' ' + String(c.article_no || '').split('(')[0];
+  }
   out.results.push({
     id: q.id, ms, error: err,
     rag: ids(ctx.chunks as []), extra: ids(ctx.extra as []), added: ctx.addedIds || [], citing: citing?.ids || [],
@@ -133,7 +164,7 @@ for (const q of set.questions) {
     news: news?.sources || [],
     lens: { law: String(ctx.lawContext || '').length, citing: (citing?.text || '').length, annex: (annex?.text || '').length,
             news: (news?.text || '').length, asm: String(ctx.asm || '').length, systemVariable: String(ctx.systemVariable || '').length },
-    log: logLines.slice(), rpc: rpcLog.slice(),
+    log: logLines.slice(), rpc: rpcLog.slice(), lab,
   });
   origLog('[ragRegress]', q.id, ms + 'ms', err || '');
 }
@@ -141,6 +172,8 @@ console.log = origLog;
 out.cacheMiss = cacheMiss;
 out.totalMs = out.results.reduce((a, r) => a + (r.ms as number), 0);
 if (cacheMiss.length) await Deno.writeTextFile(cachePath, JSON.stringify(cache));
+if (rpcCachePath && rpcCacheAdded) await Deno.writeTextFile(rpcCachePath, JSON.stringify(rpcCache));
+if (rpcCachePath) origLog('[ragRegress] RPC 기록: 재사용', rpcCacheHit, '· 새로 기록', rpcCacheAdded);
 await Deno.mkdir(outDir, { recursive: true });
 const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, '');
 const outPath = new URL(`${tag}_${stamp}.json`, outDir);

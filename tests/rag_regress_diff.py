@@ -54,11 +54,14 @@ def main():
             if va == vb:
                 continue
             la, lb = list(va or []), list(vb or [])
+            # Deno 하네스의 lab(청크 id → 문서명 앞부분·조문)이 있으면 이름표를 붙인다
+            lab = {**(ra.get('lab') or {}), **(rb.get('lab') or {})}
+            name = (lambda x: f'{x}〔{lab[str(x)]}〕' if str(x) in lab else str(x))
             if sorted(map(str, la)) == sorted(map(str, lb)):
                 lines.append(f'  {f}: 순서만 다름 A={la} B={lb}')
             else:
-                only_a = [x for x in la if x not in lb]
-                only_b = [x for x in lb if x not in la]
+                only_a = [name(x) for x in la if x not in lb]
+                only_b = [name(x) for x in lb if x not in la]
                 lines.append(f'  {f}: A에만 {only_a} / B에만 {only_b} (A {len(la)}개, B {len(lb)}개)')
         err = ''
         if ra.get('error') or rb.get('error'):

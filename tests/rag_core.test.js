@@ -31,7 +31,15 @@ NAMES.forEach(function (n) { ok('export ' + n, RC[n] !== undefined); });
 // ── 법령 키워드 추출 ──
 eq('extractKeywords 법령 명사 우선·상한 5', RC.extractKeywords('우리 회사가 직접 운영하는 대리점에서 추가지원금을 이용자에 따라 다르게 지급하면 문제인가요'),
   ['대리점', '추가지원금', '이용자', '우리', '회사']);   // '지급하면'은 우선 명사가 아니라 뒤로 밀려 잘린다
-eq('extractKeywords 용언 어미 제거(조사가 먼저라 "운영하는"→"운영하")', RC.extractKeywords('주파수를 할당하고 운영하는 경우'), ['주파수', '할당', '운영하', '경우']);
+eq('extractKeywords 용언 어미를 조사보다 먼저(#244, "운영하는"→"운영")', RC.extractKeywords('주파수를 할당하고 운영하는 경우'), ['주파수', '할당', '운영', '경우']);
+eq('extractKeywords 어미 확장(#244, 변경하려면)', RC.extractKeywords('기간통신사업 등록을 변경하려면'), ['등록', '기간통신사업', '변경']);
+eq('extractKeywords 어미 확장(#244, 산정하나요)', RC.extractKeywords('주파수 재할당 대가는 어떻게 산정하나요'), ['주파수', '재할당', '대가', '산정']);
+eq('extractKeywords 낱말 전체가 어미면 버림(#244, 해야)', RC.extractKeywords('주파수 반납 해야 하나'), ['주파수', '반납']);
+eq('extractKeywords 취소하는→취소(#244)', RC.extractKeywords('위치정보사업 허가를 취소하는 경우'), ['위치정보사업', '허가', '취소', '경우']);
+eq('extractKeywords 요청 말투 제외(#244, 알려줘)', RC.extractKeywords('적합성평가 면제 대상 기자재를 알려줘'), ['적합성평', '면제', '대상', '기자재']);
+eq('extractKeywords 요청 말투는 조사 떼기 전 낱말로도(#244, 다른가·무엇인가)', RC.extractKeywords('전파법 제16조와 시행령 제18조는 무엇인가 다른가'), ['전파법', '제16조', '시행령', '제18조']);
+// 기각 가드(#244): 상투어를 추출에서 버리면 대응표·확장어가 10칸 안으로 들어와 조문 정밀검색 순위를 흔든다(전파법 제25조의2 탈락 실측)
+eq('extractKeywords 상투어는 추출에서 버리지 않음(#244 기각안)', RC.extractKeywords('3G 종료 관련 조항은?'), ['3G', '종료', '관련', '조항']);
 
 // ── 뉴스 키워드 추출 (2026-09-25 합집합) ──
 eq('extractNewsKeywords 조사 절단·분야어 우선', RC.extractNewsKeywords('같은 지하철인데 통신사 와이파이 속도 차이 분석해줘'), ['지하철', '와이파이', '속도']);
@@ -46,6 +54,8 @@ eq('lawSynonymKeywords 없음', RC.lawSynonymKeywords('무선국 검사 주기')
 eq('expandQueryForSemantic 리파밍', RC.expandQueryForSemantic('리파밍 관련 법'), '리파밍 관련 법 주파수회수 주파수재배치 주파수 회수 주파수 재배치');
 eq('expandQueryForSemantic 원문 유지', RC.expandQueryForSemantic('무선국 검사'), '무선국 검사');
 eq('PRACTICE_TERMS 기관명 별칭', RC.lawSynonymKeywords('방통위 의결'), ['방송통신위원회', '방통위', '방송미디어통신위원회', '방미통위']);
+eq('LAW_SYNONYMS 폐업→휴업·폐업(#244)', RC.lawSynonymKeywords('기간통신사업을 폐업하려면'), ['휴업', '폐업']);
+eq('LAW_SYNONYMS 휴업→휴업·폐업(#244)', RC.lawSynonymKeywords('역무 휴업 승인 요건'), ['휴업', '폐업']);
 
 // ── 제외어·위계 ──
 ok('isTitleStop 일반어', RC.isTitleStop('직접', '직접 운영') === true);
@@ -54,6 +64,13 @@ ok('isTitleStop 목록에 없는 말(지원금)은 제외 안 함', RC.isTitleSt
 ok('isTitleStop 목록의 말(지원)은 제외', RC.isTitleStop('지원', '기지국 설치 지원') === true);
 eq('lawRank', [RC.lawRank('전파법(법률)'), RC.lawRank('전파법 시행령(대통령령)'), RC.lawRank('전파법 시행규칙(과학기술정보통신부령)'), RC.lawRank('무선설비규칙(고시)'), RC.lawRank(undefined)], [4, 3, 2, 1, 1]);
 ok('GENERIC ⊂ QUERY_TITLE_STOP', RC.GENERIC_QUERY_WORDS.every(function (w) { return RC.QUERY_TITLE_STOP.indexOf(w) >= 0; }));
+ok('isTitleStop 다른(#244 — 「다른 법령과의 관계」 제목 가점 차단)', RC.isTitleStop('다른', '다른 사업자와 무엇이 다른가') === true);
+(function () {
+  // rankLawHits 주제 점수에서 '다른'이 빠진다(#244): '다른' 한 낱말만 겹치는 조문은 주제 점수 0
+  var h = [{ id: 1, doc_name: '어느 고시(고시)', article_no: '3조(다른 법령과의 관계)', content: '', _act: 0, _hits: 0, _top: 0 }];
+  RC.rankLawHits(h, '다른 사업자', 5);
+  ok('rankLawHits 주제 점수에서 상투어 제외(#244)', h[0]._top === 0, h[0]._top);   // 변경 전엔 '다른'(2)이 걸렸다
+})();
 
 // ── 상한 상수 ──
 eq('PERDOC_LIMIT', RC.PERDOC_LIMIT, { '추가지식': 8, 'default': 3 });
@@ -86,6 +103,16 @@ ok('articleBonus 없음 0', RC.articleBonus(undefined) === 0);
   var deep = [];
   for (var j = 0; j < 20; j++) deep.push({ id: 100 + j, doc_name: '논문A', doc_category: '추가지식', content: '휴업' });
   eq('rankChunks 추가지식 8·전체 15', RC.rankChunks(deep.concat(many), ['휴업'], ['휴업'], '휴업').length, 8 + 3);
+  // 기각 가드(#244): 파일 감점은 분류를 가리지 않는다 — '기타'만으로 좁히면 회의록·보도자료가 조문 자리를 15~21% 가져갔다
+  var pair = [
+    { id: 201, doc_name: '이슈사례_3G_종료.md', doc_category: '이슈사례', content: '휴업' },
+    { id: 202, doc_name: '과기정통부_보도자료_2025.md', doc_category: '보도자료', content: '휴업' },
+    { id: 203, doc_name: '어느 공고', doc_category: '기타', content: '휴업' },
+  ];
+  var p = {}; pair.forEach(function (c) { p[c.id] = c; });   // rankChunks는 배열을 제자리 정렬한다
+  RC.rankChunks(pair, ['휴업'], ['휴업'], '휴업');
+  ok('rankChunks 파일 감점은 분류 무관(#244 기각안)', p[201]._hybrid_score < p[203]._hybrid_score && p[202]._hybrid_score < p[203]._hybrid_score,
+    pair.map(function (c) { return [c.id, c._hybrid_score]; }));
 })();
 
 // ── 조문 정밀검색 순수부 ──
