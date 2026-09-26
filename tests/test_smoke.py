@@ -123,6 +123,94 @@ class TestCrawlerKeywordMatching(unittest.TestCase):
         self.assertNotIn('혼신', crawler.NEWS_SEARCH_KEYWORDS)
 
 
+class TestExcludeKeywordsFallbackOnly(unittest.TestCase):
+    """#235 제외 낱말(EXCLUDE_KEYWORDS)은 AI 선별 앞에서 걸지 않고 키워드 폴백(AI가 죽었을 때)에서만.
+    스포츠 오인 차단(is_sports_noise)은 수집 단계에 그대로. 네트워크 0 — requests.get을 가짜로 바꾼다."""
+
+    def test_keyword_fallback_applies_exclude(self):
+        import crawler
+        kr = crawler._keyword_relevant
+        self.assertTrue(kr({'title': '과기정통부, 5G 주파수 추가 할당 계획 발표'}))
+        self.assertFalse(kr({'title': '김하성 5G 연속 안타 행진'}))      # RADIO + EXCLUDE('안타') → 폴백에서는 제외(종전과 같음)
+        self.assertFalse(kr({'title': '추석 연휴 귀성길 교통 정보'}))     # RADIO 없음
+        self.assertFalse(kr({'title': None}))
+
+    def test_naver_path_passes_exclude_words_to_ai(self):
+        import crawler
+
+        class _Resp:
+            def __init__(self, items):
+                self._items = items
+
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {'items': self._items}
+
+        pub = 'Mon, 21 Sep 2026 10:00:00 +0900'
+        arts = [
+            {'title': '국힘, 방미통위 상임위원에…또 후보 추천', 'link': 'https://n.news.naver.com/a/1',
+             'originallink': 'https://example.com/1', 'description': '요약', 'pubDate': pub},
+            {'title': '김하성, 6G 연속 무안타 침묵', 'link': 'https://n.news.naver.com/a/2',
+             'originallink': 'https://example.com/2', 'description': '요약', 'pubDate': pub},
+        ]
+        with mock.patch.object(crawler, 'NAVER_CLIENT_ID', 'x'), \
+                mock.patch.object(crawler, 'NAVER_CLIENT_SECRET', 'y'), \
+                mock.patch.object(crawler, 'NEWS_SEARCH_KEYWORDS', ['방미통위']), \
+                mock.patch.object(crawler.requests, 'get', lambda *a, **k: _Resp(arts)), \
+                mock.patch.object(crawler.time, 'sleep', lambda s: None):
+            items, fails = crawler.crawl_naver_news()
+        titles = [i['title'] for i in items]
+        self.assertIn('국힘, 방미통위 상임위원에…또 후보 추천', titles)   # '후보' — 이제 AI 판정으로 넘어간다
+        self.assertNotIn('김하성, 6G 연속 무안타 침묵', titles)           # 3G/6G+기록어 — is_sports_noise가 계속 막는다
+        self.assertEqual(fails, 0)
+
+    def test_collect_functions_do_not_use_exclude(self):
+        import inspect
+        import crawler
+        for fn in (crawler.crawl_naver_news, crawler.crawl_google_news_rss):
+            code = '\n'.join(ln for ln in inspect.getsource(fn).splitlines() if not ln.strip().startswith('#'))
+            self.assertNotIn('EXCLUDE_KEYWORDS', code, fn.__name__)
+
+    def test_screen_judges_exclude_titles_and_logs_pass(self):
+        """제외 낱말 제목도 AI 판정에 들어가고, 통과하면 '[선별] 제외 낱말 포함 통과' 로그가 남는다.
+        AI가 죽은 배치(None)는 키워드 폴백 — 제외 낱말 제목은 종전처럼 떨어진다."""
+        import io
+        import contextlib
+        import crawler
+        seen = []
+
+        def fake_batch(client, criteria, batch):
+            seen.extend(it['title'] for it in batch)
+            return {1: {'tags': [], 'event': '', 'urgency': ''}}     # 첫 기사만 관련
+
+        items = [{'title': '국힘, 방미통위 상임위원에…또 후보 추천', 'url': 'u1', '_screen_text': '요약'},
+                 {'title': '김하성 5G 연속 안타 행진', 'url': 'u2', '_screen_text': '요약'}]
+        buf = io.StringIO()
+        with mock.patch.object(crawler, 'ANTHROPIC_API_KEY', 'x'), \
+                mock.patch.object(crawler, 'load_news_criteria', lambda: '기준'), \
+                mock.patch.object(crawler.anthropic, 'Anthropic', lambda api_key=None: object()), \
+                mock.patch.object(crawler, '_load_screen_cache', lambda h, urls: {}), \
+                mock.patch.object(crawler, '_save_screen_cache', lambda rows: None), \
+                mock.patch.object(crawler, '_screen_batch_haiku', fake_batch), \
+                contextlib.redirect_stdout(buf):
+            passed = crawler.screen_news_items([dict(i) for i in items])
+        self.assertEqual(seen, [i['title'] for i in items])            # 둘 다 AI가 봤다
+        self.assertEqual([p['title'] for p in passed], [items[0]['title']])
+        self.assertIn('[선별] 제외 낱말 포함 통과 1건', buf.getvalue())
+        # AI 배치 실패 → 키워드 폴백: RADIO('5G') + EXCLUDE('안타') 제목은 떨어진다(종전과 같음)
+        with mock.patch.object(crawler, 'ANTHROPIC_API_KEY', 'x'), \
+                mock.patch.object(crawler, 'load_news_criteria', lambda: '기준'), \
+                mock.patch.object(crawler.anthropic, 'Anthropic', lambda api_key=None: object()), \
+                mock.patch.object(crawler, '_load_screen_cache', lambda h, urls: {}), \
+                mock.patch.object(crawler, '_save_screen_cache', lambda rows: None), \
+                mock.patch.object(crawler, '_screen_batch_haiku', lambda c, cr, b: None), \
+                contextlib.redirect_stdout(io.StringIO()):
+            passed = crawler.screen_news_items([dict(i) for i in items])
+        self.assertEqual(passed, [])
+
+
 class TestNotifySplit(unittest.TestCase):
     """⑤ notify 분할 로직 — 4096 초과 텍스트의 조각 수·무손실 + env 미설정 False"""
 

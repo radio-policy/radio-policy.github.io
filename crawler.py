@@ -588,9 +588,8 @@ def crawl_naver_news() -> tuple:
                 is_personnel = is_ministry_personnel_news(title)
                 # 제목 RADIO_KEYWORDS 포함 여부로 걸러내던 게이트는 폐지(2026-08-03).
                 # 넓게 담고 관련성은 screen_news_items()의 Haiku 1차 선별이 판정한다.
-                # EXCLUDE_KEYWORDS(스포츠·선거·부동산 오탐)는 값싼 사전 차단이라 그대로 둔다.
-                if not is_personnel and any(k in title for k in EXCLUDE_KEYWORDS):
-                    continue
+                # EXCLUDE_KEYWORDS도 여기서는 걸지 않는다(#235) — 제목 부분 일치라 '후보'·'감독'·'구속'·'영화'(민영화)가
+                # 방미통위 상임위원 후보 추천 같은 관련 기사를 AI 판정 전에 버렸다. 키워드 폴백(_keyword_relevant)에서만 쓴다.
                 if title in seen_titles:
                     continue
                 seen_titles.add(title)
@@ -669,9 +668,7 @@ def crawl_google_news_rss() -> list:
                 if not title or len(title) < 8:
                     continue
                 is_personnel = is_ministry_personnel_news(title)
-                # 네이버 경로와 동일 — RADIO_KEYWORDS 포함 게이트 폐지, EXCLUDE는 유지 (2026-08-03)
-                if not is_personnel and any(k in title for k in EXCLUDE_KEYWORDS):
-                    continue
+                # 네이버 경로와 동일 — RADIO_KEYWORDS 포함 게이트 폐지(2026-08-03), EXCLUDE도 키워드 폴백에서만(#235)
                 if title in seen_titles:
                     continue
                 seen_titles.add(title)
@@ -761,7 +758,11 @@ RADIO_KEYWORDS = [
     '무선국', '5G주파수', '6G주파수',
 ]
 
-# 비관련 기사 제외 키워드 — 스포츠·연예·부동산 등
+# 비관련 기사 제외 키워드 — 스포츠·연예·부동산 등.
+# ⚠️ AI 선별(screen_news_items) 앞에서는 쓰지 않는다 — AI가 죽었을 때의 키워드 폴백(_keyword_relevant)에서만(#235).
+#    제목 부분 일치라 '후보'(방미통위 위원 후보 추천·후보 주파수)·'감독'(관리감독)·'구속'·'영화'(민영화)·'주식'(주식회사)이
+#    관련 기사를 AI가 보기도 전에 버렸다(2026-09-26 실측: 네이버 1,216건 중 79건 차단, 그중 관련 가능 3~4건).
+#    스포츠 오인은 AI 앞에서 is_sports_noise()가 계속 막는다. 이 목록에 낱말을 더 쌓지 말 것(#45).
 EXCLUDE_KEYWORDS = [
     # 스포츠
     '안타', '홈런', '타율', '경기장', '야구', '축구', '농구', '골프', '테니스',
@@ -1076,7 +1077,7 @@ def fetch_article_body(url: str, source: str) -> tuple:
 #  그래서 신규 기사만 모아 제목+요약으로 배치 판정하고, 통과분만 뒤 단계로 보낸다.
 #  보도자료(press_ingest)·국회 입법예고(assembly_crawler)가 쓰는 것과 같은 패턴이다.
 #
-#  fail-open 원칙: 키 없음·판정 실패 시 기존 RADIO_KEYWORDS 키워드 필터로 되돌아간다
+#  fail-open 원칙: 키 없음·판정 실패 시 기존 키워드 필터(RADIO_KEYWORDS 포함·EXCLUDE_KEYWORDS 미포함, #235)로 되돌아간다
 #  (선별이 죽었다고 수집 자체가 멈추면 무음 누락이 된다 — 배경역사 #39).
 # ═══════════════════════════════════════════════════════
 
@@ -1231,8 +1232,12 @@ def _save_screen_cache(rows: list) -> None:
 
 
 def _keyword_relevant(item: dict) -> bool:
-    """폴백 판정 — 종전 수집 기준(제목에 RADIO_KEYWORDS 포함)과 동일."""
-    return any(k in (item.get('title') or '') for k in RADIO_KEYWORDS)
+    """폴백 판정(AI가 죽었을 때) — 제목에 RADIO_KEYWORDS가 있고 EXCLUDE_KEYWORDS가 없으면 통과.
+    #235 전에는 EXCLUDE가 수집 단계에서 먼저 걸렸으므로 폴백 결과는 종전과 같다
+    (부처 인사 뉴스는 이 함수 전에 screen_news_items가 자동 통과시킨다)."""
+    title = item.get('title') or ''
+    return (any(k in title for k in RADIO_KEYWORDS)
+            and not any(k in title for k in EXCLUDE_KEYWORDS))
 
 
 _screen_system_cache = {}
@@ -1461,6 +1466,13 @@ def screen_news_items(items: list) -> list:
     dropped = [it for n, it in enumerate(items) if not keep[n]]
     print(f'[선별] 수집 {len(items)}건 → 캐시 건너뜀 {cache_skip}건 → 판정 {judged}건 '
           f'→ 관련 {len(passed)}건 (제외 {len(dropped)}건, 인사 자동통과 {personnel}건)')
+    # #235: 제외 낱말(EXCLUDE_KEYWORDS)은 이제 AI 앞에서 걸지 않는다 — 그런 제목이 AI를 통과한 건수를 남겨
+    # 스포츠·선거 기사가 새어 들어오는지 로그로 보이게 한다(지침 '틀렸을 때 무엇이 보이는가').
+    ex_passed = [it for it in passed if not is_ministry_personnel_news(it.get('title') or '')
+                 and any(k in (it.get('title') or '') for k in EXCLUDE_KEYWORDS)]
+    if ex_passed:
+        print(f'[선별] 제외 낱말 포함 통과 {len(ex_passed)}건: '
+              + ' | '.join((it.get('title') or '')[:40] for it in ex_passed[:3]))
 
     # 캐시가 데워졌는데(300행+) 판정이 150건을 넘으면 캐시가 조용히 깨진 것 — 청구서가 아니라
     # 당일에 알기 위한 경보. 첫 실행(캐시 비어 있음)은 전량 판정이 정상이라 울리지 않는다.
