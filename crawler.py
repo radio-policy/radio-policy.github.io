@@ -1082,6 +1082,9 @@ def fetch_article_body(url: str, source: str) -> tuple:
 # ═══════════════════════════════════════════════════════
 
 ISSUE_SUGGEST_HOURS = {5, 11, 15, 20}   # 이슈맵 자동 제안 실행 시각(KST, #153) — 매시 → 하루 4회
+# 같은 시간대 재실행 가드(#194). 1 이상(한 시간대 6번 크롤 중 첫 회만) ~ '가장 짧은 시각 간격 − 1' 이하여야
+# 한다 — 5로 두었더니 11→15시(4시간)에 걸려 15시가 09-24부터 매일 빠졌다(#194-보론). 시각을 바꾸면 이것도 볼 것.
+ISSUE_SUGGEST_GUARD_HOURS = 3
 SCREEN_BATCH_SIZE = 35          # 1콜당 판정 기사 수 (제목+요약 300자 기준 ≈ 3~4K 입력토큰)
 SCREEN_MODEL = 'claude-haiku-4-5-20251001'
 
@@ -2217,8 +2220,8 @@ def main():
     try:
         _kst_hour = datetime.now(timezone(timedelta(hours=9))).hour
         # 10분 크롤(#174) 뒤로 시(hour) 조건만으로는 그 시간대에 6번씩 돌았다(하루 24회, 09-20~23 실측) —
-        # 5시간 가드를 함께 건다(#194).
-        if _kst_hour in ISSUE_SUGGEST_HOURS and ran_recently(sb, 'last_issue_suggest_run', 5):
+        # 재실행 가드를 함께 건다(#194, 시간은 ISSUE_SUGGEST_GUARD_HOURS 주석 참조).
+        if _kst_hour in ISSUE_SUGGEST_HOURS and ran_recently(sb, 'last_issue_suggest_run', ISSUE_SUGGEST_GUARD_HOURS):
             print(f'[이슈 제안] {_kst_hour}시 — 이번 시간대에 이미 실행됨, 건너뜀')
         elif _kst_hour in ISSUE_SUGGEST_HOURS:
             from issue_suggest import run_suggest

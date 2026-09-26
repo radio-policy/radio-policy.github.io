@@ -798,6 +798,15 @@ class TestRefetchSummaryGate(unittest.TestCase):
         import crawler
         self.assertEqual(crawler.ISSUE_SUGGEST_HOURS, {5, 11, 15, 20})
 
+    def test_issue_suggest_guard_fits_slots(self):
+        """#194-보론: 재실행 가드가 가장 짧은 시각 간격 − 1 이하라야 모든 시각이 돈다(5로 두어 15시가 매일 빠졌다)."""
+        import crawler
+        hs = sorted(crawler.ISSUE_SUGGEST_HOURS)
+        gaps = [(b - a) % 24 for a, b in zip(hs, hs[1:] + hs[:1])]
+        g = crawler.ISSUE_SUGGEST_GUARD_HOURS
+        self.assertGreaterEqual(g, 1)            # 한 시간대 안의 10분 크롤 6회 중 첫 회만
+        self.assertLessEqual(g, min(gaps) - 1)   # 앞 시각 끝(:59)에 기록돼도 다음 시각 첫 크롤이 돈다
+
 
 class TestKmccMeeting(unittest.TestCase):
     """방미통위 회의 의사일정·위원회 결과·공지 수집기 (#154) — 순수 함수만, 네트워크 0."""
