@@ -1894,6 +1894,24 @@ class TestIssueSuggestOverlapMerged(unittest.TestCase):
         self.assertIn('합친 곳 [171] 판정 소속 아님', log)
         self.assertEqual(new, [])
 
+    def test_propose_recheck_exclusion_issue_needs_judge(self):
+        # #243 곁가지(운영자 결정 ①): 생성 제목 ≥0.80 active 병합이 배제 기준 이슈면 뉴스도 즉석 판정을 거친다
+        excl = self._issues()
+        excl[0]['definition'] = '해당: 감면 사각지대. 해당 없음: 명절 트래픽'
+        log, calls, new = self._run(excl, [], lambda pairs: set(), [0, 0, 0, 1], gen_vec=[1, 0, 0, 0])
+        self.assertEqual(calls['judge'][-1], [('취약계층 통신비 감면 사각지대', 171)])
+        self.assertIn('배제 기준 이슈라 연결·제안 모두 보류(판정 소속 아님·실패)', log)
+        self.assertEqual(new, [])
+        excl = self._issues()
+        excl[0]['definition'] = '해당 없음: 명절 트래픽'
+        log, calls, new = self._run(excl, [], lambda pairs: {p[0] for p in pairs}, [0, 0, 0, 1], gen_vec=[1, 0, 0, 0])
+        self.assertIn('— 제안 대신 연결', log)
+        self.assertEqual(new, [])
+        # 배제 기준이 없는 이슈는 종전대로 판정 없이 연결(판정 호출은 ③ 일괄 1회뿐, 빈 목록)
+        log, calls, new = self._run(self._issues(), [], lambda pairs: set(), [0, 0, 0, 1], gen_vec=[1, 0, 0, 0])
+        self.assertIn('— 제안 대신 연결', log)
+        self.assertEqual(calls['judge'], [[]])
+
 
 class TestSidebarListBody(unittest.TestCase):
     """#232 본문 자리에 사이드바 목록(사내판 인계) — 목록 머리말로 '시작'하는 칸은 본문이 아니다.

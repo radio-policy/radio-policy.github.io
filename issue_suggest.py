@@ -312,6 +312,15 @@ def _link_reg(sb, issue_id, link):
                                    on_conflict='issue_id,item_type,item_id').execute()
 
 
+def _judge_one(title, definition, iss, news_rows, link_item):
+    """제안 직전 한 건 즉석 관련 판정(#243) — True 속함 / False 아님 / None 실패(규제만 구별, 뉴스 실패는 False)."""
+    if link_item:
+        ok = _haiku_relate_batch([(0, f'{title} — {definition or ""}'[:400], iss)], None, kind='reg')
+    else:
+        ok = _haiku_relate_batch([(0, title, iss)], [news_rows or []])
+    return None if ok is None else (0 in ok)
+
+
 def _propose(sb, issues, title, definition, category, norm_key, reason, dry,
              stage_hint='발생', news_rows=None, link_item=None):
     """제안 1건 생성 + 텔레그램 [승인][기각]. 반환: 만든 이슈 id(dry면 'dryN'), 만들지 않았으면 False.
@@ -335,11 +344,15 @@ def _propose(sb, issues, title, definition, category, norm_key, reason, dry,
     for i in issues:
         if i['state'] == 'active' and i.get('embedding') \
                 and _cosine(vec, i['embedding']) >= SIM_MERGE:
-            if link_item and _has_exclusion(i):
-                # 배제 기준 이슈에는 결정적 연결을 하지 않는다(#157) — 규제 항목은 판정 경로(③)에서만 붙는다
-                print(f'[제안→병합 재검사] "{title}" ≈ active [{i["id"]}] {i["title"][:20]} — 배제 기준 이슈라 '
-                      f'연결·제안 모두 보류(세션 확인)')
-                return False
+            if _has_exclusion(i):
+                # 배제 기준 이슈에는 결정적 연결을 하지 않는다(#157) — 규제 항목은 판정 경로(③)에서만 붙는다.
+                # 뉴스도 이 경로만 판정 없이 붙던 구멍(#243 곁가지, 운영자 결정 ① — 활성 26 중 25가 배제 기준 이슈):
+                # 이슈 벡터는 정의 전체라 배제 목록 낱말이 그 기사 쪽으로 끌려 온다 → 즉석 판정, 떨어지면 연결·제안 모두 보류.
+                ok = None if link_item else _judge_one(title, definition, i, news_rows, None)
+                if not ok:
+                    print(f'[제안→병합 재검사] "{title}" ≈ active [{i["id"]}] {i["title"][:20]} — 배제 기준 이슈라 '
+                          f'연결·제안 모두 보류({"세션 확인" if link_item else "판정 소속 아님·실패"})')
+                    return False
             print(f'[제안→병합 재검사] "{title}" ≈ active [{i["id"]}] {i["title"][:20]} — 제안 대신 연결')
             if not dry and news_rows:
                 _link_news(sb, i['id'], news_rows, added_by='auto')
@@ -360,11 +373,8 @@ def _propose(sb, issues, title, definition, category, norm_key, reason, dry,
         # 종전엔 여기서 조용히 빠져 합친 이슈에 후속 보도가 쌓이지 않았다. 판정은 이 한 건만 즉석 1콜(드묾).
         tgt = _merge_target(rej, {x['id']: x for x in issues})
         if tgt is not None:
-            if link_item:
-                ok = _haiku_relate_batch([(0, f'{title} — {definition or ""}'[:400], tgt)], None, kind='reg')
-            else:
-                ok = _haiku_relate_batch([(0, title, tgt)], [news_rows or []])
-            if ok and 0 in ok:
+            ok = _judge_one(title, definition, tgt, news_rows, link_item)
+            if ok:
                 print(f'[기각 병합처 연결] "{title}" ≈ 기각 [{rej["id"]}] ({rej_sim:.3f}) → 합친 곳 '
                       f'[{tgt["id"]}] {tgt["title"][:20]}')
                 if not dry and news_rows:
