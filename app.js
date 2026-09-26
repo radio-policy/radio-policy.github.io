@@ -264,8 +264,13 @@ function applyAuthUI() {
     var ok = aiReady();
     input.disabled = !ok;
     btn.disabled = !ok;
+    // 질문 예시는 칩 대신 안내 글 한 줄로(2026-09-27 운영자 결정). 휴대폰 배치(styles.css max-width 768px)에서는 입력란에
+    // 약 250px만 들어가 긴 문구가 '(예시) 3'에서 잘리므로(375px 실측) 예시만 짧게(215px — 360px 폰에도 들어감).
+    // 입력란 폭을 직접 재지 않는 이유: 로그인 시점에 자문 화면이 숨겨져 있으면 폭이 0이다.
     input.placeholder = ok
-      ? '궁금한 사항을 입력하세요'
+      ? (window.matchMedia && window.matchMedia('(max-width: 768px)').matches
+          ? '예) 3G 종료 법적 절차와 기한은?'
+          : '궁금한 사항을 입력하세요 — (예시) 3G 서비스를 종료하려면 어떤 법적 절차와 기한이 있나요?')
       : (!currentUser ? '로그인 후 이용할 수 있습니다' :
          (currentProfile && !currentProfile.approved ? '관리자 승인 대기 중입니다' : 'AI 기능을 이용할 수 없습니다'));
   }
@@ -1363,14 +1368,13 @@ function trimAdvHistory(hist) {
   return { messages: msgs, dropped: pairs.length - keep.length };
 }
 
-// 「새 대화」(B-8) — 이력과 화면을 비우고 첫 인사말(chat-area의 첫 말풍선)과 자주 묻는 질문만 남긴다.
+// 「새 대화」(B-8) — 이력과 화면을 비우고 첫 인사말(chat-area의 첫 말풍선)만 남긴다.
 // 앞선 질문·답은 chat_logs에 이미 저장돼 「자문 이력」에서 다시 볼 수 있다.
 function newChat() {
   if (isSending) { alert('답변을 받는 중에는 새 대화를 시작할 수 없습니다.'); return; }
   chatHistory = [];
   var area = document.getElementById('chat-area');
   if (area) { while (area.children.length > 1) area.removeChild(area.lastChild); area.scrollTop = 0; }
-  var faq = document.getElementById('chat-faq'); if (faq) faq.style.display = '';
   var inp = document.getElementById('chat-input'); if (inp && !inp.disabled) inp.focus();
 }
 
@@ -2667,8 +2671,6 @@ function appendMsg(role, text) {
     div.innerHTML = `<div class="msg-name">전파·통신 정책 AI</div>${renderMd(text)}`;
   } else {
     div.textContent = text;
-    // 첫 질문 뒤에는 「자주 묻는 질문」 칩을 접어 답변 칸을 넓힌다(2026-09-19). 새로고침하면 다시 보인다
-    var faq = document.getElementById('chat-faq'); if (faq) faq.style.display = 'none';
   }
   area.appendChild(div);
   area.scrollTop = area.scrollHeight;
