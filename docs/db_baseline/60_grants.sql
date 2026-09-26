@@ -292,6 +292,14 @@ grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE on
 grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE on public.profiles to authenticated;
 grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE on public.profiles to service_role;
 
+revoke all on public.speech_field_stats from public, anon, authenticated, service_role;
+grant SELECT on public.speech_field_stats to anon;
+grant SELECT on public.speech_field_stats to authenticated;
+grant DELETE, INSERT, SELECT, UPDATE on public.speech_field_stats to service_role;
+
+revoke all on sequence public.speech_field_stats_id_seq from public, anon, authenticated, service_role;
+grant SELECT, USAGE on sequence public.speech_field_stats_id_seq to service_role;
+
 revoke all on public.subscriber_queue from public, anon, authenticated, service_role;
 grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE on public.subscriber_queue to anon;
 grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE on public.subscriber_queue to authenticated;

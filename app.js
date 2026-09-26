@@ -9629,7 +9629,7 @@ function _personCard(p) {
       '<span style="font-size:11px;color:var(--text-secondary)">' + escHtml(sub) + '</span>' +
       (p.stance_summary ? '<span style="font-size:10px;color:var(--accent)">AI 요약</span>' : '') +
     '</div>' +
-    '<div style="font-size:11px;color:var(--text-tertiary);margin-top:3px">발언 ' + (p.speech_count || 0) + '건 · ' +
+    '<div style="font-size:11px;color:var(--text-tertiary);margin-top:3px">관련 발언 ' + (p.speech_count || 0) + '건 · ' +
       escHtml(String(p.first_speech || '').slice(0, 7)) + ' ~ ' + escHtml(String(p.last_speech || '').slice(0, 7)) + '</div>' +
   '</div>';
 }
@@ -9671,7 +9671,7 @@ function renderPeopleList() {
       'oninput="peopleSearch(this.value)" ' +
       'style="margin-left:auto;font-size:12px;padding:5px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-secondary);color:var(--text-primary);width:150px">' +
     '</div>' +
-    '<div style="font-size:11px;color:var(--text-tertiary);margin-bottom:10px">과방위 회의록 발언자 기준(의원·위원장은 1건부터, 통신사 임원은 전원, 그 밖은 4건 이상) · 현역 = 22대(2024-06~) 발언 존재 · 정당은 활동 당시 소속 · 이름 가나다순</div>';
+    '<div style="font-size:11px;color:var(--text-tertiary);margin-bottom:10px">과방위 회의록 발언자 기준(의원·위원장은 1건부터, 통신사 임원은 전원, 그 밖은 4건 이상) · 관련 발언 = 회의록에서 통신·전파·AI 관련으로 골라 담은 발언 · 현역 = 22대(2024-06~) 발언 존재 · 정당은 활동 당시 소속 · 이름 가나다순</div>';
   h += '<div id="people-results">' + _peopleResultsHtml() + '</div>';
   el.innerHTML = h;
   _issueScrollTop(el);
@@ -9709,17 +9709,57 @@ function _personRoleSpans(list) {
 
 function _ym(d) { return String(d || '').slice(0, 7); }
 
-// 자격이 둘 이상일 때만 역할 이력 줄을 보여 준다 — 한 자격뿐인 사람에게는 군더더기다.
+// 증인·참고인은 정부 측이 아니다 — 머리글·구간 표시가 '정부 측 답변'으로 뭉뚱그리던 것을 가른다(2026-09-27,
+// 요약 재생성 때 진술인·통신사 증인 9명에서 실측).
+var _WITNESS_POS_RE = /증인|참고인|진술인|공술인/;
+function _personRoleVerb(label) {
+  if (label === '과방위원') return '위원으로 질의';
+  return _WITNESS_POS_RE.test(String(label || '')) ? '증인·참고인으로 답변' : '정부 측 답변';
+}
+
+// 대수 경계(개원일). 자격 띠·월별 흐름의 눈금에 쓴다.
+var _DAE_START = [['21대', '2020-05-30'], ['22대', '2024-05-30']];
+
+// 자격 띠(#166 → 2026-09-27 그림으로) — 발언 기간을 가로축으로, 자격마다 한 줄씩 구간 막대를 그린다.
+// 정부 쪽에서 답하다 의원이 되어 묻는 사람(김현·이진숙)의 대비를 한눈에 보이게 하려는 것. 대수 경계는 점선.
+// 자격이 하나뿐이어도 그린다 — 어느 대수에 활동했는지가 보인다.
 function renderPersonRoles(p) {
   var box = document.getElementById('person-roles');
   if (!box) return;
-  var spans = _personRoleSpans(_personSpeeches);
-  if (spans.length < 2) { box.innerHTML = ''; return; }
-  box.innerHTML = '<div style="margin-top:6px;font-size:11.5px;color:var(--text-secondary)">' +
-    spans.map(function(sp) {
-      return '<b style="color:var(--text-primary)">' + escHtml(sp.label) + '</b> ' +
-        escHtml(_ym(sp.from)) + '~' + escHtml(_ym(sp.to)) + ' (' + sp.n + '건)';
-    }).join(' · ') + '</div>';
+  var spans = _personRoleSpans(_personSpeeches).filter(function(sp) { return sp.from && sp.to; });
+  if (!spans.length) { box.innerHTML = ''; return; }
+  var t0 = Date.parse(spans[0].from), t1 = t0;
+  spans.forEach(function(sp) { t0 = Math.min(t0, Date.parse(sp.from)); t1 = Math.max(t1, Date.parse(sp.to)); });
+  var pad = Math.max(45 * 864e5, (t1 - t0) * 0.03);   // 한 달짜리 구간도 보이게 앞뒤 여유
+  t0 -= pad; t1 += pad;
+  var pct = function(d) { return Math.max(0, Math.min(100, (Date.parse(d) - t0) / (t1 - t0) * 100)); };
+  var ticks = _DAE_START.filter(function(x) { var t = Date.parse(x[1]); return t > t0 && t < t1; }).map(function(x) {
+    return '<div style="position:absolute;top:0;bottom:0;left:' + pct(x[1]).toFixed(2) + '%;border-left:1px dashed var(--border-mid)"></div>' +
+      '<div style="position:absolute;top:-1px;left:calc(' + pct(x[1]).toFixed(2) + '% + 3px);font-size:9.5px;color:var(--text-tertiary)">' + x[0] + '</div>';
+  }).join('');
+  var rows = spans.map(function(sp) {
+    var member = sp.label === '과방위원';
+    var l = pct(sp.from), w = Math.max(1.2, pct(sp.to) - l);
+    var tip = sp.label + ' · ' + _ym(sp.from) + '~' + _ym(sp.to) + ' · ' + sp.n + '건 — ' + _personRoleVerb(sp.label);
+    return '<div style="display:flex;align-items:center;gap:8px;height:18px">' +
+      '<div style="flex:0 0 150px;font-size:11px;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="' + escHtml(tip) + '">' +
+        escHtml(sp.label) + ' <span style="color:var(--text-tertiary)">' + sp.n + '건</span></div>' +
+      '<div style="position:relative;flex:1;height:18px">' +
+        '<div title="' + escHtml(tip) + '" style="position:absolute;top:5px;height:8px;border-radius:4px;left:' + l.toFixed(2) + '%;width:' + w.toFixed(2) + '%;background:' +
+          (member ? 'var(--accent)' : 'var(--text-tertiary)') + '"></div>' +
+      '</div></div>';
+  }).join('');
+  box.innerHTML = '<div style="margin-top:10px">' +
+    '<div style="font-size:11px;color:var(--text-tertiary);margin-bottom:2px">자격 이력' +
+      '<span style="margin-left:10px"><span style="display:inline-block;width:12px;height:7px;border-radius:4px;background:var(--accent);vertical-align:1px"></span> 위원으로 질의</span>' +
+      '<span style="margin-left:10px"><span style="display:inline-block;width:12px;height:7px;border-radius:4px;background:var(--text-tertiary);vertical-align:1px"></span> 정부·증인 등으로 답변</span></div>' +
+    '<div style="position:relative">' +
+      '<div style="position:absolute;top:0;bottom:0;left:158px;right:0;pointer-events:none">' + ticks + '</div>' +
+      rows +
+    '</div>' +
+    '<div style="display:flex;justify-content:space-between;margin-left:158px;font-size:9.5px;color:var(--text-tertiary)">' +
+      '<span>' + escHtml(_ym(new Date(t0 + pad).toISOString())) + '</span><span>' + escHtml(_ym(new Date(t1 - pad).toISOString())) + '</span></div>' +
+  '</div>';
 }
 
 // 그 인물의 발언 조회 — 동명이인 분리(#169-보론2) 때문에 조인 키와 기간을 따로 본다.
@@ -9753,21 +9793,25 @@ async function showPersonDetail(id) {
       '<div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">' +
         '<b style="font-size:17px">' + escHtml(p.name) + '</b>' +
         '<span style="font-size:12px;color:var(--text-secondary)">' + escHtml(sub) + '</span>' +
-        '<span style="font-size:11px;color:var(--text-tertiary)">발언 ' + (p.speech_count || 0) + '건 · ' + escHtml(String(p.first_speech || '')) + ' ~ ' + escHtml(String(p.last_speech || '')) + '</span>' +
+        '<span style="font-size:11px;color:var(--text-tertiary)">통신·전파·AI 관련 발언 ' + (p.speech_count || 0) + '건 · ' + escHtml(String(p.first_speech || '')) + ' ~ ' + escHtml(String(p.last_speech || '')) + '</span>' +
       '</div>' +
       '<div id="person-roles"></div>' +
     '</div>' +
+    '<div id="person-fields"></div>' +
     '<div id="person-stance"></div>' +
     '<div id="person-topics"></div>' +
-    '<div id="person-speeches"><div style="font-size:12px;color:var(--text-tertiary);padding:10px">발언 이력 불러오는 중...</div></div>' +
+    '<div id="person-monthly"></div>' +
+    '<div id="person-speeches"><div style="font-size:12px;color:var(--text-tertiary)">발언 이력 불러오는 중...</div></div>' +
     '<div id="person-bills"></div>' +
     '<div id="person-news"></div>';
   _issueScrollTop(el);
   renderPersonStance(p);
 
-  // 발언·법안·뉴스 병렬 로드
+  // 발언·분야 집계·법안·뉴스 병렬 로드
   var jobs = [
     _personSpeechQuery(p, 'meeting_date,agenda,topic,summary,position,source_url'),
+    _personFieldQuery(p),
+    _speechFieldsCfgQuery(),
   ];
   var jw = _personJobWord(p);
   var billsIdx = -1, newsIdx = -1;
@@ -9786,34 +9830,218 @@ async function showPersonDetail(id) {
   }
   var rs = await Promise.all(jobs.map(function(j) { return j.then(function(r) { return r; }, function(e) { return { error: e }; }); }));
   _personSpeeches = (rs[0] && rs[0].data) || [];
+  if (rs[2] && rs[2].data) _speechFieldsCfg = _parseSpeechFieldsCfg(rs[2].data);
   renderPersonRoles(p);          // 자격 이력은 발언이 와야 계산된다
+  renderPersonFields(p, (rs[1] && rs[1].data) || []);
   renderPersonTopics(p);
+  renderPersonMonthly(p);
   renderPersonSpeeches(p);
   if (billsIdx >= 0) renderPersonBills(p, (rs[billsIdx] && rs[billsIdx].data) || []);
   if (newsIdx >= 0) renderPersonNews(p, (rs[newsIdx] && rs[newsIdx].data) || []);
 }
 
 function _personSec(title, hint) {
-  return '<div style="font-size:12.5px;font-weight:700;margin:14px 0 6px;display:flex;align-items:baseline;gap:8px">' + title +
+  // flex-wrap: 좁은 화면에서 긴 안내문이 제목을 두 줄로 찌그러뜨리지 않게 안내문이 다음 줄로 내려간다(2026-09-27)
+  return '<div style="font-size:12.5px;font-weight:700;margin:14px 0 6px;display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 8px">' + title +
     (hint ? '<span style="font-weight:400;font-size:11px;color:var(--text-tertiary)">' + hint + '</span>' : '') + '</div>';
 }
 
 function renderPersonStance(p) {
   var box = document.getElementById('person-stance');
   if (!box) return;
-  // 입장 요약 생성·갱신은 **관리자만**(운영자 지시 2026-09-08, #135) — Sonnet 호출 + people 행 갱신이라 승인자 전체에 열지 않는다.
+  // 발언 요약 생성·갱신은 **관리자만**(운영자 지시 2026-09-08, #135) — Sonnet 호출 + people 행 갱신이라 승인자 전체에 열지 않는다.
+  // 제목 '입장 요약' → '발언 요약'(2026-09-27 운영자 결정, 5-16) — 사외판은 무엇을 말했는지까지만, 성향·태도 평가는 하지 않는다.
+  // (사내판이 이 함수를 감싸 칸을 덧붙인다 — 함수 이름과 #person-stance 구조(제목줄 + 테두리 상자)를 바꾸면 사내에 알릴 것)
   var canGen = typeof isAdminUser === 'function' ? isAdminUser() : false;
-  box.innerHTML = _personSec('쟁점별 입장 요약', p.stance_updated_at ? 'AI 생성 · ' + String(p.stance_updated_at).slice(0, 10) : 'AI 생성') +
+  // 날짜는 현지(KST) 기준 — UTC 문자열 앞 10자를 자르면 새벽에 만든 요약이 전날로 찍힌다(#161 계열)
+  var _sd = p.stance_updated_at ? new Date(p.stance_updated_at) : null;
+  var _sdTxt = _sd && !isNaN(_sd) ? _sd.getFullYear() + '-' + ('0' + (_sd.getMonth() + 1)).slice(-2) + '-' + ('0' + _sd.getDate()).slice(-2) : '';
+  box.innerHTML = _personSec('쟁점별 발언 요약', _sdTxt ? 'AI 생성 · ' + _sdTxt : 'AI 생성') +
     '<div style="border:1px solid var(--border);border-radius:10px;padding:12px 14px;background:var(--bg-secondary)">' +
     (p.stance_summary
       ? '<div class="md-body" style="font-size:12.5px">' + renderMd(p.stance_summary) + '</div>'
       : '<div style="font-size:12px;color:var(--text-tertiary)">아직 생성되지 않았습니다.</div>') +
-    '<div style="margin-top:8px;font-size:11px;color:var(--text-tertiary)">상임위 질의는 비판조가 관행이므로 실제 입장은 원문 발언으로 확인하세요.' +
+    '<div style="margin-top:8px;font-size:11px;color:var(--text-tertiary)">통신·전파·AI 관련 발언을 쟁점별로 정리한 것입니다. 상임위 질의는 비판조가 관행이므로 실제 취지는 원문 발언으로 확인하세요.' +
     (canGen ? ' <button class="btn" onclick="refreshPersonStance(' + p.id + ')" style="font-size:11px;padding:2px 10px;margin-left:6px">요약 ' + (p.stance_summary ? '갱신' : '생성') + '</button>' : ' (갱신은 관리자만 가능합니다)') +
     '</div></div>';
 }
 
-function personTopicFilter(t) { _personTopicFilter = (_personTopicFilter === t) ? '' : t; var p = (_peopleCache || []).find(function(x) { return x.id === selectedPersonId; }); if (p) { renderPersonTopics(p); renderPersonSpeeches(p); } }
+// 관련 발언 주제 묶음(2026-09-27 운영자 승인, 5-16 ②) — assembly_speeches.topic 칩(키워드, 쉼표 구분)을 넷으로 묶는다.
+// 칩 조합 문자열('전파, 주파수, 5G')을 그대로 세던 옛 '주요 쟁점' 칩은 조합마다 갈라져 관심사가 안 보였다.
+// 'SK텔레콤 언급' 칩은 묶음에 넣지 않는다(그 칩만 있는 발언은 '그 밖'). 방송 칩은 수집 키워드에 없다.
+var PERSON_TOPIC_GROUPS = [
+  ['AI·디지털', ['AI', '인공지능']],
+  ['통신 서비스·요금', ['통신사업', '전기통신', '이동통신', '요금', '알뜰폰', '단말', '단말기유통', '번호이동', '통신품질']],
+  ['보안·이용자 보호', ['정보통신망', '사이버', '스팸', '위치정보', '이용자보호', '통신이용자', '재난문자']],
+  ['전파·주파수', ['전파', '주파수', '5G', '6G', '무선', '무선국', '기지국', '전자파', '위성통신', '스펙트럼', '기자재', '적합성평가', 'ITU', 'IMT', 'WRC']]
+];
+var _PERSON_GROUP_NAMES = PERSON_TOPIC_GROUPS.map(function(g) { return g[0]; }).concat(['그 밖']);
+
+function _speechGroups(s) {
+  var chips = String((s && s.topic) || '').split(',').map(function(c) { return c.trim(); }).filter(Boolean);
+  var out = PERSON_TOPIC_GROUPS.filter(function(g) { return chips.some(function(c) { return g[1].indexOf(c) >= 0; }); })
+    .map(function(g) { return g[0]; });
+  return out.length ? out : ['그 밖'];
+}
+
+function personTopicFilter(i) {
+  var t = _PERSON_GROUP_NAMES[i] || '';
+  _personTopicFilter = (_personTopicFilter === t) ? '' : t;
+  var p = (_peopleCache || []).find(function(x) { return x.id === selectedPersonId; });
+  if (p) { renderPersonTopics(p); renderPersonSpeeches(p); }
+}
+
+// 월별 발언 흐름(2026-09-27) — 통신·전파·AI 관련 발언(진행 발언 제외)의 달별 건수. 첫 발언 달~마지막 발언 달.
+// 사고·국감 시기에 몰렸는지, 꾸준했는지를 보려는 것. 대수 경계는 점선. 막대에 마우스를 올리면 건수.
+function renderPersonMonthly(p) {
+  var box = document.getElementById('person-monthly');
+  if (!box) return;
+  var list = _personSpeeches.filter(function(s) { return !_isProceduralSpeech(s) && s.meeting_date; });
+  if (list.length < 2) { box.innerHTML = ''; return; }
+  var cnt = {};
+  list.forEach(function(s) { var k = _ym(s.meeting_date); cnt[k] = (cnt[k] || 0) + 1; });
+  var keys = Object.keys(cnt).sort();
+  var months = [], y = +keys[0].slice(0, 4), m = +keys[0].slice(5, 7);
+  var endY = +keys[keys.length - 1].slice(0, 4), endM = +keys[keys.length - 1].slice(5, 7);
+  while (y < endY || (y === endY && m <= endM)) {
+    months.push(y + '-' + (m < 10 ? '0' : '') + m);
+    if (++m > 12) { m = 1; y++; }
+  }
+  var max = Math.max.apply(null, keys.map(function(k) { return cnt[k]; }));
+  var daeAt = {};
+  _DAE_START.forEach(function(x) { daeAt[x[1].slice(0, 7)] = x[0]; });
+  var cols = months.map(function(ym, i) {
+    var n = cnt[ym] || 0;
+    var h = n ? Math.max(6, Math.round(n / max * 100)) : 0;
+    var mark = daeAt[ym] ? 'border-left:1px dashed var(--border-mid);' : '';
+    return '<div title="' + ym + ' · ' + n + '건" style="flex:1 1 0;min-width:0;height:100%;display:flex;align-items:flex-end;' + mark + '">' +
+      (n ? '<div style="width:100%;height:' + h + '%;background:var(--accent);border-radius:3px 3px 0 0;margin:0 0.5px"></div>' : '') + '</div>';
+  }).join('');
+  // 연도 눈금 — 1월(또는 첫 달)에만. 달이 많으면 2~3년마다.
+  var step = months.length > 72 ? 2 : 1;
+  var labels = months.map(function(ym, i) {
+    var show = (i === 0 || ym.slice(5) === '01') && (+ym.slice(0, 4) % step === 0 || i === 0);
+    return '<div style="flex:1 1 0;min-width:0;position:relative">' + (show
+      ? '<span style="position:absolute;left:0;white-space:nowrap">' + ym.slice(0, 4) + (i === 0 && ym.slice(5) !== '01' ? '.' + ym.slice(5) : '') + '</span>' : '') + '</div>';
+  }).join('');
+  var dae = _DAE_START.filter(function(x) { return months.indexOf(x[1].slice(0, 7)) > 0; }).map(function(x) { return x[1].slice(0, 7) + ' ' + x[0] + ' 개원'; });
+  box.innerHTML = _personSec('월별 발언 흐름', '통신·전파·AI 관련 발언 ' + list.length + '건 · 가장 많은 달 ' + max + '건' +
+      (dae.length ? ' · 점선 = ' + escHtml(dae.join(', ')) : '') + (_personSpeeches.length >= 300 ? ' · 최근 300건 기준' : '')) +
+    '<div style="border:1px solid var(--border);border-radius:10px;padding:10px 12px 6px;background:var(--bg-secondary)">' +
+      '<div style="display:flex;height:64px;border-bottom:1px solid var(--border-mid)">' + cols + '</div>' +
+      '<div style="display:flex;height:14px;font-size:9.5px;color:var(--text-tertiary);margin-top:2px">' + labels + '</div>' +
+    '</div>';
+}
+
+// ── 과방위 발언 분야(#248, 2026-09-27) ───────────────────────────
+// speech_field_stats(회의록 **모든** 발언 블록을 낱말 규칙으로 분야별로 센 표 — speech_fields.py, AI 0회)를 인물별로 합친다.
+// 위 '관련 발언'(assembly_speeches — 통신·전파·AI 관련만 골라 담은 발언)과 모집단이 달라 이름부터 '회의록 발언 블록 기준'으로 가른다.
+// 공개 여부는 app_config.speech_fields_public — 층화 검증 통과 전에는 관리자에게만 '검증 중'으로 보인다.
+// 분야 순서·이름은 speech_fields.FIELDS 와 같고 색은 styles.css --sf-1..7(검증된 고정 순서 팔레트).
+var SPEECH_FIELDS = ['통신·전파', 'AI·디지털', '보안·개인정보', '방송·미디어', '과학기술·R&D', '원자력·우주', '우정·기타'];
+var SPEECH_FIELD_MIN = 30;        // 판정 블록이 이보다 적으면 막대 대신 '발언 적음'
+var _speechFieldsCfg = null;      // {public, rules_version, checked_at, note}
+var _personFieldRows = [];
+var _personFieldDae = '';
+
+function _parseSpeechFieldsCfg(rows) {
+  try { return JSON.parse((rows[0] || {}).value || '{}'); } catch (e) { return {}; }
+}
+function _speechFieldsCfgQuery() {
+  if (_speechFieldsCfg) return Promise.resolve({ data: null });
+  return sb.from('app_config').select('value').eq('key', 'speech_fields_public').limit(1);
+}
+function _personFieldQuery(p) {
+  var q = sb.from('speech_field_stats')
+    .select('meeting_date,position,fields,n_blocks,n_noise,n_chair,n_proc,n_unclassified')
+    .eq('speaker', p.speaker_match || p.speaker_key);
+  if (p.speech_from) q = q.gte('meeting_date', p.speech_from);
+  if (p.speech_to)   q = q.lte('meeting_date', p.speech_to);
+  return q.order('meeting_date', { ascending: false }).limit(1000);
+}
+function _daeOf(d) { d = String(d || ''); return d >= '2024-05-30' ? '22대' : (d >= '2020-05-30' ? '21대' : '20대'); }
+
+function personFieldDae(d) {
+  _personFieldDae = (_personFieldDae === d) ? '' : d;
+  var p = (_peopleCache || []).find(function(x) { return x.id === selectedPersonId; });
+  if (p) renderPersonFields(p, _personFieldRows);
+}
+
+function renderPersonFields(p, rows) {
+  var box = document.getElementById('person-fields');
+  if (!box) return;
+  _personFieldRows = rows || [];
+  var cfg = _speechFieldsCfg || {};
+  var admin = typeof isAdminUser === 'function' && isAdminUser();
+  if (!_personFieldRows.length || (cfg.public !== true && !admin)) { box.innerHTML = ''; return; }
+  var daes = [];
+  _personFieldRows.forEach(function(r) { var d = _daeOf(r.meeting_date); if (daes.indexOf(d) < 0) daes.push(d); });
+  daes.sort();
+  if (_personFieldDae && daes.indexOf(_personFieldDae) < 0) _personFieldDae = '';
+  var use = _personFieldRows.filter(function(r) { return !_personFieldDae || _daeOf(r.meeting_date) === _personFieldDae; });
+  // 자격별로 가른다 — 위원·위원장 발언은 '과방위 발언 분야', 정부 측은 '답변 분야'(받은 질의와 출석 회의로 정해진다).
+  // 민간 증인·참고인은 막대를 두지 않는다(정본 §6).
+  var groups = [['member', '과방위 발언 분야', []], ['gov', '답변 분야', []]];
+  use.forEach(function(r) {
+    var pos = String(r.position || '');
+    if (_MEMBER_POS_SET.indexOf(pos) >= 0) groups[0][2].push(r);
+    else if (!_WITNESS_POS_RE.test(pos)) groups[1][2].push(r);
+  });
+  var html = '';
+  groups.forEach(function(g) {
+    var rs = g[2];
+    if (!rs.length) return;
+    var sum = {}, judged = 0, chair = 0, proc = 0, unc = 0, noise = 0, from = '', to = '', meetings = {};
+    rs.forEach(function(r) {
+      Object.keys(r.fields || {}).forEach(function(f) { sum[f] = (sum[f] || 0) + Number(r.fields[f] || 0); });
+      chair += r.n_chair || 0; proc += r.n_proc || 0; unc += r.n_unclassified || 0; noise += r.n_noise || 0;
+      var d = String(r.meeting_date || '');
+      if (d && (!from || d < from)) from = d;
+      if (d && (!to || d > to)) to = d;
+      meetings[d] = 1;
+    });
+    SPEECH_FIELDS.forEach(function(f) { judged += sum[f] || 0; });
+    var head = g[1];
+    var hint = (g[0] === 'gov' ? '받은 질의와 출석 회의에 따라 정해진다 · ' : '') +
+      '과방위 회의록 발언 블록 기준 · 낱말 규칙으로 센 근사치 · ' + escHtml(_ym(from)) + '~' + escHtml(_ym(to)) + ' · 회의 ' + Object.keys(meetings).length + '건' +
+      (cfg.public === true ? '' : ' · <b style="color:#b45309">검증 중 — 관리자에게만 보임</b>');
+    var out = chair + proc + unc;
+    var outLine = '<div style="font-size:11px;color:var(--text-tertiary);margin-top:6px">판정 ' + Math.round(judged) + '건 · 비율 계산에서 뺀 발언 ' + out + '건' +
+      ' (사회 ' + chair + ', 의사진행·공방 ' + proc + ', 미분류 ' + unc + ')' + (noise ? ' · 짧은 응답·호명 ' + noise + '건 제외' : '') + '</div>';
+    var body;
+    if (judged < SPEECH_FIELD_MIN) {
+      body = '<div style="font-size:12px;color:var(--text-secondary)">발언 적음(' + Math.round(judged) + '건) — ' + SPEECH_FIELD_MIN + '건 미만은 비율을 그리지 않습니다.</div>';
+    } else {
+      var segs = SPEECH_FIELDS.map(function(f, i) {
+        var v = sum[f] || 0;
+        if (!v) return '';
+        var pc = v / judged * 100;
+        return '<div title="' + escHtml(f) + ' ' + pc.toFixed(1) + '% (' + Math.round(v) + '건)" style="flex:' + v.toFixed(2) + ' 1 0;min-width:2px;background:var(--sf-' + (i + 1) + ')"></div>';
+      }).join('');
+      var legend = SPEECH_FIELDS.map(function(f, i) {
+        var v = sum[f] || 0;
+        if (!v) return '';
+        var pc = v / judged * 100;
+        return '<span style="display:inline-flex;align-items:center;gap:4px;white-space:nowrap' + (pc < 5 ? ';color:var(--text-tertiary)' : '') + '">' +
+          '<span style="width:10px;height:10px;border-radius:3px;background:var(--sf-' + (i + 1) + ')"></span>' + escHtml(f) + ' ' +
+          (pc < 1 ? '<1' : Math.round(pc)) + '%</span>';
+      }).join('');
+      body = '<div style="display:flex;gap:2px;height:16px;border-radius:4px;overflow:hidden;background:var(--bg-secondary)">' + segs + '</div>' +
+        '<div style="display:flex;flex-wrap:wrap;gap:4px 12px;margin-top:7px;font-size:11.5px;color:var(--text-secondary)">' + legend + '</div>';
+    }
+    html += _personSec(head, hint) +
+      '<div style="border:1px solid var(--border);border-radius:10px;padding:11px 14px;background:var(--bg-secondary)">' + body + outLine + '</div>';
+  });
+  if (!html) { box.innerHTML = ''; return; }
+  var toggle = daes.length > 1
+    ? '<div style="display:flex;gap:6px;margin:10px 0 -6px">' + daes.map(function(d) {
+        var on = _personFieldDae === d;
+        return '<button class="btn" onclick="personFieldDae(\'' + d + '\')" style="font-size:11px;padding:2px 10px;' +
+          (on ? 'background:var(--accent);color:#fff;border-color:var(--accent)' : '') + '">' + d + '</button>';
+      }).join('') + '<span style="font-size:11px;color:var(--text-tertiary);align-self:center">' + (_personFieldDae ? '' : '전체 대수 합계') + '</span></div>'
+    : '';
+  box.innerHTML = toggle + html;
+}
 
 // 사회·진행 발언 판정 — 회의록에는 "잠깐만 기다려 주십시오, ○○○ 위원님" 같은 진행 발언이
 // 섞여 있고, 원문을 저장하지 않는 테이블이라 재요약이 불가능하다(#99). 지우지 않고 접어서
@@ -9826,28 +10054,36 @@ function _isProceduralSpeech(s) {
   return _PROC_RE.test(t) && t.length < 60;    // 진행 문구 + 짧음 (긴 발언은 본론이 이어진다)
 }
 
+// 관련 발언 주제 막대 — 묶음별 건수(한 발언이 여러 묶음에 들 수 있다). 누르면 아래 발언 이력을 그 묶음으로 거른다.
+// 건수는 내용 발언 기준 — 진행 발언이 "SK텔레콤 언급 11"처럼 부풀리던 것을 막는다.
 function renderPersonTopics(p) {
   var box = document.getElementById('person-topics');
   if (!box) return;
+  var list = _personSpeeches.filter(function(s) { return !_isProceduralSpeech(s); });
+  if (!list.length) { box.innerHTML = ''; return; }
   var cnt = {};
-  // 쟁점 칩 건수도 내용 발언 기준 — 진행 발언이 "SK텔레콤 언급 11"처럼 부풀리던 것을 막는다
-  _personSpeeches.filter(function(s) { return !_isProceduralSpeech(s); })
-    .forEach(function(s) { var t = (s.topic || '').trim(); if (t) cnt[t] = (cnt[t] || 0) + 1; });
-  var top = Object.keys(cnt).sort(function(a, b) { return cnt[b] - cnt[a]; }).slice(0, 10);
-  if (!top.length) { box.innerHTML = ''; return; }
-  box.innerHTML = _personSec('주요 쟁점', '클릭하면 발언 필터') +
-    '<div style="display:flex;gap:6px;flex-wrap:wrap">' + top.map(function(t) {
-      var on = _personTopicFilter === t;
-      return '<button class="btn" onclick="personTopicFilter(\'' + escHtml(t).replace(/'/g, "\\'") + '\')" style="font-size:11px;padding:3px 10px;' +
-        (on ? 'background:var(--accent);color:#fff;border-color:var(--accent)' : '') + '">' + escHtml(t) + ' ' + cnt[t] + '</button>';
-    }).join('') + '</div>';
+  list.forEach(function(s) { _speechGroups(s).forEach(function(g) { cnt[g] = (cnt[g] || 0) + 1; }); });
+  var rows = _PERSON_GROUP_NAMES.map(function(g, i) {
+    var n = cnt[g] || 0;
+    if (!n) return '';
+    var pc = n / list.length * 100, on = _personTopicFilter === g;
+    return '<button onclick="personTopicFilter(' + i + ')" title="누르면 이 주제의 발언만" style="display:flex;align-items:center;gap:8px;width:100%;' +
+        'padding:3px 6px;border:1px solid ' + (on ? 'var(--accent)' : 'transparent') + ';border-radius:6px;background:none;cursor:pointer;color:inherit;font:inherit;text-align:left">' +
+      '<span style="flex:0 0 110px;font-size:11.5px;color:var(--text-secondary)">' + escHtml(g) + '</span>' +
+      '<span style="flex:1;height:10px;background:var(--border-light);border-radius:4px;overflow:hidden">' +
+        '<span style="display:block;height:100%;width:' + pc.toFixed(1) + '%;background:' + (g === '그 밖' ? 'var(--text-tertiary)' : 'var(--accent)') + ';border-radius:4px"></span></span>' +
+      '<span style="flex:0 0 78px;font-size:11px;color:var(--text-secondary);text-align:right">' + n + '건 · ' + Math.round(pc) + '%</span>' +
+    '</button>';
+  }).join('');
+  box.innerHTML = _personSec('관련 발언 주제', '통신·전파·AI 관련 발언 ' + list.length + '건 중 · 한 발언이 여러 주제에 들 수 있음 · 누르면 발언 필터') +
+    '<div style="border:1px solid var(--border);border-radius:10px;padding:8px 8px;background:var(--bg-secondary);display:flex;flex-direction:column;gap:2px">' + rows + '</div>';
 }
 
 function renderPersonSpeeches(p) {
   var box = document.getElementById('person-speeches');
   if (!box) return;
   var list = _personSpeeches;
-  if (_personTopicFilter) list = list.filter(function(s) { return (s.topic || '').trim() === _personTopicFilter; });
+  if (_personTopicFilter) list = list.filter(function(s) { return _speechGroups(s).indexOf(_personTopicFilter) >= 0; });
   var proc = list.filter(_isProceduralSpeech);
   list = list.filter(function(s) { return !_isProceduralSpeech(s); });
   var CAP = 100;
@@ -9872,7 +10108,7 @@ function renderPersonSpeeches(p) {
     listHtml = '<div style="font-size:12px;color:var(--text-tertiary);padding:8px">내용 발언 기록이 없습니다.</div>';
   } else if (!multiRole) {
     listHtml = _spBlock(shown) +
-      (list.length > CAP ? '<div style="font-size:11px;color:var(--text-tertiary);padding:4px">외 ' + (list.length - CAP) + '건 — 쟁점 칩으로 좁혀 보세요</div>' : '');
+      (list.length > CAP ? '<div style="font-size:11px;color:var(--text-tertiary);padding:4px">외 ' + (list.length - CAP) + '건 — 주제 막대로 좁혀 보세요</div>' : '');
   } else {
     // 최신 자격부터. shown은 이미 날짜 내림차순이라 구간도 역순으로 돈다.
     listHtml = roleSpans.slice().reverse().map(function(sp) {
@@ -9882,14 +10118,12 @@ function renderPersonSpeeches(p) {
         'border-top:1px solid var(--border);padding-top:8px">' +
         '<b style="color:var(--text-primary)">' + escHtml(sp.label) + '</b> · ' +
         escHtml(_ym(sp.from)) + '~' + escHtml(_ym(sp.to)) + ' · ' + rows.length + '건' +
-        (_MEMBER_POS_SET.indexOf(String(sp.label)) >= 0 || sp.label === '과방위원'
-          ? ' <span style="color:var(--text-tertiary)">— 위원으로 질의</span>'
-          : ' <span style="color:var(--text-tertiary)">— 정부·기관 측 답변</span>') +
+        ' <span style="color:var(--text-tertiary)">— ' + _personRoleVerb(sp.label) + '</span>' +
         '</div>' + _spBlock(rows);
     }).join('') +
-      (list.length > CAP ? '<div style="font-size:11px;color:var(--text-tertiary);padding:4px">외 ' + (list.length - CAP) + '건 — 쟁점 칩으로 좁혀 보세요</div>' : '');
+      (list.length > CAP ? '<div style="font-size:11px;color:var(--text-tertiary);padding:4px">외 ' + (list.length - CAP) + '건 — 주제 막대로 좁혀 보세요</div>' : '');
   }
-  box.innerHTML = _personSec('발언 이력', list.length + '건' + (_personTopicFilter ? ' — ' + escHtml(_personTopicFilter) : '') + ' · 과방위 회의록 발췌') +
+  box.innerHTML = _personSec('발언 이력', list.length + '건' + (_personTopicFilter ? ' — ' + escHtml(_personTopicFilter) : '') + ' · 통신·전파·AI 관련 과방위 회의록 발췌') +
     listHtml +
     (proc.length ? '<details style="margin-top:8px"><summary style="cursor:pointer;font-size:11px;color:var(--text-tertiary)">' +
       '진행·단편 발언 ' + proc.length + '건 (사회·호명 등 내용 없음)</summary>' +
@@ -9925,13 +10159,31 @@ function renderPersonNews(p, rows) {
     }).join('') + '</div>';
 }
 
+// 요약에 넣을 발언(최대 90건, 날짜 내림차순 유지). 자격이 둘 이상이면 자격마다 최근 발언을 먼저 확보하고(자격당
+// 최대 15건, 자격이 많으면 90건을 나눠) 나머지를 최신순으로 채운다. 최근 90건만 자르면 옛 자격(김현 2021년 방통위
+// 부위원장 19건, 강도현 증인·실장 시절) 발언이 하나도 안 들어가 머리글 아래를 채울 근거가 없었다(2026-09-27 실측).
+function _personStanceRows(all, spans) {
+  var CAP = 90;
+  if (!spans || spans.length < 2) return all.slice(0, CAP);
+  var per = Math.min(15, Math.floor(CAP / spans.length));
+  var take = all.map(function() { return false; }), n = 0;
+  spans.forEach(function(sp) {
+    var k = 0;
+    for (var i = 0; i < all.length && k < per; i++) {
+      if (!take[i] && _personRoleLabel(all[i].position) === sp.label) { take[i] = true; k++; n++; }
+    }
+  });
+  for (var j = 0; j < all.length && n < CAP; j++) if (!take[j]) { take[j] = true; n++; }
+  return all.filter(function(_, i) { return take[i]; });
+}
+
 async function refreshPersonStance(id) {
   var p = (_peopleCache || []).find(function(x) { return String(x.id) === String(id); });
   if (!p || !sb) return;
   // 관리자 전용(#135). 화면 게이트는 안내용이고 실제 관문은 people UPDATE 정책(is_admin()).
-  if (typeof isAdminUser !== 'function' || !isAdminUser()) { alert('인물 입장 요약 생성·갱신은 관리자만 할 수 있습니다.'); return; }
+  if (typeof isAdminUser !== 'function' || !isAdminUser()) { alert('인물 발언 요약 생성·갱신은 관리자만 할 수 있습니다.'); return; }
   var box = document.getElementById('person-stance');
-  if (box) box.innerHTML = _personSec('쟁점별 입장 요약', '') +
+  if (box) box.innerHTML = _personSec('쟁점별 발언 요약', '') +
     '<div style="font-size:12px;color:var(--text-secondary);padding:12px 14px;border:1px solid var(--border);border-radius:10px">' +
     '<span style="display:inline-block;width:13px;height:13px;border:2px solid var(--accent);border-top-color:transparent;border-radius:50%;animation:spin 0.8s linear infinite;vertical-align:-2px;margin-right:6px"></span>요약 생성 중...</div>';
   try {
@@ -9939,11 +10191,11 @@ async function refreshPersonStance(id) {
     // 전체를 봐야 옛 자격(예: 2021년 방통위 부위원장)이 빠지지 않는다. 최다 발언자가 176건.
     var r = await _personSpeechQuery(p, 'meeting_date,topic,summary,position');
     var all = r.data || [];
-    var rows = all.slice(0, 90).map(function(s) { return (s.meeting_date || '') + ' [' + (s.topic || '기타') + '] ' + (s.summary || ''); }).join('\n');
     // 자격이 둘 이상이면(정부·증인일 때 ↔ 국회위원일 때) 자격별로 갈라 쓰게 한다.
     // 머리글은 코드가 만들어 "그대로 쓰라"고 지시한다 — 모델에게 형식을 맡기면 갱신할 때마다
     // 구조가 흔들리고, 실제로 9/13 세션이 손으로 만든 자격 블록이 갱신 한 번에 사라질 상태였다. (#169-보론2)
     var spans = _personRoleSpans(all);
+    var rows = _personStanceRows(all, spans).map(function(s) { return (s.meeting_date || '') + ' [' + (s.topic || '기타') + '] ' + (s.summary || ''); }).join('\n');
     var latestYm = all.length ? _ym(all[0].meeting_date) : '';
     var capRule = '';
     if (spans.length > 1) {
@@ -9955,15 +10207,18 @@ async function refreshPersonStance(id) {
           var isMember = sp.label === '과방위원';
           var a = _ym(sp.from), b = _ym(sp.to);
           var period = (a === b) ? a : (b === latestYm ? a + '~' : a + '~' + b);
-          return '**[' + sp.label + ' · ' + period + ' · ' + sp.n + '건 — ' +
-            (isMember ? '위원으로 질의' : '정부 측 답변') + ']**';
+          return '**[' + sp.label + ' · ' + period + ' · ' + sp.n + '건 — ' + _personRoleVerb(sp.label) + ']**';
         }).join('\n');
     }
+    // 지시문 개정(2026-09-27 운영자 결정, 5-16 ①): 'SKT/통신사 별도 불릿' 삭제 — 사외판은 발언 정리까지만(SKT 관점 분석은
+    // 사내판 몫). 태도·성향 평가어(비판적·우호적 등)는 모든 주제에서 빼고 '무엇을 말했나'(질의·촉구·요구 등 발언 행위)만.
     var userMsg = '다음은 ' + p.name + ' (' + [p.party, p.position].filter(Boolean).join(' ') + ')의 과방위 발언 요약 목록이다.\n\n' + rows +
-      '\n\n위 발언만을 근거로, 통신·전파 정책 관점의 쟁점별 입장 요약을 작성하라.\n' +
-      '- 쟁점 3~6개를 골라 "**쟁점명** — 입장 2~3문장 (근거 발언 날짜)" 형식의 불릿으로.\n' +
-      '- 상임위 질의는 비판조가 관행임을 감안해 단정을 피하고, 발언에 없는 입장은 쓰지 마라.\n' +
-      '- SKT/통신사에 직접 관련된 발언이 있으면 별도 불릿으로 표시하라.' + capRule;
+      '\n\n위 발언만을 근거로, 통신·전파·AI 정책 관점의 쟁점별 발언 요약을 작성하라.\n' +
+      '- 쟁점 3~6개를 골라 "**쟁점명** — 무엇을 묻고 요구·지적·제안·답변했는지 2~3문장 (근거 발언 날짜)" 형식의 불릿으로.\n' +
+      '- \'무엇을 말했나\'만 쓴다. 질의·촉구·요구·지적·제안·우려 표명·반대·찬성 같은 발언 행위는 써도 되지만, ' +
+      '발언자의 태도·성향을 평가하는 말(비판적·우호적·긍정적·부정적·회의적·강경·옹호·신중론·소극적 등)은 쓰지 마라.\n' +
+      '- 특정 회사(통신사 등)만 따로 모은 불릿이나 문단을 만들지 마라. 회사가 나오는 발언은 해당 쟁점 불릿 안에 사실로만 적는다.\n' +
+      '- 발언에 없는 입장·의도를 추정하지 말고 단정을 피하라.' + capRule;
     var res = await claudeFetch({
       site: 'person_stance',
       method: 'POST',
@@ -9979,7 +10234,7 @@ async function refreshPersonStance(id) {
     p.stance_summary = text; p.stance_updated_at = now;
     renderPersonStance(p);
   } catch (e) {
-    if (box) box.innerHTML = _personSec('쟁점별 입장 요약', '') +
+    if (box) box.innerHTML = _personSec('쟁점별 발언 요약', '') +
       '<div style="font-size:12px;color:#c0392b;padding:10px">생성 실패: ' + escHtml((e && e.message) || e) + '</div>';
     setTimeout(function() { renderPersonStance(p); }, 2500);
   }

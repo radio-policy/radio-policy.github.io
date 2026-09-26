@@ -94,6 +94,10 @@ CREATE INDEX news_screen_cache_judged_at_idx ON public.news_screen_cache USING b
 
 CREATE INDEX idx_profiles_team ON public.profiles USING btree (team_id);
 
+CREATE INDEX speech_field_stats_date_idx ON public.speech_field_stats USING btree (meeting_date);
+
+CREATE INDEX speech_field_stats_speaker_idx ON public.speech_field_stats USING btree (speaker, meeting_date);
+
 CREATE INDEX subscriber_queue_created_idx ON public.subscriber_queue USING btree (created_at);
 
 CREATE INDEX tech_terms_category_idx ON public.tech_terms USING btree (category);

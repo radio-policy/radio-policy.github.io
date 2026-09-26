@@ -616,6 +616,34 @@ create table if not exists public.profiles (
 );
 alter table public.profiles enable row level security;
 
+create table if not exists public.speech_field_stats (
+  id bigint generated always as identity not null,
+  confer_num text not null,
+  meeting_date date,
+  meeting_title text,
+  meeting_kind text,
+  meeting_default text,
+  speaker text not null,
+  "position" text default ''::text not null,
+  n_blocks integer default 0 not null,
+  n_chars integer default 0 not null,
+  fields jsonb default '{}'::jsonb not null,
+  field_chars jsonb default '{}'::jsonb not null,
+  n_noise integer default 0 not null,
+  n_chair integer default 0 not null,
+  n_proc integer default 0 not null,
+  n_unclassified integer default 0 not null,
+  n_direct numeric default 0 not null,
+  n_inherit numeric default 0 not null,
+  n_default numeric default 0 not null,
+  src text,
+  rules_version text not null,
+  created_at timestamp with time zone default now() not null,
+  constraint speech_field_stats_uniq UNIQUE (confer_num, speaker, "position"),
+  constraint speech_field_stats_pkey PRIMARY KEY (id)
+);
+alter table public.speech_field_stats enable row level security;
+
 create table if not exists public.subscriber_queue (
   id bigint default nextval('subscriber_queue_id_seq'::regclass) not null,
   topic text not null,

@@ -214,6 +214,9 @@ create policy profiles_upd_admin on public.profiles as PERMISSIVE for UPDATE to 
   using (is_admin())
   with check (is_admin());
 
+create policy speech_field_stats_sel on public.speech_field_stats as PERMISSIVE for SELECT to anon, authenticated
+  using (true);
+
 create policy system_health_anon_select on public.system_health as PERMISSIVE for SELECT to anon, authenticated
   using (true);
 

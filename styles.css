@@ -15,9 +15,15 @@
   --accent-dark: #3C3489;
   --green: #16a34a;
   --green-light: #dcfce7;
+  /* 과방위 발언 분야 7색(#248, 2026-09-27) — 고정 순서, app.js SPEECH_FIELDS 순서와 1:1.
+     통신·전파 / AI·디지털 / 보안·개인정보 / 방송·미디어 / 과학기술·R&D / 원자력·우주 / 우정·기타.
+     dataviz 기본 팔레트 1~7번 그대로 — 인접 색 CVD ΔE ≥ 8.4, 일반 시각 ΔE ≥ 19.3(라이트·다크 검증). 라이트의
+     3·4·5번은 바탕 대비 3:1 미만이라 범례에 %를 글자로 늘 적는다(색만으로 구분하지 않음). */
+  --sf-1: #2a78d6; --sf-2: #eb6834; --sf-3: #1baf7a; --sf-4: #eda100; --sf-5: #e87ba4; --sf-6: #008300; --sf-7: #4a3aa7;
 }
 @media (prefers-color-scheme: dark) {
   :root {
+    --sf-1: #3987e5; --sf-2: #d95926; --sf-3: #199e70; --sf-4: #c98500; --sf-5: #d55181; --sf-6: #008300; --sf-7: #9085e9;
     --bg-primary: #1c1c1e;
     --bg-secondary: #2c2c2e;
     --bg-tertiary: #3a3a3c;

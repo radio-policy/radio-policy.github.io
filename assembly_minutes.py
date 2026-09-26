@@ -58,6 +58,7 @@ from bs4 import BeautifulSoup
 from sb_client import make_client, heartbeat as sb_heartbeat
 from retry_util import with_retry
 import api_usage; api_usage.install()   # Anthropic usage 기록(#152) — 호출부 무변경, fail-open
+import speech_fields                     # 발언 분야 집계(#248) — 낱말 규칙, AI 0회
 from press_ingest import (
     load_press_keywords, make_ai_judge, register_kb_section, section_exists,
     _pdf_to_text, _like_escape, _doc_max_index,
@@ -554,7 +555,37 @@ def verify_blocks_against_pdf(blocks: list, pdf_url: str, sample: int = 6, pdf=N
         return None, '표본으로 쓸 만큼 긴 블록 없음'
     hits = sum(1 for p in probes if p in hay)
     ok = hits / len(probes) >= VERIFY_OK_RATIO
-    return ok, '표본 %d/%d 적중, PDF %d자' % (hits, len(probes), len(hay))
+    if ok:
+        return ok, '표본 %d/%d 적중, PDF %d자' % (hits, len(probes), len(hay))
+    # 두 번째 의견 — 6글자 조각 겹침(#248-보론, 2026-09-27). 22대 PDF는 중반부 글자가 무더기로 빠져(pdftotext 글리프 손실)
+    # 앞 30자 그대로 찾기가 맞는 회의에서도 0~2/6 로 떨어졌다: 22대 상임위 188건 중 63건이 '불일치'로 판정돼 **멀쩡한 뷰어
+    # 본문을 글자 빠진 PDF 블록으로 바꿔치고** 있었다(예: 55991 쿠팡 청문회 준비 회의). 실측: 같은 회의 뷰어↔PDF 조각 겹침
+    # 0.29~0.51(8건), 다른 회의끼리 0.017~0.076(8쌍) → 0.15 이상이면 같은 회의로 본다(뷰어가 다른 회의 본문을 준 경우는 여전히 걸린다).
+    cov = _ngram_coverage(blocks, hay)
+    if cov >= VERIFY_NGRAM_OK:
+        return True, '표본 %d/%d 적중이나 조각 겹침 %.2f ≥ %.2f(PDF 글자 빠짐), PDF %d자' % (
+            hits, len(probes), cov, VERIFY_NGRAM_OK, len(hay))
+    return False, '표본 %d/%d 적중·조각 겹침 %.2f, PDF %d자' % (hits, len(probes), cov, len(hay))
+
+
+VERIFY_NGRAM_N = 6
+VERIFY_NGRAM_OK = 0.15
+VERIFY_NGRAM_SAMPLE = 3000
+
+
+def _ngram_coverage(blocks: list, hay: str) -> float:
+    """뷰어 블록 본문(공백 제거)의 6글자 조각 표본이 PDF 텍스트(공백 제거)에 들어 있는 비율. 표본은 7자 간격 + 고정 시드."""
+    import random
+    n = VERIFY_NGRAM_N
+    grams = set(hay[i:i + n] for i in range(0, max(0, len(hay) - n + 1)))
+    allg = []
+    for b in blocks:
+        t = _squash(b.get('text') or '')
+        allg.extend(t[i:i + n] for i in range(0, max(0, len(t) - n + 1), 7))
+    if not allg:
+        return 0.0
+    smp = random.Random(1).sample(allg, min(VERIFY_NGRAM_SAMPLE, len(allg)))
+    return sum(1 for g in smp if g in grams) / len(smp)
 
 
 # ═══════════════════════════════════════════════════════════
@@ -1584,6 +1615,59 @@ def _alert_operator_new_minutes(items: list, year: int) -> bool:
     return _send_tg('\n'.join(lines), parse_mode='HTML', disable_web_page_preview=True)
 
 
+def fetch_verified_blocks(m: dict):
+    """회의 1건의 발언 블록 확보 + 뷰어 오응답 검증. 반환 (blocks, src) — 실패면 ([], 이유).
+    run() 과 발언 분야 백필(speech_fields_backfill.py, #248)이 같이 쓴다(2026-09-27 run() 에서 떼어 냄, 동작 무변경)."""
+    is_audit = bool(m.get('is_audit'))
+    viewer_id = m.get('viewer_id') or m['confer_num']
+    # 뷰어가 '빈 결과'가 아니라 '예외'로 실패해도 PDF 폴백까지 가야 한다.
+    # (2026-08-03: 2024-10-25 국정감사 회의록이 뷰어에서 400을 뱉는데, 예외가 폴백 앞에서
+    #  가로채는 바람에 PDF가 멀쩡한데도 영구 실패로 남았다.)
+    blocks, src, viewer_err = [], '뷰어', None
+    try:
+        blocks = fetch_speech_blocks(viewer_id)
+    except Exception as e:
+        viewer_err = str(e)[:80]
+    if not blocks:
+        try:
+            blocks = pdf_fallback_blocks(m['pdf_url'])
+            src = 'PDF폴백'
+        except Exception as e:
+            print('  [원문 실패] %s: 뷰어=%s / PDF=%s'
+                  % (m['title'][:50], viewer_err or '빈결과', str(e)[:60]))
+            return [], '원문 실패'
+        if blocks and viewer_err:
+            print('  [뷰어 실패→PDF 폴백] %s (%s)' % (m['title'][:44], viewer_err[:40]))
+    if not blocks:
+        print('  [원문 없음·스킵] %s' % m['title'][:60])
+        return [], '원문 없음'
+    # 뷰어 본문 교차 검증(2026-09-03) — 뷰어가 다른 회의의 본문을 돌려준 실측(41948·42378·43150).
+    # 상임위 회의만: Open API 의 PDF_LINK_URL 이 뷰어와 독립된 사본이라 대조 근거가 된다.
+    # 국감은 검증하지 않는다 — 국감 PDF 는 뷰어 id(MNTS_ID)로 만든 URL(AUDIT_PDF_URL)이라
+    # 뷰어와 같은 id 체계를 공유해 독립 사본이 아니다(경로 무변경, 운영자 결정 전까지).
+    if src == '뷰어' and not is_audit and m.get('pdf_url'):
+        foreign = looks_foreign_committee(blocks)
+        pdf = fetch_pdf_text(m['pdf_url'])
+        ok, detail = verify_blocks_against_pdf(blocks, m['pdf_url'], pdf=pdf)
+        if foreign or ok is False:
+            why = ('타 상임위 직함 %s' % foreign) if foreign else detail
+            try:
+                fixed = pdf_fallback_blocks(m['pdf_url'], pdf_text=pdf[0])
+            except Exception as e:
+                fixed = []
+                why += ' / PDF 폴백 예외 %s' % str(e)[:50]
+            if not fixed:
+                print('  [뷰어 불일치·PDF 폴백 없음→스킵] %s (%s) — 잘못된 본문은 등재하지 않는다'
+                      % (m['title'][:50], why))
+                return [], '뷰어 불일치'
+            print('  [뷰어 불일치→PDF 폴백] %s (%s) 뷰어 %d블록 → PDF %d블록'
+                  % (m['title'][:44], why, len(blocks), len(fixed)))
+            blocks, src = fixed, 'PDF(뷰어 불일치)'
+        elif ok is None:
+            print('  [뷰어 검증 불가·뷰어 사용] %s (%s)' % (m['title'][:44], detail))
+    return blocks, src
+
+
 def run(sb, api_key: str, year: int, limit: int = 0, dry: bool = False,
         audit: bool = True, audit_only: bool = False, notify: bool = True,
         operator_alert: bool = True) -> dict:
@@ -1647,54 +1731,18 @@ def run(sb, api_key: str, year: int, limit: int = 0, dry: bool = False,
         if sec_exists and (dry or sp_exists):
             stats['dup'] += 1
             continue
-        # 뷰어가 '빈 결과'가 아니라 '예외'로 실패해도 PDF 폴백까지 가야 한다.
-        # (2026-08-03: 2024-10-25 국정감사 회의록이 뷰어에서 400을 뱉는데, 예외가 폴백 앞에서
-        #  가로채는 바람에 PDF가 멀쩡한데도 영구 실패로 남았다.)
-        blocks, src, viewer_err = [], '뷰어', None
-        try:
-            blocks = fetch_speech_blocks(viewer_id)
-        except Exception as e:
-            viewer_err = str(e)[:80]
+        blocks, src = fetch_verified_blocks(m)
         if not blocks:
-            try:
-                blocks = pdf_fallback_blocks(m['pdf_url'])
-                src = 'PDF폴백'
-            except Exception as e:
-                print('  [원문 실패] %s: 뷰어=%s / PDF=%s'
-                      % (m['title'][:50], viewer_err or '빈결과', str(e)[:60]))
-                stats['fail'] += 1
-                continue
-            if blocks and viewer_err:
-                print('  [뷰어 실패→PDF 폴백] %s (%s)' % (m['title'][:44], viewer_err[:40]))
-        if not blocks:
-            print('  [원문 없음·스킵] %s' % m['title'][:60])
             stats['fail'] += 1
             continue
-        # 뷰어 본문 교차 검증(2026-09-03) — 뷰어가 다른 회의의 본문을 돌려준 실측(41948·42378·43150).
-        # 상임위 회의만: Open API 의 PDF_LINK_URL 이 뷰어와 독립된 사본이라 대조 근거가 된다.
-        # 국감은 검증하지 않는다 — 국감 PDF 는 뷰어 id(MNTS_ID)로 만든 URL(AUDIT_PDF_URL)이라
-        # 뷰어와 같은 id 체계를 공유해 독립 사본이 아니다(경로 무변경, 운영자 결정 전까지).
-        if src == '뷰어' and not is_audit and m.get('pdf_url'):
-            foreign = looks_foreign_committee(blocks)
-            pdf = fetch_pdf_text(m['pdf_url'])
-            ok, detail = verify_blocks_against_pdf(blocks, m['pdf_url'], pdf=pdf)
-            if foreign or ok is False:
-                why = ('타 상임위 직함 %s' % foreign) if foreign else detail
-                try:
-                    fixed = pdf_fallback_blocks(m['pdf_url'], pdf_text=pdf[0])
-                except Exception as e:
-                    fixed = []
-                    why += ' / PDF 폴백 예외 %s' % str(e)[:50]
-                if not fixed:
-                    print('  [뷰어 불일치·PDF 폴백 없음→스킵] %s (%s) — 잘못된 본문은 등재하지 않는다'
-                          % (m['title'][:50], why))
-                    stats['fail'] += 1
-                    continue
-                print('  [뷰어 불일치→PDF 폴백] %s (%s) 뷰어 %d블록 → PDF %d블록'
-                      % (m['title'][:44], why, len(blocks), len(fixed)))
-                blocks, src = fixed, 'PDF(뷰어 불일치)'
-            elif ok is None:
-                print('  [뷰어 검증 불가·뷰어 사용] %s (%s)' % (m['title'][:44], detail))
+        # 과방위 발언 분야 집계(#248) — 이 회의의 **모든** 발언 블록을 발언자별 분야로 센다(낱말 규칙, AI 0회).
+        # 원문은 저장소 밖 로컬 폴더에 보관(규칙을 바꾸면 재수신 없이 다시 센다). 실패해도 수집은 계속한다.
+        if not dry:
+            try:
+                n_f = speech_fields.record_meeting(sb, m, blocks, src)
+                print('  [분야 집계] %s 발언자 %d행' % (ymd6, n_f))
+            except Exception as e:
+                print('  [분야 집계 실패(무시)] %s: %s' % (ymd6, str(e)[:100]))
         picked, confirmed = select_relevant(blocks, keywords, judge, m['title'],
                                             max_judge=max_judge)
         detail = fetch_detail(api_key, m['conf_id'])
