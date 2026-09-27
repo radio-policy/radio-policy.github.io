@@ -998,12 +998,18 @@
               <span class="tag selected">공통</span>
               <span class="tag" style="opacity:.45;cursor:not-allowed" title="팀이 지정된 승인 계정만 팀 규칙을 씁니다">우리 팀</span>
             </div>
-            <!-- 안내·칸 이름은 「적어도/무조건」「①②③」(#249) — 옛 「최소(하한)·지정·낱말·그리고·제외」는 운영자가 뜻을 모르겠다고 해 바꿨다 -->
+            <!-- 안내·칸 이름은 「적어도/무조건」「①②③」(#249) — 옛 「최소(하한)·지정·낱말·그리고·제외」는 운영자가 뜻을 모르겠다고 해 바꿨다.
+                 설명은 한 줄 + 「자세히」(#249 보론, 2026-09-27 — 운영자 "설명이 너무 길다"). 한 줄은 탭마다 app.js _urRenderTabs가 바꾼다 -->
             <div style="font-size:11.5px;color:var(--text-secondary);margin-bottom:10px;line-height:1.75">
-              · AI가 기사마다 매기는 등급(중요·보통·참고)에 더하는 <b>안전장치</b>입니다. 기사 <b>제목이나 요약</b>에 정해 둔 낱말이 있으면 등급을 정합니다.<br>
-              · <b>적어도</b> = 그 등급 아래로는 내려가지 않게(AI가 더 높게 보면 AI 값) · <b>무조건</b> = AI 판정 없이 그 등급으로.<br>
-              · 위 규칙부터 차례로 보고 <b>처음 걸린 규칙 하나만</b> 적용합니다. <span id="ur-common-note">저장하면 다음 수집(10분 간격)부터 새 기사에 쓰이고, 이미 저장된 기사는 그대로입니다. </span>규칙은 지우지 않고 끄기만 합니다.
-              <span id="ur-team-note" style="display:none"><br>· <b>우리 팀 규칙</b>은 공통 등급 위에 <b>우리 팀이 보는 등급만</b> 덧씌웁니다(공통값·알림·브리핑은 그대로). 저장하면 불러온 기사에 <b>바로</b> 다시 적용되고, 앞으로 수집되는 기사에도 적용됩니다. 우리 팀이 직접 고친 기사는 규칙이 건드리지 않습니다.<br>· <b>④ AI 문장 조건</b>을 적은 규칙은 낱말이 걸린 기사 중 AI가 그 문장에 맞다고 본 기사에만 적용됩니다 — 판정은 다음 수집부터 10분마다 최대 100건씩이라, 판정된 기사부터 반영됩니다.</span>
+              <span id="ur-lead">제목·요약에 정해 둔 낱말로 AI 등급(중요·보통·참고)을 바로잡습니다.</span> 위 규칙부터 <b>처음 걸린 하나만</b> 적용합니다.
+              <details style="display:inline">
+                <summary style="display:inline;cursor:pointer;color:var(--accent)">자세히</summary>
+                <div style="margin-top:4px">
+                  · <b>적어도</b> = 그 등급 아래로는 내려가지 않게(AI가 더 높게 보면 AI 값) · <b>무조건</b> = AI 판정 없이 그 등급으로.<br>
+                  · <span id="ur-common-note">저장하면 다음 수집(10분 간격)부터 새 기사에 쓰이고, 이미 저장된 기사는 그대로입니다. </span>규칙은 지우지 않고 끄기만 합니다.
+                  <span id="ur-team-note" style="display:none"><br>· <b>우리 팀 규칙</b>은 공통 등급 위에 <b>우리 팀이 보는 등급만</b> 덧씌웁니다(공통값·알림·브리핑은 그대로). 저장하면 불러온 기사에 <b>바로</b> 다시 적용되고, 앞으로 수집되는 기사에도 적용됩니다. 우리 팀이 직접 고친 기사는 규칙이 건드리지 않습니다.<br>· <b>AI 확인 조건</b>을 적은 규칙은 낱말이 걸린 기사 중 AI가 그 조건에 맞다고 본 기사에만 적용됩니다 — 확인은 다음 수집부터 10분마다 최대 100건씩이라, 확인된 기사부터 반영됩니다.</span>
+                </div>
+              </details>
             </div>
             <!-- 이번 달 우리 팀 AI 문장 판정 건수·비용(#251) — 우리 팀 탭에서만, app.js _urTeamCostRender가 채운다 -->
             <div id="ur-team-cost" style="display:none;font-size:11px;color:var(--text-secondary);margin:-4px 0 8px;line-height:1.6"></div>
@@ -1014,45 +1020,56 @@
               <button class="btn" id="ur-add-btn" style="font-size:12px;display:none" onclick="editUrgencyRule(null)"><i class="ti ti-plus"></i> 새 규칙</button>
             </div>
             <div id="ur-form" style="display:none;margin-top:10px;padding:10px 12px;background:var(--bg-secondary);border-radius:var(--radius-md)">
-              <!-- 문장으로 적기(#249) — Haiku가 아래 칸을 채우기만 한다. 저장되는 건 여전히 낱말 목록이라 수집 때는 AI 없이 같은 결과
-                   (우리 팀 탭의 ④ AI 문장 조건만 예외 — 크롤러가 기사마다 한 번 판정해 저장, #251) -->
-              <div style="margin-bottom:10px;padding:8px 10px;border:0.5px dashed var(--border-mid);border-radius:var(--radius-md);background:var(--bg-primary)">
-                <span class="input-label">✍️ 문장으로 적기 (AI가 아래 칸을 채웁니다)</span>
-                <textarea class="input-field" id="ur-f-nl" rows="2" style="height:auto" maxlength="500" placeholder="예: SKT나 통신3사가 국정감사 증인으로 나온다는 기사는 적어도 중요로"></textarea>
+              <!-- 말로 적기(#249, 이름은 #249 보론 — 옛 「문장으로 적기」가 「AI 문장 조건」과 헷갈려 바꿨다) — Haiku가 아래 칸을 채우기만 한다.
+                   저장되는 건 여전히 낱말 목록이라 수집 때는 AI 없이 같은 결과(우리 팀 탭의 AI 확인 조건만 예외 — 크롤러가 기사마다 한 번 판정해 저장, #251).
+                   예시(placeholder)는 탭마다 한 주제로 app.js UR_EXAMPLES가 채운다 -->
+              <div style="margin-bottom:10px;padding:10px 12px;border:1px solid var(--accent);border-radius:var(--radius-md);background:var(--bg-primary)">
+                <div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:6px">✍️ 말로 적기 <span style="font-size:11.5px;font-weight:400;color:var(--text-secondary)">— 어떤 기사를 어떤 등급으로 볼지 적으면 AI가 규칙으로 바꿉니다</span></div>
+                <textarea class="input-field" id="ur-f-nl" rows="2" style="height:auto" maxlength="500" placeholder=""></textarea>
+                <div id="ur-f-nl-hint" style="display:none;font-size:11px;color:var(--text-secondary);line-height:1.6;margin:2px 0 4px">💡 <b>주제</b>(무엇에 관한 기사)는 낱말로, <b>성격</b>(비판·문제 제기 등)은 「AI 확인 조건」으로 나눠 채웁니다 — 둘을 함께 적어 주세요.</div>
                 <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:6px">
                   <button class="btn" id="ur-nl-btn" style="font-size:12px" onclick="urgencyRuleFromText(this)"><i class="ti ti-sparkles"></i> 규칙으로 바꾸기</button>
-                  <span style="font-size:10.5px;color:var(--text-tertiary)">Haiku 1회(약 3원) · 채운 뒤 아래 문장과 미리보기를 보고 저장</span>
+                  <span style="font-size:10.5px;color:var(--text-tertiary)">Haiku 1회(약 3원) · 아래 세부 칸을 채워 펼칩니다 — 보고 저장</span>
                 </div>
               </div>
-              <span class="input-label">규칙 이름 (기사 상세에 「규칙: 이름」으로 보임 — ' — ' 뒤에 적은 말은 메모라 화면에 안 보임)</span><input class="input-field" id="ur-f-note" type="text" placeholder="예: 국정감사 증인·참고인(SKT·통신3사)" oninput="_urFormSentence()" />
-              <div style="display:flex;gap:8px;flex-wrap:wrap">
-                <div><span class="input-label">어떻게</span><select class="input-field" id="ur-f-mode" onchange="_urFormSentence()"><option value="min">적어도 (AI가 더 높으면 AI 값)</option><option value="set">무조건 (AI 판정 생략)</option></select></div>
-                <div><span class="input-label">등급</span><select class="input-field" id="ur-f-level" onchange="_urFormSentence()"><option value="긴급">중요</option><option value="보통">보통</option><option value="참고">참고</option></select></div>
-                <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--text-secondary);margin-top:18px"><input type="checkbox" id="ur-f-enabled" onchange="_urFormSentence()" /> 켜짐</label>
-              </div>
-              <span class="input-label">① 이 낱말 중 하나가 있고 (꼭 필요 — 쉼표로 구분)</span><input class="input-field" id="ur-f-any" type="text" placeholder="예: SKT, SK텔레콤, 통신3사" oninput="_urFormSentence()" />
-              <span class="input-label">② 이 낱말도 있고 (선택 — 한 줄에 한 묶음, 줄마다 그 줄 낱말 중 하나가 더 있어야 함)</span><textarea class="input-field" id="ur-f-and" rows="3" style="height:auto" placeholder="예:&#10;국감, 국정감사&#10;증인, 참고인, 출석" oninput="_urFormSentence()"></textarea>
-              <span class="input-label">③ 이 낱말은 없을 때 (선택 — 하나라도 있으면 이 규칙은 안 걸림)</span><input class="input-field" id="ur-f-none" type="text" placeholder="예: 인사말, 인사이드" oninput="_urFormSentence()" />
-              <!-- ④ AI 문장 조건(#251) — 팀 규칙만(DB CHECK, 설계안 §10-2 C7). 보이기는 app.js(_urRenderTabs·editUrgencyRule)가 우리 팀 탭에서만.
-                   판정은 크롤러(Haiku)가 다음 수집부터 10분마다 최대 100건씩 — 브라우저는 AI를 부르지 않고 대기 행만 넣는다(C3) -->
-              <div id="ur-f-sentence-row" style="display:none">
-                <span class="input-label">④ AI 문장 조건 (선택)</span>
-                <textarea class="input-field" id="ur-f-sentence" rows="2" style="height:auto;margin-bottom:2px" maxlength="200" placeholder="예: 공공·지하철 와이파이 관련 문제(부정적)를 제기하는 기사" oninput="_urFormSentence()"></textarea>
-                <div style="font-size:10.5px;color:var(--text-tertiary);line-height:1.6;margin-bottom:8px">①~③ 낱말이 걸린 기사 중에서 AI가 이 문장에 맞는다고 본 기사에만 규칙을 적용합니다. 한 번 판정한 기사는 다시 묻지 않고, 문장을 고치면 새로 판정합니다. 판정은 다음 수집부터 10분마다 최대 100건씩, 기사당 약 2~4원.</div>
-              </div>
-              <!-- 「이렇게 읽힙니다」(#249) — id는 #251부터 ur-f-read(ur-f-sentence는 위 ④ 입력칸, 표 칸 이름 sentence와 맞춤) -->
-              <div id="ur-f-read" style="margin-top:10px;padding:8px 10px;border-radius:var(--radius-md);background:var(--bg-primary);border:0.5px solid var(--border-secondary);font-size:11.5px;line-height:1.8;color:var(--text-secondary)"></div>
-              <details style="margin-top:8px;font-size:11px;color:var(--text-tertiary)">
-                <summary style="cursor:pointer">고급 — 먼저 볼 순서 · 영문 이름</summary>
-                <div style="padding:6px 0 0 2px">
-                  <span class="input-label">먼저 볼 순서 (작을수록 먼저)</span><input class="input-field" id="ur-f-pos" type="number" style="width:90px" />
-                  <div id="ur-f-pos-hint" style="font-size:10.5px;margin:2px 0 6px;line-height:1.6"></div>
-                  <div id="ur-f-slug-row" style="margin-bottom:6px"><span class="input-label">영문 이름 (선택 — 규칙 id 앞부분, 비우면 rule)</span><input class="input-field" id="ur-f-slug" type="text" placeholder="예: skt_fine" /></div>
-                  <div>규칙 id: <code id="ur-f-id" style="font-size:10.5px"></code></div>
+              <!-- 규칙 세부(#249 보론) — 새 규칙은 접혀 있다가 「규칙으로 바꾸기」가 채우면서 펼친다(머리줄을 직접 누르면 AI 없이 직접 쓰기).
+                   기존 규칙 「편집」은 펼친 채로 연다. 여닫기는 app.js _urDetailOpen -->
+              <details id="ur-f-detail">
+                <summary style="cursor:pointer;font-size:12px;font-weight:600;color:var(--text-primary);padding:2px 0">규칙 세부 — 이름·등급·낱말 <span style="font-size:10.5px;font-weight:400;color:var(--text-tertiary)">(「규칙으로 바꾸기」가 채워 펼칩니다 · 직접 쓰려면 누르기)</span></summary>
+                <div style="padding-top:6px">
+                  <!-- 「이렇게 읽힙니다」(#249) — 세부 맨 위(사람은 칸보다 문장을 먼저 읽는다). id는 #251부터 ur-f-read(ur-f-sentence는 AI 확인 조건 입력칸, 표 칸 이름 sentence와 맞춤) -->
+                  <div id="ur-f-read" style="margin-bottom:8px;padding:8px 10px;border-radius:var(--radius-md);background:var(--bg-primary);border:0.5px solid var(--border-secondary);font-size:11.5px;line-height:1.8;color:var(--text-secondary)"></div>
+                  <!-- 「규칙으로 바꾸기」 결과 안내·AI 메모 — app.js urgencyRuleFromText가 채우고 editUrgencyRule이 비운다 -->
+                  <div id="ur-f-ai-note" style="display:none;font-size:11px;color:var(--text-secondary);line-height:1.6;margin:-2px 0 8px"></div>
+                  <!-- AI 확인 조건(#251, 옛 이름 「④ AI 문장 조건」) — 팀 규칙만(DB CHECK, 설계안 §10-2 C7). 보이기는 app.js(_urRenderTabs·editUrgencyRule)가 우리 팀 탭에서만.
+                       판정은 크롤러(Haiku)가 다음 수집부터 10분마다 최대 100건씩 — 브라우저는 AI를 부르지 않고 대기 행만 넣는다(C3) -->
+                  <div id="ur-f-sentence-row" style="display:none;margin-bottom:8px;padding:8px 10px;border:1px solid var(--accent);border-radius:var(--radius-md);background:var(--bg-primary)">
+                    <span class="input-label" style="font-weight:700;color:var(--text-primary)">🤖 AI 확인 조건 (선택)</span>
+                    <textarea class="input-field" id="ur-f-sentence" rows="2" style="height:auto;margin-bottom:2px" maxlength="200" placeholder="" oninput="_urFormSentence()"></textarea>
+                    <div style="font-size:10.5px;color:var(--text-tertiary);line-height:1.6">아래 낱말에 걸린 기사마다 AI가 이 조건에 맞는지 한 번 확인해, 맞는 기사에만 적용 · 기사당 약 2~4원 · 조건을 고치면 새로 확인</div>
+                  </div>
+                  <span class="input-label">규칙 이름 (기사 상세에 「규칙: 이름」으로 보임 — ' — ' 뒤에 적은 말은 메모라 화면에 안 보임)</span><input class="input-field" id="ur-f-note" type="text" placeholder="" oninput="_urFormSentence()" />
+                  <div style="display:flex;gap:8px;flex-wrap:wrap">
+                    <div><span class="input-label">어떻게</span><select class="input-field" id="ur-f-mode" onchange="_urFormSentence()"><option value="min">적어도 (AI가 더 높으면 AI 값)</option><option value="set">무조건 (AI 판정 생략)</option></select></div>
+                    <div><span class="input-label">등급</span><select class="input-field" id="ur-f-level" onchange="_urFormSentence()"><option value="긴급">중요</option><option value="보통">보통</option><option value="참고">참고</option></select></div>
+                    <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--text-secondary);margin-top:18px"><input type="checkbox" id="ur-f-enabled" onchange="_urFormSentence()" /> 켜짐</label>
+                  </div>
+                  <span class="input-label">① 이 낱말 중 하나가 있고 (꼭 필요 — 쉼표로 구분)</span><input class="input-field" id="ur-f-any" type="text" placeholder="" oninput="_urFormSentence()" />
+                  <span class="input-label">② 이 낱말도 있고 (선택 — 한 줄에 한 묶음, 줄마다 그 줄 낱말 중 하나가 더 있어야 함)</span><textarea class="input-field" id="ur-f-and" rows="3" style="height:auto" placeholder="" oninput="_urFormSentence()"></textarea>
+                  <span class="input-label">③ 이 낱말은 없을 때 (선택 — 하나라도 있으면 이 규칙은 안 걸림)</span><input class="input-field" id="ur-f-none" type="text" placeholder="" oninput="_urFormSentence()" />
+                  <details style="margin-top:4px;font-size:11px;color:var(--text-tertiary)">
+                    <summary style="cursor:pointer">고급 — 먼저 볼 순서 · 영문 이름</summary>
+                    <div style="padding:6px 0 0 2px">
+                      <span class="input-label">먼저 볼 순서 (작을수록 먼저)</span><input class="input-field" id="ur-f-pos" type="number" style="width:90px" />
+                      <div id="ur-f-pos-hint" style="font-size:10.5px;margin:2px 0 6px;line-height:1.6"></div>
+                      <div id="ur-f-slug-row" style="margin-bottom:6px"><span class="input-label">영문 이름 (선택 — 규칙 id 앞부분, 비우면 rule)</span><input class="input-field" id="ur-f-slug" type="text" placeholder="예: skt_fine" /></div>
+                      <div>규칙 id: <code id="ur-f-id" style="font-size:10.5px"></code></div>
+                    </div>
+                  </details>
                 </div>
               </details>
-              <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
-                <button class="btn" style="font-size:12px" onclick="previewUrgencyRules()"><i class="ti ti-player-play"></i> 이 규칙으로 미리 보기</button>
+              <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+                <button class="btn" style="font-size:12px" onclick="previewUrgencyRules(true)"><i class="ti ti-player-play"></i> 이 규칙으로 미리 보기</button>
                 <button class="btn btn-primary" style="font-size:12px" onclick="saveUrgencyRule(this)"><i class="ti ti-device-floppy"></i> 저장</button>
                 <button class="btn" style="font-size:12px" onclick="cancelUrgencyRuleEdit()">취소</button>
               </div>
@@ -1207,7 +1224,7 @@
 <script src="supabase/functions/_shared/cite_verify.js?v=20260926b"></script>
 <script src="supabase/functions/_shared/rag_core.js?v=20260927b"></script>   <!-- 자문 검색 순수 규칙(#215) — app.js보다 먼저 -->
 <script src="supabase/functions/_shared/urgency_rules.js?v=20260927c"></script>   <!-- 긴급도 규칙 매처(#216) + 팀 층 함수(#250) + 문장 조건 함수(#251) + 알림 등급 함수(#252) — app.js보다 먼저 -->
-<script src="app.js?v=20260927o"></script>
+<script src="app.js?v=20260927p"></script>
 <script src="lawmap_articles.js?v=20260914a"></script>
 </body>
 </html>
