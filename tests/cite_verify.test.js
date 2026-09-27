@@ -441,6 +441,9 @@ function ok(name, cond, extra) {
     CV.stripCiteBody('| 전기통신사업법 시행령 | 제37조의10 | 도매제공 |'), CV.stripCiteBody('전파법 시행령(대통령령) 제18조'), CV.stripCiteBody('- **전기통신사업법 제32조의14** ')],
     ['대리점은판매점을선임할때미리승낙을받아야한다', '제1항', '별표4제5호마목', '도매제공', '', '']);
   eq('stripCiteBody: 「업무처리규정 제11조는 다음과 같이 규정합니다.」는 종전대로 번호·제목뿐', CV.stripCiteBody('업무처리규정 제11조는 다음과 같이 규정합니다.').length < 24, true);
+  // 과거 실답변 대조(2026-09-28 PC): 8낱말 고시 이름 칸·줄표 뒤 이름 — 남기면 이름 칸·소제목이 인용문이 되어 뒤 칸 조문 내용을 버린다
+  eq('stripCiteBody: 8낱말 고시 이름 칸(dd26eb98)은 번호·제목뿐', CV.stripCiteBody('| **주파수할당 신청 절차 및 방법 등 세부사항 고시(제2026-23호) 제14조** '), '');
+  eq('stripCiteBody: 줄표 뒤 이름(992c7fb8 소제목)은 지운다', CV.stripCiteBody('## 3. ② 예비전원 용량·이원화 세부기준 — 통신시설 등급 지정·관리 기준 제8조 ').length < 24, true);
   // (2) 표 행·형제 항목은 토막 문단 규칙(#176)으로 앞 문단을 가져오지 않는다 — 줄에 조 번호가 없는 짧은 행이 표 앞 안내 문장과 대조됐다
   var tblI = '전파법 제16조는 재할당의 절차와 조건을 정하고 있으며, 각 항의 내용을 표로 정리하면 다음과 같습니다.\n\n| 항 | 내용 |\n|---|---|\n| 제5항 | 조건을 붙일 수 있음 [원문 확인됨: 전파법 제16조제5항] |\n| 제6항 | 재할당 절차는 대통령령으로 정함 [원문 확인됨: 전파법 제16조제6항] |\n';
   var cI = CV.findCitations(tblI);
@@ -473,6 +476,15 @@ function ok(name, cond, extra) {
   var cW2 = CV.findCitations('전파법 제16조에 따라 재할당 대가를 산정하고, 산정 방식 제9조는 주파수를 분배한다고 정한다 [원문 확인됨: 산정 방식 제9조]')[0];
   eq('약한 이름을 못 맞추면 종전대로 앞 법령(전파법 제9조)', [CV.checkCitation(cW2, [l9, g9], []).lawDoc], ['전파법']);
   eq('약한 이름은 이어받을 법령이 되지 않음(동법은 전파법)', CV.lawScope(CV.lawNameBefore('동법 '), CV.findCitations('주파수할당 신청 절차 및 방법 등 세부사항 제9조와 동법 제10조 [원문 확인됨: 동법 제10조]')[0].ctxLaw || CV.lawNameBefore('전파법 '), [gosiSD, '전파법']), ['전파법']);
+
+  // 과거 실답변 대조(2026-09-28 PC, dd26eb98): 표 이름 칸이 원문 제목 줄과 글자 그대로 겹쳐도(‘|’를 빼면 13자 100%) 그것만으로 초록이 되지 않는다
+  //  — 이름·번호·제목을 빼면 내용이 없는 앞 줄은 '글자 그대로 일치'에 세지 않고, 뒤 칸 내용이 판정기로 간다
+  var sp18 = [{ id: 9101, doc_name: '전파법 시행령', article_no: '18조(재할당)', chunk_index: 0,
+    content: '전파법 시행령 제18조(재할당) ① 법 제16조에 따라 주파수를 다시 할당받으려는 자는 이용기간이 끝나기 6개월 전까지 재할당을 신청하여야 한다.' }];
+  var judged18 = null;
+  var v18 = await CV.verifyCitations({ answer: '| 조문 | 내용 |\n|---|---|\n| **전파법 시행령 제18조(재할당)** [원문 확인됨] | 주파수를 다시 할당받으려면 이용기간이 끝나기 1년 전까지만 재할당 신청서를 내면 된다 |\n',
+    chunks: sp18, callHaiku: async function (s, u) { judged18 = u; return '[{"id":1,"verdict":"불일치","reason":"6개월 전"}]'; } });
+  eq('표 이름 칸만 원문 제목과 같으면 판정기로(거짓 초록 방지)', [v18.verdicts[0].status, v18.verdicts[0].verbatim, /1년 전까지만/.test(judged18 || '')], ['mismatch', false, true]);
 
   console.log('\n' + (total - fails) + '/' + total + ' passed');
   process.exit(fails ? 1 : 0);

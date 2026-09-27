@@ -56,7 +56,10 @@
   // 낱말 묶음만 지운다(Fable 재검토 #240, 2026-09-27). 종전 규칙은 '규정·기준·법'으로 끝나는 낱말 앞 40자를 문장 어디서든 지워
   // 「…재할당받은 경우 임대 가능 등 규정」(33자)이 4자, 「…할당할 수 있다고 규정」이 0자가 되어 충분한 인용문이 '대조할 내용 없음'(회색)이 됐다
   // (사내 실답변 2건). 참조가 뒤따르지 않는 이름은 지우지 않는다 — 내용을 더 세는 쪽이 안전하다(회색이 아니라 판정기로 간다).
-  const LAW_NAME_BEFORE_REF_RE = /(^|[|\-*•:;,.(「『\[>])(\s*(?:\*\*)?)((?:[가-힣A-Za-z0-9·ㆍ]+\s+){0,6}?[가-힣A-Za-z0-9·ㆍ]*(?:법률|법|시행령|시행규칙|규칙|고시|규정|기준|세칙|지침)[」』\]]?(?:\*\*)?\s*(?:\([^)]*\))?)(?=\s*\|?\s*(?:제\s?\d+\s?조|\[?별표|\[?별지))/g;
+  // 낱말 상한 12·줄표(— –) 구분(2026-09-28 PC 과거 답 75건 대조, Fable 재검토 대상): 7낱말 상한은 「주파수할당 신청 절차 및 방법 등 세부사항
+  // 고시(…) 제14조」(8낱말) 이름 칸을 인용문으로 남겨 옛 코드가 판정기로 보내던 뒤 칸 조문 내용을 버렸고, 「… — 통신시설 등급 지정·관리 기준 제8조」
+  // 소제목 줄도 줄표 뒤 이름을 못 지워 소제목이 인용문이 됐다.
+  const LAW_NAME_BEFORE_REF_RE = /(^|[|\-*•:;,.(「『\[>—–])(\s*(?:\*\*)?)((?:[가-힣A-Za-z0-9·ㆍ]+\s+){0,11}?[가-힣A-Za-z0-9·ㆍ]*(?:법률|법|시행령|시행규칙|규칙|고시|규정|기준|세칙|지침)[」』\]]?(?:\*\*)?\s*(?:\([^)]*\))?)(?=\s*\|?\s*(?:제\s?\d+\s?조|\[?별표|\[?별지))/g;
   function stripCiteBody(s) {
     return normQ(String(s || '').replace(LAW_NAME_BEFORE_REF_RE, '$1$2')
       .replace(/제\s?\d+\s?조(?:\s?의\s?\d+)?(?:\s?\([^)]*\))?/g, ''));
@@ -901,10 +904,14 @@
     //    (통째 인용 안의 교차참조가 엉뚱한 조를 가리켜 '미확인'이 되던 오판 방지, #155-보론3). 앞·뒤 중 큰 쪽.
     //    표시에 적힌 대상과 다른 조문이어도 확인됨(#155-보론6 '꼬리표 오기 교정') — 글자 그대로 일치는 거짓 '원문과 다름'을
     //    만들지 않으므로 #240의 대상 제한은 ②(번호로 고르는 경로)에만 건다.
+    //    앞 줄(before·line)은 이름·번호·제목을 뺀 내용이 최소 길이 이상일 때만 센다(2026-09-28 PC 과거 답 대조, Fable 재검토 대상):
+    //    표 칸 경계 '|'를 빼자 「| **전파법 시행령 제18조(재할당)** [원문 확인됨] | …내용… |」의 이름 칸이 시스템 프롬프트 핵심 조문의
+    //    제목 줄과 13자 그대로 겹쳐(100%) 뒤 칸 내용을 판정하지 않고 초록이 됐다 — 제목만 맞는 거짓 초록.
+    const vbBefore = stripCite(before).length >= minClaim, vbLine = !!cite.line && stripCite(cite.line).length >= minClaim;
     let vbBest = null, vbRatio = 0;
     for (const gk of articleText.keys()) {
       const t = mergedOf(gk);
-      const r = Math.max(quoteOverlap(before, t), cite.line ? quoteOverlap(cite.line, t) : 0, cite.after ? quoteOverlap(cite.after, t) : 0);
+      const r = Math.max(vbBefore ? quoteOverlap(before, t) : 0, vbLine ? quoteOverlap(cite.line, t) : 0, cite.after ? quoteOverlap(cite.after, t) : 0);
       if (r > vbRatio) { vbRatio = r; vbBest = gk; }
     }
     if (vbBest && vbRatio >= VERBATIM_MIN) {
