@@ -9794,8 +9794,8 @@ function renderPersonRoles(p, fieldRows) {
     '</div>' +
     '<div style="display:flex;justify-content:space-between;margin-left:158px;font-size:9.5px;color:var(--text-tertiary)">' +
       '<span>' + escHtml(_ym(new Date(t0 + pad).toISOString())) + '</span><span>' + escHtml(_ym(new Date(t1 - pad).toISOString())) + '</span></div>' +
-    '<div style="font-size:10px;color:var(--text-tertiary);margin-top:4px">관련 = 통신·전파·AI 관련으로 골라 담은 발언' +
-      (anyBlocks ? ' · 전체 = 22대(2024-06~) 회의록의 모든 발언 블록' : '') + '</div>' +
+    '<div style="font-size:10px;color:var(--text-tertiary);margin-top:4px"><b style="color:var(--text-secondary)">관련</b> = 통신·전파·AI 관련으로 골라 담은 발언' +
+      (anyBlocks ? ' · <b style="color:var(--text-secondary)">전체</b> = 22대(2024-06~) 회의록의 모든 발언 블록' : '') + '</div>' +
   '</div>';
 }
 
@@ -9830,7 +9830,7 @@ async function showPersonDetail(id) {
       '<div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">' +
         '<b style="font-size:17px">' + escHtml(p.name) + '</b>' +
         '<span style="font-size:12px;color:var(--text-secondary)">' + escHtml(sub) + '</span>' +
-        '<span style="font-size:11px;color:var(--text-tertiary)">통신·전파·AI 관련 발언 ' + (p.speech_count || 0) + '건 · ' + escHtml(String(p.first_speech || '')) + ' ~ ' + escHtml(String(p.last_speech || '')) + '</span>' +
+        '<span style="font-size:11px;color:var(--text-tertiary)"><b style="color:var(--text-secondary)">통신·전파·AI 관련 발언 ' + (p.speech_count || 0) + '건</b> · ' + escHtml(String(p.first_speech || '')) + ' ~ ' + escHtml(String(p.last_speech || '')) + '</span>' +
       '</div>' +
       '<div id="person-roles"></div>' +
     '</div>' +
