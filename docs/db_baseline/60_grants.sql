@@ -357,6 +357,10 @@ grant SELECT, UPDATE, USAGE on sequence public.telegram_usage_id_seq to anon;
 grant SELECT, UPDATE, USAGE on sequence public.telegram_usage_id_seq to authenticated;
 grant SELECT, UPDATE, USAGE on sequence public.telegram_usage_id_seq to service_role;
 
+revoke all on public.urgency_rule_verdicts from public, anon, authenticated, service_role;
+grant INSERT, SELECT on public.urgency_rule_verdicts to authenticated;
+grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE on public.urgency_rule_verdicts to service_role;
+
 revoke all on public.urgency_rules from public, anon, authenticated, service_role;
 grant SELECT on public.urgency_rules to anon;
 grant INSERT, SELECT, UPDATE on public.urgency_rules to authenticated;
@@ -708,6 +712,18 @@ grant EXECUTE on function public.update_tech_terms_updated_at() to anon;
 grant EXECUTE on function public.update_tech_terms_updated_at() to authenticated;
 grant EXECUTE on function public.update_tech_terms_updated_at() to public;
 grant EXECUTE on function public.update_tech_terms_updated_at() to service_role;
+
+revoke all on function public.urgency_rule_verdicts_requester() from public, anon, authenticated, service_role;
+grant EXECUTE on function public.urgency_rule_verdicts_requester() to anon;
+grant EXECUTE on function public.urgency_rule_verdicts_requester() to authenticated;
+grant EXECUTE on function public.urgency_rule_verdicts_requester() to public;
+grant EXECUTE on function public.urgency_rule_verdicts_requester() to service_role;
+
+revoke all on function public.urgency_rules_sentence_rev() from public, anon, authenticated, service_role;
+grant EXECUTE on function public.urgency_rules_sentence_rev() to anon;
+grant EXECUTE on function public.urgency_rules_sentence_rev() to authenticated;
+grant EXECUTE on function public.urgency_rules_sentence_rev() to public;
+grant EXECUTE on function public.urgency_rules_sentence_rev() to service_role;
 
 revoke all on function public.urgency_rules_touch() from public, anon, authenticated, service_role;
 grant EXECUTE on function public.urgency_rules_touch() to anon;

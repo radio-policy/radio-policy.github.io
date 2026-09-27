@@ -115,6 +115,65 @@
     return { level: top, teams: effs.filter(function (e) { return e[1] === top; }).map(function (e) { return e[0]; }) };
   }
 
+  // ── 문장 조건(#251, 2026-09-27, 설계안 §10-2 — Fable 재검토) ──────────────────────────────────
+  // Python urgency_rules.py의 has_sentence·sentence_verdict·sentence_candidates·sentence_filtered_rules·
+  // team_rule_decision_judged·verdict_map과 같은 규칙(케이스 urgency_team_cases.json). 판정은 크롤러(Haiku)만 하고
+  // 여기서는 저장된 판정을 규칙 목록에 반영할 뿐이다. 기존 함수의 계약은 그대로(사내판 감시 대상 — 추가만).
+  // verdicts = 그 기사 것만 {rule_id: {'<문장 판>': true/false}} — 열쇠는 자기 속성만 본다('__proto__' 등 안전).
+  // 배열은 사전으로 보지 않는다(Python dict 판정과 같게)
+  function own(o, k) {
+    return o != null && typeof o === 'object' && !Array.isArray(o) && Object.prototype.hasOwnProperty.call(o, k);
+  }
+  function sentenceRev(r) {
+    const v = r && r.sentence_rev;
+    return (typeof v === 'number' && Number.isInteger(v)) ? v : 0;
+  }
+  function hasSentence(r) { return !!r && typeof r.sentence === 'string' && !isBlank(r.sentence); }
+
+  // → true/false, 없음·대기·옛 판이면 null
+  function sentenceVerdict(verdicts, rule) {
+    if (!rule || typeof rule.id !== 'string' || !own(verdicts, rule.id)) return null;
+    const per = verdicts[rule.id];
+    const k = String(sentenceRev(rule));
+    if (!own(per, k)) return null;
+    return typeof per[k] === 'boolean' ? per[k] : null;
+  }
+
+  // 판정을 물어야 할 문장 규칙 id(목록 순서) — 낱말 규칙이 걸리면 멈춤, 문장 규칙은 true면 멈춤·false면 지나감·없으면 후보
+  function sentenceCandidates(teamRules, title, text, verdicts) {
+    const out = [];
+    for (const r of teamRules || []) {
+      if (!matchUrgencyRules([r], title, text)) continue;
+      if (!hasSentence(r)) break;
+      const v = sentenceVerdict(verdicts, r);
+      if (v === true) break;
+      if (v === null) out.push(r.id);
+    }
+    return out;
+  }
+
+  function sentenceFilteredRules(teamRules, verdicts) {
+    return (teamRules || []).filter(function (r) { return !hasSentence(r) || sentenceVerdict(verdicts, r) === true; });
+  }
+
+  function teamRuleDecisionJudged(teamRules, title, text, commonLevel, verdicts) {
+    return teamRuleDecision(sentenceFilteredRules(teamRules, verdicts), title, text, commonLevel);
+  }
+
+  // 판정 기록 행들(한 기사 것) → {rule_id: {'<판>': bool}} — verdict가 참·거짓인 행만
+  function verdictMap(rows) {
+    const out = Object.create(null);
+    (rows || []).forEach(function (row) {
+      if (!row || typeof row !== 'object') return;
+      const v = row.verdict, rid = row.rule_id, rev = row.sentence_rev;
+      if (typeof v === 'boolean' && typeof rid === 'string' && typeof rev === 'number' && Number.isInteger(rev)) {
+        if (!own(out, rid)) out[rid] = Object.create(null);
+        out[rid][String(rev)] = v;
+      }
+    });
+    return out;
+  }
+
   function isWordList(v, allowEmpty) {
     return Array.isArray(v) && (allowEmpty || v.length > 0) &&
       v.every(function (w) { return typeof w === 'string' && w.trim() !== ''; });
@@ -151,6 +210,9 @@
     validateRules: validateRules,
     maxLevel: maxLevel, ruleInputText: ruleInputText, teamRuleDecision: teamRuleDecision,
     effectiveTeamUrgency: effectiveTeamUrgency, divisionUrgency: divisionUrgency,
+    hasSentence: hasSentence, sentenceVerdict: sentenceVerdict, sentenceCandidates: sentenceCandidates,
+    sentenceFilteredRules: sentenceFilteredRules, teamRuleDecisionJudged: teamRuleDecisionJudged,
+    verdictMap: verdictMap,
   };
   root.UrgencyRules = UrgencyRules;
   if (typeof module !== 'undefined' && module.exports) module.exports = UrgencyRules;

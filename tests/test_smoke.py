@@ -1191,6 +1191,37 @@ class TestUrgencyTeamLayer(unittest.TestCase):
                 rows = {int(k): v for k, v in c['rows_by_team'].items()}
                 self.assertEqual(self.ur.division_urgency(c['common'], rows, self.by_id, c['team_ids']), c['expect'])
 
+    # ── 문장 조건(#251) — JS판은 node tests/urgency_rules.test.js가 같은 파일을 돈다 ──
+    def _sentence_rules(self):
+        return sorted((r for r in self.t['sentence_rules'] if r['enabled']), key=lambda r: (r['position'], r['id']))
+
+    def test_judged_equals_plain_without_sentences(self):
+        for c in self.t['decision_cases']:
+            with self.subTest(c['name']):
+                got = self.ur.team_rule_decision_judged(self._team_rules(c['team_id']), c['title'], c['text'],
+                                                        c['common'], {})
+                self.assertEqual(got, c['expect'])
+
+    def test_sentence_cases(self):
+        rules = self._sentence_rules()
+        self.assertEqual(self.ur.validate_rules(self.t['sentence_rules']), [])
+        for c in self.t['sentence_cases']:
+            with self.subTest(c['name']):
+                self.assertEqual(self.ur.sentence_candidates(rules, c['title'], c['text'], c['verdicts']),
+                                 c['expect_candidates'])
+                self.assertEqual(self.ur.team_rule_decision_judged(rules, c['title'], c['text'], c['common'],
+                                                                   c['verdicts']), c['expect_decision'])
+
+    def test_verdict_map(self):
+        for c in self.t['verdict_map_cases']:
+            with self.subTest(c['name']):
+                self.assertEqual(self.ur.verdict_map(c['rows']), c['expect'])
+
+    def test_has_sentence(self):
+        for c in self.t['has_sentence_cases']:
+            with self.subTest(c['name']):
+                self.assertEqual(self.ur.has_sentence(c['rule']), c['expect'])
+
 
 class TestUrgencyRules(unittest.TestCase):
     """긴급도 낱말 규칙 매처(#216) — 공용 케이스 파일 전건. JS판은 node tests/urgency_rules.test.js가 같은 파일을 돈다."""
@@ -1463,7 +1494,10 @@ class TestUrgencyTeamLayerCrawler(unittest.TestCase):
         import contextlib
         buf = io.StringIO()
         with mock.patch.object(self.c, 'sb', sb), mock.patch.object(self.c, '_URGENCY_RULES', None), \
-                mock.patch.object(self.c, '_TEAM_URGENCY_RULES', None), contextlib.redirect_stdout(buf):
+                mock.patch.object(self.c, '_TEAM_URGENCY_RULES', None), \
+                mock.patch.object(self.c, '_TEAM_RULES_ENABLED', None), \
+                mock.patch.object(self.c, '_RULES_LOADED_AT', None), contextlib.redirect_stdout(buf):
+            # 로더가 채우는 전역(#251 _TEAM_RULES_ENABLED·_RULES_LOADED_AT)도 되돌린다 — 다른 테스트로 새지 않게
             common = self.c.load_urgency_rules()
             team = self.c.load_team_urgency_rules()
             again = self.c.load_team_urgency_rules()

@@ -138,12 +138,12 @@ for wf, thresh in checks.items():
         problems.append("%s 마지막 성공 %.1f시간 전 (임계 %dh)" % (wf, h, thresh))
 
 # ── ③ PC 예약작업 heartbeat (system_health) — lampmanH-pc 본선(#179, 2026-09-20) ──
-# gov 체인(16:30)·본문 재수집(매시 22분)은 GitHub Actions 밖(한국 IP 필요)이라 ②의 run 이력이 없다.
+# gov 체인(16:30)·본문 재수집(10분마다 — #251, 전에는 매시 22분)은 GitHub Actions 밖(한국 IP 필요)이라 ②의 run 이력이 없다.
 # 내부 watchdog_scan(pg_cron)도 같은 키를 보지만 Supabase cron이 서면 함께 서므로 여기서도 본다.
 # ①에서 Supabase 접속 불가로 이미 경고했으면 중복 경고를 피해 건너뛴다.
 PC_HEARTBEATS = {
     "last_gov_notice_run": (26, "정부고시·입법예고 체인(lampmanH-pc 16:30)"),   # 하루 1회 → 26h
-    "last_refetch_run":    (3,  "뉴스 본문 재수집(lampmanH-pc 매시 22분)"),     # 매시 → 3h
+    "last_refetch_run":    (3,  "뉴스 본문 재수집(lampmanH-pc 10분마다)"),     # 10분마다(#251) → 3h 여유
 }
 if not any(p.startswith("⛔") for p in problems):
     try:

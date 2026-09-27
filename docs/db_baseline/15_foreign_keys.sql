@@ -28,4 +28,10 @@ alter table public.team_urgency add constraint team_urgency_news_id_fkey FOREIGN
 
 alter table public.team_urgency add constraint team_urgency_team_id_fkey FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE;
 
+alter table public.urgency_rule_verdicts add constraint urgency_rule_verdicts_news_id_fkey FOREIGN KEY (news_id) REFERENCES news_feed(id) ON DELETE CASCADE;
+
+alter table public.urgency_rule_verdicts add constraint urgency_rule_verdicts_rule_id_fkey FOREIGN KEY (rule_id) REFERENCES urgency_rules(id);
+
+alter table public.urgency_rule_verdicts add constraint urgency_rule_verdicts_team_id_fkey FOREIGN KEY (team_id) REFERENCES teams(id);
+
 alter table public.urgency_rules add constraint urgency_rules_team_id_fkey FOREIGN KEY (team_id) REFERENCES teams(id);

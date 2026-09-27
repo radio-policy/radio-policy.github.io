@@ -1,5 +1,5 @@
 {
-  "_about": "긴급도 팀 층(#250) 공용 케이스 — Python urgency_rules.py(TestUrgencyTeamLayer)와 JS _shared/urgency_rules.js(node tests/urgency_rules.test.js)가 함께 돈다. rows_by_team의 키는 팀 id 문자열(두 쪽 모두 정수로 바꿔 쓴다). 매처 케이스(urgency_rules_cases.json)와 파일을 나눈 것은 사내판이 그 파일만 복사해 쓰기 때문이다.",
+  "_about": "긴급도 팀 층(#250) 공용 케이스 — Python urgency_rules.py(TestUrgencyTeamLayer)와 JS _shared/urgency_rules.js(node tests/urgency_rules.test.js)가 함께 돈다. rows_by_team의 키는 팀 id 문자열(두 쪽 모두 정수로 바꿔 쓴다). 매처 케이스(urgency_rules_cases.json)와 파일을 나눈 것은 사내판이 그 파일만 복사해 쓰기 때문이다. 문장 조건(#251): sentence_rules(팀 7, 켜진 것만 position·id 순으로 쓴다)·sentence_cases(후보 sentenceCandidates + 판정 반영 teamRuleDecisionJudged)·verdict_map_cases·has_sentence_cases. verdicts 판 번호는 문자열 열쇠.",
   "rules": [
     {
       "id": "t1_set_down",
@@ -86,19 +86,19 @@
     },
     {
       "name": "검색 요약이 BOM뿐 → 저장 요약(두 언어 공백 기준 통일)",
-      "screen_text": "\ufeff",
+      "screen_text": "﻿",
       "summary": "AI 요약 문장",
       "expect": "AI 요약 문장"
     },
     {
       "name": "검색 요약이 U+0085·U+001C뿐 → 저장 요약",
-      "screen_text": "\u0085\u001c",
+      "screen_text": "\u001c",
       "summary": "AI 요약 문장",
       "expect": "AI 요약 문장"
     },
     {
       "name": "전각 공백뿐 → 저장 요약",
-      "screen_text": "\u3000",
+      "screen_text": "　",
       "summary": "AI 요약 문장",
       "expect": "AI 요약 문장"
     }
@@ -472,6 +472,500 @@
         "level": "참고",
         "teams": []
       }
+    }
+  ],
+  "sentence_rules": [
+    {
+      "id": "s_off",
+      "team_id": 7,
+      "position": 5,
+      "mode": "set",
+      "level": "참고",
+      "any_words": [
+        "와이파이"
+      ],
+      "and_any": [],
+      "none_words": [],
+      "enabled": false,
+      "sentence": "꺼진 규칙 — 목록에 안 들어감",
+      "sentence_rev": 0
+    },
+    {
+      "id": "s_wifi",
+      "team_id": 7,
+      "position": 10,
+      "mode": "set",
+      "level": "긴급",
+      "any_words": [
+        "공공와이파이",
+        "지하철 와이파이"
+      ],
+      "and_any": [],
+      "none_words": [
+        "홍보"
+      ],
+      "enabled": true,
+      "sentence": "공공·지하철 와이파이 관련 문제를 제기하는 기사",
+      "sentence_rev": 1
+    },
+    {
+      "id": "w_wifi",
+      "team_id": 7,
+      "position": 20,
+      "mode": "min",
+      "level": "보통",
+      "any_words": [
+        "와이파이"
+      ],
+      "and_any": [],
+      "none_words": [],
+      "enabled": true,
+      "sentence": "",
+      "sentence_rev": 0
+    },
+    {
+      "id": "s_spec",
+      "team_id": 7,
+      "position": 30,
+      "mode": "set",
+      "level": "긴급",
+      "any_words": [
+        "주파수"
+      ],
+      "and_any": [
+        [
+          "재할당"
+        ],
+        [
+          "대가"
+        ]
+      ],
+      "none_words": [],
+      "enabled": true,
+      "sentence": "주파수 재할당 대가 산정이 통신사에 불리하다는 기사",
+      "sentence_rev": 0
+    },
+    {
+      "id": "s_sat",
+      "team_id": 7,
+      "position": 35,
+      "mode": "set",
+      "level": "긴급",
+      "any_words": [
+        "위성"
+      ],
+      "and_any": [],
+      "none_words": [],
+      "enabled": true,
+      "sentence": "저궤도 위성 규제를 강화하는 기사",
+      "sentence_rev": 0
+    },
+    {
+      "id": "s_blank",
+      "team_id": 7,
+      "position": 40,
+      "mode": "min",
+      "level": "긴급",
+      "any_words": [
+        "위성"
+      ],
+      "and_any": [],
+      "none_words": [],
+      "enabled": true,
+      "sentence": "   ",
+      "sentence_rev": 2
+    }
+  ],
+  "sentence_cases": [
+    {
+      "name": "문장 규칙 판정 없음 → 후보, 뒤 낱말 규칙이 정함",
+      "title": "서울 공공와이파이 장애 복구 지연",
+      "text": "",
+      "common": "참고",
+      "verdicts": {},
+      "expect_candidates": [
+        "s_wifi"
+      ],
+      "expect_decision": {
+        "level": "보통",
+        "rule_id": "w_wifi"
+      }
+    },
+    {
+      "name": "판정 True → 문장 규칙(set 긴급)이 정함, 후보 없음",
+      "title": "서울 공공와이파이 장애 복구 지연",
+      "text": "",
+      "common": "참고",
+      "verdicts": {
+        "s_wifi": {
+          "1": true
+        }
+      },
+      "expect_candidates": [],
+      "expect_decision": {
+        "level": "긴급",
+        "rule_id": "s_wifi"
+      }
+    },
+    {
+      "name": "판정 False → 뒤 낱말 규칙, 후보 없음",
+      "title": "서울 공공와이파이 장애 복구 지연",
+      "text": "",
+      "common": "참고",
+      "verdicts": {
+        "s_wifi": {
+          "1": false
+        }
+      },
+      "expect_candidates": [],
+      "expect_decision": {
+        "level": "보통",
+        "rule_id": "w_wifi"
+      }
+    },
+    {
+      "name": "옛 판(0) 판정 True는 무시 — 지금 판은 1",
+      "title": "서울 공공와이파이 장애 복구 지연",
+      "text": "",
+      "common": "참고",
+      "verdicts": {
+        "s_wifi": {
+          "0": true
+        }
+      },
+      "expect_candidates": [
+        "s_wifi"
+      ],
+      "expect_decision": {
+        "level": "보통",
+        "rule_id": "w_wifi"
+      }
+    },
+    {
+      "name": "공통값이 더 높으면 min 낱말 규칙은 공통값",
+      "title": "서울 공공와이파이 장애 복구 지연",
+      "text": "",
+      "common": "긴급",
+      "verdicts": {},
+      "expect_candidates": [
+        "s_wifi"
+      ],
+      "expect_decision": {
+        "level": "긴급",
+        "rule_id": "w_wifi"
+      }
+    },
+    {
+      "name": "③ 제외 낱말이면 문장 규칙은 후보도 아님",
+      "title": "공공와이파이 홍보 행사 열려",
+      "text": "",
+      "common": "참고",
+      "verdicts": {},
+      "expect_candidates": [],
+      "expect_decision": {
+        "level": "보통",
+        "rule_id": "w_wifi"
+      }
+    },
+    {
+      "name": "문장 규칙만 걸림·판정 없음 → 팀 행 없음",
+      "title": "주파수 재할당 대가 산정 논란",
+      "text": "",
+      "common": "보통",
+      "verdicts": {},
+      "expect_candidates": [
+        "s_spec"
+      ],
+      "expect_decision": null
+    },
+    {
+      "name": "문장 규칙만 걸림·판정 True",
+      "title": "주파수 재할당 대가 산정 논란",
+      "text": "",
+      "common": "보통",
+      "verdicts": {
+        "s_spec": {
+          "0": true
+        }
+      },
+      "expect_candidates": [],
+      "expect_decision": {
+        "level": "긴급",
+        "rule_id": "s_spec"
+      }
+    },
+    {
+      "name": "문장 규칙만 걸림·판정 False → 팀 행 없음",
+      "title": "주파수 재할당 대가 산정 논란",
+      "text": "",
+      "common": "보통",
+      "verdicts": {
+        "s_spec": {
+          "0": false
+        }
+      },
+      "expect_candidates": [],
+      "expect_decision": null
+    },
+    {
+      "name": "문장 규칙 둘 판정 없음 → 둘 다 후보, 빈 문장 규칙(낱말 규칙)이 정함",
+      "title": "주파수 재할당 대가와 저궤도 위성 규제",
+      "text": "",
+      "common": "참고",
+      "verdicts": {},
+      "expect_candidates": [
+        "s_spec",
+        "s_sat"
+      ],
+      "expect_decision": {
+        "level": "긴급",
+        "rule_id": "s_blank"
+      }
+    },
+    {
+      "name": "앞 문장 규칙 False → 두 번째만 후보",
+      "title": "주파수 재할당 대가와 저궤도 위성 규제",
+      "text": "",
+      "common": "참고",
+      "verdicts": {
+        "s_spec": {
+          "0": false
+        }
+      },
+      "expect_candidates": [
+        "s_sat"
+      ],
+      "expect_decision": {
+        "level": "긴급",
+        "rule_id": "s_blank"
+      }
+    },
+    {
+      "name": "앞 문장 규칙 True → 거기서 멈춤",
+      "title": "주파수 재할당 대가와 저궤도 위성 규제",
+      "text": "",
+      "common": "참고",
+      "verdicts": {
+        "s_spec": {
+          "0": true
+        }
+      },
+      "expect_candidates": [],
+      "expect_decision": {
+        "level": "긴급",
+        "rule_id": "s_spec"
+      }
+    },
+    {
+      "name": "두 번째 문장 규칙만 True",
+      "title": "주파수 재할당 대가와 저궤도 위성 규제",
+      "text": "",
+      "common": "참고",
+      "verdicts": {
+        "s_spec": {
+          "0": false
+        },
+        "s_sat": {
+          "0": true
+        }
+      },
+      "expect_candidates": [],
+      "expect_decision": {
+        "level": "긴급",
+        "rule_id": "s_sat"
+      }
+    },
+    {
+      "name": "빈 문장(공백·U+0085)은 낱말 규칙 — 판정 없이 정함",
+      "title": "위성 통신 요금 인하",
+      "text": "",
+      "common": "보통",
+      "verdicts": {
+        "s_sat": {
+          "0": false
+        }
+      },
+      "expect_candidates": [],
+      "expect_decision": {
+        "level": "긴급",
+        "rule_id": "s_blank"
+      }
+    },
+    {
+      "name": "이상한 열쇠·값(__proto__·toString·문자열 'true')은 무시",
+      "title": "서울 공공와이파이 장애 복구 지연",
+      "text": "",
+      "common": "참고",
+      "verdicts": {
+        "__proto__": {
+          "1": true
+        },
+        "toString": {
+          "1": true
+        },
+        "s_wifi": {
+          "1": "true"
+        }
+      },
+      "expect_candidates": [
+        "s_wifi"
+      ],
+      "expect_decision": {
+        "level": "보통",
+        "rule_id": "w_wifi"
+      }
+    },
+    {
+      "name": "판정 값이 배열이면 무시",
+      "title": "서울 공공와이파이 장애 복구 지연",
+      "text": "",
+      "common": "참고",
+      "verdicts": {
+        "s_wifi": [
+          true,
+          true
+        ]
+      },
+      "expect_candidates": [
+        "s_wifi"
+      ],
+      "expect_decision": {
+        "level": "보통",
+        "rule_id": "w_wifi"
+      }
+    },
+    {
+      "name": "NFD 제목도 걸림",
+      "title": "지하철 와이파이 먹통에 승객 불편",
+      "text": "",
+      "common": "참고",
+      "verdicts": {},
+      "expect_candidates": [
+        "s_wifi"
+      ],
+      "expect_decision": {
+        "level": "보통",
+        "rule_id": "w_wifi"
+      }
+    },
+    {
+      "name": "요약 글에서만 걸려도 후보",
+      "title": "승객 불편 잇따라",
+      "text": "지하철 와이파이가 자주 끊긴다는 민원",
+      "common": "참고",
+      "verdicts": {},
+      "expect_candidates": [
+        "s_wifi"
+      ],
+      "expect_decision": {
+        "level": "보통",
+        "rule_id": "w_wifi"
+      }
+    },
+    {
+      "name": "아무 규칙도 안 걸림",
+      "title": "통신요금 인하 발표",
+      "text": "",
+      "common": "보통",
+      "verdicts": {},
+      "expect_candidates": [],
+      "expect_decision": null
+    }
+  ],
+  "verdict_map_cases": [
+    {
+      "name": "판정 끝난 행만, 판 번호는 문자열 열쇠",
+      "rows": [
+        {
+          "rule_id": "s_wifi",
+          "sentence_rev": 1,
+          "verdict": true,
+          "status": "done"
+        },
+        {
+          "rule_id": "s_wifi",
+          "sentence_rev": 0,
+          "verdict": false,
+          "status": "done"
+        },
+        {
+          "rule_id": "s_spec",
+          "sentence_rev": 0,
+          "verdict": null,
+          "status": "pending"
+        },
+        {
+          "rule_id": "x",
+          "sentence_rev": true,
+          "verdict": true,
+          "status": "done"
+        },
+        {
+          "rule_id": 7,
+          "sentence_rev": 0,
+          "verdict": true,
+          "status": "done"
+        },
+        {
+          "rule_id": "y",
+          "sentence_rev": "0",
+          "verdict": true,
+          "status": "done"
+        },
+        {
+          "rule_id": "z",
+          "sentence_rev": 0,
+          "verdict": "true",
+          "status": "done"
+        },
+        "문자열 행"
+      ],
+      "expect": {
+        "s_wifi": {
+          "0": false,
+          "1": true
+        }
+      }
+    },
+    {
+      "name": "빈 목록",
+      "rows": [],
+      "expect": {}
+    }
+  ],
+  "has_sentence_cases": [
+    {
+      "name": "문장 있음",
+      "rule": {
+        "sentence": "문장"
+      },
+      "expect": true
+    },
+    {
+      "name": "빈 글",
+      "rule": {
+        "sentence": ""
+      },
+      "expect": false
+    },
+    {
+      "name": "공백·줄바꿈·U+0085·U+001C·U+FEFF만",
+      "rule": {
+        "sentence": " \n\u001c﻿ "
+      },
+      "expect": false
+    },
+    {
+      "name": "칸 없음",
+      "rule": {},
+      "expect": false
+    },
+    {
+      "name": "문자열 아님",
+      "rule": {
+        "sentence": 3
+      },
+      "expect": false
     }
   ]
 }

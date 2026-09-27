@@ -775,6 +775,28 @@ create table if not exists public.telegram_usage (
 );
 alter table public.telegram_usage enable row level security;
 
+create table if not exists public.urgency_rule_verdicts (
+  rule_id text not null,
+  sentence_rev integer not null,
+  news_id uuid not null,
+  team_id smallint not null,
+  status text default 'pending'::text not null,
+  verdict boolean,
+  reason text default ''::text not null,
+  input_kind text default ''::text not null,
+  model text default ''::text not null,
+  cost_usd numeric(10,6) default 0 not null,
+  attempts smallint default 0 not null,
+  requested_by uuid,
+  created_at timestamp with time zone default now() not null,
+  judged_at timestamp with time zone,
+  constraint urgency_rule_verdicts_pkey PRIMARY KEY (rule_id, sentence_rev, news_id),
+  constraint urgency_rule_verdicts_done_check CHECK (((status = 'done'::text) = (verdict IS NOT NULL))),
+  constraint urgency_rule_verdicts_kind_check CHECK ((input_kind = ANY (ARRAY[''::text, 'body'::text, 'snippet'::text, 'title'::text]))),
+  constraint urgency_rule_verdicts_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'wait_body'::text, 'done'::text, 'failed'::text, 'stale'::text])))
+);
+alter table public.urgency_rule_verdicts enable row level security;
+
 create table if not exists public.urgency_rules (
   id text not null,
   team_id smallint,
@@ -788,13 +810,17 @@ create table if not exists public.urgency_rules (
   enabled boolean default true not null,
   updated_by uuid,
   updated_at timestamp with time zone default now() not null,
+  sentence text default ''::text not null,
+  sentence_rev integer default 0 not null,
   constraint urgency_rules_pkey PRIMARY KEY (id),
   constraint urgency_rules_and_any_check CHECK ((jsonb_typeof(and_any) = 'array'::text)),
   constraint urgency_rules_any_words_check CHECK (((jsonb_typeof(any_words) = 'array'::text) AND (jsonb_array_length(any_words) > 0))),
   constraint urgency_rules_id_check CHECK ((id ~ '^[a-z0-9_]+$'::text)),
   constraint urgency_rules_level_check CHECK ((level = ANY (ARRAY['긴급'::text, '보통'::text, '참고'::text]))),
   constraint urgency_rules_mode_check CHECK ((mode = ANY (ARRAY['min'::text, 'set'::text]))),
-  constraint urgency_rules_none_words_check CHECK ((jsonb_typeof(none_words) = 'array'::text))
+  constraint urgency_rules_none_words_check CHECK ((jsonb_typeof(none_words) = 'array'::text)),
+  constraint urgency_rules_sentence_len_check CHECK ((char_length(sentence) <= 200)),
+  constraint urgency_rules_sentence_team_check CHECK (((sentence = ''::text) OR (team_id IS NOT NULL)))
 );
 alter table public.urgency_rules enable row level security;
 

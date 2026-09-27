@@ -1460,6 +1460,38 @@ END;
 $function$
 ;
 
+CREATE OR REPLACE FUNCTION public.urgency_rule_verdicts_requester()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SET search_path TO 'public'
+AS $function$
+begin
+  if auth.uid() is not null then
+    new.requested_by := auth.uid();
+  end if;
+  return new;
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.urgency_rules_sentence_rev()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SET search_path TO 'public'
+AS $function$
+begin
+  new.sentence := btrim(regexp_replace(normalize(coalesce(new.sentence, ''), NFC),
+                  '[\t\n\v\f\r    -     　﻿]+', ' ', 'g'));
+  if tg_op = 'INSERT' then
+    new.sentence_rev := 0;
+  elsif new.sentence is distinct from old.sentence then
+    new.sentence_rev := old.sentence_rev + 1;
+  else
+    new.sentence_rev := old.sentence_rev;          -- 클라이언트가 판 번호를 바꿀 수 없다
+  end if;
+  return new;
+end $function$
+;
+
 CREATE OR REPLACE FUNCTION public.urgency_rules_touch()
  RETURNS trigger
  LANGUAGE plpgsql

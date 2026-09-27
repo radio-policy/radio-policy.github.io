@@ -159,6 +159,76 @@ def division_urgency(common_level, rows_by_team, rules_by_id, team_ids):
     return {'level': top, 'teams': [t for t, lv in effs if lv == top]}
 
 
+# ── 문장 조건(#251, 2026-09-27, 설계안 §10-2 — Fable 재검토) ─────────────────────────────────────
+# 팀 규칙에만 붙는 「조건 문장」(urgency_rules.sentence): 낱말이 걸린 기사만 크롤러가 Haiku로 「이 문장에
+# 해당하나」를 한 번 묻고 결과를 표 urgency_rule_verdicts에 (규칙, 문장 판 sentence_rev, 기사)로 저장한다 —
+# 다시 묻지 않는다. 아래 함수들은 그 판정을 규칙 목록에 반영할 뿐 판정 자체는 하지 않는다(AI 없음).
+# **기존 함수(match_urgency_rules·combine·validate_rules·team_rule_decision …)는 그대로** — 사내판이 원본 변경을
+# 감시하는 계약이라 함수 추가로만 넓혔다. JS판(hasSentence·sentenceVerdict·sentenceCandidates·
+# sentenceFilteredRules·teamRuleDecisionJudged·verdictMap)과 같은 규칙, 케이스는 urgency_team_cases.json.
+# verdicts = 그 기사 것만 {rule_id: {'<문장 판>': True/False}} — 판 번호는 문자열 열쇠(JSON 케이스와 같게).
+
+def _sentence_rev(r):
+    v = r.get('sentence_rev', 0) if isinstance(r, dict) else 0
+    return v if isinstance(v, int) and not isinstance(v, bool) else 0
+
+
+def has_sentence(r):
+    """문장 조건 규칙인가 — sentence 칸이 빈 글(공백만 포함)이 아니면. 빈 문장 규칙은 낱말 규칙과 같다."""
+    s = r.get('sentence') if isinstance(r, dict) else None
+    return isinstance(s, str) and not _blank(s)
+
+
+def sentence_verdict(verdicts, rule):
+    """그 기사에서 이 규칙의 **지금 문장 판** 판정 → True/False, 없음·대기·옛 판이면 None."""
+    rid = rule.get('id') if isinstance(rule, dict) else None
+    per = verdicts.get(rid) if isinstance(verdicts, dict) and isinstance(rid, str) else None
+    if not isinstance(per, dict):
+        return None
+    v = per.get(str(_sentence_rev(rule)))
+    return v if isinstance(v, bool) else None
+
+
+def sentence_candidates(team_rules, title, text, verdicts=None):
+    """판정을 물어야 할 문장 규칙 id(목록 순서). 규칙을 순서대로 보며 낱말이 걸린 것만:
+    낱말 규칙이 걸리면 거기서 멈춘다(그 규칙이 정한다), 문장 규칙은 지금 판 판정이 True면 멈추고
+    False면 지나가고 없으면 후보에 넣고 지나간다(거짓으로 나오면 뒤 규칙이 정하므로)."""
+    out = []
+    for r in team_rules or []:
+        if not match_urgency_rules([r], title, text):
+            continue
+        if not has_sentence(r):
+            break
+        v = sentence_verdict(verdicts, r)
+        if v is True:
+            break
+        if v is None:
+            out.append(r.get('id'))
+    return out
+
+
+def sentence_filtered_rules(team_rules, verdicts):
+    """문장 규칙은 그 기사의 지금 판 판정이 True일 때만 남긴다(없음·대기·False·옛 판 = 뺀다 → 뒤 규칙이 정함)."""
+    return [r for r in team_rules or [] if not has_sentence(r) or sentence_verdict(verdicts, r) is True]
+
+
+def team_rule_decision_judged(team_rules, title, text, common_level, verdicts):
+    """team_rule_decision에 문장 판정을 반영한 것. 문장 규칙이 없으면 team_rule_decision과 같다."""
+    return team_rule_decision(sentence_filtered_rules(team_rules, verdicts), title, text, common_level)
+
+
+def verdict_map(rows):
+    """판정 기록 행들(한 기사 것) → {rule_id: {'<판>': bool}}. verdict가 참·거짓인 행만(대기·실패 행은 뺀다)."""
+    out = {}
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        v, rid, rev = row.get('verdict'), row.get('rule_id'), row.get('sentence_rev')
+        if isinstance(v, bool) and isinstance(rid, str) and isinstance(rev, int) and not isinstance(rev, bool):
+            out.setdefault(rid, {})[str(rev)] = v
+    return out
+
+
 def _is_word_list(v, allow_empty=True):
     return isinstance(v, list) and (allow_empty or len(v) > 0) and \
         all(isinstance(w, str) and w.strip() for w in v)

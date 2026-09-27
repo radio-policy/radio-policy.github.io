@@ -1,3 +1,21 @@
+// ── 캐시 섞임 대비(#251, 2026-09-27 검토) — 옛 urgency_rules.js(문장 조건 함수 없음)가 새 app.js와 함께 실리면 ──
+// 문장 조건 함수를 '문장 조건 없음'으로 채워 화면이 예외 없이 돌게 한다(판정 반영 결정 = 종전 teamRuleDecision).
+// 이 상태에서 문장 조건 규칙을 규칙 행·대기 행으로 쓰면 틀린 값이 되므로 재적용·되돌리기는 _UR_SENTENCE_FALLBACK을 보고 멈춘다.
+// 공용 파일의 정본 함수는 덮지 않는다 — hasSentence가 있으면 아무것도 하지 않는다. 사내 이식(ported.js)은 이 이름을 부르는
+// 함수(재적용·되돌리기)를 옮기지 않으므로 싣지 않는다(사내는 UrgencyRules 자체를 안 싣는다).
+var _UR_SENTENCE_FALLBACK = (function() {
+  var U = (typeof UrgencyRules !== 'undefined') ? UrgencyRules : null;
+  if (!U || typeof U.hasSentence === 'function') return false;
+  U.hasSentence = function() { return false; };
+  U.sentenceVerdict = function() { return null; };
+  U.sentenceCandidates = function() { return []; };
+  U.sentenceFilteredRules = function(rules) { return rules || []; };
+  U.teamRuleDecisionJudged = function(rules, title, text, commonLevel) { return U.teamRuleDecision(rules, title, text, commonLevel); };
+  U.verdictMap = function() { return {}; };
+  console.warn('[긴급도 규칙] urgency_rules.js가 옛 판(문장 조건 함수 없음) — 새로고침하면 바로잡힙니다');
+  return true;
+})();
+
 // ════════════════════════════════════════════
 //  SKT 전파정책 AI 분석 — 공통 시스템 프롬프트
 // ════════════════════════════════════════════
@@ -4293,6 +4311,7 @@ function openUrgencyRules() {
   if (list && !list.innerHTML) list.innerHTML = '<div style="font-size:12px;color:var(--text-tertiary);padding:8px 0">불러오는 중...</div>';
   _urRenderTabs();
   loadUrgencySources(true).then(renderUrgencyRules);
+  if (_urTab === 'team') _urLoadTeamVerdicts();   // 우리 팀 탭이면 AI 문장 판정 기록(#251) — 첫 화면에는 조회하지 않는다
 }
 function closeUrgencyRules() {
   var m = document.getElementById('ur-modal');
@@ -4319,6 +4338,7 @@ function switchUrgencyTab(tab) {
   _urTab = tab;
   _urMsg('');
   renderUrgencyRules();
+  if (tab === 'team') _urLoadTeamVerdicts();
 }
 function _urRenderTabs() {
   if (_urTab === 'team' && !teamEditor()) _urTab = 'common';
@@ -4338,13 +4358,20 @@ function _urRenderTabs() {
   var cn = document.getElementById('ur-common-note'); if (cn) cn.style.display = team ? 'none' : '';
   var tn = document.getElementById('ur-team-note'); if (tn) tn.style.display = team ? '' : 'none';
   var add = document.getElementById('ur-add-btn'); if (add) add.style.display = _urCanEdit() ? '' : 'none';
+  // ④ AI 문장 조건 칸(#251)은 우리 팀 탭에서만 — 공통 규칙은 DB CHECK가 막는다(설계안 §10-2 C7). 값도 팀 탭에서만 보낸다(_urFormRow)
+  var sr = document.getElementById('ur-f-sentence-row'); if (sr) sr.style.display = team ? '' : 'none';
+  _urTeamCostRender();
 }
 // 로그인·로그아웃·팀 변경 뒤(applyAuthUI) — 탭·버튼을 새 권한에 맞추고, 편집 권한이 없어졌으면 폼을 닫는다
 function _urAuthChanged() {
   _urRenderTabs();
   if (_urFormOpen && !_urCanEdit()) cancelUrgencyRuleEdit();
   var m = document.getElementById('ur-modal');
-  if (m && m.style.display !== 'none' && m.style.display) renderUrgencyRules();
+  if (m && m.style.display !== 'none' && m.style.display) {
+    renderUrgencyRules();
+    // 우리 팀 탭이 열려 있으면 판정 기록을 다시(#251) — 계정·팀이 바뀌었으면 _vdSync가 위에서 기록을 비웠다(같으면 2분 캐시)
+    if (_urTab === 'team') _urLoadTeamVerdicts();
+  }
 }
 
 function _urMsg(text, isError) {
@@ -4377,6 +4404,9 @@ function _urSentenceHtml(r) {
     return (i ? '그리고 ' : '제목·요약에 ') + _urChips(g) + (one ? ' 낱말' : ' 중 하나') +
       (i ? '도' : (one ? '이' : '가')) + (i === segs.length - 1 ? ' 있으면' : ' 있고');
   });
+  // ④ AI 문장 조건(#251, 팀 규칙만) — 낱말이 걸린 기사 중 AI(수집 때 크롤러)가 이 문장에 맞다고 본 기사에만 적용
+  if (UrgencyRules.hasSentence(r))
+    lines.push('그중 AI가 보기에 <span style="color:var(--accent)">「' + escHtml(_urSentenceNorm(r.sentence)) + '」</span>인 기사만');
   lines[lines.length - 1] += ' → <b style="color:' + (lv.color || 'inherit') + '">' + escHtml(_urModeLabel(v.mode, v.level)) + '</b>';
   if (v.none.length) lines.push('단, ' + _urChips(v.none) + (v.none.length === 1 ? ' 낱말이' : ' 중 하나라도') + ' 있으면 이 규칙은 안 걸림');
   return lines.join('<br>');
@@ -4401,6 +4431,9 @@ function renderUrgencyRules() {
         '<span style="font-size:10.5px;color:var(--text-muted)" title="위에서부터 차례로 보고, 처음 걸린 규칙 하나만 적용">' + (i + 1) + '</span>' +
         '<span style="font-size:10.5px;font-weight:700;white-space:nowrap;padding:1px 7px;border-radius:10px;border:0.5px solid ' + (lv.color || 'var(--border-mid)') + ';color:' + (lv.color || 'inherit') + '">' + escHtml(_urModeLabel(r.mode, r.level)) + '</span>' +
         '<span style="font-size:12.5px;color:var(--text-primary);font-weight:600" title="' + escHtml(r.note || r.id) + '">' + escHtml(_urShortName(r)) + '</span>' +
+        (UrgencyRules.hasSentence(r)   // 문장 조건 규칙(#251) — 판정은 뉴스 수집 때 크롤러(Haiku), 결과는 (규칙·문장 판·기사)로 저장
+          ? '<span style="font-size:10px;white-space:nowrap;padding:0 6px;border-radius:10px;border:0.5px solid var(--accent);color:var(--accent)" title="①~③ 낱말이 걸린 기사 중 AI가 ④ 문장에 맞다고 본 기사에만 적용 — 판정은 다음 수집부터 10분마다 최대 100건씩(기사당 약 2~4원), 한 번 판정한 기사는 다시 묻지 않음">AI 문장 판정</span>'
+          : '') +
         (r.enabled ? '' : '<span style="font-size:10px;color:#b45309">꺼짐 — 적용 안 함</span>') +
         (admin ? '<button class="btn" style="font-size:10.5px;padding:2px 8px;margin-left:auto" data-rid="' + escHtml(r.id) + '" onclick="editUrgencyRule(this.getAttribute(\'data-rid\'))">편집</button>' : '') +
       '</div>' +
@@ -4424,7 +4457,7 @@ function _urFormRow() {
     var base = id, k = 2;
     while (_urRules.some(function(x) { return x.id === id; })) id = base + '_' + (k++);   // 지운 id 재사용 금지 — 꺼진 행도 표에 남는다
   }
-  return {
+  var row = {
     // 팀 탭이면 내 팀(#250). 기존 규칙을 고칠 때 team_id는 저장에서 빠지므로(saveUrgencyRule) 규칙의 주인은 바뀌지 않는다
     id: id, team_id: _urTab === 'team' ? myTeamId() : null,
     position: parseInt(g('ur-f-pos'), 10) || 100,
@@ -4433,7 +4466,20 @@ function _urFormRow() {
     note: (g('ur-f-note') || '').trim(),
     enabled: !!(document.getElementById('ur-f-enabled') || {}).checked,
   };
+  // ④ AI 문장 조건(#251) — 우리 팀 탭에서만 키를 넣는다(공통 탭은 키 자체를 안 보냄 — DB CHECK, C7). 빈 값 = 문장 조건 없음.
+  // 칸이 textarea가 아니면(캐시에 남은 옛 index.html — 그 id가 「이렇게 읽힙니다」 칸이었다) 키를 빼서 저장된 문장을 지우지 않는다.
+  // sentence_rev는 보내지 않는다 — 트리거가 문장이 바뀔 때만 올린다(클라이언트 값 무시)
+  var sEl = document.getElementById('ur-f-sentence');
+  if (_urTab === 'team' && sEl && sEl.tagName === 'TEXTAREA') row.sentence = (sEl.value || '').trim();
+  return row;
 }
+
+// 문장 조건 비교·길이 — DB 트리거 urgency_rules_sentence_rev와 같은 정리(NFC + 공백 묶음 → 한 칸 + 앞뒤 제거).
+// 길이는 char_length처럼 글자(코드 포인트) 수로 센다(DB CHECK ≤200)
+function _urSentenceNorm(s) {
+  return String(s == null ? '' : s).normalize('NFC').replace(/\s+/g, ' ').trim();
+}
+function _urSentenceLen(s) { return Array.from(_urSentenceNorm(s)).length; }
 
 function editUrgencyRule(id) {
   if (!_urCanEdit()) {
@@ -4455,6 +4501,8 @@ function editUrgencyRule(id) {
   set('ur-f-any', r ? (r.any_words || []).join(', ') : '');
   set('ur-f-and', r ? _urGroups(r.and_any).map(function(g) { return g.join(', '); }).join('\n') : '');
   set('ur-f-none', r ? (r.none_words || []).join(', ') : '');
+  set('ur-f-sentence', r && r.sentence ? r.sentence : '');   // ④ AI 문장 조건(#251) — 칸은 우리 팀 탭에서만 보인다
+  var sr = document.getElementById('ur-f-sentence-row'); if (sr) sr.style.display = _urTab === 'team' ? '' : 'none';
   var en = document.getElementById('ur-f-enabled'); if (en) en.checked = r ? !!r.enabled : true;
   var idEl = document.getElementById('ur-f-id');
   if (idEl) idEl.textContent = r ? r.id + ' (고정 — 규칙 id는 바꾸지 않는다)' : '저장할 때 자동 생성 (영문 이름 + 날짜)';
@@ -4470,9 +4518,10 @@ function editUrgencyRule(id) {
   try { form.scrollIntoView({ block: 'start', behavior: 'smooth' }); } catch (e) { /* 구형 브라우저 — 스크롤만 생략 */ }
 }
 
-// 편집 칸 아래 「이렇게 읽힙니다」(#249) — 칸을 고칠 때마다 다시 그린다
+// 편집 칸 아래 「이렇게 읽힙니다」(#249) — 칸을 고칠 때마다 다시 그린다.
+// 칸 id는 ur-f-read(#251부터 — 전의 ur-f-sentence는 ④ AI 문장 조건 입력칸이 쓴다, 표 칸 이름 sentence와 맞춤)
 function _urFormSentence() {
-  var el = document.getElementById('ur-f-sentence');
+  var el = document.getElementById('ur-f-read');
   if (!el || !_urFormOpen) return;
   var row = _urFormRow();
   el.innerHTML = '<div style="font-size:10.5px;color:var(--text-tertiary);margin-bottom:2px">이렇게 읽힙니다' +
@@ -4482,7 +4531,13 @@ function _urFormSentence() {
 // 편집 칸 검증 — 매처 검증(validateRules)의 영문 메시지 전에 칸 이름으로 먼저 알린다
 function _urFormErrors(row) {
   if (!row.any_words.length) return ['① 칸(이 낱말 중 하나가 있고)에 낱말을 하나 이상 적어 주세요'];
-  return UrgencyRules.validateRules([row]);
+  var errs = UrgencyRules.validateRules([row]);
+  // ④ AI 문장 조건(#251) — DB CHECK(≤200자)와 같은 기준. 칸의 maxlength는 「문장으로 적기」가 채운 값을 막지 못한다
+  if (row.sentence != null) {
+    var len = _urSentenceLen(row.sentence);
+    if (len > 200) errs.push('④ AI 문장 조건은 200자 이하로 적어 주세요(지금 ' + len + '자)');
+  }
+  return errs;
 }
 
 function cancelUrgencyRuleEdit() {
@@ -4496,21 +4551,33 @@ function cancelUrgencyRuleEdit() {
 // 비교 기준은 지금 보는 등급이다(AI 원값이 아님) — 값 변경 = 이 목록이면 달라질 기사.
 // 요약 자리는 수집 때 규칙이 본 검색 요약(screen_text)이 있으면 그것(#250 — ruleInputText, 크롤러와 같은 입력).
 // 공통 탭 = 공통 저장값과 비교 / 팀 탭 = 우리 팀이 지금 보는 값과 비교(사람·팀 AI 행이 있는 기사는 규칙이 안 건드림).
+// 문장 조건(#251, 설계안 §10-2): 팀 탭의 결정은 teamRuleDecisionJudged(기사마다 그 기사의 판정 기록) — 판정이 참인 문장 규칙만
+// 걸리고, 대기·없음·거짓은 안 걸림(뒤 규칙이 정함). 편집 중 규칙이 문장 규칙이면 낱말에 걸린 후보마다 저장된 판정 상태
+// (해당·아님·대기·판정 전)를 보여 준다. 여기서 AI는 부르지 않는다(C3 — 판정은 크롤러가 다음 수집 때).
 async function previewUrgencyRules() {
   var pv = document.getElementById('ur-preview');
   if (!pv) return;
   var team = _urTab === 'team';
   var rules = _urTabRules();
-  var target = null;
+  var target = null, tSent = false, tNew = false;
   if (_urFormOpen) {
     target = _urFormRow();
     var errs = _urFormErrors(target);
     if (errs.length) { pv.innerHTML = '<div style="color:#ef4444;font-size:11px">' + escHtml(errs.join(' / ')) + '</div>'; return; }
+    if (team) {
+      // 편집 중 규칙의 문장 판: 저장된 문장과 같으면 저장된 판(받아 둔 판정을 그대로 쓴다), 새 규칙이거나 문장을 고쳤으면
+      // 저장 뒤 판 — 그 판의 판정은 아직 없으므로 이 규칙은 '안 걸림'으로 계산되고 후보는 모두 「저장 뒤 새로 판정」
+      var saved = _urEditing ? _urRulesById()[target.id] : null;
+      tSent = UrgencyRules.hasSentence(target) && target.enabled;   // 꺼진 규칙은 판정 후보를 만들지 않는다(대기 행도 안 넣음)
+      // 트리거와 같은 비교: 새 문장은 정규화(_urSentenceNorm ≡ DB 트리거), 저장된 문장은 DB가 이미 정규화해 둔 값 그대로
+      tNew = !saved || _urSentenceNorm(target.sentence) !== (saved.sentence || '');
+      target.sentence_rev = saved ? (Number(saved.sentence_rev) || 0) + (tNew ? 1 : 0) : 0;
+    }
     rules = rules.filter(function(r) { return r.id !== target.id; }).concat([target]);
   }
   rules = rules.filter(function(r) { return r.enabled; });
-  if (team) rules.sort(function(a, b) { return a.position - b.position; });   // 같은 순서면 표 조회 순서(= 크롤러와 같은 position, id) 유지
-  else rules.sort(function(a, b) { return (a.position - b.position) || (a.id < b.id ? -1 : 1); });
+  // 순서 = 표 조회 순서(position, id) — 크롤러·재적용과 같게. 편집 중 규칙도 끝에 붙이지 않고 제자리(순서 번호·id)에 둔다(#251 검토)
+  rules.sort(_urRuleCmp);
   if (!newsDataCache.length) { pv.innerHTML = '<div style="font-size:11px;color:var(--text-tertiary)">불러온 기사가 없습니다 — 뉴스 목록을 한 번 연 뒤 다시 눌러 주세요.</div>'; return; }
   pv.innerHTML = '<div style="font-size:11px;color:var(--text-tertiary)">기사 검색 요약 불러오는 중...</div>';
   var texts = {}, warn = '';
@@ -4519,9 +4586,19 @@ async function previewUrgencyRules() {
     warn = '<div style="font-size:10.5px;color:#b45309;margin-bottom:4px">⚠️ 수집 때 본 검색 요약을 불러오지 못해 저장 요약으로 돌렸습니다(' + escHtml((e && e.message) || String(e)) + ') — 실제 수집 결과와 조금 다를 수 있습니다.</div>';
   }
   if (team && _teamLayerPromise) { try { await _teamLayerPromise; } catch (e2) { /* 아래에서 빈 팀 행으로 계산 */ } }
+  // 문장 조건 규칙이 하나라도 있으면 우리 팀 판정 기록(크롤러가 저장한 AI 판정, #251)을 읽는다 — 기사마다 그 기사 것만 넘긴다.
+  // 못 읽으면 문장 규칙은 모두 판정 전(안 걸림)으로 계산하고 알린다
+  var vmOf = function() { return {}; }, vdOk = false;
+  if (team && rules.some(UrgencyRules.hasSentence)) {
+    try { await loadSentenceVerdicts(); vdOk = _vdAll; if (vdOk) vmOf = _verdictMapFor; }
+    catch (e3) { /* 아래 경고 */ }
+    if (!vdOk) warn += '<div style="font-size:10.5px;color:#b45309;margin-bottom:4px">⚠️ AI 문장 판정 기록을 불러오지 못해 문장 조건 규칙은 모두 판정 전(안 걸림)으로 계산했습니다' +
+      (_vdError ? '(' + escHtml(_vdError) + ')' : '') + '.</div>';
+  }
   var nameOf = {};
   rules.forEach(function(r) { nameOf[r.id] = (target && r.id === target.id && !r.note) ? '이 규칙' : _urShortName(r); });
-  var hits = [], perRule = {}, changed = 0, total = 0, pinned = 0;
+  var hits = [], perRule = {}, changed = 0, total = 0, pinned = 0, tDecided = 0;
+  var cands = [], sc = { yes: 0, no: 0, wait: 0, none: 0, fresh: 0, failed: 0 };   // 문장 규칙 후보와 판정 상태별 수(fresh = 저장 뒤 새로 판정)
   var rb = _urRulesById();
   newsDataCache.forEach(function(n) {
     var text = UrgencyRules.ruleInputText(texts[String(n.id)], n.summary);
@@ -4530,13 +4607,22 @@ async function previewUrgencyRules() {
       if (row && (row.source === 'human' || row.source === 'ai')) { pinned++; return; }
       var common = n._common || n.importance || n.urgency || '참고';
       var curT = UrgencyRules.effectiveTeamUrgency(common, row, rb).level;
-      var dec = UrgencyRules.teamRuleDecision(rules, n.title || '', text, common);
+      var vm = vmOf(n.id);
+      var dec = UrgencyRules.teamRuleDecisionJudged(rules, n.title || '', text, common, vm);
       var nv = dec ? dec.level : common;
-      if (nv !== curT) changed++;   // 규칙에서 풀려 공통값으로 돌아가는 기사도 센다
+      var tres = { level: nv, changed: nv !== curT };
+      if (tres.changed) changed++;   // 규칙에서 풀려 공통값으로 돌아가는 기사도 센다
+      if (tSent && _urReachesRule(rules, n.title || '', text, vm, target.id)) {
+        var vr = (tNew || !vdOk) ? null : _verdictRowFor(n.id, target);
+        var s = tNew ? 'fresh' : _urVerdictState(vr);
+        sc[s]++;
+        cands.push({ n: n, cur: curT, res: tres, st: s, vr: vr });
+      }
       if (!dec) return;
       perRule[dec.rule_id] = (perRule[dec.rule_id] || 0) + 1;
       total++;
-      if (!target || dec.rule_id === target.id) hits.push({ n: n, cur: curT, res: { level: nv, changed: nv !== curT } });
+      if (target && dec.rule_id === target.id) tDecided++;
+      if (!tSent && (!target || dec.rule_id === target.id)) hits.push({ n: n, cur: curT, res: tres });
       return;
     }
     var cur = n.urgency || n.importance || '참고';
@@ -4546,6 +4632,7 @@ async function previewUrgencyRules() {
     perRule[hit.id] = (perRule[hit.id] || 0) + 1;
     total++;
     if (res.changed) changed++;
+    if (target && hit.id === target.id) tDecided++;
     if (!target || hit.id === target.id) hits.push({ n: n, cur: cur, res: res });
   });
   var head = warn + '<div style="font-size:11.5px;color:var(--text-primary);margin-bottom:4px;line-height:1.7">최근 불러온 기사 ' + newsDataCache.length.toLocaleString('ko-KR') + '건에 ' +
@@ -4553,12 +4640,43 @@ async function previewUrgencyRules() {
     (team
       ? '걸린 기사 <b>' + total + '건</b> · 우리 팀 등급이 바뀌는 기사 <b>' + changed + '건</b>(규칙에서 풀려 공통값으로 돌아가는 기사 포함)'
       : '규칙에 걸린 기사 <b>' + total + '건</b> · 그중 등급이 바뀌는 기사 <b>' + changed + '건</b>') +
-    (target ? ' · <b>이 규칙으로 정해지는 기사 ' + hits.length + '건</b>' : '') + '</div>' +
+    (target ? ' · <b>이 규칙으로 정해지는 기사 ' + tDecided + '건</b>' : '') + '</div>' +
     (team && pinned ? '<div style="font-size:10.5px;color:var(--text-tertiary);margin-bottom:2px">우리 팀이 직접 고친 기사 ' + pinned + '건은 규칙이 건드리지 않습니다(「공통값으로 되돌리기」를 하면 그때 규칙이 다시 적용).</div>' : '') +
     '<div style="font-size:10.5px;color:var(--text-tertiary);margin-bottom:6px">' +
     Object.keys(perRule).map(function(k) { return escHtml(nameOf[k] || k) + ' ' + perRule[k] + '건'; }).join(' · ') + '</div>';
+  if (tSent) {
+    // 문장 규칙 요약 — 낱말에 걸린(앞 규칙에 먼저 걸리지 않은) 후보의 판정 상태와 저장하면 새로 물을 건수·어림 비용
+    var nC = cands.length, ask = tNew ? sc.fresh : sc.none;
+    head += '<div style="font-size:11px;color:var(--text-primary);margin-bottom:6px;padding:6px 8px;border-radius:var(--radius-md);background:var(--bg-primary);border:0.5px solid var(--border-secondary);line-height:1.7">' +
+      '낱말에 걸린 기사 <b>' + nC.toLocaleString('ko-KR') + '건</b> → ' +
+      (tNew
+        ? '<b>저장 뒤 새로 판정 ' + nC.toLocaleString('ko-KR') + '건</b>' + (_urEditing ? ' (문장이 바뀌어 새 문장으로 다시 판정합니다)' : '')
+        : 'AI 판정: 해당 <b>' + sc.yes + '</b> · 아님 <b>' + sc.no + '</b> · 대기 <b>' + sc.wait + '</b> · 판정 전 <b>' + sc.none + '</b>' +
+          (sc.failed ? ' · 판정 실패 <b>' + sc.failed + '</b>' : '')) +
+      (ask
+        ? '<br>저장하면 ' + (tNew ? '' : '판정 전 ') + ask.toLocaleString('ko-KR') + '건을 AI가 판정합니다 — ' +
+          _urJudgeEta(Math.min(ask, UR_VERDICT_REQ_CAP)) + ', 약 ' + _urWonEst(Math.min(ask, UR_VERDICT_REQ_CAP)) + '원' +
+          (ask > UR_VERDICT_REQ_CAP ? ' — 한 번 저장에 최근 ' + UR_VERDICT_REQ_CAP + '건까지만 요청하므로 나머지는 같은 규칙을 다시 저장하면 요청합니다' : '')
+        : '') +
+      '</div>';
+  }
   var list = '';
-  if (target) {
+  if (tSent) {
+    var RANK = { yes: 0, wait: 1, none: 2, fresh: 2, failed: 3, no: 4 };
+    cands.sort(function(a, b) { return (RANK[a.st] - RANK[b.st]) || (b.n.published_at || '').localeCompare(a.n.published_at || ''); });
+    if (cands.length) list = '<div style="font-size:10.5px;color:var(--text-tertiary);margin-bottom:2px;line-height:1.6">해당 ✓ = AI가 문장에 맞다고 본 기사(이 규칙 적용, 주황 = 등급이 바뀜) · 아님 ✗ = 뒤 규칙이 정함 · 대기 ⏳ = 다음 수집부터 판정(10분마다 최대 100건씩) · 판정 전 = 저장하면 판정 요청' +
+      (sc.failed ? ' · 판정 실패 ⚠ = 더 묻지 않음(직접 확인)' : '') + ' — 판정 이유는 표시에 마우스를 올리면 보입니다</div>';
+    list += cands.slice(0, 40).map(function(c) {
+      var m = _urStateMark(c.st, c.vr);
+      return '<div style="font-size:11px;padding:3px 0;border-top:0.5px solid var(--border-tertiary);display:flex;gap:6px">' +
+        '<span style="white-space:nowrap;color:' + m.color + ';cursor:help" title="' + escHtml(m.tip) + '">' + escHtml(m.label) + '</span>' +
+        (c.st === 'yes' && c.res.changed
+          ? '<span style="white-space:nowrap;color:#b45309">' + escHtml(_urLvLabel(c.cur)) + '→' + escHtml(_urLvLabel(c.res.level)) + '</span>' : '') +
+        '<span style="color:var(--text-muted);white-space:nowrap">' + escHtml((c.n.published_at || '').slice(5, 10)) + '</span>' +
+        '<span style="color:var(--text-primary)">' + escHtml(c.n.title || '') + '</span></div>';
+    }).join('') || '<div style="font-size:11px;color:var(--text-tertiary)">낱말에 걸린 기사가 없습니다 — 낱말이 든 기사가 없거나, 위쪽 규칙에 먼저 걸렸습니다.</div>';
+    if (cands.length > 40) list += '<div style="font-size:10.5px;color:var(--text-tertiary)">… 외 ' + (cands.length - 40) + '건</div>';
+  } else if (target) {
     hits.sort(function(a, b) { return (b.res.changed - a.res.changed) || (b.n.published_at || '').localeCompare(a.n.published_at || ''); });
     if (hits.length) list = '<div style="font-size:10.5px;color:var(--text-tertiary);margin-bottom:2px">왼쪽 = 지금 등급 → 이 규칙이면 바뀔 등급 (주황 = 바뀌는 기사)</div>';
     list += hits.slice(0, 40).map(function(h) {
@@ -4574,10 +4692,64 @@ async function previewUrgencyRules() {
     '<div style="font-size:10.5px;color:var(--text-tertiary);margin-top:6px;line-height:1.6">⚠️ 낱말은 글자 일부만 같아도 걸립니다(예: 「인사」는 「인사말」에도 걸림). 두세 글자 낱말은 ② 칸과 함께 쓰고, 위 목록에 엉뚱한 기사가 없는지 읽어 보세요.</div>';
 }
 
+// 기사가 편집 중 문장 규칙(rid)까지 내려오나(#251) — UrgencyRules.sentenceCandidates와 같은 걸음: 앞의 낱말 규칙이 걸리면
+// 멈추고, 앞의 문장 규칙은 판정이 참일 때만 멈춘다(거짓·대기·없음은 지나감). rules = 지금 탭의 켜진 규칙(순서대로)
+function _urReachesRule(rules, title, text, vm, rid) {
+  for (var i = 0; i < rules.length; i++) {
+    var r = rules[i];
+    if (!UrgencyRules.matchUrgencyRules([r], title, text)) continue;
+    if (r.id === rid) return true;
+    if (!UrgencyRules.hasSentence(r) || UrgencyRules.sentenceVerdict(vm, r) === true) return false;
+  }
+  return false;
+}
+// 판정 기록 한 행(지금 문장 판) → 미리보기 상태 — 크롤러의 상태 규칙과 맞춘다. 행 없음 = 판정 전(저장하면 요청) /
+// pending·wait_body·stale = 대기(stale도 지금 판이면 크롤러가 다음 실행에 되살려 판정 — 옛 판 행은 여기서 보지 않는다) /
+// failed = 판정 실패(끝 — 3번 실패했거나 3일이 지남, 크롤러가 다시 묻지 않고 관리자만 SQL로 되돌린다)
+function _urVerdictState(vr) {
+  if (!vr) return 'none';
+  if (vr.status === 'done') return vr.verdict === true ? 'yes' : 'no';
+  if (vr.status === 'failed') return 'failed';
+  return 'wait';
+}
+function _urStateMark(st, vr) {
+  var why = vr && vr.reason ? 'AI 판단: ' + vr.reason : '';
+  if (st === 'yes') return { label: '해당 ✓', color: 'var(--green)', tip: why || 'AI가 문장에 맞다고 봄' };
+  if (st === 'no') return { label: '아님 ✗', color: 'var(--text-muted)', tip: why || 'AI가 문장에 맞지 않는다고 봄' };
+  if (st === 'wait') return { label: '대기 ⏳', color: '#b45309', tip: _urWaitText(vr) };
+  if (st === 'failed') return { label: '판정 실패 — 직접 확인 ⚠', color: 'var(--text-secondary)', tip: _UR_FAILED_TIP };
+  if (st === 'fresh') return { label: '저장 뒤 새로 판정', color: 'var(--accent)', tip: '새 규칙이거나 문장을 고쳤습니다 — 저장하면 이 문장으로 판정합니다(다음 수집부터 10분마다 최대 ' + UR_VERDICT_PER_RUN + '건씩)' };
+  return { label: '판정 전', color: 'var(--text-tertiary)', tip: '저장하면 AI가 판정합니다(다음 수집부터 10분마다 최대 ' + UR_VERDICT_PER_RUN + '건씩)' };
+}
+var _UR_FAILED_TIP = 'AI 판정이 끝내 실패했습니다(3번 실패했거나 3일이 지남) — 다시 묻지 않으니 기사를 직접 보고 필요하면 우리 팀 등급을 고치세요(관리자가 되돌리면 다시 판정)';
+function _urWaitText(vr) {
+  if (vr && vr.status === 'wait_body') return '본문이 들어오면 판정합니다(늦어도 3시간 뒤에는 제목·요약으로)';
+  return '다음 수집부터 판정합니다(10분마다 최대 ' + UR_VERDICT_PER_RUN + '건씩)';
+}
+// 판정 어림 비용(원) — 기사당 약 2원(20건 묶음 실측 $0.0013, 설계안 §10-2 실측표)
+function _urWonEst(n) { return Math.round(n * UR_VERDICT_WON).toLocaleString('ko-KR'); }
+// 판정 때 — 크롤러는 10분 실행마다 최대 UR_VERDICT_PER_RUN건만 판정한다(모든 팀 합산). N건이 넘으면 걸리는 시간 어림을 붙인다
+function _urJudgeEta(n) {
+  return '다음 수집부터 10분마다 최대 ' + UR_VERDICT_PER_RUN + '건씩' +
+    (n > UR_VERDICT_PER_RUN ? '(약 ' + (Math.ceil(n / UR_VERDICT_PER_RUN) * 10).toLocaleString('ko-KR') + '분)' : '');
+}
+// 규칙 순서 = 표 조회 순서 order(position).order(id) — 크롤러·재적용(_teamEnabledRules = _urRules 조회 순서)과 같게(#251 검토).
+// id는 DB 정렬(en_US.UTF-8: '_' < 숫자 < 영문 소문자 — 2026-09-27 실측 a_1 < a_b < a1 < ab)을 따른다. JS 기본 비교는 숫자 < '_'라
+// 순서 번호가 같은 규칙끼리 어긋난다. id는 CHECK로 [a-z0-9_]만이라 '_'를 가장 앞 글자로 바꿔 비교하면 된다
+function _urIdSortKey(id) { return String(id == null ? '' : id).replace(/_/g, '\u0001'); }
+function _urRuleCmp(a, b) {
+  var d = a.position - b.position;
+  if (d) return d;
+  var x = _urIdSortKey(a.id), y = _urIdSortKey(b.id);
+  return x < y ? -1 : (x > y ? 1 : 0);
+}
+
 // ── 문장으로 규칙 만들기 (#249, 2026-09-27 운영자 요청 "규칙을 자연어로 입력") ──
 // Haiku가 운영자 문장을 편집 칸(이름·적어도/무조건·등급·①②③)으로 옮긴다. **칸을 채우기만 하고 저장하지 않는다** —
 // 읽히는 문장과 최근 기사 미리보기를 바로 띄워 운영자가 보고 고친 뒤 저장한다(파싱 결과를 숨기지 않는다).
 // 저장되는 것은 여전히 낱말 목록이라 수집 때는 AI 없이 매번 같은 결과다. 본보기 = 지금 공통 규칙 전부.
+// 예외는 우리 팀 규칙의 ④ 문장 조건(#251) — 수집 때 크롤러가 기사마다 한 번 판정해 (규칙·문장 판·기사)로 저장하므로
+// 같은 기사는 역시 같은 결과다. 우리 팀 탭에서만 도구에 sentence 칸을 더한다(_urNlTool).
 var UR_NL_SYSTEM =
   '너는 SK텔레콤 기술정책팀 뉴스 모니터링 대시보드의 「긴급도 규칙」 작성 도우미다. ' +
   '운영자가 문장으로 적은 요구를 낱말 규칙 하나로 옮겨 make_rule 도구로만 답한다.\n\n' +
@@ -4613,6 +4785,21 @@ var UR_NL_TOOL = {
     required: ['name', 'mode', 'level', 'any_words', 'and_groups', 'none_words', 'notes']
   }
 };
+// 우리 팀 탭에서만(#251) — ④ AI 문장 조건(sentence, 선택)을 더한 도구와 지시문. 공통 탭은 UR_NL_TOOL·UR_NL_SYSTEM 그대로
+// (문장 조건은 팀 규칙만 — DB CHECK, 설계안 §10-2 C7). 200자는 설명과 _urFormErrors로 지킨다(도구 스키마 길이 제약은 넣지 않음)
+var UR_NL_TEAM_SENTENCE =
+  '(우리 팀 탭) 낱말만으로 가를 수 없는 뜻·어조 조건(문제를 제기하는, 부정적인, 비판하는, 통신사에 불리한 등)은 notes가 아니라 ' +
+  'sentence에 한 문장으로 적는다. 그때 any 낱말은 주제 낱말로 넓게 잡는다(뜻은 sentence가 거른다). ' +
+  'sentence는 200자 안의 한 문장(예: 「공공·지하철 와이파이 관련 문제(부정적)를 제기하는 기사」)이고, 그런 조건이 없으면 빈 문자열로 둔다.';
+function _urNlTool(team) {
+  if (!team) return UR_NL_TOOL;
+  var t = JSON.parse(JSON.stringify(UR_NL_TOOL));
+  t.input_schema.properties.sentence = {
+    type: 'string',
+    description: '(우리 팀 규칙만, 선택) 낱말로 가를 수 없는 뜻·어조 조건 한 문장(200자 이내). ①~③ 낱말이 걸린 기사마다 AI가 이 문장에 맞는지 판정해 맞는 기사에만 규칙을 적용한다. 필요 없으면 빈 문자열'
+  };
+  return t;
+}
 
 async function urgencyRuleFromText(btn) {
   if (!_urCanEdit()) { _urMsg(_urTab === 'team' ? teamEditGateMsg() : '공통 규칙은 관리자만 만들 수 있습니다.', true); return; }
@@ -4624,8 +4811,10 @@ async function urgencyRuleFromText(btn) {
   var examples = _urRules.filter(function(r) {
     return r.team_id == null || (team && tid != null && r.team_id != null && Number(r.team_id) === tid);
   }).map(function(r) {
-    return { name: _urShortName(r), mode: r.mode, level: r.level, any_words: r.any_words || [],
-             and_groups: _urGroups(r.and_any), none_words: r.none_words || [] };
+    var ex = { name: _urShortName(r), mode: r.mode, level: r.level, any_words: r.any_words || [],
+               and_groups: _urGroups(r.and_any), none_words: r.none_words || [] };
+    if (team && UrgencyRules.hasSentence(r)) ex.sentence = _urSentenceNorm(r.sentence);   // 우리 팀 문장 조건 규칙 본보기(#251)
+    return ex;
   });
   if (btn) btn.disabled = true;
   _urMsg('AI가 규칙으로 옮기는 중...');
@@ -4636,9 +4825,9 @@ async function urgencyRuleFromText(btn) {
       body: JSON.stringify({
         model: 'claude-haiku-4-5-20251001', max_tokens: 800,
         system: UR_NL_SYSTEM +
-          (team ? '\n\n[이번 규칙은 「' + myTeamName() + '」 팀 규칙이다 — 그 팀이 보는 등급에만 적용된다. 그 팀의 관점으로 옮긴다]' : '') +
+          (team ? ('\n\n[이번 규칙은 「' + myTeamName() + '」 팀 규칙이다 — 그 팀이 보는 등급에만 적용된다. 그 팀의 관점으로 옮긴다]\n' + UR_NL_TEAM_SENTENCE) : '') +
           '\n\n[지금 저장된 규칙 — 본보기]\n' + JSON.stringify(examples),
-        tools: [UR_NL_TOOL], tool_choice: { type: 'tool', name: 'make_rule' },
+        tools: [_urNlTool(team)], tool_choice: { type: 'tool', name: 'make_rule' },
         messages: [{ role: 'user', content: text.slice(0, 500) }]
       })
     });
@@ -4656,6 +4845,8 @@ async function urgencyRuleFromText(btn) {
     set('ur-f-and', (Array.isArray(o.and_groups) ? o.and_groups : []).map(words)
       .filter(function(g) { return g.length; }).map(function(g) { return g.join(', '); }).join('\n'));
     set('ur-f-none', words(o.none_words).join(', '));
+    // ④ AI 문장 조건(#251) — 우리 팀 탭에서만. 규칙 전체를 옮긴 결과라 비어 오면 칸도 비운다(200자 초과는 미리보기·저장이 알린다)
+    if (team) set('ur-f-sentence', typeof o.sentence === 'string' ? o.sentence.trim() : '');
     _urFormSentence();
     previewUrgencyRules();
     _urMsg('칸을 채웠습니다 — 아래 「이렇게 읽힙니다」와 미리보기에서 엉뚱한 기사가 없는지 보고, 필요하면 고친 뒤 저장하세요.' +
@@ -4680,14 +4871,17 @@ async function saveUrgencyRule(btn) {
   _urMsg('저장 중...');
   try {
     var resp;
+    // 돌려받는 sentence_rev(#251) = 트리거가 정한 문장 판(문장이 바뀔 때만 +1) — 재적용이 그 판으로 대기 행을 넣는다
+    var RET = 'id,sentence_rev,updated_at';
     if (_urEditing) {
       var upd = Object.assign({}, row); delete upd.id; delete upd.team_id;
-      resp = await sb.from('urgency_rules').update(upd).eq('id', row.id).select('id');
+      resp = await sb.from('urgency_rules').update(upd).eq('id', row.id).select(RET);
     } else {
-      resp = await sb.from('urgency_rules').insert(row).select('id');
+      resp = await sb.from('urgency_rules').insert(row).select(RET);
     }
     if (resp.error) throw resp.error;
     if (!resp.data || !resp.data.length) throw new Error('저장된 행이 없습니다(권한 확인)');
+    var saved = resp.data[0];
     await loadUrgencySources(true);
     renderUrgencyRules();
     cancelUrgencyRuleEdit();
@@ -4695,13 +4889,27 @@ async function saveUrgencyRule(btn) {
       _urMsg('저장됨 — 다음 뉴스 수집(10분 간격)부터 새 기사에 적용됩니다. 이미 저장된 기사는 바뀌지 않습니다.');
       return;
     }
-    // 팀 규칙은 저장하는 순간 불러온 기사에 다시 적용한다(#250 E4) — 수집 때 적용(크롤러)과 같은 입력·같은 함수
+    // 다시 읽은 규칙이 방금 저장한 행보다 옛것이면(loadUrgencySources는 조회 실패를 경고로만 남긴다) 옛 정의·옛 문장 판으로
+    // 재적용하게 된다 — 멈추고 알린다(#251)
+    var fresh = _urRulesById()[saved.id];
+    if (!fresh || (Number(fresh.sentence_rev) || 0) < (Number(saved.sentence_rev) || 0) ||
+        (saved.updated_at && fresh.updated_at && Date.parse(fresh.updated_at) < Date.parse(saved.updated_at))) {
+      _urMsg('규칙은 저장됐지만 규칙 목록을 다시 읽지 못해 불러온 기사에 바로 반영하지 못했습니다 — 새로고침 후 같은 규칙을 한 번 더 저장하면 반영합니다(앞으로 수집되는 기사에는 적용됩니다).', true);
+      return;
+    }
+    // 팀 규칙은 저장하는 순간 불러온 기사에 다시 적용한다(#250 E4) — 수집 때 적용(크롤러)과 같은 입력·같은 함수.
+    // 문장 조건 규칙은 판정된 기사만 걸리고, 판정 전 후보는 대기 행만 넣는다(판정은 다음 수집 때 크롤러, #251 C3)
     _urMsg('저장됨 — 우리 팀 기사에 바로 반영하는 중...');
     try {
       var st = await reapplyTeamRules();
       var n = st.added + st.changed + st.released;
-      _urMsg('저장됨 — 우리 팀 기사 ' + n.toLocaleString('ko-KR') + '건에 바로 반영(새로 걸림 ' + st.added + ' · 바뀜 ' + st.changed + ' · 해제 ' + st.released + '). 앞으로 수집되는 기사에도 적용됩니다.' +
-        (st.skipped ? ' (그사이 팀에서 직접 고쳤거나 지워진 기사 ' + st.skipped + '건은 건너뜀)' : ''));
+      var msg = '저장됨 — 우리 팀 기사 ' + n.toLocaleString('ko-KR') + '건에 바로 반영(새로 걸림 ' + st.added + ' · 바뀜 ' + st.changed + ' · 해제 ' + st.released + '). 앞으로 수집되는 기사에도 적용됩니다.' +
+        (st.skipped ? ' (그사이 팀에서 직접 고쳤거나 지워진 기사 ' + st.skipped + '건은 건너뜀)' : '');
+      if (st.waiting) msg += ' · AI 판정 대기 ' + st.waiting.toLocaleString('ko-KR') + '건 — ' + _urJudgeEta(st.waiting) + ' 판정해 반영(약 ' + _urWonEst(st.waiting) + '원)';
+      if (st.capped) msg += ' — 판정 전 기사가 많아 최근 ' + UR_VERDICT_REQ_CAP + '건만 요청했습니다(나머지 ' + st.capped.toLocaleString('ko-KR') + '건은 같은 규칙을 한 번 더 저장하면 요청)';
+      if (st.reqError) msg += ' ⚠️ AI 판정 요청 실패: ' + st.reqError;
+      _urMsg(msg, !!st.reqError);
+      _urTeamCostRender();
     } catch (e2) {
       console.warn('[팀 규칙] 즉시 재적용 실패:', e2);
       _urMsg('규칙은 저장됐지만 불러온 기사에 바로 반영하지 못했습니다: ' + ((e2 && e2.message) || e2) +
@@ -4936,7 +5144,14 @@ function _teamSourceHtml(n) {
     var r = _urRulesById()[rid];
     var name = r ? _urShortName(r) : rid;
     var tip = r ? (r.note || r.id) + ' (' + _urModeLabel(r.mode, r.level) + ')' : rid;
-    return '<span style="' + st + '" title="' + escHtml('우리 팀 규칙 — ' + tip) + '">· 우리 팀 규칙: ' + escHtml(name) + '</span>';
+    // 문장 조건 규칙(#251)이면 「· AI 판정」 — 판정 이유는 판정 기록을 이미 읽었을 때만 풍선말에(여기서는 조회하지 않는다)
+    var sent = !!r && UrgencyRules.hasSentence(r);
+    if (sent) {
+      tip += ' · AI 문장 조건: 「' + _urSentenceNorm(r.sentence) + '」';
+      var vr = _verdictRowFor(n.id, r);
+      if (vr && vr.status === 'done' && vr.reason) tip += ' · AI 판단: ' + vr.reason;
+    }
+    return '<span style="' + st + '" title="' + escHtml('우리 팀 규칙 — ' + tip) + '">· 우리 팀 규칙: ' + escHtml(name) + (sent ? ' · AI 판정' : '') + '</span>';
   }
   if (te.source === 'ai') return '<span style="' + st + '" title="우리 팀 관점으로 AI가 판정한 값">· 우리 팀 AI</span>';
   return '';
@@ -4987,6 +5202,8 @@ function _impBlockHtml(n) {
         ? '<span onclick="revertTeamImportance(\'' + id + '\')" title="우리 팀이 고친 값을 지우고 공통값(우리 팀 규칙에 걸리면 그 값)으로 돌아갑니다" ' +
           'style="cursor:pointer;font-size:10px;color:var(--accent);white-space:nowrap;text-decoration:underline">공통값으로 되돌리기</span>'
         : ''));
+    var ai = _teamVerdictLineHtml(n, te);   // 문장 조건 규칙이 정한 값이면 「AI 판정: 해당 — 이유」 한 줄(#251)
+    if (ai) out += line(ai);
   } else if (div) {
     var de = (n._teamEff && n._teamEff.division) ? n._teamEff : null;
     var dr = IMPORTANCE_RULES[de ? de.level : common] || IMPORTANCE_RULES['참고'];
@@ -5105,27 +5322,53 @@ async function revertTeamImportance(newsId) {
     console.warn('[팀 등급] 팀 학습 기록 삭제 실패:', e2);
     warns.push('팀 학습 기록 삭제 실패: ' + ((e2 && e2.message) || e2));
   }
-  // 팀 규칙 다시 판정 — 수집 때와 같은 입력(검색 요약 → 없으면 저장 요약)·같은 함수
-  try {
-    var tRules = _teamEnabledRules(tid);
-    if (tRules.length) {
-      var screen = await _screenTextOf(n.id);
-      var common = n._common || n.importance || n.urgency || '참고';
-      var dec = UrgencyRules.teamRuleDecision(tRules, n.title || '', UrgencyRules.ruleInputText(screen, n.summary), common);
-      if (dec) {
-        var ins = await sb.from('team_urgency')
-          .insert({ news_id: n.id, team_id: tid, urgency: dec.level, source: 'rule', rule_id: dec.rule_id })
-          .select(TEAM_URG_COLS);
-        if (ins.error) throw new Error(ins.error.message);
-        if (!ins.data || !ins.data.length) throw new Error('규칙 행이 저장되지 않음(권한 확인)');
-        var nr = ins.data[0];
-        nr.team_id = Number(nr.team_id);
-        _teamRows[key] = nr;
+  // 팀 규칙 다시 판정 — 수집 때와 같은 입력(검색 요약 → 없으면 저장 요약)·같은 함수.
+  // 규칙은 **새로 읽은 것**으로 계산한다(#251 검토) — 페이지를 연 뒤 팀원이 규칙·문장을 바꿨을 수 있고, 대기 행의 문장 판은 지금 판이어야
+  // 한다. loadUrgencySources는 실패해도 경고만 남기고 옛 목록을 두므로 배열이 새것인지로 성공을 가린다 — 실패(또는 옛 공용 파일이
+  // 섞여 문장 조건을 못 셀 때)면 규칙 행·대기 행을 쓰지 않고 알린다(사람 수정 행 삭제는 위에서 끝났다).
+  // 문장 조건(#251): 이 기사의 판정 기록을 새로 읽어 판정이 참인 문장 규칙만 걸리게 하고(못 읽으면 규칙 행을 넣지 않고 알린다),
+  // 판정 기록이 아예 없는 문장 규칙 후보는 대기 행을 넣는다 — 판정은 다음 수집부터 크롤러(C3)
+  var reqRows = [];
+  var rulesBefore = _urRules;
+  try { await loadUrgencySources(true); } catch (e0) { /* 아래 배열 비교로 가린다 */ }
+  var rulesFresh = _urRules !== rulesBefore;
+  var fallbackBlock = _UR_SENTENCE_FALLBACK && _teamEnabledRules(tid).some(function(r) { return !!_urSentenceNorm(r.sentence); });
+  if (!rulesFresh || fallbackBlock) {
+    warns.push((rulesFresh ? '화면 파일이 섞여(옛 긴급도 규칙 파일) AI 문장 조건 규칙을 계산할 수 없어' : '규칙 목록을 다시 읽지 못해') +
+      ' 우리 팀 규칙은 지금 다시 적용하지 않았습니다 — 다음에 우리 팀 규칙을 저장하면(또는 수집이 이 기사를 다시 판정하면) 적용됩니다');
+  } else {
+    try {
+      var tRules = _teamEnabledRules(tid);   // 새로 읽은 규칙 — 대기 행의 sentence_rev도 여기서(_verdictPendingRows)
+      if (tRules.length) {
+        var screen = await _screenTextOf(n.id);
+        var common = n._common || n.importance || n.urgency || '참고';
+        var tTitle = n.title || '', tText = UrgencyRules.ruleInputText(screen, n.summary);
+        var anySent = tRules.some(UrgencyRules.hasSentence);
+        var vm = anySent ? UrgencyRules.verdictMap(await _loadNewsVerdicts(n.id, true)) : {};
+        var dec = UrgencyRules.teamRuleDecisionJudged(tRules, tTitle, tText, common, vm);
+        if (anySent) reqRows = _verdictPendingRows(tRules, n, tTitle, tText, vm, tid).rows;
+        if (dec) {
+          var ins = await sb.from('team_urgency')
+            .insert({ news_id: n.id, team_id: tid, urgency: dec.level, source: 'rule', rule_id: dec.rule_id })
+            .select(TEAM_URG_COLS);
+          if (ins.error) throw new Error(ins.error.message);
+          if (!ins.data || !ins.data.length) throw new Error('규칙 행이 저장되지 않음(권한 확인)');
+          var nr = ins.data[0];
+          nr.team_id = Number(nr.team_id);
+          _teamRows[key] = nr;
+        }
       }
+    } catch (e3) {
+      console.warn('[팀 등급] 팀 규칙 다시 적용 실패:', e3);
+      warns.push('팀 규칙 다시 적용 실패: ' + ((e3 && e3.message) || e3));
     }
-  } catch (e3) {
-    console.warn('[팀 등급] 팀 규칙 다시 적용 실패:', e3);
-    warns.push('팀 규칙 다시 적용 실패: ' + ((e3 && e3.message) || e3));
+  }
+  if (reqRows.length) {
+    try { await _verdictRequest(reqRows); }
+    catch (e4) {
+      console.warn('[팀 등급] AI 판정 요청 실패:', e4);
+      warns.push('AI 문장 판정 요청 실패: ' + ((e4 && e4.message) || e4));
+    }
   }
   _overlayItem(n);
   _newsCacheVer++;
@@ -5169,6 +5412,276 @@ async function _screenTextOf(newsId) {
   return r.data ? r.data.screen_text : null;
 }
 
+// ════════════════════════════════════════════
+//  AI 문장 조건 판정 기록 (#251, 2026-09-27, 설계안 §10-2 — Fable 재검토)
+//  팀 규칙의 ④ 문장 조건은 낱말(①~③)이 걸린 기사마다 **크롤러가** Haiku로 한 번 판정해 표 urgency_rule_verdicts에
+//  (규칙 id, 문장 판 sentence_rev, 기사)로 저장한다 — 같은 기사는 다시 묻지 않고, 문장을 고치면 판이 올라 그 규칙만 다시 판정.
+//  브라우저는 AI를 부르지 않는다(C3): 저장된 판정을 읽어 규칙 목록에 반영하고(UrgencyRules.teamRuleDecisionJudged — 판정이
+//  참인 문장 규칙만 걸림, 대기·없음·거짓 = 안 걸림 → 뒤 규칙이 정함), 규칙 저장·되돌리기 때 판정 기록이 아예 없는 후보만
+//  대기(pending) 행으로 넣는다. RLS: 읽기 = 관리자·자기 팀·실장(team_urgency와 같음) / 넣기 = 자기 팀 승인 계정이 지금 판의
+//  켜진 문장 규칙에 빈 대기 행만(requested_by는 트리거) / 판정 칸 쓰기·고치기·지우기 = service_role(크롤러)만.
+//  읽는 때: 편집 창 우리 팀 탭·재적용·되돌리기·문장 규칙 행의 기사 상세(그 기사 것만) — 첫 화면에서는 조회하지 않는다.
+//  사내판: 기사 상세 경로(_impBlockHtml·_teamSourceHtml)가 여기 함수를 부르지만 팀 id가 있을 때만 — 사내 콘솔은 myTeamId·
+//  _overlayItem을 덮어써 팀 층이 늘 없으므로 이 분기가 돌지 않는다(설계안 §10-1 사내판 회신).
+// ════════════════════════════════════════════
+var VERDICT_COLS = 'rule_id,sentence_rev,news_id,status,verdict,reason,input_kind,cost_usd,judged_at';
+var UR_VERDICT_REQ_CAP = 500;    // 저장 한 번에 넣는 대기 행 상한(최근 기사부터) — 나머지는 다시 저장하면 넣는다
+var UR_VERDICT_WON = 2;          // 판정 어림 비용(원/기사) — 미리보기·저장 알림용
+var UR_VERDICT_PER_RUN = 100;    // 크롤러가 10분 실행마다 판정하는 최대 건수(crawler.py SENTENCE_PER_RUN_MAX, 모든 팀 합산) — 안내 문구용
+var VD_REFRESH_MS = 2 * 60 * 1000;   // 기사 상세: 조회 오류 다시 시도·대기 상태 다시 읽기 간격
+var _vdKey = null;               // 어느 계정·팀·실 기준인가 — 바뀌면 기록을 비운다(앞 계정의 판정을 남기지 않는다)
+var _vdAll = false;              // 팀(실) 전체를 읽었나 — 참이면 _vdByNews에 없는 기사 = 판정 기록 없음
+var _vdByNews = {};              // news_id → 판정 행 배열(팀 계정 = 우리 팀, 실장 = 실 팀들)
+var _vdPromise = null, _vdAt = 0, _vdError = '';
+var _vdGen = 0;                  // 전체 조회 차례 — 늦게 끝난 옛 조회가 새 조회 결과를 덮지 않게
+var _vdLoadedStart = 0;          // 지금 기록을 채운 전체 조회의 시작 시각 — 그보다 먼저 시작한 기사 하나 조회는 덮지 않는다
+var _vdOne = {};                 // news_id → { p, error } — 기사 하나만 읽기(상세 화면)
+
+function _vdSync() {
+  var tid = myTeamId(), div = myDivision();
+  var key = (tid != null || div) ? [currentUser ? currentUser.id : '', tid, div].join('|') : null;
+  if (key !== _vdKey) {
+    _vdKey = key; _vdAll = false; _vdByNews = {}; _vdPromise = null; _vdAt = 0; _vdError = ''; _vdOne = {};
+    _vdGen++; _vdLoadedStart = 0;
+  }
+  return key;
+}
+
+// 판정 기록 전체(팀 계정 = 우리 팀, 실장 = 실 팀들, 관리자라도 팀이 없으면 읽지 않음). 2분 안이면 재사용, force = 새로.
+// 페이지 = 유일 정렬(PK rule_id, sentence_rev, news_id)로 짧은 페이지가 나올 때까지. 일부만 읽고 계산하면 맞다고 판정된
+// 규칙 행까지 풀 수 있으므로 안전상한을 넘으면 실패로 돌린다
+function loadSentenceVerdicts(force) {
+  var key = _vdSync();
+  if (!sb || !key) return Promise.resolve(false);
+  if (_vdPromise && !force && Date.now() - _vdAt < 2 * 60 * 1000) return _vdPromise;
+  var tid = myTeamId(), div = myDivision();
+  var gen = ++_vdGen, started = Date.now();
+  var p = (async function() {
+    var ids = tid != null ? [tid]
+      : _teamsAll.filter(function(t) { return t.division === div; }).map(function(t) { return Number(t.id); });
+    if (!ids.length) throw new Error(div + ' 소속 팀을 찾지 못함(팀 목록 조회 확인)');
+    var scope = function(b) { return tid != null ? b.eq('team_id', tid) : b.in('team_id', ids); };
+    var PAGE = 1000, MAX_PAGES = 50, map = {}, done = false;
+    for (var i = 0; i < MAX_PAGES; i++) {
+      var r = await scope(sb.from('urgency_rule_verdicts').select(VERDICT_COLS))
+        .order('rule_id').order('sentence_rev').order('news_id').range(i * PAGE, i * PAGE + PAGE - 1);
+      if (r.error) throw r.error;
+      (r.data || []).forEach(function(v) { var k = String(v.news_id); (map[k] = map[k] || []).push(v); });
+      if (!r.data || r.data.length < PAGE) { done = true; break; }
+    }
+    if (!done) throw new Error('판정 기록이 안전상한(' + (MAX_PAGES * PAGE).toLocaleString('ko-KR') + '건)을 넘음');
+    if (key !== _vdKey) return false;   // 그사이 계정이 바뀜
+    if (gen !== _vdGen) {               // 그사이 더 새 조회가 시작됨 — 그 결과를 기다린다(옛 결과로 덮지 않음)
+      return _vdPromise ? _vdPromise.then(function() { return _vdAll; }, function() { return _vdAll; }) : _vdAll;
+    }
+    _vdByNews = map; _vdAll = true; _vdError = ''; _vdOne = {}; _vdLoadedStart = started;
+    return true;
+  })();
+  _vdPromise = p; _vdAt = Date.now(); _vdError = '';
+  p.catch(function(e) {
+    if (_vdPromise === p) _vdPromise = null;
+    if (key === _vdKey && gen === _vdGen) _vdError = (e && e.message) || String(e);
+  });
+  return p;
+}
+
+// 기사 하나의 우리 팀 판정 기록(상세 화면·되돌리기) — 읽은 것은 _vdByNews에 넣는다.
+// _vdOne[id] = { p, at(시작), done, doneAt, error } — 오류는 VD_REFRESH_MS 동안만 들고 있다가 다시 읽는다(_teamVerdictLineHtml)
+function _loadNewsVerdicts(newsId, force) {
+  var key = _vdSync(), k = String(newsId), tid = myTeamId();
+  if (!sb || !key || tid == null) return Promise.resolve([]);
+  var prev = _vdOne[k];
+  if (!force && prev && !prev.error) return prev.p;
+  // okAt = 마지막으로 성공한 조회의 시작 시각(실패한 다시 읽기가 앞 성공을 지우지 않게 이어 받는다)
+  var st = { at: Date.now(), done: false, doneAt: 0, error: '', okAt: prev ? (prev.okAt || 0) : 0 };
+  st.p = (async function() {
+    var r = await sb.from('urgency_rule_verdicts').select(VERDICT_COLS).eq('news_id', newsId).eq('team_id', tid);
+    if (r.error) throw r.error;
+    var rows = r.data || [];
+    if (key === _vdKey && st.at >= _vdLoadedStart) _vdByNews[k] = rows;   // 이보다 늦게 시작한 전체 조회가 이미 채웠으면 그대로
+    return rows;
+  })();
+  _vdOne[k] = st;
+  st.p.then(function() { st.done = true; st.doneAt = Date.now(); st.okAt = st.at; },
+            function(e) { st.done = true; st.doneAt = Date.now(); st.error = (e && e.message) || String(e); });
+  return st.p;
+}
+// 그 기사 판정 기록을 언제 읽었나(ms) — 기사 하나 조회(성공)와 전체 조회 중 늦은 쪽의 시작 시각, 모르면 0
+function _vdFetchedAt(newsId) {
+  var one = _vdOne[String(newsId)];
+  return Math.max(one ? (one.okAt || 0) : 0, _vdAll ? _vdLoadedStart : 0);
+}
+
+// 읽어 둔 기록만 본다(조회하지 않음) — 배열, 모르면 null(전체도 그 기사도 아직 안 읽음)
+function _verdictRowsOf(newsId) {
+  _vdSync();
+  var k = String(newsId);
+  if (Object.prototype.hasOwnProperty.call(_vdByNews, k)) return _vdByNews[k];
+  return _vdAll ? [] : null;
+}
+// 그 규칙의 **지금 문장 판** 기록 한 행(상태 무관) 또는 null
+function _verdictRowFor(newsId, rule) {
+  var rows = _verdictRowsOf(newsId);
+  if (!rows || !rule) return null;
+  var rev = Number(rule.sentence_rev) || 0;
+  for (var i = 0; i < rows.length; i++) {
+    if (rows[i].rule_id === rule.id && Number(rows[i].sentence_rev) === rev) return rows[i];
+  }
+  return null;
+}
+// 기사 하나의 판정 사전 {rule_id: {'<판>': bool}} — UrgencyRules 문장 함수에는 늘 기사별로 넘긴다
+function _verdictMapFor(newsId) { return UrgencyRules.verdictMap(_verdictRowsOf(newsId) || []); }
+
+// 이 기사에서 판정을 물어야 할 문장 규칙(sentenceCandidates) 중 **지금 판의 기록이 아예 없는 것만** 대기 행으로.
+// 행이 이미 있으면 넣지 않는다 — pending·wait_body·stale(지금 판이면 크롤러가 되살림)은 waiting으로 세고,
+// failed는 끝난 상태라(크롤러가 다시 묻지 않음, 관리자만 되돌림) 대기로 세지 않는다
+function _verdictPendingRows(rules, n, title, text, vm, tid) {
+  var out = { rows: [], waiting: 0 }, rb = _urRulesById();
+  UrgencyRules.sentenceCandidates(rules, title, text, vm).forEach(function(rid) {
+    var r = rb[rid];
+    if (!r) return;
+    var ex = _verdictRowFor(n.id, r);
+    if (ex) { if (ex.status !== 'failed') out.waiting++; return; }
+    out.rows.push({ rule_id: r.id, sentence_rev: Number(r.sentence_rev) || 0, news_id: n.id, team_id: tid });
+  });
+  return out;
+}
+
+// 60일 정리로 지워지지 않은 기사 id(문자열 Set) — 외래키 23503 뒤 다시 넣을 때
+async function _aliveNewsIds(ids) {
+  var alive = new Set();
+  for (var i = 0; i < ids.length; i += 200) {
+    var q = await sb.from('news_feed').select('id').in('id', ids.slice(i, i + 200));
+    if (q.error) throw new Error('기사 확인 실패: ' + q.error.message);
+    (q.data || []).forEach(function(x) { alive.add(String(x.id)); });
+  }
+  return alive;
+}
+
+// 대기 행 넣기 — {rule_id, sentence_rev, news_id, team_id}만 보낸다(상태·판정 칸은 기본값, RLS가 빈 대기 행만 허용).
+// PK 충돌은 건너뛴다(ignoreDuplicates = ON CONFLICT DO NOTHING — 이미 판정·대기 중인 행을 덮지 않는다). 지워진 기사(23503)가
+// 섞이면 살아 있는 기사만 다시. 넣은 행은 읽어 둔 기록에도 더한다. 반환 = 실제로 넣은 수
+async function _verdictRequest(rows) {
+  var n = 0;
+  var ins = function(c) {
+    return sb.from('urgency_rule_verdicts').upsert(c, { onConflict: 'rule_id,sentence_rev,news_id', ignoreDuplicates: true }).select(VERDICT_COLS);
+  };
+  for (var i = 0; i < rows.length; i += 500) {
+    var chunk = rows.slice(i, i + 500);
+    var r = await ins(chunk);
+    if (r.error && r.error.code === '23503') {
+      var alive = await _aliveNewsIds(chunk.map(function(x) { return x.news_id; }));
+      chunk = chunk.filter(function(x) { return alive.has(String(x.news_id)); });
+      if (!chunk.length) continue;
+      r = await ins(chunk);
+    }
+    if (r.error) {
+      throw new Error((r.error.code === '42501' ? '권한 확인 — 그사이 규칙이 꺼졌거나 문장이 바뀌었을 수 있습니다(다시 저장해 주세요): ' : '') + r.error.message);
+    }
+    (r.data || []).forEach(function(v) {
+      var k = String(v.news_id);
+      if (_vdAll || Object.prototype.hasOwnProperty.call(_vdByNews, k)) (_vdByNews[k] = _vdByNews[k] || []).push(v);
+    });
+    n += (r.data || []).length;
+  }
+  return n;
+}
+
+// 기사 상세 「AI 판정: 해당 — 이유」 한 줄 — 우리 팀 값이 문장 조건 규칙에서 왔을 때만. 판정 기록을 아직 모르면 이 기사 것만
+// 한 번 읽고(_loadNewsVerdicts) 다시 그린다. 판정은 크롤러(Haiku)가 한 것 — 여기서는 저장된 결과를 보여 줄 뿐이다.
+// 조회 오류는 VD_REFRESH_MS(2분) 동안만 보여 주고 그 뒤 다시 그릴 때 다시 읽는다. 끝나지 않은 상태(대기·본문 대기·되살릴 stale·
+// 기록 없음)를 2분 넘게 들고 있으면 상세를 다시 열 때 그 기사 것만 새로 읽는다 — 그사이 크롤러가 판정했을 수 있다(#251 검토)
+function _teamVerdictLineHtml(n, te) {
+  if (!n || !te || te.source !== 'rule' || !te.row) return '';
+  var r = _urRulesById()[te.row.rule_id];
+  if (!r || !UrgencyRules.hasSentence(r)) return '';
+  var k = String(n.id);
+  var span = function(text, tip) {
+    return '<span style="font-size:10px;color:var(--text-tertiary);line-height:1.5"' + (tip ? ' title="' + escHtml(tip) + '"' : '') + '>AI 판정: ' + escHtml(text) + '</span>';
+  };
+  var one = _vdOne[k], busy = !!(one && !one.done);
+  var errFresh = !!(one && one.error && Date.now() - one.doneAt < VD_REFRESH_MS);   // 방금 실패 — 2분 동안은 다시 묻지 않는다(되풀이 조회 방지)
+  var reload = function() { var again = function() { _refreshNewsGradeUI(k); }; _loadNewsVerdicts(k, true).then(again, again); };
+  if (!_verdictRowsOf(k)) {
+    if (errFresh) return span('기록을 불러오지 못했습니다', one.error);
+    if (!busy) reload();
+    return span('불러오는 중…');
+  }
+  var vr = _verdictRowFor(k, r);
+  if ((!vr || (vr.status !== 'done' && vr.status !== 'failed')) && !busy && !errFresh &&
+      Date.now() - _vdFetchedAt(k) >= VD_REFRESH_MS) reload();
+  var KIND = { body: '제목·요약·본문 앞부분', snippet: '제목·검색 요약', title: '제목만' };
+  var tip = '문장 조건: 「' + _urSentenceNorm(r.sentence) + '」' +
+    (vr && vr.input_kind ? ' · 판정에 쓴 글: ' + (KIND[vr.input_kind] || vr.input_kind) : '') +
+    (vr && vr.judged_at ? ' · 판정 ' + _kstYmd(vr.judged_at) : '');
+  if (!vr) return span('지금 문장으로는 아직 판정 기록이 없습니다', tip);
+  if (vr.status === 'done') return span((vr.verdict ? '해당' : '아님') + (vr.reason ? ' — ' + vr.reason : ''), tip);
+  if (vr.status === 'failed') return span('판정 실패 — 직접 확인', tip + ' · ' + _UR_FAILED_TIP);   // 끝난 상태(크롤러가 다시 묻지 않음)
+  return span('대기 — ' + _urWaitText(vr), tip);
+}
+
+// 이번 달(KST 1일 0시부터) 판정 건수·비용 — 읽어 둔 기록에서(편집 창 우리 팀 탭 머리줄)
+function _kstMonthStartMs() {
+  var k = new Date(Date.now() + 9 * 3600 * 1000);   // KST 벽시계를 UTC 칸으로 읽는다
+  return Date.UTC(k.getUTCFullYear(), k.getUTCMonth(), 1) - 9 * 3600 * 1000;
+}
+function _verdictMonthStats() {
+  var from = _kstMonthStartMs(), n = 0, cost = 0;
+  Object.keys(_vdByNews).forEach(function(k) {
+    _vdByNews[k].forEach(function(v) {
+      var t = Date.parse(v.judged_at || '');
+      if (isNaN(t) || t < from) return;
+      n++; cost += Number(v.cost_usd) || 0;
+    });
+  });
+  return { n: n, cost: cost };
+}
+
+// 팀당 월 AI 문장 판정 기준 금액(달러) — app_config sentence_rule_budget_usd(글자 → 실수, 0보다 커야 함), 없거나 이상하면 2.
+// 크롤러 _sentence_budget_cap과 같은 규칙(기준을 처음 넘는 실행에서 운영자 알림 1회, 판정은 계속 — C4). 페이지당 한 번 읽는다
+var UR_BUDGET_DEFAULT_USD = 2;
+var _urBudgetUsd = null, _urBudgetPromise = null;
+function _urLoadBudget() {
+  if (_urBudgetPromise) return _urBudgetPromise;
+  if (!sb) return Promise.resolve(UR_BUDGET_DEFAULT_USD);
+  var p = Promise.resolve(sb.from('app_config').select('value').eq('key', 'sentence_rule_budget_usd').limit(1)).then(function(r) {
+    var v = (!r.error && r.data && r.data[0]) ? Number(String(r.data[0].value == null ? '' : r.data[0].value).trim()) : NaN;
+    _urBudgetUsd = v > 0 ? v : UR_BUDGET_DEFAULT_USD;   // NaN·0·음수·빈 글자 → 기본값
+    return _urBudgetUsd;
+  }, function(e) {
+    console.warn('[문장 판정] 비용 기준 조회 실패 — 기본 $' + UR_BUDGET_DEFAULT_USD + ':', e);
+    _urBudgetPromise = null;                               // 다음에 탭을 열 때 다시 묻는다
+    return UR_BUDGET_DEFAULT_USD;
+  });
+  _urBudgetPromise = p;
+  return p;
+}
+// 편집 창 우리 팀 탭을 열 때 — 판정 기록·비용 기준을 읽고 머리줄 비용 줄을 다시 그린다
+function _urLoadTeamVerdicts(force) {
+  if (!teamEditor()) return Promise.resolve();
+  var p = loadSentenceVerdicts(force);
+  _urTeamCostRender();
+  var b = _urLoadBudget().then(function() { _urTeamCostRender(); });
+  return Promise.all([p.then(function() { _urTeamCostRender(); }, function(e) { console.warn('[문장 판정] 기록 조회 실패:', e); _urTeamCostRender(); }), b]);
+}
+// 「이번 달 우리 팀 AI 문장 판정 N건 · 약 $X (기준 $B …)」 — 기준 B = app_config sentence_rule_budget_usd(없으면 2)
+function _urTeamCostRender() {
+  var el = document.getElementById('ur-team-cost');
+  if (!el) return;
+  if (_urTab !== 'team' || !teamEditor()) { el.style.display = 'none'; el.innerHTML = ''; return; }
+  el.style.display = '';
+  _vdSync();
+  if (!_vdAll) {
+    el.textContent = _vdError ? '이번 달 우리 팀 AI 문장 판정 기록을 불러오지 못했습니다(' + _vdError + ')' : '이번 달 우리 팀 AI 문장 판정 — 불러오는 중…';
+    return;
+  }
+  var s = _verdictMonthStats();
+  var cap = _urBudgetUsd != null ? _urBudgetUsd : UR_BUDGET_DEFAULT_USD;
+  var capTxt = Number.isInteger(cap) ? String(cap) : cap.toFixed(2);
+  el.innerHTML = '이번 달 우리 팀 AI 문장 판정 <b>' + s.n.toLocaleString('ko-KR') + '건</b> · 약 <b>$' + (s.cost >= 1 ? s.cost.toFixed(2) : s.cost.toFixed(3)) + '</b>' +
+    ' (기준 $' + escHtml(capTxt) + ' — 넘으면 운영자에게 알림, 판정은 계속)' + (s.cost >= cap ? ' <span style="color:#b45309">⚠️ 기준 넘음</span>' : '');
+}
+
 // 팀 규칙 행 넣기 — 충돌(이미 행 있음)은 건너뛴다(ignoreDuplicates = ON CONFLICT DO NOTHING): 그사이 팀원이 넣은
 // 사람 수정 행을 절대 덮지 않는다(크롤러와 같은 원칙). 60일 정리로 이미 지워진 기사(외래키 23503)가 섞이면
 // 살아 있는 기사만 골라 한 번 더. 돌려주는 값 = 실제로 넣은 news_id 목록.
@@ -5176,12 +5689,7 @@ async function _teamRuleInsert(rows) {
   if (!rows.length) return [];
   var r = await sb.from('team_urgency').upsert(rows, { onConflict: 'news_id,team_id', ignoreDuplicates: true }).select('news_id');
   if (r.error && r.error.code === '23503') {
-    var alive = new Set();
-    for (var i = 0; i < rows.length; i += 200) {
-      var q = await sb.from('news_feed').select('id').in('id', rows.slice(i, i + 200).map(function(x) { return x.news_id; }));
-      if (q.error) throw new Error('기사 확인 실패: ' + q.error.message);
-      (q.data || []).forEach(function(x) { alive.add(String(x.id)); });
-    }
+    var alive = await _aliveNewsIds(rows.map(function(x) { return x.news_id; }));
     var keep = rows.filter(function(x) { return alive.has(String(x.news_id)); });
     if (!keep.length) return [];
     r = await sb.from('team_urgency').upsert(keep, { onConflict: 'news_id,team_id', ignoreDuplicates: true }).select('news_id');
@@ -5194,6 +5702,8 @@ async function _teamRuleInsert(rows) {
 // 사람(human)·팀 AI(ai) 행이 있는 기사는 건너뛴다. 결정 있음 → 규칙 행 새로/바꿈, 결정 없음 + 규칙 행 있음 → 해제(삭제).
 // 바꿈은 '규칙 행 지우기(source=rule만) → 넣기(충돌 무시)'로 한다 — upsert(갱신)로 덮으면 그사이 팀원이 사람 수정으로 바꾼
 // 행까지 규칙 값으로 덮을 수 있다. 입력 글 = ruleInputText(screen_text, summary), 기준 = 공통값 — 크롤러와 같다(AI 0회).
+// 문장 조건(#251): 결정 = teamRuleDecisionJudged(기사마다 그 기사 판정 기록 — 판정이 참인 문장 규칙만 걸림). 판정 기록이 아예 없는
+// 문장 규칙 후보는 대기 행을 넣는다(최근 기사부터 UR_VERDICT_REQ_CAP건) — 판정과 그 결과의 팀 행은 다음 수집 때 크롤러가 쓴다.
 async function reapplyTeamRules() {
   var tid = myTeamId();
   if (tid == null || !sb) throw new Error('팀이 지정된 계정이 아닙니다');
@@ -5202,18 +5712,35 @@ async function reapplyTeamRules() {
   await loadTeamRows();   // 지금 DB 상태와 비교(다른 팀원의 수정·크롤러가 넣은 행 반영)
   if (_teamRowsMode !== 'team') throw new Error('우리 팀 등급을 불러오지 못했습니다');
   var rules = _teamEnabledRules(tid);
-  var add = [], chg = [], rel = [];
+  // 옛 공용 파일이 섞였으면(_UR_SENTENCE_FALLBACK) 문장 조건 규칙을 낱말 규칙처럼 계산하게 된다 — 틀린 팀 행을 쓰지 않게 멈춘다
+  if (_UR_SENTENCE_FALLBACK && rules.some(function(r) { return !!_urSentenceNorm(r.sentence); }))
+    throw new Error('화면 파일이 섞여(옛 긴급도 규칙 파일) AI 문장 조건 규칙을 계산할 수 없습니다 — 새로고침(Ctrl+F5) 뒤 같은 규칙을 한 번 더 저장해 주세요');
+  // 판정 기록은 팀 행 다음에 새로 읽는다(더 새것). 못 읽으면 멈춘다 — 빈 판정으로 돌리면 이미 '해당'으로 판정된 기사의
+  // 규칙 행까지 안 걸림으로 계산해 풀어 버린다
+  var anySent = rules.some(UrgencyRules.hasSentence);
+  if (anySent) {
+    await loadSentenceVerdicts(true);
+    if (!_vdAll) throw new Error('AI 문장 판정 기록을 불러오지 못했습니다');
+  }
+  var add = [], chg = [], rel = [], pend = [], waiting = 0;
   newsDataCache.forEach(function(n) {
     var key = String(n.id), row = _teamRows[key] || null;
     if (row && (row.source === 'human' || row.source === 'ai')) return;
     var common = n.importance || n.urgency || classifyNewsImportance(n);
-    var dec = rules.length ? UrgencyRules.teamRuleDecision(rules, n.title || '', UrgencyRules.ruleInputText(texts[key], n.summary), common) : null;
+    var title = n.title || '', text = UrgencyRules.ruleInputText(texts[key], n.summary);
+    var vm = anySent ? _verdictMapFor(key) : {};
+    var dec = rules.length ? UrgencyRules.teamRuleDecisionJudged(rules, title, text, common, vm) : null;
     if (dec) {
       var rec = { news_id: n.id, team_id: tid, urgency: dec.level, source: 'rule', rule_id: dec.rule_id };
       if (!row) add.push(rec);
       else if (row.rule_id !== dec.rule_id || row.urgency !== dec.level) chg.push(rec);
     } else if (row && row.source === 'rule') {
       rel.push(n.id);
+    }
+    if (anySent) {
+      var pr = _verdictPendingRows(rules, n, title, text, vm, tid);
+      waiting += pr.waiting;
+      pr.rows.forEach(function(x) { pend.push({ rec: x, at: n.published_at || n.created_at || '' }); });
     }
   });
   // 1) 해제·바꿈 대상의 규칙 행 지우기 — 200건씩, 지운 행 수 확인(0이면 RLS에 막힌 것, #48)
@@ -5233,12 +5760,21 @@ async function reapplyTeamRules() {
   for (var j = 0; j < ins.length; j += 500) {
     (await _teamRuleInsert(ins.slice(j, j + 500))).forEach(function(k) { inserted.add(k); });
   }
+  // 3) 문장 조건 대기 행 — 최근 기사부터 UR_VERDICT_REQ_CAP건까지. 실패해도 위 반영은 그대로 두고 알린다
+  pend.sort(function(x, y) { return y.at.localeCompare(x.at); });
+  var capped = Math.max(0, pend.length - UR_VERDICT_REQ_CAP), requested = 0, reqError = '';
+  try { requested = await _verdictRequest(pend.slice(0, UR_VERDICT_REQ_CAP).map(function(x) { return x.rec; })); }
+  catch (e5) {
+    console.warn('[팀 규칙] AI 문장 판정 요청 실패:', e5);
+    reqError = (e5 && e5.message) || String(e5);
+  }
   var a = add.filter(function(r) { return inserted.has(String(r.news_id)); }).length;
   var b = chg.filter(function(r) { return inserted.has(String(r.news_id)); }).length;
   var c = rel.filter(function(id) { return deleted.has(String(id)); }).length;
   await loadTeamRows();
   applyTeamOverlay();
-  return { added: a, changed: b, released: c, skipped: add.length + chg.length + rel.length - a - b - c };
+  return { added: a, changed: b, released: c, skipped: add.length + chg.length + rel.length - a - b - c,
+           requested: requested, waiting: waiting + requested, capped: capped, reqError: reqError };
 }
 
 // 목록을 다시 그리지 않고 선택 표시·읽음 점만 제자리에서 바꾼다(§4-3-12).

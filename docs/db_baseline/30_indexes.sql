@@ -113,3 +113,9 @@ CREATE INDEX idx_telegram_updates_received ON public.telegram_updates USING btre
 CREATE INDEX telegram_usage_chat_idx ON public.telegram_usage USING btree (chat_id, created_at DESC);
 
 CREATE INDEX telegram_usage_created_idx ON public.telegram_usage USING btree (created_at DESC);
+
+CREATE INDEX urgency_rule_verdicts_news_idx ON public.urgency_rule_verdicts USING btree (news_id);
+
+CREATE INDEX urgency_rule_verdicts_open_idx ON public.urgency_rule_verdicts USING btree (created_at) WHERE (status = ANY (ARRAY['pending'::text, 'wait_body'::text]));
+
+CREATE INDEX urgency_rule_verdicts_team_idx ON public.urgency_rule_verdicts USING btree (team_id, judged_at);

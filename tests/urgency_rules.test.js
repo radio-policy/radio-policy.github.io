@@ -48,5 +48,21 @@ T.division_cases.forEach(function (c) {
   eq('[실장] ' + c.name, UR.divisionUrgency(c.common, rows, byId, c.team_ids), c.expect);
 });
 
+// ── 문장 조건(#251) — Python TestUrgencyTeamLayer와 같은 파일 ──
+// 문장 규칙이 없으면 판정 반영 함수 = 기존 teamRuleDecision
+T.decision_cases.forEach(function (c) {
+  eq('[문장 없음=기존] ' + c.name, UR.teamRuleDecisionJudged(teamRules(c.team_id), c.title, c.text, c.common, {}), c.expect);
+});
+var S = T.sentence_rules.filter(function (r) { return r.enabled; })
+  .sort(function (a, b) { return (a.position - b.position) || (a.id < b.id ? -1 : 1); });
+eq('문장 규칙 형식', UR.validateRules(T.sentence_rules), []);
+T.sentence_cases.forEach(function (c) {
+  eq('[문장 후보] ' + c.name, UR.sentenceCandidates(S, c.title, c.text, c.verdicts), c.expect_candidates);
+  eq('[문장 판정] ' + c.name, UR.teamRuleDecisionJudged(S, c.title, c.text, c.common, c.verdicts), c.expect_decision);
+});
+T.verdict_map_cases.forEach(function (c) { eq('[판정 모음] ' + c.name, UR.verdictMap(c.rows), c.expect); });
+T.has_sentence_cases.forEach(function (c) { eq('[문장 있음] ' + c.name, UR.hasSentence(c.rule), c.expect); });
+eq('NFD 문장 케이스가 실제로 NFD', T.sentence_cases.some(function (c) { return c.title !== c.title.normalize('NFC'); }), true);
+
 console.log('\n' + (total - fails) + '/' + total + ' 통과');
 if (fails) process.exit(1);

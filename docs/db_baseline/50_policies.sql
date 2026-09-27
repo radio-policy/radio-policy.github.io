@@ -267,6 +267,16 @@ create policy tech_terms_upd on public.tech_terms as PERMISSIVE for UPDATE to au
   using (is_admin())
   with check (is_admin());
 
+create policy urgency_rule_verdicts_ins on public.urgency_rule_verdicts as PERMISSIVE for INSERT to authenticated
+  with check (((status = 'pending'::text) AND (verdict IS NULL) AND (reason = ''::text) AND (input_kind = ''::text) AND (model = ''::text) AND (cost_usd = (0)::numeric) AND (attempts = 0) AND (judged_at IS NULL) AND (( SELECT is_admin() AS is_admin) OR (( SELECT is_approved_user() AS is_approved_user) AND (team_id = ( SELECT my_team() AS my_team)))) AND (EXISTS ( SELECT 1
+   FROM urgency_rules r
+  WHERE ((r.id = urgency_rule_verdicts.rule_id) AND (r.team_id = urgency_rule_verdicts.team_id) AND r.enabled AND (r.sentence <> ''::text) AND (r.sentence_rev = urgency_rule_verdicts.sentence_rev))))));
+
+create policy urgency_rule_verdicts_sel on public.urgency_rule_verdicts as PERMISSIVE for SELECT to authenticated
+  using ((( SELECT is_admin() AS is_admin) OR (( SELECT is_approved_user() AS is_approved_user) AND (team_id = ( SELECT my_team() AS my_team))) OR (( SELECT is_approved_user() AS is_approved_user) AND (( SELECT my_division() AS my_division) IS NOT NULL) AND (team_id IN ( SELECT t.id
+   FROM teams t
+  WHERE (t.division = ( SELECT my_division() AS my_division)))))));
+
 create policy urgency_rules_ins on public.urgency_rules as PERMISSIVE for INSERT to authenticated
   with check ((( SELECT is_admin() AS is_admin) OR ((team_id IS NOT NULL) AND ( SELECT is_approved_user() AS is_approved_user) AND (team_id = ( SELECT my_team() AS my_team)))));
 

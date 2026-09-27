@@ -32,6 +32,7 @@ import api_usage; api_usage.install()   # Anthropic usage 기록(#152) — 호�
 import notify   # 텔레그램 전송 공용 유틸 (개선⑪) — 전송부만 위임
 import urgency_rules   # 긴급도 공통 낱말 규칙 매처(#216) — 사내판·대시보드 JS와 같은 계약
 import news_known      # 뉴스 중복 대조 공용(#234) — 후보만 DB 함수로, 실패 시 전량 조회
+import retry_util      # 재시도 공용(#217) — 문장 판정 기록·팀 행 쓰기(#251)에만, Anthropic 호출에는 쓰지 않는다
 import anthropic
 
 # ── 환경변수 ────────────────────────────────────────────
@@ -1163,16 +1164,24 @@ def load_news_criteria() -> str:
 
 _URGENCY_RULES = None        # 공통 규칙 — 실행당 1회 로드(모듈 전역 캐시)
 _TEAM_URGENCY_RULES = None   # 팀 규칙 {team_id: [규칙…]}(#250) — 같은 한 번의 조회에서 나눈다
+# 켜진 팀 규칙 {id: 행}(형식 검사 전, #251). 표 조회 실패면 None. 문장 판정 대기 처리가 '규칙 꺼짐(→ stale)'과
+# '조회 실패·그 팀 형식 오류로 이번 실행만 빠짐(→ 손대지 않음)'을 가르는 데만 쓴다 — 둘을 섞으면 일시 장애 한 번에
+# 대기 행이 전부 stale로 굳는다(#183: 실패를 '없음'으로 삼키지 않는다).
+_TEAM_RULES_ENABLED = None
+# 규칙을 읽기 시작한 시각(UTC, #251). 이 뒤에 생긴 판정 요청은 이 실행의 규칙 사본보다 새 규칙(판 올림·다시 켬·낱말 수정)
+# 때문에 들어왔을 수 있다 — 대기 처리가 그런 행을 stale로 만들지 않고 다음 실행으로 넘긴다.
+_RULES_LOADED_AT = None
 
 
 def _load_all_urgency_rules() -> None:
     """표 urgency_rules의 켜진 행 전부를 **한 번** 읽어 공통(team_id null)·팀으로 나눈다(실행당 1회).
     공통: 실패·형식 오류·0건이면 비상 사본(#216) — 로그 '[규칙] N개 로드(db|fallback)'는 운영 점검이 읽으므로 그대로 둔다.
     팀: _split_team_rules 참조. 조회 실패면 팀 규칙 없이 돈다(팀은 공통값) — 그 사실을 따로 적는다(#183)."""
-    global _URGENCY_RULES, _TEAM_URGENCY_RULES
+    global _URGENCY_RULES, _TEAM_URGENCY_RULES, _TEAM_RULES_ENABLED, _RULES_LOADED_AT
     if _URGENCY_RULES is not None:
         return
     rules, src, rows = None, 'db', None
+    _RULES_LOADED_AT = datetime.now(timezone.utc)      # 조회 **전** 시각 — 그 뒤 요청은 사본에 없는 변경일 수 있다
     try:
         rows = sb.table('urgency_rules').select('*').eq('enabled', True) \
             .order('position').order('id').execute().data or []
@@ -1192,6 +1201,11 @@ def _load_all_urgency_rules() -> None:
     print(f'[규칙] {len(rules)}개 로드({src})')
     _URGENCY_RULES = rules
     _TEAM_URGENCY_RULES = _split_team_rules(rows)
+    try:
+        _TEAM_RULES_ENABLED = None if rows is None else \
+            {r['id']: r for r in rows if r.get('team_id') is not None and r.get('id')}
+    except Exception:
+        _TEAM_RULES_ENABLED = None
 
 
 def _split_team_rules(rows) -> dict:
@@ -1574,6 +1588,10 @@ _URGENCY_SUMMARY: dict = {}
 # 되거나 키 집합이 어긋난다(#82·#222).
 _TEAM_RULE_HITS: dict = {}
 
+# 문장 조건 판정 후보(url → [{'team_id', 'rule_ids', 'common', 'text'}], #251). grade_urgency가 낱말이 걸린 팀 문장 규칙을
+# 모으고 queue_new_sentence_candidates가 판정 대기 행으로 만든다. _TEAM_RULE_HITS와 같은 이유로 item 키로 넣지 않는다(#82·#222).
+_SENTENCE_CANDS: dict = {}
+
 
 # ═══════════════════════════════════════════════════════
 #  Supabase 저장
@@ -1586,6 +1604,10 @@ def grade_urgency(valid: list, rules: list, classify=None, team_rules=None) -> d
     알림·큐·브리핑은 저장값(공통값)을 쓰므로 따로 고칠 곳이 없다.
     팀 층(#250): team_rules({team_id: 규칙들})가 있으면 기사마다 팀별로 team_rule_decision(기준 = 위에서 정한 **공통
     최종값**)을 돌려 적중을 _TEAM_RULE_HITS에 모은다 — item['urgency']는 바꾸지 않고, AI 콜도 늘지 않는다.
+    문장 조건(#251): 판정 전이라 문장 규칙은 '안 걸림'으로 보고(team_rule_decision_judged, 판정 {}) 뒤 규칙이 정한다.
+    낱말이 걸린 문장 규칙은 _SENTENCE_CANDS에만 모은다 — queue_new_sentence_candidates가 판정 대기 행으로 만들고, 판정과
+    팀 행 고침은 같은 실행의 process_open_sentence_verdicts가 긴급 알림 **뒤에** 한다(여기서는 AI 0회 — 문장 규칙이 없으면
+    종전과 바이트 단위로 같다).
     item['screen_text'] = 판정에 쓴 네이버 요약(없으면 None)을 **모든 행에** 채운다(#82·#222). 반환 = 로그용 집계."""
     classify = classify or classify_urgency
     team_rules = team_rules or {}
@@ -1612,19 +1634,27 @@ def grade_urgency(valid: list, rules: list, classify=None, team_rules=None) -> d
         item['screen_text'] = summary or None
         # ── 팀 층(#250) — 공통값은 위에서 끝났다. 여기서는 팀별 적중만 옆 dict에 모은다(item 키 금지) ──
         _TEAM_RULE_HITS.pop(url, None)
+        _SENTENCE_CANDS.pop(url, None)
         if team_rules:
             try:
                 # 입력 글 = 대시보드 재적용과 같은 rule_input_text(screen_text, …) — 새 기사는 두 경로가 같은 글을 본다
                 text = urgency_rules.rule_input_text(item['screen_text'], '')
-                got = []
+                got, cands = [], []
                 for tid, trules in team_rules.items():
-                    dec = urgency_rules.team_rule_decision(trules, item.get('title', ''), text, val)
+                    # 문장 규칙(#251)은 아직 판정이 없다({}) = '안 걸림' → 뒤 규칙이 정한다. 문장 규칙이 없으면
+                    # team_rule_decision과 같다(공용 함수 계약 — 케이스 파일 urgency_team_cases.json).
+                    dec = urgency_rules.team_rule_decision_judged(trules, item.get('title', ''), text, val, {})
                     if dec:
                         got.append({'team_id': tid, 'urgency': dec['level'], 'rule_id': dec['rule_id']})
+                    rids = urgency_rules.sentence_candidates(trules, item.get('title', ''), text, {})
+                    if rids:
+                        cands.append({'team_id': tid, 'rule_ids': rids, 'common': val, 'text': text})
                 if got and url:
                     _TEAM_RULE_HITS[url] = got
                     for g in got:
                         team_hits[g['team_id']] = team_hits.get(g['team_id'], 0) + 1
+                if cands and url:
+                    _SENTENCE_CANDS[url] = cands
             except Exception as e:                          # fail-open — 팀 층 오류가 공통 판정·수집을 막으면 안 된다
                 team_err += 1
                 if team_err == 1:
@@ -1789,7 +1819,11 @@ def save_new_items(items: list, existing_data: tuple) -> list:
     #    통합을 되살릴 실험 여지를 남겨 둔 것. 되살릴 땐 반드시 긴급률을 배포 전(9.9%)과 비교할 것.
     #    ⑤-1 공통 낱말 규칙(#216, 표 urgency_rules)을 AI 판정과 합친다 — grade_urgency 주석 참조.
     #    ⑤-2 팀 규칙(#250)은 공통값 위에서 팀별 적중만 모은다(공통값·알림 불변) — 저장은 아래 save_team_rule_rows.
+    #    ⑤-3 팀 규칙의 문장 조건(#251)은 여기서 **판정하지 않는다** — 낱말이 걸린 기사의 판정 대기 행(본문 있으면 pending,
+    #        없으면 wait_body)만 만들고(저장은 아래 save_sentence_verdict_rows), Haiku 판정과 팀 행 고침은 같은 실행의
+    #        main() 끝 process_open_sentence_verdicts(긴급 알림·구독자 큐 뒤)가 한다 — 알림 경로에 AI 지연을 넣지 않는다.
     grade_urgency(valid, load_urgency_rules(), team_rules=load_team_urgency_rules())
+    queue_new_sentence_candidates(valid, load_team_urgency_rules())
 
     try:
         # upsert(on_conflict=url, ignore_duplicates): 크롤러 동시 실행 시
@@ -1804,7 +1838,9 @@ def save_new_items(items: list, existing_data: tuple) -> list:
         return []
     urgent_count = sum(1 for i in valid if i.get('urgency') == '긴급')
     print(f'[저장] {len(valid)}건 저장 완료 (긴급 {urgent_count}건)')
-    save_team_rule_rows(getattr(res, 'data', None))
+    inserted = getattr(res, 'data', None)
+    save_sentence_verdict_rows(inserted)     # 판정 기록 먼저 — 팀 행(아래)은 이 판정에서 나온 값이다(#251)
+    save_team_rule_rows(inserted)
     return valid
 
 
@@ -1847,6 +1883,768 @@ def save_team_rule_rows(inserted) -> int:
     except Exception as e:
         print(f'[팀 규칙] 저장 실패(무시): {str(e)[:120]}')
         return 0
+
+
+# ═══════════════════════════════════════════════════════
+#  팀 규칙 「문장 조건」 판정 — Claude Haiku (#251, 2026-09-27, 설계안 §10-2 — ⚠️ Fable 재검토 대상)
+#
+#  팀 규칙의 낱말(any/and_any/none)이 1차 거름이고, 걸린 기사만 Haiku가 「조건 문장에 해당하나」를 **한 번** 판정해
+#  표 urgency_rule_verdicts에 (규칙, 문장 판 sentence_rev, 기사)로 저장한다 — 같은 판의 같은 기사는 다시 묻지 않는다
+#  (#249 재현성 원칙: 다시 물으면 같은 기사가 실행마다 다른 등급이 될 수 있다). 문장을 고치면 DB 트리거가 판을 올려
+#  그 규칙만 새로 판정한다. 판정 대기·없음·거짓·옛 판은 '안 걸림'(urgency_rules.sentence_filtered_rules) — 뒤 규칙이 정한다.
+#  · 흐름(리뷰 반영 2026-09-27): 수집(save_new_items)은 **AI 없이** 판정 대기 행만 만든다(본문 있으면 pending, 없으면
+#    wait_body) → 같은 실행의 main() 끝, 긴급 알림·구독자 큐 **뒤**에서 process_open_sentence_verdicts가 판정하고 팀 행을
+#    고친다. 10분 실행 안에서 판정되는 것은 같고, 판정 지연이 공통 긴급 알림을 늦추지 않는다.
+#  · 판정 글(C2) = 제목 + 검색 요약(≤300자) + 본문 앞 800자. 본문(content 100자 이상 — 수집 저장·재수집 기준과 같다)이
+#    있으면 바로 판정, 없으면 wait_body — lampmanH-pc 재수집이 content를 채우면 판정, 3시간이 지나면 제목+요약으로.
+#  · 대시보드는 규칙 저장 뒤 지난 기사의 **대기 행만** 넣는다(C3) — 판정 지시문은 이 파일 한 곳(JS 사본 금지).
+#  · 비용(C4): 팀별 이번 달 판정 비용 합계가 기준($2, app_config sentence_rule_budget_usd)을 넘으면 그 달에 한 번 운영자
+#    텔레그램(보낸 달은 app_config sentence_rule_budget_alerted에 팀별 'YYYY-MM'). **판정은 멈추지 않는다**(운영자 결정).
+#  · 모델(C8) Haiku 4.5, 규칙당 ≤20건 묶음, 도구 강제, 캐시 없음(접두 < 4,096토큰), temperature류 금지(지침 do-not).
+#    지시문·도구는 실측(58건 정답·흔들림 0, 설계안 §10-2)에 쓴 글자 그대로다 — 고치면 그 실측이 무효가 된다.
+#  · 장애: 호출이 통째로 실패하면(예외·529·시간 초과·도구 없음) 시도 수를 올리지 않고 이번 실행의 판정을 멈춘다(다음 실행에서
+#    다시) — Anthropic 장애 몇 번에 멀쩡한 요청이 failed로 굳지 않게. 시도 수는 '호출은 됐는데 답에 그 기사가 빠짐'만 세고,
+#    최종 멈춤은 대기 3일 기한(SENTENCE_OPEN_MAX_DAYS)이다.
+# ═══════════════════════════════════════════════════════
+
+SENTENCE_BATCH = 20              # 호출당 기사 수(규칙 하나) — 시험에서 묶음·한 건씩 판정이 같았다(C8)
+SENTENCE_BODY_CHARS = 800        # 본문 앞부분(공백 정리 뒤)
+SENTENCE_SNIPPET_CHARS = 300     # 검색 요약
+SENTENCE_BODY_MIN = 100          # 앞뒤 공백을 뺀 content가 이 길이 이상이면 '본문 있음' — 수집 저장(③ 100자)·refetch_content
+                                 # 재수집(100자 미만) 기준과 같다. 200이면 100~199자 본문은 오지 않을 재수집을 3시간 기다린다
+SENTENCE_WAIT_BODY_HOURS = 3     # 본문 대기 상한 — 지나면 제목+요약으로 판정
+SENTENCE_MAX_ATTEMPTS = 3        # '호출은 됐는데 답에 그 기사가 빠짐'이 이만큼 쌓이면 failed(호출 통째 실패는 세지 않는다)
+SENTENCE_OPEN_MAX_DAYS = 3       # 대기 행이 이보다 오래되면 failed — 최종 멈춤(장애가 길게 이어져도 여기서 끝난다)
+SENTENCE_PER_RUN_MAX = 100       # 실행당 판정 건수 상한 — 넘는 몫은 대기로 두고 다음 실행(10분 뒤)
+SENTENCE_BUDGET_USD = 2.0        # 팀당 월 비용 알림 기준 기본값(app_config sentence_rule_budget_usd가 있으면 그 값)
+SENTENCE_OPEN_LIMIT = 500        # 한 실행에서 읽는 대기 행·되살림 후보 수(새것부터)
+SENTENCE_TIME_BUDGET_S = 120     # 대기 처리의 판정 시간 예산 — 넘으면 남은 것은 다음 실행
+SENTENCE_CALL_TIMEOUT_S = 90     # 호출 하나의 제한 — SDK 기본(10분 × 재시도 2회)이면 멈춘 호출 하나가 job 30분과 heartbeat를 먹는다
+SENTENCE_CHUNK = 500             # 판정 기록 upsert 묶음
+SENTENCE_ID_CHUNK = 100          # news_id in_ 조회 묶음
+SENTENCE_DB_RETRIES = 2          # 판정 기록·팀 행 쓰기 재시도(retry_util) — Anthropic 호출에는 걸지 않는다
+SENTENCE_DB_RETRY_DELAY_S = 1
+SENTENCE_SNAPSHOT_MARGIN_S = 120  # 규칙 읽은 시각(크롤러 시계)과 created_at(DB 시계) 차이 여유 — 이 안쪽 요청도 '사본 뒤'로 본다
+_SENTENCE_PRICE_IN = 1.0 / 1_000_000     # Haiku 4.5 입력 $1/M 토큰
+_SENTENCE_PRICE_OUT = 5.0 / 1_000_000    # 출력 $5/M 토큰
+_BUDGET_KEY = 'sentence_rule_budget_usd'           # app_config — 팀당 월 비용 알림 기준(글자 → 실수)
+_BUDGET_MARK_KEY = 'sentence_rule_budget_alerted'  # app_config — 알림을 보낸 달 {"<team_id>": "YYYY-MM"}(JSON)
+
+SENTENCE_RUBRIC = (
+    "너는 뉴스 기사 분류기다. 팀이 정한 「조건 문장」에 각 기사가 해당하는지 판정한다.\n\n"
+    "판정 규칙\n"
+    "1. 기사의 중심 내용이 조건 문장에 해당할 때만 match=true. 조건의 주제어가 나와도 지나가는 언급"
+    "(시설·서비스 목록의 한 항목, 다른 사안의 배경 설명)이면 false.\n"
+    "2. 조건 문장이 기사의 성격(문제 제기·비판, 긍정 평가, 발표·결정 등)을 정했으면 그 성격이어야 true. "
+    "주제가 같아도 성격이 다르면(조건은 문제 제기인데 기사는 개선·확대·도입 소식) false.\n"
+    "3. 주어진 제목·요약·본문 앞부분만 보고 판단한다(본문은 앞부분만 잘려 있다). 요약·본문이 없으면 제목만으로 "
+    "판단하고, 해당하는지 분명하지 않으면 false.\n"
+    "4. 기사가 회사에 중요한지, 뉴스 가치가 큰지는 판단하지 않는다. 조건 문장에 해당하는지만 본다.\n"
+    "5. 기사마다 따로 판정한다(같은 사건의 다른 기사도 각자). why에는 판정 근거를 한 줄(40자 이내)로 쓴다."
+)
+SENTENCE_TOOL = {'name': 'record_condition_verdicts',
+  'description': '기사마다 조건 문장 해당 여부를 기록한다. 입력된 모든 기사에 대해 한 줄씩.',
+  'input_schema': {'type': 'object', 'properties': {'verdicts': {'type': 'array', 'items': {'type': 'object',
+     'properties': {'id': {'type': 'integer', 'description': '기사 번호'},
+                    'why': {'type': 'string', 'description': '판정 근거 한 줄(40자 이내)'},
+                    'match': {'type': 'boolean', 'description': '조건 문장에 해당하면 true'}},
+     'required': ['id', 'why', 'match']}}}, 'required': ['verdicts']}}
+
+# 판정 대기 행(url → [행(news_id 없음)]). queue_new_sentence_candidates가 채우고 save_sentence_verdict_rows가 새로 저장된 기사
+# 것만 쓴다 — _TEAM_RULE_HITS와 같은 구조(item 키 금지, #82·#222).
+_SENTENCE_ROWS: dict = {}
+# 이번 실행에서 저장한 판정 비용(team_id → USD). 월 비용 알림은 이번 실행에 판정이 있던 팀만 본다.
+_SENTENCE_RUN_COST: dict = {}
+# 실행 상태 — judged: 이번 실행에 보낸 판정 건수(상한), nokey_logged: 키 없음 로그 1회, broken: 호출 통째 실패 뒤 판정 중단
+_SENTENCE_RUN: dict = {'judged': 0, 'nokey_logged': False, 'broken': False}
+
+
+def _ws(s) -> str:
+    """공백 정리 — 판정 입력 전부(실측과 같은 ' '.join(s.split()))."""
+    return ' '.join(s.split()) if isinstance(s, str) else ''
+
+
+def _sentence_body(content) -> str:
+    """판정용 본문 — 앞뒤 공백을 뺀 content가 SENTENCE_BODY_MIN 이상이면 공백 정리 뒤 앞 800자, 아니면 ''(본문 없음).
+    content = 수집 때 긁은 본문(fetch_article_body) 또는 재수집(refetch_content)이 채운 본문. Google RSS 폴백 기사는
+    RSS 요약이 content에 들어 있어 100자를 넘으면 본문으로 본다(그 기사는 재수집 대상도 아니다)."""
+    if not isinstance(content, str) or len(content.strip()) < SENTENCE_BODY_MIN:
+        return ''
+    return _ws(content)[:SENTENCE_BODY_CHARS]
+
+
+def _rev_of(rule) -> int:
+    """규칙의 지금 문장 판 — 정수가 아니면 0(urgency_rules.sentence_verdict와 같은 규칙)."""
+    v = rule.get('sentence_rev', 0) if isinstance(rule, dict) else 0
+    return v if isinstance(v, int) and not isinstance(v, bool) else 0
+
+
+def _as_int(v, default: int = 0) -> int:
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return default
+
+
+def _parse_ts(s):
+    """PostgREST timestamptz 문자열 → aware datetime. 못 읽으면 None."""
+    try:
+        dt = datetime.fromisoformat(str(s).replace('Z', '+00:00'))
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
+
+
+def _sentence_cost(usage) -> float:
+    """호출 한 번의 요금(USD) = 입력 토큰 × $1/M + 출력 토큰 × $5/M(캐시를 쓰지 않는다). usage가 없으면 0."""
+    if usage is None:
+        return 0.0
+
+    def g(k):
+        v = getattr(usage, k, None)
+        if v is None and isinstance(usage, dict):
+            v = usage.get(k)
+        return _as_int(v or 0)
+    return g('input_tokens') * _SENTENCE_PRICE_IN + g('output_tokens') * _SENTENCE_PRICE_OUT
+
+
+def _sentence_client():
+    """문장 판정용 Anthropic 클라이언트 — 판정할 것이 있을 때만 만든다. 키가 없으면(로그는 실행당 1번) None → 행은 대기로 남는다.
+    호출 제한(SENTENCE_CALL_TIMEOUT_S, 재시도 1회)을 건다 — 판정이 늦어도 heartbeat·이슈 제안을 붙잡지 않게."""
+    if not ANTHROPIC_API_KEY:
+        if not _SENTENCE_RUN.get('nokey_logged'):
+            print('[문장 판정] ANTHROPIC_API_KEY 없음 — 판정하지 않고 대기로 둔다(키가 생기면 다음 실행에서 판정)')
+            _SENTENCE_RUN['nokey_logged'] = True
+        return None
+    try:
+        return anthropic.Anthropic(api_key=ANTHROPIC_API_KEY, timeout=SENTENCE_CALL_TIMEOUT_S, max_retries=1)
+    except Exception as e:
+        print(f'[문장 판정] Haiku 초기화 실패 — 대기로 둔다: {str(e)[:80]}')
+        return None
+
+
+def _judge_sentence_batch(client, sentence: str, rows: list):
+    """조건 문장 하나 × 기사 ≤SENTENCE_BATCH건을 Haiku 1콜로 판정한다.
+    rows = [{'title', 'snippet', 'body'}] — 공백 정리·자르기(요약 300자·본문 800자)는 여기서 하고, 빈 요약·본문은 payload에서 뺀다.
+    반환 (결과, 비용): 결과 = {기사 번호(1부터): (해당 여부 bool, 근거 ≤80자)} — 답에 없는 번호는 '판정 못 함'(부르는 쪽이
+    시도 1회로 센다). 예외·도구 호출 없음 = (None, 비용) — 부르는 쪽은 이번 실행 판정을 멈춘다(시도 수 불변).
+    비용 = 이 호출의 요금(부르는 쪽이 기사 수로 나눈다).
+    ⚠️ client.messages.create는 **이 함수 안에서 직접** 부를 것 — api_usage.install()이 부른 함수 이름으로 비용 라벨
+    ('crawler.py:_judge_sentence_batch')을 만든다. 람다·with_retry로 감싸면 라벨이 엉뚱해진다.
+    결정성: 도구 강제 + 판정 규칙 문자 적용. temperature류 파라미터 금지(지침 do-not), 캐시 없음(접두가 최소 4,096토큰 미만)."""
+    n = len(rows)
+    payload = []
+    for k, r in enumerate(rows, 1):
+        row = {'id': k, 'title': _ws(r.get('title'))}
+        snippet = _ws(r.get('snippet'))[:SENTENCE_SNIPPET_CHARS]
+        if snippet:
+            row['summary'] = snippet
+        body = _ws(r.get('body'))[:SENTENCE_BODY_CHARS]
+        if body:
+            row['body'] = body
+        payload.append(row)
+    prompt = (f'조건 문장: «{sentence}»\n\n아래 기사 {n}건을 모두 판정해 record_condition_verdicts 도구로 기록하라.\n'
+              + json.dumps(payload, ensure_ascii=False))
+    cost = 0.0
+    try:
+        resp = client.messages.create(
+            model=SCREEN_MODEL,
+            max_tokens=4000,
+            system=SENTENCE_RUBRIC,
+            tools=[SENTENCE_TOOL],
+            tool_choice={'type': 'tool', 'name': 'record_condition_verdicts'},
+            messages=[{'role': 'user', 'content': prompt}],
+        )
+        cost = _sentence_cost(getattr(resp, 'usage', None))
+        for blk in resp.content:          # 도구 강제 — tool_use 블록만 읽는다(_screen_batch_haiku와 같은 방식)
+            if getattr(blk, 'type', '') == 'tool_use':
+                out = {}
+                for v in (blk.input or {}).get('verdicts') or []:
+                    if not isinstance(v, dict):
+                        continue
+                    k = _as_int(v.get('id'), -1)
+                    m = v.get('match')
+                    if 1 <= k <= n and isinstance(m, bool) and k not in out:     # 참·거짓이 아닌 답은 '판정 못 함'
+                        out[k] = (m, _ws(v.get('why'))[:80])
+                return out, cost
+        print(f'  [문장 판정 오류] 도구 호출 없음({n}건)')
+        return None, cost
+    except Exception as e:
+        print(f'  [문장 판정 오류] {str(e)[:120]}')
+        return None, cost
+
+
+def _judge_jobs(client, sentence: str, jobs: list, t0: float) -> list:
+    """한 규칙(조건 문장 하나)의 판정 거리들을 ≤SENTENCE_BATCH건 묶음으로 판정 — 실행당 상한·시간 예산 안에서만.
+    jobs = [{'title', 'snippet', 'body', …}]. 반환 = jobs와 같은 순서·길이:
+      None = 보내지 않음(클라이언트 없음·상한·시간·이번 실행 판정 중단) **또는 호출이 통째로 실패함** → 행은 그대로(시도 수 불변)
+      (해당 여부, 근거, 기사당 비용) = 판정됨 / (None, '', 0.0) = 호출은 됐는데 답에 그 기사가 빠짐(시도 1회로 센다).
+    호출이 통째로 실패하면(예외·529·시간 초과·도구 없음) 이번 실행의 남은 호출을 모두 멈춘다(차단기 _SENTENCE_RUN['broken'],
+    로그 1줄) — 장애 중에 호출을 거듭하면 요청마다 시도 수만 쌓여 멀쩡한 행이 failed로 굳는다.
+    비용은 호출 요금을 그 호출의 기사 수로 나눈 몫 — 판정된 기사만 제 몫을 기록한다(나머지는 api_usage에만 남는다)."""
+    out = [None] * len(jobs)
+    pos = 0
+    while client is not None and pos < len(jobs) and not _SENTENCE_RUN.get('broken'):
+        room = SENTENCE_PER_RUN_MAX - _SENTENCE_RUN.get('judged', 0)
+        if room <= 0 or time.monotonic() - t0 > SENTENCE_TIME_BUDGET_S:
+            break
+        n = min(SENTENCE_BATCH, room, len(jobs) - pos)
+        _SENTENCE_RUN['judged'] = _SENTENCE_RUN.get('judged', 0) + n
+        got, cost = _judge_sentence_batch(client, sentence, jobs[pos:pos + n])
+        if got is None:
+            _SENTENCE_RUN['broken'] = True
+            print('[문장 판정] AI 호출 실패 — 이번 실행 판정 중단(다음 실행에서 다시)')
+            break
+        share = round(cost / n, 6)
+        for k in range(n):
+            v = got.get(k + 1)
+            out[pos + k] = (v[0], v[1], share) if v else (None, '', 0.0)
+        pos += n
+    return out
+
+
+def _verdict_row(rule_id, rev, team_id, status, *, verdict=None, reason='', input_kind='', model='', cost=0.0,
+                 attempts=0, judged_at=None) -> dict:
+    """urgency_rule_verdicts 행(news_id는 저장 때 붙인다). ★ 모든 행의 키 집합 동일 ★(PostgREST 벌크 upsert 요건, #82).
+    requested_by·created_at은 보내지 않는다 — 트리거(BEFORE INSERT)·기본값 몫이고, 갱신(ON CONFLICT DO UPDATE)은 보낸 칸만
+    바꾸므로 요청자 기록이 남는다. verdict는 status='done'일 때만 참·거짓(표 CHECK)."""
+    return {'rule_id': rule_id, 'sentence_rev': rev, 'team_id': team_id, 'status': status, 'verdict': verdict,
+            'reason': reason, 'input_kind': input_kind, 'model': model, 'cost_usd': cost, 'attempts': attempts,
+            'judged_at': judged_at}
+
+
+def _result_row(rule_id, rev, team_id, res, input_kind: str, attempts: int, now_iso: str):
+    """_judge_jobs 결과 하나 → 판정 기록 행. None(보내지 않음·호출 통째 실패)이면 None — 행을 건드리지 않는다.
+    답에 그 기사가 빠짐 = 시도 수만 올려 pending(SENTENCE_MAX_ATTEMPTS번째면 failed)."""
+    if res is None:
+        return None
+    match, why, share = res
+    if match is None:
+        n = attempts + 1
+        return _verdict_row(rule_id, rev, team_id, 'failed' if n >= SENTENCE_MAX_ATTEMPTS else 'pending', attempts=n)
+    return _verdict_row(rule_id, rev, team_id, 'done', verdict=match, reason=why, input_kind=input_kind,
+                        model=SCREEN_MODEL, cost=share, attempts=attempts + 1, judged_at=now_iso)
+
+
+def _add_run_cost(rows) -> None:
+    """저장에 성공한 done 행의 비용을 팀별로 더한다(월 비용 알림은 이번 실행에 판정이 있던 팀만 본다)."""
+    for r in rows:
+        if r.get('status') == 'done' and r.get('cost_usd'):
+            t = r.get('team_id')
+            _SENTENCE_RUN_COST[t] = _SENTENCE_RUN_COST.get(t, 0.0) + float(r['cost_usd'])
+
+
+def _db_retry(fn, label: str):
+    """문장 판정 기록·팀 행 쓰기 한 번 — 일시 오류면 SENTENCE_DB_RETRIES번까지(retry_util, #217). Anthropic 호출에는 쓰지 않는다
+    (호출 재시도는 비용이 두 배가 되고, 장애 처리는 차단기가 맡는다)."""
+    return retry_util.with_retry(fn, retries=SENTENCE_DB_RETRIES, delay=SENTENCE_DB_RETRY_DELAY_S, label=label,
+                                 raise_status=False)
+
+
+def _upsert_rows(table: str, rows: list, chunk: int, **kw) -> tuple:
+    """rows를 chunk씩 upsert(쓰기마다 재시도). 묶음이 실패하면 한 행씩 다시 쓴다 — 도중에 지워진 기사(FK 오류)의 행만 빠지고
+    나머지는 저장된다. 한 행씩 쓰기에서 처음 3행이 모두 실패하면 표 자체 장애로 보고 멈춘다(더 두드리지 않는다).
+    반환 (저장된 행, 첫 오류 글 — 없으면 '')."""
+    saved, err = [], ''
+    for i in range(0, len(rows), chunk):
+        part = rows[i:i + chunk]
+        try:
+            _db_retry(lambda p=part: sb.table(table).upsert(p, **kw).execute(), table)
+            saved.extend(part)
+            continue
+        except Exception as e:
+            err = err or str(e)[:120]
+        if len(part) == 1:
+            continue
+        ok_any, bad_run = False, 0
+        for r in part:
+            try:
+                _db_retry(lambda p=[r]: sb.table(table).upsert(p, **kw).execute(), table)
+                saved.append(r)
+                ok_any, bad_run = True, 0
+            except Exception as e:
+                err = err or str(e)[:120]
+                bad_run += 1
+                if not ok_any and bad_run >= 3:
+                    return saved, err
+    return saved, err
+
+
+def queue_new_sentence_candidates(valid: list, team_rules) -> dict:
+    """⑤-3 새 기사의 문장 조건 후보 → 판정 대기 행(#251). **AI를 부르지 않는다**(리뷰 반영 2026-09-27 — 수집·긴급 알림 경로에
+    AI 지연을 넣지 않는다). 본문(SENTENCE_BODY_MIN 이상)이 있으면 pending, 없으면 wait_body. 행은 _SENTENCE_ROWS에 두고
+    news_feed 저장 뒤 save_sentence_verdict_rows가 새로 들어간 기사 것만 쓴다. 판정·팀 행 고침은 같은 실행의 main() 끝
+    process_open_sentence_verdicts(긴급 알림·구독자 큐 뒤)가 한다 — 그때까지 팀 결정은 '판정 없음'(문장 규칙 빼고 뒤 규칙)
+    그대로다(_TEAM_RULE_HITS 불변). 후보가 없으면 아무것도 하지 않는다(조회·로그 0). fail-open. 반환 = 로그용 집계."""
+    if not _SENTENCE_CANDS:
+        return {}
+    try:
+        items = {it.get('url'): it for it in valid if it.get('url')}
+        rule_by_id = {r.get('id'): r for rs in (team_rules or {}).values() for r in rs}
+        st = {'cands': 0, 'pending': 0, 'wait': 0}
+        for url in list(_SENTENCE_CANDS):
+            entries = _SENTENCE_CANDS.pop(url, None) or []
+            it = items.get(url)
+            if it is None:
+                continue
+            _SENTENCE_ROWS.pop(url, None)
+            status = 'pending' if _sentence_body(it.get('content')) else 'wait_body'
+            for e in entries:
+                for rid in e.get('rule_ids') or []:
+                    r = rule_by_id.get(rid)
+                    if r is None or not urgency_rules.has_sentence(r):
+                        continue
+                    _SENTENCE_ROWS.setdefault(url, []).append(_verdict_row(rid, _rev_of(r), e.get('team_id'), status))
+                    st['cands'] += 1
+                    st['pending' if status == 'pending' else 'wait'] += 1
+        if st['cands']:
+            print(f"[문장 판정] 새 기사 후보 {st['cands']}건 → 대기 {st['pending']}건 · 본문 대기 {st['wait']}건"
+                  ' (판정은 긴급 알림 뒤 대기 처리에서)')
+        return st
+    except Exception as e:
+        _SENTENCE_CANDS.clear()
+        print(f'[문장 판정] 새 기사 후보 정리 오류(무시 — 그 기사들은 판정 요청 없이 저장): {str(e)[:120]}')
+        return {}
+
+
+def sentence_verdict_rows(inserted) -> list:
+    """새로 저장된 기사(upsert 응답 행 — id·url) × 판정 대기 행 → urgency_rule_verdicts 행(#251). team_rule_rows와 같은 규칙:
+    응답에 없는 url(이미 있던 기사 = 동시 실행이 먼저 넣음)은 만들지 않는다. 모든 행의 키 집합이 같다(#82)."""
+    rows = []
+    for r in inserted or []:
+        nid, url = r.get('id'), r.get('url')
+        if not nid or not url:
+            continue
+        for v in _SENTENCE_ROWS.get(url, ()):
+            rows.append(dict(v, news_id=nid))
+    return rows
+
+
+def save_sentence_verdict_rows(inserted) -> int:
+    """판정 대기 행을 urgency_rule_verdicts에 쓴다(#251). 반환 = 저장된 행 수. **fail-open**(예외는 로그만 — 수집을 막지 않는다).
+    ignore_duplicates — 같은 (규칙·판·기사)가 이미 있으면 그대로 둔다(한 번 판정한 것은 다시 쓰지 않는다)."""
+    if not _SENTENCE_ROWS:
+        return 0
+    try:
+        rows = sentence_verdict_rows(inserted)
+        if not rows:
+            print(f'[문장 판정] 기록 저장 0건 — 판정 기사 {len(_SENTENCE_ROWS)}건이 이번 저장 응답(새 행 '
+                  f'{len(inserted or [])}건)에 없음(이미 있던 기사이거나 응답 비어 있음)')
+            return 0
+        saved, err = _upsert_rows('urgency_rule_verdicts', rows, SENTENCE_CHUNK,
+                                  on_conflict='rule_id,sentence_rev,news_id', ignore_duplicates=True)
+        if not saved:
+            print(f'[문장 판정] 저장 실패(무시): {err}')
+            return 0
+        by = {}
+        for r in saved:
+            by[r['status']] = by.get(r['status'], 0) + 1
+        print(f'[문장 판정] 기록 {len(saved)}건 저장(' + ', '.join(f'{k} {v}' for k, v in sorted(by.items())) + ')'
+              + (f' · 일부 실패(무시): {err}' if err else ''))
+        return len(saved)
+    except Exception as e:
+        print(f'[문장 판정] 저장 실패(무시): {str(e)[:120]}')
+        return 0
+
+
+def process_open_sentence_verdicts() -> None:
+    """매 실행(새 기사가 없어도) — ① 대기 행 판정(_process_open_sentence_rows — 이번 실행 새 기사의 대기 행 포함)
+    ② 팀별 월 비용 알림(_sentence_budget_alert). main()이 긴급 알림·구독자 큐 **뒤**, heartbeat 앞에서 부른다 — 판정이
+    느려도 알림을 늦추지 않는다. 둘 다 fail-open."""
+    try:
+        _process_open_sentence_rows()
+    except Exception as e:
+        print(f'[문장 판정] 대기 처리 실패(무시 — 대기 행은 그대로, 다음 실행에서 다시): {str(e)[:120]}')
+    try:
+        _sentence_budget_alert()
+    except Exception as e:
+        print(f'[문장 판정] 비용 점검 실패(무시): {str(e)[:120]}')
+
+
+_OPEN_VERDICT_COLS = 'rule_id,sentence_rev,news_id,team_id,status,attempts,created_at'
+_RULE_ID_RE = re.compile(r'[a-z0-9_]+')    # 표 CHECK urgency_rules_id_check와 같은 모양 — or 필터 글에 그대로 넣어도 안전
+_NEWS_LIGHT_COLS = 'id,title,screen_text,summary'                   # 낱말 확인만(본문 없이)
+_NEWS_JUDGE_COLS = 'id,title,screen_text,summary,content,urgency'   # 판정·팀 결정
+
+
+def _fetch_news(ids, cols: str) -> dict:
+    """news_feed를 id로 SENTENCE_ID_CHUNK씩 읽는다 → {id: 행}. id가 없으면 조회 0번."""
+    out = {}
+    ids = sorted({i for i in ids if i})
+    for i in range(0, len(ids), SENTENCE_ID_CHUNK):
+        for n in sb.table('news_feed').select(cols).in_('id', ids[i:i + SENTENCE_ID_CHUNK]).execute().data or []:
+            out[n.get('id')] = n
+    return out
+
+
+def _stale_revival_rows(enabled: dict) -> list:
+    """되살림 후보(#251 보강) — 켜진 문장 규칙의 **지금 판** stale 행(**새것부터** ≤SENTENCE_OPEN_LIMIT — 낱말이 끝내 안 걸리는
+    옛 stale 행이 한도를 채워 새 후보를 밀어내지 않게). stale 행은 PK(규칙·판·기사)를 차지해 브라우저의 새 요청
+    (ignoreDuplicates)을 막는다 — 규칙을 껐다가 같은 문장으로 다시 켜거나 낱말을 고쳐 기사가 다시 걸리게 되면 여기서
+    되살려야 그 기사가 판정된다. 옛 판 stale은 되살리지 않는다(질문이 바뀌었다). failed도 되살리지 않는다(최종 — 다시 묻게
+    하려면 관리자가 SQL로 status='pending', attempts=0, created_at=now() — created_at을 안 바꾸면 3일 기한에 곧바로 다시 failed).
+    켜진 문장 규칙이 없으면 조회 0번, 있으면 1번. (규칙, 지금 판) 쌍으로 거른다 — 규칙 id만(in_)으로 받으면 문장을 고친
+    규칙의 옛 판 행(영원히 stale)이 한도를 채운다. 조회 실패는 빈 목록(대기 행 처리는 계속)."""
+    cur = {rid: _rev_of(r) for rid, r in enabled.items()
+           if isinstance(rid, str) and _RULE_ID_RE.fullmatch(rid) and urgency_rules.has_sentence(r)}
+    if not cur:
+        return []
+    pairs = ','.join(f'and(rule_id.eq.{rid},sentence_rev.eq.{rev})' for rid, rev in sorted(cur.items()))
+    try:
+        return sb.table('urgency_rule_verdicts').select(_OPEN_VERDICT_COLS).eq('status', 'stale').or_(pairs) \
+            .order('created_at', desc=True).limit(SENTENCE_OPEN_LIMIT).execute().data or []
+    except Exception as e:
+        print(f'[문장 판정] 되살림 조회 실패(무시 — 대기 행 처리는 계속): {str(e)[:120]}')
+        return []
+
+
+def _process_open_sentence_rows() -> dict:
+    """대기 행(pending — 이번 실행 새 기사·대시보드가 넣은 지난 기사 요청 / wait_body — 본문 대기)을 판정한다.
+    대기 행은 **새것부터** 읽는다(≤SENTENCE_OPEN_LIMIT) — 지난 기사 요청이 많이 밀려 있어도 이번 실행 새 기사의 대기 행이
+    창 안에 들어와 같은 실행에서 판정된다(실행당 상한도 먼저 쓴다).
+    대기 행이 없고 이번 실행에 규칙을 아직 안 읽었으면(새 기사 없던 실행) 조회 1번으로 끝(로그 없음) — 되살림 조회도
+    규칙을 읽는 다음 실행으로 미룬다(되살림만 하려고 규칙 표를 읽지 않는다). 순서:
+      ⓪ 되살림(_stale_revival_rows): 켜진 문장 규칙의 지금 판 stale 행 → 본문 없이 기사를 읽어 지금 낱말이 걸리는 것만 →
+         pending으로 먼저 저장(시도 수 유지, created_at = 지금 — 3일 기한은 되살린 때부터 센다)하고 이번 처리에 대기 행처럼
+         넣는다(실행당 상한·시간 예산에 포함). 여전히 낱말이 안 걸리면 stale 그대로(쓰기 없음), 시도가 이미 다 찼으면 failed.
+      ① 규칙이 없거나 꺼졌거나 문장이 없거나 판이 바뀜 → stale / 시도 SENTENCE_MAX_ATTEMPTS번·SENTENCE_OPEN_MAX_DAYS일 초과 → failed
+         (규칙 표 조회 실패·그 팀 규칙 형식 오류로 이번 실행에서 빠진 팀은 **손대지 않는다** — 일시 장애로 굳히지 않는다)
+         단 **이 실행이 규칙을 읽은 뒤에 생긴 행**(_RULES_LOADED_AT − SENTENCE_SNAPSHOT_MARGIN_S 이후)은 사본이 '안 맞다'고 해도
+         stale로 만들지 않고 그대로 둔다 — 사본 뒤의 새 규칙(판 올림·다시 켬·낱말 수정) 때문에 들어온 요청일 수 있다(다음 실행의
+         새 사본으로 본다). 사본과 맞으면 그대로 판정한다(이번 실행 새 기사의 대기 행이 그렇다).
+      ② 지금 규칙의 낱말이 그 기사(제목 + rule_input_text)에 안 걸리면 stale — 낱말이 1차 거름이자 비용 상한이다(①과 같은 예외)
+      ③ pending은 지금 판정(본문 있으면 body, 없으면 검색 요약 snippet·제목 title), wait_body는 본문이 들어왔거나
+         SENTENCE_WAIT_BODY_HOURS가 지났을 때만(그 전에는 그대로 둔다)
+      ④ 판정 기록을 전체 행으로 upsert(PK 충돌 = 갱신) — 실행당 상한·시간 예산·호출 장애로 못 보낸 몫은 손대지 않는다(다음 실행)
+      ⑤ 판정이 저장된 (기사, 팀)의 team_urgency rule 행을 지금 결정과 맞춘다(_rewrite_team_rows — human·ai 행은 불가침)."""
+    t0 = time.monotonic()
+    rows = sb.table('urgency_rule_verdicts').select(_OPEN_VERDICT_COLS) \
+        .in_('status', ['pending', 'wait_body']).order('created_at', desc=True).limit(SENTENCE_OPEN_LIMIT) \
+        .execute().data or []
+    if not rows and _TEAM_RULES_ENABLED is None:
+        return {}                            # 대기 행 없음 + 규칙을 안 읽음(또는 표 조회 실패) — 조회 1번으로 끝
+    team_rules = load_team_urgency_rules()   # 이미 읽었으면 캐시(조회 0번)
+    enabled = _TEAM_RULES_ENABLED
+    if enabled is None:
+        print(f'[문장 판정] 대기 {len(rows)}건 처리 건너뜀 — 규칙 표 조회 실패(대기 행은 그대로, 다음 실행에서 다시)')
+        return {}
+    stale_rows = _stale_revival_rows(enabled)
+    if not rows and not stale_rows:
+        return {}
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+    snap = (_RULES_LOADED_AT - timedelta(seconds=SENTENCE_SNAPSHOT_MARGIN_S)) if _RULES_LOADED_AT else None
+    st = {'open': len(rows), 'judged': 0, 'true': 0, 'kept': 0, 'stale': 0, 'nohit': 0, 'failed': 0, 'retry': 0,
+          'left': 0, 'skipped': 0, 'ins': 0, 'upd': 0, 'del': 0, 'cost': 0.0, 'revived': 0}
+    updates, todo = [], []
+    for row in rows:
+        rid, rev, tid = row.get('rule_id'), row.get('sentence_rev'), row.get('team_id')
+        attempts = _as_int(row.get('attempts'))
+        created = _parse_ts(row.get('created_at'))
+        after_snap = bool(snap and created and created >= snap)
+        r = enabled.get(rid)
+        if r is None or not urgency_rules.has_sentence(r) or _rev_of(r) != rev or r.get('team_id') != tid:
+            if after_snap:                   # 규칙을 읽은 뒤 들어온 요청 — 사본보다 새 규칙 때문일 수 있다, 다음 실행에서 본다
+                st['skipped'] += 1
+                continue
+            updates.append(dict(_verdict_row(rid, rev, tid, 'stale', attempts=attempts), news_id=row.get('news_id')))
+            st['stale'] += 1
+            continue
+        age_h = (now - created).total_seconds() / 3600 if created else None
+        if attempts >= SENTENCE_MAX_ATTEMPTS or (age_h is not None and age_h > SENTENCE_OPEN_MAX_DAYS * 24):
+            updates.append(dict(_verdict_row(rid, rev, tid, 'failed', attempts=attempts), news_id=row.get('news_id')))
+            st['failed'] += 1
+            continue
+        if not team_rules.get(tid):          # 켜져 있지만 그 팀 규칙이 이번 실행에서 빠졌다(형식 오류) — 손대지 않는다
+            st['skipped'] += 1
+            continue
+        todo.append({'row': row, 'rule': r, 'age_h': age_h, 'attempts': attempts, 'after_snap': after_snap})
+    # ⓪ 되살림 후보 — 판·팀을 다시 확인하고, 본문 없이 기사를 읽어 지금 낱말이 걸리는 것만 남긴다
+    revive = []
+    for row in stale_rows:
+        rid, rev, tid = row.get('rule_id'), row.get('sentence_rev'), row.get('team_id')
+        r = enabled.get(rid)
+        if r is None or not urgency_rules.has_sentence(r) or _rev_of(r) != rev or r.get('team_id') != tid \
+                or not team_rules.get(tid):
+            continue                         # 옛 판·다른 팀·이번 실행에서 빠진 팀 — stale 그대로
+        revive.append({'row': row, 'rule': r, 'age_h': 0.0, 'attempts': _as_int(row.get('attempts'))})
+    light = _fetch_news([t['row'].get('news_id') for t in revive], _NEWS_LIGHT_COLS) if revive else {}
+    revive_ok = []
+    for t in revive:
+        row = t['row']
+        n = light.get(row.get('news_id'))
+        if not n:
+            continue
+        snippet = urgency_rules.rule_input_text(n.get('screen_text'), n.get('summary')) or ''
+        if not urgency_rules.match_urgency_rules([t['rule']], n.get('title') or '', snippet):
+            continue                         # 여전히 낱말 안 걸림 — stale 그대로(쓰기 없음)
+        if t['attempts'] >= SENTENCE_MAX_ATTEMPTS:
+            updates.append(dict(_verdict_row(row.get('rule_id'), row.get('sentence_rev'), row.get('team_id'), 'failed',
+                                             attempts=t['attempts']), news_id=row.get('news_id')))
+            st['failed'] += 1
+            continue
+        revive_ok.append(t)
+    # 본문까지 읽는 것은 대기 행 + 낱말이 걸린 되살림 후보만
+    news = _fetch_news([t['row'].get('news_id') for t in todo + revive_ok], _NEWS_JUDGE_COLS) \
+        if (todo or revive_ok) else {}
+    jobs = []
+    for t in todo:
+        row = t['row']
+        n = news.get(row.get('news_id'))
+        if not n:                            # 기사가 지워지는 중(cascade로 이 행도 사라진다) — 손대지 않는다
+            st['skipped'] += 1
+            continue
+        snippet = urgency_rules.rule_input_text(n.get('screen_text'), n.get('summary')) or ''
+        if not urgency_rules.match_urgency_rules([t['rule']], n.get('title') or '', snippet):
+            if t['after_snap']:              # 사본 뒤 낱말 수정 때문에 들어온 요청일 수 있다 — 다음 실행에서 본다
+                st['skipped'] += 1
+                continue
+            # 지금 규칙의 낱말이 안 걸리는 기사(낱말을 고쳤거나 요약이 바뀜) — 판정해도 쓰이지 않는다. 문장 판정은 낱말이
+            # 걸린 기사에만(지침 do-not #251 — 낱말 = 1차 거름이자 비용 상한). 입력 글은 대시보드와 같은 rule_input_text.
+            updates.append(dict(_verdict_row(row.get('rule_id'), row.get('sentence_rev'), row.get('team_id'), 'stale',
+                                             attempts=t['attempts']), news_id=row.get('news_id')))
+            st['nohit'] += 1
+            continue
+        body = _sentence_body(n.get('content'))
+        if row.get('status') == 'wait_body' and not body and \
+                t['age_h'] is not None and t['age_h'] < SENTENCE_WAIT_BODY_HOURS:
+            st['kept'] += 1                  # 아직 본문 대기 — 재수집(lampmanH-pc 10분마다)을 기다린다
+            continue
+        kind = 'body' if body else ('snippet' if _ws(snippet) else 'title')
+        jobs.append(dict(t, title=n.get('title') or '', snippet=snippet, body=body, kind=kind))
+    revivals, revived_jobs = [], []
+    for t in revive_ok:
+        row = t['row']
+        n = news.get(row.get('news_id'))
+        if not n:
+            continue
+        snippet = urgency_rules.rule_input_text(n.get('screen_text'), n.get('summary')) or ''
+        # created_at = 지금 — 옛 요청 시각 그대로면 다음 실행의 3일 기한에 판정 전 failed가 된다(requested_by는 보내지 않아 보존)
+        revivals.append(dict(_verdict_row(row.get('rule_id'), row.get('sentence_rev'), row.get('team_id'), 'pending',
+                                          attempts=t['attempts']), news_id=row.get('news_id'), created_at=now_iso))
+        body = _sentence_body(n.get('content'))
+        kind = 'body' if body else ('snippet' if _ws(snippet) else 'title')
+        revived_jobs.append(dict(t, title=n.get('title') or '', snippet=snippet, body=body, kind=kind))
+    # 되살림은 판정 전에 먼저 저장 — 저장 못 한 것은 이번에 판정하지 않는다(stale 그대로, 다음 실행에서 다시)
+    saved_rev, err = _upsert_rows('urgency_rule_verdicts', revivals, SENTENCE_CHUNK,
+                                  on_conflict='rule_id,sentence_rev,news_id')
+    if err:
+        print(f'[문장 판정] 되살림 저장 실패(무시 — stale 그대로, 다음 실행에서 다시): {err}')
+    rev_keys = {(r['rule_id'], r['sentence_rev'], r['news_id']) for r in saved_rev}
+    for j in revived_jobs:                   # 대기 행 뒤에 붙인다 — 실행당 상한·시간 예산은 대기 행이 먼저 쓴다
+        if (j['row'].get('rule_id'), j['row'].get('sentence_rev'), j['row'].get('news_id')) in rev_keys:
+            jobs.append(j)
+    st['revived'] = len(rev_keys)
+    client = _sentence_client() if jobs else None
+    by_rule = {}
+    for j in jobs:
+        by_rule.setdefault(j['rule']['id'], []).append(j)
+    for grp in by_rule.values():
+        sentence = (grp[0]['rule'].get('sentence') or '').strip()
+        for j, res in zip(grp, _judge_jobs(client, sentence, grp, t0)):
+            row = j['row']
+            out = _result_row(row.get('rule_id'), row.get('sentence_rev'), row.get('team_id'), res, j['kind'],
+                              j['attempts'], now_iso)
+            if out is None:
+                st['left'] += 1              # 상한·시간·키 없음·호출 장애 — 그대로 두고 다음 실행
+                continue
+            out['news_id'] = row.get('news_id')
+            updates.append(out)
+            if out['status'] == 'done':
+                st['judged'] += 1
+                st['true'] += int(out['verdict'])
+            elif out['status'] == 'failed':
+                st['failed'] += 1
+            else:
+                st['retry'] += 1
+    saved, err = _upsert_rows('urgency_rule_verdicts', updates, SENTENCE_CHUNK,
+                              on_conflict='rule_id,sentence_rev,news_id')
+    if err:
+        print(f'[문장 판정] 대기 행 갱신 일부 실패(무시 — 다음 실행에서 다시): {err}')
+    _add_run_cost(saved)
+    pairs = {}
+    for u in saved:
+        if u['status'] == 'done':
+            st['cost'] += u['cost_usd']
+            pairs.setdefault(u['team_id'], set()).add(u['news_id'])
+    if pairs:
+        try:
+            st['ins'], st['upd'], st['del'] = _rewrite_team_rows(pairs, news, team_rules)
+        except Exception as e:
+            print(f'[문장 판정] 팀 행 다시 쓰기 실패(무시): {str(e)[:120]}')
+    if not rows and not st['revived'] and not updates:
+        return st                            # 되살림 후보만 있었고 하나도 안 걸림 — 매 실행 같은 줄을 찍지 않는다
+    print(f"[문장 판정] 대기 처리 — 대기 {st['open']}건 → 판정 {st['judged']}건(해당 {st['true']}) · 본문 대기 유지 {st['kept']}건"
+          f" · 판 바뀜·꺼짐 {st['stale']}건 · 낱말 안 걸림 {st['nohit']}건 · 실패 확정 {st['failed']}건"
+          f" · 재시도 {st['retry']}건 · 다음 실행 {st['left']}건"
+          f" · 팀 행 +{st['ins']}/~{st['upd']}/-{st['del']} · ${st['cost']:.4f}"
+          + (f" · 되살림 {st['revived']}건" if st['revived'] else '')
+          + (f" · 건너뜀 {st['skipped']}건" if st['skipped'] else ''))
+    return st
+
+
+def _rewrite_team_rows(pairs: dict, news: dict, team_rules: dict) -> tuple:
+    """판정이 새로 저장된 (팀 → 기사들)의 team_urgency rule 행을 지금 결정과 맞춘다(#251). 반환 (넣은 행, 고친 행, 지운 행).
+    결정 = team_rule_decision_judged(그 팀의 켜진 규칙, 제목, rule_input_text(screen_text, summary), 공통값 news_feed.urgency,
+    그 기사의 done 판정 전부) — 대시보드 재적용과 같은 입력. 쓰기 규칙:
+      · human(팀원 수정)·ai 행은 **절대 건드리지 않는다**(설계안 §10 human > rule)
+      · 결정이 바뀐 rule 행은 **그 자리에서 고친다**(update … source='rule' 조건) — 지웠다 넣으면 그 사이 화면·알림이 공통값으로
+        비고, 그 틈에 사람이 고친 행을 덮을 수 있다
+      · 결정이 새로 생긴 기사는 ignore_duplicates로 넣는다(그 사이 사람이 만든 행을 덮지 않는다)
+      · 결정이 없어진 rule 행만 지운다(source='rule' 조건)
+    쓰기마다 재시도(retry_util), 넣기 묶음이 실패하면 한 행씩(도중에 지워진 기사의 FK 오류 행만 빠진다).
+    늦게 생긴·바뀐 rule 행은 세션 B 팀별 알림 대조 대상(설계안 §10-2)."""
+    ids = sorted({nid for s in pairs.values() for nid in s})
+    by_news, existing = {}, {}
+    for i in range(0, len(ids), SENTENCE_ID_CHUNK):
+        chunk = ids[i:i + SENTENCE_ID_CHUNK]
+        for v in sb.table('urgency_rule_verdicts').select('rule_id,sentence_rev,news_id,verdict') \
+                .in_('news_id', chunk).eq('status', 'done').execute().data or []:
+            by_news.setdefault(v.get('news_id'), []).append(v)
+        for t in sb.table('team_urgency').select('news_id,team_id,source,rule_id,urgency') \
+                .in_('news_id', chunk).execute().data or []:
+            existing[(t.get('news_id'), t.get('team_id'))] = t
+    ins, upd, dels = [], [], {}
+    for tid in sorted(pairs):
+        trules = team_rules.get(tid) or []
+        for nid in sorted(pairs[tid]):
+            n = news.get(nid)
+            if not n or not trules:
+                continue
+            dec = urgency_rules.team_rule_decision_judged(
+                trules, n.get('title') or '', urgency_rules.rule_input_text(n.get('screen_text'), n.get('summary')),
+                n.get('urgency'), urgency_rules.verdict_map(by_news.get(nid)))
+            ex = existing.get((nid, tid))
+            if ex and ex.get('source') != 'rule':
+                continue                     # human(팀원 수정)·ai — 불가침
+            if ex and dec:
+                if ex.get('rule_id') != dec['rule_id'] or ex.get('urgency') != dec['level']:
+                    upd.append((nid, tid, dec))
+            elif ex:
+                dels.setdefault(tid, []).append(nid)
+            elif dec:
+                ins.append({'news_id': nid, 'team_id': tid, 'urgency': dec['level'], 'source': 'rule',
+                            'rule_id': dec['rule_id']})
+    n_upd = n_del = 0
+    errs = []
+    for nid, tid, dec in upd:
+        try:
+            _db_retry(lambda n_=nid, t_=tid, d_=dec: sb.table('team_urgency')
+                      .update({'urgency': d_['level'], 'rule_id': d_['rule_id']})
+                      .eq('news_id', n_).eq('team_id', t_).eq('source', 'rule').execute(), 'team_urgency')
+            n_upd += 1
+        except Exception as e:
+            errs.append(str(e)[:120])
+    for tid, nids in dels.items():
+        for i in range(0, len(nids), SENTENCE_ID_CHUNK):
+            part = nids[i:i + SENTENCE_ID_CHUNK]
+            try:
+                _db_retry(lambda p=part, t_=tid: sb.table('team_urgency').delete().eq('team_id', t_)
+                          .eq('source', 'rule').in_('news_id', p).execute(), 'team_urgency')
+                n_del += len(part)
+            except Exception as e:
+                errs.append(str(e)[:120])
+    saved, err = _upsert_rows('team_urgency', ins, TEAM_URGENCY_CHUNK, on_conflict='news_id,team_id',
+                              ignore_duplicates=True)
+    if err:
+        errs.append(err)
+    if errs:
+        print(f'[문장 판정] 팀 행 쓰기 일부 실패(무시 — 도중에 지워진 기사 등) {len(errs)}건: {errs[0]}')
+    return len(saved), n_upd, n_del
+
+
+def _sentence_budget_config():
+    """(기준 금액, 알림 표시 {"<team_id>": "YYYY-MM"}) — app_config 두 키를 **한 번에** 읽는다. 값이 없거나 이상하면 기준은
+    SENTENCE_BUDGET_USD, 표시는 {}. 조회 자체가 실패하면 None(이번 실행은 알림 점검을 건너뛴다 — 표시를 못 읽은 채 보내면
+    같은 달에 두 번 갈 수 있다)."""
+    try:
+        rows = sb.table('app_config').select('key,value').in_('key', [_BUDGET_KEY, _BUDGET_MARK_KEY]) \
+            .execute().data or []
+    except Exception as e:
+        print(f'[문장 판정] 비용 기준 조회 실패 — 이번 실행은 비용 알림 점검을 건너뜀: {str(e)[:80]}')
+        return None
+    cap, marks = SENTENCE_BUDGET_USD, {}
+    for r in rows:
+        if r.get('key') == _BUDGET_KEY:
+            try:
+                v = float(str(r.get('value') or '').strip())
+                if 0 < v < float('inf'):
+                    cap = v
+            except ValueError:
+                pass
+        elif r.get('key') == _BUDGET_MARK_KEY:
+            try:
+                m = json.loads(r.get('value') or '{}')
+                if isinstance(m, dict):
+                    marks = {str(k): str(v) for k, v in m.items()}
+            except ValueError:
+                pass
+    return cap, marks
+
+
+def _team_month_cost(team_id, since_iso: str) -> float:
+    """그 팀 판정 기록 중 judged_at ≥ since의 cost_usd 합계 — PostgREST 1,000행 상한 때문에 PK 정렬로 페이지를 넘긴다(#233)."""
+    total, lo, page = 0.0, 0, 1000
+    while True:
+        data = sb.table('urgency_rule_verdicts').select('cost_usd').eq('team_id', team_id) \
+            .gte('judged_at', since_iso).order('rule_id').order('sentence_rev').order('news_id') \
+            .range(lo, lo + page - 1).execute().data or []
+        total += sum(float(r.get('cost_usd') or 0) for r in data)
+        if len(data) < page:
+            return total
+        lo += page
+
+
+def _team_name(team_id) -> str:
+    try:
+        rows = sb.table('teams').select('id,name').eq('id', team_id).limit(1).execute().data
+        if rows and rows[0].get('name'):
+            return str(rows[0]['name'])
+    except Exception:
+        pass
+    return f'팀 {team_id}'
+
+
+def _sentence_budget_alert() -> int:
+    """C4 — 이번 실행에 판정 비용이 생긴 팀만 본다: 이번 달(KST 1일 0시부터) 판정 비용 합계 ≥ 기준이고 그 팀의 알림 표시가
+    이번 달이 아니면 운영자 텔레그램 1회 → **보낸 뒤에만** 표시(app_config sentence_rule_budget_alerted의 팀 = 'YYYY-MM')를
+    남긴다(보내기가 실패하면 표시 없이 다음 실행에서 다시). 팀마다 달에 한 번. **판정은 멈추지 않는다**(운영자 결정).
+    반환 = 보낸 알림 수."""
+    teams = sorted((t for t, c in _SENTENCE_RUN_COST.items() if c > 0), key=str)
+    if not teams:
+        return 0
+    cfg = _sentence_budget_config()
+    if cfg is None:
+        return 0
+    cap, marks = cfg
+    now_kst = datetime.now(KST)
+    month = now_kst.strftime('%Y-%m')
+    month_start = now_kst.replace(day=1, hour=0, minute=0, second=0, microsecond=0) \
+        .astimezone(timezone.utc).isoformat()
+    sent = 0
+    for tid in teams:
+        if marks.get(str(tid)) == month:
+            continue                         # 이번 달 이미 알림
+        total = _team_month_cost(tid, month_start)
+        if total < cap:
+            continue
+        name = _team_name(tid)
+        text = (f'⚠️ 팀 AI 문장 판정 비용\n{name}: 이번 달 ${total:.2f} — 기준 ${cap:.2f}를 넘었습니다(판정은 계속합니다).\n'
+                '낱말이 너무 넓은 규칙이 없는지 「긴급도 설정 → 우리 팀」에서 확인해 주세요.')
+        ok = notify.send_telegram(text, chat_id=TELEGRAM_CHAT_ID)
+        print(f'[문장 판정] 비용 기준 넘김 — 팀 {tid} 이번 달 ${total:.2f} (기준 ${cap:.2f}) · 운영자 알림 '
+              + ('발송' if ok else '실패(표시 없이 다음 실행에서 다시)'))
+        if not ok:
+            continue
+        sent += 1
+        marks[str(tid)] = month
+        value = json.dumps(marks, ensure_ascii=False, sort_keys=True)
+        try:
+            _db_retry(lambda v=value: sb.table('app_config').upsert({'key': _BUDGET_MARK_KEY, 'value': v},
+                                                                    on_conflict='key').execute(), 'app_config')
+        except Exception as e:
+            print(f'[문장 판정] 비용 알림 표시 저장 실패(다음 실행에서 한 번 더 갈 수 있음): {str(e)[:120]}')
+    return sent
 
 
 def generate_summary(title: str, source: str, published_at: str, content: str) -> str:
@@ -2339,6 +3137,14 @@ def main():
         print('[긴급] 해당 없음')
 
     print('[모닝 브리핑] morning_briefing.yml GitHub Actions 담당 — 건너뜀')
+
+    # ── 팀 규칙 문장 조건 — 대기 행 판정 + 팀별 월 비용 알림 (#251) ──
+    # 긴급 알림·구독자 큐 **뒤** — Haiku 판정이 느려도 알림을 늦추지 않는다. 새 기사가 없는 실행에서도 돈다(본문 대기·
+    # 대시보드가 넣은 지난 기사 요청). 대기 행이 없으면 조회 1번으로 끝난다. 어떤 실패도 heartbeat·이슈 제안을 막지 않는다.
+    try:
+        process_open_sentence_verdicts()
+    except Exception as e:
+        print(f'[문장 판정] 실패(무시): {e}')
 
     # ── 크롤러 heartbeat ── (check_news_health가 '크롤러 정상 vs 고장' 구분에 사용)
     # 신규 0건이어도 '크롤러는 돌았다'를 기록 → 주말 등 '뉴스 없음' 오경보 방지. 실패해도 무시.
