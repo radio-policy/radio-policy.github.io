@@ -4178,6 +4178,14 @@ function loadUrgencySources(force) {
 }
 
 function _urLvLabel(v) { return v === '긴급' ? '중요' : v; }
+// 화면 낱말(#249): min = 「적어도」, set = 「무조건」. 표 값(min/set·긴급)은 그대로 두고 보이는 말만 바꾼다
+function _urModeLabel(mode, level) { return (mode === 'set' ? '무조건 ' : '적어도 ') + _urLvLabel(level); }
+// 규칙 이름 = note의 ' — ' 앞부분(뒤는 메모). 목록 제목·기사 상세 「규칙: …」·미리보기 집계에 쓴다
+function _urShortName(r) {
+  var s = (r && (r.note || r.id)) || '';
+  var i = s.indexOf(' — ');
+  return i > 0 ? s.slice(0, i) : s;
+}
 
 // 상세 모달 배지 옆 — 이 등급이 어디서 왔나: 담당자 수정 > 규칙 > AI 판정
 function _urgencySourceHtml(n) {
@@ -4186,8 +4194,9 @@ function _urgencySourceHtml(n) {
   if (_urFb.has(String(n.id))) return '<span style="' + st + '" title="담당자가 직접 고친 값">· 담당자 수정</span>';
   if (n.urgency_rule) {
     var rule = _urRules.find(function(x) { return x.id === n.urgency_rule; });
-    var note = rule ? (rule.note || rule.id) : n.urgency_rule;
-    return '<span style="' + st + '" title="긴급도 규칙 ' + escHtml(n.urgency_rule) + ' — 제목·요약 낱말로 정한 하한/지정">· 규칙: ' + escHtml(note) + '</span>';
+    var name = rule ? _urShortName(rule) : n.urgency_rule;
+    var tip = rule ? (rule.note || rule.id) + ' (' + _urModeLabel(rule.mode, rule.level) + ')' : n.urgency_rule;
+    return '<span style="' + st + '" title="긴급도 규칙 — ' + escHtml(tip) + '">· 규칙: ' + escHtml(name) + '</span>';
   }
   if (n.urgency || n.importance) return '<span style="' + st + '" title="수집 때 AI가 판정한 값">· AI 판정</span>';
   return '';
@@ -4233,29 +4242,41 @@ function _urGroups(andAny) {
   return UrgencyRules.ruleView({ id: 'x', mode: 'min', level: '보통', any_words: ['x'], and_any: andAny || [] }).groups;
 }
 
+// 규칙 → 읽히는 문장(#249): 「제목·요약에 [A] [B] 중 하나가 있고 / 그리고 [C] 중 하나도 있으면 → 적어도 보통」.
+// 낱말이 하나뿐인 줄은 '중 하나' 대신 '낱말'로 적어, 조사(이/가)를 낱말 끝소리에 맞추지 않아도 되게 한다.
+function _urSentenceHtml(r) {
+  var v = UrgencyRules.ruleView(r);
+  if (!v.any.length) return '<span style="color:var(--text-tertiary)">① 칸에 낱말을 적으면 여기에 문장으로 보입니다.</span>';
+  var segs = [v.any].concat(v.groups).filter(function(g) { return g.length; });
+  var lv = IMPORTANCE_RULES[v.level] || {};
+  var lines = segs.map(function(g, i) {
+    var one = g.length === 1;
+    return (i ? '그리고 ' : '제목·요약에 ') + _urChips(g) + (one ? ' 낱말' : ' 중 하나') +
+      (i ? '도' : (one ? '이' : '가')) + (i === segs.length - 1 ? ' 있으면' : ' 있고');
+  });
+  lines[lines.length - 1] += ' → <b style="color:' + (lv.color || 'inherit') + '">' + escHtml(_urModeLabel(v.mode, v.level)) + '</b>';
+  if (v.none.length) lines.push('단, ' + _urChips(v.none) + (v.none.length === 1 ? ' 낱말이' : ' 중 하나라도') + ' 있으면 이 규칙은 안 걸림');
+  return lines.join('<br>');
+}
+
 function renderUrgencyRules() {
   var el = document.getElementById('ur-list');
   if (!el) return;
   var admin = isAdminUser();
   var rows = _urRules.filter(function(r) { return r.team_id == null; });
   if (!rows.length) { el.innerHTML = '<div style="font-size:12px;color:var(--text-tertiary);padding:8px 0">등록된 공통 규칙이 없습니다.</div>'; return; }
-  el.innerHTML = rows.map(function(r) {
+  // 순서 번호(position)·규칙 id는 목록에서 뺐다(#249) — 목록 자체가 보는 순서이고, 둘 다 편집 창 「고급」에 있다
+  el.innerHTML = rows.map(function(r, i) {
     var lv = IMPORTANCE_RULES[r.level] || {};
-    var groups = _urGroups(r.and_any);
     return '<div style="padding:8px 10px;margin-bottom:6px;border:0.5px solid var(--border-secondary);border-radius:var(--radius-md);' + (r.enabled ? '' : 'opacity:.5') + '">' +
       '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">' +
-        '<span style="font-size:10px;color:var(--text-muted)" title="순서 — 작을수록 먼저, 처음 걸린 규칙 하나가 정한다">' + escHtml(String(r.position)) + '</span>' +
-        '<span style="font-size:11px;font-weight:700;white-space:nowrap;color:' + (lv.color || 'inherit') + '">' + (r.mode === 'set' ? '지정 ' : '최소 ') + escHtml(_urLvLabel(r.level)) + '</span>' +
-        '<span style="font-size:12px;color:var(--text-primary);font-weight:600">' + escHtml(r.note || r.id) + '</span>' +
-        (r.enabled ? '' : '<span style="font-size:10px;color:#b45309">꺼짐</span>') +
-        '<code style="font-size:10px;color:var(--text-muted);margin-left:auto">' + escHtml(r.id) + '</code>' +
-        (admin ? '<button class="btn" style="font-size:10.5px;padding:2px 8px" data-rid="' + escHtml(r.id) + '" onclick="editUrgencyRule(this.getAttribute(\'data-rid\'))">편집</button>' : '') +
+        '<span style="font-size:10.5px;color:var(--text-muted)" title="위에서부터 차례로 보고, 처음 걸린 규칙 하나만 적용">' + (i + 1) + '</span>' +
+        '<span style="font-size:10.5px;font-weight:700;white-space:nowrap;padding:1px 7px;border-radius:10px;border:0.5px solid ' + (lv.color || 'var(--border-mid)') + ';color:' + (lv.color || 'inherit') + '">' + escHtml(_urModeLabel(r.mode, r.level)) + '</span>' +
+        '<span style="font-size:12.5px;color:var(--text-primary);font-weight:600" title="' + escHtml(r.note || r.id) + '">' + escHtml(_urShortName(r)) + '</span>' +
+        (r.enabled ? '' : '<span style="font-size:10px;color:#b45309">꺼짐 — 적용 안 함</span>') +
+        (admin ? '<button class="btn" style="font-size:10.5px;padding:2px 8px;margin-left:auto" data-rid="' + escHtml(r.id) + '" onclick="editUrgencyRule(this.getAttribute(\'data-rid\'))">편집</button>' : '') +
       '</div>' +
-      '<div style="font-size:11px;color:var(--text-secondary);margin-top:4px;line-height:1.7">' +
-        '<b style="font-weight:600">낱말</b> ' + _urChips(r.any_words) +
-        groups.map(function(g) { return '<br><b style="font-weight:600">그리고</b> ' + _urChips(g); }).join('') +
-        ((r.none_words || []).length ? '<br><b style="font-weight:600">제외</b> ' + _urChips(r.none_words) : '') +
-      '</div></div>';
+      '<div style="font-size:11.5px;color:var(--text-secondary);margin-top:5px;line-height:1.8">' + _urSentenceHtml(r) + '</div></div>';
   }).join('');
 }
 
@@ -4293,6 +4314,7 @@ function editUrgencyRule(id) {
   if (!form) return;
   var maxPos = _urRules.reduce(function(m, x) { return Math.max(m, x.position || 0); }, 0);
   var set = function(k, v) { var e = document.getElementById(k); if (e) e.value = v; };
+  set('ur-f-nl', '');
   set('ur-f-slug', ''); set('ur-f-note', r ? r.note : '');
   set('ur-f-pos', r ? r.position : maxPos + 10);
   set('ur-f-mode', r ? r.mode : 'min'); set('ur-f-level', r ? r.level : '보통');
@@ -4303,10 +4325,30 @@ function editUrgencyRule(id) {
   var idEl = document.getElementById('ur-f-id');
   if (idEl) idEl.textContent = r ? r.id + ' (고정 — 규칙 id는 바꾸지 않는다)' : '저장할 때 자동 생성 (영문 이름 + 날짜)';
   var slugRow = document.getElementById('ur-f-slug-row'); if (slugRow) slugRow.style.display = r ? 'none' : '';
+  var posHint = document.getElementById('ur-f-pos-hint');
+  if (posHint) posHint.textContent = '지금 순서: ' + _urRules.filter(function(x) { return x.team_id == null; })
+    .map(function(x) { return x.position + ' ' + _urShortName(x); }).join(' · ');
   form.style.display = 'block';
   _urFormOpen = true;
+  _urFormSentence();
   var pv = document.getElementById('ur-preview'); if (pv) pv.innerHTML = '';
   _urMsg('');
+  try { form.scrollIntoView({ block: 'start', behavior: 'smooth' }); } catch (e) { /* 구형 브라우저 — 스크롤만 생략 */ }
+}
+
+// 편집 칸 아래 「이렇게 읽힙니다」(#249) — 칸을 고칠 때마다 다시 그린다
+function _urFormSentence() {
+  var el = document.getElementById('ur-f-sentence');
+  if (!el || !_urFormOpen) return;
+  var row = _urFormRow();
+  el.innerHTML = '<div style="font-size:10.5px;color:var(--text-tertiary);margin-bottom:2px">이렇게 읽힙니다' +
+    (row.enabled ? '' : ' (꺼짐 — 저장해도 적용 안 함)') + '</div>' + _urSentenceHtml(row);
+}
+
+// 편집 칸 검증 — 매처 검증(validateRules)의 영문 메시지 전에 칸 이름으로 먼저 알린다
+function _urFormErrors(row) {
+  if (!row.any_words.length) return ['① 칸(이 낱말 중 하나가 있고)에 낱말을 하나 이상 적어 주세요'];
+  return UrgencyRules.validateRules([row]);
 }
 
 function cancelUrgencyRuleEdit() {
@@ -4316,7 +4358,7 @@ function cancelUrgencyRuleEdit() {
   var pv = document.getElementById('ur-preview'); if (pv) pv.innerHTML = '';
 }
 
-// 「최근 기사에 적용해 보기」 — 저장 전, 편집 중인 규칙을 넣은 공통 목록을 불러온 기사 제목 + 요약에 돌린다.
+// 「최근 기사로 미리 보기」 — 저장 전, 편집 중인 규칙을 넣은 공통 목록을 불러온 기사 제목 + 요약에 돌린다.
 // 비교 기준은 지금 저장된 등급이다(AI 원값이 아님) — 값 변경 = 이 목록이면 달라질 기사.
 function previewUrgencyRules() {
   var pv = document.getElementById('ur-preview');
@@ -4325,13 +4367,15 @@ function previewUrgencyRules() {
   var target = null;
   if (_urFormOpen) {
     target = _urFormRow();
-    var errs = UrgencyRules.validateRules([target]);
+    var errs = _urFormErrors(target);
     if (errs.length) { pv.innerHTML = '<div style="color:#ef4444;font-size:11px">' + escHtml(errs.join(' / ')) + '</div>'; return; }
     rules = rules.filter(function(r) { return r.id !== target.id; }).concat([target]);
   }
   rules = rules.filter(function(r) { return r.enabled; })
     .sort(function(a, b) { return (a.position - b.position) || (a.id < b.id ? -1 : 1); });
-  if (!newsDataCache.length) { pv.innerHTML = '<div style="font-size:11px;color:var(--text-tertiary)">불러온 기사가 없습니다.</div>'; return; }
+  if (!newsDataCache.length) { pv.innerHTML = '<div style="font-size:11px;color:var(--text-tertiary)">불러온 기사가 없습니다 — 뉴스 목록을 한 번 연 뒤 다시 눌러 주세요.</div>'; return; }
+  var nameOf = {};
+  rules.forEach(function(r) { nameOf[r.id] = (target && r.id === target.id && !r.note) ? '이 규칙' : _urShortName(r); });
   var hits = [], perRule = {}, changed = 0, total = 0;
   newsDataCache.forEach(function(n) {
     var cur = n.urgency || n.importance || '참고';
@@ -4343,33 +4387,121 @@ function previewUrgencyRules() {
     if (res.changed) changed++;
     if (!target || hit.id === target.id) hits.push({ n: n, cur: cur, res: res });
   });
-  var head = '<div style="font-size:11.5px;color:var(--text-primary);margin-bottom:4px">불러온 기사 ' + newsDataCache.length.toLocaleString('ko-KR') + '건 중 ' +
-    '적중 ' + total + '건 · 값 변경 ' + changed + '건' +
-    (target ? ' · <b>이 규칙이 정하는 기사 ' + hits.length + '건</b>' : '') + '</div>' +
+  var head = '<div style="font-size:11.5px;color:var(--text-primary);margin-bottom:4px;line-height:1.7">최근 불러온 기사 ' + newsDataCache.length.toLocaleString('ko-KR') + '건에 돌려 보면 — ' +
+    '규칙에 걸린 기사 <b>' + total + '건</b> · 그중 등급이 바뀌는 기사 <b>' + changed + '건</b>' +
+    (target ? ' · <b>이 규칙으로 정해지는 기사 ' + hits.length + '건</b>' : '') + '</div>' +
     '<div style="font-size:10.5px;color:var(--text-tertiary);margin-bottom:6px">' +
-    Object.keys(perRule).map(function(k) { return escHtml(k) + ' ×' + perRule[k]; }).join(' · ') + '</div>';
+    Object.keys(perRule).map(function(k) { return escHtml(nameOf[k] || k) + ' ' + perRule[k] + '건'; }).join(' · ') + '</div>';
   var list = '';
   if (target) {
     hits.sort(function(a, b) { return (b.res.changed - a.res.changed) || (b.n.published_at || '').localeCompare(a.n.published_at || ''); });
-    list = hits.slice(0, 40).map(function(h) {
+    if (hits.length) list = '<div style="font-size:10.5px;color:var(--text-tertiary);margin-bottom:2px">왼쪽 = 지금 등급 → 이 규칙이면 바뀔 등급 (주황 = 바뀌는 기사)</div>';
+    list += hits.slice(0, 40).map(function(h) {
       return '<div style="font-size:11px;padding:3px 0;border-top:0.5px solid var(--border-tertiary);display:flex;gap:6px">' +
         '<span style="white-space:nowrap;color:' + (h.res.changed ? '#b45309' : 'var(--text-muted)') + '">' +
           escHtml(_urLvLabel(h.cur)) + (h.res.changed ? '→' + escHtml(_urLvLabel(h.res.level)) : '') + '</span>' +
         '<span style="color:var(--text-muted);white-space:nowrap">' + escHtml((h.n.published_at || '').slice(5, 10)) + '</span>' +
         '<span style="color:var(--text-primary)">' + escHtml(h.n.title || '') + '</span></div>';
-    }).join('') || '<div style="font-size:11px;color:var(--text-tertiary)">이 규칙이 정하는 기사가 없습니다 — 앞 규칙이 먼저 잡았거나 낱말이 안 걸립니다.</div>';
+    }).join('') || '<div style="font-size:11px;color:var(--text-tertiary)">이 규칙으로 정해지는 기사가 없습니다 — 낱말이 든 기사가 없거나, 위쪽 규칙에 먼저 걸렸습니다.</div>';
     if (hits.length > 40) list += '<div style="font-size:10.5px;color:var(--text-tertiary)">… 외 ' + (hits.length - 40) + '건</div>';
   }
   pv.innerHTML = head + list +
-    '<div style="font-size:10.5px;color:var(--text-tertiary);margin-top:6px">⚠️ 한국어는 부분 문자열로 맞춘다 — 2~3자 낱말은 「그리고」 줄과 함께 쓰고, 오탐이 없는지 목록을 읽어 볼 것.</div>';
+    '<div style="font-size:10.5px;color:var(--text-tertiary);margin-top:6px;line-height:1.6">⚠️ 낱말은 글자 일부만 같아도 걸립니다(예: 「인사」는 「인사말」에도 걸림). 두세 글자 낱말은 ② 칸과 함께 쓰고, 위 목록에 엉뚱한 기사가 없는지 읽어 보세요.</div>';
+}
+
+// ── 문장으로 규칙 만들기 (#249, 2026-09-27 운영자 요청 "규칙을 자연어로 입력") ──
+// Haiku가 운영자 문장을 편집 칸(이름·적어도/무조건·등급·①②③)으로 옮긴다. **칸을 채우기만 하고 저장하지 않는다** —
+// 읽히는 문장과 최근 기사 미리보기를 바로 띄워 운영자가 보고 고친 뒤 저장한다(파싱 결과를 숨기지 않는다).
+// 저장되는 것은 여전히 낱말 목록이라 수집 때는 AI 없이 매번 같은 결과다. 본보기 = 지금 공통 규칙 전부.
+var UR_NL_SYSTEM =
+  '너는 SK텔레콤 기술정책팀 뉴스 모니터링 대시보드의 「긴급도 규칙」 작성 도우미다. ' +
+  '운영자가 문장으로 적은 요구를 낱말 규칙 하나로 옮겨 make_rule 도구로만 답한다.\n\n' +
+  '[규칙이 동작하는 방식 — 이 틀로만 옮길 수 있다]\n' +
+  '- 뉴스를 모을 때 기사 「제목 + 요약」 글자에서 낱말을 찾는다. 부분 문자열 일치다(띄어쓰기·영문 대소문자를 그대로 본다). 「인사」는 「인사말」에도 걸린다.\n' +
+  '- any_words: 이 중 하나 이상이 있어야 한다. 비울 수 없다.\n' +
+  '- and_groups: 묶음마다 그 묶음의 낱말이 하나 이상 더 있어야 한다(선택). 서로 다른 조건은 서로 다른 묶음으로 나눈다.\n' +
+  '- none_words: 하나라도 있으면 규칙이 걸리지 않는다(선택).\n' +
+  '- mode: "min" = 적어도 그 등급(AI가 더 높게 보면 AI 값을 둔다), "set" = 무조건 그 등급(AI 판정을 건너뛴다). ' +
+  '"적어도·최소·이상·올려·놓치지 않게" → min. "무조건·항상·고정" 또는 등급을 낮추라는 요구 → set(min으로는 낮출 수 없다).\n' +
+  '- level: "긴급"(화면 이름 \'중요\'), "보통", "참고" 중 하나. 운영자가 \'중요\'라고 하면 "긴급"이다.\n\n' +
+  '[옮기는 요령]\n' +
+  '- 회사·기관은 기사에 실제로 쓰이는 이름을 모두 넣는다(예: SK텔레콤·SKT, 과기정통부·과학기술정보통신부, 방통위·방미통위·방송통신위). 띄어 쓴 꼴이 흔하면 함께 넣는다(통신3사·통신 3사).\n' +
+  '- 사건·행위는 제목에 실제로 나오는 짧은 꼴로 넣는다(소환·출석·국감행, 과징금·제재).\n' +
+  '- 운영자 문장에 없는 조건을 지어내지 않는다. 뜻이 둘로 읽히거나 낱말이 넓어 엉뚱한 기사가 걸릴 것 같으면 notes에 한두 문장으로 적는다.\n' +
+  '- 두세 글자 낱말만으로 된 조건은 다른 묶음과 함께 쓰고, 뻔한 오탐 꼴은 none_words에 넣는다(예: 인사 → 인사말·인사이드).\n' +
+  '- name은 20자 안팎 명사구로, 등급·방식 말(적어도·최소·긴급 등)은 넣지 않는다 — 화면이 따로 보여 준다.\n' +
+  '- 규칙 하나로 옮길 수 없는 요구(본문·출처·날짜 조건, 여러 등급을 한꺼번에)는 가장 가까운 규칙 하나만 만들고 notes에 못 담은 부분을 적는다.';
+var UR_NL_TOOL = {
+  name: 'make_rule',
+  description: '운영자 문장을 긴급도 낱말 규칙 하나로 기록한다.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      name: { type: 'string', description: '규칙 이름 — 20자 안팎 명사구' },
+      mode: { type: 'string', enum: ['min', 'set'] },
+      level: { type: 'string', enum: ['긴급', '보통', '참고'] },
+      any_words: { type: 'array', items: { type: 'string' }, description: '이 중 하나 이상 있어야 함(비우면 안 됨)' },
+      and_groups: { type: 'array', items: { type: 'array', items: { type: 'string' } }, description: '묶음마다 그중 하나 이상 더 있어야 함(없으면 빈 배열)' },
+      none_words: { type: 'array', items: { type: 'string' }, description: '하나라도 있으면 안 걸림(없으면 빈 배열)' },
+      notes: { type: 'string', description: '운영자에게 알릴 점 — 없으면 빈 문자열' }
+    },
+    required: ['name', 'mode', 'level', 'any_words', 'and_groups', 'none_words', 'notes']
+  }
+};
+
+async function urgencyRuleFromText(btn) {
+  if (!isAdminUser()) { _urMsg('공통 규칙은 관리자만 만들 수 있습니다.', true); return; }
+  var ta = document.getElementById('ur-f-nl');
+  var text = ((ta && ta.value) || '').trim();
+  if (!text) { _urMsg('만들고 싶은 규칙을 문장으로 적어 주세요.', true); return; }
+  var examples = _urRules.filter(function(r) { return r.team_id == null; }).map(function(r) {
+    return { name: _urShortName(r), mode: r.mode, level: r.level, any_words: r.any_words || [],
+             and_groups: _urGroups(r.and_any), none_words: r.none_words || [] };
+  });
+  if (btn) btn.disabled = true;
+  _urMsg('AI가 규칙으로 옮기는 중...');
+  try {
+    var res = await claudeFetch({
+      site: 'urgency_rule_nl',
+      method: 'POST',
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001', max_tokens: 800,
+        system: UR_NL_SYSTEM + '\n\n[지금 저장된 규칙 — 본보기]\n' + JSON.stringify(examples),
+        tools: [UR_NL_TOOL], tool_choice: { type: 'tool', name: 'make_rule' },
+        messages: [{ role: 'user', content: text.slice(0, 500) }]
+      })
+    });
+    var data = await res.json();
+    if (data.error) throw new Error(data.error.message || 'API 오류');
+    var tu = (data.content || []).find(function(b) { return b.type === 'tool_use'; });
+    if (!tu || !tu.input) throw new Error('AI 응답에 규칙이 없습니다');
+    var o = tu.input;
+    var words = function(a) { return (Array.isArray(a) ? a : []).map(function(w) { return String(w).trim(); }).filter(Boolean); };
+    var set = function(k, v) { var e = document.getElementById(k); if (e) e.value = v; };
+    if (o.name) set('ur-f-note', String(o.name).trim());
+    if (UrgencyRules.MODES.indexOf(o.mode) !== -1) set('ur-f-mode', o.mode);
+    if (UrgencyRules.LEVELS.indexOf(o.level) !== -1) set('ur-f-level', o.level);
+    set('ur-f-any', words(o.any_words).join(', '));
+    set('ur-f-and', (Array.isArray(o.and_groups) ? o.and_groups : []).map(words)
+      .filter(function(g) { return g.length; }).map(function(g) { return g.join(', '); }).join('\n'));
+    set('ur-f-none', words(o.none_words).join(', '));
+    _urFormSentence();
+    previewUrgencyRules();
+    _urMsg('칸을 채웠습니다 — 아래 「이렇게 읽힙니다」와 미리보기에서 엉뚱한 기사가 없는지 보고, 필요하면 고친 뒤 저장하세요.' +
+      (o.notes && String(o.notes).trim() ? ' AI 메모: ' + String(o.notes).trim() : ''));
+  } catch (e) {
+    _urMsg('변환 실패: ' + (e.message || e), true);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
 
 async function saveUrgencyRule(btn) {
   if (!sb) return;
   if (!isAdminUser()) { _urMsg('공통 규칙은 관리자만 저장할 수 있습니다.', true); return; }
   var row = _urFormRow();
-  var errs = UrgencyRules.validateRules([row]);
-  if (!row.note) errs.push('설명(화면에 보이는 문장)을 적어 주세요');
+  var errs = _urFormErrors(row);
+  if (!row.note) errs.push('규칙 이름을 적어 주세요');
   if (errs.length) { _urMsg(errs.join(' / '), true); return; }
   if (btn) btn.disabled = true;
   _urMsg('저장 중...');
