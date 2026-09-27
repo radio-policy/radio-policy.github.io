@@ -215,10 +215,12 @@ async function unitLabel(s: Pick<Sub, 'team_id' | 'division'> | null): Promise<s
     return '';
   }
 }
-// 설정 메시지 본문 끝 한 줄 — 주요 뉴스 등급 기준(관리자가 대시보드에서 지정한 팀·실). 공통이면 ''(종전 본문 그대로).
+// 설정 메시지 본문 끝 한 줄 — 주요 뉴스 등급 기준(관리자가 대시보드에서 정한 소속 팀·실). 공통이면 ''(종전 본문 그대로).
 async function basisLine(s: Pick<Sub, 'team_id' | 'division'> | null): Promise<string> {
   const unit = (await unitLabel(s)).replace(/^ · /, '');
-  return unit ? `\n\n📡 <b>주요 뉴스 등급 기준</b>: ${escapeHtml(unit)} <i>(관리자 지정)</i>` : '';
+  // '(관리자 지정)'이 아니라 '(팀별 설정 기준)' — 관리자는 소속만 정하고 등급은 팀원들이 정한 규칙·수정으로 정해진다
+  // ('관리자 지정'은 관리자가 중요도를 정하는 것처럼 읽힌다 — 운영자 지적 09-27).
+  return unit ? `\n\n📡 <b>주요 뉴스 등급 기준</b>: ${escapeHtml(unit)} <i>(팀별 설정 기준)</i>` : '';
 }
 
 const START_TEXT =
