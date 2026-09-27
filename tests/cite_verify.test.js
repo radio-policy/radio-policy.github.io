@@ -412,9 +412,13 @@ function ok(name, cond, extra) {
   ok('표 행 표시: after가 다음 행으로 넘어가지 않음', !/제6항|대통령령/.test(ct.after), ct.after);
   var seenT = [];
   var vT = await CV.verifyCitations({ answer: tbl, chunks: [r16a, r16b], autoTag: false, quoteTag: false,
-    callHaiku: async function (s, u) { seenT.push(u); return '[{"id":1,"verdict":"불일치","reason":"제5항이 아닌 제6항 내용"}]'; } });
+    callHaiku: async function (s, u) { seenT.push(u); return '[{"id":1,"verdict":"일치","reason":""}]'; } });
   ok('표 행 표시: 다음 행 내용이 판정기에 인용문으로 가지 않음', !seenT.some(function (u) { return /대통령령으로 정함/.test(u); }), seenT);
-  eq('표 행 표시: 짧은 행은 대조할 내용 없음(주황 아님)', vT.verdicts[0].status, 'noclaim');
+  // Fable 재검토(2026-09-27): 표 행은 12자부터 판정기로 — 종전 24자 규칙으로는 이 22자 행이 '대조할 내용 없음'(회색)이었다
+  eq('표 행 표시: 짧아도 12자 이상이면 그 행만으로 판정(확인됨)', [vT.verdicts[0].status, seenT.length === 1 && /제5항 \| 재할당 시 제10조제4항에 따른 조건을 붙일 수 있음/.test(seenT[0])], ['ok', true]);
+  var tblS = '| 항 | 내용 |\n|---|---|\n| 제5항 | 조건 부가 [원문 확인됨: 전파법 제16조제5항] |\n| 제6항 | 절차는 대통령령 |\n';
+  var vS = await CV.verifyCitations({ answer: tblS, chunks: [r16a, r16b], autoTag: false, quoteTag: false, callHaiku: async function () { throw new Error('불려선 안 됨'); } });
+  eq('표 행 표시: 12자 미만 행은 대조할 내용 없음', vS.verdicts[0].status, 'noclaim');
   var tblL = '| 항 | 내용 |\n|---|---|\n| 제5항 | 주파수를 재할당할 때에는 과기정통부장관이 제10조제4항에 따른 조건을 붙일 수 있다고 정함 [원문 확인됨: 전파법 제16조제5항] |\n| 제6항 | 절차는 대통령령 |\n';
   var seenL = [];
   await CV.verifyCitations({ answer: tblL, chunks: [r16a, r16b], autoTag: false, quoteTag: false,
@@ -426,6 +430,49 @@ function ok(name, cond, extra) {
   ok('번호 형제 항목: after가 다음 항목으로 넘어가지 않음', !/대통령령/.test(nl.after), nl.after);
   var hb = CV.findCitations('- **전기통신사업법 제32조의14** [원문 확인됨: 전기통신사업법 제32조의14]\n  ① 대리점은 이용자에게 계약 조건을 설명하여야 한다.\n')[0];
   ok('제목형 글머리(들여 쓴 내용이 이어짐)는 종전대로 뒤 문단이 after', /① 대리점은/.test(hb.after), hb.after);
+
+  // ── Fable 재검토(2026-09-27) #230·#240·#246 묶음 — 재검토에서 찾은 구멍 ──
+  // (1) stripCiteBody: 법령 이름은 조·별표 참조 바로 앞의 것만 지운다 — 종전엔 '규정·기준·법'으로 끝나는 낱말 앞 40자를 어디서든 지웠다
+  eq('stripCiteBody: 「…임대 가능 등 규정」 인용문이 4자로 줄지 않음(사내 실답변)', CV.stripCiteBody('| 전파법 시행령 제16조 | 주파수할당 후 3년이 지나면 양도할 수 있고 재할당받은 경우 임대 가능 등 규정 ').length, 32);
+  eq('stripCiteBody: 「…있다고 규정」 문장이 0자로 줄지 않음', CV.stripCiteBody('과기정통부장관은 주파수 이용기간이 끝나면 다시 할당할 수 있다고 규정').length, 30);
+  eq('stripCiteBody: 참조 앞 법령 이름은 지운다(줄 머리·글머리·표 칸·낫표·굵게·괄호)', [
+    CV.stripCiteBody('- 전기통신사업법 제32조의14(판매점 선임에 대한 승낙 등): 대리점은 판매점을 선임할 때 미리 승낙을 받아야 한다'),
+    CV.stripCiteBody('「전기통신사업법」 제50조제1항'), CV.stripCiteBody('**전기통신사업법 시행령** 별표 4 제5호 마목'),
+    CV.stripCiteBody('| 전기통신사업법 시행령 | 제37조의10 | 도매제공 |'), CV.stripCiteBody('전파법 시행령(대통령령) 제18조'), CV.stripCiteBody('- **전기통신사업법 제32조의14** ')],
+    ['대리점은판매점을선임할때미리승낙을받아야한다', '제1항', '별표4제5호마목', '도매제공', '', '']);
+  eq('stripCiteBody: 「업무처리규정 제11조는 다음과 같이 규정합니다.」는 종전대로 번호·제목뿐', CV.stripCiteBody('업무처리규정 제11조는 다음과 같이 규정합니다.').length < 24, true);
+  // (2) 표 행·형제 항목은 토막 문단 규칙(#176)으로 앞 문단을 가져오지 않는다 — 줄에 조 번호가 없는 짧은 행이 표 앞 안내 문장과 대조됐다
+  var tblI = '전파법 제16조는 재할당의 절차와 조건을 정하고 있으며, 각 항의 내용을 표로 정리하면 다음과 같습니다.\n\n| 항 | 내용 |\n|---|---|\n| 제5항 | 조건을 붙일 수 있음 [원문 확인됨: 전파법 제16조제5항] |\n| 제6항 | 재할당 절차는 대통령령으로 정함 [원문 확인됨: 전파법 제16조제6항] |\n';
+  var cI = CV.findCitations(tblI);
+  eq('표 행 표시: 앞 문단(표 안내 문장)을 인용문으로 가져오지 않음', [cI[0].sibling, cI[0].claimOverride, cI[1].claimOverride], [true, undefined, undefined]);
+  var seenI = [];
+  var vI = await CV.verifyCitations({ answer: tblI, chunks: [r16a, r16b], autoTag: false, quoteTag: false,
+    callHaiku: async function (s, u) { seenI.push(u); return '[{"id":1,"verdict":"일치","reason":""}]'; } });
+  ok('표 행 표시: 판정기에는 그 행만(안내 문장 없음), 11자 행은 대조 없음', vI.verdicts.map(function (v) { return v.status; }).join(',') === 'noclaim,ok' && seenI.length === 1 && /재할당 절차는 대통령령으로 정함/.test(seenI[0]) && !/표로 정리하면/.test(seenI[0]), [vI.verdicts.map(function (v) { return v.status; }), seenI]);
+  // (3) #230 isOtherLawRef: 낫표 없는 「…에 관한 법률 제N조」도 다른 법령
+  eq('isOtherLawRef: 낫표 없는 「…에 관한 법률」은 다른 법령', [CV.isOtherLawRef('이동통신단말장치 유통구조 개선에 관한 법률 '), CV.isOtherLawRef('정보통신망 이용촉진 및 정보보호 등에 관한 법률 '), CV.isOtherLawRef('이 법률 ')], [true, true, false]);
+  eq('selfCiteIndexes: 낫표 없는 다른 법률 인용은 자기 인용 아님', CV.selfCiteIndexes('이동통신단말장치 유통구조 개선에 관한 법률 제4조에 따른 지원금과 제4조의 조건', '4조'), [37]);
+  // (4) #240·#246 약칭은 법률에만 — 「단통법」이 그 법률 이름을 담은 고시에 붙지 않고, 「정보통신망법 시행령」은 그 시행령에 붙는다
+  var gosiDT = '이동통신단말장치 유통구조 개선에 관한 법률 위반 과징금 부과 세부기준', lawDT = '이동통신단말장치 유통구조 개선에 관한 법률';
+  eq('약칭(단통법): 법률이 없으면 고시에 붙지 않음(못 맞춤)', CV.resolveLaw(CV.lawNameBefore('단통법 '), [gosiDT, '전파법']), null);
+  eq('약칭(단통법): 법률이 있으면 법률', CV.resolveLaw(CV.lawNameBefore('단통법 '), [gosiDT, lawDT]), lawDT);
+  var netAct = '정보통신망 이용촉진 및 정보보호 등에 관한 법률', netDec = netAct + ' 시행령';
+  eq('약칭 + 시행령(정보통신망법 시행령) → 그 시행령', [CV.resolveLaw(CV.lawNameBefore('정보통신망법 시행령 '), [netAct, netDec]), CV.resolveLaw(CV.lawNameBefore('정보통신망법 '), [netAct, netDec])], [netDec, netAct]);
+  eq('약칭 + 시행령: 법률만 있으면 못 맞춤', CV.resolveLaw(CV.lawNameBefore('정보통신망법 시행령 '), [netAct]), null);
+  // (5) 법령 종류 낱말로 끝나지 않는 이름(「…세부사항」 제9조, 사내 회신) — 약한 이름: 낱말 순서·끝 낱말이 같은 문서가 하나면 그 문서, 아니면 이름 없는 것으로
+  var gosiSD = '주파수할당 신청 절차 및 방법 등 세부사항';
+  var g9 = { id: 'g9', doc_name: gosiSD + '(과학기술정보통신부고시)(제2025-10호)(20250301)', article_no: '9조(실제매출액)', chunk_index: 5, content: '제9조(실제매출액) ① 실제매출액은 해당 주파수를 이용하는 역무의 매출액으로 한다.\n② 매출액 산정은 별표 2에 따른다.' };
+  var l9 = { id: 'l9', doc_name: '전파법(법률)(제21065호)(20260102)', article_no: '9조(주파수분배)', chunk_index: 4, content: '제9조(주파수분배) ① 과학기술정보통신부장관은 주파수를 분배한다.\n② 분배는 국제 동향을 고려한다.' };
+  var wk = CV.lawNameBefore('… 주파수할당 신청 절차 및 방법 등 세부사항 ');
+  eq('약한 이름: weak 표지·후보는 낱말 2개 이상', [wk.weak, wk.text, wk.candidates[wk.candidates.length - 1]], [true, '세부사항', '등 세부사항']);
+  eq('약한 이름 맞추기: 끝 낱말·순서가 같은 문서 하나', CV.resolveLaw(wk, [gosiSD, '전파법', '전파법 시행령']), gosiSD);
+  eq('약한 이름 맞추기: 그런 문서가 없으면 null', CV.resolveLaw(CV.lawNameBefore('이 경우 산정 방식 '), [gosiSD, '전파법']), null);
+  var cW = CV.findCitations('전파법 제16조에 따라 재할당 대가를 산정한다.\n\n주파수할당 신청 절차 및 방법 등 세부사항 제9조는 실제매출액을 해당 주파수를 이용하는 역무의 매출액으로 한다고 정한다 [원문 확인됨: 주파수할당 신청 절차 및 방법 등 세부사항 제9조]')[0];
+  var rW = CV.checkCitation(cW, [l9, g9], []);
+  eq('약한 이름 인용: 전파법 제9조(앞 법령)가 아니라 그 고시의 제9조와 대조', [rW.status, rW.lawDoc], ['ok', gosiSD]);
+  var cW2 = CV.findCitations('전파법 제16조에 따라 재할당 대가를 산정하고, 산정 방식 제9조는 주파수를 분배한다고 정한다 [원문 확인됨: 산정 방식 제9조]')[0];
+  eq('약한 이름을 못 맞추면 종전대로 앞 법령(전파법 제9조)', [CV.checkCitation(cW2, [l9, g9], []).lawDoc], ['전파법']);
+  eq('약한 이름은 이어받을 법령이 되지 않음(동법은 전파법)', CV.lawScope(CV.lawNameBefore('동법 '), CV.findCitations('주파수할당 신청 절차 및 방법 등 세부사항 제9조와 동법 제10조 [원문 확인됨: 동법 제10조]')[0].ctxLaw || CV.lawNameBefore('전파법 '), [gosiSD, '전파법']), ['전파법']);
 
   console.log('\n' + (total - fails) + '/' + total + ' passed');
   process.exit(fails ? 1 : 0);

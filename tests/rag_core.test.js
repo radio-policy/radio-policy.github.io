@@ -158,6 +158,13 @@ eq('titleActWeights', RC.titleActWeights(['종료', '휴업', '직접', '3G'], '
   eq('namedArticleRefs 나열·동법 이어받기', refs('전파법 제16조, 제17조 및 동법 시행령 제18조'),
     [['16조', '전파법', null], ['17조', null, '전파법'], ['18조', 'subord:시행령', '전파법']]);
   eq('namedArticleRefs 16조 1항(뒤 숫자가 항)', refs('전파법 16조 1항'), [['16조', '전파법', null]]);
+  // Fable 재검토(2026-09-27): '제' 없는 꼴은 법령명이 바로 앞일 때만 — 앞 법령을 이어받으면 「3조 규모」「2조를 넘는다」가 제3조·제2조가 됐다
+  eq('namedArticleRefs 제 없는 N조는 앞 법령을 이어받지 않음(3조 규모)', refs('전파법 제11조 기준 할당대가가 3조 규모인데 적정한가'), [['11조', '전파법', null]]);
+  eq('namedArticleRefs 제 없는 N조는 앞 법령을 이어받지 않음(2조를)', refs('전기통신사업법 제50조 위반 과징금 2조를 넘는다'), [['50조', '전기통신사업법', null]]);
+  eq('namedArticleRefs 「전파법 16조와 17조」의 17조는 잃는다(제17조는 됨)', [refs('전파법 16조와 17조 차이').length, refs('전파법 16조와 제17조 차이').length], [1, 2]);
+  // 법령 종류 낱말로 끝나지 않는 이름(「…세부사항」 제9조, 사내 회신) — 약한 이름은 후보로 읽되 이어받을 법령은 되지 않는다
+  var wkRefs = RC.namedArticleRefs('주파수할당 신청 절차 및 방법 등 세부사항 제9조와 제10조');
+  eq('namedArticleRefs 약한 이름(…세부사항)은 후보로 읽는다(weak 표지, 이어받을 법령은 못 됨 — 제10조는 ctx 없음)', [wkRefs[0].key, wkRefs[0].info.weak, wkRefs[1].key, wkRefs[1].ctx], ['9조', true, '10조', null]);
 
   var D = { law: '전파법(법률)(제21065호)(20260102)', dec: '전파법 시행령(대통령령)(제35801호)(20251001)', etc: '전기통신기본법(법률)(제16019호)(20190625)',
     net: '정보통신망 이용촉진 및 정보보호 등에 관한 법률(법률)(제21445호)(20260911)', pdf: '실행계획(안).pdf' };
@@ -168,6 +175,7 @@ eq('titleActWeights', RC.titleActWeights(['종료', '휴업', '직접', '3G'], '
     '48조의3': [{ doc_name: D.net, article_no: '48조의3(침해사고의 신고 등)' }],
   };
   var pick = function (q) { return RC.pickNamedArticles(RC.namedArticleRefs(q), rows).map(function (p) { return p.doc_name.split('(')[0] + ' ' + p.key; }); };
+  var pick2 = function (q, r2) { return RC.pickNamedArticles(RC.namedArticleRefs(q), r2).map(function (p) { return p.doc_name.split('(')[0] + ' ' + p.key; }); };
   eq('pickNamedArticles 법·시행령 한 질문', pick('전파법 제16조와 시행령 제18조는 무엇이 다른가'), ['전파법 16조', '전파법 시행령 18조']);
   eq('pickNamedArticles 앞 법령 없는 시행령은 안 고름', pick('시행령 제18조 내용'), []);
   eq('pickNamedArticles 약칭(정보통신망법)', pick('정보통신망법 제48조의3 신고 기한'), ['정보통신망 이용촉진 및 정보보호 등에 관한 법률 48조의3']);
@@ -175,6 +183,11 @@ eq('titleActWeights', RC.titleActWeights(['종료', '휴업', '직접', '3G'], '
   eq('pickNamedArticles 16조의2는 16조로 치지 않음', RC.pickNamedArticles(RC.namedArticleRefs('전파법 제16조'), { '16조': [{ doc_name: D.law, article_no: '16조의2(x)' }] }), []);
   // '개정 전파법(안).pdf'는 문서군 '개정 전파법'이라 이름 끝 일치로 '전파법'에 붙을 수 있다 — 파일 문서 필터가 막는다
   eq('pickNamedArticles 파일 문서 제외', RC.pickNamedArticles(RC.namedArticleRefs('전파법 제16조'), { '16조': [{ doc_name: '개정 전파법(안).pdf', article_no: '16조(재할당)' }] }), []);
+  var gosiSD = '주파수할당 신청 절차 및 방법 등 세부사항(과학기술정보통신부고시)(제2025-10호)(20250301)';
+  eq('pickNamedArticles 약한 이름(…세부사항 제9조) → 그 고시(전파법 제9조 아님)', pick2('주파수할당 신청 절차 및 방법 등 세부사항 제9조 실제매출액', { '9조': [{ doc_name: D.law, article_no: '9조(주파수분배)' }, { doc_name: gosiSD, article_no: '9조(실제매출액)' }] }), ['주파수할당 신청 절차 및 방법 등 세부사항 9조']);
+  eq('pickNamedArticles 약한 이름을 못 맞추고 앞 법령도 없으면 안 고름', pick2('산정 방식 제9조', { '9조': [{ doc_name: D.law, article_no: '9조(주파수분배)' }, { doc_name: gosiSD, article_no: '9조(실제매출액)' }] }), []);
+  // 약칭은 법률에만(#240·#246): 단통법은 폐지돼 현행 문서가 없다 — 그 법률 이름을 담은 고시의 제4조에 붙지 않는다(사내 회신)
+  eq('pickNamedArticles 약칭(단통법)이 고시에 붙지 않음', pick2('단통법 제4조 과징금', { '4조': [{ doc_name: '이동통신단말장치 유통구조 개선에 관한 법률 위반 과징금 부과 세부기준(방송미디어통신위원회고시)(제2026-1호)(20260101)', article_no: '4조(과징금 산정)' }] }), []);
 })();
 
 // 조회 순서·첫 조각만(통째 보강이 나머지를 합친다)·실패 시 빈 배열 — 비동기라 끝에서 기다린다
