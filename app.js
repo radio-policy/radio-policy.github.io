@@ -14256,7 +14256,10 @@ document.addEventListener('DOMContentLoaded', function() {
   // 허용 값은 PAGE_TO_NAV 키뿐이며, 없는 이름·파싱 실패는 기본값으로 떨어진다(fail-safe).
   // 관계도로 시작하면 뉴스 1만 건 조회(#130)를 하지 않아 첫 화면이 그만큼 빨리 뜬다
   // (뉴스 목록은 go('news')가 그때 불러온다).
-  var DEFAULT_PAGE = 'lawmap';
+  // 2026-09-28 (#254-보론, 운영자 결정) 기본을 **통합 모니터링(뉴스)**으로 바꿨다 — GitHub 정지로 gitlab.io(압축 없음)가 정본이 되자
+  // 관계도 첫 화면(전체 인용망 노드 1,254개 배치)이 10초 넘게 비어 보였다. 같은 브라우저 실측: 뉴스 시작 ≈2초에 245건 표시,
+  // 관계도 시작 30초 이상(배치 계산이 PC 성능에 좌우 — GitLab만의 문제가 아니다). 관계도는 메뉴·`?p=lawmap`으로 그대로 연다.
+  var DEFAULT_PAGE = 'news';
   var startPage = (function() {
     try {
       var p = (new URLSearchParams(location.search).get('p') || (location.hash || '').replace(/^#/, '') || '').trim();
