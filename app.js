@@ -9581,6 +9581,14 @@ var _peopleTab = '의원';        // 의원 | 정부·참고인
 var _peopleQuery = '';
 var _personSpeeches = [];       // 상세에서 쟁점 칩 필터용
 var _personTopicFilter = '';
+// 목록 정렬: 'count' = 관련 발언 많은 순(같으면 가나다) / 'name' = 이름 가나다순. 보는 사람 브라우저에 기억(편의용, 실패해도 기본값).
+var _peopleSort = (function() { try { return localStorage.getItem('peopleSort') === 'name' ? 'name' : 'count'; } catch (e) { return 'count'; } })();
+
+function peopleSetSort(s) {
+  _peopleSort = s === 'name' ? 'name' : 'count';
+  try { localStorage.setItem('peopleSort', _peopleSort); } catch (e) {}
+  renderPeopleList();
+}
 
 async function loadPeople(force) {
   var el = document.getElementById('people-body');
@@ -9641,11 +9649,14 @@ function _peopleResultsHtml() {
   // 음절이 완성될 때까지 '해당 없음'이 깜빡인다 — 꼬리 낱자는 떼고 맞춘다.
   var q = _peopleQuery.replace(/[\u3131-\u3163]+$/, '');
   var inTab = all.filter(function(p) { return p.kind === _peopleTab && (!q || p.name.indexOf(q) >= 0 || String(p.position || '').indexOf(q) >= 0); });
-  // 이름 가나다순(2026-09-27 운영자 결정 — 사람을 찾는 화면이라). 종전 현역은 발언 수 순이었는데 동점끼리 순서가
-  // 정해져 있지 않아 새로고침마다 흔들렸고, 지난 대수는 마지막 발언 최근 순이었다. 동명이인은 id로 고정.
+  // 정렬(2026-09-27 운영자 결정 두 번): 오전에 가나다순으로 바꿨더니 발언 1~2건인 사람이 맨 위에 와서, **기본은 관련 발언 많은 순**
+  // (같으면 가나다 — 종전엔 동점끼리 순서가 정해져 있지 않아 새로고침마다 흔들렸다)으로 되돌리고 가나다순은 버튼으로 고른다
+  // (peopleSetSort). 현역·지난 대수 모두 같은 정렬. 동명이인은 id로 고정.
   var byName = function(a, b) { return String(a.name || '').localeCompare(String(b.name || ''), 'ko') || (a.id - b.id); };
-  var cur = inTab.filter(function(p) { return p.is_22; }).sort(byName);
-  var past = inTab.filter(function(p) { return !p.is_22; }).sort(byName);
+  var byCount = function(a, b) { return ((b.speech_count || 0) - (a.speech_count || 0)) || byName(a, b); };
+  var cmp = _peopleSort === 'name' ? byName : byCount;
+  var cur = inTab.filter(function(p) { return p.is_22; }).sort(cmp);
+  var past = inTab.filter(function(p) { return !p.is_22; }).sort(cmp);
   var h = '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:8px">' +
     (cur.length ? cur.map(_personCard).join('') : '<div style="font-size:12px;color:var(--text-tertiary);padding:12px">해당 없음</div>') + '</div>';
   if (past.length) {
@@ -9665,13 +9676,18 @@ function renderPeopleList() {
     return '<button class="btn" onclick="peopleSetTab(\'' + t + '\')" style="font-size:12px;padding:4px 14px;' +
       (on ? 'background:var(--accent);color:#fff;border-color:var(--accent)' : '') + '">' + label + '</button>';
   }
+  // 정렬 버튼은 '바꿀 쪽'을 적는다 — 지금 발언순이면 「가나다순」, 가나다순이면 「발언 많은 순」
+  var sortBtn = '<button class="btn" onclick="peopleSetSort(\'' + (_peopleSort === 'name' ? 'count' : 'name') + '\')" ' +
+    'title="목록 정렬 바꾸기" style="font-size:12px;padding:4px 12px;margin-left:auto">' +
+    (_peopleSort === 'name' ? '발언 많은 순' : '가나다순') + '</button>';
   var h = '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">' +
-    tabBtn('의원', '의원') + tabBtn('정부·참고인', '정부·참고인') +
+    tabBtn('의원', '의원') + tabBtn('정부·참고인', '정부·참고인') + sortBtn +
     '<input type="text" placeholder="이름·직함 검색" value="' + escHtml(q) + '" ' +
       'oninput="peopleSearch(this.value)" ' +
-      'style="margin-left:auto;font-size:12px;padding:5px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-secondary);color:var(--text-primary);width:150px">' +
+      'style="font-size:12px;padding:5px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-secondary);color:var(--text-primary);width:150px">' +
     '</div>' +
-    '<div style="font-size:11px;color:var(--text-tertiary);margin-bottom:10px">과방위 회의록 발언자 기준(의원·위원장은 1건부터, 통신사 임원은 전원, 그 밖은 4건 이상) · 관련 발언 = 회의록에서 통신·전파·AI 관련으로 골라 담은 발언 · 현역 = 22대(2024-06~) 발언 존재 · 정당은 활동 당시 소속 · 이름 가나다순</div>';
+    '<div style="font-size:11px;color:var(--text-tertiary);margin-bottom:10px">과방위 회의록 발언자 기준(의원·위원장은 1건부터, 통신사 임원은 전원, 그 밖은 4건 이상) · 관련 발언 = 회의록에서 통신·전파·AI 관련으로 골라 담은 발언 · 현역 = 22대(2024-06~) 발언 존재 · 정당은 활동 당시 소속 · ' +
+      (_peopleSort === 'name' ? '이름 가나다순' : '관련 발언 많은 순(같으면 가나다순)') + '</div>';
   h += '<div id="people-results">' + _peopleResultsHtml() + '</div>';
   el.innerHTML = h;
   _issueScrollTop(el);
