@@ -136,6 +136,10 @@ async function upsertSub(chatId: number, patch: Record<string, unknown>): Promis
 //   🔵 / ⚪  = 여럿 중 하나만 고르는 항목 (요일, 받는 시각)
 // ●/○ 는 텔레그램 폰트에서 크기 차이가 거의 없어 "눌렀는데 안 바뀐 것 같다"는 혼동을 줬다.
 // unit = 주요 뉴스 버튼 뒤 소속 표시(unitLabel — ' · 기술정책팀' / ' · 정책개발실 실장' / 공통이면 '').
+// 받을 뉴스 버튼의 등급 기준 — 발송 측 받는 단위와 같은 우선순위(실 → 팀 → 공통, _shared/subscriber_queue.ts audienceKey)
+function basisLabel(s: Sub): string {
+  return s.division ? '실 기준' : (s.team_id != null ? '팀 기준' : '공통 기준');
+}
 function settingsKeyboard(s: Sub, unit = '') {
   const chk = (on: boolean) => on ? '✅' : '⬜';   // 체크박스(다중 선택)
   const sel = (on: boolean) => on ? '🔵' : '⚪';   // 라디오(택일)
@@ -153,9 +157,11 @@ function settingsKeyboard(s: Sub, unit = '') {
      { text: `${chk(s.topic_urgent)} 📡 주요 뉴스${unit}`, callback_data: 't:urgent' }],
     // 받을 뉴스(#252) — 주요 뉴스 바로 아래 한 줄(운영자 요청 「한 줄로」). 중요만(기본) / 중요+보통(보통은 매시 :25에
     // 한 시간치를 한 통으로). 주요 뉴스가 꺼져 있으면 줄 자체를 감춘다 — 관심분야 태그와 같은 이유(죽은 버튼 혼동).
+    // 버튼 뒤 등급 기준(운영자 요청 09-27 「각 팀 설정 기준이라고 옆에」) — 휴대폰 폭에서 잘리지 않게 짧게: 팀이면 '팀 기준',
+    // 실장이면 '실 기준', 둘 다 없으면 '공통 기준'. 팀 이름은 바로 위 주요 뉴스 버튼에 있다.
     ...(s.topic_urgent
-      ? [[{ text: `${sel(s.news_level !== 'normal')} 중요만`, callback_data: 'n:urgent' },
-          { text: `${sel(s.news_level === 'normal')} 중요+보통`, callback_data: 'n:normal' }]]
+      ? [[{ text: `${sel(s.news_level !== 'normal')} 중요만 · ${basisLabel(s)}`, callback_data: 'n:urgent' },
+          { text: `${sel(s.news_level === 'normal')} 중요+보통 · ${basisLabel(s)}`, callback_data: 'n:normal' }]]
       : []),
     // 방미통위 동향(#154): 위원회 회의 의사일정(회의 전날 게시)·위원회 결과(회의 당일)·통신·전파 관련 보도자료가 게시 직후 온다.
     // 같은 레벨의 네 번째 항목 — 국회·법률(입법)과 성격이 달라 별도 토글. 두 개를 한 줄에(운영자 지시 2026-09-11).
