@@ -250,6 +250,9 @@ create policy team_urgency_upd on public.team_urgency as PERMISSIVE for UPDATE t
   using ((( SELECT is_admin() AS is_admin) OR (( SELECT is_approved_user() AS is_approved_user) AND (team_id = ( SELECT my_team() AS my_team)))))
   with check (((source = ANY (ARRAY['human'::text, 'rule'::text])) AND (( SELECT is_admin() AS is_admin) OR (( SELECT is_approved_user() AS is_approved_user) AND (team_id = ( SELECT my_team() AS my_team))))));
 
+create policy teams_sel_anon on public.teams as PERMISSIVE for SELECT to anon
+  using (true);
+
 create policy teams_sel_auth on public.teams as PERMISSIVE for SELECT to authenticated
   using (true);
 
@@ -276,6 +279,9 @@ create policy urgency_rule_verdicts_sel on public.urgency_rule_verdicts as PERMI
   using ((( SELECT is_admin() AS is_admin) OR (( SELECT is_approved_user() AS is_approved_user) AND (team_id = ( SELECT my_team() AS my_team))) OR (( SELECT is_approved_user() AS is_approved_user) AND (( SELECT my_division() AS my_division) IS NOT NULL) AND (team_id IN ( SELECT t.id
    FROM teams t
   WHERE (t.division = ( SELECT my_division() AS my_division)))))));
+
+create policy urgency_rule_verdicts_sel_anon on public.urgency_rule_verdicts as PERMISSIVE for SELECT to anon
+  using ((status = 'done'::text));
 
 create policy urgency_rules_ins on public.urgency_rules as PERMISSIVE for INSERT to authenticated
   with check ((( SELECT is_admin() AS is_admin) OR ((team_id IS NOT NULL) AND ( SELECT is_approved_user() AS is_approved_user) AND (team_id = ( SELECT my_team() AS my_team)))));

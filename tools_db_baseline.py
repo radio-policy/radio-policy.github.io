@@ -75,23 +75,31 @@ where n.nspname='public' and c.relkind in ('r','p') group by c.oid, c.relname, c
              "permissive, cmd, array_to_string(roles, ', '), coalesce(E'\\n  using ('||qual||')',''), "
              "coalesce(E'\\n  with check ('||with_check||')','')) s from pg_policies "
              "where schemaname in ('public','storage') order by schemaname, tablename, policyname",
- # 권한은 '전부 회수 → 지금 것만 부여'로 적는다 — 새 프로젝트의 기본 권한(#214)과 무관하게 지금과 똑같아진다
+ # 권한은 '전부 회수 → 지금 것만 부여'로 적는다 — 새 프로젝트의 기본 권한(#214)과 무관하게 지금과 똑같아진다.
+ # 칸 단위 권한(pg_attribute.attacl)도 그 표의 부여 뒤에 적는다(#253) — 표 회수가 칸 권한까지 지우므로 순서가 이래야 하고,
+ # 빠지면 복구한 DB에서 news_feed 칸별 UPDATE(#191)·사내 다리의 teams 4칸·판정 기록 9칸 읽기(#253)가 막힌다.
  'grants': r"""
 with rel as (
   select case when c.relkind='S' then 'sequence ' else '' end||format('public.%I', c.relname) obj, c.relname k,
-         coalesce(c.relacl, acldefault((case when c.relkind='S' then 's' else 'r' end)::"char", c.relowner)) acl
+         coalesce(c.relacl, acldefault((case when c.relkind='S' then 's' else 'r' end)::"char", c.relowner)) acl, c.oid roid
   from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind in ('r','p','v','m','S')
 ), fn as (
   select format('function public.%I(%s)', p.proname, pg_get_function_identity_arguments(p.oid)) obj, p.proname||p.oid::text k,
          coalesce(p.proacl, acldefault('f', p.proowner)) acl
   from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.prokind in ('f','p')
     and not exists (select 1 from pg_depend d where d.objid=p.oid and d.deptype='e')
-), o as (select obj, k, acl, 1 g from rel union all select obj, k, acl, 2 from fn)
-select format('revoke all on %s from public, anon, authenticated, service_role;%s', o.obj,
+), o as (select obj, k, acl, 1 g, roid from rel union all select obj, k, acl, 2, null::oid from fn)
+select format('revoke all on %s from public, anon, authenticated, service_role;%s%s', o.obj,
   coalesce((select string_agg(format(E'\ngrant %s on %s to %s;', x.privs, o.obj, x.grantee), '' order by x.grantee)
             from (select coalesce(r.rolname, 'public') grantee, string_agg(a.privilege_type, ', ' order by a.privilege_type) privs
                   from aclexplode(o.acl) a left join pg_roles r on r.oid=a.grantee
-                  where coalesce(r.rolname, 'public') in ('public','anon','authenticated','service_role') group by 1) x), '')) s
+                  where coalesce(r.rolname, 'public') in ('public','anon','authenticated','service_role') group by 1) x), ''),
+  coalesce((select string_agg(format(E'\ngrant %s (%s) on %s to %s;', y.priv, y.cols, o.obj, y.grantee), '' order by y.grantee, y.priv)
+            from (select coalesce(r.rolname, 'public') grantee, x.privilege_type priv,
+                         string_agg(quote_ident(a.attname), ', ' order by a.attnum) cols
+                  from pg_attribute a cross join lateral aclexplode(a.attacl) x left join pg_roles r on r.oid=x.grantee
+                  where o.roid is not null and a.attrelid=o.roid and a.attacl is not null and a.attnum>0 and not a.attisdropped
+                    and coalesce(r.rolname, 'public') in ('public','anon','authenticated','service_role') group by 1, 2) y), '')) s
 from o order by o.g, o.k""",
  # 값은 따옴표로('3s'는 따옴표 없이는 문법 오류). session_preload_libraries는 플랫폼 관리 목록이라 뺀다
  'role_settings': "select format('alter role %I set %s = %L;', rolname, split_part(cfg, '=', 1), substr(cfg, strpos(cfg, '=') + 1)) s "
@@ -137,7 +145,7 @@ README = """# DB 설계도 (docs/db_baseline) — 자동 생성, 손으로 고�
 ## 복구 순서 (새 Supabase 프로젝트 — SQL Editor에서 파일 순서대로)
 1. `00_extensions.sql` → `05_sequences.sql` → `10_tables.sql` → `15_foreign_keys.sql`
 2. `20_functions.sql`(맨 위 `set check_function_bodies = off`) → `25_views.sql` → `30_indexes.sql` → `40_triggers.sql`
-3. `50_policies.sql` → `60_grants.sql`(전부 회수 후 지금 권한만 부여) → `65_role_settings.sql`(statement_timeout — 실행 뒤 `NOTIFY pgrst, 'reload config';`)
+3. `50_policies.sql` → `60_grants.sql`(전부 회수 후 지금 권한만 부여 — 칸 단위 권한 포함, #253) → `65_role_settings.sql`(statement_timeout — 실행 뒤 `NOTIFY pgrst, 'reload config';`)
 4. Vault 값 재입력: `90_vault_names.txt`의 이름마다 `vault.create_secret(값, 이름)` — 값은 운영자 보관분·재발급
    (`github_pat`는 조직 `radio-policy` 소유 fine-grained PAT, Actions R/W 필수 — 지침 #18·#116)
 5. `70_cron.sql` — 1~4가 끝난 뒤(잡이 Vault·함수를 부른다). 파일의 `<OPERATOR_CHAT_ID>`는 실제 값으로 바꾼다(20_functions도 동일)

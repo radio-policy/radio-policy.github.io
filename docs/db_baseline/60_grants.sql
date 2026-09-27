@@ -271,6 +271,8 @@ revoke all on public.news_feed from public, anon, authenticated, service_role;
 grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE on public.news_feed to anon;
 grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE on public.news_feed to authenticated;
 grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE on public.news_feed to service_role;
+grant UPDATE (is_read) on public.news_feed to anon;
+grant UPDATE (is_read, content, summary, importance, urgency, locked, impact_analysis, impact_analyzed_at) on public.news_feed to authenticated;
 
 revoke all on public.news_screen_cache from public, anon, authenticated, service_role;
 grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE on public.news_screen_cache to anon;
@@ -331,9 +333,10 @@ grant DELETE, INSERT, SELECT, UPDATE on public.team_urgency to authenticated;
 grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE on public.team_urgency to service_role;
 
 revoke all on public.teams from public, anon, authenticated, service_role;
-grant MAINTAIN, REFERENCES, SELECT, TRIGGER on public.teams to anon;
+grant MAINTAIN, REFERENCES, TRIGGER on public.teams to anon;
 grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE on public.teams to authenticated;
 grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE on public.teams to service_role;
+grant SELECT (id, name, division, sort_order) on public.teams to anon;
 
 revoke all on sequence public.teams_id_seq from public, anon, authenticated, service_role;
 grant SELECT, UPDATE, USAGE on sequence public.teams_id_seq to anon;
@@ -366,6 +369,7 @@ grant SELECT, UPDATE, USAGE on sequence public.telegram_usage_id_seq to service_
 revoke all on public.urgency_rule_verdicts from public, anon, authenticated, service_role;
 grant INSERT, SELECT on public.urgency_rule_verdicts to authenticated;
 grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE on public.urgency_rule_verdicts to service_role;
+grant SELECT (rule_id, sentence_rev, news_id, team_id, status, verdict, reason, input_kind, judged_at) on public.urgency_rule_verdicts to anon;
 
 revoke all on public.urgency_rules from public, anon, authenticated, service_role;
 grant SELECT on public.urgency_rules to anon;
