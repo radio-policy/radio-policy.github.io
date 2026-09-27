@@ -68,6 +68,53 @@
     return combine(matchUrgencyRules(rules, title, summary), aiLevel);
   }
 
+  // ── 팀 층(#250, 2026-09-27, 설계안 §10 — Fable 재검토) ──────────────────────────────────────
+  // Python urgency_rules.py의 max_level·rule_input_text·team_rule_decision·effective_team_urgency·
+  // division_urgency와 **같은 규칙**. 케이스 파일 tests/fixtures/urgency_team_cases.json을 함께 돈다.
+  function maxLevel(a, b) { return rank(a) >= rank(b) ? a : b; }
+
+  // 빈 글 판정 — Python _blank와 같은 문자 집합(JS \s + Python isspace만 공백으로 보는 U+001C~001F·U+0085)
+  function isBlank(s) { return /^[\s\u001c-\u001f\u0085]*$/.test(s || ''); }
+
+  // 규칙 입력의 요약 자리 — 수집 때 본 검색 요약(screen_text)이 있으면 그것, 없으면 저장 요약
+  function ruleInputText(screenText, summary) {
+    return !isBlank(screenText) ? screenText : (summary || '');
+  }
+
+  // → { level, rule_id } 또는 null(미적중 — 팀 행을 두지 않는다). 기준값 = 공통값
+  function teamRuleDecision(teamRules, title, text, commonLevel) {
+    const hit = matchUrgencyRules(teamRules, title, text);
+    if (!hit) return null;
+    return { level: combine(hit, commonLevel).level, rule_id: hit.id };
+  }
+
+  // 한 팀이 보는 등급 → { level, source }  source = common | human | rule | ai
+  // rule 행은 지금 규칙 정의로 다시 계산(없음·꺼짐·다른 팀 규칙이면 공통값), 저장 urgency는 쓰지 않는다
+  function effectiveTeamUrgency(commonLevel, teamRow, rulesById) {
+    if (!teamRow) return { level: commonLevel, source: 'common' };
+    const src = teamRow.source;
+    if (src === 'rule') {
+      const r = (rulesById || {})[teamRow.rule_id];
+      if (!r || !r.enabled || r.team_id !== teamRow.team_id || rank(r.level) < 0 || MODES.indexOf(r.mode) === -1)
+        return { level: commonLevel, source: 'common' };
+      if (r.mode === 'set') return { level: r.level, source: 'rule' };
+      return { level: maxLevel(commonLevel, r.level), source: 'rule' };
+    }
+    if ((src === 'human' || src === 'ai') && rank(teamRow.urgency) >= 0) return { level: teamRow.urgency, source: src };
+    return { level: commonLevel, source: 'common' };
+  }
+
+  // 실장 화면 등급 = 그 실 팀들이 보는 등급 중 가장 높은 것 → { level, teams }(그 등급을 본 팀 id, teamIds 순서)
+  function divisionUrgency(commonLevel, rowsByTeam, rulesById, teamIds) {
+    if (!teamIds || !teamIds.length) return { level: commonLevel, teams: [] };
+    const effs = teamIds.map(function (t) {
+      return [t, effectiveTeamUrgency(commonLevel, (rowsByTeam || {})[t], rulesById).level];
+    });
+    let top = effs[0][1];
+    for (let i = 1; i < effs.length; i++) top = maxLevel(top, effs[i][1]);
+    return { level: top, teams: effs.filter(function (e) { return e[1] === top; }).map(function (e) { return e[0]; }) };
+  }
+
   function isWordList(v, allowEmpty) {
     return Array.isArray(v) && (allowEmpty || v.length > 0) &&
       v.every(function (w) { return typeof w === 'string' && w.trim() !== ''; });
@@ -102,6 +149,8 @@
     LEVELS: LEVELS, MODES: MODES, normalizeText: normalizeText, ruleView: ruleView,
     matchUrgencyRules: matchUrgencyRules, combine: combine, applyUrgencyRules: applyUrgencyRules,
     validateRules: validateRules,
+    maxLevel: maxLevel, ruleInputText: ruleInputText, teamRuleDecision: teamRuleDecision,
+    effectiveTeamUrgency: effectiveTeamUrgency, divisionUrgency: divisionUrgency,
   };
   root.UrgencyRules = UrgencyRules;
   if (typeof module !== 'undefined' && module.exports) module.exports = UrgencyRules;

@@ -8,6 +8,8 @@ CREATE TRIGGER trg_notify_lawmap_request AFTER INSERT ON lawmap_proposals FOR EA
 
 CREATE TRIGGER news_feed_edit_guard_trg BEFORE UPDATE ON news_feed FOR EACH ROW EXECUTE FUNCTION news_feed_edit_guard();
 
+CREATE TRIGGER team_urgency_touch BEFORE INSERT OR UPDATE ON team_urgency FOR EACH ROW EXECUTE FUNCTION team_urgency_touch();
+
 CREATE TRIGGER tech_terms_updated_at BEFORE UPDATE ON tech_terms FOR EACH ROW EXECUTE FUNCTION update_tech_terms_updated_at();
 
 CREATE TRIGGER urgency_rules_touch BEFORE INSERT OR UPDATE ON urgency_rules FOR EACH ROW EXECUTE FUNCTION urgency_rules_touch();

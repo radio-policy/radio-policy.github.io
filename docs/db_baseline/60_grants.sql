@@ -123,7 +123,7 @@ grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE on
 grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE on public.feedback_rules to service_role;
 
 revoke all on public.importance_feedback from public, anon, authenticated, service_role;
-grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE on public.importance_feedback to anon;
+grant MAINTAIN, REFERENCES, SELECT, TRIGGER on public.importance_feedback to anon;
 grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE on public.importance_feedback to authenticated;
 grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE on public.importance_feedback to service_role;
 
@@ -319,6 +319,10 @@ revoke all on public.system_status from public, anon, authenticated, service_rol
 grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE on public.system_status to anon;
 grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE on public.system_status to authenticated;
 grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE on public.system_status to service_role;
+
+revoke all on public.team_urgency from public, anon, authenticated, service_role;
+grant DELETE, INSERT, SELECT, UPDATE on public.team_urgency to authenticated;
+grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE on public.team_urgency to service_role;
 
 revoke all on public.teams from public, anon, authenticated, service_role;
 grant MAINTAIN, REFERENCES, SELECT, TRIGGER on public.teams to anon;
@@ -583,6 +587,12 @@ grant EXECUTE on function public.minutes_index() to anon;
 grant EXECUTE on function public.minutes_index() to authenticated;
 grant EXECUTE on function public.minutes_index() to service_role;
 
+revoke all on function public.my_division() from public, anon, authenticated, service_role;
+grant EXECUTE on function public.my_division() to anon;
+grant EXECUTE on function public.my_division() to authenticated;
+grant EXECUTE on function public.my_division() to public;
+grant EXECUTE on function public.my_division() to service_role;
+
 revoke all on function public.my_team() from public, anon, authenticated, service_role;
 grant EXECUTE on function public.my_team() to anon;
 grant EXECUTE on function public.my_team() to authenticated;
@@ -677,6 +687,12 @@ grant EXECUTE on function public.submit_answer_feedback(p_log_id uuid, p_rating 
 grant EXECUTE on function public.submit_answer_feedback(p_log_id uuid, p_rating smallint, p_reason text) to authenticated;
 grant EXECUTE on function public.submit_answer_feedback(p_log_id uuid, p_rating smallint, p_reason text) to public;
 grant EXECUTE on function public.submit_answer_feedback(p_log_id uuid, p_rating smallint, p_reason text) to service_role;
+
+revoke all on function public.team_urgency_touch() from public, anon, authenticated, service_role;
+grant EXECUTE on function public.team_urgency_touch() to anon;
+grant EXECUTE on function public.team_urgency_touch() to authenticated;
+grant EXECUTE on function public.team_urgency_touch() to public;
+grant EXECUTE on function public.team_urgency_touch() to service_role;
 
 revoke all on function public.trigger_admin_report() from public, anon, authenticated, service_role;
 grant EXECUTE on function public.trigger_admin_report() to service_role;

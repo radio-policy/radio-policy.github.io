@@ -8,6 +8,8 @@ alter table public.answer_feedback add constraint answer_feedback_log_id_fkey FO
 
 alter table public.chat_logs add constraint chat_logs_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
 
+alter table public.importance_feedback add constraint importance_feedback_team_id_fkey FOREIGN KEY (team_id) REFERENCES teams(id);
+
 alter table public.issue_links add constraint issue_links_issue_id_fkey FOREIGN KEY (issue_id) REFERENCES issues(id) ON DELETE CASCADE;
 
 alter table public.kb_chunks add constraint kb_chunks_doc_id_fkey FOREIGN KEY (doc_id) REFERENCES kb_documents(id) ON DELETE CASCADE;
@@ -21,5 +23,9 @@ alter table public.news_embeddings add constraint news_embeddings_news_id_fkey F
 alter table public.profiles add constraint profiles_team_id_fkey FOREIGN KEY (team_id) REFERENCES teams(id);
 
 alter table public.profiles add constraint profiles_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+alter table public.team_urgency add constraint team_urgency_news_id_fkey FOREIGN KEY (news_id) REFERENCES news_feed(id) ON DELETE CASCADE;
+
+alter table public.team_urgency add constraint team_urgency_team_id_fkey FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE;
 
 alter table public.urgency_rules add constraint urgency_rules_team_id_fkey FOREIGN KEY (team_id) REFERENCES teams(id);

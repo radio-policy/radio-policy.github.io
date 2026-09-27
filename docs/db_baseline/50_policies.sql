@@ -82,15 +82,30 @@ create policy doc_chunks_ins_approved on public.document_chunks as PERMISSIVE fo
 create policy feedback_rules_sel on public.feedback_rules as PERMISSIVE for SELECT to anon, authenticated
   using (true);
 
+create policy imp_fb_del on public.importance_feedback as PERMISSIVE for DELETE to authenticated
+  using (((team_id IS NOT NULL) AND (( SELECT is_admin() AS is_admin) OR (( SELECT is_approved_user() AS is_approved_user) AND (team_id = ( SELECT my_team() AS my_team))))));
+
 create policy imp_fb_ins on public.importance_feedback as PERMISSIVE for INSERT to authenticated
-  with check (is_admin());
+  with check (
+CASE
+    WHEN (team_id IS NULL) THEN ( SELECT is_admin() AS is_admin)
+    ELSE (( SELECT is_admin() AS is_admin) OR (( SELECT is_approved_user() AS is_approved_user) AND (team_id = ( SELECT my_team() AS my_team))))
+END);
 
 create policy imp_fb_sel on public.importance_feedback as PERMISSIVE for SELECT to anon, authenticated
-  using (true);
+  using (((team_id IS NULL) OR ( SELECT is_admin() AS is_admin) OR (team_id = ( SELECT my_team() AS my_team))));
 
 create policy imp_fb_upd on public.importance_feedback as PERMISSIVE for UPDATE to authenticated
-  using (is_admin())
-  with check (is_admin());
+  using (
+CASE
+    WHEN (team_id IS NULL) THEN ( SELECT is_admin() AS is_admin)
+    ELSE (( SELECT is_admin() AS is_admin) OR (( SELECT is_approved_user() AS is_approved_user) AND (team_id = ( SELECT my_team() AS my_team))))
+END)
+  with check (
+CASE
+    WHEN (team_id IS NULL) THEN ( SELECT is_admin() AS is_admin)
+    ELSE (( SELECT is_admin() AS is_admin) OR (( SELECT is_approved_user() AS is_approved_user) AND (team_id = ( SELECT my_team() AS my_team))))
+END);
 
 create policy issue_links_del on public.issue_links as PERMISSIVE for DELETE to authenticated
   using (is_issue_editor());
@@ -220,6 +235,21 @@ create policy speech_field_stats_sel on public.speech_field_stats as PERMISSIVE 
 create policy system_health_anon_select on public.system_health as PERMISSIVE for SELECT to anon, authenticated
   using (true);
 
+create policy team_urgency_del on public.team_urgency as PERMISSIVE for DELETE to authenticated
+  using (((source = ANY (ARRAY['human'::text, 'rule'::text])) AND (( SELECT is_admin() AS is_admin) OR (( SELECT is_approved_user() AS is_approved_user) AND (team_id = ( SELECT my_team() AS my_team))))));
+
+create policy team_urgency_ins on public.team_urgency as PERMISSIVE for INSERT to authenticated
+  with check (((source = ANY (ARRAY['human'::text, 'rule'::text])) AND (( SELECT is_admin() AS is_admin) OR (( SELECT is_approved_user() AS is_approved_user) AND (team_id = ( SELECT my_team() AS my_team))))));
+
+create policy team_urgency_sel on public.team_urgency as PERMISSIVE for SELECT to authenticated
+  using ((( SELECT is_admin() AS is_admin) OR (( SELECT is_approved_user() AS is_approved_user) AND (team_id = ( SELECT my_team() AS my_team))) OR (( SELECT is_approved_user() AS is_approved_user) AND (( SELECT my_division() AS my_division) IS NOT NULL) AND (team_id IN ( SELECT t.id
+   FROM teams t
+  WHERE (t.division = ( SELECT my_division() AS my_division)))))));
+
+create policy team_urgency_upd on public.team_urgency as PERMISSIVE for UPDATE to authenticated
+  using ((( SELECT is_admin() AS is_admin) OR (( SELECT is_approved_user() AS is_approved_user) AND (team_id = ( SELECT my_team() AS my_team)))))
+  with check (((source = ANY (ARRAY['human'::text, 'rule'::text])) AND (( SELECT is_admin() AS is_admin) OR (( SELECT is_approved_user() AS is_approved_user) AND (team_id = ( SELECT my_team() AS my_team))))));
+
 create policy teams_sel_auth on public.teams as PERMISSIVE for SELECT to authenticated
   using (true);
 
@@ -238,14 +268,14 @@ create policy tech_terms_upd on public.tech_terms as PERMISSIVE for UPDATE to au
   with check (is_admin());
 
 create policy urgency_rules_ins on public.urgency_rules as PERMISSIVE for INSERT to authenticated
-  with check ((is_admin() OR ((team_id IS NOT NULL) AND is_leader() AND (team_id = my_team()))));
+  with check ((( SELECT is_admin() AS is_admin) OR ((team_id IS NOT NULL) AND ( SELECT is_approved_user() AS is_approved_user) AND (team_id = ( SELECT my_team() AS my_team)))));
 
 create policy urgency_rules_sel on public.urgency_rules as PERMISSIVE for SELECT to anon, authenticated
   using (true);
 
 create policy urgency_rules_upd on public.urgency_rules as PERMISSIVE for UPDATE to authenticated
-  using ((is_admin() OR ((team_id IS NOT NULL) AND is_leader() AND (team_id = my_team()))))
-  with check ((is_admin() OR ((team_id IS NOT NULL) AND is_leader() AND (team_id = my_team()))));
+  using ((( SELECT is_admin() AS is_admin) OR ((team_id IS NOT NULL) AND ( SELECT is_approved_user() AS is_approved_user) AND (team_id = ( SELECT my_team() AS my_team)))))
+  with check ((( SELECT is_admin() AS is_admin) OR ((team_id IS NOT NULL) AND ( SELECT is_approved_user() AS is_approved_user) AND (team_id = ( SELECT my_team() AS my_team)))));
 
 create policy watchdog_targets_sel on public.watchdog_targets as PERMISSIVE for SELECT to anon, authenticated
   using (true);

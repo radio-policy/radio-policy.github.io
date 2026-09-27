@@ -100,6 +100,8 @@ CREATE INDEX speech_field_stats_speaker_idx ON public.speech_field_stats USING b
 
 CREATE INDEX subscriber_queue_created_idx ON public.subscriber_queue USING btree (created_at);
 
+CREATE INDEX team_urgency_team_idx ON public.team_urgency USING btree (team_id, news_id);
+
 CREATE INDEX tech_terms_category_idx ON public.tech_terms USING btree (category);
 
 CREATE INDEX tech_terms_content_idx ON public.tech_terms USING gin (to_tsvector('simple'::regconfig, ((((term || ' '::text) || COALESCE(definition, ''::text)) || ' '::text) || COALESCE(description, ''::text))));

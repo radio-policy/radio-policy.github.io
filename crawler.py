@@ -202,12 +202,13 @@ _feedback_rows_cache = None
 _distilled_rules_cache = None
 
 def _load_feedback_rows() -> list:
-    """importance_feedback 전체 로드 (실행당 1회, 최신순 최대 500건)"""
+    """importance_feedback 공통 행 로드 (실행당 1회, 최신순 최대 500건)"""
     global _feedback_rows_cache
     if _feedback_rows_cache is None:
         try:
+            # 공통 행(team_id null)만 — 팀 행은 그 팀의 관점이라 섞으면 공통 AI 판정·증류 규칙이 흔들린다(#250, 결정 E8)
             res = sb.table('importance_feedback').select('title,user_importance') \
-                .order('updated_at', desc=True).limit(500).execute()
+                .is_('team_id', 'null').order('updated_at', desc=True).limit(500).execute()
             _feedback_rows_cache = [r for r in (res.data or []) if r.get('title') and r.get('user_importance')]
             if _feedback_rows_cache:
                 print(f'[피드백] 누적 사례 {len(_feedback_rows_cache)}건 로드')
@@ -1160,32 +1161,81 @@ def load_news_criteria() -> str:
     return NEWS_RELEVANCE_CRITERIA_FALLBACK
 
 
-_URGENCY_RULES = None   # 실행당 1회 로드(모듈 전역 캐시)
+_URGENCY_RULES = None        # 공통 규칙 — 실행당 1회 로드(모듈 전역 캐시)
+_TEAM_URGENCY_RULES = None   # 팀 규칙 {team_id: [규칙…]}(#250) — 같은 한 번의 조회에서 나눈다
 
 
-def load_urgency_rules() -> list:
-    """표 urgency_rules의 공통 규칙(team_id null, enabled)을 position 순으로. 실패·형식 오류·0건이면 비상 사본(#216).
-    1단계는 공통 규칙만 적용한다 — 팀 규칙은 팀 값 저장소(2단계)가 생겨야 적용할 자리가 있다."""
-    global _URGENCY_RULES
+def _load_all_urgency_rules() -> None:
+    """표 urgency_rules의 켜진 행 전부를 **한 번** 읽어 공통(team_id null)·팀으로 나눈다(실행당 1회).
+    공통: 실패·형식 오류·0건이면 비상 사본(#216) — 로그 '[규칙] N개 로드(db|fallback)'는 운영 점검이 읽으므로 그대로 둔다.
+    팀: _split_team_rules 참조. 조회 실패면 팀 규칙 없이 돈다(팀은 공통값) — 그 사실을 따로 적는다(#183)."""
+    global _URGENCY_RULES, _TEAM_URGENCY_RULES
     if _URGENCY_RULES is not None:
-        return _URGENCY_RULES
-    rules, src = None, 'db'
+        return
+    rules, src, rows = None, 'db', None
     try:
-        rows = sb.table('urgency_rules').select('*').is_('team_id', 'null').eq('enabled', True)             .order('position').order('id').execute().data or []
-        errs = urgency_rules.validate_rules(rows)
+        rows = sb.table('urgency_rules').select('*').eq('enabled', True) \
+            .order('position').order('id').execute().data or []
+        common = [r for r in rows if r.get('team_id') is None]
+        errs = urgency_rules.validate_rules(common)
         if errs:
             print(f'[규칙] 표 형식 오류 {len(errs)}건 — 비상 사본 사용: {errs[:3]}')
-        elif rows:
-            rules = rows
+        elif common:
+            rules = common
         else:
             print('[규칙] 표에 켜진 공통 규칙 0건 — 비상 사본 사용')
     except Exception as e:
+        rows = None
         print(f'[규칙] 표 조회 실패 — 비상 사본 사용: {str(e)[:80]}')
     if rules is None:
         rules, src = urgency_rules.URGENCY_RULES_FALLBACK, 'fallback'
     print(f'[규칙] {len(rules)}개 로드({src})')
     _URGENCY_RULES = rules
-    return rules
+    _TEAM_URGENCY_RULES = _split_team_rules(rows)
+
+
+def _split_team_rules(rows) -> dict:
+    """켜진 행 중 팀 규칙 → {team_id: [규칙…]}(조회 순서 = position, id 유지). 팀마다 따로 형식 검사 —
+    한 팀의 형식 오류는 그 팀만 이번 실행에서 건너뛴다(그 팀은 공통값). 비상 사본은 없다(팀 규칙은 표가 정본).
+    rows=None(표 조회 실패)은 '팀 규칙 없음'과 다른 상황이라 따로 적는다(#183: 실패를 '없음'으로 삼키지 않는다)."""
+    if rows is None:
+        print('[규칙] 팀 규칙 건너뜀 — 표 조회 실패, 이번 실행은 모든 팀이 공통값(팀 행 저장 없음)')
+        return {}
+    try:
+        by_team = {}
+        for r in rows:
+            if r.get('team_id') is not None:
+                by_team.setdefault(int(r['team_id']), []).append(r)
+        team, bad = {}, []
+        for tid in sorted(by_team):
+            errs = urgency_rules.validate_rules(by_team[tid])
+            if errs:
+                bad.append(tid)
+                print(f'[규칙] 팀 {tid} 규칙 형식 오류 {len(errs)}건 — 이번 실행은 그 팀 규칙 건너뜀(그 팀은 공통값): {errs[:3]}')
+            else:
+                team[tid] = by_team[tid]
+    except Exception as e:
+        print(f'[규칙] 팀 규칙 정리 실패 — 이번 실행은 모든 팀이 공통값(팀 행 저장 없음): {str(e)[:80]}')
+        return {}
+    if team or bad:
+        line = f'[규칙] 팀 규칙 {sum(len(v) for v in team.values())}개({len(team)}팀)'
+        print(line + (f' · 형식 오류로 건너뜀 {len(bad)}팀' if bad else ''))
+    else:
+        print('[규칙] 팀 규칙 없음')
+    return team
+
+
+def load_urgency_rules() -> list:
+    """공통 규칙(team_id null, enabled)을 position 순으로. 실패·형식 오류·0건이면 비상 사본(#216).
+    공통값(news_feed.urgency)은 공통 규칙으로만 정한다 — 팀 규칙은 팀 층(표 team_urgency)에만 쓴다(#250)."""
+    _load_all_urgency_rules()
+    return _URGENCY_RULES
+
+
+def load_team_urgency_rules() -> dict:
+    """팀 규칙 {team_id: [켜진 규칙, position·id 순]}(#250). 없거나 조회 실패면 {} — 구분은 로드 로그에 남는다."""
+    _load_all_urgency_rules()
+    return _TEAM_URGENCY_RULES or {}
 
 
 def _screen_text_of(item: dict) -> str:
@@ -1512,25 +1562,38 @@ def screen_news_items(items: list) -> list:
     return passed
 
 
-# 긴급도 판정용 네이버 요약(url → ≤300자). 본문 수집이 실패한 기사(#200 이전에는 Actions 전건)에서
-# 이것이 없으면 긴급도는 **제목 한 줄**만 보고 매겨진다(2026-09-24 확인, #188). DB에는 저장하지 않는다 —
-# content에 넣으면 refetch_content.py의 '100자 미만 = 재수집 대상' 조건이 깨진다.
+# 긴급도 판정용 네이버 요약(url → ≤300자, Google RSS 폴백이면 RSS 요약). 본문 수집이 실패한 기사(#200 이전에는
+# Actions 전건)에서 이것이 없으면 긴급도는 **제목 한 줄**만 보고 매겨진다(2026-09-24 확인, #188).
+# #250(결정 1(가))부터 별도 칸 news_feed.screen_text에 저장한다(grade_urgency가 모든 행에 키를 채움) — 대시보드의
+# 팀 규칙 재적용이 수집 때와 같은 글을 보게 하려는 것. **content에는 여전히 넣지 않는다** — refetch_content.py의
+# '100자 미만 = 재수집 대상' 조건이 깨진다(#188).
 _URGENCY_SUMMARY: dict = {}
+
+# 팀 규칙 적중(url → [{'team_id', 'urgency', 'rule_id'}], #250). grade_urgency가 채우고 save_new_items가 새로 저장된
+# 기사만 team_urgency에 쓴다. **item 키로 넣지 말 것** — 기사 dict는 news_feed 벌크 upsert로 그대로 가서 없는 칸이
+# 되거나 키 집합이 어긋난다(#82·#222).
+_TEAM_RULE_HITS: dict = {}
 
 
 # ═══════════════════════════════════════════════════════
 #  Supabase 저장
 # ═══════════════════════════════════════════════════════
 
-def grade_urgency(valid: list, rules: list, classify=None) -> dict:
+def grade_urgency(valid: list, rules: list, classify=None, team_rules=None) -> dict:
     """⑤ 긴급도 — 공통 낱말 규칙(#216) + Haiku 판정을 합쳐 item['urgency'/'importance'/'urgency_rule']을 채운다.
     규칙은 AI보다 먼저 맞춰 본다(제목 + 네이버 요약만, 본문 금지). set 적중 = 그 값, AI 콜 생략 /
     min 적중 = AI를 돌린 뒤 하한만(max) / 적중 id는 값이 안 바뀌어도 urgency_rule에 남긴다(출처 표시·사내 정본).
-    알림·큐·브리핑은 저장값을 쓰므로 따로 고칠 곳이 없다. 반환 = 로그용 집계."""
+    알림·큐·브리핑은 저장값(공통값)을 쓰므로 따로 고칠 곳이 없다.
+    팀 층(#250): team_rules({team_id: 규칙들})가 있으면 기사마다 팀별로 team_rule_decision(기준 = 위에서 정한 **공통
+    최종값**)을 돌려 적중을 _TEAM_RULE_HITS에 모은다 — item['urgency']는 바꾸지 않고, AI 콜도 늘지 않는다.
+    item['screen_text'] = 판정에 쓴 네이버 요약(없으면 None)을 **모든 행에** 채운다(#82·#222). 반환 = 로그용 집계."""
     classify = classify or classify_urgency
+    team_rules = team_rules or {}
     hits, changed_n, skipped_ai = {}, 0, 0
+    team_hits, team_err = {}, 0
     for item in valid:
-        summary = _URGENCY_SUMMARY.get(item.get('url', ''), '')
+        url = item.get('url', '')
+        summary = _URGENCY_SUMMARY.get(url, '')
         hit = urgency_rules.match_urgency_rules(rules, item.get('title', ''), summary)
         if hit and hit['mode'] == 'set':
             val = hit['level']                              # 공통 AI 생략
@@ -1545,12 +1608,36 @@ def grade_urgency(valid: list, rules: list, classify=None) -> dict:
         item['urgency'] = val
         item['importance'] = val
         item['urgency_rule'] = hit['id'] if hit else None   # 모든 행에 키(벌크 upsert 키 집합 동일, #82)
+        # 수집 때 본 검색 요약 — 모든 행에 키(없으면 None: postgrest 벌크 upsert는 빠진 칸을 NULL로 채운다, #222)
+        item['screen_text'] = summary or None
+        # ── 팀 층(#250) — 공통값은 위에서 끝났다. 여기서는 팀별 적중만 옆 dict에 모은다(item 키 금지) ──
+        _TEAM_RULE_HITS.pop(url, None)
+        if team_rules:
+            try:
+                # 입력 글 = 대시보드 재적용과 같은 rule_input_text(screen_text, …) — 새 기사는 두 경로가 같은 글을 본다
+                text = urgency_rules.rule_input_text(item['screen_text'], '')
+                got = []
+                for tid, trules in team_rules.items():
+                    dec = urgency_rules.team_rule_decision(trules, item.get('title', ''), text, val)
+                    if dec:
+                        got.append({'team_id': tid, 'urgency': dec['level'], 'rule_id': dec['rule_id']})
+                if got and url:
+                    _TEAM_RULE_HITS[url] = got
+                    for g in got:
+                        team_hits[g['team_id']] = team_hits.get(g['team_id'], 0) + 1
+            except Exception as e:                          # fail-open — 팀 층 오류가 공통 판정·수집을 막으면 안 된다
+                team_err += 1
+                if team_err == 1:
+                    print(f'[팀 규칙] 판정 오류(그 기사는 모든 팀이 공통값): {str(e)[:80]}')
     if hits:
         print(f'[규칙] 적중 {sum(hits.values())}건 (' + ', '.join(f'{k}×{v}' for k, v in hits.items()) +
               f', 값 변경 {changed_n}건, AI 생략 {skipped_ai}건)')
     else:
         print('[규칙] 적중 0건')
-    return {'hits': hits, 'changed': changed_n, 'skipped_ai': skipped_ai}
+    if team_rules:
+        print(f'[팀 규칙] 적중 {sum(team_hits.values())}건({len(team_hits)}팀)'
+              + (f' · 판정 오류 {team_err}건' if team_err else ''))
+    return {'hits': hits, 'changed': changed_n, 'skipped_ai': skipped_ai, 'team_hits': team_hits}
 
 
 def save_new_items(items: list, existing_data: tuple) -> list:
@@ -1701,12 +1788,15 @@ def save_new_items(items: list, existing_data: tuple) -> list:
     #    선별 콜은 urgency를 여전히 뱉지만(스키마 유지) **여기서 쓰지 않는다** — 프롬프트 보강으로
     #    통합을 되살릴 실험 여지를 남겨 둔 것. 되살릴 땐 반드시 긴급률을 배포 전(9.9%)과 비교할 것.
     #    ⑤-1 공통 낱말 규칙(#216, 표 urgency_rules)을 AI 판정과 합친다 — grade_urgency 주석 참조.
-    grade_urgency(valid, load_urgency_rules())
+    #    ⑤-2 팀 규칙(#250)은 공통값 위에서 팀별 적중만 모은다(공통값·알림 불변) — 저장은 아래 save_team_rule_rows.
+    grade_urgency(valid, load_urgency_rules(), team_rules=load_team_urgency_rules())
 
     try:
         # upsert(on_conflict=url, ignore_duplicates): 크롤러 동시 실행 시
         # 같은 기사 중복 저장 방지 (idx_news_feed_url_unique와 한 쌍)
-        sb.table('news_feed').upsert(
+        # 응답(res.data) = 새로 들어간 행만(postgrest 기본 return=representation + ON CONFLICT DO NOTHING) —
+        # 팀 규칙 행을 붙일 news_id를 여기서 얻는다(#250).
+        res = sb.table('news_feed').upsert(
             valid, on_conflict='url', ignore_duplicates=True
         ).execute()
     except Exception as e:
@@ -1714,7 +1804,49 @@ def save_new_items(items: list, existing_data: tuple) -> list:
         return []
     urgent_count = sum(1 for i in valid if i.get('urgency') == '긴급')
     print(f'[저장] {len(valid)}건 저장 완료 (긴급 {urgent_count}건)')
+    save_team_rule_rows(getattr(res, 'data', None))
     return valid
+
+
+def team_rule_rows(inserted: list) -> list:
+    """새로 저장된 기사(upsert 응답 행 — id·url) × 팀 규칙 적중 → team_urgency 행(#250).
+    응답에 없는 url(이미 있던 기사 = 동시 실행이 먼저 넣음)은 만들지 않는다 — 그 기사는 먼저 넣은 실행이 맡는다.
+    모든 행의 키 집합이 같다(#82)."""
+    rows = []
+    for r in inserted or []:
+        nid, url = r.get('id'), r.get('url')
+        if not nid or not url:
+            continue
+        for h in _TEAM_RULE_HITS.get(url, ()):
+            rows.append({'news_id': nid, 'team_id': h['team_id'], 'urgency': h['urgency'],
+                         'source': 'rule', 'rule_id': h['rule_id']})
+    return rows
+
+
+TEAM_URGENCY_CHUNK = 500
+
+
+def save_team_rule_rows(inserted) -> int:
+    """팀 규칙 적중을 team_urgency에 쓴다(source='rule'). 반환 = 보낸 행 수. **fail-open** — 팀 층 때문에 수집이
+    실패하면 안 된다(예외는 로그만). ignore_duplicates(ON CONFLICT DO NOTHING) — 이미 있는 팀 행(사람 수정 human,
+    세션 C의 ai, 브라우저가 먼저 쓴 rule)을 절대 덮지 않는다(설계안 §10 쓰기 규칙 human > rule)."""
+    if not _TEAM_RULE_HITS:
+        return 0
+    try:
+        rows = team_rule_rows(inserted)
+        if not rows:
+            # 적중은 있는데 새 행과 하나도 안 맞음 = 전부 중복(동시 실행) 또는 응답이 비었다 — 조용히 넘기지 않는다
+            print(f'[팀 규칙] 저장 0건 — 적중 기사 {len(_TEAM_RULE_HITS)}건이 이번 저장 응답(새 행 '
+                  f'{len(inserted or [])}건)에 없음(이미 있던 기사이거나 응답 비어 있음)')
+            return 0
+        for i in range(0, len(rows), TEAM_URGENCY_CHUNK):
+            sb.table('team_urgency').upsert(rows[i:i + TEAM_URGENCY_CHUNK], on_conflict='news_id,team_id',
+                                            ignore_duplicates=True).execute()
+        print(f"[팀 규칙] {len(rows)}건 저장({len({r['team_id'] for r in rows})}팀)")
+        return len(rows)
+    except Exception as e:
+        print(f'[팀 규칙] 저장 실패(무시): {str(e)[:120]}')
+        return 0
 
 
 def generate_summary(title: str, source: str, published_at: str, content: str) -> str:

@@ -1,10 +1,12 @@
 """긴급도 낱말 규칙 과거 기사 재적용 (#216, 운영자 결정 D5) — AI 0회.
 
 최근 N일(수집일 created_at 기준, 기본 60일) news_feed에 공통 규칙(표 urgency_rules, 없으면 비상 사본)을
-제목 + summary로 돌린다.
+제목 + 요약으로 돌린다. 요약 자리 = rule_input_text(screen_text, summary) — 수집 때 본 검색 요약(#250부터 저장)이
+있으면 그것, 없으면 저장 요약(크롤러·대시보드와 같은 입력, 결정 1(가)).
   ① urgency_rule이 비어 있고 적중 → urgency_rule 기록(값이 안 바뀌어도 — 출처 표시·사내 정본)
-  ② 적중 규칙 등급 > 현재 등급(min 하한·set 지정) 이고 importance_feedback(사람 수정)에 없고
-     오늘(KST) 수집 행이 아니면 → urgency·importance를 규칙 값으로
+  ② 적중 규칙 등급 > 현재 등급(min 하한·set 지정) 이고 importance_feedback 공통 행(관리자 수정, team_id null)에
+     없고 오늘(KST) 수집 행이 아니면 → urgency·importance를 규칙 값으로. 팀 행(팀 관점 수정, #250)은 공통값을
+     막지 않는다 — 팀 값은 표 team_urgency가 따로 들고 있다.
 기존 행 UPDATE는 알림을 만들지 않는다(#161-보론5) — 크롤러는 그 실행의 신규분만 알린다.
 
   py -3.12 tools_urgency_rules_backfill.py                 # 드라이런(기본): 규칙별 적중·변경 건수 + 변경 목록
@@ -42,7 +44,7 @@ def load_rules(sb, use_fallback):
 
 
 def fetch_news(sb, since_iso, until_iso, with_rule=True):
-    cols = 'id,title,summary,urgency,importance,created_at' + (',urgency_rule' if with_rule else '')
+    cols = 'id,title,summary,screen_text,urgency,importance,created_at' + (',urgency_rule' if with_rule else '')
     out, start = [], 0
     while True:
         # origin is null — 이슈맵 보강 옛 기사는 소급 대상이 아니다(9/25 --apply가 35행을 참고→보통으로 올림, #236)
@@ -58,13 +60,15 @@ def fetch_news(sb, since_iso, until_iso, with_rule=True):
 
 
 def fetch_feedback_ids(sb):
+    """공통 수정(importance_feedback team_id null) 기사 id — 팀 행은 공통값 소급을 막지 않는다(#250)."""
     ids, start = set(), 0
     while True:
-        rows = sb.table('importance_feedback').select('news_id').order('id') \
+        rows = sb.table('importance_feedback').select('news_id').is_('team_id', 'null').order('id') \
             .range(start, start + PAGE - 1).execute().data or []
         ids.update(r['news_id'] for r in rows if r.get('news_id'))
         if len(rows) < PAGE:
             return ids
+        start += PAGE      # 빠져 있으면 1,000행부터 같은 페이지를 끝없이 다시 읽는다
 
 
 def main():
@@ -90,13 +94,14 @@ def main():
     until = datetime.fromisoformat(a.until).replace(tzinfo=KST) if a.until else None
     news = fetch_news(sb, since.isoformat(), until.isoformat() if until else None, with_rule=not a.fallback)
     fb = fetch_feedback_ids(sb)
-    print(f'[대상] {len(news)}건 ({since.date()} ~ {until.date() if until else "지금"}), 사람 수정 {len(fb)}건')
+    print(f'[대상] {len(news)}건 ({since.date()} ~ {until.date() if until else "지금"}), 사람 수정(공통) {len(fb)}건')
 
     hits, raised, trans = Counter(), Counter(), Counter()
     rule_only, upgrades, skipped = [], [], Counter()
     for n in news:
         cur = n.get('urgency') or '참고'
-        hit = ur.match_urgency_rules(rules, n.get('title') or '', n.get('summary') or '')
+        hit = ur.match_urgency_rules(rules, n.get('title') or '',
+                                     ur.rule_input_text(n.get('screen_text'), n.get('summary')))
         if not hit:
             continue
         hits[hit['id']] += 1

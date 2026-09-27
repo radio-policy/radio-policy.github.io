@@ -254,7 +254,8 @@ create table if not exists public.importance_feedback (
   user_importance text,
   created_at timestamp with time zone default now() not null,
   updated_at timestamp with time zone default now() not null,
-  constraint importance_feedback_news_id_key UNIQUE (news_id),
+  team_id smallint,
+  constraint importance_feedback_news_team_key UNIQUE NULLS NOT DISTINCT (news_id, team_id),
   constraint importance_feedback_pkey PRIMARY KEY (id)
 );
 alter table public.importance_feedback enable row level security;
@@ -563,6 +564,7 @@ create table if not exists public.news_feed (
   urgency_screen text,
   urgency_rule text,
   origin text,
+  screen_text text,
   constraint news_feed_pkey PRIMARY KEY (id)
 );
 alter table public.news_feed enable row level security;
@@ -611,6 +613,7 @@ create table if not exists public.profiles (
   active boolean default true not null,
   created_at timestamp with time zone default now() not null,
   can_edit_issues boolean default false not null,
+  division text,
   constraint profiles_pkey PRIMARY KEY (user_id),
   constraint profiles_role_check CHECK ((role = ANY (ARRAY['admin'::text, 'leader'::text, 'member'::text])))
 );
@@ -672,12 +675,29 @@ create table if not exists public.system_status (
 );
 alter table public.system_status enable row level security;
 
+create table if not exists public.team_urgency (
+  news_id uuid not null,
+  team_id smallint not null,
+  urgency text not null,
+  source text not null,
+  rule_id text,
+  set_by uuid,
+  updated_at timestamp with time zone default now() not null,
+  constraint team_urgency_pkey PRIMARY KEY (news_id, team_id),
+  constraint team_urgency_check CHECK (((source <> 'rule'::text) OR (rule_id IS NOT NULL))),
+  constraint team_urgency_source_check CHECK ((source = ANY (ARRAY['human'::text, 'rule'::text, 'ai'::text]))),
+  constraint team_urgency_urgency_check CHECK ((urgency = ANY (ARRAY['긴급'::text, '보통'::text, '참고'::text])))
+);
+alter table public.team_urgency enable row level security;
+
 create table if not exists public.teams (
   id smallint default nextval('teams_id_seq'::regclass) not null,
   name text not null,
   daily_limit integer default 30 not null,
   unlimited boolean default false not null,
   created_at timestamp with time zone default now() not null,
+  division text,
+  sort_order smallint default 100 not null,
   constraint teams_name_key UNIQUE (name),
   constraint teams_pkey PRIMARY KEY (id)
 );

@@ -1151,6 +1151,47 @@ class TestPressWindow(unittest.TestCase):
         self.assertEqual(pi._press_window_days(bad), 15)
 
 
+class TestUrgencyTeamLayer(unittest.TestCase):
+    """긴급도 팀 층(#250) — 팀 규칙 판정·팀 등급·실장 등급. JS판은 node tests/urgency_rules.test.js가 같은 파일을 돈다."""
+
+    def setUp(self):
+        import json
+        import urgency_rules
+        self.ur = urgency_rules
+        with open(os.path.join(_ROOT, 'tests', 'fixtures', 'urgency_team_cases.json'), encoding='utf-8') as f:
+            self.t = json.load(f)
+        self.by_id = {r['id']: r for r in self.t['rules']}
+
+    def _team_rules(self, team_id):
+        return sorted((r for r in self.t['rules'] if r['team_id'] == team_id and r['enabled']),
+                      key=lambda r: (r['position'], r['id']))
+
+    def test_rules_valid(self):
+        self.assertEqual(self.ur.validate_rules(self.t['rules']), [])
+
+    def test_input_text(self):
+        for c in self.t['input_text_cases']:
+            with self.subTest(c['name']):
+                self.assertEqual(self.ur.rule_input_text(c['screen_text'], c['summary']), c['expect'])
+
+    def test_decision(self):
+        for c in self.t['decision_cases']:
+            with self.subTest(c['name']):
+                got = self.ur.team_rule_decision(self._team_rules(c['team_id']), c['title'], c['text'], c['common'])
+                self.assertEqual(got, c['expect'])
+
+    def test_effective(self):
+        for c in self.t['effective_cases']:
+            with self.subTest(c['name']):
+                self.assertEqual(self.ur.effective_team_urgency(c['common'], c['row'], self.by_id), c['expect'])
+
+    def test_division(self):
+        for c in self.t['division_cases']:
+            with self.subTest(c['name']):
+                rows = {int(k): v for k, v in c['rows_by_team'].items()}
+                self.assertEqual(self.ur.division_urgency(c['common'], rows, self.by_id, c['team_ids']), c['expect'])
+
+
 class TestUrgencyRules(unittest.TestCase):
     """긴급도 낱말 규칙 매처(#216) — 공용 케이스 파일 전건. JS판은 node tests/urgency_rules.test.js가 같은 파일을 돈다."""
 
@@ -1200,7 +1241,7 @@ class TestUrgencyRules(unittest.TestCase):
         self.assertEqual([i['importance'] for i in items], ['참고', '긴급', '보통'])
         self.assertEqual([i['urgency_rule'] for i in items], ['set_x', 'min_x', None])
         self.assertEqual(calls, ['SKT 국감 증인 채택', '기지국 소식'])   # set 적중은 AI 콜 생략
-        self.assertEqual(stat, {'hits': {'set_x': 1, 'min_x': 1}, 'changed': 1, 'skipped_ai': 1})
+        self.assertEqual(stat, {'hits': {'set_x': 1, 'min_x': 1}, 'changed': 1, 'skipped_ai': 1, 'team_hits': {}})
         self.assertEqual(len({frozenset(i) for i in items}), 1, '벌크 upsert는 모든 행의 키 집합이 같아야 한다')
 
     def test_validate_catches(self):
@@ -1211,6 +1252,252 @@ class TestUrgencyRules(unittest.TestCase):
         self.assertTrue(v([{'id': 'a', 'mode': 'min', 'level': '보통', 'any_words': ['x'], 'and_any': [[]]}]))
         self.assertTrue(v([{'id': 'a', 'min': '보통', 'any': ['x']}, {'id': 'a', 'min': '보통', 'any': ['y']}]))
         self.assertEqual(v([{'id': 'a', 'min': '보통', 'any': ['x'], 'and_any': ['y', 'z']}]), [])
+
+
+class _RecSb:
+    """가짜 Supabase — 표별 호출(메서드·인자)을 기록하고 표 이름으로 응답한다. 네트워크 0."""
+
+    def __init__(self, tables=None, inserted_urls=None, fail=()):
+        self.tables = tables or {}                 # 표 → select 응답 행
+        self.inserted_urls = inserted_urls         # news_feed upsert 응답에 돌려줄 url(None = 전부 새 행)
+        self.fail = set(fail)                      # execute에서 예외를 낼 표
+        self.queries = []
+
+    def table(self, name):
+        return _RecQ(self, name)
+
+
+class _RecQ:
+    def __init__(self, db, name):
+        self.db, self.name, self.ops = db, name, []
+        db.queries.append(self)
+
+    def __getattr__(self, op):                     # select·is_·eq·order·limit·upsert… 전부 기록
+        def rec(*a, **k):
+            self.ops.append((op, a, k))
+            return self
+        return rec
+
+    def op(self, name):
+        return next((o for o in self.ops if o[0] == name), None)
+
+    def execute(self):
+        if self.name in self.db.fail:
+            raise RuntimeError(f'{self.name} down')
+        up = self.op('upsert')
+        if up and self.name == 'news_feed':      # ON CONFLICT DO NOTHING + representation = 새 행만 돌아온다
+            keep = self.db.inserted_urls
+            return mock.Mock(data=[{'id': 'id-' + r['url'], 'url': r['url'], 'title': r.get('title')}
+                                   for r in up[1][0] if keep is None or r['url'] in keep])
+        if up:
+            return mock.Mock(data=list(up[1][0]))
+        return mock.Mock(data=list(self.db.tables.get(self.name, [])))
+
+
+class TestUrgencyTeamLayerCrawler(unittest.TestCase):
+    """#250 크롤러 팀 층 — 공통값·알림은 그대로, 팀 적중은 옆 dict → 새로 저장된 기사만 team_urgency(rule).
+    news_feed 벌크 upsert 행은 키 집합이 모두 같고(screen_text 포함, #82·#222) 팀 키가 없어야 한다."""
+
+    COMMON = [{'id': 'c_witness', 'mode': 'min', 'level': '긴급', 'any_words': ['SKT'], 'and_any': [['국감'], ['증인']]}]
+    TEAM = {
+        5: [{'id': 't5_down', 'team_id': 5, 'mode': 'set', 'level': '참고', 'any_words': ['증인']},
+            {'id': 't5_floor', 'team_id': 5, 'mode': 'min', 'level': '보통', 'any_words': ['로밍']}],
+        7: [{'id': 't7_up', 'team_id': 7, 'mode': 'min', 'level': '긴급', 'any_words': ['위성']}],
+    }
+
+    def setUp(self):
+        import crawler
+        self.c = crawler
+        self._patches = [mock.patch.dict(crawler._TEAM_RULE_HITS, {}, clear=True),
+                         mock.patch.dict(crawler._URGENCY_SUMMARY, {}, clear=True)]
+        for p in self._patches:
+            p.start()
+
+    def tearDown(self):
+        for p in reversed(self._patches):
+            p.stop()
+
+    def _grade(self, items, summaries=None, ai='보통', team=None):
+        import io
+        import contextlib
+        self.c._URGENCY_SUMMARY.update(summaries or {})
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            stat = self.c.grade_urgency(items, self.COMMON, classify=lambda t, c, s: ai,
+                                        team_rules=self.TEAM if team is None else team)
+        return stat, buf.getvalue()
+
+    def test_same_keys_screen_text_and_no_team_keys(self):
+        items = [{'title': 'SKT 국감 증인 채택', 'url': 'u1'},
+                 {'title': '로밍 요금 인하', 'url': 'u2'},
+                 {'title': '기지국 소식', 'url': 'u3'}]
+        stat, log = self._grade(items, {'u1': '국회 과방위 요약', 'u3': '위성 통신 요약'})
+        self.assertEqual(len({frozenset(i) for i in items}), 1, '벌크 upsert는 모든 행의 키 집합이 같아야 한다')
+        for k in ('urgency', 'importance', 'urgency_rule', 'screen_text'):
+            self.assertIn(k, items[0])
+        self.assertFalse([k for i in items for k in i if 'team' in k], '팀 판정은 item 키가 아니라 옆 dict에(#82)')
+        self.assertEqual([i['screen_text'] for i in items], ['국회 과방위 요약', None, '위성 통신 요약'])
+        self.assertIn('[팀 규칙] 적중 3건(2팀)', log)
+        self.assertEqual(stat['team_hits'], {5: 2, 7: 1})
+
+    def test_team_hits_use_common_final_value_as_base(self):
+        items = [{'title': 'SKT 국감 증인 채택', 'url': 'u1'},       # 공통 min 긴급 → 팀5 set 참고로 내림
+                 {'title': '로밍 요금 인하', 'url': 'u2'},            # 공통 AI 참고 → 팀5 min 보통 = max(참고, 보통)
+                 {'title': '기지국 소식', 'url': 'u3'}]               # 팀7 '위성'은 요약에만 있다 → 요약도 본다
+        self._grade(items, {'u3': '저궤도 위성 주파수'}, ai='참고')
+        self.assertEqual([i['urgency'] for i in items], ['긴급', '참고', '참고'], '공통값은 팀 규칙으로 바뀌지 않는다')
+        hits = self.c._TEAM_RULE_HITS
+        self.assertEqual(hits['u1'], [{'team_id': 5, 'urgency': '참고', 'rule_id': 't5_down'}])
+        self.assertEqual(hits['u2'], [{'team_id': 5, 'urgency': '보통', 'rule_id': 't5_floor'}])
+        self.assertEqual(hits['u3'], [{'team_id': 7, 'urgency': '긴급', 'rule_id': 't7_up'}])
+        # min의 기준은 AI 원값이 아니라 공통 **최종값**: 공통 규칙이 긴급으로 올린 기사에 팀 min 보통 → 긴급
+        items2 = [{'title': 'SKT 국감 증인 로밍', 'url': 'u4'}]
+        self._grade(items2, ai='참고', team={5: [self.TEAM[5][1]]})
+        self.assertEqual(self.c._TEAM_RULE_HITS['u4'], [{'team_id': 5, 'urgency': '긴급', 'rule_id': 't5_floor'}])
+
+    def test_no_team_rules_no_team_log(self):
+        items = [{'title': 'SKT 국감 증인 채택', 'url': 'u1'}]
+        stat, log = self._grade(items, team={})
+        self.assertNotIn('[팀 규칙]', log)
+        self.assertEqual(stat['team_hits'], {})
+        self.assertEqual(self.c._TEAM_RULE_HITS, {})
+        self.assertIsNone(items[0]['screen_text'])
+
+    def test_team_rule_rows_only_for_inserted(self):
+        self.c._TEAM_RULE_HITS.update({
+            'u1': [{'team_id': 5, 'urgency': '참고', 'rule_id': 't5_down'},
+                   {'team_id': 7, 'urgency': '긴급', 'rule_id': 't7_up'}],
+            'u2': [{'team_id': 5, 'urgency': '보통', 'rule_id': 't5_floor'}]})   # u2 = 이미 있던 기사(응답에 없음)
+        rows = self.c.team_rule_rows([{'id': 'n1', 'url': 'u1'}, {'id': 'n3', 'url': 'u3'}])
+        self.assertEqual(rows, [
+            {'news_id': 'n1', 'team_id': 5, 'urgency': '참고', 'source': 'rule', 'rule_id': 't5_down'},
+            {'news_id': 'n1', 'team_id': 7, 'urgency': '긴급', 'source': 'rule', 'rule_id': 't7_up'}])
+        self.assertEqual(len({frozenset(r) for r in rows}), 1)
+        self.assertEqual(self.c.team_rule_rows(None), [])
+
+    def test_save_team_rows_chunks_ignore_duplicates_and_fail_open(self):
+        import io
+        import contextlib
+        self.c._TEAM_RULE_HITS.update({f'u{i}': [{'team_id': 5, 'urgency': '참고', 'rule_id': 't5_down'}]
+                                       for i in range(3)})
+        inserted = [{'id': f'n{i}', 'url': f'u{i}'} for i in range(3)]
+        sb = _RecSb()
+        buf = io.StringIO()
+        with mock.patch.object(self.c, 'sb', sb), mock.patch.object(self.c, 'TEAM_URGENCY_CHUNK', 2), \
+                contextlib.redirect_stdout(buf):
+            n = self.c.save_team_rule_rows(inserted)
+        self.assertEqual(n, 3)
+        ups = [q.op('upsert') for q in sb.queries if q.name == 'team_urgency']
+        self.assertEqual([len(u[1][0]) for u in ups], [2, 1])
+        for u in ups:     # 기존 팀 행(사람 수정)을 절대 덮지 않는다
+            self.assertEqual(u[2], {'on_conflict': 'news_id,team_id', 'ignore_duplicates': True})
+        self.assertIn('[팀 규칙] 3건 저장(1팀)', buf.getvalue())
+        # 표 장애 → 0, 예외 없이 로그만
+        buf = io.StringIO()
+        with mock.patch.object(self.c, 'sb', _RecSb(fail={'team_urgency'})), contextlib.redirect_stdout(buf):
+            self.assertEqual(self.c.save_team_rule_rows(inserted), 0)
+        self.assertIn('[팀 규칙] 저장 실패(무시)', buf.getvalue())
+        # 적중은 있는데 새 행이 하나도 안 맞음 → 조용히 넘기지 않는다
+        buf = io.StringIO()
+        with mock.patch.object(self.c, 'sb', _RecSb()), contextlib.redirect_stdout(buf):
+            self.assertEqual(self.c.save_team_rule_rows([]), 0)
+        self.assertIn('[팀 규칙] 저장 0건', buf.getvalue())
+
+    def test_save_new_items_end_to_end(self):
+        """save_new_items: news_feed upsert 계약 유지 + 응답(새 행)에 있는 기사만 팀 행, 팀 표 장애는 수집을 막지 않는다."""
+        import io
+        import contextlib
+        from datetime import timezone as tz
+        pub = datetime.now(tz(timedelta(hours=9))).isoformat()
+        items = [{'title': 'SKT 국감 증인 채택', 'url': 'u1', 'published_at': pub, 'content': None},
+                 {'title': '위성 통신 정책', 'url': 'u2', 'published_at': pub, 'content': None},
+                 {'title': '기지국 소식', 'url': 'u3', 'published_at': pub, 'content': None}]
+        self.c._URGENCY_SUMMARY.update({'u1': '요약1', 'u2': '요약2'})
+
+        def run(sb):
+            buf = io.StringIO()
+            with mock.patch.object(self.c, 'sb', sb), \
+                    mock.patch.object(self.c, 'screen_news_items', lambda xs: xs), \
+                    mock.patch.object(self.c, 'fetch_article_body', lambda url, src='': (None, None)), \
+                    mock.patch.object(self.c.time, 'sleep', lambda s: None), \
+                    mock.patch.object(self.c, 'classify_urgency', lambda t, c='', s='': '보통'), \
+                    mock.patch.object(self.c, 'load_urgency_rules', lambda: self.COMMON), \
+                    mock.patch.object(self.c, 'load_team_urgency_rules', lambda: self.TEAM), \
+                    contextlib.redirect_stdout(buf):
+                out = self.c.save_new_items([dict(i) for i in items], (set(), set()))
+            return out, buf.getvalue()
+
+        sb = _RecSb(inserted_urls={'u1'})              # u2는 동시 실행이 먼저 넣었다(응답에 없음)
+        out, log = run(sb)
+        self.assertEqual([i['url'] for i in out], ['u1', 'u2', 'u3'])
+        nf = [q for q in sb.queries if q.name == 'news_feed']
+        self.assertEqual(len(nf), 1)
+        up = nf[0].op('upsert')
+        self.assertEqual(up[2], {'on_conflict': 'url', 'ignore_duplicates': True})
+        self.assertEqual(len({frozenset(r) for r in up[1][0]}), 1)
+        self.assertIn('screen_text', up[1][0][0])
+        self.assertEqual([r['screen_text'] for r in up[1][0]], ['요약1', '요약2', None])
+        tu = [q.op('upsert')[1][0] for q in sb.queries if q.name == 'team_urgency']
+        self.assertEqual(tu, [[{'news_id': 'id-u1', 'team_id': 5, 'urgency': '참고', 'source': 'rule',
+                                'rule_id': 't5_down'}]])
+        self.assertIn('[팀 규칙] 1건 저장(1팀)', log)
+        # 팀 표 장애 — 수집 결과는 그대로
+        self.c._TEAM_RULE_HITS.clear()
+        out, log = run(_RecSb(fail={'team_urgency'}))
+        self.assertEqual(len(out), 3)
+        self.assertIn('[팀 규칙] 저장 실패(무시)', log)
+
+    def test_feedback_reads_common_rows_only(self):
+        sb = _RecSb(tables={'importance_feedback': [{'title': 't', 'user_importance': '긴급'}]})
+        import io
+        import contextlib
+        with mock.patch.object(self.c, 'sb', sb), mock.patch.object(self.c, '_feedback_rows_cache', None), \
+                contextlib.redirect_stdout(io.StringIO()):
+            rows = self.c._load_feedback_rows()
+        self.assertEqual(rows, [{'title': 't', 'user_importance': '긴급'}])
+        q = next(q for q in sb.queries if q.name == 'importance_feedback')
+        self.assertIn(('is_', ('team_id', 'null'), {}), q.ops, '공통 AI 학습은 공통 행만(E8) — 팀 행은 팀 관점')
+
+    def _load_rules(self, sb):
+        import io
+        import contextlib
+        buf = io.StringIO()
+        with mock.patch.object(self.c, 'sb', sb), mock.patch.object(self.c, '_URGENCY_RULES', None), \
+                mock.patch.object(self.c, '_TEAM_URGENCY_RULES', None), contextlib.redirect_stdout(buf):
+            common = self.c.load_urgency_rules()
+            team = self.c.load_team_urgency_rules()
+            again = self.c.load_team_urgency_rules()
+        return common, team, again, buf.getvalue()
+
+    def test_rule_loading_splits_one_query(self):
+        rows = [dict(self.COMMON[0], team_id=None, position=10),
+                dict(self.TEAM[5][0], position=10), dict(self.TEAM[7][0], position=20),
+                dict(self.TEAM[5][1], position=30),
+                {'id': 't9_bad', 'team_id': 9, 'mode': 'max', 'level': '보통', 'any_words': ['x'], 'position': 5}]
+        sb = _RecSb(tables={'urgency_rules': rows})
+        common, team, again, log = self._load_rules(sb)
+        self.assertEqual([r['id'] for r in common], ['c_witness'])
+        self.assertEqual({k: [r['id'] for r in v] for k, v in team.items()},
+                         {5: ['t5_down', 't5_floor'], 7: ['t7_up']})       # 형식 오류 팀 9는 그 팀만 건너뜀
+        self.assertIs(team, again)
+        self.assertEqual(len([q for q in sb.queries if q.name == 'urgency_rules']), 1, '실행당 한 번 조회')
+        q = sb.queries[0]
+        self.assertIn(('eq', ('enabled', True), {}), q.ops)
+        self.assertFalse(q.op('is_'), '공통·팀을 한 번에 읽고 나눈다')
+        self.assertIn('[규칙] 1개 로드(db)', log)
+        self.assertIn('[규칙] 팀 9 규칙 형식 오류', log)
+        self.assertIn('[규칙] 팀 규칙 3개(2팀) · 형식 오류로 건너뜀 1팀', log)
+
+    def test_rule_loading_no_team_and_failure(self):
+        _, team, _, log = self._load_rules(_RecSb(tables={'urgency_rules': [dict(self.COMMON[0], team_id=None)]}))
+        self.assertEqual(team, {})
+        self.assertIn('[규칙] 팀 규칙 없음', log)
+        common, team, _, log = self._load_rules(_RecSb(fail={'urgency_rules'}))
+        self.assertIs(common, self.c.urgency_rules.URGENCY_RULES_FALLBACK)
+        self.assertEqual(team, {})
+        self.assertIn('[규칙] 5개 로드(fallback)', log)
+        self.assertIn('[규칙] 팀 규칙 건너뜀 — 표 조회 실패', log)      # 실패를 '없음'과 섞지 않는다(#183)
+        self.assertNotIn('팀 규칙 없음', log)
 
 
 class TestDashboardCacheBuster(unittest.TestCase):

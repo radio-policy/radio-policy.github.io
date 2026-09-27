@@ -86,6 +86,79 @@ def apply_urgency_rules(rules, title, summary, ai_level):
     return combine(match_urgency_rules(rules, title, summary), ai_level)
 
 
+# ── 팀 층(#250, 2026-09-27, 설계안 §10 — Fable 재검토) ─────────────────────────────────────────
+# 공통값(news_feed.urgency)은 그대로 두고 팀 값(표 team_urgency)을 읽을 때 덧씌운다. 아래 셋은 JS판
+# (_shared/urgency_rules.js의 maxLevel·teamRuleDecision·effectiveTeamUrgency·divisionUrgency)과 **같은 규칙**이고
+# tests/fixtures/urgency_team_cases.json 한 파일을 함께 돈다. 크롤러(수집 때 팀 규칙 저장)·대시보드(덧씌우기·
+# 규칙 저장 즉시 재적용)·tools_urgency_audit.py(두 구현 전체 대조)가 쓴다. 한쪽만 고치지 말 것.
+
+def max_level(a, b):
+    """두 등급 중 높은 것(모르는 값은 가장 낮게 본다)."""
+    return a if _RANK.get(a, -1) >= _RANK.get(b, -1) else b
+
+
+def _blank(s):
+    """빈 글 판정 — JS판 isBlank와 같은 문자 집합. Python strip()과 JS trim()은 U+001C~001F·U+0085·U+FEFF에서
+    서로 다르게 본다(tools_urgency_audit.py 경계 탐침) → 둘의 합집합을 공백으로 친다."""
+    return all(c.isspace() or c == '﻿' for c in (s or ''))
+
+
+def rule_input_text(screen_text, summary):
+    """규칙 입력의 요약 자리 — 수집 때 본 검색 요약(news_feed.screen_text)이 있으면 그것, 없으면 저장 요약.
+    크롤러는 수집 시점의 검색 요약을 쓰므로 새 기사는 두 경로가 같은 글을 본다(결정 1(가))."""
+    return screen_text if not _blank(screen_text) else (summary or '')
+
+
+def team_rule_decision(team_rules, title, text, common_level):
+    """팀 규칙 판정 → {'level', 'rule_id'} 또는 None(미적중 — 팀 행을 두지 않는다).
+    team_rules = 그 팀의 켜진 규칙(position, id 순, 부르는 쪽이 거른다). 기준값은 공통값:
+    set = 그 등급(공통 하한 아래로도 내릴 수 있음), min = max(공통값, 하한)."""
+    hit = match_urgency_rules(team_rules, title, text)
+    if not hit:
+        return None
+    level, _, _ = combine(hit, common_level)
+    return {'level': level, 'rule_id': hit['id']}
+
+
+def effective_team_urgency(common_level, team_row, rules_by_id):
+    """한 팀이 보는 등급 → {'level', 'source'}. source = common | human | rule | ai.
+    - 팀 행 없음 → 공통값.
+    - human(팀원 수정) → 그 값(공통 하한도 뚫는다).
+    - rule → **지금 규칙 정의로 다시 계산**: 규칙이 없거나 꺼졌거나 다른 팀 규칙이면 공통값(낡은 행 무시),
+      set = 규칙 등급, min = max(지금 공통값, 하한). 저장된 urgency는 쓰지 않는다 — 관리자가 공통값을
+      바꾸거나 규칙 등급을 고쳐도 화면이 저절로 맞는다.
+    - ai(세션 C 몫) → 저장값.
+    저장값이 등급 셋 밖이면 공통값."""
+    if not team_row:
+        return {'level': common_level, 'source': 'common'}
+    src = team_row.get('source')
+    if src == 'rule':
+        r = (rules_by_id or {}).get(team_row.get('rule_id'))
+        if not r or not r.get('enabled') or r.get('team_id') != team_row.get('team_id') \
+                or r.get('level') not in _RANK or r.get('mode') not in MODES:
+            return {'level': common_level, 'source': 'common'}
+        if r['mode'] == 'set':
+            return {'level': r['level'], 'source': 'rule'}
+        return {'level': max_level(common_level, r['level']), 'source': 'rule'}
+    if src in ('human', 'ai') and team_row.get('urgency') in _RANK:
+        return {'level': team_row['urgency'], 'source': src}
+    return {'level': common_level, 'source': 'common'}
+
+
+def division_urgency(common_level, rows_by_team, rules_by_id, team_ids):
+    """실장 화면(팀 없음, 실 지정)의 등급 = 그 실 팀들이 보는 등급 중 가장 높은 것(2026-09-27 운영자 결정 —
+    「실 안 각 팀이 고른 중요 뉴스」, 기사당 한 줄이라 여러 팀이 골라도 한 번만). → {'level', 'teams'}
+    teams = 그 최고 등급을 본 팀 id(team_ids 순서). team_ids가 비면 공통값·빈 목록."""
+    if not team_ids:
+        return {'level': common_level, 'teams': []}
+    effs = [(t, effective_team_urgency(common_level, (rows_by_team or {}).get(t), rules_by_id)['level'])
+            for t in team_ids]
+    top = effs[0][1]                                   # 공통값은 넣지 않는다 — 모든 팀이 낮췄으면 낮춘 값이 맞다
+    for _, lv in effs[1:]:
+        top = max_level(top, lv)
+    return {'level': top, 'teams': [t for t, lv in effs if lv == top]}
+
+
 def _is_word_list(v, allow_empty=True):
     return isinstance(v, list) and (allow_empty or len(v) > 0) and \
         all(isinstance(w, str) and w.strip() for w in v)

@@ -94,6 +94,19 @@ function aiReady() {
 }
 function isAdminUser()  { return !!(currentProfile && currentProfile.role === 'admin'  && currentProfile.approved && currentProfile.active); }
 
+// ── 팀 층의 '내 자리' (#250, 2026-09-27, 설계안 §10 — Fable 재검토) ──
+// 팀 = 승인·활성 계정의 profiles.team_id(관리자도 팀이 있으면 팀원과 같다). 실장 = 팀 없이 profiles.division만 있는 계정
+// (실마다 1명, 그 실 모든 팀 등급을 보기만 한다). 둘 다 없으면(비로그인·미승인·팀 미지정) 공통값만 본다.
+// 화면 게이트는 안내용이고 관문은 RLS(team_urgency·importance_feedback·urgency_rules 팀 행 = 자기 팀 승인 계정).
+function myTeamId() {
+  return (aiReady() && currentProfile.team_id != null) ? Number(currentProfile.team_id) : null;
+}
+function myDivision() {
+  return (aiReady() && currentProfile.team_id == null && currentProfile.division) ? String(currentProfile.division) : null;
+}
+/** 자기 팀 등급·팀 규칙을 고칠 수 있나 — 팀원·팀장·관리자 모두(E2). 실장은 보기만 */
+function teamEditor() { return myTeamId() != null; }
+
 /** 왜 막혔는지 한 문장으로 — 로그인 안 함 / 승인 대기 / 비활성 구분 */
 function aiGateMsg() {
   if (!currentUser) return 'AI 기능은 로그인 후 이용할 수 있습니다. 우측 상단에서 로그인해 주세요.';
@@ -109,7 +122,7 @@ async function loadMyProfile() {
   if (!sb || !currentUser) return 'missing';
   try {
     var r = await sb.from('profiles')
-      .select('user_id,name,role,approved,active,daily_limit,unlimited,team_id,teams(name,daily_limit,unlimited)')
+      .select('user_id,name,role,approved,active,daily_limit,unlimited,team_id,division,teams(name,daily_limit,unlimited)')
       .eq('user_id', currentUser.id).maybeSingle();
     if (r.error) { console.warn('프로필 조회 실패:', r.error); return 'error'; }
     currentProfile = r.data || null;
@@ -227,7 +240,7 @@ function onAccountClick() {
   var lines = [
     (p.name || currentUser.email),
     '이메일: ' + currentUser.email,
-    '소속: ' + ((p.teams && p.teams.name) || '(팀 미지정)') + ' · ' + role,
+    '소속: ' + ((p.teams && p.teams.name) || (p.division ? p.division + ' 실장' : '(팀 미지정)')) + ' · ' + role,
     '상태: ' + (p.approved ? (p.active ? '이용 가능' : '비활성') : '관리자 승인 대기')
   ];
   if (confirm(lines.join('\n') + '\n\n로그아웃할까요?')) doLogout();
@@ -250,6 +263,8 @@ function applyAuthUI() {
       var nm = (currentProfile && currentProfile.name) || currentUser.email || '';
       var team = currentProfile && currentProfile.teams ? currentProfile.teams.name : '';
       var role = currentProfile ? ({ admin: '관리자', leader: '팀장', member: '' })[currentProfile.role] : '';
+      // 실장(팀 없음 + 실, #250) — '팀장' 대신 '<실> 실장'으로 보인다
+      if (!team && currentProfile && currentProfile.division) { team = currentProfile.division + ' 실장'; if (role === '팀장') role = ''; }
       label.textContent = nm + (team ? ' · ' + team : '') + (role ? ' · ' + role : '') +
         (currentProfile && !currentProfile.approved ? ' (승인 대기)' : '');
     }
@@ -286,6 +301,9 @@ function applyAuthUI() {
   applySettingsLock();   // 설정 잠금도 로그인 상태를 따라간다(이중 잠금 없음)
   updateStatusDots();
   refreshQuotaLine();
+  // 팀 층(#250) — 계정·팀이 바뀐 때만 팀 등급을 다시 읽는다. 비로그인·팀 없는 계정은 조회 0회(공통값 그대로)
+  refreshTeamLayer();
+  _urAuthChanged();
 }
 
 /** 입력창 아래 잔여 한도 표시 */
@@ -315,23 +333,47 @@ async function loadAccountAdmin() {
   if (!isAdminUser()) { el.innerHTML = '<div style="font-size:12px;color:var(--text-tertiary)">관리자 계정으로 로그인해야 합니다.</div>'; return; }
   el.innerHTML = '<div style="font-size:12px;color:var(--text-tertiary);padding:10px">불러오는 중...</div>';
   try {
-    var tRes = await sb.from('teams').select('id,name,daily_limit,unlimited').order('id');
+    // 팀은 실(division) 묶음 순서(sort_order = 실 순서×10 + 팀 순서)로 — 고르기 칸을 실별 optgroup으로 나눈다(#250 E1)
+    var tRes = await sb.from('teams').select('id,name,division,sort_order,daily_limit,unlimited')
+      .order('sort_order', { ascending: true, nullsFirst: false }).order('id');
     var pRes = await sb.from('profiles')
-      .select('user_id,name,role,approved,active,daily_limit,unlimited,team_id,can_edit_issues')
+      .select('user_id,name,role,approved,active,daily_limit,unlimited,team_id,division,can_edit_issues')
       .order('created_at', { ascending: false });
     if (tRes.error) throw tRes.error;
     if (pRes.error) throw pRes.error;
     _acctTeams = tRes.data || [];
+    _teamsAll = _acctTeams;   // 팀 층 이름표(실장 「…로 본 팀」)도 같은 목록 — 방금 고친 팀 이름이 바로 보이게
     renderAccountAdmin(_acctTeams, pRes.data || []);
   } catch (e) {
     el.innerHTML = '<div style="font-size:12px;color:var(--text-tertiary)">조회 실패: ' + chEsc(e.message || String(e)) + '</div>';
   }
 }
 
-function _teamOptions(sel) {
-  return '<option value="">(팀 없음)</option>' + _acctTeams.map(function(t) {
-    return '<option value="' + t.id + '"' + (String(sel) === String(t.id) ? ' selected' : '') + '>' + chEsc(t.name) + '</option>';
-  }).join('');
+// 팀 고르기(#250 E1) — 실별 <optgroup>(sort_order 순) + 실마다 「<실> 실장(팀 없음)」 한 줄.
+// 값: 팀 = 팀 id / 실장 = 'div:<실>'(저장은 team_id null + division) / '' = 팀도 실도 없음. _teamChoice()가 읽는다.
+function _teamOptions(sel, div) {
+  var html = '<option value=""' + (sel == null && !div ? ' selected' : '') + '>(팀 없음)</option>';
+  var order = [], byDiv = {};
+  _acctTeams.forEach(function(t) {
+    var d = t.division || '';
+    if (!byDiv[d]) { byDiv[d] = []; order.push(d); }
+    byDiv[d].push(t);
+  });
+  order.forEach(function(d) {
+    html += '<optgroup label="' + escHtml(d || '(실 미지정)') + '">';
+    byDiv[d].forEach(function(t) {
+      html += '<option value="' + t.id + '"' + (sel != null && String(sel) === String(t.id) ? ' selected' : '') + '>' + chEsc(t.name) + '</option>';
+    });
+    if (d) html += '<option value="' + escHtml('div:' + d) + '"' + (sel == null && div === d ? ' selected' : '') + '>' + chEsc(d) + ' 실장(팀 없음)</option>';
+    html += '</optgroup>';
+  });
+  return html;
+}
+/** 팀 고르기 값 → { team_id, division } — 팀을 고르면 division은 비운다(team_id가 있으면 division은 무시되는 규칙, #250) */
+function _teamChoice(v) {
+  v = v || '';
+  if (v.indexOf('div:') === 0) return { team_id: null, division: v.slice(4) || null };
+  return { team_id: v ? Number(v) : null, division: null };
 }
 function _roleOptions(sel) {
   return [['member','팀원'],['leader','팀장'],['admin','관리자']].map(function(r) {
@@ -353,7 +395,7 @@ function renderAccountAdmin(teams, profs) {
     return '<div class="card" style="margin-bottom:6px;padding:10px 12px;cursor:default">' +
       '<div style="font-size:12px;font-weight:500;margin-bottom:6px">' + chEsc(p.name || '(이름 없음)') + '</div>' +
       '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">' +
-        '<select id="ap-team-' + p.user_id + '" style="' + inputCss + '">' + _teamOptions(p.team_id) + '</select>' +
+        '<select id="ap-team-' + p.user_id + '" style="' + inputCss + '">' + _teamOptions(p.team_id, p.division) + '</select>' +
         '<select id="ap-role-' + p.user_id + '" style="' + inputCss + '">' + _roleOptions(p.role) + '</select>' +
         '<label style="font-size:11px;color:var(--text-secondary)">일일 한도 <input id="ap-lim-' + p.user_id + '" type="number" min="0" value="' + p.daily_limit + '" style="' + inputCss + ';width:56px"></label>' +
         '<button class="btn btn-primary" style="font-size:11px;padding:3px 10px" onclick="approveAccount(\'' + p.user_id + '\')"><i class="ti ti-check"></i>승인</button>' +
@@ -366,8 +408,9 @@ function renderAccountAdmin(teams, profs) {
   html += members.length ? members.map(function(p) {
     return '<div class="card" style="margin-bottom:6px;padding:10px 12px;cursor:default;' + (p.active ? '' : 'opacity:.55') + '">' +
       '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">' +
-        '<span style="font-size:12px;font-weight:500;min-width:80px">' + chEsc(p.name || '(이름 없음)') + '</span>' +
-        '<select id="mb-team-' + p.user_id + '" style="' + inputCss + '">' + _teamOptions(p.team_id) + '</select>' +
+        '<span style="font-size:12px;font-weight:500;min-width:80px">' + chEsc(p.name || '(이름 없음)') +
+          (p.team_id == null && p.division ? ' <span style="font-size:10.5px;font-weight:400;color:var(--text-tertiary)">실장 · ' + chEsc(p.division) + '</span>' : '') + '</span>' +
+        '<select id="mb-team-' + p.user_id + '" style="' + inputCss + '">' + _teamOptions(p.team_id, p.division) + '</select>' +
         '<select id="mb-role-' + p.user_id + '" style="' + inputCss + '">' + _roleOptions(p.role) + '</select>' +
         '<label style="font-size:11px;color:var(--text-secondary)">한도 <input id="mb-lim-' + p.user_id + '" type="number" min="0" value="' + p.daily_limit + '" style="' + inputCss + ';width:56px"></label>' +
         '<label style="font-size:11px;color:var(--text-secondary)"><input id="mb-unl-' + p.user_id + '" type="checkbox"' + (p.unlimited ? ' checked' : '') + '> 무제한</label>' +
@@ -383,7 +426,8 @@ function renderAccountAdmin(teams, profs) {
   html += teams.map(function(t) {
     return '<div class="card" style="margin-bottom:6px;padding:10px 12px;cursor:default">' +
       '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">' +
-        '<input id="tm-name-' + t.id + '" value="' + chEsc(t.name) + '" style="' + inputCss + ';width:130px">' +
+        '<span style="font-size:10.5px;color:var(--text-tertiary);min-width:64px">' + chEsc(t.division || '') + '</span>' +
+        '<input id="tm-name-' + t.id + '" value="' + escHtml(t.name) + '" style="' + inputCss + ';width:130px">' +
         '<label style="font-size:11px;color:var(--text-secondary)">팀 한도 <input id="tm-lim-' + t.id + '" type="number" min="0" value="' + t.daily_limit + '" style="' + inputCss + ';width:56px"></label>' +
         '<label style="font-size:11px;color:var(--text-secondary)"><input id="tm-unl-' + t.id + '" type="checkbox"' + (t.unlimited ? ' checked' : '') + '> 무제한</label>' +
         '<button class="btn" style="font-size:11px;padding:3px 10px" onclick="saveTeamRow(' + t.id + ')">저장</button>' +
@@ -402,10 +446,10 @@ async function _acctUpdate(userId, patch, okMsg) {
   return true;
 }
 async function approveAccount(userId) {
-  var team = document.getElementById('ap-team-' + userId).value;
+  var tc = _teamChoice(document.getElementById('ap-team-' + userId).value);
   await _acctUpdate(userId, {
     approved: true, active: true,
-    team_id: team ? Number(team) : null,
+    team_id: tc.team_id, division: tc.division,
     role: document.getElementById('ap-role-' + userId).value,
     daily_limit: Number(document.getElementById('ap-lim-' + userId).value || 10)
   }, '승인 완료');
@@ -415,9 +459,9 @@ async function rejectAccount(userId) {
   await _acctUpdate(userId, { approved: false, active: false }, '거절');
 }
 async function saveMemberRow(userId) {
-  var team = document.getElementById('mb-team-' + userId).value;
+  var tc = _teamChoice(document.getElementById('mb-team-' + userId).value);
   await _acctUpdate(userId, {
-    team_id: team ? Number(team) : null,
+    team_id: tc.team_id, division: tc.division,
     role: document.getElementById('mb-role-' + userId).value,
     daily_limit: Number(document.getElementById('mb-lim-' + userId).value || 10),
     unlimited: document.getElementById('mb-unl-' + userId).checked,
@@ -3556,7 +3600,7 @@ function _newsAbsorb(rows) {
   (rows || []).forEach(function(n) {
     if (seen.has(n.id)) return;
     seen.add(n.id);
-    n._importance = n.importance || n.urgency || classifyNewsImportance(n);
+    _overlayItem(n);   // n._common = 공통값, n._importance = 보이는 등급(팀 층이 있으면 덧씌운 값, #250)
     newsDataCache.push(n);
   });
   newsDataCache.sort(function(a, b) { return (b.published_at || '').localeCompare(a.published_at || ''); });
@@ -4047,10 +4091,17 @@ async function deleteNewsItem(newsId) {
 // 화면 게이트는 안내용이고 실제 관문은 DB다 — news_feed_edit_guard 트리거가 importance·urgency·locked
 // 컬럼 변경 시 is_admin()을 요구하고, 삭제·deleted_news·importance_feedback 쓰기는 정책이 관리자로 제한한다.
 // (요약·영향분석 저장은 같은 news_feed UPDATE 통로지만 다른 컬럼이라 승인 계정 그대로 통과한다 — #153)
+// 팀별 중요도(#250, 2026-09-27)가 들어와 승인 계정은 **자기 팀 값**(team_urgency)을 고친다 — 공통값은 여전히 관리자만.
 function canEditNews() { return typeof isAdminUser === 'function' && isAdminUser(); }
 function newsEditGateMsg() {
-  if (!currentUser) return '뉴스 중요도·잠금·삭제는 관리자만 이용할 수 있습니다.';
-  return '뉴스 중요도·잠금·삭제는 관리자만 할 수 있습니다. 중요도는 모든 이용자가 함께 보는 값이라, 팀별 중요도 기능이 준비될 때까지 관리자 전용입니다.';
+  if (!currentUser) return '공통 중요도·잠금·삭제는 관리자만 할 수 있습니다. 팀이 지정된 계정으로 로그인하면 기사 상세에서 「우리 팀 등급」을 고칠 수 있습니다.';
+  return '공통 중요도·잠금·삭제는 관리자만 할 수 있습니다(모든 이용자·알림·브리핑이 함께 보는 값). 팀이 지정된 승인 계정은 기사 상세의 「우리 팀 등급」을 고칩니다 — 팀 지정은 관리자에게 요청해 주세요.';
+}
+function teamEditGateMsg() {
+  if (!currentUser) return '우리 팀 등급은 로그인 후 고칠 수 있습니다.';
+  if (!aiReady()) return aiGateMsg();
+  if (myDivision()) return '실장 계정은 팀 등급을 보기만 합니다.';
+  return '팀이 지정되지 않은 계정입니다 — 관리자에게 팀 지정을 요청해 주세요.';
 }
 
 // ── 긴급도 수정 셀렉터 HTML (뉴스 상세 모달) ──
@@ -4070,19 +4121,17 @@ async function setNewsImportance(newsId, newVal) {
   if (!canEditNews()) { alert(newsEditGateMsg()); return; }
   var n = newsDataCache.find(function(x) { return String(x.id) === String(newsId); });
   if (!n || !sb) return;
-  var oldVal = n._importance || n.importance || n.urgency || '참고';
+  // 공통값 기준(#250) — n._importance는 팀 층을 덧씌운 값일 수 있어 비교·학습 기록에 쓰지 않는다
+  var oldVal = n._common || n.importance || n.urgency || '참고';
   if (oldVal === newVal) return;
   // 화면부터 바꾼다(낙관적 갱신, 2026-09-07, #130) — 종전엔 DB 왕복 3회(갱신·피드백 조회·기록)를
   // 기다린 뒤에야 목록을 다시 그려 클릭 반응이 늦었다. DB가 실패하면 되돌리고 알린다.
   var apply = function(v) {
-    n.importance = v; n.urgency = v; n._importance = v;
+    n.importance = v; n.urgency = v;
+    _overlayItem(n);   // 팀 규칙 min은 공통값을 하한 기준으로 쓰므로 팀이 보는 값도 다시 계산
     if (currentNewsFilter !== '전체') _newsCacheVer++;   // 필터 목록에서 빠지므로 묶음 캐시 무효화
     renderNewsList();
-    var rule = IMPORTANCE_RULES[v];
-    var badge = document.getElementById('importance-badge-' + newsId);
-    if (badge && rule) { badge.textContent = rule.label; badge.style.color = rule.color; badge.style.background = rule.bg; }
-    var sel = document.getElementById('imp-sel-' + newsId);
-    if (sel) sel.innerHTML = _impSelHtml(newsId, v);
+    _refreshNewsGradeUI(newsId);
   };
   apply(newVal);
   try {
@@ -4090,24 +4139,36 @@ async function setNewsImportance(newsId, newVal) {
       .eq('id', newsId).select('id,importance');
     if (ur.error) throw new Error('news_feed 업데이트 실패: ' + ur.error.message);
     if (!ur.data || ur.data.length === 0) throw new Error('news_feed 업데이트 실패: 대상 행을 찾지 못함');
-    // 피드백 기록 — ai_importance는 최초 AI 판정값 보존 (news_id당 1행)
-    var fb = { title: n.title || '', summary: (n.summary || '').slice(0, 300),
-               user_importance: newVal, updated_at: new Date().toISOString() };
-    var ex = await sb.from('importance_feedback').select('id').eq('news_id', newsId).limit(1);
-    if (ex.data && ex.data.length > 0) {
-      await sb.from('importance_feedback').update(fb).eq('news_id', newsId);
-    } else {
-      fb.news_id = newsId;
-      fb.ai_importance = oldVal;
-      await sb.from('importance_feedback').insert(fb);
-    }
-    _urFb.add(String(newsId)); _urRefreshSource(newsId);   // 등급 출처 → 담당자 수정(#216)
-    // 당일 브리핑에 포함된 기사면 브리핑 원문의 🔴 표시도 동기화 — 화면을 막지 않고 뒤에서
-    syncBriefingUrgency(newsId, newVal).catch(function(e2) { console.warn('[브리핑 동기화] 실패(무시):', e2); });
   } catch(e) {
     apply(oldVal);
     alert('긴급도 수정 실패: ' + e.message);
+    return;
   }
+  // 피드백 기록 — ai_importance는 최초 AI 판정값 보존 (공통 행 = team_id null, news_id당 1행).
+  // team_id is null 조건을 빼면 같은 기사의 팀 행(#250 — 유일 제약이 (news_id, team_id))까지 함께 고친다.
+  // 공통값은 이미 저장됐으므로 여기서 실패해도 화면을 되돌리지 않고 알리기만 한다(#226 — 오류를 삼키지 않는다).
+  try {
+    var fb = { title: n.title || '', summary: (n.summary || '').slice(0, 300),
+               user_importance: newVal, updated_at: new Date().toISOString() };
+    var ex = await sb.from('importance_feedback').select('id').eq('news_id', newsId).is('team_id', null).limit(1);
+    if (ex.error) throw ex.error;
+    var fw;
+    if (ex.data && ex.data.length > 0) {
+      fw = await sb.from('importance_feedback').update(fb).eq('id', ex.data[0].id).select('id');
+    } else {
+      fb.news_id = newsId;
+      fb.ai_importance = oldVal;
+      fw = await sb.from('importance_feedback').insert(fb).select('id');
+    }
+    if (fw.error) throw fw.error;
+    if (!fw.data || !fw.data.length) throw new Error('기록된 행이 없음(권한 확인)');
+    _urFb.add(String(newsId)); _urRefreshSource(newsId);   // 등급 출처 → 담당자 수정(#216)
+  } catch(e3) {
+    console.warn('[중요도] 학습 기록(importance_feedback) 실패:', e3);
+    alert('공통 등급은 저장됐지만 학습 기록(importance_feedback) 저장에 실패했습니다: ' + ((e3 && e3.message) || e3));
+  }
+  // 당일 브리핑에 포함된 기사면 브리핑 원문의 🔴 표시도 동기화 — 화면을 막지 않고 뒤에서. 브리핑은 공통값만(#250)
+  syncBriefingUrgency(newsId, newVal).catch(function(e2) { console.warn('[브리핑 동기화] 실패(무시):', e2); });
 }
 
 // ── 긴급도 수정 → 당일 브리핑 원문 🔴 동기화 ──
@@ -4150,13 +4211,16 @@ async function syncBriefingUrgency(newsId, newVal) {
 //  _shared/urgency_rules.js(UrgencyRules) — Python urgency_rules.py와 같은 케이스 파일로 검증한다.
 //  편집기는 뉴스 화면 머리줄의 「긴급도 설정」 버튼이 여는 창(2026-09-25 운영자 결정 — 목록을 가리지 않게,
 //  설정 탭은 관리자 전용이라 2단계 팀장이 못 들어오므로 설정 탭에 두지 않는다).
-//  화면 게이트는 안내용이고 관문은 RLS(공통 = is_admin(), 팀 = 팀장 자기 팀). 삭제는 없다 — 끄기(enabled=false)만.
+//  화면 게이트는 안내용이고 관문은 RLS(공통 = is_admin(), 팀 = 그 팀 승인 계정 전원 — #250 E2). 삭제는 없다 — 끄기(enabled=false)만.
+//  탭(#250): 「공통」 = team_id null(관리자만 편집) / 「우리 팀(<팀>)」 = team_id = 내 팀(팀이 있는 승인 계정 누구나).
+//  팀 규칙은 저장하는 순간 불러온 기사에 다시 적용해 team_urgency에 쓴다(E4) — 공통 규칙은 다음 수집부터(종전 그대로).
 // ════════════════════════════════════════════
 var _urRules = [];              // 표 전체(공통·팀·꺼진 것 포함) — id→note 표시와 편집기 공용
 var _urFb = new Set();          // 담당자가 중요도를 고친 news_id (importance_feedback)
 var _urSrcPromise = null;
 var _urEditing = null;          // 편집 중인 규칙 id (null = 새 규칙)
 var _urFormOpen = false;
+var _urTab = 'common';          // 편집기 탭 — 'common' | 'team'(#250)
 
 function loadUrgencySources(force) {
   if (!sb) return Promise.resolve();
@@ -4167,12 +4231,15 @@ function loadUrgencySources(force) {
     else console.warn('[긴급도 규칙] 조회 실패:', r.error.message);
     var fb = new Set(), PAGE = 1000;
     for (var p = 0; p < 20; p++) {
-      var f = await sb.from('importance_feedback').select('news_id').order('id').range(p * PAGE, p * PAGE + PAGE - 1);
+      // 공통 행만(team_id null = 관리자가 공통값을 고친 것, #250 E8) — 팀 행은 「우리 팀 수정」으로 따로 보인다
+      var f = await sb.from('importance_feedback').select('news_id').is('team_id', null).order('id').range(p * PAGE, p * PAGE + PAGE - 1);
       if (f.error) { console.warn('[긴급도 규칙] 담당자 수정 조회 실패:', f.error.message); break; }
       (f.data || []).forEach(function(x) { if (x.news_id) fb.add(String(x.news_id)); });
       if (!f.data || f.data.length < PAGE) break;
     }
     _urFb = fb;
+    // 팀 규칙 행은 '지금 규칙 정의'로 다시 계산하므로(effectiveTeamUrgency) 규칙을 새로 읽으면 덧씌우기도 다시(#250)
+    if (_teamRowsMode) applyTeamOverlay();
   })().catch(function(e) { console.warn('[긴급도 규칙] 로드 실패:', e); _urSrcPromise = null; });
   return _urSrcPromise;
 }
@@ -4187,8 +4254,17 @@ function _urShortName(r) {
   return i > 0 ? s.slice(0, i) : s;
 }
 
-// 상세 모달 배지 옆 — 이 등급이 어디서 왔나: 담당자 수정 > 규칙 > AI 판정
+// 상세 모달 배지 옆 — 이 등급이 어디서 왔나. 팀 층 보기(「등급 기준: 우리 팀/우리 실」)에서 팀 값이 공통과 다른 출처면
+// 팀 이름표(_teamSourceHtml), 아니면 공통 이름표: 담당자 수정 > 규칙 > AI 판정
 function _urgencySourceHtml(n) {
+  if (!n) return '';
+  if (n._teamEff && _gradeView !== 'common') {
+    var t = _teamSourceHtml(n);
+    if (t) return t;
+  }
+  return _commonSourceHtml(n);
+}
+function _commonSourceHtml(n) {
   if (!n) return '';
   var st = 'font-size:10px;color:var(--text-tertiary);white-space:nowrap';
   if (_urFb.has(String(n.id))) return '<span style="' + st + '" title="담당자가 직접 고친 값">· 담당자 수정</span>';
@@ -4215,6 +4291,7 @@ function openUrgencyRules() {
   m.style.display = 'flex';
   var list = document.getElementById('ur-list');
   if (list && !list.innerHTML) list.innerHTML = '<div style="font-size:12px;color:var(--text-tertiary);padding:8px 0">불러오는 중...</div>';
+  _urRenderTabs();
   loadUrgencySources(true).then(renderUrgencyRules);
 }
 function closeUrgencyRules() {
@@ -4222,6 +4299,52 @@ function closeUrgencyRules() {
   if (m) m.style.display = 'none';
   cancelUrgencyRuleEdit();
   _urMsg('');
+}
+
+// ── 편집기 탭 「공통 / 우리 팀(<팀>)」 (#250, 설계안 §10 E2) ──
+// 지금 탭이 목록(team_id null ↔ 내 팀), 편집 권한(공통 = 관리자 / 팀 = 팀이 있는 승인 계정), 새 규칙의 team_id,
+// 순서 안내, 미리보기, 저장 뒤 동작(팀 = 즉시 재적용)을 정한다. 실장·팀 없는 계정은 공통 탭만(보기).
+function _urCanEdit() { return _urTab === 'team' ? teamEditor() : isAdminUser(); }
+function _urTabRules() {
+  var tid = myTeamId();
+  return _urRules.filter(function(r) {
+    return _urTab === 'team' ? (tid != null && r.team_id != null && Number(r.team_id) === tid) : r.team_id == null;
+  });
+}
+function switchUrgencyTab(tab) {
+  if (tab === 'team' && !teamEditor()) { _urMsg(teamEditGateMsg(), true); return; }
+  tab = tab === 'team' ? 'team' : 'common';
+  if (tab === _urTab) return;
+  cancelUrgencyRuleEdit();
+  _urTab = tab;
+  _urMsg('');
+  renderUrgencyRules();
+}
+function _urRenderTabs() {
+  if (_urTab === 'team' && !teamEditor()) _urTab = 'common';
+  var team = _urTab === 'team';
+  var box = document.getElementById('ur-tabs');
+  if (box) {
+    var tab = function(key, label, title) {
+      return '<span class="tag' + (_urTab === key ? ' selected' : '') + '" style="cursor:pointer" title="' + escHtml(title) + '" onclick="switchUrgencyTab(\'' + key + '\')">' + label + '</span>';
+    };
+    box.innerHTML = tab('common', '공통', '모든 이용자·알림·브리핑이 보는 공통 등급 규칙' + (isAdminUser() ? '' : ' — 보기만(편집은 관리자)')) +
+      (teamEditor()
+        ? tab('team', '우리 팀(' + escHtml(myTeamName()) + ')', myTeamName() + ' 화면에만 적용되는 규칙 — 팀원 누구나 만들고 고칩니다')
+        : '<span class="tag" style="opacity:.45;cursor:not-allowed" title="' + escHtml(myDivision() ? '실장 계정은 팀 규칙을 쓰지 않습니다(공통 탭 보기만)' : '팀이 지정된 승인 계정만 팀 규칙을 씁니다 — 팀 지정은 관리자에게') + '">우리 팀</span>');
+  }
+  var scope = document.getElementById('ur-scope');
+  if (scope) scope.textContent = team ? myTeamName() + ' 화면에만 적용 · 공통값·알림·브리핑은 그대로' : '모든 이용자·알림·브리핑에 적용';
+  var cn = document.getElementById('ur-common-note'); if (cn) cn.style.display = team ? 'none' : '';
+  var tn = document.getElementById('ur-team-note'); if (tn) tn.style.display = team ? '' : 'none';
+  var add = document.getElementById('ur-add-btn'); if (add) add.style.display = _urCanEdit() ? '' : 'none';
+}
+// 로그인·로그아웃·팀 변경 뒤(applyAuthUI) — 탭·버튼을 새 권한에 맞추고, 편집 권한이 없어졌으면 폼을 닫는다
+function _urAuthChanged() {
+  _urRenderTabs();
+  if (_urFormOpen && !_urCanEdit()) cancelUrgencyRuleEdit();
+  var m = document.getElementById('ur-modal');
+  if (m && m.style.display !== 'none' && m.style.display) renderUrgencyRules();
 }
 
 function _urMsg(text, isError) {
@@ -4262,9 +4385,14 @@ function _urSentenceHtml(r) {
 function renderUrgencyRules() {
   var el = document.getElementById('ur-list');
   if (!el) return;
-  var admin = isAdminUser();
-  var rows = _urRules.filter(function(r) { return r.team_id == null; });
-  if (!rows.length) { el.innerHTML = '<div style="font-size:12px;color:var(--text-tertiary);padding:8px 0">등록된 공통 규칙이 없습니다.</div>'; return; }
+  _urRenderTabs();
+  var admin = _urCanEdit();   // 지금 탭의 편집 권한(공통 = 관리자, 팀 = 팀이 있는 승인 계정, #250)
+  var rows = _urTabRules();
+  if (!rows.length) {
+    el.innerHTML = '<div style="font-size:12px;color:var(--text-tertiary);padding:8px 0">' +
+      (_urTab === 'team' ? '우리 팀 규칙이 아직 없습니다. 「새 규칙」으로 만들면 저장하는 순간 불러온 기사에 바로 적용됩니다.' : '등록된 공통 규칙이 없습니다.') + '</div>';
+    return;
+  }
   // 순서 번호(position)·규칙 id는 목록에서 뺐다(#249) — 목록 자체가 보는 순서이고, 둘 다 편집 창 「고급」에 있다
   el.innerHTML = rows.map(function(r, i) {
     var lv = IMPORTANCE_RULES[r.level] || {};
@@ -4297,7 +4425,8 @@ function _urFormRow() {
     while (_urRules.some(function(x) { return x.id === id; })) id = base + '_' + (k++);   // 지운 id 재사용 금지 — 꺼진 행도 표에 남는다
   }
   return {
-    id: id, team_id: null,
+    // 팀 탭이면 내 팀(#250). 기존 규칙을 고칠 때 team_id는 저장에서 빠지므로(saveUrgencyRule) 규칙의 주인은 바뀌지 않는다
+    id: id, team_id: _urTab === 'team' ? myTeamId() : null,
     position: parseInt(g('ur-f-pos'), 10) || 100,
     mode: g('ur-f-mode'), level: g('ur-f-level'),
     any_words: _urSplit(g('ur-f-any')), and_any: andLines, none_words: _urSplit(g('ur-f-none')),
@@ -4307,12 +4436,17 @@ function _urFormRow() {
 }
 
 function editUrgencyRule(id) {
-  if (!isAdminUser()) { _urMsg('공통 규칙은 관리자만 고칠 수 있습니다.', true); return; }
-  var r = id ? _urRules.find(function(x) { return x.id === id; }) : null;
+  if (!_urCanEdit()) {
+    _urMsg(_urTab === 'team' ? teamEditGateMsg() : '공통 규칙은 관리자만 고칠 수 있습니다.', true);
+    return;
+  }
+  var tabRules = _urTabRules();   // 지금 탭의 규칙만 — 다른 탭(공통↔팀) 규칙은 이 탭에서 고치지 않는다(#250)
+  var r = id ? tabRules.find(function(x) { return x.id === id; }) : null;
+  if (id && !r) { _urMsg('이 탭의 규칙이 아닙니다 — 새로고침 후 다시 열어 주세요.', true); return; }
   _urEditing = r ? r.id : null;
   var form = document.getElementById('ur-form');
   if (!form) return;
-  var maxPos = _urRules.reduce(function(m, x) { return Math.max(m, x.position || 0); }, 0);
+  var maxPos = tabRules.reduce(function(m, x) { return Math.max(m, x.position || 0); }, 0);
   var set = function(k, v) { var e = document.getElementById(k); if (e) e.value = v; };
   set('ur-f-nl', '');
   set('ur-f-slug', ''); set('ur-f-note', r ? r.note : '');
@@ -4326,8 +4460,8 @@ function editUrgencyRule(id) {
   if (idEl) idEl.textContent = r ? r.id + ' (고정 — 규칙 id는 바꾸지 않는다)' : '저장할 때 자동 생성 (영문 이름 + 날짜)';
   var slugRow = document.getElementById('ur-f-slug-row'); if (slugRow) slugRow.style.display = r ? 'none' : '';
   var posHint = document.getElementById('ur-f-pos-hint');
-  if (posHint) posHint.textContent = '지금 순서: ' + _urRules.filter(function(x) { return x.team_id == null; })
-    .map(function(x) { return x.position + ' ' + _urShortName(x); }).join(' · ');
+  if (posHint) posHint.textContent = (_urTab === 'team' ? '우리 팀 규칙 지금 순서: ' : '지금 순서: ') +
+    (tabRules.map(function(x) { return x.position + ' ' + _urShortName(x); }).join(' · ') || '(아직 없음)');
   form.style.display = 'block';
   _urFormOpen = true;
   _urFormSentence();
@@ -4358,12 +4492,15 @@ function cancelUrgencyRuleEdit() {
   var pv = document.getElementById('ur-preview'); if (pv) pv.innerHTML = '';
 }
 
-// 「최근 기사로 미리 보기」 — 저장 전, 편집 중인 규칙을 넣은 공통 목록을 불러온 기사 제목 + 요약에 돌린다.
-// 비교 기준은 지금 저장된 등급이다(AI 원값이 아님) — 값 변경 = 이 목록이면 달라질 기사.
-function previewUrgencyRules() {
+// 「최근 기사로 미리 보기」 — 저장 전, 편집 중인 규칙을 넣은 지금 탭의 목록을 불러온 기사 제목 + 요약에 돌린다.
+// 비교 기준은 지금 보는 등급이다(AI 원값이 아님) — 값 변경 = 이 목록이면 달라질 기사.
+// 요약 자리는 수집 때 규칙이 본 검색 요약(screen_text)이 있으면 그것(#250 — ruleInputText, 크롤러와 같은 입력).
+// 공통 탭 = 공통 저장값과 비교 / 팀 탭 = 우리 팀이 지금 보는 값과 비교(사람·팀 AI 행이 있는 기사는 규칙이 안 건드림).
+async function previewUrgencyRules() {
   var pv = document.getElementById('ur-preview');
   if (!pv) return;
-  var rules = _urRules.filter(function(r) { return r.team_id == null; });
+  var team = _urTab === 'team';
+  var rules = _urTabRules();
   var target = null;
   if (_urFormOpen) {
     target = _urFormRow();
@@ -4371,15 +4508,39 @@ function previewUrgencyRules() {
     if (errs.length) { pv.innerHTML = '<div style="color:#ef4444;font-size:11px">' + escHtml(errs.join(' / ')) + '</div>'; return; }
     rules = rules.filter(function(r) { return r.id !== target.id; }).concat([target]);
   }
-  rules = rules.filter(function(r) { return r.enabled; })
-    .sort(function(a, b) { return (a.position - b.position) || (a.id < b.id ? -1 : 1); });
+  rules = rules.filter(function(r) { return r.enabled; });
+  if (team) rules.sort(function(a, b) { return a.position - b.position; });   // 같은 순서면 표 조회 순서(= 크롤러와 같은 position, id) 유지
+  else rules.sort(function(a, b) { return (a.position - b.position) || (a.id < b.id ? -1 : 1); });
   if (!newsDataCache.length) { pv.innerHTML = '<div style="font-size:11px;color:var(--text-tertiary)">불러온 기사가 없습니다 — 뉴스 목록을 한 번 연 뒤 다시 눌러 주세요.</div>'; return; }
+  pv.innerHTML = '<div style="font-size:11px;color:var(--text-tertiary)">기사 검색 요약 불러오는 중...</div>';
+  var texts = {}, warn = '';
+  try { texts = await loadScreenTexts(); }
+  catch (e) {
+    warn = '<div style="font-size:10.5px;color:#b45309;margin-bottom:4px">⚠️ 수집 때 본 검색 요약을 불러오지 못해 저장 요약으로 돌렸습니다(' + escHtml((e && e.message) || String(e)) + ') — 실제 수집 결과와 조금 다를 수 있습니다.</div>';
+  }
+  if (team && _teamLayerPromise) { try { await _teamLayerPromise; } catch (e2) { /* 아래에서 빈 팀 행으로 계산 */ } }
   var nameOf = {};
   rules.forEach(function(r) { nameOf[r.id] = (target && r.id === target.id && !r.note) ? '이 규칙' : _urShortName(r); });
-  var hits = [], perRule = {}, changed = 0, total = 0;
+  var hits = [], perRule = {}, changed = 0, total = 0, pinned = 0;
+  var rb = _urRulesById();
   newsDataCache.forEach(function(n) {
+    var text = UrgencyRules.ruleInputText(texts[String(n.id)], n.summary);
+    if (team) {
+      var row = _teamRowsMode === 'team' ? (_teamRows[String(n.id)] || null) : null;
+      if (row && (row.source === 'human' || row.source === 'ai')) { pinned++; return; }
+      var common = n._common || n.importance || n.urgency || '참고';
+      var curT = UrgencyRules.effectiveTeamUrgency(common, row, rb).level;
+      var dec = UrgencyRules.teamRuleDecision(rules, n.title || '', text, common);
+      var nv = dec ? dec.level : common;
+      if (nv !== curT) changed++;   // 규칙에서 풀려 공통값으로 돌아가는 기사도 센다
+      if (!dec) return;
+      perRule[dec.rule_id] = (perRule[dec.rule_id] || 0) + 1;
+      total++;
+      if (!target || dec.rule_id === target.id) hits.push({ n: n, cur: curT, res: { level: nv, changed: nv !== curT } });
+      return;
+    }
     var cur = n.urgency || n.importance || '참고';
-    var hit = UrgencyRules.matchUrgencyRules(rules, n.title || '', n.summary || '');
+    var hit = UrgencyRules.matchUrgencyRules(rules, n.title || '', text);
     if (!hit) return;
     var res = UrgencyRules.combine(hit, cur);
     perRule[hit.id] = (perRule[hit.id] || 0) + 1;
@@ -4387,9 +4548,13 @@ function previewUrgencyRules() {
     if (res.changed) changed++;
     if (!target || hit.id === target.id) hits.push({ n: n, cur: cur, res: res });
   });
-  var head = '<div style="font-size:11.5px;color:var(--text-primary);margin-bottom:4px;line-height:1.7">최근 불러온 기사 ' + newsDataCache.length.toLocaleString('ko-KR') + '건에 돌려 보면 — ' +
-    '규칙에 걸린 기사 <b>' + total + '건</b> · 그중 등급이 바뀌는 기사 <b>' + changed + '건</b>' +
+  var head = warn + '<div style="font-size:11.5px;color:var(--text-primary);margin-bottom:4px;line-height:1.7">최근 불러온 기사 ' + newsDataCache.length.toLocaleString('ko-KR') + '건에 ' +
+    (team ? '우리 팀 규칙을 ' : '') + '돌려 보면 — ' +
+    (team
+      ? '걸린 기사 <b>' + total + '건</b> · 우리 팀 등급이 바뀌는 기사 <b>' + changed + '건</b>(규칙에서 풀려 공통값으로 돌아가는 기사 포함)'
+      : '규칙에 걸린 기사 <b>' + total + '건</b> · 그중 등급이 바뀌는 기사 <b>' + changed + '건</b>') +
     (target ? ' · <b>이 규칙으로 정해지는 기사 ' + hits.length + '건</b>' : '') + '</div>' +
+    (team && pinned ? '<div style="font-size:10.5px;color:var(--text-tertiary);margin-bottom:2px">우리 팀이 직접 고친 기사 ' + pinned + '건은 규칙이 건드리지 않습니다(「공통값으로 되돌리기」를 하면 그때 규칙이 다시 적용).</div>' : '') +
     '<div style="font-size:10.5px;color:var(--text-tertiary);margin-bottom:6px">' +
     Object.keys(perRule).map(function(k) { return escHtml(nameOf[k] || k) + ' ' + perRule[k] + '건'; }).join(' · ') + '</div>';
   var list = '';
@@ -4450,11 +4615,15 @@ var UR_NL_TOOL = {
 };
 
 async function urgencyRuleFromText(btn) {
-  if (!isAdminUser()) { _urMsg('공통 규칙은 관리자만 만들 수 있습니다.', true); return; }
+  if (!_urCanEdit()) { _urMsg(_urTab === 'team' ? teamEditGateMsg() : '공통 규칙은 관리자만 만들 수 있습니다.', true); return; }
   var ta = document.getElementById('ur-f-nl');
   var text = ((ta && ta.value) || '').trim();
   if (!text) { _urMsg('만들고 싶은 규칙을 문장으로 적어 주세요.', true); return; }
-  var examples = _urRules.filter(function(r) { return r.team_id == null; }).map(function(r) {
+  // 본보기 = 공통 규칙 + (팀 탭이면) 우리 팀 규칙. 칸만 채우므로 어느 탭이든 같은 방식(#250)
+  var team = _urTab === 'team', tid = myTeamId();
+  var examples = _urRules.filter(function(r) {
+    return r.team_id == null || (team && tid != null && r.team_id != null && Number(r.team_id) === tid);
+  }).map(function(r) {
     return { name: _urShortName(r), mode: r.mode, level: r.level, any_words: r.any_words || [],
              and_groups: _urGroups(r.and_any), none_words: r.none_words || [] };
   });
@@ -4466,7 +4635,9 @@ async function urgencyRuleFromText(btn) {
       method: 'POST',
       body: JSON.stringify({
         model: 'claude-haiku-4-5-20251001', max_tokens: 800,
-        system: UR_NL_SYSTEM + '\n\n[지금 저장된 규칙 — 본보기]\n' + JSON.stringify(examples),
+        system: UR_NL_SYSTEM +
+          (team ? '\n\n[이번 규칙은 「' + myTeamName() + '」 팀 규칙이다 — 그 팀이 보는 등급에만 적용된다. 그 팀의 관점으로 옮긴다]' : '') +
+          '\n\n[지금 저장된 규칙 — 본보기]\n' + JSON.stringify(examples),
         tools: [UR_NL_TOOL], tool_choice: { type: 'tool', name: 'make_rule' },
         messages: [{ role: 'user', content: text.slice(0, 500) }]
       })
@@ -4498,10 +4669,12 @@ async function urgencyRuleFromText(btn) {
 
 async function saveUrgencyRule(btn) {
   if (!sb) return;
-  if (!isAdminUser()) { _urMsg('공통 규칙은 관리자만 저장할 수 있습니다.', true); return; }
+  var team = _urTab === 'team';
+  if (!_urCanEdit()) { _urMsg(team ? teamEditGateMsg() : '공통 규칙은 관리자만 저장할 수 있습니다.', true); return; }
   var row = _urFormRow();
   var errs = _urFormErrors(row);
   if (!row.note) errs.push('규칙 이름을 적어 주세요');
+  if (team && row.team_id == null) errs.push('팀이 지정되지 않은 계정입니다');
   if (errs.length) { _urMsg(errs.join(' / '), true); return; }
   if (btn) btn.disabled = true;
   _urMsg('저장 중...');
@@ -4518,12 +4691,554 @@ async function saveUrgencyRule(btn) {
     await loadUrgencySources(true);
     renderUrgencyRules();
     cancelUrgencyRuleEdit();
-    _urMsg('저장됨 — 다음 뉴스 수집(10분 간격)부터 새 기사에 적용됩니다. 이미 저장된 기사는 바뀌지 않습니다.');
+    if (!team) {
+      _urMsg('저장됨 — 다음 뉴스 수집(10분 간격)부터 새 기사에 적용됩니다. 이미 저장된 기사는 바뀌지 않습니다.');
+      return;
+    }
+    // 팀 규칙은 저장하는 순간 불러온 기사에 다시 적용한다(#250 E4) — 수집 때 적용(크롤러)과 같은 입력·같은 함수
+    _urMsg('저장됨 — 우리 팀 기사에 바로 반영하는 중...');
+    try {
+      var st = await reapplyTeamRules();
+      var n = st.added + st.changed + st.released;
+      _urMsg('저장됨 — 우리 팀 기사 ' + n.toLocaleString('ko-KR') + '건에 바로 반영(새로 걸림 ' + st.added + ' · 바뀜 ' + st.changed + ' · 해제 ' + st.released + '). 앞으로 수집되는 기사에도 적용됩니다.' +
+        (st.skipped ? ' (그사이 팀에서 직접 고쳤거나 지워진 기사 ' + st.skipped + '건은 건너뜀)' : ''));
+    } catch (e2) {
+      console.warn('[팀 규칙] 즉시 재적용 실패:', e2);
+      _urMsg('규칙은 저장됐지만 불러온 기사에 바로 반영하지 못했습니다: ' + ((e2 && e2.message) || e2) +
+        ' — 같은 규칙을 한 번 더 저장하면 다시 반영합니다(앞으로 수집되는 기사에는 적용됩니다).', true);
+    }
   } catch(e) {
     _urMsg('저장 실패: ' + (e.message || e), true);
   } finally {
     if (btn) btn.disabled = false;
   }
+}
+
+// ════════════════════════════════════════════
+//  긴급도 팀 층 (#250, 2026-09-27, 설계안 §10 — Fable 재검토)
+//  공통값(news_feed.importance || urgency) 위에 팀 값(표 team_urgency)을 **읽을 때 덧씌운다** — news_feed는 건드리지 않는다.
+//  팀 값 = 사람 수정(human) > 팀 규칙(rule — 저장된 urgency가 아니라 **지금 규칙 정의로 다시 계산**) > 공통값. ai 행(세션 C
+//  팀 AI)은 저장값 그대로. 계산은 전부 _shared/urgency_rules.js(effectiveTeamUrgency·divisionUrgency·teamRuleDecision·
+//  ruleInputText) — Python urgency_rules.py와 같은 케이스 파일(tests/fixtures/urgency_team_cases.json)로 검증한다.
+//  누가 무엇을 보나: 팀이 있는 승인 계정(관리자 포함) = 우리 팀 값 · 실장(팀 없음 + division) = 실 팀들 중 가장 높은 값(보기만) ·
+//  그 밖(비로그인·미승인·팀 없음) = 공통값 — 팀 표를 조회하지 않는다(anon은 권한도 없다).
+//  공통값·당일 브리핑 🔴(syncBriefingUrgency)·알림·아침 브리핑은 팀 값을 보지 않는다(세션 B 몫).
+//  고친 사람 이름은 화면에 내지 않는다(E7) — set_by는 DB에만(관리자 확인용).
+//  사내판: 콘솔 ported.js가 이 파일의 뉴스 목록·등급 함수를 옮겨 쓴다 — _newsAbsorb·setNewsImportance·showNewsDetail·
+//  _urgencySourceHtml이 이 층을 부르게 바뀌었으니 port_watch 통보 대상(팀 표 자체는 사내와 무관, 설계안 §8).
+// ════════════════════════════════════════════
+var _teamsAll = [];              // teams(id,name,division,sort_order) sort_order 순 — 로그인 때 한 번, 계정 관리와 공용
+var _teamsPromise = null;
+var _teamRows = {};              // 팀 계정: news_id → team_urgency 행 / 실장: news_id → { team_id: 행 }
+var _teamRowsMode = null;        // 'team' | 'division' | null(덧씌우기 없음 = 공통값)
+var _divTeamIds = [];            // 실장: 그 실 팀 id(sort_order 순) — divisionUrgency의 team_ids
+var _teamLayerKey = null;        // 어느 계정·팀·실 기준으로 불러왔나 — 바뀔 때만 다시 읽는다
+var _teamLayerPromise = null;
+var _teamLayerError = '';        // 팀 등급을 못 읽었으면 그 이유(머리줄 ⚠️)
+var _gradeView = 'team';         // 머리줄 「등급 기준」 — 'team'(우리 팀·우리 실) | 'common'
+var TEAM_URG_COLS = 'news_id,team_id,urgency,source,rule_id,updated_at';
+try { if (localStorage.getItem('newsGradeView') === 'common') _gradeView = 'common'; } catch (e) { /* 저장소 막힘(사생활 모드 등) — 기본값 */ }
+
+function _teamName(id) {
+  for (var i = 0; i < _teamsAll.length; i++) if (Number(_teamsAll[i].id) === Number(id)) return _teamsAll[i].name;
+  return '팀 ' + id;
+}
+function myTeamName() {
+  if (currentProfile && currentProfile.teams && currentProfile.teams.name) return currentProfile.teams.name;
+  var tid = myTeamId();
+  return tid != null ? _teamName(tid) : '우리 팀';
+}
+
+function loadTeamsList(force) {
+  if (!sb || !aiReady()) return Promise.resolve(_teamsAll);
+  if (_teamsPromise && !force) return _teamsPromise;
+  var p = (async function() {
+    var r = await sb.from('teams').select('id,name,division,sort_order')
+      .order('sort_order', { ascending: true, nullsFirst: false }).order('id');
+    if (r.error) throw r.error;
+    _teamsAll = r.data || [];
+    return _teamsAll;
+  })();
+  _teamsPromise = p;
+  p.catch(function() { if (_teamsPromise === p) _teamsPromise = null; });
+  return p;
+}
+
+// applyAuthUI 끝에서 불린다 — 계정·팀·실이 그대로면 아무것도 안 한다(비로그인은 늘 여기서 끝, 조회 0회)
+function refreshTeamLayer() {
+  var tid = myTeamId(), div = myDivision();
+  var key = (tid != null || div) ? [currentUser ? currentUser.id : '', tid, div].join('|') : null;
+  if (key === _teamLayerKey) { _gradeViewUI(); return _teamLayerPromise || Promise.resolve(); }
+  _teamLayerKey = key;
+  _teamLayerError = '';
+  var had = _teamRowsMode != null;
+  _teamRows = {}; _teamRowsMode = null; _divTeamIds = []; _teamLayerPromise = null;   // 앞 계정의 팀 값을 남기지 않는다
+  if (!currentUser) { _teamsAll = []; _teamsPromise = null; }
+  _gradeViewUI();
+  if (had) applyTeamOverlay();
+  if (!key) return Promise.resolve();
+  var p = loadTeamLayer(key);
+  _teamLayerPromise = p;
+  return p;
+}
+
+// 규칙(전체 — 꺼진 것 포함, rule 행 재계산용)·팀 목록을 먼저, 그다음 팀 행 → 덧씌우기
+async function loadTeamLayer(key) {
+  try {
+    await Promise.all([loadUrgencySources(), loadTeamsList()]);
+    if (key !== _teamLayerKey) return;
+    await loadTeamRows();
+    if (key !== _teamLayerKey) return;
+    _teamLayerError = '';
+    applyTeamOverlay();
+  } catch (e) {
+    if (key !== _teamLayerKey) return;
+    _teamLayerError = (e && e.message) || String(e);
+    console.warn('[팀 층] 팀 등급을 불러오지 못함 — 공통값으로 표시:', _teamLayerError);
+  }
+  _gradeViewUI();
+  _urRenderTabs();
+}
+
+// team_urgency 읽기 — RLS가 이미 자기 팀·자기 실로 좁히지만 관리자는 전 팀이 보이므로 팀 id로 거른다.
+// 페이지 = 유일 정렬(news_id, team_id) + 건수 먼저 + Promise.all(#117·#233)
+async function loadTeamRows() {
+  var tid = myTeamId(), div = myDivision();
+  var mode = tid != null ? 'team' : (div ? 'division' : null);
+  if (!sb || !mode) { _teamRows = {}; _teamRowsMode = null; _divTeamIds = []; return; }
+  var ids = mode === 'team' ? [tid]
+    : _teamsAll.filter(function(t) { return t.division === div; }).map(function(t) { return Number(t.id); });
+  if (!ids.length) throw new Error(div + ' 소속 팀을 찾지 못함(팀 목록 조회 확인)');
+  var scope = function(b) { return mode === 'team' ? b.eq('team_id', tid) : b.in('team_id', ids); };
+  var PAGE = 1000, MAX_PAGES = 100;
+  var head = await scope(sb.from('team_urgency').select('news_id', { count: 'exact', head: true }));
+  if (head.error) throw head.error;
+  var pages = Math.ceil((head.count || 0) / PAGE);
+  if (pages > MAX_PAGES) { console.warn('[팀 층] 팀 행 ' + head.count + '건이 안전상한을 넘어 일부만 읽습니다'); pages = MAX_PAGES; }
+  var reqs = [];
+  for (var p = 0; p < pages; p++) {
+    reqs.push(scope(sb.from('team_urgency').select(TEAM_URG_COLS))
+      .order('news_id').order('team_id').range(p * PAGE, p * PAGE + PAGE - 1));
+  }
+  var resps = await Promise.all(reqs);
+  var map = {};
+  resps.forEach(function(r) {
+    if (r.error) throw r.error;
+    (r.data || []).forEach(function(row) {
+      row.team_id = Number(row.team_id);
+      var k = String(row.news_id);
+      if (mode === 'team') map[k] = row;
+      else (map[k] = map[k] || {})[row.team_id] = row;
+    });
+  });
+  _teamRows = map; _teamRowsMode = mode; _divTeamIds = mode === 'division' ? ids : [];
+}
+
+// 규칙 id → 행(표 전체, 꺼진 것 포함). _urRules가 새로 읽히면(배열이 바뀌면) 다시 만든다
+var _urByIdSrc = null, _urByIdMap = {};
+function _urRulesById() {
+  if (_urByIdSrc !== _urRules) {
+    _urByIdMap = {};
+    (_urRules || []).forEach(function(r) { _urByIdMap[r.id] = r; });
+    _urByIdSrc = _urRules;
+  }
+  return _urByIdMap;
+}
+
+// 기사 하나 — n._common(공통값), n._teamEff(팀/실 값과 출처), n._importance(지금 보기 기준의 보이는 등급)
+function _overlayItem(n) {
+  var common = n.importance || n.urgency || classifyNewsImportance(n);
+  n._common = common;
+  var eff = null;
+  if (_teamRowsMode === 'team') {
+    var row = _teamRows[String(n.id)] || null;
+    var e = UrgencyRules.effectiveTeamUrgency(common, row, _urRulesById());
+    eff = { level: e.level, source: e.source, row: row };
+  } else if (_teamRowsMode === 'division') {
+    var rows = _teamRows[String(n.id)];
+    if (!rows) eff = { division: true, level: common, teams: _divTeamIds.slice(), anyTeam: false };
+    else {
+      var rb = _urRulesById();
+      var d = UrgencyRules.divisionUrgency(common, rows, rb, _divTeamIds);
+      var any = _divTeamIds.some(function(t) { return UrgencyRules.effectiveTeamUrgency(common, rows[t], rb).source !== 'common'; });
+      eff = { division: true, level: d.level, teams: d.teams, anyTeam: any };
+    }
+  }
+  n._teamEff = eff;
+  n._importance = (eff && _gradeView !== 'common') ? eff.level : common;
+}
+
+// 불러온 기사 전부 다시 덧씌우기 — 보이는 등급이 하나라도 바뀌면 묶음 캐시 무효화(#130) 후 다시 그림
+function applyTeamOverlay() {
+  var changed = false;
+  newsDataCache.forEach(function(n) {
+    var before = n._importance;
+    _overlayItem(n);
+    if (n._importance !== before) changed = true;
+  });
+  if (changed) { _newsCacheVer++; renderNewsList(); }
+  if (selectedNewsId != null) _refreshNewsGradeUI(selectedNewsId);
+}
+
+function setNewsGradeView(v) {
+  _gradeView = v === 'common' ? 'common' : 'team';
+  try { localStorage.setItem('newsGradeView', _gradeView); } catch (e) { /* 기억만 못 할 뿐 화면은 바뀐다 */ }
+  _gradeViewUI();
+  applyTeamOverlay();
+}
+
+// 뉴스 머리줄 「등급 기준: 우리 팀 | 공통」(실장은 「우리 실 | 공통」) — 팀 계정·실장에게만
+function _gradeViewUI() {
+  var box = document.getElementById('news-grade-view');
+  if (!box) return;
+  var tid = myTeamId(), div = myDivision();
+  if (tid == null && !div) { box.style.display = 'none'; box.innerHTML = ''; return; }
+  var chip = function(v, label, title) {
+    var on = _gradeView === v;
+    return '<span onclick="setNewsGradeView(\'' + v + '\')" title="' + escHtml(title) + '" style="cursor:pointer;font-size:10.5px;padding:2px 8px;border-radius:10px;white-space:nowrap;border:0.5px solid ' +
+      (on ? 'var(--accent)' : 'var(--border-mid)') + ';color:' + (on ? 'var(--accent)' : 'var(--text-tertiary)') + ';background:' + (on ? 'var(--accent-light)' : 'transparent') + '">' + label + '</span>';
+  };
+  box.innerHTML = '<span style="font-size:10.5px;color:var(--text-tertiary);white-space:nowrap">등급 기준:</span>' +
+    chip('team', tid != null ? '우리 팀' : '우리 실',
+      tid != null ? myTeamName() + ' 등급으로 봅니다 — 공통값 위에 우리 팀 수정·팀 규칙을 덧씌운 값'
+                  : div + ' 팀들이 보는 등급 중 가장 높은 값으로 봅니다(보기만)') +
+    chip('common', '공통', '모든 이용자가 함께 보는 공통 등급 — 알림·브리핑 기준') +
+    (_teamLayerError ? '<span title="' + escHtml('팀 등급을 불러오지 못해 공통값으로 보입니다: ' + _teamLayerError) + '" style="font-size:11px;color:#b45309;cursor:help">⚠️</span>' : '');
+  box.style.display = 'inline-flex';
+}
+
+function _kstYmd(ts) {
+  var t = Date.parse(ts || '');
+  return isNaN(t) ? '' : new Date(t + 9 * 3600 * 1000).toISOString().slice(0, 10);
+}
+function _lvRo(lv) { return _urLvLabel(lv) + (lv === '보통' ? '으로' : '로'); }   // 중요로·보통으로·참고로
+
+// 팀 층 이름표 — 팀 값이 공통과 다른 출처일 때만(공통이면 '' → 호출부가 공통 이름표). 사람 이름은 넣지 않는다(E7)
+function _teamSourceHtml(n) {
+  var te = n && n._teamEff;
+  if (!te) return '';
+  var st = 'font-size:10px;color:var(--text-tertiary);white-space:nowrap';
+  if (te.division) {
+    if (!te.anyTeam) return '';
+    var names = te.teams.map(_teamName);
+    if (te.teams.length && te.teams.length === _divTeamIds.length)
+      return '<span style="' + st + '" title="' + escHtml('실 모든 팀이 ' + _lvRo(te.level) + ' 봄(팀 수정·팀 규칙 포함)') + '">· 실 전체 팀</span>';
+    return '<span style="' + st + '" title="' + escHtml('이 실 팀들이 보는 등급 중 가장 높은 값 — ' + _lvRo(te.level) + ' 본 팀: ' + names.join(', ')) + '">· ' +
+      escHtml(_lvRo(te.level) + ' 본 팀: ' + names.join('·')) + '</span>';
+  }
+  if (te.source === 'human') {
+    var d = _kstYmd(te.row && te.row.updated_at);
+    var md = d ? parseInt(d.slice(5, 7), 10) + '/' + parseInt(d.slice(8, 10), 10) : '';
+    return '<span style="' + st + '" title="' + escHtml('우리 팀에서 직접 고친 값' + (d ? ' · 마지막 수정 ' + d : '')) + '">· 우리 팀 수정' + (md ? ' · ' + md : '') + '</span>';
+  }
+  if (te.source === 'rule') {
+    var rid = te.row && te.row.rule_id;
+    var r = _urRulesById()[rid];
+    var name = r ? _urShortName(r) : rid;
+    var tip = r ? (r.note || r.id) + ' (' + _urModeLabel(r.mode, r.level) + ')' : rid;
+    return '<span style="' + st + '" title="' + escHtml('우리 팀 규칙 — ' + tip) + '">· 우리 팀 규칙: ' + escHtml(name) + '</span>';
+  }
+  if (te.source === 'ai') return '<span style="' + st + '" title="우리 팀 관점으로 AI가 판정한 값">· 우리 팀 AI</span>';
+  return '';
+}
+
+// 우리 팀이 보는 값(보기 기준과 무관) → { level, source, row } — 팀 행을 아직 못 읽었으면 공통값
+function _teamEffOf(n) {
+  var common = n._common || n.importance || n.urgency || '참고';
+  if (_teamRowsMode !== 'team') return { level: common, source: 'common', row: null };
+  var row = _teamRows[String(n.id)] || null;
+  var e = UrgencyRules.effectiveTeamUrgency(common, row, _urRulesById());
+  return { level: e.level, source: e.source, row: row };
+}
+
+function _teamSelHtml(newsId, current) {
+  return ['긴급', '보통', '참고'].map(function(v) {
+    var r = IMPORTANCE_RULES[v] || {};
+    var act = (current === v);
+    return '<span onclick="setTeamImportance(\'' + newsId + '\',\'' + v + '\')" ' +
+      'style="cursor:pointer;font-size:10px;padding:2px 7px;border-radius:4px;white-space:nowrap;border:1px solid ' + (act ? r.color : 'var(--border-secondary)') + ';' +
+      'color:' + (act ? '#fff' : 'var(--text-tertiary)') + ';background:' + (act ? r.color : 'transparent') + '">' + (v === '긴급' ? '중요' : v) + '</span>';
+  }).join('');
+}
+
+// 상세 모달의 등급 고르기 묶음 — 관리자: 「공통」(+ 팀이 있으면 「우리 팀」) / 팀 계정: 「우리 팀 등급」 + 공통값 흐리게 /
+// 실장: 「우리 실 등급」 보기만 / 그 밖: 종전 잠긴 「중요도 수정」 그대로
+function _impBlockHtml(n) {
+  var id = n.id;
+  var common = n._common || n.importance || n.urgency || '참고';
+  var admin = isAdminUser(), tid = myTeamId(), div = myDivision();
+  var lbl = function(t) { return '<span style="font-size:10px;color:var(--text-tertiary);white-space:nowrap">' + t + '</span>'; };
+  var muted = function(t) { return '<span style="font-size:10px;color:var(--text-muted);white-space:nowrap">' + t + '</span>'; };
+  var line = function(inner) { return '<div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap">' + inner + '</div>'; };
+  var out = '';
+  if (admin || (tid == null && !div)) {
+    var two = admin && tid != null;
+    out += line(lbl(two ? '공통' : '중요도 수정') +
+      '<span id="imp-sel-' + id + '" title="' + (two ? '모든 이용자·알림·브리핑이 함께 보는 값 — 수정 내역은 공통 AI 분류 학습에 반영됩니다' : '수정 내역은 AI 분류 학습에 반영됩니다') +
+      '" style="display:inline-flex;gap:4px">' + _impSelHtml(id, common) + '</span>');
+  }
+  if (tid != null) {
+    var te = _teamEffOf(n);
+    out += line(lbl(admin ? '우리 팀' : '우리 팀 등급') +
+      '<span id="imp-tsel-' + id + '" title="' + escHtml(myTeamName() + ' 화면에만 적용 — 공통값·알림·브리핑은 그대로. 수정 내역은 우리 팀 학습 기록에만 남습니다') + '" style="display:inline-flex;gap:4px">' +
+        _teamSelHtml(id, te.level) + '</span>' +
+      (admin ? '' : muted('공통: ' + escHtml(_urLvLabel(common)))) +
+      (te.source === 'human'
+        ? '<span onclick="revertTeamImportance(\'' + id + '\')" title="우리 팀이 고친 값을 지우고 공통값(우리 팀 규칙에 걸리면 그 값)으로 돌아갑니다" ' +
+          'style="cursor:pointer;font-size:10px;color:var(--accent);white-space:nowrap;text-decoration:underline">공통값으로 되돌리기</span>'
+        : ''));
+  } else if (div) {
+    var de = (n._teamEff && n._teamEff.division) ? n._teamEff : null;
+    var dr = IMPORTANCE_RULES[de ? de.level : common] || IMPORTANCE_RULES['참고'];
+    out += line(lbl('우리 실 등급') +
+      '<span style="font-size:10px;font-weight:700;padding:1px 7px;border-radius:4px;white-space:nowrap;color:' + dr.color + ';background:' + dr.bg + '">' + dr.label + '</span>' +
+      ((de && _teamSourceHtml(n)) || muted('· 실 모든 팀이 공통값')) +
+      muted('공통: ' + escHtml(_urLvLabel(common))) + muted('(보기만)'));
+  }
+  return out;
+}
+
+// 상세 모달의 배지·출처·고르기 묶음을 지금 값으로(목록은 호출부가 다시 그린다)
+function _refreshNewsGradeUI(newsId) {
+  var n = newsDataCache.find(function(x) { return String(x.id) === String(newsId); });
+  if (!n) return;
+  var rule = IMPORTANCE_RULES[n._importance] || IMPORTANCE_RULES['참고'];
+  var badge = document.getElementById('importance-badge-' + newsId);
+  if (badge) { badge.textContent = rule.label; badge.style.color = rule.color; badge.style.background = rule.bg; }
+  var src = document.getElementById('imp-src-' + newsId);
+  if (src) src.innerHTML = _urgencySourceHtml(n);
+  var blk = document.getElementById('imp-block-' + newsId);
+  if (blk) blk.innerHTML = _impBlockHtml(n);
+}
+
+// ── 우리 팀 등급 고치기 (E2·E8) — team_urgency(source human) + importance_feedback 팀 행. 공통값·당일 브리핑은 그대로 ──
+async function setTeamImportance(newsId, newVal) {
+  if (!teamEditor()) { alert(teamEditGateMsg()); return; }
+  var n = newsDataCache.find(function(x) { return String(x.id) === String(newsId); });
+  if (!n || !sb || UrgencyRules.LEVELS.indexOf(newVal) === -1) return;
+  if (_teamLayerPromise) { try { await _teamLayerPromise; } catch (e0) { /* 아래 상태 확인에서 걸러진다 */ } }
+  if (_teamRowsMode !== 'team') {
+    alert('우리 팀 등급을 아직 불러오지 못했습니다 — 새로고침 후 다시 시도해 주세요.' + (_teamLayerError ? '\n(' + _teamLayerError + ')' : ''));
+    return;
+  }
+  var tid = myTeamId(), key = String(n.id);
+  var oldRow = _teamRows[key] || null;
+  var oldEff = _teamEffOf(n).level;
+  if (oldEff === newVal) return;
+  // 화면부터 바꾸고(낙관적 갱신 — setNewsImportance와 같은 방식, #130) DB가 실패하면 되돌린다
+  var apply = function(row) {
+    if (row) _teamRows[key] = row; else delete _teamRows[key];
+    _overlayItem(n);
+    if (currentNewsFilter !== '전체') _newsCacheVer++;
+    renderNewsList();
+    _refreshNewsGradeUI(newsId);
+  };
+  apply({ news_id: n.id, team_id: tid, urgency: newVal, source: 'human', rule_id: null, updated_at: new Date().toISOString() });
+  try {
+    // updated_at·set_by는 트리거가 채운다(set_by = auth.uid() — 위조 불가)
+    var up = await sb.from('team_urgency')
+      .upsert({ news_id: n.id, team_id: tid, urgency: newVal, source: 'human', rule_id: null }, { onConflict: 'news_id,team_id' })
+      .select(TEAM_URG_COLS);
+    if (up.error) throw new Error(up.error.message);
+    if (!up.data || !up.data.length) throw new Error('저장된 행이 없음(권한 확인)');
+    var saved = up.data[0];
+    saved.team_id = Number(saved.team_id);
+    _teamRows[key] = saved;
+  } catch (e) {
+    apply(oldRow);
+    alert('우리 팀 등급 수정 실패: ' + ((e && e.message) || e));
+    return;
+  }
+  _refreshNewsGradeUI(newsId);   // 「마지막 수정」을 서버 시각으로
+  // 팀 학습 기록 — (news_id, team_id) 한 행. ai_importance = 고치기 직전 우리 팀이 보던 값(처음 한 번만, 갱신 때는 보존).
+  // 팀 값은 이미 저장됐으므로 여기서 실패해도 화면을 되돌리지 않고 알리기만 한다(#226)
+  try {
+    var fb = { title: n.title || '', summary: (n.summary || '').slice(0, 300),
+               user_importance: newVal, updated_at: new Date().toISOString() };
+    var ex = await sb.from('importance_feedback').select('id').eq('news_id', n.id).eq('team_id', tid).limit(1);
+    if (ex.error) throw ex.error;
+    var fw;
+    if (ex.data && ex.data.length) {
+      fw = await sb.from('importance_feedback').update(fb).eq('id', ex.data[0].id).select('id');
+    } else {
+      fb.news_id = n.id; fb.team_id = tid; fb.ai_importance = oldEff;
+      fw = await sb.from('importance_feedback').insert(fb).select('id');
+    }
+    if (fw.error) throw fw.error;
+    if (!fw.data || !fw.data.length) throw new Error('기록된 행이 없음(권한 확인)');
+  } catch (e2) {
+    console.warn('[팀 등급] 팀 학습 기록 실패:', e2);
+    alert('우리 팀 등급은 저장됐지만 팀 학습 기록(importance_feedback) 저장에 실패했습니다: ' + ((e2 && e2.message) || e2));
+  }
+}
+
+// 우리 팀의 켜진 팀 규칙 — 표 조회 순서(position, id) 그대로(크롤러와 같은 순서, 첫 적중 하나가 정함)
+function _teamEnabledRules(tid) {
+  return _urRules.filter(function(r) { return r.enabled && r.team_id != null && Number(r.team_id) === tid; });
+}
+
+// ── 「공통값으로 되돌리기」 — 우리 팀 사람 수정 행 + 팀 학습 기록을 지우고, 그 기사에 팀 규칙을 다시 판정 ──
+async function revertTeamImportance(newsId) {
+  if (!teamEditor()) { alert(teamEditGateMsg()); return; }
+  var n = newsDataCache.find(function(x) { return String(x.id) === String(newsId); });
+  if (!n || !sb) return;
+  var tid = myTeamId(), key = String(n.id);
+  var row = _teamRows[key];
+  if (!row || row.source !== 'human') return;
+  if (!confirm('우리 팀이 고친 등급을 지우고 공통값(우리 팀 규칙에 걸리면 그 값)으로 되돌릴까요?')) return;
+  try {
+    // RLS 삭제는 막혀도 오류 없이 0행 — 지운 행 수로 성공을 판정한다(#48)
+    var d = await sb.from('team_urgency').delete().eq('news_id', n.id).eq('team_id', tid).eq('source', 'human').select('news_id');
+    if (d.error) throw new Error(d.error.message);
+    if (!d.data || !d.data.length) throw new Error('지운 행이 없습니다(권한 확인 또는 이미 되돌려짐)');
+  } catch (e) {
+    alert('되돌리기 실패: ' + ((e && e.message) || e));
+    return;
+  }
+  delete _teamRows[key];
+  var warns = [];
+  try {
+    var f = await sb.from('importance_feedback').delete().eq('news_id', n.id).eq('team_id', tid).select('id');
+    if (f.error) throw f.error;
+    if (!f.data || !f.data.length) console.warn('[팀 등급] 되돌리기 — 지운 팀 학습 기록 0건(원래 없었거나 권한):', newsId);
+  } catch (e2) {
+    console.warn('[팀 등급] 팀 학습 기록 삭제 실패:', e2);
+    warns.push('팀 학습 기록 삭제 실패: ' + ((e2 && e2.message) || e2));
+  }
+  // 팀 규칙 다시 판정 — 수집 때와 같은 입력(검색 요약 → 없으면 저장 요약)·같은 함수
+  try {
+    var tRules = _teamEnabledRules(tid);
+    if (tRules.length) {
+      var screen = await _screenTextOf(n.id);
+      var common = n._common || n.importance || n.urgency || '참고';
+      var dec = UrgencyRules.teamRuleDecision(tRules, n.title || '', UrgencyRules.ruleInputText(screen, n.summary), common);
+      if (dec) {
+        var ins = await sb.from('team_urgency')
+          .insert({ news_id: n.id, team_id: tid, urgency: dec.level, source: 'rule', rule_id: dec.rule_id })
+          .select(TEAM_URG_COLS);
+        if (ins.error) throw new Error(ins.error.message);
+        if (!ins.data || !ins.data.length) throw new Error('규칙 행이 저장되지 않음(권한 확인)');
+        var nr = ins.data[0];
+        nr.team_id = Number(nr.team_id);
+        _teamRows[key] = nr;
+      }
+    }
+  } catch (e3) {
+    console.warn('[팀 등급] 팀 규칙 다시 적용 실패:', e3);
+    warns.push('팀 규칙 다시 적용 실패: ' + ((e3 && e3.message) || e3));
+  }
+  _overlayItem(n);
+  _newsCacheVer++;
+  renderNewsList();
+  _refreshNewsGradeUI(newsId);
+  if (warns.length) alert('공통값으로 되돌렸습니다. 다만 ' + warns.join(' / '));
+}
+
+// ── 수집 때 규칙이 본 검색 요약(news_feed.screen_text, ≤300자) — 규칙 편집기(미리보기·즉시 재적용)·되돌리기에만 ──
+// 목록 조회(NEWS_LIST_COLS)에 넣지 않는 이유: 모두의 첫 화면에 수 MB가 더 실린다. 필요한 사람만 한 번(5분 재사용).
+// 요약 자리 = UrgencyRules.ruleInputText(screen_text, summary) — 크롤러(수집 때 적용)와 같은 입력이어야 결과가 같다.
+var _screenTextsPromise = null, _screenTextsAt = 0;
+function loadScreenTexts(force) {
+  if (!sb) return Promise.resolve({});
+  if (_screenTextsPromise && !force && Date.now() - _screenTextsAt < 5 * 60 * 1000) return _screenTextsPromise;
+  var p = (async function() {
+    var PAGE = 1000, MAX_PAGES = 60;
+    var head = await sb.from('news_feed').select('id', { count: 'exact', head: true }).not('screen_text', 'is', null);
+    if (head.error) throw head.error;
+    var pages = Math.min(Math.ceil((head.count || 0) / PAGE), MAX_PAGES);
+    var reqs = [];
+    for (var i = 0; i < pages; i++) {
+      reqs.push(sb.from('news_feed').select('id,screen_text').not('screen_text', 'is', null)
+        .order('id').range(i * PAGE, i * PAGE + PAGE - 1));
+    }
+    var resps = await Promise.all(reqs);
+    var map = {};
+    resps.forEach(function(r) {
+      if (r.error) throw r.error;
+      (r.data || []).forEach(function(x) { map[String(x.id)] = x.screen_text; });
+    });
+    return map;
+  })();
+  _screenTextsPromise = p; _screenTextsAt = Date.now();
+  p.catch(function() { if (_screenTextsPromise === p) _screenTextsPromise = null; });
+  return p;
+}
+async function _screenTextOf(newsId) {
+  var r = await sb.from('news_feed').select('screen_text').eq('id', newsId).maybeSingle();
+  if (r.error) throw r.error;
+  return r.data ? r.data.screen_text : null;
+}
+
+// 팀 규칙 행 넣기 — 충돌(이미 행 있음)은 건너뛴다(ignoreDuplicates = ON CONFLICT DO NOTHING): 그사이 팀원이 넣은
+// 사람 수정 행을 절대 덮지 않는다(크롤러와 같은 원칙). 60일 정리로 이미 지워진 기사(외래키 23503)가 섞이면
+// 살아 있는 기사만 골라 한 번 더. 돌려주는 값 = 실제로 넣은 news_id 목록.
+async function _teamRuleInsert(rows) {
+  if (!rows.length) return [];
+  var r = await sb.from('team_urgency').upsert(rows, { onConflict: 'news_id,team_id', ignoreDuplicates: true }).select('news_id');
+  if (r.error && r.error.code === '23503') {
+    var alive = new Set();
+    for (var i = 0; i < rows.length; i += 200) {
+      var q = await sb.from('news_feed').select('id').in('id', rows.slice(i, i + 200).map(function(x) { return x.news_id; }));
+      if (q.error) throw new Error('기사 확인 실패: ' + q.error.message);
+      (q.data || []).forEach(function(x) { alive.add(String(x.id)); });
+    }
+    var keep = rows.filter(function(x) { return alive.has(String(x.news_id)); });
+    if (!keep.length) return [];
+    r = await sb.from('team_urgency').upsert(keep, { onConflict: 'news_id,team_id', ignoreDuplicates: true }).select('news_id');
+  }
+  if (r.error) throw new Error('팀 규칙 행 저장 실패: ' + r.error.message);
+  return (r.data || []).map(function(x) { return String(x.news_id); });
+}
+
+// ── 팀 규칙 저장 직후 즉시 재적용 (E4) — 불러온 기사 전부에 우리 팀의 켜진 규칙을 다시 돌려 team_urgency 규칙 행을 맞춘다 ──
+// 사람(human)·팀 AI(ai) 행이 있는 기사는 건너뛴다. 결정 있음 → 규칙 행 새로/바꿈, 결정 없음 + 규칙 행 있음 → 해제(삭제).
+// 바꿈은 '규칙 행 지우기(source=rule만) → 넣기(충돌 무시)'로 한다 — upsert(갱신)로 덮으면 그사이 팀원이 사람 수정으로 바꾼
+// 행까지 규칙 값으로 덮을 수 있다. 입력 글 = ruleInputText(screen_text, summary), 기준 = 공통값 — 크롤러와 같다(AI 0회).
+async function reapplyTeamRules() {
+  var tid = myTeamId();
+  if (tid == null || !sb) throw new Error('팀이 지정된 계정이 아닙니다');
+  if (_newsFillPromise) { try { await _newsFillPromise; } catch (e0) { /* 1단계분만으로 진행 */ } }
+  var texts = await loadScreenTexts(true);
+  await loadTeamRows();   // 지금 DB 상태와 비교(다른 팀원의 수정·크롤러가 넣은 행 반영)
+  if (_teamRowsMode !== 'team') throw new Error('우리 팀 등급을 불러오지 못했습니다');
+  var rules = _teamEnabledRules(tid);
+  var add = [], chg = [], rel = [];
+  newsDataCache.forEach(function(n) {
+    var key = String(n.id), row = _teamRows[key] || null;
+    if (row && (row.source === 'human' || row.source === 'ai')) return;
+    var common = n.importance || n.urgency || classifyNewsImportance(n);
+    var dec = rules.length ? UrgencyRules.teamRuleDecision(rules, n.title || '', UrgencyRules.ruleInputText(texts[key], n.summary), common) : null;
+    if (dec) {
+      var rec = { news_id: n.id, team_id: tid, urgency: dec.level, source: 'rule', rule_id: dec.rule_id };
+      if (!row) add.push(rec);
+      else if (row.rule_id !== dec.rule_id || row.urgency !== dec.level) chg.push(rec);
+    } else if (row && row.source === 'rule') {
+      rel.push(n.id);
+    }
+  });
+  // 1) 해제·바꿈 대상의 규칙 행 지우기 — 200건씩, 지운 행 수 확인(0이면 RLS에 막힌 것, #48)
+  var delIds = rel.concat(chg.map(function(r) { return r.news_id; }));
+  var deleted = new Set();
+  for (var i = 0; i < delIds.length; i += 200) {
+    var ids = delIds.slice(i, i + 200);
+    var d = await sb.from('team_urgency').delete().in('news_id', ids).eq('team_id', tid).eq('source', 'rule').select('news_id');
+    if (d.error) throw new Error('규칙 행 정리 실패: ' + d.error.message);
+    if (!d.data || !d.data.length) throw new Error('규칙 행 정리 실패: 지운 행 0건(권한 확인)');
+    if (d.data.length < ids.length) console.warn('[팀 규칙] 정리 ' + ids.length + '건 중 ' + d.data.length + '건만 지움 — 그사이 사람 수정으로 바뀐 행은 그대로 둔다');
+    d.data.forEach(function(x) { deleted.add(String(x.news_id)); });
+  }
+  // 2) 새로 걸림 + (지운) 바꿈 넣기 — 500건씩, 모든 행 같은 키(news_id, team_id, urgency, source, rule_id)
+  var ins = add.concat(chg.filter(function(r) { return deleted.has(String(r.news_id)); }));
+  var inserted = new Set();
+  for (var j = 0; j < ins.length; j += 500) {
+    (await _teamRuleInsert(ins.slice(j, j + 500))).forEach(function(k) { inserted.add(k); });
+  }
+  var a = add.filter(function(r) { return inserted.has(String(r.news_id)); }).length;
+  var b = chg.filter(function(r) { return inserted.has(String(r.news_id)); }).length;
+  var c = rel.filter(function(id) { return deleted.has(String(id)); }).length;
+  await loadTeamRows();
+  applyTeamOverlay();
+  return { added: a, changed: b, released: c, skipped: add.length + chg.length + rel.length - a - b - c };
 }
 
 // 목록을 다시 그리지 않고 선택 표시·읽음 점만 제자리에서 바꾼다(§4-3-12).
@@ -4569,9 +5284,8 @@ async function showNewsDetail(newsId) {
     'style="font-size:11px;padding:4px 10px;cursor:pointer;color:#d04545;white-space:nowrap">' +
     '<i class="ti ti-trash"></i> 삭제</button>';
 
-  var impSel = '<div style="display:flex;align-items:center;gap:5px;margin-bottom:8px;flex-wrap:wrap">' +
-    '<span style="font-size:10px;color:var(--text-tertiary);white-space:nowrap">중요도 수정</span>' +
-    '<span id="imp-sel-' + n.id + '" title="수정 내역은 AI 분류 학습에 반영됩니다" style="display:inline-flex;gap:4px">' + _impSelHtml(n.id, n._importance) + '</span></div>';
+  // 등급 고르기 묶음(#250) — 관리자 「공통」(+「우리 팀」) / 팀 계정 「우리 팀 등급」 / 실장 보기만 / 그 밖 종전 잠긴 셀렉터
+  var impSel = '<div id="imp-block-' + n.id + '" style="display:flex;flex-direction:column;gap:4px;margin-bottom:8px">' + _impBlockHtml(n) + '</div>';
 
   var html =
     // 헤더: 중요도 + 제목

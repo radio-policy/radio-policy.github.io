@@ -28,5 +28,25 @@ eq('검증: 빈 그룹', v([{ id: 'a', mode: 'min', level: '보통', any_words: 
 eq('검증: id 중복', v([{ id: 'a', min: '보통', any: ['x'] }, { id: 'a', min: '보통', any: ['y'] }]).length > 0, true);
 eq('검증: 평면 and_any 정상', v([{ id: 'a', min: '보통', any: ['x'], and_any: ['y', 'z'] }]), []);
 
+// ── 팀 층(#250) — Python TestUrgencyTeamLayer와 같은 파일 ──
+var T = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'urgency_team_cases.json'), 'utf8'));
+var byId = {};
+T.rules.forEach(function (r) { byId[r.id] = r; });
+function teamRules(teamId) {
+  return T.rules.filter(function (r) { return r.team_id === teamId && r.enabled; })
+    .sort(function (a, b) { return (a.position - b.position) || (a.id < b.id ? -1 : 1); });
+}
+eq('팀 규칙 형식', UR.validateRules(T.rules), []);
+T.input_text_cases.forEach(function (c) { eq('[입력] ' + c.name, UR.ruleInputText(c.screen_text, c.summary), c.expect); });
+T.decision_cases.forEach(function (c) {
+  eq('[팀 규칙] ' + c.name, UR.teamRuleDecision(teamRules(c.team_id), c.title, c.text, c.common), c.expect);
+});
+T.effective_cases.forEach(function (c) { eq('[팀 등급] ' + c.name, UR.effectiveTeamUrgency(c.common, c.row, byId), c.expect); });
+T.division_cases.forEach(function (c) {
+  var rows = {};
+  Object.keys(c.rows_by_team).forEach(function (k) { rows[parseInt(k, 10)] = c.rows_by_team[k]; });
+  eq('[실장] ' + c.name, UR.divisionUrgency(c.common, rows, byId, c.team_ids), c.expect);
+});
+
 console.log('\n' + (total - fails) + '/' + total + ' 통과');
 if (fails) process.exit(1);

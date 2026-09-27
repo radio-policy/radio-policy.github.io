@@ -954,6 +954,16 @@ AS $function$
 $function$
 ;
 
+CREATE OR REPLACE FUNCTION public.my_division()
+ RETURNS text
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+  select case when team_id is null then division end from profiles where user_id = auth.uid()
+$function$
+;
+
 CREATE OR REPLACE FUNCTION public.my_team()
  RETURNS smallint
  LANGUAGE sql
@@ -966,7 +976,6 @@ AS $function$
 CREATE OR REPLACE FUNCTION public.news_feed_edit_guard()
  RETURNS trigger
  LANGUAGE plpgsql
- SECURITY DEFINER
  SET search_path TO 'public'
 AS $function$
 begin
@@ -1362,6 +1371,18 @@ begin
     set rating = excluded.rating,
         reason = coalesce(excluded.reason, answer_feedback.reason),
         updated_at = now();
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.team_urgency_touch()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SET search_path TO 'public'
+AS $function$
+begin
+  new.updated_at := now();
+  new.set_by := coalesce(auth.uid(), new.set_by);   -- 로그인 쓰기는 본인 id로 고정(위조 불가), 크롤러는 null
+  return new;
 end $function$
 ;
 
