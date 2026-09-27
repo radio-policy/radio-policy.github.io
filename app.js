@@ -9777,7 +9777,7 @@ function renderPersonRoles(p, fieldRows) {
     var tip = sp.label + ' · ' + _ym(sp.from) + '~' + _ym(sp.to) + ' · ' + cnt + ' — ' + _personRoleVerb(sp.label);
     return '<div style="display:flex;align-items:center;gap:8px;min-height:30px">' +
       '<div style="flex:0 0 150px;min-width:0;line-height:1.25" title="' + escHtml(tip) + '">' +
-        '<div style="font-size:11px;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + escHtml(sp.label) + '</div>' +
+        '<div style="font-size:11px;font-weight:700;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + escHtml(sp.label) + '</div>' +
         '<div style="font-size:10px;color:var(--text-tertiary);white-space:nowrap">' + escHtml(cnt) + '</div></div>' +
       '<div style="position:relative;flex:1;height:18px">' +
         '<div title="' + escHtml(tip) + '" style="position:absolute;top:5px;height:8px;border-radius:4px;left:' + l.toFixed(2) + '%;width:' + w.toFixed(2) + '%;background:' +
