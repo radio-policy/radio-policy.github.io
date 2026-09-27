@@ -9741,11 +9741,25 @@ var _DAE_START = [['21대', '2020-05-30'], ['22대', '2024-05-30']];
 // 자격 띠(#166 → 2026-09-27 그림으로) — 발언 기간을 가로축으로, 자격마다 한 줄씩 구간 막대를 그린다.
 // 정부 쪽에서 답하다 의원이 되어 묻는 사람(김현·이진숙)의 대비를 한눈에 보이게 하려는 것. 대수 경계는 점선.
 // 자격이 하나뿐이어도 그린다 — 어느 대수에 활동했는지가 보인다.
-function renderPersonRoles(p) {
+// 숫자 두 가지(2026-09-27 운영자 지적 — 이진숙 후보자 '9건'): '관련' = assembly_speeches(통신·전파·AI 관련만 골라 담은 발언),
+// '전체' = speech_field_stats(22대 회의록 모든 발언 블록). 전체 쪽에만 있는 자격(예: 이진숙 '증인' 572블록)도 줄로 보인다.
+function renderPersonRoles(p, fieldRows) {
   var box = document.getElementById('person-roles');
   if (!box) return;
   var spans = _personRoleSpans(_personSpeeches).filter(function(sp) { return sp.from && sp.to; });
+  var byLabel = {};
+  spans.forEach(function(sp) { sp.blocks = null; byLabel[sp.label] = sp; });
+  (fieldRows || []).forEach(function(r) {
+    var k = _personRoleLabel(r.position), d = String(r.meeting_date || '');
+    if (!d) return;
+    var sp = byLabel[k];
+    if (!sp) { sp = byLabel[k] = { label: k, from: d, to: d, n: 0, blocks: 0 }; spans.push(sp); }
+    sp.blocks = (sp.blocks || 0) + (r.n_blocks || 0);
+    if (d < sp.from) sp.from = d;
+    if (d > sp.to) sp.to = d;
+  });
   if (!spans.length) { box.innerHTML = ''; return; }
+  spans.sort(function(a, b) { return (a.from || '').localeCompare(b.from || ''); });
   var t0 = Date.parse(spans[0].from), t1 = t0;
   spans.forEach(function(sp) { t0 = Math.min(t0, Date.parse(sp.from)); t1 = Math.max(t1, Date.parse(sp.to)); });
   var pad = Math.max(45 * 864e5, (t1 - t0) * 0.03);   // 한 달짜리 구간도 보이게 앞뒤 여유
@@ -9755,13 +9769,16 @@ function renderPersonRoles(p) {
     return '<div style="position:absolute;top:0;bottom:0;left:' + pct(x[1]).toFixed(2) + '%;border-left:1px dashed var(--border-mid)"></div>' +
       '<div style="position:absolute;top:-1px;left:calc(' + pct(x[1]).toFixed(2) + '% + 3px);font-size:9.5px;color:var(--text-tertiary)">' + x[0] + '</div>';
   }).join('');
+  var anyBlocks = spans.some(function(sp) { return sp.blocks != null; });
   var rows = spans.map(function(sp) {
     var member = sp.label === '과방위원';
     var l = pct(sp.from), w = Math.max(1.2, pct(sp.to) - l);
-    var tip = sp.label + ' · ' + _ym(sp.from) + '~' + _ym(sp.to) + ' · ' + sp.n + '건 — ' + _personRoleVerb(sp.label);
-    return '<div style="display:flex;align-items:center;gap:8px;height:18px">' +
-      '<div style="flex:0 0 150px;font-size:11px;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="' + escHtml(tip) + '">' +
-        escHtml(sp.label) + ' <span style="color:var(--text-tertiary)">' + sp.n + '건</span></div>' +
+    var cnt = '관련 ' + sp.n + '건' + (sp.blocks != null ? ' · 전체 ' + sp.blocks.toLocaleString() + '블록' : '');
+    var tip = sp.label + ' · ' + _ym(sp.from) + '~' + _ym(sp.to) + ' · ' + cnt + ' — ' + _personRoleVerb(sp.label);
+    return '<div style="display:flex;align-items:center;gap:8px;min-height:30px">' +
+      '<div style="flex:0 0 150px;min-width:0;line-height:1.25" title="' + escHtml(tip) + '">' +
+        '<div style="font-size:11px;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + escHtml(sp.label) + '</div>' +
+        '<div style="font-size:10px;color:var(--text-tertiary);white-space:nowrap">' + escHtml(cnt) + '</div></div>' +
       '<div style="position:relative;flex:1;height:18px">' +
         '<div title="' + escHtml(tip) + '" style="position:absolute;top:5px;height:8px;border-radius:4px;left:' + l.toFixed(2) + '%;width:' + w.toFixed(2) + '%;background:' +
           (member ? 'var(--accent)' : 'var(--text-tertiary)') + '"></div>' +
@@ -9777,6 +9794,8 @@ function renderPersonRoles(p) {
     '</div>' +
     '<div style="display:flex;justify-content:space-between;margin-left:158px;font-size:9.5px;color:var(--text-tertiary)">' +
       '<span>' + escHtml(_ym(new Date(t0 + pad).toISOString())) + '</span><span>' + escHtml(_ym(new Date(t1 - pad).toISOString())) + '</span></div>' +
+    '<div style="font-size:10px;color:var(--text-tertiary);margin-top:4px">관련 = 통신·전파·AI 관련으로 골라 담은 발언' +
+      (anyBlocks ? ' · 전체 = 22대(2024-06~) 회의록의 모든 발언 블록' : '') + '</div>' +
   '</div>';
 }
 
@@ -9849,7 +9868,7 @@ async function showPersonDetail(id) {
   var rs = await Promise.all(jobs.map(function(j) { return j.then(function(r) { return r; }, function(e) { return { error: e }; }); }));
   _personSpeeches = (rs[0] && rs[0].data) || [];
   if (rs[2] && rs[2].data) _speechFieldsCfg = _parseSpeechFieldsCfg(rs[2].data);
-  renderPersonRoles(p);          // 자격 이력은 발언이 와야 계산된다
+  renderPersonRoles(p, (rs[1] && rs[1].data) || []);   // 자격 이력은 발언(관련)·분야 집계(전체)가 와야 계산된다
   renderPersonFields(p, (rs[1] && rs[1].data) || []);
   renderPersonTopics(p);
   renderPersonMonthly(p);
@@ -9997,9 +10016,9 @@ function renderPersonFields(p, rows) {
   daes.sort();
   if (_personFieldDae && daes.indexOf(_personFieldDae) < 0) _personFieldDae = '';
   var use = _personFieldRows.filter(function(r) { return !_personFieldDae || _daeOf(r.meeting_date) === _personFieldDae; });
-  // 자격별로 가른다 — 위원·위원장 발언은 '과방위 발언 분야', 정부 측은 '답변 분야'(받은 질의와 출석 회의로 정해진다).
-  // 민간 증인·참고인은 막대를 두지 않는다(정본 §6).
-  var groups = [['member', '과방위 발언 분야', []], ['gov', '답변 분야', []]];
+  // 자격별로 가른다 — 위원·위원장 발언은 '위원으로 질의한 분야', 정부 측은 '정부·후보자로 답변한 분야'(받은 질의와 출석 회의로
+  // 정해진다). 이름은 2026-09-27 운영자 지적으로 바꿈('발언 분야'·'답변 분야'로는 차이가 안 보였다). 민간 증인·참고인은 막대 없음(정본 §6).
+  var groups = [['member', '위원으로 질의한 분야', []], ['gov', '정부·후보자로 답변한 분야', []]];
   use.forEach(function(r) {
     var pos = String(r.position || '');
     if (_MEMBER_POS_SET.indexOf(pos) >= 0) groups[0][2].push(r);
