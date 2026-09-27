@@ -641,8 +641,10 @@ def load_all(sb, days):
     now = datetime.now(timezone.utc)
     since = now - timedelta(days=days)
     # 상한(now)을 고정해 도중에 들어온 기사로 페이지가 밀리지 않게 하고, 그래도 id로 한 번 더 거른다
+    # origin is null — 이슈맵 보강 옛 기사(created_at = 넣은 시각, 선별 흔적 없음)는 실데이터 표본이 아니다(#236)
     raw = _fetch_paged(lambda: sb.table('news_feed').select(NEWS_COLS)
                        .gte('created_at', since.isoformat()).lte('created_at', now.isoformat())
+                       .is_('origin', 'null')
                        .order('created_at', desc=True).order('id'))
     seen, news = set(), []
     for n in raw:

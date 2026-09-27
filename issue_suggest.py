@@ -363,11 +363,14 @@ def _propose(sb, issues, title, definition, category, norm_key, reason, dry,
     # 지저분한 대표 제목 탓에 새는데, 생성 제목은 기각 이슈와 거의 같게 나온다(실측: 9/24 10:29 기각분이
     # 11:02 실행에서 0.853~0.861로 재제안). active 병합 검사 뒤에 둬야 활성 이슈 후속이 기각에 막히지 않는다.
     rej, rej_sim = None, 0.0
-    for i in issues:
-        if i['state'] == 'rejected' and i.get('embedding'):
-            sim = _cosine(vec, i['embedding'])
-            if sim >= SIM_REJECTED_REPROPOSE and sim > rej_sim:
-                rej, rej_sim = i, sim
+    twins = sorted(((_cosine(vec, i['embedding']), i) for i in issues
+                    if i['state'] == 'rejected' and i.get('embedding')), key=lambda x: -x[0])
+    twins = [(s, i) for s, i in twins if s >= SIM_REJECTED_REPROPOSE]
+    if twins:
+        # 쌍둥이 기각이 여럿이면 합친 곳(active)이 있는 것을 먼저 — 가장 가까운 것이 보통 기각이면 합친 이슈의
+        # 후속이 그 기각에 막혀 어디에도 안 붙는다(합친 곳 판정이 유일한 출구, Fable 재검토 2026-09-27).
+        by_id_all = {x['id']: x for x in issues}
+        rej_sim, rej = next(((s, i) for s, i in twins if _merge_target(i, by_id_all) is not None), twins[0])
     if rej is not None:
         # 합친 기각(#243) — 세션이 다른 active 이슈로 합친 제안이면 그 후속은 건너뛰지 말고 합친 곳에 판정 연결.
         # 종전엔 여기서 조용히 빠져 합친 이슈에 후속 보도가 쌓이지 않았다. 판정은 이 한 건만 즉석 1콜(드묾).
@@ -822,9 +825,10 @@ def _reg_process(sb, issues, items, law_by_id, reg_links, dry):
             if mh is not None:
                 judge.append((k, f'{it["name"]} — {it["summary"][:300]}', mh[1]))
                 print(f'[기각 병합처→판정] {it["label"]} ≈ 기각 [{mh[0]["id"]}] → 합친 곳 [{mh[1]["id"]}]')
-    if judge:
-        related = _haiku_relate_batch(judge, None, kind='reg')
-        for k, _, iss in judge:
+    def _apply_verdicts(pairs, related):
+        """판정 결과 반영 — 떨어진 (k, 후보 이슈) 목록을 돌려준다."""
+        fell = []
+        for k, _, iss in pairs:
             it = todo[k]
             if related is None:
                 it['done'] = True   # 판정 실패는 '관련 없음'이 아니다 — 제안하지 않고 다음 실행에서 다시 본다
@@ -837,6 +841,21 @@ def _reg_process(sb, issues, items, law_by_id, reg_links, dry):
                       f'(sim {it["sim"][0]:.2f})')
             else:
                 print(f'[관련 판정 — 소속 아님] {it["label"]} ≠ [{iss["id"]}] (sim {it["sim"][0]:.2f})')
+                fell.append((k, iss))
+        return fell
+    if judge:
+        fell = _apply_verdicts(judge, _haiku_relate_batch(judge, None, kind='reg'))
+        # active 후보 판정에서 떨어진 항목이 합친 기각과 내용이 같으면(≥0.72) 아래 '내용 중복'으로 빠지기 전에
+        # 합친 곳과 한 번 더 판정한다(#243 표 '규제 — 요약 벡터 ≥0.72 → 합친 곳과 판정'이 판정 대상 항목에는
+        # 적용되지 않던 틈 — Fable 재검토 2026-09-27). 합친 곳이 방금 떨어진 이슈와 같으면 다시 묻지 않는다.
+        judge2 = []
+        for k, iss in fell:
+            mh = _merged_hit(issues, by_id, vecs[k])
+            if mh is not None and mh[1]['id'] != iss['id']:
+                judge2.append((k, f'{todo[k]["name"]} — {todo[k]["summary"][:300]}', mh[1]))
+                print(f'[기각 병합처→판정] {todo[k]["label"]} ≈ 기각 [{mh[0]["id"]}] → 합친 곳 [{mh[1]["id"]}]')
+        if judge2:
+            _apply_verdicts(judge2, _haiku_relate_batch(judge2, None, kind='reg'))
     for it in todo:
         if it.get('done'):
             continue

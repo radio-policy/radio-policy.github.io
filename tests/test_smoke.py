@@ -317,6 +317,13 @@ class TestIssuemapOriginMarker(unittest.TestCase):
         fn = self._src('docs/db_baseline/20_functions.sql')
         j = fn.index('FUNCTION public.check_news_health()')
         self.assertIn('FROM news_feed WHERE origin IS NULL', fn[j:j + 1500])
+        # Fable 재검토(2026-09-27) 전수 조사에서 더 찾은 두 곳 — 브리핑 해외 동향(created_at 24h)·긴급도 감사 도구(30일 표본)
+        mb = self._src('morning_briefing.py')
+        i = mb.index('def fetch_overseas_items')
+        self.assertIn(".is_('origin', 'null')", mb[i:i + 900])
+        ua = self._src('tools_urgency_audit.py')
+        i = ua.index('def load_all')
+        self.assertIn(".is_('origin', 'null')", ua[i:i + 900])
 
 
 class TestNotifySplit(unittest.TestCase):
@@ -2108,6 +2115,59 @@ class TestIssueSuggestReg(unittest.TestCase):
         self.assertIn('[보류 — 관련 판정 실패] bill B3', log)
         self.assertEqual([i['title'] for i in issues if i['state'] == 'proposed'], ['주제형 제목 s4'])
 
+    def test_reg_judge_no_then_merged_target(self):
+        """Fable 재검토(2026-09-27, #231·#243): active 후보 판정에서 떨어진 항목이 합친 기각과 ≥0.72면 '내용 중복'으로
+        빠지기 전에 합친 곳과 한 번 더 판정 — 종전엔 판정 대상 항목(sim ≥0.40)에는 합친 기각 대조가 없었다."""
+        import io, contextlib
+        isg = self.isg
+        e = lambda *v: list(v)
+
+        def run(verdicts):
+            isg._proposed_this_run = 0
+            issues = [{'id': 1, 'state': 'active', 'title': 'X', 'definition': '', 'embedding': e(1, 0, 0, 0)},
+                      {'id': 2, 'state': 'active', 'title': 'Y 합친 곳', 'definition': '', 'embedding': e(0, 1, 0, 0)},
+                      {'id': 3, 'state': 'rejected', 'title': 'R', 'definition': '', 'embedding': e(0, 0.3, 1, 0),
+                       'proposal_reason': {'bill_no': 'B9', 'merged_into': 2}}]
+            item = {'label': 'bill B1', 'name': '법1', 'summary': 's1', 'keys': {'bill:B1'},
+                    'link': {'item_type': 'bill', 'item_id': 'B1', 'item_date': None, 'title': '법1'},
+                    'reason': {'kind': 'assembly_notice', 'bill_no': 'B1', 'detail': ''}}
+            calls, out = [], io.StringIO()
+
+            def judge(pairs, groups, kind='news'):
+                calls.append([(p[0], p[2]['id']) for p in pairs])
+                v = verdicts[len(calls) - 1]
+                return None if v is None else ({pairs[0][0]} if v else set())
+            with mock.patch.object(isg, '_embed', lambda t, input_type='query': [e(0.5, 0.05, 0.85, 0)]), \
+                    mock.patch.object(isg, '_haiku_relate_batch', judge), \
+                    mock.patch.object(isg, '_reg_title', lambda n, s: '제목 ' + s), contextlib.redirect_stdout(out):
+                isg._reg_process(None, issues, [item], {}, [], dry=True)
+            return calls, out.getvalue(), [i for i in issues if i['state'] == 'proposed']
+        # X(0.51) 판정 아니오 → 합친 기각 R(0.84) → 합친 곳 Y와 2차 판정 → 예면 Y에 연결
+        calls, log, new = run([False, True])
+        self.assertEqual(calls, [[(0, 1)], [(0, 2)]])
+        self.assertIn('[기각 병합처→판정] bill B1 ≈ 기각 [3] → 합친 곳 [2]', log)
+        self.assertIn('[기존 이슈 연결·관련판정] bill B1 → [2]', log)
+        self.assertEqual(new, [])
+        # 2차도 아니오면 종전대로 내용 중복 skip / 2차 실패는 보류(제안 없음)
+        calls, log, new = run([False, False])
+        self.assertIn('[건너뜀 — 내용 중복] bill B1', log)
+        self.assertEqual(new, [])
+        calls, log, new = run([False, None])
+        self.assertIn('[보류 — 관련 판정 실패] bill B1 (후보 [2])', log)
+        self.assertEqual(new, [])
+        # 합친 기각이 없으면 2차 판정 없이 종전 흐름(제안)
+        isg._proposed_this_run = 0
+        issues = [{'id': 1, 'state': 'active', 'title': 'X', 'definition': '', 'embedding': e(1, 0, 0, 0)}]
+        item = {'label': 'bill B1', 'name': '법1', 'summary': 's1', 'keys': {'bill:B1'},
+                'link': {'item_type': 'bill', 'item_id': 'B1', 'item_date': None, 'title': '법1'},
+                'reason': {'kind': 'assembly_notice', 'bill_no': 'B1', 'detail': ''}}
+        calls, out = [], io.StringIO()
+        with mock.patch.object(isg, '_embed', lambda t, input_type='query': [e(0.5, 0.05, 0.85, 0)]), \
+                mock.patch.object(isg, '_haiku_relate_batch', lambda p, g, kind='news': calls.append(1) or set()), \
+                mock.patch.object(isg, '_reg_title', lambda n, s: '제목 ' + s), contextlib.redirect_stdout(out):
+            isg._reg_process(None, issues, [item], {}, [], dry=True)
+        self.assertEqual((len(calls), [i['title'] for i in issues if i['state'] == 'proposed']), (1, ['제목 s1']))
+
     def test_reg_merged_rejection_goes_to_target(self):
         """#243 — 기각하며 합친 제안(merged_into)과 같은 번호면 합친 곳에 연결, 내용이 같으면(≥0.72) 합친 곳과 판정."""
         import io, contextlib
@@ -2247,6 +2307,42 @@ class TestIssueSuggestOverlapMerged(unittest.TestCase):
         self.assertIn('[기각 재제안 — 건너뜀]', log)
         self.assertIn('합친 곳 [171] 판정 소속 아님', log)
         self.assertEqual(new, [])
+
+    def test_propose_prefers_merged_twin(self):
+        """Fable 재검토(2026-09-27, #243): 생성 제목 ≥0.80 쌍둥이 기각이 둘일 때 가장 가까운 것이 보통 기각이어도
+        합친 기각이 있으면 그것을 골라 합친 곳과 판정 — 종전엔 최고 유사 기각만 봐서 합친 이슈의 후속이 막혔다."""
+        import io, contextlib
+        isg = self.isg
+        e = lambda *v: list(v)
+        issues = [{'id': 2, 'state': 'active', 'title': '합친 곳', 'definition': '', 'embedding': e(0, 1, 0, 0)},
+                  {'id': 3, 'state': 'rejected', 'title': '보통 기각', 'definition': '', 'embedding': e(0, 0, 1, 0),
+                   'proposal_reason': {}},
+                  {'id': 4, 'state': 'rejected', 'title': '합친 기각', 'definition': '', 'embedding': e(0, 0.4, 0.9, 0),
+                   'proposal_reason': {'merged_into': 2}}]
+        for verdict, expect in ((True, '[기각 병합처 연결] "제목" ≈ 기각 [4]'),
+                                (False, '[기각 재제안 — 건너뜀] 제목  (≈ [4] 합친 기각')):
+            isg._proposed_this_run = 0
+            judged, out = [], io.StringIO()
+
+            def judge(pairs, groups, kind='news'):
+                judged.append([(p[0], p[2]['id']) for p in pairs])
+                return {pairs[0][0]} if verdict else set()
+            with mock.patch.object(isg, '_embed', lambda t, input_type='query': [e(0, 0.1, 1, 0)]), \
+                    mock.patch.object(isg, '_haiku_relate_batch', judge), contextlib.redirect_stdout(out):
+                r = isg._propose(None, issues, '제목', '정의', '기타', 'nk', {'kind': 'news_cluster'}, True,
+                                 news_rows=[{'id': 'n1', 'title': 't'}])
+            self.assertFalse(r)
+            self.assertEqual(judged, [[(0, 2)]])
+            self.assertIn(expect, out.getvalue())
+        # 합친 기각이 없으면 종전대로 최고 유사 기각으로 건너뜀(판정 0회)
+        isg._proposed_this_run = 0
+        judged, out = [], io.StringIO()
+        with mock.patch.object(isg, '_embed', lambda t, input_type='query': [e(0, 0.1, 1, 0)]), \
+                mock.patch.object(isg, '_haiku_relate_batch', lambda p, g, kind='news': judged.append(1) or set()), \
+                contextlib.redirect_stdout(out):
+            r = isg._propose(None, issues[:2], '제목', '정의', '기타', 'nk', {'kind': 'news_cluster'}, True)
+        self.assertEqual((r, judged), (False, []))
+        self.assertIn('[기각 재제안 — 건너뜀] 제목  (≈ [3] 보통 기각', out.getvalue())
 
     def test_propose_recheck_exclusion_issue_needs_judge(self):
         # #243 곁가지(운영자 결정 ①): 생성 제목 ≥0.80 active 병합이 배제 기준 이슈면 뉴스도 즉석 판정을 거친다

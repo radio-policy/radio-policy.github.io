@@ -1207,6 +1207,7 @@ def fetch_overseas_items() -> list:
             .select('title,source,url,summary') \
             .eq('category', '해외') \
             .gte('created_at', cutoff) \
+            .is_('origin', 'null') \
             .order('created_at', desc=True) \
             .limit(3) \
             .execute()
