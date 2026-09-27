@@ -300,6 +300,12 @@ grant DELETE, INSERT, SELECT, UPDATE on public.speech_field_stats to service_rol
 revoke all on sequence public.speech_field_stats_id_seq from public, anon, authenticated, service_role;
 grant SELECT, USAGE on sequence public.speech_field_stats_id_seq to service_role;
 
+revoke all on public.subscriber_alert_log from public, anon, authenticated, service_role;
+grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE on public.subscriber_alert_log to service_role;
+
+revoke all on sequence public.subscriber_alert_log_id_seq from public, anon, authenticated, service_role;
+grant SELECT, UPDATE, USAGE on sequence public.subscriber_alert_log_id_seq to service_role;
+
 revoke all on public.subscriber_queue from public, anon, authenticated, service_role;
 grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE on public.subscriber_queue to anon;
 grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE on public.subscriber_queue to authenticated;
@@ -419,11 +425,19 @@ grant EXECUTE on function public.admin_list_chat_logs(p_limit integer) to authen
 grant EXECUTE on function public.admin_list_chat_logs(p_limit integer) to public;
 grant EXECUTE on function public.admin_list_chat_logs(p_limit integer) to service_role;
 
+revoke all on function public.admin_list_subscribers() from public, anon, authenticated, service_role;
+grant EXECUTE on function public.admin_list_subscribers() to authenticated;
+grant EXECUTE on function public.admin_list_subscribers() to service_role;
+
 revoke all on function public.admin_set_kb_approval(p_doc_name text, p_approved boolean) from public, anon, authenticated, service_role;
 grant EXECUTE on function public.admin_set_kb_approval(p_doc_name text, p_approved boolean) to anon;
 grant EXECUTE on function public.admin_set_kb_approval(p_doc_name text, p_approved boolean) to authenticated;
 grant EXECUTE on function public.admin_set_kb_approval(p_doc_name text, p_approved boolean) to public;
 grant EXECUTE on function public.admin_set_kb_approval(p_doc_name text, p_approved boolean) to service_role;
+
+revoke all on function public.admin_set_subscriber_team(p_chat_id bigint, p_team_id smallint, p_division text) from public, anon, authenticated, service_role;
+grant EXECUTE on function public.admin_set_subscriber_team(p_chat_id bigint, p_team_id smallint, p_division text) to authenticated;
+grant EXECUTE on function public.admin_set_subscriber_team(p_chat_id bigint, p_team_id smallint, p_division text) to service_role;
 
 revoke all on function public.admin_update_chunk_embeddings(p_ids bigint[], p_embeddings text[]) from public, anon, authenticated, service_role;
 grant EXECUTE on function public.admin_update_chunk_embeddings(p_ids bigint[], p_embeddings text[]) to anon;

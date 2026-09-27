@@ -101,6 +101,12 @@ interface Sub {
   // 관심분야. **빈 배열 = 전체 수신**(캐논 하나). 6개를 다 켜면 []로 정규화하므로,
   // 나중에 7번째 태그가 생겨도 기존 '전체' 구독자가 자동으로 받는다.
   tags: string[];
+  // 팀별 알림(#252, 2026-09-27, ⚠️ Fable 재검토 대상) — 팀·실은 관리자가 대시보드에서 지정(여기서는 표시만),
+  // news_level은 구독자가 「받을 뉴스」 버튼으로 고른다('urgent' 기본 | 'normal' = 중요+보통, 보통은 매시 한 통 묶음).
+  team_id: number | null;
+  division: string | null;
+  news_level: string;
+  last_normal_sent_at: string | null;
 }
 async function getSub(chatId: number): Promise<Sub | null> {
   const { data } = await sb.from('telegram_subscribers').select('*').eq('chat_id', chatId).maybeSingle();
@@ -129,7 +135,8 @@ async function upsertSub(chatId: number, patch: Record<string, unknown>): Promis
 //   ✅ / ⬜  = 여러 개를 각각 켜고 끄는 항목 (콘텐츠 3종)
 //   🔵 / ⚪  = 여럿 중 하나만 고르는 항목 (요일, 받는 시각)
 // ●/○ 는 텔레그램 폰트에서 크기 차이가 거의 없어 "눌렀는데 안 바뀐 것 같다"는 혼동을 줬다.
-function settingsKeyboard(s: Sub) {
+// unit = 주요 뉴스 버튼 뒤 소속 표시(unitLabel — ' · 기술정책팀' / ' · 정책개발실 실장' / 공통이면 '').
+function settingsKeyboard(s: Sub, unit = '') {
   const chk = (on: boolean) => on ? '✅' : '⬜';   // 체크박스(다중 선택)
   const sel = (on: boolean) => on ? '🔵' : '⚪';   // 라디오(택일)
   const hh = (v: number) => String(v).padStart(2, '0');
@@ -143,7 +150,13 @@ function settingsKeyboard(s: Sub) {
   }
   return { inline_keyboard: [
     [{ text: `${chk(s.topic_briefing)} 📡 모닝 브리핑`, callback_data: 't:briefing' },
-     { text: `${chk(s.topic_urgent)} 📡 주요 뉴스`, callback_data: 't:urgent' }],
+     { text: `${chk(s.topic_urgent)} 📡 주요 뉴스${unit}`, callback_data: 't:urgent' }],
+    // 받을 뉴스(#252) — 주요 뉴스 바로 아래 한 줄(운영자 요청 「한 줄로」). 중요만(기본) / 중요+보통(보통은 매시 :25에
+    // 한 시간치를 한 통으로). 주요 뉴스가 꺼져 있으면 줄 자체를 감춘다 — 관심분야 태그와 같은 이유(죽은 버튼 혼동).
+    ...(s.topic_urgent
+      ? [[{ text: `${sel(s.news_level !== 'normal')} 중요만`, callback_data: 'n:urgent' },
+          { text: `${sel(s.news_level === 'normal')} 중요+보통`, callback_data: 'n:normal' }]]
+      : []),
     // 방미통위 동향(#154): 위원회 회의 의사일정(회의 전날 게시)·위원회 결과(회의 당일)·통신·전파 관련 보도자료가 게시 직후 온다.
     // 같은 레벨의 네 번째 항목 — 국회·법률(입법)과 성격이 달라 별도 토글. 두 개를 한 줄에(운영자 지시 2026-09-11).
     [{ text: `${chk(s.topic_assembly)} 🏛️ 국회·법률 동향`, callback_data: 't:assembly' },
@@ -178,12 +191,33 @@ function settingsKeyboard(s: Sub) {
   ] };
 }
 
+/**
+ * 주요 뉴스 버튼 뒤 소속 표시(#252) — 관리자가 대시보드에서 지정한 팀·실. 실장은 실 이름이 구독자 행에 있어
+ * 조회 없이, 팀은 teams에서 이름 1번 조회(팀·실이 없으면 조회 0). 실패하면 표시만 빠진다(설정 버튼은 그대로 동작).
+ */
+async function unitLabel(s: Pick<Sub, 'team_id' | 'division'> | null): Promise<string> {
+  if (!s) return '';
+  if (s.division) return ` · ${s.division} 실장`;
+  if (s.team_id === null || s.team_id === undefined) return '';
+  try {
+    const { data } = await sb.from('teams').select('name').eq('id', s.team_id).maybeSingle();
+    const name = (data as { name?: string } | null)?.name;
+    return name ? ` · ${name}` : '';
+  } catch (e) {
+    console.error('[팀 이름 조회 실패 — 소속 표시 생략]', e);
+    return '';
+  }
+}
+
 const START_TEXT =
   '✅ <b>구독 완료!</b>\n\n' +
   '선택한 요일·시각에 <b>모닝 브리핑</b>이 도착하고, 나머지 알림은 그 시각 이후 새로 생기는 대로 전달됩니다.\n' +
   '   <i>국회·법률 동향 = 국회 법안 · 입법예고(국회·부처) · 과방위 회의록 요약</i>\n' +
   '   <i>방미통위 동향 = 방송미디어통신위원회 회의 의사일정(회의 전날) · 위원회 결과(회의 당일) · 통신·전파 관련 보도자료</i>\n' +
   '🌙 <b>받기 종료 시각을 넘겨 들어온 소식은 사라지지 않고, 다음 날 시작 시각에 모아서 보내 드립니다.</b>\n' +
+  // #252 받을 뉴스 — 안내는 '무엇이 언제 오는지'로 끝낸다(#167: '안 온다'로 끝내지 말 것)
+  '📡 <b>받을 뉴스</b> — 주요 뉴스 아래 버튼에서 <b>중요만</b>(기본) 또는 <b>중요+보통</b>을 고르세요. ' +
+  '보통 뉴스는 받는 시간대 안에서 한 시간치를 묶어 매시 한 통으로 보내 드립니다.\n' +
   '아래 버튼으로 콘텐츠·요일·수신 시각을 바로 바꿀 수 있어요. (언제든 /settings)\n' +
   '항목을 모두 끄면 알림이 오지 않습니다.\n\n' +
   // 순서 = 실사용 순(60일: assem 45 · law 30+6 · ask 13, 2026-09-14 실측).
@@ -982,14 +1016,20 @@ async function handleCallback(cb: { id: string; data?: string; from: { id: numbe
   const sub: Sub = cur ?? {
     chat_id: chatId, username: null, first_name: null, active: true,
     topic_briefing: true, topic_urgent: true, topic_assembly: true, topic_kmcc: true,
-    days: 'daily', briefing_hour: 7,
-    ai_allowed: false, ai_count_date: null, ai_count: 0,
+    days: 'daily', briefing_hour: 7, end_hour: 22,   // end_hour·law_allowed = DB 기본값(키보드 표시용 — DB에는 patch만 쓴다)
+    ai_allowed: false, ai_count_date: null, ai_count: 0, law_allowed: false,
     tags: [],   // 빈 배열 = 전체 수신 (DB 기본값과 동일)
+    team_id: null, division: null, news_level: 'urgent', last_normal_sent_at: null,   // #252 — 공통·중요만(DB 기본값과 동일)
   };
 
   const patch: Record<string, unknown> = {};
   if (data === 't:briefing') { patch.topic_briefing = !sub.topic_briefing; ack = patch.topic_briefing ? '모닝 브리핑 ON' : '모닝 브리핑 OFF'; }
-  else if (data === 't:urgent') { patch.topic_urgent = !sub.topic_urgent; ack = patch.topic_urgent ? '주요 뉴스 ON' : '주요 뉴스 OFF'; }
+  else if (data === 't:urgent') {
+    patch.topic_urgent = !sub.topic_urgent; ack = patch.topic_urgent ? '주요 뉴스 ON' : '주요 뉴스 OFF';
+    // #252: 중요+보통인 사람이 주요 뉴스를 다시 켜면 보통 기준 시각을 지금으로 — 끈 동안 쌓인 보통(하루 ≈40건 × 최대 72시간)이
+    // 다음 정시 한 통으로 쏟아지지 않게. 중요(주요 뉴스)는 종전대로 '껐다 켜면 그 사이 건을 받는다'를 유지한다.
+    if (patch.topic_urgent && sub.news_level === 'normal') patch.last_normal_sent_at = new Date().toISOString();
+  }
   else if (data === 't:assembly') { patch.topic_assembly = !sub.topic_assembly; ack = patch.topic_assembly ? '국회·법률 동향 ON' : '국회·법률 동향 OFF'; }
   else if (data === 't:kmcc') { patch.topic_kmcc = !sub.topic_kmcc; ack = patch.topic_kmcc ? '방미통위 동향 ON' : '방미통위 동향 OFF'; }
   else if (data.startsWith('g:')) {
@@ -1024,6 +1064,23 @@ async function handleCallback(cb: { id: string; data?: string; from: { id: numbe
     const label = NEWS_TAGS.find((t) => t.slug === slug)!.label;
     ack = next.includes(slug) ? `${label} 받기` : `${label} 제외`;
   }
+  else if (data === 'n:urgent' || data === 'n:normal') {
+    // ── 받을 뉴스(#252) ── 중요만 / 중요+보통. 주요 뉴스가 꺼져 있으면 버튼 줄이 화면에 없다 — 옛 화면에서 눌러도
+    // 서버에서 막는다(관심분야 g: 와 같은 이유: "껐는데 설정이 바뀌는" 상태 방지). 선택값은 DB에 그대로 남는다.
+    if (!sub.topic_urgent) {
+      await tg('answerCallbackQuery', {
+        callback_query_id: cb.id, show_alert: true,
+        text: '📡 주요 뉴스가 꺼져 있어 받을 뉴스는 적용되지 않습니다.\n먼저 주요 뉴스를 켜 주세요.',
+      });
+      return;
+    }
+    const level = data === 'n:normal' ? 'normal' : 'urgent';
+    patch.news_level = level;
+    // 중요만 → 중요+보통으로 바뀌는 순간부터의 보통만 — 기준 시각을 지금으로(가입 직후처럼 오늘치 보통이 한 통에 쏟아지지 않게).
+    // 이미 중요+보통인데 다시 누른 것은 기준 시각을 건드리지 않는다(그 사이 대기분이 빠지지 않게).
+    if (level === 'normal' && sub.news_level !== 'normal') patch.last_normal_sent_at = new Date().toISOString();
+    ack = level === 'normal' ? '중요+보통 받기 — 보통은 매시 한 통으로 묶어 보냅니다' : '중요 뉴스만 받기';
+  }
   else if (data === 'd:daily') { patch.days = 'daily'; ack = '매일 받기로 변경'; }
   else if (data === 'd:weekday') { patch.days = 'weekday'; ack = '평일(월~금)만 받기로 변경'; }
   else if (data.startsWith('e:')) {
@@ -1048,6 +1105,8 @@ async function handleCallback(cb: { id: string; data?: string; from: { id: numbe
   else if (data === 'resub') {
     patch.active = true;
     patch.topic_briefing = true; patch.topic_urgent = true; patch.topic_assembly = true; patch.topic_kmcc = true;
+    // #252: 꺼져 있던 동안 쌓인 보통이 한 통으로 쏟아지지 않게(t:urgent와 같은 이유)
+    if (sub.news_level === 'normal' && (!sub.active || !sub.topic_urgent)) patch.last_normal_sent_at = new Date().toISOString();
     ack = '모든 알림을 켰습니다';
   }
   else { await tg('answerCallbackQuery', { callback_query_id: cb.id }); return; }
@@ -1056,8 +1115,10 @@ async function handleCallback(cb: { id: string; data?: string; from: { id: numbe
   await Promise.all([
     upsertSub(chatId, patch),
     tg('answerCallbackQuery', { callback_query_id: cb.id, text: ack }),
+    // 소속 표시(팀 이름 조회)는 화면 갱신 쪽에만 이어 붙여 저장·응답 확인과 계속 동시에 돈다(unitLabel은 던지지 않는다)
     msgId
-      ? tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: settingsKeyboard(next) })
+      ? unitLabel(next).then((unit) =>
+          tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: settingsKeyboard(next, unit) }))
       : Promise.resolve(null),
   ]);
 }
@@ -1119,16 +1180,21 @@ Deno.serve(async (req: Request) => {
     const text = msg.text.trim();
 
     if (text === '/start' || text.startsWith('/start ')) {
-      await upsertSub(chatId, { username: from.username || null, first_name: from.first_name || null, active: true });
+      // #252: 봇을 차단했다가(active=false) /start로 돌아온 「중요+보통」 구독자는 보통 기준 시각을 지금으로 — 차단된 동안
+      // 발송이 워터마크를 멈춰 두었으므로 그대로면 다음 정시에 최대 72시간치 보통이 한 통으로 쏟아진다.
+      const prev = await getSub(chatId);
+      const revive = prev && !prev.active && prev.news_level === 'normal'
+        ? { last_normal_sent_at: new Date().toISOString() } : {};
+      await upsertSub(chatId, { username: from.username || null, first_name: from.first_name || null, active: true, ...revive });
       await logUsage(chatId, 'start', from.username || from.first_name || '');
       const sub = (await getSub(chatId))!;
-      await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: START_TEXT, disable_web_page_preview: true, reply_markup: settingsKeyboard(sub) });
+      await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: START_TEXT, disable_web_page_preview: true, reply_markup: settingsKeyboard(sub, await unitLabel(sub)) });
     } else if (text === '/settings' || text === '/설정') {
       let sub = await getSub(chatId);
       if (!sub) { await upsertSub(chatId, { username: from.username || null, first_name: from.first_name || null }); sub = (await getSub(chatId))!; }
       await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML',
         text: '⚙️ <b>수신 설정</b>\n버튼을 눌러 바로 변경할 수 있습니다.\n✅⬜ = 여러 개 선택 · 🔵⚪ = 하나만 선택\n<i>항목을 모두 끄면 알림이 오지 않습니다.</i>\n\n🌙 <b>발송 시간대</b> — 모닝 브리핑은 <b>시작 시각</b>에 1회, 나머지 알림은 그 뒤 새로 생기는 대로 옵니다. <b>종료 시각을 넘겨 들어온 소식은 다음 날 시작 시각에 모아서 옵니다.</b>',
-        reply_markup: settingsKeyboard(sub) });
+        reply_markup: settingsKeyboard(sub, await unitLabel(sub)) });
     } else if (text === '/stop') {
       // 메뉴에서는 뺐지만 하위호환으로 남긴다 — '모든 항목 끄기'로 동작(설정·시각은 보존)
       await upsertSub(chatId, { topic_briefing: false, topic_urgent: false, topic_assembly: false, topic_kmcc: false });

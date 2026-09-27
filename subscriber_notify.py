@@ -23,7 +23,9 @@ from datetime import datetime, timedelta, timezone
 DASHBOARD_URL = 'https://radio-policy.github.io/?p=minutes'
 
 # kmcc = 방미통위 동향(위원회 회의 의사일정·위원회 결과, 2026-09-11 #154). subscriber_queue.topic CHECK 도 같이 갱신됨.
-_VALID_TOPICS = ('urgent', 'assembly', 'kmcc')
+# news = 받는 단위(공통 보통 'c'·팀 't:<id>'·실장 'd:<실>')별 기사 행(#252, 2026-09-27) — audience·level·news_url이 있어야 하는
+# 모양(표 CHECK subscriber_queue_news_shape_check)이라 queue_audience_rows로만 넣는다(queue_for_subscribers는 거절).
+_VALID_TOPICS = ('urgent', 'assembly', 'kmcc', 'news')
 # 큐 적재 직후 발송 함수를 바로 부르는 토픽 — 수집 당일·직후 배달이 목적인 것들.
 # assembly 는 정시(:25)만 — 법안 단계변경·입법예고는 하루 한 묶음이 적절하다.
 _IMMEDIATE_TOPICS = ('urgent', 'kmcc')
@@ -38,6 +40,9 @@ def queue_for_subscribers(sb, topic: str, html_text: str) -> bool:
     """구독자 알림 큐에 적재. 반환=성공 여부. 어떤 예외도 밖으로 던지지 않는다."""
     if topic not in _VALID_TOPICS:
         print(f'[구독자 큐] 알 수 없는 토픽: {topic}')
+        return False
+    if topic == 'news':      # 받는 단위·등급·기사 url이 필요한 행 — 묶음 HTML 한 덩이로는 표 CHECK에 걸린다(#252)
+        print('[구독자 큐] news 토픽은 queue_audience_rows로만 적재 — 건너뜀')
         return False
     if not html_text or not html_text.strip():
         return False
@@ -74,6 +79,10 @@ def _trigger_delivery() -> bool:
     발송 함수 자체가 '구독자의 수신 시각이 지났는가'를 검사하므로, 심야에 호출돼도
     아무에게도 보내지 않는다 — 심야 무발송 원칙은 그대로 유지되고 낮 시간대 지연만 줄어든다.
     매시 :25 정시 실행은 그대로 두어(이 호출이 실패해도) 배달이 누락되지 않는다. fail-open.
+    헤더 `x-delivery: immediate`(#252) — 발송 측은 이 호출에서 보통 뉴스 묶음을 평가하지도 워터마크를 옮기지도 않는다
+    (보통은 매시 :25 정기 발송 몫). kmcc·queue_for_subscribers의 즉시 호출도 이 함수라 함께 실리지만 그 경로에 보통은 없다.
+    크롤러는 실행당 한 번만 부른다 — 몇 초 간격으로 두 번 부르면 두 발송 실행이 겹쳐(워터마크 갱신 전 읽기) 같은 사람에게
+    같은 행이 두 번 갈 수 있다(queue_news_items(trigger=False) + crawler.main 끝에서 한 번).
     """
     url, secret = os.environ.get('SUPABASE_URL', ''), os.environ.get('CRON_SECRET', '')
     if not url or not secret:
@@ -81,7 +90,7 @@ def _trigger_delivery() -> bool:
     try:
         import requests
         resp = requests.post(f'{url}/functions/v1/send-subscriber-briefing',
-                             headers={'x-cron-secret': secret}, timeout=30)
+                             headers={'x-cron-secret': secret, 'x-delivery': 'immediate'}, timeout=30)
         if resp.status_code == 200:
             print(f'[구독자 배달] 즉시 배달 호출 완료 — {resp.text[:120]}')
             return True
@@ -319,19 +328,27 @@ def format_news_item(item) -> str:
 
     format_urgent_html의 항목 조립부와 같은 모양을 유지할 것. 앞의 번호와 뒤의 칩 줄은
     발송 측(Edge)이 붙인다.
+    선택 키 `_label`(#252 — 받는 단위에서만 중요한 기사의 표시, 예: '우리 팀 기준' / '기술정책팀·AI정책팀')이 있으면
+    출처 줄 끝에 ` · 🏷 {label}`을 붙인다. 키가 없거나 비면 종전과 바이트 단위로 같다(공통 경로 불변).
     """
     rel = item.get('_related', 0)
     rel_txt = f' <i>(관련 보도 {rel}건)</i>' if rel else ''
     rem = item.get('_remind') or ''                      # 하루 1회 리마인드 표시 (#181)
     title, url = esc(('🔁[' + rem + '] ' if rem else '') + str(item.get('title', ''))), esc(item.get('url', ''))
     head = f'<a href="{url}">{title}</a>' if url else f'<b>{title}</b>'
-    return f'{head}{rel_txt}\n   <i>{esc(item.get("source", ""))}</i>'
+    src = esc(item.get("source", ""))
+    label = str(item.get('_label') or '').strip()
+    if label:
+        src = f'{src} · 🏷 {esc(label)}' if src else f'🏷 {esc(label)}'
+    return f'{head}{rel_txt}\n   <i>{src}</i>'
 
 
-def queue_news_items(sb, items: list) -> bool:
+def queue_news_items(sb, items: list, trigger: bool = True) -> bool:
     """긴급 기사 목록 → subscriber_queue에 **기사당 1행**으로 한 번에 적재. 반환=성공 여부.
 
     어떤 예외도 밖으로 던지지 않는다(fail-open) — 큐 적재 실패가 크롤링·운영자 알림을 죽이면 안 된다.
+    trigger=False(#252) — 넣기만 하고 즉시 배달 호출은 부르는 쪽이 **실행당 한 번** 한다(crawler.main이 팀 단위 행까지
+    넣은 뒤). 기본값 True는 종전 동작 그대로.
     """
     if not items:
         return False
@@ -380,5 +397,62 @@ def queue_news_items(sb, items: list) -> bool:
     except Exception as e:
         print(f'[구독자 큐] 적재 실패(무시): {e}')
         return False
-    _trigger_delivery()   # 다음 정시(:25)를 기다리지 않고 바로 배달 시도
+    if trigger:
+        _trigger_delivery()   # 다음 정시(:25)를 기다리지 않고 바로 배달 시도
     return True
+
+
+# ═══════════════════════════════════════════════════════
+#  받는 단위별 기사 행 (#252, 2026-09-27 — ⚠️ Fable 재검토 대상)
+# ═══════════════════════════════════════════════════════
+#  팀·실장 구독자의 중요(긴급)와 「중요+보통」 구독자의 보통은 topic 'news' 행으로 넣는다 — 받는 단위(audience:
+#  'c' 공통 보통 / 't:<팀 id>' / 'd:<실>')와 등급(level: '긴급'|'보통')을 싣고, 발송 측이 구독자의 단위·받을 뉴스로 고른다.
+#  공통 구독자의 중요는 종전 topic 'urgent'(queue_news_items) 그대로. 억제·묶기는 크롤러(run_audience_alerts)가 끝낸 뒤
+#  넣으며, 같은 (단위, 채널, 기사)가 두 번 들어가지 않게 하는 것은 크롤러의 subscriber_alert_log(upsert 응답으로만 판단)다.
+NEWS_LEVELS = ('긴급', '보통')
+_AUDIENCE_RE = re.compile(r'^(c|t:[0-9]+|d:.+)$')     # 표 CHECK와 같은 모양
+AUDIENCE_CHUNK = 500
+
+
+def news_row(audience: str, level: str, item: dict) -> dict:
+    """기사 1건 → topic 'news' 큐 행. ★ 모든 행의 키 집합이 같다 ★(PostgREST 벌크 insert).
+    html = format_news_item(item) — item['_label']이 있으면 출처 줄에 표시가 붙는다. 조건이 안 맞으면(단위·등급 모양,
+    빈 url) None — 표 CHECK에 걸려 묶음 전체가 실패하는 대신 그 행만 뺀다."""
+    url = str(item.get('url') or '').strip()
+    if not url or level not in NEWS_LEVELS or not isinstance(audience, str) or not _AUDIENCE_RE.match(audience):
+        return None
+    body = format_news_item(item)
+    if not body.strip():
+        return None
+    tags = item.get('tags')
+    if not isinstance(tags, list):
+        tags = []
+    return {'topic': 'news', 'audience': audience, 'level': level, 'news_url': url,
+            'tags': [str(t) for t in tags], 'html': body[:3500]}
+
+
+def queue_audience_rows(sb, rows: list) -> dict:
+    """topic 'news' 행 목록을 벌크 insert(AUDIENCE_CHUNK씩). 반환 = 들어간 행 수 {등급: 건수}(실패한 묶음은 빠진다).
+    **즉시 배달 호출은 하지 않는다** — crawler.main이 실행당 한 번. 어떤 예외도 밖으로 던지지 않는다(fail-open).
+    None 행은 버리고, 키 집합이 다른 행이 섞이면 넣지 않는다(벌크 insert가 통째로 실패하는 것을 미리 막는다)."""
+    rows = [r for r in (rows or []) if r]
+    if not rows:
+        return {}
+    keys = frozenset(rows[0])
+    if any(frozenset(r) != keys for r in rows):
+        print('[구독자 큐] news 행 키 집합이 서로 다름 — 적재 안 함(벌크 insert 요건)')
+        return {}
+    done = {}
+    for i in range(0, len(rows), AUDIENCE_CHUNK):
+        part = rows[i:i + AUDIENCE_CHUNK]
+        try:
+            sb.table('subscriber_queue').insert(part).execute()
+        except Exception as e:
+            print(f'[구독자 큐] news {len(part)}행 적재 실패(무시): {str(e)[:160]}')
+            continue
+        for r in part:
+            done[r['level']] = done.get(r['level'], 0) + 1
+    if done:
+        print('[구독자 큐] news ' + ' · '.join(f'{lv} {done[lv]}건' for lv in NEWS_LEVELS if lv in done)
+              + ' 적재 완료 — 받는 단위별로 발송됨')
+    return done

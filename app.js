@@ -369,8 +369,9 @@ async function loadAccountAdmin() {
 
 // 팀 고르기(#250 E1) — 실별 <optgroup>(sort_order 순) + 실마다 「<실> 실장(팀 없음)」 한 줄.
 // 값: 팀 = 팀 id / 실장 = 'div:<실>'(저장은 team_id null + division) / '' = 팀도 실도 없음. _teamChoice()가 읽는다.
-function _teamOptions(sel, div) {
-  var html = '<option value=""' + (sel == null && !div ? ' selected' : '') + '>(팀 없음)</option>';
+// noneLabel: 첫 줄('' 값) 문구 — 생략하면 '(팀 없음)'(계정 관리), 구독자 알림 기준은 '(공통 등급)'(#252)
+function _teamOptions(sel, div, noneLabel) {
+  var html = '<option value=""' + (sel == null && !div ? ' selected' : '') + '>' + chEsc(noneLabel || '(팀 없음)') + '</option>';
   var order = [], byDiv = {};
   _acctTeams.forEach(function(t) {
     var d = t.division || '';
@@ -385,6 +386,11 @@ function _teamOptions(sel, div) {
     if (d) html += '<option value="' + escHtml('div:' + d) + '"' + (sel == null && div === d ? ' selected' : '') + '>' + chEsc(d) + ' 실장(팀 없음)</option>';
     html += '</optgroup>';
   });
+  // 저장된 실이 팀 목록에 없으면(실 이름을 바꿨거나 팀이 없어짐) 그 값을 그대로 보이게 둔다 — 없으면 브라우저가 첫 줄을
+  // 골라, 무심코 저장 한 번에 실장 지정이 지워진다(#252 리뷰). 정상 값에서는 출력이 종전과 같다.
+  if (sel == null && div && order.indexOf(div) < 0) {
+    html += '<option value="' + escHtml('div:' + div) + '" selected>(없는 실: ' + chEsc(div) + ')</option>';
+  }
   return html;
 }
 /** 팀 고르기 값 → { team_id, division } — 팀을 고르면 division은 비운다(team_id가 있으면 division은 무시되는 규칙, #250) */
@@ -495,6 +501,94 @@ async function saveTeamRow(teamId) {
   }).eq('id', teamId).select('id');
   if (r.error) { alert('팀 저장 실패: ' + r.error.message); return; }
   await loadAccountAdmin();
+}
+
+// ── 텔레그램 구독자 — 알림 기준 (관리자 전용, #252 긴급도 2단계 세션 B) ───────
+// 구독자마다 공통 / 팀 / 실장(실)을 고르면 구독자 봇의 주요 뉴스가 그 받는 단위의 등급(팀 층 덧씌우기)으로 간다.
+// 읽기·쓰기는 관리자 RPC(admin_list_subscribers / admin_set_subscriber_team — 안에서 is_admin 검사, 'AUTH_FAILED')로만.
+// chat_id는 화면에도 DOM id에도 싣지 않는다 — 줄은 목록 인덱스(_subTeamRows[i])로 찾는다.
+// 받을 뉴스(중요만/중요+보통)는 각자 봇 /start에서 고르므로 여기서는 읽기 전용.
+var _subTeamRows = [];
+
+async function loadSubscriberTeams(note) {
+  var el = document.getElementById('subscriber-team-body');
+  if (!el || !sb) return;
+  if (!isAdminUser()) { el.innerHTML = '<div style="font-size:12px;color:var(--text-tertiary)">관리자 계정으로 로그인해야 합니다.</div>'; return; }
+  el.innerHTML = '<div style="font-size:12px;color:var(--text-tertiary);padding:10px">불러오는 중...</div>';
+  try {
+    // 팀 목록은 계정 관리가 읽은 _acctTeams를 같이 쓴다 — 비었으면(계정 관리 조회 실패 등) 같은 select·정렬로 직접 채운다
+    if (!_acctTeams.length) {
+      var tRes = await sb.from('teams').select('id,name,division,sort_order,daily_limit,unlimited')
+        .order('sort_order', { ascending: true, nullsFirst: false }).order('id');
+      if (tRes.error) throw tRes.error;
+      _acctTeams = tRes.data || [];
+    }
+    var r = await sb.rpc('admin_list_subscribers');
+    if (r.error) throw r.error;
+    _subTeamRows = r.data || [];
+    renderSubscriberTeams(_subTeamRows, note);
+  } catch (e) {
+    el.innerHTML = '<div style="font-size:12px;color:var(--text-tertiary)">조회 실패: ' + chEsc(e.message || String(e)) + '</div>';
+  }
+}
+
+// note: 저장 직후 한 줄 결과(이미 이스케이프한 HTML) — 새로고침 버튼으로 다시 읽으면 사라진다
+function renderSubscriberTeams(rows, note) {
+  var el = document.getElementById('subscriber-team-body');
+  if (!el) return;
+  var inputCss = 'padding:3px 6px;font-size:11px;border:0.5px solid var(--border-mid);border-radius:4px;background:var(--bg-secondary);color:var(--text-primary);font-family:inherit';
+  var chipCss = 'font-size:10.5px;padding:1px 6px;border-radius:8px;border:0.5px solid var(--border-mid);';
+  var html = note ? '<div style="font-size:11.5px;color:var(--text-secondary);margin:2px 0 8px">' + note + '</div>' : '';
+  if (!rows.length) {
+    el.innerHTML = html + '<div style="font-size:11px;color:var(--text-tertiary);padding:4px 0">구독자가 없습니다.</div>';
+    return;
+  }
+  var nAct = rows.filter(function(s) { return s.active; }).length;
+  var nSet = rows.filter(function(s) { return s.team_id != null || s.division; }).length;
+  html += '<div style="font-size:11px;color:var(--text-tertiary);margin-bottom:6px">구독자 ' + rows.length + '명 · 활성 ' + nAct +
+    '명 · 팀/실장 기준 ' + nSet + '명 (나머지는 공통 등급)</div>';
+  function on(v, yes, no) {
+    return '<span style="' + chipCss + (v ? 'color:var(--text-secondary)' : 'color:var(--text-tertiary);opacity:.8') + '">' + (v ? yes : no) + '</span>';
+  }
+  html += rows.map(function(s, i) {
+    var joined = s.created_at ? new Date(s.created_at).toLocaleDateString('ko-KR', { year: '2-digit', month: '2-digit', day: '2-digit' }) : '';
+    return '<div class="card" style="margin-bottom:6px;padding:10px 12px;cursor:default;' + (s.active ? '' : 'opacity:.55') + '">' +
+      '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">' +
+        '<span style="font-size:12px;font-weight:500;min-width:80px">' + escHtml(s.first_name || '(이름 없음)') +
+          (s.username ? ' <span style="font-size:10.5px;font-weight:400;color:var(--text-tertiary)">@' + escHtml(s.username) + '</span>' : '') +
+          (joined ? ' <span style="font-size:10.5px;font-weight:400;color:var(--text-tertiary)">가입 ' + escHtml(joined) + '</span>' : '') + '</span>' +
+        on(s.active, '활성', '비활성') +
+        on(s.topic_urgent, '주요 뉴스 켜짐', '주요 뉴스 꺼짐') +
+        '<span style="' + chipCss + 'color:var(--text-secondary)" title="각자 봇 /start에서 고릅니다">' +
+          (s.news_level === 'normal' ? '중요+보통' : '중요만') + '</span>' +
+        '<select id="st-team-' + i + '" style="' + inputCss + '">' + _teamOptions(s.team_id, s.division, '(공통 등급)') + '</select>' +
+        '<button class="btn" style="font-size:11px;padding:3px 10px" onclick="saveSubscriberTeam(' + i + ', this)">저장</button>' +
+      '</div></div>';
+  }).join('');
+  el.innerHTML = html;
+}
+
+async function saveSubscriberTeam(i, btn) {
+  var s = _subTeamRows[i];
+  var selEl = document.getElementById('st-team-' + i);
+  if (!s || !selEl || !sb) return;
+  if (!_ensureAdminPwd()) return;
+  var tc = _teamChoice(selEl.value);
+  var who = escHtml(s.first_name || '(이름 없음)');
+  if (btn) btn.disabled = true;
+  var r = await sb.rpc('admin_set_subscriber_team', { p_chat_id: s.chat_id, p_team_id: tc.team_id, p_division: tc.division });
+  if (btn) btn.disabled = false;
+  if (r.error) {
+    var m = r.error.message || '';
+    if (/AUTH_FAILED/.test(m)) { _handleAdminRpcError(r.error, '구독자 알림 기준 저장'); return; }
+    if (/NOT_FOUND/.test(m)) { alert('구독자를 찾지 못했습니다 — 목록을 다시 읽습니다.'); await loadSubscriberTeams(); return; }
+    if (/UNKNOWN_DIVISION/.test(m)) { alert('없는 실 이름입니다 — 새로고침 뒤 다시 골라 주세요.'); return; }
+    if (/TEAM_OR_DIVISION/.test(m)) { alert('팀과 실장을 동시에 지정할 수 없습니다.'); return; }
+    alert('구독자 알림 기준 저장 실패: ' + m);
+    return;
+  }
+  var n = Number(r.data);
+  await loadSubscriberTeams(n === 1 ? '✅ ' + who + ': 저장했습니다 — 다음 수집부터 이 기준' : who + ': 변경 없음');
 }
 
 async function claudeFetch(init) {
@@ -7610,7 +7704,8 @@ function loadSettingsFields() {
   if (cfg.sbKey) document.getElementById('inp-sb-key').value = cfg.sbKey;
   loadPendingApprovals();
   loadLawWatch();
-  if (isAdminUser()) loadAccountAdmin();
+  // 구독자 알림 기준(#252)은 계정 관리가 팀 목록(_acctTeams)을 채운 뒤에 — loadAccountAdmin은 오류를 안에서 삼키므로 늘 이어진다
+  if (isAdminUser()) loadAccountAdmin().then(function() { loadSubscriberTeams(); });
 }
 
 // ── 지식베이스 승인 대기 (업로드 파일 게이트) ──

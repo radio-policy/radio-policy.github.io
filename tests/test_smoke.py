@@ -1191,6 +1191,39 @@ class TestUrgencyTeamLayer(unittest.TestCase):
                 rows = {int(k): v for k, v in c['rows_by_team'].items()}
                 self.assertEqual(self.ur.division_urgency(c['common'], rows, self.by_id, c['team_ids']), c['expect'])
 
+    # ── 팀별 알림 등급(#252) — JS판은 node tests/urgency_rules.test.js가 같은 파일을 돈다 ──
+    def test_min_level(self):
+        for c in self.t['min_level_cases']:
+            with self.subTest(c['name']):
+                self.assertEqual(self.ur.min_level(c['a'], c['b']), c['expect'])
+
+    def test_alert_team_level(self):
+        for c in self.t['alert_cases']:
+            with self.subTest(c['name']):
+                self.assertEqual(self.ur.alert_team_level(c['common'], c['row'], self.by_id), c['expect'])
+
+    def test_alert_division_level(self):
+        for c in self.t['alert_division_cases']:
+            with self.subTest(c['name']):
+                rows = {int(k): v for k, v in c['rows_by_team'].items()}
+                self.assertEqual(self.ur.alert_division_level(c['common'], rows, self.by_id, c['team_ids']),
+                                 c['expect'])
+
+    def test_alert_equals_screen_without_human(self):
+        """팀원 수정(human)이 없으면 알림 등급 = 화면 등급 — 다른 점은 사람 수정 하나뿐이다."""
+        for c in self.t['effective_cases']:
+            if c['row'] and c['row'].get('source') == 'human':
+                continue
+            with self.subTest(c['name']):
+                self.assertEqual(self.ur.alert_team_level(c['common'], c['row'], self.by_id), c['expect']['level'])
+        for c in self.t['division_cases']:
+            if any(v.get('source') == 'human' for v in c['rows_by_team'].values()):
+                continue
+            with self.subTest(c['name']):
+                rows = {int(k): v for k, v in c['rows_by_team'].items()}
+                self.assertEqual(self.ur.alert_division_level(c['common'], rows, self.by_id, c['team_ids']),
+                                 c['expect'])
+
     # ── 문장 조건(#251) — JS판은 node tests/urgency_rules.test.js가 같은 파일을 돈다 ──
     def _sentence_rules(self):
         return sorted((r for r in self.t['sentence_rules'] if r['enabled']), key=lambda r: (r['position'], r['id']))

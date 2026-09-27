@@ -1,5 +1,5 @@
 {
-  "_about": "긴급도 팀 층(#250) 공용 케이스 — Python urgency_rules.py(TestUrgencyTeamLayer)와 JS _shared/urgency_rules.js(node tests/urgency_rules.test.js)가 함께 돈다. rows_by_team의 키는 팀 id 문자열(두 쪽 모두 정수로 바꿔 쓴다). 매처 케이스(urgency_rules_cases.json)와 파일을 나눈 것은 사내판이 그 파일만 복사해 쓰기 때문이다. 문장 조건(#251): sentence_rules(팀 7, 켜진 것만 position·id 순으로 쓴다)·sentence_cases(후보 sentenceCandidates + 판정 반영 teamRuleDecisionJudged)·verdict_map_cases·has_sentence_cases. verdicts 판 번호는 문자열 열쇠.",
+  "_about": "긴급도 팀 층(#250) 공용 케이스 — Python urgency_rules.py(TestUrgencyTeamLayer)와 JS _shared/urgency_rules.js(node tests/urgency_rules.test.js)가 함께 돈다. rows_by_team의 키는 팀 id 문자열(두 쪽 모두 정수로 바꿔 쓴다). 매처 케이스(urgency_rules_cases.json)와 파일을 나눈 것은 사내판이 그 파일만 복사해 쓰기 때문이다. 문장 조건(#251): sentence_rules(팀 7, 켜진 것만 position·id 순으로 쓴다)·sentence_cases(후보 sentenceCandidates + 판정 반영 teamRuleDecisionJudged)·verdict_map_cases·has_sentence_cases. verdicts 판 번호는 문자열 열쇠. 팀별 알림 등급(#252): min_level_cases(a·b → 낮은 것)·alert_cases(alertTeamLevel — 팀원 수정은 min(팀원값, 공통값))·alert_division_cases(alertDivisionLevel — rows_by_team 키는 위와 같이 문자열).",
   "rules": [
     {
       "id": "t1_set_down",
@@ -448,6 +448,347 @@
           "team_id": 3,
           "urgency": "참고",
           "source": "human",
+          "rule_id": null
+        }
+      },
+      "team_ids": [
+        1,
+        2,
+        3
+      ],
+      "expect": {
+        "level": "보통",
+        "teams": [
+          2
+        ]
+      }
+    },
+    {
+      "name": "실에 팀이 없음 → 공통값",
+      "common": "참고",
+      "rows_by_team": {},
+      "team_ids": [],
+      "expect": {
+        "level": "참고",
+        "teams": []
+      }
+    }
+  ],
+  "min_level_cases": [
+    {
+      "name": "긴급·보통 → 보통",
+      "a": "긴급",
+      "b": "보통",
+      "expect": "보통"
+    },
+    {
+      "name": "참고·긴급 → 참고",
+      "a": "참고",
+      "b": "긴급",
+      "expect": "참고"
+    },
+    {
+      "name": "같으면 그 값",
+      "a": "보통",
+      "b": "보통",
+      "expect": "보통"
+    },
+    {
+      "name": "모르는 값은 가장 낮게",
+      "a": "긴급",
+      "b": "높음",
+      "expect": "높음"
+    },
+    {
+      "name": "null은 가장 낮게",
+      "a": null,
+      "b": "참고",
+      "expect": null
+    },
+    {
+      "name": "둘 다 모르면 앞 값",
+      "a": "x",
+      "b": "y",
+      "expect": "x"
+    }
+  ],
+  "alert_cases": [
+    {
+      "name": "팀 행 없음 → 공통값",
+      "common": "보통",
+      "row": null,
+      "expect": "보통"
+    },
+    {
+      "name": "팀원이 올림 → 알림은 공통값(올린 것은 알림 안 함)",
+      "common": "보통",
+      "row": {
+        "team_id": 1,
+        "urgency": "긴급",
+        "source": "human",
+        "rule_id": null
+      },
+      "expect": "보통"
+    },
+    {
+      "name": "팀원이 내림 → 알림도 내림(내린 것은 막음)",
+      "common": "긴급",
+      "row": {
+        "team_id": 1,
+        "urgency": "참고",
+        "source": "human",
+        "rule_id": null
+      },
+      "expect": "참고"
+    },
+    {
+      "name": "팀원 값 = 공통값 → 그대로",
+      "common": "긴급",
+      "row": {
+        "team_id": 1,
+        "urgency": "긴급",
+        "source": "human",
+        "rule_id": null
+      },
+      "expect": "긴급"
+    },
+    {
+      "name": "팀원 값이 등급 셋 밖 → 공통값",
+      "common": "긴급",
+      "row": {
+        "team_id": 1,
+        "urgency": "높음",
+        "source": "human",
+        "rule_id": null
+      },
+      "expect": "긴급"
+    },
+    {
+      "name": "규칙 행 min이 올림 → 알림도 올림",
+      "common": "보통",
+      "row": {
+        "team_id": 1,
+        "urgency": "보통",
+        "source": "rule",
+        "rule_id": "t1_min_up"
+      },
+      "expect": "긴급"
+    },
+    {
+      "name": "규칙 행 set이 내림 → 알림도 내림",
+      "common": "긴급",
+      "row": {
+        "team_id": 1,
+        "urgency": "긴급",
+        "source": "rule",
+        "rule_id": "t1_set_down"
+      },
+      "expect": "참고"
+    },
+    {
+      "name": "꺼진 규칙의 행 → 공통값",
+      "common": "참고",
+      "row": {
+        "team_id": 1,
+        "urgency": "긴급",
+        "source": "rule",
+        "rule_id": "t1_off"
+      },
+      "expect": "참고"
+    },
+    {
+      "name": "팀 AI 행 → 저장값(올림도 알림)",
+      "common": "보통",
+      "row": {
+        "team_id": 1,
+        "urgency": "긴급",
+        "source": "ai",
+        "rule_id": null
+      },
+      "expect": "긴급"
+    },
+    {
+      "name": "공통값 없음 + 팀원 긴급 → 없음(모르는 값이 가장 낮다)",
+      "common": null,
+      "row": {
+        "team_id": 1,
+        "urgency": "긴급",
+        "source": "human",
+        "rule_id": null
+      },
+      "expect": null
+    }
+  ],
+  "alert_division_cases": [
+    {
+      "name": "팀 행 없음 → 공통값, 실 전 팀",
+      "common": "보통",
+      "rows_by_team": {},
+      "team_ids": [
+        1,
+        2,
+        3
+      ],
+      "expect": {
+        "level": "보통",
+        "teams": [
+          1,
+          2,
+          3
+        ]
+      }
+    },
+    {
+      "name": "한 팀 팀원이 올림 → 알림은 공통값(화면 division_urgency는 긴급)",
+      "common": "보통",
+      "rows_by_team": {
+        "2": {
+          "team_id": 2,
+          "urgency": "긴급",
+          "source": "human",
+          "rule_id": null
+        }
+      },
+      "team_ids": [
+        1,
+        2,
+        3
+      ],
+      "expect": {
+        "level": "보통",
+        "teams": [
+          1,
+          2,
+          3
+        ]
+      }
+    },
+    {
+      "name": "한 팀 규칙이 올림 → 긴급, 그 팀만",
+      "common": "보통",
+      "rows_by_team": {
+        "1": {
+          "team_id": 1,
+          "urgency": "보통",
+          "source": "rule",
+          "rule_id": "t1_min_up"
+        }
+      },
+      "team_ids": [
+        1,
+        2,
+        3
+      ],
+      "expect": {
+        "level": "긴급",
+        "teams": [
+          1
+        ]
+      }
+    },
+    {
+      "name": "두 팀이 같은 기사를 긴급으로 → 한 번, 두 팀",
+      "common": "보통",
+      "rows_by_team": {
+        "1": {
+          "team_id": 1,
+          "urgency": "보통",
+          "source": "rule",
+          "rule_id": "t1_min_up"
+        },
+        "2": {
+          "team_id": 2,
+          "urgency": "긴급",
+          "source": "ai",
+          "rule_id": null
+        }
+      },
+      "team_ids": [
+        1,
+        2,
+        3
+      ],
+      "expect": {
+        "level": "긴급",
+        "teams": [
+          1,
+          2
+        ]
+      }
+    },
+    {
+      "name": "공통 긴급을 한 팀 팀원이 내림 → 나머지 팀이 긴급",
+      "common": "긴급",
+      "rows_by_team": {
+        "1": {
+          "team_id": 1,
+          "urgency": "참고",
+          "source": "human",
+          "rule_id": null
+        }
+      },
+      "team_ids": [
+        1,
+        2,
+        3
+      ],
+      "expect": {
+        "level": "긴급",
+        "teams": [
+          2,
+          3
+        ]
+      }
+    },
+    {
+      "name": "모든 팀이 내림 → 팀 값 중 최고(공통값은 넣지 않음)",
+      "common": "긴급",
+      "rows_by_team": {
+        "1": {
+          "team_id": 1,
+          "urgency": "긴급",
+          "source": "rule",
+          "rule_id": "t1_set_down"
+        },
+        "2": {
+          "team_id": 2,
+          "urgency": "보통",
+          "source": "human",
+          "rule_id": null
+        },
+        "3": {
+          "team_id": 3,
+          "urgency": "참고",
+          "source": "human",
+          "rule_id": null
+        }
+      },
+      "team_ids": [
+        1,
+        2,
+        3
+      ],
+      "expect": {
+        "level": "보통",
+        "teams": [
+          2
+        ]
+      }
+    },
+    {
+      "name": "팀원 올림은 빼고 AI 올림만 → 보통, AI 팀",
+      "common": "참고",
+      "rows_by_team": {
+        "1": {
+          "team_id": 1,
+          "urgency": "긴급",
+          "source": "human",
+          "rule_id": null
+        },
+        "2": {
+          "team_id": 2,
+          "urgency": "보통",
+          "source": "ai",
           "rule_id": null
         }
       },

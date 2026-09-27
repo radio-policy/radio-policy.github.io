@@ -647,6 +647,25 @@ create table if not exists public.speech_field_stats (
 );
 alter table public.speech_field_stats enable row level security;
 
+create table if not exists public.subscriber_alert_log (
+  id bigint generated always as identity not null,
+  audience text not null,
+  channel text not null,
+  news_id uuid not null,
+  article_title text default ''::text not null,
+  article_url text,
+  outcome text not null,
+  matched_title text,
+  shared_keywords text,
+  created_at timestamp with time zone default now() not null,
+  constraint subscriber_alert_log_audience_channel_news_id_key UNIQUE (audience, channel, news_id),
+  constraint subscriber_alert_log_pkey PRIMARY KEY (id),
+  constraint subscriber_alert_log_audience_check CHECK ((audience ~ '^(c|t:[0-9]+|d:.+)$'::text)),
+  constraint subscriber_alert_log_channel_check CHECK ((channel = ANY (ARRAY['긴급'::text, '보통'::text]))),
+  constraint subscriber_alert_log_outcome_check CHECK ((outcome = ANY (ARRAY['sent'::text, 'remind'::text, 'suppressed'::text, 'merged'::text])))
+);
+alter table public.subscriber_alert_log enable row level security;
+
 create table if not exists public.subscriber_queue (
   id bigint default nextval('subscriber_queue_id_seq'::regclass) not null,
   topic text not null,
@@ -654,8 +673,11 @@ create table if not exists public.subscriber_queue (
   created_at timestamp with time zone default now() not null,
   news_url text,
   tags text[],
+  audience text,
+  level text,
   constraint subscriber_queue_pkey PRIMARY KEY (id),
-  constraint subscriber_queue_topic_check CHECK ((topic = ANY (ARRAY['urgent'::text, 'assembly'::text, 'kmcc'::text])))
+  constraint subscriber_queue_news_shape_check CHECK ((((topic = 'news'::text) AND (audience ~ '^(c|t:[0-9]+|d:.+)$'::text) AND (level = ANY (ARRAY['긴급'::text, '보통'::text])) AND (news_url IS NOT NULL)) OR ((topic <> 'news'::text) AND (audience IS NULL) AND (level IS NULL)))),
+  constraint subscriber_queue_topic_check CHECK ((topic = ANY (ARRAY['urgent'::text, 'assembly'::text, 'kmcc'::text, 'news'::text])))
 );
 alter table public.subscriber_queue enable row level security;
 
@@ -749,9 +771,15 @@ create table if not exists public.telegram_subscribers (
   law_allowed boolean default false not null,
   topic_kmcc boolean default true not null,
   last_kmcc_sent_at timestamp with time zone,
+  team_id smallint,
+  division text,
+  news_level text default 'urgent'::text not null,
+  last_normal_sent_at timestamp with time zone,
   constraint telegram_subscribers_pkey PRIMARY KEY (chat_id),
   constraint telegram_subscribers_briefing_hour_check CHECK (((briefing_hour >= 6) AND (briefing_hour <= 12))),
-  constraint telegram_subscribers_days_check CHECK ((days = ANY (ARRAY['daily'::text, 'weekday'::text])))
+  constraint telegram_subscribers_days_check CHECK ((days = ANY (ARRAY['daily'::text, 'weekday'::text]))),
+  constraint telegram_subscribers_news_level_check CHECK ((news_level = ANY (ARRAY['urgent'::text, 'normal'::text]))),
+  constraint telegram_subscribers_team_or_division_check CHECK (((team_id IS NULL) OR (division IS NULL)))
 );
 alter table public.telegram_subscribers enable row level security;
 

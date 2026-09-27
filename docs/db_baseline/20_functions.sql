@@ -149,6 +149,21 @@ begin
 end $function$
 ;
 
+CREATE OR REPLACE FUNCTION public.admin_list_subscribers()
+ RETURNS TABLE(chat_id bigint, first_name text, username text, active boolean, topic_urgent boolean, news_level text, team_id smallint, division text, created_at timestamp with time zone)
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+begin
+  if not public.is_admin() then raise exception 'AUTH_FAILED'; end if;
+  return query
+    select s.chat_id, s.first_name, s.username, s.active, s.topic_urgent, s.news_level, s.team_id, s.division, s.created_at
+      from public.telegram_subscribers s
+     order by s.created_at, s.chat_id;
+end $function$
+;
+
 CREATE OR REPLACE FUNCTION public.admin_set_kb_approval(p_doc_name text, p_approved boolean)
  RETURNS integer
  LANGUAGE plpgsql
@@ -165,6 +180,34 @@ BEGIN
   RETURN n;
 END;
 $function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_set_subscriber_team(p_chat_id bigint, p_team_id smallint, p_division text)
+ RETURNS integer
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare n integer;
+begin
+  if not public.is_admin() then raise exception 'AUTH_FAILED'; end if;
+  if p_team_id is not null and p_division is not null then raise exception 'TEAM_OR_DIVISION'; end if;
+  if p_division is not null and not exists (select 1 from public.teams t where t.division = p_division) then
+    raise exception 'UNKNOWN_DIVISION';
+  end if;
+  if not exists (select 1 from public.telegram_subscribers s where s.chat_id = p_chat_id) then
+    raise exception 'NOT_FOUND';
+  end if;
+  update public.telegram_subscribers s
+     set team_id = p_team_id, division = p_division,
+         last_urgent_sent_at = least(now(), coalesce(s.last_urgent_sent_at, now()) + interval '5 minutes'),
+         last_normal_sent_at = least(now(), coalesce(s.last_normal_sent_at, now()) + interval '5 minutes'),
+         updated_at = now()
+   where s.chat_id = p_chat_id
+     and (s.team_id is distinct from p_team_id or s.division is distinct from p_division);
+  get diagnostics n = row_count;
+  return n;
+end $function$
 ;
 
 CREATE OR REPLACE FUNCTION public.admin_update_chunk_embeddings(p_ids bigint[], p_embeddings text[])

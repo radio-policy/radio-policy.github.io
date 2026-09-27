@@ -15,6 +15,13 @@
 
 규칙 한 개는 표 행 모양(any_words/none_words/mode/level)과 JSON 모양(any/none/"min": 등급 또는
 "set": 등급) 둘 다 받는다.
+
+그 밖의 공용 함수(모두 JS판과 같은 규칙, 케이스 `tests/fixtures/urgency_team_cases.json`):
+  - 팀 층(#250): max_level·rule_input_text·team_rule_decision·effective_team_urgency·division_urgency
+  - 팀별 알림 등급(#252): min_level·alert_team_level·alert_division_level — 사람 수정은 min(사람값, 공통값)
+  - 문장 조건(#251): has_sentence·sentence_verdict·sentence_candidates·sentence_filtered_rules·
+    team_rule_decision_judged·verdict_map
+기존 함수의 계약은 바꾸지 않고 함수 추가로만 넓힌다(사내판이 이 파일의 변경을 감시한다).
 """
 import unicodedata
 
@@ -154,6 +161,41 @@ def division_urgency(common_level, rows_by_team, rules_by_id, team_ids):
     effs = [(t, effective_team_urgency(common_level, (rows_by_team or {}).get(t), rules_by_id)['level'])
             for t in team_ids]
     top = effs[0][1]                                   # 공통값은 넣지 않는다 — 모든 팀이 낮췄으면 낮춘 값이 맞다
+    for _, lv in effs[1:]:
+        top = max_level(top, lv)
+    return {'level': top, 'teams': [t for t, lv in effs if lv == top]}
+
+
+# ── 팀별 알림 등급(#252, 2026-09-27, 설계안 §10 E5·A2 — Fable 재검토) ─────────────────────────────────
+# 구독자 봇의 팀·실장 알림(크롤러 run_audience_alerts)이 쓰는 등급. 화면 등급(effective_team_urgency·division_urgency)과
+# 다른 점은 **사람 수정(human) 하나** — 팀원이 수집 뒤 올린 등급은 알림을 만들지 않고(공통값과 같은 원칙 E5), 내린 등급은
+# 알림을 막는다 → 알림 등급 = min(사람값, 공통값). rule·ai 행은 화면 등급 그대로. 기존 함수 계약은 그대로(함수 추가만 —
+# 사내판 감시 대상). JS판 minLevel·alertTeamLevel·alertDivisionLevel과 같은 규칙, 케이스 urgency_team_cases.json.
+
+def min_level(a, b):
+    """두 등급 중 낮은 것(모르는 값은 가장 낮게 본다 — max_level과 대칭, 같으면 a)."""
+    return a if _RANK.get(a, -1) <= _RANK.get(b, -1) else b
+
+
+def alert_team_level(common_level, team_row, rules_by_id):
+    """한 팀의 **알림** 등급. 팀 행 없음 → 공통값 / human → min(사람값, 공통값) / rule·ai → effective_team_urgency 등급.
+    사람값이 등급 셋 밖이면 effective_team_urgency가 공통값을 돌려주므로 결과도 공통값이다."""
+    if not team_row:
+        return common_level
+    eff = effective_team_urgency(common_level, team_row, rules_by_id)['level']
+    if team_row.get('source') == 'human':
+        return min_level(eff, common_level)
+    return eff
+
+
+def alert_division_level(common_level, rows_by_team, rules_by_id, team_ids):
+    """실장 알림 등급 = 그 실 팀들의 알림 등급(alert_team_level) 중 가장 높은 것 → {'level', 'teams'}.
+    teams = 그 등급을 본 팀 id(team_ids 순서) — 알림 표시(🏷 팀 이름들)에 쓴다. team_ids가 비면 공통값·빈 목록.
+    division_urgency와 같은 모양(공통값은 넣지 않는다 — 모든 팀이 낮췄으면 낮춘 값)."""
+    if not team_ids:
+        return {'level': common_level, 'teams': []}
+    effs = [(t, alert_team_level(common_level, (rows_by_team or {}).get(t), rules_by_id)) for t in team_ids]
+    top = effs[0][1]
     for _, lv in effs[1:]:
         top = max_level(top, lv)
     return {'level': top, 'teams': [t for t, lv in effs if lv == top]}

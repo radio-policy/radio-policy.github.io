@@ -11,6 +11,11 @@
 //  목록 순서의 첫 적중 규칙 하나가 정한다(첫 적중 min이 이미 그 이상이면 값 그대로, 뒤 규칙 안 봄).
 //  min = 하한, set = 지정. team_id·enabled·position은 보지 않는다(목록을 만드는 쪽 몫).
 //
+//  그 밖(케이스 tests/fixtures/urgency_team_cases.json, Python과 같은 규칙): 팀 층(#250) maxLevel·ruleInputText·
+//  teamRuleDecision·effectiveTeamUrgency·divisionUrgency / 팀별 알림 등급(#252) minLevel·alertTeamLevel·
+//  alertDivisionLevel / 문장 조건(#251) hasSentence·sentenceVerdict·sentenceCandidates·sentenceFilteredRules·
+//  teamRuleDecisionJudged·verdictMap. 기존 함수 계약은 그대로 — 함수 추가로만 넓힌다(사내판 감시 대상).
+//
 //  cite_verify.js와 같은 방식 — ESM export 없이 globalThis.UrgencyRules 에 붙인다(브라우저 <script>·node).
 //  GitLab Pages는 나열된 파일만 싣는다 — .gitlab-ci.yml cp 목록에 이 경로가 있어야 한다.
 // ============================================================================
@@ -115,6 +120,30 @@
     return { level: top, teams: effs.filter(function (e) { return e[1] === top; }).map(function (e) { return e[0]; }) };
   }
 
+  // ── 팀별 알림 등급(#252, 2026-09-27, 설계안 §10 E5·A2 — Fable 재검토) ─────────────────────────────
+  // Python urgency_rules.py의 min_level·alert_team_level·alert_division_level과 같은 규칙(케이스 urgency_team_cases.json).
+  // 화면 등급과 다른 점은 사람 수정(human) 하나 — 올린 것은 알림 안 함·내린 것은 막음 → min(사람값, 공통값).
+  // 기존 함수 계약은 그대로(함수 추가만 — 사내판 감시 대상).
+  function minLevel(a, b) { return rank(a) <= rank(b) ? a : b; }   // 모르는 값은 가장 낮게, 같으면 a
+
+  function alertTeamLevel(commonLevel, teamRow, rulesById) {
+    if (!teamRow) return commonLevel;
+    const eff = effectiveTeamUrgency(commonLevel, teamRow, rulesById).level;
+    if (teamRow.source === 'human') return minLevel(eff, commonLevel);
+    return eff;
+  }
+
+  // → { level, teams } — 그 실 팀들의 알림 등급 중 최고, teams = 그 등급을 본 팀 id(teamIds 순서)
+  function alertDivisionLevel(commonLevel, rowsByTeam, rulesById, teamIds) {
+    if (!teamIds || !teamIds.length) return { level: commonLevel, teams: [] };
+    const effs = teamIds.map(function (t) {
+      return [t, alertTeamLevel(commonLevel, (rowsByTeam || {})[t], rulesById)];
+    });
+    let top = effs[0][1];
+    for (let i = 1; i < effs.length; i++) top = maxLevel(top, effs[i][1]);
+    return { level: top, teams: effs.filter(function (e) { return e[1] === top; }).map(function (e) { return e[0]; }) };
+  }
+
   // ── 문장 조건(#251, 2026-09-27, 설계안 §10-2 — Fable 재검토) ──────────────────────────────────
   // Python urgency_rules.py의 has_sentence·sentence_verdict·sentence_candidates·sentence_filtered_rules·
   // team_rule_decision_judged·verdict_map과 같은 규칙(케이스 urgency_team_cases.json). 판정은 크롤러(Haiku)만 하고
@@ -213,6 +242,7 @@
     hasSentence: hasSentence, sentenceVerdict: sentenceVerdict, sentenceCandidates: sentenceCandidates,
     sentenceFilteredRules: sentenceFilteredRules, teamRuleDecisionJudged: teamRuleDecisionJudged,
     verdictMap: verdictMap,
+    minLevel: minLevel, alertTeamLevel: alertTeamLevel, alertDivisionLevel: alertDivisionLevel,
   };
   root.UrgencyRules = UrgencyRules;
   if (typeof module !== 'undefined' && module.exports) module.exports = UrgencyRules;

@@ -20,6 +20,7 @@ import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
 import { createClient, type SupabaseClient } from 'jsr:@supabase/supabase-js@2';
 import { escapeHtml, splitByLines, sendTelegramHtml } from '../_shared/telegram_format.ts';
 import { NEWS_TAGS } from '../_shared/news_tags.ts';
+import { fetchAllPages } from '../_shared/subscriber_queue.ts';
 
 const env = (k: string) => (Deno.env.get(k) || '').trim();
 const BOT_TOKEN = env('TELEGRAM_BOT_TOKEN') || env('SUBSCRIBER_BOT_TOKEN');   // 운영자 봇 우선(2026-09-06)
@@ -42,12 +43,18 @@ type Sub = {
   last_urgent_sent_at: string | null;
   last_assembly_sent_at: string | null;
   last_kmcc_sent_at: string | null;
+  // 팀별 알림(#252) — 관리자가 지정한 팀·실(둘 다 null = 공통)과 봇 「받을 뉴스」
+  team_id: number | null;
+  division: string | null;
+  news_level: string | null;
+  last_normal_sent_at: string | null;
 };
 type Usage = { chat_id: number; command: string; query: string | null; result_note: string | null; created_at: string };
 type QueueRow = { topic: string; created_at: string };
 
 const QUEUE_LABEL: Record<string, string> = {
   briefing: '모닝 브리핑', urgent: '주요 뉴스', assembly: '국회·법률 동향', kmcc: '방미통위 동향',
+  news: '팀·보통 뉴스',   // #252 — 받는 단위(팀·실·공통 보통)별 기사 행이라 사람 수가 아니라 (단위×기사) 행 수
 };
 
 const CMD_LABEL: Record<string, string> = {
@@ -83,7 +90,19 @@ function tagLine(s: Sub): string {
   return `관심분야 ${labels.join(', ')}`;
 }
 
-function buildReport(subs: Sub[], usage: Usage[], queue: QueueRow[], since7: Date): string {
+/** 주요 뉴스 기준(#252) — 어느 등급으로 받는지(공통/팀/실장)와 받을 뉴스(중요만/중요+보통). 주요 뉴스를 끈 사람은 생략. */
+function newsUnitLine(s: Sub, teamName: Map<number, string>): string {
+  if (!s.topic_urgent) return '';
+  const unit = s.division
+    ? `${s.division} 실장`
+    : (s.team_id !== null && s.team_id !== undefined)
+      ? (teamName.get(s.team_id) || `팀 ${s.team_id}`)
+      : '공통';
+  return `뉴스 기준 ${unit} · ${s.news_level === 'normal' ? '중요+보통' : '중요만'}`;
+}
+
+function buildReport(subs: Sub[], usage: Usage[], queue: QueueRow[], since7: Date,
+                     teamName: Map<number, string> = new Map()): string {
   const today = kstDate(new Date());
   const yday = kstDate(new Date(Date.now() - 24 * 3600 * 1000));
 
@@ -141,16 +160,20 @@ function buildReport(subs: Sub[], usage: Usage[], queue: QueueRow[], since7: Dat
       ? kstDate(new Date(mine[0].created_at))
       : '없음';
     const tags = tagLine(s);
+    const unit = newsUnitLine(s, teamName);
     // 마지막으로 실제 발송된 시점 — 구독은 켜 뒀는데 안 나가고 있는 사람을 잡아내는 지표.
     // 브리핑은 켜 두면 매일 같은 날짜가 찍혀 신호가 없다(운영자 지시 2026-08-14) — 뺀다.
     const sent = [
       s.last_urgent_sent_at ? `뉴스 ${kstDate(new Date(s.last_urgent_sent_at))}` : '',
+      // 보통 묶음(#252)은 중요+보통을 고른 사람만 전진한다 — 중요만인 사람의 옛 값은 신호가 아니라 뺀다
+      s.news_level === 'normal' && s.last_normal_sent_at ? `보통 ${kstDate(new Date(s.last_normal_sent_at))}` : '',
       s.last_assembly_sent_at ? `국회·법률 ${kstDate(new Date(s.last_assembly_sent_at))}` : '',
       s.last_kmcc_sent_at ? `방미통위 ${kstDate(new Date(s.last_kmcc_sent_at))}` : '',
     ].filter(Boolean).join(' · ') || '발송 이력 없음';
     out += `\n• <b>${name}</b> ${handle}\n` +
       `  수신 ${escapeHtml(subscriptionLine(s))}\n` +
       (tags ? `  ${escapeHtml(tags)}\n` : '') +
+      (unit ? `  ${escapeHtml(unit)}\n` : '') +
       `  최근 발송 ${escapeHtml(sent)}\n` +
       `  권한 ${escapeHtml(perms)} · 가입 ${escapeHtml((s.created_at || '').slice(0, 10))}\n` +
       `  명령 어제 ${mineYday.length}건 (${escapeHtml(fmtCmds(cmdCount(mineYday)))}) · ` +
@@ -204,24 +227,32 @@ Deno.serve(async (req: Request) => {
       } catch (_e) { return ''; }
     })();
 
-    const [{ data: subs }, { data: usage }, { data: queue }] = await Promise.all([
+    const [{ data: subs }, { data: usage }, { rows: queue, error: qerr }, { data: teams }] = await Promise.all([
       sb.from('telegram_subscribers')
         .select('chat_id, first_name, username, active, ai_allowed, law_allowed, unlimited, ' +
                 'briefing_hour, end_hour, days, created_at, tags, ' +
                 'topic_briefing, topic_urgent, topic_assembly, topic_kmcc, ' +
-                'last_briefing_sent_date, last_urgent_sent_at, last_assembly_sent_at, last_kmcc_sent_at')
+                'last_briefing_sent_date, last_urgent_sent_at, last_assembly_sent_at, last_kmcc_sent_at, ' +
+                'team_id, division, news_level, last_normal_sent_at')
         .order('created_at'),
       sb.from('telegram_usage')
         .select('chat_id, command, query, result_note, created_at')
         .gte('created_at', since7.toISOString())
         .order('created_at', { ascending: false }),
-      sb.from('subscriber_queue')
+      // 7일 큐는 받는 단위별·보통 행(#252)이 더해져 1,000행을 넘을 수 있다 → (created_at, id) 순서로 끝까지 페이지
+      fetchAllPages<QueueRow>((from, to) => sb.from('subscriber_queue')
         .select('topic, created_at')
-        .gte('created_at', since7.toISOString()),
+        .gte('created_at', since7.toISOString())
+        .order('created_at').order('id').range(from, to)),
+      // 구독자 줄의 팀 이름(#252) — 18행, 실패하면 '팀 <id>'로 표시
+      sb.from('teams').select('id, name'),
     ]);
+    if (qerr) console.error('[admin-daily-report] 큐 조회 실패(물량 줄은 없음으로 표시)', qerr);
+    const teamName = new Map<number, string>(
+      ((teams || []) as Array<{ id: number; name: string }>).map((t) => [t.id, t.name]));
 
     const html = buildReport((subs || []) as Sub[], (usage || []) as Usage[],
-                             (queue || []) as QueueRow[], since7) + aiLine;
+                             queue, since7, teamName) + aiLine;
     // maxParts 기본값 3(≈11.7KB)이면 구독자가 20~25명을 넘을 때 뒷사람과 '집계 기간' 줄이 조용히 잘린다.
     // 운영자 1명에게만 가는 리포트라 조각이 늘어도 부담이 없어 8로 올린다.
     for (const part of splitByLines(html, 3900, 8)) await sendTelegramHtml(BOT_TOKEN, OPERATOR_CHAT_ID, part);

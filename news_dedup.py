@@ -111,10 +111,13 @@ _GROUP_SYSTEM = (
 )
 
 
-def group_same_event(titles: list, api_key: str, model: str = 'claude-haiku-4-5-20251001') -> list | None:
+def group_same_event(titles: list, api_key: str, model: str = 'claude-haiku-4-5-20251001',
+                     timeout=None, max_retries=None) -> list | None:
     """제목 목록 → 같은 사건끼리의 인덱스 그룹. 실패하면 None(호출부는 원본 유지 = fail-open).
 
     반환 예: [[0, 2, 3], [1]]  (0-based, 입력 순서 유지)
+    timeout·max_retries(#252): 주면 클라이언트에 그대로 건다 — 크롤러의 받는 단위별 알림이 짧은 제한(20초·재시도 1회)으로
+    부른다(멈춘 호출 하나가 공통 즉시 배달을 붙잡지 않게). **둘 다 None(기본)이면 종전과 같은 호출**(Anthropic(api_key=…)만).
     """
     if not api_key or len(titles) < 2:
         return None
@@ -122,7 +125,12 @@ def group_same_event(titles: list, api_key: str, model: str = 'claude-haiku-4-5-
         import json as _json
         import anthropic
         listing = '\n'.join(f'{i + 1}. {t}' for i, t in enumerate(titles))
-        resp = anthropic.Anthropic(api_key=api_key).messages.create(
+        client_kw = {}
+        if timeout is not None:
+            client_kw['timeout'] = timeout
+        if max_retries is not None:
+            client_kw['max_retries'] = max_retries
+        resp = anthropic.Anthropic(api_key=api_key, **client_kw).messages.create(
             model=model, max_tokens=400, system=_GROUP_SYSTEM,
             messages=[{'role': 'user', 'content': f'[기사 {len(titles)}건]\n{listing}'}],
         )

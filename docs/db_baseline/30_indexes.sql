@@ -98,6 +98,10 @@ CREATE INDEX speech_field_stats_date_idx ON public.speech_field_stats USING btre
 
 CREATE INDEX speech_field_stats_speaker_idx ON public.speech_field_stats USING btree (speaker, meeting_date);
 
+CREATE INDEX subscriber_alert_log_aud_created_idx ON public.subscriber_alert_log USING btree (audience, channel, created_at);
+
+CREATE INDEX subscriber_alert_log_news_idx ON public.subscriber_alert_log USING btree (news_id);
+
 CREATE INDEX subscriber_queue_created_idx ON public.subscriber_queue USING btree (created_at);
 
 CREATE INDEX team_urgency_team_idx ON public.team_urgency USING btree (team_id, news_id);

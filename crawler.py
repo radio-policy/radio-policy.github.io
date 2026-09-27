@@ -1592,6 +1592,11 @@ _TEAM_RULE_HITS: dict = {}
 # 모으고 queue_new_sentence_candidates가 판정 대기 행으로 만든다. _TEAM_RULE_HITS와 같은 이유로 item 키로 넣지 않는다(#82·#222).
 _SENTENCE_CANDS: dict = {}
 
+# 이번 실행에 **실제로 새로 저장된** 기사(url → news_id, #252) — save_new_items가 upsert 응답(ON CONFLICT DO NOTHING +
+# representation = 새 행만)으로 채운다. 받는 단위별 알림(run_audience_alerts 'collect')의 후보는 여기 있는 기사만 —
+# 응답에 없는 url은 동시 실행이 먼저 넣은 기사라 그 실행이 맡는다(#154 'upsert 반환값으로만 판단').
+_INSERTED_IDS: dict = {}
+
 
 # ═══════════════════════════════════════════════════════
 #  Supabase 저장
@@ -1680,6 +1685,7 @@ def save_new_items(items: list, existing_data: tuple) -> list:
     본문 수집·긴급도 분류는 선별 통과분에만 돈다(둘 다 건당 비용이 큰 단계).
     """
     existing_urls, existing_titles = existing_data
+    _INSERTED_IDS.clear()                       # 이번 실행에 새로 저장된 기사만 팀 알림 후보(#252) — 이른 반환에도 비어 있게
     now_kst = datetime.now(KST)
     cutoff_72h = now_kst - timedelta(days=15)   # 저장 기준: 15일 이내
     seen_urls   = set(existing_urls)
@@ -1839,9 +1845,23 @@ def save_new_items(items: list, existing_data: tuple) -> list:
     urgent_count = sum(1 for i in valid if i.get('urgency') == '긴급')
     print(f'[저장] {len(valid)}건 저장 완료 (긴급 {urgent_count}건)')
     inserted = getattr(res, 'data', None)
+    _remember_inserted(inserted)             # 팀 알림 후보(#252) — 응답 행만
     save_sentence_verdict_rows(inserted)     # 판정 기록 먼저 — 팀 행(아래)은 이 판정에서 나온 값이다(#251)
     save_team_rule_rows(inserted)
     return valid
+
+
+def _remember_inserted(inserted) -> None:
+    """upsert 응답(새로 들어간 행 — id·url) → _INSERTED_IDS(url → news_id, #252). 응답이 비거나 이상하면 비운 채로 둔다
+    (팀 알림 후보 없음 — 공통 알림은 종전대로 valid 전체를 본다)."""
+    _INSERTED_IDS.clear()
+    try:
+        for r in inserted or []:
+            if isinstance(r, dict) and r.get('id') and r.get('url'):
+                _INSERTED_IDS[r['url']] = r['id']
+    except Exception as e:
+        _INSERTED_IDS.clear()
+        print(f'[팀 알림] 저장 응답 정리 실패(무시 — 이번 실행은 팀 알림 후보 없음): {str(e)[:80]}')
 
 
 def team_rule_rows(inserted: list) -> list:
@@ -2261,7 +2281,14 @@ def process_open_sentence_verdicts() -> None:
         print(f'[문장 판정] 비용 점검 실패(무시): {str(e)[:120]}')
 
 
-_OPEN_VERDICT_COLS = 'rule_id,sentence_rev,news_id,team_id,status,attempts,created_at'
+# requested_by(#252) — 수집 경로(null)의 판정만 늦은 팀 알림 후보가 된다(대시보드 요청·재판정은 화면만)
+_OPEN_VERDICT_COLS = 'rule_id,sentence_rev,news_id,team_id,status,attempts,created_at,requested_by'
+# 늦은 팀 알림 후보(#252, run_audience_alerts 'late') — 대기 처리가 이번 실행에 **참(verdict=true)**으로 저장한 판정 중 원 요청이
+# 수집 경로(requested_by null)인 것 → {team_id: {news_id: {rule_id: 판정 행 created_at}}}. late 단계는 여기에 더해 ① 판정 행이
+# 기사 저장 뒤 LATE_COLLECT_MAX_GAP_MIN 안에 생겼고 ② _rewrite_team_rows 뒤 그 팀 행이 source='rule'이며 rule_id가 그 문장
+# 규칙일 때만 알린다(실장은 그 팀이 최고 등급을 본 팀일 때만). 대시보드 규칙 저장·재적용·재판정·되살림·관리자 공통 등급
+# 수정으로 생긴 팀 등급은 알림 없음(화면에만 — 설계 B-2·E5).
+_LATE_ALERT_PAIRS: dict = {}
 _RULE_ID_RE = re.compile(r'[a-z0-9_]+')    # 표 CHECK urgency_rules_id_check와 같은 모양 — or 필터 글에 그대로 넣어도 안전
 _NEWS_LIGHT_COLS = 'id,title,screen_text,summary'                   # 낱말 확인만(본문 없이)
 _NEWS_JUDGE_COLS = 'id,title,screen_text,summary,content,urgency'   # 판정·팀 결정
@@ -2359,6 +2386,11 @@ def _process_open_sentence_rows() -> dict:
             st['skipped'] += 1
             continue
         todo.append({'row': row, 'rule': r, 'age_h': age_h, 'attempts': attempts, 'after_snap': after_snap})
+    # 늦은 팀 알림 후보(#252) — requested_by 칸을 **받았고** 값이 null인 대기 행(이번 실행 되살림은 아래 revive라 빠진다) →
+    # 판정 행 created_at을 함께 넘긴다: late 단계가 '기사 created_at + LATE_COLLECT_MAX_GAP_MIN 안에 생긴 요청'만 수집 경로로
+    # 본다(되살림·관리자 SQL 재대기는 requested_by null인 채 created_at만 지금으로 바뀌어 다음 실행에 수집 경로로 둔갑한다).
+    collect_req = {(t['row'].get('rule_id'), t['row'].get('sentence_rev'), t['row'].get('news_id')): t['row'].get('created_at')
+                   for t in todo if 'requested_by' in t['row'] and t['row']['requested_by'] is None}
     # ⓪ 되살림 후보 — 판·팀을 다시 확인하고, 본문 없이 기사를 읽어 지금 낱말이 걸리는 것만 남긴다
     revive = []
     for row in stale_rows:
@@ -2467,6 +2499,9 @@ def _process_open_sentence_rows() -> dict:
         if u['status'] == 'done':
             st['cost'] += u['cost_usd']
             pairs.setdefault(u['team_id'], set()).add(u['news_id'])
+            k = (u['rule_id'], u['sentence_rev'], u['news_id'])
+            if u.get('verdict') is True and k in collect_req:        # 참 판정만 — 거짓은 새 팀 등급을 만들지 않는다
+                _LATE_ALERT_PAIRS.setdefault(u['team_id'], {}).setdefault(u['news_id'], {})[u['rule_id']] = collect_req[k]
     if pairs:
         try:
             st['ins'], st['upd'], st['del'] = _rewrite_team_rows(pairs, news, team_rules)
@@ -2700,6 +2735,234 @@ def tag_labels(tags) -> str:
     return ' · '.join(TAG_LABELS_KO.get(str(t), str(t)) for t in tags)
 
 
+REMIND_AFTER_H = 24          # 사건 대표가 이 시간을 넘으면 재보도 1건을 리마인드로 통과(#181)
+ALERT_CHAIN_DAYS = 10        # 억제 사슬 조회 창(일)
+ALERT_PAGE = 1000            # PostgREST 요청당 상한 — 사슬·비교군 조회는 order + range 페이지(#66·#233)
+
+# group_same_event 메모(#252) — 한 실행 안에서 같은 제목 목록(tuple)이면 앞 결과를 그대로 쓴다(Haiku 호출 0).
+# 공통 포장과 받는 단위별 계산이 같이 쓴다 — 단위의 입력이 공통과 같으면 같은 판정·같은 비용 0.
+_GROUP_MEMO: dict = {}
+# 공통 포장(suppress_repeat_alerts)의 마지막 결과 — 받는 단위 '긴급' 채널의 복사 지름길이 쓴다(#252).
+# {'urls': 입력 url 목록(순서), 'reps', 'sup_rows', 'remind_rows', 'fail_open'} 또는 None(이번 실행에 안 불림).
+_COMMON_ALERT = None
+
+
+def _group_same_event_memo(titles, timeout=None, max_retries=None, counter=None):
+    """news_dedup.group_same_event(제목들, 키)의 실행 내 메모. 실패(None)도 메모한다 — 같은 입력에 같은 결과.
+    공통 포장은 인자 없이 부른다(종전과 같은 호출). 받는 단위별 알림은 timeout·max_retries(짧은 제한)와 counter([n] —
+    메모에 없어 실제로 나간 호출 수, 비용 관측)를 넘긴다."""
+    key = tuple(titles)
+    if key not in _GROUP_MEMO:
+        import news_dedup
+        if timeout is None and max_retries is None:
+            _GROUP_MEMO[key] = news_dedup.group_same_event(list(titles), ANTHROPIC_API_KEY)
+        else:
+            _GROUP_MEMO[key] = news_dedup.group_same_event(list(titles), ANTHROPIC_API_KEY,
+                                                           timeout=timeout, max_retries=max_retries)
+        if counter is not None and len(titles) >= 2:
+            counter[0] += 1
+    got = _GROUP_MEMO[key]
+    return [list(g) for g in got] if got else got
+
+
+def _fetch_pages(make_query, page: int = ALERT_PAGE) -> list:
+    """make_query() = 정렬까지 건 새 쿼리. range로 끝까지 읽는다(PostgREST 1,000행 상한, #53·#233)."""
+    out, lo = [], 0
+    while True:
+        data = make_query().range(lo, lo + page - 1).execute().data or []
+        out.extend(data)
+        if len(data) < page:
+            return out
+        lo += page
+
+
+def _prior_entries(rows, exclude_urls) -> tuple:
+    """비교군 행(title·url·created_at, **최신순**) → (prior [{'title', 'kw'}], prior_at {제목: 가장 최근 created_at}).
+    exclude_urls(이번 후보 — 자기 자신과 비교 방지)는 뺀다. 공통 포장과 받는 단위별 계산이 같이 쓴다."""
+    from news_dedup import extract_keywords
+    prior, prior_at = [], {}
+    for r in rows or []:
+        if r.get('url') not in exclude_urls:
+            prior.append({'title': r.get('title') or '', 'kw': extract_keywords(r.get('title') or '')})
+            prior_at.setdefault(r.get('title') or '', r.get('created_at'))   # 정렬이 최신순 = 가장 최근 것
+    return prior, prior_at
+
+
+def _chain_from_suppress_log(rows) -> dict:
+    """alert_suppress_log 행(오래된 것부터) → 억제 사슬 {억제된 제목: 그때 걸린 기존 제목}. 리마인드는 '나간 기사'라 사슬을 끊는다."""
+    sup_chain = {}
+    for r in rows or []:
+        if str(r.get('shared_keywords') or '').startswith('[리마인드]'):
+            continue                 # 리마인드는 '나간 기사' — 사슬을 끊는다
+        if r.get('article_title'):
+            sup_chain[r['article_title']] = r.get('matched_title') or ''
+    return sup_chain
+
+
+def _suppress_core(items: list, prior: list, prior_at: dict, sup_chain: dict, group_fn, log=None) -> tuple:
+    """재알림 억제·묶기의 핵심(#44·#92·#170·#181) — **DB·전역을 만지지 않는다**. → (reps, sup_rows, remind_rows, merged).
+      items     = 이번 후보(순서가 대표를 정한다). **제자리에서** 고친다(_remind·_related) — 받는 단위마다 따로 계산할 때는
+                  부르는 쪽이 dict를 복사해 넘긴다(단위끼리 섞이면 안 된다).
+      prior     = 비교군 [{'title', 'kw'}](최신순), prior_at = {제목: created_at}(_prior_entries)
+      sup_chain = 억제 사슬 {억제된 제목: 그때 걸린 기존 제목}(한 칸씩)
+      group_fn  = 같은 사건 묶기(titles → 0부터 인덱스 묶음 | None) — None이면 의미 판정 두 단계(①-2·2차)를 건너뛴다
+      log       = 줄 출력(공통 포장은 print — 종전 로그 그대로, 받는 단위는 None = 조용히)
+      merged    = 실행분 안에서 대표에 병합된 건수(종전 len(passed) - len(reps))
+    ①·②·③의 뜻은 suppress_repeat_alerts 설명 참조. 행 모양(article_title·article_url·matched_title·shared_keywords)은
+    alert_suppress_log와 같다 — 받는 단위는 이것을 subscriber_alert_log 행으로 옮긴다."""
+    from news_dedup import extract_keywords, is_followup, cluster_star
+    say = log or (lambda *_a, **_k: None)
+
+    def _rep_age_h(matched_title: str):
+        """사건 대표(마지막으로 실제 알림이 나간 기사)의 경과 시간(h). 모르면 None(=3일 창 밖)."""
+        cur, seen = matched_title, set()
+        while cur and cur in sup_chain and cur not in seen:
+            seen.add(cur)
+            cur = sup_chain[cur]
+        at = prior_at.get(cur)
+        if not at:
+            return None                  # 3일 창 밖의 대표 = 72시간 초과 → 리마인드 대상
+        try:
+            t = datetime.fromisoformat(str(at).replace('Z', '+00:00'))
+            return (datetime.now(KST) - t).total_seconds() / 3600
+        except Exception:
+            return None
+
+    def _remind_label(age_h):
+        return '이어지는 사건' if age_h is None else f'{int(age_h // 24) + 1}일째'
+
+    passed, sup_rows, remind_rows, passed_kw = [], [], [], []
+    for it in items:
+        kw = extract_keywords(it.get('title') or '')
+        matched = None
+        for pv in prior:
+            if is_followup(kw, pv['kw'], it.get('title') or '', pv['title']):
+                matched = pv
+                break
+        if matched:
+            age_h = _rep_age_h(matched['title'])
+            if age_h is None or age_h >= REMIND_AFTER_H:
+                it['_remind'] = _remind_label(age_h)          # 하루 1회 리마인드로 통과
+                remind_rows.append({
+                    'article_title': it.get('title') or '',
+                    'article_url': it.get('url') or '',
+                    'matched_title': matched['title'],
+                    'shared_keywords': f"[리마인드] {it['_remind']}",
+                })
+                passed.append(it)
+                passed_kw.append(kw)
+                continue
+            sup_rows.append({
+                'article_title': it.get('title') or '',
+                'article_url': it.get('url') or '',
+                'matched_title': matched['title'],
+                'shared_keywords': ','.join(sorted(kw & matched['kw'])),
+            })
+        else:
+            passed.append(it)
+            passed_kw.append(kw)
+
+    # ── ①-2: 키워드로 못 잡은 '실행이 갈린' 재보도를 의미 판정으로 한 번 더 거른다 (2026-09-14) ──
+    #  왜 필요한가(실측): 네팔 구호인력 로밍 면제 사건은 같은 내용 기사가 10건 들어왔고 그중 2건이
+    #  긴급으로 분류됐는데, 10:03·10:49 실행으로 갈려 ①의 키워드 문턱(3개)만 거쳤다. 공유는 2개
+    #  (네팔·구호인력)뿐 — '로밍' vs '로밍요금', '통신업계' vs '이통'+'3사', '무료' vs '전액면제'로
+    #  같은 말이 다른 토큰이 되어 통과했고 한 시간 간격으로 두 통이 나갔다.
+    #  #92의 의미 판정은 아래 ②(같은 실행분 묶기)에만 붙어 있어 실행이 갈리면 적용되지 않았다.
+    #  후보는 키워드를 1개라도 공유하는 기보도로 한정한다 — 무관한 제목까지 태우면 오판도 비용도 는다.
+    #  실행당 Haiku 1회(후보가 있을 때만), 실패하면 원본 유지(fail-open).
+    if passed and prior and group_fn:
+        cand = []                                  # 후보 기보도(제목 중복 제거, 최대 10건)
+        seen_t = set()
+        for pv in prior:
+            if len(seen_t) >= 10:
+                break
+            if pv['title'] and pv['title'] not in seen_t and any(kw & pv['kw'] for kw in passed_kw):
+                seen_t.add(pv['title'])
+                cand.append(pv)
+        if cand:
+            titles = [it.get('title') or '' for it in passed] + [pv['title'] for pv in cand]
+            gidx = group_fn(titles)
+            if gidx:
+                base = len(passed)
+                drop = {}                          # passed 인덱스 → 묶인 기보도
+                for g in gidx:
+                    news = [i for i in g if i < base]
+                    olds = [i - base for i in g if i >= base]
+                    if news and olds:
+                        for i in news:
+                            drop[i] = cand[olds[0]]
+                if drop:
+                    kept, kept_kw = [], []
+                    for i, it in enumerate(passed):
+                        pv = drop.get(i)
+                        if pv is None:
+                            kept.append(it)
+                            kept_kw.append(passed_kw[i])
+                            continue
+                        age_h = _rep_age_h(pv['title'])
+                        if age_h is None or age_h >= REMIND_AFTER_H:
+                            it['_remind'] = _remind_label(age_h)   # 여기서도 하루 1회는 통과
+                            remind_rows.append({
+                                'article_title': it.get('title') or '',
+                                'article_url': it.get('url') or '',
+                                'matched_title': pv['title'],
+                                'shared_keywords': f"[리마인드] {it['_remind']}",
+                            })
+                            kept.append(it)
+                            kept_kw.append(passed_kw[i])
+                            continue
+                        sup_rows.append({
+                            'article_title': it.get('title') or '',
+                            'article_url': it.get('url') or '',
+                            'matched_title': pv['title'],
+                            'shared_keywords': '[의미판정] ' + ','.join(sorted(passed_kw[i] & pv['kw'])),
+                        })
+                    say(f'[긴급 억제] 의미 판정으로 실행 간 재보도 {len(drop)}건 판정(리마인드 포함)')
+                    passed, passed_kw = kept, kept_kw
+
+    # 같은 실행분 내 유사 기사 묶기 — 사건 첫날 첫 실행에 재보도 수십 건이
+    # 한꺼번에 들어오면 한 통에 수십 줄이 되는 것을 대표 1건으로 줄인다
+    groups = []                      # [(대표, [묶인 것들])] — 아래 2차 묶기와 형태를 맞춘다
+    for rep, members in cluster_star(passed):
+        groups.append((rep, list(members)))
+
+    # ── 2차: 키워드로 못 묶인 대표들을 Haiku가 의미로 다시 묶는다 (#92) ──
+    # 매체마다 관점이 달라 제목에 공통 단어가 거의 없는 사건이 있다(공정위 불공정약관 4건:
+    # 쌍별 공유 키워드 최대 1개). 어휘로는 못 넘으므로 여기서만 의미 판정을 쓴다.
+    # 실패하면 1차 결과를 그대로 쓴다(fail-open) — 판정이 죽어서 알림이 죽으면 안 된다.
+    if len(groups) >= 2 and group_fn:
+        merged_idx = group_fn([g[0].get('title') or '' for g in groups])
+        if merged_idx and len(merged_idx) < len(groups):
+            regrouped = []
+            for idxs in merged_idx:
+                head = groups[idxs[0]]
+                others = [m for i in idxs[1:] for m in ([groups[i][0]] + groups[i][1])]
+                regrouped.append((head[0], head[1] + others))
+            say(f'[긴급 억제] 의미 판정으로 {len(groups)}묶음 → {len(merged_idx)}묶음')
+            groups = regrouped
+
+    reps = []
+    for rep, members in groups:
+        rep['_related'] = len(members)
+        if not rep.get('_remind'):
+            for m in members:                     # 묶음 안의 리마인드 표시는 대표가 이어받는다
+                if m.get('_remind'):
+                    rep['_remind'] = m['_remind']
+                    break
+        reps.append(rep)
+        # 대표에 병합된 기사도 '알림으로 나가지 않은 기사'다 — 2026-09-21부터 로그에 남긴다.
+        # 사내판 다리(export_news.py)가 alert_suppress_log만 보고 대표 1건을 가려내기 때문이며,
+        # 여기 없으면 같은 사건의 첫 실행분이 TOKTOK으로 여러 통 나간다(#180). 알림 내용은 그대로다.
+        for m in members:
+            sup_rows.append({
+                'article_title': m.get('title') or '',
+                'article_url': m.get('url') or '',
+                'matched_title': rep.get('title') or '',
+                'shared_keywords': '[실행내묶음]',
+            })
+    return reps, sup_rows, remind_rows, len(passed) - len(reps)
+
+
 def suppress_repeat_alerts(urgent_items: list) -> list:
     """같은 사건 재보도의 재알림 억제 (배경역사 #44).
 
@@ -2711,24 +2974,27 @@ def suppress_repeat_alerts(urgent_items: list) -> list:
     ①·②·③ 모두 alert_suppress_log에 남긴다(②는 shared_keywords='[실행내묶음]', ③은 '[리마인드]', 2026-09-21~) —
        이 로그가 곧 '알림으로 나가지 않은 기사' 목록이고, 사내판 다리(export_news.py)가
        이것으로 TOKTOK 대표 1건을 가린다(#180). Haiku 판정 층 추가 여부는 계속 실측 후 결정.
-    어떤 오류든 나면 원본 그대로 반환(fail-open) — 판정이 죽어서 알림까지 죽으면 안 된다."""
+    어떤 오류든 나면 원본 그대로 반환(fail-open) — 판정이 죽어서 알림까지 죽으면 안 된다.
+
+    구조(#252, 2026-09-27): 이 함수는 **공통 경로의 얇은 포장** — 조회(3일 긴급 기보도·억제 사슬)·로그 기록·로그 줄만 하고,
+    판정은 _suppress_core(DB·전역 무접촉)가 한다. 받는 단위별 알림(run_audience_alerts)이 같은 핵심을 자기 비교군으로
+    돌리고, 등급이 갈라지지 않은 단위는 여기 결과(_COMMON_ALERT)를 복사한다. 공통 경로의 입력·출력·로그 행·로그 줄은
+    나누기 전과 같다(tests/test_audience_alerts.py가 나누기 전 본문과 대조). 억제 사슬 조회만 1,000행에서 잘리던 것을
+    order(created_at, id) + range 페이지로 고쳤다(행동 변화는 10일 로그가 1,000행을 넘을 때만 — 전에는 오래된 1,000행만 남았다)."""
+    global _COMMON_ALERT
+    _COMMON_ALERT = None
     if not urgent_items:
+        _COMMON_ALERT = {'urls': [], 'reps': [], 'sup_rows': [], 'remind_rows': [], 'fail_open': False}
         return urgent_items
     try:
-        from news_dedup import extract_keywords, is_followup, cluster_star
-
         # 이번 실행에서 방금 저장한 기사는 비교 대상에서 빼야 한다 (자기 자신과 비교 방지)
         batch_urls = {i.get('url') for i in urgent_items}
         cutoff_3d = (datetime.now(KST) - timedelta(days=3)).isoformat()
-        prior, prior_at = [], {}
         # origin is null — 이슈맵 보강 옛 기사(created_at = 넣은 시각)가 긴급이 되면 3일간 같은 사건의 새 알림을 막는다(#236)
         resp = sb.table('news_feed').select('title,url,created_at') \
             .eq('urgency', '긴급').gte('created_at', cutoff_3d).is_('origin', 'null') \
             .order('created_at', desc=True).limit(1000).execute()
-        for r in (resp.data or []):
-            if r.get('url') not in batch_urls:
-                prior.append({'title': r.get('title') or '', 'kw': extract_keywords(r.get('title') or '')})
-                prior_at.setdefault(r.get('title') or '', r.get('created_at'))   # 정렬이 최신순 = 가장 최근 것
+        prior, prior_at = _prior_entries(resp.data or [], batch_urls)
 
         # ── 하루 1회 리마인드 (2026-09-21 #181) ──────────────────────────────
         # 억제는 사슬로 이어진다 — 실측(30일) 억제 821건 중 660건(80%)이 '이미 억제된 기사'에
@@ -2737,169 +3003,20 @@ def suppress_repeat_alerts(urgent_items: list) -> list:
         # 알림이 나간 기사)가 24시간을 넘었으면 재보도 1건을 '리마인드'로 통과시킨다.
         # 통과분은 alert_suppress_log에 `[리마인드]`로 남긴다 — 미발송이 아니라 발송 기록이며,
         # 사슬을 여기서 끊어 다음 24시간을 새로 센다. 사내판 다리도 이 접두사로 구분한다(#180).
-        REMIND_AFTER_H = 24
+        # 사슬 조회는 페이지로 끝까지(#252) — 페이지 없이 오름차순 1,000행이면 **오래된 행만** 남아 최근 사슬이 빠졌다.
         sup_chain = {}                       # 억제된 제목 → 그때 걸린 기존 제목(사슬 한 칸)
         try:
-            cutoff_10d = (datetime.now(KST) - timedelta(days=10)).isoformat()
-            _lg = (sb.table('alert_suppress_log').select('article_title,matched_title,shared_keywords')
-                   .gte('created_at', cutoff_10d).order('created_at').execute().data) or []
-            for r in _lg:
-                if str(r.get('shared_keywords') or '').startswith('[리마인드]'):
-                    continue                 # 리마인드는 '나간 기사' — 사슬을 끊는다
-                if r.get('article_title'):
-                    sup_chain[r['article_title']] = r.get('matched_title') or ''
+            cutoff_10d = (datetime.now(KST) - timedelta(days=ALERT_CHAIN_DAYS)).isoformat()
+            _lg = _fetch_pages(lambda: sb.table('alert_suppress_log')
+                               .select('article_title,matched_title,shared_keywords')
+                               .gte('created_at', cutoff_10d).order('created_at').order('id'))
+            sup_chain = _chain_from_suppress_log(_lg)
         except Exception as e:
             print(f'[긴급 억제] 억제 사슬 조회 실패 — 이번 실행은 리마인드 없이 종전대로: {e}')
 
-        def _rep_age_h(matched_title: str):
-            """사건 대표(마지막으로 실제 알림이 나간 기사)의 경과 시간(h). 모르면 None(=3일 창 밖)."""
-            cur, seen = matched_title, set()
-            while cur and cur in sup_chain and cur not in seen:
-                seen.add(cur)
-                cur = sup_chain[cur]
-            at = prior_at.get(cur)
-            if not at:
-                return None                  # 3일 창 밖의 대표 = 72시간 초과 → 리마인드 대상
-            try:
-                t = datetime.fromisoformat(str(at).replace('Z', '+00:00'))
-                return (datetime.now(KST) - t).total_seconds() / 3600
-            except Exception:
-                return None
-
-        def _remind_label(age_h):
-            return '이어지는 사건' if age_h is None else f'{int(age_h // 24) + 1}일째'
-
-        passed, sup_rows, remind_rows, passed_kw = [], [], [], []
-        for it in urgent_items:
-            kw = extract_keywords(it.get('title') or '')
-            matched = None
-            for pv in prior:
-                if is_followup(kw, pv['kw'], it.get('title') or '', pv['title']):
-                    matched = pv
-                    break
-            if matched:
-                age_h = _rep_age_h(matched['title'])
-                if age_h is None or age_h >= REMIND_AFTER_H:
-                    it['_remind'] = _remind_label(age_h)          # 하루 1회 리마인드로 통과
-                    remind_rows.append({
-                        'article_title': it.get('title') or '',
-                        'article_url': it.get('url') or '',
-                        'matched_title': matched['title'],
-                        'shared_keywords': f"[리마인드] {it['_remind']}",
-                    })
-                    passed.append(it)
-                    passed_kw.append(kw)
-                    continue
-                sup_rows.append({
-                    'article_title': it.get('title') or '',
-                    'article_url': it.get('url') or '',
-                    'matched_title': matched['title'],
-                    'shared_keywords': ','.join(sorted(kw & matched['kw'])),
-                })
-            else:
-                passed.append(it)
-                passed_kw.append(kw)
-
-        # ── ①-2: 키워드로 못 잡은 '실행이 갈린' 재보도를 의미 판정으로 한 번 더 거른다 (2026-09-14) ──
-        #  왜 필요한가(실측): 네팔 구호인력 로밍 면제 사건은 같은 내용 기사가 10건 들어왔고 그중 2건이
-        #  긴급으로 분류됐는데, 10:03·10:49 실행으로 갈려 ①의 키워드 문턱(3개)만 거쳤다. 공유는 2개
-        #  (네팔·구호인력)뿐 — '로밍' vs '로밍요금', '통신업계' vs '이통'+'3사', '무료' vs '전액면제'로
-        #  같은 말이 다른 토큰이 되어 통과했고 한 시간 간격으로 두 통이 나갔다.
-        #  #92의 의미 판정은 아래 ②(같은 실행분 묶기)에만 붙어 있어 실행이 갈리면 적용되지 않았다.
-        #  후보는 키워드를 1개라도 공유하는 기보도로 한정한다 — 무관한 제목까지 태우면 오판도 비용도 는다.
-        #  실행당 Haiku 1회(후보가 있을 때만), 실패하면 원본 유지(fail-open).
-        if passed and prior and ANTHROPIC_API_KEY:
-            cand = []                                  # 후보 기보도(제목 중복 제거, 최대 10건)
-            seen_t = set()
-            for pv in prior:
-                if len(seen_t) >= 10:
-                    break
-                if pv['title'] and pv['title'] not in seen_t and any(kw & pv['kw'] for kw in passed_kw):
-                    seen_t.add(pv['title'])
-                    cand.append(pv)
-            if cand:
-                from news_dedup import group_same_event
-                titles = [it.get('title') or '' for it in passed] + [pv['title'] for pv in cand]
-                gidx = group_same_event(titles, ANTHROPIC_API_KEY)
-                if gidx:
-                    base = len(passed)
-                    drop = {}                          # passed 인덱스 → 묶인 기보도
-                    for g in gidx:
-                        news = [i for i in g if i < base]
-                        olds = [i - base for i in g if i >= base]
-                        if news and olds:
-                            for i in news:
-                                drop[i] = cand[olds[0]]
-                    if drop:
-                        kept, kept_kw = [], []
-                        for i, it in enumerate(passed):
-                            pv = drop.get(i)
-                            if pv is None:
-                                kept.append(it)
-                                kept_kw.append(passed_kw[i])
-                                continue
-                            age_h = _rep_age_h(pv['title'])
-                            if age_h is None or age_h >= REMIND_AFTER_H:
-                                it['_remind'] = _remind_label(age_h)   # 여기서도 하루 1회는 통과
-                                remind_rows.append({
-                                    'article_title': it.get('title') or '',
-                                    'article_url': it.get('url') or '',
-                                    'matched_title': pv['title'],
-                                    'shared_keywords': f"[리마인드] {it['_remind']}",
-                                })
-                                kept.append(it)
-                                kept_kw.append(passed_kw[i])
-                                continue
-                            sup_rows.append({
-                                'article_title': it.get('title') or '',
-                                'article_url': it.get('url') or '',
-                                'matched_title': pv['title'],
-                                'shared_keywords': '[의미판정] ' + ','.join(sorted(passed_kw[i] & pv['kw'])),
-                            })
-                        print(f'[긴급 억제] 의미 판정으로 실행 간 재보도 {len(drop)}건 판정(리마인드 포함)')
-                        passed, passed_kw = kept, kept_kw
-
-        # 같은 실행분 내 유사 기사 묶기 — 사건 첫날 첫 실행에 재보도 수십 건이
-        # 한꺼번에 들어오면 한 통에 수십 줄이 되는 것을 대표 1건으로 줄인다
-        groups = []                      # [(대표, [묶인 것들])] — 아래 2차 묶기와 형태를 맞춘다
-        for rep, members in cluster_star(passed):
-            groups.append((rep, list(members)))
-
-        # ── 2차: 키워드로 못 묶인 대표들을 Haiku가 의미로 다시 묶는다 (#92) ──
-        # 매체마다 관점이 달라 제목에 공통 단어가 거의 없는 사건이 있다(공정위 불공정약관 4건:
-        # 쌍별 공유 키워드 최대 1개). 어휘로는 못 넘으므로 여기서만 의미 판정을 쓴다.
-        # 실패하면 1차 결과를 그대로 쓴다(fail-open) — 판정이 죽어서 알림이 죽으면 안 된다.
-        if len(groups) >= 2 and ANTHROPIC_API_KEY:
-            from news_dedup import group_same_event
-            merged_idx = group_same_event([g[0].get('title') or '' for g in groups], ANTHROPIC_API_KEY)
-            if merged_idx and len(merged_idx) < len(groups):
-                regrouped = []
-                for idxs in merged_idx:
-                    head = groups[idxs[0]]
-                    others = [m for i in idxs[1:] for m in ([groups[i][0]] + groups[i][1])]
-                    regrouped.append((head[0], head[1] + others))
-                print(f'[긴급 억제] 의미 판정으로 {len(groups)}묶음 → {len(merged_idx)}묶음')
-                groups = regrouped
-
-        reps = []
-        for rep, members in groups:
-            rep['_related'] = len(members)
-            if not rep.get('_remind'):
-                for m in members:                     # 묶음 안의 리마인드 표시는 대표가 이어받는다
-                    if m.get('_remind'):
-                        rep['_remind'] = m['_remind']
-                        break
-            reps.append(rep)
-            # 대표에 병합된 기사도 '알림으로 나가지 않은 기사'다 — 2026-09-21부터 로그에 남긴다.
-            # 사내판 다리(export_news.py)가 alert_suppress_log만 보고 대표 1건을 가려내기 때문이며,
-            # 여기 없으면 같은 사건의 첫 실행분이 TOKTOK으로 여러 통 나간다(#180). 알림 내용은 그대로다.
-            for m in members:
-                sup_rows.append({
-                    'article_title': m.get('title') or '',
-                    'article_url': m.get('url') or '',
-                    'matched_title': rep.get('title') or '',
-                    'shared_keywords': '[실행내묶음]',
-                })
+        reps, sup_rows, remind_rows, merged = _suppress_core(
+            urgent_items, prior, prior_at, sup_chain,
+            _group_same_event_memo if ANTHROPIC_API_KEY else None, log=print)
 
         if remind_rows:
             print(f'[긴급 억제] 대표가 24시간을 넘겨 리마인드로 통과 {len(remind_rows)}건')
@@ -2910,12 +3027,18 @@ def suppress_repeat_alerts(urgent_items: list) -> list:
                 sb.table('alert_suppress_log').insert(sup_rows + remind_rows).execute()
             except Exception as e:
                 print(f'[긴급 억제] 로그 저장 실패(무시): {e}')
-        merged = len(passed) - len(reps)
         if merged:
             print(f'[긴급 억제] 실행분 내 유사 {merged}건 대표에 병합')
+        _COMMON_ALERT = {'urls': [i.get('url') for i in urgent_items], 'reps': list(reps),
+                         'sup_rows': list(sup_rows), 'remind_rows': list(remind_rows), 'fail_open': False}
         return reps
     except Exception as e:
         print(f'[긴급 억제] 판정 오류 → 전부 알림(fail-open): {e}')
+        try:
+            _COMMON_ALERT = {'urls': [i.get('url') for i in urgent_items], 'reps': list(urgent_items),
+                             'sup_rows': [], 'remind_rows': [], 'fail_open': True}
+        except Exception:
+            _COMMON_ALERT = None
         return urgent_items
 
 
@@ -3058,6 +3181,672 @@ def send_urgent_email(urgent_items: list):
 
 
 # ═══════════════════════════════════════════════════════
+#  받는 단위별 알림 — 팀·실장의 중요 + 「중요+보통」의 보통 (#252, 2026-09-27, 설계안 §10 E5·E6·E9·A2 — ⚠️ Fable 재검토 대상)
+#
+#  구독자 봇의 주요 뉴스(긴급)만 팀 등급으로 거른다 — 브리핑·운영자 봇·긴급 메일·공통 구독자의 중요는 공통값 그대로(E5).
+#  받는 단위(audience) = 실장 'd:<실>' / 팀 't:<팀 id>' / 공통 'c' — 구독자 행의 division·team_id(관리자 지정, E6).
+#  채널: 팀·실장 = '긴급' + (그 단위에 「중요+보통」인 사람이 있으면) '보통' / 공통 = 「중요+보통」인 사람이 있을 때 '보통'만
+#  (공통 중요는 종전 topic 'urgent' 경로 그대로). 새 큐 행은 모두 topic 'news'(subscriber_notify.news_row).
+#  · 알림 등급: 팀 = urgency_rules.alert_team_level(팀원 수정은 min(팀원값, 공통값) — 올린 것은 알림 안 함·내린 것은 막음),
+#    실장 = alert_division_level(실 팀들의 최고 — 같은 기사는 한 번), 공통 = 공통값.
+#  · 후보는 **새로 수집한 기사만**(B-2): 'collect' = 이번 실행에 새로 저장된 기사(_INSERTED_IDS), 'late' = 수집 때 생긴 문장
+#    판정 대기 행(requested_by null + 기사 저장 뒤 LATE_COLLECT_MAX_GAP_MIN 안)이 이번 실행에 **참**으로 판정되어 그 팀 행(rule·
+#    그 규칙 id)을 정한 기사(_LATE_ALERT_PAIRS, 실장은 그 팀이 최고 등급을 본 팀일 때만). 대시보드 저장·재적용·재판정·되살림·
+#    관리자 공통 등급 수정은 알림 없음(화면만).
+#  · 억제·묶기(#44)는 공통과 같은 핵심(_suppress_core)을 그 단위가 **지금 보는** 등급의 비교군(3일, origin null)으로 돌린다 —
+#    '긴급' 비교군 = 긴급, '보통' 비교군 = 긴급+보통(B-1: 중요로 이미 간 사건의 뒤 보통은 안 보내고, 보통으로 먼저 간 사건이
+#    중요로 오면 중요로 다시 보낸다). 억제 사슬 = subscriber_alert_log(그 단위·채널). **alert_suppress_log에는 쓰지 않는다**
+#    (사내 다리가 읽는 공통 기록, #180).
+#  · 복사 지름길('collect'만): 단위의 입력(후보 목록·비교군 구성)이 기준과 같으면 계산하지 않고 기준 결과를 복사한다 —
+#    '긴급' = 공통 포장 결과(_COMMON_ALERT), '보통' = 공통값으로 한 번 계산한 'c' 보통 결과. AI 호출 0.
+#    복사 조건은 _aud_same_inputs — 후보 목록이 순서까지 같고, 3일 비교군 창의 모든 기사에서 그 단위의 채널 비교군 소속이
+#    공통값 기준과 같을 때(사슬만 다르다). 팀 규칙 행이 이번 후보나 3일 창의 한 기사라도 채널 경계를 넘기면 계산한다.
+#  · 쓰기 순서: subscriber_alert_log upsert(ignore_duplicates, 묶음 실패면 한 행씩) 먼저 → **응답으로 새로 들어간 대표만**, 그
+#    단위·채널 기록 직후 바로 큐(#154 동시 실행 안전).
+#  · main: 'collect' 긴급 채널(전 단위) → 즉시 배달 호출 한 번(try/finally) → 보통 채널 → 문장 판정 → 'late'(긴급 행이 들어갔고
+#    앞 호출이 실패하지 않았을 때만 한 번 더). 팀 경로의 사건 묶기는 짧은 제한(20초·재시도 1회), 공통 경로는 종전 그대로.
+#  · 읽기는 모두 재시도(retry_util). 그래도 단위를 계산할 수 없으면 'collect' 긴급은 **공통 결과 복사**로 대체(#44 '판정이 죽으면
+#    시끄러운 쪽이 안전', 기록 shared_keywords '[대체]'), 그 밖은 건너뛴다. 구독자 목록을 끝내 못 읽으면 그 실행은 팀 알림 없음.
+#    팀 규칙 표 조회가 실패한 실행은 팀 규칙 행을 쓰지 않았으므로 팀 등급을 공통값으로(규칙 없이) 계산한다.
+#  · 감시: heartbeat last_crawl_run 메모 끝 ' team=긴급N/보통M/오류K'(audience_note), 단위 줄·합계 줄에 'AI N회'(메모 적중 제외).
+#  · fail-open: 어떤 예외도 수집·공통 알림·즉시 배달·문장 판정·heartbeat를 막지 않는다(run_audience_alerts가 삼킨다).
+# ═══════════════════════════════════════════════════════
+
+ALERT_CHANNELS = ('긴급', '보통')
+ALERT_WINDOW_DAYS = 3                  # 비교군 창 — 공통 억제와 같다
+ALERT_ID_CHUNK = 100                   # news_id in_ 조회 묶음(uuid 100개 ≈ 3.7KB 주소)
+ALERT_LOG_CHUNK = 500
+ALERT_MAX_ROWS = 1000                  # PostgREST 요청당 상한 — in_ 두 개를 곱한 조회는 묶음 크기를 이것으로 나눠 잡는다(#233)
+LATE_COLLECT_MAX_GAP_MIN = 15          # 수집 경로 판정 행 = requested_by null + (판정 행 created_at − 기사 created_at) ≤ 이 분
+ALERT_GROUP_TIMEOUT_S = 20             # 받는 단위 계산의 사건 묶기 호출 제한 — 공통 경로는 종전 그대로(인자 없음)
+ALERT_AI_BUDGET_S = 45           # 채널 묶음(예: collect 긴급) 전체의 사건 묶기 AI 시간 예산 — 넘으면 남은 단위는 AI 없이(공통 즉시 배달 지연 상한)
+ALERT_GROUP_RETRIES = 1
+_ALERT_CMP = {'긴급': ('긴급',), '보통': ('긴급', '보통')}          # 채널별 비교군 등급(B-1)
+_ALERT_WINDOW_COLS = 'id,title,url,created_at,urgency'
+_ALERT_LATE_COLS = 'id,title,url,source,tags,urgency,published_at,origin,created_at'
+_ALERT_STRIP = ('_related', '_remind', '_label')      # 공통 포장이 제자리에 쓴 표시 — 단위 계산 전에 떼어 낸다
+_LEVEL_RANK = {lv: i for i, lv in enumerate(urgency_rules.LEVELS)}
+_C_UNIT = {'kind': 'c', 'team_ids': [], 'channels': ['보통']}
+# 'collect' 준비 결과(후보·단위·팀 행·비교군 창·기록 확인) — main이 긴급 채널 → 즉시 배달 → 보통 채널로 나눠 부르므로 같은
+# 실행 안에서 다시 쓴다. _AUD_STATS = 이번 실행 합계(heartbeat 메모 꼬리 audience_note). main 시작 때 _reset_audience_state.
+_AUD_CTX: dict = {}
+_AUD_STATS: dict = {'units': 0, '긴급': 0, '보통': 0, '오류': 0, 'ai': 0}
+
+
+class _AudSkip(RuntimeError):
+    """이미 로그를 찍고 오류로 센 조회 실패 때문에 그 단위를 계산할 수 없다(대체·건너뜀만, 오류 수는 다시 세지 않는다)."""
+
+
+def _reset_audience_state() -> None:
+    _GROUP_MEMO.clear()
+    _AUD_CTX.clear()
+    _AUD_STATS.update({'units': 0, '긴급': 0, '보통': 0, '오류': 0, 'ai': 0})
+
+
+def audience_note() -> str:
+    """heartbeat 메모(last_crawl_run) 꼬리 — ' team=긴급N/보통M/오류K'(이번 실행 큐에 넣은 팀·보통 행, 팀 경로 오류 수).
+    받는 단위도 오류도 없으면 ''(메모는 종전 그대로). 오류가 있으면 끝에 ' fail=K'를 더 붙인다 — watchdog_scan(3시간마다)의
+    실패 정규식 '(fail|failed)=[1-9]'가 잡아 운영자 봇 경보가 간다(운영자 결정 09-27 「경보 받기」). 팀 구독자만 조용히 끊기는
+    것을 알리려는 것이고, 한 번 났다가 다음 실행에서 사라진 오류는 그 시각 메모에 없으므로 경보가 가지 않는다."""
+    s = _AUD_STATS
+    if not s.get('units') and not s.get('오류'):
+        return ''
+    k = s.get('오류', 0)
+    return f" team=긴급{s.get('긴급', 0)}/보통{s.get('보통', 0)}/오류{k}" + (f' fail={k}' if k else '')
+
+
+def is_within_24h(item, cutoff_24h=None) -> bool:
+    """알림 대상 발행 시각 — 발행 24시간 이내만(main의 공통 긴급 알림과 받는 단위별 알림이 같은 판정을 쓴다, #252).
+    cutoff_24h 이후면 True, 없으면 지금 − 24시간. published_at이 없거나 못 읽으면 False."""
+    if cutoff_24h is None:
+        cutoff_24h = datetime.now(KST) - timedelta(hours=24)
+    pub = item.get('published_at', '')
+    if not pub:
+        return False
+    try:
+        from dateutil import parser as _dtp2
+        pub_dt = _dtp2.parse(pub)
+        if pub_dt.tzinfo is None:
+            pub_dt = pub_dt.replace(tzinfo=KST)
+        return pub_dt >= cutoff_24h
+    except Exception:
+        return False
+
+
+def _chunks(seq, n: int):
+    seq = list(seq)
+    for i in range(0, len(seq), max(1, n)):
+        yield seq[i:i + max(1, n)]
+
+
+def _id_chunk(per_id: int) -> int:
+    """in_(기사 id) 묶음 크기 — 기사 하나당 최대 per_id행이 오는 조회가 1,000행 상한에 잘리지 않게(#233)."""
+    return max(1, min(ALERT_ID_CHUNK, ALERT_MAX_ROWS // max(1, per_id)))
+
+
+def _alert_units(subs, teams) -> dict:
+    """구독자 행(team_id·division·news_level) → 받는 단위 {audience: {'kind': 'c'|'t'|'d', 'team_ids': [...], 'channels': [...]}}.
+    division 있으면 'd:<실>'(team_ids = teams 중 그 실의 팀, teams 순서 = sort_order·id), 아니면 team_id 있으면 't:<id>',
+    둘 다 없으면 'c'. 채널: 팀·실장 = '긴급' + (normal인 사람이 있으면) '보통' / 공통 = normal인 사람이 있을 때만 '보통'.
+    채널이 없는 단위는 돌려주지 않는다."""
+    div_teams = {}
+    for t in teams or []:
+        if t.get('division') and t.get('id') is not None:
+            div_teams.setdefault(t['division'], []).append(int(t['id']))
+    units = {}
+    for s in subs or []:
+        div, tid = s.get('division'), s.get('team_id')
+        if div:
+            aud, kind, tids = f'd:{div}', 'd', div_teams.get(div, [])
+        elif tid is not None:
+            aud, kind, tids = f't:{int(tid)}', 't', [int(tid)]
+        else:
+            aud, kind, tids = 'c', 'c', []
+        u = units.setdefault(aud, {'kind': kind, 'team_ids': list(tids), 'channels': set()})
+        if kind != 'c':
+            u['channels'].add('긴급')
+        if s.get('news_level') == 'normal':
+            u['channels'].add('보통')
+    return {a: dict(u, channels=[c for c in ALERT_CHANNELS if c in u['channels']])
+            for a, u in units.items() if u['channels']}
+
+
+def _unit_level(unit: dict, common, rows_by_team, rules_by_id, alert: bool = True) -> tuple:
+    """단위가 한 기사에서 보는 등급 → (등급, 그 등급을 본 팀 id — 실장 표시용).
+    alert=True(후보) = 알림 등급(팀원 수정은 min), False(비교군) = 지금 보는 화면 등급(팀원 수정 포함)."""
+    kind = unit['kind']
+    if kind == 'c':
+        return common, []
+    if kind == 't':
+        tid = unit['team_ids'][0]
+        row = (rows_by_team or {}).get(tid)
+        if alert:
+            return urgency_rules.alert_team_level(common, row, rules_by_id), [tid]
+        return urgency_rules.effective_team_urgency(common, row, rules_by_id)['level'], [tid]
+    fn = urgency_rules.alert_division_level if alert else urgency_rules.division_urgency
+    d = fn(common, rows_by_team, rules_by_id, unit['team_ids'])
+    return d['level'], list(d['teams'])
+
+
+def _alert_label(unit: dict, level, common, teams, team_names: dict) -> str:
+    """B-3 — 받는 단위의 알림 등급이 공통값보다 높을 때만: 팀 '우리 팀 기준', 실장 '<그 등급을 본 팀 이름들>'(팀 순서)."""
+    if _LEVEL_RANK.get(level, -1) <= _LEVEL_RANK.get(common, -1):
+        return ''
+    if unit['kind'] == 't':
+        return '우리 팀 기준'
+    if unit['kind'] == 'd':
+        return '·'.join(str(team_names.get(t) or f'팀 {t}') for t in teams)
+    return ''
+
+
+def _alert_log_rows(audience: str, channel: str, reps: list, sup_rows: list, remind_rows: list, nid_of: dict) -> tuple:
+    """억제 결과 → (subscriber_alert_log 행, 대표 [(news_id, 대표 item)]). ★ 모든 행의 키 집합 동일 ★(벌크 upsert).
+    outcome: 대표 → _remind 있으면 'remind'(matched_title·shared_keywords = 리마인드 행) 아니면 'sent' / 실행내 묶음 → 'merged' /
+    기보도 억제 → 'suppressed'(shared_keywords는 공통 로그와 같은 글 — '[의미판정] …' 포함). news_id를 모르는 기사는 뺀다.
+    한 기사는 한 행(표 unique(audience, channel, news_id))."""
+    rows, out, seen = [], [], set()
+    remind_by_url = {}
+    for r in remind_rows or []:
+        remind_by_url.setdefault(r.get('article_url') or '', r)
+
+    def add(nid, title, url, outcome, matched, kw):
+        rows.append({'audience': audience, 'channel': channel, 'news_id': nid, 'article_title': title or '',
+                     'article_url': url or None, 'outcome': outcome, 'matched_title': matched, 'shared_keywords': kw})
+
+    for rep in reps or []:
+        url = rep.get('url') or ''
+        nid = nid_of.get(url)
+        if not nid or nid in seen:
+            continue
+        seen.add(nid)
+        rem = rep.get('_remind') or ''
+        rr = remind_by_url.get(url) if rem else None
+        if rem:
+            add(nid, rep.get('title'), url, 'remind', rr.get('matched_title') if rr else None,
+                rr.get('shared_keywords') if rr else f'[리마인드] {rem}')
+        else:
+            add(nid, rep.get('title'), url, 'sent', None, None)
+        out.append((nid, rep))
+    for s in sup_rows or []:
+        url = s.get('article_url') or ''
+        nid = nid_of.get(url)
+        if not nid or nid in seen:
+            continue
+        seen.add(nid)
+        kw = s.get('shared_keywords')
+        add(nid, s.get('article_title'), url, 'merged' if kw == '[실행내묶음]' else 'suppressed',
+            s.get('matched_title'), kw)
+    return rows, out
+
+
+def _save_alert_log(rows: list) -> tuple:
+    """subscriber_alert_log upsert(on_conflict audience,channel,news_id + ignore_duplicates) → (fresh, ok, bad, err).
+      fresh = 응답(= 새로 들어간 행) 중 대표(sent·remind)의 news_id — 이것만 큐에 넣는다. 이미 있던 (단위, 채널, 기사)는 응답에
+              없다(다른 실행이 보냄, #154 'upsert 반환값으로만 판단').
+      ok    = 쓰기가 성공한 행(새로 들어갔거나 이미 있던)의 news_id — 같은 실행의 기록 확인 집합에 더한다(R7).
+      bad   = 끝내 못 쓴 행 수(묶음이 실패하면 한 행씩 다시 — 수집 직후 지워진 기사(FK 오류)의 행만 빠진다, _upsert_rows와 같은
+              방식). 한 행씩 쓰기에서 처음 3행이 모두 실패하면 표 장애로 보고 그 묶음을 멈춘다.
+    한 행도 못 썼으면 예외(부르는 쪽이 그 단위·채널을 이번 실행에 보내지 않는다)."""
+    fresh, ok, bad, err = set(), set(), 0, ''
+
+    def put(part):
+        tries = [0]
+
+        def _do(p=part):
+            tries[0] += 1
+            return sb.table('subscriber_alert_log').upsert(
+                p, on_conflict='audience,channel,news_id', ignore_duplicates=True).execute()
+        res = _db_retry(_do, 'subscriber_alert_log')
+        for r in getattr(res, 'data', None) or []:
+            if isinstance(r, dict) and r.get('outcome') in ('sent', 'remind'):
+                fresh.add(r.get('news_id'))
+        ok.update(x.get('news_id') for x in part)
+        if tries[0] > 1:
+            # 재시도로 성공 — 첫 시도가 커밋된 뒤 응답만 끊겼으면 두 번째 응답은 비어(이미 있음) 그 대표가 큐에 못 들어간다.
+            # 구분할 수 없으므로 오류로 센다(heartbeat fail=K → 워치독 경보, 재검토 경미 3).
+            _AUD_STATS['오류'] = _AUD_STATS.get('오류', 0) + 1
+            print(f'[팀 알림] 기록 쓰기가 재시도 끝에 성공 — 첫 시도 응답이 끊겼다면 일부 대표가 큐에 못 들어갔을 수 있음({len(part)}행)')
+
+    for part in _chunks(rows, ALERT_LOG_CHUNK):
+        try:
+            put(part)
+            continue
+        except Exception as e:
+            err = err or str(e)[:120]
+        if len(part) == 1:
+            bad += 1
+            continue
+        ok_any, bad_run = False, 0
+        for k, r in enumerate(part):
+            try:
+                put([r])
+                ok_any, bad_run = True, 0
+            except Exception as e:
+                err = err or str(e)[:120]
+                bad += 1
+                bad_run += 1
+                if not ok_any and bad_run >= 3:
+                    bad += len(part) - k - 1
+                    break
+    if rows and not ok:
+        raise RuntimeError(err or '기록 실패')
+    return fresh, ok, bad, err
+
+
+def _audience_chain(audience: str, channel: str) -> dict:
+    """억제 사슬 = subscriber_alert_log(그 단위·채널, 10일, suppressed·merged — sent·remind는 '나간 기사'라 사슬을 끊는다)
+    → {article_title: matched_title}, 오래된 것부터 페이지로 끝까지(#66·#233). 실패하면 {}(그 단위는 리마인드 없이 — 공통과 같다)."""
+    try:
+        cut = (datetime.now(KST) - timedelta(days=ALERT_CHAIN_DAYS)).isoformat()
+        rows = _fetch_pages(lambda: sb.table('subscriber_alert_log').select('article_title,matched_title')
+                            .eq('audience', audience).eq('channel', channel).gte('created_at', cut)
+                            .in_('outcome', ['suppressed', 'merged']).order('created_at').order('id'))
+    except Exception as e:
+        print(f'[팀 알림] {audience} {channel} 억제 사슬 조회 실패 — 이번 실행은 리마인드 없이: {str(e)[:80]}')
+        return {}
+    chain = {}
+    for r in rows:
+        if r.get('article_title'):
+            chain[r['article_title']] = r.get('matched_title') or ''
+    return chain
+
+
+def _late_gap_ok(requested_at, article_at) -> bool:
+    """R2 — 판정 행이 기사 저장 뒤 LATE_COLLECT_MAX_GAP_MIN 안에 생겼나(수집 때 만든 대기 행). 시각을 못 읽으면 False."""
+    r, a = _parse_ts(requested_at), _parse_ts(article_at)
+    return bool(r and a and (r - a) <= timedelta(minutes=LATE_COLLECT_MAX_GAP_MIN))
+
+
+def run_audience_alerts(stage: str, new_items=None, cutoff_24h=None, channels=ALERT_CHANNELS) -> int:
+    """받는 단위별 알림(#252). stage 'collect' = main이 공통 큐 적재 직후(new_items = save_new_items 반환 — 그중 이번
+    실행에 새로 저장된 기사만), 'late' = 문장 판정 대기 처리 뒤(_LATE_ALERT_PAIRS). cutoff_24h = main의 24시간 기준.
+    channels — main은 'collect'를 ('긴급',) → 즉시 배달 → ('보통',)으로 나눠 부른다(준비 결과는 _AUD_CTX로 한 번만 읽는다).
+    반환 = 이번 호출에서 큐에 넣은 '긴급' 행 수(즉시 배달 호출은 부르는 쪽이 정한다 — 보통만 들어갔으면 부르지 않는다).
+    **어떤 예외도 밖으로 던지지 않는다**(fail-open — 수집·공통 알림·즉시 배달·heartbeat를 막지 않는다)."""
+    try:
+        ctx = _AUD_CTX.get(stage) if stage == 'collect' else None
+        if ctx is None or ctx.get('new_items') is not new_items:
+            ctx = _audience_prepare(stage, new_items, cutoff_24h)
+            if stage == 'collect':
+                _AUD_CTX['collect'] = ctx
+        if ctx.get('empty'):
+            return 0
+        ctx['t0'] = time.monotonic()        # 이번 채널 묶음의 시작 — 사건 묶기 AI 전체 예산(ALERT_AI_BUDGET_S)의 기준
+        return _audience_channels(ctx, tuple(channels))
+    except Exception as e:
+        _AUD_STATS['오류'] += 1
+        print(f'[팀 알림] {stage} 오류(무시 — 수집·공통 알림은 그대로): {str(e)[:160]}')
+        return 0
+
+
+def _audience_prepare(stage: str, new_items, cutoff_24h) -> dict:
+    """후보·받는 단위·규칙·팀 행·기록 확인을 읽는다(읽기는 모두 재시도 — R5). 할 일이 없으면 {'empty': True}.
+    단위를 계산할 수 없게 만드는 조회 실패는 ctx['broken'](단위별)·ctx['broken_all']에 이유로 남긴다 — 'collect' 긴급 채널은
+    공통 결과 복사로 대체, 그 밖은 건너뛴다(_audience_channels)."""
+    empty = {'new_items': new_items, 'empty': True}
+    cut = cutoff_24h or (datetime.now(KST) - timedelta(hours=24))
+    # ① 후보(메모리) — 없으면 조회 0번
+    if stage == 'collect':
+        cands = [it for it in (new_items or []) if it.get('url') and it.get('url') in _INSERTED_IDS
+                 and not it.get('origin') and is_within_24h(it, cut)]
+        if not cands:
+            return empty
+        pairs = {}
+    elif stage == 'late':
+        pairs = {t: {n: dict(r) for n, r in m.items()} for t, m in _LATE_ALERT_PAIRS.items() if m}
+        if not pairs:
+            return empty
+        cands = []
+    else:
+        print(f'[팀 알림] 알 수 없는 단계 {stage!r} — 건너뜀')
+        return empty
+
+    # ② 받는 단위 — 활성·주요 뉴스 켜진 구독자. 단위가 없으면 여기서 끝(조회 1번). 끝내 못 읽으면 단위를 모르니 팀 알림 없음
+    try:
+        subs = _db_retry(lambda: sb.table('telegram_subscribers').select('team_id,division,news_level')
+                         .eq('active', True).eq('topic_urgent', True).execute(), 'telegram_subscribers').data or []
+    except Exception as e:
+        _AUD_STATS['오류'] += 1
+        print(f'[팀 알림] 구독자 목록 조회 실패 — 이번 실행은 팀 알림 없음(받는 단위를 모름): {str(e)[:80]}')
+        return empty
+    broken = {}                                  # 단위 → 계산할 수 없는 이유
+    teams = []
+    if any(s.get('division') for s in subs):
+        try:
+            teams = _db_retry(lambda: sb.table('teams').select('id,division,name,sort_order')
+                              .order('sort_order').order('id').execute(), 'teams').data or []
+        except Exception as e:
+            _AUD_STATS['오류'] += 1
+            teams = None
+            print('[팀 알림] 팀 목록 조회 실패 — 이번 실행 실장 단위는 '
+                  + ('긴급만 공통 결과로 대체' if stage == 'collect' else '건너뜀') + f': {str(e)[:80]}')
+    units = _alert_units(subs, teams or [])
+    if teams is None:
+        for a, u in units.items():
+            if u['kind'] == 'd':
+                broken[a] = '팀 목록 조회 실패'
+    if stage == 'late':                          # 공통값은 문장 판정으로 바뀌지 않는다 — 그 팀이 든 팀·실장 단위만
+        units = {a: u for a, u in units.items() if u['kind'] != 'c' and set(u['team_ids']) & set(pairs)}
+    if not units:
+        if stage == 'late':
+            _LATE_ALERT_PAIRS.clear()            # 받을 단위가 없다 — 할 일 끝
+        return empty
+    _AUD_STATS['units'] = max(_AUD_STATS['units'], len(units))
+
+    # ③ 규칙 — 표 조회 실패면 그 실행은 팀 규칙 행을 하나도 쓰지 않았다(_split_team_rules {}) → 팀 등급은 사실 공통값(R3)
+    rules_by_id = {}
+    if any(u['kind'] != 'c' for u in units.values()):
+        load_team_urgency_rules()                # 이미 읽었으면 캐시(조회 0번)
+        if _TEAM_RULES_ENABLED is None:
+            print('[팀 알림] 규칙 조회 실패 — 이번 실행 팀 등급은 공통값으로')
+        rules_by_id = _TEAM_RULES_ENABLED or {}
+    team_names = {t.get('id'): t.get('name') for t in (teams or [])}
+
+    # ④ 'late' 후보 — 기사 읽기에 성공한 뒤에만 _LATE_ALERT_PAIRS를 비운다(R5). R2: 판정 행이 기사 저장 직후 생긴 것만
+    late_ok = {}                                 # (팀, 기사) → 수집 경로로 인정한 참 판정 규칙 id
+    if stage == 'late':
+        want = sorted({n for t, m in pairs.items() for n in m if any(t in u['team_ids'] for u in units.values())})
+        try:
+            rows = []
+            for part in _chunks(want, ALERT_ID_CHUNK):
+                rows += _db_retry(lambda p=part: sb.table('news_feed').select(_ALERT_LATE_COLS).in_('id', p).execute(),
+                                  'news_feed').data or []
+        except Exception as e:
+            _AUD_STATS['오류'] += 1
+            print(f'[팀 알림] 늦은 판정 기사 조회 실패 — 이번 실행 늦은 알림 없음: {str(e)[:80]}')
+            return empty
+        _LATE_ALERT_PAIRS.clear()
+        created = {n.get('id'): n.get('created_at') for n in rows}
+        for t, m in pairs.items():
+            for nid, req in m.items():
+                ok = {rid for rid, at in req.items() if _late_gap_ok(at, created.get(nid))}
+                if ok:
+                    late_ok[(t, nid)] = ok
+        rows.sort(key=lambda n: (str(n.get('created_at') or ''), str(n.get('id') or '')), reverse=True)   # 최신 = 대표
+        cands = [n for n in rows if n.get('id') and n.get('url') and not n.get('origin') and is_within_24h(n, cut)
+                 and any((t, n['id']) in late_ok for t in pairs)]
+        if not cands:
+            return empty
+        nid_of = {n['url']: n['id'] for n in cands}
+    else:
+        nid_of = {it['url']: _INSERTED_IDS[it['url']] for it in cands}
+
+    ctx = {'new_items': new_items, 'empty': False, 'stage': stage, 'cands': cands, 'nid_of': nid_of, 'units': units,
+           'auds': sorted(units), 'rules_by_id': rules_by_id, 'team_names': team_names, 'late_ok': late_ok,
+           'need_teams': sorted({t for u in units.values() for t in u['team_ids']}), 'trows': {}, 'logged': set(),
+           'broken': broken, 'broken_all': '', 'window': None, 'window_err': '', 'view': {}, 'ai': [0]}
+    ctx['group_fn'] = (lambda titles, c=ctx['ai']: _group_same_event_memo(
+        titles, timeout=ALERT_GROUP_TIMEOUT_S, max_retries=ALERT_GROUP_RETRIES, counter=c)) if ANTHROPIC_API_KEY else None
+
+    # ⑤ 필요한 팀의 팀 행 — 먼저 후보만(비교군 창은 후보가 있는 단위·채널이 있을 때만). 못 읽으면 팀·실장 단위를 계산 못 함
+    cand_ids = set(nid_of.values())
+    try:
+        _aud_load_team_rows(ctx, cand_ids)
+    except Exception as e:
+        _AUD_STATS['오류'] += 1
+        print('[팀 알림] 팀 등급 조회 실패 — 이번 실행 팀·실장 단위는 '
+              + ('긴급만 공통 결과로 대체' if stage == 'collect' else '건너뜀') + f': {str(e)[:80]}')
+        for a, u in units.items():
+            if u['kind'] != 'c':
+                broken.setdefault(a, '팀 등급 조회 실패')
+
+    # ⑥ 이미 기록된 (단위, 채널, 기사) — 뺀다('c'는 활성이 아니어도 본다 — 보통 기준 기록, R6). 묶음 = 기사 × 단위 × 2 ≤ 1,000
+    log_auds = sorted(set(units) | {'c'})
+    try:
+        for part in _chunks(sorted(cand_ids), _id_chunk(len(log_auds) * 2)):
+            data = _db_retry(lambda p=part: sb.table('subscriber_alert_log').select('audience,channel,news_id')
+                             .in_('news_id', p).in_('audience', log_auds).execute(), 'subscriber_alert_log').data or []
+            ctx['logged'].update((r.get('audience'), r.get('channel'), r.get('news_id')) for r in data)
+    except Exception as e:
+        _AUD_STATS['오류'] += 1
+        ctx['broken_all'] = '기록 확인 조회 실패'
+        print('[팀 알림] 기록 확인 조회 실패 — 이번 실행은 '
+              + ('긴급만 공통 결과로 대체' if stage == 'collect' else '늦은 알림 없음') + f': {str(e)[:80]}')
+    return ctx
+
+
+def _aud_load_team_rows(ctx: dict, ids) -> None:
+    """team_urgency(기사 in_ × 필요한 팀 in_) → ctx['trows'] {news_id: {team_id: 행}}. 묶음 = 1,000 // 팀 수(R8). 재시도, 실패는 예외."""
+    if not ctx['need_teams'] or not ids:
+        return
+    for part in _chunks(sorted(ids), _id_chunk(len(ctx['need_teams']))):
+        data = _db_retry(lambda p=part: sb.table('team_urgency').select('news_id,team_id,urgency,source,rule_id')
+                         .in_('news_id', p).in_('team_id', ctx['need_teams']).execute(), 'team_urgency').data or []
+        for r in data:
+            ctx['trows'].setdefault(r.get('news_id'), {})[r.get('team_id')] = r
+
+
+def _aud_window(ctx: dict) -> list:
+    """비교군 창(3일, origin null, 최신순 페이지) + 그 창의 팀 행 — 처음 필요할 때 한 번(재시도). 실패하면 _AudSkip."""
+    if ctx['window'] is None:
+        if ctx['window_err']:
+            raise _AudSkip(ctx['window_err'])
+        try:
+            cut3 = (datetime.now(KST) - timedelta(days=ALERT_WINDOW_DAYS)).isoformat()
+            w = _db_retry(lambda: _fetch_pages(lambda: sb.table('news_feed').select(_ALERT_WINDOW_COLS)
+                                               .gte('created_at', cut3).is_('origin', 'null')
+                                               .order('created_at', desc=True).order('id')), 'news_feed')
+            _aud_load_team_rows(ctx, {x.get('id') for x in w if x.get('id')} - set(ctx['nid_of'].values()))
+        except Exception as e:
+            ctx['window_err'] = f'비교군 조회 실패: {str(e)[:80]}'
+            _AUD_STATS['오류'] += 1
+            print(f'[팀 알림] {ctx["window_err"]} — 계산이 필요한 단위는 '
+                  + ('긴급만 공통 결과로 대체' if ctx['stage'] == 'collect' else '건너뜀'))
+            raise _AudSkip(ctx['window_err'])
+        ctx['window'] = w
+    return ctx['window']
+
+
+def _aud_view(ctx: dict, aud: str, u: dict, w: dict):
+    k = (aud, w.get('id'))
+    if k not in ctx['view']:
+        ctx['view'][k] = _unit_level(u, w.get('urgency'), ctx['trows'].get(w.get('id')), ctx['rules_by_id'],
+                                     alert=False)[0]
+    return ctx['view'][k]
+
+
+def _aud_late_team_ok(ctx: dict, team_id, nid, common=None) -> bool:
+    """R1 — 그 팀의 (참 판정·수집 경로) 문장 규칙이 지금 팀 행을 정했나: 팀 행 source='rule'이고 rule_id가 그 규칙이며,
+    그 규칙이 등급을 **스스로 정했다**(set이거나 규칙 등급 > 지금 공통값). min 규칙이 지금 공통값보다 낮거나 같으면 팀 등급은
+    공통값에서 온 것이다 — 수집 뒤 관리자가 공통을 올린 기사가 늦은 판정으로 팀 알림이 되지 않게(E5, 재검토 경미 1)."""
+    ok = ctx['late_ok'].get((team_id, nid))
+    row = (ctx['trows'].get(nid) or {}).get(team_id)
+    if not (ok and row and row.get('source') == 'rule' and row.get('rule_id') in ok):
+        return False
+    r = (ctx.get('rules_by_id') or {}).get(row.get('rule_id')) or {}
+    if r.get('mode') == 'set':
+        return True
+    return _LEVEL_RANK.get(r.get('level'), -1) > _LEVEL_RANK.get(common, -1)
+
+
+def _aud_trip(ctx: dict, aud: str, u: dict, ch: str) -> list:
+    """후보 [(item, 알림 등급, 그 등급을 본 팀)] — 그 채널 등급인 것만, 입력 순서 유지. 이미 기록된 (단위, 채널, 기사)는 빼고,
+    보통 채널은 같은 단위의 긴급 기록이 있는 기사도 뺀다(R7). 'late'는 R1 조건(팀 단위 = 그 팀, 실장 = 최고 등급을 본 팀 중
+    하나)을 통과한 기사만. 계산할 수 없는 단위면 _AudSkip."""
+    reason = ctx['broken_all'] or ctx['broken'].get(aud)
+    if reason:
+        raise _AudSkip(reason)
+    late, lg, out = ctx['stage'] == 'late', ctx['logged'], []
+    for it in ctx['cands']:
+        nid = ctx['nid_of'].get(it['url'])
+        if not nid or (aud, ch, nid) in lg or (ch == '보통' and (aud, '긴급', nid) in lg):
+            continue
+        ok_teams = [t for t in u['team_ids'] if _aud_late_team_ok(ctx, t, nid, it.get('urgency'))] if late else None
+        if late and not ok_teams:
+            continue
+        lv, tms = _unit_level(u, it.get('urgency'), ctx['trows'].get(nid), ctx['rules_by_id'], alert=True)
+        if lv != ch or (late and not set(tms) & set(ok_teams)):
+            continue
+        out.append((it, lv, tms))
+    return out
+
+
+def _aud_compute(ctx: dict, aud: str, u: dict, ch: str, trip: list) -> dict:
+    """핵심을 그 단위의 비교군·사슬로 돌린다 — 항목 dict는 복사(공통 포장이 쓴 표시는 떼어 냄), 사건 묶기는 짧은 제한."""
+    window = _aud_window(ctx)
+    items = [{k: v for k, v in it.items() if k not in _ALERT_STRIP} for it, _, _ in trip]
+    excl = {it['url'] for it, _, _ in trip}
+    keep = _ALERT_CMP[ch]
+    rows = [w for w in window if w.get('url') not in excl and _aud_view(ctx, aud, u, w) in keep]
+    prior, prior_at = _prior_entries(rows, excl)
+    group_fn = ctx['group_fn']
+    if group_fn and time.monotonic() - ctx.get('t0', time.monotonic()) > ALERT_AI_BUDGET_S:
+        # 채널 묶음 전체 예산 초과 — 남은 단위는 AI 없이(키워드 억제·별형 묶기만). 호출 하나의 20초 제한만으로는 팀 수만큼
+        # 공통 즉시 배달이 밀린다(재검토 경미 2). AI 묶기는 억제를 더하는 쪽이라 빼도 알림이 빠지지는 않는다(fail-open 방향).
+        if not ctx.get('budget_logged'):
+            ctx['budget_logged'] = True
+            print(f'[팀 알림] 사건 묶기 AI 예산 {ALERT_AI_BUDGET_S}초 초과 — 이번 채널의 남은 단위는 AI 없이 계산')
+        group_fn = None
+    reps, sup, rem, _m = _suppress_core(items, prior, prior_at, _audience_chain(aud, ch), group_fn, log=None)
+    return {'urls': [it['url'] for it, _, _ in trip], 'reps': reps, 'sup_rows': sup, 'remind_rows': rem}
+
+
+def _aud_same_inputs(ctx: dict, aud: str, u: dict, ch: str, trip: list, base_urls) -> bool:
+    """복사 조건 — 후보 목록(순서까지)이 기준과 같고, 비교군 창의 모든 기사에서 그 단위의 채널 비교군 소속이 공통값 기준과
+    같다(팀 행이 이 채널의 후보·비교군을 바꾼 기사가 하나도 없다 — 핵심의 입력이 같다. 사슬만 다르다)."""
+    if base_urls is None or [it['url'] for it, _, _ in trip] != list(base_urls):
+        return False
+    keep, excl = _ALERT_CMP[ch], {it['url'] for it, _, _ in trip}
+    return all((_aud_view(ctx, aud, u, w) in keep) == (w.get('urgency') in keep)
+               for w in _aud_window(ctx) if w.get('url') not in excl)
+
+
+def _aud_base_urls(ctx: dict) -> list:
+    """'c' 보통 기준의 후보 url 목록 — 기준을 이미 계산했으면 그때의 목록(그 뒤 'c' 기록이 생겨 다시 뽑으면 비어 버린다)."""
+    if 'base' in ctx:
+        return list(ctx['base']['urls'])
+    return [it['url'] for it, _, _ in _aud_trip(ctx, 'c', _C_UNIT, '보통')]
+
+
+def _aud_normal_base(ctx: dict) -> dict:
+    """'c' 보통 결과 — 복사할 단위가 있거나 'c'가 활성일 때 한 번만 계산. 'c'가 활성 단위가 아니어도 기록은 'c' 이름으로 남긴다
+    (큐는 없음) — 복사하는 팀 보통 채널의 사슬(#181 리마인드)이 쌓이게(R6)."""
+    if 'base' not in ctx:
+        res = _aud_compute(ctx, 'c', _C_UNIT, '보통', _aud_trip(ctx, 'c', _C_UNIT, '보통'))
+        ctx['base'] = res
+        if 'c' not in ctx['units']:
+            rows, _ = _alert_log_rows('c', '보통', res['reps'], res['sup_rows'], res['remind_rows'], ctx['nid_of'])
+            if rows:
+                try:
+                    _save_alert_log(rows)
+                except Exception as e:
+                    print(f'[팀 알림] c 보통 기준 기록 실패(무시 — 사슬만 한 칸 빈다): {str(e)[:80]}')
+    return ctx['base']
+
+
+def _audience_channels(ctx: dict, channels: tuple) -> int:
+    """채널마다 단위를 돈다 — 복사 또는 계산(실패하면 'collect' 긴급은 공통 결과 복사 대체, 그 밖은 건너뜀) → 기록 먼저 →
+    **그 단위·채널의 큐 행을 바로** 넣는다(R4 ②). 반환 = 큐에 넣은 '긴급' 행 수."""
+    from subscriber_notify import news_row, queue_audience_rows
+    stage, urgent = ctx['stage'], 0
+    for ch in channels:
+        if ch not in ALERT_CHANNELS:
+            continue
+        queued, ai0, lines = 0, ctx['ai'][0], 0
+        for aud in ctx['auds']:
+            u = ctx['units'][aud]
+            if ch not in u['channels']:
+                continue
+            a0, mode, trip = ctx['ai'][0], '', []
+            try:
+                trip = _aud_trip(ctx, aud, u, ch)
+                if not trip:
+                    continue                     # 후보 없음 — 조용히
+                if stage == 'collect' and aud == 'c':
+                    res, mode = _aud_normal_base(ctx), '계산'
+                elif stage == 'collect' and ch == '긴급' and _COMMON_ALERT is not None \
+                        and _aud_same_inputs(ctx, aud, u, ch, trip, _COMMON_ALERT.get('urls')):
+                    res, mode = _COMMON_ALERT, '복사'
+                elif stage == 'collect' and ch == '보통' and _aud_same_inputs(ctx, aud, u, ch, trip, _aud_base_urls(ctx)):
+                    res, mode = _aud_normal_base(ctx), '복사'
+                else:
+                    res, mode = _aud_compute(ctx, aud, u, ch, trip), '계산'
+                log_rows, reps = _alert_log_rows(aud, ch, res['reps'], res['sup_rows'], res['remind_rows'], ctx['nid_of'])
+                n_cand = len(trip)
+            except Exception as e:
+                known = isinstance(e, _AudSkip)  # 조회 실패는 이미 로그·오류 수에 들어갔다
+                if not known:
+                    _AUD_STATS['오류'] += 1
+                if stage == 'collect' and ch == '긴급' and _COMMON_ALERT is not None:
+                    # #44 '판정이 죽으면 시끄러운 쪽이 안전' — 그 단위에 공통 결과를 복사한다(표시 없음, 기록은 '[대체]')
+                    if not known:
+                        print(f'[팀 알림] {aud} {ch} 판정 오류 → 공통 결과로 대체: {str(e)[:80]}')
+                    try:
+                        log_rows, reps = _alert_log_rows(aud, ch, _COMMON_ALERT['reps'], _COMMON_ALERT['sup_rows'],
+                                                         _COMMON_ALERT['remind_rows'], ctx['nid_of'])
+                        for r in log_rows:
+                            r['shared_keywords'] = '[대체]' + (' ' + r['shared_keywords'] if r['shared_keywords'] else '')
+                    except Exception as e2:
+                        _AUD_STATS['오류'] += 1
+                        lines += 1
+                        print(f'[팀 알림] {aud} {ch} 대체도 실패 — 이번 실행은 보내지 않음(무시): {str(e2)[:80]}')
+                        continue
+                    if not log_rows:
+                        continue
+                    trip, mode, n_cand = [], '대체: 공통 복사', len(log_rows)
+                else:
+                    lines += 1
+                    print(f'[팀 알림] {aud} {ch} ' + (f'건너뜀 — {e}' if known else
+                                                    f'판정 오류 — 이번 실행은 보내지 않음(무시): {str(e)[:80]}'))
+                    continue
+            n_sup = sum(1 for r in log_rows if r['outcome'] == 'suppressed')
+            n_mrg = sum(1 for r in log_rows if r['outcome'] == 'merged')
+            lines += 1
+            try:
+                fresh, ok_nids, n_bad, err = _save_alert_log(log_rows)
+            except Exception as e:
+                _AUD_STATS['오류'] += 1
+                print(f'[팀 알림] {aud} {ch} 후보 {n_cand} → 기록 실패 — 이번 실행은 보내지 않음({mode}): {str(e)[:80]}')
+                continue
+            if n_bad:
+                print(f'[팀 알림] {aud} {ch} 기록 {n_bad}건 못 씀(무시 — 도중에 지워진 기사 등): {err}')
+            ctx['logged'].update((aud, ch, n) for n in ok_nids)
+            info = {it['url']: (lv, tms) for it, lv, tms in trip}
+            qrows, r_n = [], 0
+            for nid, rep in reps:
+                if nid not in fresh:
+                    continue                     # 이미 있던 기록 = 다른 실행이 보냄 — 큐에 넣지 않는다
+                lv, tms = info.get(rep.get('url'), (ch, []))
+                item = {kk: vv for kk, vv in rep.items() if kk != '_label'}
+                label = _alert_label(u, lv, rep.get('urgency'), tms, ctx['team_names'])
+                if label:
+                    item['_label'] = label
+                row = news_row(aud, ch, item)
+                if row:
+                    qrows.append(row)
+                    r_n += 1 if rep.get('_remind') else 0
+            done = queue_audience_rows(sb, qrows) if qrows else {}
+            n_in = sum(done.values())
+            if n_in < len(qrows):
+                _AUD_STATS['오류'] += 1
+                print(f'[팀 알림] {aud} {ch} 기록 {len(qrows) - n_in}건은 들어갔으나 큐 적재 실패 — 이 기사들은 다시 가지 않음')
+            queued += done.get(ch, 0)
+            _AUD_STATS[ch] += done.get(ch, 0)
+            print(f'[팀 알림] {aud} {ch} 후보 {n_cand} → 보냄 {n_in}(리마인드 {r_n})·억제 {n_sup}·묶음 {n_mrg} ({mode})'
+                  f' · AI {ctx["ai"][0] - a0}회')
+        ai_n = ctx['ai'][0] - ai0
+        _AUD_STATS['ai'] += ai_n
+        if lines:
+            print(f'[팀 알림] 합계({stage}·{ch}) — 큐 {ch} {queued}건 · AI {ai_n}회')
+        if ch == '긴급':
+            urgent += queued
+    return urgent
+
+
+def _deliver_now(needed: bool):
+    """즉시 배달 호출 한 번(#252). needed가 거짓이면 부르지 않고 None, 불렀으면 성공(HTTP 200) 여부. 예외를 던지지 않는다
+    (정시 :25가 받쳐 준다). main은 이 값으로 늦은 판정 알림의 두 번째 호출 여부를 정한다(R10)."""
+    if not needed:
+        return None
+    try:
+        from subscriber_notify import _trigger_delivery
+        return bool(_trigger_delivery())
+    except Exception as e:
+        print(f'[구독자 배달] 즉시 호출 실패(무시 — 정시 :25에 발송): {str(e)[:120]}')
+        return False
+
+
+# ═══════════════════════════════════════════════════════
 #  메인
 # ═══════════════════════════════════════════════════════
 
@@ -3066,6 +3855,7 @@ def main():
     print(f'{"="*50}')
     print(f'[시작] {now_str}')
     print(f'{"="*50}')
+    _reset_audience_state()          # 사건 묶기 메모·받는 단위 준비·팀 알림 합계는 한 실행 안에서만 쓴다(#252)
 
     # ── 크롤링 (GitHub Actions 10분마다 실행) ────────────
     all_items: list = []
@@ -3090,24 +3880,12 @@ def main():
     print(f'[신규] {len(new_items)}건')
 
     # ── 긴급 기사 즉시 알림 (발행 24시간 이내만) ────────
+    # 판정은 모듈 함수 is_within_24h(#252 — 받는 단위별 알림도 같은 기준 시각으로 쓴다)
     now_kst = datetime.now(KST)
     cutoff_24h = now_kst - timedelta(hours=24)
 
-    def is_within_24h(item):
-        pub = item.get('published_at', '')
-        if not pub:
-            return False
-        try:
-            from dateutil import parser as _dtp2
-            pub_dt = _dtp2.parse(pub)
-            if pub_dt.tzinfo is None:
-                pub_dt = pub_dt.replace(tzinfo=KST)
-            return pub_dt >= cutoff_24h
-        except Exception:
-            return False
-
-    urgent_items = [i for i in new_items if i.get('urgency') == '긴급' and is_within_24h(i)]
-    skipped = [i for i in new_items if i.get('urgency') == '긴급' and not is_within_24h(i)]
+    urgent_items = [i for i in new_items if i.get('urgency') == '긴급' and is_within_24h(i, cutoff_24h)]
+    skipped = [i for i in new_items if i.get('urgency') == '긴급' and not is_within_24h(i, cutoff_24h)]
     if skipped:
         print(f'[긴급] {len(skipped)}건 발행 24시간 초과 — 알림 제외')
 
@@ -3118,6 +3896,7 @@ def main():
     # 실패 시에는 전부 알림(fail-open): 억제가 목적이므로 판정이 죽으면 시끄러운 쪽이 안전.
     urgent_items = suppress_repeat_alerts(urgent_items)
 
+    common_queued = False            # 공통 구독자 긴급 행이 큐에 들어갔나 — 즉시 배달 호출(아래 한 번) 여부(#252)
     if urgent_items:
         print(f'[긴급] {len(urgent_items)}건 — 알림 발송')
         send_telegram(urgent_items)
@@ -3128,13 +3907,31 @@ def main():
         # 성립하고, 헤더·번호·칩은 구독자마다 달라 발송 측(Edge)이 조립한다.
         # 운영자 알림(send_telegram/send_urgent_email)보다 **뒤에** 두고 try/except로 격리하는
         # 현재 순서를 유지할 것 — 큐 장애가 유일한 감시 채널인 운영자 수신을 끊으면 안 된다.
+        # trigger=False(#252) — 즉시 배달 호출은 팀 단위 행까지 넣은 뒤 아래에서 **한 번만**(두 번 부르면 두 발송 실행이
+        # 겹쳐 같은 사람에게 같은 행이 두 번 갈 수 있다 — 워터마크 갱신 전 읽기).
         try:
             from subscriber_notify import queue_news_items
-            queue_news_items(sb, urgent_items)
+            common_queued = queue_news_items(sb, urgent_items, trigger=False)
         except Exception as e:
             print(f'[구독자 큐 적재 실패(무시)] {e}')
     else:
         print('[긴급] 해당 없음')
+
+    # ── 받는 단위별 알림 — 팀·실장 중요 + 「중요+보통」의 보통 (#252) ──
+    # 긴급 채널(전 단위) → 즉시 배달 호출 한 번 → 보통 채널(즉시 호출 불필요 — :25 정기 발송 몫). 어떤 실패도 공통 알림·배달·
+    # heartbeat를 막지 않는다 — 공통 행이 들어갔으면 팀 단계가 죽어도 즉시 배달 호출은 반드시 나간다(finally).
+    team_urgent = 0
+    first_delivery = None            # 즉시 배달 호출 결과: None = 안 부름, True = 200, False = 실패(R10)
+    try:
+        team_urgent = run_audience_alerts('collect', new_items=new_items, cutoff_24h=cutoff_24h, channels=('긴급',))
+    except Exception as e:
+        print(f'[팀 알림] 실패(무시): {e}')
+    finally:
+        first_delivery = _deliver_now(bool(common_queued) or team_urgent > 0)
+    try:
+        run_audience_alerts('collect', new_items=new_items, cutoff_24h=cutoff_24h, channels=('보통',))
+    except Exception as e:
+        print(f'[팀 알림] 보통 채널 실패(무시): {e}')
 
     print('[모닝 브리핑] morning_briefing.yml GitHub Actions 담당 — 건너뜀')
 
@@ -3146,9 +3943,23 @@ def main():
     except Exception as e:
         print(f'[문장 판정] 실패(무시): {e}')
 
+    # ── 늦게 생긴 팀 등급의 알림 (#252) ── 수집 때 생긴 문장 판정 대기 행이 이번 실행에 참으로 판정되어 그 팀 행을 정한
+    # 기사만(대시보드 요청·되살림·관리자 재대기 제외). 긴급 행이 들어갔을 때만 즉시 배달을 한 번 더 부른다 — 단, 앞 호출이
+    # 실패(200 아님)했으면 그 발송 실행이 아직 돌고 있을 수 있어 겹치지 않게 생략(:25 정시가 받친다, R10). 없으면 조회 0번.
+    late_urgent = 0
+    try:
+        late_urgent = run_audience_alerts('late', cutoff_24h=cutoff_24h)
+    except Exception as e:
+        print(f'[팀 알림] 늦은 판정 알림 실패(무시): {e}')
+    if late_urgent > 0 and first_delivery is False:
+        print('[구독자 배달] 앞 즉시 호출이 성공하지 않아 두 번째 호출 생략(겹친 발송 방지) — 늦은 판정 알림은 정시 :25에 발송')
+    else:
+        _deliver_now(late_urgent > 0)
+
     # ── 크롤러 heartbeat ── (check_news_health가 '크롤러 정상 vs 고장' 구분에 사용)
     # 신규 0건이어도 '크롤러는 돌았다'를 기록 → 주말 등 '뉴스 없음' 오경보 방지. 실패해도 무시.
-    sb_heartbeat(sb, 'last_crawl_run', f'new={len(new_items)} total={len(all_items)}')
+    # 받는 단위가 있으면 끝에 ' team=긴급N/보통M/오류K'(#252 — 운영 상태 탭이 메모를 그대로 보여 준다, 없으면 종전 그대로)
+    sb_heartbeat(sb, 'last_crawl_run', f'new={len(new_items)} total={len(all_items)}' + audience_note())
 
     # ── 이슈맵 자동 제안 파이프 (2026-08-26, P4) ──
     # fail-open 격리: 제안 파이프의 어떤 실패도 크롤러 본연의 수집·통지에 영향을 주면 안 된다.

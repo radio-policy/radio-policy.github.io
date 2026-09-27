@@ -24,9 +24,13 @@ alter table public.profiles add constraint profiles_team_id_fkey FOREIGN KEY (te
 
 alter table public.profiles add constraint profiles_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 
+alter table public.subscriber_alert_log add constraint subscriber_alert_log_news_id_fkey FOREIGN KEY (news_id) REFERENCES news_feed(id) ON DELETE CASCADE;
+
 alter table public.team_urgency add constraint team_urgency_news_id_fkey FOREIGN KEY (news_id) REFERENCES news_feed(id) ON DELETE CASCADE;
 
 alter table public.team_urgency add constraint team_urgency_team_id_fkey FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE;
+
+alter table public.telegram_subscribers add constraint telegram_subscribers_team_id_fkey FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE SET NULL;
 
 alter table public.urgency_rule_verdicts add constraint urgency_rule_verdicts_news_id_fkey FOREIGN KEY (news_id) REFERENCES news_feed(id) ON DELETE CASCADE;
 

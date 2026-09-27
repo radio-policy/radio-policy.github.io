@@ -48,6 +48,28 @@ T.division_cases.forEach(function (c) {
   eq('[실장] ' + c.name, UR.divisionUrgency(c.common, rows, byId, c.team_ids), c.expect);
 });
 
+// ── 팀별 알림 등급(#252) — Python TestUrgencyTeamLayer와 같은 파일 ──
+T.min_level_cases.forEach(function (c) { eq('[낮은 등급] ' + c.name, UR.minLevel(c.a, c.b), c.expect); });
+T.alert_cases.forEach(function (c) { eq('[팀 알림] ' + c.name, UR.alertTeamLevel(c.common, c.row, byId), c.expect); });
+T.alert_division_cases.forEach(function (c) {
+  var rows = {};
+  Object.keys(c.rows_by_team).forEach(function (k) { rows[parseInt(k, 10)] = c.rows_by_team[k]; });
+  eq('[실장 알림] ' + c.name, UR.alertDivisionLevel(c.common, rows, byId, c.team_ids), c.expect);
+});
+// 팀원 수정이 없으면 알림 등급 = 화면 등급(effectiveTeamUrgency·divisionUrgency)
+T.effective_cases.forEach(function (c) {
+  if (c.row && c.row.source === 'human') return;
+  eq('[알림=화면] ' + c.name, UR.alertTeamLevel(c.common, c.row, byId), c.expect.level);
+});
+T.division_cases.forEach(function (c) {
+  var rows = {}, human = false;
+  Object.keys(c.rows_by_team).forEach(function (k) {
+    rows[parseInt(k, 10)] = c.rows_by_team[k];
+    if (c.rows_by_team[k].source === 'human') human = true;
+  });
+  if (!human) eq('[실장 알림=화면] ' + c.name, UR.alertDivisionLevel(c.common, rows, byId, c.team_ids), c.expect);
+});
+
 // ── 문장 조건(#251) — Python TestUrgencyTeamLayer와 같은 파일 ──
 // 문장 규칙이 없으면 판정 반영 함수 = 기존 teamRuleDecision
 T.decision_cases.forEach(function (c) {
