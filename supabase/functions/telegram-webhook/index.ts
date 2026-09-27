@@ -135,12 +135,13 @@ async function upsertSub(chatId: number, patch: Record<string, unknown>): Promis
 //   ✅ / ⬜  = 여러 개를 각각 켜고 끄는 항목 (콘텐츠 3종)
 //   🔵 / ⚪  = 여럿 중 하나만 고르는 항목 (요일, 받는 시각)
 // ●/○ 는 텔레그램 폰트에서 크기 차이가 거의 없어 "눌렀는데 안 바뀐 것 같다"는 혼동을 줬다.
-// unit = 주요 뉴스 버튼 뒤 소속 표시(unitLabel — ' · 기술정책팀' / ' · 정책개발실 실장' / 공통이면 '').
+// 소속 이름(기술정책팀 등)은 버튼에 넣지 않는다 — 휴대폰 폭에서 「주요 뉴스 · 기술정…」로 잘렸다(운영자 지적 09-27). 이름은
+// 설정 메시지 본문 끝 한 줄(basisLine)에 두고, 버튼에는 짧은 기준(팀/실/공통 기준)만.
 // 받을 뉴스 버튼의 등급 기준 — 발송 측 받는 단위와 같은 우선순위(실 → 팀 → 공통, _shared/subscriber_queue.ts audienceKey)
 function basisLabel(s: Sub): string {
   return s.division ? '실 기준' : (s.team_id != null ? '팀 기준' : '공통 기준');
 }
-function settingsKeyboard(s: Sub, unit = '') {
+function settingsKeyboard(s: Sub) {
   const chk = (on: boolean) => on ? '✅' : '⬜';   // 체크박스(다중 선택)
   const sel = (on: boolean) => on ? '🔵' : '⚪';   // 라디오(택일)
   const hh = (v: number) => String(v).padStart(2, '0');
@@ -154,11 +155,11 @@ function settingsKeyboard(s: Sub, unit = '') {
   }
   return { inline_keyboard: [
     [{ text: `${chk(s.topic_briefing)} 📡 모닝 브리핑`, callback_data: 't:briefing' },
-     { text: `${chk(s.topic_urgent)} 📡 주요 뉴스${unit}`, callback_data: 't:urgent' }],
+     { text: `${chk(s.topic_urgent)} 📡 주요 뉴스`, callback_data: 't:urgent' }],
     // 받을 뉴스(#252) — 주요 뉴스 바로 아래 한 줄(운영자 요청 「한 줄로」). 중요만(기본) / 중요+보통(보통은 매시 :25에
     // 한 시간치를 한 통으로). 주요 뉴스가 꺼져 있으면 줄 자체를 감춘다 — 관심분야 태그와 같은 이유(죽은 버튼 혼동).
     // 버튼 뒤 등급 기준(운영자 요청 09-27 「각 팀 설정 기준이라고 옆에」) — 휴대폰 폭에서 잘리지 않게 짧게: 팀이면 '팀 기준',
-    // 실장이면 '실 기준', 둘 다 없으면 '공통 기준'. 팀 이름은 바로 위 주요 뉴스 버튼에 있다.
+    // 실장이면 '실 기준', 둘 다 없으면 '공통 기준'. 팀 이름은 설정 메시지 본문 끝 한 줄(basisLine).
     ...(s.topic_urgent
       ? [[{ text: `${sel(s.news_level !== 'normal')} 중요만 · ${basisLabel(s)}`, callback_data: 'n:urgent' },
           { text: `${sel(s.news_level === 'normal')} 중요+보통 · ${basisLabel(s)}`, callback_data: 'n:normal' }]]
@@ -213,6 +214,11 @@ async function unitLabel(s: Pick<Sub, 'team_id' | 'division'> | null): Promise<s
     console.error('[팀 이름 조회 실패 — 소속 표시 생략]', e);
     return '';
   }
+}
+// 설정 메시지 본문 끝 한 줄 — 주요 뉴스 등급 기준(관리자가 대시보드에서 지정한 팀·실). 공통이면 ''(종전 본문 그대로).
+async function basisLine(s: Pick<Sub, 'team_id' | 'division'> | null): Promise<string> {
+  const unit = (await unitLabel(s)).replace(/^ · /, '');
+  return unit ? `\n\n📡 <b>주요 뉴스 등급 기준</b>: ${escapeHtml(unit)} <i>(관리자 지정)</i>` : '';
 }
 
 const START_TEXT =
@@ -1121,10 +1127,8 @@ async function handleCallback(cb: { id: string; data?: string; from: { id: numbe
   await Promise.all([
     upsertSub(chatId, patch),
     tg('answerCallbackQuery', { callback_query_id: cb.id, text: ack }),
-    // 소속 표시(팀 이름 조회)는 화면 갱신 쪽에만 이어 붙여 저장·응답 확인과 계속 동시에 돈다(unitLabel은 던지지 않는다)
     msgId
-      ? unitLabel(next).then((unit) =>
-          tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: settingsKeyboard(next, unit) }))
+      ? tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: settingsKeyboard(next) })
       : Promise.resolve(null),
   ]);
 }
@@ -1194,13 +1198,13 @@ Deno.serve(async (req: Request) => {
       await upsertSub(chatId, { username: from.username || null, first_name: from.first_name || null, active: true, ...revive });
       await logUsage(chatId, 'start', from.username || from.first_name || '');
       const sub = (await getSub(chatId))!;
-      await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: START_TEXT, disable_web_page_preview: true, reply_markup: settingsKeyboard(sub, await unitLabel(sub)) });
+      await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: START_TEXT + await basisLine(sub), disable_web_page_preview: true, reply_markup: settingsKeyboard(sub) });
     } else if (text === '/settings' || text === '/설정') {
       let sub = await getSub(chatId);
       if (!sub) { await upsertSub(chatId, { username: from.username || null, first_name: from.first_name || null }); sub = (await getSub(chatId))!; }
       await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML',
-        text: '⚙️ <b>수신 설정</b>\n버튼을 눌러 바로 변경할 수 있습니다.\n✅⬜ = 여러 개 선택 · 🔵⚪ = 하나만 선택\n<i>항목을 모두 끄면 알림이 오지 않습니다.</i>\n\n🌙 <b>발송 시간대</b> — 모닝 브리핑은 <b>시작 시각</b>에 1회, 나머지 알림은 그 뒤 새로 생기는 대로 옵니다. <b>종료 시각을 넘겨 들어온 소식은 다음 날 시작 시각에 모아서 옵니다.</b>',
-        reply_markup: settingsKeyboard(sub, await unitLabel(sub)) });
+        text: '⚙️ <b>수신 설정</b>\n버튼을 눌러 바로 변경할 수 있습니다.\n✅⬜ = 여러 개 선택 · 🔵⚪ = 하나만 선택\n<i>항목을 모두 끄면 알림이 오지 않습니다.</i>\n\n🌙 <b>발송 시간대</b> — 모닝 브리핑은 <b>시작 시각</b>에 1회, 나머지 알림은 그 뒤 새로 생기는 대로 옵니다. <b>종료 시각을 넘겨 들어온 소식은 다음 날 시작 시각에 모아서 옵니다.</b>' + await basisLine(sub),
+        reply_markup: settingsKeyboard(sub) });
     } else if (text === '/stop') {
       // 메뉴에서는 뺐지만 하위호환으로 남긴다 — '모든 항목 끄기'로 동작(설정·시각은 보존)
       await upsertSub(chatId, { topic_briefing: false, topic_urgent: false, topic_assembly: false, topic_kmcc: false });
