@@ -569,6 +569,17 @@
     return out;
   }
 
+  const ANNEX_RE = /별표\s*제?\s*(\d+(?:\s*의\s*\d+)?)|별지\s*(?:제\s*)?(\d+)\s*(?:호)?(?:\s*의\s*(\d+))?/;
+  // 꼬리표 안(「[원문 확인됨: …]」의 …)의 대상 읽기 — 인용문 파싱(parseSegment)과 달리 별표·별지가 첫 조 언급보다 앞이면
+  // 별표·별지가 대상이다. 별표 공식 제목의 괄호 「별표 12(제95조제1항 관련)」의 조 번호는 대상이 아니다(청크 article_no가
+  // 이 꼴이라 모델이 제목째 옮긴다 — 종전엔 제95조로 읽혀 법령 이름까지 잃고, 별표가 자료에 있어도 '원문 없음'. 2026-09-27 사내 인계)
+  function parseTagInner(inner) {
+    const s = String(inner || '');
+    const am = s.match(ANNEX_RE), cm = s.match(/제\s?\d+\s?조/);
+    if (am && (!cm || am.index < cm.index)) return parseSegment(s.slice(0, am.index + am[0].length) + ' ');
+    return parseSegment(s + ' ');
+  }
+
   // 표시 하나의 앞 문단에서 인용 대상을 읽는다.
   // 반환 mentions = 등장 순서의 조 언급 목록(조마다 항·호·앞 법령명). key/paras/items/lawInfo는 첫 언급(primary) —
   // 실제 대상 선택은 checkCitation이 "컨텍스트에 있고 인용문과 가장 많이 겹치는 후보"로 한다(#155-보론3: 조문을 통째로
@@ -581,7 +592,7 @@
     while ((a = artRe.exec(s))) raw.push({ idx: a.index, end: a.index + a[0].length, key: a[1] + '조' + (a[2] ? '의' + a[2] : '') });
     if (!raw.length) {
       // 별표·별지(서식) — 앞의 법령 이름도 읽는다(#240: 존재 확인을 그 법령의 별표로 좁힌다). 「시행령 [별표 4]」의 '['는 떼고 본다
-      const bm = s.match(/별표\s*제?\s*(\d+(?:\s*의\s*\d+)?)|별지\s*(?:제\s*)?(\d+)\s*(?:호)?(?:\s*의\s*(\d+))?/);
+      const bm = s.match(ANNEX_RE);
       if (!bm) return { kind: 'none' };
       const lawInfo = lawNameBefore(s.slice(0, bm.index).replace(/[\s\[【「『<(]+$/, ' '));
       if (bm[1]) return { kind: 'annex', annexType: '별표', annex: bm[1].replace(/\s+/g, ''), lawInfo: lawInfo };
@@ -682,7 +693,7 @@
       // 인용문(과 앞 줄)에서 마지막으로 이름이 나온 법령 — 표시 대상이 이름 없이 '제N조'·'별표 N'만 적혔을 때 이어받는다
       const segNamed = (parsed.mentions || []).filter(function (x) { return x.lawInfo && x.lawInfo.candidates; });
       const segLaw = segNamed.length ? segNamed[segNamed.length - 1].lawInfo : (parsed.kind === 'annex' && parsed.lawInfo && parsed.lawInfo.candidates ? parsed.lawInfo : null);
-      const tp = (inner && /제\s?\d+\s?조|별표\s*제?\s*\d+|별지\s*(?:제\s*)?\d+/.test(inner)) ? parseSegment(inner + ' ') : null;
+      const tp = (inner && /제\s?\d+\s?조|별표\s*제?\s*\d+|별지\s*(?:제\s*)?\d+/.test(inner)) ? parseTagInner(inner) : null;
       if (tp && tp.kind === 'annex') {
         // 표시에 별표·별지가 적혀 있으면 그것이 대상 — 앞 문장의 조 번호(「법 제50조제1항제5호 및 시행령 [별표 4]」의 제50조)로
         // 넘어가지 않는다(#240: 「[원문 확인됨: 전기통신사업법 시행령 별표 4]」가 법 제50조와 대조돼 맞는 인용이 '원문과 다름')

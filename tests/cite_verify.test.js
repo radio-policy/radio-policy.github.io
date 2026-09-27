@@ -387,6 +387,18 @@ function ok(name, cond, extra) {
   var cb = CV.findCitations(qBare);
   eq('#240 옛 형식 표시의 맨 「제53조」 → 앞 인용의 전기통신사업법에서만 찾음(재난안전법 제53조 아님)', CV.checkCitation(cb[1], [a50, d53], []).status, 'missing');
 
+  // ── 2026-09-27 사내 인계 ①: 꼬리표 안 별표 공식 제목 괄호의 조 번호(「별표 12(제95조제1항 관련)」)는 대상이 아니다 ──
+  var an12 = { id: 'an12', doc_name: '전파법 시행령(대통령령)(제35801호)(20251001)', article_no: '별표 12(무선국 및 전파응용설비 허가 등의 신청수수료(제95조제1항 관련))', chunk_index: 323,
+    content: '■ 전파법 시행령 [별표 12] <개정 2016. 6. 21.>\n무선국 및 전파응용설비 허가 등의 신청수수료(제95조제1항 관련)' };
+  var an12r = Object.assign({}, an12, { doc_name: '전파법 시행규칙(과학기술정보통신부령)(제00156호)(20251001)', article_no: '별표 12(다른 별표)' });
+  ['[원문 확인됨: 전파법 시행령 별표 12(제95조제1항 관련)]', '[원문 확인됨: 전파법 시행령 별표 12 무선국 및 전파응용설비 허가 등의 신청수수료(제95조제1항 관련)]'].forEach(function (tag, i) {
+    var ca = CV.findCitations('실험국 50W 미만의 허가신청 수수료는 5천원입니다 ' + tag + '\n')[0];
+    eq('별표 제목 괄호 꼬리표 ' + (i + 1) + ' → 전파법 시행령 별표 12(제95조 아님)', [ca.kind, ca.annex, CV.checkCitation(ca, [an12], []).status], ['annex', '12', 'ok']);
+    eq('별표 제목 괄호 꼬리표 ' + (i + 1) + ' → 법령 이름 유지(시행규칙 별표 12만 있으면 원문 없음)', CV.checkCitation(ca, [an12r], []).status, 'missing');
+  });
+  var cArtFirst = CV.findCitations('수수료 과다 제공은 금지됩니다 [원문 확인됨: 전기통신사업법 제50조제1항제5호 및 시행령 별표 4]')[0];
+  eq('꼬리표에 조가 별표보다 앞이면 종전대로 조가 대상', [cArtFirst.kind, cArtFirst.key], ['article', '50조']);
+
   console.log('\n' + (total - fails) + '/' + total + ' passed');
   process.exit(fails ? 1 : 0);
 })().catch(function (e) { console.error(e); process.exit(2); });
