@@ -32,3 +32,7 @@ tests/fixtures/rag_regress_out/
 confluence_writer.py
 _confluence_attach.py
 docs/사내공유_*
+
+# 세션 보고서·사내 인계문 — 대화 패널에서 열리도록 작업 폴더 안에 두되 커밋·공개하지 않는다(2026-09-27 운영자 지시).
+# 저장소 밖(frequence/)에 두면 패널이 '작업 디렉터리 외부'라며 열지 못했다. 원문 데이터·백업 JSON은 계속 frequence/에 둔다.
+local_docs/
