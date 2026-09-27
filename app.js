@@ -9682,7 +9682,9 @@ function renderPeopleList() {
 // 김현 방통위 부위원장 21건 → 의원 155건). 카드를 둘로 쪼개지 않고 한 카드 안에서 자격을 가른다 —
 // "규제기관에 있을 때 이렇게 답했는데 의원이 되어 이렇게 따진다"는 대비 자체가 정보이기 때문이다.
 var _MEMBER_POS_SET = ['위원', '위원장', '의원', '위원장대리', '조정위원장', '간사',
-                       '소위원장', '소위원장대리', '소위원장직무대리', '위원장직무대리', '반장'];
+                       '소위원장', '소위원장대리', '소위원장직무대리', '위원장직무대리', '반장',
+                       // 안건조정위원회 위원장 대행 등 — 없으면 의원이 '정부 측'으로 갈렸다(최민희 2회의, 2026-09-27)
+                       '조정위원장직무대행', '위원장직무대행', '소위원장직무대행'];
 
 function _personRoleLabel(pos) {
   pos = String(pos || '').trim();
@@ -9988,6 +9990,9 @@ function renderPersonFields(p, rows) {
     else if (!_WITNESS_POS_RE.test(pos)) groups[1][2].push(r);
   });
   var html = '';
+  // 주 자격(의원 = 위원 발언, 정부·참고인 = 답변)은 적어도 그리고, **곁 자격**은 판정이 SPEECH_FIELD_MIN 이상일 때만 그린다 —
+  // 몇 건 안 되는 곁 자격이 '발언 적음(0건)' 빈 칸으로 뜨던 것(2026-09-27 최민희 '답변 분야' 0건).
+  var primary = p.kind === '의원' ? 'member' : 'gov';
   groups.forEach(function(g) {
     var rs = g[2];
     if (!rs.length) return;
@@ -10001,6 +10006,7 @@ function renderPersonFields(p, rows) {
       meetings[d] = 1;
     });
     SPEECH_FIELDS.forEach(function(f) { judged += sum[f] || 0; });
+    if (g[0] !== primary && judged < SPEECH_FIELD_MIN) return;
     var head = g[1];
     var hint = (g[0] === 'gov' ? '받은 질의와 출석 회의에 따라 정해진다 · ' : '') +
       '과방위 회의록 발언 블록 기준 · 낱말 규칙으로 센 근사치 · ' + escHtml(_ym(from)) + '~' + escHtml(_ym(to)) + ' · 회의 ' + Object.keys(meetings).length + '건' +
