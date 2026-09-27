@@ -346,8 +346,13 @@
     while ((m = NAMED_ART_RE.exec(s))) {
       const info = CV.lawNameBefore(s.slice(0, m.index));
       const no = m[1] || m[3], sub = m[2] || m[4];   // 앞 둘 = '제'가 붙은 꼴, 뒤 둘 = '제' 없는 꼴
-      if (info || lastNamed) refs.push({ key: no + '조' + (sub ? '의' + sub : ''), info: info, ctx: lastNamed });
-      if (info && info.candidates) lastNamed = info;
+      // '제' 없는 꼴은 법령명이 **바로 앞**에 있을 때만(「전기통신사업법 37조」) — 앞서 나온 법령을 이어받지 않는다(Fable 재검토 #246, 2026-09-27):
+      // 「전파법 제11조 … 할당대가 3조 규모」「…제50조 위반 과징금 2조를 넘는다」의 금액이 뒤 낱말 거르기(원·억·천·만)에 안 걸려
+      // 전파법 제3조·전기통신사업법 제2조(정의)를 끌어왔다. 「전파법 16조와 17조」의 17조는 잃지만 표준 표기 '제17조'는 그대로 된다.
+      // 약한 이름(「…세부사항」·앞 낱말이 이름이 아닌 것 — cite_verify lawNameBefore weak)은 '제'가 붙은 번호에만 후보로 둔다.
+      const strong = info && !info.weak;
+      if (strong || (m[1] && (info || lastNamed))) refs.push({ key: no + '조' + (sub ? '의' + sub : ''), info: info, ctx: lastNamed });
+      if (info && info.candidates && !info.weak) lastNamed = info;   // 약한 이름(「…세부사항」)은 이어받을 법령로 치지 않는다(cite_verify와 같음)
     }
     return refs;
   }
