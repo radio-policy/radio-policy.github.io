@@ -10893,9 +10893,8 @@ async function loadSpeakers(force) {
     } catch (e0) { _speakerIndex = null; }
     if (_speakerIndex) {
       _speechesBySpeaker = {};   // 이름별 발언은 선택 시 채운다
-      var inames = Object.keys(_speakerIndex).sort(function(a, b) {
-        return _speakerIndex[b].n - _speakerIndex[a].n || a.localeCompare(b, 'ko');
-      });
+      // 발언자 목록은 이름 가나다순(2026-09-27 운영자 요청 — 425명에서 사람을 찾는 목록이라). 건수는 이름 옆 괄호에 그대로.
+      var inames = Object.keys(_speakerIndex).sort(function(a, b) { return a.localeCompare(b, 'ko'); });
       sel.innerHTML = '<option value="">발언자 선택 (' + inames.length + '명)</option>' +
         inames.map(function(n) {
           return '<option value="' + escHtml(n) + '">' + escHtml(n) + ' (' + _speakerIndex[n].n + ')</option>';
@@ -10926,9 +10925,7 @@ async function loadSpeakers(force) {
       (map[k] = map[k] || []).push(r);
     });
     _speechesBySpeaker = map;
-    var names = Object.keys(map).sort(function(a, b) {
-      return map[b].length - map[a].length || a.localeCompare(b, 'ko');
-    });
+    var names = Object.keys(map).sort(function(a, b) { return a.localeCompare(b, 'ko'); });   // 가나다순(위와 같음)
     if (names.length === 0) {
       sel.innerHTML = '<option value="">수집된 발언이 없습니다 (수집기 가동 후 표시)</option>';
       if (out) out.innerHTML = '<div style="color:var(--text-secondary);padding:12px;text-align:center;font-size:12px">수집된 발언이 없습니다</div>';
