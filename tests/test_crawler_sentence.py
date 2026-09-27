@@ -585,6 +585,115 @@ class TestOpenPass(_Base):
         self.assertIn(('created_at', True), q['orders'])
         self.assertEqual((self.v('new')['status'], self.v('old')['status']), ('done', 'pending'))
 
+    def test_collection_rows_judged_before_dashboard_backlog(self):
+        """판정 순서(Fable 재검토 #251): 수집 경로 대기 행(requested_by null)이 대시보드 요청 밀림보다 먼저 — 새것부터라도 지난 기사
+        요청이 더 새로우면 그 규칙 묶음이 실행당 상한을 다 써 다른 팀 새 기사(늦은 팀 알림)가 밀렸다."""
+        dash = [_vrow(f'd{i}', 's_spec', 0, 'pending', _ago(0.1)) for i in range(3)]          # 대시보드 요청(더 새것)
+        col = dict(_vrow('c1', 's_wifi', 1, 'pending', _ago(0.5)), requested_by=None)         # 수집 경로(더 옛것)
+        self.db.tables.update({
+            'urgency_rule_verdicts': dash + [col],
+            'news_feed': [_news(f'd{i}', f'주파수 재할당 대가 논란 {i}', content=BODY) for i in range(3)]
+                         + [_news('c1', '공공와이파이 장애 새 기사', content=BODY)]})
+        self.verdicts = {f'주파수 재할당 대가 논란 {i}': (True, '') for i in range(3)}
+        self.verdicts['공공와이파이 장애 새 기사'] = (True, '')
+        with mock.patch.object(crawler, 'SENTENCE_PER_RUN_MAX', 2), \
+                mock.patch.dict(crawler._LATE_ALERT_PAIRS, {}, clear=True):
+            _, log = self.run_pass()
+            self.assertEqual(list(crawler._LATE_ALERT_PAIRS.get(7, {})), ['c1'], '수집 경로 참 판정만 늦은 알림 후보')
+        titles = [[r['title'] for r in c['rows']] for c in self.judge_calls]
+        self.assertEqual((titles[0], len(titles), len(titles[1])), (['공공와이파이 장애 새 기사'], 2, 1))
+        self.assertTrue(titles[1][0].startswith('주파수 재할당 대가 논란'))
+        self.assertEqual(self.v('c1')['status'], 'done')
+        self.assertEqual(sorted(self.v(f'd{i}')['status'] for i in range(3)), ['done', 'pending', 'pending'])
+        self.assertIn('다음 실행 2건', log)
+
+    # ── 판 올림 재요청(Fable 재검토 #251) — 문장을 고쳐 판이 오른 규칙: 옛 판 기사 중 지금 판 행이 없고 지금 낱말이 걸리는 기사에
+    #    지금 판 대기 행(requested_by 표식)을 넣고 같은 실행에서 판정한다(브라우저 재적용이 못 본 기사: 페이지 연 뒤 수집·규칙 사본 경쟁)
+    def _edited(self, hours_ago, base=S_WIFI):
+        r = dict(base, updated_at=_ago(hours_ago))
+        crawler._TEAM_RULES_ENABLED[r['id']] = r
+        self.TEAM = {7: [r if x['id'] == r['id'] else x for x in self.TEAM[7]]}
+        return r
+
+    @staticmethod
+    def _done(nid, rev, hours_ago, verdict=True, rid='s_wifi'):
+        return dict(_vrow(nid, rid, rev, 'done', _ago(hours_ago)), verdict=verdict, requested_by=None)
+
+    def _catchup_queries(self, rid):
+        return [e for e in self.db.log if e['table'] == 'urgency_rule_verdicts' and e['op'] == 'select'
+                and ('eq', 'rule_id', rid) in e['filters'] and any(f[0] == 'gte' for f in e['filters'])]
+
+    def test_old_rev_articles_requeued_and_judged_no_late_alert(self):
+        self._edited(1)
+        self.db.tables.update({
+            'urgency_rule_verdicts': [
+                self._done('n1', 0, 2),                                        # 옛 판만 → 재요청
+                self._done('n2', 0, 2), self._done('n2', 1, 1),                # 지금 판 있음 → 없음
+                self._done('n3', 0, 24 * 5),                                   # 기간 밖 → 없음
+                self._done('n4', 0, 2),                                        # 낱말 이제 안 걸림 → 없음
+                dict(_vrow('n5', 's_wifi', 0, 'stale', _ago(2)), requested_by=None),   # 옛 판 stale도 대상
+            ],
+            'news_feed': [_news('n1', '공공와이파이 장애 A', content=BODY), _news('n2', '공공와이파이 장애 B', content=BODY),
+                          _news('n3', '공공와이파이 장애 C', content=BODY), _news('n4', '와이파이 소식', content=BODY),
+                          _news('n5', '지하철 와이파이 먹통', content=BODY)]})
+        self.verdicts = {'공공와이파이 장애 A': (True, '장애'), '지하철 와이파이 먹통': (False, '안내')}
+        with mock.patch.dict(crawler._LATE_ALERT_PAIRS, {}, clear=True):
+            _, log = self.run_pass()
+            self.assertEqual(crawler._LATE_ALERT_PAIRS, {}, '재요청 판정은 늦은 팀 알림 후보가 아니다(requested_by 표식)')
+        new = {v['news_id']: v for v in self.db.tables['urgency_rule_verdicts'] if v['sentence_rev'] == 1}
+        self.assertEqual(sorted(new), ['n1', 'n2', 'n5'])
+        self.assertEqual((new['n1']['status'], new['n1']['verdict'], new['n1']['input_kind'], new['n1']['requested_by']),
+                         ('done', True, 'body', crawler.SENTENCE_REQUEUE_BY))
+        self.assertEqual((new['n5']['status'], new['n5']['verdict']), ('done', False))
+        self.assertEqual(new['n2']['requested_by'], None, '이미 있던 지금 판 행은 그대로')
+        ins = self.db.calls('urgency_rule_verdicts', 'upsert')[0]
+        self.assertEqual(ins['kw'], {'on_conflict': 'rule_id,sentence_rev,news_id', 'ignore_duplicates': True})
+        self.assertEqual(len({frozenset(r) for r in ins['rows']}), 1, '재요청 행 키 집합 동일')
+        light = self._news_selects()[0]
+        self.assertEqual((light['cols'], ('in', 'id', ['n1', 'n4', 'n5']) in light['filters']),
+                         ('id,title,screen_text,summary', True), '본문 없이 지금 판 행이 없는 옛 판 기사만 읽는다')
+        self.assertEqual([[r['title'] for r in c['rows']] for c in self.judge_calls],
+                         [['공공와이파이 장애 A', '지하철 와이파이 먹통']])
+        tu = {r['news_id']: r for r in self.db.tables['team_urgency']}
+        self.assertEqual((tu['n1']['rule_id'], tu['n1']['urgency']), ('s_wifi', '긴급'))
+        self.assertIn('[문장 판정] 판 올림 재요청 2건(1규칙)', log)
+        self.assertIn('판 올림 재요청 2건', log.split('대기 처리 —')[1])
+
+    def test_no_catchup_unless_recently_edited_sentence_rule_with_rev(self):
+        self._edited(24 * 5)                                   # 문장 고친 지 5일 — 대상 아님
+        self._edited(1, base=S_SPEC)                           # 판 0 — 대상 아님
+        self.db.tables.update({'urgency_rule_verdicts': [self._done('n1', 0, 2), self._done('n2', 0, 2, rid='s_spec')],
+                               'news_feed': [_news('n1', '공공와이파이 장애 A', content=BODY),
+                                             _news('n2', '주파수 재할당 대가 논란', content=BODY)]})
+        self.run_pass()
+        self.assertEqual((self._catchup_queries('s_wifi'), self._catchup_queries('s_spec')), ([], []))
+        self.assertEqual([v['sentence_rev'] for v in self.db.tables['urgency_rule_verdicts']], [0, 0])
+        self.assertEqual(self.judge_calls, [])
+
+    def test_catchup_skips_article_already_open_and_query_failure_is_ignored(self):
+        self._edited(1)
+        self.db.tables.update({
+            'urgency_rule_verdicts': [self._done('n1', 0, 2),
+                                      dict(_vrow('n1', 's_wifi', 1, 'pending', _ago(0.1)), requested_by=None)],   # 브라우저·수집이 이미 넣음
+            'news_feed': [_news('n1', '공공와이파이 장애 A', content=BODY)]})
+        self.verdicts = {'공공와이파이 장애 A': (True, '')}
+        _, log = self.run_pass()
+        self.assertEqual(len(self._catchup_queries('s_wifi')), 1)
+        self.assertEqual(self.db.calls('urgency_rule_verdicts', 'upsert')[0]['kw'].get('ignore_duplicates'), None,
+                         '재요청 넣기 없음 — 첫 upsert가 판정 갱신')
+        self.assertEqual([[r['title'] for r in c['rows']] for c in self.judge_calls], [['공공와이파이 장애 A']])
+        self.assertNotIn('판 올림 재요청', log)
+        # 조회 장애: 재요청만 건너뛰고(로그) 대기 행 처리는 계속
+        self.db.tables['urgency_rule_verdicts'] = [self._done('n7', 0, 2),
+                                                   dict(_vrow('n8', 's_wifi', 1, 'pending', _ago(0.1)), requested_by=None)]
+        self.db.tables['news_feed'] = [_news('n7', '공공와이파이 장애 A', content=BODY), _news('n8', '공공와이파이 장애 A', content=BODY)]
+        self.db.log, self.judge_calls = [], []
+        self.db.fail_when = lambda q: q.name == 'urgency_rule_verdicts' and q.op == 'select' \
+            and ('eq', 'rule_id', 's_wifi') in q.filters and any(f[0] == 'gte' for f in q.filters)
+        _, log = self.run_pass()
+        self.assertIn('[문장 판정] 판 올림 재요청 조회 실패(무시', log)
+        self.assertEqual(self.v('n8')['status'], 'done')
+
     def test_sentence_only_rule_true_inserts_team_row(self):
         self.db.tables.update({
             'urgency_rule_verdicts': [_vrow('n1', 's_spec', 0, 'pending', _ago(1))],
