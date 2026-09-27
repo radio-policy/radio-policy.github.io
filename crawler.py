@@ -3164,7 +3164,7 @@ def send_telegram(urgent_items: list):
         else:
             lines.append('')
 
-    lines.append('📊 <a href="https://radio-policy.github.io/?p=news">대시보드</a>')
+    lines.append('📊 <a href="https://radio-policy.gitlab.io/?p=news">대시보드</a>')
     text = '\n'.join(lines)
 
     # 전송부는 notify 위임 (개선⑪) — 실패 로그는 notify가 출력
@@ -3183,7 +3183,7 @@ def send_telegram(urgent_items: list):
             plain_lines.append(f"   출처: {item.get('source', '')}")
             plain_lines.append(f"   🏷 {tag_labels(item.get('tags'))}")
             plain_lines.append(f"   🔗 {item.get('url', '')}\n")
-        plain_lines.append('📊 대시보드: https://radio-policy.github.io/?p=news')
+        plain_lines.append('📊 대시보드: https://radio-policy.gitlab.io/?p=news')
         ok = notify.send_telegram('\n'.join(plain_lines), chat_id=TELEGRAM_CHAT_ID,
                                   disable_web_page_preview=True)
     if ok:
@@ -3223,7 +3223,7 @@ def send_urgent_email(urgent_items: list):
 <hr>
 <p style="color:#999;font-size:12px">
 이 메일은 긴급 기사 감지 시 자동 발송됩니다. SKT Comm센터 기술정책팀<br>
-대시보드: <a href="https://radio-policy.github.io/?p=news">https://radio-policy.github.io/?p=news</a>
+대시보드: <a href="https://radio-policy.gitlab.io/?p=news">https://radio-policy.gitlab.io/?p=news</a>
 </p>
 </body></html>'''
 

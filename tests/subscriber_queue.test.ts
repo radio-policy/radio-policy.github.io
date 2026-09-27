@@ -308,7 +308,7 @@ Deno.test('renderNormalBatch — 한 통 상한: 최근 NORMAL_BATCH_MAX건만, 
   ok(out.startsWith(`🟡 <b>보통 뉴스 ${NORMAL_BATCH_MAX + 5}건</b>`), out.slice(0, 60));
   ok(!out.includes('>기사4<'), '가장 오래된 5건은 빠진다');
   ok(out.includes('>기사5<') && out.includes(`>기사${NORMAL_BATCH_MAX + 4}<`), '최근 상한 건수는 실린다');
-  ok(out.endsWith('<i>… 앞선 5건은 대시보드에서 볼 수 있습니다</i> — <a href="https://radio-policy.github.io/?p=news">뉴스 보기</a>'), out.slice(-120));
+  ok(out.endsWith('<i>… 앞선 5건은 대시보드에서 볼 수 있습니다</i> — <a href="https://radio-policy.gitlab.io/?p=news">뉴스 보기</a>'), out.slice(-120));
   // 상한 이하면 꼬리 없음
   ok(!renderNormalBatch(many.slice(0, NORMAL_BATCH_MAX), from, null).includes('앞선'));
 });
