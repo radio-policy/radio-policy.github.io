@@ -399,6 +399,34 @@ function ok(name, cond, extra) {
   var cArtFirst = CV.findCitations('수수료 과다 제공은 금지됩니다 [원문 확인됨: 전기통신사업법 제50조제1항제5호 및 시행령 별표 4]')[0];
   eq('꼬리표에 조가 별표보다 앞이면 종전대로 조가 대상', [cArtFirst.kind, cArtFirst.key], ['article', '50조']);
 
+  // ── 2026-09-27 사내 인계 ②: 표 행·목록 항목의 표시는 그 줄이 인용문 — 다음 행(형제)을 인용문으로 가져가지 않는다 ──
+  // 반례: ⑤ 행 본문이 짧아(24자 미만) '제목 줄' 규칙이 ⑥ 행을 인용문으로 잡고, 판정기가 '제5항이 아닌 제6항 내용'(주황)
+  var r16a = { id: 'r16a', doc_name: '전파법(법률)(제21065호)(20260102)', article_no: '16조(재할당)', chunk_index: 32,
+    content: '제16조(재할당)\n① 과학기술정보통신부장관은 이용기간이 끝난 주파수를 재할당할 수 있다.\n④ 제11조제1항 단서에 따라 주파수할당 대가를 받고 재할당하는 경우에는 제12조를 준용한다. <개정 2010.7.23>\n⑤ 주파수를 재할당하는 경우에는 제10조제4항에 따른 조건을 붙일 수 있다. <개정 2015.12.22>\n⑥ 제1항부터 제5항까지의' };
+  var r16b = { id: 'r16b', doc_name: r16a.doc_name, article_no: '16조(재할당)', chunk_index: 33,
+    content: '제12조를 준용한다. <개정 2010.7.23>\n⑤ 주파수를 재할당하는 경우에는 제10조제4항에 따른 조건을 붙일 수 있다. <개정 2015.12.22>\n⑥ 제1항부터 제5항까지의 규정에 따른 재할당 절차 및 방법 등에 필요한 사항은 대통령령으로 정한다. <신설 2015.12.22>' };
+  var m16 = CV.mergeChunkTexts([r16a.content, r16b.content]);
+  eq('제16조 두 조각 병합 → ⑤·⑥ 한 번씩(청크 경계는 반례 원인 아님)', [(m16.match(/⑤/g) || []).length, (m16.match(/⑥/g) || []).length, /⑥ 제1항부터 제5항까지의 규정에 따른/.test(m16)], [1, 1, true]);
+  var tbl = '| 항 | 내용 |\n|---|---|\n| 제5항 | 재할당 시 제10조제4항에 따른 조건을 붙일 수 있음 [원문 확인됨: 전파법 제16조제5항] |\n| 제6항 | 재할당 절차·방법 등 필요한 사항은 대통령령으로 정함 |\n';
+  var ct = CV.findCitations(tbl)[0];
+  ok('표 행 표시: after가 다음 행으로 넘어가지 않음', !/제6항|대통령령/.test(ct.after), ct.after);
+  var seenT = [];
+  var vT = await CV.verifyCitations({ answer: tbl, chunks: [r16a, r16b], autoTag: false, quoteTag: false,
+    callHaiku: async function (s, u) { seenT.push(u); return '[{"id":1,"verdict":"불일치","reason":"제5항이 아닌 제6항 내용"}]'; } });
+  ok('표 행 표시: 다음 행 내용이 판정기에 인용문으로 가지 않음', !seenT.some(function (u) { return /대통령령으로 정함/.test(u); }), seenT);
+  eq('표 행 표시: 짧은 행은 대조할 내용 없음(주황 아님)', vT.verdicts[0].status, 'noclaim');
+  var tblL = '| 항 | 내용 |\n|---|---|\n| 제5항 | 주파수를 재할당할 때에는 과기정통부장관이 제10조제4항에 따른 조건을 붙일 수 있다고 정함 [원문 확인됨: 전파법 제16조제5항] |\n| 제6항 | 절차는 대통령령 |\n';
+  var seenL = [];
+  await CV.verifyCitations({ answer: tblL, chunks: [r16a, r16b], autoTag: false, quoteTag: false,
+    callHaiku: async function (s, u) { seenL.push(u); return '[{"id":1,"verdict":"일치","reason":""}]'; } });
+  ok('표 행 표시: 본문이 충분한 행은 그 행이 인용문', seenL.length === 1 && /과기정통부장관이/.test(seenL[0]) && !/절차는 대통령령/.test(seenL[0]), seenL);
+  var bl = CV.findCitations('- 제5항: 재할당 시 조건 부가 가능 [원문 확인됨: 전파법 제16조제5항]\n- 제6항: 재할당 절차·방법 등 필요한 사항은 대통령령으로 정함\n')[0];
+  ok('글머리 형제 항목: after가 다음 항목으로 넘어가지 않음', !/대통령령/.test(bl.after), bl.after);
+  var nl = CV.findCitations('1. 제5항: 재할당 시 조건 부가 가능 [원문 확인됨: 전파법 제16조제5항]\n2. 제6항: 재할당 절차·방법 등 필요한 사항은 대통령령으로 정함\n')[0];
+  ok('번호 형제 항목: after가 다음 항목으로 넘어가지 않음', !/대통령령/.test(nl.after), nl.after);
+  var hb = CV.findCitations('- **전기통신사업법 제32조의14** [원문 확인됨: 전기통신사업법 제32조의14]\n  ① 대리점은 이용자에게 계약 조건을 설명하여야 한다.\n')[0];
+  ok('제목형 글머리(들여 쓴 내용이 이어짐)는 종전대로 뒤 문단이 after', /① 대리점은/.test(hb.after), hb.after);
+
   console.log('\n' + (total - fails) + '/' + total + ' passed');
   process.exit(fails ? 1 : 0);
 })().catch(function (e) { console.error(e); process.exit(2); });

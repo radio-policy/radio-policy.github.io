@@ -647,6 +647,9 @@
   // 같은 문언이 두 조문에 있을 때 겹침 최대값은 동전 던지기가 된다(#169-보론4 실측).
   const AMBIG_MARGIN = 0.08;   // 이 이상 겹치면 "원문 그대로 인용" — 번호 파싱 없이 확인됨, Haiku 판정 생략
 
+  // 줄 머리의 표 행·목록 항목 표시 — [1] 들여쓰기, [2] '|' · 글머리(-·*·•) · 번호(1. 1))
+  const SIBLING_RE = /^([ \t]*)(\||[-*•](?=\s)|\d+[.)](?=\s))/;
+
   // 답변에서 표시를 전부 찾아 각 표시의 인용 대상을 붙인다
   function findCitations(answer) {
     const text = String(answer || '');
@@ -683,7 +686,20 @@
       // (「**② 전기통신사업법 제32조의14(…) [원문 확인됨]**\n① 대리점은 …」)에서 인용문은 뒤에 있다(#155-보론5).
       const nextTag = (function () { TAG_RE.lastIndex = tagEnd; const nm = TAG_RE.exec(text); TAG_RE.lastIndex = tagEnd; return nm ? nm.index : text.length; })();
       const blank = text.indexOf('\n\n', tagEnd + 1);
-      const after = text.slice(tagEnd, Math.min(nextTag, blank === -1 ? text.length : blank + 1, tagEnd + 900));
+      let after = text.slice(tagEnd, Math.min(nextTag, blank === -1 ? text.length : blank + 1, tagEnd + 900));
+      // 표 행·목록 항목의 표시는 그 줄이 인용문이다 — 뒤 문단은 다음 행·다음 항목(형제)이라 인용문이 아니다. 행 본문이 짧으면
+      // (24자 미만) 위 '제목 줄' 규칙이 다음 행을 인용문으로 가져가, 「| 제5항 | … [원문 확인됨: 전파법 제16조제5항] |」가 ⑥ 행 내용과
+      // 제5항이 대조돼 '원문과 다름 — 제5항이 아닌 제6항 내용'이 됐다(2026-09-27 사내 반례). 표 행은 늘, 목록은 다음 줄이 같은 들여쓰기의
+      // 같은 꼴 항목일 때만 이 줄로 끊는다(들여 쓴 내용이 이어지는 「- **제32조의14** [원문 확인됨]」 제목형 항목은 종전대로).
+      const lineHead = text.slice(lineStart, tagStart).match(SIBLING_RE);
+      if (lineHead) {
+        const eol = after.indexOf('\n');
+        const rest = eol === -1 ? after : after.slice(0, eol);
+        const nextLine = eol === -1 ? '' : (after.slice(eol + 1).split('\n').find(function (l) { return l.trim(); }) || '');
+        const nextHead = nextLine.match(SIBLING_RE);
+        const kind = function (h) { return h[2] === '|' ? '|' : /\d/.test(h[2]) ? '1' : '-'; };
+        if (kind(lineHead) === '|' || (nextHead && kind(nextHead) === kind(lineHead) && nextHead[1].length === lineHead[1].length)) after = rest;
+      }
       // line = 표시가 있는 줄만(조 번호가 없어 segment가 앞 문단으로 넓어졌어도 겹침 판정은 이 줄로도 본다)
       const c = Object.assign({ tagStart: tagStart, tagEnd: tagEnd, tag: m[0], segment: text.slice(segStart, tagStart), line: text.slice(starts[0], tagStart), after: after }, parsed);
       // 꼬리표 안에 대상이 적힌 형식(#155-보론6, 2026-09-11 운영자 결정): 「[원문 확인됨: 전기통신사업법 제32조의14제1항]」
