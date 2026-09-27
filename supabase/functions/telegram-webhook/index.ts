@@ -204,7 +204,7 @@ function settingsKeyboard(s: Sub) {
  */
 async function unitLabel(s: Pick<Sub, 'team_id' | 'division'> | null): Promise<string> {
   if (!s) return '';
-  if (s.division) return ` · ${s.division} 실장`;
+  if (s.division) return ` · ${s.division}`;   // 실장도 실 이름만(운영자 요청 09-27 — 「사업협력실 (팀별 설정 기준)」)
   if (s.team_id === null || s.team_id === undefined) return '';
   try {
     const { data } = await sb.from('teams').select('name').eq('id', s.team_id).maybeSingle();
