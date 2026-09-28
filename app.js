@@ -12927,9 +12927,19 @@ async function loadLawMap(force) {
       ]);
     }
     var dataReady = fetchGraph();
-    // 둘을 한 Promise.all로 기다린다 — 따로 await 하면 먼저 실패한 쪽이 던질 때 남은 쪽이
+    // 전체 인용망 좌표 파일(#255, ≈25KB·압축 9KB)도 함께 받는다. 실패해도 관계도는 뜬다(null → 종전 물리 배치) —
+    // 다만 조용히 넘기지 않고 경고를 남긴다(.gitlab-ci.yml cp 목록에서 빠지면 gitlab.io에서만 404, #125).
+    var posReady = _lawMapPositions ? Promise.resolve(_lawMapPositions) : fetch('lawmap_positions.json').then(function(resp) {
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      return resp.json();
+    }).catch(function(e) {
+      console.warn('[관계도] lawmap_positions.json을 읽지 못해 전체 인용망을 물리 배치로 그립니다:', e && e.message ? e.message : e);
+      return null;
+    });
+    // 셋을 한 Promise.all로 기다린다 — 따로 await 하면 먼저 실패한 쪽이 던질 때 남은 쪽이
     // '처리되지 않은 거부'로 새어 콘솔에 잡음이 남는다.
-    var both = await Promise.all([visReady, dataReady]);
+    var both = await Promise.all([visReady, dataReady, posReady]);
+    _lawMapPositions = both[2] || null;
     var r = both[1];
     _lawMapNodes = r[0];
     _lawMapEdges = r[1];
@@ -13113,6 +13123,257 @@ function lawmapWrapLabel(name) {
   return name.slice(0, mid) + '\n' + name.slice(mid);
 }
 
+// 전체 인용망에 그릴 노드·엣지 — renderLawMapGraph(전체 뷰)와 좌표 뽑기(lawMapExportPositions)가 같은 규칙을 쓰도록 한 곳에 둔다 (#255).
+// showNotice=false면 고시·행정규칙을 접는다(#36). hidden = 접은 고시 수.
+function lawmapFullView(showNotice) {
+  var nodes, edges, hidden = 0;
+  // 전체 뷰: '전파정책 관련 법'만 — 주제 + 주제·시드에 연결된 법 + 그 법의 계열(하위법령)로 코어를 정하고,
+  //   엣지는 시드·주제 엣지 + (코어 내부의 계열·인용)만 표시. 지방세법처럼 세금 감면 조항에서 농지법·축산법 등
+  //   타 분야 법을 대량 인용하는 허브의 바깥 인용은 코어 밖이라 제외됨(그 법의 전체 인용은 노드 클릭 시).
+  var core = new Set();
+  var topicIds = new Set();
+  _lawMapNodes.forEach(function(n) { if (n.node_type === 'topic') { core.add(n.id); topicIds.add(n.id); } });
+  // 주제에 닿은 엣지(seed·ai 등 출처 불문)의 양끝은 코어 — 시드 밖 법령만 근거로 가진 주제(예: 침해사고 신고→정보통신망법)가
+  //   엣지 없는 단독 버블로 뜨던 문제 방지. 주제 엣지는 소수라 그래프 폭발 위험 없음.
+  _lawMapEdges.forEach(function(e) { if (e.source === 'seed' || topicIds.has(e.source_id) || topicIds.has(e.target_id)) { core.add(e.source_id); core.add(e.target_id); } });
+  _lawMapEdges.forEach(function(e) { if (e.source === 'family' && (core.has(e.source_id) || core.has(e.target_id))) { core.add(e.source_id); core.add(e.target_id); } });
+  var keep = new Set();
+  _lawMapEdges.forEach(function(e) {
+    if (e.source === 'seed' || topicIds.has(e.source_id) || topicIds.has(e.target_id)) keep.add(e.id);
+    else if (core.has(e.source_id) && core.has(e.target_id)) keep.add(e.id);
+  });
+  edges = _lawMapEdges.filter(function(e) { return keep.has(e.id); });
+  var usedIds2 = new Set();
+  edges.forEach(function(e) { usedIds2.add(e.source_id); usedIds2.add(e.target_id); });
+  nodes = _lawMapNodes.filter(function(n) { return usedIds2.has(n.id) || n.node_type === 'topic'; });
+  // 전체 뷰에서 고시·행정규칙 접기 — 노드의 절반 이상(96/178)이 고시라 중앙이 뭉개져 조망이 불가능했다.
+  // 고시는 '법률→시행령→고시' 말단이라 전체 조망에선 잔가지이고, 주제·법령을 클릭하면 그대로 다 보인다.
+  // ★ 단, 근거가 고시뿐인 주제(충전단자 표준화 등 3개)는 통째로 숨기면 엣지 없는 단독 버블이 된다 —
+  //   #28에서 이미 고쳤던 회귀라, 그런 주제의 직결 고시는 예외로 남긴다. (배경역사 #36)
+  if (!showNotice) {
+    var noticeIds = new Set();
+    nodes.forEach(function(n) { if (n.node_type === 'notice' || n.node_type === 'etc') noticeIds.add(n.id); });
+    var degNoNotice = {};
+    edges.forEach(function(e) {
+      if (noticeIds.has(e.source_id) || noticeIds.has(e.target_id)) return;
+      degNoNotice[e.source_id] = 1; degNoNotice[e.target_id] = 1;
+    });
+    var orphanTopics = new Set();
+    nodes.forEach(function(n) { if (n.node_type === 'topic' && !degNoNotice[n.id]) orphanTopics.add(n.id); });
+    var rescued = new Set();
+    edges.forEach(function(e) {
+      if (orphanTopics.has(e.source_id) && noticeIds.has(e.target_id)) rescued.add(e.target_id);
+      if (orphanTopics.has(e.target_id) && noticeIds.has(e.source_id)) rescued.add(e.source_id);
+    });
+    var hiddenIds = new Set();
+    noticeIds.forEach(function(id) { if (!rescued.has(id)) hiddenIds.add(id); });
+    hidden = hiddenIds.size;
+    if (hiddenIds.size) {
+      edges = edges.filter(function(e) { return !hiddenIds.has(e.source_id) && !hiddenIds.has(e.target_id); });
+      nodes = nodes.filter(function(n) { return !hiddenIds.has(n.id); });
+    }
+  }
+  return { nodes: nodes, edges: edges, hidden: hidden };
+}
+
+// ── 전체 인용망 좌표 파일 lawmap_positions.json (#255, 2026-09-28) ──
+// 전체 인용망(노드 ≈150, 고시를 펼치면 ≈280)을 열 때마다 물리 계산(barnesHut 250회)으로 배치하면 그동안 캔버스가 비고
+// 그림도 매번 달라진다. 좌표를 한 번 넉넉히 계산해 파일로 두고, 전체 인용망은 그 자리에 물리 계산 없이 바로 그린다.
+// 파일에 없는 새 노드(인용망 재구축·주제 추가)만 이웃 곁에 짧게 배치한다(lawmapPlaceNewNodes). 주제·법령 포커스는 종전대로 물리 배치.
+// 좌표 키는 노드 id(uuid) — 노드는 지우지 않고 병합만 하므로(#28) 바뀌지 않는다.
+// 다시 뽑기: 관계도 화면을 연 브라우저 콘솔에서 lawMapExportPositions() → 내려받은 파일을 저장소 루트에 커밋.
+var _lawMapPositions = null;      // { version, generated_at, counts, variants: { folded: {id: [x, y]}, all: {...} } }
+var LAWMAP_POS_MIN_COVER = 0.7;   // 지금 노드의 70% 미만만 덮으면 파일을 믿지 않고 종전 물리 배치로 그린다
+function lawmapBarnesHut() { return { gravitationalConstant: -3000, springLength: 150, springConstant: 0.04, avoidOverlap: 0.4 }; }
+function lawmapNodeSize(n) { return n.node_type === 'topic' ? 22 : 12; }
+function lmHashAngle(s) {
+  var h = 0;
+  for (var i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+  return (Math.abs(h) % 360) * Math.PI / 180;
+}
+
+// 좌표 없는 노드(ids)를 pos에 채운다(pos를 직접 고침). 이웃 좌표의 평균에서 id로 정한 방향으로 한 칸 떨어뜨리고,
+// 이웃도 새 노드면 먼저 놓인 이웃을 기준으로 차례로 놓는다. 놓을 기준이 전혀 없으면 그림 바깥 둘레에 둔다.
+// 그다음 새 노드만 60회 짧게 밀고 당긴다(기존 노드는 움직이지 않음). 한 칸 = 기존 좌표의 최근접 거리 중앙값.
+function lawmapPlaceNewNodes(pos, ids, edges) {
+  if (!ids.length) return;
+  var adj = {};
+  edges.forEach(function(e) {
+    (adj[e.source_id] = adj[e.source_id] || []).push(e.target_id);
+    (adj[e.target_id] = adj[e.target_id] || []).push(e.source_id);
+  });
+  var known = Object.keys(pos);
+  var nn = known.map(function(a) {
+    var best = Infinity, pa = pos[a];
+    known.forEach(function(b) {
+      if (a === b) return;
+      var dx = pa[0] - pos[b][0], dy = pa[1] - pos[b][1], d = Math.sqrt(dx * dx + dy * dy);
+      if (d < best) best = d;
+    });
+    return best;
+  }).filter(isFinite).sort(function(a, b) { return a - b; });
+  var SP = Math.min(250, Math.max(40, nn.length ? nn[Math.floor(nn.length / 2)] : 100));
+  var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  known.forEach(function(k) { var p = pos[k]; minX = Math.min(minX, p[0]); maxX = Math.max(maxX, p[0]); minY = Math.min(minY, p[1]); maxY = Math.max(maxY, p[1]); });
+  if (!known.length) { minX = maxX = minY = maxY = 0; }
+  var cx = (minX + maxX) / 2, cy = (minY + maxY) / 2, R = Math.max(maxX - minX, maxY - minY) / 2;
+  var placed = [], pending = ids.slice();
+  for (var round = 0; pending.length && round < 50; round++) {
+    var next = [];
+    pending.forEach(function(id) {
+      var nb = (adj[id] || []).filter(function(x) { return pos[x]; });
+      if (!nb.length) { next.push(id); return; }
+      var sx = 0, sy = 0;
+      nb.forEach(function(x) { sx += pos[x][0]; sy += pos[x][1]; });
+      var a = lmHashAngle(id);
+      pos[id] = [sx / nb.length + Math.cos(a) * SP, sy / nb.length + Math.sin(a) * SP];
+      placed.push(id);
+    });
+    if (next.length === pending.length) break;
+    pending = next;
+  }
+  pending.forEach(function(id, i) {
+    var a = 2 * Math.PI * i / pending.length;
+    pos[id] = [cx + Math.cos(a) * (R + SP), cy + Math.sin(a) * (R + SP)];
+    placed.push(id);
+  });
+  var all = Object.keys(pos), MIN = SP * 0.9, STEP = SP * 0.25;
+  for (var it = 0; it < 60; it++) {
+    placed.forEach(function(id) {
+      var p = pos[id], fx = 0, fy = 0;
+      all.forEach(function(o) {
+        if (o === id) return;
+        var q = pos[o], dx = p[0] - q[0], dy = p[1] - q[1], d = Math.sqrt(dx * dx + dy * dy);
+        if (d >= MIN) return;
+        if (d < 0.01) { var a = lmHashAngle(id + o); dx = Math.cos(a); dy = Math.sin(a); d = 1; }
+        var f = (MIN - d) * 0.5 / d;
+        fx += dx * f; fy += dy * f;
+      });
+      (adj[id] || []).forEach(function(o) {
+        var q = pos[o]; if (!q) return;
+        var dx = q[0] - p[0], dy = q[1] - p[1], d = Math.sqrt(dx * dx + dy * dy) || 1;
+        if (d <= SP) return;
+        var f = (d - SP) * 0.1 / d;
+        fx += dx * f; fy += dy * f;
+      });
+      var s = Math.sqrt(fx * fx + fy * fy);
+      if (s > STEP) { fx *= STEP / s; fy *= STEP / s; }
+      p[0] += fx; p[1] += fy;
+    });
+  }
+  placed.forEach(function(id) { pos[id] = [Math.round(pos[id][0]), Math.round(pos[id][1])]; });
+}
+
+// 전체 인용망 노드의 좌표표 {id: [x, y]} — 파일이 없거나 지금 노드를 충분히 덮지 못하면 null(→ 종전 물리 배치).
+function lawmapFixedPositions(nodes, edges, variant) {
+  var saved = _lawMapPositions && _lawMapPositions.variants && _lawMapPositions.variants[variant];
+  if (!saved || !nodes.length) return null;
+  var pos = {}, missing = [];
+  nodes.forEach(function(n) {
+    var p = saved[n.id];
+    if (p && isFinite(p[0]) && isFinite(p[1])) pos[n.id] = [p[0], p[1]]; else missing.push(n.id);
+  });
+  if (nodes.length - missing.length < nodes.length * LAWMAP_POS_MIN_COVER) {
+    console.warn('[관계도] 좌표 파일이 지금 노드 ' + nodes.length + '개 중 ' + (nodes.length - missing.length) +
+                 '개만 덮어 물리 배치로 그립니다 — lawMapExportPositions()로 다시 뽑을 때입니다');
+    return null;
+  }
+  if (missing.length) {
+    lawmapPlaceNewNodes(pos, missing, edges);
+    console.info('[관계도] 좌표 파일에 없는 새 노드 ' + missing.length + '개를 이웃 곁에 배치했습니다' +
+                 (missing.length > nodes.length * 0.1 ? ' — 10%를 넘었으니 lawMapExportPositions()로 좌표 파일을 다시 뽑을 때입니다' : ''));
+  }
+  return pos;
+}
+
+// 화면 밖 칸에서 물리 배치를 끝까지 돌려 좌표만 받는다. anchor {id:[x,y]}가 있으면 그 노드는 그 자리에서,
+// 나머지는 이웃 곁에서 출발한다(고정은 하지 않는다 — 뼈대를 고정하면 고시가 비집고 들어갈 틈이 없어 44~72쌍이 겹쳤다).
+// 모양 옵션은 실제 그리기와 같게 둔다 — 크기(avoidOverlap)와 선 곡선(smooth 'continuous', 기본값 'dynamic'이면
+// 선마다 보이지 않는 받침 노드가 물리에 끼어 배치가 달라진다).
+function lawmapLayoutOffscreen(nodes, edges, anchor, iterations, seed) {
+  return new Promise(function(resolve, reject) {
+    var box = document.createElement('div');
+    box.style.cssText = 'position:absolute;left:-10000px;top:0;width:1200px;height:800px;visibility:hidden';
+    document.body.appendChild(box);
+    var start = null;
+    if (anchor) {
+      // 새로 들어오는 노드(고시)는 뼈대 이웃 곁에서 출발 — 무작위 출발이면 먼 곳에서 끌려오며 뼈대를 가로지른다
+      start = {};
+      Object.keys(anchor).forEach(function(k) { start[k] = anchor[k].slice(); });
+      lawmapPlaceNewNodes(start, nodes.filter(function(n) { return !anchor[n.id]; }).map(function(n) { return n.id; }), edges);
+    }
+    var vn = nodes.map(function(n) {
+      var o = { id: n.id, shape: 'dot', size: lawmapNodeSize(n) };
+      if (start && start[n.id]) { o.x = start[n.id][0]; o.y = start[n.id][1]; }
+      return o;
+    });
+    var ve = edges.map(function(e) { return { id: e.id, from: e.source_id, to: e.target_id }; });
+    var net = new vis.Network(box, { nodes: new vis.DataSet(vn), edges: new vis.DataSet(ve) }, {
+      physics: { barnesHut: lawmapBarnesHut(), stabilization: { iterations: iterations, updateInterval: 100, fit: false }, minVelocity: 0.75 },
+      edges: { smooth: { type: 'continuous' } },
+      layout: { improvedLayout: false, randomSeed: seed == null ? 7 : seed }
+    });
+    var timer = setTimeout(function() { cleanup(); reject(new Error('좌표 계산 시간 초과(3분)')); }, 180000);
+    function cleanup() { clearTimeout(timer); try { net.destroy(); } catch(e) {} box.remove(); }
+    net.once('stabilizationIterationsDone', function() {
+      var p = net.getPositions(), out = {};
+      Object.keys(p).forEach(function(id) { out[id] = [Math.round(p[id].x), Math.round(p[id].y)]; });
+      cleanup();
+      resolve(out);
+    });
+  });
+}
+
+// 저장소에 넣을 모양 — id 순으로 한 줄에 하나(파일 차이가 노드 단위로 보이게)
+function lawmapPositionsJson(out) {
+  var parts = ['{', '  "version": ' + out.version + ',', '  "generated_at": ' + JSON.stringify(out.generated_at) + ',',
+               '  "counts": ' + JSON.stringify(out.counts) + ',', '  "variants": {'];
+  var vk = Object.keys(out.variants);
+  vk.forEach(function(v, vi) {
+    var ids = Object.keys(out.variants[v]).sort();
+    parts.push('    ' + JSON.stringify(v) + ': {');
+    ids.forEach(function(id, i) { parts.push('      ' + JSON.stringify(id) + ': ' + JSON.stringify(out.variants[v][id]) + (i < ids.length - 1 ? ',' : '')); });
+    parts.push('    }' + (vi < vk.length - 1 ? ',' : ''));
+  });
+  parts.push('  }', '}', '');
+  return parts.join('\n');
+}
+
+// 좌표 파일 만들기 — 콘솔 전용 도구(버튼 없음). 접힌 뷰(folded)를 넉넉히(기본 2000회) 안정화하고,
+// 펼친 뷰(all)는 접힌 뷰 좌표에서 출발해(고시는 이웃 곁) 다시 안정화한다. 결과의 quality.close(노드 지름 30 미만으로 붙은 수)가
+// 0이 아니면 seed를 바꿔 다시 뽑는다. 화면이 가려진 창에서는 타이머가 느려져 수십 초 걸린다.
+// opts: { iterations, seed, download:false(내려받기 없이 결과만 반환) }
+async function lawMapExportPositions(opts) {
+  opts = opts || {};
+  if (!_lawMapLoaded) await loadLawMap();
+  await loadVisNetwork();
+  var iters = opts.iterations || 2000;
+  var folded = lawmapFullView(false), all = lawmapFullView(true);
+  var fpos = await lawmapLayoutOffscreen(folded.nodes, folded.edges, null, iters, opts.seed);
+  var apos = await lawmapLayoutOffscreen(all.nodes, all.edges, fpos, iters, opts.seed);
+  var out = {
+    version: 1, generated_at: new Date().toISOString(),
+    counts: { folded: { nodes: folded.nodes.length, edges: folded.edges.length }, all: { nodes: all.nodes.length, edges: all.edges.length } },
+    variants: { folded: fpos, all: apos }
+  };
+  function closePairs(p) {
+    var v = Object.keys(p).map(function(k) { return p[k]; }), c = 0;
+    v.forEach(function(a, i) { if (v.some(function(b, j) { return i !== j && Math.abs(a[0] - b[0]) < 30 && Math.abs(a[1] - b[1]) < 30 && Math.hypot(a[0] - b[0], a[1] - b[1]) < 30; })) c++; });
+    return c;
+  }
+  out.quality = { folded: { close: closePairs(fpos) }, all: { close: closePairs(apos) } };
+  out.json = lawmapPositionsJson(out);
+  console.info('[관계도] 좌표 뽑기 끝 — 접힘 ' + out.counts.folded.nodes + '개(붙은 노드 ' + out.quality.folded.close + ') · 펼침 ' +
+               out.counts.all.nodes + '개(붙은 노드 ' + out.quality.all.close + ')');
+  if (opts.download !== false) {
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([out.json], { type: 'application/json' }));
+    a.download = 'lawmap_positions.json';
+    document.body.appendChild(a); a.click(); a.remove();
+  }
+  return out;
+}
+
 function renderLawMapGraph(focusId) {
   _lawMapFocusId = focusId || null;
   var el = document.getElementById('lawmap-graph');
@@ -13127,54 +13388,9 @@ function renderLawMapGraph(focusId) {
     var sub = lawmapNeighborhood(_lawMapFocusId);
     nodes = sub.nodes; edges = sub.edges;
   } else {
-    // 전체 뷰: '전파정책 관련 법'만 — 주제 + 주제·시드에 연결된 법 + 그 법의 계열(하위법령)로 코어를 정하고,
-    //   엣지는 시드·주제 엣지 + (코어 내부의 계열·인용)만 표시. 지방세법처럼 세금 감면 조항에서 농지법·축산법 등
-    //   타 분야 법을 대량 인용하는 허브의 바깥 인용은 코어 밖이라 제외됨(그 법의 전체 인용은 노드 클릭 시).
-    var core = new Set();
-    var topicIds = new Set();
-    _lawMapNodes.forEach(function(n) { if (n.node_type === 'topic') { core.add(n.id); topicIds.add(n.id); } });
-    // 주제에 닿은 엣지(seed·ai 등 출처 불문)의 양끝은 코어 — 시드 밖 법령만 근거로 가진 주제(예: 침해사고 신고→정보통신망법)가
-    //   엣지 없는 단독 버블로 뜨던 문제 방지. 주제 엣지는 소수라 그래프 폭발 위험 없음.
-    _lawMapEdges.forEach(function(e) { if (e.source === 'seed' || topicIds.has(e.source_id) || topicIds.has(e.target_id)) { core.add(e.source_id); core.add(e.target_id); } });
-    _lawMapEdges.forEach(function(e) { if (e.source === 'family' && (core.has(e.source_id) || core.has(e.target_id))) { core.add(e.source_id); core.add(e.target_id); } });
-    var keep = new Set();
-    _lawMapEdges.forEach(function(e) {
-      if (e.source === 'seed' || topicIds.has(e.source_id) || topicIds.has(e.target_id)) keep.add(e.id);
-      else if (core.has(e.source_id) && core.has(e.target_id)) keep.add(e.id);
-    });
-    edges = _lawMapEdges.filter(function(e) { return keep.has(e.id); });
-    var usedIds2 = new Set();
-    edges.forEach(function(e) { usedIds2.add(e.source_id); usedIds2.add(e.target_id); });
-    nodes = _lawMapNodes.filter(function(n) { return usedIds2.has(n.id) || n.node_type === 'topic'; });
-    // 전체 뷰에서 고시·행정규칙 접기 — 노드의 절반 이상(96/178)이 고시라 중앙이 뭉개져 조망이 불가능했다.
-    // 고시는 '법률→시행령→고시' 말단이라 전체 조망에선 잔가지이고, 주제·법령을 클릭하면 그대로 다 보인다.
-    // ★ 단, 근거가 고시뿐인 주제(충전단자 표준화 등 3개)는 통째로 숨기면 엣지 없는 단독 버블이 된다 —
-    //   #28에서 이미 고쳤던 회귀라, 그런 주제의 직결 고시는 예외로 남긴다. (배경역사 #36)
-    if (!_lawMapShowNotice) {
-      var noticeIds = new Set();
-      nodes.forEach(function(n) { if (n.node_type === 'notice' || n.node_type === 'etc') noticeIds.add(n.id); });
-      var degNoNotice = {};
-      edges.forEach(function(e) {
-        if (noticeIds.has(e.source_id) || noticeIds.has(e.target_id)) return;
-        degNoNotice[e.source_id] = 1; degNoNotice[e.target_id] = 1;
-      });
-      var orphanTopics = new Set();
-      nodes.forEach(function(n) { if (n.node_type === 'topic' && !degNoNotice[n.id]) orphanTopics.add(n.id); });
-      var rescued = new Set();
-      edges.forEach(function(e) {
-        if (orphanTopics.has(e.source_id) && noticeIds.has(e.target_id)) rescued.add(e.target_id);
-        if (orphanTopics.has(e.target_id) && noticeIds.has(e.source_id)) rescued.add(e.source_id);
-      });
-      var hiddenIds = new Set();
-      noticeIds.forEach(function(id) { if (!rescued.has(id)) hiddenIds.add(id); });
-      _lawMapHiddenCount = hiddenIds.size;
-      if (hiddenIds.size) {
-        edges = edges.filter(function(e) { return !hiddenIds.has(e.source_id) && !hiddenIds.has(e.target_id); });
-        nodes = nodes.filter(function(n) { return !hiddenIds.has(n.id); });
-      }
-    } else {
-      _lawMapHiddenCount = 0;
-    }
+    var fv = lawmapFullView(_lawMapShowNotice);
+    nodes = fv.nodes; edges = fv.edges;
+    _lawMapHiddenCount = fv.hidden;
   }
   updateLawMapNoticeToggle(!_lawMapFocusId);
   // 보강 버튼: 주제 포커스일 때만 노출
@@ -13184,18 +13400,22 @@ function renderLawMapGraph(focusId) {
   var css = getComputedStyle(document.documentElement);
   var textColor = (css.getPropertyValue('--text-primary') || '').trim() || '#333';
   var bgColor = (css.getPropertyValue('--bg-primary') || '').trim() || '#fff';
+  // 전체 인용망은 좌표 파일 자리에 물리 계산 없이 바로 그린다 (#255). null이면 종전 물리 배치.
+  var fixedPos = _lawMapFocusId ? null : lawmapFixedPositions(nodes, edges, _lawMapShowNotice ? 'all' : 'folded');
   var visNodes = nodes.map(function(n) {
-    return {
+    var o = {
       id: n.id,
       label: lawmapWrapLabel(n.name),
       shape: 'dot',
-      size: n.node_type === 'topic' ? 22 : 12,
+      size: lawmapNodeSize(n),
       color: { background: LAWMAP_COLORS[n.node_type] || '#999', border: 'rgba(0,0,0,0.22)',
                highlight: { background: LAWMAP_COLORS[n.node_type] || '#999', border: textColor } },
       // 라벨에 배경색 외곽선 → 엣지·다른 노드 위에서도 글자가 읽힘
       font: { color: textColor, size: n.node_type === 'topic' ? 15 : 13, strokeWidth: 4, strokeColor: bgColor,
               vadjust: 0, bold: n.node_type === 'topic' }
     };
+    if (fixedPos) { o.x = fixedPos[n.id][0]; o.y = fixedPos[n.id][1]; }
+    return o;
   });
   var visEdges = edges.map(function(e) {
     return {
@@ -13211,14 +13431,14 @@ function renderLawMapGraph(focusId) {
   el.innerHTML = '';
   var data = { nodes: new vis.DataSet(visNodes), edges: new vis.DataSet(visEdges) };
   var options = {
-    physics: {
-      barnesHut: { gravitationalConstant: -3000, springLength: 150, springConstant: 0.04, avoidOverlap: 0.4 },
+    physics: fixedPos ? { enabled: false } : {
+      barnesHut: lawmapBarnesHut(),
       stabilization: { iterations: 250, updateInterval: 25, fit: true },
       minVelocity: 0.75
     },
     nodes: { scaling: { label: { enabled: true, min: 11, max: 20 } } },
     interaction: { hover: true, tooltipDelay: 120, hideEdgesOnDrag: visNodes.length > 60 },
-    layout: { improvedLayout: visNodes.length <= 120 }
+    layout: { improvedLayout: !fixedPos && visNodes.length <= 120 }
   };
   if (_lawMapNet) { try { _lawMapNet.destroy(); } catch(e) {} }
   _lawMapNet = new vis.Network(el, data, options);
@@ -13237,10 +13457,15 @@ function renderLawMapGraph(focusId) {
     });
     el._lmRO.observe(el);
   }
-  // 안정화가 끝나면 physics를 꺼서 노드가 계속 흔들리지 않게 함 (전체 인용망 '춤추는' 현상 방지)
-  _lawMapNet.once('stabilizationIterationsDone', function() {
-    try { _lawMapNet.setOptions({ physics: false }); _lawMapNet.setSize(el.clientWidth + 'px', el.clientHeight + 'px'); _lawMapNet.fit({ animation: false }); } catch(e) {}
-  });
+  if (fixedPos) {
+    // 좌표 파일로 그렸으면 안정화(와 그 이벤트)가 없다 — 바로 칸에 맞춘다 (#255)
+    try { _lawMapNet.setSize(el.clientWidth + 'px', el.clientHeight + 'px'); _lawMapNet.fit({ animation: false }); } catch(e) {}
+  } else {
+    // 안정화가 끝나면 physics를 꺼서 노드가 계속 흔들리지 않게 함 (전체 인용망 '춤추는' 현상 방지)
+    _lawMapNet.once('stabilizationIterationsDone', function() {
+      try { _lawMapNet.setOptions({ physics: false }); _lawMapNet.setSize(el.clientWidth + 'px', el.clientHeight + 'px'); _lawMapNet.fit({ animation: false }); } catch(e) {}
+    });
+  }
   _lawMapNet.on('click', function(p) {
     if (!(p.nodes && p.nodes.length)) return;
     var id = p.nodes[0];
