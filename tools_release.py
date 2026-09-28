@@ -167,9 +167,9 @@ def check_gitlab_ci():
             continue
         if not re.search(r'(^|[\s/])' + re.escape(os.path.basename(ref)) + r'(\s|$)', ci):
             todo.append('④ index.html이 부르는 %s 가 .gitlab-ci.yml 복사 목록에 없음 → GitLab Pages에서 404' % ref)
-    # app.js가 실행 중에 읽는 로컬 파일(관계도 좌표 fetch #255, vis-network 동봉본 #170-보론3)도 같은 목록에 있어야 한다
-    js = open(os.path.join(ROOT, 'app.js'), encoding='utf-8').read()
-    lazy = set(re.findall(r'''fetch\(\s*['"]([\w./-]+\.json)['"]''', js)) | set(re.findall(r'''['"](vendor/[\w./-]+\.js)['"]''', js))
+    # app.js·index.html 머리가 실행 중에 읽는 로컬 파일(관계도 좌표 #255, vis-network 동봉본 #170-보론3)도 같은 목록에 있어야 한다
+    js = open(os.path.join(ROOT, 'app.js'), encoding='utf-8').read() + html
+    lazy = set(re.findall(r'''['"]([\w./-]+\.json)(?:\?v=\w+)?['"]''', js)) | set(re.findall(r'''['"](vendor/[\w./-]+\.js)['"]''', js))
     for ref in sorted(lazy):
         if not re.search(r'(^|[\s/])' + re.escape(os.path.basename(ref)) + r'(\s|$)', ci):
             todo.append('④ app.js가 읽는 %s 가 .gitlab-ci.yml 복사 목록에 없음 → GitLab Pages에서 404' % ref)

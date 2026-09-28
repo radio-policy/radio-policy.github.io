@@ -1580,7 +1580,8 @@ class TestDashboardCacheBuster(unittest.TestCase):
     커밋 전 수정분(작업 트리·스테이징)은 번호가 오늘(KST)이어야 한다. git이 없거나 기록이 없으면 건너뛴다."""
 
     FILES = ('app.js', 'styles.css', 'system_prompt.js', 'supabase/functions/_shared/cite_verify.js',
-             'supabase/functions/_shared/rag_core.js', 'supabase/functions/_shared/urgency_rules.js')
+             'supabase/functions/_shared/rag_core.js', 'supabase/functions/_shared/urgency_rules.js',
+             'lawmap_positions.json')   # 관계도 좌표 파일(#255) — 주소는 index.html 머리 window.LAWMAP_POS_URL
 
     def _git(self, *args):
         import subprocess

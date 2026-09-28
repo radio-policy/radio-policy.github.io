@@ -12863,6 +12863,9 @@ async function loadLawMap(force) {
   if (!el || !sb) return;
   if (typeof refreshLawmapPendingBadge === 'function') refreshLawmapPendingBadge();   // 관리자: 검토 대기 N건 (#147)
   if (_lawMapLoaded && !force) { return; }
+  if (_lawMapLoading) return _lawMapLoading;   // 진행 중이면 합류 — 겹쳐 부르면 미리 그린 그림을 '불러오는 중'으로 지운다(#255)
+  var loadDone;
+  _lawMapLoading = new Promise(function(res) { loadDone = res; });
   el.innerHTML = '<div style="color:var(--text-secondary);font-size:12px;padding:16px">불러오는 중...</div>';
   try {
     // 라이브러리와 데이터는 서로 독립이다 — **동시에 시작한다** (2026-09-15, #170-보론4).
@@ -12929,18 +12932,33 @@ async function loadLawMap(force) {
     var dataReady = fetchGraph();
     // 전체 인용망 좌표 파일(#255, ≈25KB·압축 9KB)도 함께 받는다. 실패해도 관계도는 뜬다(null → 종전 물리 배치) —
     // 다만 조용히 넘기지 않고 경고를 남긴다(.gitlab-ci.yml cp 목록에서 빠지면 gitlab.io에서만 404, #125).
-    var posReady = _lawMapPositions ? Promise.resolve(_lawMapPositions) : fetch('lawmap_positions.json').then(function(resp) {
+    var posReady = _lawMapPositions ? Promise.resolve(_lawMapPositions) : fetch(window.LAWMAP_POS_URL || 'lawmap_positions.json').then(function(resp) {   // 주소·캐시 번호는 index.html 머리
+
       if (!resp.ok) throw new Error('HTTP ' + resp.status);
       return resp.json();
     }).catch(function(e) {
       console.warn('[관계도] lawmap_positions.json을 읽지 못해 전체 인용망을 물리 배치로 그립니다:', e && e.message ? e.message : e);
       return null;
     });
+    // 미리 그리기(#255): 라이브러리와 좌표 파일만 오면 DB 조회를 기다리지 않고 파일의 부분 그래프로 전체 인용망을 먼저 그린다.
+    // 첫 진입(아직 전체 데이터 없음)·전체 인용망일 때만. 실패는 삼킨다 — 아래 본 경로가 종전대로 그리고 오류도 거기서 보인다.
+    var dataDone = false;
+    dataReady.then(function() { dataDone = true; }, function() {});
+    Promise.all([visReady, posReady]).then(function(b) {
+      if (_lawMapLoaded || dataDone || _lawMapFocusId || !b[1]) return;
+      var pg = lawmapGraphFromFile(b[1].graph);
+      if (!pg) return;
+      _lawMapPositions = b[1];
+      _lawMapPreview = pg;
+      renderLawMapGraph(null);
+    }).catch(function(e) { console.warn('[관계도] 미리 그리기 실패 — 전체 데이터로 그립니다:', e && e.message ? e.message : e); });
     // 셋을 한 Promise.all로 기다린다 — 따로 await 하면 먼저 실패한 쪽이 던질 때 남은 쪽이
     // '처리되지 않은 거부'로 새어 콘솔에 잡음이 남는다.
     var both = await Promise.all([visReady, dataReady, posReady]);
     _lawMapPositions = both[2] || null;
     var r = both[1];
+    var pv = _lawMapPreview;   // 미리 그린 부분 그래프(없으면 null)
+    _lawMapPreview = null;
     _lawMapNodes = r[0];
     _lawMapEdges = r[1];
     _lawMapLoaded = true;
@@ -12952,9 +12970,20 @@ async function loadLawMap(force) {
     }
     // 기존 포커스가 새 데이터에도 있으면 유지, 없으면 전체 뷰
     if (_lawMapFocusId && !_lawMapNodes.some(function(n) { return n.id === _lawMapFocusId; })) _lawMapFocusId = null;
-    renderLawMapGraph(_lawMapFocusId);
+    // 미리 그린 그림과 전체 데이터의 그림이 같으면 다시 그리지 않는다 — 그새 확대·이동한 화면을 흔들지 않게 (#255)
+    if (pv && !_lawMapFocusId && _lawMapNet &&
+        lawmapViewSig(lawmapFullView(_lawMapShowNotice, pv.nodes, pv.edges)) === lawmapViewSig(lawmapFullView(_lawMapShowNotice))) {
+      if (/전체 연결을 불러오는 중/.test((document.getElementById('lawmap-status') || {}).textContent || '')) setLawMapStatus('');
+    } else {
+      if (pv) console.info('[관계도] 좌표 파일 이후 연결이 바뀌어 최신 데이터로 다시 그립니다 — 차이가 크면 lawMapExportPositions()로 파일을 다시 뽑을 때입니다');
+      renderLawMapGraph(_lawMapFocusId);
+    }
   } catch(e) {
+    _lawMapPreview = null;
     el.innerHTML = '<div style="color:#dc2626;font-size:12px;padding:16px">관계도 로드 실패: ' + lmEsc(e && e.message ? e.message : e) + '</div>';
+  } finally {
+    _lawMapLoading = null;
+    loadDone();
   }
 }
 
@@ -13125,27 +13154,29 @@ function lawmapWrapLabel(name) {
 
 // 전체 인용망에 그릴 노드·엣지 — renderLawMapGraph(전체 뷰)와 좌표 뽑기(lawMapExportPositions)가 같은 규칙을 쓰도록 한 곳에 둔다 (#255).
 // showNotice=false면 고시·행정규칙을 접는다(#36). hidden = 접은 고시 수.
-function lawmapFullView(showNotice) {
+// N·E를 주면 그 데이터로(좌표 파일의 미리 그리기용 부분 그래프), 없으면 전체 데이터(_lawMapNodes·_lawMapEdges)로 거른다.
+function lawmapFullView(showNotice, N, E) {
+  N = N || _lawMapNodes; E = E || _lawMapEdges;
   var nodes, edges, hidden = 0;
   // 전체 뷰: '전파정책 관련 법'만 — 주제 + 주제·시드에 연결된 법 + 그 법의 계열(하위법령)로 코어를 정하고,
   //   엣지는 시드·주제 엣지 + (코어 내부의 계열·인용)만 표시. 지방세법처럼 세금 감면 조항에서 농지법·축산법 등
   //   타 분야 법을 대량 인용하는 허브의 바깥 인용은 코어 밖이라 제외됨(그 법의 전체 인용은 노드 클릭 시).
   var core = new Set();
   var topicIds = new Set();
-  _lawMapNodes.forEach(function(n) { if (n.node_type === 'topic') { core.add(n.id); topicIds.add(n.id); } });
+  N.forEach(function(n) { if (n.node_type === 'topic') { core.add(n.id); topicIds.add(n.id); } });
   // 주제에 닿은 엣지(seed·ai 등 출처 불문)의 양끝은 코어 — 시드 밖 법령만 근거로 가진 주제(예: 침해사고 신고→정보통신망법)가
   //   엣지 없는 단독 버블로 뜨던 문제 방지. 주제 엣지는 소수라 그래프 폭발 위험 없음.
-  _lawMapEdges.forEach(function(e) { if (e.source === 'seed' || topicIds.has(e.source_id) || topicIds.has(e.target_id)) { core.add(e.source_id); core.add(e.target_id); } });
-  _lawMapEdges.forEach(function(e) { if (e.source === 'family' && (core.has(e.source_id) || core.has(e.target_id))) { core.add(e.source_id); core.add(e.target_id); } });
+  E.forEach(function(e) { if (e.source === 'seed' || topicIds.has(e.source_id) || topicIds.has(e.target_id)) { core.add(e.source_id); core.add(e.target_id); } });
+  E.forEach(function(e) { if (e.source === 'family' && (core.has(e.source_id) || core.has(e.target_id))) { core.add(e.source_id); core.add(e.target_id); } });
   var keep = new Set();
-  _lawMapEdges.forEach(function(e) {
+  E.forEach(function(e) {
     if (e.source === 'seed' || topicIds.has(e.source_id) || topicIds.has(e.target_id)) keep.add(e.id);
     else if (core.has(e.source_id) && core.has(e.target_id)) keep.add(e.id);
   });
-  edges = _lawMapEdges.filter(function(e) { return keep.has(e.id); });
+  edges = E.filter(function(e) { return keep.has(e.id); });
   var usedIds2 = new Set();
   edges.forEach(function(e) { usedIds2.add(e.source_id); usedIds2.add(e.target_id); });
-  nodes = _lawMapNodes.filter(function(n) { return usedIds2.has(n.id) || n.node_type === 'topic'; });
+  nodes = N.filter(function(n) { return usedIds2.has(n.id) || n.node_type === 'topic'; });
   // 전체 뷰에서 고시·행정규칙 접기 — 노드의 절반 이상(96/178)이 고시라 중앙이 뭉개져 조망이 불가능했다.
   // 고시는 '법률→시행령→고시' 말단이라 전체 조망에선 잔가지이고, 주제·법령을 클릭하면 그대로 다 보인다.
   // ★ 단, 근거가 고시뿐인 주제(충전단자 표준화 등 3개)는 통째로 숨기면 엣지 없는 단독 버블이 된다 —
@@ -13184,6 +13215,38 @@ function lawmapFullView(showNotice) {
 // 다시 뽑기: 관계도 화면을 연 브라우저 콘솔에서 lawMapExportPositions() → 내려받은 파일을 저장소 루트에 커밋.
 var _lawMapPositions = null;      // { version, generated_at, counts, variants: { folded: {id: [x, y]}, all: {...} } }
 var LAWMAP_POS_MIN_COVER = 0.7;   // 지금 노드의 70% 미만만 덮으면 파일을 믿지 않고 종전 물리 배치로 그린다
+// 미리 그리기(#255 보완): 파일에는 전체 인용망(펼침)의 노드·선도 들어 있어, DB 조회(0.7~1.2초)를 기다리지 않고 먼저 그린다.
+// 전체 데이터가 오면 같은 그림인지 지문(lawmapViewSig)으로 비교해 다를 때만 다시 그린다(노드 자리는 같아 그림이 튀지 않는다).
+// 부분 그래프는 _lawMapPreview에만 둔다 — _lawMapNodes에 넣으면 goLawmapTopic 등이 '다 받았다'로 읽는다.
+var _lawMapPreview = null;        // {nodes, edges} — 전체 데이터가 오면 null
+var _lawMapLoading = null;        // 진행 중인 loadLawMap — 미리 그린 뒤 질문창 등이 두 번째 로드를 겹쳐 그림을 지우지 않게
+// 파일의 압축 모양 → 객체. nodes: [id, name, node_type] · edges: [시작 노드 번호, 끝 노드 번호, relation_type, source, weight, description]
+// (선 id는 쓰지 않는다 — 인용망 재구축이 선을 새로 만들어 id가 바뀐다)
+function lawmapGraphFromFile(g) {
+  if (!g || !Array.isArray(g.nodes) || !Array.isArray(g.edges) || !g.nodes.length) return null;
+  var nodes = g.nodes.map(function(a) { return { id: a[0], name: a[1], node_type: a[2] }; });
+  var edges = [];
+  for (var i = 0; i < g.edges.length; i++) {
+    var a = g.edges[i], sN = nodes[a[0]], tN = nodes[a[1]];
+    if (!sN || !tN) return null;   // 깨진 파일은 쓰지 않는다
+    edges.push({ id: 'f' + i, source_id: sN.id, target_id: tN.id, relation_type: a[2], source: a[3], weight: a[4], description: a[5] || '' });
+  }
+  return { nodes: nodes, edges: edges };
+}
+function lawmapGraphToFile(v) {
+  var idx = {};
+  v.nodes.forEach(function(n, i) { idx[n.id] = i; });
+  return {
+    nodes: v.nodes.map(function(n) { return [n.id, n.name, n.node_type]; }),
+    edges: v.edges.map(function(e) { return [idx[e.source_id], idx[e.target_id], e.relation_type || '', e.source || '', e.weight == null ? null : e.weight, e.description || '']; })
+  };
+}
+// 그림에 드러나는 것(노드 이름·종류, 선의 양끝·종류·굵기·말풍선)만 담은 지문
+function lawmapViewSig(v) {
+  var n = v.nodes.map(function(x) { return x.id + '|' + x.name + '|' + x.node_type; }).sort();
+  var e = v.edges.map(function(x) { return x.source_id + '>' + x.target_id + '|' + (x.relation_type || '') + '|' + (x.weight || 1) + '|' + (x.description || ''); }).sort();
+  return n.join('\n') + '\n#\n' + e.join('\n');
+}
 function lawmapBarnesHut() { return { gravitationalConstant: -3000, springLength: 150, springConstant: 0.04, avoidOverlap: 0.4 }; }
 function lawmapNodeSize(n) { return n.node_type === 'topic' ? 22 : 12; }
 function lmHashAngle(s) {
@@ -13327,7 +13390,15 @@ function lawmapLayoutOffscreen(nodes, edges, anchor, iterations, seed) {
 // 저장소에 넣을 모양 — id 순으로 한 줄에 하나(파일 차이가 노드 단위로 보이게)
 function lawmapPositionsJson(out) {
   var parts = ['{', '  "version": ' + out.version + ',', '  "generated_at": ' + JSON.stringify(out.generated_at) + ',',
-               '  "counts": ' + JSON.stringify(out.counts) + ',', '  "variants": {'];
+               '  "counts": ' + JSON.stringify(out.counts) + ','];
+  if (out.graph) {
+    parts.push('  "graph": {', '    "nodes": [');
+    out.graph.nodes.forEach(function(a, i) { parts.push('      ' + JSON.stringify(a) + (i < out.graph.nodes.length - 1 ? ',' : '')); });
+    parts.push('    ],', '    "edges": [');
+    out.graph.edges.forEach(function(a, i) { parts.push('      ' + JSON.stringify(a) + (i < out.graph.edges.length - 1 ? ',' : '')); });
+    parts.push('    ]', '  },');
+  }
+  parts.push('  "variants": {');
   var vk = Object.keys(out.variants);
   vk.forEach(function(v, vi) {
     var ids = Object.keys(out.variants[v]).sort();
@@ -13352,16 +13423,23 @@ async function lawMapExportPositions(opts) {
   var fpos = await lawmapLayoutOffscreen(folded.nodes, folded.edges, null, iters, opts.seed);
   var apos = await lawmapLayoutOffscreen(all.nodes, all.edges, fpos, iters, opts.seed);
   var out = {
-    version: 1, generated_at: new Date().toISOString(),
+    version: 2, generated_at: new Date().toISOString(),
     counts: { folded: { nodes: folded.nodes.length, edges: folded.edges.length }, all: { nodes: all.nodes.length, edges: all.edges.length } },
+    graph: lawmapGraphToFile(all),
     variants: { folded: fpos, all: apos }
   };
+  // 파일의 부분 그래프만으로 거른 그림이 전체 데이터로 거른 그림과 같아야 미리 그리기가 맞다 — 두 모양 모두 대조
+  var fg = lawmapGraphFromFile(out.graph);
+  var graphOk = !!fg && [false, true].every(function(show) {
+    return lawmapViewSig(lawmapFullView(show, fg.nodes, fg.edges)) === lawmapViewSig(lawmapFullView(show));
+  });
+  if (!graphOk) console.error('[관계도] 파일에 넣을 부분 그래프로 거른 그림이 전체 데이터와 다릅니다 — lawmapFullView 규칙을 확인하세요');
   function closePairs(p) {
     var v = Object.keys(p).map(function(k) { return p[k]; }), c = 0;
     v.forEach(function(a, i) { if (v.some(function(b, j) { return i !== j && Math.abs(a[0] - b[0]) < 30 && Math.abs(a[1] - b[1]) < 30 && Math.hypot(a[0] - b[0], a[1] - b[1]) < 30; })) c++; });
     return c;
   }
-  out.quality = { folded: { close: closePairs(fpos) }, all: { close: closePairs(apos) } };
+  out.quality = { folded: { close: closePairs(fpos) }, all: { close: closePairs(apos) }, graph: graphOk ? 'ok' : 'mismatch' };
   out.json = lawmapPositionsJson(out);
   console.info('[관계도] 좌표 뽑기 끝 — 접힘 ' + out.counts.folded.nodes + '개(붙은 노드 ' + out.quality.folded.close + ') · 펼침 ' +
                out.counts.all.nodes + '개(붙은 노드 ' + out.quality.all.close + ')');
@@ -13388,7 +13466,8 @@ function renderLawMapGraph(focusId) {
     var sub = lawmapNeighborhood(_lawMapFocusId);
     nodes = sub.nodes; edges = sub.edges;
   } else {
-    var fv = lawmapFullView(_lawMapShowNotice);
+    var pv = (!_lawMapLoaded && _lawMapPreview) ? _lawMapPreview : null;   // 전체 데이터 전이면 좌표 파일의 부분 그래프로(#255)
+    var fv = lawmapFullView(_lawMapShowNotice, pv && pv.nodes, pv && pv.edges);
     nodes = fv.nodes; edges = fv.edges;
     _lawMapHiddenCount = fv.hidden;
   }
@@ -13469,24 +13548,35 @@ function renderLawMapGraph(focusId) {
   _lawMapNet.on('click', function(p) {
     if (!(p.nodes && p.nodes.length)) return;
     var id = p.nodes[0];
-    var clicked = _lawMapNodes.find(function(x) { return x.id === id; });
-    if (!clicked) return;
-    var focusNode = _lawMapFocusId ? _lawMapNodes.find(function(x) { return x.id === _lawMapFocusId; }) : null;
-    var inTopicView = !!(focusNode && focusNode.node_type === 'topic');
-    if (!inTopicView && clicked.node_type === 'topic') {
-      // 전체 인용망에서 주제 노드 클릭 → 주제 포커스로 전환
-      var sel = document.getElementById('lawmap-topic-select');
-      if (sel) sel.value = id;
-      lawMapSelectTopic(id);
+    if (!_lawMapLoaded) {
+      // 좌표 파일로 미리 그린 동안(#255)은 전체 데이터가 올 때까지 기다렸다 처리한다 — 부분 그래프로 포커스·카드를 열면 연결이 빠져 보인다
+      setLawMapStatus('전체 연결을 불러오는 중… 곧 열립니다');
+      if (_lawMapLoading) _lawMapLoading.then(function() { if (_lawMapLoaded) lawmapOnNodeClick(id); });
       return;
     }
-    if (!inTopicView && clicked.node_type !== 'topic' && id !== _lawMapFocusId) {
-      // 전체 인용망(또는 법령 포커스)에서 법령 클릭 → 그 법령 중심의 실제 인용·계열 관계로 드릴다운
-      renderLawMapGraph(id);
-      setLawMapStatus('법령 <b>' + lmEsc(clicked.name) + '</b> — 실제 인용·계열 관계 표시 중 · <a style="cursor:pointer;text-decoration:underline;color:var(--accent, #5b7ff5)" onclick="lawMapSelectTopic(\'\')">← 전체 인용망으로</a>');
-    }
-    showLawMapNodeDetail(id);
+    lawmapOnNodeClick(id);
   });
+}
+
+// 관계도 노드 클릭 처리 — 주제면 주제 포커스, 법령이면 그 법령 중심으로 드릴다운 + 카드 (#255에서 클릭 핸들러에서 분리)
+function lawmapOnNodeClick(id) {
+  var clicked = _lawMapNodes.find(function(x) { return x.id === id; });
+  if (!clicked) return;
+  var focusNode = _lawMapFocusId ? _lawMapNodes.find(function(x) { return x.id === _lawMapFocusId; }) : null;
+  var inTopicView = !!(focusNode && focusNode.node_type === 'topic');
+  if (!inTopicView && clicked.node_type === 'topic') {
+    // 전체 인용망에서 주제 노드 클릭 → 주제 포커스로 전환
+    var sel = document.getElementById('lawmap-topic-select');
+    if (sel) sel.value = id;
+    lawMapSelectTopic(id);
+    return;
+  }
+  if (!inTopicView && clicked.node_type !== 'topic' && id !== _lawMapFocusId) {
+    // 전체 인용망(또는 법령 포커스)에서 법령 클릭 → 그 법령 중심의 실제 인용·계열 관계로 드릴다운
+    renderLawMapGraph(id);
+    setLawMapStatus('법령 <b>' + lmEsc(clicked.name) + '</b> — 실제 인용·계열 관계 표시 중 · <a style="cursor:pointer;text-decoration:underline;color:var(--accent, #5b7ff5)" onclick="lawMapSelectTopic(\'\')">← 전체 인용망으로</a>');
+  }
+  showLawMapNodeDetail(id);
 }
 
 function lawMapSelectTopic(id) {
@@ -14481,10 +14571,10 @@ document.addEventListener('DOMContentLoaded', function() {
   // 허용 값은 PAGE_TO_NAV 키뿐이며, 없는 이름·파싱 실패는 기본값으로 떨어진다(fail-safe).
   // 관계도로 시작하면 뉴스 1만 건 조회(#130)를 하지 않아 첫 화면이 그만큼 빨리 뜬다
   // (뉴스 목록은 go('news')가 그때 불러온다).
-  // 2026-09-28 (#254-보론, 운영자 결정) 기본을 **통합 모니터링(뉴스)**으로 바꿨다 — GitHub 정지로 gitlab.io(압축 없음)가 정본이 되자
-  // 관계도 첫 화면(전체 인용망 노드 1,254개 배치)이 10초 넘게 비어 보였다. 같은 브라우저 실측: 뉴스 시작 ≈2초에 245건 표시,
-  // 관계도 시작 30초 이상(배치 계산이 PC 성능에 좌우 — GitLab만의 문제가 아니다). 관계도는 메뉴·`?p=lawmap`으로 그대로 연다.
-  var DEFAULT_PAGE = 'news';
+  // 2026-09-28 새벽 (#254-보론) gitlab.io에서 관계도가 느려 잠시 뉴스로 바꿨다가, 같은 날 #255(전체 인용망 좌표 파일 +
+  // GitLab .gz 미리 압축)로 원인(무압축 다운로드 — 화면 노드는 151개, 물리 배치 0.46초)을 걷어낸 뒤 운영자 결정으로 관계도로 되돌렸다.
+  // 기본 화면을 바꾸면 index.html 머리의 '관계도 미리 받기'(#255) 판정도 같이 고친다.
+  var DEFAULT_PAGE = 'lawmap';
   var startPage = (function() {
     try {
       var p = (new URLSearchParams(location.search).get('p') || (location.hash || '').replace(/^#/, '') || '').trim();
