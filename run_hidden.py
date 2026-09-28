@@ -48,9 +48,13 @@ def main():
         # -u(무버퍼): 중간에 강제 종료돼도 그때까지의 출력이 파일에 남는다.
         # (2026-08-03 크롤러가 7~11분 돌다 외부 종료됐는데 버퍼가 통째로 날아가
         #  어디서 멈췄는지 알 수 없었다 — 진단 불가 상태를 만들지 말 것.)
+        # PYTHONIOENCODING=utf-8: 자식의 출력을 이 로그 파일(utf-8)과 같은 인코딩으로 고정한다(2026-09-28, #254).
+        # Actions(리눅스)에서만 돌던 스크립트는 sys.stdout.reconfigure가 없어, 스케줄러(cp949)에서 이모지 print가
+        # UnicodeEncodeError로 죽는다(#19) — GitHub 정지로 그런 스크립트를 PC로 옮기며 래퍼 한 곳에서 막는다.
+        env = dict(os.environ, PYTHONIOENCODING="utf-8")
         r = subprocess.run([PY, "-u", script] + sys.argv[3:],
                            stdout=lf, stderr=subprocess.STDOUT,
-                           creationflags=CREATE_NO_WINDOW)
+                           creationflags=CREATE_NO_WINDOW, env=env)
         lf.write("=== exit %s at %s\n" % (r.returncode, datetime.datetime.now().isoformat()))
     sys.exit(r.returncode)
 

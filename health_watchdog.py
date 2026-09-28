@@ -24,6 +24,21 @@ import datetime
 import urllib.request
 import urllib.error
 
+# PC에서 돌 때(GitHub 정지 중 회사 PC 임시 작업, #254) — .env를 읽고 출력을 UTF-8로(#19).
+# Actions는 Secrets로 env가 이미 있고 dotenv가 없어도 된다(없으면 건너뜀 — 표준 라이브러리만으로 도는 성질 유지).
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+except ImportError:
+    pass
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+# --no-github: GitHub Actions 이력을 볼 수 없을 때(계정 정지 #254 — API가 404) ② 워크플로 성공 이력 대신
+# 같은 작업의 system_health heartbeat로 본다. 없이 돌리면 매일 밤 '성공 실행 기록 확인 실패' 3건이 오경보로 나간다.
+NO_GITHUB = "--no-github" in sys.argv
+
 SUPABASE_URL = os.environ["SUPABASE_URL"].rstrip("/")
 SUPABASE_KEY = os.environ["SUPABASE_SERVICE_KEY"]
 TG_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
@@ -83,8 +98,18 @@ def workflow_last_success_hours(wf):
         return None
 
 
+def heartbeat_hours(key):
+    """system_health heartbeat 이후 경과 시간(시간). 알 수 없으면 None (--no-github 전용)."""
+    try:
+        rows = http_get_json(SUPABASE_URL + "/rest/v1/system_health?select=updated_at&key=eq." + key,
+                             {"apikey": SUPABASE_KEY, "Authorization": "Bearer " + SUPABASE_KEY})
+        return hours_since(rows[0]["updated_at"]) if rows and rows[0].get("updated_at") else None
+    except Exception:
+        return None
+
+
 # 크롤러가 '실제로 도는지' 먼저 확인 → '새 뉴스 없음'과 '크롤러 고장'을 구분(주말 오경보 방지)
-crawl_h = workflow_last_success_hours("daily_crawl.yml")
+crawl_h = heartbeat_hours("last_crawl_run") if NO_GITHUB else workflow_last_success_hours("daily_crawl.yml")
 crawl_running = (crawl_h is not None and crawl_h < 14)
 
 # ── ① Supabase 데이터 신선도 (접속 실패 시 그 자체가 경고) ──
@@ -130,12 +155,25 @@ checks = {
     "law_crawl.yml": 26,          # 하루 1회
     "assembly_crawl.yml": 26,     # 하루 1회
 }
-for wf, thresh in checks.items():
-    h = workflow_last_success_hours(wf)
-    if h is None:
-        problems.append("%s 성공 실행 기록 확인 실패" % wf)
-    elif h >= thresh:
-        problems.append("%s 마지막 성공 %.1f시간 전 (임계 %dh)" % (wf, h, thresh))
+if NO_GITHUB:
+    # 같은 작업의 heartbeat로 대신 본다 — 브리핑은 ①의 '오늘자 브리핑 존재'가 이미 본다
+    print("[워치독] --no-github: GitHub Actions 이력 대신 heartbeat로 점검 (#254)")
+    for key, thresh, label in (("last_law_crawl_run", 26, "법령 체인(11:30)"),
+                               ("last_assembly_run", 26, "국회 법안(10:00)")):
+        h = heartbeat_hours(key)
+        if h is None:
+            problems.append("%s heartbeat(%s) 확인 실패" % (label, key))
+        elif h >= thresh:
+            problems.append("%s 마지막 실행 %.1f시간 전 (임계 %dh)" % (label, h, thresh))
+        else:
+            print("[워치독] %s %.1fh 전 실행 (정상)" % (label, h))
+else:
+    for wf, thresh in checks.items():
+        h = workflow_last_success_hours(wf)
+        if h is None:
+            problems.append("%s 성공 실행 기록 확인 실패" % wf)
+        elif h >= thresh:
+            problems.append("%s 마지막 성공 %.1f시간 전 (임계 %dh)" % (wf, h, thresh))
 
 # ── ③ PC 예약작업 heartbeat (system_health) — lampmanH-pc 본선(#179, 2026-09-20) ──
 # gov 체인(16:30)·본문 재수집(10분마다 — #251, 전에는 매시 22분)은 GitHub Actions 밖(한국 IP 필요)이라 ②의 run 이력이 없다.
