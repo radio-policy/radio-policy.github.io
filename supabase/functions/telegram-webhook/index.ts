@@ -4,11 +4,12 @@
 //  역할: 구독자 봇(SUBSCRIBER_BOT_TOKEN)의 Telegram webhook 수신부.
 //   - /start /settings /stop : 수신 설정 (인라인 키보드로 토픽·요일·수신시각 토글)
 //   - /law "OO법 N조" : 조문 원문 즉답 (LLM 없음, 비용 0)
-//   - /ask <질문> (또는 평문 질문) : AI 자문 — ai_allowed 승인자만, 일일 상한, 건당 API 과금
+//   - /ask <질문> : AI 자문 — 승인자는 일일 상한, 승인 안 된 사람은 무료 3회(#259), 건당 API 과금
+//     (명령어 없는 평문은 자문으로 보내지 않고 명령어 안내를 돌려준다 — #259)
 //   - /admin : 운영자 전용 (승인자 관리)
 //
 //  보안: verify_jwt OFF 대신 X-Telegram-Bot-Api-Secret-Token == TELEGRAM_WEBHOOK_SECRET 검증.
-//  푸시/풀 독립 원칙: 토픽 토글은 푸시 발송만 제어. /law는 누구나, /ask는 ai_allowed만
+//  푸시/풀 독립 원칙: 토픽 토글은 푸시 발송만 제어. /law·/ask는 누구나(승인 안 된 사람은 무료 3회씩)
 //  — 토픽을 전부 꺼도 질의 기능은 동작한다("뉴스는 안 받고 자문만" 케이스).
 //
 //  발송 시점: 브리핑·긴급·법안 모두 구독자가 고른 시각(briefing_hour)에 send-subscriber-briefing이
@@ -35,6 +36,18 @@ const BOT_TOKEN = env('SUBSCRIBER_BOT_TOKEN');
 const WEBHOOK_SECRET = env('TELEGRAM_WEBHOOK_SECRET');
 const OPERATOR_CHAT_ID = Number(env('OPERATOR_CHAT_ID') || '0');
 const AI_DAILY_LIMIT = 20;   // 승인자 1인당 자문 일일 상한 (과금 폭주 방지)
+// 무료 이용(#259, 2026-09-29 운영자 결정, Fable 재검토 대상) — 승인 안 된 사람도 자연어 /law·/ask를 **명령마다 통틀어** 3회
+// (하루가 아니라 합계) 쓴다. 넘으면 「추가 한도는 관리자에게 문의」 + 운영자에게 ✅ 승인 버튼(사람·명령마다 하루 한 번),
+// 승인되면 종전 승인자 한도(/ask 하루 20회, /law 하루 10회). 한 사람 한도와 별개로, 승인 안 된 사람 **모두를 합친** 무료 사용은 하루 50회(/law·/ask 합계) —
+// 승인제가 하던 '공개 봇 비용 방어'를 대신한다. 조문 번호 조회·/assem은 세지 않는다(AI 비용 없음).
+// 셈은 telegram_usage의 result_note 표시 줄로 한다(새 칸 없음, 색인 chat_id·created_at). 안내 문구(/start)에는 승인·횟수를
+// 적지 않는다 — 한도를 넘었을 때만 알린다(운영자 결정).
+const TRIAL_PER_COMMAND = 3;
+const TRIAL_DAILY_TOTAL = 50;
+const TRIAL_NOTE = '무료';               // 무료 이용 1회(셈 대상)
+const TRIAL_FAIL_NOTE = '무료-실패';     // 실패해 돌려준 무료 이용(셈 제외)
+const TRIAL_OUT_NOTE = '무료소진';       // 3회를 넘겨 막힌 시도
+const TRIAL_CAP_NOTE = '무료전체한도';   // 하루 전체 상한에 막힌 시도
 
 const sb: SupabaseClient = createClient(
   Deno.env.get('SUPABASE_URL')!,
@@ -233,16 +246,20 @@ const START_TEXT =
   '📡 <b>받을 뉴스</b> — 주요 뉴스 아래 버튼에서 <b>중요만</b>(기본) 또는 <b>중요+보통</b>을 고르세요. ' +
   '보통 뉴스는 받는 시간대 안에서 한 시간치를 묶어 매시 한 통으로 보내 드립니다.\n' +
   '아래 버튼으로 콘텐츠·요일·수신 시각을 바로 바꿀 수 있어요. (언제든 /settings)\n' +
-  '항목을 모두 끄면 알림이 오지 않습니다.\n\n' +
+  '항목을 모두 끄면 알림이 오지 않습니다.\n\n';
+
+// 명령어 안내 — /start 끝과, 명령어 없이 보낸 평문의 답(#259)에 같이 쓴다.
+const COMMANDS_HELP =
   // 순서 = 실사용 순(60일: assem 45 · law 30+6 · ask 13, 2026-09-14 실측).
   // 승인 없이 바로 쓰는 /assem 을 먼저 보여 준다 — 첫 화면에서 바로 해 볼 수 있는 것이 위에 와야 한다.
   // 예시에 의원 실명을 쓰지 않는다(2026-09-13, #158) — 사내 공유 대상이 넓어졌고, 이름을 넣으면 그 사람 발언만
   // 걸러져 결과가 1~3건으로 줄어 기능이 약해 보인다(실측: 주제어 71~183건 vs 이름+주제어 1~3건).
   '🏛 <b>국회 발언 검색</b> — <code>/assem 2023년 공공와이파이 관련 발언 찾아줘</code>\n' +
   '   <i>과방위 상임위·국정감사 회의록 원문에서 찾습니다(20대 국회~현재).</i>\n' +
-  '📖 <b>법령 검색</b> — <code>/law 3G 종료 관련 법령</code> (궁금한 주제 → 관련 법령·조항과 이유. <b>운영자 최초 1회 승인 필요</b>)\n' +
-  '   <i>조문 번호를 알면 승인 없이 바로 — <code>/law 전기통신사업법 19조</code></i>\n' +
-  '🤖 <b>AI 자문</b> — <code>/ask 질문</code> (동향·시사점까지 종합, 운영자 최초 1회 승인 필요)\n' +
+  // 승인·횟수 안내는 적지 않는다(#259) — 무료 3회를 넘겼을 때만 그 자리에서 알린다.
+  '📖 <b>법령 검색</b> — <code>/law 3G 종료 관련 법령</code> (궁금한 주제 → 관련 법령·조항과 이유)\n' +
+  '   <i>조문 번호를 알면 원문이 바로 — <code>/law 전기통신사업법 19조</code></i>\n' +
+  '🤖 <b>AI 자문</b> — <code>/ask 질문</code> (동향·시사점까지 종합)\n' +
   // 대시보드 자문은 chatHistory를 누적해 대화가 이어지지만 봇은 질문 1건만 보낸다(rag.ts).
   // 웹을 써 본 사람일수록 "그건 언제 시행되나?" 식 후속 질문을 던지므로 가입 시점에 미리 알린다.
   // (답변 하단에도 같은 취지의 한 줄이 붙는다 — 첫 질문 전/후 양쪽에서 닿게)
@@ -533,30 +550,17 @@ async function handleLawQuery(chatId: number, q: string): Promise<Promise<void> 
   // 자연어 질의 → 법령 한정 답변 (2026-08-03 개편 — 운영자: "몇조가 뭐냐고 묻는 게 아니라
   // 궁금한 사항이 어떤 법과 관련돼 있는지 알고 싶은 게 대부분").
   // /ask와의 경계: 법령 내용만 — 뉴스·동향·시사점은 /ask 몫.
-  // 승인제 + 일일 상한 (2026-08-14): Haiku 건당 ~25원이라 인원이 늘면 비용이 선형으로 늘어난다.
-  // **신규 가입자만** 승인 대상 — 그 전 가입자는 마이그레이션에서 law_allowed=true 로 소급 허용했다.
+  // 승인자 + 일일 상한 (2026-08-14): Haiku 건당 ~25원이라 인원이 늘면 비용이 선형으로 늘어난다.
+  // 그 전 가입자는 마이그레이션에서 law_allowed=true 로 소급 허용했다. 승인 안 된 사람은 무료 3회(#259, trialGate).
   // 조문번호 직답(위 ARTICLE_RE 분기)은 DB 조회뿐이라 이 게이트를 타지 않는다.
   const sub = await getSub(chatId);
   // fail-closed. `sub && !sub.law_allowed`로 두면 **구독 행이 없는 계정**(=/start를 거치지 않고 곧장
   // /law를 보낸 경우)이 게이트·일일 한도·사용 로깅을 전부 우회한다. /ask와 같은 `!sub?.x` 형태로 맞춘다.
+  let trialId: number | null = null;
   if (!sub?.law_allowed) {
-    await sendTelegramHtml(BOT_TOKEN, chatId,
-      '🔒 법령 검색은 운영자 승인이 필요합니다(최초 1회만).\n승인 요청을 보냈습니다 — 승인되면 다시 질문해 주세요.\n' +
-      '<i>조문 번호를 아는 경우엔 승인 없이도 쓸 수 있습니다 — 예: <code>/law 전기통신사업법 19조</code></i>');
-    await logUsage(chatId, 'law', query, false, '승인대기');
-    if (OPERATOR_CHAT_ID) {
-      await tg('sendMessage', {
-        chat_id: OPERATOR_CHAT_ID, parse_mode: 'HTML',
-        text: `📖 <b>법령 검색 권한 요청</b>\n${escapeHtml(sub?.first_name || '')} (@${escapeHtml(sub?.username || '없음')}, <code>${chatId}</code>)\n첫 질문: ${escapeHtml(query.slice(0, 200))}`,
-        reply_markup: { inline_keyboard: [[
-          { text: '✅ 승인', callback_data: `law:ok:${chatId}` },
-          { text: '❌ 거부', callback_data: `law:no:${chatId}` },
-        ]] },
-      });
-    }
-    return;
-  }
-  if (sub) {
+    trialId = await trialGate(chatId, 'law', query, { first_name: sub?.first_name, username: sub?.username });
+    if (!trialId) return;   // 막힘 — 안내·운영자 버튼은 trialGate가 보냈다
+  } else if (sub) {
     const today = todayKst();
     const used = sub.law_count_date === today ? (sub.law_count || 0) : 0;
     if (!sub.unlimited && used >= LAW_DAILY_LIMIT) {   // unlimited 면제(#86)
@@ -576,6 +580,7 @@ async function handleLawQuery(chatId: number, q: string): Promise<Promise<void> 
     try {
       const result = await answerLawQuery(sb, query);
       if (!result) {
+        await refundTrial(trialId);   // 답을 못 줬으면 무료 횟수를 돌려준다
         await sendTelegramHtml(BOT_TOKEN, chatId,
           `🔎 "<b>${escapeHtml(query.slice(0, 60))}</b>" — 등재된 법령·고시에서 관련 조문을 찾지 못했습니다.\n` +
           '이 시스템 DB는 전파·통신 분야 법령 위주입니다.\n' +
@@ -593,6 +598,7 @@ async function handleLawQuery(chatId: number, q: string): Promise<Promise<void> 
       await sendAnswerWithFeedback(chatId, html, logId);
     } catch (e) {
       console.error('[법령 검색 실패]', e);
+      await refundTrial(trialId);
       await sendTelegramHtml(BOT_TOKEN, chatId, '⚠️ 법령 검색 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.');
     } finally {
       clearInterval(typingTimer);
@@ -689,39 +695,111 @@ async function handleArticleLookup(chatId: number, ref: ArticleRef): Promise<boo
   return true;
 }
 
-// ── AI 자문 (승인제 + 일일 상한 + 백그라운드 실행) ──
+// ── AI 자문 (승인자 일일 상한 / 무료 3회 + 백그라운드 실행) ──
 function todayKst(): string {
   return new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10);
+}
+
+/** telegram_usage에서 조건에 맞는 줄 수. 조회 실패는 null(부르는 쪽이 막는다). */
+async function usageCount(
+  filter: { chatId?: number; commands: string[]; note: string; sinceIso?: string },
+): Promise<number | null> {
+  let qb = sb.from('telegram_usage').select('id', { count: 'exact', head: true })
+    .in('command', filter.commands).eq('result_note', filter.note);
+  if (filter.chatId !== undefined) qb = qb.eq('chat_id', filter.chatId);
+  if (filter.sinceIso) qb = qb.gte('created_at', filter.sinceIso);
+  const { count, error } = await qb;
+  if (error) { console.error('[무료 이용 셈 실패]', error); return null; }
+  return count ?? 0;
+}
+
+/**
+ * 승인 안 된 사람의 무료 이용 문(#259). 한 사람이 명령(law/ask)마다 따로 TRIAL_PER_COMMAND회.
+ * 통과하면 이번 이용을 '무료' 줄로 기록하고 그 id를 돌려준다(실패 시 refundTrial용).
+ * 막히면 안내(한도를 넘었을 때만 나가는 유일한 안내)와 운영자 알림을 보내고 null.
+ * 셈 조회가 실패하면 막는다(fail-closed — 공개 봇의 비용 방어). 승인자 경로는 이 함수를 타지 않는다.
+ */
+async function trialGate(
+  chatId: number, command: 'ask' | 'law', query: string,
+  who: { first_name?: string | null; username?: string | null },
+): Promise<number | null> {
+  const label = command === 'ask' ? 'AI 자문' : '법령 검색';
+  const dayStart = todayKst() + 'T00:00:00+09:00';
+  const retry = () => sendTelegramHtml(BOT_TOKEN, chatId, '⚠️ 잠시 후 다시 시도해 주세요.');
+
+  const mine = await usageCount({ chatId, commands: [command], note: TRIAL_NOTE });
+  if (mine === null) { await retry(); return null; }
+  if (mine >= TRIAL_PER_COMMAND) {
+    await sendTelegramHtml(BOT_TOKEN, chatId, '🔒 추가 한도는 관리자에게 문의해 주세요.');
+    // 운영자 버튼은 사람·명령마다 하루 한 번 — 같은 사람이 여러 번 보내도 요청이 쌓이지 않게
+    const asked = await usageCount({ chatId, commands: [command], note: TRIAL_OUT_NOTE, sinceIso: dayStart });
+    await logUsage(chatId, command, query, false, TRIAL_OUT_NOTE);
+    if (OPERATOR_CHAT_ID && asked === 0) {
+      const cb = command === 'ask' ? 'ai' : 'law';
+      await tg('sendMessage', {
+        chat_id: OPERATOR_CHAT_ID, parse_mode: 'HTML',
+        text: `${command === 'ask' ? '👤' : '📖'} <b>${label} 추가 한도 요청</b> — 무료 ${TRIAL_PER_COMMAND}회 사용 뒤\n` +
+          `${escapeHtml(who.first_name || '')} (@${escapeHtml(who.username || '없음')}, <code>${chatId}</code>)\n` +
+          `이번 질문: ${escapeHtml(query.slice(0, 200))}`,
+        reply_markup: { inline_keyboard: [[
+          { text: '✅ 승인', callback_data: `${cb}:ok:${chatId}` },
+          { text: '❌ 거부', callback_data: `${cb}:no:${chatId}` },
+        ]] },
+      });
+    }
+    return null;
+  }
+
+  // 승인 안 된 사람 모두를 합친 하루 상한 — 봇이 널리 알려져도 하루 비용이 묶이게
+  const all = await usageCount({ commands: ['ask', 'law'], note: TRIAL_NOTE, sinceIso: dayStart });
+  if (all === null) { await retry(); return null; }
+  if (all >= TRIAL_DAILY_TOTAL) {
+    await sendTelegramHtml(BOT_TOKEN, chatId, '🔒 오늘은 이용이 많아 잠시 멈췄습니다. 내일 다시 이용해 주세요.\n추가 한도는 관리자에게 문의해 주세요.');
+    const noted = await usageCount({ commands: ['ask', 'law'], note: TRIAL_CAP_NOTE, sinceIso: dayStart });
+    await logUsage(chatId, command, query, false, TRIAL_CAP_NOTE);
+    if (OPERATOR_CHAT_ID && noted === 0) {   // 운영자 알림은 하루 한 번
+      await tg('sendMessage', {
+        chat_id: OPERATOR_CHAT_ID, parse_mode: 'HTML',
+        text: `⚠️ <b>텔레그램 무료 이용 하루 상한(${TRIAL_DAILY_TOTAL}회) 도달</b>\n오늘 남은 시간 동안 승인 안 된 사람의 /law·/ask는 멈춥니다(승인자는 그대로).`,
+      });
+    }
+    return null;
+  }
+
+  const { data, error } = await sb.from('telegram_usage')
+    .insert({ chat_id: chatId, command, ok: true, query: query.slice(0, 200) || null, result_note: TRIAL_NOTE })
+    .select('id').single();
+  if (error || !data) { console.error('[무료 이용 기록 실패]', error); await retry(); return null; }
+  return (data as { id: number }).id;
+}
+
+/** 실패해 답을 못 준 무료 이용은 셈에서 뺀다(자문 쿼터 환불과 같은 취지). */
+async function refundTrial(usageId: number | null): Promise<void> {
+  if (!usageId) return;
+  const { error } = await sb.from('telegram_usage').update({ result_note: TRIAL_FAIL_NOTE, ok: false }).eq('id', usageId);
+  if (error) console.error('[무료 이용 환불 실패]', error);
 }
 
 async function handleAsk(chatId: number, from: { username?: string; first_name?: string }, question: string): Promise<Promise<void> | void> {
   const q = question.trim();
   if (!q) { await sendTelegramHtml(BOT_TOKEN, chatId, '사용법: <code>/ask 질문 내용</code>'); return; }
   const sub = await getSub(chatId);
-  if (!sub?.ai_allowed) {
-    // 미승인 → 본인 안내 + 운영자에게 승인 버튼
-    await sendTelegramHtml(BOT_TOKEN, chatId, '🔒 AI 자문은 운영자 승인이 필요합니다(최초 1회만).\n승인 요청을 보냈습니다 — 승인되면 다시 질문해 주세요.');
-    if (OPERATOR_CHAT_ID) {
-      await tg('sendMessage', {
-        chat_id: OPERATOR_CHAT_ID, parse_mode: 'HTML',
-        text: `👤 <b>AI 자문 권한 요청</b>\n${escapeHtml(from.first_name || '')} (@${escapeHtml(from.username || '없음')}, <code>${chatId}</code>)\n첫 질문: ${escapeHtml(q.slice(0, 200))}`,
-        reply_markup: { inline_keyboard: [[
-          { text: '✅ 승인', callback_data: `ai:ok:${chatId}` },
-          { text: '❌ 거부', callback_data: `ai:no:${chatId}` },
-        ]] },
-      });
-    }
-    return;
-  }
-  // 일일 상한 — unlimited=true인 구독자는 면제(#86). 카운터는 계속 올린다(사용량 관찰용).
   const today = todayKst();
-  const used = sub.ai_count_date === today ? sub.ai_count : 0;
-  if (!sub.unlimited && used >= AI_DAILY_LIMIT) {
-    await sendTelegramHtml(BOT_TOKEN, chatId, `⏳ 오늘 자문 한도(${AI_DAILY_LIMIT}회)를 모두 사용했습니다. 내일 다시 이용해 주세요.`);
-    return;
+  let trialId: number | null = null;
+  if (!sub?.ai_allowed) {
+    // 승인 안 된 사람 → 무료 3회(#259). 막히면 안내·운영자 버튼은 trialGate가 보냈다.
+    trialId = await trialGate(chatId, 'ask', q, from);
+    if (!trialId) return;
+  } else {
+    // 일일 상한 — unlimited=true인 구독자는 면제(#86). 카운터는 계속 올린다(사용량 관찰용).
+    const used = sub.ai_count_date === today ? sub.ai_count : 0;
+    if (!sub.unlimited && used >= AI_DAILY_LIMIT) {
+      await sendTelegramHtml(BOT_TOKEN, chatId, `⏳ 오늘 자문 한도(${AI_DAILY_LIMIT}회)를 모두 사용했습니다. 내일 다시 이용해 주세요.`);
+      return;
+    }
+    await upsertSub(chatId, { ai_count_date: today, ai_count: used + 1 });
+    await logUsage(chatId, 'ask', q);
   }
-  await upsertSub(chatId, { ai_count_date: today, ai_count: used + 1 });
-  await logUsage(chatId, 'ask', q);
   await sendTelegramHtml(BOT_TOKEN, chatId, '🤔 법령·자료를 검토하고 있습니다... (1~2분 소요)');
 
   // webhook 200을 먼저 돌려보내고 백그라운드에서 RAG+Sonnet 실행 (텔레그램 재시도 방지)
@@ -773,9 +851,13 @@ async function handleAsk(chatId: number, from: { username?: string; first_name?:
       // 쿼터 환불 — 선차감은 유지하되(동시성 안전) 실패 경로에서 -1 복원.
       // 실측(8/1): 5차감/2성공 — 환불이 없으면 실패가 일일 상한 20회를 갉아먹는다.
       try {
-        const cur = await getSub(chatId);
-        if (cur && cur.ai_count_date === today && cur.ai_count > 0) {
-          await upsertSub(chatId, { ai_count: cur.ai_count - 1 });
+        if (trialId) {
+          await refundTrial(trialId);   // 무료 이용은 그 줄만 셈에서 뺀다(ai_count는 올리지 않았다)
+        } else {
+          const cur = await getSub(chatId);
+          if (cur && cur.ai_count_date === today && cur.ai_count > 0) {
+            await upsertSub(chatId, { ai_count: cur.ai_count - 1 });
+          }
         }
       } catch (re) { console.error('[쿼터 환불 실패]', re); }
       // 실패도 로그로 남겨 실패율 추적 가능하게 (성공과 같은 category='텔레그램', answer에 실패 표식)
@@ -790,7 +872,7 @@ async function handleAsk(chatId: number, from: { username?: string; first_name?:
           });
         } catch (le) { console.error('[실패 로그 기록 실패]', le); }
       }
-      await sendTelegramHtml(BOT_TOKEN, chatId, '⚠️ 자문 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.\n(이번 실패는 오늘 사용 횟수에서 차감되지 않습니다)');
+      await sendTelegramHtml(BOT_TOKEN, chatId, '⚠️ 자문 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.\n(이번 실패는 사용 횟수에서 차감되지 않습니다)');
     } finally {
       clearInterval(typingTimer);
     }
@@ -1200,7 +1282,7 @@ Deno.serve(async (req: Request) => {
       await upsertSub(chatId, { username: from.username || null, first_name: from.first_name || null, active: true, ...revive });
       await logUsage(chatId, 'start', from.username || from.first_name || '');
       const sub = (await getSub(chatId))!;
-      await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: START_TEXT + await basisLine(sub), disable_web_page_preview: true, reply_markup: settingsKeyboard(sub) });
+      await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: START_TEXT + COMMANDS_HELP + await basisLine(sub), disable_web_page_preview: true, reply_markup: settingsKeyboard(sub) });
     } else if (text === '/settings' || text === '/설정') {
       let sub = await getSub(chatId);
       if (!sub) { await upsertSub(chatId, { username: from.username || null, first_name: from.first_name || null }); sub = (await getSub(chatId))!; }
@@ -1226,10 +1308,13 @@ Deno.serve(async (req: Request) => {
       const bg = await handleAsk(chatId, from, text.replace(/^\/ask\s*/, ''));
       if (bg) (globalThis as { EdgeRuntime?: { waitUntil: (p: Promise<void>) => void } }).EdgeRuntime?.waitUntil(bg);
     } else if (!text.startsWith('/')) {
-      const bg = await handleAsk(chatId, from, text);   // 평문 질문 → 자문 경로 (승인 게이트가 비용 방어)
-      if (bg) (globalThis as { EdgeRuntime?: { waitUntil: (p: Promise<void>) => void } }).EdgeRuntime?.waitUntil(bg);
+      // 명령어 없는 평문은 자문으로 보내지 않는다 — 승인자도 실수로 보낼 수 있고, 인사·잡담이 Sonnet 자문(건당 ≈280원)이나
+      // 무료 3회를 써 버린다(#259, 운영자 결정). 전체 명령어를 보여 준다. (위 두 갈래 — 슬래시 없는 'assem …'과
+      // 「전기통신사업법 19조」 같은 조문 번호 — 는 AI를 안 쓰는 조회라 그대로 받는다.)
+      await sendTelegramHtml(BOT_TOKEN, chatId,
+        '💬 질문은 아래 명령어를 앞에 붙여 보내 주세요.\n\n' + COMMANDS_HELP + '\n\n⚙️ <b>수신 설정</b> — /settings');
     } else {
-      await sendTelegramHtml(BOT_TOKEN, chatId, '알 수 없는 명령입니다.\n/settings 설정 · /law 법령검색 · /ask AI자문 · assem 국회 발언검색');
+      await sendTelegramHtml(BOT_TOKEN, chatId, '알 수 없는 명령입니다.\n\n' + COMMANDS_HELP + '\n\n⚙️ <b>수신 설정</b> — /settings');
     }
   } catch (e) {
     // 어떤 오류도 200으로 마감 — 비200이면 텔레그램이 같은 업데이트를 재전송해 무한 반복된다
