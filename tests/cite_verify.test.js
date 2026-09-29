@@ -486,6 +486,44 @@ function ok(name, cond, extra) {
     chunks: sp18, callHaiku: async function (s, u) { judged18 = u; return '[{"id":1,"verdict":"불일치","reason":"6개월 전"}]'; } });
   eq('표 이름 칸만 원문 제목과 같으면 판정기로(거짓 초록 방지)', [v18.verdicts[0].status, v18.verdicts[0].verbatim, /1년 전까지만/.test(judged18 || '')], ['mismatch', false, true]);
 
+  // ── 2026-09-29 37d2d5c3: 번호 없는 별표 꼬리표 「집적정보 통신시설 보호지침 별표(제8조관련)」 ──
+  // 종전: 숫자 없는 별표를 못 읽어 제목 괄호의 제8조가 대상 + 법령 이름 못 읽음 → 앞 꼬리표의 등급기준 고시 제8조 '원문 없음'
+  var gradeDoc = '주요통신사업자의 통신시설 등급 지정 및 관리 기준(과학기술정보통신부고시)(제2026-12호)(20260310)';
+  var idcDoc = '집적정보 통신시설 보호지침(과학기술정보통신부고시)(제2024-19호)(20240601)';
+  var g10 = { id: 'g10', doc_name: gradeDoc, article_no: '10조(통신재난 대응 인력 운용)', chunk_index: 20,
+    content: '제10조(통신재난 대응 인력 운용) ② 사업자는 중요통신시설마다 재난대응담당자(정ㆍ부) 2인을 지정하고 역할 및 임무를 부여하여야 하며, 사업자에 소속된 근로자로 통신재난 대응 인력을 24시간 운용하여야 한다.' };
+  var idcOld = { id: 75680, doc_name: idcDoc, article_no: '별표 ?(집적정보통신시설 보호조치 세부기준(제8조관련))', chunk_index: 39,
+    content: '┃    │    │관리책임자    │? 집적정보통신시설내의 모든 보호조치를 계획, 감독, 통제하며 비상시 재난관리활동을 수행한다.' };
+  var idcNew = Object.assign({}, idcOld, { article_no: '별표(집적정보통신시설 보호조치 세부기준(제8조관련))' });
+  var ans29 = '## 2. 통신시설\n\n사업자는 중요통신시설마다 재난대응담당자(정ㆍ부) 2인을 지정하고 역할 및 임무를 부여하여야 하며, 사업자에 소속된 근로자로 통신재난 대응 인력을 24시간 운용하여야 한다.\n\n [원문 확인됨: 주요통신사업자의 통신시설 등급 지정 및 관리 기준 제10조]\n\n' +
+    'RAG에서 실제 확인되는 별표(제8조관련) 원문 일부는 다음과 같습니다.\n\n관리책임자는 집적정보통신시설내의 모든 보호조치를 계획, 감독, 통제하며 비상시 재난관리활동을 수행한다.\n\n [원문 확인됨: 집적정보 통신시설 보호지침 별표(제8조관련)]\n';
+  var c29 = CV.findCitations(ans29)[1];
+  eq('번호 없는 별표 꼬리표 → 별표 대상(제8조 아님)·법령 이름 읽음·관련 조 8조', [c29.kind, c29.annex, c29.annexRel, c29.lawInfo && c29.lawInfo.text], ['annex', '', '8조', '보호지침']);
+  [['옛 이름표 「별표 ?(…)」', idcOld], ['새 이름표 「별표(…)」', idcNew]].forEach(function (p) {
+    eq('번호 없는 별표: ' + p[0] + ' 자료에 있으면 확인됨(그 지침의 것)', [CV.checkCitation(c29, [g10, p[1]], []).status, CV.checkCitation(c29, [g10, p[1]], []).lawDoc], ['ok', '집적정보 통신시설 보호지침']);
+  });
+  eq('번호 없는 별표: 봇 별표 출처 문자열(「… 별표 ?」)로도 확인됨', CV.checkCitation(c29, [g10], ['집적정보 통신시설 보호지침 별표 ?']).status, 'ok');
+  var r29m = CV.checkCitation(c29, [g10], ['주요통신사업자의 통신시설 등급 지정 및 관리 기준 별표 1']);
+  eq('번호 없는 별표: 다른 고시의 별표만 있으면 원문 없음(이름은 보호지침, 번호 칸 없음)', [r29m.status, r29m.reason], ['missing', '보호지침 별표 원문 없음']);
+  var v29 = await CV.verifyCitations({ answer: ans29, chunks: [g10, idcOld], callHaiku: async function () { return '[{"id":1,"verdict":"일치","reason":"x"}]'; } });
+  var v29b = v29.verdicts.filter(function (v) { return /보호지침/.test(v.tag); })[0];
+  eq('37d2d5c3 재현: 보호지침 꼬리표 annex·별표·ok·보호지침, 초록 유지', [v29b.kind, v29b.key, v29b.status, v29b.law, /\[원문 확인됨: 집적정보 통신시설 보호지침 별표\(제8조관련\)\]/.test(v29.answer)],
+     ['annex', '별표', 'ok', '집적정보 통신시설 보호지침', true]);
+  // 모델이 번호를 빠뜨린 경우: 그 법령에 번호 있는 별표만 있으면 제목 괄호의 관련 조가 같은 별표로 맞춘다 — 관련 조가 다르면 원문 없음
+  var dec12 = { id: 'd12', doc_name: '전파법 시행령(대통령령)(제35801호)(20251001)', article_no: '별표 12(무선국 및 전파응용설비 허가 등의 신청수수료(제95조제1항 관련))', chunk_index: 323, content: '신청수수료 표' };
+  var cRel = CV.findCitations('신청수수료는 표와 같습니다 [원문 확인됨: 전파법 시행령 별표(제95조제1항 관련)]')[0];
+  eq('번호 빠진 별표 + 관련 조 같음 → 확인됨', [cRel.annex, cRel.annexRel, CV.checkCitation(cRel, [dec12], []).status], ['', '95조', 'ok']);
+  eq('번호 빠진 별표 + 관련 조 다름 → 원문 없음', CV.checkCitation(CV.findCitations('수수료 [원문 확인됨: 전파법 시행령 별표(제96조 관련)]')[0], [dec12], []).status, 'missing');
+  eq('번호 빠진 별표 + 관련 조 없음 → 원문 없음(번호 있는 별표로 넘겨짚지 않음)', CV.checkCitation(CV.findCitations('수수료 [원문 확인됨: 전파법 시행령 별표]')[0], [dec12], []).status, 'missing');
+  // 꼬리표 끝의 「별표」·쉼표 뒤 조 — 번호 없는 별표가 앞이면 별표가 대상. 인용문 본문의 「별표에 따른」은 종전대로 대상 아님
+  eq('꼬리표 끝 「… 지침 별표」 → 별표', [CV.findCitations('관리책임자 [원문 확인됨: 집적정보 통신시설 보호지침 별표]')[0].kind, CV.findCitations('관리책임자 [원문 확인됨: 집적정보 통신시설 보호지침 별표]')[0].annex], ['annex', '']);
+  eq('본문 「별표에 따른」 · 「별표 3」은 종전대로', [CV.parseSegment('보호지침 별표에 따른 세부기준 ').kind, CV.parseSegment('보호지침 별표(제8조관련) ').kind, CV.findCitations('산식 [원문 확인됨: 전파법 시행령 별표 3]')[0].annex], ['none', 'article', '3']);
+  eq('꼬리표에 조가 번호 없는 별표보다 앞이면 조가 대상', [CV.findCitations('x [원문 확인됨: 집적정보 통신시설 보호지침 제5조 및 별표]')[0].kind, CV.findCitations('x [원문 확인됨: 집적정보 통신시설 보호지침 제5조 및 별표]')[0].key], ['article', '5조']);
+
+  // 시스템 프롬프트 3-⑧(#257): 요약 문서에서만 확인한 문단의 「[요약 문서 기반 — …]」는 모델이 붙인 표시로 본다 — 기계 표시를 더 붙이지 않는다
+  var sumPara = '사업자는 중요통신시설마다 재난대응담당자(정ㆍ부) 2인을 지정하고 역할 및 임무를 부여하여야 하며, 사업자에 소속된 근로자로 통신재난 대응 인력을 24시간 운용하여야 한다. [요약 문서 기반 — 원문 확인 권장: 통신시설 등급관리 요약]';
+  eq('요약 문서 기반 표시 문단은 자동 표시 안 함', [CV.autoTagVerbatim(sumPara, [g10]).added, CV.tagUntaggedQuotes('제10조는\n\n' + sumPara).answer.indexOf(CV.QUOTE_MARK)], [0, -1]);
+
   console.log('\n' + (total - fails) + '/' + total + ' passed');
   process.exit(fails ? 1 : 0);
 })().catch(function (e) { console.error(e); process.exit(2); });

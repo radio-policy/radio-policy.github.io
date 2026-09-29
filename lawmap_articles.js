@@ -532,7 +532,10 @@ function lmaJoinChunks(acc, next) {
 // ── 별표·별지 (2026-09-06, 배경역사 #127) — 근거 조문 본문(또는 주제 설명)이 인용하는 별표를 같은 상자 안에 네모로 올린다 ──
 //  전파사용료의 가입자 수 기준은 시행령 90조①이 아니라 별표 8에 있다 — 조문만 그리면 사슬이 90조에서 끊긴다(운영자 지적).
 var LMA_ANNEX_RE = /(별표|별지)\s*(?:제\s*)?(\d+(?:\s*의\s*\d+)?)\s*(?:호)?\s*(?:서식)?/g;
-function lmaAnnexKey(kind, num) { return kind + String(num).replace(/\s/g, ''); }          // '별표8' · '별표11의2' · '별지57'
+// 번호 없는 별표(별표가 하나뿐인 고시 — 원문 「[별 표]」, 조문은 「별표와 같다」, 적재 이름표 「별표(제목)」, 옛 적재 「별표 ?(제목)」) — #257, 2026-09-29.
+// 종전엔 번호를 요구해 집적정보 통신시설 보호지침 제8조→별표 사슬이 끊겼다. 키는 '별표'(번호 칸 없음)
+var LMA_ANNEX_BARE_RE = /(?:\[\s*)?별\s*표\s*\]?(?!\s*(?:제\s*)?\d)/g;
+function lmaAnnexKey(kind, num) { return kind + String(num).replace(/\s/g, ''); }          // '별표8' · '별표11의2' · '별지57' · '별표'(번호 없음)
 function lmaAnnexLabelOf(key) { var m = /^(별표|별지)(.+)$/.exec(String(key || '')); return m ? (m[1] === '별지' ? '별지 제' + m[2] + '호' : '별표 ' + m[2]) : String(key || ''); }
 function lmaAnyLabel(key) { if (key === '전문') return '전문'; if (/^(별표|별지)/.test(key)) return lmaAnnexLabelOf(key); return lmaKeyLabel(key); }
 function lmaExtractAnnexRefs(text) {   // → [{key, kind, num, fromPara, snippet}] (표제 자신은 제외, 같은 별표·항은 1회)
@@ -543,6 +546,13 @@ function lmaExtractAnnexRefs(text) {   // → [{key, kind, num, fromPara, snippe
     if (seen[k]) continue; seen[k] = 1;
     out.push({ key: key, kind: m[1], num: m[2].replace(/\s/g, ''), fromPara: para, snippet: lmaSentenceAround(t, m.index, m.index + m[0].length) });
   }
+  var bre = new RegExp(LMA_ANNEX_BARE_RE.source, 'g');
+  while ((m = bre.exec(t)) !== null) {
+    if (m.index === 0) continue;
+    var bpara = lmaLastPara(t.slice(0, m.index)), bk = '별표|' + bpara;
+    if (seen[bk]) continue; seen[bk] = 1;
+    out.push({ key: '별표', kind: '별표', num: '', fromPara: bpara, snippet: lmaSentenceAround(t, m.index, m.index + m[0].length) });
+  }
   return out;
 }
 async function lmaFetchAnnexes(docName, keys) {   // article_no: '별표 8(전파사용료 산정기준(제90조제1항 관련))' / '별지 제57호서식(…)'
@@ -550,15 +560,17 @@ async function lmaFetchAnnexes(docName, keys) {   // article_no: '별표 8(전�
   if (!docName || !keys.length) return out;
   var ors = [];
   keys.forEach(function(k) {
+    if (k === '별표') { ors.push('article_no.ilike."별표(%"', 'article_no.eq.별표', 'article_no.ilike."별표 ?(%"'); return; }   // 번호 없는 별표(옛 이름표 포함)
     var m = /^(별표|별지)(.+)$/.exec(k); if (!m) return;
     var kind = m[1], n = m[2];
     ors.push('article_no.ilike."' + kind + ' ' + n + '(%"', 'article_no.ilike."' + kind + n + '(%"', 'article_no.eq.' + kind + ' ' + n, 'article_no.eq.' + kind + n,
              'article_no.ilike."' + kind + ' 제' + n + '호%"', 'article_no.ilike."' + kind + ' ' + n + '호%"');
   });
+  if (!ors.length) return out;
   var r = await sb.from('document_chunks').select('article_no,chunk_index,content').eq('doc_name', docName).or(ors.join(',')).order('chunk_index').limit(300);
   if (r.error) throw new Error(r.error.message);
   (r.data || []).forEach(function(c) {
-    var am = /^(별표|별지)\s*(?:제\s*)?(\d+(?:의\d+)?)/.exec(c.article_no || ''); if (!am) return;
+    var am = /^(별표|별지)\s*(?:제\s*)?(\d+(?:의\d+)?)/.exec(c.article_no || '') || /^(별표)\s*\??\s*(?=\(|$)()/.exec(c.article_no || ''); if (!am) return;
     var k = lmaAnnexKey(am[1], am[2]); if (keys.indexOf(k) < 0) return;
     if (!out[k]) out[k] = { key: k, articleNo: c.article_no, title: lmaTitleOf(c.article_no), content: '', isAnnex: true };
     out[k].content = lmaJoinChunks(out[k].content, c.content || '');

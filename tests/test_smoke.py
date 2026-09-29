@@ -757,6 +757,48 @@ class TestLawmapEdgeCheck(unittest.TestCase):
         self.assertEqual(m.judge('할당대금 기재 (서식 5의2)', '전파법 시행규칙', True, {'1조'})[1], 'annex_ref')
         self.assertEqual(m.judge('설명만 있음', '전파법', True, {'9조'})[:2], ('ERR', 'no_article'))
 
+    def test_bare_annex(self):
+        """번호 없는 별표(#257) — 대상 문서에 번호 없는 별표가 있을 때만 근거로 본다"""
+        import lawmap_edge_check as m
+        idc = '집적정보 통신시설 보호지침'
+        self.assertEqual(m.judge('IDC 보호조치 세부기준(별표)', idc, True, {'8조'}, frozenset({'별표'}))[:2], ('OK', 'annex_ref'))
+        self.assertEqual(m.judge('IDC 보호조치 세부기준(별표)', idc, True, {'8조'}, frozenset())[:2], ('ERR', 'no_article'))
+        self.assertEqual(m.judge('IDC 보호조치 세부기준(별표)', idc, True, {'8조'})[:2], ('ERR', 'no_article'))
+        self.assertEqual([bool(m.BARE_LABEL_RE.match(a)) for a in ('별표(집적정보통신시설 보호조치 세부기준(제8조관련))',
+                          '별표 ?(규제심사 절차)', '별표', '별표 8(전파사용료)', '별지 제57호서식(신청서)')], [True, True, True, False, False])
+
+
+class TestAnnexLabelAndTextFix(unittest.TestCase):
+    """번호 없는 별표 이름표·별표 본문 잃은 글자 복구(#257, 2026-09-29) — 네트워크 없음"""
+
+    def test_table_label(self):
+        import law_sync as L
+        u = {'kind': '별표', 'no': '', 'br': '', 'title': '집적정보통신시설 보호조치 세부기준(제8조관련)'}
+        self.assertEqual(L.table_label(u), '별표(집적정보통신시설 보호조치 세부기준(제8조관련))')
+        self.assertEqual(L.table_label(u, legacy=True), '별표 ?(집적정보통신시설 보호조치 세부기준(제8조관련))')
+        self.assertEqual(L.table_label({'kind': '별표', 'no': '11', 'br': '2', 'title': 'x'}), '별표 11의2(x)')
+        self.assertEqual(L.table_label({'kind': '붙임', 'no': '', 'br': '', 'title': ''}), '붙임')
+
+    def test_fix_lost_chars(self):
+        import annex_textfix as F
+        api = ('┃관리책임자    │? 집적정보통신시설내의 모든 보호조치를 계획, 감독, 통제한다.┃\n'
+               '┃항공?해상?육상용 DGPS │몇도입니까?      ┃\n'
+               '┃              │? 업무환경의 변화 등으로 인하여┃')
+        pdf = ('관리책임자     ‧ 집적정보통신시설내의 모든 보호조치를 계획, 감독, 통제한다.\n'
+               '항공‧해상‧육상용 DGPS   몇도입니까?\n'
+               '시설보호계획 업무환경의 변화 등으로 인하여')     # 마지막 줄: PDF에서 글머리가 빠지고 옆 칸 글자가 붙음
+        out, n, left, genuine = F.fix_lost_chars(api, pdf)
+        self.assertIn('│‧ 집적정보', out)
+        self.assertIn('항공‧해상‧육상용', out)
+        self.assertIn('몇도입니까?', out)                # 진짜 물음표는 그대로
+        self.assertIn('│? 업무환경', out)                 # 한쪽 문맥만으로 찾은 글자(「획」)는 받지 않는다
+        self.assertEqual((n, left, genuine), (3, 1, 1))
+        self.assertEqual(len(out), len(api))              # 한 글자 → 한 글자(조각 경계 불변)
+        self.assertEqual(F.fix_lost_chars(api, ''), (api, 0, api.count('?'), 0))
+        # PDF 글꼴이 가운뎃점을 「ž」로, 기호를 사용자 정의 영역 글자로 옮긴 것은 받지 않는다(KB 전수 미리보기 실측)
+        bad = F.fix_lost_chars('│2) 전기냉장?냉동기류 │ 사이에 “?”을 삽입', '2) 전기냉장ž냉동기류  사이에 “”을 삽입')
+        self.assertEqual((bad[0], bad[1]), ('│2) 전기냉장?냉동기류 │ 사이에 “?”을 삽입', 0))
+
 
 class TestAssemblyAlertBatch(unittest.TestCase):
     """assembly_crawler 알림 묶음(#140·#193) — 실행당 한 통, 구독자는 위원회 통과 이후만, 폐기류는 양쪽 제외, 그룹당 10건 + 외 N건"""

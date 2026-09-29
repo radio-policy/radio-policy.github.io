@@ -2710,7 +2710,7 @@ function renderMd(text) {
     .replace(/\[(원문 확인 안 됨[^\]]*)\]/g, '<span class="cite cite-miss">[$1]</span>')
     .replace(/\[(⚠️ 원문 미확인[^\]]*)\]/g, '<span class="cite cite-miss">[$1]</span>')
     .replace(/\[(⚠️ 원문과 다르게 설명됨[^\]]*)\]/g, '<span class="cite cite-bad">[$1]</span>')
-    .replace(/\[(학습 데이터 기반[^\]]*|근거 조문 미확인[^\]]*)\]/g, '<span class="cite cite-learn">[$1]</span>');
+    .replace(/\[(학습 데이터 기반[^\]]*|요약 문서 기반[^\]]*|근거 조문 미확인[^\]]*)\]/g, '<span class="cite cite-learn">[$1]</span>');   // 요약 문서 기반: 프롬프트 3-⑧(#257)
   const splitRow = r => r.trim().replace(/^\||\|$/g, '').split('|').map(c => c.trim());
 
   const lines = text.split('\n');

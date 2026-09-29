@@ -611,13 +611,27 @@
   }
 
   const ANNEX_RE = /별표\s*제?\s*(\d+(?:\s*의\s*\d+)?)|별지\s*(?:제\s*)?(\d+)\s*(?:호)?(?:\s*의\s*(\d+))?/;
+  // 번호 없는 별표 — 별표가 하나뿐인 법령·고시는 원문이 「[별 표]」이고 적재 이름표는 「별표(제목)」(옛 적재는 「별표 ?(제목)」).
+  // 꼬리표 안에서만 읽는다(인용문 본문의 「별표에 따른」 같은 말은 대상이 아니다). 뒤에 괄호·쉼표·끝이 와야 한다 — 「별표 3」·「별표에」는 아님
+  const ANNEX_BARE_RE = /(?:\[\s*)?별\s*표(?:\s*\?)?\s*\]?\s*(?=[(（,，]|$)/;
+  // 별표 공식 제목의 「(제8조관련)」「(제95조제1항 관련)」 → '8조' — 번호 없는 별표 꼬리표를 자료의 별표와 맞출 때 쓴다
+  const ANNEX_REL_RE = /제\s?(\d+)\s?조(?:\s?의\s?(\d+))?(?:\s?제\s?\d+\s?항)?(?:\s?제\s?\d+\s?호)?\s*관\s*련/;
+  function annexRelOf(s) { const m = String(s || '').match(ANNEX_REL_RE); return m ? m[1] + '조' + (m[2] ? '의' + m[2] : '') : null; }
   // 꼬리표 안(「[원문 확인됨: …]」의 …)의 대상 읽기 — 인용문 파싱(parseSegment)과 달리 별표·별지가 첫 조 언급보다 앞이면
   // 별표·별지가 대상이다. 별표 공식 제목의 괄호 「별표 12(제95조제1항 관련)」의 조 번호는 대상이 아니다(청크 article_no가
   // 이 꼴이라 모델이 제목째 옮긴다 — 종전엔 제95조로 읽혀 법령 이름까지 잃고, 별표가 자료에 있어도 '원문 없음'. 2026-09-27 사내 인계)
+  // 번호 없는 별표 「집적정보 통신시설 보호지침 별표(제8조관련)」도 같다(2026-09-29 37d2d5c3 — 종전엔 ANNEX_RE가 숫자를 요구해
+  // 제목 괄호의 제8조가 대상이 되고 법령 이름도 못 읽어 앞 꼬리표의 등급기준 고시를 이어받았다 → 자료에 있던 별표가 '원문 없음')
   function parseTagInner(inner) {
     const s = String(inner || '');
-    const am = s.match(ANNEX_RE), cm = s.match(/제\s?\d+\s?조/);
-    if (am && (!cm || am.index < cm.index)) return parseSegment(s.slice(0, am.index + am[0].length) + ' ');
+    const cm = s.match(/제\s?\d+\s?조/);
+    let am = s.match(ANNEX_RE), bare = false;
+    if (!am) { am = s.match(ANNEX_BARE_RE); bare = !!am; }
+    if (am && (!cm || am.index < cm.index)) {
+      const r = parseSegment(s.slice(0, am.index + am[0].length) + ' ', { bareAnnex: bare });
+      if (r.kind === 'annex' && !r.annex) r.annexRel = annexRelOf(s.slice(am.index));
+      return r;
+    }
     return parseSegment(s + ' ');
   }
 
@@ -625,7 +639,7 @@
   // 반환 mentions = 등장 순서의 조 언급 목록(조마다 항·호·앞 법령명). key/paras/items/lawInfo는 첫 언급(primary) —
   // 실제 대상 선택은 checkCitation이 "컨텍스트에 있고 인용문과 가장 많이 겹치는 후보"로 한다(#155-보론3: 조문을 통째로
   // 인용하면 그 안의 교차참조(제52조·제53조)가 먼저 잡혀 정작 인용 대상(앞 줄 제목의 제50조)을 놓쳤다).
-  function parseSegment(segment) {
+  function parseSegment(segment, opts) {
     const s = String(segment || '').replace(/\*\*/g, '');
     const artRe = /제\s?(\d+)\s?조(?:\s?의\s?(\d+))?/g;
     const raw = [];
@@ -633,9 +647,11 @@
     while ((a = artRe.exec(s))) raw.push({ idx: a.index, end: a.index + a[0].length, key: a[1] + '조' + (a[2] ? '의' + a[2] : '') });
     if (!raw.length) {
       // 별표·별지(서식) — 앞의 법령 이름도 읽는다(#240: 존재 확인을 그 법령의 별표로 좁힌다). 「시행령 [별표 4]」의 '['는 떼고 본다
-      const bm = s.match(ANNEX_RE);
+      // 번호 없는 별표(annex '')는 꼬리표 안(parseTagInner → opts.bareAnnex)에서만
+      const bm = s.match(ANNEX_RE) || (opts && opts.bareAnnex ? s.match(ANNEX_BARE_RE) : null);
       if (!bm) return { kind: 'none' };
       const lawInfo = lawNameBefore(s.slice(0, bm.index).replace(/[\s\[【「『<(]+$/, ' '));
+      if (bm[1] === undefined && bm[2] === undefined) return { kind: 'annex', annexType: '별표', annex: '', lawInfo: lawInfo };
       if (bm[1]) return { kind: 'annex', annexType: '별표', annex: bm[1].replace(/\s+/g, ''), lawInfo: lawInfo };
       return { kind: 'annex', annexType: '별지', annex: bm[2] + (bm[3] ? '의' + bm[3] : ''), lawInfo: lawInfo };
     }
@@ -756,12 +772,12 @@
       // 인용문(과 앞 줄)에서 마지막으로 이름이 나온 법령 — 표시 대상이 이름 없이 '제N조'·'별표 N'만 적혔을 때 이어받는다
       const segNamed = (parsed.mentions || []).filter(function (x) { return x.lawInfo && x.lawInfo.candidates && !x.lawInfo.weak; });
       const segLaw = segNamed.length ? segNamed[segNamed.length - 1].lawInfo : (parsed.kind === 'annex' && parsed.lawInfo && parsed.lawInfo.candidates ? parsed.lawInfo : null);
-      const tp = (inner && /제\s?\d+\s?조|별표\s*제?\s*\d+|별지\s*(?:제\s*)?\d+/.test(inner)) ? parseTagInner(inner) : null;
+      const tp = (inner && (/제\s?\d+\s?조|별표\s*제?\s*\d+|별지\s*(?:제\s*)?\d+/.test(inner) || ANNEX_BARE_RE.test(inner))) ? parseTagInner(inner) : null;
       if (tp && tp.kind === 'annex') {
         // 표시에 별표·별지가 적혀 있으면 그것이 대상 — 앞 문장의 조 번호(「법 제50조제1항제5호 및 시행령 [별표 4]」의 제50조)로
         // 넘어가지 않는다(#240: 「[원문 확인됨: 전기통신사업법 시행령 별표 4]」가 법 제50조와 대조돼 맞는 인용이 '원문과 다름')
         c.tagTarget = { key: null, annex: tp.annex, fromTag: true };
-        Object.assign(c, { kind: 'annex', annexType: tp.annexType, annex: tp.annex, lawInfo: tp.lawInfo, key: null, paras: [], items: [], mentions: [], candidates: null });
+        Object.assign(c, { kind: 'annex', annexType: tp.annexType, annex: tp.annex, annexRel: tp.annexRel || null, lawInfo: tp.lawInfo, key: null, paras: [], items: [], mentions: [], candidates: null });
         c.ctxLaw = segLaw || lastLaw;
       } else if (tp && tp.kind === 'article') {
         c.tagTarget = Object.assign({}, tp.mentions[0], { fromTag: true });
@@ -855,20 +871,28 @@
       // 별표·별지는 있는지만 본다(판정기에 보내지 않음). 법령 이름이 있으면 그 법령의 것만(#240 — 종전엔 아무 법령의
       // 같은 번호 별표가 있어도 확인됨이었다). 별표 출처 문자열은 「<법령> 별표 4」「<법령> 별표 4 머리」 꼴
       const label = cite.annexType || '별표';
-      const want = norm(label + cite.annex);
+      const want = norm(label + (cite.annex || ''));
+      // 옛 적재의 번호 없는 별표 이름표 「별표 ?(…)」의 '?'는 번호 자리표시 — 떼면 번호 없는 별표 「별표」(2026-09-29)
+      const keyOf = function (s) { return norm(s).replace(/머리$/, '').replace(/\?$/, ''); };
       const pool = [];
       for (const s of annexSources || []) {
         const t = String(s), i = t.search(/별표|별지/);
-        if (i >= 0) pool.push({ fam: t.slice(0, i).trim(), key: norm(t.slice(i)).replace(/머리$/, '') });
+        if (i >= 0) pool.push({ fam: t.slice(0, i).trim(), key: keyOf(t.slice(i)), rel: null });
       }
-      for (const c of chunks || []) pool.push({ fam: docFamily(c.doc_name), key: norm(String(c.article_no || '').split('(')[0]) });
+      for (const c of chunks || []) {
+        const an = String(c.article_no || '');
+        pool.push({ fam: docFamily(c.doc_name), key: keyOf(an.split('(')[0]), rel: /^(별표|별지)/.test(an) ? annexRelOf(an) : null });
+      }
       const fams = families.slice();
       for (const p of pool) if (p.fam && fams.indexOf(p.fam) === -1) fams.push(p.fam);
       const scope = lawScope(cite.lawInfo, cite.ctxLaw, fams);
-      const hit = pool.find(function (p) { return p.key === want && (!scope || scope.indexOf(p.fam) !== -1); });
+      const inScope = function (p) { return !scope || scope.indexOf(p.fam) !== -1; };
+      // 번호 없는 별표는 그 법령의 번호 없는 별표, 없으면 꼬리표의 「(제N조관련)」이 같은 그 법령의 별표(모델이 번호를 빠뜨린 경우)
+      const hit = pool.find(function (p) { return p.key === want && inScope(p); }) ||
+        (!cite.annex && cite.annexRel ? pool.find(function (p) { return p.rel === cite.annexRel && p.key.indexOf(label) === 0 && inScope(p); }) : null);
       const lawLabel = (scope && scope[0]) || (cite.lawInfo && cite.lawInfo.text) || '';
       return hit ? { status: 'ok', kind: 'annex', lawDoc: hit.fam || null }
-        : { status: 'missing', reason: (lawLabel ? lawLabel + ' ' : '') + label + ' ' + cite.annex + ' 원문 없음', lawDoc: (scope && scope[0]) || null };
+        : { status: 'missing', reason: (lawLabel ? lawLabel + ' ' : '') + label + (cite.annex ? ' ' + cite.annex : '') + ' 원문 없음', lawDoc: (scope && scope[0]) || null };
     }
     // 문서·조별 정본 텍스트 (같은 조가 현행·시행예정 두 판으로 있을 수 있어 문서별로 묶는다)
     const articleText = new Map();   // doc_name|key → merged text
@@ -1039,7 +1063,7 @@
       const p = parts[i];
       const body = p.replace(/^\s*[-*>]\s+/, '');
       if (!p.trim() || /^\s*#/.test(p) || /^\s*\|/.test(p)) continue;
-      if (/\[(원문\s*확인됨|⚠️ 원문|학습 데이터 기반|근거 조문 미확인)[^\]]*\]/.test(p)) continue;
+      if (/\[(원문\s*확인됨|⚠️ 원문|학습 데이터 기반|요약 문서 기반|근거 조문 미확인)[^\]]*\]/.test(p)) continue;   // 요약 문서 기반: 시스템 프롬프트 3-⑧(#257)
       if (normQ(body).length < 40) continue;
       let best = null, bestR = 0, secondR = 0;
       for (const [gk, t] of merged) {
@@ -1090,7 +1114,7 @@
   function tagUntaggedQuotes(answer) {
     const text = String(answer || '');
     const parts = text.split(/(\n[ \t]*\n)/);   // 문단과 구분자를 번갈아 보존
-    const hasTag = function (p) { return /\[(원문\s*확인됨|원문 없음|원문과 다름|⚠️ 원문|학습 데이터 기반|근거 조문 미확인)[^\]]*\]/.test(p); };
+    const hasTag = function (p) { return /\[(원문\s*확인됨|원문 없음|원문과 다름|⚠️ 원문|학습 데이터 기반|요약 문서 기반|근거 조문 미확인)[^\]]*\]/.test(p); };
     const skip = function (p) { return !p.trim() || /^\s*#/.test(p) || /^\s*\|/.test(p) || hasTag(p); };
     let added = 0;
     for (let i = 0; i < parts.length; i += 2) {
@@ -1212,7 +1236,7 @@
     return {
       answer: out, changed: changed, autoTagged: at.added, quoteTagged: quoteTagged, citedDocs: citedDocs,
       verdicts: kept.map(function (r) {
-        const v = { tag: String(r.tag).replace(QUOTE_MARK, ''), kind: r.kind, key: r.key || (r.annex ? (r.annexType || '별표') + ' ' + r.annex : null), law: r.lawDoc || r.lawText || null,
+        const v = { tag: String(r.tag).replace(QUOTE_MARK, ''), kind: r.kind, key: r.key || (r.kind === 'annex' ? (r.annexType || '별표') + (r.annex ? ' ' + r.annex : '') : null), law: r.lawDoc || r.lawText || null,
           paras: r.paras || [], items: r.items || [], status: r.status, reason: r.reason || null, judge: r.judge || null, doc: r.doc || null,
           verbatim: !!r.verbatim, overlap: typeof r.overlap === 'number' ? Math.round(r.overlap * 100) / 100 : null };
         if (r.auto) v.auto = 'quote';

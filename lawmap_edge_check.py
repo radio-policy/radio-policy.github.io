@@ -35,6 +35,10 @@ MISSING_TAG_RE = re.compile(r"KB\s*미(보유|등재)")
 # "제6조", "제19조의2", "제6·18조", "제67~68조", "제7·8·16조", "제18조의5~제18조의7"(뒤 항은 별도 매치)
 ART_RE = re.compile(r"제\s*(\d+(?:\s*[·ㆍ,~∼\-]\s*\d+)*)\s*조(?:\s*의\s*(\d+))?")
 ANNEX_RE = re.compile(r"(별표|별지|별첨|붙임|서식)\s*제?\s*\d+")
+# 번호 없는 별표(별표가 하나뿐인 고시 — 원문 「[별 표]」, 이름표 「별표(제목)」, 옛 적재 「별표 ?(제목)」, #257 2026-09-29).
+# 설명에 「별표」만 있으면 대상 문서에 번호 없는 그 종류 별표가 **실제로 있을 때만** 근거로 본다(없는 문서에서 통과시키지 않게)
+BARE_ANNEX_RE = re.compile(r"(별표|별지|별첨|붙임|서식)(?!\s*제?\s*\d)")
+BARE_LABEL_RE = re.compile(r"^(별표|별지|별첨|붙임|서식)\s*\??\s*(?:\(|$)")
 # 교차 인용 판별: 조문 앞 낱말이 법령명으로 끝나는가
 LAWWORD_RE = re.compile(r"([가-힣A-Za-z0-9·ㆍ]*(?:법|법률|령|영|규칙|고시|규정|기준|지침|조례|헌장|협정))\s*$")
 LAW_ONLY_SUFFIX = ("법", "법률", "령", "규칙")           # 고시·지침이 '…법 제N조'를 자기 조문으로 가질 수는 없다
@@ -117,8 +121,9 @@ def art_key(article_no: str) -> str:
     return re.sub(r"\s", "", a)
 
 
-def judge(description: str, target_name: str, doc_found: bool, doc_articles) -> tuple:
-    """(level, code, detail). doc_articles: 원문 조문 키 집합(None=문서 미보유)."""
+def judge(description: str, target_name: str, doc_found: bool, doc_articles, doc_bare_annexes=()) -> tuple:
+    """(level, code, detail). doc_articles: 원문 조문 키 집합(None=문서 미보유).
+    doc_bare_annexes: 대상 문서에 있는 번호 없는 별표 종류('별표' 등, #257)."""
     d = description or ""
     if PLACEHOLDER_RE.search(d):
         return ("ERR", "placeholder", "자리표시 설명")
@@ -135,6 +140,8 @@ def judge(description: str, target_name: str, doc_found: bool, doc_articles) -> 
             return ("OK", "tagged", "")
         if ANNEX_RE.search(d):
             return ("OK", "annex_ref", "")       # 별표·별지·서식 번호로 특정
+        if any(k in (doc_bare_annexes or ()) for k in BARE_ANNEX_RE.findall(d)):
+            return ("OK", "annex_ref", "")       # 번호 없는 별표 — 대상 문서에 그 별표가 있다(#257)
         if cross:
             return ("WARN", "cross_only", "타 법령 조문만 인용, 자기 조문 없음")
         return ("ERR", "no_article", "근거 조문 번호 없음")
@@ -199,17 +206,20 @@ def resolve_docs(target_name, target_doc, kb_docs, base_index):
 
 
 def fetch_articles(sb, doc_names):
-    """여러 판의 조문 키 합집합. 부칙·별표·별지는 '조문 체계'로 세지 않는다(부칙만 있는 공정위 예규·고시가
-    조문 있는 문서로 오판돼 no_article이 쏟아졌음)."""
-    keys = set()
+    """여러 판의 조문 키 합집합 + 번호 없는 별표 종류. 부칙·별표·별지는 '조문 체계'로 세지 않는다(부칙만 있는
+    공정위 예규·고시가 조문 있는 문서로 오판돼 no_article이 쏟아졌음) — 번호 없는 별표는 따로 모은다(#257)."""
+    keys, bare = set(), set()
     for d in doc_names:
         rows = _paged(sb.table("document_chunks").select("id,article_no").eq("doc_name", d))
         for r in rows:
             a = (r.get("article_no") or "").strip()
+            bm = BARE_LABEL_RE.match(a)
+            if bm:
+                bare.add(bm.group(1))
             if not a or a.startswith(("부칙", "별표", "별지", "별첨", "붙임")):
                 continue
             keys.add(art_key(a))
-    return keys
+    return keys, frozenset(bare)
 
 
 def run(since_hours: float, notify: bool, notify_all: bool):
@@ -225,12 +235,12 @@ def run(since_hours: float, notify: bool, notify_all: bool):
     results = []
     for e in edges:
         docs = resolve_docs(e["target"], e.get("target_doc"), kb_docs, base_index)
-        arts = None
+        arts, bare = None, ()
         if docs:
             if docs not in art_cache:
                 art_cache[docs] = fetch_articles(sb, docs)
-            arts = art_cache[docs]
-        level, code, detail = judge(e.get("description"), e["target"], bool(docs), arts)
+            arts, bare = art_cache[docs]
+        level, code, detail = judge(e.get("description"), e["target"], bool(docs), arts, bare)
         # AI 즉석 생성이 'KB 미보유' 꼬리표로 남긴 엣지는 등재 후보이거나 지어낸 문서명이다(2026-09-05 '전파사용료 징수에 관한 고시' — 법제처에 없음).
         # 생성 후 3일 안에는 WARN으로 올려 운영자가 법제처 검색으로 존재를 확인하고 등재/삭제를 결정하게 한다.
         if code == "doc_missing_tagged" and e.get("source") == "ai":

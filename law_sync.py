@@ -53,6 +53,7 @@ except Exception:
 
 import sb_client
 import kb_store   # 조각 삽입·검증 / law_watch 등록 공용 (#218)
+import annex_textfix   # 별표 본문의 잃은 글자('?')를 별표 PDF로 되찾기 (#257)
 import notify as tg_notify   # 교체 완료 통지(운영자 봇) — 전송부만 위임 (#197)
 from law_watch import (norm_name, parse_doc_name, api_target_of,
                        drf_law_search, pick_exact, row_fields,
@@ -217,7 +218,7 @@ def _addenda(body):
     return [(lbl, txt) for lbl, txt, _, _ in out[:ADDENDA_KEEP]]
 
 
-def _tables(body):
+def _tables(body, repair=True):
     """별표·별지·서식 → [(article_no, text)].
 
     법제처 API는 별표를 준다 — 법령·행정규칙 모두 응답의 '별표.별표단위'에 표 본문까지
@@ -226,6 +227,22 @@ def _tables(body):
     포기했었다. 별표가 실질인 문서(적합성평가 고시·행정처분기준 등)에서는
     이 부분이 본문보다 중요하다.
     """
+    out = []
+    for u in _table_units(body):
+        text = u['text']
+        if repair and '?' in text:
+            # 법제처 API는 옛 한글 코드(KS X 1001)에 없는 글자(표 글머리 ‧·․, 화살표 등)를 '?'로 준다 — 같은 별표의
+            # PDF에서 앞뒤 글자로 되찾는다(#257). 실패·pdftotext 없음이면 종전대로 '?'가 든 채 적재(fail-soft)
+            before = text.count('?')
+            text, n, left = annex_textfix.repair_unit_text(text, u['raw'])
+            if n or left:
+                print(f"    · {table_label(u)[:40]} 글자 복구: '?' {before} → {n}개 되찾음, {left}개 남김")
+        out.append((table_label(u), text))
+    return out
+
+
+def _table_units(body):
+    """별표단위 → [dict(kind, no, br, title, text, raw)] — 본문 10자 미만은 뺀다(종전 _tables와 같은 기준)."""
     byl = body.get('별표') or {}
     if not isinstance(byl, dict):
         return []
@@ -239,13 +256,20 @@ def _tables(body):
         text = _txt(u.get('별표내용'))
         if len(text.strip()) < 10:
             continue
-        kind = _txt(u.get('별표구분')) or '별표'
-        no = (_txt(u.get('별표번호')) or '').lstrip('0') or '?'
-        br = (_txt(u.get('별표가지번호')) or '').lstrip('0')
-        title = _txt(u.get('별표제목'))
-        label = f"{kind} {no}" + (f"의{br}" if br else "") + (f"({title})" if title else "")
-        out.append((label, text))
+        out.append({'kind': _txt(u.get('별표구분')) or '별표',
+                    'no': (_txt(u.get('별표번호')) or '').lstrip('0'),
+                    'br': (_txt(u.get('별표가지번호')) or '').lstrip('0'),
+                    'title': _txt(u.get('별표제목')), 'text': text, 'raw': u})
     return out
+
+
+def table_label(u, legacy=False):
+    """별표 이름표 — 「별표 8(제목)」「별지 57(…)」. 번호 없는 별표(별표가 하나뿐인 법령·고시, 원문 「[별 표]」)는
+    원문대로 번호 없이 「별표(제목)」(#257, 2026-09-29 운영자 결정 나). 종전엔 「별표 ?(제목)」 — 판정기·관계도 조문 보기·
+    야간 점검이 번호를 요구해 이 별표를 못 읽었다. legacy=True는 옛 이름표(tools_annex_repair가 옛 조각을 다시 만들 때만)."""
+    no = u['no'] or ('?' if legacy else '')
+    return (u['kind'] + (f" {no}" if no else "") + (f"의{u['br']}" if u['br'] and no else "")
+            + (f"({u['title']})" if u['title'] else ""))
 
 
 ADM_ART_RE = re.compile(r'^제(\d+)조(?:의(\d+))?\s*(?:\(([^)]*)\))?')

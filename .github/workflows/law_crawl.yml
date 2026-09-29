@@ -65,6 +65,12 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      # 별표 본문의 잃은 글자('?') 되찾기(#257, annex_textfix) — law_sync가 별표 PDF를 pdftotext로 읽는다.
+      # 없으면 복구 없이 종전대로 '?'가 든 채 적재된다(fail-soft). 실패해도 법령 체인은 돌아야 한다.
+      - name: Poppler(pdftotext) 설치 — 별표 글자 복구
+        continue-on-error: true
+        run: sudo apt-get install -y -qq --no-install-recommends poppler-utils
+
       - name: Run law crawler
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
