@@ -174,7 +174,7 @@ async function _refreshAuthStateOnce() {
   // '로그인한 것처럼' 보인다. 프로필 행이 확실히 없으면(조회 실패가 아니라 0행) 세션을 정리한다.
   // 조회 오류('error')는 일시적 네트워크 문제일 수 있어 로그아웃시키지 않는다.
   if (currentUser && st === 'missing') {
-    try { await sb.auth.signOut(); } catch (e) { /* 이미 만료된 세션 */ }
+    try { await sb.auth.signOut({ scope: 'local' }); } catch (e) { /* 이미 만료된 세션 */ }
     currentUser = null; currentProfile = null;
   }
   applyAuthUI();
@@ -266,7 +266,9 @@ function onAccountClick() {
 
 async function doLogout() {
   if (!sb) return;
-  try { await sb.auth.signOut(); } catch (e) { /* 세션이 이미 없을 수 있다 */ }
+  // scope 'local' — 이 브라우저 세션만 끝낸다. 기본값 'global'은 같은 계정의 모든 세션을 끊어,
+  // 여럿이 함께 쓰는 공용 계정(심사위원용)에서 한 사람의 로그아웃이 전원을 내보낸다.
+  try { await sb.auth.signOut({ scope: 'local' }); } catch (e) { /* 세션이 이미 없을 수 있다 */ }
   currentUser = null; currentProfile = null;
   applyAuthUI();
   applySettingsLock();
