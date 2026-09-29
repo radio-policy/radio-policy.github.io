@@ -148,7 +148,8 @@ class FeedbackTokens(unittest.TestCase):
 
     def test_criteria_lines_present(self):
         s = crawler._URGENCY_CRITERIA
-        for key in ('민간 기업 고객의 망 구축·5G 특화망', '자기 특화망(이음5G)용으로 전용 주파수', '해외 기관·표준화 회의 참여', '타 상임위(복지위·정무위·산자위·환노위 등) 국감'):
+        for key in ('민간 기업 고객의 망 구축·5G 특화망', '자기 특화망(이음5G)용으로 전용 주파수', '해외 기관·표준화 회의 참여', '타 상임위(복지위·정무위·산자위·환노위 등) 국감',
+                    '통신과 무관한 기관·플랫폼·기업의 유출은 규모가 수백만 계정 미만이면'):
             self.assertIn(key, s)
 
 
