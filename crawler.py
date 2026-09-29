@@ -395,9 +395,14 @@ def classify_urgency(title: str, content: str = '', summary: str = '') -> str:
         similar = _feedback_similar_block(title)
         if similar:
             sys_blocks.append({'type': 'text', 'text': similar})
+        # temperature 0(#256-보론3, 2026-09-29, 운영자 결정 '해'): 같은 글이 실행마다 다르게 판정되던 흔들림을 없앤다 — A/B 실측
+        # 같은 입력 재판정 불일치 제목만 4.8%·본문 12.4%(하나금융 보도자료 35건 중 11건만 긴급, 같은 제목 쌍이 긴급/보통). 지침
+        # do-not '온도류 금지'의 **유일한 예외**(그 규칙은 Sonnet 5가 400을 내던 데서 온 것, Haiku 4.5는 받는다). 선별·문장 판정·
+        # 사건 묶기 등 다른 콜에는 넣지 말 것. 캐시(접두 동일)·비용·속도 영향 0. 기준문을 잘못 읽는 오판은 이것으로 안 고쳐진다.
         resp = client.messages.create(
             model='claude-haiku-4-5-20251001',
             max_tokens=10,
+            temperature=0,
             system=sys_blocks,
             messages=[{'role': 'user', 'content': user_msg}],
         )

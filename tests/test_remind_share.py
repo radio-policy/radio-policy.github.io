@@ -146,6 +146,11 @@ class FeedbackTokens(unittest.TestCase):
         finally:
             crawler._feedback_rows_cache, crawler._feedback_fixed_cache = saved
 
+    def test_temperature_zero_only_in_urgency_call(self):
+        # #256-보론3: 긴급도 판정 콜 한 곳만 temperature 0 — 다른 콜엔 온도류 금지(지침 do-not)
+        self.assertIn('temperature=0', inspect.getsource(crawler.classify_urgency))
+        self.assertEqual(inspect.getsource(crawler).count('temperature='), 1, '긴급도 콜 한 곳만')
+
     def test_criteria_lines_present(self):
         s = crawler._URGENCY_CRITERIA
         for key in ('민간 기업 고객의 망 구축·5G 특화망', '자기 특화망(이음5G)용으로 전용 주파수', '해외 기관·표준화 회의 참여', '타 상임위(복지위·정무위·산자위·환노위 등) 국감',
