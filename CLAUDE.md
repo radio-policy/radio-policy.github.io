@@ -18,7 +18,7 @@ SKT Comm Center 기술정책팀's radio/telecom **policy-monitoring automation s
 
 - Dashboard: **https://radio-policy.github.io/ (GitHub Pages — canonical, all notification links point here)** · backup https://radio-policy.gitlab.io/
   - GitHub Pages gzips and serves from a Fastly edge in Incheon; GitLab Pages serves everything uncompressed. Measured 2026-09-15: `app.js` 216KB/0.19s vs 718KB/2.68s. GitLab was canonical only while the GitHub account was flagged (2026-08-01~08-25, #109); it stays deployed as the backup site. **The git topology is unchanged — GitLab is still the primary repo, GitHub the mirror, and every push goes to both.**
-  - **⚠️ 2026-09-28~ GitHub account flagged again (#254):** github.io is 404 and Actions are disabled — notification links point to **gitlab.io** for now (60d6d9c), push to the GitLab URL only (never `git push gitlab main`, whose second pushurl is GitHub), collection runs on the company PC `radio_TEMP_*` tasks. Read memory `github-suspended-20260928` and 배경역사 #254 first.
+  - **⚠️ 2026-09-28~ GitHub account flagged again (#254):** github.io is 404 and Actions are disabled — notification links point to **gitlab.io** for now (60d6d9c), push to the GitLab URL only (never `git push gitlab main`, whose second pushurl is GitHub), collection runs on **lampmanH-pc**'s 8 `radio_TEMP_*` tasks since 2026-09-29 03:15 (#254-보론3; its repo folder pulls from GitLab with a read-only token). The company PC's `radio_TEMP_*` copies are disabled standby — enable them only if lampmanH-pc stops, never both (double AI cost, duplicate alerts). Read memory `github-suspended-20260928` and 배경역사 #254 first.
 - Supabase project `zwkjedumfuhodckmtxxn` (ap-northeast-1 / Tokyo)
 
 ## Architecture (big picture)
