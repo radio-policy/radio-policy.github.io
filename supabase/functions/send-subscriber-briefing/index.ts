@@ -287,6 +287,40 @@ Deno.serve(async (req: Request) => {
     // 받는 단위: 공통 = topic 'urgent'(종전 식 그대로) / 팀·실장 = topic 'news'·'긴급'·audience 일치.
     const nowMs = Date.now();
 
+    // ── 임시 보류(#256-보론, 2026-09-29, 운영자 요청 「운영자 봇으로 먼저 보고 ~10분 뒤 일반 이용자에게」) ──
+    // app_config.subscriber_hold = {"minutes": 8, "until": "2026-09-29T17:00:00+09:00"} — until이 지나면 저절로 꺼진다(설정 삭제 불필요).
+    // 켜져 있는 동안: ① 중요 행은 created_at이 minutes 이전인 것만 평가·발송(planSubscriber holdMs) ② 발송 직전에 공통 등급을
+    // 다시 읽어 운영자가 대시보드에서 내린 기사(긴급 아님)·지운 기사는 발송분에서 뺀다(eligible엔 남겨 워터마크는 전진 → 큐에
+    // 고이지 않음). 설정·재확인 조회가 실패하면 보류·취소 없이 종전대로(fail-open — 보내는 쪽).
+    let holdMs = 0;
+    let holdNote = '';
+    const dropUrls = new Set<string>();
+    try {
+      const { data: hc } = await sb.from('app_config').select('value').eq('key', 'subscriber_hold').maybeSingle();
+      if (hc?.value) {
+        const cfg = JSON.parse(String(hc.value));
+        const until = cfg.until ? Date.parse(String(cfg.until)) : 0;
+        const mins = Number(cfg.minutes) || 0;
+        if (mins > 0 && until > nowMs) holdMs = mins * 60 * 1000;
+      }
+    } catch (e) {
+      console.error('[보류 설정 읽기 실패 — 보류 없이 진행]', e);
+    }
+    if (holdMs > 0 && !qerr) {
+      const urls = [...new Set(queue
+        .filter((r) => (r.topic === 'urgent' || (r.topic === 'news' && r.level === '긴급')) && !!r.news_url)
+        .map((r) => (r.news_url as string).trim()))];
+      const grade = new Map<string, string>();
+      let okLookup = true;
+      for (let i = 0; i < urls.length; i += 100) {
+        const { data, error } = await sb.from('news_feed').select('url, urgency').in('url', urls.slice(i, i + 100));
+        if (error) { okLookup = false; console.error('[보류 등급 재확인 실패 — 이번엔 빼지 않음]', error); break; }
+        for (const r of (data || []) as Array<{ url: string; urgency: string }>) grade.set(String(r.url).trim(), String(r.urgency));
+      }
+      if (okLookup) for (const u of urls) if (grade.get(u) !== '긴급') dropUrls.add(u);
+      holdNote = ` · 보류 ${Math.round(holdMs / 60000)}분 · 취소 ${dropUrls.size}건`;
+    }
+
     for (const s of subs) {
       // 메시지에 reply_markup을 실을 수 있게 {text, extra} 쌍으로 든다 — 주요 뉴스 마지막
       // 조각에만 '더 보기' 버튼이 붙는다(2026-08-21).
@@ -297,9 +331,10 @@ Deno.serve(async (req: Request) => {
       }
       // 1단(평가 대상 = 워터마크 전진의 근거)·2단(실제 발송분) — 법안 동향(assembly)·방미통위(kmcc)는 기사 단위
       // 개념이 없어 태그 필터를 적용하지 않는다. 보통은 「중요+보통」·주요 뉴스 켬·정기 발송일 때만 채워진다.
-      const plan = planSubscriber(queue, s, { dayStartMs, nowMs, immediate });
+      const plan = planSubscriber(queue, s, { dayStartMs, nowMs, immediate, holdMs });
       const urgentEligible = plan.urgentEligible;
-      const urgent = plan.urgent;
+      // 보류 중 취소분(운영자가 내린·지운 기사)은 발송분에서만 뺀다 — eligible은 그대로라 워터마크가 넘어간다
+      const urgent = dropUrls.size ? plan.urgent.filter((r) => !dropUrls.has((r.news_url || '').trim())) : plan.urgent;
       const assembly = plan.assemblyEligible;
       const kmcc = plan.kmccEligible;
 
@@ -387,7 +422,7 @@ Deno.serve(async (req: Request) => {
       key: 'last_subscriber_briefing_run',
       updated_at: new Date().toISOString(),
       // 큐 조회 실패는 note에 남긴다(리뷰 #252-6) — 종전엔 '큐 0'으로 정상처럼 보였다
-      note: `${date} ${hour}시 · 발송 ${sent} · 실패 ${failed} · 대상후보 ${subs.length} · 큐 ${qerr ? '조회 실패' : queue.length}`,
+      note: `${date} ${hour}시 · 발송 ${sent} · 실패 ${failed} · 대상후보 ${subs.length} · 큐 ${qerr ? '조회 실패' : queue.length}${holdNote}`,
     }, { onConflict: 'key' });
 
     return new Response(JSON.stringify({ ok: true, date, hour, sent, failed, queued: queue.length }), { headers: { 'Content-Type': 'application/json' } });

@@ -42,6 +42,7 @@ export interface PickOpts {
   dayStartMs: number;    // 오늘 00:00 KST(ms) — 첫 발송(기록 없음)의 시작점
   nowMs: number;
   immediate: boolean;    // 크롤러 즉시 호출(x-delivery: immediate) — 보통은 건드리지 않는다
+  holdMs?: number;       // 보류(#256-보론, 2026-09-29): 중요 행은 created_at ≤ now − holdMs 인 것만 평가·발송. 0/없음 = 종전 그대로
 }
 
 export interface SubPlan {
@@ -103,10 +104,14 @@ export function planSubscriber(queue: QueueRow[], s: PickSub, o: PickOpts): SubP
   };
 
   const audience = audienceKey(s);
-  const urgentEligible = audience === null
+  // 보류(#256-보론): 너무 새 행은 **eligible에서도** 뺀다 — 워터마크가 그 행을 넘지 않아 다음 호출(크롤러 즉시 호출·:25)에서
+  // 다시 평가된다. 그 사이 운영자가 대시보드에서 등급을 내리면 발송 측이 발송 직전 재확인으로 뺀다(index.ts). holdMs 0이면 항등.
+  const holdCut = o.holdMs && o.holdMs > 0 ? o.nowMs - o.holdMs : Infinity;
+  const notHeld = (r: QueueRow) => new Date(r.created_at).getTime() <= holdCut;
+  const urgentEligible = (audience === null
     ? pickEligible(s.topic_urgent, 'urgent', s.last_urgent_sent_at)
     : pickUnit(s.topic_urgent, audience, '긴급',
-        s.last_urgent_sent_at ? new Date(s.last_urgent_sent_at).getTime() : o.dayStartMs);
+        s.last_urgent_sent_at ? new Date(s.last_urgent_sent_at).getTime() : o.dayStartMs)).filter(notHeld);
 
   const isNormal = s.news_level === 'normal';
   const normalOn = isNormal && !!s.topic_urgent && !o.immediate;

@@ -338,3 +338,31 @@ Deno.test('fetchAllPages — 1,000행 페이지 끝까지, 실패하면 통째�
   const r4 = await fetchAllPages<number>(() => Promise.resolve({ data: null, error: null }));
   deepStrictEqual(r4, { rows: [], error: null });
 });
+
+// ── 보류(#256-보론, 2026-09-29): holdMs 안의 새 행은 eligible에서도 빠져 워터마크가 그 행을 넘지 않는다 ─────────
+Deno.test('holdMs — 새 행은 평가·발송에서 빠지고, 0이면 종전과 같다', () => {
+  const NOW2 = Date.parse('2026-09-29T02:30:00Z');
+  const DAY2 = Date.parse('2026-09-28T15:00:00Z');
+  const iso2 = (ms: number) => new Date(ms).toISOString();
+  const q: QueueRow[] = [
+    { id: 1, topic: 'urgent', html: 'a', created_at: iso2(NOW2 - 30 * 60 * 1000), news_url: 'u1', tags: null },
+    { id: 2, topic: 'urgent', html: 'b', created_at: iso2(NOW2 - 3 * 60 * 1000), news_url: 'u2', tags: null },
+    { id: 3, topic: 'news', html: 'c', created_at: iso2(NOW2 - 3 * 60 * 1000), news_url: 'u3', tags: null, audience: 't:2', level: '긴급' },
+    { id: 4, topic: 'news', html: 'd', created_at: iso2(NOW2 - 20 * 60 * 1000), news_url: 'u4', tags: null, audience: 't:2', level: '긴급' },
+  ];
+  const common: PickSub = { topic_urgent: true, topic_assembly: false, topic_kmcc: false, last_urgent_sent_at: null,
+    last_assembly_sent_at: null, last_kmcc_sent_at: null, tags: [] };
+  const held = planSubscriber(q, common, { dayStartMs: DAY2, nowMs: NOW2, immediate: true, holdMs: 8 * 60 * 1000 });
+  deepStrictEqual(held.urgentEligible.map((r) => r.id), [1]);
+  deepStrictEqual(held.urgent.map((r) => r.id), [1]);
+  strictEqual(watermarkPatch(held).last_urgent_sent_at, q[0].created_at);   // 새 행(2)을 넘지 않는다
+  const off = planSubscriber(q, common, { dayStartMs: DAY2, nowMs: NOW2, immediate: true, holdMs: 0 });
+  deepStrictEqual(off.urgentEligible.map((r) => r.id), [1, 2]);
+  const none = planSubscriber(q, common, { dayStartMs: DAY2, nowMs: NOW2, immediate: true });
+  deepStrictEqual(none.urgentEligible.map((r) => r.id), [1, 2]);
+  const team = planSubscriber(q, { ...common, team_id: 2 }, { dayStartMs: DAY2, nowMs: NOW2, immediate: true, holdMs: 8 * 60 * 1000 });
+  deepStrictEqual(team.urgentEligible.map((r) => r.id), [4]);
+  // 8분이 지나면 다음 호출에서 평가된다
+  const later = planSubscriber(q, common, { dayStartMs: DAY2, nowMs: NOW2 + 6 * 60 * 1000, immediate: true, holdMs: 8 * 60 * 1000 });
+  deepStrictEqual(later.urgentEligible.map((r) => r.id), [1, 2]);
+});
