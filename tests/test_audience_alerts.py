@@ -647,11 +647,28 @@ class TestCommonPathEquivalence(unittest.TestCase):
         self.assertEqual(new['grp'], ref['grp'], '사건 묶기 호출(제목 목록·횟수)')
         self.assertEqual(new['grp_kw'], ref['grp_kw'], '공통 경로 사건 묶기는 인자 없이(종전 호출 그대로 — 제한은 팀 경로만)')
         self.assertTrue(all(k == {} for k in new['grp_kw']))
+        # 리마인드 문턱(#256, 2026-09-29)의 3일 창 전체 조회(칸 title,url,urgency,created_at)는 나누기 전에 없던 조회 —
+        # 기보도(긴급) 조회는 그대로이고, 새 조회는 모양만 따로 확인한다(조건은 기보도 조회와 같고 등급 조건만 없다).
+        _SHARE_COLS = 'title,url,urgency,created_at'
         for t in ('news_feed',):
             self.assertEqual([(e['op'], e['cols'], _norm_filters(e['filters']), e['orders'], e['limit'], e['range'])
-                              for e in new['db'].calls(t)],
+                              for e in new['db'].calls(t) if e['cols'] != _SHARE_COLS],
                              [(e['op'], e['cols'], _norm_filters(e['filters']), e['orders'], e['limit'], e['range'])
                               for e in ref['db'].calls(t)], '기보도 조회 그대로')
+            share_q = [e for e in new['db'].calls(t) if e['cols'] == _SHARE_COLS]
+            prior_q = [e for e in ref['db'].calls(t)]
+            if prior_q and ('news_feed', 'select') not in set(fail):   # 기보도 조회가 된 실행이면 3일 창 전체 조회도 한 번(#256)
+                self.assertEqual(len(share_q), 1, '3일 창 전체 조회 1번')
+                self.assertEqual(share_q[0]['orders'], [('created_at', True), ('id', True)])
+                self.assertEqual(share_q[0]['range'], (0, 999))
+                self.assertEqual({k: v for k, v in _norm_filters(share_q[0]['filters']).items() if k != 'urgency'}
+                                 if isinstance(_norm_filters(share_q[0]['filters']), dict) else _norm_filters(share_q[0]['filters']),
+                                 {k: v for k, v in _norm_filters(prior_q[0]['filters']).items() if k != 'urgency'}
+                                 if isinstance(_norm_filters(prior_q[0]['filters']), dict) else
+                                 [f for f in _norm_filters(prior_q[0]['filters']) if 'urgency' not in str(f)],
+                                 '조건은 기보도 조회에서 등급만 뺀 것')
+            else:
+                self.assertEqual(share_q, [])
         self.assertEqual([e['rows'] for e in new['db'].calls('alert_suppress_log', 'insert')],
                          [e['rows'] for e in ref['db'].calls('alert_suppress_log', 'insert')], 'alert_suppress_log 행')
         rs = ref['db'].calls('alert_suppress_log', 'select')
@@ -1700,8 +1717,9 @@ class TestReviewFollowups(unittest.TestCase):
                'view': {}, 'stage': 'collect'}
         seen = {}
 
-        def fake_core(items, prior, prior_at, chain, group_fn, log=None):
+        def fake_core(items, prior, prior_at, chain, group_fn, log=None, remind_share=None):
             seen['group_fn'] = group_fn
+            seen['remind_share'] = remind_share
             return list(items), [], [], 0
         with mock.patch.object(crawler, '_aud_window', lambda c: []),                 mock.patch.object(crawler, '_audience_chain', lambda a, ch: {}),                 mock.patch.object(crawler, '_suppress_core', fake_core),                 mock.patch.object(crawler.time, 'monotonic', lambda: crawler.ALERT_AI_BUDGET_S + 1.0):
             out = io.StringIO()

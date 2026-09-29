@@ -98,6 +98,9 @@ _URGENCY_CRITERIA = """[0단계 — 영역 게이트] 먼저 이 기사가 **이
   ⚠️ 이미 끝난 과거 사고를 돌아보는 회고·통계·순위 기사도 사고 보도가 아니다 → 금주검토
 - **국정감사에 SK텔레콤이(또는 통신3사가 일괄로) 증인·참고인으로 채택·신청·소환·출석하는 보도** — 채택 단계든
   출석 당일이든 즉시대응. 타사만 소환된 국감 기사는 이 항목이 아니다(다른 항목으로 판단).
+  ⚠️ **타 상임위(복지위·정무위·산자위·환노위 등) 국감의 플랫폼·유통·제약 등 타 업종 증인 채택·신청은 통신 사안이 아니다
+     → 동향파악** — 정보보호 언저리라도 금주검토를 넘지 않는다
+     (실측: 복지위 국감의 미용의료·약배송 플랫폼 증인 신청 기사가 '국감 + 증인 신청' 모양만으로 즉시대응이 됐다)
 - **제도가 실제로 움직인 것** — 법·시행령·고시·기준의 제개정과 시행, 정부·위원회의 의결·처분·행정지도,
   국회의 법안 처리, 요금·약관 규제, 무선국·통신설비 제도 변경
   · **이용자보호 업무 평가의 결과·등급 공표**는 특정 사업자 성과 보도처럼 보여도 제도 사안이다 → 즉시대응
@@ -108,6 +111,8 @@ _URGENCY_CRITERIA = """[0단계 — 영역 게이트] 먼저 이 기사가 **이
     ▸ **판별법**: 기사의 **주장·결론이 주파수 제도**(대가 산정·할당 방식·일정·회수)**에 관한 것이면 본론**이고,
       주파수가 **다른 주장의 배경·변수로만** 쓰였으면 스친 언급이다
       (스친 언급 예: 통신사 실적·임원 인사 기사에서 "재할당을 앞두고" 정도로만 스친 경우).
+      · 기업·기관이 **자기 특화망(이음5G)용으로 전용 주파수를 할당받았다**는 언급은 그 기업의 망 구축 사안이지
+        주파수 제도 사안이 아니다 → 주파수 본론이 아니다(협력 통신사가 SK텔레콤이어도 같다 → 금주검토)
       ⚠️ **망 투자·5G SA 전환·기지국 구축은 그 자체가 팀 소관 사안이다** — 주파수 항목에 안 걸려도
       "스쳤으니 하찮다"로 읽지 말 것. **동향파악으로 내리지 않고 금주검토로 둔다.**
       (위쪽도 닫는다: 정부-통신3사 공동 사업·제도 변경 등 **다른 즉시대응 항목에 따로 걸리지 않는 한**
@@ -124,12 +129,18 @@ _URGENCY_CRITERIA = """[0단계 — 영역 게이트] 먼저 이 기사가 **이
      읽어 즉시대응이 됐고, 같은 사건이 한 시간 간격으로 두 번 발송됐다)
 - **SK텔레콤이 당사자인 부정적 사안** (과징금·제재·소송·장애·해킹·점유율 하락·불공정 논란·비판 보도)
   및 상장·투자·수주·실적 등 재무 이벤트
+  · 여기서 **수주·투자**는 정부·공공 사업 수주, M&A·상장·유상증자처럼 규제·공시가 따르는 것을 말한다.
+    **민간 기업 고객의 망 구축·5G 특화망(이음5G)·전용망·B2B 계약·업무협약은 일상적 영업 활동이다 → 금주검토**
+    (실측: 하나금융 5G 특화망 스마트오피스 구축 보도 170건 중 30건이 즉시대응이 됐다 — 제휴·구축은 재무 이벤트가 아니다)
 - **플랫폼 사업자의 개인정보 사건에 정부가 전기통신사업법·정보통신망법으로 조사·제재·법적 책임을
   검토한다고 밝힌 것** (예: 검색사업자의 디지털성범죄 피해자 정보 노출과 정부의 책임 추궁)
 - **경쟁사 사안 중 업계 공통 규제로 번질 것** — 정부의 통신사 전수조사·일괄 점검, 국회·시민단체가
   통신사 전반을 겨냥한 문제 제기, 동일 설비·기술·관행에서 비롯된 사고.
   **"우리도 같은 지적을 받을 수 있는가"로 판단한다.**
   ⚠️ 경쟁사의 개별 경영·세무·상품·실적 사안은 여기 해당하지 않는다 → 금주검토
+  ⚠️ **경쟁사의 해외 기관·표준화 회의 참여, 해외 협력·MOU, 국방·공공 사업 수주도 개별 경영 사안이다 → 금주검토**
+     — 정부가 통신 3사 공동으로 제도·의무를 만드는 경우만 즉시대응이다
+     (실측: KT의 NATO 국방통신 표준화 회의 참여 보도 77건 중 32건이 즉시대응이 됐다)
 
 금주검토:
 - 정책 논의 단계 — 토론회·연구·전문가 제언·입법예고 이전의 검토 보도
@@ -220,7 +231,15 @@ def _load_feedback_rows() -> list:
 
 
 def _fb_tokens(s: str) -> set:
-    return set(re.findall(r'[가-힣A-Za-z0-9]{2,}', (s or '').lower()))
+    """제목 → 유사 사례 겹침 비교용 낱말. 한글 낱말은 조사를 뗀다(#256, 2026-09-29 — 「국감도」·「삼성전자와」가 「국감」·「삼성전자」와
+    다른 낱말로 세어져 09-26 피드백(식품·유통 국감 → 동향파악)이 09-29 복지위 국감 기사에 붙지 않았다). 조사 규칙은
+    news_dedup의 것(억제·묶기와 같은 규칙), 뗀 뒤 2자 미만이면 원형. 고정 블록(캐시 접두)에는 영향이 없다 — 유사 블록은 캐시 밖."""
+    from news_dedup import _JOSA_RE
+    out = set()
+    for w in re.findall(r'[가-힣A-Za-z0-9]{2,}', (s or '').lower()):
+        d = _JOSA_RE.sub('', w)
+        out.add(d if len(d) >= 2 else w)
+    return out
 
 
 DISTILL_MIN_FEEDBACK = 50   # 증류 착수 최소 표본. 아래 주석 참조 — 20건에서 실패했다.
@@ -2824,6 +2843,8 @@ def tag_labels(tags) -> str:
 
 
 REMIND_AFTER_H = 24          # 사건 대표가 이 시간을 넘으면 재보도 1건을 리마인드로 통과(#181)
+REMIND_MIN_SHARE = 0.5       # 리마인드 문턱(#256) — 그 사건의 3일 창 기사 중 이 채널 등급(공통 = 긴급) 비율이 이 미만이면 보류
+REMIND_HOLD_MARK = '[리마인드보류]'   # 보류 기록의 shared_keywords 접두 — '[리마인드]'로 시작하지 않아 사슬·사내 다리가 '미발송'으로 읽는다
 ALERT_CHAIN_DAYS = 10        # 억제 사슬 조회 창(일)
 ALERT_PAGE = 1000            # PostgREST 요청당 상한 — 사슬·비교군 조회는 order + range 페이지(#66·#233)
 
@@ -2887,7 +2908,26 @@ def _chain_from_suppress_log(rows) -> dict:
     return sup_chain
 
 
-def _suppress_core(items: list, prior: list, prior_at: dict, sup_chain: dict, group_fn, log=None) -> tuple:
+def _event_share_fn(rows, is_keep):
+    """리마인드 문턱(#256)용 — (후보 제목, 걸린 기보도 제목) → (이 채널 등급인 기사 수, 그 사건 기사 수).
+    사건 = rows(3일 창 전체, 등급 무관) 중 두 제목 가운데 하나와 키워드 3개 이상을 공유하는 기사(억제·묶기와 같은 문턱,
+    국면 신호 제외 없음). 후보 자신은 알림 전에 저장되므로 창에 들어 있다. rows가 비면 (0, 0) → 문턱은 통과(fail-open)."""
+    from news_dedup import extract_keywords
+    pre = [(extract_keywords(r.get('title') or ''), bool(is_keep(r))) for r in rows or []]
+
+    def share(title_a, title_b):
+        ka, kb = extract_keywords(title_a or ''), extract_keywords(title_b or '')
+        n = tot = 0
+        for kw, keep in pre:
+            if len(kw & ka) >= 3 or len(kw & kb) >= 3:
+                tot += 1
+                n += int(keep)
+        return n, tot
+    return share
+
+
+def _suppress_core(items: list, prior: list, prior_at: dict, sup_chain: dict, group_fn, log=None,
+                   remind_share=None) -> tuple:
     """재알림 억제·묶기의 핵심(#44·#92·#170·#181) — **DB·전역을 만지지 않는다**. → (reps, sup_rows, remind_rows, merged).
       items     = 이번 후보(순서가 대표를 정한다). **제자리에서** 고친다(_remind·_related) — 받는 단위마다 따로 계산할 때는
                   부르는 쪽이 dict를 복사해 넘긴다(단위끼리 섞이면 안 된다).
@@ -2919,6 +2959,23 @@ def _suppress_core(items: list, prior: list, prior_at: dict, sup_chain: dict, gr
     def _remind_label(age_h):
         return '이어지는 사건' if age_h is None else f'{int(age_h // 24) + 1}일째'
 
+    held = [0]                       # 리마인드 보류 건수(#256)
+
+    def _remind_ok(it, matched_title):
+        """리마인드 문턱(#256): remind_share(후보 제목, 기보도 제목) → (채널 등급 기사 수, 사건 기사 수)가 REMIND_MIN_SHARE 미만이면
+        보류. remind_share가 없거나(조회 실패·시험) 사건 기사가 0이거나 계산이 죽으면 종전대로 통과(fail-open).
+        → (통과 여부, 'n/N')."""
+        if remind_share is None:
+            return True, ''
+        try:
+            n, tot = remind_share(it.get('title') or '', matched_title)
+        except Exception:
+            return True, ''
+        if not tot or n / tot >= REMIND_MIN_SHARE:
+            return True, f'{n}/{tot}'
+        held[0] += 1
+        return False, f'{n}/{tot}'
+
     passed, sup_rows, remind_rows, passed_kw = [], [], [], []
     for it in items:
         kw = extract_keywords(it.get('title') or '')
@@ -2930,6 +2987,15 @@ def _suppress_core(items: list, prior: list, prior_at: dict, sup_chain: dict, gr
         if matched:
             age_h = _rep_age_h(matched['title'])
             if age_h is None or age_h >= REMIND_AFTER_H:
+                ok, ratio = _remind_ok(it, matched['title'])
+                if not ok:                                    # 사건의 긴급 비율이 낮다 — 보류(#256), 사슬은 이어진다
+                    sup_rows.append({
+                        'article_title': it.get('title') or '',
+                        'article_url': it.get('url') or '',
+                        'matched_title': matched['title'],
+                        'shared_keywords': f'{REMIND_HOLD_MARK} {ratio}',
+                    })
+                    continue
                 it['_remind'] = _remind_label(age_h)          # 하루 1회 리마인드로 통과
                 remind_rows.append({
                     'article_title': it.get('title') or '',
@@ -2989,6 +3055,15 @@ def _suppress_core(items: list, prior: list, prior_at: dict, sup_chain: dict, gr
                             continue
                         age_h = _rep_age_h(pv['title'])
                         if age_h is None or age_h >= REMIND_AFTER_H:
+                            ok, ratio = _remind_ok(it, pv['title'])
+                            if not ok:                              # 보류(#256)
+                                sup_rows.append({
+                                    'article_title': it.get('title') or '',
+                                    'article_url': it.get('url') or '',
+                                    'matched_title': pv['title'],
+                                    'shared_keywords': f'{REMIND_HOLD_MARK} {ratio}',
+                                })
+                                continue
                             it['_remind'] = _remind_label(age_h)   # 여기서도 하루 1회는 통과
                             remind_rows.append({
                                 'article_title': it.get('title') or '',
@@ -3007,6 +3082,9 @@ def _suppress_core(items: list, prior: list, prior_at: dict, sup_chain: dict, gr
                         })
                     say(f'[긴급 억제] 의미 판정으로 실행 간 재보도 {len(drop)}건 판정(리마인드 포함)')
                     passed, passed_kw = kept, kept_kw
+
+    if held[0]:
+        say(f'[긴급 억제] 리마인드 보류 {held[0]}건 — 그 사건의 3일 창 기사 중 이 채널 등급 비율이 {REMIND_MIN_SHARE:.0%} 미만(#256)')
 
     # 같은 실행분 내 유사 기사 묶기 — 사건 첫날 첫 실행에 재보도 수십 건이
     # 한꺼번에 들어오면 한 통에 수십 줄이 되는 것을 대표 1건으로 줄인다
@@ -3102,9 +3180,21 @@ def suppress_repeat_alerts(urgent_items: list) -> list:
         except Exception as e:
             print(f'[긴급 억제] 억제 사슬 조회 실패 — 이번 실행은 리마인드 없이 종전대로: {e}')
 
+        # ── 리마인드 문턱(#256, 2026-09-29): 사건의 3일 창 기사 전체(등급 무관) 중 긴급 비율 ≥ REMIND_MIN_SHARE일 때만 통과 ──
+        # 하나금융 5G 특화망(170건 중 긴급 30)처럼 기사별 판정이 갈리는 경계 사건이 이튿날 새 기사 1건의 긴급으로 🔁[2일째]가
+        # 되던 것을 막는다. 조회가 실패하면 문턱 없이 종전대로(fail-open — 리마인드가 빠지는 쪽이 아니라 나가는 쪽).
+        remind_share = None
+        try:
+            _all = _fetch_pages(lambda: sb.table('news_feed').select('title,url,urgency,created_at')
+                                .gte('created_at', cutoff_3d).is_('origin', 'null')
+                                .order('created_at', desc=True).order('id', desc=True))
+            remind_share = _event_share_fn(_all, lambda r: r.get('urgency') == '긴급')
+        except Exception as e:
+            print(f'[긴급 억제] 3일 창 전체 조회 실패 — 이번 실행은 리마인드 문턱 없이 종전대로: {e}')
+
         reps, sup_rows, remind_rows, merged = _suppress_core(
             urgent_items, prior, prior_at, sup_chain,
-            _group_same_event_memo if ANTHROPIC_API_KEY else None, log=print)
+            _group_same_event_memo if ANTHROPIC_API_KEY else None, log=print, remind_share=remind_share)
 
         if remind_rows:
             print(f'[긴급 억제] 대표가 24시간을 넘겨 리마인드로 통과 {len(remind_rows)}건')
@@ -3785,7 +3875,10 @@ def _aud_compute(ctx: dict, aud: str, u: dict, ch: str, trip: list) -> dict:
             ctx['budget_logged'] = True
             print(f'[팀 알림] 사건 묶기 AI 예산 {ALERT_AI_BUDGET_S}초 초과 — 이번 채널의 남은 단위는 AI 없이 계산')
         group_fn = None
-    reps, sup, rem, _m = _suppress_core(items, prior, prior_at, _audience_chain(aud, ch), group_fn, log=None)
+    # 리마인드 문턱(#256) — 같은 3일 창을 그 단위의 시각(_aud_view)으로 센다. 채널 등급 = keep(긴급 채널은 긴급만).
+    remind_share = _event_share_fn(window, lambda w: _aud_view(ctx, aud, u, w) in keep)
+    reps, sup, rem, _m = _suppress_core(items, prior, prior_at, _audience_chain(aud, ch), group_fn, log=None,
+                                        remind_share=remind_share)
     return {'urls': [it['url'] for it, _, _ in trip], 'reps': reps, 'sup_rows': sup, 'remind_rows': rem}
 
 
