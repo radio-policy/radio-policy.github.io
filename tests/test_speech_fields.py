@@ -89,13 +89,19 @@ class TestClassify(unittest.TestCase):
         self.assertEqual(res[1]['kind'], 'inherit')
         self.assertEqual(res[1]['w'], {'통신·전파': 1.0})
 
-    def test_long_wordless_block_breaks_chain(self):
+    def test_long_wordless_block_inherits(self):
+        # v5(2026-10-01 운영자 결정): 150자 넘는 무낱말 위원 블록도 끊지 않고 같은 턴의 판정을 물려받는다 — 끊어서 미분류로 둔
+        # 실질 발언 약 2,800블록의 3분의 2 이상이 분야가 있는 발언이었다(배경역사 #248-보론3). 답변도 그 질문 분야를 따른다.
         long_txt = '그 문제는 통상 협상에서 다뤄야 할 사안이라고 봅니다. ' * 6        # 150자 이상, 분야 낱말 없음
+        self.assertGreater(len(long_txt), 150)
         blocks = [B('갑', '위원', '알뜰폰 도매대가 인하는 언제 합니까?'),
                   B('갑', '위원', long_txt),
                   B('을', '부총리', '그 부분은 관계부처와 협의하고 있습니다. 조만간 말씀드리겠습니다.')]
         res = sf.classify_blocks(blocks, {'default': None})
-        self.assertEqual([x['kind'] for x in res], ['direct', 'unclassified', 'unclassified'])
+        self.assertEqual([x['kind'] for x in res], ['direct', 'inherit', 'inherit'])
+        self.assertEqual(res[1]['w'], {'통신·전파': 1.0})
+        self.assertEqual(res[2]['w'], {'통신·전파': 1.0})
+        self.assertFalse(hasattr(sf, 'INHERIT_BREAK_LEN'))      # 끊기 상수를 되살리지 않는다
 
     def test_long_wordless_sandwich_inherits(self):
         long_txt = '그 부분은 관리가 전혀 안 됐다는 얘기입니다. 퇴사자 관리를 어떻게 했는지 묻고 있습니다. ' * 3
@@ -254,6 +260,38 @@ class TestDashboardSync(unittest.TestCase):
         m = re.search(r"^MEMBER_POS = \{([^}]+)\}", py, re.M)
         self.assertIsNotNone(m)
         self.assertEqual(set(re.findall(r"'([^']+)'", m.group(1))), want)
+
+    def test_witness_words_match(self):
+        # 증인류 직위 낱말도 세 곳(분야 집계·대시보드 막대·명부 직함)이 같아야 한다(2026-10-01, #248-보론3)
+        with open(os.path.join(ROOT, 'app.js'), encoding='utf-8') as fp:
+            js = fp.read()
+        m = re.search(r"var _WITNESS_POS_RE = /([^/]+)/;", js)
+        self.assertIsNotNone(m)
+        with open(os.path.join(ROOT, 'tools_people_refresh.py'), encoding='utf-8') as fp:
+            py = fp.read()
+        m2 = re.search(r"^WITNESS_TITLE_RE = re\.compile\(r'([^']+)'\)", py, re.M)
+        self.assertIsNotNone(m2)
+        self.assertEqual(m.group(1), sf.WITNESS_POS_RE.pattern)
+        self.assertEqual(m2.group(1), sf.WITNESS_POS_RE.pattern)
+
+
+class TestRosterTitle(unittest.TestCase):
+    def test_witness_title_falls_back_to_latest_official(self):
+        # 명부 직함이 증인류면 가장 최근의 증인 아닌 직위(2026-10-01 운영자 결정 3 — 김태규·김홍일이 '증인'으로 나왔다)
+        import tools_people_refresh as pr
+        pd = {'증인': '2025-05-08', '방송통신위원회부위원장': '2025-04-24', '방송통신위원장직무대행': '2024-12-27'}
+        self.assertEqual(pr.roster_title('증인', pd), '방송통신위원회부위원장')
+        self.assertEqual(pr.roster_title('증인', {'증인': '2025-10-21'}), '증인')          # 증인 아닌 직위가 없으면 그대로
+        self.assertEqual(pr.roster_title('증인(박정호)대리', {'증인(박정호)대리': '2017-07-04'}), '증인(박정호)대리')
+        self.assertEqual(pr.roster_title('참고인', {'참고인': '2025-12-31', '고려대학교정보보호대학원교수': '2025-12-02'}),
+                         '고려대학교정보보호대학원교수')
+        self.assertEqual(pr.roster_title('과학기술정보통신부장관', pd), '과학기술정보통신부장관')   # 증인류가 아니면 손대지 않는다
+
+    def test_homonym_by_position(self):
+        # 같은 이름·다른 사람을 직위로 가른다(박정호 SK텔레콤 대표 ↔ 한국인터넷진흥원장 직무대행, 2026-10-01 운영자 결정 4)
+        import assembly_minutes as am
+        self.assertEqual(am.HOMONYM_BY_POSITION.get(('박정호', '한국인터넷진흥원장직무대행')), '박정호#KISA')
+        self.assertIsNone(am.HOMONYM_BY_POSITION.get(('박정호', '증인')))
 
 
 if __name__ == '__main__':

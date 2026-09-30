@@ -11303,10 +11303,17 @@ var _WITNESS_POS_RE = /증인|참고인|진술인|공술인/;
 var _PRIVATE_POS_RE = /주식회사|㈜|\(주\)|연합회|협회|노동조합|대학교|법무법인/;
 var _PUBLIC_CORP_POS_RE = /한국수력원자력|문화방송/;
 var _STAFF_POS_RE = /전문위원|입법조사관/;
+function _isPrivatePos(pos) { pos = String(pos || ''); return _PRIVATE_POS_RE.test(pos) && !_PUBLIC_CORP_POS_RE.test(pos); }
+// 공직(정부·피감기관·후보자) 직위인가 — 과방위원·증인류·국회 직원·회사·단체 직함이 아닌 것. 증인 행을 답변 막대에 넣을지 가른다(2026-10-01).
+function _isOfficialPos(pos) {
+  pos = String(pos || '').trim();
+  if (!pos || _MEMBER_POS_SET.indexOf(pos) >= 0 || _WITNESS_POS_RE.test(pos) || _STAFF_POS_RE.test(pos)) return false;
+  return !_isPrivatePos(pos);
+}
 function _personRoleVerb(label) {
   label = String(label || '');
   if (label === '과방위원') return '위원으로 질의';
-  if (_WITNESS_POS_RE.test(label) || (_PRIVATE_POS_RE.test(label) && !_PUBLIC_CORP_POS_RE.test(label))) return '증인·참고인으로 답변';
+  if (_WITNESS_POS_RE.test(label) || _isPrivatePos(label)) return '증인·참고인으로 답변';
   // 인사청문 후보자는 아직 정부 측이 아니다 — 분야 막대 이름 '정부·후보자로 답변한 분야'와 같은 구분
   if (label.indexOf('후보자') >= 0) return '후보자로 답변';
   if (_STAFF_POS_RE.test(label)) return '전문위원으로 검토보고';     // 국회 직원(수석전문위원·전문위원)도 정부 측이 아니다
@@ -11605,11 +11612,17 @@ function renderPersonFields(p, rows) {
   var use = _personFieldRows.filter(function(r) { return !_personFieldDae || _daeOf(r.meeting_date) === _personFieldDae; });
   // 자격별로 가른다 — 위원·위원장 발언은 '위원으로 질의한 분야', 정부 측은 '정부·후보자로 답변한 분야'(받은 질의와 출석 회의로
   // 정해진다). 이름은 2026-09-27 운영자 지적으로 바꿈('발언 분야'·'답변 분야'로는 차이가 안 보였다). 민간 증인·참고인은 막대 없음(정본 §6).
+  // 청문회·현안질의에서는 현직 공직자도 '증인'으로 기록된다 — 공직(정부·후보자) 직위 기록이 따로 있는 사람만 증인 행을 답변 막대에
+  // 넣는다(2026-10-01 운영자 결정 2, 김태규 37%·조성은 51%가 빠져 있었다). 공직 기록은 대수 선택과 상관없이 전 발언에서 찾는다
+  // (김홍일: 21대 후보자 발언 ↔ 22대는 전부 증인). 회사·대학·단체 직함 행(쿠팡㈜대표이사·대학교 교수)도 민간 출석자라 막대에 넣지 않는다.
+  var official = _personFieldRows.concat(_personSpeeches || []).some(function(r) { return _isOfficialPos(r.position); });
   var groups = [['member', '위원으로 질의한 분야', []], ['gov', '정부·후보자로 답변한 분야', []]];
+  var witnessIn = 0;
   use.forEach(function(r) {
-    var pos = String(r.position || '');
+    var pos = String(r.position || '').trim();
     if (_MEMBER_POS_SET.indexOf(pos) >= 0) groups[0][2].push(r);
-    else if (!_WITNESS_POS_RE.test(pos)) groups[1][2].push(r);
+    else if (_WITNESS_POS_RE.test(pos)) { if (official) { groups[1][2].push(r); witnessIn += r.n_blocks || 0; } }
+    else if (!_isPrivatePos(pos)) groups[1][2].push(r);
   });
   var html = '';
   // 주 자격(의원 = 위원 발언, 정부·참고인 = 답변)은 적어도 그리고, **곁 자격**은 판정이 SPEECH_FIELD_MIN 이상일 때만 그린다 —
@@ -11634,6 +11647,7 @@ function renderPersonFields(p, rows) {
     var staffOnly = g[0] === 'gov' && rs.every(function(r) { return _STAFF_POS_RE.test(String(r.position || '')); });
     if (staffOnly) head = '전문위원으로 검토보고한 분야';
     var hint = (g[0] === 'gov' ? (staffOnly ? '심사한 안건에 따라 정해진다 · ' : '받은 질의와 출석 회의에 따라 정해진다 · ') : '') +
+      (g[0] === 'gov' && witnessIn ? '증인으로 출석한 발언 ' + witnessIn.toLocaleString() + '블록 포함 · ' : '') +
       '과방위 회의록 발언 블록 기준 · 낱말 규칙으로 센 근사치 · ' + escHtml(_ym(from)) + '~' + escHtml(_ym(to)) + ' · 회의 ' + Object.keys(meetings).length + '건' +
       (cfg.public === true ? '' : ' · <b style="color:#b45309">검증 중 — 관리자에게만 보임</b>');
     var out = chair + proc + unc;

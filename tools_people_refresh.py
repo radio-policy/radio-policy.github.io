@@ -56,6 +56,23 @@ TELCO_NAMES = {'황창규','구현모','김영섭','박정호','유영상','하�
 # 동명이인 오등록 방지 — 이름 명단은 증인·참고인 자격으로 나온 발언에만 적용한다.
 WITNESS_POS = ('증인','참고인','대리')
 
+# 명부 직함(position)은 최신 발언의 직위인데, 그것이 증인류면 그 사람을 알려 주지 못한다 — 청문회·현안질의에서는 현직
+# 공직자도 '증인'으로 기록돼 김태규(방통위 부위원장·직무대행)·김홍일이 명부에 '증인'으로 나왔다(명부 직함 '증인'류 45명).
+# 그럴 때는 **가장 최근의 증인 아닌 직위**를 쓴다 — 관련 발언(assembly_speeches)과 22대 분야 집계(speech_field_stats)를 함께 본다
+# (김승주 '참고인' → 분야 집계의 '고려대학교정보보호대학원교수'). 증인 아닌 직위가 하나도 없으면 종전대로 둔다.
+# 2026-10-01 운영자 결정(배경역사 #248-보론3). app.js _WITNESS_POS_RE · speech_fields.WITNESS_POS_RE 와 같은 낱말.
+WITNESS_TITLE_RE = re.compile(r'증인|참고인|진술인|공술인')
+
+
+def roster_title(latest: str, pos_dates: dict) -> str:
+    """최신 발언 직위 latest 가 증인류면 pos_dates({직위: 마지막 날짜}) 중 가장 최근의 증인 아닌 직위, 없으면 latest."""
+    if not latest or not WITNESS_TITLE_RE.search(latest):
+        return latest
+    cands = {p: d for p, d in pos_dates.items() if p and d and not WITNESS_TITLE_RE.search(p)}
+    if not cands:
+        return latest
+    return max(cands, key=lambda p: (cands[p], p))
+
 # 팀 소관(전파·통신·네트워크·이용자보호) 실무 라인은 1건이라도 등록한다(2026-09-13 운영자 결정).
 # 전파정책국장·통신정책관은 우리 팀 카운터파트라 발언이 적어도 인물 축으로 묶을 값어치가 있다.
 # 반면 원자력·기초과학 출연연 기관장(1건짜리 120명의 몸통)은 소관이 아니라 4건 문턱을 유지한다.
@@ -79,7 +96,7 @@ def main():
         print('[명부 갱신] assembly_speeches 0건 — 조회 이상으로 보고 중단(명부 무변경)')
         return
     agg = defaultdict(lambda: {'n':0,'mn':None,'mx':None,'pos':None,'poss':set(),'t20':False,'t21':False,'t22':False,
-                               'match':None,'fr':None,'to':None})
+                               'match':None,'fr':None,'to':None,'pd':{}})
     for r in sp:
         d = (r['meeting_date'] or '')
         # 동명이인은 발언 날짜로 사람을 가른다. 나머지는 종전대로 이름이 곧 키다.
@@ -87,6 +104,8 @@ def main():
         a = agg[k]; a['n'] += 1
         a['match'] = r['speaker']; a['fr'] = _fr; a['to'] = _to
         if r['position']: a['poss'].add(r['position'])
+        if r['position'] and d and d > a['pd'].get(r['position'], ''):
+            a['pd'][r['position']] = d
         if d:
             a['mn'] = d if not a['mn'] or d < a['mn'] else a['mn']
             if not a['mx'] or d > a['mx']:
@@ -94,6 +113,16 @@ def main():
             if d < '2020-05-30': a['t20'] = True
             elif d < '2024-05-30': a['t21'] = True
             else: a['t22'] = True
+    # 22대 분야 집계의 직위 — 명부 직함이 증인류일 때의 대체 후보로만 쓴다(roster_title). 조회 실패는 관련 발언만으로(fail-open).
+    st_pd = defaultdict(dict)
+    try:
+        for r in fetch_all(sb, 'speech_field_stats', 'speaker,position,meeting_date'):
+            d, p = (r['meeting_date'] or ''), (r['position'] or '').strip()
+            k, _fr, _to = split_of(r['speaker'] or '', d)
+            if k in agg and p and d and d > st_pd[k].get(p, ''):
+                st_pd[k][p] = d
+    except Exception as e:
+        print('[명부 갱신] 분야 집계 직위 조회 실패(무시) — %s' % str(e)[:80])
     _cols = ('speech_count','first_speech','last_speech','is_22','terms','position','speaker_match',
              'speech_from','speech_to','kind')
     people = fetch_all(sb, 'people', 'id,speaker_key,' + ','.join(_cols))
@@ -102,9 +131,13 @@ def main():
     for k, a in agg.items():
         if k == '미상': continue
         terms = '·'.join(t for t, f in (('20',a['t20']),('21',a['t21']),('22',a['t22'])) if f)
+        pd = dict(a['pd'])
+        for p, d in st_pd.get(k, {}).items():
+            if (a['fr'] is None or d >= a['fr']) and (a['to'] is None or d <= a['to']) and d > pd.get(p, ''):
+                pd[p] = d
         row = {'speech_count':a['n'], 'first_speech':a['mn'], 'last_speech':a['mx'],
                'is_22':a['t22'], 'terms':(terms + '대') if terms else None,
-               'position':a['pos'] or (known.get(k) or {}).get('position'),
+               'position':roster_title(a['pos'], pd) or (known.get(k) or {}).get('position'),
                'speaker_match':a['match'], 'speech_from':a['fr'], 'speech_to':a['to']}
         is_member = bool(a['poss'] & MEMBER_POS)
         # kind는 **현재 자격**(최신 발언 직함)으로 정한다. 과거 자격은 대시보드가 발언에서
@@ -114,7 +147,7 @@ def main():
         # 때문에 의원 탭에 들어가고, 반대로 의원 발언 61건인 사람이 정부 탭으로 빠져 대표발의
         # 법안 섹션이 통째로 숨는다(실측, #169-보론2). 정부·증인 자격은 지우지 않고 카드 안에서
         # 자격 구간(_personRoleSpans)으로 따로 보여 준다 — 한 사람 안에서 구분하되 합치지 않는다.
-        # position(현재 직함)은 종전대로 최신 발언 기준이다.
+        # position(현재 직함)은 종전대로 최신 발언 기준이다 — 다만 그것이 증인류면 가장 최근의 증인 아닌 직위(roster_title, 2026-10-01).
         row['kind'] = '의원' if is_member else '정부·참고인'
         if k in known:
             # 바뀐 행만 쓴다 — 매일 244행 전부 PATCH하지 않도록(날짜는 문자열 앞 10자로 비교)

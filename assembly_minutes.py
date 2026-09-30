@@ -1144,6 +1144,14 @@ _TITLE_TOKENS = sorted([
     '참고인', '증인', '진술인', '공술인', '님',
 ], key=len, reverse=True)
 
+# 같은 이름·다른 사람을 직위로 가른다(발언 행 speaker 만 — 2026-10-01 운영자 결정, 배경역사 #248-보론3).
+# 박정호 SK텔레콤 대표(증인, 2017-10~2018-10)와 박정호 한국인터넷진흥원장 직무대행(2017-10-17 국감 2건)은 날짜가 겹쳐
+# 명부의 기간 분리(tools_people_refresh.SPLIT_PEOPLE)로는 못 가른다 — 대표 카드에 KISA 발언과 그 머리글이 붙어 있었다.
+# 두 행은 DB에서 이름을 바꿨고, 이 표는 그 회의를 다시 적재해도 옛 이름으로 중복 행이 생기지 않게 한다.
+HOMONYM_BY_POSITION = {
+    ('박정호', '한국인터넷진흥원장직무대행'): '박정호#KISA',
+}
+
 
 def normalize_speaker(name: str) -> str:
     """발언자명에서 직위·존칭·괄호부가정보를 제거해 매칭 가능한 이름만 남긴다.
@@ -1348,6 +1356,7 @@ def build_speech_rows(meeting: dict, blocks: list, confirmed: list,
     for i in cap_speech_indices(confirmed, blocks, max_excerpts, keywords):
         b = blocks[i]
         speaker = normalize_speaker(b['name'])
+        speaker = HOMONYM_BY_POSITION.get((speaker, (b['pos'] or '').strip()), speaker)
         key = (speaker, i)
         if key in seen:
             continue

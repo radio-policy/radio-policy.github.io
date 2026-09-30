@@ -11,6 +11,8 @@
    채점은 모집단 가중 + 분야별 정밀도·재현율을 함께 낸다(2026-10-01 Fable 재검토, 배경역사 #248-보론2) — 층마다 같은 수를 뽑은
    표본을 그대로 합치면 수치가 부풀고, 전체 일치율은 방송·미디어가 좌우해 통신·전파↔보안·개인정보 혼동을 가린다.
    규칙을 고친 뒤에는 같은 정답으로 다시 재지 말고 --seed 를 바꿔 새 표본을 뽑는다(고칠 때 본 표본은 표본 안 수치).
+   통과 기준(2026-10-01 운영자 결정, 배경역사 #248-보론3): 09-27의 '낱말 85%·이어받기 75%' 한 쌍으로 통과를 가리지 않는다 —
+   표본 밖·모집단 가중·분야별(정밀도, 막대 비율 차이)로 보고 사람이 판단한다. 그래서 ⑤는 수치만 내고 '참고'로 찍는다.
 """
 import argparse
 import glob
@@ -267,6 +269,7 @@ def main():
                 nsmp[gi[j['key']]['stratum']] += 1
         agree = defaultdict(lambda: [0, 0])
         wagree = defaultdict(lambda: [0.0, 0.0])
+        whole = [0.0, 0.0]                          # 표본 전체(막대 밖·미분류 포함) 같은 분모 일치 — 규칙판끼리 견줄 때 쓴다
         confusion = Counter()
         table = defaultdict(Counter)                # 규칙 분야 → 판정자 분야 (가중)
         for j in g:
@@ -291,35 +294,54 @@ def main():
             agree[kk][1] += 1
             wagree[kk][0] += w * ok
             wagree[kk][1] += w
+            whole[0] += w * ok
+            whole[1] += w
             agree[it['stratum']][0] += ok
             agree[it['stratum']][1] += 1
         L += ['## ⑤ 정답 대조 (판정자 눈가림, 규칙 답은 현재 규칙으로 재계산)', '']
         for k, (a, n) in sorted(agree.items()):
             L.append('- %s: %d/%d = %.0f%%' % (k, a, n, pct(a, n)) +
                      (' · 모집단 가중 %.1f%%' % pct(*wagree[k]) if k in wagree else ''))
+        L.append('- 표본 전체(막대 밖·미분류 포함) 같은 분모 일치: 모집단 가중 %.1f%% — 규칙판끼리 견줄 때는 이 수치로 본다'
+                 '(칸별 수치는 규칙이 블록을 다른 칸으로 옮기면 분모가 바뀐다)' % pct(*whole))
         L.append('- 틀린 짝(규칙 → 판정자) 상위: ' + ', '.join('%s→%s %d' % (a, b, n) for (a, b), n in confusion.most_common(12)))
         # 분야별 정밀도·재현율(가중) — 전체 일치율은 방송·미디어(막대의 60%)가 좌우해 작은 분야의 큰 오류를 가린다
         # (v3: 전체 낱말 판정 87%인데 통신·전파 정밀도 45%, 보안·개인정보 재현율 49%).
-        L += ['', '| 규칙이 준 분야 | 정밀도(가중) | 재현율(가중) | 판정자가 가장 많이 준 다른 답 |', '|---|---|---|---|']
+        # 막대 비율 차이 = 규칙이 막대 안에 둔 블록에서 규칙의 분야 비율 ↔ 그 블록 중 판정자가 분야를 준 것의 분야 비율(가중).
+        rshare = {f: sum(table[f].values()) for f in sf.FIELDS}
+        jshare = {f: sum(table[r][f] for r in sf.FIELDS) for f in sf.FIELDS}
+        rt, jt = sum(rshare.values()), sum(jshare.values())
+        gaps = {}
+        L += ['', '| 규칙이 준 분야 | 정밀도(가중) | 재현율(가중) | 막대 비율 규칙 ↔ 판정자 (차이) | 판정자가 가장 많이 준 다른 답 |',
+              '|---|---|---|---|---|']
         for f in sf.FIELDS:
             row = table[f]
             tot = sum(row.values())
             rec = sum(table[r][f] for r in table)
             other = [(v, k) for k, v in row.items() if k != f]
-            L.append('| %s | %s | %s | %s |' % (
+            rs, js = pct(rshare[f], rt), pct(jshare[f], jt)
+            gaps[f] = rs - js
+            L.append('| %s | %s | %s | %.1f%% ↔ %.1f%% (%+.1f%%p) | %s |' % (
                 f, ('%.0f%%' % pct(row[f], tot)) if tot else '-', ('%.0f%%' % pct(row[f], rec)) if rec else '-',
+                rs, js, rs - js,
                 ('%s %.0f%%' % (max(other)[1], pct(max(other)[0], tot))) if other and tot else '-'))
         L += ['', '같은 정답으로 규칙을 고친 뒤 다시 잰 수치는 **표본 안** 수치다(v3의 87%·75%는 새 표본에서 80.5%·70.8%였다). '
               '규칙을 고쳤으면 `--seed`를 바꿔 새 표본을 뽑아 다시 판정할 것.', '']
+        # 통과 기준(2026-10-01 운영자 결정, 배경역사 #248-보론3): 09-27의 '낱말 85%·이어받기 75%' 한 쌍으로 통과·미통과를 가리지
+        # 않는다. ⓐ 표본 밖(규칙을 고칠 때 보지 않은 표본) ⓑ 모집단 가중 ⓒ 분야별 정밀도와 막대 비율 차이를 함께 보고 사람이 판단한다
+        # — 그래서 ⑤는 '참고'로만 찍는다(수치 문턱 없음).
         wd, wi = pct(*wagree['direct']), pct(*wagree['inherit'])
-        d_ok = wd >= 85 if wagree['direct'][1] else False
-        i_ok = wi >= 75 if wagree['inherit'][1] else False
-        verdict['⑤'] = (d_ok and i_ok, '낱말 %.1f%% · 이어받기 %.1f%% (모집단 가중 — 비가중 %.0f%%·%.0f%%)' % (
-            wd, wi, pct(*agree['direct']), pct(*agree['inherit'])))
+        worst = max(gaps, key=lambda f: abs(gaps[f])) if gaps else None
+        prec = {f: pct(table[f][f], sum(table[f].values())) for f in sf.FIELDS if sum(table[f].values())}
+        low = min(prec, key=prec.get) if prec else None
+        verdict['⑤'] = (None, '표본 전체 %.1f%% · 낱말 %.1f%% · 이어받기 %.1f%% (모집단 가중 — 비가중 %.0f%%·%.0f%%) · '
+                              '정밀도 최저 %s %.0f%% · 막대 비율 차이 최대 %s %+.1f%%p' % (
+            pct(*whole), wd, wi, pct(*agree['direct']), pct(*agree['inherit']),
+            low or '-', prec.get(low, 0), worst or '-', gaps.get(worst, 0)))
 
     L += ['', '## 판정 요약', '']
     for k, (ok, why) in verdict.items():
-        L.append('- %s %s — %s' % (k, '통과' if ok else '**미통과**', why))
+        L.append('- %s %s — %s' % (k, {True: '통과', False: '**미통과**', None: '참고(수치 문턱 없음 — 표본 밖·가중·분야별로 사람이 판단)'}[ok], why))
     open(args.out, 'w', encoding='utf-8').write('\n'.join(L) + '\n')
     print('\n'.join(L[-(len(verdict) + 1):]))
     print('보고서:', args.out)
