@@ -71,14 +71,13 @@ def dump(api_key, years, out_path, kw, limit=0):
                 _include, confirmed = am.select_relevant(
                     blocks, kw, None, m['title'],
                     max_judge=am.AUDIT_MAX_JUDGE_BLOCKS if is_audit else am.MAX_JUDGE_BLOCKS)
-                max_exc = am.AUDIT_MAX_EXCERPTS if is_audit else am.MAX_EXCERPTS
                 agenda = am._primary_agenda(m)
                 confer_num = (am.AUDIT_CONFER_PREFIX + str(viewer_id)) if is_audit else str(m['confer_num'])
                 src = am.VIEWER_URL % viewer_id
                 seen_meetings += 1
                 cnt = 0
                 # 선별·칩 규칙은 build_speech_rows와 같게 — 자사 언급은 상한 밖·칩 상시(#262, #120)
-                for i in am.cap_speech_indices(confirmed, blocks, max_exc, kw):
+                for i in am.cap_speech_indices(confirmed, blocks, am.MAX_SPEECH_ROWS, kw):
                     b = blocks[i]
                     if am.is_noise_speech(b['text']):      # 사회·호명 발언 제외(2026-09-01)
                         continue

@@ -625,7 +625,7 @@ def import_judged(sb, in_dir: str, year: int, limit: int, dry: bool) -> dict:
                        'is_valid_summary', 'rule_summary', 'clip_sentence',
                        'shell_section_range', 'drop_section', 'renumber_doc',
                        'speeches_exist', 'upsert_speeches', 'VIEWER_URL', 'DOC_CATEGORY',
-                       'MAX_EXCERPTS', 'AUDIT_MAX_EXCERPTS', 'SHELL_BODY_MARK'])
+                       'MAX_EXCERPTS', 'AUDIT_MAX_EXCERPTS', 'SHELL_BODY_MARK', 'MAX_SPEECH_ROWS'])
     root = Path(in_dir)
     if not root.is_dir():
         print('[오류] 입력 폴더 없음: %s' % root)
@@ -725,7 +725,7 @@ def import_judged(sb, in_dir: str, year: int, limit: int, dry: bool) -> dict:
         url = am.VIEWER_URL % viewer_id
         presum = {int(k['idx']): k['summary'].strip() for k in kept}
         rows = [] if sp_exists else am.build_speech_rows(
-            m, blocks, confirmed, keywords, url, dry=dry, max_excerpts=max_exc,
+            m, blocks, confirmed, keywords, url, dry=dry, max_excerpts=am.MAX_SPEECH_ROWS,
             presummarized=presum)
 
         if dry:

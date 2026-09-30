@@ -108,8 +108,13 @@ MINUTES_MODEL = 'claude-sonnet-5'
 MINUTES_THINKING = {'type': 'disabled'}
 
 BLOCK_TRUNC = 1500                   # 발언 블록당 발췌 상한(자)
-MAX_JUDGE_BLOCKS = 40                # 회의당 AI 판정 상한 (비용·시간 방어)
-MAX_EXCERPTS = 30                    # 회의당 수록 발췌 상한
+# 회의당 AI 판정 후보 상한 — 폭주 방어용 천장(#262, 2026-09-30 40 → 300, 운영자 결정 「소급하자」).
+# 40이면 큰 회의의 관련 발언이 판정도 받지 못하고 버려져 인물별 발언 수·주제 비율·'SK 언급 / 전체' 비율이
+# 틀어졌다(22대 165회의 중 45개가 상한에 닿음, 잘린 후보의 약 70%가 관련 발언 — 표본 실측). 실측 최대 후보 254.
+# 늘어난 비용은 후보 1개당 판정 ≈$0.004 + 채택분 요지 ≈$0.003(Sonnet 5 실측 토큰) — 평월 $1 미만, 국감 달 ≈$2.
+MAX_JUDGE_BLOCKS = 300
+MAX_EXCERPTS = 30                    # 회의당 섹션 발췌 상한(읽기용 본문·회의 요약 입력) — 발언 행에는 쓰지 않는다
+MAX_SPEECH_ROWS = 300                # 회의당 발언 행(assembly_speeches) 천장 — 판정 통과분은 사실상 전부 싣는다(#262)
 MAX_AGENDA_LINES = 15                # 개요의 안건 나열 상한
 
 # 구독자 다이제스트(텔레그램 '국회·법률 동향', 2026-09-03) 가드.
@@ -161,8 +166,8 @@ AUDIT_PDF_URL = ('https://record.assembly.go.kr/assembly/viewer/minutes/'
 AUDIT_CONFER_PREFIX = 'audit-'       # assembly_speeches.confer_num 네임스페이스(상임위 번호와 값 충돌 방지)
 AUDIT_MIN_YEAR = 2016                # 20대 개원(2016-05-30) — 소급 하한 (운영자 지시 2026-08-14)
 # 국감은 회의 1건이 2,000블록을 넘어(2019년 실측 2,146) 상임위 상한이면 앞부분만 보고 잘린다.
-AUDIT_MAX_JUDGE_BLOCKS = 80
-AUDIT_MAX_EXCERPTS = 50
+AUDIT_MAX_JUDGE_BLOCKS = 300         # #262: 80 → 300 (위 MAX_JUDGE_BLOCKS 주석)
+AUDIT_MAX_EXCERPTS = 50              # 섹션 발췌 상한(국감) — 발언 행은 MAX_SPEECH_ROWS
 
 # 주제 무관 무조건 수록 대상 (운영자 지시 2026-08-13).
 # 자사 언급은 키워드·AI 판정으로 거르지 않는다 — 판정이 '통신정책 아님'으로 봐도 우리에겐 자료다.
@@ -1278,7 +1283,7 @@ def is_noise_speech(text: str) -> bool:
 
 def build_speech_rows(meeting: dict, blocks: list, confirmed: list,
                       keywords: list, source_url: str, dry: bool = False,
-                      max_excerpts: int = MAX_EXCERPTS, presummarized: dict = None) -> list:
+                      max_excerpts: int = MAX_SPEECH_ROWS, presummarized: dict = None) -> list:
     """confirmed 발언 블록을 발언자별 assembly_speeches 행으로 구성.
     요지는 dry-run 이 아닐 때만 AI 로 생성(비용 방어).
     presummarized={블록idx: 요지} 를 주면(오프라인 파이프라인 — 세션이 작성) API를 부르지 않고
@@ -1777,7 +1782,7 @@ def run(sb, api_key: str, year: int, limit: int = 0, dry: bool = False,
         url = VIEWER_URL % viewer_id
         if dry:
             sp_rows = build_speech_rows(m, blocks, confirmed, keywords, url, dry=True,
-                                        max_excerpts=max_exc)
+                                        max_excerpts=MAX_SPEECH_ROWS)
             speakers = sorted({r['speaker'] for r in sp_rows})
             print('  [dry-run] ## %s %s | 원문=%s 블록 %d, 발췌 %d, %d자, SK텔레콤 언급=%s'
                   % (ymd6, title, src, len(blocks), len(picked), len(body), skt_flag))
@@ -1817,7 +1822,7 @@ def run(sb, api_key: str, year: int, limit: int = 0, dry: bool = False,
         sp_rows = []
         if not sp_exists:
             sp_rows = build_speech_rows(m, blocks, confirmed, keywords, url, dry=False,
-                                        max_excerpts=max_exc)
+                                        max_excerpts=MAX_SPEECH_ROWS)
             n_sp = upsert_speeches(sb, sp_rows)
             if n_sp:
                 print('  [발언 적재] %s 발언 %d건' % (ymd6, n_sp))
