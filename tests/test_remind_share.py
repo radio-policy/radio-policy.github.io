@@ -131,20 +131,46 @@ class FeedbackTokens(unittest.TestCase):
     def test_short_remainder_keeps_original(self):
         self.assertIn('나는', crawler._fb_tokens('나는'))          # '나' 1자 → 원형 유지
 
-    def test_similar_block_now_matches_gukgam_feedback(self):
+    def _similar(self, rows, title):
         saved = (crawler._feedback_rows_cache, crawler._feedback_fixed_cache)
         try:
-            crawler._feedback_rows_cache = [
-                {'title': "연휴 끝나면 식품·유통업계 ‘국감 모드’···쿠팡·홈플러스·배달앱 증인 채택", 'user_importance': '참고'},
-                {'title': '주파수 재할당 대가 산정 원칙', 'user_importance': '긴급'},
-            ]
+            crawler._feedback_rows_cache = rows
             crawler._feedback_fixed_cache = '(고정 블록 없음)'
-            block = crawler._feedback_similar_block("복지위 국감도 '플랫폼' 이슈…강남언니·구글·닥터나우 등 증인 신청")
-            self.assertIn('국감 모드', block)
-            self.assertIn('동향파악', block)
-            self.assertNotIn('주파수', block)
+            return crawler._feedback_similar_block(title)
         finally:
             crawler._feedback_rows_cache, crawler._feedback_fixed_cache = saved
+
+    def test_similar_block_attaches_near_duplicate_title(self):
+        # #264: 같은 사건의 후속 보도(제목이 거의 같음)에는 예전 수정이 따라붙는다 — 조사 떼기(#256)도 그대로 쓴다
+        rows = [{'title': "창원소방본부, 복합건축물 화재 대비 '3분기 긴급구조통제단 불시훈련'...", 'user_importance': '보통'},
+                {'title': 'SKT-하나금융-삼성전자, 청라 사옥에 \'5G 특화망\' 구축', 'user_importance': '보통'}]
+        block = self._similar(rows, '창원소방본부, 복합건축물 화재 불시훈련')
+        self.assertIn('창원소방본부', block)
+        self.assertIn('금주검토', block)
+        self.assertIn('제목이 거의 같은', block)
+        self.assertNotIn('반드시 우선 적용', block)
+        block2 = self._similar(rows, '하나금융, SKT·삼성전자와 청라 사옥 5G 특화망 구축')   # '삼성전자와' → '삼성전자'
+        self.assertIn('하나금융', block2)
+
+    def test_similar_block_ignores_common_word_overlap(self):
+        # #264 실측 오판 두 부류: 흔한 낱말 두 개(1위·석권 / KT·통신사)만 겹친 6월 사례가 「즉시대응」으로 붙었다
+        rows = [{'title': 'LG유플러스, 고객혁신 결실…이용자보호·만족도 1위 석권', 'user_importance': '긴급'},
+                {'title': "통신사 ‘이용자보호 평가’ LG유플러스 ‘최고 등급’···SKT·KT ‘우수’", 'user_importance': '긴급'},
+                {'title': '통신 네트워크에도 AI, 주파수 효율·데이터 처리량 높여', 'user_importance': '긴급'}]
+        for title in ('사이버 침해 악재 극복..SKT, 韓 3대 고객만족도 1위 석권',
+                      'KT, 국내 통신사 최초 NATO 국방통신 표준화 논의 참여',
+                      '[위클리오늘] 이동통신 소식_LG유플러스, SK텔레콤, KT(9.28)',
+                      "[AI 인프라 투자 패러다임 전환]〈상〉통신 투자, '망 구축'에서 'AI 인프라'로"):
+            self.assertEqual(self._similar(rows, title), '', title)
+
+    def test_similar_block_needs_three_words_and_half_of_shorter_title(self):
+        rows = [{'title': "연휴 끝나면 식품·유통업계 ‘국감 모드’···쿠팡·홈플러스·배달앱 증인 채택", 'user_importance': '참고'}]
+        # 국감·증인 두 낱말만 겹침 → 붙지 않는다(종류가 같은 기사는 고정 블록과 기준문이 맡는다)
+        self.assertEqual(self._similar(rows, "복지위 국감도 '플랫폼' 이슈…강남언니·구글·닥터나우 등 증인 신청"), '')
+        self.assertEqual(crawler.FB_SIMILAR_MIN, 3)
+        self.assertEqual(crawler.FB_SIMILAR_RATIO, 0.5)
+        for w in ('skt', 'kt', 'ai', '통신', '통신사'):
+            self.assertIn(w, crawler._FB_COMMON)
 
     def test_temperature_zero_only_in_urgency_call(self):
         # #256-보론3: 긴급도 판정 콜 한 곳만 temperature 0 — 다른 콜엔 온도류 금지(지침 do-not)

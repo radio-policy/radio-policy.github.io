@@ -341,20 +341,40 @@ def _feedback_fixed_block() -> str:
     return block
 
 
+# 유사 사례 블록의 겹침 규칙(#264, 2026-09-30). 종전 '제목 낱말 2개 겹침'은 KT·SKT·AI·통신 같은 흔한 낱말의 우연으로 붙었다
+# (09-01 이후 붙은 421건의 대부분, 피드백 3행이 305건). 붙은 사례는 「반드시 우선 적용」 머리말 아래 놓여, 6월의
+# 「…이용자보호·만족도 1위 석권 → 즉시대응」이 SKT 고객만족도 1위 기사에(붙은 9건 중 5건 긴급 / 안 붙은 21건 중 0건),
+# 「통신사 '이용자보호 평가' … SKT·KT → 즉시대응」이 KT NATO 기사에(붙은 25건 중 18건 / 안 붙은 50건 중 12건) 긴급을 만들었다.
+# 이제 **제목이 거의 같은** 사례만 붙인다 — 흔한 낱말을 뺀 겹침이 FB_SIMILAR_MIN개 이상이고 짧은 쪽 제목 낱말의 절반 이상.
+# 같은 호출로 다시 판정한 173건 실측: 긴급이 아닌 기사 95건의 긴급 39 → 30, 진짜 긴급 66건은 55 → 55.
+# 낱말 2개 겹침·「반드시 우선 적용」으로 되돌리지 말 것. _FB_COMMON은 회사·부처 이름과 어디에나 나오는 낱말뿐이다(사건 이름을 넣지 말 것).
+_FB_COMMON = frozenset({'ai', 'skt', 'sk텔레콤', 'kt', 'lg유플러스', 'lgu', 'lg', '통신', '통신사', '통신3사', '이통3사', '이통사',
+                        '3사', '5g', '6g', '정부', '과기정통부'})
+FB_SIMILAR_MIN = 3        # 흔한 낱말을 뺀 겹침 낱말 수
+FB_SIMILAR_RATIO = 0.5    # 겹침 ÷ 짧은 쪽 제목의 낱말 수
+FB_SIMILAR_MAX = 3
+
+
 def _feedback_similar_block(title: str) -> str:
-    """기사 제목과 키워드가 2개 이상 겹치는 담당자 사례 최대 5건(#175). 기사마다 달라지므로 캐시 접두 **뒤**에 둔다.
-    고정 블록에 이미 실린 사례는 뺀다(같은 줄 중복 방지). 없으면 ''."""
+    """기사와 **제목이 거의 같은** 담당자 사례 최대 FB_SIMILAR_MAX건(#175 → #264). 기사마다 달라지므로 캐시 접두 **뒤**에 둔다.
+    고정 블록에 이미 실린 사례는 뺀다(같은 줄 중복 방지). 없으면 ''. 같은 사건의 후속 보도에 예전 수정이 따라붙게 하는 장치다 —
+    '같은 종류' 기사까지 끌어오는 일은 고정 블록의 최근 사례와 기준문이 맡는다(낱말 몇 개로는 종류를 못 가린다)."""
     rows = _load_feedback_rows()
-    tt = _fb_tokens(title)
-    if not rows or not tt:
+    tt = _fb_tokens(title) - _FB_COMMON
+    if not rows or len(tt) < FB_SIMILAR_MIN:
         return ''
     fixed = _feedback_fixed_block()
-    scored = [(len(tt & _fb_tokens(r['title'])), r) for r in rows]
-    similar = [r for sc, r in sorted(scored, key=lambda x: -x[0]) if sc >= 2]
-    lines = [_fb_line(r) for r in similar if _fb_line(r) not in fixed][:5]
+    scored = []
+    for r in rows:
+        ft = _fb_tokens(r['title']) - _FB_COMMON
+        ov = len(tt & ft)
+        if ov >= FB_SIMILAR_MIN and ov / min(len(tt), len(ft)) >= FB_SIMILAR_RATIO:
+            scored.append((ov, r))
+    similar = [r for sc, r in sorted(scored, key=lambda x: -x[0])]
+    lines = [_fb_line(r) for r in similar if _fb_line(r) not in fixed][:FB_SIMILAR_MAX]
     if not lines:
         return ''
-    return "\n\n[이 기사와 유사한 담당자 피드백 사례 — 반드시 우선 적용]\n" + "\n".join(lines)
+    return "\n\n[이 기사와 제목이 거의 같은 담당자 수정 사례 — 같은 사건의 기사면 이 등급을 따른다]\n" + "\n".join(lines)
 
 
 def get_feedback_examples(title: str = '') -> str:
@@ -1847,6 +1867,7 @@ def save_new_items(items: list, existing_data: tuple) -> list:
     #         → 선별에 본문을 주려면 무관 기사 500건의 본문까지 매시간 긁어야 해서 캐시 절감이 무너진다.
     #      ② 개별 판정은 get_feedback_examples(title)로 **제목별 유사 사례 5건**을 넣지만,
     #         배치 판정은 여러 기사를 한 번에 보므로 공통 사례만 쓴다.
+    #         (#264부터 유사 사례는 제목이 거의 같은 사례 최대 3건뿐 — _feedback_similar_block 주석 참조)
     #    월 $33을 아끼려다 긴급 알림(이 시스템의 존재 이유)을 잃는 거래라 원복했다.
     #    선별 콜은 urgency를 여전히 뱉지만(스키마 유지) **여기서 쓰지 않는다** — 프롬프트 보강으로
     #    통합을 되살릴 실험 여지를 남겨 둔 것. 되살릴 땐 반드시 긴급률을 배포 전(9.9%)과 비교할 것.
