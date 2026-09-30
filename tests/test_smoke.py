@@ -1333,7 +1333,8 @@ class TestUrgencyRules(unittest.TestCase):
         fb = self.ur.URGENCY_RULES_FALLBACK
         self.assertEqual(self.ur.validate_rules(fb), [])
         self.assertEqual([r['id'] for r in fb], ['obituary', 'skt_gukgam_witness', 'ministry_personnel',
-                                                  'assembly_law', 'ministry_telecom'])
+                                                  'assembly_law', 'ministry_telecom', 'fire_drill_telecom',
+                                                  'fire_drill', 'skt_related'])
         self.assertEqual([r['position'] for r in fb], sorted(r['position'] for r in fb))
 
     def test_crawler_grade_urgency(self):
@@ -1611,7 +1612,7 @@ class TestUrgencyTeamLayerCrawler(unittest.TestCase):
         common, team, _, log = self._load_rules(_RecSb(fail={'urgency_rules'}))
         self.assertIs(common, self.c.urgency_rules.URGENCY_RULES_FALLBACK)
         self.assertEqual(team, {})
-        self.assertIn('[규칙] 5개 로드(fallback)', log)
+        self.assertIn('[규칙] 8개 로드(fallback)', log)
         self.assertIn('[규칙] 팀 규칙 건너뜀 — 표 조회 실패', log)      # 실패를 '없음'과 섞지 않는다(#183)
         self.assertNotIn('팀 규칙 없음', log)
 
