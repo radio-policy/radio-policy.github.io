@@ -17,52 +17,65 @@
 
 ---
 
-## 0-1. Claude Code로 이어받는 경우 — 순서대로 7단계 (2026-07-15 추가)
+## 0-1. Claude Code로 이어받는 경우 — 순서대로 7단계 (2026-07-15 추가, **2026-10-01 개정**)
 
-위 §0의 4가지는 **Claude for Windows(Cowork)** 기준. **Claude Code**(CLI/데스크톱 앱)로 이어받으면 아래 순서대로만 하면 됨. 실질적으로 손이 가는 건 ⑤ 커넥터 연결 하나.
+위 §0의 4가지는 **Claude for Windows(Cowork)** 기준. **Claude Code**(데스크톱 앱 Code 탭/CLI)로 이어받으면 아래 순서대로만 하면 됨.
+
+> **전제 (운영자 결정 2026-10-01): 회사 PC를 통째로 같이 쓴다 — Claude 계정만 다르고 나머지는 전부 지금 그대로다.**
+> Windows 계정, 작업 폴더, `.env`, git 인증, Supabase 계정, 컨플루언스 쓰기 설정, 운영자 텔레그램 알림, 대시보드 admin 계정을 모두 같이 쓴다. 따로 만들 계정은 없다.
+> 그래서 달라지는 것은 **Claude 계정에 붙은 것**(커넥터·모델/한도·앱 세션 목록·Remote Control·앱 예약 작업)뿐이다.
 
 ### ① (넘기는 사람) 마무리 기록
-- 미완 작업이 있으면 §6 작업 로그에 한 줄 남기기.
+- 커밋·push·원격 대조까지 끝내고, 진행 상태·미결 판단을 **메모리**(`~\.claude\projects\…\memory\`)나 `local_docs/`에 남긴다. **새 계정은 옛 대화 창을 볼 수 없으므로**(아래 "계정별이라 안 따라오는 것") 글로 남긴 것만 넘어간다.
 
 ### ② (넘기는 사람) 세션 완전 종료
-- 기존 계정의 Claude Code 창/세션·앱을 **모두 닫기**. 두 계정이 같은 폴더에서 동시에 돌면 stale 커밋 사고(§4-3) 재발 — §5 절대 규칙.
+- 기존 계정의 Claude Code 창/세션·앱을 **모두 닫기**. 두 계정이 같은 폴더에서 동시에 돌면 stale 커밋 사고(§4-3) 재발 — §5 절대 규칙. 데스크톱 앱은 로그인이 하나뿐이지만 **터미널 `claude`는 로그인이 따로**라 두 계정이 동시에 뜰 수 있다.
 
 ### ③ 로그아웃 → 새 계정 로그인
 - 데스크톱 앱: 프로필/설정 → Sign out → 새 계정으로 Sign in.
 - 터미널 CLI: `claude` 실행 → `/logout` → `/login` → 브라우저에서 새 계정 인증.
+- 새 계정 요금제에서 Fable 5.1·Opus 5.5를 쓸 수 있는지 확인한다(CLAUDE.md의 (모델, 노력) 규칙이 이 둘을 전제한다). 주간 한도는 계정별로 따로다.
 
 ### ④ 같은 폴더 열기
-- `C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai`
+- 외부판: `C:\Users\SKTelecom\Desktop\frequence\radio-policy-ai` (이 저장소)
+- 사내판: `C:\claude\rp-internal\radio-policy-internal` (별도 프로젝트 폴더 — 사내판 작업은 그 폴더의 세션만 한다. 외부판 세션은 사내 저장소를 고치지 않고, 사내 문서·데이터는 외부판에 넣지 않는다)
 - 첫 실행 시 "폴더 신뢰" 확인이 뜨면 승인. 이 시점에 **지침(CLAUDE.md)·메모리는 자동 로드** — 별도 작업 불필요 (아래 "자동으로 따라오는 것" 참조).
 
 ### ⑤ 커넥터(MCP) 재연결 — 새 계정에서 처음 한 번만
 커넥터는 Claude 계정에 붙어 있어 새 계정에는 비어 있음:
 1. 브라우저에서 **claude.ai** 접속 → 새 계정(Claude Code와 같은 계정)으로 로그인
 2. **Settings → Connectors** 이동
-3. **Supabase** 연결 → Supabase 계정 인증 → 프로젝트 `zwkjedumfuhodckmtxxn`(radio-policy-ai) 선택
-   - ⚠️ 다른 사람이라 본인 Supabase 계정에 이 프로젝트가 안 보이면 → 기존 담당자가 Supabase 콘솔에서 Organization 멤버로 초대
-4. Gmail·Calendar 등은 이 프로젝트 필수 아님 — 필요할 때만 연결. **당장은 Supabase 하나면 충분**
+3. **Supabase** 연결 → **기존과 같은 Supabase 계정**으로 인증(운영자 결정 2026-10-01 — 조직 멤버 초대 불필요) → 프로젝트 `zwkjedumfuhodckmtxxn`(radio-policy-ai) 선택
+4. Gmail·Calendar 등은 이 프로젝트 필수 아님 — 필요할 때만 연결. **당장은 Supabase 하나면 충분**(크롤러·도구는 `.env` 키로 돌므로 커넥터 없이도 대부분의 작업은 된다)
 5. 연결 후 Claude Code 재시작(또는 새 세션)하면 커넥터가 잡힘
 
 ### ⑥ 새 세션 첫 메시지 — 인수인계 프롬프트
 ```
-작업 인수인계 받았어. 다음을 읽고 현재 상태를 요약해줘:
-1. HANDOFF.md (작업 로그와 누적 주의사항)
-2. 전파정책AI_지침_운영핵심.md의 "하지 말아야 할 것" 목록
-3. git log 최근 커밋 10개 + git status로 미커밋/미추적 파일 현황
-그다음 진행 중이던 작업과 주의할 것을 정리해줘.
+작업 인계 받았어. CLAUDE.md, 메모리 MEMORY.md, HANDOFF.md를 읽고
+git log 최근 10개와 git status로 현재 상태·대기 작업·주의할 것을 정리해줘.
 ```
 - 작업 중 도구 권한 프롬프트(파일 읽기·git 등)가 처음 몇 번 뜸 → 승인하며 진행.
 
 ### ⑦ 이어받기 검증 (1분)
 - "Supabase에서 news_feed 최근 1건 조회해줘" → 나오면 커넥터 정상.
-- ⑥의 요약 응답에 최근 커밋과 §6 작업 로그 최신 줄이 언급되는지 → 나오면 문서·repo 인계 정상.
+- ⑥의 요약 응답에 최근 커밋과 메모리의 대기 작업이 언급되는지 → 나오면 문서·repo 인계 정상.
+- 앱의 **예약 작업 목록**을 열어 기존 예약(예: 매주 목요일 팀방 요약)이 보이는지 확인한다(아래 참조).
 
 ### 자동으로 따라오는 것 (같은 Windows 계정이므로 손댈 필요 없음)
-- **지침** — repo 안 `CLAUDE.md`가 폴더 열면 자동 로드되고, 정본 지침(`전파정책AI_지침_운영핵심.md`·`전파정책AI_배경역사.md`)도 그 안에서 링크됨. §1의 Project 붙여넣기 **불필요**.
-- **메모리** — Claude Code 메모리는 로컬 디스크(`C:\Users\SKTelecom\.claude\projects\...\memory\`)에 저장되므로 같은 Windows 계정이면 다른 Claude 계정에서도 그대로 승계됨. §4 도입부의 "메모리는 계정 간 안 넘어옴"은 **Cowork(클라우드 메모리) 얘기** — 단, §4의 누적 주의사항 자체는 여전히 숙지할 것.
-- **세션 기록** — 로컬 `~\.claude\projects\`에 있어 계정 전환 후에도 기존 세션을 열어 이어갈 수 있음.
-- `.env`·GitHub 인증·Python 3.12·작업 스케줄러 — 전부 Windows 계정 소속이라 그대로.
+- **지침** — repo 안 `CLAUDE.md`가 폴더 열면 자동 로드되고, 정본 지침(`전파정책AI_지침_운영핵심.md`·`전파정책AI_배경역사.md`)도 그 안에서 링크됨. 전역 지침 `~\.claude\CLAUDE.md`(답변 언어·모델 규칙 요지)도 같이 로드된다. §1의 Project 붙여넣기 **불필요**.
+- **메모리** — Claude Code 메모리는 로컬 디스크(`C:\Users\SKTelecom\.claude\projects\...\memory\`)에 저장되므로 같은 Windows 계정이면 다른 Claude 계정에서도 그대로 승계됨(외부판·사내판 각각). §4 도입부의 "메모리는 계정 간 안 넘어옴"은 **Cowork(클라우드 메모리) 얘기** — 단, §4의 누적 주의사항 자체는 여전히 숙지할 것.
+- `.env`·git 인증(GitLab·GitHub)·Python 3.12·Windows 작업 스케줄러 — 전부 Windows 계정 소속이라 그대로.
+
+### 계정별이라 안 따라오는 것 (2026-10-01 실측·정정)
+- **앱 세션 목록** — 데스크톱 앱 사이드바의 세션 목록은 계정별 폴더(`%APPDATA%\Claude\claude-code-sessions\<계정 ID>\`)에 따로 저장된다. 새 계정에서는 옛 창이 보이지 않고 기록 검색도 되지 않는다(옛 문구 "계정 전환 후에도 기존 세션을 열어 이어갈 수 있음"은 앱에서는 맞지 않다). 대화 원본 파일은 `~\.claude\projects\`에 남는다.
+- **Remote Control** — 다른 기기(다른 계정으로 로그인한 앱)에서는 이 계정의 세션이 보이지 않는다. 앱 로그인은 하나뿐이라 한 계정이 로그인해 있는 동안 다른 계정의 세션은 이 PC에서 돌지 않는다.
+- **앱 예약 작업** — Claude 앱의 예약 작업(Windows 작업 스케줄러의 크롤러와 별개, 정의는 `~\.claude\scheduled-tasks\`)은 로그인한 계정의 세션으로 돈다. 다른 계정으로 로그인한 동안 기존 예약이 보이고 도는지는 **확인하지 못했다** — 전환 뒤 목록을 확인하고, 안 보이면 그 계정에서 다시 등록한다. 돌면 그 계정의 한도를 쓴다.
+- **커넥터·모델 접근·주간 한도** — ③·⑤ 참조.
+
+### 새 계정에서도 그대로 지킬 것
+- **Claude GitHub App 설치·클라우드 세션(「클라우드로 옮기기」 포함) 금지** — 2026-09-28 클라우드 세션이 브랜치·PR을 만든 직후 GitHub 계정이 정지됐다(배경역사 #254). 작업은 로컬 세션과 일반 push만.
+- **push는 `git push gitlab main`**(pushurl 두 개 — GitLab → GitHub) 뒤 `py -3.12 tools_release.py --verify`. 아래 §4의 `git push origin main` 예시는 옛 표기다.
+- 커밋 작성자가 두 사람 모두 같은 이름으로 찍힌다 — 구분이 필요하면 커밋 메시지에 이니셜(§5).
 
 ---
 
@@ -183,6 +196,7 @@ git read-tree HEAD && git add <파일> && git commit -m "..." && git push origin
 
 | 날짜 | 작업자 | 바꾼 것 / 진행 중 / 주의할 것 |
 |---|---|---|
+| 2026-10-01 | 진웅(lampman) | §0-1 개정 — 다른 사람이 **다른 Claude 계정**으로 이 PC에서 외부판·사내판을 이어 가는 경우. 운영자 결정: Claude 계정만 다르고 나머지(Supabase·컨플루언스·텔레그램 알림·대시보드 admin 등)는 전부 같이 쓴다. 앱 세션 목록은 계정별이라 인계는 메모리·`local_docs/`·커밋으로. 앱 예약 작업이 다른 계정에서 도는지는 미확인(전환 뒤 확인). 7/15~9/30 작업은 이 표에 없다 — 메모리 `MEMORY.md`와 배경역사 #24~#265를 볼 것 |
 | 2026-07-15 | 진웅(lampman) | HANDOFF 최신화 — Claude Code 인수 절차(§0-1) 추가, §1 낡은 사본 경고, 로그 공백 보충. **6/20~7/6 작업 요약**(상세는 배경역사 #15~#23): supabase-py HTTP/2 끊김→`sb_client.make_client` 도입(#15) / 운영상태 탭·heartbeat 3종·빈 브리핑 폴백(#16) / 무뉴스 날 🕊️ 통지+placeholder(#17) / PAT 재생성 시 Actions 권한 누락 무음실패 가드(#18) / 스케줄러 cp949 이모지 크래시·옛 폴더 경로 교정(#19) / 법령요약 레이어 regulatory-kb→kb_*, voyage-law-2(#21) / 정부크롤러 7일 무음 중단 복구 — .bat ASCII+CRLF·Python312 전체 경로 고정·StartWhenAvailable(#22) / 자문 검색 병렬화·news_feed upsert 견고화(#23) |
 | 2026-06-17 | 진웅(lampman) | 낮시간(KST 09~20시) 크롤이 GitHub cron 블록 드롭으로 며칠째 누락되던 문제 보완 — Supabase pg_cron 잡 `github-daily-crawl-daytime`(KST 09:25~20:25 매시간 workflow_dispatch) 추가. Vault에 `github_pat` 저장. 지침에 pg_cron 섹션·주의사항 반영. (기존 미문서화 cron 잡 briefing-health-check·news-feed-cleanup도 함께 문서화) + 모닝 브리핑 06:00/06:30 정시 스케줄도 매일 드롭돼 늦게/수동 생성되던 문제 보완 — `trigger_briefing_if_missing()` 함수 + pg_cron 잡 8·7(KST 06:05·06:20, 오늘자 없으면 morning_briefing.yml dispatch — GitHub 06:00 직후 오프셋: 동시 발사로 인한 중복 run·드롭 감지 불가 회피) 추가. health-check(10시 경고)는 유지. + 크롤·법령·국회 트리거도 Supabase로 일원화(crawl-trigger-hourly :47 24h / law 11:30 / assembly 10:30, 공용 함수 `dispatch_github_workflow`). daily_crawl.yml은 매시 :17 GitHub 백업으로 단순화 + 08:05 브리핑 백업 스텝 제거. + **무음 실패 감시** 추가: 내부 `check_news_health`(pg_cron 12, 21:00) + 외부 `health_watchdog.py`/`.yml`(GitHub Actions, Supabase 독립, 21:30 + pg_cron 13이 21:35 백업). 텔레그램 토큰은 Vault `telegram_bot_token`. → health_watchdog.py·.yml·daily_crawl.yml·지침 PC에서 push 필요 |
 | 2026-06-16 | 유진웅 | HANDOFF.md·지침 최신화. 인수인계 체계 구축 |
