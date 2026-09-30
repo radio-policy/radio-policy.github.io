@@ -50,7 +50,7 @@ from news_dedup import extract_keywords, cluster_star
 
 ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')
 VOYAGE_API_KEY = os.environ.get('VOYAGE_API_KEY', '')
-DASHBOARD_URL = 'https://radio-policy.gitlab.io/?p=issuemap'   # 알림 링크 — GitHub 계정 정지(#254) 동안 GitLab 예비 주소. 복구 뒤 github.io로 되돌릴지 결정(#170-보론5: GitHub가 압축·인천 캐시로 빠르다)
+DASHBOARD_URL = 'https://radio-policy.github.io/?p=issuemap'   # 알림 링크는 GitHub 주소(정본) 사용 — 압축·인천 캐시로 GitLab보다 빠르다(#170-보론5)
 
 CLUSTER_MIN_ARTICLES = 5     # ⓐ 기준: 기사 수 & 서로 다른 날짜 수
 CLUSTER_MIN_DAYS = 2

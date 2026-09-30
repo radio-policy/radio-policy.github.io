@@ -20,7 +20,7 @@ import re
 import html as _html
 from datetime import datetime, timedelta, timezone
 
-DASHBOARD_URL = 'https://radio-policy.gitlab.io/?p=minutes'
+DASHBOARD_URL = 'https://radio-policy.github.io/?p=minutes'
 
 # kmcc = 방미통위 동향(위원회 회의 의사일정·위원회 결과, 2026-09-11 #154). subscriber_queue.topic CHECK 도 같이 갱신됨.
 # news = 받는 단위(공통 보통 'c'·팀 't:<id>'·실장 'd:<실>')별 기사 행(#252, 2026-09-27) — audience·level·news_url이 있어야 하는

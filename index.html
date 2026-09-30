@@ -4,6 +4,26 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>전파·통신 정책 AI — SKT Comm센터 사업협력실</title>
+<!-- gitlab.io → github.io 조건부 자동 이동 (#261) — GitLab 주소로 들어와도 빠른 GitHub 사본(압축·인천 캐시, 요청당 ≈1초 빠름)으로 옮긴다.
+     github.io의 alive.txt(GitHub에만 있음)를 1.5초 안에 받아 내용까지 맞을 때만 이동 — GitHub가 또 정지되면(404) gitlab.io에 그대로 남는다.
+     무조건 이동(서버 설정)으로 바꾸지 말 것: 정지 때 GitLab 주소까지 404로 끌고 간다. 로그인 메일 등 인증 값이 붙은 주소는 옮기지 않는다
+     (그 주소에서 로그인을 끝낸다). 옮기지 않고 GitLab 사본을 보려면 ?stay=gitlab. -->
+<script>
+(function() {
+  try {
+    if (location.hostname !== 'radio-policy.gitlab.io') return;
+    var q = location.search + location.hash;
+    if (/[?&#](access_token|refresh_token|code|error|error_description|type)=/.test(q) || /[?&]stay=gitlab\b/.test(location.search)) return;
+    var target = 'https://radio-policy.github.io' + location.pathname + location.search + location.hash;   // app.js가 주소를 고치기 전에 잡아 둔다
+    var late = false, ctl = window.AbortController ? new AbortController() : null;
+    var timer = setTimeout(function() { late = true; if (ctl) ctl.abort(); }, 1500);   // 늦게 오면 이미 쓰고 있는 화면을 빼앗지 않는다
+    fetch('https://radio-policy.github.io/alive.txt?t=' + Date.now(), { cache: 'no-store', signal: ctl ? ctl.signal : undefined })
+      .then(function(r) { return r.ok ? r.text() : ''; })
+      .then(function(t) { clearTimeout(timer); if (!late && t.indexOf('radio-policy-mirror-ok') === 0) location.replace(target); })
+      .catch(function() {});
+  } catch (e) {}
+})();
+</script>
 <!-- 관계도 첫 표시 앞당기기 (#255) — DB 연결을 미리 열고, 관계도로 시작할 때만 그래프 라이브러리·좌표 파일을
      app.js와 동시에 받기 시작한다(종전에는 app.js가 다 와서 실행된 뒤에야 요청이 나갔다 — gitlab.io에서 한 단계 ≈0.7초).
      시작 화면 판정은 app.js의 startPage와 같게(?p= 또는 #, 없으면 기본 화면) — DEFAULT_PAGE를 바꾸면 여기도 같이 고친다. -->
