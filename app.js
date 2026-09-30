@@ -11351,7 +11351,9 @@ function _personSpeechQuery(p, cols) {
     .eq('speaker', p.speaker_match || p.speaker_key);
   if (p.speech_from) q = q.gte('meeting_date', p.speech_from);
   if (p.speech_to)   q = q.lte('meeting_date', p.speech_to);
-  return q.order('meeting_date', { ascending: false }).limit(300);
+  // 한도 1000(#262-보론, 2026-09-30) — 상한 해제 소급으로 변재일 414·최형두 322건이 되어 300이면 그림·요약 입력이 잘렸다.
+  // PostgREST 최대 행 수도 1000이다. 넘보이면 범위를 넘겨 가며 받을 것(_personFieldQuery와 같은 한도).
+  return q.order('meeting_date', { ascending: false }).limit(1000);
 }
 
 function _personJobWord(p) {
@@ -11773,7 +11775,7 @@ async function refreshPersonStance(id) {
     '<span style="display:inline-block;width:13px;height:13px;border:2px solid var(--accent);border-top-color:transparent;border-radius:50%;animation:spin 0.8s linear infinite;vertical-align:-2px;margin-right:6px"></span>요약 생성 중...</div>';
   try {
     // position 까지 받아 자격 구간을 만든다. 요약 본문은 최근 90건만 쓰되(비용), 구간 계산은
-    // 전체를 봐야 옛 자격(예: 2021년 방통위 부위원장)이 빠지지 않는다. 최다 발언자가 176건.
+    // 전체를 봐야 옛 자격(예: 2021년 방통위 부위원장)이 빠지지 않는다. 최다 발언자 414건(2026-09-30 소급 뒤).
     var r = await _personSpeechQuery(p, 'meeting_date,topic,summary,position');
     var all = r.data || [];
     // 자격이 둘 이상이면(정부·증인일 때 ↔ 국회위원일 때) 자격별로 갈라 쓰게 한다.
