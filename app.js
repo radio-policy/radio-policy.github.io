@@ -11297,9 +11297,27 @@ function _ym(d) { return String(d || '').slice(0, 7); }
 // 증인·참고인은 정부 측이 아니다 — 머리글·구간 표시가 '정부 측 답변'으로 뭉뚱그리던 것을 가른다(2026-09-27,
 // 요약 재생성 때 진술인·통신사 증인 9명에서 실측).
 var _WITNESS_POS_RE = /증인|참고인|진술인|공술인/;
+// 회사·단체 직함으로 적힌 민간 출석자도 정부 측이 아니다(2026-10-01 Fable 재검토) — 20·21대 회의록은 통신사 임원을 '증인' 대신
+// '주식회사KT대표이사'처럼 직함으로 적기도 해서 황창규·오성목·강국현(KT)·윤상필(KTOA) 머리글이 '정부 측 답변'이었다.
+// 공기업·공영방송(한국수력원자력㈜·㈜문화방송)은 피감기관이라 민간 출석자로 보지 않는다.
+var _PRIVATE_POS_RE = /주식회사|㈜|\(주\)|연합회|협회|노동조합|대학교|법무법인/;
+var _PUBLIC_CORP_POS_RE = /한국수력원자력|문화방송/;
+var _STAFF_POS_RE = /전문위원|입법조사관/;
 function _personRoleVerb(label) {
+  label = String(label || '');
   if (label === '과방위원') return '위원으로 질의';
-  return _WITNESS_POS_RE.test(String(label || '')) ? '증인·참고인으로 답변' : '정부 측 답변';
+  if (_WITNESS_POS_RE.test(label) || (_PRIVATE_POS_RE.test(label) && !_PUBLIC_CORP_POS_RE.test(label))) return '증인·참고인으로 답변';
+  // 인사청문 후보자는 아직 정부 측이 아니다 — 분야 막대 이름 '정부·후보자로 답변한 분야'와 같은 구분
+  if (label.indexOf('후보자') >= 0) return '후보자로 답변';
+  if (_STAFF_POS_RE.test(label)) return '전문위원으로 검토보고';     // 국회 직원(수석전문위원·전문위원)도 정부 측이 아니다
+  return '정부 측 답변';
+}
+// 저장된 요약의 자격 머리글('**[자격 · 기간 · N건 — 동사]**')은 생성 당시 규칙으로 적혀 있다 — 보여 줄 때 끝 동사만 지금 규칙으로 맞춘다
+// (동사 규칙을 고칠 때마다 people.stance_summary 를 DB에서 고쳐 쓰지 않도록. 기간·건수는 생성 시점 값 그대로 둔다).
+function _personStanceNormalize(text) {
+  return String(text || '').replace(/^\*\*\[([^\n]+?) · ([^\n]*?) — [^\]\n]+\]\*\*[ \t]*$/gm, function(_m, label, mid) {
+    return '**[' + label + ' · ' + mid + ' — ' + _personRoleVerb(label) + ']**';
+  });
 }
 
 // 대수 경계(개원일). 자격 띠·월별 흐름의 눈금에 쓴다.
@@ -11465,7 +11483,7 @@ function renderPersonStance(p) {
   box.innerHTML = _personSec('쟁점별 발언 요약', _sdTxt ? 'AI 생성 · ' + _sdTxt : 'AI 생성') +
     '<div style="border:1px solid var(--border);border-radius:10px;padding:12px 14px;background:var(--bg-secondary)">' +
     (p.stance_summary
-      ? '<div class="md-body" style="font-size:12.5px">' + renderMd(p.stance_summary) + '</div>'
+      ? '<div class="md-body" style="font-size:12.5px">' + renderMd(_personStanceNormalize(p.stance_summary)) + '</div>'
       : '<div style="font-size:12px;color:var(--text-tertiary)">아직 생성되지 않았습니다.</div>') +
     '<div style="margin-top:8px;font-size:11px;color:var(--text-tertiary)">통신·전파·AI 관련 발언을 쟁점별로 정리한 것입니다. 상임위 질의는 비판조가 관행이므로 실제 취지는 원문 발언으로 확인하세요.' +
     (canGen ? ' <button class="btn" onclick="refreshPersonStance(' + p.id + ')" style="font-size:11px;padding:2px 10px;margin-left:6px">요약 ' + (p.stance_summary ? '갱신' : '생성') + '</button>' : ' (갱신은 관리자만 가능합니다)') +
@@ -11532,7 +11550,7 @@ function renderPersonMonthly(p) {
   }).join('');
   var dae = _DAE_START.filter(function(x) { return months.indexOf(x[1].slice(0, 7)) > 0; }).map(function(x) { return x[1].slice(0, 7) + ' ' + x[0] + ' 개원'; });
   box.innerHTML = _personSec('월별 발언 흐름', '통신·전파·AI 관련 발언 ' + list.length + '건 · 가장 많은 달 ' + max + '건' +
-      (dae.length ? ' · 점선 = ' + escHtml(dae.join(', ')) : '') + (_personSpeeches.length >= 300 ? ' · 최근 300건 기준' : '')) +
+      (dae.length ? ' · 점선 = ' + escHtml(dae.join(', ')) : '') + (_personSpeeches.length >= 1000 ? ' · 최근 1000건 기준' : '')) +
     '<div style="border:1px solid var(--border);border-radius:10px;padding:10px 12px 6px;background:var(--bg-secondary)">' +
       '<div style="display:flex;height:64px;border-bottom:1px solid var(--border-mid)">' + cols + '</div>' +
       '<div style="display:flex;height:14px;font-size:9.5px;color:var(--text-tertiary);margin-top:2px">' + labels + '</div>' +
@@ -11612,7 +11630,10 @@ function renderPersonFields(p, rows) {
     SPEECH_FIELDS.forEach(function(f) { judged += sum[f] || 0; });
     if (g[0] !== primary && judged < SPEECH_FIELD_MIN) return;
     var head = g[1];
-    var hint = (g[0] === 'gov' ? '받은 질의와 출석 회의에 따라 정해진다 · ' : '') +
+    // 답변 쪽 묶음이 전부 국회 전문위원 직위면 제목을 바꾼다(2026-10-01 — 수석전문위원 4명의 막대가 '정부·후보자로 답변한 분야'였다)
+    var staffOnly = g[0] === 'gov' && rs.every(function(r) { return _STAFF_POS_RE.test(String(r.position || '')); });
+    if (staffOnly) head = '전문위원으로 검토보고한 분야';
+    var hint = (g[0] === 'gov' ? (staffOnly ? '심사한 안건에 따라 정해진다 · ' : '받은 질의와 출석 회의에 따라 정해진다 · ') : '') +
       '과방위 회의록 발언 블록 기준 · 낱말 규칙으로 센 근사치 · ' + escHtml(_ym(from)) + '~' + escHtml(_ym(to)) + ' · 회의 ' + Object.keys(meetings).length + '건' +
       (cfg.public === true ? '' : ' · <b style="color:#b45309">검증 중 — 관리자에게만 보임</b>');
     var out = chair + proc + unc;
@@ -11808,21 +11829,23 @@ async function refreshPersonStance(id) {
     // 자격이 둘 이상이면 줄마다 자격을 붙인다(#262-보론3, 2026-09-30) — 두 자격의 기간이 겹치는 사람(강도현: 증인 2024-06~2025-05 ↔
     // 제2차관 2024-08~2025-06)은 날짜만으로 어느 머리글 아래인지 가를 수 없어 모델이 짐작했다. 표시는 머리글과 같은 _personRoleLabel.
     var multi = spans.length > 1;
-    var rows = _personStanceRows(all, spans).map(function(s) { return (s.meeting_date || '') + (multi ? ' (' + _personRoleLabel(s.position) + ')' : '') + ' [' + (s.topic || '기타') + '] ' + (s.summary || ''); }).join('\n');
+    var used = _personStanceRows(all, spans);
+    var rows = used.map(function(s) { return (s.meeting_date || '') + (multi ? ' (' + _personRoleLabel(s.position) + ')' : '') + ' [' + (s.topic || '기타') + '] ' + (s.summary || ''); }).join('\n');
     var latestYm = all.length ? _ym(all[0].meeting_date) : '';
     var capRule = '';
+    var heads = [];       // 코드가 만든 자격 머리글 — 저장 전 점검(_personStanceCheck)이 글자 그대로 있는지 본다
     if (spans.length > 1) {
+      heads = spans.map(function(sp) {
+        var a = _ym(sp.from), b = _ym(sp.to);
+        var period = (a === b) ? a : (b === latestYm ? a + '~' : a + '~' + b);
+        return { label: sp.label, line: '**[' + sp.label + ' · ' + period + ' · ' + sp.n + '건 — ' + _personRoleVerb(sp.label) + ']**' };
+      });
       capRule = '\n\n이 사람은 과방위에 **자격이 둘 이상**으로 출석했다. 아래 머리글을 순서대로 ' +
         '**한 글자도 바꾸지 말고 그대로** 쓰고, 각 머리글 바로 아래에 그 자격의 발언만 근거로 ' +
         '불릿을 달아라. 발언 줄 앞 괄호 속 자격이 머리글의 자격과 같은 것만 그 머리글 아래에 쓴다(날짜로 짐작하지 마라). ' +
         '자격을 섞지 마라(정부 측 답변과 위원 질의는 성격이 다르다). ' +
         '발언이 2건 이하인 자격은 머리글만 두고 불릿 1개로 줄여도 된다.\n' +
-        spans.map(function(sp) {
-          var isMember = sp.label === '과방위원';
-          var a = _ym(sp.from), b = _ym(sp.to);
-          var period = (a === b) ? a : (b === latestYm ? a + '~' : a + '~' + b);
-          return '**[' + sp.label + ' · ' + period + ' · ' + sp.n + '건 — ' + _personRoleVerb(sp.label) + ']**';
-        }).join('\n');
+        heads.map(function(h) { return h.line; }).join('\n');
     }
     // 지시문 개정(2026-09-27 운영자 결정, 5-16 ①): 'SKT/통신사 별도 불릿' 삭제 — 사외판은 발언 정리까지만(SKT 관점 분석은
     // 사내판 몫). 태도·성향 평가어(비판적·우호적 등)는 모든 주제에서 빼고 '무엇을 말했나'(질의·촉구·요구 등 발언 행위)만.
@@ -11836,12 +11859,19 @@ async function refreshPersonStance(id) {
     var res = await claudeFetch({
       site: 'person_stance',
       method: 'POST',
-      body: JSON.stringify({ model: 'claude-sonnet-5', max_tokens: 1000, thinking: { type: 'disabled' }, messages: [{ role: 'user', content: userMsg }] })
+      // max_tokens 1000 → 4000(2026-10-01 Fable 재검토): 한글 1자 ≈ 1토큰이라 1000이면 1,000자쯤에서 끊긴다 — 세션이 써 넣은 요약
+      // 271명 중 111명이 1,200자를 넘는다(자격이 여럿인 사람은 5,000자대). 이 버튼으로 갱신하면 문장 중간에서 잘린 채 저장됐을 것.
+      body: JSON.stringify({ model: 'claude-sonnet-5', max_tokens: 4000, thinking: { type: 'disabled' }, messages: [{ role: 'user', content: userMsg }] })
     });
     var data = await res.json();
     if (data.error) throw new Error(data.error.message || 'API 오류');
     var text = (data.content || []).map(function(c) { return c && c.text ? c.text : ''; }).join('').trim();
     if (!text) throw new Error('빈 응답');
+    // 저장 전 점검(2026-10-01) — 세션이 재작성 때 손으로 돌리던 점검(길이 끊김·자격 머리글·근거 날짜·자격-날짜·금지어)을 버튼 경로에도 둔다.
+    // 걸리면 저장하지 않고 옛 요약을 그대로 둔다(다시 누르면 된다).
+    if (data.stop_reason === 'max_tokens') throw new Error('요약이 길이 상한에서 끊겨 저장하지 않았습니다 — 다시 눌러 보세요');
+    var bad = _personStanceCheck(text, used, heads);
+    if (bad) throw new Error('자동 점검에 걸려 저장하지 않았습니다(' + bad + ') — 다시 눌러 보세요');
     var now = new Date().toISOString();
     var u = await sb.from('people').update({ stance_summary: text, stance_updated_at: now, updated_at: now }).eq('id', p.id);
     if (u.error) throw u.error;
@@ -11850,8 +11880,44 @@ async function refreshPersonStance(id) {
   } catch (e) {
     if (box) box.innerHTML = _personSec('쟁점별 발언 요약', '') +
       '<div style="font-size:12px;color:#c0392b;padding:10px">생성 실패: ' + escHtml((e && e.message) || e) + '</div>';
-    setTimeout(function() { renderPersonStance(p); }, 2500);
+    setTimeout(function() { renderPersonStance(p); }, 6000);      // 점검 사유를 읽을 시간(종전 2.5초)
   }
+}
+
+// 요약 저장 전 점검 — 걸린 사유(문자열) 또는 ''. used = 모델에 준 발언 행, heads = 코드가 만든 자격 머리글 [{label, line}](자격 하나면 []).
+// ① 자격 머리글이 글자 그대로·순서대로 있는가 ② 인용한 날짜(YYYY-MM-DD)가 준 발언 목록에 있는가 ③ 자격이 둘 이상이면 머리글
+// 아래 날짜가 그 자격의 발언 날짜인가 ④ 지시문이 금지한 태도 평가어 ⑤ 회사만 모은 불릿 제목. 지시문을 고치면 ④의 낱말도 함께.
+var _STANCE_BAN_RE = /비판적|우호적|긍정적|부정적|회의적|강경(?!숙)|옹호|신중론|소극적/;   // (?!숙): 강경숙 의원 이름
+var _STANCE_COMPANY_BULLET_RE = /^\s*[-•*]\s*\*\*\s*(?:SK\s*텔레콤|SKT|KT|LG\s*유플러스|LGU\+|통신\s*3사|통신사)(?:\s*[·,\/]\s*(?:SK\s*텔레콤|SKT|KT|LG\s*유플러스|LGU\+))*\s*(?:관련|언급)?\s*(?:발언|질의)?\s*\*\*/m;
+function _personStanceCheck(text, used, heads) {
+  text = String(text || '');
+  var dates = {}, byRole = {};
+  (used || []).forEach(function(s) {
+    var d = String(s.meeting_date || '').slice(0, 10), k = _personRoleLabel(s.position);
+    if (!d) return;
+    dates[d] = 1;
+    (byRole[k] = byRole[k] || {})[d] = 1;
+  });
+  var cited = text.match(/20\d\d-\d\d-\d\d/g) || [];
+  if (!cited.length) return '근거 날짜가 없음';
+  for (var i = 0; i < cited.length; i++) if (!dates[cited[i]]) return '발언 목록에 없는 날짜 ' + cited[i];
+  if (heads && heads.length) {
+    var pos = -1, cuts = [];
+    for (var h = 0; h < heads.length; h++) {
+      var at = text.indexOf(heads[h].line, pos + 1);
+      if (at < 0) return '자격 머리글이 빠졌거나 바뀜: ' + heads[h].label;
+      cuts.push(at); pos = at;
+    }
+    for (var c = 0; c < heads.length; c++) {
+      var part = text.slice(cuts[c] + heads[c].line.length, c + 1 < cuts.length ? cuts[c + 1] : text.length);
+      var ds = part.match(/20\d\d-\d\d-\d\d/g) || [], ok = byRole[heads[c].label] || {};
+      for (var k2 = 0; k2 < ds.length; k2++) if (!ok[ds[k2]]) return heads[c].label + ' 머리글 아래에 다른 자격의 발언 날짜 ' + ds[k2];
+    }
+  }
+  var ban = text.match(_STANCE_BAN_RE);
+  if (ban) return '태도 평가어 「' + ban[0] + '」';
+  if (_STANCE_COMPANY_BULLET_RE.test(text)) return '회사만 모은 불릿';
+  return '';
 }
 
 function escHtml(str) {

@@ -535,13 +535,20 @@ def _squash(s: str) -> str:
     return re.sub(r'\s+', '', s or '')
 
 
-def verify_blocks_against_pdf(blocks: list, pdf_url: str, sample: int = 6, pdf=None):
+def verify_blocks_against_pdf(blocks: list, pdf_url: str, sample: int = 6, pdf=None, title: str = None):
     """뷰어 블록이 같은 회의의 PDF 원문과 같은 내용인지 표본 대조.
     반환 (ok, detail): ok=True 일치 / False 불일치 / None 판정 불가(PDF 없음·다운로드 실패·너무 짧음).
     방법: 가장 긴 블록 sample 개의 앞 VERIFY_PROBE_CHARS 자(공백 제거)를 PDF 텍스트(공백 제거)에서 찾아
-    적중률 VERIFY_OK_RATIO 이상이면 일치. pdf=(텍스트, 오류) 를 주면(fetch_pdf_text 결과) 재다운로드 없음."""
+    적중률 VERIFY_OK_RATIO 이상이면 일치. pdf=(텍스트, 오류) 를 주면(fetch_pdf_text 결과) 재다운로드 없음.
+    title(회의 제목 '제22대 제418회 제3차 …')을 주면 뷰어 개회 발언의 회수·차수와 먼저 견준다."""
     if not blocks:
         return None, '블록 없음'
+    # 개회 발언의 회수·차수(2026-10-01 Fable 재검토, #248-보론2) — 뷰어 첫 블록들의 "제418회 국회(정기회) … 제5차"가 회의 제목의
+    # 회수·차수와 **읽히는데 다르면** 다른 회의 본문이다(PDF 가 없어도 판정된다). 22대 상임위 165회의 실측: 읽힘 159·다름 0.
+    # 표본·조각 겹침은 짧은 진행 회의("의석을 정돈… 가결되었음을 선포합니다")끼리는 서로 통과하므로(아래) 이 대조가 먼저다.
+    st, so = _title_session(title), _opening_session(blocks)
+    if st and so and st != so:
+        return False, '개회 발언 제%s회 제%s차 ≠ 회의 제%s회 제%s차' % (so + st)
     if pdf is None:
         pdf = fetch_pdf_text(pdf_url)
     txt, err = pdf
@@ -566,16 +573,53 @@ def verify_blocks_against_pdf(blocks: list, pdf_url: str, sample: int = 6, pdf=N
     # 앞 30자 그대로 찾기가 맞는 회의에서도 0~2/6 로 떨어졌다: 22대 상임위 188건 중 63건이 '불일치'로 판정돼 **멀쩡한 뷰어
     # 본문을 글자 빠진 PDF 블록으로 바꿔치고** 있었다(예: 55991 쿠팡 청문회 준비 회의). 실측: 같은 회의 뷰어↔PDF 조각 겹침
     # 0.29~0.51(8건), 다른 회의끼리 0.017~0.076(8쌍) → 0.15 이상이면 같은 회의로 본다(뷰어가 다른 회의 본문을 준 경우는 여전히 걸린다).
+    # **양방향으로 본다(2026-10-01 Fable 재검토)**: 위 '다른 회의 0.017~0.076'은 긴 회의 8쌍만 잰 값이었다. 22대 상임위 165회의의
+    # 다른 회의 전 쌍 27,060개를 재니 뷰어→PDF 겹침이 0.15를 넘는 쌍이 1,059개(3.9%, 최대 0.86)였다 — 뷰어 쪽이 짧은 진행 회의면
+    # 그 문장들("이의 없으십니까… 가결되었음을 선포합니다")은 어느 회의 PDF에나 있다. 반대 방향(PDF 조각이 뷰어 본문에 있는 비율)을
+    # 함께 걸면 49쌍(0.18%)으로 줄고, 위 개회 회차 대조까지 하면 6쌍(모두 3블록짜리 한 회의)이 남는다. 같은 회의 165건은
+    # 뷰어→PDF 최소 0.287·PDF→뷰어 최소 0.233이라 둘 다 0.15를 넘는다(글자 빠진 PDF 63건 포함, 잘못 떨어지는 회의 0).
     cov = _ngram_coverage(blocks, hay)
-    if cov >= VERIFY_NGRAM_OK:
-        return True, '표본 %d/%d 적중이나 조각 겹침 %.2f ≥ %.2f(PDF 글자 빠짐), PDF %d자' % (
-            hits, len(probes), cov, VERIFY_NGRAM_OK, len(hay))
-    return False, '표본 %d/%d 적중·조각 겹침 %.2f, PDF %d자' % (hits, len(probes), cov, len(hay))
+    back = _ngram_back_coverage(blocks, hay)
+    if cov >= VERIFY_NGRAM_OK and back >= VERIFY_NGRAM_BACK_OK:
+        return True, '표본 %d/%d 적중이나 조각 겹침 %.2f·역방향 %.2f ≥ %.2f(PDF 글자 빠짐), PDF %d자' % (
+            hits, len(probes), cov, back, VERIFY_NGRAM_OK, len(hay))
+    return False, '표본 %d/%d 적중·조각 겹침 %.2f·역방향 %.2f, PDF %d자' % (hits, len(probes), cov, back, len(hay))
 
 
 VERIFY_NGRAM_N = 6
-VERIFY_NGRAM_OK = 0.15
+VERIFY_NGRAM_OK = 0.15           # 뷰어 조각이 PDF 에 있는 비율
+VERIFY_NGRAM_BACK_OK = 0.15      # PDF 조각이 뷰어 본문에 있는 비율(짧은 진행 회의의 오통과 방지)
 VERIFY_NGRAM_SAMPLE = 3000
+
+_SESSION_TITLE_RE = re.compile(r'제(\d+)회\s*제(\d+)차')
+# "제418회 국회(정기회) 과학기술정보방송통신위원회 제5차 전체회의" / "국회 제418회(정기회) … 제10차" — 공백 없이 본다
+_SESSION_OPEN_RE = re.compile(r'(?:제?(\d+)회국회\([^)]{1,8}\)|국회제(\d+)회\([^)]{1,8}\)).{0,40}?제(\d+)차')
+
+
+def _title_session(title: str):
+    """회의 제목 → (회수, 차수) or None."""
+    mm = _SESSION_TITLE_RE.search(title or '')
+    return (mm.group(1), mm.group(2)) if mm else None
+
+
+def _opening_session(blocks: list):
+    """뷰어 첫 블록들의 개회 발언 → (회수, 차수) or None(개회 발언이 없거나 회수를 말하지 않음)."""
+    head = _squash(' '.join((b.get('text') or '') for b in (blocks or [])[:4]))[:600]
+    mm = _SESSION_OPEN_RE.search(head)
+    return ((mm.group(1) or mm.group(2)), mm.group(3)) if mm else None
+
+
+def _ngram_back_coverage(blocks: list, hay: str) -> float:
+    """PDF 텍스트(공백 제거)의 6글자 조각 표본이 뷰어 블록 본문에 들어 있는 비율. 표본은 7자 간격 + 고정 시드."""
+    import random
+    n = VERIFY_NGRAM_N
+    vt = ''.join(_squash(b.get('text') or '') for b in blocks)
+    grams = set(vt[i:i + n] for i in range(0, max(0, len(vt) - n + 1)))
+    allg = [hay[i:i + n] for i in range(0, max(0, len(hay) - n + 1), 7)]
+    if not allg:
+        return 0.0
+    smp = random.Random(1).sample(allg, min(VERIFY_NGRAM_SAMPLE, len(allg)))
+    return sum(1 for g in smp if g in grams) / len(smp)
 
 
 def _ngram_coverage(blocks: list, hay: str) -> float:
@@ -1665,7 +1709,7 @@ def fetch_verified_blocks(m: dict):
     if src == '뷰어' and not is_audit and m.get('pdf_url'):
         foreign = looks_foreign_committee(blocks)
         pdf = fetch_pdf_text(m['pdf_url'])
-        ok, detail = verify_blocks_against_pdf(blocks, m['pdf_url'], pdf=pdf)
+        ok, detail = verify_blocks_against_pdf(blocks, m['pdf_url'], pdf=pdf, title=m.get('title'))
         if foreign or ok is False:
             why = ('타 상임위 직함 %s' % foreign) if foreign else detail
             try:

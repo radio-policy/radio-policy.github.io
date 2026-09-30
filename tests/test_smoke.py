@@ -1182,6 +1182,65 @@ class TestMinutesSpeechCap(unittest.TestCase):
         self.assertEqual(am.cap_speech_indices(idx[5:], blocks, 3, kw), am.cap_indices(idx[5:], blocks, 3, kw))
 
 
+class TestMinutesViewerVerify(unittest.TestCase):
+    """뷰어 본문 ↔ PDF 대조(#120-보론·#248-보론·#248-보론2): 글자 빠진 PDF는 통과, 다른 회의 본문은 걸려야 한다."""
+
+    T8 = '제22대 제418회 제8차 과학기술정보방송통신위원회 (2024년 10월 15일)'
+
+    @staticmethod
+    def _sent(i):
+        # 문장마다 글자 조합이 다른 가짜 발언(시드 고정) — 같은 틀의 문장을 쓰면 조각이 회의끼리 겹쳐 대조 시험이 안 된다
+        import random
+        r = random.Random(i)
+        return ''.join(chr(0xAC00 + r.randrange(0, 11172)) for _ in range(45))
+
+    def _blocks(self, lo, hi, per=6):
+        return [{'name': '갑', 'pos': '위원', 'text': ' '.join(self._sent(i) for i in range(k, min(hi, k + per)))}
+                for k in range(lo, hi, per)]
+
+    def test_opening_session_veto(self):
+        import assembly_minutes as am
+        opening = {'name': '장', 'pos': '위원장', 'text': '국정감사 중이지만 안건 처리를 위하여 잠시 전체회의를 개회하도록 하겠습니다. '
+                   '제418회 국회(정기회) 과학기술정보방송통신위원회 제5차 전체회의를 개회합니다.'}
+        self.assertEqual(am._opening_session([opening]), ('418', '5'))
+        self.assertEqual(am._title_session(self.T8), ('418', '8'))
+        # 읽히는데 다르면 PDF 가 없어도 불일치
+        ok, why = am.verify_blocks_against_pdf([opening], None, pdf=('', 'PDF 다운로드 실패'), title=self.T8)
+        self.assertIs(ok, False)
+        self.assertIn('제5차', why)
+        # 같으면 종전 흐름(PDF 없음 → 판정 불가), 제목을 안 주거나 개회 발언이 회수를 말하지 않으면 대조하지 않는다
+        same = dict(opening, text=opening['text'].replace('제5차', '제8차'))
+        self.assertIsNone(am.verify_blocks_against_pdf([same], None, pdf=('', 'PDF 다운로드 실패'), title=self.T8)[0])
+        self.assertIsNone(am.verify_blocks_against_pdf([opening], None, pdf=('', 'PDF 다운로드 실패'))[0])
+        self.assertIsNone(am._opening_session([{'text': '의석을 정돈하여 주시기 바랍니다. 제2차 법안심사소위원회를 개회하겠습니다.'}]))
+        self.assertEqual(am._opening_session([{'text': '국회 제418회(정기회) 과학기술정보방송통신위원회 제10차 전체회의를 개회'}]), ('418', '10'))
+
+    def test_garbled_pdf_same_meeting_passes(self):
+        import assembly_minutes as am
+        blocks = self._blocks(0, 120)
+        # PDF 에서 블록 앞 30자가 깨진 경우 — 앞 30자 표본은 0/6 이지만 조각 겹침은 양방향 모두 높다
+        pdf = ' '.join('깨진글자깨진글자깨진글자깨진글자깨진글자깨진글자' + b['text'][40:] for b in blocks)
+        ok, why = am.verify_blocks_against_pdf(blocks, None, pdf=(pdf, ''))
+        self.assertIs(ok, True, why)
+        self.assertIn('역방향', why)
+
+    def test_other_meeting_rejected_both_directions(self):
+        import assembly_minutes as am
+        pdf = ' '.join(b['text'] for b in self._blocks(0, 200))
+        # 전혀 다른 회의
+        ok, _ = am.verify_blocks_against_pdf(self._blocks(1000, 1120), None, pdf=(pdf, ''))
+        self.assertIs(ok, False)
+        # 짧은 진행 회의: 뷰어 문장은 거의 다 PDF 에 있지만(뷰어→PDF 높음) PDF 의 대부분은 뷰어에 없다(역방향 낮음) → 불일치.
+        # 역방향을 안 보던 때에는 이런 본문이 같은 회의로 통과했다(22대 다른 회의 쌍의 3.9%).
+        short = [{'name': '장', 'pos': '위원장', 'text': '앞머리는 다르게 적은 서른 글자짜리 진행 발언 머리말입니다 ' + self._sent(i) + ' ' + self._sent(i + 1)}
+                 for i in (3, 50, 90)]
+        hay = am._squash(pdf)
+        self.assertGreaterEqual(am._ngram_coverage(short, hay), am.VERIFY_NGRAM_OK)
+        self.assertLess(am._ngram_back_coverage(short, hay), am.VERIFY_NGRAM_BACK_OK)
+        ok, why = am.verify_blocks_against_pdf(short, None, pdf=(pdf, ''))
+        self.assertIs(ok, False, why)
+
+
 class TestKmccSubjectSplit(unittest.TestCase):
     """안건명 ' - 대상 -' 꼬리 분리 — 제목 안의 붙은 하이픈(2026-2027, SK-브로드밴드)은 자르지 않는다."""
 

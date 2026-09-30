@@ -10,7 +10,9 @@
   py -3.12 speech_fields_backfill.py --from-raw                   # 보관 원문으로 다시 세기 (네트워크 0, 규칙 바꾼 뒤)
 
 - 이미 원문 파일이 있는 회의는 다시 받지 않는다(--refetch 로 강제). 적재는 메인 스레드에서 순차(#120 단일·순차 원칙).
-- 16:30~17:30(lampmanH-pc gov 체인 — assembly_minutes 가 같은 표를 쓴다)에는 돌리지 않는다(#178).
+- 16:30~18:00(gov 체인 — 회사 PC 16:30, 꺼져 있으면 lampmanH-pc 17:15 대체 실행(#265-보론2). assembly_minutes 가 같은 표를 쓴다)에는
+  돌리지 않는다(#178).
+- 원문은 수집한 PC에만 남는다. --from-raw 뒤에 옛 규칙판 행이 남은 회의(다른 PC가 수집한 회의)를 알려 주므로 그 회의는 --only 로 다시 받는다.
 - 구독자 큐·운영자 알림·assembly_speeches 는 건드리지 않는다.
 """
 import argparse
@@ -60,6 +62,19 @@ def list_meetings(api_key: str, since: str, until: str) -> list:
     return out
 
 
+def stale_meetings(sb) -> list:
+    """speech_field_stats 에서 지금 규칙판(sf.RULES_VERSION)이 아닌 행이 남은 회의 번호."""
+    out, start = set(), 0
+    while True:
+        r = sb.table('speech_field_stats').select('confer_num').neq('rules_version', sf.RULES_VERSION) \
+            .order('id').range(start, start + 999).execute()
+        out.update(str(x['confer_num']) for x in (r.data or []))
+        if len(r.data or []) < 1000:
+            break
+        start += 1000
+    return sorted(out)
+
+
 def fetch_one(m: dict, raw_dir: str, refetch: bool):
     """(m, blocks, src, from_cache). 네트워크 작업만 — DB는 메인 스레드."""
     p = sf.raw_path(m, raw_dir)
@@ -94,8 +109,8 @@ def main():
         os.environ.pop(k, None)                      # 세션 프록시가 국회 사이트 SSL을 깬다
     raw_dir = args.raw_dir or sf.default_raw_dir()
     now = datetime.now()
-    if not args.dry_run and (16 * 60 + 30) <= now.hour * 60 + now.minute <= (17 * 60 + 30):
-        print('[거부] 16:30~17:30은 gov 체인(assembly_minutes)이 같은 표를 쓴다(#178) — 그 뒤에 돌리세요.')
+    if not args.dry_run and (16 * 60 + 30) <= now.hour * 60 + now.minute <= (18 * 60):
+        print('[거부] 16:30~18:00은 gov 체인(assembly_minutes)이 같은 표를 쓴다(#178·#265-보론2) — 그 뒤에 돌리세요.')
         return
     sb = None if args.dry_run else make_client(os.environ['SUPABASE_URL'], os.environ['SUPABASE_SERVICE_KEY'])
     print('[분야 백필] 규칙 %s · 원문 폴더 %s' % (sf.RULES_VERSION, raw_dir))
@@ -115,6 +130,15 @@ def main():
             done += 1
             rows_n += len(rows)
         print('[분야 백필 완료 — 원문 재계산] 회의 %d · 행 %d%s' % (done, rows_n, ' (dry-run)' if not sb else ''))
+        # 원문은 수집한 PC에만 남는다 — 회사 PC가 꺼진 날 lampmanH-pc가 대신 수집한 회의(#265-보론2)는 이 PC에 원문이 없어
+        # 위 재계산에서 빠지고 옛 규칙판 행이 그대로 남는다. 그런 회의를 찾아 다시 받는 명령을 알려 준다.
+        if sb:
+            stale = stale_meetings(sb)
+            if stale:
+                print('[주의] 옛 규칙판으로 남은 회의 %d건(이 PC에 원문 없음): %s' % (len(stale), ' '.join(stale[:40])))
+                print('  → py -3.12 speech_fields_backfill.py --only %s   (뷰어에서 다시 받아 센다)' % ' '.join(stale[:40]))
+            else:
+                print('[확인] speech_field_stats 전 행이 규칙 %s' % sf.RULES_VERSION)
         return
 
     api_key = os.environ.get('ASSEMBLY_API_KEY', '')

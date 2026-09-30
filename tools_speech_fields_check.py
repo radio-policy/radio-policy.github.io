@@ -8,6 +8,9 @@
  1소위 = 과학기술+원자력·우주 70%↑, 2소위 = 통신+방송+AI+보안 70%↑) ③ 미분류 기준(회의별 실질의 10%↓, 전체 5%↓,
  인물별 15%↓, 우정·기타는 우정 날 밖 5%↓) ④ 분야별 적중 상위 낱말 + 무작위 문맥(눈 확인용) ⑥ 분기별 추이.
  ⑤ 정답 대조는 --gold-out 으로 층별 무작위 블록(앞 블록 문맥 포함)을 뽑아 세션이 판정한다(API 0회) → --gold-in 으로 채점.
+   채점은 모집단 가중 + 분야별 정밀도·재현율을 함께 낸다(2026-10-01 Fable 재검토, 배경역사 #248-보론2) — 층마다 같은 수를 뽑은
+   표본을 그대로 합치면 수치가 부풀고, 전체 일치율은 방송·미디어가 좌우해 통신·전파↔보안·개인정보 혼동을 가린다.
+   규칙을 고친 뒤에는 같은 정답으로 다시 재지 말고 --seed 를 바꿔 새 표본을 뽑는다(고칠 때 본 표본은 표본 안 수치).
 """
 import argparse
 import glob
@@ -36,7 +39,7 @@ def load_all(raw_dir, since, until):
         d = m.get('conf_date') or ''
         if d < since or d > until:
             continue
-        info = sf.meeting_info(m)
+        info = sf.meeting_info(m, blocks)
         res = sf.classify_blocks(blocks, info)
         out.append((m, blocks, src, info, res))
     return out
@@ -253,34 +256,66 @@ def main():
         for k, it in gi.items():
             if k in cur:
                 it['rule'], it['rule_kind'] = cur[k]['w'], cur[k]['kind']
+        # 모집단 가중(2026-10-01 Fable 재검토): 표본은 층마다 같은 수(50)를 뽑으므로 118블록짜리 청원소위와 6만 9천 블록짜리
+        # 전체회의가 같은 무게로 섞인다 — 그대로 합치면 작은 층의 높은 일치율이 전체 수치를 끌어올린다(v3: 비가중 78% ↔ 가중 75%).
+        # 층의 실질 블록 수 ÷ 그 층 표본 수를 가중치로 쓴다.
+        pop, nsmp = Counter(), Counter()
+        for m, blocks, src, info, res in data:
+            pop[stratum(m, info)] += sum(1 for x in res if x['kind'] not in OUT_KINDS)
+        for j in g:
+            if j['key'] in gi:
+                nsmp[gi[j['key']]['stratum']] += 1
         agree = defaultdict(lambda: [0, 0])
+        wagree = defaultdict(lambda: [0.0, 0.0])
         confusion = Counter()
+        table = defaultdict(Counter)                # 규칙 분야 → 판정자 분야 (가중)
         for j in g:
             it = gi.get(j['key'])
             if not it:
                 continue
             labs = [x for x in (j.get('labels') or []) if x] or [j.get('label')]   # 판정자: 분야 1개(반반이면 2개) 또는 '미분류'
             rule = it['rule']
+            w = pop[it['stratum']] / nsmp[it['stratum']] if nsmp[it['stratum']] else 1.0
             if it['rule_kind'] in OUT_KINDS:
-                kk, ok = 'out(규칙이 막대 밖으로 뺌)', '미분류' in labs
+                kk, ok, rf = 'out(규칙이 막대 밖으로 뺌)', '미분류' in labs, '막대 밖'
             elif it['rule_kind'] == 'unclassified':
-                kk, ok = 'unclassified', '미분류' in labs
+                kk, ok, rf = 'unclassified', '미분류' in labs, '미분류'
             else:
                 ok = any(x in rule for x in labs)      # 규칙이 반분이면 둘 중 하나, 판정자가 반반이면 둘 중 하나가 맞으면 일치
                 kk = 'direct' if it['rule_kind'] == 'direct' else 'inherit'
+                rf = max(rule, key=rule.get)
                 if not ok:
-                    confusion[(max(rule, key=rule.get), labs[0])] += 1
+                    confusion[(rf, labs[0])] += 1
+            table[rf][labs[0]] += w
             agree[kk][0] += ok
             agree[kk][1] += 1
+            wagree[kk][0] += w * ok
+            wagree[kk][1] += w
             agree[it['stratum']][0] += ok
             agree[it['stratum']][1] += 1
         L += ['## ⑤ 정답 대조 (판정자 눈가림, 규칙 답은 현재 규칙으로 재계산)', '']
         for k, (a, n) in sorted(agree.items()):
-            L.append('- %s: %d/%d = %.0f%%' % (k, a, n, pct(a, n)))
+            L.append('- %s: %d/%d = %.0f%%' % (k, a, n, pct(a, n)) +
+                     (' · 모집단 가중 %.1f%%' % pct(*wagree[k]) if k in wagree else ''))
         L.append('- 틀린 짝(규칙 → 판정자) 상위: ' + ', '.join('%s→%s %d' % (a, b, n) for (a, b), n in confusion.most_common(12)))
-        d_ok = pct(*agree['direct']) >= 85 if agree['direct'][1] else False
-        i_ok = pct(*agree['inherit']) >= 75 if agree['inherit'][1] else False
-        verdict['⑤'] = (d_ok and i_ok, '낱말 %.0f%% · 이어받기 %.0f%%' % (pct(*agree['direct']), pct(*agree['inherit'])))
+        # 분야별 정밀도·재현율(가중) — 전체 일치율은 방송·미디어(막대의 60%)가 좌우해 작은 분야의 큰 오류를 가린다
+        # (v3: 전체 낱말 판정 87%인데 통신·전파 정밀도 45%, 보안·개인정보 재현율 49%).
+        L += ['', '| 규칙이 준 분야 | 정밀도(가중) | 재현율(가중) | 판정자가 가장 많이 준 다른 답 |', '|---|---|---|---|']
+        for f in sf.FIELDS:
+            row = table[f]
+            tot = sum(row.values())
+            rec = sum(table[r][f] for r in table)
+            other = [(v, k) for k, v in row.items() if k != f]
+            L.append('| %s | %s | %s | %s |' % (
+                f, ('%.0f%%' % pct(row[f], tot)) if tot else '-', ('%.0f%%' % pct(row[f], rec)) if rec else '-',
+                ('%s %.0f%%' % (max(other)[1], pct(max(other)[0], tot))) if other and tot else '-'))
+        L += ['', '같은 정답으로 규칙을 고친 뒤 다시 잰 수치는 **표본 안** 수치다(v3의 87%·75%는 새 표본에서 80.5%·70.8%였다). '
+              '규칙을 고쳤으면 `--seed`를 바꿔 새 표본을 뽑아 다시 판정할 것.', '']
+        wd, wi = pct(*wagree['direct']), pct(*wagree['inherit'])
+        d_ok = wd >= 85 if wagree['direct'][1] else False
+        i_ok = wi >= 75 if wagree['inherit'][1] else False
+        verdict['⑤'] = (d_ok and i_ok, '낱말 %.1f%% · 이어받기 %.1f%% (모집단 가중 — 비가중 %.0f%%·%.0f%%)' % (
+            wd, wi, pct(*agree['direct']), pct(*agree['inherit'])))
 
     L += ['', '## 판정 요약', '']
     for k, (ok, why) in verdict.items():

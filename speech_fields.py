@@ -12,6 +12,11 @@
   고정 분야 우선순위는 쓰지 않는다(한쪽 쏠림).
   무낱말 블록: 막대 밖(잡음·위원장 사회·의사진행) → 같은 위원 질의 턴 이어받기(150자 이상 무낱말은 끊고 미분류)
   → 답변은 질문 분야 → 단일 피감기관 날 기본값 → 미분류. 위원장 직위 블록은 낱말로만 판정.
+v4(2026-10-01 Fable 재검토 — 새 눈가림 정답 520블록으로 표본 밖 대조, 배경역사 #248-보론2):
+  · 위원장의 진행 공식 블록(개회·상정·선포·보고 요청)은 안건 이름의 낱말이 있어도 막대 밖(소위 안건 흐름에는 쓴다)
+  · '유심'은 통신이 아니라 보안 약신호(22대 적중의 90%가 유심 해킹 회의)
+  · 통신사 이름(SKT·KT·LG유플러스)은 내용어가 있는 블록에서는 세지 않고, 이름만 있는 블록은 같은 턴의 내용어 판정을 따른다
+  · 청문회·공청회 날은 '끝이 청문회·공청회인 안건'이 어디에 있든 잡는다(첫 안건만 보면 22대 청문 날 절반을 놓쳤다)
 분야 목록·색 순서는 대시보드(app.js SPEECH_FIELDS)와 같아야 한다.
 """
 import json
@@ -19,7 +24,7 @@ import os
 import re
 from collections import defaultdict
 
-RULES_VERSION = 'v3-260927'   # v2: 샌드위치 이어받기·청문회 약한 기본값·소위 안건 흐름·소위 이름 STRIP / v3: 오탐 점검 반영(약신호 단독 무효 등)
+RULES_VERSION = 'v4-261001'   # v2: 샌드위치 이어받기·청문회 약한 기본값·소위 안건 흐름·소위 이름 STRIP / v3: 오탐 점검 반영(약신호 단독 무효 등) / v4: Fable 재검토(위원장 진행 공식·유심·통신사 이름·청문회 날 판별)
 
 # 표시 순서 고정(모든 인물 같은 색·같은 순서). app.js SPEECH_FIELDS 와 1:1.
 FIELDS = ['통신·전파', 'AI·디지털', '보안·개인정보', '방송·미디어', '과학기술·R&D', '원자력·우주', '우정·기타']
@@ -44,6 +49,7 @@ _STRIP = [
     r'(?:국가기간\s*)?뉴스\s*통신사|국가\s*기간\s*통신사|통신\s*사실\s*확인|통신\s*자료',   # 연합뉴스·수사 통신자료의 '통신사'
     r'정보통신망\s*이용\s*촉진\s*및\s*정보\s*보호\s*등에\s*관한\s*법률',           # 법률 이름 속 '정보보호'(오탐 점검 2026-09-27)
     r'위성\s*정당', r'우편으로',
+    r'천문학적',                                            # '천문학적인 금액' — 22대 23블록 중 천문 이야기는 2블록(2026-10-01)
 ]
 STRIP_RE = re.compile('|'.join('(?:%s)' % p for p in _STRIP))
 
@@ -61,15 +67,19 @@ _CONTENT = {
     '통신·전파': (r'통신사|이통\s*3사|통신\s*3사|이동\s*통신|알뜰폰|요금제|통신\s*(?:요금|비)|가계\s*통신비|(?<!전기)요금\s*인하|'
                r'단말(?:기)?\s*(?:지원금|보조금|유통|출고가)|단통법|번호\s*이동|주파수|전파|(?<![A-Za-z0-9])[56]G(?![A-Za-z])|'
                r'(?<![A-Za-z])LTE(?![A-Za-z])|기지국|(?<!정보)통신망|망\s*(?:사용료|이용\s*대가|중립)|전기\s*통신|기간\s*통신|부가\s*통신|'
-               r'로밍|초고속\s*인터넷|와이파이|통신\s*장애|제4\s*이동|재난\s*문자|도메인|인터넷\s*주소'),
+               # '도메인' 단독은 절반이 '산업 도메인·도메인 지식'(AI 문맥)이었다 — 인터넷주소 뜻일 때만(2026-10-01)
+               r'로밍|초고속\s*인터넷|와이파이|통신\s*장애|제4\s*이동|재난\s*문자|도메인\s*(?:이름|주소|등록|차단|네임)|인터넷\s*주소'),
     'AI·디지털': (r'(?<![A-Za-z])AI(?![A-Za-z])|인공\s*지능|생성형|데이터\s*센터|(?<![A-Za-z])[GN]PU(?![A-Za-z])|'
                 r'클라우드(?!\s*플레어)|소프트웨어|(?<![A-Za-z])SW(?![A-Za-z])|초거대|(?<![A-Za-z])LLM(?![A-Za-z])|'
                 r'파운데이션\s*모델|소버린|챗\s*GPT|디지털\s*(?:전환|포용|격차|인프라|트윈)|메타버스|블록\s*체인|빅\s*데이터|'
-                r'데이터\s*(?:산업|경제|기본법)|인앱\s*결제|앱\s*마켓'),
+                # 디지털배움터·키오스크(디지털 포용) — 낱말이 없어 91블록 중 51블록이 다른 분야를 물려받았다(2026-10-01)
+                r'데이터\s*(?:산업|경제|기본법)|인앱\s*결제|앱\s*마켓|디지털\s*배움터|키오스크'),
     # '보안' 단독은 '보안 프로그램(직원 사찰)'·'보안 직원'·'문서 보안'에 6/8 틀려(오탐 점검 2026-09-27) 복합형만 인정
     '보안·개인정보': (r'해킹|정보\s*보호|(?:정보|사이버|네트워크|통신|망|데이터|클라우드|국가|산업|기술)\s*보안|'
                   r'보안\s*(?:취약|사고|패치|인증|점검|관제|투자|업데이트|위협|강화|체계|기술|업체|솔루션|대책|인력|조치|정책|수준|역량|예산|공시|위기)|'
                   r'개인\s*정보\s*(?:유출|침해|보호\s*조치)|정보\s*유출|유출\s*사고|침해\s*사고|'
+                  # 조사가 끼면('정보가 유출', '유출된 정보') 위 꼴에 안 걸려 195블록 중 91블록이 보안이 아니었다(2026-10-01)
+                  r'정보[가는를도은이]\s*(?:다\s*|모두\s*)?유출|유출된\s*(?:개인\s*)?정보|'
                   r'사이버\s*(?:공격|보안|안보|위협)|랜섬\s*웨어|디도스|악성\s*코드|'
                   r'스팸|스미싱|보이스\s*피싱|BPF\s*도어|펨토셀|무단\s*소액\s*결제|(?<![A-Za-z])ISMS|변작|대포폰'),
     '방송·미디어': (r'방송(?!\s*(?:미디어\s*)?통신\s*(?:위원회|심의\s*위원회|발전\s*기금|사무소))|공영\s*방송|지상파|종편|유료\s*방송|'
@@ -91,11 +101,17 @@ _CONTENT = {
 CONTENT_RE = {f: re.compile(p) for f, p in _CONTENT.items()}
 
 # ── 약신호(0.5점, 블록당 분야별 상한 1) — 사업자·언론사·겸임 기관명 ────────
+# 통신·전파 약신호는 **통신사 이름뿐**이다(TELCO_FIELD). 통신사 이름은 요금·해킹·방송 송출·AI 어느 주제에나 나와서
+# ① 내용어가 있는 블록에서는 세지 않고(이름 0.5점이 '이동통신 1 : 해킹 1' 접전을 통신으로 기울였다) ② 이름만 있는
+# 블록은 같은 턴의 내용어 판정을 따른다(classify_blocks). '유심'은 22대 적중 652건 중 589건이 유심 해킹 회의
+# (54606·54673)라 보안 약신호로 옮겼다 — v3에서 규칙이 통신·전파로 센 블록의 42%를 판정자는 보안·개인정보로 봤다
+# (새 정답 520블록, 통신·전파 정밀도 33%). 2026-10-01 Fable 재검토.
+TELCO_FIELD = '통신·전파'
 _WEAK = {
-    '통신·전파': r'SKT|SK\s*텔레콤|(?<![A-Za-z])KT(?![A-Za-z&])|LG\s*유플러스|LGU\+|유심(?!히)',
+    '통신·전파': r'SKT|SK\s*텔레콤|(?<![A-Za-z])KT(?![A-Za-z&])|LG\s*유플러스|LGU\+',
     '방송·미디어': (r'(?<![A-Za-z])(?:KBS|MBC|EBS|YTN|TBS|SBS|JTBC|KTV)(?![A-Za-z])|'
                  r'방송(?:미디어)?통신위원회|방통위|방미통위'),
-    '보안·개인정보': r'(?<![A-Za-z])KISA(?![A-Za-z])|인터넷\s*진흥원',
+    '보안·개인정보': r'(?<![A-Za-z])KISA(?![A-Za-z])|인터넷\s*진흥원|유심(?!히)',
     '과학기술·R&D': r'과학\s*기술원|(?<![A-Za-z])KAIST(?![A-Za-z])|카이스트',
 }
 WEAK_RE = {f: re.compile(p) for f, p in _WEAK.items()}
@@ -106,6 +122,17 @@ WEAK_ALONE = True    # 약신호만 있는 블록도 그 분야로 판정(정본
 PROC_RE = re.compile(r'의사\s*진행|자료\s*(?:제출|요구)|증인\s*(?:채택|출석)|동행\s*명령|고발|정회|산회|질의\s*시간|'
                      r'위원장석|사회를\s*보|신상|의결|이의\s*없')
 PROC_STRONG_RE = re.compile(r'사회를\s*보|위원장\s*자격|신상\s*발언')
+# 위원장 진행 공식(v4) — 개회·속개·상정·선포·보고 요청·발언권 부여. 이런 블록은 안건·기관 이름 때문에 분야 낱말이 걸려도
+# 위원장이 그 분야를 '말한' 것이 아니다: 정답 대조에서 공식이 든 위원장 블록은 일치 4/15(판정자는 '회의 진행'), 공식이 없는
+# 위원장 블록은 27/30. 긴 실질 발언 끝에 "○○○ 위원님 질의하십시오" 한 번 붙은 것까지 빼지 않도록 범위를 좁힌다(chair_formula).
+CHAIR_FORMULA_RE = re.compile(
+    r'의석을\s*정돈|성원이\s*되었(?:으므로|기\s*때문에)|(?:개회|개의)(?:하겠습니다|합니다|하도록\s*하겠습니다)|개회를\s*선언|'
+    r'(?:회의|국정감사|감사|청문회|공청회|질의)를\s*(?:속개|계속하겠|중지|마치|종결)|속개(?:하겠습니다|합니다)|'
+    r'선포합니다|상정(?:합니다|하겠습니다|하도록\s*하겠습니다)|의사\s*일정\s*제\s*\d+\s*항|'
+    r'(?:보고|설명|인사\s*말씀|인사|선서|착석|이석|출석)(?:해|하여)?\s*주시기\s*바랍니다|'
+    r'질의(?:하십시오|해\s*주십시오|하여\s*주시기\s*바랍니다|하시기\s*바랍니다)')
+CHAIR_FORMULA_SHORT = 200     # 공식이 하나뿐이면 이보다 짧은 블록이거나
+CHAIR_FORMULA_HEAD = 60       # 공식이 블록 첫머리(이 글자 수 안)에서 시작할 때만 진행 블록으로 본다
 SUBCOMMITTEE_KINDS = ('1소위', '2소위', '예결소위', '청원소위')
 AGENDA_POS_RE = re.compile(r'전문위원|입법조사관')           # 안건을 소개·검토보고하는 직위(소위 안건 흐름)
 AGENDA_START_RE = re.compile(r'상정|의사\s*일정\s*제')
@@ -149,14 +176,25 @@ def agency_field(name: str):
     return None
 
 
-def meeting_info(m: dict) -> dict:
-    """회의 종류·기본 분야. m 은 assembly_minutes 의 회의 dict(title, agenda, is_audit, audit_nm)."""
+HEARING_ITEM_RE = re.compile(r'(인사청문회|청문회|공청회)\s*$')    # 안건 자체가 청문회·공청회('…출석요구의 건'·'인사청문요청안'은 아님)
+BILL_ITEM_RE = re.compile(r'법률안|예산안|결산|기금운용')
+MIXED_DAY_BILLS = 10          # 법안·예산 안건이 이만큼 있으면 청문 안건이 있어도 섞인 날 — 기본 분야를 주지 않는다
+HEARING_DEFAULT_MIN_SHARE = 0.5   # 청문회 제목이 가리키는 분야가 그날 내용어 판정의 이 비율에 못 미치면 기본 분야를 주지 않는다
+
+
+def meeting_info(m: dict, blocks: list = None) -> dict:
+    """회의 종류·기본 분야. m 은 assembly_minutes 의 회의 dict(title, agenda, is_audit, audit_nm).
+    blocks 를 주면 청문회·공청회의 약한 기본값을 그날 실제 발언 분포로 확인한다(build_rows 는 항상 준다)."""
     title = m.get('title') or ''
     items = [re.sub(r'^\s*\d+\.\s*', '', a).strip() for a in (m.get('agenda') or [])]
-    agenda = ' '.join(items)
     # 소위 이름만 본다 — 제목의 상위 위원회 이름('과학기술정보방송통신위원회')에 '과학기술'·'방송'이 다 들어 있다.
     sub = re.search(r'(\S+)소위원회', title)
     sub = sub.group(1) if sub else ''
+    # 청문회·공청회 자체인 안건(v4, 2026-10-01): **안건 목록의 어디에 있든** 잡는다. v3은 첫 안건만 봤는데 열린국회정보의 안건
+    # 순서는 진행 순서가 아니어서('인사청문요청안'·'의사일정 변경의 건'·'증인 출석요구 추가의 건'이 앞에 온다) 22대 청문 날
+    # 26일 중 16일을 전체회의로 놓쳤다 — 같은 이진숙 인사청문 사흘 가운데 둘째 날만 인사청문으로 잡혔다.
+    # v1의 오판('청문회 증인 출석요구의 건' 때문에 일반 회의가 청문회로)은 끝이 '…의 건'인 안건을 안 봐서 생기지 않는다.
+    hear = [a for a in items if HEARING_ITEM_RE.search(a)]
     kind = '전체회의'
     if m.get('is_audit'):
         kind = '국정감사'
@@ -171,16 +209,15 @@ def meeting_info(m: dict) -> dict:
             kind = '2소위'
         else:
             kind = '소위'
-    # **첫(대표) 안건**이 청문회·공청회 자체인 날만('청문회 증인 출석요구의 건'·'인사청문요청안'·'공청회 개최의 건'이나
-    # 법안 심사 뒤에 붙은 청문 안건은 아님) — 인사청문은 기본 분야를 주므로 섞인 날에 붙으면 무낱말 발언이 끌려간다.
-    elif items and re.search(r'인사청문회$', items[0]):
-        kind = '인사청문'
-    elif items and re.search(r'공청회$', items[0]):
-        kind = '공청회'
-    elif items and re.search(r'청문회$', items[0]):
-        kind = '청문회'
+    elif hear:
+        tail = HEARING_ITEM_RE.search(hear[0]).group(1)
+        kind = {'인사청문회': '인사청문', '공청회': '공청회'}.get(tail, '청문회')
     default = None
     agencies = []
+    weak = False
+    # 법안을 많이 처리한 날(2024-11-20 KBS 사장 인사청문 3일차 + 법안 72건)은 섞인 날 — 종류는 청문으로 두되 기본 분야는
+    # 주지 않는다(기본 분야가 있으면 법안 심사의 무낱말 발언이 끌려간다).
+    mixed = sum(1 for a in items if BILL_ITEM_RE.search(a)) >= MIXED_DAY_BILLS
     if m.get('is_audit'):
         agencies = [a.strip() for a in re.split(r'[·,]', m.get('audit_nm') or '') if a.strip()]
         # 목록이 잘려 '…'로 끝나면 마지막 항목은 온전한 기관명이 아니다 — 빼고 본다
@@ -188,17 +225,24 @@ def meeting_info(m: dict) -> dict:
         fs = {agency_field(a) for a in agencies}
         if agencies and len(fs) == 1 and None not in fs:
             default = fs.pop()
-    elif kind == '인사청문':
-        mm = re.search(r'([가-힣]+(?:위원회|공사|부|청))\s*(?:위원장|사장|장관|청장)?\s*후보자', agenda)
+    elif kind == '인사청문' and not mixed:
+        mm = re.search(r'([가-힣]+(?:위원회|공사|부|청))\s*(?:위원장|사장|장관|청장)?\s*후보자', hear[0])
         if mm:
             default = agency_field(mm.group(1))
-    weak = False
-    if not default and kind in ('청문회', '공청회') and items:
-        # 한 주제 청문회·공청회('SK텔레콤 해킹 관련 청문회' → 보안·개인정보) — 대표 안건 제목이 한 분야로만 읽히면 그날의
-        # **약한** 기본값(무낱말 블록의 마지막 기댈 곳, 공방 턴은 흡수하지 않음). 2026-09-27 전수 실측 뒤 추가(Fable 재검토).
-        d = decide(score_text(items[0]))
+    elif kind in ('청문회', '공청회') and not mixed:
+        # 한 주제 청문회·공청회('SK텔레콤 해킹 관련 청문회' → 보안·개인정보) — 그 안건 제목이 한 분야로만 읽히면 그날의
+        # **약한** 기본값(무낱말 블록의 마지막 기댈 곳, 공방 턴은 흡수하지 않음 — 공방 턴은 강한 기본값도 흡수하지 않는다).
+        d = decide(score_text(hear[0]))
         if len(d) == 1:
             default, weak = next(iter(d)), True
+            # 제목과 실제가 다른 날이 있다: 2025-04-30 'YTN 등 방송통신 분야 청문회'는 SKT 유심 해킹 질의가 절반
+            # (내용어 판정 방송 44%·보안 37%·통신 17%)이라 제목대로 방송을 주면 해킹 질의의 무낱말 발언이 방송이 된다.
+            # 나머지 청문 날은 제목 분야가 56~100%였다(2026-10-01 전수).
+            if blocks is not None:
+                share = _content_share(blocks)
+                tot = sum(share.values())
+                if tot and share.get(default, 0.0) / tot < HEARING_DEFAULT_MIN_SHARE:
+                    default, weak = None, False
     return {'kind': kind, 'default': default, 'default_weak': weak, 'agencies': agencies}
 
 
@@ -206,28 +250,62 @@ def _norm(text: str) -> str:
     return re.sub(r'\s+', ' ', text or '').strip()
 
 
-def score_text(text: str) -> dict:
-    """블록 본문 → {분야: 점수}. 0점 분야는 없음."""
+def score_detail(text: str):
+    """블록 본문 → ({분야: 점수}, 내용어 있음, 통신사 이름만 있음). 0점 분야는 없음."""
     t = STRIP_RE.sub(' ', _norm(text))
     sc = defaultdict(float)
+    strong = False                # 복합어·내용어가 하나라도 걸렸는가(약신호만이면 False)
     for f, rx in COMPOUND_RE.items():
         n = len(rx.findall(t))
         if n:
             sc[f] += n
             t = rx.sub(' ', t)
+            strong = True
     for f, rx in CONTENT_RE.items():
         n = len(rx.findall(t))
         if n:
             sc[f] += n
+            strong = True
     if not sc and not WEAK_ALONE:
         # 약신호(사업자·언론사·기관 이름)만 있는 블록은 분야를 정하지 않는다 — 증인 소개·호명·인사말에서 대량으로 틀렸다
         # (오탐 점검 2026-09-27: SK텔레콤 7/8·KT 4/8·쿠팡 7/8 틀림). 이런 블록은 이어받기·기본값으로 간다.
-        return {}
+        return {}, False, False
+    weak_fields = set()
     for f, rx in WEAK_RE.items():
         n = len(rx.findall(t))
         if n:
+            if f == TELCO_FIELD and strong:
+                continue          # 통신사 이름은 내용어가 있는 블록에서는 세지 않는다(v4)
             sc[f] += min(1.0, 0.5 * n)
-    return {f: v for f, v in sc.items() if v > 0}
+            weak_fields.add(f)
+    telco_only = (not strong) and weak_fields == {TELCO_FIELD}
+    return {f: v for f, v in sc.items() if v > 0}, strong, telco_only
+
+
+def score_text(text: str) -> dict:
+    """블록 본문 → {분야: 점수}. 0점 분야는 없음."""
+    return score_detail(text)[0]
+
+
+def chair_formula(text: str) -> bool:
+    """위원장 직위 블록이 진행 공식 블록인가 — 공식이 둘 이상이거나, 하나면 짧은 블록이거나 첫머리에서 시작할 때."""
+    ms = list(CHAIR_FORMULA_RE.finditer(text))
+    if not ms:
+        return False
+    return len(ms) >= 2 or len(text) < CHAIR_FORMULA_SHORT or ms[0].start() < CHAIR_FORMULA_HEAD
+
+
+def _content_share(blocks: list) -> dict:
+    """그날 위원·정부 측 발언의 내용어 판정 분포(기본 분야 없이) — 청문회 제목이 실제 발언과 맞는지 확인용."""
+    sh = defaultdict(float)
+    for b in blocks:
+        if role_of(b.get('pos')) == 'chair':
+            continue
+        sc, strong, _ = score_detail(b.get('text'))
+        if sc and strong:
+            for f, w in decide(sc).items():
+                sh[f] += w
+    return sh
 
 
 def decide(scores: dict, default=None) -> dict:
@@ -269,13 +347,18 @@ def classify_blocks(blocks: list, info: dict) -> list:
         if _is_noise(t):
             res.append({'kind': 'noise', 'w': {}, 'role': r})
             continue
-        sc = score_text(t)
+        sc, strong, telco_only = score_detail(t)
         total = sum(sc.values())
         if PROC_STRONG_RE.search(t) and total <= 2:
             res.append({'kind': 'proc', 'w': {}, 'role': r})
             continue
         if sc:
-            res.append({'kind': 'direct', 'w': decide(sc, default), 'role': r})
+            if r == 'chair' and chair_formula(t):
+                # 위원장 진행 공식(v4) — 막대 밖. 낱말 판정은 'aw'로 남겨 소위 안건 흐름의 '현재 안건 분야'로만 쓴다.
+                res.append({'kind': 'chair', 'w': {}, 'role': r, 'aw': decide(sc, default)})
+                continue
+            # strong: 내용어가 걸린 판정인가 / telco: 통신사 이름만 걸린 블록인가(같은 턴의 내용어 판정에 양보한다)
+            res.append({'kind': 'direct', 'w': decide(sc, default), 'role': r, 'strong': strong, 'telco': telco_only})
             continue
         if r == 'chair':
             res.append({'kind': 'chair', 'w': {}, 'role': r})
@@ -294,6 +377,7 @@ def classify_blocks(blocks: list, info: dict) -> list:
 
     last = None          # 이 턴에서 질의자의 직전 판정(이어받기 원천)
     q = None             # 답변이 물려받을 질문 분야
+    last_strong = False  # last·q 가 내용어 판정에서 온 것인가(통신사 이름만 있는 블록이 양보할 상대, v4)
     # 분야 낱말이 하나도 없는 턴(정쟁·사회 공방·진행만 오간 턴)은 '공방·진행'으로 막대 밖에 둔다(정본 §5 —
     # 22대 위원장 공방은 한 위원 국감 블록의 절반을 넘기도 한다). 턴 밖(첫 위원 발언 전) 블록은 여기 해당 없음.
     topical = set(turn[i] for i, x in enumerate(res) if x['kind'] == 'direct' and turn[i] >= 0)
@@ -301,14 +385,15 @@ def classify_blocks(blocks: list, info: dict) -> list:
     # 아니라 '위원장 상정 → 전문위원 검토보고 → 차관·위원 조문 논의'로 흐른다. 조문 논의("22조 3항 삭제")는 분야 낱말이 없어
     # 턴 이어받기로는 미분류가 19~24%였다. 위원장·전문위원 블록의 판정을 '현재 안건 분야'로 두고, 무낱말 블록이 물려받는다.
     sub = info.get('kind') in SUBCOMMITTEE_KINDS
-    weak = bool(info.get('default_weak'))
     agenda = None
     for i, (b, x) in enumerate(zip(blocks, res)):
         if i == 0 or turn[i] != turn[i - 1]:
-            last, q = None, None
+            last, q, last_strong = None, None, False
         if sub and (x['role'] == 'chair' or AGENDA_POS_RE.search(b.get('pos') or '')):
             if x['kind'] == 'direct':
                 agenda = x['w']
+            elif x.get('aw'):
+                agenda = x['aw']                 # 위원장 진행 공식 블록(막대 밖)의 낱말 판정 — 안건 분야로는 쓴다
             elif AGENDA_START_RE.search(_norm(b.get('text'))):
                 agenda = None                    # 낱말 없는 안건 상정 — 앞 안건 분야를 끌고 가지 않는다
         # 기본 분야가 있는 날(단일 피감기관 국감·인사청문)도 공방 턴은 흡수하지 않는다 — 정답 대조(2026-09-27, 판정자 눈가림 550블록)에서
@@ -317,8 +402,32 @@ def classify_blocks(blocks: list, info: dict) -> list:
             x['kind'] = 'offtopic'
             continue
         if x['kind'] == 'direct':
+            if x.get('telco') and x['role'] != 'chair':
+                # 통신사 이름만 있는 블록(v4): 같은 턴에 내용어 판정이 있으면 그 분야를 따른다 — "KT에서 송출을 중단했습니다"는
+                # 방송 질의, "SK텔레콤이나 KT도 똑같은 잣대로"는 침해사고 질의였다. 턴에 내용어 판정이 없으면 종전대로 통신 0.5점.
+                # 방송사·기관 이름('방통위'·'KISA'·'유심')은 그 자체가 주제라 양보하지 않는다(양보시키면 맞던 것이 틀려졌다).
+                if x['role'] == 'member':
+                    src = last if (last is not None and last_strong) else None
+                    if src is None:
+                        for j in range(i + 1, len(blocks)):
+                            if turn[j] != turn[i]:
+                                break
+                            if res[j]['role'] == 'member' and res[j]['kind'] == 'direct' and not res[j].get('telco'):
+                                src = res[j]['w']
+                                break
+                    if src:
+                        x['kind'], x['w'] = 'inherit', dict(src)
+                        last = q = src
+                        last_strong = True
+                    else:
+                        last = q = x['w']
+                        last_strong = False
+                elif turn[i] >= 0 and q is not None and last_strong:
+                    x['kind'], x['w'] = 'inherit', dict(q)
+                continue
             if x['role'] == 'member':
                 last = q = x['w']
+                last_strong = True
             continue
         if x['kind'] != 'none':
             continue
@@ -340,6 +449,7 @@ def classify_blocks(blocks: list, info: dict) -> list:
                     continue
                 x['kind'] = 'unclassified'
                 last = q = None
+                last_strong = False
                 continue
             src = last
             if src is None:
@@ -349,6 +459,7 @@ def classify_blocks(blocks: list, info: dict) -> list:
                         break
                     if res[j]['role'] == 'member' and res[j]['kind'] == 'direct':
                         src = res[j]['w']
+                        last_strong = not res[j].get('telco')
                         break
             if src:
                 x['kind'], x['w'] = 'inherit', dict(src)
@@ -398,7 +509,7 @@ def aggregate(blocks: list, res: list) -> dict:
 
 
 def build_rows(m: dict, blocks: list, src: str = '') -> list:
-    info = meeting_info(m)
+    info = meeting_info(m, blocks)
     res = classify_blocks(blocks, info)
     rows = []
     for (spk, pos), a in aggregate(blocks, res).items():
