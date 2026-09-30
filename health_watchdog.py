@@ -183,9 +183,11 @@ else:
 # 공휴일·휴가는 근무일로 세므로 그날은 한 번 경고가 나간다(알고 있는 날이면 무시).
 # 내부 watchdog_scan(pg_cron)도 같은 키를 보지만 Supabase cron이 서면 함께 서므로 여기서도 본다.
 # ①에서 Supabase 접속 불가로 이미 경고했으면 중복 경고를 피해 건너뛴다.
+# #265-보론2(2026-10-01): 회사 PC가 꺼진 동안은 lampmanH-pc가 가드를 달고 대신 돈다(standby_run.py) — 근무시간에 이
+# 경보가 나면 두 PC가 다 못 돈 것이다. 판정은 그대로 근무시간 기준(밤에 lampmanH-pc만 죽은 것은 울리지 않음).
 PC_HEARTBEATS = {
-    "last_gov_notice_run": "정부고시·입법예고 체인(회사 PC 평일 16:30)",   # 임계 근무시간 10h = 하루 건너뜀
-    "last_refetch_run":    "뉴스 본문 재수집(회사 PC 10분마다)",          # 임계 근무시간 3h
+    "last_gov_notice_run": "정부고시·입법예고 체인(회사 PC 16:30 · 대체 lampmanH-pc 17:15)",   # 임계 근무시간 10h = 하루 건너뜀
+    "last_refetch_run":    "뉴스 본문 재수집(회사 PC 10분마다 · 대체 lampmanH-pc)",          # 임계 근무시간 3h
 }
 if not any(p.startswith("⛔") for p in problems):
     try:
@@ -197,11 +199,11 @@ if not any(p.startswith("⛔") for p in problems):
         for key, label in PC_HEARTBEATS.items():
             row = seen.get(key)
             if not row or row.get("age_h") is None:
-                problems.append("%s heartbeat(%s) 기록 없음 — 회사 PC 확인" % (label, key))
+                problems.append("%s heartbeat(%s) 기록 없음 — 회사 PC·lampmanH-pc 확인" % (label, key))
                 continue
             h, thresh = float(row["age_h"]), float(row["thresh_h"])
             if h >= thresh:
-                problems.append("%s 근무시간 기준 %.1f시간째 실행 없음 (임계 %dh) — 회사 PC 확인" % (label, h, thresh))
+                problems.append("%s 근무시간 기준 %.1f시간째 실행 없음 (임계 %dh) — 회사 PC·lampmanH-pc 확인" % (label, h, thresh))
             else:
                 print("[워치독] %s 근무시간 기준 %.1fh 전 실행 (정상)" % (label, h))
     except Exception as e:

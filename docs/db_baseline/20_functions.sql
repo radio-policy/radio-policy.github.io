@@ -1623,7 +1623,7 @@ begin
       probs := probs || (r.label || ' ' || round(r.age_h, 1) || 'h 무갱신(' ||
                          (case when r.clock = 'biz' then '근무시간 기준, ' else '' end) ||
                          '임계 ' || round(r.thresh_h) || 'h)' ||
-                         (case when r.clock = 'biz' then ' — 회사 PC 확인' else '' end));
+                         (case when r.clock = 'biz' then ' — 회사 PC·lampmanH-pc 확인' else '' end));
       keys  := keys  || (r.key || ':late');
     end if;
 

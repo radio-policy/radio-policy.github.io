@@ -55,6 +55,25 @@ def ran_recently(sb: Client, key: str, hours: float) -> bool:
         return False
 
 
+def heartbeat_age_hours(sb: Client, key: str):
+    """system_health[key]가 갱신된 뒤 지난 실제 시간(h). 기록이 없거나 조회가 실패하면 None.
+
+    ran_recently와 같은 조회에 나이를 돌려주는 판 — lampmanH-pc 대체 실행기(standby_run.py, #265-보론2)가
+    '몇 시간 전에 돌았기에 건너뛰었는지'를 남기려고 쓴다. None을 '돌았다'로 읽지 말 것(fail-open은 호출자 몫).
+    """
+    try:
+        r = sb.table('system_health').select('updated_at').eq('key', key).maybe_single().execute()
+        ts = (getattr(r, 'data', None) or {}).get('updated_at')
+        if not ts:
+            return None
+        prev = datetime.datetime.fromisoformat(str(ts).replace('Z', '+00:00'))
+        now = datetime.datetime.now(datetime.timezone.utc)
+        return (now - prev).total_seconds() / 3600
+    except Exception as e:
+        print('[heartbeat 나이 조회 실패] %s: %s' % (key, str(e)[:80]))
+        return None
+
+
 def make_client(url: str, key: str) -> Client:
     # transport를 명시하면 protocol(HTTP/1.1)·retries·limits가 transport 기준으로 적용된다.
     # HTTPTransport는 기본 http2=False → HTTP/1.1 사용(=Server disconnected 버그 원인 제거).

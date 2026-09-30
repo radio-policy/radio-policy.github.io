@@ -8245,7 +8245,8 @@ function opsRow(label, value, ok, hint) {
            '</div><div style="font-size:12px;color:' + color + ';font-weight:600;text-align:right">' + value + '</div></div>';
 }
 
-// PC 예약작업(정부 공고 체인 등)은 평일 09:30~18:00에만 켜지는 회사 PC에서 돈다(#265) — 실제 경과 시간으로 재면
+// PC 예약작업(정부 공고 체인 등)은 평일 09:30~18:00에만 켜지는 회사 PC가 주(#265), 꺼진 동안은 lampmanH-pc가 가드를 달고
+// 대신 돈다(#265-보론2) — 둘 다 죽었을 때 근무시간에만 울리도록 판정은 그대로 근무시간 기준이다. 실제 경과 시간으로 재면
 // 밤·주말마다 빨간불이 된다. 근무시간만 센 나이와 임계는 DB가 돌려준다(RPC pc_heartbeat_ages — watchdog_scan·
 // health_watchdog.py와 같은 계산). 조회가 안 되면 종전처럼 실제 경과 시간(wallLimitH)으로 본다.
 async function pcHeartbeatOk(key, wallIso, wallLimitH) {
@@ -8312,10 +8313,19 @@ async function loadOpsStatus() {
                    '매일 06:00 KST');
     rows += opsRow('입법예고·정부고시 크롤러 (마지막 실행)', opsAgoText(lastGov),
                    lastGov ? govOk : null,
-                   lastGov ? '평일 16:30 회사 PC 실행(밤·주말엔 돌지 않음, 근무시간 기준 판정) — 새 예고 없어도 정상' : '회사 PC 16:30 스케줄러 (heartbeat 대기)');
+                   lastGov ? '회사 PC 16:30, 회사 PC가 꺼진 날은 lampmanH-pc가 17:15에 대신(#265-보론2) · 근무시간 기준 판정 — 새 예고 없어도 정상' : '회사 PC 16:30 스케줄러 (heartbeat 대기)');
     rows += opsRow('└ 입법예고 최근 새 항목', opsAgoText(lastLaw), null, '매칭되는 새 입법예고가 드물어 간격 큼(정상)');
-    rows += opsRow('본문 재수집 (회사 PC, 마지막 실행)', opsAgoText(lastRefetch), null,
-                   lastRefetch ? ('평일 근무시간에 10분마다 · 최근 결과: ' + hbNote('last_refetch_run')) : '회사 PC 본문 재수집 (실행 기록 대기)');
+    rows += opsRow('본문 재수집 (마지막 실행)', opsAgoText(lastRefetch), null,
+                   lastRefetch ? ('회사 PC 10분마다, 꺼져 있으면 lampmanH-pc가 대신 · 최근 결과: ' + hbNote('last_refetch_run')) : '본문 재수집 (실행 기록 대기)');
+    // lampmanH-pc 자동 대체(standby_run.py, #265-보론2) — 회사 PC가 돌았으면 건너뛰고 기록만 남긴다. 10분마다 찍히므로
+    // 1시간 넘게 없으면 대체 PC가 멈춘 것(밤·주말 대신 돌 PC가 없음). 워치독 대상은 아니다 — 이 행이 감시 창.
+    var lastStandby = hbTime('last_standby_refetch');
+    if (lastStandby) {
+      var chainNote = hbNote('last_standby_chain');
+      rows += opsRow('└ lampmanH-pc 자동 대체 (마지막 확인)', opsAgoText(lastStandby), hoursAgo(lastStandby) < 1,
+                     '재수집: ' + hbNote('last_standby_refetch') +
+                     (chainNote ? (' · 정부 체인(' + opsAgoText(hbTime('last_standby_chain')) + '): ' + chainNote) : ''));
+    }
     // 방미통위 회의 의사일정·위원회 결과 (kmcc_meeting.py, Actions 매시 :17 뉴스 뒤 단계 — #154).
     // watchdog_scan 은 아직 이 키를 안 본다(2주 안정 뒤 추가 검토) — 이 행이 유일한 감시 창이다.
     var lastKmcc = hbTime('last_kmcc_meeting_run');
