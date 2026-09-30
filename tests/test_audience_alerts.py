@@ -7,6 +7,10 @@
     사건 묶기 호출·기보도 조회가 **나누기 전 본문(아래 _ref_suppress_repeat_alerts — HEAD b2c213c에서 글자 그대로 옮김)**과
     같다(키워드 억제·의미판정 억제·리마인드(사슬 포함)·실행내 묶음·의미 재묶기·fail-open 여러 갈래). 다른 것은 억제 사슬 조회의
     정렬(id 추가)·페이지(range)뿐이고, 그 행동 차이는 로그가 1,000행을 넘을 때만 난다(따로 확인).
+    ※ #263(2026-09-30): 실행 간 재보도 억제(①-2)는 묶기 분류기(group_same_event)에서 재보도 대조(match_prior_reports)로
+      옮겼다 — 기준본은 그대로 두고, 같은 시나리오에서 '같은 기사를 같은 기보도와 묶는' 가짜 대조기(FakeMatch)를 물려 결과가
+      같음을 본다. 달라진 것(기보도 조회 칸 event·screen_text, 사건 묶기 호출 1번 → 2차 묶기만, 억제 사슬을 못 읽은 실행은
+      대조를 건너뜀)은 따로 확인한다. 새 단계의 세부(대표만 견줌·오염 제외·리마인드 취소)는 tests/test_dedup_match.py.
   - format_news_item(표시 키 없음)·queue_news_items(trigger=False)의 행이 나누기 전과 바이트 단위로 같다.
   - 사건 묶기 메모, 받는 단위 만들기, 알림 등급(팀원 수정 min·실장 합침), 복사 지름길 조건, 채널별 후보·비교군,
     late 후보(requested_by null·되살림 제외), 로그 → 큐 순서(이미 있는 기록이면 큐 안 넣음), 행 키 집합, 표시 문구,
@@ -548,6 +552,30 @@ class FakeGroup:
         return [groups[k] for k in order]
 
 
+class FakeMatch:
+    """news_dedup.match_prior_reports 가짜(#263) — 새 기사마다, events {제목: 사건 열쇠}가 같은 「이미 알린 기사」 가운데 첫
+    기사의 번호(없으면 None). 진짜처럼 키가 없거나 목록이 비면 None, fail=True면 None(실패). 호출(새 제목들, 기보도 제목들)을
+    calls에, 넘어온 키워드 인자를 kws에 남긴다."""
+
+    def __init__(self, events=None, fail=False):
+        self.events = dict(events or {})
+        self.fail = fail
+        self.calls = []
+        self.kws = []
+
+    def __call__(self, new_items, prior_items, api_key, model=None, **kw):
+        self.calls.append(([n.get('title') for n in new_items], [p.get('title') for p in prior_items]))
+        self.kws.append(dict(kw))
+        if self.fail or not api_key or not new_items or not prior_items:
+            return None
+        out = []
+        for n in new_items:
+            k = self.events.get(n.get('title'))
+            out.append(next((j for j, p in enumerate(prior_items)
+                             if k is not None and self.events.get(p.get('title')) == k), None))
+        return out
+
+
 def _ts(hours_ago: float) -> str:
     """KST ISO 시각(크롤러의 cutoff와 같은 꼴)."""
     return (datetime.now(KST) - timedelta(hours=hours_ago)).isoformat()
@@ -626,16 +654,20 @@ class TestCommonPathEquivalence(unittest.TestCase):
     def _run(self, fn, tables, items, key, events, fail=(), group_fail=False):
         db = FakeDb(tables, fail=fail)
         grp = FakeGroup(events, fail=group_fail)
+        mat = FakeMatch(events, fail=group_fail)
         its = copy.deepcopy(items)
         with mock.patch.object(_THIS, 'sb', db), mock.patch.object(_THIS, 'ANTHROPIC_API_KEY', key), \
                 mock.patch.object(crawler, 'sb', db), mock.patch.object(crawler, 'ANTHROPIC_API_KEY', key), \
                 mock.patch.object(news_dedup, 'group_same_event', grp), \
+                mock.patch.object(news_dedup, 'match_prior_reports', mat), \
                 mock.patch.dict(crawler._GROUP_MEMO, {}, clear=True), \
+                mock.patch.dict(crawler._MATCH_MEMO, {}, clear=True), \
                 mock.patch.object(crawler, '_COMMON_ALERT', None):
             reps, out = _quiet(fn, its)
             common = crawler._COMMON_ALERT
         return {'reps': copy.deepcopy(reps), 'rep_idx': [next(k for k, i in enumerate(its) if i is r) for r in reps],
-                'items': its, 'out': out, 'db': db, 'grp': grp.calls, 'grp_kw': grp.kws, 'common': common}
+                'items': its, 'out': out, 'db': db, 'grp': grp.calls, 'grp_kw': grp.kws, 'match': mat.calls,
+                'match_kw': mat.kws, 'common': common}
 
     def assert_same(self, tables, items=N_ITEMS, key='k', events=EVENTS, fail=(), group_fail=False):
         ref = self._run(_ref_suppress_repeat_alerts, tables, items, key, events, fail, group_fail)
@@ -644,17 +676,25 @@ class TestCommonPathEquivalence(unittest.TestCase):
         self.assertEqual(new['rep_idx'], ref['rep_idx'], '대표는 입력 dict 그 자체(같은 객체·같은 순서)')
         self.assertEqual(new['items'], ref['items'], '입력 dict 제자리 표시(_remind·_related)')
         self.assertEqual(new['out'], ref['out'], '로그 줄')
-        self.assertEqual(new['grp'], ref['grp'], '사건 묶기 호출(제목 목록·횟수)')
-        self.assertEqual(new['grp_kw'], ref['grp_kw'], '공통 경로 사건 묶기는 인자 없이(종전 호출 그대로 — 제한은 팀 경로만)')
-        self.assertTrue(all(k == {} for k in new['grp_kw']))
+        # 사건 묶기(group_same_event) — 기준본은 ①-2와 2차 두 번, 새 코드는 2차만(①-2는 재보도 대조로 옮김, #263).
+        # 2차 묶기의 입력(대표 제목 목록)은 그대로여야 한다.
+        n_new = len(new['grp'])
+        self.assertIn(len(ref['grp']) - n_new, (0, 1), '줄어든 호출은 ①-2 하나뿐')
+        self.assertEqual(new['grp'], ref['grp'][len(ref['grp']) - n_new:], '2차 묶기 호출(제목 목록)')
+        self.assertLessEqual(len(new['match']), 1, '재보도 대조는 실행당 많아야 한 번')
+        self.assertTrue(all(k == {} for k in new['grp_kw']), '공통 경로 사건 묶기는 인자 없이(제한은 팀 경로만)')
+        self.assertTrue(all(k == {} for k in new['match_kw']), '공통 경로 재보도 대조도 인자 없이')
         # 리마인드 문턱(#256, 2026-09-29)의 3일 창 전체 조회(칸 title,url,urgency,created_at)는 나누기 전에 없던 조회 —
         # 기보도(긴급) 조회는 그대로이고, 새 조회는 모양만 따로 확인한다(조건은 기보도 조회와 같고 등급 조건만 없다).
         _SHARE_COLS = 'title,url,urgency,created_at'
+        _PRIOR_COLS = 'title,url,created_at,event,screen_text'          # 재보도 대조가 읽는 요지·요약 두 칸이 더해졌다(#263)
         for t in ('news_feed',):
-            self.assertEqual([(e['op'], e['cols'], _norm_filters(e['filters']), e['orders'], e['limit'], e['range'])
+            self.assertEqual([(e['op'], 'title,url,created_at' if e['cols'] == _PRIOR_COLS else e['cols'],
+                               _norm_filters(e['filters']), e['orders'], e['limit'], e['range'])
                               for e in new['db'].calls(t) if e['cols'] != _SHARE_COLS],
                              [(e['op'], e['cols'], _norm_filters(e['filters']), e['orders'], e['limit'], e['range'])
-                              for e in ref['db'].calls(t)], '기보도 조회 그대로')
+                              for e in ref['db'].calls(t)], '기보도 조회 그대로(칸 둘만 더함)')
+            self.assertTrue(all(e['cols'] in (_PRIOR_COLS, _SHARE_COLS) for e in new['db'].calls(t)))
             share_q = [e for e in new['db'].calls(t) if e['cols'] == _SHARE_COLS]
             prior_q = [e for e in ref['db'].calls(t)]
             if prior_q and ('news_feed', 'select') not in set(fail):   # 기보도 조회가 된 실행이면 3일 창 전체 조회도 한 번(#256)
@@ -697,6 +737,14 @@ class TestCommonPathEquivalence(unittest.TestCase):
                          ['주파수 경매 일정 연기 발표 이후 업계 반응', 'AI 기본법 시행령 초안 공개', '알뜰폰 요금제 전면 개편',
                           '해지 위약금 면제 방안 검토 착수 소식', '통신사 해킹 과징금 부과 결정 소송 제기'])
         self.assertEqual(len(ref['grp']), 2, '의미 판정 두 단계 모두 불림')
+        self.assertEqual((len(new['grp']), len(new['match'])), (1, 1), '새 코드: 2차 묶기 1번 + 재보도 대조 1번(#263)')
+        new_titles, old_titles = new['match'][0]
+        self.assertIn('위성통신 새 사업자 뽑았다', new_titles)
+        self.assertNotIn('통신사 해킹 과징금 부과 결정 후속 보도', new_titles, '①에서 억제된 기사는 대조에 안 올린다')
+        self.assertIn(P3['title'], old_titles)
+        self.assertIn(P1['title'], old_titles, '리마인드로 나간 기사는 알림 대표다')
+        self.assertNotIn(P5['title'], old_titles, '억제된 기사(사슬에 있는 제목)는 견줄 대상이 아니다')
+        self.assertNotIn(P4['title'], old_titles)
         # 공통 포장 결과가 복사용으로 남는다
         c = new['common']
         self.assertEqual(c['urls'], [i['url'] for i in N_ITEMS])
@@ -711,7 +759,7 @@ class TestCommonPathEquivalence(unittest.TestCase):
 
     def test_group_failure(self):
         _, new = self.assert_same(_common_tables(), group_fail=True)
-        self.assertEqual(len(new['grp']), 2)
+        self.assertEqual((len(new['grp']), len(new['match'])), (1, 1), '둘 다 불리고 둘 다 실패 → 원본 유지')
 
     def test_prior_query_failure_fail_open(self):
         ref, new = self.assert_same(_common_tables(), fail={('news_feed', 'select')})
@@ -721,8 +769,24 @@ class TestCommonPathEquivalence(unittest.TestCase):
         self.assertEqual(len(new['common']['reps']), len(N_ITEMS))
 
     def test_chain_query_failure(self):
-        _, new = self.assert_same(_common_tables(), fail={('alert_suppress_log', 'select')})
+        """억제 사슬을 못 읽은 실행(#263): 리마인드는 종전대로(걸린 기사 자신의 나이), 재보도 대조(①-2)는 건너뛴다 — 어느 기사가
+        알림으로 나갔는지 모르는 채로 AI 억제를 하지 않는다. 그래서 기준본(①-2가 묶기 분류기로 돌던 때)과는 '위성통신' 기사
+        한 건이 다르다(억제 → 통과)."""
+        fail = {('alert_suppress_log', 'select')}
+        ref = self._run(_ref_suppress_repeat_alerts, _common_tables(), N_ITEMS, 'k', EVENTS, fail)
+        new = self._run(crawler.suppress_repeat_alerts, _common_tables(), N_ITEMS, 'k', EVENTS, fail)
         self.assertIn('억제 사슬 조회 실패', new['out'])
+        self.assertIn('재보도 대조(AI)는 건너뜀', new['out'])
+        self.assertEqual(new['match'], [], '대조 호출 0')
+        sat = '위성통신 새 사업자 뽑았다'
+        ref_titles, new_titles = [r['title'] for r in ref['reps']], [r['title'] for r in new['reps']]
+        self.assertNotIn(sat, ref_titles)
+        self.assertIn(sat, new_titles, '대조를 건너뛰면 알림이 나가는 쪽')
+        self.assertEqual([t for t in new_titles if t != sat], ref_titles, '나머지 대표는 그대로')
+
+        def rows(r):
+            return [x for e in r['db'].calls('alert_suppress_log', 'insert') for x in e['rows']]
+        self.assertEqual(rows(new), [x for x in rows(ref) if x['article_title'] != sat], '다른 기록 행은 그대로')
 
     def test_log_insert_failure(self):
         _, new = self.assert_same(_common_tables(), fail={('alert_suppress_log', 'insert')})
@@ -863,10 +927,13 @@ class _AudBase(unittest.TestCase):
 
     def setUp(self):
         self.grp = FakeGroup(EVENTS)
+        self.match = FakeMatch(EVENTS)
         self.trig = []
         patches = [mock.patch.object(crawler, 'ANTHROPIC_API_KEY', 'k'),
                    mock.patch.object(news_dedup, 'group_same_event', self.grp),
+                   mock.patch.object(news_dedup, 'match_prior_reports', self.match),
                    mock.patch.dict(crawler._GROUP_MEMO, {}, clear=True),
+                   mock.patch.dict(crawler._MATCH_MEMO, {}, clear=True),
                    mock.patch.dict(crawler._INSERTED_IDS, {}, clear=True),
                    mock.patch.dict(crawler._LATE_ALERT_PAIRS, {}, clear=True),
                    mock.patch.dict(crawler._AUD_CTX, {}, clear=True),
@@ -900,6 +967,7 @@ class _AudBase(unittest.TestCase):
             reps, _ = _quiet(crawler.suppress_repeat_alerts, urgent)
             self.n_common_calls = len(self.db.log)
             self.n_grp_common = len(self.grp.calls)
+            self.n_match_common = len(self.match.calls)
             n, out = _quiet(crawler.run_audience_alerts, 'collect', new_items=new_items, cutoff_24h=cut)
         return n, reps, out
 
@@ -949,6 +1017,7 @@ class TestCollect(_AudBase):
         self.assertIn('[팀 알림] d:사업협력실 긴급 후보 9 → 보냄 5(리마인드 2)·억제 2·묶음 2 (복사) · AI 0회', out)
         self.assertIn('[팀 알림] 합계(collect·긴급) — 큐 긴급 10건 · AI 0회', out)
         self.assertEqual(len(self.grp.calls), self.n_grp_common, '복사 = 사건 묶기 호출 0')
+        self.assertEqual(len(self.match.calls), self.n_match_common, '복사 = 재보도 대조 호출 0')
         self.assertEqual(n, 10)
         common_html = [subscriber_notify.format_news_item(r) for r in reps]
         self.assertEqual([r['html'] for r in self.queue('t:1', '긴급')], common_html, '표시 없음 — 공통과 같은 html')
@@ -1713,24 +1782,28 @@ class TestReviewFollowups(unittest.TestCase):
 
     def test_ai_budget_drops_group_fn(self):
         calls = []
-        ctx = {'group_fn': lambda titles: calls.append(titles) or None, 't0': 0.0, 'window': [], 'window_err': '',
-               'view': {}, 'stage': 'collect'}
+        ctx = {'group_fn': lambda titles: calls.append(titles) or None, 'match_fn': lambda new, old: None,
+               't0': 0.0, 'window': [], 'window_err': '', 'view': {}, 'stage': 'collect'}
         seen = {}
 
-        def fake_core(items, prior, prior_at, chain, group_fn, log=None, remind_share=None):
+        def fake_core(items, prior, prior_at, chain, group_fn, log=None, remind_share=None, match_fn=None,
+                      sem_titles=None):
             seen['group_fn'] = group_fn
+            seen['match_fn'] = match_fn
             seen['remind_share'] = remind_share
             return list(items), [], [], 0
-        with mock.patch.object(crawler, '_aud_window', lambda c: []),                 mock.patch.object(crawler, '_audience_chain', lambda a, ch: {}),                 mock.patch.object(crawler, '_suppress_core', fake_core),                 mock.patch.object(crawler.time, 'monotonic', lambda: crawler.ALERT_AI_BUDGET_S + 1.0):
+        with mock.patch.object(crawler, '_aud_window', lambda c: []),                 mock.patch.object(crawler, '_audience_chain', lambda a, ch: ({}, set(), True)),                 mock.patch.object(crawler, '_suppress_core', fake_core),                 mock.patch.object(crawler.time, 'monotonic', lambda: crawler.ALERT_AI_BUDGET_S + 1.0):
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
                 crawler._aud_compute(ctx, 't:2', {'team_ids': [2]}, '긴급', [({'url': 'u1', 'title': 't'}, '긴급', [2])])
         self.assertIsNone(seen['group_fn'], '예산을 넘으면 AI 없이')
+        self.assertIsNone(seen['match_fn'], '재보도 대조도 AI — 같이 뺀다(#263)')
         self.assertIn('AI 예산', out.getvalue())
         ctx['t0'] = crawler.ALERT_AI_BUDGET_S          # 예산 안
-        with mock.patch.object(crawler, '_aud_window', lambda c: []),                 mock.patch.object(crawler, '_audience_chain', lambda a, ch: {}),                 mock.patch.object(crawler, '_suppress_core', fake_core),                 mock.patch.object(crawler.time, 'monotonic', lambda: crawler.ALERT_AI_BUDGET_S + 1.0):
+        with mock.patch.object(crawler, '_aud_window', lambda c: []),                 mock.patch.object(crawler, '_audience_chain', lambda a, ch: ({}, set(), True)),                 mock.patch.object(crawler, '_suppress_core', fake_core),                 mock.patch.object(crawler.time, 'monotonic', lambda: crawler.ALERT_AI_BUDGET_S + 1.0):
             crawler._aud_compute(ctx, 't:2', {'team_ids': [2]}, '긴급', [({'url': 'u1', 'title': 't'}, '긴급', [2])])
         self.assertIs(seen['group_fn'], ctx['group_fn'])
+        self.assertIs(seen['match_fn'], ctx['match_fn'])
 
 
 if __name__ == '__main__':

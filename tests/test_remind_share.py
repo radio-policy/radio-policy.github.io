@@ -98,13 +98,13 @@ class RemindGate(unittest.TestCase):
         prior = [{'title': old, 'kw': extract_keywords(old)}]
         prior_at = {old: (datetime.now(KST) - timedelta(hours=30)).isoformat()}
         self.assertLess(len(extract_keywords(new['title']) & prior[0]['kw']), 3)
-        self.assertTrue(extract_keywords(new['title']) & prior[0]['kw'], '후보 조건(키워드 1개 이상 공유)')
-        reps, sup, rem, _m = crawler._suppress_core([new], prior, prior_at, {}, lambda titles: [[0, 1]], log=None,
-                                                    remind_share=lambda a, b: (30, 170))
+        # #263부터 ①-2는 재보도 대조(match_fn — 새 기사마다 '이미 알린 기사' 번호)로 돈다. 사슬이 비었으니 기보도는 알림 대표다.
+        reps, sup, rem, _m = crawler._suppress_core([new], prior, prior_at, {}, None, log=None,
+                                                    remind_share=lambda a, b: (30, 170), match_fn=lambda n, o: [0])
         self.assertEqual(reps, [])
         self.assertEqual(sup[0]['shared_keywords'], '[리마인드보류] 30/170')
-        reps2, _s, rem2, _m = crawler._suppress_core([dict(new)], prior, prior_at, {}, lambda titles: [[0, 1]], log=None,
-                                                     remind_share=lambda a, b: (9, 10))
+        reps2, _s, rem2, _m = crawler._suppress_core([dict(new)], prior, prior_at, {}, None, log=None,
+                                                     remind_share=lambda a, b: (9, 10), match_fn=lambda n, o: [0])
         self.assertEqual(len(reps2), 1)
         self.assertEqual(rem2[0]['shared_keywords'], '[리마인드] 2일째')
 
