@@ -6,6 +6,12 @@
       "runtimeExecutable": "C:\\Users\\SKTelecom\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
       "runtimeArgs": ["-m", "http.server", "8765", "--bind", "127.0.0.1"],
       "port": 8765
+    },
+    {
+      "name": "ux-preview",
+      "runtimeExecutable": "C:\\Users\\SKTelecom\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
+      "runtimeArgs": ["-m", "http.server", "8000", "--bind", "127.0.0.1", "--directory", "C:\\Users\\SKTelecom\\Desktop\\frequence\\rp-wt-ux"],
+      "port": 8000
     }
   ]
 }
