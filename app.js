@@ -11782,13 +11782,17 @@ async function refreshPersonStance(id) {
     // 머리글은 코드가 만들어 "그대로 쓰라"고 지시한다 — 모델에게 형식을 맡기면 갱신할 때마다
     // 구조가 흔들리고, 실제로 9/13 세션이 손으로 만든 자격 블록이 갱신 한 번에 사라질 상태였다. (#169-보론2)
     var spans = _personRoleSpans(all);
-    var rows = _personStanceRows(all, spans).map(function(s) { return (s.meeting_date || '') + ' [' + (s.topic || '기타') + '] ' + (s.summary || ''); }).join('\n');
+    // 자격이 둘 이상이면 줄마다 자격을 붙인다(#262-보론3, 2026-09-30) — 두 자격의 기간이 겹치는 사람(강도현: 증인 2024-06~2025-05 ↔
+    // 제2차관 2024-08~2025-06)은 날짜만으로 어느 머리글 아래인지 가를 수 없어 모델이 짐작했다. 표시는 머리글과 같은 _personRoleLabel.
+    var multi = spans.length > 1;
+    var rows = _personStanceRows(all, spans).map(function(s) { return (s.meeting_date || '') + (multi ? ' (' + _personRoleLabel(s.position) + ')' : '') + ' [' + (s.topic || '기타') + '] ' + (s.summary || ''); }).join('\n');
     var latestYm = all.length ? _ym(all[0].meeting_date) : '';
     var capRule = '';
     if (spans.length > 1) {
       capRule = '\n\n이 사람은 과방위에 **자격이 둘 이상**으로 출석했다. 아래 머리글을 순서대로 ' +
-        '**한 글자도 바꾸지 말고 그대로** 쓰고, 각 머리글 바로 아래에 그 기간·그 자격의 발언만 근거로 ' +
-        '불릿을 달아라. 자격을 섞지 마라(정부 측 답변과 위원 질의는 성격이 다르다). ' +
+        '**한 글자도 바꾸지 말고 그대로** 쓰고, 각 머리글 바로 아래에 그 자격의 발언만 근거로 ' +
+        '불릿을 달아라. 발언 줄 앞 괄호 속 자격이 머리글의 자격과 같은 것만 그 머리글 아래에 쓴다(날짜로 짐작하지 마라). ' +
+        '자격을 섞지 마라(정부 측 답변과 위원 질의는 성격이 다르다). ' +
         '발언이 2건 이하인 자격은 머리글만 두고 불릿 1개로 줄여도 된다.\n' +
         spans.map(function(sp) {
           var isMember = sp.label === '과방위원';
