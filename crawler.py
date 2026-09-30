@@ -3991,6 +3991,8 @@ def _aud_compute(ctx: dict, aud: str, u: dict, ch: str, trip: list) -> dict:
     if (group_fn or match_fn) and time.monotonic() - ctx.get('t0', time.monotonic()) > ALERT_AI_BUDGET_S:
         # 채널 묶음 전체 예산 초과 — 남은 단위는 AI 없이(키워드 억제·별형 묶기만). 호출 하나의 20초 제한만으로는 팀 수만큼
         # 공통 즉시 배달이 밀린다(재검토 경미 2). AI 묶기·대조는 억제를 더하는 쪽이라 빼도 알림이 빠지지는 않는다(fail-open 방향).
+        # T18(2026-09-30): 이때 ①이 넘긴 기사(키워드 일치 + 대표 18시간 초과)는 그 단위에 대조 없이 알림으로 나간다(🔁·보류 없음) —
+        # 예산 초과는 호출이 멈추거나 느린 실행에서만 생기므로 '①-2를 못 쓰는 실행'과 같은 취급이다(운영자 결정 2).
         if not ctx.get('budget_logged'):
             ctx['budget_logged'] = True
             print(f'[팀 알림] 사건 묶기 AI 예산 {ALERT_AI_BUDGET_S}초 초과 — 이번 채널의 남은 단위는 AI 없이 계산')
