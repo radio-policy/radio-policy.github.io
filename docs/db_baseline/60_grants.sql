@@ -458,6 +458,11 @@ grant EXECUTE on function public.admin_upsert_kb_document(p_dedup_key text, p_ti
 revoke all on function public.batch_update_embeddings(p_ids bigint[], p_embeddings text[]) from public, anon, authenticated, service_role;
 grant EXECUTE on function public.batch_update_embeddings(p_ids bigint[], p_embeddings text[]) to service_role;
 
+revoke all on function public.biz_hours_between(p_from timestamp with time zone, p_to timestamp with time zone) from public, anon, authenticated, service_role;
+grant EXECUTE on function public.biz_hours_between(p_from timestamp with time zone, p_to timestamp with time zone) to anon;
+grant EXECUTE on function public.biz_hours_between(p_from timestamp with time zone, p_to timestamp with time zone) to authenticated;
+grant EXECUTE on function public.biz_hours_between(p_from timestamp with time zone, p_to timestamp with time zone) to service_role;
+
 revoke all on function public.charge_ai_usage(p_user uuid, p_kind text) from public, anon, authenticated, service_role;
 grant EXECUTE on function public.charge_ai_usage(p_user uuid, p_kind text) to service_role;
 
@@ -654,6 +659,11 @@ grant EXECUTE on function public.ops_ai_usage_today() to service_role;
 revoke all on function public.ops_system_prompt_hash() from public, anon, authenticated, service_role;
 grant EXECUTE on function public.ops_system_prompt_hash() to authenticated;
 grant EXECUTE on function public.ops_system_prompt_hash() to service_role;
+
+revoke all on function public.pc_heartbeat_ages() from public, anon, authenticated, service_role;
+grant EXECUTE on function public.pc_heartbeat_ages() to anon;
+grant EXECUTE on function public.pc_heartbeat_ages() to authenticated;
+grant EXECUTE on function public.pc_heartbeat_ages() to service_role;
 
 revoke all on function public.pending_versions_for_docs(p_docs text[]) from public, anon, authenticated, service_role;
 grant EXECUTE on function public.pending_versions_for_docs(p_docs text[]) to anon;

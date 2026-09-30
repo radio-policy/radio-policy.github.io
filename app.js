@@ -8245,6 +8245,19 @@ function opsRow(label, value, ok, hint) {
            '</div><div style="font-size:12px;color:' + color + ';font-weight:600;text-align:right">' + value + '</div></div>';
 }
 
+// PC 예약작업(정부 공고 체인 등)은 평일 09:30~18:00에만 켜지는 회사 PC에서 돈다(#265) — 실제 경과 시간으로 재면
+// 밤·주말마다 빨간불이 된다. 근무시간만 센 나이와 임계는 DB가 돌려준다(RPC pc_heartbeat_ages — watchdog_scan·
+// health_watchdog.py와 같은 계산). 조회가 안 되면 종전처럼 실제 경과 시간(wallLimitH)으로 본다.
+async function pcHeartbeatOk(key, wallIso, wallLimitH) {
+  try {
+    var resp = await sb.rpc('pc_heartbeat_ages');
+    if (resp.error) throw resp.error;
+    var row = (resp.data || []).filter(function(x) { return x.key === key; })[0];
+    if (row && row.age_h != null) return Number(row.age_h) < Number(row.thresh_h);
+  } catch (e) {}
+  return wallIso ? ((Date.now() - new Date(wallIso).getTime()) / 3600000 < wallLimitH) : false;
+}
+
 async function loadOpsStatus() {
   var el = document.getElementById('ops-status-body');
   if (!el) return;
@@ -8282,7 +8295,7 @@ async function loadOpsStatus() {
 
     function hoursAgo(iso) { return iso ? (Date.now() - new Date(iso).getTime()) / 3600000 : Infinity; }
     var crawlerOk = hoursAgo(lastCrawl) < 1.5;
-    var govOk = hoursAgo(lastGov) < 25;   // 매일 17:00 → 25h 내면 정상
+    var govOk = await pcHeartbeatOk('last_gov_notice_run', lastGov, 25);   // 평일 16:30 회사 PC — 근무시간 기준(#265)
     var newsH = hoursAgo(lastNews);
     var briefOk = !!(briefRow && briefRow.briefing_date === todayKst);
 
@@ -8299,10 +8312,10 @@ async function loadOpsStatus() {
                    '매일 06:00 KST');
     rows += opsRow('입법예고·정부고시 크롤러 (마지막 실행)', opsAgoText(lastGov),
                    lastGov ? govOk : null,
-                   lastGov ? '매일 17:00 PC 실행 — 새 예고 없어도 정상' : 'PC 17:00 스케줄러 (heartbeat 대기)');
+                   lastGov ? '평일 16:30 회사 PC 실행(밤·주말엔 돌지 않음, 근무시간 기준 판정) — 새 예고 없어도 정상' : '회사 PC 16:30 스케줄러 (heartbeat 대기)');
     rows += opsRow('└ 입법예고 최근 새 항목', opsAgoText(lastLaw), null, '매칭되는 새 입법예고가 드물어 간격 큼(정상)');
-    rows += opsRow('본문 재수집 (PC 작업, 마지막 실행)', opsAgoText(lastRefetch), null,
-                   lastRefetch ? ('최근 결과: ' + hbNote('last_refetch_run')) : 'PC 본문 재수집 (실행 기록 대기)');
+    rows += opsRow('본문 재수집 (회사 PC, 마지막 실행)', opsAgoText(lastRefetch), null,
+                   lastRefetch ? ('평일 근무시간에 10분마다 · 최근 결과: ' + hbNote('last_refetch_run')) : '회사 PC 본문 재수집 (실행 기록 대기)');
     // 방미통위 회의 의사일정·위원회 결과 (kmcc_meeting.py, Actions 매시 :17 뉴스 뒤 단계 — #154).
     // watchdog_scan 은 아직 이 키를 안 본다(2주 안정 뒤 추가 검토) — 이 행이 유일한 감시 창이다.
     var lastKmcc = hbTime('last_kmcc_meeting_run');
@@ -8586,7 +8599,7 @@ function renderGroupTabs(page) {
 
 // ════════════════════════════════════════════
 //  상단바 상태등 — loadOpsStatus의 system_health 판정을 재사용한 경량 버전
-//  임계는 loadOpsStatus와 동일 규약: crawl 1.5h / gov_notice 25h. 초과·부재 시 빨강.
+//  임계는 loadOpsStatus와 동일 규약: crawl 1.5h / gov_notice 근무시간 기준(pcHeartbeatOk, #265). 초과·부재 시 빨강.
 // ════════════════════════════════════════════
 async function refreshOpsLight() {
   var els = document.querySelectorAll('.ops-light');
@@ -8598,7 +8611,7 @@ async function refreshOpsLight() {
     var hb = {};
     (resp.data || []).forEach(function(row) { hb[row.key] = row.updated_at; });
     var hoursAgo = function(iso) { return iso ? (Date.now() - new Date(iso).getTime()) / 3600000 : Infinity; };
-    ok = hoursAgo(hb['last_crawl_run']) < 1.5 && hoursAgo(hb['last_gov_notice_run']) < 25;
+    ok = hoursAgo(hb['last_crawl_run']) < 1.5 && await pcHeartbeatOk('last_gov_notice_run', hb['last_gov_notice_run'], 25);
   } catch (e) { ok = null; }
   els.forEach(function(el) {
     if (ok === null) { el.innerHTML = '⚪ <span>확인중</span>'; el.title = '상태 조회 실패 — 클릭해 운영 상태 확인'; return; }

@@ -6,7 +6,7 @@
   ② 각 워크플로우의 '마지막 성공 실행'(GitHub Actions run 이력 = heartbeat)
      → 데이터가 안 바뀌어도 '돌았다 vs 안 돌았다'를 정확히 구분(법령·국회처럼 변동이 드문 것도 커버)
   ③ PC 예약작업 heartbeat(system_health): 정부고시 체인·본문 재수집은 Actions에 없어 ②로 못 본다.
-     lampmanH-pc(24시간, 본선 — #179)가 서면 여기서 잡아 "lampmanH-pc 확인"으로 알린다.
+     회사 PC(평일 09:30~18:00, #265)가 서면 여기서 잡아 "회사 PC 확인"으로 알린다 — 근무시간만 센 나이로 판정.
 이상이 하나라도 있으면 텔레그램으로 경고. 모두 정상이면 조용히 종료(무음).
 Supabase가 통째로 다운이면 그 접속 실패 자체도 경고로 발송 → 단일 장애점 커버.
 
@@ -175,33 +175,37 @@ else:
         elif h >= thresh:
             problems.append("%s 마지막 성공 %.1f시간 전 (임계 %dh)" % (wf, h, thresh))
 
-# ── ③ PC 예약작업 heartbeat (system_health) — lampmanH-pc 본선(#179, 2026-09-20) ──
-# gov 체인(16:30)·본문 재수집(10분마다 — #251, 전에는 매시 22분)은 GitHub Actions 밖(한국 IP 필요)이라 ②의 run 이력이 없다.
+# ── ③ PC 예약작업 heartbeat (system_health) — 회사 PC(#265, 2026-09-30; 09-20~09-30은 lampmanH-pc, #179) ──
+# gov 체인(평일 16:30)·본문 재수집(10분마다, #251)은 GitHub Actions 밖(한국 IP 필요)이라 ②의 run 이력이 없다.
+# 회사 PC는 평일 09:30~18:00에만 켜져 있어 실제 경과 시간으로 재면 매일 밤·주말마다 오경보가 난다 →
+# **근무시간만 센 나이**로 본다. 계산·임계는 DB 한 곳(watchdog_targets.clock='biz', 함수 biz_hours_between)에 있고
+# 내부 watchdog_scan·대시보드 운영 상태와 같은 RPC(pc_heartbeat_ages)를 쓴다 — 여기서 다시 계산하지 않는다.
+# 공휴일·휴가는 근무일로 세므로 그날은 한 번 경고가 나간다(알고 있는 날이면 무시).
 # 내부 watchdog_scan(pg_cron)도 같은 키를 보지만 Supabase cron이 서면 함께 서므로 여기서도 본다.
 # ①에서 Supabase 접속 불가로 이미 경고했으면 중복 경고를 피해 건너뛴다.
 PC_HEARTBEATS = {
-    "last_gov_notice_run": (26, "정부고시·입법예고 체인(lampmanH-pc 16:30)"),   # 하루 1회 → 26h
-    "last_refetch_run":    (3,  "뉴스 본문 재수집(lampmanH-pc 10분마다)"),     # 10분마다(#251) → 3h 여유
+    "last_gov_notice_run": "정부고시·입법예고 체인(회사 PC 평일 16:30)",   # 임계 근무시간 10h = 하루 건너뜀
+    "last_refetch_run":    "뉴스 본문 재수집(회사 PC 10분마다)",          # 임계 근무시간 3h
 }
 if not any(p.startswith("⛔") for p in problems):
     try:
-        rows = http_get_json(
-            SUPABASE_URL + "/rest/v1/system_health?select=key,updated_at&key=in.(%s)"
-            % ",".join(PC_HEARTBEATS),
-            sb_headers,
-        )
-        seen = {r.get("key"): r.get("updated_at") for r in rows}
-        for key, (thresh, label) in PC_HEARTBEATS.items():
-            if not seen.get(key):
-                problems.append("%s heartbeat(%s) 기록 없음 — lampmanH-pc 확인" % (label, key))
+        req = urllib.request.Request(
+            SUPABASE_URL + "/rest/v1/rpc/pc_heartbeat_ages", data=b"{}",
+            headers=dict(sb_headers, **{"Content-Type": "application/json"}), method="POST")
+        with urllib.request.urlopen(req, timeout=20) as r:
+            seen = {row.get("key"): row for row in json.loads(r.read().decode("utf-8"))}
+        for key, label in PC_HEARTBEATS.items():
+            row = seen.get(key)
+            if not row or row.get("age_h") is None:
+                problems.append("%s heartbeat(%s) 기록 없음 — 회사 PC 확인" % (label, key))
                 continue
-            h = hours_since(seen[key])
+            h, thresh = float(row["age_h"]), float(row["thresh_h"])
             if h >= thresh:
-                problems.append("%s 마지막 실행 %.1f시간 전 (임계 %dh) — lampmanH-pc 확인" % (label, h, thresh))
+                problems.append("%s 근무시간 기준 %.1f시간째 실행 없음 (임계 %dh) — 회사 PC 확인" % (label, h, thresh))
             else:
-                print("[워치독] %s %.1fh 전 실행 (정상)" % (label, h))
+                print("[워치독] %s 근무시간 기준 %.1fh 전 실행 (정상)" % (label, h))
     except Exception as e:
-        problems.append("system_health heartbeat 조회 실패: %s" % e)
+        problems.append("PC 예약작업 heartbeat 조회 실패: %s" % e)
 
 # ── ③-2 봇 지침서 동기화 (B-9, #210) ──
 # 텔레그램 /ask·인용 검증기는 app_config.system_prompt를, 대시보드는 저장소 system_prompt.js를 쓴다.

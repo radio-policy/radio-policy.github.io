@@ -286,6 +286,25 @@ END;
 $function$
 ;
 
+CREATE OR REPLACE FUNCTION public.biz_hours_between(p_from timestamp with time zone, p_to timestamp with time zone DEFAULT now())
+ RETURNS numeric
+ LANGUAGE sql
+ STABLE
+ SET search_path TO 'public'
+AS $function$
+  select coalesce(sum(greatest(0, extract(epoch from (least(p_to, d.e) - greatest(p_from, d.s))))), 0)::numeric / 3600.0
+  from (
+    select ((g::date + time '09:30') at time zone 'Asia/Seoul') as s,
+           ((g::date + time '18:00') at time zone 'Asia/Seoul') as e,
+           g::date as day
+    from generate_series((p_from at time zone 'Asia/Seoul')::date::timestamp,
+                         (p_to   at time zone 'Asia/Seoul')::date::timestamp,
+                         interval '1 day') g
+  ) d
+  where extract(isodow from d.day) < 6
+$function$
+;
+
 CREATE OR REPLACE FUNCTION public.charge_ai_usage(p_user uuid, p_kind text)
  RETURNS jsonb
  LANGUAGE plpgsql
@@ -1166,6 +1185,23 @@ AS $function$
 $function$
 ;
 
+CREATE OR REPLACE FUNCTION public.pc_heartbeat_ages()
+ RETURNS TABLE(key text, updated_at timestamp with time zone, thresh_h numeric, age_h numeric, label text)
+ LANGUAGE sql
+ STABLE
+ SET search_path TO 'public'
+AS $function$
+  select t.key, sh.updated_at, t.thresh_h,
+         case when sh.updated_at is null then null
+              else round(public.biz_hours_between(sh.updated_at, now()), 2) end as age_h,
+         t.label
+  from public.watchdog_targets t
+  left join public.system_health sh on sh.key = t.key
+  where t.active and t.clock = 'biz'
+  order by t.key
+$function$
+;
+
 CREATE OR REPLACE FUNCTION public.pending_versions_for_docs(p_docs text[])
  RETURNS TABLE(law_name text, current_doc text, law_no text, enf_date text, loaded boolean)
  LANGUAGE sql
@@ -1571,9 +1607,10 @@ begin
   now_kst := to_char(now() at time zone 'Asia/Seoul', 'MM-DD HH24:MI');
 
   for r in
-    select t.key, t.thresh_h, t.label,
+    select t.key, t.thresh_h, t.label, t.clock,
            sh.updated_at, sh.note,
-           extract(epoch from (now() - sh.updated_at))/3600 as age_h
+           case when t.clock = 'biz' then public.biz_hours_between(sh.updated_at, now())
+                else extract(epoch from (now() - sh.updated_at))/3600 end as age_h
     from watchdog_targets t
     left join system_health sh on sh.key = t.key
     where t.active
@@ -1583,7 +1620,10 @@ begin
       probs := probs || (r.label || ': heartbeat 없음');
       keys  := keys  || (r.key || ':missing');
     elsif r.age_h >= r.thresh_h then
-      probs := probs || (r.label || ' ' || round(r.age_h, 1) || 'h 무갱신(임계 ' || round(r.thresh_h) || 'h)');
+      probs := probs || (r.label || ' ' || round(r.age_h, 1) || 'h 무갱신(' ||
+                         (case when r.clock = 'biz' then '근무시간 기준, ' else '' end) ||
+                         '임계 ' || round(r.thresh_h) || 'h)' ||
+                         (case when r.clock = 'biz' then ' — 회사 PC 확인' else '' end));
       keys  := keys  || (r.key || ':late');
     end if;
 

@@ -859,6 +859,8 @@ create table if not exists public.watchdog_targets (
   active boolean default true not null,
   note text,
   created_at timestamp with time zone default now() not null,
-  constraint watchdog_targets_pkey PRIMARY KEY (key)
+  clock text default 'wall'::text not null,
+  constraint watchdog_targets_pkey PRIMARY KEY (key),
+  constraint watchdog_targets_clock_chk CHECK ((clock = ANY (ARRAY['wall'::text, 'biz'::text])))
 );
 alter table public.watchdog_targets enable row level security;
