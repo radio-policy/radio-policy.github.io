@@ -6,7 +6,8 @@
   - 지시문·도구·온도 0은 실측(tools_dedup_probe.py, tests/fixtures/dedup_match_cases.json)에 쓴 글자 그대로 — 고치면 실측부터.
   - 입력 글(이미 알린 기사 = 기호, 새 기사 = 번호), 도구 출력 읽기(기사별 — 흠 있는 줄만 '대조 없음'), 나눠 부르기, fail-open.
   - _suppress_core: 견줄 대상은 알림으로 나간 기사만 · 낱말 공유 수 → 최신 순 · 의미 판정으로 억제된 기사(와 거기 매달린
-    기사)는 ① 키워드 비교군에서 빠짐 · ①의 리마인드는 24시간 안 대표와 같은 소식일 때만 취소 · 기록은 한 줄.
+    기사)는 ① 키워드 비교군에서 빠짐 · ①이 넘긴 기사(T18 — 키워드 일치, 대표 18시간 초과)도 같은 규칙으로 억제·🔁·알림 ·
+    기록은 한 줄. T18의 세부(18시간 경계·후보 맨 앞의 대표·대조를 못 쓰는 실행·신호 낱말)는 tests/test_kw_trust.py.
   - 고정 자료(dedup_match_cases.json)의 모양.
 """
 import inspect
@@ -356,30 +357,29 @@ class TestCoreMatching(unittest.TestCase):
         self.assertEqual((reps, rem), ([], []))
         self.assertEqual(sup[0]['shared_keywords'], '[리마인드보류] 1/10')
 
-    def test_first_stage_reminder_cancelled_only_by_fresh_alerted_match(self):
-        """①이 '대표가 24시간을 넘었다'고 리마인드로 정한 기사 — 24시간 안에 알린 대표와 같은 소식이면 리마인드를 거두고 억제.
-        기록은 한 줄('[의미판정]')이고 리마인드 줄은 남지 않는다(종전에는 두 줄이 함께 남았다)."""
+    def test_handed_keyword_match_is_decided_by_the_match(self):
+        """T18: ①이 대표 40시간 전 기사에 키워드로 건 기사 — ①은 🔁를 정하지 않고 ①-2에 넘긴다. 그 대표는 후보 맨 앞.
+        같은 소식 + 24시간 안 대표 → '[의미판정]' 억제 한 줄 · 같은 소식 + 넘은 대표 → 🔁 한 줄(matched_title = 그 대표) ·
+        대조가 없으면 표시 없는 알림(기록 없음). 종전에는 ①이 먼저 🔁로 정하고 ①-2가 그것을 거두거나 두었다."""
         prior, at = _prior(('KT 펨토셀 과징금 행정소송 검토…의결서 수령', 2),
-                           ('통신사 과징금 법정 공방 본격화 전망', 40))
+                           ('통신사 과징금 법정 공방 본격화 전망', 40), ('다른 매체의 같은 소식 첫 보도', 50))
         new = {'title': '통신사 과징금 법정 공방 본격화…쟁점은 관련매출', 'url': 'n'}
         self.assertGreaterEqual(len(extract_keywords(new['title']) & prior[1]['kw']), 3, '①이 옛 기사(40시간)에 건다')
         reps, sup, rem, _ = _core([dict(new)], prior, at, {}, None)
-        self.assertEqual(([r.get('_remind') for r in reps], len(rem)), (['2일째'], 1), '대조가 없으면 리마인드')
+        self.assertEqual(([r.get('_remind') for r in reps], sup, rem), ([None], [], []), '대조가 없으면 표시 없는 알림')
         it = dict(new)
-        reps, sup, rem, _ = _core([it], prior, at, {}, _Match({new['title']: prior[0]['title']}))
-        self.assertEqual((reps, rem), ([], []), '리마인드 줄도 거둔다')
+        m = _Match({new['title']: prior[0]['title']})
+        reps, sup, rem, _ = _core([it], prior, at, {}, m)
+        self.assertEqual([o['title'] for o in m.calls[0][1]][0], prior[1]['title'], '걸린 사건의 대표가 후보 맨 앞')
+        self.assertEqual((reps, rem), ([], []))
         self.assertEqual([r['shared_keywords'][:6] for r in sup], ['[의미판정]'])
         self.assertEqual(sup[0]['matched_title'], prior[0]['title'])
         self.assertNotIn('_remind', it)
-
-    def test_first_stage_reminder_kept_when_matched_representative_is_stale(self):
-        prior, at = _prior(('다른 매체의 같은 소식 첫 보도', 50), ('통신사 과징금 법정 공방 본격화 전망', 40))
-        new = {'title': '통신사 과징금 법정 공방 본격화…쟁점은 관련매출', 'url': 'n'}
-        reps, sup, rem, _ = _core([new], prior, at, {}, _Match({new['title']: prior[1]['title']}))
-        self.assertEqual([r.get('_remind') for r in reps], ['2일째'])
-        self.assertEqual(sup, [])
-        self.assertEqual(len(rem), 1, '리마인드 기록은 ①의 한 줄 — 두 번 남기지 않는다')
-        self.assertEqual(rem[0]['matched_title'], '통신사 과징금 법정 공방 본격화 전망')
+        for pick, label in ((prior[1]['title'], '2일째'), (prior[2]['title'], '3일째')):
+            reps, sup, rem, _ = _core([dict(new)], prior, at, {}, _Match({new['title']: pick}))
+            self.assertEqual(([r.get('_remind') for r in reps], sup), ([label], []))
+            self.assertEqual([(r['matched_title'], r['shared_keywords']) for r in rem], [(pick, f'[리마인드] {label}')],
+                             '리마인드 기록은 한 줄, matched_title = ①-2가 고른 알림 나간 대표')
 
     def test_failure_none_fn_or_no_priors_pass_everything(self):
         prior, at = _prior(('통신업계, 네팔 홍수 복구 지원…구호인력 로밍 무료', 1))
@@ -416,8 +416,9 @@ class TestCoreMatching(unittest.TestCase):
         남는다(#263-보론). 묶인 기사에는 '[실행내묶음]' 한 줄만 — 종전에는 묶인 기사에 두 줄이 찍혀 사내 다리가 대표에 🔁를 못 달았다."""
         prior, at = _prior(('주파수 경매 일정 연기 발표', 30))
         rep = {'title': '정부, 5G 추가 할당 계획 다시 짠다', 'url': 'r'}
-        mem = {'title': '주파수 경매 일정 연기 발표 이후 업계 반응', 'url': 'm'}        # ①이 30시간 전 기사에 건다 → 리마인드
-        reps, sup, rem, merged = _core([rep, mem], prior, at, {}, None, group_fn=lambda titles: [[0, 1]])
+        mem = {'title': '주파수 경매 일정 연기 발표 이후 업계 반응', 'url': 'm'}        # ①이 30시간 전 기사에 건다 → 넘김
+        same = _Match({mem['title']: prior[0]['title']})                              # → ①-2가 같은 소식 → 리마인드
+        reps, sup, rem, merged = _core([rep, mem], prior, at, {}, same, group_fn=lambda titles: [[0, 1]])
         self.assertEqual(([r['title'] for r in reps], merged), ([rep['title']], 1))
         self.assertEqual(rep.get('_remind'), '2일째')
         self.assertEqual(rem, [{'article_title': rep['title'], 'article_url': 'r', 'matched_title': prior[0]['title'],
@@ -436,8 +437,9 @@ class TestCoreMatching(unittest.TestCase):
         a = {'title': '주파수 경매 일정 연기 발표 이후 업계 반응', 'url': 'a'}
         b = {'title': '주파수 경매 일정 연기 발표에 통신사 촉각', 'url': 'b'}
         c = {'title': '주파수 경매 일정 연기 발표 배경은', 'url': 'c'}
-        reps, sup, rem, merged = _core([a, b, c], prior, at, {}, None)
-        self.assertEqual((len(reps), merged), (1, 2), '셋 다 ①의 리마인드 → 실행내 묶음으로 대표 하나')
+        same = _Match({x['title']: prior[0]['title'] for x in (a, b, c)})
+        reps, sup, rem, merged = _core([a, b, c], prior, at, {}, same)
+        self.assertEqual((len(reps), merged), (1, 2), '셋 다 넘김 → ①-2 리마인드 → 실행내 묶음으로 대표 하나')
         self.assertEqual(reps[0].get('_remind'), '2일째')
         self.assertEqual([(r['article_title'], r['shared_keywords']) for r in rem],
                          [(reps[0]['title'], '[리마인드] 2일째')])

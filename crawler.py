@@ -2850,7 +2850,8 @@ def tag_labels(tags) -> str:
     return ' · '.join(TAG_LABELS_KO.get(str(t), str(t)) for t in tags)
 
 
-REMIND_AFTER_H = 24          # 사건 대표가 이 시간을 넘으면 재보도 1건을 리마인드로 통과(#181)
+REMIND_AFTER_H = 24          # 사건 대표가 이 시간을 넘으면 재보도 1건을 리마인드로 통과(#181) — ①-2가 같은 소식이라고 한 기사만(T18)
+KW_TRUST_H = 18              # ① 키워드 일치만으로 억제하는 한도(T18, 2026-09-30) — 사건 대표가 이 시간 안일 때만. 넘거나 모르면 ①-2가 정한다
 REMIND_MIN_SHARE = 0.5       # 리마인드 문턱(#256) — 그 사건의 3일 창 기사 중 이 채널 등급(공통 = 긴급) 비율이 이 미만이면 보류
 REMIND_HOLD_MARK = '[리마인드보류]'   # 보류 기록의 shared_keywords 접두 — '[리마인드]'로 시작하지 않아 사슬·사내 다리가 '미발송'으로 읽는다
 ALERT_CHAIN_DAYS = 10        # 억제 사슬 조회 창(일)
@@ -2980,7 +2981,8 @@ def _suppress_core(items: list, prior: list, prior_at: dict, sup_chain: dict, gr
       sup_chain = 억제 사슬 {억제된 제목: 그때 걸린 기존 제목}(한 칸씩) — 여기 없는 비교군 기사 = 알림으로 나간 대표
       group_fn  = 같은 사건 묶기(titles → 0부터 인덱스 묶음 | None) — 같은 실행분의 2차 묶기만. None이면 건너뛴다
       match_fn  = 재보도 대조(새 기사들, 이미 알린 기사들) → 새 기사마다 기보도 인덱스 | None, 실패면 None(#263, ①-2).
-                  None이면 ①-2를 건너뛴다(키 없음·억제 사슬을 못 읽은 실행·받는 단위의 AI 예산 초과)
+                  None이면 ①-2를 건너뛴다(키 없음·억제 사슬을 못 읽은 실행·받는 단위의 AI 예산 초과) — 그때 ①이 넘긴 기사
+                  (키워드 일치 + 대표 KW_TRUST_H 초과, T18)는 대조 없이 알림으로 나간다(🔁·보류 없음)
       sem_titles= 의미 판정으로 억제된 기사 제목 집합(_sem_titles_from_log) — 그 기사와 그 뒤에 매달린 기사는 ①의
                   비교군에서 뺀다(AI 판정 한 번의 오류가 키워드 억제의 근거로 번지지 않게)
       log       = 줄 출력(공통 포장은 print — 종전 로그 그대로, 받는 단위는 None = 조용히)
@@ -3010,15 +3012,19 @@ def _suppress_core(items: list, prior: list, prior_at: dict, sup_chain: dict, gr
     # 통째로 사라졌다(09-21 LGU+ 서버 폐기 긴급 15건·알림 0통). 빼 두면 다음 기사가 ①-2의 심사를 다시 받는다.
     kw_pool = [pv for pv in prior if not _rides_semantic(pv['title'])] if sem_titles else prior
 
-    def _rep_age_h(matched_title: str):
-        """사건 대표(마지막으로 실제 알림이 나간 기사)의 경과 시간(h). 모르면 None(=3일 창 밖)."""
+    def _rep_of(matched_title: str) -> str:
+        """사건 대표(마지막으로 실제 알림이 나간 기사)의 제목 — 억제 사슬을 끝까지 따라간다(고리면 멈춘 자리)."""
         cur, seen = matched_title, set()
         while cur and cur in sup_chain and cur not in seen:
             seen.add(cur)
             cur = sup_chain[cur]
-        at = prior_at.get(cur)
+        return cur
+
+    def _rep_age_h(matched_title: str):
+        """사건 대표(마지막으로 실제 알림이 나간 기사)의 경과 시간(h). 모르면 None(=3일 창 밖)."""
+        at = prior_at.get(_rep_of(matched_title))
         if not at:
-            return None                  # 3일 창 밖의 대표 = 72시간 초과 → 리마인드 대상
+            return None                  # 3일 창 밖의 대표 = 72시간 초과 → ①이면 넘김(T18), ①-2면 리마인드 대상
         try:
             t = datetime.fromisoformat(str(at).replace('Z', '+00:00'))
             return (datetime.now(KST) - t).total_seconds() / 3600
@@ -3045,8 +3051,15 @@ def _suppress_core(items: list, prior: list, prior_at: dict, sup_chain: dict, gr
         held[0] += 1
         return False, f'{n}/{tot}'
 
+    # ── ①: 키워드 일치(공유 3개 이상, 국면 신호 없음)는 **사건 대표가 KW_TRUST_H(18시간) 안일 때만** 바로 억제한다(T18, 2026-09-30) ──
+    #  재연(09-13~09-30 후보 637건, 판정 local_docs/키워드억제_오걸림_판정_260930.md): 대표가 나간 뒤 0~18시간의 키워드 억제는
+    #  327건 중 7건만 틀렸는데 18~24시간은 16건 중 8건, 24시간 넘어 ①이 정하던 🔁는 37건 중 13건이 틀렸다 — 같은 발표의 재보도는
+    #  몇 시간 안에 몰려 나오고, 다음 날 낱말이 겹치는 기사는 재보도와 새 전개(의원의 새 자료·회사의 새 조치·기획 다음 회)가 반반이다.
+    #  이어지는 사건은 기사마다 같은 수식어를 달고 나오므로 낱말 수·흔한 낱말 목록으로는 못 가른다(티빙 보안인력 4명 — 전날 기사와 5개 공유).
+    #  그래서 대표가 18시간을 넘었거나 모르면(3일 창 밖) 키워드 일치는 '후보'일 뿐 — 억제도 🔁도 정하지 않고 ①-2(재보도 대조)에 넘긴다.
+    #  ①이 스스로 리마인드·보류를 정하던 갈래는 없다 — 🔁와 보류 문턱(#256)은 ①-2가 '같음'이라고 한 기사에만 붙는다.
     passed, sup_rows, remind_rows, passed_kw = [], [], [], []
-    first_remind = {}                # id(기사) → ①이 남긴 리마인드 행 — ①-2가 그 리마인드를 거둘 때 같은 행을 뺀다(#263)
+    handed = {}                      # id(기사) → 걸린 사건의 대표 제목 — 키워드 일치지만 ①-2에 넘긴 기사(T18)
     for it in items:
         kw = extract_keywords(it.get('title') or '')
         matched = None
@@ -3056,36 +3069,19 @@ def _suppress_core(items: list, prior: list, prior_at: dict, sup_chain: dict, gr
                 break
         if matched:
             age_h = _rep_age_h(matched['title'])
-            if age_h is None or age_h >= REMIND_AFTER_H:
-                ok, ratio = _remind_ok(it, matched['title'])
-                if not ok:                                    # 사건의 긴급 비율이 낮다 — 보류(#256), 사슬은 이어진다
-                    sup_rows.append({
-                        'article_title': it.get('title') or '',
-                        'article_url': it.get('url') or '',
-                        'matched_title': matched['title'],
-                        'shared_keywords': f'{REMIND_HOLD_MARK} {ratio}',
-                    })
-                    continue
-                it['_remind'] = _remind_label(age_h)          # 하루 1회 리마인드로 통과
-                remind_rows.append({
+            if age_h is not None and age_h < KW_TRUST_H:
+                sup_rows.append({
                     'article_title': it.get('title') or '',
                     'article_url': it.get('url') or '',
                     'matched_title': matched['title'],
-                    'shared_keywords': f"[리마인드] {it['_remind']}",
+                    'shared_keywords': ','.join(sorted(kw & matched['kw'])),
                 })
-                first_remind[id(it)] = remind_rows[-1]
-                passed.append(it)
-                passed_kw.append(kw)
                 continue
-            sup_rows.append({
-                'article_title': it.get('title') or '',
-                'article_url': it.get('url') or '',
-                'matched_title': matched['title'],
-                'shared_keywords': ','.join(sorted(kw & matched['kw'])),
-            })
-        else:
-            passed.append(it)
-            passed_kw.append(kw)
+            handed[id(it)] = _rep_of(matched['title'])      # 넘김 — ①-2 후보 맨 앞에 이 대표를 넣는다
+        passed.append(it)
+        passed_kw.append(kw)
+    if handed:
+        say(f'[긴급 억제] 키워드 일치 {len(handed)}건을 재보도 대조에 넘김(대표 {KW_TRUST_H}시간 초과)')
 
     # ── ①-2: 키워드로 못 잡은 '실행이 갈린' 재보도를 AI 대조로 한 번 더 거른다 (2026-09-14 #170 → 2026-09-30 #263) ──
     #  왜 필요한가(#170 실측): 네팔 구호인력 로밍 면제 사건은 같은 내용 기사 2건이 10:03·10:49 실행으로 갈려 ①의 키워드
@@ -3098,10 +3094,14 @@ def _suppress_core(items: list, prior: list, prior_at: dict, sup_chain: dict, gr
     #     기사에 다시 묶이면 사슬이 주제를 따라 흘렀다(오묶음 36건 중 15건이 '의미 판정으로 억제된 기사'에 걸렸다).
     #   · 고르는 법 — 새 기사와 낱말(제목 + 요지)을 많이 공유한 순, 같으면 최신순으로 MATCH_MAX_PRIOR건. 공유 0도 채운다
     #     ('낱말 1개 공유한 최근 10건'은 같은 낱말의 다른 기사로 차서 정작 같은 소식이 후보 밖에 있던 중복 알림이 7건).
-    #   · ①이 리마인드로 정한 기사 — 24시간 안에 알린 대표와 같은 소식일 때만 리마인드를 거두고 억제한다. 대조된 대표도
-    #     24시간을 넘었으면 ①의 리마인드 그대로(기록 한 줄). 종전에는 억제된 기사와 묶여도 리마인드가 사라졌고(13건)
-    #     기록에 '[의미판정]'과 '[리마인드]'가 함께 남았다.
+    #   · ①이 넘긴 기사(T18 — 키워드 일치, 대표 18시간 초과)가 걸린 사건의 대표는 후보 **맨 앞에 반드시** 넣는다(최신순). 넣지
+    #     않으면 대표가 상위 10건 밖으로 밀려 재보도가 새 알림으로 샌다. 결과는 다른 기사와 같다 — 같음 + 대표 24시간 안 →
+    #     '[의미판정]' 억제, 같음 + 24시간 넘음 → 🔁(보류 문턱 #256), 같음 없음 → 표시 없는 알림.
+    #   · ①-2를 못 쓰는 실행(키 없음·사슬 못 읽음·받는 단위의 AI 예산 초과·호출 실패·알림 나간 후보 0)이면 넘긴 기사는 **대조 없이
+    #     알림**이다(운영자 결정 2026-09-30 — 판정이 죽으면 알림, 옛 키워드 🔁·억제 갈래는 남기지 않는다). 홍수는 스스로 멈춘다 —
+    #     한 통 나가면 그 기사가 새 대표가 되어 같은 사건의 뒤 기사는 다시 18시간 안 키워드 억제에 걸린다.
     #  실행당 Haiku 1회(새 기사가 MATCH_MAX_NEW를 넘으면 나눠서), 실패하면 원본 유지(fail-open).
+    judged = False                                  # ①-2가 이번 실행에 답을 돌려줬나(넘긴 기사의 '대조 없이 알림' 로그용)
     if passed and prior and match_fn:
         reps, seen_t = [], set()                   # 알림으로 나간 기보도(제목 중복 제거) — (최신순 순번, 기사)
         for order, pv in enumerate(prior):
@@ -3114,11 +3114,15 @@ def _suppress_core(items: list, prior: list, prior_at: dict, sup_chain: dict, gr
             def _near(pv):
                 pk = pv['kw'] | extract_keywords(pv.get('event') or '')
                 return max(len(k & pk) for k in new_kw)
-            cand = [pv for _o, pv in sorted(reps, key=lambda x: (-_near(x[1]), x[0]))[:MATCH_MAX_PRIOR]]
+            must = set(handed.values())                     # 넘긴 기사가 걸린 사건의 대표 — 맨 앞(최신순)
+            front = [x for x in reps if x[1]['title'] in must]
+            rest = sorted((x for x in reps if x[1]['title'] not in must), key=lambda x: (-_near(x[1]), x[0]))
+            cand = [pv for _o, pv in (front + rest)[:MATCH_MAX_PRIOR]]
             got = match_fn([{'title': it.get('title') or '', 'event': it.get('event') or '',
                              'snip': it.get('screen_text') or it.get('content') or ''} for it in passed],
                            [{'title': pv['title'], 'event': pv.get('event') or '', 'snip': pv.get('snip') or ''}
                             for pv in cand])
+            judged = got is not None
             drop = {i: cand[j] for i, j in enumerate(got or [])          # passed 인덱스 → 같은 소식으로 본 기보도
                     if isinstance(j, int) and 0 <= j < len(cand) and i < len(passed)}
             if drop:
@@ -3137,16 +3141,6 @@ def _suppress_core(items: list, prior: list, prior_at: dict, sup_chain: dict, gr
                         'matched_title': pv['title'],
                         'shared_keywords': '[의미판정] ' + ','.join(sorted(passed_kw[i] & pv['kw'])),
                     }
-                    if id(it) in first_remind:                 # ①이 리마인드로 정한 기사
-                        if stale:                               # 대조된 대표도 24시간을 넘었다 — ①의 리마인드 그대로
-                            kept.append(it)
-                            kept_kw.append(passed_kw[i])
-                        else:                                   # 24시간 안에 알린 대표와 같은 소식 — 리마인드를 거두고 억제
-                            row = first_remind.pop(id(it))
-                            remind_rows[:] = [r for r in remind_rows if r is not row]
-                            it.pop('_remind', None)
-                            sup_rows.append(sem_row)
-                        continue
                     if stale:
                         ok, ratio = _remind_ok(it, pv['title'])
                         if not ok:                              # 보류(#256)
@@ -3170,6 +3164,8 @@ def _suppress_core(items: list, prior: list, prior_at: dict, sup_chain: dict, gr
                     sup_rows.append(sem_row)
                 say(f'[긴급 억제] 의미 판정으로 실행 간 재보도 {len(drop)}건 판정(리마인드 포함)')
                 passed, passed_kw = kept, kept_kw
+    if handed and not judged:
+        say(f'[긴급 억제] 재보도 대조를 못 써 {len(handed)}건은 대조 없이 알림')
 
     if held[0]:
         say(f'[긴급 억제] 리마인드 보류 {held[0]}건 — 그 사건의 3일 창 기사 중 이 채널 등급 비율이 {REMIND_MIN_SHARE:.0%} 미만(#256)')
@@ -3233,14 +3229,16 @@ def _suppress_core(items: list, prior: list, prior_at: dict, sup_chain: dict, gr
 def suppress_repeat_alerts(urgent_items: list) -> list:
     """같은 사건 재보도의 재알림 억제 (배경역사 #44).
 
-    ① 최근 3일 내 이미 DB에 있던 긴급 기사와 제목 유사(공유 키워드 3+) → 억제.
-       단, 국면 신호 단어(소송·고발·상고…)가 새로 등장한 제목은 통과(새 전개).
-    ①-2 ①을 통과한 기사를 '이미 알림으로 나간 기사'와 AI로 한 번 더 대조(#170 → #263, news_dedup.match_prior_reports) —
+    ① 최근 3일 내 이미 DB에 있던 긴급 기사와 제목 유사(공유 키워드 3+) → 억제. **그 사건의 대표(마지막으로 실제 알림이
+       나간 기사)가 KW_TRUST_H(18시간) 안일 때만**(T18, 2026-09-30) — 넘었거나 모르면 억제도 🔁도 정하지 않고 ①-2에 넘긴다.
+       단, 국면 신호 단어(소송·고발·채택·[단독]…)가 새로 등장한 제목은 통과(새 전개).
+    ①-2 ①을 통과·넘긴 기사를 '이미 알림으로 나간 기사'와 AI로 한 번 더 대조(#170 → #263, news_dedup.match_prior_reports) —
        같은 소식이면 억제('[의미판정]'), 그 대표가 24시간을 넘었으면 리마인드. 억제 사슬을 못 읽은 실행은 건너뛴다
-       (어느 기사가 알림으로 나갔는지 모르는 채로 AI 억제를 하지 않는다 — 알림이 나가는 쪽).
+       (어느 기사가 알림으로 나갔는지 모르는 채로 AI 억제를 하지 않는다 — 알림이 나가는 쪽). ①-2를 못 쓰면 넘긴 기사도 알림.
     ② 이번 실행분 안에서도 유사 기사는 대표 1건으로 묶고 '(관련 보도 N건)' 병기.
     ③ 사건 대표(실제 알림이 나간 기사)가 24시간을 넘었으면 재보도 1건을 '리마인드'로 통과(#181, 2026-09-21).
-       억제가 사슬로 이어져(실측 80%) 며칠짜리 사건이 영영 안 오던 것을 하루 1건으로 되살린다.
+       억제가 사슬로 이어져(실측 80%) 며칠짜리 사건이 영영 안 오던 것을 하루 1건으로 되살린다. T18부터는 ①-2가 그 대표와
+       '같은 소식'이라고 한 기사에만 붙는다(키워드 일치만으로 🔁를 달던 갈래는 37건 중 13건이 새 소식의 첫 알림이었다).
     ①·②·③ 모두 alert_suppress_log에 남긴다(②는 shared_keywords='[실행내묶음]', ③은 '[리마인드]', 2026-09-21~) —
        이 로그가 곧 '알림으로 나가지 않은 기사' 목록이고, 사내판 다리(export_news.py)가
        이것으로 TOKTOK 대표 1건을 가린다(#180).
@@ -3252,7 +3250,9 @@ def suppress_repeat_alerts(urgent_items: list) -> list:
     나누기 전과 같다(tests/test_audience_alerts.py가 나누기 전 본문과 대조). 억제 사슬 조회만 1,000행에서 잘리던 것을
     order(created_at, id) + range 페이지로 고쳤다(행동 변화는 10일 로그가 1,000행을 넘을 때만 — 전에는 오래된 1,000행만 남았다).
     그 뒤 #263(2026-09-30)에서 ①-2만 바꿨다 — 묶기 분류기 대신 재보도 대조, 견줄 대상은 알림으로 나간 기사만, 의미 판정으로
-    억제된 기사는 ①의 비교군에서 뺌(기보도 조회에 event·screen_text 두 칸 추가). 그 밖의 갈래는 나누기 전 그대로다."""
+    억제된 기사는 ①의 비교군에서 뺌(기보도 조회에 event·screen_text 두 칸 추가). T18(2026-09-30)에서 ①의 리마인드·보류 갈래를
+    ①-2로 옮겼다(대표 18시간 초과 키워드 일치 = 넘김, 그 대표를 ①-2 후보 맨 앞에) — 그래서 리마인드 기록의 matched_title은 언제나
+    알림 나간 대표다. 행 모양·접두는 그대로. 그 밖의 갈래는 나누기 전 그대로다."""
     global _COMMON_ALERT
     _COMMON_ALERT = None
     if not urgent_items:
@@ -3288,7 +3288,7 @@ def suppress_repeat_alerts(urgent_items: list) -> list:
             sem_titles = _sem_titles_from_log(_lg)
         except Exception as e:
             chain_ok = False
-            print(f'[긴급 억제] 억제 사슬 조회 실패 — 이번 실행은 리마인드 없이 종전대로: {e}')
+            print(f'[긴급 억제] 억제 사슬 조회 실패 — 이번 실행은 리마인드 없이(대표를 몰라 키워드 억제는 걸린 기사 나이로): {e}')
 
         # ── 리마인드 문턱(#256, 2026-09-29): 사건의 3일 창 기사 전체(등급 무관) 중 긴급 비율 ≥ REMIND_MIN_SHARE일 때만 통과 ──
         # 하나금융 5G 특화망(170건 중 긴급 30)처럼 기사별 판정이 갈리는 경계 사건이 이튿날 새 기사 1건의 긴급으로 🔁[2일째]가

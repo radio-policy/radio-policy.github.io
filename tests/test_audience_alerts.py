@@ -11,6 +11,10 @@
       옮겼다 — 기준본은 그대로 두고, 같은 시나리오에서 '같은 기사를 같은 기보도와 묶는' 가짜 대조기(FakeMatch)를 물려 결과가
       같음을 본다. 달라진 것(기보도 조회 칸 event·screen_text, 사건 묶기 호출 1번 → 2차 묶기만, 억제 사슬을 못 읽은 실행은
       대조를 건너뜀)은 따로 확인한다. 새 단계의 세부(대표만 견줌·오염 제외·리마인드 취소)는 tests/test_dedup_match.py.
+    ※ T18(2026-09-30): ①은 대표가 18시간 안일 때만 키워드로 억제하고, 넘으면 ①-2에 넘긴다 — 기준본에서 ①이 스스로 정하던 🔁는
+      이제 ①-2가 '같음'이라고 할 때만 붙는다. 기준본은 그대로 두고 가짜 대조기에 그 기사들의 짝(MATCH_EVENTS)을 주며, 남는
+      차이(🔁 기록의 matched_title = 사슬 끝의 대표, 로그 줄 둘, 대조를 못 쓰면 🔁 없는 알림)는 _t18_expected가 명시한다.
+      T18의 세부는 tests/test_kw_trust.py.
   - format_news_item(표시 키 없음)·queue_news_items(trigger=False)의 행이 나누기 전과 바이트 단위로 같다.
   - 사건 묶기 메모, 받는 단위 만들기, 알림 등급(팀원 수정 min·실장 합침), 복사 지름길 조건, 채널별 후보·비교군,
     late 후보(requested_by null·되살림 제외), 로그 → 큐 순서(이미 있는 기록이면 큐 안 넣음), 행 키 집합, 표시 문구,
@@ -636,6 +640,56 @@ N_ITEMS = [
 ]
 EVENTS = {'위성통신 새 사업자 뽑았다': 'sat', P3['title']: 'sat',
           '알뜰폰 요금제 전면 개편': 'mvno', '중소 통신사 가격 체계 손질': 'mvno'}
+# 재보도 대조(가짜)의 짝 — EVENTS에 더해, 기준본에서 ①이 🔁로 정하던 두 기사를 그 사건의 대표와 같은 소식으로 답한다(T18).
+# 사건 묶기(FakeGroup)는 EVENTS 그대로 — 기준본의 ①-2(묶기 분류기)가 이 짝으로 달라지면 기준본이 기준이 아니게 된다.
+MATCH_EVENTS = dict(EVENTS, **{'주파수 경매 일정 연기 발표 이후 업계 반응': 'auction', P2['title']: 'auction',
+                               '해지 위약금 면제 방안 검토 착수 소식': 'wiyak', P5['title']: 'wiyak', PQ['title']: 'wiyak'})
+_T18_HANDED = '[긴급 억제] 키워드 일치 {n}건을 재보도 대조에 넘김(대표 18시간 초과)'
+_T18_UNJUDGED = '[긴급 억제] 재보도 대조를 못 써 {n}건은 대조 없이 알림'
+_SEM_LINE = re.compile(r'^\[긴급 억제\] 의미 판정으로 실행 간 재보도 (\d+)건 판정\(리마인드 포함\)$')
+
+
+def _t18_expected(ref, tables, judged):
+    """기준본 결과(①이 '대표 24시간 초과' 키워드 일치를 스스로 🔁로 정하던 때) → T18(2026-09-30) 뒤 기대 결과
+    {'reps', 'items', 'out', 'rows'}. 이 시나리오들에서 기준본의 '[리마인드]' 행은 모두 ①이 정한 것이다(기준본 ①-2의 묶기는
+    그 기사들을 묶지 않는다 — EVENTS에 없다). T18은 그 기사들을 ①-2에 넘긴다(대표가 18~24시간인 키워드 억제도 넘기지만
+    이 시나리오에는 없다 — 억제 P1은 2시간, P5는 3시간 전).
+      judged=True  (가짜 대조기가 MATCH_EVENTS로 '대표와 같은 소식'이라고 답함): 🔁·라벨·대표·행 순서는 그대로이고, 기록의
+                   matched_title만 걸린 기사 → 사슬 끝의 대표(알림 나간 기사)로 바뀐다. 로그 맨 앞에 '넘김' 줄, ①-2 줄 건수 + 넘긴 수.
+      judged=False (키 없음·대조 실패): 넘긴 기사는 🔁 없는 알림 — '[리마인드]' 행·_remind 표시·리마인드 로그 줄이 빠지고
+                   로그 맨 앞에 '넘김'·'못 써' 두 줄."""
+    exp = copy.deepcopy({'reps': ref['reps'], 'items': ref['items']})
+    rows = [dict(x) for e in ref['db'].calls('alert_suppress_log', 'insert') for x in e['rows']]
+    lines = ref['out'].splitlines()
+    n = sum(1 for x in rows if x['shared_keywords'].startswith('[리마인드]'))
+    if n:
+        chain = {r['article_title']: r['matched_title'] for r in tables.get('alert_suppress_log', [])
+                 if not str(r.get('shared_keywords') or '').startswith('[리마인드]')}
+        if judged:
+            for x in rows:
+                if x['shared_keywords'].startswith('[리마인드]'):
+                    cur, seen = x['matched_title'], set()
+                    while cur in chain and cur not in seen:
+                        seen.add(cur)
+                        cur = chain[cur]
+                    x['matched_title'] = cur
+            k = next((i for i, ln in enumerate(lines) if _SEM_LINE.match(ln)), None)
+            sem = int(_SEM_LINE.match(lines[k]).group(1)) if k is not None else 0
+            line = f'[긴급 억제] 의미 판정으로 실행 간 재보도 {sem + n}건 판정(리마인드 포함)'
+            if k is None:
+                lines.insert(0, line)
+            else:
+                lines[k] = line
+            lines.insert(0, _T18_HANDED.format(n=n))
+        else:
+            rows = [x for x in rows if not x['shared_keywords'].startswith('[리마인드]')]
+            for r in exp['reps'] + exp['items']:
+                r.pop('_remind', None)
+            lines = [ln for ln in lines if not ln.startswith('[긴급 억제] 대표가 24시간을 넘겨 리마인드로 통과')]
+            lines[0:0] = [_T18_HANDED.format(n=n), _T18_UNJUDGED.format(n=n)]
+    exp['rows'] = rows
+    exp['out'] = ''.join(ln + '\n' for ln in lines)
+    return exp
 
 
 def _common_tables(chain_extra=()):
@@ -651,10 +705,10 @@ def _common_tables(chain_extra=()):
 class TestCommonPathEquivalence(unittest.TestCase):
     """공통 포장(새) ≡ 나누기 전 본문(기준본) — 같은 가짜 DB·같은 가짜 사건 묶기로 두 번 돌려 전부 대조."""
 
-    def _run(self, fn, tables, items, key, events, fail=(), group_fail=False):
+    def _run(self, fn, tables, items, key, events, fail=(), group_fail=False, match_events=None):
         db = FakeDb(tables, fail=fail)
         grp = FakeGroup(events, fail=group_fail)
-        mat = FakeMatch(events, fail=group_fail)
+        mat = FakeMatch(events if match_events is None else match_events, fail=group_fail)
         its = copy.deepcopy(items)
         with mock.patch.object(_THIS, 'sb', db), mock.patch.object(_THIS, 'ANTHROPIC_API_KEY', key), \
                 mock.patch.object(crawler, 'sb', db), mock.patch.object(crawler, 'ANTHROPIC_API_KEY', key), \
@@ -669,13 +723,16 @@ class TestCommonPathEquivalence(unittest.TestCase):
                 'items': its, 'out': out, 'db': db, 'grp': grp.calls, 'grp_kw': grp.kws, 'match': mat.calls,
                 'match_kw': mat.kws, 'common': common}
 
-    def assert_same(self, tables, items=N_ITEMS, key='k', events=EVENTS, fail=(), group_fail=False):
+    def assert_same(self, tables, items=N_ITEMS, key='k', events=EVENTS, fail=(), group_fail=False,
+                    match_events=MATCH_EVENTS):
         ref = self._run(_ref_suppress_repeat_alerts, tables, items, key, events, fail, group_fail)
-        new = self._run(crawler.suppress_repeat_alerts, tables, items, key, events, fail, group_fail)
-        self.assertEqual(new['reps'], ref['reps'], '반환(대표·_related·_remind)')
+        new = self._run(crawler.suppress_repeat_alerts, tables, items, key, events, fail, group_fail, match_events)
+        # T18(2026-09-30): 기준본과 다른 것은 _t18_expected가 적은 것뿐이어야 한다(대조기가 답을 돌려준 실행인지로 갈린다)
+        exp = _t18_expected(ref, tables, judged=bool(key) and not group_fail)
+        self.assertEqual(new['reps'], exp['reps'], '반환(대표·_related·_remind)')
         self.assertEqual(new['rep_idx'], ref['rep_idx'], '대표는 입력 dict 그 자체(같은 객체·같은 순서)')
-        self.assertEqual(new['items'], ref['items'], '입력 dict 제자리 표시(_remind·_related)')
-        self.assertEqual(new['out'], ref['out'], '로그 줄')
+        self.assertEqual(new['items'], exp['items'], '입력 dict 제자리 표시(_remind·_related)')
+        self.assertEqual(new['out'], exp['out'], '로그 줄')
         # 사건 묶기(group_same_event) — 기준본은 ①-2와 2차 두 번, 새 코드는 2차만(①-2는 재보도 대조로 옮김, #263).
         # 2차 묶기의 입력(대표 제목 목록)은 그대로여야 한다.
         n_new = len(new['grp'])
@@ -709,8 +766,10 @@ class TestCommonPathEquivalence(unittest.TestCase):
                                  '조건은 기보도 조회에서 등급만 뺀 것')
             else:
                 self.assertEqual(share_q, [])
-        self.assertEqual([e['rows'] for e in new['db'].calls('alert_suppress_log', 'insert')],
-                         [e['rows'] for e in ref['db'].calls('alert_suppress_log', 'insert')], 'alert_suppress_log 행')
+        self.assertEqual([x for e in new['db'].calls('alert_suppress_log', 'insert') for x in e['rows']], exp['rows'],
+                         'alert_suppress_log 행')
+        self.assertEqual(len(new['db'].calls('alert_suppress_log', 'insert')),
+                         len(ref['db'].calls('alert_suppress_log', 'insert')), '기록은 실행당 한 번에')
         rs = ref['db'].calls('alert_suppress_log', 'select')
         ns = new['db'].calls('alert_suppress_log', 'select')
         if rs:           # 사슬 조회 — 칸·조건은 같고 정렬에 id·페이지(range)만 더했다
@@ -745,6 +804,15 @@ class TestCommonPathEquivalence(unittest.TestCase):
         self.assertIn(P1['title'], old_titles, '리마인드로 나간 기사는 알림 대표다')
         self.assertNotIn(P5['title'], old_titles, '억제된 기사(사슬에 있는 제목)는 견줄 대상이 아니다')
         self.assertNotIn(P4['title'], old_titles)
+        # T18: 대표 18시간 넘은 키워드 일치 두 건(P2 30시간 · P5 → 사슬 → PQ 50시간)은 ①-2에 넘어가고, 그 대표가 후보 맨 앞(최신순)
+        self.assertEqual(old_titles[:2], [P2['title'], PQ['title']])
+        self.assertIn('주파수 경매 일정 연기 발표 이후 업계 반응', new_titles)
+        self.assertIn(_T18_HANDED.format(n=2), new['out'])
+        got = {r['article_title']: r['matched_title'] for e in new['db'].calls('alert_suppress_log', 'insert')
+               for r in e['rows'] if r['shared_keywords'].startswith('[리마인드]')}
+        self.assertEqual(got, {'주파수 경매 일정 연기 발표 이후 업계 반응': P2['title'],
+                               '해지 위약금 면제 방안 검토 착수 소식': PQ['title']},
+                         '🔁 기록의 matched_title = 알림 나간 대표(기준본은 억제된 P5였다)')
         # 공통 포장 결과가 복사용으로 남는다
         c = new['common']
         self.assertEqual(c['urls'], [i['url'] for i in N_ITEMS])
@@ -769,24 +837,30 @@ class TestCommonPathEquivalence(unittest.TestCase):
         self.assertEqual(len(new['common']['reps']), len(N_ITEMS))
 
     def test_chain_query_failure(self):
-        """억제 사슬을 못 읽은 실행(#263): 리마인드는 종전대로(걸린 기사 자신의 나이), 재보도 대조(①-2)는 건너뛴다 — 어느 기사가
-        알림으로 나갔는지 모르는 채로 AI 억제를 하지 않는다. 그래서 기준본(①-2가 묶기 분류기로 돌던 때)과는 '위성통신' 기사
-        한 건이 다르다(억제 → 통과)."""
+        """억제 사슬을 못 읽은 실행(#263): 재보도 대조(①-2)는 건너뛴다 — 어느 기사가 알림으로 나갔는지 모르는 채로 AI 억제를
+        하지 않는다. 그래서 기준본(①-2가 묶기 분류기로 돌던 때)과는 '위성통신' 기사 한 건이 다르다(억제 → 통과).
+        T18(2026-09-30): 사슬이 없으니 대표 = 걸린 기사 자신. 그 나이가 18시간을 넘는 키워드 일치(주파수 경매 — P2 30시간)는
+        ①-2에 넘어가는데 ①-2를 못 쓰므로 🔁 없는 알림이다(기준본은 ①이 🔁[2일째]로 정했다). 3시간 전 P5에 걸린 기사는 그대로 억제."""
         fail = {('alert_suppress_log', 'select')}
         ref = self._run(_ref_suppress_repeat_alerts, _common_tables(), N_ITEMS, 'k', EVENTS, fail)
-        new = self._run(crawler.suppress_repeat_alerts, _common_tables(), N_ITEMS, 'k', EVENTS, fail)
+        new = self._run(crawler.suppress_repeat_alerts, _common_tables(), N_ITEMS, 'k', EVENTS, fail, match_events=MATCH_EVENTS)
         self.assertIn('억제 사슬 조회 실패', new['out'])
         self.assertIn('재보도 대조(AI)는 건너뜀', new['out'])
+        self.assertIn(_T18_HANDED.format(n=1), new['out'])
+        self.assertIn(_T18_UNJUDGED.format(n=1), new['out'])
         self.assertEqual(new['match'], [], '대조 호출 0')
-        sat = '위성통신 새 사업자 뽑았다'
+        sat, auc = '위성통신 새 사업자 뽑았다', '주파수 경매 일정 연기 발표 이후 업계 반응'
         ref_titles, new_titles = [r['title'] for r in ref['reps']], [r['title'] for r in new['reps']]
         self.assertNotIn(sat, ref_titles)
         self.assertIn(sat, new_titles, '대조를 건너뛰면 알림이 나가는 쪽')
         self.assertEqual([t for t in new_titles if t != sat], ref_titles, '나머지 대표는 그대로')
+        self.assertEqual({r['title']: r.get('_remind') for r in ref['reps']}[auc], '2일째')
+        self.assertIsNone({r['title']: r.get('_remind') for r in new['reps']}[auc], '넘긴 기사는 🔁 없는 알림')
 
         def rows(r):
             return [x for e in r['db'].calls('alert_suppress_log', 'insert') for x in e['rows']]
-        self.assertEqual(rows(new), [x for x in rows(ref) if x['article_title'] != sat], '다른 기록 행은 그대로')
+        self.assertEqual(rows(new), [x for x in rows(ref) if x['article_title'] not in (sat, auc)],
+                         '다른 기록 행은 그대로(넘긴 기사는 기록 없음)')
 
     def test_log_insert_failure(self):
         _, new = self.assert_same(_common_tables(), fail={('alert_suppress_log', 'insert')})
@@ -816,9 +890,11 @@ class TestChainPaging(unittest.TestCase):
         items = [_item('n5', '해지 위약금 면제 방안 검토 착수 소식')]
         eq = TestCommonPathEquivalence()
         ref = eq._run(_ref_suppress_repeat_alerts, tables, items, 'k', EVENTS)
-        new = eq._run(crawler.suppress_repeat_alerts, tables, items, 'k', EVENTS)
+        new = eq._run(crawler.suppress_repeat_alerts, tables, items, 'k', EVENTS, match_events=MATCH_EVENTS)
         self.assertEqual(ref['reps'], [], '종전: 1,000행에서 잘려 사슬이 빠짐 → P5(3시간)에 걸려 억제')
+        # 페이지로 끝까지 → 사슬 → 대표 PQ(50시간) → ①-2에 넘김(T18) → 대조기가 PQ와 같은 소식 → 리마인드
         self.assertEqual([r.get('_remind') for r in new['reps']], ['3일째'], '페이지로 끝까지 → 사슬 → 리마인드')
+        self.assertEqual(new['match'][0][1][0], PQ['title'], '사슬 끝의 대표가 대조 후보 맨 앞')
         self.assertEqual([e['range'] for e in new['db'].calls('alert_suppress_log', 'select')], [(0, 999), (1000, 1999)])
 
 
@@ -929,7 +1005,7 @@ class _AudBase(unittest.TestCase):
 
     def setUp(self):
         self.grp = FakeGroup(EVENTS)
-        self.match = FakeMatch(EVENTS)
+        self.match = FakeMatch(MATCH_EVENTS)
         self.trig = []
         patches = [mock.patch.object(crawler, 'ANTHROPIC_API_KEY', 'k'),
                    mock.patch.object(news_dedup, 'group_same_event', self.grp),
