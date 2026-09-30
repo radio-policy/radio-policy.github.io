@@ -77,13 +77,15 @@ def dump(api_key, years, out_path, kw, limit=0):
                 src = am.VIEWER_URL % viewer_id
                 seen_meetings += 1
                 cnt = 0
-                for i in am.cap_indices(confirmed, blocks, max_exc, kw):
+                # 선별·칩 규칙은 build_speech_rows와 같게 — 자사 언급은 상한 밖·칩 상시(#262, #120)
+                for i in am.cap_speech_indices(confirmed, blocks, max_exc, kw):
                     b = blocks[i]
                     if am.is_noise_speech(b['text']):      # 사회·호명 발언 제외(2026-09-01)
                         continue
-                    topic = ', '.join(am.matched_keywords(b['text'], kw)[:5])
-                    if not topic and am.is_always_keep(b['text']):
-                        topic = 'SK텔레콤 언급'
+                    kws = am.matched_keywords(b['text'], kw)[:5]
+                    if am.is_always_keep(b['text']) and am.SKT_CHIP not in kws:
+                        kws.append(am.SKT_CHIP)
+                    topic = ', '.join(kws)
                     f.write(json.dumps({
                         'confer_num': confer_num, 'viewer_id': str(viewer_id),
                         'is_audit': is_audit, 'meeting_title': m['title'],

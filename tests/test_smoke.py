@@ -1165,6 +1165,23 @@ class TestMinutesYearRollover(unittest.TestCase):
         self.assertEqual(am.years_to_run(2019, datetime(2027, 1, 5)), [2019])
 
 
+class TestMinutesSpeechCap(unittest.TestCase):
+    """사내판 지적(2026-09-30): 발언 적재 상한이 자사 언급 블록을 자르면 안 된다 — 자사는 상한 밖."""
+
+    def test_sk_outside_cap(self):
+        import assembly_minutes as am
+        blocks = [{'text': 'SKT 해킹 사고 질의 %d' % i} for i in range(5)] + \
+                 [{'text': '주파수 재할당 대가 질의 %d' % i} for i in range(5)]
+        idx = list(range(10))
+        kw = ['주파수']
+        # 자사 5 > 상한 3 → 자사 전부, 나머지 0
+        self.assertEqual(am.cap_speech_indices(idx, blocks, 3, kw), [0, 1, 2, 3, 4])
+        # 자사 5 < 상한 7 → cap_indices와 같다(자사 5 + 나머지 2)
+        self.assertEqual(am.cap_speech_indices(idx, blocks, 7, kw), am.cap_indices(idx, blocks, 7, kw))
+        # 자사 없음 → cap_indices와 같다
+        self.assertEqual(am.cap_speech_indices(idx[5:], blocks, 3, kw), am.cap_indices(idx[5:], blocks, 3, kw))
+
+
 class TestKmccSubjectSplit(unittest.TestCase):
     """안건명 ' - 대상 -' 꼬리 분리 — 제목 안의 붙은 하이픈(2026-2027, SK-브로드밴드)은 자르지 않는다."""
 

@@ -753,6 +753,17 @@ def cap_indices(indices: list, blocks: list, cap: int, keywords: list = None) ->
     return sorted(ranked[:cap])
 
 
+def cap_speech_indices(indices: list, blocks: list, cap: int, keywords: list = None) -> list:
+    """발언 적재(assembly_speeches)용 상한 — **자사 언급 블록은 상한 밖**에서 전부 싣고, 나머지는
+    남은 자리(cap - 자사 수, 0 이상)만 관련도 순으로 채운다. 자사 수가 cap 이하인 회의는 cap_indices와 같다.
+    cap_indices의 우선권만으로는 자사 블록이 cap보다 많은 회의에서 잘렸다(2025-04-30 유심 해킹 현안질의:
+    자사 176블록 중 30개만 적재 — 사내판 지적 2026-09-30). 섹션 발췌·요약 입력은 cap_indices 그대로다."""
+    sk = [i for i in indices if is_always_keep(blocks[i]['text'])]
+    sk_set = set(sk)
+    rest = [i for i in indices if i not in sk_set]
+    return sorted(sk + cap_indices(rest, blocks, max(0, cap - len(sk)), keywords))
+
+
 def select_relevant(blocks: list, keywords: list, judge, meeting_title: str,
                     max_judge: int = MAX_JUDGE_BLOCKS):
     """키워드 매칭 블록을 Haiku 로 확정.
@@ -1284,7 +1295,8 @@ def build_speech_rows(meeting: dict, blocks: list, confirmed: list,
     mdate = (meeting['conf_date'] or '').strip() or None
     rows = []
     seen = set()                    # (speaker, chunk_seq) 중복 방어
-    for i in cap_indices(confirmed, blocks, max_excerpts, keywords):
+    # 자사 언급은 상한 밖(cap_speech_indices) — 운영자 지시 2026-08-13 「주제 불문 수록」
+    for i in cap_speech_indices(confirmed, blocks, max_excerpts, keywords):
         b = blocks[i]
         speaker = normalize_speaker(b['name'])
         key = (speaker, i)
