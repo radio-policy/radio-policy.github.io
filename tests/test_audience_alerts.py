@@ -914,7 +914,9 @@ class TestUnitsAndLevels(unittest.TestCase):
         self.assertEqual(len({frozenset(r) for r in rows}), 1, '키 집합 동일')
         got = {r['article_title']: (r['outcome'], r['matched_title'], r['shared_keywords']) for r in rows}
         self.assertEqual(got, {'A': ('sent', None, None), 'B': ('remind', 'OLD', '[리마인드] 2일째'),
-                               'C': ('remind', None, '[리마인드] 이어지는 사건'),       # 묶음 안 리마인드를 이어받은 대표
+                               # 묶음 안 리마인드를 이어받은 대표인데 제 URL의 리마인드 행이 없을 때의 폴백(#263-보론부터
+                               # 핵심 함수는 그 행을 대표로 옮겨 주므로 실제 흐름에서는 B 꼴이 된다 — test_dedup_match 참조)
+                               'C': ('remind', None, '[리마인드] 이어지는 사건'),
                                'D': ('suppressed', 'P', 'x,y,z'), 'E': ('suppressed', 'Q', '[의미판정] x'),
                                'F': ('merged', 'A', '[실행내묶음]'), 'G': ('merged', 'C', '[실행내묶음]')})
         self.assertEqual([n for n, _ in out], ['id-ua', 'id-ub', 'id-uc'])

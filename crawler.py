@@ -3195,14 +3195,27 @@ def _suppress_core(items: list, prior: list, prior_at: dict, sup_chain: dict, gr
             say(f'[긴급 억제] 의미 판정으로 {len(groups)}묶음 → {len(merged_idx)}묶음')
             groups = regrouped
 
+    def _remind_row_of(it):
+        """이 기사의 '[리마인드]' 기록 행(없으면 None) — 같은 dict 객체."""
+        t, u = it.get('title') or '', it.get('url') or ''
+        return next((r for r in remind_rows if r['article_title'] == t and r['article_url'] == u), None)
+
     reps = []
     for rep, members in groups:
         rep['_related'] = len(members)
-        if not rep.get('_remind'):
-            for m in members:                     # 묶음 안의 리마인드 표시는 대표가 이어받는다
-                if m.get('_remind'):
-                    rep['_remind'] = m['_remind']
-                    break
+        # 묶음 안의 리마인드 표시는 대표가 이어받는다. '[리마인드]' 기록도 **실제로 나가는 기사(대표)**에 남긴다(#263-보론,
+        # 2026-09-30): 종전에는 묶인 기사 쪽에 남아 같은 기사에 '[리마인드]'(나감)와 '[실행내묶음]'(안 나감)이 함께 찍혔고,
+        # 사내 다리가 대표에 🔁를 달지 못했다(09-21~09-30 4건). 대표에 옮길 행은 하나, 묶인 기사의 나머지 리마인드 행은 뺀다.
+        for m in members:
+            if not m.get('_remind'):
+                continue
+            row = _remind_row_of(m)
+            if not rep.get('_remind'):
+                rep['_remind'] = m['_remind']
+                if row is not None:
+                    row['article_title'], row['article_url'] = rep.get('title') or '', rep.get('url') or ''
+            elif row is not None:
+                remind_rows[:] = [r for r in remind_rows if r is not row]
         reps.append(rep)
         # 대표에 병합된 기사도 '알림으로 나가지 않은 기사'다 — 2026-09-21부터 로그에 남긴다.
         # 사내판 다리(export_news.py)가 alert_suppress_log만 보고 대표 1건을 가려내기 때문이며,

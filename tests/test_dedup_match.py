@@ -411,6 +411,40 @@ class TestCoreMatching(unittest.TestCase):
         self.assertEqual(([r['title'] for r in reps], merged), (['위성통신 새 사업자 뽑았다'], 1))
         self.assertEqual([r['shared_keywords'] for r in sup], ['[실행내묶음]'])
 
+    def test_inherited_reminder_row_is_written_on_the_representative(self):
+        """리마인드 기사가 같은 실행의 다른 대표에 묶이면 🔁는 대표가 이어받고, '[리마인드]' 기록도 대표(실제로 나가는 기사)에
+        남는다(#263-보론). 묶인 기사에는 '[실행내묶음]' 한 줄만 — 종전에는 묶인 기사에 두 줄이 찍혀 사내 다리가 대표에 🔁를 못 달았다."""
+        prior, at = _prior(('주파수 경매 일정 연기 발표', 30))
+        rep = {'title': '정부, 5G 추가 할당 계획 다시 짠다', 'url': 'r'}
+        mem = {'title': '주파수 경매 일정 연기 발표 이후 업계 반응', 'url': 'm'}        # ①이 30시간 전 기사에 건다 → 리마인드
+        reps, sup, rem, merged = _core([rep, mem], prior, at, {}, None, group_fn=lambda titles: [[0, 1]])
+        self.assertEqual(([r['title'] for r in reps], merged), ([rep['title']], 1))
+        self.assertEqual(rep.get('_remind'), '2일째')
+        self.assertEqual(rem, [{'article_title': rep['title'], 'article_url': 'r', 'matched_title': prior[0]['title'],
+                                'shared_keywords': '[리마인드] 2일째'}])
+        self.assertEqual(sup, [{'article_title': mem['title'], 'article_url': 'm', 'matched_title': rep['title'],
+                                'shared_keywords': '[실행내묶음]'}])
+        # 받는 단위 기록(subscriber_alert_log)도 대표 행에 '어느 옛 기사의 리마인드인지'가 채워진다
+        rows, _ = crawler._alert_log_rows('t:1', '긴급', reps, sup, rem, {'r': 'id-r', 'm': 'id-m'})
+        got = {r['article_title']: (r['outcome'], r['matched_title'], r['shared_keywords']) for r in rows}
+        self.assertEqual(got, {rep['title']: ('remind', prior[0]['title'], '[리마인드] 2일째'),
+                               mem['title']: ('merged', rep['title'], '[실행내묶음]')})
+
+    def test_merged_reminders_leave_one_reminder_row(self):
+        """대표도 리마인드이고 묶인 기사도 리마인드면 '[리마인드]' 기록은 대표의 한 줄만 남는다(나간 것은 한 통)."""
+        prior, at = _prior(('주파수 경매 일정 연기 발표', 30))
+        a = {'title': '주파수 경매 일정 연기 발표 이후 업계 반응', 'url': 'a'}
+        b = {'title': '주파수 경매 일정 연기 발표에 통신사 촉각', 'url': 'b'}
+        c = {'title': '주파수 경매 일정 연기 발표 배경은', 'url': 'c'}
+        reps, sup, rem, merged = _core([a, b, c], prior, at, {}, None)
+        self.assertEqual((len(reps), merged), (1, 2), '셋 다 ①의 리마인드 → 실행내 묶음으로 대표 하나')
+        self.assertEqual(reps[0].get('_remind'), '2일째')
+        self.assertEqual([(r['article_title'], r['shared_keywords']) for r in rem],
+                         [(reps[0]['title'], '[리마인드] 2일째')])
+        self.assertEqual(sorted(r['shared_keywords'] for r in sup), ['[실행내묶음]', '[실행내묶음]'])
+        self.assertEqual({r['matched_title'] for r in sup}, {reps[0]['title']})
+        self.assertNotIn(reps[0]['title'], {r['article_title'] for r in sup})
+
 
 class TestSemanticLinksAreNotKeywordEvidence(unittest.TestCase):
     """의미 판정으로 억제된 기사와 그 뒤에 매달려 억제된 기사는 ① 키워드 비교군에서 빠진다 — AI가 한 번 틀려도 같은 사건의
