@@ -20,6 +20,8 @@ alter table public.law_graph_edges add constraint law_graph_edges_target_id_fkey
 
 alter table public.news_embeddings add constraint news_embeddings_news_id_fkey FOREIGN KEY (news_id) REFERENCES news_feed(id) ON DELETE CASCADE;
 
+alter table public.profiles add constraint profiles_requested_team_id_fkey FOREIGN KEY (requested_team_id) REFERENCES teams(id) ON DELETE SET NULL;
+
 alter table public.profiles add constraint profiles_team_id_fkey FOREIGN KEY (team_id) REFERENCES teams(id);
 
 alter table public.profiles add constraint profiles_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;

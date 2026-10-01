@@ -205,6 +205,9 @@ function closeLoginModal() {
 function switchLoginTab(tab) {
   var isSignup = tab === 'signup';
   document.getElementById('login-name-row').style.display = isSignup ? 'block' : 'none';
+  var teamRow = document.getElementById('login-team-row');
+  if (teamRow) teamRow.style.display = isSignup ? 'block' : 'none';
+  if (isSignup) _loadSignupTeams();
   document.getElementById('login-submit').textContent = isSignup ? '가입 신청' : '로그인';
   document.getElementById('login-title').textContent = isSignup ? '가입 신청' : '로그인';
   document.getElementById('login-switch').innerHTML = isSignup
@@ -213,6 +216,39 @@ function switchLoginTab(tab) {
   document.getElementById('login-modal').setAttribute('data-tab', isSignup ? 'signup' : 'login');
   var n = document.getElementById('login-note');
   if (n) { n.textContent = ''; n.style.color = ''; }
+}
+// 가입 창 소속 팀(2026-10-02 운영자 결정) — 비로그인도 teams 4칸(id·name·division·sort_order)은 읽힌다(#253 칸 GRANT).
+// 고른 값은 가입 메타 team_req → 트리거 handle_new_user가 profiles.requested_team_id(권한 없는 참고 칸)에만 넣는다.
+// 팀 권한(team_id)은 종전처럼 관리자가 승인 때 정한다 — 승인 화면이 신청 팀을 미리 골라 둘 뿐.
+// 실이 없는 팀(공용 계정용 등)은 목록에서 뺀다. 'none' = 목록에 없음·실장 → 관리자가 지정.
+var _signupTeamsLoaded = false;
+async function _loadSignupTeams() {
+  var el = document.getElementById('login-team');
+  if (!el || _signupTeamsLoaded || !sb) return;
+  var noneOpt = '<option value="none">목록에 없음 · 실장 (승인 때 관리자가 지정)</option>';
+  try {
+    var r = await sb.from('teams').select('id,name,division,sort_order')
+      .order('sort_order', { ascending: true, nullsFirst: false }).order('id');
+    if (r.error) throw r.error;
+    var order = [], byDiv = {};
+    (r.data || []).forEach(function(t) {
+      if (!t.division) return;
+      if (!byDiv[t.division]) { byDiv[t.division] = []; order.push(t.division); }
+      byDiv[t.division].push(t);
+    });
+    var html = '<option value="">소속 팀을 고르세요</option>';
+    order.forEach(function(d) {
+      html += '<optgroup label="' + escHtml(d) + '">' + byDiv[d].map(function(t) {
+        return '<option value="' + t.id + '">' + chEsc(t.name) + '</option>';
+      }).join('') + '</optgroup>';
+    });
+    el.innerHTML = html + noneOpt;
+    _signupTeamsLoaded = true;
+  } catch (e) {
+    // 목록을 못 읽어도 가입은 막지 않는다 — 팀은 승인 때 관리자가 지정
+    console.warn('[가입] 팀 목록 조회 실패:', e && e.message || e);
+    el.innerHTML = '<option value="none">(팀 목록을 못 불러왔습니다 — 승인 때 관리자가 지정)</option>';
+  }
 }
 function _loginNote(msg, kind) {
   var n = document.getElementById('login-note');
@@ -231,8 +267,14 @@ async function submitLogin() {
   btn.disabled = true;
   try {
     if (isSignup) {
+      if (!name) { _loginNote('이름을 입력해 주세요.', 'err'); return; }
+      var teamEl = document.getElementById('login-team');
+      var teamReq = teamEl ? teamEl.value : 'none';
+      if (!teamReq) { _loginNote('소속 팀을 골라 주세요. 목록에 없으면 맨 아래 「목록에 없음」을 고르세요.', 'err'); return; }
       if (pw.length < 8) { _loginNote('비밀번호는 8자 이상이어야 합니다.', 'err'); return; }
-      var su = await sb.auth.signUp({ email: email, password: pw, options: { data: { name: name } } });
+      var meta = { name: name };
+      if (teamReq !== 'none') meta.team_req = teamReq;
+      var su = await sb.auth.signUp({ email: email, password: pw, options: { data: meta } });
       if (su.error) { _loginNote(su.error.message, 'err'); return; }
       await refreshAuthState();
       _loginNote('가입 신청이 접수되었습니다. 관리자 승인 후 AI 기능을 이용할 수 있습니다.');
@@ -357,7 +399,7 @@ async function loadAccountAdmin() {
     var tRes = await sb.from('teams').select('id,name,division,sort_order,daily_limit,unlimited')
       .order('sort_order', { ascending: true, nullsFirst: false }).order('id');
     var pRes = await sb.from('profiles')
-      .select('user_id,name,role,approved,active,daily_limit,unlimited,team_id,division,can_edit_issues')
+      .select('user_id,name,role,approved,active,daily_limit,unlimited,team_id,division,can_edit_issues,requested_team_id')
       .order('created_at', { ascending: false });
     if (tRes.error) throw tRes.error;
     if (pRes.error) throw pRes.error;
@@ -418,10 +460,16 @@ function renderAccountAdmin(teams, profs) {
 
   html += '<div style="font-size:12px;font-weight:600;margin:4px 0 6px">가입 승인 대기 (' + pending.length + ')</div>';
   html += pending.length ? pending.map(function(p) {
+    // 가입 때 신청자가 고른 팀(requested_team_id, 권한 없는 참고 칸 — 10-02)을 미리 골라 둔다. 팀·실이 이미 정해져 있으면 그것이 우선.
+    // 승인 버튼이 이 칸 값을 team_id로 쓰므로, 관리자가 바꾸지 않으면 신청 팀이 그대로 확정된다.
+    var reqTeam = teams.find(function(t) { return p.requested_team_id != null && String(t.id) === String(p.requested_team_id); });
+    var preSel = (p.team_id != null || p.division) ? p.team_id : (reqTeam ? reqTeam.id : null);
     return '<div class="card" style="margin-bottom:6px;padding:10px 12px;cursor:default">' +
-      '<div style="font-size:12px;font-weight:500;margin-bottom:6px">' + chEsc(p.name || '(이름 없음)') + '</div>' +
+      '<div style="font-size:12px;font-weight:500;margin-bottom:6px">' + chEsc(p.name || '(이름 없음)') +
+        ' <span style="font-size:10.5px;font-weight:400;color:var(--text-tertiary)">· 신청 팀: ' +
+        (reqTeam ? chEsc((reqTeam.division ? reqTeam.division + ' ' : '') + reqTeam.name) : '고르지 않음') + '</span></div>' +
       '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">' +
-        '<select id="ap-team-' + p.user_id + '" style="' + inputCss + '">' + _teamOptions(p.team_id, p.division) + '</select>' +
+        '<select id="ap-team-' + p.user_id + '" style="' + inputCss + '">' + _teamOptions(preSel, p.division) + '</select>' +
         '<select id="ap-role-' + p.user_id + '" style="' + inputCss + '">' + _roleOptions(p.role) + '</select>' +
         '<label style="font-size:11px;color:var(--text-secondary)">일일 한도 <input id="ap-lim-' + p.user_id + '" type="number" min="0" value="' + p.daily_limit + '" style="' + inputCss + ';width:56px"></label>' +
         '<button class="btn btn-primary" style="font-size:11px;padding:3px 10px" onclick="approveAccount(\'' + p.user_id + '\')"><i class="ti ti-check"></i>승인</button>' +

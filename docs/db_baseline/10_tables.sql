@@ -614,6 +614,7 @@ create table if not exists public.profiles (
   created_at timestamp with time zone default now() not null,
   can_edit_issues boolean default false not null,
   division text,
+  requested_team_id smallint,
   constraint profiles_pkey PRIMARY KEY (user_id),
   constraint profiles_role_check CHECK ((role = ANY (ARRAY['admin'::text, 'leader'::text, 'member'::text])))
 );
