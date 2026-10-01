@@ -8351,7 +8351,7 @@ async function loadOpsStatus() {
     var rows = '';
     rows += opsRow('크롤러 실행 (마지막 실행)', opsAgoText(lastCrawl),
                    lastCrawl ? crawlerOk : null,
-                   crawlNote ? ('최근 결과: ' + crawlNote) : '매시간 자동 실행');
+                   crawlNote ? ('최근 결과: ' + crawlNote) : '10분마다 자동 실행');
     rows += opsRow('뉴스 마지막 입력', opsAgoText(lastNews),
                    crawlerOk ? true : (newsH < 14 ? true : false),
                    crawlerOk ? '크롤러 정상 — 새 기사 없으면 간격이 벌어져도 정상' : '크롤러 점검 필요할 수 있음');
