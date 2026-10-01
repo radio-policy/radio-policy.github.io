@@ -1,7 +1,7 @@
 {
   "schema": "regulatory-kb-manifest/v1",
   "updated": "2026-09-03",
-  "entry_count": 433,
+  "entry_count": 326,
   "dedup_key_rule": "정규화 제목(버전 수식어 '(구버전)' 등 제거) + '|' + law_type. 같은 dedup_key = 같은 법령(버전만 다를 수 있음).",
   "on_readd_rule": {
     "same_law_number": "동일 법령번호 재추가 → 기존 path에 덮어쓰기(idempotent). 신규 파일 생성 금지.",
@@ -2126,7 +2126,8 @@
       "enforcement_date": "2026-07-31",
       "concept_type": "Procedure",
       "path": "procedures/crms/전파차단장치/전파차단장치_도입신고.md",
-      "status": "current"
+      "status": "superseded",
+      "superseded_by": "2026-10-01"
     },
     {
       "dedup_key": "중앙전파관리소 업무안내 — 전파차단장치 > 전파차단장치 야외시험장 신청|Procedure",
@@ -3258,6 +3259,26 @@
       "enforcement_date": "2017-08-24",
       "concept_type": "Notice",
       "path": "laws/telecom-facility-standards/notices/relay_service_provision_standard.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "중앙전파관리소 업무안내 — 전파차단장치 > 전파차단장치 도입신고|Procedure",
+      "title": "중앙전파관리소 업무안내 — 전파차단장치 > 전파차단장치 도입신고",
+      "law_type": "",
+      "law_number": "2026-10-01",
+      "enforcement_date": "2026-10-01",
+      "concept_type": "Procedure",
+      "path": "procedures/crms/전파차단장치/전파차단장치_도입신고.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "중앙전파관리소 업무안내 — 전파차단장치 > 전파차단장치 시험장 신청|Procedure",
+      "title": "중앙전파관리소 업무안내 — 전파차단장치 > 전파차단장치 시험장 신청",
+      "law_type": "",
+      "law_number": "2026-10-01",
+      "enforcement_date": "2026-10-01",
+      "concept_type": "Procedure",
+      "path": "procedures/crms/전파차단장치/전파차단장치_시험장_신청.md",
       "status": "current"
     }
   ]
