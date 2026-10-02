@@ -394,26 +394,40 @@ def get_feedback_examples(title: str = '') -> str:
     return _feedback_fixed_block() + _feedback_similar_block(title)
 
 
+# 짧은 본문(#267-보론, 2026-10-02): 공백 정리 뒤 이 길이 미만인 본문은 요약이 있으면 본문 없는 기사처럼 요약으로 판정한다.
+# 짧은 본문의 절반이 사이트 메뉴 글자였다(「최종편집 … 로그인 회원가입 전체보기 …」「▪ Reader's Pickup …」 — 14일 25건 중 ≈13건, 나머지는
+# 사진 설명이라 요약과 같은 글). 그 25건을 같은 호출로 다시 판정: 7건 참고 → 보통(메뉴 글 대신 요약을 읽어 기준문대로), 긴급 변화 0.
+# 새 입력 형식을 만들지 않고 이미 쓰는 「요약:」 형식을 쓴다 — 입력·출력 형식이 등급 분포를 움직인다(#267). tools_urgency_probe.SHORT_BODY와 같은 값.
+URGENCY_SHORT_BODY = 200
+
+
+def _urgency_user_msg(title: str, content: str = '', summary: str = '') -> str:
+    """긴급도 판정의 사용자 메시지 — 본문 600자, 없으면(또는 짧고 요약이 있으면) 검색 요약 300자, 둘 다 없으면 제목만."""
+    snippet = re.sub(r'\s+', ' ', content or '').strip()[:600]
+    summ = re.sub(r'\s+', ' ', summary or '').strip()[:300]
+    if snippet and len(snippet) < URGENCY_SHORT_BODY and summ:
+        snippet = ''
+    if snippet:
+        return f"제목: {title}\n본문: {snippet}"
+    if summ:
+        return f"제목: {title}\n요약: {summ}"
+    return f"제목: {title}"
+
+
 def classify_urgency(title: str, content: str = '', summary: str = '') -> str:
     """
     Claude Haiku로 기사 긴급도 AI 판단.
     API 키 없거나 오류 시 키워드 기반 폴백.
-    summary = 네이버 검색 요약(≤300자). 본문이 없을 때만 판정 재료로 쓴다(#188).
+    summary = 네이버 검색 요약(≤300자). 본문이 없을 때(또는 URGENCY_SHORT_BODY자 미만일 때) 판정 재료로 쓴다(#188·#267-보론).
     반환값: '긴급' | '보통' | '참고'
+    ⚠️ 출력 지시(「셋 중 하나만 … 단어만」)·출력 방식(도구·두 줄)을 실측 없이 바꾸지 말 것 — 등급 분포가 통째로 움직인다(#267).
     """
     if not ANTHROPIC_API_KEY:
         # API 키 없을 때 간단 폴백
         text = title + ' ' + ((content or '')[:300] or (summary or ''))
         return '보통' if any(k in text for k in _FALLBACK_MOBILE) else '참고'
 
-    snippet = re.sub(r'\s+', ' ', content or '').strip()[:600]
-    summ = re.sub(r'\s+', ' ', summary or '').strip()[:300]
-    if snippet:
-        user_msg = f"제목: {title}\n본문: {snippet}"
-    elif summ:
-        user_msg = f"제목: {title}\n요약: {summ}"
-    else:
-        user_msg = f"제목: {title}"
+    user_msg = _urgency_user_msg(title, content, summary)
 
     try:
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)

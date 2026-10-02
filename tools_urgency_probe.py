@@ -144,6 +144,8 @@ VARIANTS = {
     # #267 뒤 형식 후보(운영자 승인 +$2) — G1이 등급을 크게 바꾼 원인을 가른다
     'W2': {'rubric': 'cur', 'tool': None, 'fb': 'now', 'sets': 'ABC', 'out': 'w2'},
     'G1ns': {'rubric': 'cur', 'tool': 'sgb-ns', 'fb': 'now', 'sets': 'ABC'},
+    # 짧은 본문 보완(#267-보론)의 기준선 — 짧은 본문도 본문으로 쓰던 그 전 입력. 세트 X = --extra 파일의 기사
+    'B0L': {'rubric': 'cur', 'tool': None, 'fb': 'now', 'sets': 'X', 'in': 'legacy'},
 }
 
 
@@ -313,10 +315,17 @@ def feedback_rows(snap: dict, fx: dict, mode: str) -> list:
     raise ValueError(mode)
 
 
-def user_msg(art: dict) -> str:
-    """crawler.classify_urgency의 사용자 메시지 — 본문 600자, 없으면 검색 요약 300자, 둘 다 없으면 제목만."""
+SHORT_BODY = 200      # crawler.URGENCY_SHORT_BODY와 같은 값(시험이 대조)
+
+
+def user_msg(art: dict, mode: str = '') -> str:
+    """crawler.classify_urgency의 사용자 메시지 — 본문 600자, 없으면 검색 요약 300자, 둘 다 없으면 제목만.
+    본문이 SHORT_BODY자 미만이고 요약이 있으면 본문 없는 기사처럼 요약으로(#267-보론 — 짧은 본문의 절반이 사이트 메뉴 글자).
+    mode='legacy' = 그 전 운영(짧은 본문도 본문으로) — 보완 실측의 기준선(B0L)."""
     snippet = ws(art.get('content'))[:600]
     summ = ws(art.get('screen_text'))[:300]
+    if mode != 'legacy' and snippet and len(snippet) < SHORT_BODY and summ:
+        snippet = ''
     if snippet:
         return f"제목: {art['title']}\n본문: {snippet}"
     if summ:
@@ -364,7 +373,7 @@ class Builder:
         sys_text = intro_of(self.prod_intro, v['rubric'], v['tool'], v.get('out', '')) + crit + fixed
         sim = similar_block(art['title'], rows, fixed)
         tool = urgency_tool(v['tool']) if v['tool'] else None
-        um = user_msg(art)
+        um = user_msg(art, v.get('in', ''))
         mt = 150 if tool else (20 if v.get('out') == 'w2' else 10)
         key = hashlib.sha1('\x00'.join([MODEL, str(mt), json.dumps(tool, ensure_ascii=False, sort_keys=False) if tool else '',
                                         sys_text, sim, um]).encode('utf-8')).hexdigest()
@@ -373,10 +382,13 @@ class Builder:
                 'key': key, 'prefix': prefix, 'out': v.get('out', '')}
 
 
-def set_ids(fx: dict, sets: str) -> list:
+def set_ids(fx: dict, sets: str, snap: dict = None) -> list:
     seen, out = set(), []
     for k in sets:
-        src = fx['synth'] if k == 'S' else fx['sets'][k]
+        if k == 'X':                                 # 임시 세트(--extra) — 정답 없음, 변형끼리 등급만 견준다
+            src = [{'id': i} for i in (snap or {}).get('extra', [])]
+        else:
+            src = fx['synth'] if k == 'S' else fx['sets'][k]
         for c in src:
             if c['id'] not in seen:
                 seen.add(c['id']); out.append(c['id'])
@@ -479,7 +491,7 @@ def run_variants(a, fx, snap):
     plan, reuse = [], []
     for var in a.variants.split(','):
         sets = a.sets or VARIANTS[var]['sets']
-        for cid in set_ids(fx, sets):
+        for cid in set_ids(fx, sets, snap):
             if (var, a.rep, cid) in done:
                 continue
             it = b.call(var, cid)
@@ -848,6 +860,7 @@ def main() -> int:
     ap.add_argument('--refresh', action='store_true', help='스냅숏을 DB에서 다시 읽는다(결과 key가 바뀔 수 있다)')
     ap.add_argument('--workers', type=int, default=4)
     ap.add_argument('--cap', type=float, default=5.0, help='한 번 실행의 어림 비용 상한($, 설계 D7)')
+    ap.add_argument('--extra', default='', help='임시 세트 X — 기사 id를 쉼표·줄바꿈으로 적은 파일(스냅숏에 더해 읽는다)')
     a = ap.parse_args()
     for k in ('HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy'):
         os.environ.pop(k, None)
@@ -859,6 +872,19 @@ def main() -> int:
         with open(snap_path, encoding='utf-8') as f:
             snap = json.load(f)
         print(f'[스냅숏] {snap_path} ({snap["made"]}) — 기사 {len(snap["articles"])} · 피드백 {len(snap["feedback"])}')
+    if a.extra:
+        ids = [x.strip() for x in re.split(r'[,\s]+', open(a.extra, encoding='utf-8').read()) if x.strip()]
+        need = [i for i in ids if i not in snap['articles']]
+        if need:
+            import crawler
+            for i in range(0, len(need), 80):
+                for r in crawler.sb.table('news_feed').select('id,title,content,screen_text').in_('id', need[i:i + 80]).execute().data or []:
+                    snap['articles'][r['id']] = {'title': r['title'], 'content': r.get('content') or '',
+                                                 'screen_text': r.get('screen_text') or ''}
+        snap['extra'] = [i for i in ids if i in snap['articles']]
+        with open(snap_path, 'w', encoding='utf-8') as f:
+            json.dump(snap, f, ensure_ascii=False)
+        print(f'[임시 세트 X] {len(snap["extra"])}건(새로 읽음 {len(need)})')
     for c in fx['sets']['A'] + fx['sets']['B'] + fx['sets']['C'] + fx['sets']['D']:
         if snap['articles'][c['id']]['title'] != c['title']:
             print(f'⚠️ 제목이 고정 자료와 다르다: {c["id"][:8]} {c["title"][:30]} / {snap["articles"][c["id"]]["title"][:30]}')

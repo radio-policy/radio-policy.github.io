@@ -99,6 +99,18 @@ class TestToolAndCaps(unittest.TestCase):
         bad = P.parse_response(Resp('금주검토\n주파수'), None, 'w2')    # 둘째 줄이 영역 낱말이 아니면 해석 실패로 센다
         self.assertEqual((bad['grade'], bad['scope'], bad['parse']), ('보통', None, 'fail'))
 
+    def test_user_msg_matches_crawler(self):
+        # 실측 입력 = 운영 입력(#267-보론 짧은 본문 규칙 포함). legacy는 보완 전 기준선 전용
+        self.assertEqual(P.SHORT_BODY, crawler.URGENCY_SHORT_BODY)
+        menu = '최종편집 2026-09-28 16:49 (월) 로그인 회원가입 전체보기 산업 ICT·AI'
+        long_body = '가' * 700
+        for content, snip in ((menu, '요약 글'), (menu, ''), (long_body, '요약 글'), ('', '요약 글'), ('', ''), ('  짧은  본문 ', '요약')):
+            art = {'title': '제목', 'content': content, 'screen_text': snip}
+            self.assertEqual(P.user_msg(art), crawler._urgency_user_msg('제목', content, snip), (content[:10], snip))
+        self.assertEqual(crawler._urgency_user_msg('제목', menu, '요약 글'), '제목: 제목\n요약: 요약 글')
+        self.assertEqual(crawler._urgency_user_msg('제목', menu, ''), f'제목: 제목\n본문: {menu}')   # 요약이 없으면 짧은 본문이라도 쓴다
+        self.assertIn('본문:', P.user_msg({'title': '제목', 'content': menu, 'screen_text': '요약 글'}, 'legacy'))
+
     def test_caps(self):
         r = lambda s, g, b='없음': {'scope': s, 'grade': g, 'basis': b}
         self.assertEqual(P.cap(r('타영역', '긴급'), 'raw'), '긴급')
