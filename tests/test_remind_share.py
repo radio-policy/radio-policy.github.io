@@ -185,7 +185,7 @@ class FeedbackTokens(unittest.TestCase):
 
     def test_criteria_lines_264_present(self):
         # #264-보론(2026-09-30 운영자 결정): 해외·국제기구 주파수, 성과·수상, 이미 부과된 처분의 집계 자료 → 금주검토.
-        # 같은 호출로 실측한 글자 그대로다 — 다듬을 때는 다시 잰다(local_docs/긴급오탐_실측_260930/urg_probe.py)
+        # 같은 호출로 실측한 글자 그대로다 — 다듬을 때는 다시 잰다(tools_urgency_probe.py, #267)
         s = crawler._URGENCY_CRITERIA
         for key in ('여기서 주파수는 **국내 주파수 제도**', '해외 정부의 경매·할당·회수(미국 FCC 등)와 국제기구·해외 기관의 촉구·지침·세미나(ITU·WMO 등)',
                     '국제 회의가 국내 이동통신 대역의 분배·이용 조건을 실제로 결정한 보도만 즉시대응',
