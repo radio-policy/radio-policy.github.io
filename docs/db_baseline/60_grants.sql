@@ -328,6 +328,19 @@ grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE on
 grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE on public.system_status to authenticated;
 grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE on public.system_status to service_role;
 
+revoke all on public.team_criteria from public, anon, authenticated, service_role;
+grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE on public.team_criteria to service_role;
+grant INSERT (team_id, criteria, keywords, examples) on public.team_criteria to authenticated;
+grant SELECT (team_id, criteria, keywords, examples, rev, updated_at) on public.team_criteria to authenticated;
+grant UPDATE (team_id, criteria, keywords, examples) on public.team_criteria to authenticated;
+
+revoke all on public.team_criteria_history from public, anon, authenticated, service_role;
+grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE on public.team_criteria_history to service_role;
+grant SELECT (id, team_id, rev, criteria, keywords, examples, updated_at, replaced_at) on public.team_criteria_history to authenticated;
+
+revoke all on sequence public.team_criteria_history_id_seq from public, anon, authenticated, service_role;
+grant SELECT, USAGE on sequence public.team_criteria_history_id_seq to service_role;
+
 revoke all on public.team_urgency from public, anon, authenticated, service_role;
 grant DELETE, INSERT, SELECT, UPDATE on public.team_urgency to authenticated;
 grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE on public.team_urgency to service_role;
@@ -720,6 +733,9 @@ grant EXECUTE on function public.submit_answer_feedback(p_log_id uuid, p_rating 
 grant EXECUTE on function public.submit_answer_feedback(p_log_id uuid, p_rating smallint, p_reason text) to authenticated;
 grant EXECUTE on function public.submit_answer_feedback(p_log_id uuid, p_rating smallint, p_reason text) to public;
 grant EXECUTE on function public.submit_answer_feedback(p_log_id uuid, p_rating smallint, p_reason text) to service_role;
+
+revoke all on function public.team_criteria_before() from public, anon, authenticated, service_role;
+grant EXECUTE on function public.team_criteria_before() to service_role;
 
 revoke all on function public.team_urgency_export(p_key text) from public, anon, authenticated, service_role;
 grant EXECUTE on function public.team_urgency_export(p_key text) to anon;

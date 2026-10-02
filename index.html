@@ -709,6 +709,19 @@ window.LAWMAP_POS_URL = 'lawmap_positions.json?v=20260928a';
             <div id="subscriber-team-body"><div style="padding:14px;text-align:center;color:var(--text-secondary);font-size:12px">불러오는 중...</div></div>
           </div>
 
+          <!-- 팀별 뉴스 기준문 (관리자 전용, #270) — 팀에서 받은 키워드 + 500자 기준문을 등록. 지금은 저장만(등급에 쓰지 않음) -->
+          <div class="card" data-admin-only style="display:none;margin-bottom:12px;cursor:default">
+            <div class="section-title" style="margin-bottom:6px">
+              <i class="ti ti-file-text"></i>팀별 뉴스 기준문
+              <button class="btn" style="font-size:11px;padding:3px 10px;margin-left:auto" onclick="loadTeamCriteria()"><i class="ti ti-refresh"></i>새로고침</button>
+            </div>
+            <div style="font-size:11px;color:var(--text-tertiary);margin-bottom:10px">
+              팀에서 받은 기준문·키워드를 팀별로 등록합니다. 그 팀 승인 계정은 「긴급도 설정」의 우리 팀 탭에서 볼 수 있습니다.
+              사외 서버에 저장되니 대외비는 넣지 마세요.
+            </div>
+            <div id="team-criteria-body"><div style="padding:14px;text-align:center;color:var(--text-secondary);font-size:12px">불러오는 중...</div></div>
+          </div>
+
           <!-- 지식베이스 승인 대기 -->
           <div class="card" style="margin-bottom:12px;cursor:default">
             <div class="section-title" style="margin-bottom:6px">
@@ -1053,6 +1066,8 @@ window.LAWMAP_POS_URL = 'lawmap_positions.json?v=20260928a';
             </div>
             <!-- 이번 달 우리 팀 AI 문장 판정 건수·비용(#251) — 우리 팀 탭에서만, app.js _urTeamCostRender가 채운다 -->
             <div id="ur-team-cost" style="display:none;font-size:11px;color:var(--text-secondary);margin:-4px 0 8px;line-height:1.6"></div>
+            <!-- 우리 팀 기준문 보기(#270, 읽기 전용) — 우리 팀 탭에서만, app.js _urTeamCriteriaRender가 채운다 -->
+            <div id="ur-team-criteria" style="display:none;margin:0 0 8px"></div>
             <div id="ur-list"></div>
             <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap">
               <button class="btn" style="font-size:12px" onclick="previewUrgencyRules()"><i class="ti ti-player-play"></i> 최근 기사로 미리 보기</button>
@@ -1268,7 +1283,7 @@ window.LAWMAP_POS_URL = 'lawmap_positions.json?v=20260928a';
 <script src="supabase/functions/_shared/cite_verify.js?v=20260929a"></script>
 <script src="supabase/functions/_shared/rag_core.js?v=20260928a"></script>   <!-- 자문 검색 순수 규칙(#215) — app.js보다 먼저 -->
 <script src="supabase/functions/_shared/urgency_rules.js?v=20260927c"></script>   <!-- 긴급도 규칙 매처(#216) + 팀 층 함수(#250) + 문장 조건 함수(#251) + 알림 등급 함수(#252) — app.js보다 먼저 -->
-<script src="app.js?v=20261002e"></script>
+<script src="app.js?v=20261002f"></script>
 <script src="lawmap_articles.js?v=20260929a"></script>
 </body>
 </html>

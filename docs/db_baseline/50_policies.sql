@@ -235,6 +235,21 @@ create policy speech_field_stats_sel on public.speech_field_stats as PERMISSIVE 
 create policy system_health_anon_select on public.system_health as PERMISSIVE for SELECT to anon, authenticated
   using (true);
 
+create policy team_criteria_ins on public.team_criteria as PERMISSIVE for INSERT to authenticated
+  with check (( SELECT is_admin() AS is_admin));
+
+create policy team_criteria_sel on public.team_criteria as PERMISSIVE for SELECT to authenticated
+  using ((( SELECT is_admin() AS is_admin) OR (( SELECT is_approved_user() AS is_approved_user) AND (team_id = ( SELECT my_team() AS my_team))) OR (( SELECT is_approved_user() AS is_approved_user) AND (( SELECT my_division() AS my_division) IS NOT NULL) AND (team_id IN ( SELECT t.id
+   FROM teams t
+  WHERE (t.division = ( SELECT my_division() AS my_division)))))));
+
+create policy team_criteria_upd on public.team_criteria as PERMISSIVE for UPDATE to authenticated
+  using (( SELECT is_admin() AS is_admin))
+  with check (( SELECT is_admin() AS is_admin));
+
+create policy team_criteria_history_sel on public.team_criteria_history as PERMISSIVE for SELECT to authenticated
+  using (( SELECT is_admin() AS is_admin));
+
 create policy team_urgency_del on public.team_urgency as PERMISSIVE for DELETE to authenticated
   using (((source = ANY (ARRAY['human'::text, 'rule'::text])) AND (( SELECT is_admin() AS is_admin) OR (( SELECT is_approved_user() AS is_approved_user) AND (team_id = ( SELECT my_team() AS my_team))))));
 

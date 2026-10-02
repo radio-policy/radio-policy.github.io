@@ -1466,6 +1466,49 @@ begin
 end $function$
 ;
 
+CREATE OR REPLACE FUNCTION public.team_criteria_before()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare
+  kw text[];
+begin
+  new.criteria := btrim(normalize(coalesce(new.criteria, ''), NFC));
+  new.examples := btrim(normalize(coalesce(new.examples, ''), NFC));
+  select coalesce(array_agg(w order by ord), '{}'::text[]) into kw
+    from (select distinct on (w) w, ord
+            from (select btrim(normalize(x, NFC)) as w, ord
+                    from unnest(coalesce(new.keywords, '{}'::text[])) with ordinality as u(x, ord)) s
+           where w <> ''
+           order by w, ord) d;
+  if exists (select 1 from unnest(kw) as k(w) where char_length(w) > 30) then
+    raise exception 'TEAM_CRITERIA_KEYWORD_TOO_LONG' using errcode = '22001';
+  end if;
+  new.keywords := kw;
+  if tg_op = 'INSERT' then
+    new.rev := 1;
+    new.updated_at := now();
+    new.updated_by := auth.uid();
+  elsif (new.criteria, new.keywords, new.examples) is distinct from (old.criteria, old.keywords, old.examples) then
+    insert into public.team_criteria_history (team_id, rev, criteria, keywords, examples, updated_at, updated_by)
+      values (old.team_id, old.rev, old.criteria, old.keywords, old.examples, old.updated_at, old.updated_by);
+    new.team_id := old.team_id;
+    new.rev := old.rev + 1;
+    new.updated_at := now();
+    new.updated_by := auth.uid();
+  else
+    new.team_id := old.team_id;
+    new.rev := old.rev;
+    new.updated_at := old.updated_at;
+    new.updated_by := old.updated_by;
+  end if;
+  return new;
+end
+$function$
+;
+
 CREATE OR REPLACE FUNCTION public.team_urgency_export(p_key text)
  RETURNS jsonb
  LANGUAGE plpgsql

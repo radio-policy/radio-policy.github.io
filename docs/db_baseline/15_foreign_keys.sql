@@ -28,6 +28,8 @@ alter table public.profiles add constraint profiles_user_id_fkey FOREIGN KEY (us
 
 alter table public.subscriber_alert_log add constraint subscriber_alert_log_news_id_fkey FOREIGN KEY (news_id) REFERENCES news_feed(id) ON DELETE CASCADE;
 
+alter table public.team_criteria add constraint team_criteria_team_id_fkey FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE;
+
 alter table public.team_urgency add constraint team_urgency_news_id_fkey FOREIGN KEY (news_id) REFERENCES news_feed(id) ON DELETE CASCADE;
 
 alter table public.team_urgency add constraint team_urgency_team_id_fkey FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE;

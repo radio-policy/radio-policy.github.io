@@ -643,6 +643,203 @@ async function saveSubscriberTeam(i, btn) {
   await loadSubscriberTeams(n === 1 ? '✅ ' + who + ': 저장했습니다 — 다음 수집부터 이 기준' : who + ': 변경 없음');
 }
 
+// ── 팀별 뉴스 기준문 (#270, 2026-10-02 운영자 결정 — 팀에서 「키워드 + 500자 기준문」을 받는다) ──
+// 표 team_criteria(팀당 1행) — 쓰기 = 관리자(RLS), 읽기 = 관리자·그 팀 승인 계정·그 실 실장, anon 권한 없음.
+// 지금은 저장만 한다 — 판정·수집에 쓰는 코드는 아직 없다(수집 확대·팀별 AI 판정은 Fable 결정 뒤).
+// rev·updated_at은 트리거가 정한다(내용이 같으면 그대로, 바뀌면 옛 판을 team_criteria_history에).
+// updated_by(계정 uuid)는 칸 GRANT 밖이라 읽지 않는다(#269 원칙) — select는 꼭 TC_COLS로.
+var TC_COLS = 'team_id,criteria,keywords,examples,rev,updated_at';
+var TC_MAX_CRITERIA = 500, TC_MAX_EXAMPLES = 1000, TC_MAX_KEYWORDS = 20, TC_KW_RECOMMEND = 10, TC_MAX_KW_LEN = 30;
+// 흔한 낱말 — 혼자서는 거의 모든 기사에 걸린다(제출 양식 「쓰실 때」 3번). 경고만 하고 저장은 막지 않는다
+var TC_GENERIC_WORDS = ['AI', '통신', 'SKT', 'SK텔레콤', 'KT', 'LG유플러스', 'LGU+', '통신3사', '이동통신', '5G', '6G', '정부', '과기정통부', '규제', '정책'];
+var _tcRows = {};          // team_id(문자열) → 행
+var _tcSel = null;         // 설정 화면에서 고른 팀 id(문자열)
+
+async function loadTeamCriteria(note) {
+  var el = document.getElementById('team-criteria-body');
+  if (!el || !sb) return;
+  if (!isAdminUser()) { el.innerHTML = '<div style="font-size:12px;color:var(--text-tertiary)">관리자 계정으로 로그인해야 합니다.</div>'; return; }
+  el.innerHTML = '<div style="font-size:12px;color:var(--text-tertiary);padding:10px">불러오는 중...</div>';
+  try {
+    if (!_acctTeams.length) {   // 구독자 칸과 같은 팀 목록 — 비었으면 같은 select·정렬로 직접
+      var tRes = await sb.from('teams').select('id,name,division,sort_order,daily_limit,unlimited')
+        .order('sort_order', { ascending: true, nullsFirst: false }).order('id');
+      if (tRes.error) throw tRes.error;
+      _acctTeams = tRes.data || [];
+    }
+    var r = await sb.from('team_criteria').select(TC_COLS);
+    if (r.error) throw r.error;
+    _tcRows = {};
+    (r.data || []).forEach(function(x) { _tcRows[String(x.team_id)] = x; });
+    var ok = _tcSel != null && _acctTeams.some(function(t) { return String(t.id) === _tcSel; });
+    if (!ok) {
+      var first = _acctTeams.filter(function(t) { return t.division; })[0] || _acctTeams[0];
+      _tcSel = first ? String(first.id) : null;
+    }
+    renderTeamCriteria(note);
+  } catch (e) {
+    el.innerHTML = '<div style="font-size:12px;color:var(--text-tertiary)">조회 실패: ' + chEsc(e.message || String(e)) + '</div>';
+  }
+}
+
+function _tcTeamOptions() {
+  var order = [], byDiv = {};
+  _acctTeams.forEach(function(t) {
+    var d = t.division || '';
+    if (!byDiv[d]) { byDiv[d] = []; order.push(d); }
+    byDiv[d].push(t);
+  });
+  return order.map(function(d) {
+    return '<optgroup label="' + escHtml(d || '(실 미지정)') + '">' + byDiv[d].map(function(t) {
+      var row = _tcRows[String(t.id)];
+      var mark = row && (row.criteria || (row.keywords || []).length) ? ' ✓ 판 ' + row.rev : '';
+      return '<option value="' + t.id + '"' + (String(t.id) === _tcSel ? ' selected' : '') + '>' + chEsc(t.name + mark) + '</option>';
+    }).join('') + '</optgroup>';
+  }).join('');
+}
+
+function renderTeamCriteria(note) {
+  var el = document.getElementById('team-criteria-body');
+  if (!el) return;
+  if (_tcSel == null) { el.innerHTML = '<div style="font-size:11px;color:var(--text-tertiary)">팀이 없습니다.</div>'; return; }
+  var row = _tcRows[_tcSel] || null;
+  var nReg = Object.keys(_tcRows).filter(function(k) { var x = _tcRows[k]; return x.criteria || (x.keywords || []).length; }).length;
+  var fieldCss = 'width:100%;box-sizing:border-box;padding:6px 8px;font-size:12px;line-height:1.6;border:0.5px solid var(--border-mid);border-radius:4px;background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;resize:vertical';
+  var labelCss = 'display:flex;align-items:baseline;gap:6px;font-size:11.5px;font-weight:600;color:var(--text-secondary);margin:10px 0 4px';
+  var html = note ? '<div style="font-size:11.5px;color:var(--text-secondary);margin:2px 0 8px">' + note + '</div>' : '';
+  html += '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">' +
+      '<select id="tc-team" onchange="_tcPick(this)" style="padding:4px 6px;font-size:12px;border:0.5px solid var(--border-mid);border-radius:4px;background:var(--bg-secondary);color:var(--text-primary);font-family:inherit">' + _tcTeamOptions() + '</select>' +
+      '<span style="font-size:11px;color:var(--text-tertiary)">등록 ' + nReg + '팀 / 전체 ' + _acctTeams.length + '팀</span>' +
+    '</div>' +
+    '<div style="font-size:11px;color:var(--text-tertiary);margin-top:6px">' +
+      (row ? '판 ' + row.rev + ' · 마지막 수정 ' + escHtml(new Date(row.updated_at).toLocaleString('ko-KR', { year: '2-digit', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })) +
+             ' — 내용을 바꿔 저장하면 판이 올라가고 옛 판은 보관됩니다'
+          : '아직 등록하지 않은 팀입니다.') +
+    '</div>' +
+    '<div style="' + labelCss + '">기준문 <span id="tc-criteria-n" style="font-weight:400;color:var(--text-tertiary)"></span></div>' +
+    '<textarea id="tc-criteria" rows="6" maxlength="' + TC_MAX_CRITERIA + '" oninput="_tcCount()" style="' + fieldCss + '" placeholder="팀이 보낸 기준문을 그대로 붙여 넣습니다(500자 이내) — 중요·보통·참고인 뉴스와 빼야 할 기사"></textarea>' +
+    '<div style="' + labelCss + '">키워드 <span id="tc-keywords-n" style="font-weight:400;color:var(--text-tertiary)"></span></div>' +
+    '<textarea id="tc-keywords" rows="2" oninput="_tcCount()" style="' + fieldCss + '" placeholder="쉼표나 줄바꿈으로 구분 — 5~10개 권장(최대 20개, 한 낱말 30자)"></textarea>' +
+    '<div id="tc-warn" style="font-size:11px;line-height:1.6;margin-top:4px"></div>' +
+    '<div style="' + labelCss + '">기사 예 <span style="font-weight:400;color:var(--text-tertiary)">(선택 — 중요해야 하는 기사·아니어야 하는 기사의 제목이나 링크)</span> <span id="tc-examples-n" style="font-weight:400;color:var(--text-tertiary)"></span></div>' +
+    '<textarea id="tc-examples" rows="3" maxlength="' + TC_MAX_EXAMPLES + '" oninput="_tcCount()" style="' + fieldCss + '"></textarea>' +
+    '<div style="display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap">' +
+      '<button class="btn btn-primary" style="font-size:12px" onclick="saveTeamCriteria(this)"><i class="ti ti-device-floppy"></i>저장</button>' +
+      '<span style="font-size:11px;color:var(--text-tertiary)">지금은 저장만 합니다 — 등급에는 아직 쓰이지 않습니다.</span>' +
+    '</div>';
+  el.innerHTML = html;
+  // 값은 DOM 속성으로 넣는다(HTML 조립에 사용자 글을 섞지 않는다)
+  document.getElementById('tc-criteria').value = row ? row.criteria || '' : '';
+  document.getElementById('tc-keywords').value = row ? (row.keywords || []).join(', ') : '';
+  document.getElementById('tc-examples').value = row ? row.examples || '' : '';
+  _tcCount();
+}
+
+function _tcKeywords() {
+  var e = document.getElementById('tc-keywords');
+  var seen = {}, out = [];
+  _urSplit(e ? e.value : '').forEach(function(w) { if (!seen[w]) { seen[w] = 1; out.push(w); } });
+  return out;
+}
+
+// 글자 수·키워드 경고만 다시 쓴다 — 입력칸이 든 영역을 통째로 다시 그리지 않는다(#182)
+function _tcCount() {
+  var c = document.getElementById('tc-criteria'), x = document.getElementById('tc-examples');
+  var kws = _tcKeywords();
+  var set = function(id, text) { var e = document.getElementById(id); if (e) e.textContent = text; };
+  set('tc-criteria-n', (c ? c.value.trim().length : 0) + ' / ' + TC_MAX_CRITERIA + '자');
+  set('tc-keywords-n', kws.length + '개');
+  set('tc-examples-n', (x ? x.value.trim().length : 0) + ' / ' + TC_MAX_EXAMPLES + '자');
+  var warn = [], err = [];
+  var generic = kws.filter(function(w) { return TC_GENERIC_WORDS.some(function(g) { return g.toLowerCase() === w.toLowerCase(); }); });
+  if (generic.length) warn.push('흔한 낱말 ' + generic.map(function(w) { return '「' + escHtml(w) + '」'; }).join('') + ' — 혼자서는 거의 모든 기사에 걸립니다');
+  if (kws.length > TC_MAX_KEYWORDS) err.push('키워드는 ' + TC_MAX_KEYWORDS + '개까지입니다(지금 ' + kws.length + '개)');
+  else if (kws.length > TC_KW_RECOMMEND) warn.push('키워드 ' + kws.length + '개 — 권장은 5~10개입니다');
+  var long = kws.filter(function(w) { return w.length > TC_MAX_KW_LEN; });
+  if (long.length) err.push(TC_MAX_KW_LEN + '자 넘는 키워드 ' + long.length + '개 — 쉼표가 빠졌는지 보세요');
+  var w = document.getElementById('tc-warn');
+  if (w) w.innerHTML = err.map(function(s) { return '<div style="color:#ef4444">⛔ ' + s + '</div>'; }).join('') +
+                       warn.map(function(s) { return '<div style="color:#b45309">⚠️ ' + s + '</div>'; }).join('');
+  return err.length === 0;
+}
+
+function _tcDirty() {
+  var row = _tcRows[_tcSel] || { criteria: '', keywords: [], examples: '' };
+  var v = function(id) { var e = document.getElementById(id); return e ? e.value.trim() : ''; };
+  return v('tc-criteria') !== (row.criteria || '') || v('tc-examples') !== (row.examples || '') ||
+         _tcKeywords().join('\n') !== (row.keywords || []).join('\n');
+}
+
+function _tcPick(sel) {
+  if (_tcDirty() && !confirm('저장하지 않은 내용이 있습니다. 버리고 다른 팀으로 바꿀까요?')) { sel.value = _tcSel; return; }
+  _tcSel = String(sel.value);
+  renderTeamCriteria();
+}
+
+async function saveTeamCriteria(btn) {
+  if (!sb || _tcSel == null) return;
+  if (!_ensureAdminPwd()) return;
+  if (!_tcCount()) { alert('⛔ 표시된 문제를 먼저 고쳐 주세요.'); return; }
+  var v = function(id) { var e = document.getElementById(id); return e ? e.value.trim() : ''; };
+  var payload = { team_id: Number(_tcSel), criteria: v('tc-criteria'), keywords: _tcKeywords(), examples: v('tc-examples') };
+  if (payload.criteria.length > TC_MAX_CRITERIA) { alert('기준문은 ' + TC_MAX_CRITERIA + '자까지입니다.'); return; }
+  var before = _tcRows[_tcSel] || null;
+  if (!before && !payload.criteria && !payload.keywords.length && !payload.examples) { alert('저장할 내용이 없습니다.'); return; }
+  var name = _teamName(_tcSel);
+  for (var i = 0; i < _acctTeams.length; i++) if (String(_acctTeams[i].id) === _tcSel) name = _acctTeams[i].name;
+  if (btn) btn.disabled = true;
+  var r = await sb.from('team_criteria').upsert(payload, { onConflict: 'team_id' }).select(TC_COLS);
+  if (btn) btn.disabled = false;
+  if (r.error) {
+    var m = r.error.message || '';
+    if (r.error.code === '42501') { alert('권한이 없습니다 — 관리자 계정으로 다시 로그인해 주세요.'); return; }
+    if (/TEAM_CRITERIA_KEYWORD_TOO_LONG/.test(m)) { alert(TC_MAX_KW_LEN + '자 넘는 키워드가 있습니다.'); return; }
+    alert('기준문 저장 실패: ' + m);
+    return;
+  }
+  var saved = (r.data || [])[0];
+  if (!saved) { alert('저장 결과를 확인하지 못했습니다 — 새로고침 뒤 다시 확인해 주세요.'); return; }
+  _tcRows[_tcSel] = saved;
+  _tcMineKey = null;   // 우리 팀 탭 사본도 다시 읽게
+  var who = escHtml(name);
+  renderTeamCriteria(before && before.rev === saved.rev ? who + ': 변경 없음' : '✅ ' + who + ': 판 ' + saved.rev + '으로 저장했습니다');
+}
+
+// ── 「긴급도 설정」 우리 팀 탭 — 우리 팀 기준문 보기(읽기 전용, #270). 등록·수정은 관리자가 설정 화면에서 ──
+var _tcMine = null, _tcMineKey = null, _tcMineErr = '';
+function _urTeamCriteriaRender() {
+  var el = document.getElementById('ur-team-criteria');
+  if (!el) return;
+  var tid = myTeamId();
+  if (_urTab !== 'team' || tid == null) { el.style.display = 'none'; el.innerHTML = ''; return; }
+  el.style.display = '';
+  var key = (currentUser ? currentUser.id : '') + '|' + tid;
+  if (_tcMineKey !== key) {   // 계정·팀이 바뀌었거나 관리자가 방금 저장 — 한 번만 읽는다
+    _tcMineKey = key; _tcMine = null; _tcMineErr = '';
+    el.innerHTML = '<div style="font-size:11px;color:var(--text-tertiary)">우리 팀 기준문 불러오는 중…</div>';
+    sb.from('team_criteria').select(TC_COLS).eq('team_id', tid).maybeSingle().then(function(r) {
+      if (_tcMineKey !== key) return;
+      if (r.error) _tcMineErr = r.error.message || String(r.error); else _tcMine = r.data || false;
+      _urTeamCriteriaRender();
+    });
+    return;
+  }
+  if (_tcMineErr) { el.innerHTML = '<div style="font-size:11px;color:var(--text-tertiary)">우리 팀 기준문을 불러오지 못했습니다(' + escHtml(_tcMineErr) + ')</div>'; return; }
+  if (_tcMine === null) return;
+  var row = _tcMine;
+  if (!row || (!row.criteria && !(row.keywords || []).length)) {
+    el.innerHTML = '<div style="font-size:11px;color:var(--text-tertiary)">우리 팀 기준문이 아직 등록되지 않았습니다 — 팀에서 보낸 기준문은 관리자가 등록합니다.</div>';
+    return;
+  }
+  el.innerHTML = '<details style="font-size:11.5px;border:0.5px solid var(--border-secondary);border-radius:var(--radius-md);padding:6px 10px">' +
+    '<summary style="cursor:pointer;color:var(--text-secondary)"><b>우리 팀 기준문</b> · 판 ' + row.rev + ' · ' +
+      escHtml(new Date(row.updated_at).toLocaleDateString('ko-KR', { year: '2-digit', month: '2-digit', day: '2-digit' })) +
+      ' <span style="color:var(--text-tertiary)">(등록만 됨 — 등급에는 아직 쓰이지 않음)</span></summary>' +
+    '<div style="white-space:pre-wrap;line-height:1.7;margin-top:6px;color:var(--text-primary)">' + escHtml(row.criteria || '') + '</div>' +
+    ((row.keywords || []).length ? '<div style="margin-top:6px">' + _urChips(row.keywords) + '</div>' : '') +
+    '</details>';
+}
+
 async function claudeFetch(init) {
   if (!sb) throw new Error('Supabase 연결이 없습니다.');
   var s = await sb.auth.getSession();
@@ -4550,7 +4747,7 @@ function _urRenderTabs() {
   [['ur-f-nl', 'nl'], ['ur-f-note', 'note'], ['ur-f-any', 'any'], ['ur-f-and', 'and'], ['ur-f-none', 'none'], ['ur-f-sentence', 'sentence']].forEach(function(p) {
     var e = document.getElementById(p[0]); if (e) e.placeholder = ex[p[1]];
   });
-  _urTeamCostRender();
+  _urTeamCostRender();  _urTeamCriteriaRender();   // 우리 팀 기준문 보기(#270) — 우리 팀 탭에서만
 }
 // 로그인·로그아웃·팀 변경 뒤(applyAuthUI) — 탭·버튼을 새 권한에 맞추고, 편집 권한이 없어졌으면 폼을 닫는다
 function _urAuthChanged() {
@@ -7830,7 +8027,7 @@ function loadSettingsFields() {
   loadPendingApprovals();
   loadLawWatch();
   // 구독자 알림 기준(#252)은 계정 관리가 팀 목록(_acctTeams)을 채운 뒤에 — loadAccountAdmin은 오류를 안에서 삼키므로 늘 이어진다
-  if (isAdminUser()) loadAccountAdmin().then(function() { loadSubscriberTeams(); });
+  if (isAdminUser()) loadAccountAdmin().then(function() { loadSubscriberTeams(); loadTeamCriteria(); });   // 팀별 기준문(#270)도 같은 팀 목록
 }
 
 // ── 지식베이스 승인 대기 (업로드 파일 게이트) ──

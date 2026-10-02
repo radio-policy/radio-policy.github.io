@@ -703,6 +703,36 @@ create table if not exists public.system_status (
 );
 alter table public.system_status enable row level security;
 
+create table if not exists public.team_criteria (
+  team_id smallint not null,
+  criteria text default ''::text not null,
+  keywords text[] default '{}'::text[] not null,
+  examples text default ''::text not null,
+  rev integer default 1 not null,
+  updated_at timestamp with time zone default now() not null,
+  updated_by uuid,
+  constraint team_criteria_pkey PRIMARY KEY (team_id),
+  constraint team_criteria_criteria_check CHECK ((char_length(criteria) <= 500)),
+  constraint team_criteria_examples_check CHECK ((char_length(examples) <= 1000)),
+  constraint team_criteria_keywords_check CHECK ((cardinality(keywords) <= 20))
+);
+alter table public.team_criteria enable row level security;
+
+create table if not exists public.team_criteria_history (
+  id bigint generated always as identity not null,
+  team_id smallint not null,
+  rev integer not null,
+  criteria text not null,
+  keywords text[] not null,
+  examples text not null,
+  updated_at timestamp with time zone not null,
+  updated_by uuid,
+  replaced_at timestamp with time zone default now() not null,
+  constraint team_criteria_history_team_id_rev_key UNIQUE (team_id, rev),
+  constraint team_criteria_history_pkey PRIMARY KEY (id)
+);
+alter table public.team_criteria_history enable row level security;
+
 create table if not exists public.team_urgency (
   news_id uuid not null,
   team_id smallint not null,
