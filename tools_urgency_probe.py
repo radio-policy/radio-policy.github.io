@@ -68,17 +68,25 @@ TOOL_ORDERS = {'sgb': ('scope', 'grade', 'basis'), 'gsb': ('grade', 'scope', 'ba
 
 
 def urgency_tool(order: str = 'sgb') -> dict:
-    """record_urgency 도구 정의. strict(문법 제약)라 enum 밖 값·빠진 칸이 나오지 않는다 — 칸 순서 = 생성 순서."""
-    keys = TOOL_ORDERS[order]
-    return {'name': 'record_urgency',
-            'description': '기사 한 건의 판정을 기록한다. 칸은 ' + ' → '.join(keys) + ' 순서로 채운다.',
-            'strict': True,
-            'input_schema': {'type': 'object', 'properties': {k: _TOOL_PROPS[k] for k in keys},
-                             'required': list(keys), 'additionalProperties': False}}
+    """record_urgency 도구 정의. strict(문법 제약)라 enum 밖 값·빠진 칸이 나오지 않는다 — 칸 순서 = 생성 순서.
+    order 끝에 '-ns'가 붙으면 strict 없이(G1ns — 등급 쏠림이 strict 탓인지 가르는 변형)."""
+    ns = order.endswith('-ns')
+    keys = TOOL_ORDERS[order[:-3] if ns else order]
+    t = {'name': 'record_urgency',
+         'description': '기사 한 건의 판정을 기록한다. 칸은 ' + ' → '.join(keys) + ' 순서로 채운다.',
+         'strict': True,
+         'input_schema': {'type': 'object', 'properties': {k: _TOOL_PROPS[k] for k in keys},
+                          'required': list(keys), 'additionalProperties': False}}
+    if ns:
+        del t['strict']
+    return t
 
 
 WORD_LINE = '아래 기준으로 셋 중 하나만 출력하세요 (다른 말 없이 단어만):'
 TOOL_LINE = '아래 기준으로 판정해 record_urgency 도구로 기록하세요:'
+# W2(#267 뒤 후보): 등급 낱말을 지금처럼 첫 줄에 먼저 쓰게 하고 영역은 둘째 줄 — 등급을 만들 때의 문맥을 지금 출력과 가깝게 둔다
+W2_LINE = ('아래 기준으로 셋 중 하나를 첫 줄에 출력하고, 둘째 줄에는 0단계 영역 게이트의 결과를 「통신」·「언저리」·「타영역」 중 '
+           '한 낱말로 출력하세요 (다른 말 없이 단어만):')
 HEAD_OLD = '당신은 SK텔레콤 Comm센터 기술정책팀의 전파정책 모니터링 AI입니다.'
 HEAD_V01 = '당신은 SK텔레콤 Comm센터의 통신정책 뉴스 모니터링 AI입니다.'
 
@@ -133,6 +141,9 @@ VARIANTS = {
     'G1': {'rubric': 'cur', 'tool': 'sgb', 'fb': 'now', 'sets': 'ABCDS'},
     'G1b': {'rubric': 'cur', 'tool': 'gsb', 'fb': 'now', 'sets': 'ABC'},
     'T1': {'rubric': 'V01', 'tool': 'sgb', 'fb': 'T1', 'sets': 'ABCDS'},
+    # #267 뒤 형식 후보(운영자 승인 +$2) — G1이 등급을 크게 바꾼 원인을 가른다
+    'W2': {'rubric': 'cur', 'tool': None, 'fb': 'now', 'sets': 'ABC', 'out': 'w2'},
+    'G1ns': {'rubric': 'cur', 'tool': 'sgb-ns', 'fb': 'now', 'sets': 'ABC'},
 }
 
 
@@ -157,10 +168,12 @@ def criteria_of(cur: str, rubric: str) -> str:
     raise ValueError(rubric)
 
 
-def intro_of(prod_intro: str, rubric: str, tool) -> str:
+def intro_of(prod_intro: str, rubric: str, tool, out: str = '') -> str:
     s = prod_intro
     if tool:
         s = _replace_once(s, WORD_LINE, TOOL_LINE)
+    elif out == 'w2':
+        s = _replace_once(s, WORD_LINE, W2_LINE)
     if rubric == 'V01':
         s = _replace_once(s, HEAD_OLD, HEAD_V01)
     return s
@@ -348,16 +361,16 @@ class Builder:
         art = self.article(cid)
         fixed, rows = self.fixed(v['fb'], cid)
         crit = criteria_of(self.snap['criteria'], v['rubric'])
-        sys_text = intro_of(self.prod_intro, v['rubric'], v['tool']) + crit + fixed
+        sys_text = intro_of(self.prod_intro, v['rubric'], v['tool'], v.get('out', '')) + crit + fixed
         sim = similar_block(art['title'], rows, fixed)
         tool = urgency_tool(v['tool']) if v['tool'] else None
         um = user_msg(art)
-        mt = 150 if tool else 10
+        mt = 150 if tool else (20 if v.get('out') == 'w2' else 10)
         key = hashlib.sha1('\x00'.join([MODEL, str(mt), json.dumps(tool, ensure_ascii=False, sort_keys=False) if tool else '',
                                         sys_text, sim, um]).encode('utf-8')).hexdigest()
         prefix = hashlib.sha1(((json.dumps(tool, ensure_ascii=False) if tool else '') + '\x00' + sys_text).encode('utf-8')).hexdigest()[:12]
         return {'var': var, 'id': cid, 'sys': sys_text, 'sim': sim, 'tool': tool, 'user': um, 'max_tokens': mt,
-                'key': key, 'prefix': prefix}
+                'key': key, 'prefix': prefix, 'out': v.get('out', '')}
 
 
 def set_ids(fx: dict, sets: str) -> list:
@@ -374,7 +387,7 @@ def set_ids(fx: dict, sets: str) -> list:
 #  호출
 # ═══════════════════════════════════════════════════════════════════════════════════════════
 
-def parse_response(resp, tool) -> dict:
+def parse_response(resp, tool, out: str = '') -> dict:
     """도구 변형: tool_use 블록의 scope·grade·basis(값 검사). 실패면 운영 폴백과 같은 글 낱말 찾기(영역 없음).
     낱말 변형: 운영과 같은 글 낱말 찾기(없으면 참고)."""
     texts = [getattr(b, 'text', '') for b in resp.content if getattr(b, 'type', '') == 'text']
@@ -389,6 +402,12 @@ def parse_response(resp, tool) -> dict:
                 return {'grade': None, 'scope': s if s in SCOPES else None, 'basis': ba, 'parse': 'bad-value',
                         'order': list(inp.keys()), 'raw': json.dumps(inp, ensure_ascii=False)}
     answer = ' '.join(texts).strip()
+    if out == 'w2':                                  # 첫 줄 등급 · 둘째 줄 영역(타영역 → 언저리 → 통신 순으로 찾는다)
+        lines = [x.strip() for x in '\n'.join(texts).strip().split('\n') if x.strip()]
+        g = next((v for k, v in GRADE_MAP.items() if lines and k in lines[0]), None)
+        rest = ' '.join(lines[1:])
+        s = next((x for x in ('타영역', '언저리', '통신') if x in rest), None)
+        return {'grade': g or '참고', 'scope': s, 'basis': None, 'parse': 'ok' if g and s else 'fail', 'raw': answer[:80]}
     for k, v in GRADE_MAP.items():
         if k in answer:
             return {'grade': v, 'scope': None, 'basis': None, 'parse': 'text' if tool else 'ok', 'raw': answer[:80]}
@@ -410,7 +429,7 @@ def judge(client, item: dict) -> dict:
         try:
             resp = client.messages.create(model=MODEL, max_tokens=item['max_tokens'], temperature=0, system=blocks,
                                           messages=[{'role': 'user', 'content': item['user']}], **kw)
-            out = parse_response(resp, item['tool'])
+            out = parse_response(resp, item['tool'], item.get('out', ''))
             u = resp.usage
             out.update({'in': getattr(u, 'input_tokens', 0) or 0, 'out': getattr(u, 'output_tokens', 0) or 0,
                         'cr': getattr(u, 'cache_read_input_tokens', 0) or 0, 'cw': getattr(u, 'cache_creation_input_tokens', 0) or 0,

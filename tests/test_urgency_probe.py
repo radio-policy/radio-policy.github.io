@@ -79,6 +79,26 @@ class TestToolAndCaps(unittest.TestCase):
         self.assertFalse(t['input_schema']['additionalProperties'])
         self.assertEqual(t['input_schema']['properties']['basis']['enum'][-1], '없음')
 
+    def test_no_strict_variant_and_w2_line(self):
+        self.assertNotIn('strict', P.urgency_tool('sgb-ns'))
+        self.assertEqual(list(P.urgency_tool('sgb-ns')['input_schema']['properties']), ['scope', 'grade', 'basis'])
+        intro = crawler._URGENCY_SYSTEM[:len(crawler._URGENCY_SYSTEM) - len(crawler._URGENCY_CRITERIA)]
+        self.assertIn(P.W2_LINE, P.intro_of(intro, 'cur', None, 'w2'))
+        self.assertNotIn(P.WORD_LINE, P.intro_of(intro, 'cur', None, 'w2'))
+
+    def test_w2_parse(self):
+        class B:
+            def __init__(self, t):
+                self.type, self.text = 'text', t
+
+        class Resp:
+            def __init__(self, t):
+                self.content = [B(t)]
+        ok = P.parse_response(Resp('즉시대응\n타영역'), None, 'w2')
+        self.assertEqual((ok['grade'], ok['scope'], ok['parse']), ('긴급', '타영역', 'ok'))
+        bad = P.parse_response(Resp('금주검토\n주파수'), None, 'w2')    # 둘째 줄이 영역 낱말이 아니면 해석 실패로 센다
+        self.assertEqual((bad['grade'], bad['scope'], bad['parse']), ('보통', None, 'fail'))
+
     def test_caps(self):
         r = lambda s, g, b='없음': {'scope': s, 'grade': g, 'basis': b}
         self.assertEqual(P.cap(r('타영역', '긴급'), 'raw'), '긴급')
