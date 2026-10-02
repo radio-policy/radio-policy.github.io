@@ -2,6 +2,8 @@
 
 admin_report_cron_secret  -- 운영자 일일 구독자 리포트 Edge Function 호출용 (2026-08-14)
 
+bridge_team_urgency_key  -- 사내 다리 team_urgency_export 비밀값 (#269) — Vault와 사내 PC 저장소 밖 파일에만 둔다
+
 github_pat  -- 
 
 subscriber_cron_secret  -- 구독자 브리핑 cron → Edge Function 인증

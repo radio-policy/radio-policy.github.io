@@ -372,9 +372,10 @@ grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE on
 grant SELECT (rule_id, sentence_rev, news_id, team_id, status, verdict, reason, input_kind, judged_at) on public.urgency_rule_verdicts to anon;
 
 revoke all on public.urgency_rules from public, anon, authenticated, service_role;
-grant SELECT on public.urgency_rules to anon;
-grant INSERT, SELECT, UPDATE on public.urgency_rules to authenticated;
+grant INSERT, UPDATE on public.urgency_rules to authenticated;
 grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE on public.urgency_rules to service_role;
+grant SELECT (id, team_id, "position", mode, level, any_words, and_any, none_words, note, enabled, updated_at, sentence, sentence_rev) on public.urgency_rules to anon;
+grant SELECT (id, team_id, "position", mode, level, any_words, and_any, none_words, note, enabled, updated_at, sentence, sentence_rev) on public.urgency_rules to authenticated;
 
 revoke all on public.watchdog_targets from public, anon, authenticated, service_role;
 grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE on public.watchdog_targets to anon;
@@ -719,6 +720,10 @@ grant EXECUTE on function public.submit_answer_feedback(p_log_id uuid, p_rating 
 grant EXECUTE on function public.submit_answer_feedback(p_log_id uuid, p_rating smallint, p_reason text) to authenticated;
 grant EXECUTE on function public.submit_answer_feedback(p_log_id uuid, p_rating smallint, p_reason text) to public;
 grant EXECUTE on function public.submit_answer_feedback(p_log_id uuid, p_rating smallint, p_reason text) to service_role;
+
+revoke all on function public.team_urgency_export(p_key text) from public, anon, authenticated, service_role;
+grant EXECUTE on function public.team_urgency_export(p_key text) to anon;
+grant EXECUTE on function public.team_urgency_export(p_key text) to service_role;
 
 revoke all on function public.team_urgency_touch() from public, anon, authenticated, service_role;
 grant EXECUTE on function public.team_urgency_touch() to anon;
