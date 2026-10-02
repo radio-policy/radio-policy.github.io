@@ -54,6 +54,7 @@
 작업 인계 받았어. CLAUDE.md, 메모리 MEMORY.md, HANDOFF.md를 읽고
 git log 최근 10개와 git status로 현재 상태·대기 작업·주의할 것을 정리해줘.
 ```
+- 짧게는 **「인수인계 작업 시작해」** 한마디면 된다(넘기는 쪽은 「다른 계정에 넘길 준비해」) — 세션이 `local_docs/인수인계_접속정보_<날짜>.md`(접속 정보·예약 작업·대기 작업별 (모델, 노력) 짝)를 읽고 확인까지 한다.
 - 작업 중 도구 권한 프롬프트(파일 읽기·git 등)가 처음 몇 번 뜸 → 승인하며 진행.
 
 ### ⑦ 이어받기 검증 (1분)
@@ -197,6 +198,7 @@ git read-tree HEAD && git add <파일> && git commit -m "..." && git push origin
 
 | 날짜 | 작업자 | 바꾼 것 / 진행 중 / 주의할 것 |
 |---|---|---|
+| 2026-10-02 | 진웅(lampman) | **Claude 계정 교대(넘기는 쪽 준비 끝, 13시).** 저장소는 6c343b6에서 GitLab·GitHub 일치, 미커밋 없음. 접속 정보(어느 서비스의 인증이 어디 들어 있는지 — 값은 없음)·예약 작업 목록·대기 작업별 (모델, 노력) 짝은 `local_docs/인수인계_접속정보_261002.md`(git 무시 폴더, 이 PC에만 있음)에 모았다. 받는 쪽은 새 계정 로그인 → Supabase 커넥터 연결 → 새 창에서 「인수인계 작업 시작해」. 로컬 전용 가지 둘(`../rp-wt-kw18` T18 배포 대기, `../rp-wt-ux` 보류)은 원격에 없으니 지우지 말 것. 업무 짝 규칙의 정본은 CLAUDE.md 「Session model + effort rule」 |
 | 2026-10-01 | 진웅(lampman) | §0-1 개정 — 다른 사람이 **다른 Claude 계정**으로 이 PC에서 외부판·사내판을 이어 가는 경우. 운영자 결정: Claude 계정만 다르고 나머지(Supabase·컨플루언스·텔레그램 알림·대시보드 admin 등)는 전부 같이 쓴다. 앱 세션 목록은 계정별이라 인계는 메모리·`local_docs/`·커밋으로. 앱 예약 작업이 다른 계정에서 도는지는 미확인(전환 뒤 확인). 보강(사내판 인수인계 작성 중 확인): 예약 작업 목록은 두 판이 함께 써 외부판 몫만 재등록, `~\.claude\settings.json`도 그대로 따라옴. 7/15~9/30 작업은 이 표에 없다 — 메모리 `MEMORY.md`와 배경역사 #24~#265를 볼 것 |
 | 2026-07-15 | 진웅(lampman) | HANDOFF 최신화 — Claude Code 인수 절차(§0-1) 추가, §1 낡은 사본 경고, 로그 공백 보충. **6/20~7/6 작업 요약**(상세는 배경역사 #15~#23): supabase-py HTTP/2 끊김→`sb_client.make_client` 도입(#15) / 운영상태 탭·heartbeat 3종·빈 브리핑 폴백(#16) / 무뉴스 날 🕊️ 통지+placeholder(#17) / PAT 재생성 시 Actions 권한 누락 무음실패 가드(#18) / 스케줄러 cp949 이모지 크래시·옛 폴더 경로 교정(#19) / 법령요약 레이어 regulatory-kb→kb_*, voyage-law-2(#21) / 정부크롤러 7일 무음 중단 복구 — .bat ASCII+CRLF·Python312 전체 경로 고정·StartWhenAvailable(#22) / 자문 검색 병렬화·news_feed upsert 견고화(#23) |
 | 2026-06-17 | 진웅(lampman) | 낮시간(KST 09~20시) 크롤이 GitHub cron 블록 드롭으로 며칠째 누락되던 문제 보완 — Supabase pg_cron 잡 `github-daily-crawl-daytime`(KST 09:25~20:25 매시간 workflow_dispatch) 추가. Vault에 `github_pat` 저장. 지침에 pg_cron 섹션·주의사항 반영. (기존 미문서화 cron 잡 briefing-health-check·news-feed-cleanup도 함께 문서화) + 모닝 브리핑 06:00/06:30 정시 스케줄도 매일 드롭돼 늦게/수동 생성되던 문제 보완 — `trigger_briefing_if_missing()` 함수 + pg_cron 잡 8·7(KST 06:05·06:20, 오늘자 없으면 morning_briefing.yml dispatch — GitHub 06:00 직후 오프셋: 동시 발사로 인한 중복 run·드롭 감지 불가 회피) 추가. health-check(10시 경고)는 유지. + 크롤·법령·국회 트리거도 Supabase로 일원화(crawl-trigger-hourly :47 24h / law 11:30 / assembly 10:30, 공용 함수 `dispatch_github_workflow`). daily_crawl.yml은 매시 :17 GitHub 백업으로 단순화 + 08:05 브리핑 백업 스텝 제거. + **무음 실패 감시** 추가: 내부 `check_news_health`(pg_cron 12, 21:00) + 외부 `health_watchdog.py`/`.yml`(GitHub Actions, Supabase 독립, 21:30 + pg_cron 13이 21:35 백업). 텔레그램 토큰은 Vault `telegram_bot_token`. → health_watchdog.py·.yml·daily_crawl.yml·지침 PC에서 push 필요 |
