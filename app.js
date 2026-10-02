@@ -139,8 +139,10 @@ async function loadMyProfile() {
   currentProfile = null;
   if (!sb || !currentUser) return 'missing';
   try {
+    // teams 묶음은 외래키 이름을 적는다 — profiles → teams 외래키가 둘(team_id · requested_team_id, #266)이라 이름 없이
+    // teams(...)만 쓰면 PostgREST가 어느 쪽인지 못 골라 PGRST201로 조회 자체가 실패한다(10-02 전 계정 로그인 불가).
     var r = await sb.from('profiles')
-      .select('user_id,name,role,approved,active,daily_limit,unlimited,team_id,division,teams(name,daily_limit,unlimited)')
+      .select('user_id,name,role,approved,active,daily_limit,unlimited,team_id,division,teams!profiles_team_id_fkey(name,daily_limit,unlimited)')
       .eq('user_id', currentUser.id).maybeSingle();
     if (r.error) { console.warn('프로필 조회 실패:', r.error); return 'error'; }
     currentProfile = r.data || null;
