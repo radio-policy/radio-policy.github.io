@@ -3107,7 +3107,7 @@ function appendMsg(role, text) {
   const div = document.createElement('div');
   div.className = `msg msg-${role}`;
   if (role === 'ai') {
-    div.innerHTML = `<div class="msg-name">전파·통신 정책 AI</div>${renderMd(text)}`;
+    div.innerHTML = `<div class="msg-name">통신 정책 AI Agent</div>${renderMd(text)}`;
   } else {
     div.textContent = text;
   }
@@ -3427,13 +3427,13 @@ async function sendChat() {
       const now = Date.now();
       if (now - lastRender < 120) return;
       lastRender = now;
-      streamEl.innerHTML = '<div class="msg-name">전파·통신 정책 AI</div>' + renderMd(partial);
+      streamEl.innerHTML = '<div class="msg-name">통신 정책 AI Agent</div>' + renderMd(partial);
       chatArea.scrollTop = chatArea.scrollHeight;
     };
     const answer = await callClaude(text, onDelta);
     if (!streamEl) { loader.remove(); streamEl = appendMsg('ai', ''); }
     const msgEl = streamEl;
-    msgEl.innerHTML = '<div class="msg-name">전파·통신 정책 AI</div>' + renderMd(answer);
+    msgEl.innerHTML = '<div class="msg-name">통신 정책 AI Agent</div>' + renderMd(answer);
     chatArea.scrollTop = chatArea.scrollHeight;
 
     // 출처 표기 두 갈래 (2026-08-03 "참고가 전부 법령" 사고):
