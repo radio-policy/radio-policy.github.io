@@ -3755,7 +3755,7 @@ function classifyNewsImportance(news) {
 // 되돌리지 말 것: 1단계에서 `count:'exact'`를 같이 받아 2단계 페이지 수를 정한다(왕복 1회 절약).
 var _newsFullLoaded = false;      // 2단계까지 끝났나
 var _newsFillPromise = null;      // 2단계 진행 중 Promise (중복 실행 방지)
-var NEWS_LIST_COLS = 'id,title,source,category,url,is_read,published_at,created_at,summary,importance,urgency,locked,briefed_date,content_fetched_at,tags,event,urgency_rule';   // urgency_rule = 적중 긴급도 규칙 id(#216)
+var NEWS_LIST_COLS = 'id,title,source,category,url,is_read,published_at,created_at,summary,importance,urgency,locked,briefed_date,content_fetched_at,tags,event,urgency_rule,urgency_check_capped';   // urgency_rule = 적중 긴급도 규칙 id(#216), urgency_check_capped = 2차 확인이 긴급→보통으로 내림(#268)
 
 function _newsAbsorb(rows) {
   // 중복 없이 합치고 최신순 정렬 + 중요도 분류. 잠금 기사 별도 조회분도 이 경로로 들어온다(#38).
@@ -4461,6 +4461,11 @@ function _commonSourceHtml(n) {
   if (!n) return '';
   var st = 'font-size:10px;color:var(--text-tertiary);white-space:nowrap';
   if (_urFb.has(String(n.id))) return '<span style="' + st + '" title="담당자가 직접 고친 값">· 담당자 수정</span>';
+  // 2차 확인(#268) — 1차 AI는 긴급, 두 번째 판정이 「타영역」으로 보아 보통으로 내렸다. 관리자가 긴급으로 올리면 구독자에게 나간다
+  if (n.urgency_check_capped) {
+    return '<span style="' + st + '" title="1차 AI는 긴급이었으나 2차 확인이 이동통신·통신정책 영역 밖으로 보아 보통으로 내렸습니다. '
+      + '긴급이 맞으면 등급을 긴급으로 올리세요(관리자) — 다음 수집(10분 안)에 구독자에게 나갑니다.">· 🔽 2차 확인에서 내림</span>';
+  }
   if (n.urgency_rule) {
     var rule = _urRules.find(function(x) { return x.id === n.urgency_rule; });
     var name = rule ? _urShortName(rule) : n.urgency_rule;

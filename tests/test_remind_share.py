@@ -173,9 +173,15 @@ class FeedbackTokens(unittest.TestCase):
             self.assertIn(w, crawler._FB_COMMON)
 
     def test_temperature_zero_only_in_urgency_call(self):
-        # #256-보론3: 긴급도 판정 콜 한 곳만 temperature 0 — 다른 콜엔 온도류 금지(지침 do-not)
-        self.assertIn('temperature=0', inspect.getsource(crawler.classify_urgency))
-        self.assertEqual(inspect.getsource(crawler).count('temperature='), 1, '긴급도 콜 한 곳만')
+        # #256-보론3: 긴급도 판정에만 temperature 0 — 다른 콜엔 온도류 금지(지침 do-not). #268부터 1차(classify_urgency)와
+        # 2차 확인(urgency_second_check)이 공통 인자 _urgency_call_kw 한 곳을 쓴다(크롤러의 temperature= 글자는 그대로 하나).
+        self.assertIn('temperature=0', inspect.getsource(crawler._urgency_call_kw))
+        self.assertEqual(inspect.getsource(crawler).count('temperature='), 1, '긴급도 공통 인자 한 곳만')
+        for fn in (crawler.classify_urgency, crawler.urgency_second_check):
+            src = inspect.getsource(fn)
+            self.assertIn('client.messages.create(**_urgency_call_kw(', src, 'create는 각 함수가 직접(api_usage 라벨)')
+        self.assertEqual(crawler._urgency_call_kw(max_tokens=10),
+                         {'model': 'claude-haiku-4-5-20251001', 'temperature': 0, 'max_tokens': 10})
 
     def test_criteria_lines_present(self):
         s = crawler._URGENCY_CRITERIA

@@ -414,6 +414,16 @@ def _urgency_user_msg(title: str, content: str = '', summary: str = '') -> str:
     return f"제목: {title}"
 
 
+def _urgency_call_kw(**kw) -> dict:
+    """긴급도 판정 두 호출(1차 classify_urgency · 2차 urgency_second_check, #268)의 공통 인자 — 모델과 temperature 0.
+    temperature 0(#256-보론3, 2026-09-29, 운영자 결정 '해'): 같은 글이 실행마다 다르게 판정되던 흔들림을 없앤다 — A/B 실측
+    같은 입력 재판정 불일치 제목만 4.8%·본문 12.4%(하나금융 보도자료 35건 중 11건만 긴급, 같은 제목 쌍이 긴급/보통). 지침
+    do-not '온도류 금지'의 예외(그 규칙은 Sonnet 5가 400을 내던 데서 온 것, Haiku 4.5는 받는다) — 크롤러에서는 **이 한 줄뿐**
+    (시험이 센다). 선별·문장 판정·사건 묶기 등 다른 콜에는 넣지 말 것. 캐시(접두 동일)·비용·속도 영향 0.
+    2차 확인은 실측(tools_urgency_probe G1)이 온도 0으로 잰 값이라 같은 인자를 쓴다. create 자체는 각 함수가 직접 부른다(라벨)."""
+    return dict(model='claude-haiku-4-5-20251001', temperature=0, **kw)
+
+
 def classify_urgency(title: str, content: str = '', summary: str = '') -> str:
     """
     Claude Haiku로 기사 긴급도 AI 판단.
@@ -440,17 +450,13 @@ def classify_urgency(title: str, content: str = '', summary: str = '') -> str:
         similar = _feedback_similar_block(title)
         if similar:
             sys_blocks.append({'type': 'text', 'text': similar})
-        # temperature 0(#256-보론3, 2026-09-29, 운영자 결정 '해'): 같은 글이 실행마다 다르게 판정되던 흔들림을 없앤다 — A/B 실측
-        # 같은 입력 재판정 불일치 제목만 4.8%·본문 12.4%(하나금융 보도자료 35건 중 11건만 긴급, 같은 제목 쌍이 긴급/보통). 지침
-        # do-not '온도류 금지'의 **유일한 예외**(그 규칙은 Sonnet 5가 400을 내던 데서 온 것, Haiku 4.5는 받는다). 선별·문장 판정·
-        # 사건 묶기 등 다른 콜에는 넣지 말 것. 캐시(접두 동일)·비용·속도 영향 0. 기준문을 잘못 읽는 오판은 이것으로 안 고쳐진다.
-        resp = client.messages.create(
-            model='claude-haiku-4-5-20251001',
+        # 모델·temperature 0은 _urgency_call_kw 한 곳(2차 확인과 같은 값, #268) — 요청 글자는 그 전과 같다.
+        # ⚠️ create는 이 함수 안에서 직접 부를 것 — api_usage 라벨 'crawler.py:classify_urgency'(워치독 캐시 적중률 #211)
+        resp = client.messages.create(**_urgency_call_kw(
             max_tokens=10,
-            temperature=0,
             system=sys_blocks,
             messages=[{'role': 'user', 'content': user_msg}],
-        )
+        ))
         answer = resp.content[0].text.strip()
         # 응답에서 키워드 추출 (앞뒤 공백·줄바꿈 제거)
         for key in _AI_PRIORITY_MAP:
@@ -461,6 +467,114 @@ def classify_urgency(title: str, content: str = '', summary: str = '') -> str:
         print(f'  [AI 분류 오류] {title[:30]}... → 폴백 사용: {e}')
         text = title + ' ' + (content or '')[:300]
         return '보통' if any(k in text for k in _FALLBACK_MOBILE) else '참고'
+
+
+# ═══════════════════════════════════════════════════════
+#  긴급도 2차 확인 — 2단 구조 (#268, 2026-10-02, 판정 local_docs/긴급도_2단구조_판정_261002.md, 설계 4-2)
+#
+#  1차(classify_urgency, 한 낱말 — 바이트 그대로)가 긴급이라 한 기사에만 두 번째 Haiku 호출을 한다. 두 번째 호출은
+#  tools_urgency_probe.py의 G1 글자 그대로(같은 기준문·같은 피드백 블록·같은 유사 블록·도구 record_urgency(scope → grade
+#  → basis, strict)·지시 줄 TOOL_LINE·온도 0) — 잰 것 = 돌리는 것. 읽는 칸은 scope 하나(R1): 「타영역」이면 보통.
+#  「타영역」은 영역 분류라기보다 보수적인 두 번째 판정기의 「확실히 아님」 신호다(B0 긴급 182건 중 타영역 31건이 전부 2차
+#  등급 「참고」) — **도구 설명·지시 줄을 「정확한 영역」으로 다듬지 말 것**(효과의 절반 이상이 사라진다, 판정 1절).
+#  실측(혼합 = 지금 등급 + G1 영역 R1): 정답 긴급 99 → 98, 긴급 아님의 긴급 59 → 32, 안정성 1/60, 내린 9건 중 5건(기준 6에
+#  1 모자람). 판정은 「그림자 먼저」였으나 **운영자 결정(10-02)으로 바로 켰다**(b 미달·국감 주간 진짜 긴급 손실 위험을 알고) —
+#  대신 안전장치 둘: ① 내린 기사마다 운영자 봇 한 줄(send_check_capped_notice) ② 관리자가 다시 긴급으로 올리면 구독자 큐로
+#  (restore_raised_checks). 「내린 기사」 = urgency_check_capped true(상한 전 등급은 언제나 긴급 — 2차는 1차 긴급일 때만 부른다).
+#  건너뜀: ⓐ 공통 낱말 규칙 하한이 긴급(어차피 긴급) ⓑ 유사 사례 블록에 사람의 「즉시대응」 사례가 붙은 기사(사람이 긴급이라
+#  한 사건을 판정기가 뒤집지 않게). 실패(키 없음·호출 오류·도구 블록 없음·값 이상)는 긴급 그대로(fail-open).
+#  ⚠️ 1차 호출(classify_urgency)의 글자·출력 형식은 건드리지 않는다(#267). 2차는 별도 함수 = 별도 api_usage 라벨
+#  'crawler.py:urgency_second_check' — 1차 라벨의 캐시 적중률 경보(#211)를 흐리지 않는다. 접두(도구+기준문+피드백
+#  ≈9K 토큰)는 1차와 캐시를 나누지 않는다(월 $5~8 어림, 판정 2-3).
+# ═══════════════════════════════════════════════════════
+
+URGENCY_CHECK_MODE = 'on'          # 'off' = 2차 호출 없음 / 'shadow' = 세 칸 저장만 / 'on' = 타영역이면 보통(운영자 결정 10-02)
+URGENCY_CHECK_TIMEOUT_S = 30       # 2차는 알림 경로(grade_urgency) 안이다 — 느린 응답이 알림을 오래 붙잡지 않게
+URGENCY_CHECK_MAX_FAIL = 2         # 한 실행에 2차 확인이 이만큼 실패하면 그 실행의 나머지는 부르지 않는다(긴급 유지 — API 장애 때 지연 상한)
+URGENCY_CHECK_DRIFT_MIN = 10       # 하루 2차 확인 건수가 이 이상이고
+URGENCY_CHECK_DRIFT_RATIO = 0.4    # 타영역 비율이 이보다 크면 운영자 봇 한 줄(하루 한 번, 판정 3절 H2 — 실측 17%)
+_URGENCY_CHECK_DRIFT_MARK = 'urgency_check_drift_alerted'   # app_config — 알린 날 'YYYY-MM-DD'(KST)
+
+# 1차 지시 줄 → 2차 지시 줄(tools_urgency_probe.WORD_LINE → TOOL_LINE, 한 곳만 바꾼다)
+_URGENCY_WORD_LINE = '아래 기준으로 셋 중 하나만 출력하세요 (다른 말 없이 단어만):'
+_URGENCY_CHECK_LINE = '아래 기준으로 판정해 record_urgency 도구로 기록하세요:'
+assert _URGENCY_SYSTEM.count(_URGENCY_WORD_LINE) == 1
+_URGENCY_CHECK_SYSTEM = _URGENCY_SYSTEM.replace(_URGENCY_WORD_LINE, _URGENCY_CHECK_LINE)
+_URGENCY_CHECK_SCOPES = ('통신', '언저리', '타영역')
+_URGENCY_CHECK_BASES = ('통신사·통신망 사고', '대규모 유출', '국감 증인', '제도', '주파수', '정부·통신3사 공동', 'SKT 당사자',
+                        '플랫폼 개인정보', '경쟁사 공통 규제', '없음')
+# tools_urgency_probe.urgency_tool('sgb')와 같은 글자(시험이 대조·지문 잠금). 칸 순서 = 생성 순서.
+_URGENCY_CHECK_TOOL = {
+    'name': 'record_urgency',
+    'description': '기사 한 건의 판정을 기록한다. 칸은 scope → grade → basis 순서로 채운다.',
+    'strict': True,
+    'input_schema': {
+        'type': 'object',
+        'properties': {
+            'scope': {'type': 'string', 'enum': list(_URGENCY_CHECK_SCOPES),
+                      'description': '0단계 영역 게이트. 통신 = 이동통신·전파·통신정책이 본론 / '
+                                     '언저리 = 통신·방송·정보보호 언저리지만 이동통신 사안은 아님 / 타영역 = 완전히 다른 영역'},
+            'grade': {'type': 'string', 'enum': ['즉시대응', '금주검토', '동향파악'], 'description': '1단계 등급'},
+            'basis': {'type': 'string', 'enum': list(_URGENCY_CHECK_BASES),
+                      'description': 'grade가 즉시대응일 때 적용한 즉시대응 항목 하나. 통신사·통신망 사고 = 통신사·통신망의 '
+                                     '해킹·유출·장애 / 대규모 유출 = 플랫폼·부가통신의 수백만 계정 이상 또는 통신 이용자 피해로 '
+                                     '이어진 유출. 즉시대응이 아니면 없음'},
+        },
+        'required': ['scope', 'grade', 'basis'],
+        'additionalProperties': False,
+    },
+}
+_URGENCY_CHECK_RUN = {}            # 한 실행의 2차 확인 집계(grade_urgency가 채운다) — 경보(H2)를 부를지 정한다
+
+
+def _similar_has_human_urgent(similar: str) -> bool:
+    """유사 사례 블록(_feedback_similar_block 결과)에 사람이 「즉시대응」으로 고친 사례 줄이 있나."""
+    return any(line.startswith('- "') and line.rstrip().endswith('→ 즉시대응') for line in (similar or '').split('\n'))
+
+
+def _parse_urgency_check(resp):
+    """2차 응답 → {'scope', 'grade'(긴급·보통·참고), 'basis'} 또는 None(도구 블록 없음·값 이상 — 부르는 쪽은 긴급 유지)."""
+    for b in getattr(resp, 'content', None) or []:
+        if getattr(b, 'type', '') != 'tool_use':
+            continue
+        inp = getattr(b, 'input', None) or {}
+        g, s, ba = inp.get('grade'), inp.get('scope'), inp.get('basis')
+        if g in _AI_PRIORITY_MAP and s in _URGENCY_CHECK_SCOPES and ba in _URGENCY_CHECK_BASES:
+            return {'scope': s, 'grade': _AI_PRIORITY_MAP[g], 'basis': ba}
+        return None
+    return None
+
+
+def urgency_second_check(title: str, content: str = '', summary: str = ''):
+    """1차가 긴급인 기사의 2차 확인(#268). 반환:
+      {'scope', 'grade', 'basis'} — 2차 결과 / {'skip': 'human'} — 유사 사례에 사람의 즉시대응 사례(호출 안 함) /
+      None — 키 없음·호출 실패·해석 실패(부르는 쪽은 긴급 그대로).
+    입력은 1차와 같은 사용자 메시지·같은 유사 블록. ⚠️ create는 이 함수 안에서 직접(api_usage 라벨)."""
+    if not ANTHROPIC_API_KEY:
+        return None
+    try:
+        similar = _feedback_similar_block(title)
+        if _similar_has_human_urgent(similar):
+            return {'skip': 'human'}
+        sys_blocks = [{'type': 'text', 'text': _URGENCY_CHECK_SYSTEM + _feedback_fixed_block(),
+                       'cache_control': {'type': 'ephemeral', 'ttl': '1h'}}]
+        if similar:
+            sys_blocks.append({'type': 'text', 'text': similar})
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY, timeout=URGENCY_CHECK_TIMEOUT_S, max_retries=1)
+        resp = client.messages.create(**_urgency_call_kw(
+            max_tokens=150,
+            system=sys_blocks,
+            messages=[{'role': 'user', 'content': _urgency_user_msg(title, content, summary)}],
+            tools=[_URGENCY_CHECK_TOOL],
+            tool_choice={'type': 'tool', 'name': 'record_urgency'},
+        ))
+        out = _parse_urgency_check(resp)
+        if out is None:
+            print(f'  [2차 확인] 해석 실패(긴급 유지): {title[:30]}… stop={getattr(resp, "stop_reason", None)}')
+        return out
+    except Exception as e:
+        print(f'  [2차 확인] 호출 실패(긴급 유지): {title[:30]}… {str(e)[:80]}')
+        return None
 
 
 # ═══════════════════════════════════════════════════════
@@ -1674,7 +1788,7 @@ _INSERTED_IDS: dict = {}
 #  Supabase 저장
 # ═══════════════════════════════════════════════════════
 
-def grade_urgency(valid: list, rules: list, classify=None, team_rules=None) -> dict:
+def grade_urgency(valid: list, rules: list, classify=None, team_rules=None, check=None) -> dict:
     """⑤ 긴급도 — 공통 낱말 규칙(#216) + Haiku 판정을 합쳐 item['urgency'/'importance'/'urgency_rule']을 채운다.
     규칙은 AI보다 먼저 맞춰 본다(제목 + 네이버 요약만, 본문 금지). set 적중 = 그 값, AI 콜 생략 /
     min 적중 = AI를 돌린 뒤 하한만(max) / 적중 id는 값이 안 바뀌어도 urgency_rule에 남긴다(출처 표시·사내 정본).
@@ -1685,21 +1799,53 @@ def grade_urgency(valid: list, rules: list, classify=None, team_rules=None) -> d
     낱말이 걸린 문장 규칙은 _SENTENCE_CANDS에만 모은다 — queue_new_sentence_candidates가 판정 대기 행으로 만들고, 판정과
     팀 행 고침은 같은 실행의 process_open_sentence_verdicts가 긴급 알림 **뒤에** 한다(여기서는 AI 0회 — 문장 규칙이 없으면
     종전과 바이트 단위로 같다).
-    item['screen_text'] = 판정에 쓴 네이버 요약(없으면 None)을 **모든 행에** 채운다(#82·#222). 반환 = 로그용 집계."""
+    item['screen_text'] = 판정에 쓴 네이버 요약(없으면 None)을 **모든 행에** 채운다(#82·#222). 반환 = 로그용 집계.
+    2차 확인(#268): 1차 AI가 긴급이면 check(제목, 본문, 요약)를 부른다 — 순서는 1차 → 2차(on이면 타영역 → 보통) → 낱말 min 하한.
+    결과 네 칸 urgency_check_scope·_grade·_basis·_capped를 **모든 행에** 채운다(안 불렀거나 건너뜀·실패면 None).
+    check 기본값은 urgency_second_check(URGENCY_CHECK_MODE 'off'면 없음) — classify를 넘긴 호출(시험)은 check도 넘겨야 2차가 돈다."""
+    if check is None and classify is None and URGENCY_CHECK_MODE in ('shadow', 'on'):
+        check = urgency_second_check
+    apply_cap = URGENCY_CHECK_MODE == 'on'
     classify = classify or classify_urgency
     team_rules = team_rules or {}
     hits, changed_n, skipped_ai = {}, 0, 0
     team_hits, team_err = {}, 0
+    ck = _URGENCY_CHECK_RUN
+    ck.clear()                                              # 실행당 한 번 부른다 — 집계는 이번 호출 것만
     for item in valid:
         url = item.get('url', '')
         summary = _URGENCY_SUMMARY.get(url, '')
         hit = urgency_rules.match_urgency_rules(rules, item.get('title', ''), summary)
+        res = None                                          # 2차 확인 결과(부른 경우만)
+        capped = None
         if hit and hit['mode'] == 'set':
             val = hit['level']                              # 공통 AI 생략
             skipped_ai += 1
         else:
             val = classify(item.get('title', ''), item.get('content', '') or '', summary)
-            if hit:                                         # min — AI 값에 하한
+            if val == '긴급' and check:
+                ck['target'] = ck.get('target', 0) + 1
+                if hit and hit['level'] == '긴급':          # ⓐ 낱말 하한이 긴급 — 어차피 긴급
+                    ck['skip_rule'] = ck.get('skip_rule', 0) + 1
+                elif ck.get('fail', 0) >= URGENCY_CHECK_MAX_FAIL:   # 차단기 — 이 실행의 나머지는 긴급 그대로(알림 지연 상한)
+                    ck['fail'] += 1
+                else:
+                    got = check(item.get('title', ''), item.get('content', '') or '', summary)
+                    if not isinstance(got, dict):
+                        ck['fail'] = ck.get('fail', 0) + 1
+                    elif got.get('skip'):                   # ⓑ 사람의 즉시대응 유사 사례
+                        ck['skip_human'] = ck.get('skip_human', 0) + 1
+                    elif got.get('scope') in _URGENCY_CHECK_SCOPES:
+                        res = got
+                        ck['called'] = ck.get('called', 0) + 1
+                        capped = apply_cap and got['scope'] == '타영역'
+                        if got['scope'] == '타영역':
+                            ck['other'] = ck.get('other', 0) + 1
+                        if capped:
+                            val = '보통'
+                    else:
+                        ck['fail'] = ck.get('fail', 0) + 1
+            if hit:                                         # min — AI 값(2차 뒤)에 하한
                 val, _, changed = urgency_rules.combine(hit, val)
                 changed_n += int(changed)
         if hit:
@@ -1707,6 +1853,11 @@ def grade_urgency(valid: list, rules: list, classify=None, team_rules=None) -> d
         item['urgency'] = val
         item['importance'] = val
         item['urgency_rule'] = hit['id'] if hit else None   # 모든 행에 키(벌크 upsert 키 집합 동일, #82)
+        # 2차 확인 네 칸 — 모든 행에 키(#82·#222). 그림자면 capped=False(등급 불변), 안 불렀으면 전부 None
+        item['urgency_check_scope'] = res['scope'] if res else None
+        item['urgency_check_grade'] = res.get('grade') if res else None
+        item['urgency_check_basis'] = res.get('basis') if res else None
+        item['urgency_check_capped'] = capped
         # 수집 때 본 검색 요약 — 모든 행에 키(없으면 None: postgrest 벌크 upsert는 빠진 칸을 NULL로 채운다, #222)
         item['screen_text'] = summary or None
         # ── 팀 층(#250) — 공통값은 위에서 끝났다. 여기서는 팀별 적중만 옆 dict에 모은다(item 키 금지) ──
@@ -1741,6 +1892,10 @@ def grade_urgency(valid: list, rules: list, classify=None, team_rules=None) -> d
               f', 값 변경 {changed_n}건, AI 생략 {skipped_ai}건)')
     else:
         print('[규칙] 적중 0건')
+    if ck.get('target'):
+        print(f"[2차 확인] AI 긴급 {ck['target']}건 · 확인 {ck.get('called', 0)} · 타영역 {ck.get('other', 0)}"
+              + ('(보통으로 내림)' if apply_cap else '(그림자 — 등급 불변)')
+              + f" · 건너뜀 규칙 {ck.get('skip_rule', 0)}·사람 사례 {ck.get('skip_human', 0)} · 실패 {ck.get('fail', 0)}")
     if team_rules:
         print(f'[팀 규칙] 적중 {sum(team_hits.values())}건({len(team_hits)}팀)'
               + (f' · 판정 오류 {team_err}건' if team_err else ''))
@@ -1975,6 +2130,117 @@ def save_team_rule_rows(inserted) -> int:
         return len(rows)
     except Exception as e:
         print(f'[팀 규칙] 저장 실패(무시): {str(e)[:120]}')
+        return 0
+
+
+def _check_drift_due(total: int, other: int, mark: str, today: str) -> bool:
+    """H2(#268) — 오늘 2차 확인 total건 중 타영역 other건: total ≥ URGENCY_CHECK_DRIFT_MIN이고 비율 > URGENCY_CHECK_DRIFT_RATIO이며
+    오늘(KST 'YYYY-MM-DD') 아직 안 알렸으면 True."""
+    return total >= URGENCY_CHECK_DRIFT_MIN and other / max(1, total) > URGENCY_CHECK_DRIFT_RATIO and mark != today
+
+
+def urgency_check_drift_alert() -> bool:
+    """2차 확인 비율 경보(판정 3절 H2, #268). 2차 판정기의 보수성은 그날의 고정 피드백 블록에 달려 있어(피드백 보통 칸이
+    바뀌면 참고 쏠림이 움직인다, #267 R3) 「타영역」 비율이 조용히 움직일 수 있다. 이번 실행에 2차 확인이 있었을 때만 오늘(KST)
+    저장분을 세어 기준을 넘으면 운영자 봇 한 줄 → **보낸 뒤에만** 표시(app_config urgency_check_drift_alerted = 오늘). 하루 한 번.
+    실패는 삼킨다(fail-open — 알림 경로 뒤에서 돈다). 반환 = 보냈나. 실측 비율 17%(B0 긴급 182건 중 31)."""
+    if not _URGENCY_CHECK_RUN.get('called'):
+        return False
+    try:
+        now_kst = datetime.now(KST)
+        today = now_kst.strftime('%Y-%m-%d')
+        start = now_kst.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc).isoformat()
+        rows = sb.table('news_feed').select('urgency_check_scope').is_('origin', 'null').gte('created_at', start) \
+            .not_.is_('urgency_check_scope', 'null').limit(1000).execute().data or []
+        total = len(rows)
+        other = sum(1 for r in rows if r.get('urgency_check_scope') == '타영역')
+        mk = sb.table('app_config').select('value').eq('key', _URGENCY_CHECK_DRIFT_MARK).execute().data or []
+        mark = str(mk[0].get('value') or '') if mk else ''
+        if not _check_drift_due(total, other, mark, today):
+            return False
+        effect = ('보통으로 내려갔습니다' if URGENCY_CHECK_MODE == 'on'
+                  else '그림자 기간이라 등급·알림은 그대로입니다')
+        text = (f'⚠️ 긴급도 2차 확인 — 오늘 AI 긴급 {total}건 중 {other}건({other / total:.0%})이 「타영역」입니다'
+                f'(실측 17%, 경보선 {URGENCY_CHECK_DRIFT_RATIO:.0%}). {effect}.\n'
+                '최근 담당자 등급 수정(고정 피드백 블록)이 바뀌었는지, 내려간 기사 목록(news_feed.urgency_check_scope = 타영역)을 '
+                '확인해 주세요.')
+        ok = notify.send_telegram(text, chat_id=TELEGRAM_CHAT_ID)
+        print(f'[2차 확인] 오늘 타영역 {other}/{total} — 운영자 알림 ' + ('발송' if ok else '실패(표시 없이 다음 실행에서 다시)'))
+        if ok:
+            _db_retry(lambda: sb.table('app_config').upsert({'key': _URGENCY_CHECK_DRIFT_MARK, 'value': today},
+                                                            on_conflict='key').execute(), 'app_config')
+        return bool(ok)
+    except Exception as e:
+        print(f'[2차 확인] 비율 경보 확인 실패(무시): {str(e)[:100]}')
+        return False
+
+
+# ── 지킴 규칙 변경 알림(설계 7-2, #268) ──
+# 기준문 2단계 뒤에는 「주파수 논의 긴급」을 공통 기준문(관리자만)이 아니라 팀 규칙(팀원 누구나 고침·끔)이 맡는다. 누가 실수로
+# 끄거나 문장을 고치면 그 팀의 긴급이 **조용히** 사라진다 → app_config guarded_team_rules = {"<규칙 id>": <문장 판>}에 적힌
+# 규칙이 없거나·꺼졌거나·판이 다르면 운영자 봇 한 줄(같은 상태는 한 번만 — guarded_team_rules_alerted). 막지는 않는다(D10).
+# 의도한 문장 수정이면 운영자가 guarded_team_rules의 판 번호를 새 판으로 고친다.
+_GUARD_KEY = 'guarded_team_rules'
+_GUARD_MARK_KEY = 'guarded_team_rules_alerted'
+
+
+def guarded_rule_problems(guard: dict, enabled: dict) -> dict:
+    """지킴 규칙 {id: 문장 판} 대 이번 실행의 켜진 팀 규칙 {id: 행} → 문제 {id: 상태}.
+    상태 'off' = 없거나 꺼짐(켜진 행만 읽으므로 둘을 가르지 않는다) / 'rev:<지금 판>' = 문장이 바뀜. 문제없으면 빠진다."""
+    out = {}
+    for rid, rev in (guard or {}).items():
+        r = (enabled or {}).get(rid)
+        if r is None:
+            out[rid] = 'off'
+            continue
+        cur = urgency_rules._sentence_rev(r)
+        if cur != rev:
+            out[rid] = f'rev:{cur}'
+    return out
+
+
+def check_guarded_team_rules() -> int:
+    """지킴 규칙 확인 — 이번 실행에 규칙 표를 읽었을 때만(추가 표 조회 없음, app_config 한 번). 표 조회가 실패한 실행은 판단하지
+    않는다(꺼짐으로 오인 금지). 새 문제는 알림 → 보낸 뒤에만 표시, 고쳐진 규칙은 표시를 지운다(다시 생기면 다시 알림).
+    fail-open. 반환 = 보낸 알림 수."""
+    if _URGENCY_RULES is None or _TEAM_RULES_ENABLED is None:
+        return 0
+    try:
+        rows = sb.table('app_config').select('key,value').in_('key', [_GUARD_KEY, _GUARD_MARK_KEY]).execute().data or []
+        cfg = {r.get('key'): r.get('value') for r in rows}
+        guard = json.loads(cfg.get(_GUARD_KEY) or '{}')
+        marks = json.loads(cfg.get(_GUARD_MARK_KEY) or '{}')
+        if not isinstance(guard, dict) or not all(isinstance(k, str) and isinstance(v, int) and not isinstance(v, bool)
+                                                  for k, v in guard.items()):
+            print(f'[지킴 규칙] {_GUARD_KEY} 형식 오류 — {{"규칙 id": 문장 판(정수)}}이어야 한다, 확인 건너뜀')
+            return 0
+        if not isinstance(marks, dict):
+            marks = {}
+        problems = guarded_rule_problems(guard, _TEAM_RULES_ENABLED)
+        new_marks = {k: v for k, v in marks.items() if k in problems}
+        sent = 0
+        for rid, st in sorted(problems.items()):
+            if marks.get(rid) == st:
+                continue
+            if st == 'off':
+                what = '꺼졌거나 지워졌습니다'
+            else:
+                what = f'문장이 바뀌었습니다(지킴 판 {guard[rid]} → 지금 판 {st[4:]})'
+            text = (f'⚠️ 지킴 팀 규칙 변경 — 「{rid}」 규칙이 {what}.\n'
+                    '이 규칙이 맡은 팀 긴급(예: 기술정책팀 주파수 논의)이 조용히 사라질 수 있습니다. 대시보드 「긴급도 설정」에서 '
+                    f'확인해 주세요. 의도한 변경이면 app_config {_GUARD_KEY}의 판 번호를 고칩니다.')
+            ok = notify.send_telegram(text, chat_id=TELEGRAM_CHAT_ID)
+            print(f'[지킴 규칙] {rid} {st} — 운영자 알림 ' + ('발송' if ok else '실패(다음 실행에서 다시)'))
+            if ok:
+                new_marks[rid] = st
+                sent += 1
+        if new_marks != marks:
+            value = json.dumps(new_marks, ensure_ascii=False, sort_keys=True)
+            _db_retry(lambda v=value: sb.table('app_config').upsert({'key': _GUARD_MARK_KEY, 'value': v},
+                                                                    on_conflict='key').execute(), 'app_config')
+        return sent
+    except Exception as e:
+        print(f'[지킴 규칙] 확인 실패(무시): {str(e)[:100]}')
         return 0
 
 
@@ -3799,6 +4065,148 @@ def _late_gap_ok(requested_at, article_at) -> bool:
     return bool(r and a and (r - a) <= timedelta(minutes=LATE_COLLECT_MAX_GAP_MIN))
 
 
+# ═══════════════════════════════════════════════════════
+#  2차 확인 안전장치 둘 (#268, 운영자 결정 2026-10-02 「그림자 없이 켠다, 대신 안전장치 둘」)
+#  ① 2차 확인이 내린 기사마다 운영자 봇에 「🔽 2차 확인에서 내림: 제목」 — 그 실행의 내린 기사를 한 메시지에 한 줄씩, 즉시.
+#  ② 관리자가 그 기사를 대시보드에서 다시 긴급으로 올리면 구독자 큐에 넣어 보낸다 — 발송 보류(#256-보론, 운영자가 내린
+#     기사를 빼는 쪽)의 반대 방향. 공통 등급 변경은 관리자만 된다(DB 트리거 news_feed_edit_guard) → 「올리면 전 구독자 발송」의
+#     권한 경계는 관리자다. 크롤러가 매 실행(10분) news_feed에서 「capped인데 지금 긴급, 아직 안 되돌림」을 찾아
+#     urgency_check_restored_at으로 **먼저 선점**(동시 실행 두 번 방지)한 뒤 공통(topic urgent, 단위 없는 구독자) + 팀·실 단위
+#     (topic news·긴급, subscriber_alert_log 'sent'·'[복원]' 기록 뒤 새로 들어간 것만)으로 넣고, 그 실행의 즉시 배달 호출
+#     한 번에 함께 실린다(send-subscriber-briefing — 보류가 켜져 있으면 보류 분 뒤, 발송 직전 등급 재확인도 긴급이라 통과).
+#     억제(#44)는 거치지 않는다 — 관리자가 직접 올린 기사다. 팀원이 그 기사를 팀 등급으로 내려 둔 팀은 받지 않는다
+#     (alert_team_level = min(팀원값, 공통값)). 2차 확인이 내리지 않은 기사의 관리자 수정은 종전대로 알림 없음(화면만).
+# ═══════════════════════════════════════════════════════
+URGENCY_RESTORE_LOOKBACK_H = 72    # 구독자 큐 조회 창(send-subscriber-briefing QUEUE_LOOKBACK_H)과 같다 — 더 오래된 기사는 안 보낸다
+URGENCY_RESTORE_MAX = 20           # 한 실행에 되돌릴 기사 상한(일괄 수정 사고 방어 — 나머지는 다음 실행)
+_RESTORE_COLS = 'id,title,url,source,tags,urgency,published_at,origin,created_at'
+_RESTORE_MARK = '[복원] 2차 확인 되돌림'   # subscriber_alert_log.shared_keywords — 이 경로로 나간 단위 행
+
+
+def send_check_capped_notice(items: list) -> bool:
+    """① 이번 실행에 2차 확인이 내린 기사(urgency_check_capped) → 운영자 봇 한 메시지, 기사마다 한 줄. 없으면 안 보낸다.
+    운영자 긴급 알림(send_telegram)과 따로 — 억제(#44)·24시간 거름 없이 내린 기사 전부. 실패는 로그만(fail-open)."""
+    capped = [i for i in items or [] if i.get('urgency_check_capped')]
+    if not capped or not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        return False
+    import html as _html
+    lines = []
+    for it in capped:
+        t = _html.escape(str(it.get('title', '')), quote=False)
+        url = str(it.get('url') or '')
+        head = f'<a href="{_html.escape(url, quote=True)}">{t}</a>' if url else t
+        lines.append(f'🔽 2차 확인에서 내림: {head}')
+    lines.append('<i>긴급이 맞으면 대시보드 뉴스(<a href="https://radio-policy.github.io/?p=news">열기</a>)에서 그 기사 등급을 '
+                 '긴급으로 올리세요 — 다음 수집(10분 안)에 구독자에게 나갑니다.</i>')
+    try:
+        ok = notify.send_telegram('\n'.join(lines), chat_id=TELEGRAM_CHAT_ID, parse_mode='HTML',
+                                  disable_web_page_preview=True)
+        if not ok:
+            ok = notify.send_telegram('\n'.join(f'🔽 2차 확인에서 내림: {i.get("title", "")}' for i in capped),
+                                      chat_id=TELEGRAM_CHAT_ID, disable_web_page_preview=True)
+        print(f'[2차 확인] 내린 기사 {len(capped)}건 운영자 알림 ' + ('발송' if ok else '실패'))
+        return bool(ok)
+    except Exception as e:
+        print(f'[2차 확인] 내린 기사 알림 실패(무시): {str(e)[:80]}')
+        return False
+
+
+def _restore_unit_rows(items: list) -> tuple:
+    """② 팀·실 단위 — 단위마다 알림 등급(공통 = 긴급)이 긴급인 기사만 subscriber_alert_log('sent', '[복원]')에 쓰고 **새로 들어간
+    것만** topic news 긴급 행으로 넣는다(같은 단위·기사 두 번 방지 = 표 unique). 반환 (넣은 행 수, 오류 글)."""
+    from subscriber_notify import news_row, queue_audience_rows
+    subs = _db_retry(lambda: sb.table('telegram_subscribers').select('team_id,division,news_level')
+                     .eq('active', True).eq('topic_urgent', True).execute(), 'telegram_subscribers').data or []
+    teams = []
+    if any(s.get('division') for s in subs):
+        teams = _db_retry(lambda: sb.table('teams').select('id,division,name,sort_order').order('sort_order').order('id')
+                          .execute(), 'teams').data or []
+    units = {a: u for a, u in _alert_units(subs, teams).items() if u['kind'] != 'c'}
+    if not units:
+        return 0, ''
+    load_team_urgency_rules()
+    rules_by_id = _TEAM_RULES_ENABLED or {}
+    need = sorted({t for u in units.values() for t in u['team_ids']})
+    trows = {}
+    if need:
+        data = _db_retry(lambda: sb.table('team_urgency').select('news_id,team_id,urgency,source,rule_id')
+                         .in_('news_id', [it['id'] for it in items]).in_('team_id', need).execute(), 'team_urgency').data or []
+        for r in data:
+            trows.setdefault(r.get('news_id'), {})[r.get('team_id')] = r
+    queued, err = 0, ''
+    for aud in sorted(units):
+        u = units[aud]
+        pick = [it for it in items if _unit_level(u, '긴급', trows.get(it['id']), rules_by_id, alert=True)[0] == '긴급']
+        if not pick:
+            continue
+        logs = [{'audience': aud, 'channel': '긴급', 'news_id': it['id'], 'article_title': it.get('title') or '',
+                 'article_url': it.get('url') or None, 'outcome': 'sent', 'matched_title': None,
+                 'shared_keywords': _RESTORE_MARK} for it in pick]
+        try:
+            fresh, _ok, _bad, _e = _save_alert_log(logs)
+        except Exception as e:
+            err = err or f'{aud} 기록 실패: {str(e)[:80]}'
+            continue
+        rows = [news_row(aud, '긴급', it) for it in pick if it['id'] in fresh]
+        queued += sum(queue_audience_rows(sb, rows).values())
+    return queued, err
+
+
+def restore_raised_checks() -> int:
+    """② 본체 — 반환 = 큐에 넣은 긴급 행 수(공통 기사 수 + 단위 행 수). main이 즉시 배달 호출 여부에 쓴다. 어떤 예외도 밖으로
+    던지지 않는다. 공통 큐 적재가 실패하면 선점을 되돌려 다음 실행에서 다시 한다(단위는 기록 표 unique라 두 번 안 간다)."""
+    try:
+        since = (datetime.now(timezone.utc) - timedelta(hours=URGENCY_RESTORE_LOOKBACK_H)).isoformat()
+        rows = sb.table('news_feed').select(_RESTORE_COLS).eq('urgency_check_capped', True).eq('urgency', '긴급') \
+            .is_('urgency_check_restored_at', 'null').is_('origin', 'null').gte('created_at', since) \
+            .order('created_at').limit(URGENCY_RESTORE_MAX).execute().data or []
+    except Exception as e:
+        print(f'[2차 확인 복원] 조회 실패(무시 — 다음 실행에서 다시): {str(e)[:100]}')
+        return 0
+    if not rows:
+        return 0
+    ids = [r['id'] for r in rows if r.get('id')]
+    try:
+        claimed = sb.table('news_feed').update({'urgency_check_restored_at': datetime.now(timezone.utc).isoformat()}) \
+            .in_('id', ids).is_('urgency_check_restored_at', 'null').eq('urgency', '긴급').execute().data or []
+    except Exception as e:
+        print(f'[2차 확인 복원] 선점 실패(무시 — 다음 실행에서 다시): {str(e)[:100]}')
+        return 0
+    got = {r.get('id') for r in claimed}
+    items = [r for r in rows if r.get('id') in got]
+    if not items:
+        return 0
+    common_ok = False
+    try:
+        from subscriber_notify import queue_news_items
+        common_ok = queue_news_items(sb, items, trigger=False)
+    except Exception as e:
+        print(f'[2차 확인 복원] 공통 큐 적재 예외: {str(e)[:100]}')
+    if not common_ok:
+        try:
+            sb.table('news_feed').update({'urgency_check_restored_at': None}).in_('id', [i['id'] for i in items]).execute()
+            print(f'[2차 확인 복원] 공통 큐 적재 실패 — {len(items)}건 선점 되돌림(다음 실행에서 다시)')
+        except Exception as e:
+            print(f'[2차 확인 복원] 공통 큐 적재 실패 + 선점 되돌림 실패 — 운영자 확인 필요: {str(e)[:80]}')
+            notify.send_telegram('⚠️ 2차 확인 되돌림 발송 실패 — ' + ', '.join(i.get('title', '')[:30] for i in items)
+                                 + ' (구독자 큐 적재·선점 되돌림 모두 실패, 수동 확인 필요)', chat_id=TELEGRAM_CHAT_ID)
+        return 0
+    unit_n, unit_err = 0, ''
+    try:
+        unit_n, unit_err = _restore_unit_rows(items)
+    except Exception as e:
+        unit_err = str(e)[:100]
+    print(f'[2차 확인 복원] 관리자가 다시 긴급으로 올린 기사 {len(items)}건 — 공통 큐 {len(items)} · 팀·실 행 {unit_n}'
+          + (f' · 단위 오류: {unit_err}' if unit_err else ''))
+    try:
+        notify.send_telegram('\n'.join(f'🔼 다시 긴급 — 구독자에게 보냄: {i.get("title", "")}' for i in items)
+                             + (f'\n(팀·실 단위 일부 실패: {unit_err})' if unit_err else ''),
+                             chat_id=TELEGRAM_CHAT_ID, disable_web_page_preview=True)
+    except Exception:
+        pass
+    return len(items) + unit_n
+
+
 def run_audience_alerts(stage: str, new_items=None, cutoff_24h=None, channels=ALERT_CHANNELS) -> int:
     """받는 단위별 알림(#252). stage 'collect' = main이 공통 큐 적재 직후(new_items = save_new_items 반환 — 그중 이번
     실행에 새로 저장된 기사만), 'late' = 문장 판정 대기 처리 뒤(_LATE_ALERT_PAIRS). cutoff_24h = main의 24시간 기준.
@@ -4265,6 +4673,15 @@ def main():
     else:
         print('[긴급] 해당 없음')
 
+    # ── 2차 확인 안전장치 (#268) — ① 내린 기사 운영자 봇 한 줄씩 ② 관리자가 다시 긴급으로 올린 기사 → 구독자 큐 ──
+    #    운영자 긴급 알림·공통 큐 **뒤**, 즉시 배달 호출(아래 한 번) **앞** — ②의 행도 그 한 번에 실린다. 둘 다 fail-open.
+    send_check_capped_notice(new_items)
+    restored = 0
+    try:
+        restored = restore_raised_checks()
+    except Exception as e:
+        print(f'[2차 확인 복원] 실패(무시): {e}')
+
     # ── 받는 단위별 알림 — 팀·실장 중요 + 「중요+보통」의 보통 (#252) ──
     # 긴급 채널(전 단위) → 즉시 배달 호출 한 번 → 보통 채널(즉시 호출 불필요 — :25 정기 발송 몫). 어떤 실패도 공통 알림·배달·
     # heartbeat를 막지 않는다 — 공통 행이 들어갔으면 팀 단계가 죽어도 즉시 배달 호출은 반드시 나간다(finally).
@@ -4275,7 +4692,7 @@ def main():
     except Exception as e:
         print(f'[팀 알림] 실패(무시): {e}')
     finally:
-        first_delivery = _deliver_now(bool(common_queued) or team_urgent > 0)
+        first_delivery = _deliver_now(bool(common_queued) or team_urgent > 0 or restored > 0)
     try:
         run_audience_alerts('collect', new_items=new_items, cutoff_24h=cutoff_24h, channels=('보통',))
     except Exception as e:
@@ -4303,6 +4720,11 @@ def main():
         print('[구독자 배달] 앞 즉시 호출이 성공하지 않아 두 번째 호출 생략(겹친 발송 방지) — 늦은 판정 알림은 정시 :25에 발송')
     else:
         _deliver_now(late_urgent > 0)
+
+    # ── 긴급도 2차 확인 비율 경보·지킴 팀 규칙 확인 (#268) ── 알림·배달 **뒤**, 둘 다 fail-open(함수 안에서 삼킨다).
+    #    비율 경보는 이번 실행에 2차 확인이 있었을 때만 조회, 지킴 규칙은 이번 실행에 규칙 표를 읽었을 때만(app_config 한 번).
+    urgency_check_drift_alert()
+    check_guarded_team_rules()
 
     # ── 크롤러 heartbeat ── (check_news_health가 '크롤러 정상 vs 고장' 구분에 사용)
     # 신규 0건이어도 '크롤러는 돌았다'를 기록 → 주말 등 '뉴스 없음' 오경보 방지. 실패해도 무시.

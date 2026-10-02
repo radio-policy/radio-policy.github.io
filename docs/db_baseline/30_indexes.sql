@@ -82,6 +82,8 @@ CREATE INDEX lawmap_proposals_status_idx ON public.lawmap_proposals USING btree 
 
 CREATE INDEX news_embeddings_hnsw ON public.news_embeddings USING hnsw (embedding vector_cosine_ops);
 
+CREATE INDEX idx_news_feed_check_capped ON public.news_feed USING btree (created_at) WHERE urgency_check_capped;
+
 CREATE INDEX idx_news_feed_locked ON public.news_feed USING btree (locked) WHERE (locked = true);
 
 CREATE INDEX idx_news_feed_published_at ON public.news_feed USING btree (published_at DESC NULLS LAST);

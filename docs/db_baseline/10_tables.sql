@@ -565,6 +565,11 @@ create table if not exists public.news_feed (
   urgency_rule text,
   origin text,
   screen_text text,
+  urgency_check_scope text,
+  urgency_check_grade text,
+  urgency_check_basis text,
+  urgency_check_capped boolean,
+  urgency_check_restored_at timestamp with time zone,
   constraint news_feed_pkey PRIMARY KEY (id)
 );
 alter table public.news_feed enable row level security;
