@@ -460,6 +460,8 @@ function renderAccountAdmin(teams, profs) {
   var inputCss = 'padding:3px 6px;font-size:11px;border:0.5px solid var(--border-mid);border-radius:4px;background:var(--bg-secondary);color:var(--text-primary);font-family:inherit';
   var html = '';
 
+  // 세 칸을 data-acct-sec로 감싼다 — 설정 탭(가입 승인 / 구성원 / 팀 한도)이 이 카드 하나를 나눠 쓴다(switchSettingsTab)
+  html += '<div data-acct-sec="pending">';
   html += '<div style="font-size:12px;font-weight:600;margin:4px 0 6px">가입 승인 대기 (' + pending.length + ')</div>';
   html += pending.length ? pending.map(function(p) {
     // 가입 때 신청자가 고른 팀(requested_team_id, 권한 없는 참고 칸 — 10-02)을 미리 골라 둔다. 팀·실이 이미 정해져 있으면 그것이 우선.
@@ -478,9 +480,11 @@ function renderAccountAdmin(teams, profs) {
         '<button class="btn" style="font-size:11px;padding:3px 10px" onclick="rejectAccount(\'' + p.user_id + '\')">거절</button>' +
       '</div></div>';
   }).join('') : '<div style="font-size:11px;color:var(--text-tertiary);padding:4px 0 10px">대기 중인 신청이 없습니다.</div>';
+  html += '</div>';
 
   var members = profs.filter(function(p) { return p.approved || !p.active; });
-  html += '<div style="font-size:12px;font-weight:600;margin:14px 0 6px">구성원 (' + members.length + ')</div>';
+  html += '<div data-acct-sec="members">';
+  html += '<div style="font-size:12px;font-weight:600;margin:4px 0 6px">구성원 (' + members.length + ')</div>';
   html += members.length ? members.map(function(p) {
     return '<div class="card" style="margin-bottom:6px;padding:10px 12px;cursor:default;' + (p.active ? '' : 'opacity:.55') + '">' +
       '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">' +
@@ -497,8 +501,10 @@ function renderAccountAdmin(teams, profs) {
         '<button class="btn" style="font-size:11px;padding:3px 10px" onclick="saveMemberRow(\'' + p.user_id + '\')">저장</button>' +
       '</div></div>';
   }).join('') : '<div style="font-size:11px;color:var(--text-tertiary)">구성원이 없습니다.</div>';
+  html += '</div>';
 
-  html += '<div style="font-size:12px;font-weight:600;margin:14px 0 6px">팀 (합산 일일 한도)</div>';
+  html += '<div data-acct-sec="teams">';
+  html += '<div style="font-size:12px;font-weight:600;margin:4px 0 6px">팀 (합산 일일 한도)</div>';
   html += teams.map(function(t) {
     return '<div class="card" style="margin-bottom:6px;padding:10px 12px;cursor:default">' +
       '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">' +
@@ -509,8 +515,36 @@ function renderAccountAdmin(teams, profs) {
         '<button class="btn" style="font-size:11px;padding:3px 10px" onclick="saveTeamRow(' + t.id + ')">저장</button>' +
       '</div></div>';
   }).join('');
+  html += '</div>';
 
   el.innerHTML = html;
+  _stabCount('pending', pending.length);
+  _stabCount('members', members.length);
+  switchSettingsTab();   // 새로 그린 칸에도 지금 탭을 적용
+}
+
+// ── 설정 탭(2026-10-02 운영자 요청) ──────────────────────────
+// 관리자 화면이 가입 승인·구성원·팀 18개·구독자·기준문·지식베이스·법령으로 길어져 스크롤로 찾던 것을, 누른 탭의 칸만 보이게.
+// 카드는 data-stab(공백으로 여러 탭), 계정 관리 카드 안쪽 칸은 data-acct-sec. 숨김은 .stab-off 클래스로만 한다 —
+// applyAuthUI가 data-admin-only 카드의 style.display를 다시 쓰므로, 인라인 display로 숨기면 로그인 갱신 때 되살아난다.
+var _settingsTab = 'pending';
+function switchSettingsTab(tab) {
+  if (tab) _settingsTab = tab;
+  var t = ' ' + _settingsTab + ' ';
+  document.querySelectorAll('#settings-unlocked [data-stab], #settings-unlocked [data-acct-sec]').forEach(function(el) {
+    var tabs = ' ' + (el.getAttribute('data-stab') || el.getAttribute('data-acct-sec')) + ' ';
+    el.classList.toggle('stab-off', tabs.indexOf(t) < 0);
+  });
+  document.querySelectorAll('#settings-tabs [data-stab-btn]').forEach(function(b) {
+    b.classList.toggle('active', b.getAttribute('data-stab-btn') === _settingsTab);
+  });
+  // 탭을 누르면 맨 위로 — 긴 목록(팀 18개) 아래에서 바꾸면 짧은 탭의 내용이 화면 밖에 남는다
+  if (tab) { var sc = document.querySelector('.content'); if (sc) sc.scrollTop = 0; }
+}
+/** 탭 이름 옆 건수(가입 승인·구성원·지식베이스 승인·법령 개정) — 0이면 비운다 */
+function _stabCount(tab, n) {
+  var el = document.getElementById('stab-n-' + tab);
+  if (el) el.textContent = n ? String(n) : '';
 }
 
 async function _acctUpdate(userId, patch, okMsg) {
@@ -8011,6 +8045,7 @@ function applySettingsLock() {
           : '이 계정에는 관리자 권한이 없습니다.');
   }
   if (ok) {
+    switchSettingsTab();   // 설정 탭 — applyAuthUI가 관리자 카드를 다시 보이게 한 뒤에도 지금 탭만 남게
     var spd = document.getElementById('system-prompt-display');
     if (spd) spd.value = SYSTEM_PROMPT;
     loadSettingsFields();
@@ -8048,6 +8083,7 @@ async function loadPendingApprovals() {
     if (resp.error) throw resp.error;
     _pendingDocs = (resp.data || []).filter(function(r){ return r.approved === false; });
     if (badgeEl) badgeEl.textContent = _pendingDocs.length ? _pendingDocs.length + '건' : '';
+    _stabCount('kb', _pendingDocs.length);
     if (_pendingDocs.length === 0) {
       listEl.innerHTML = '<div style="padding:14px;text-align:center;color:var(--text-secondary);font-size:12px">승인 대기 중인 문서가 없습니다.</div>';
       return;
@@ -8101,6 +8137,7 @@ async function loadLawWatch() {
       return byLaw[a][0].enf_date.localeCompare(byLaw[b][0].enf_date);
     }).map(function(k){ return { law_name: k, steps: byLaw[k] }; });
     if (badgeEl) badgeEl.textContent = outdated.length ? outdated.length + '건 개정' : '';
+    _stabCount('lawwatch', outdated.length);
 
     var last = rows.reduce(function(m, x){ return (x.last_checked_at || '') > m ? x.last_checked_at : m; }, '');
     var html = '<div style="font-size:11px;color:var(--text-tertiary);margin-bottom:8px">'

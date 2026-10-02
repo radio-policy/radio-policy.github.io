@@ -479,6 +479,18 @@ mark.kb-hit { background: rgba(245, 197, 24, .38); color: inherit; border-radius
 .guide-chip.active { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
 .guide-chip span { opacity: .75; margin-left: 3px; }
 
+/* 설정 탭(2026-10-02) — 칩 모양은 guide-chip 그대로, 스크롤해도 위에 붙어 있게. 숨김은 클래스로(applyAuthUI의 인라인 display보다 우선) */
+.settings-tabs {
+  display: flex; flex-wrap: wrap; gap: 6px; position: sticky; top: -20px; z-index: 5;
+  margin: -20px -20px 12px; padding: 14px 20px 10px;   /* .content 안쪽 여백(20px)까지 덮어 위·양옆에 딱 붙인다 — sticky top은 그 여백 안쪽 기준이라 같은 값만큼 음수 */
+  background: var(--bg-primary); border-bottom: 0.5px solid var(--border-light);
+}
+.settings-tabs .guide-chip { font-size: 12px; padding: 5px 13px; }
+.stab-off { display: none !important; }
+@media (max-width: 768px) {
+  .settings-tabs { top: -14px; margin: -14px -14px 10px; padding: 10px 14px 8px; }   /* 모바일 .content 여백 14px */
+}
+
 /* 구획 머리(중앙전파관리소 업무안내 · 2단 / 법령 요약 · 3단) */
 .guide-sec {
   font-size: 11.5px; font-weight: 600; color: var(--accent);
