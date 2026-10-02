@@ -4380,6 +4380,8 @@ async function syncBriefingUrgency(newsId, newVal) {
 //  팀 규칙은 저장하는 순간 불러온 기사에 다시 적용해 team_urgency에 쓴다(E4) — 공통 규칙은 다음 수집부터(종전 그대로).
 // ════════════════════════════════════════════
 var _urRules = [];              // 표 전체(공통·팀·꺼진 것 포함) — id→note 표시와 편집기 공용
+// urgency_rules에서 읽는 칸(13칸) — updated_by는 빼고 쓴다. 칸을 늘리면 DB 칸 단위 GRANT(anon·authenticated)도 함께(#269)
+var UR_RULE_COLS = 'id,team_id,position,mode,level,any_words,and_any,none_words,note,enabled,updated_at,sentence,sentence_rev';
 var _urFb = new Set();          // 담당자가 중요도를 고친 news_id (importance_feedback)
 var _urSrcPromise = null;
 var _urEditing = null;          // 편집 중인 규칙 id (null = 새 규칙)
@@ -4419,7 +4421,8 @@ function loadUrgencySources(force) {
   if (!sb) return Promise.resolve();
   if (_urSrcPromise && !force) return _urSrcPromise;
   _urSrcPromise = (async function() {
-    var r = await sb.from('urgency_rules').select('*').order('position').order('id');
+    // 칸 목록으로만 읽는다 — updated_by(계정 uuid)는 anon·authenticated에 닫혀 있어 '*'는 권한 오류(#269)
+    var r = await sb.from('urgency_rules').select(UR_RULE_COLS).order('position').order('id');
     if (!r.error) _urRules = r.data || [];
     else console.warn('[긴급도 규칙] 조회 실패:', r.error.message);
     var fb = new Set(), PAGE = 1000;
