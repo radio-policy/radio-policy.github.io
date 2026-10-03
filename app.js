@@ -7684,9 +7684,15 @@ function renderPlainBulletItem(block) {
         var lm = lines[k].match(/^\s*🔗\s*(\S+)\s*$/);
         if (lm) { u = lm[1]; used[k] = 1; break; }
       }
-      var body = mdBold(l.replace(/^• /, ''));
+      // [ID:기사id]는 역저장용 꼬리표 — [그 외 오늘의 움직임]도 이 함수로 그려지므로 여기서도 지운다
+      // (뉴스 칸 renderBriefingNewsItem·발송본과 같은 규칙. 빠져 있어 링크 글자에 uuid가 붙어 보였다)
+      var body = mdBold(l.replace(/^• /, '').replace(/\s*\[ID:[^\]]+\]/g, ''));
       if (u) body = '<a href="' + u + '" target="_blank" rel="noopener" class="brief-link">' + body + '</a>';
       out += '<div style="font-size:13px;line-height:1.8;padding-left:2px">• ' + body + '</div>';
+    } else if (/^\s*⚠️\s*SKT 영향 분석/.test(l)) {
+      // 그 외 칸에 실린 긴급 기사에도 영향 분석이 붙는다(add_urgent_analyses) — 본문 글씨로 두면 항목 사이에 큰 문단이 끼어든다
+      var an = l.replace(/^\s*⚠️\s*SKT 영향 분석[::]\s*/, '').trim();
+      out += '<div style="margin:4px 0 2px 16px;padding:8px 10px;background:rgba(239,68,68,0.06);border-radius:8px;border:1px solid rgba(239,68,68,0.2);font-size:12px;color:var(--text-primary);line-height:1.7"><span style="font-weight:700">⚠️ SKT 영향 분석</span> ' + mdBold(an) + '</div>';
     } else if (/^  → /.test(l)) {
       out += '<div style="font-size:12px;color:var(--text-secondary);padding-left:16px;line-height:1.6">→ ' + mdBold(l.replace(/^  → /, '')) + '</div>';
     } else if (/^  🔗 /.test(l)) {
