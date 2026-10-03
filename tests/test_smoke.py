@@ -813,6 +813,33 @@ class TestLawmapCurrentVersion(unittest.TestCase):
         self.assertIsNone(m.doc_date('이동통신용 무선설비 예비전원설비 설치 가이드라인'))
 
 
+class TestLawmapPendingMark(unittest.TestCase):
+    """관계도 설명의 시행 전 조문 표기(#273, 2026-10-03) — 「YYYY.M.D 시행」 판정, 네트워크 없음"""
+
+    def test_effective_dates(self):
+        import lawmap_edge_check as m
+        from datetime import date
+        self.assertEqual(m.effective_dates('갈음(제24조제2항 — 2026.4.21 신설, 2026.10.22 시행) · 수수료(제69조)'), [date(2026, 10, 22)])
+        self.assertEqual(m.effective_dates('제3조·별표1 (제1조; 2026.11.6 시행)'), [date(2026, 11, 6)])
+        self.assertEqual(m.effective_dates('(2025.1 제정·2026.1 시행)'), [])      # 시행 뒤 남기는 연·월 꼴은 표기가 아니다
+        self.assertEqual(m.effective_dates('2026.3.31 신설 · 2023.4.18 신설'), [])
+        self.assertEqual(m.effective_dates('2026.13.40 시행'), [])                 # 없는 날짜는 버린다
+        self.assertEqual(m.effective_dates(None), [])
+
+    def test_pending_mark(self):
+        import lawmap_edge_check as m
+        from datetime import date
+        d = '거짓 제출 시 취소(제72조제2항제4의3호 — 2026.10.22 시행) ※ 시행예정판 기준'
+        today = date(2026, 10, 3)
+        self.assertEqual(m.pending_mark(d, today, {date(2026, 10, 22), date(2026, 1, 2)})[:2], ('OK', 'pending_cited'))
+        self.assertEqual(m.pending_mark(d, today, {date(2026, 1, 2)})[:2], ('WARN', 'pending_unverified'))
+        self.assertEqual(m.pending_mark(d, today, set())[:2], ('WARN', 'pending_unverified'))
+        self.assertEqual(m.pending_mark(d, today, None)[:2], ('OK', 'pending_cited'))           # 주제 설명 — 판 대조 안 함
+        self.assertEqual(m.pending_mark(d, date(2026, 10, 22), {date(2026, 10, 22)})[1], 'pending_cited')  # 시행일 당일은 아직
+        self.assertEqual(m.pending_mark(d, date(2026, 10, 23), {date(2026, 10, 22)})[:2], ('WARN', 'pending_expired'))
+        self.assertIsNone(m.pending_mark('주파수분배(제9조)', today, set()))
+
+
 class TestAnnexLabelAndTextFix(unittest.TestCase):
     """번호 없는 별표 이름표·별표 본문 잃은 글자 복구(#257, 2026-09-29) — 네트워크 없음"""
 

@@ -13,6 +13,11 @@ AI 즉석 생성(app.js saveLawmapData)이 조문을 검증 없이 저장한 것
   WARN art_partial  자기 조문 일부만 원문에 있음
   WARN doc_missing  대상 문서가 KB에 없는데 '[원문 KB 미보유/미등재…]' 꼬리표가 없음
   OK                그 외
+시행 전 조문 표기(#273, 2026-10-03) — 설명의 「YYYY.M.D 시행」을 읽어 덧씌운다:
+  OK   pending_cited       시행일이 오늘 이후이고 KB에 그 시행일 판(문서명 끝 날짜)이 있다 — 요약에 「시행 전 조문 인용 N건」
+  WARN pending_unverified  시행일이 오늘 이후인데 KB에 그 시행일 판이 없다
+  WARN pending_expired     시행일이 지났다 — 표기를 떼고(또는 연·월만 남기고) 현행판과 대조. 주제 설명도 본다
+  조 단위만 본다 — 시행예정판에서 항·호 번호가 바뀐 것(자기적합확인 제72조②4의3)은 사람·세션이 확인한다.
 
 타 법령 조문 인용("전파법 제15조의2에 적용", "법 제41조 위임")은 자기 조문으로 세지 않는다 —
 바로 앞 낱말이 법령명(…법·령·규칙·고시·규정·기준·지침)이고 대상 노드명이 아니면 교차 인용.
@@ -46,6 +51,8 @@ GENERIC_LAWWORDS = ("법", "령", "영", "규칙", "고시", "규정", "기준",
 # 직전 조문에 연결부호(·, ~)로 이어진 조문은 앞 조문의 판정(자기/교차)을 그대로 따른다 (','는 새 문맥)
 CONNECT_RE = re.compile(r"[·ㆍ~∼\-]\s*$")
 DELEG_AFTER_RE = re.compile(r"^\s*(?:제\d+항|제\d+호|[①-⑳])*\s*(?:의\s*)?(?:위임|에\s*따른|에\s*의한|근거)")
+EFFECTIVE_RE = re.compile(r"(\d{4})\.(\d{1,2})\.(\d{1,2})\s*시행")   # 시행 전 조문 표기 「(2026.10.22 시행)」 (#273)
+KST = timezone(timedelta(hours=9))
 
 
 def nrm(s: str) -> str:
@@ -164,6 +171,35 @@ def not_current_articles(description: str, target_name: str, current_articles) -
     return [k for k in own if k not in current_articles]
 
 
+def effective_dates(description: str) -> list:
+    """설명 안 「YYYY.M.D 시행」의 날짜들(#273). 「2026.1 시행」처럼 일이 없는 표기는 읽지 않는다 — 시행 뒤 남기는 꼴."""
+    out = []
+    for m in EFFECTIVE_RE.finditer(description or ""):
+        try:
+            out.append(datetime(int(m.group(1)), int(m.group(2)), int(m.group(3))).date())
+        except ValueError:
+            continue
+    return out
+
+
+def pending_mark(description: str, today, doc_dates) -> tuple:
+    """시행 전 조문 표기 판정(#273). doc_dates: 대상 문서 판들의 시행일(doc_date) 집합 — None이면 대조하지 않는다(주제 설명).
+    반환 None(표기 없음) 또는 (level, code, detail). 시행일 당일은 아직 '지남'으로 보지 않는다(승격 다음 날 알림)."""
+    ds = effective_dates(description)
+    if not ds:
+        return None
+    past = sorted(d for d in ds if d < today)
+    if past:
+        return ("WARN", "pending_expired",
+                "시행일 지남 — 표기 떼고 현행판 대조: " + "·".join(d.isoformat() for d in past))
+    if doc_dates is not None:
+        miss = sorted(d for d in ds if d not in doc_dates)
+        if miss:
+            return ("WARN", "pending_unverified",
+                    "시행 전 표기인데 KB에 그 시행일 판 없음: " + "·".join(d.isoformat() for d in miss))
+    return ("OK", "pending_cited", "")
+
+
 DOC_DATE_RE = re.compile(r"\((\d{8})\)(?:\.(?:pdf|md))?$", re.I)
 
 
@@ -209,6 +245,11 @@ def fetch_topic_edges(sb):
         e["topic"], e["target"], e["target_doc"] = s["name"], t["name"], t.get("doc_name")
         out.append(e)
     return out
+
+
+def fetch_topic_nodes(sb):
+    """주제 노드(이름·설명) — 주제 설명의 시행 표기 만료 점검용(#273)"""
+    return _paged(sb.table("law_graph_nodes").select("id,name,description").eq("node_type", "topic"))
 
 
 def fetch_kb_docs(sb):
@@ -276,6 +317,7 @@ def run(since_hours: float, notify: bool, notify_all: bool, gone_days: float = 4
         base_index.setdefault(base_of(d), set()).add(d)
     print(f"주제 엣지 {len(edges)}건 · KB 문서 {len(kb_docs)}종 점검")
 
+    today = datetime.now(KST).date()
     art_cache = {}
     results = []
     for e in edges:
@@ -303,6 +345,16 @@ def run(since_hours: float, notify: bool, notify_all: bool, gone_days: float = 4
                             dates = [x for x in (doc_date(d), fetch_doc_loaded(sb, d)) if x]
                             recent_change[d] = max(dates) if dates else None
                     e["current_changed"] = max((recent_change[d] for d in cur if recent_change[d]), default=None)
+        # 시행 전 조문 표기(#273) — 미래 시행일은 그 시행일 판이 KB에 있으면 OK(pending_cited, 신설 조라 현행 판에 없는
+        # art_not_current도 이것으로 낮춘다), 없으면 WARN; 지난 시행일은 WARN. 다른 ERR·WARN은 그대로 두고 사유만 붙인다.
+        pm = pending_mark(e.get("description"), today, {doc_date(d) for d in docs} - {None})
+        if pm:
+            if level == "OK" or code == "art_not_current":
+                level, code, detail = pm
+            elif pm[2]:
+                detail = f"{detail} / {pm[2]}" if detail else pm[2]
+            if pm[1] == "pending_expired":
+                e["expired_days"] = (today - max(d for d in effective_dates(e.get("description")) if d < today)).days
         # AI 즉석 생성이 'KB 미보유' 꼬리표로 남긴 엣지는 등재 후보이거나 지어낸 문서명이다(2026-09-05 '전파사용료 징수에 관한 고시' — 법제처에 없음).
         # 생성 후 3일 안에는 WARN으로 올려 운영자가 법제처 검색으로 존재를 확인하고 등재/삭제를 결정하게 한다.
         if code == "doc_missing_tagged" and e.get("source") == "ai":
@@ -314,10 +366,24 @@ def run(since_hours: float, notify: bool, notify_all: bool, gone_days: float = 4
                 level, code, detail = "WARN", "doc_missing_ai_new", "AI가 붙인 KB 미보유 문서 — 법제처 존재 확인 후 등재/삭제 결정"
         results.append((level, code, detail, e))
 
+    # 주제 설명의 시행 표기(#273 R5-2) — 대상 문서가 없으니 만료만 본다
+    try:
+        for t in fetch_topic_nodes(sb):
+            pm = pending_mark(t.get("description"), today, None)
+            if pm and pm[1] == "pending_expired":
+                te = {"topic": t["name"], "target": "(주제 설명)", "source": "topic", "created_at": None,
+                      "description": t.get("description"),
+                      "expired_days": (today - max(d for d in effective_dates(t.get("description")) if d < today)).days}
+                results.append((pm[0], pm[1], pm[2], te))
+    except Exception as ex:
+        print("주제 설명 시행 표기 점검 실패(무시):", ex)
+
     counts = {}
     for level, code, _, _ in results:
         counts[code] = counts.get(code, 0) + 1
     print("판정 분포:", ", ".join(f"{k} {v}" for k, v in sorted(counts.items(), key=lambda x: -x[1])))
+    n_pending = counts.get("pending_cited", 0)
+    print(f"시행 전 조문 인용 {n_pending}건 (시행일 판이 KB에 있음 — 시행 뒤 표기를 떼야 함)")
 
     problems = [r for r in results if r[0] != "OK"]
     for level, code, detail, e in sorted(problems, key=lambda r: (r[0] != "ERR", r[3]["topic"])):
@@ -333,12 +399,16 @@ def run(since_hours: float, notify: bool, notify_all: bool, gone_days: float = 4
             return datetime.fromisoformat(e["created_at"].replace("Z", "+00:00")) >= since
         except Exception:
             return False
-    today = datetime.now(timezone.utc).date()
     def is_amended(r):
         # 현행 판이 최근(gone_days 안에) 시행·적재됐으면 그 개정이 만든 문제다 — 엣지는 오래돼도 알린다(#271).
         # 주말·휴일을 건너 다음 평일 실행이 잡도록 기본 4일 — 그 사이 매 실행 반복될 수 있다.
         ch = r[3].get("current_changed")
-        return r[1] == "art_not_current" and ch is not None and (today - ch).days <= gone_days
+        if r[1] == "art_not_current" and ch is not None and (today - ch).days <= gone_days:
+            return True
+        # 시행 표기(#273): 시행일이 막 지난 것(승격 다음 날부터 gone_days 동안)과 KB에 그 시행일 판이 없는 것은 엣지가 오래돼도 알린다
+        if r[1] == "pending_expired" and r[3].get("expired_days", 99) <= gone_days:
+            return True
+        return r[1] == "pending_unverified"
     to_send = problems if notify_all else [r for r in problems if (since_hours > 0 and is_new(r[3])) or is_amended(r)]
     # 검토 대기 제안(lawmap_proposals, #147) — 승인이 밀리면 관계도가 자라지 않으므로 건수·최고 대기일을 함께 알린다
     pending_n, pending_days = 0, 0
@@ -355,6 +425,8 @@ def run(since_hours: float, notify: bool, notify_all: bool, gone_days: float = 4
         return
     from notify import send_telegram
     lines = [f"🔎 관계도 주제 엣지 점검 — 문제 {len(to_send)}건" + ("" if notify_all else f" (최근 {since_hours:g}시간 생성분·최근 {gone_days:g}일 개정분)")]
+    if n_pending:
+        lines.append(f"⏳ 시행 전 조문 인용 {n_pending}건 — 시행일이 지나면 표기를 떼야 함(다음 날 점검이 알림)")
     if pending_n:
         lines.append(f"📝 AI 연결 제안 검토 대기 {pending_n}건" + (f" (가장 오래된 것 {pending_days}일)" if pending_days else "") + " → 관계도 탭 '검토 대기' 카드에서 승인/기각")
     for level, code, detail, e in to_send[:25]:
