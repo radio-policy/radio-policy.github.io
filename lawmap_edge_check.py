@@ -4,7 +4,7 @@
 배경: 2026-09-05 전수 검증에서 주제 엣지 356건 중 214건이 조문 오류·자리표시 설명이었다.
 AI 즉석 생성(app.js saveLawmapData)이 조문을 검증 없이 저장한 것이 주원인이라 저장 전 관문을
 넣었고, 이 스크립트는 그 두 번째 층(야간 전수 점검)이다. 17시 run_gov_crawler.bat 체인의
-마지막 단계로 돌며, DB는 읽기만 한다(정정은 운영자·세션이 한다).
+마지막 단계로 돌며, DB는 읽기만 한다(정정은 운영자·세션이 한다) — 예외 하나: 시행일이 지난 시행 표기 자동 정리(#275, 아래).
 
 판정(엣지 1건당 하나):
   ERR placeholder   설명이 '관련 조문'·'제N조'·'(관련)' 같은 자리표시
@@ -18,6 +18,12 @@ AI 즉석 생성(app.js saveLawmapData)이 조문을 검증 없이 저장한 것
   WARN pending_unverified  시행일이 오늘 이후인데 KB에 그 시행일 판이 없다
   WARN pending_expired     시행일이 지났다 — 표기를 떼고(또는 연·월만 남기고) 현행판과 대조. 주제 설명도 본다
   조 단위만 본다 — 시행예정판에서 항·호 번호가 바뀐 것(자기적합확인 제72조②4의3)은 사람·세션이 확인한다.
+시행 표기 자동 정리(#275, 2026-10-04) — pending_expired인 선은 셋이 맞을 때만 설명을 고쳐 쓴다(OK pending_cleaned):
+  ① clean_expired_marks가 정리됨(「YYYY.M.D 시행」→「YYYY.M 시행」, 맨 앞 「[시행예정 — … 시행]」·「※ 시행예정판(제N호) 기준, …」 절 삭제,
+     정리 뒤 「시행예정·시행 전까지·현행판」이 안 남음) ② 대상의 현행본 중 시행일이 그 날 이상인 판이 있음(승격됨)
+  ③ 정리한 설명이 judge OK이고 자기 조문이 모두 현행판에 있음. 주제 설명은 ①만 본다. 고친 전·후 전문을 운영자 봇에 보낸다(되돌리기 자료).
+  예약 실행(알림 켬)에서만 쓴다 — --no-notify면 「자동 정리 예정」만 출력, --fix로 강제, --no-fix로 끔. 문장 뜻이 바뀌어야 하는 것
+  (예: 「현행 시행령에 미반영」)은 날짜 표기가 없어 잡히지 않는다 — 사람·세션 몫.
 
 타 법령 조문 인용("전파법 제15조의2에 적용", "법 제41조 위임")은 자기 조문으로 세지 않는다 —
 바로 앞 낱말이 법령명(…법·령·규칙·고시·규정·기준·지침)이고 대상 노드명이 아니면 교차 인용.
@@ -52,6 +58,10 @@ GENERIC_LAWWORDS = ("법", "령", "영", "규칙", "고시", "규정", "기준",
 CONNECT_RE = re.compile(r"[·ㆍ~∼\-]\s*$")
 DELEG_AFTER_RE = re.compile(r"^\s*(?:제\d+항|제\d+호|[①-⑳])*\s*(?:의\s*)?(?:위임|에\s*따른|에\s*의한|근거)")
 EFFECTIVE_RE = re.compile(r"(\d{4})\.(\d{1,2})\.(\d{1,2})\s*시행")   # 시행 전 조문 표기 「(2026.10.22 시행)」 (#273)
+# 시행 표기 자동 정리(#275) — 맨 앞 「[시행예정 — 2027.3.10 시행] 」, 「 ※ 시행예정판(제N호) 기준, …」(그 절 끝까지 — 괄호·가운뎃점 앞에서 멈춤)
+PENDING_PREFIX_RE = re.compile(r"^\s*\[시행예정\s*[—–\-]\s*\d{4}\.\d{1,2}\.\d{1,2}\s*시행\]\s*")
+PENDING_NOTE_RE = re.compile(r"\s*※\s*시행예정판(?:\(제\d+호\))?\s*기준(?:[^()·]*[^()·\s])?")
+PENDING_STALE_RE = re.compile(r"시행예정|시행\s*전까지|현행판")   # 정리 뒤에도 남으면 사람 몫(문장 뜻이 바뀌어야 하는 경우)
 KST = timezone(timedelta(hours=9))
 
 
@@ -200,6 +210,24 @@ def pending_mark(description: str, today, doc_dates) -> tuple:
     return ("OK", "pending_cited", "")
 
 
+def clean_expired_marks(description: str, today):
+    """시행일이 지난 시행 표기를 떼어 낸 설명(#275) — 정리할 수 없으면 None.
+    「YYYY.M.D 시행」 → 「YYYY.M 시행」(지침이 허용한 연·월 꼴 — effective_dates가 읽지 않는다), 맨 앞 「[시행예정 — … 시행]」과
+    「※ 시행예정판(제N호) 기준, …」 절은 지운다. 시행일이 하나라도 아직 안 지났거나, 정리 뒤에도 「시행예정·시행 전까지·현행판」이
+    남으면 None — 문장 뜻을 바꿔야 하는 것은 사람·세션이 고친다."""
+    ds = effective_dates(description)
+    if not ds or any(d >= today for d in ds):
+        return None
+    s = PENDING_PREFIX_RE.sub("", description)
+    s = PENDING_NOTE_RE.sub("", s)
+    s = EFFECTIVE_RE.sub(lambda m: f"{m.group(1)}.{int(m.group(2))} 시행", s)
+    s = re.sub(r"\s+\)", ")", s)
+    s = re.sub(r"\s{2,}", " ", s).strip()
+    if effective_dates(s) or PENDING_STALE_RE.search(s) or s == description:
+        return None
+    return s
+
+
 DOC_DATE_RE = re.compile(r"\((\d{8})\)(?:\.(?:pdf|md))?$", re.I)
 
 
@@ -306,7 +334,36 @@ def fetch_articles(sb, doc_names):
     return keys, frozenset(bare)
 
 
-def run(since_hours: float, notify: bool, notify_all: bool, gone_days: float = 4):
+def _write_clean(sb, table, row_id, old, new):
+    """시행 표기 정리 쓰기(#275) — 읽은 뒤 누가 설명을 바꿨으면(eq description) 쓰지 않는다. 성공 여부."""
+    try:
+        r = sb.table(table).update({"description": new}).eq("id", row_id).eq("description", old).execute()
+        return bool(r.data)
+    except Exception as ex:
+        print(f"시행 표기 정리 쓰기 실패({table} {row_id}):", ex)
+        return False
+
+
+def expired_fix_block(new, cur_docs, expired_on, judged, gone):
+    """시행 표기 자동 정리를 막는 사유(#275) — 없으면 None. 순수 함수(네트워크 없음).
+    new: clean_expired_marks 결과 · cur_docs: 대상의 현행본 문서명들(None=목록 조회 실패) · expired_on: 지난 시행일 중 가장 늦은 날
+    judged: 정리한 설명의 judge 결과 · gone: 정리한 설명의 자기 조문 중 현행판에 없는 것"""
+    if new is None:
+        return "문장 뜻을 바꿔야 함 — 사람이 정리"
+    if cur_docs is None:
+        return "현행본 목록 조회 실패"
+    if not any((doc_date(d) or datetime.min.date()) >= expired_on for d in cur_docs):
+        return "현행판이 아직 그 시행일 판이 아님(승격 전·실패)"
+    if judged is None:
+        return "정리한 설명 대조 못 함"
+    if judged[0] != "OK":
+        return "정리한 설명 대조 실패: " + (judged[2] or judged[1])
+    if gone:
+        return "현행판에 없는 조문: " + "·".join("제" + k for k in gone)
+    return None
+
+
+def run(since_hours: float, notify: bool, notify_all: bool, gone_days: float = 4, fix: bool = False):
     sb = _client()
     edges = fetch_topic_edges(sb)
     kb_docs = fetch_kb_docs(sb)
@@ -320,6 +377,7 @@ def run(since_hours: float, notify: bool, notify_all: bool, gone_days: float = 4
     today = datetime.now(KST).date()
     art_cache = {}
     results = []
+    cleaned = []   # 시행 표기 자동 정리(#275) — (주제, 대상, 전, 후)
     for e in edges:
         docs = resolve_docs(e["target"], e.get("target_doc"), kb_docs, base_index)
         arts, bare = None, ()
@@ -354,7 +412,26 @@ def run(since_hours: float, notify: bool, notify_all: bool, gone_days: float = 4
             elif pm[2]:
                 detail = f"{detail} / {pm[2]}" if detail else pm[2]
             if pm[1] == "pending_expired":
-                e["expired_days"] = (today - max(d for d in effective_dates(e.get("description")) if d < today)).days
+                expired_on = max(d for d in effective_dates(e.get("description")) if d < today)
+                e["expired_days"] = (today - expired_on).days
+                # 시행 표기 자동 정리(#275): 시행일이 지났고, 현행판이 그 시행일 판으로 바뀌었고, 정리한 설명이 대조를 통과할 때만 쓴다
+                old = e.get("description") or ""
+                new = clean_expired_marks(old, today)
+                cur = tuple(d for d in docs if d in current_docs) if current_docs is not None else None
+                judged, gone = None, []
+                if new is not None and cur:
+                    if cur not in art_cache:
+                        art_cache[cur] = fetch_articles(sb, cur)
+                    judged = judge(new, e["target"], bool(docs), arts, bare)
+                    gone = not_current_articles(new, e["target"], art_cache[cur][0])
+                block = expired_fix_block(new, cur, expired_on, judged, gone)
+                if block:
+                    detail = f"{detail} / 자동 정리 안 함: {block}"
+                elif fix and _write_clean(sb, "law_graph_edges", e["id"], old, new):
+                    level, code, detail = "OK", "pending_cleaned", ""
+                    cleaned.append((e["topic"], e["target"], old, new))
+                else:
+                    detail = f"{detail} / " + ("자동 정리 쓰기 실패" if fix else "자동 정리 예정(이번 실행은 쓰기 꺼짐): " + new)
         # AI 즉석 생성이 'KB 미보유' 꼬리표로 남긴 엣지는 등재 후보이거나 지어낸 문서명이다(2026-09-05 '전파사용료 징수에 관한 고시' — 법제처에 없음).
         # 생성 후 3일 안에는 WARN으로 올려 운영자가 법제처 검색으로 존재를 확인하고 등재/삭제를 결정하게 한다.
         if code == "doc_missing_tagged" and e.get("source") == "ai":
@@ -371,6 +448,16 @@ def run(since_hours: float, notify: bool, notify_all: bool, gone_days: float = 4
         for t in fetch_topic_nodes(sb):
             pm = pending_mark(t.get("description"), today, None)
             if pm and pm[1] == "pending_expired":
+                # 주제 설명은 대상 문서가 없어 날짜 꼴만 정리한다(#275) — 문장 뜻을 바꿔야 하는 것은 사람 몫으로 남긴다
+                old = t.get("description") or ""
+                new = clean_expired_marks(old, today)
+                if new is not None and fix and _write_clean(sb, "law_graph_nodes", t["id"], old, new):
+                    cleaned.append((t["name"], "(주제 설명)", old, new))
+                    continue
+                if new is not None:
+                    pm = (pm[0], pm[1], pm[2] + (" / 자동 정리 쓰기 실패" if fix else " / 자동 정리 예정(이번 실행은 쓰기 꺼짐): " + new))
+                else:
+                    pm = (pm[0], pm[1], pm[2] + " / 자동 정리 안 함: 문장 뜻을 바꿔야 함 — 사람이 정리")
                 te = {"topic": t["name"], "target": "(주제 설명)", "source": "topic", "created_at": None,
                       "description": t.get("description"),
                       "expired_days": (today - max(d for d in effective_dates(t.get("description")) if d < today)).days}
@@ -390,6 +477,18 @@ def run(since_hours: float, notify: bool, notify_all: bool, gone_days: float = 4
         print(f"[{level}:{code}] {e['topic']} → {e['target']} ({e['source']}) : {detail}\n"
               f"      설명: {(e.get('description') or '')[:110]}")
     print(f"문제 {len(problems)}건 (ERR {sum(r[0]=='ERR' for r in problems)} · WARN {sum(r[0]=='WARN' for r in problems)})")
+
+    # 시행 표기 자동 정리 기록(#275) — 운영자 봇 메시지가 되돌리기 자료다(전·후 전문). 쓴 것이 있으면 알림 설정과 무관하게 보낸다
+    if cleaned:
+        lines = [f"🧹 관계도 시행 표기 자동 정리 {len(cleaned)}건 (시행일 지남·현행판 대조 통과)"]
+        for topic, target, old, new in cleaned:
+            lines.append(f"• {topic} → {target}\n  전: {old}\n  후: {new}")
+        print("\n".join(lines))
+        try:
+            from notify import send_telegram
+            print("텔레그램(정리 기록):", "성공" if send_telegram("\n".join(lines), disable_notification=True) else "실패/미설정")
+        except Exception as ex:
+            print("텔레그램(정리 기록) 실패:", ex)
 
     if not notify:
         return
@@ -426,7 +525,7 @@ def run(since_hours: float, notify: bool, notify_all: bool, gone_days: float = 4
     from notify import send_telegram
     lines = [f"🔎 관계도 주제 엣지 점검 — 문제 {len(to_send)}건" + ("" if notify_all else f" (최근 {since_hours:g}시간 생성분·최근 {gone_days:g}일 개정분)")]
     if n_pending:
-        lines.append(f"⏳ 시행 전 조문 인용 {n_pending}건 — 시행일이 지나면 표기를 떼야 함(다음 날 점검이 알림)")
+        lines.append(f"⏳ 시행 전 조문 인용 {n_pending}건 — 시행일 다음 날 점검이 현행판 대조 뒤 표기를 자동 정리(#275), 못 하면 사유와 함께 알림")
     if pending_n:
         lines.append(f"📝 AI 연결 제안 검토 대기 {pending_n}건" + (f" (가장 오래된 것 {pending_days}일)" if pending_days else "") + " → 관계도 탭 '검토 대기' 카드에서 승인/기각")
     for level, code, detail, e in to_send[:25]:
@@ -439,15 +538,19 @@ def run(since_hours: float, notify: bool, notify_all: bool, gone_days: float = 4
 
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser(description="법령 관계도 주제 엣지 — 근거 조문 존재 점검(읽기 전용)")
+    ap = argparse.ArgumentParser(description="법령 관계도 주제 엣지 — 근거 조문 존재 점검(쓰기는 시행 표기 자동 정리뿐, #275)")
     ap.add_argument("--since-hours", type=float, default=30, help="이 시간 내 생성 엣지의 문제만 텔레그램(기본 30, 0=미발송)")
     ap.add_argument("--no-notify", action="store_true", help="텔레그램 미발송(출력만)")
     ap.add_argument("--notify-all", action="store_true", help="신규 여부 무관 전체 문제를 텔레그램으로")
     ap.add_argument("--gone-days", type=float, default=4,
                     help="현행 판이 이 날수 안에 시행·적재됐으면 '현행 판에 없는 조문' 문제를 엣지 생성일과 무관하게 알림(기본 4, #271)")
+    ap.add_argument("--no-fix", action="store_true", help="시행 표기 자동 정리를 쓰지 않음(예정만 출력, #275)")
+    ap.add_argument("--fix", action="store_true", help="--no-notify여도 시행 표기 자동 정리를 씀(#275)")
     a = ap.parse_args()
+    # 자동 정리는 예약 실행(알림 켬)에서만 쓴다 — 세션이 --no-notify로 점검하다가 DB를 바꾸지 않게
+    fix = a.fix or (not a.no_notify and not a.no_fix)
     try:
-        run(a.since_hours, notify=not a.no_notify, notify_all=a.notify_all, gone_days=a.gone_days)
+        run(a.since_hours, notify=not a.no_notify, notify_all=a.notify_all, gone_days=a.gone_days, fix=fix)
     except Exception as ex:  # 체인을 막지 않는다
         print(f"[lawmap_edge_check] 실패: {ex!r}")
     sys.exit(0)

@@ -840,6 +840,65 @@ class TestLawmapPendingMark(unittest.TestCase):
         self.assertIsNone(m.pending_mark('주파수분배(제9조)', today, set()))
 
 
+class TestLawmapCleanExpiredMarks(unittest.TestCase):
+    """시행 표기 자동 정리(#275, 2026-10-04) — 실DB 문안 7개(10-04 기준) 그대로, 네트워크 없음"""
+
+    def test_real_wordings(self):
+        import lawmap_edge_check as m
+        from datetime import date
+        after = date(2027, 3, 11)   # 모든 시행일(2026.10.22·11.6·11.20·2027.3.10)이 지난 날
+        cases = [
+            ('휴대폰·태블릿·노트북 등 13종 유선충전 기자재(제2조)에 USB C형 리셉터클 커넥터 의무(제3조·별표1) (제1조, 방송통신발전기본법 제28조제9항 위임; 2026.11.6 시행)',
+             '휴대폰·태블릿·노트북 등 13종 유선충전 기자재(제2조)에 USB C형 리셉터클 커넥터 의무(제3조·별표1) (제1조, 방송통신발전기본법 제28조제9항 위임; 2026.11 시행)'),
+            ('USB C형 리셉터클 커넥터를 별표1 제7호다목25)나) 적합성평가 대상(자기적합확인, 기기부호 USBCR)으로 편입 — 충전 기술기준 고시 부칙 제2조로 개정(2026.11.6 시행)',
+             'USB C형 리셉터클 커넥터를 별표1 제7호다목25)나) 적합성평가 대상(자기적합확인, 기기부호 USBCR)으로 편입 — 충전 기술기준 고시 부칙 제2조로 개정(2026.11 시행)'),
+            ('무선국자기적합확인서 제출로 준공검사 갈음(제24조제2항 — 2026.4.21 신설, 2026.10.22 시행) · 수수료(제69조제1항제3의2호) · 거짓 제출 시 개설허가 취소·운용정지 등(제72조제2항제4의3호) · 과태료(제90조제2의2호) ※ 시행예정판(제21553호) 기준, 시행 전까지 현행판에는 없음',
+             '무선국자기적합확인서 제출로 준공검사 갈음(제24조제2항 — 2026.4.21 신설, 2026.10 시행) · 수수료(제69조제1항제3의2호) · 거짓 제출 시 개설허가 취소·운용정지 등(제72조제2항제4의3호) · 과태료(제90조제2의2호)'),
+            ('기간통신사업 등록(제6조)·양수·합병 인가(제18조) — 자본금 감소·다른 주주 보유주식 처분 등으로 최대주주가 된 자도 인가 대상(제18조제1항제4호 후단, 2026.11.20 시행 ※ 시행예정판(제21652호) 기준) · 공익성심사 — 15% 이상 취득',
+             '기간통신사업 등록(제6조)·양수·합병 인가(제18조) — 자본금 감소·다른 주주 보유주식 처분 등으로 최대주주가 된 자도 인가 대상(제18조제1항제4호 후단, 2026.11 시행) · 공익성심사 — 15% 이상 취득'),
+            ('주파수분배(제9조), 무선국자기적합확인서 제출로 준공검사 갈음(제24조제2항 — 2026.4.21 신설, 2026.10.22 시행 ※ 시행예정판(제21553호) 기준, 현행판 제24조제2항은 준공기한 연장) — 지하철 AP·중계기 준공 절차 근거',
+             '주파수분배(제9조), 무선국자기적합확인서 제출로 준공검사 갈음(제24조제2항 — 2026.4.21 신설, 2026.10 시행) — 지하철 AP·중계기 준공 절차 근거'),
+            ('[시행예정 — 2027.3.10 시행] AIDC 구축·운영 지원 — 통신시설 설치 우선 추진(제12조) · 신고와 지원·특례(제10조) · 신용보증 지원 ※ 시행예정판(제21759호) 기준 (제26조)',
+             'AIDC 구축·운영 지원 — 통신시설 설치 우선 추진(제12조) · 신고와 지원·특례(제10조) · 신용보증 지원 (제26조)'),
+            ('전파법 제24조제2항(2026.4.21 신설, 2026.10.22 시행) 무선국 준공검사 갈음 제도 및 시행령 위임 현황',
+             '전파법 제24조제2항(2026.4.21 신설, 2026.10 시행) 무선국 준공검사 갈음 제도 및 시행령 위임 현황'),
+        ]
+        for old, want in cases:
+            got = m.clean_expired_marks(old, after)
+            self.assertEqual(got, want)
+            self.assertEqual(m.effective_dates(got), [])             # 정리 뒤엔 시행 표기로 읽히지 않는다
+            self.assertIsNone(m.pending_mark(got, after, set()))
+
+    def test_not_cleaned(self):
+        import lawmap_edge_check as m
+        from datetime import date
+        d = '갈음(제24조제2항 — 2026.10.22 시행)'
+        self.assertIsNone(m.clean_expired_marks(d, date(2026, 10, 22)))     # 시행일 당일은 아직
+        self.assertEqual(m.clean_expired_marks(d, date(2026, 10, 23)), '갈음(제24조제2항 — 2026.10 시행)')
+        # 시행일이 하나라도 남았으면 통째로 손대지 않는다
+        self.assertIsNone(m.clean_expired_marks('A(제1조 — 2026.10.22 시행) · B(제2조 — 2026.11.20 시행)', date(2026, 10, 23)))
+        # 정리 뒤에도 뜻을 바꿔야 할 문구가 남으면 사람 몫
+        self.assertIsNone(m.clean_expired_marks('준공 갈음(제24조, 2026.10.22 시행) — 현행판 시행령에 미반영', date(2026, 10, 23)))
+        self.assertIsNone(m.clean_expired_marks('주파수분배(제9조)', date(2026, 10, 23)))
+        self.assertIsNone(m.clean_expired_marks(None, date(2026, 10, 23)))
+
+    def test_fix_block(self):
+        import lawmap_edge_check as m
+        from datetime import date
+        on = date(2026, 10, 22)
+        cur_new = ('전파법(법률)(제21553호)(20261022)',)
+        cur_old = ('전파법(법률)(제21065호)(20260102)',)
+        ok = ('OK', 'verified', '')
+        self.assertIsNone(m.expired_fix_block('새 설명', cur_new, on, ok, []))
+        self.assertIn('사람', m.expired_fix_block(None, cur_new, on, ok, []))
+        self.assertIn('조회 실패', m.expired_fix_block('새 설명', None, on, ok, []))
+        self.assertIn('승격 전', m.expired_fix_block('새 설명', cur_old, on, ok, []))        # 11:00 승격이 안 된 날
+        self.assertIn('승격 전', m.expired_fix_block('새 설명', (), on, ok, []))
+        self.assertIn('승격 전', m.expired_fix_block('새 설명', ('날짜 없는 문서',), on, ok, []))
+        self.assertIn('대조 실패', m.expired_fix_block('새 설명', cur_new, on, ('ERR', 'art_missing', '원문에 없는 조문: 제99조'), []))
+        self.assertIn('제24조', m.expired_fix_block('새 설명', cur_new, on, ok, ['24조']))
+
+
 class TestAnnexLabelAndTextFix(unittest.TestCase):
     """번호 없는 별표 이름표·별표 본문 잃은 글자 복구(#257, 2026-09-29) — 네트워크 없음"""
 
