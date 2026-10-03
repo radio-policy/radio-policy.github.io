@@ -768,6 +768,51 @@ class TestLawmapEdgeCheck(unittest.TestCase):
                           '별표 ?(규제심사 절차)', '별표', '별표 8(전파사용료)', '별지 제57호서식(신청서)')], [True, True, True, False, False])
 
 
+class TestLawmapCurrentVersion(unittest.TestCase):
+    """관계도 노드 doc_name 현행본 추종·현행 판 조문 대조(#271, 2026-10-03) — 네트워크 없음"""
+
+    @staticmethod
+    def _builder_funcs():
+        # build_law_citation_graph는 import 때 DB 클라이언트를 만들므로 순수 함수 둘만 떼어 실행한다
+        import ast, re
+        path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'build_law_citation_graph.py')
+        tree = ast.parse(open(path, encoding='utf-8').read())
+        fns = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in ('prefer_doc', 'doc_refresh_needed')]
+        ns = {'re': re}
+        exec(compile(ast.Module(body=fns, type_ignores=[]), path, 'exec'), ns)
+        return ns['prefer_doc'], ns['doc_refresh_needed']
+
+    def test_prefer_current(self):
+        prefer, _ = self._builder_funcs()
+        cur = {'망법 시행령(대통령령)(제36728호)(20261002)'}
+        # 사전순으로는 구판(제36735호)이 크지만 현행본이 이긴다
+        self.assertFalse(prefer('망법 시행령(대통령령)(제36735호)(20261001)', '망법 시행령(대통령령)(제36728호)(20261002)', cur))
+        self.assertTrue(prefer('망법 시행령(대통령령)(제36728호)(20261002)', '망법 시행령(대통령령)(제36735호)(20261001)', cur))
+        # 둘 다 현행이 아니면 종전처럼 사전순
+        self.assertTrue(prefer('X(법률)(제2호)(20270701)', 'X(법률)(제1호)(20260911)', set()))
+
+    def test_doc_refresh_needed(self):
+        _, need = self._builder_funcs()
+        cur = {'전파법(법률)(제2호)(20261001)', '전기안전 처리지침(국립전파연구원공고)(제1호)(20120701).pdf'}
+        self.assertTrue(need('전파법(법률)(제1호)(20260102)', '전파법(법률)(제2호)(20261001)', cur))
+        self.assertTrue(need('(과기부) 전파법(법률)(제1호).pdf', '전파법(법률)(제2호)(20261001)', cur))
+        self.assertFalse(need('전파법(법률)(제2호)(20261001)', '전파법(법률)(제2호)(20261001)', cur))
+        self.assertFalse(need('전파법(법률)(제1호)(20260102)', '전파법(법률)(제3호)(20270101)', cur))   # 새 쪽이 현행 아님
+        self.assertFalse(need('전파법(법률)(제1호)(20260102)', '전파법(법률)(제2호)(20261001)', None))   # 현행 목록 조회 실패
+        # KB 문서명 자체가 .pdf로 끝나는 현행본 — 그대로 둔다
+        self.assertFalse(need('전기안전 처리지침(국립전파연구원공고)(제1호)(20120701).pdf', '다른 이름', cur))
+
+    def test_not_current_articles_and_doc_date(self):
+        import lawmap_edge_check as m
+        d = '침해사고 신고의 시기·방법·절차(제58조의2) — 법 제48조의3제1항'
+        self.assertEqual(m.not_current_articles(d, '정보통신망법 시행령', {'58조의8', '58조의3'}), ['58조의2'])
+        self.assertEqual(m.not_current_articles(d, '정보통신망법 시행령', {'58조의2'}), [])
+        self.assertEqual(m.not_current_articles(d, '정보통신망법 시행령', set()), [])   # 현행 판 조문 체계 없음 → 판정 안 함
+        self.assertEqual(str(m.doc_date('전파법(법률)(제21065호)(20260102)')), '2026-01-02')
+        self.assertEqual(str(m.doc_date('X(고시)(제1호)(20190108).pdf')), '2019-01-08')
+        self.assertIsNone(m.doc_date('이동통신용 무선설비 예비전원설비 설치 가이드라인'))
+
+
 class TestAnnexLabelAndTextFix(unittest.TestCase):
     """번호 없는 별표 이름표·별표 본문 잃은 글자 복구(#257, 2026-09-29) — 네트워크 없음"""
 

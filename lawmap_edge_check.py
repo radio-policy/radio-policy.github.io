@@ -154,6 +154,30 @@ def judge(description: str, target_name: str, doc_found: bool, doc_articles, doc
     return ("OK", "verified", "")
 
 
+def not_current_articles(description: str, target_name: str, current_articles) -> list:
+    """설명의 자기 조문 중 현행 판에 없는 것(#271). judge()는 모든 판의 합집합으로 존재를 보므로(구판 PDF 오탐 방지)
+    개정으로 조문이 삭제·이동돼도 통과한다 — 그 구멍을 현행 판만 따로 대조해 메운다.
+    current_articles가 비어 있으면(현행 판이 조문 체계 없음·미보유) 판정하지 않는다."""
+    if not current_articles:
+        return []
+    own, _ = own_articles(description or "", target_name)
+    return [k for k in own if k not in current_articles]
+
+
+DOC_DATE_RE = re.compile(r"\((\d{8})\)(?:\.(?:pdf|md))?$", re.I)
+
+
+def doc_date(doc_name: str):
+    """문서명 끝 '(YYYYMMDD)' = 시행일 → date, 없으면 None"""
+    m = DOC_DATE_RE.search(str(doc_name or "").strip())
+    if not m:
+        return None
+    try:
+        return datetime.strptime(m.group(1), "%Y%m%d").date()
+    except ValueError:
+        return None
+
+
 # ─────────────────────────── DB 접근 (여기서부터 네트워크) ───────────────────────────
 
 def _client():
@@ -192,6 +216,25 @@ def fetch_kb_docs(sb):
     return {r["doc_name"] for r in _paged(sb.table("document_chunks").select("id,doc_name"))}
 
 
+def fetch_current_docs(sb):
+    """현행본 문서명 집합(document_chunks.status='current', RPC kb_doc_names). 실패하면 None — 현행 판 대조만 건너뛴다."""
+    try:
+        import kb_store
+        return set(kb_store.list_docs(sb, status="current"))
+    except Exception as e:
+        print("현행본 목록 조회 실패 — 현행 판 대조 건너뜀:", e)
+        return None
+
+
+def fetch_doc_loaded(sb, doc_name):
+    """문서 적재일(첫 청크 created_at) → date, 실패 None"""
+    try:
+        r = sb.table("document_chunks").select("created_at").eq("doc_name", doc_name).order("created_at").limit(1).execute().data
+        return datetime.fromisoformat(r[0]["created_at"].replace("Z", "+00:00")).date() if r else None
+    except Exception:
+        return None
+
+
 def resolve_docs(target_name, target_doc, kb_docs, base_index):
     """대상 노드의 KB 문서 '판(版)' 전부 — 같은 base의 현행·시행예정·구판을 모두 돌려준다(조문은 어느 판에든
     있으면 존재로 본다: 노드 doc_name이 구판 PDF를 가리켜 조문 파싱이 빈 경우가 실측됨 — 지방세법 시행령).
@@ -222,10 +265,12 @@ def fetch_articles(sb, doc_names):
     return keys, frozenset(bare)
 
 
-def run(since_hours: float, notify: bool, notify_all: bool):
+def run(since_hours: float, notify: bool, notify_all: bool, gone_days: float = 4):
     sb = _client()
     edges = fetch_topic_edges(sb)
     kb_docs = fetch_kb_docs(sb)
+    current_docs = fetch_current_docs(sb)
+    recent_change = {}   # 현행 판 문서명 → 시행일·적재일 중 늦은 날(알림 창 판정용)
     base_index = {}
     for d in kb_docs:
         base_index.setdefault(base_of(d), set()).add(d)
@@ -241,6 +286,23 @@ def run(since_hours: float, notify: bool, notify_all: bool):
                 art_cache[docs] = fetch_articles(sb, docs)
             arts, bare = art_cache[docs]
         level, code, detail = judge(e.get("description"), e["target"], bool(docs), arts, bare)
+        # 현행 판 대조(#271) — 모든 판 합집합으로는 있지만 현행 판에는 없는 자기 조문(개정으로 삭제·이동)
+        if code in ("verified", "art_partial") and current_docs:
+            cur = tuple(d for d in docs if d in current_docs)
+            if cur:
+                if cur not in art_cache:
+                    art_cache[cur] = fetch_articles(sb, cur)
+                gone = not_current_articles(e.get("description"), e["target"], art_cache[cur][0])
+                if gone:
+                    level, code = "WARN", "art_not_current"
+                    detail = ("현행 판에 없는 조문(구판·시행예정판에만): " + "·".join("제" + k for k in gone)
+                              + (" / " + detail if detail else ""))
+                    e["current_doc"] = cur[-1]
+                    for d in cur:
+                        if d not in recent_change:
+                            dates = [x for x in (doc_date(d), fetch_doc_loaded(sb, d)) if x]
+                            recent_change[d] = max(dates) if dates else None
+                    e["current_changed"] = max((recent_change[d] for d in cur if recent_change[d]), default=None)
         # AI 즉석 생성이 'KB 미보유' 꼬리표로 남긴 엣지는 등재 후보이거나 지어낸 문서명이다(2026-09-05 '전파사용료 징수에 관한 고시' — 법제처에 없음).
         # 생성 후 3일 안에는 WARN으로 올려 운영자가 법제처 검색으로 존재를 확인하고 등재/삭제를 결정하게 한다.
         if code == "doc_missing_tagged" and e.get("source") == "ai":
@@ -271,7 +333,13 @@ def run(since_hours: float, notify: bool, notify_all: bool):
             return datetime.fromisoformat(e["created_at"].replace("Z", "+00:00")) >= since
         except Exception:
             return False
-    to_send = problems if notify_all else [r for r in problems if since_hours > 0 and is_new(r[3])]
+    today = datetime.now(timezone.utc).date()
+    def is_amended(r):
+        # 현행 판이 최근(gone_days 안에) 시행·적재됐으면 그 개정이 만든 문제다 — 엣지는 오래돼도 알린다(#271).
+        # 주말·휴일을 건너 다음 평일 실행이 잡도록 기본 4일 — 그 사이 매 실행 반복될 수 있다.
+        ch = r[3].get("current_changed")
+        return r[1] == "art_not_current" and ch is not None and (today - ch).days <= gone_days
+    to_send = problems if notify_all else [r for r in problems if (since_hours > 0 and is_new(r[3])) or is_amended(r)]
     # 검토 대기 제안(lawmap_proposals, #147) — 승인이 밀리면 관계도가 자라지 않으므로 건수·최고 대기일을 함께 알린다
     pending_n, pending_days = 0, 0
     try:
@@ -286,7 +354,7 @@ def run(since_hours: float, notify: bool, notify_all: bool):
         print("텔레그램: 보낼 신규 문제·검토 대기 없음")
         return
     from notify import send_telegram
-    lines = [f"🔎 관계도 주제 엣지 점검 — 문제 {len(to_send)}건" + ("" if notify_all else f" (최근 {since_hours:g}시간 생성분)")]
+    lines = [f"🔎 관계도 주제 엣지 점검 — 문제 {len(to_send)}건" + ("" if notify_all else f" (최근 {since_hours:g}시간 생성분·최근 {gone_days:g}일 개정분)")]
     if pending_n:
         lines.append(f"📝 AI 연결 제안 검토 대기 {pending_n}건" + (f" (가장 오래된 것 {pending_days}일)" if pending_days else "") + " → 관계도 탭 '검토 대기' 카드에서 승인/기각")
     for level, code, detail, e in to_send[:25]:
@@ -303,9 +371,11 @@ if __name__ == "__main__":
     ap.add_argument("--since-hours", type=float, default=30, help="이 시간 내 생성 엣지의 문제만 텔레그램(기본 30, 0=미발송)")
     ap.add_argument("--no-notify", action="store_true", help="텔레그램 미발송(출력만)")
     ap.add_argument("--notify-all", action="store_true", help="신규 여부 무관 전체 문제를 텔레그램으로")
+    ap.add_argument("--gone-days", type=float, default=4,
+                    help="현행 판이 이 날수 안에 시행·적재됐으면 '현행 판에 없는 조문' 문제를 엣지 생성일과 무관하게 알림(기본 4, #271)")
     a = ap.parse_args()
     try:
-        run(a.since_hours, notify=not a.no_notify, notify_all=a.notify_all)
+        run(a.since_hours, notify=not a.no_notify, notify_all=a.notify_all, gone_days=a.gone_days)
     except Exception as ex:  # 체인을 막지 않는다
         print(f"[lawmap_edge_check] 실패: {ex!r}")
     sys.exit(0)

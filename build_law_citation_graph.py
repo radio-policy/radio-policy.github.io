@@ -52,6 +52,7 @@ except ImportError:
 
 from sb_client import make_client
 from retry_util import with_retry
+import kb_store
 
 SUPABASE_URL = os.environ['SUPABASE_URL']
 SUPABASE_KEY = os.environ['SUPABASE_SERVICE_KEY']
@@ -213,8 +214,28 @@ def fetch_all_doc_rows():
     return rows
 
 
-def fetch_target_docs(all_rows):
-    """법령·고시 원문 문서 목록: base_name → {'doc_name': 대표 문서명(최신), 'type': node_type}"""
+def prefer_doc(new, prev, current):
+    """같은 base의 두 판 중 new를 대표로 삼을까? — 현행본(document_chunks.status='current')이 먼저,
+    둘 다 현행이거나 둘 다 아니면 문서명 사전순 최대(종전 규칙).
+    사전순만 쓰면 시행예정본(20270701)이나 공포번호가 큰 구판(제36735호(20261001) > 현행 제36728호(20261002))을
+    대표로 잡는다(#271)."""
+    nc, pc = new in current, prev in current
+    if nc != pc:
+        return nc
+    return new > prev
+
+
+def doc_refresh_needed(row_doc, new_doc, current):
+    """기존 노드의 doc_name을 new_doc으로 바꿀까? (#271) — 노드가 현행본이 아닌 판(구판·시행예정본·
+    '.pdf' 꼬리 등 KB에 없는 이름)을 가리키고 new_doc이 현행본일 때만. current가 None(조회 실패)이면
+    바꾸지 않는다 — 사전순 대표로 노드를 옮겼다가 다음 날 되돌리는 출렁임을 막는다."""
+    if current is None or not row_doc or not new_doc or row_doc == new_doc:
+        return False
+    return new_doc in current and re.sub(r'\.(pdf|md)$', '', row_doc) not in current
+
+
+def fetch_target_docs(all_rows, current=frozenset()):
+    """법령·고시 원문 문서 목록: base_name → {'doc_name': 대표 문서명(현행본 우선), 'type': node_type}"""
     seen = {}
     for row in all_rows:
         if row['doc_category'] in EXCLUDE_CATEGORIES:
@@ -224,8 +245,7 @@ def fetch_target_docs(all_rows):
             continue
         base, ntype = parsed
         prev = seen.get(base)
-        # 같은 base가 여러 버전이면 문서명 사전순 최대(시행일 최신) 채택
-        if prev is None or row['doc_name'] > prev['doc_name']:
+        if prev is None or prefer_doc(row['doc_name'], prev['doc_name'], current):
             seen[base] = {'doc_name': row['doc_name'], 'type': ntype}
     return seen
 
@@ -448,7 +468,15 @@ def main(dry_run=False):
     print('=== 법령 인용망 추출 시작 ===' + ('  [DRY-RUN — DB 무변경]' if dry_run else ''))
     all_rows = fetch_all_doc_rows()
     print(f'document_chunks 전체 행: {len(all_rows)}건')
-    docs = fetch_target_docs(all_rows)
+    # 현행본 목록(#271) — 노드 doc_name을 현행본으로 따라가게 한다. 실패하면 대표 선택은 종전(사전순),
+    # 노드 doc_name 갱신은 건너뛴다(None).
+    try:
+        current_docs = set(kb_store.list_docs(sb, status='current'))
+        print(f'현행본 문서: {len(current_docs)}종')
+    except Exception as e:
+        current_docs = None
+        print(f'⚠️ 현행본 목록 조회 실패 — 노드 doc_name 갱신 건너뜀: {e}')
+    docs = fetch_target_docs(all_rows, current_docs or frozenset())
     print(f'법령·고시 원문 문서(정규화 기준): {len(docs)}건')
 
     base_of_doc = {}   # 실제 doc_name → base
@@ -685,17 +713,32 @@ def main(dry_run=False):
     for src, dst, missing in sorted(thd_skip_pairs):
         print(f'    [스킵] {src} → {dst}  (노드 없음: {missing})')
 
+    # 노드 doc_name 현행본 갱신 대상(#271) — 실제 실행의 ensure_node와 같은 판정
+    refresh_preview = []
+    for base, info in docs.items():
+        row = existing.get(base) or existing_nrm.get(nrm_key(base))
+        if row and doc_refresh_needed(row.get('doc_name'), info['doc_name'], current_docs):
+            refresh_preview.append((row['name'], row.get('doc_name'), info['doc_name']))
+    print(f'\n── 노드 doc_name 현행본 갱신: {len(refresh_preview)}건 ──')
+    for name, old, new in sorted(refresh_preview):
+        print(f'    {name}: {old} → {new}')
+
     if dry_run:
         print(f'\n[DRY-RUN] DB 무변경 — 노드/엣지 쓰기 없이 종료'
               f' (thdcmp 신규 노드 0건 / delegation 신규 노드 {len(deleg_new_nodes)}건)')
         print('=== 완료(dry-run) ===')
         return
 
+    doc_refreshed = []   # doc_name을 현행본으로 옮긴 노드(#271)
+
     def ensure_node(name, ntype, doc_name=None):
         row = existing.get(name) or existing_nrm.get(nrm_key(name))
         if row:
             patch = {}
-            if doc_name and not row.get('doc_name'):
+            # 비어 있으면 채우고, 현행본이 아닌 판을 가리키면 현행본으로 옮긴다(#271 — 종전엔 한 번 채운
+            # doc_name이 영영 그대로라 법령이 개정돼도 관계도 카드·조문 단위 보기가 구판 원문을 보였다)
+            if doc_name and (not row.get('doc_name')
+                             or doc_refresh_needed(row.get('doc_name'), doc_name, current_docs)):
                 patch['doc_name'] = doc_name
             # 동일성 색인으로 재사용된 노드가 과거 인용 스텁의 손상된 이름을 그대로 물고 있을 수 있다
             # ("정보통신기반 보호법 시행령"의 인용 스텁이 "정보통신기 반 보호법 시행령"으로 잘못
@@ -715,9 +758,11 @@ def main(dry_run=False):
                     if 'name' in patch:
                         existing.pop(cur, None)
                         existing[name] = row
+                    if 'doc_name' in patch and row.get('doc_name'):
+                        doc_refreshed.append(row.get('name') or name)
                     row.update(patch)
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f'⚠️ 노드 갱신 실패 {name}: {patch} — {e}')
             return row['id']
         ins = sb.table('law_graph_nodes').insert({
             'name': name, 'node_type': ntype, 'doc_name': doc_name, 'source': 'citation'
@@ -733,7 +778,9 @@ def main(dry_run=False):
     for name in cited_names:
         if name not in node_ids:
             node_ids[name] = ensure_node(name, guess_type_by_name(name))
-    print(f'노드 확보: {len(node_ids)}건 (전체 노드 {len(existing)}건)')
+    print(f'노드 확보: {len(node_ids)}건 (전체 노드 {len(existing)}건)'
+          f' · doc_name 현행본 갱신 {len(doc_refreshed)}건'
+          + (': ' + ', '.join(doc_refreshed) if doc_refreshed else ''))
 
     # ── delegation(law_delegations) 위임 쌍 → 노드ID 확정 ──────
     # description은 **요약**이다. 조문 근거 전체는 law_delegations에 남아 있으므로
