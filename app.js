@@ -10335,6 +10335,7 @@ var _issueCache = null;        // [{...issue, _links:[...]}]
 var _issueFilter = { stage: null, category: null };
 var selectedIssueId = null;
 var _issueView = 'list';   // list | detail — 새로고침 후 화면 복원용
+var _issueTab = null, _issueTabFor = null;   // 상세 탭(impact|timeline|laws|stake|cases)과 그 탭을 고른 이슈 id
 
 function _issueStageBadge(stage, dormant) {
   var s = ISSUE_STAGES[stage] || ISSUE_STAGES['발생'];
@@ -10483,7 +10484,7 @@ function _issueCardHtml(i) {
   var hot   = _issueHotCount(i);
   var last  = (i.last_activity_at || '').slice(5, 10).replace('-', '/');
   var desc  = _issueDefHead(i.definition);
-  return '<div onclick="showIssueDetail(' + i.id + ')" style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius-md);padding:12px 14px;cursor:pointer">' +
+  return '<div onclick="showIssueDetail(' + i.id + ',true)" style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius-md);padding:12px 14px;cursor:pointer">' +
     '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;flex-wrap:wrap">' +
       _issueStageBadge(i.stage, i.dormant) +
       (i.category ? '<span style="font-size:11px;color:var(--text-tertiary)">' + escHtml(i.category) + '</span>' : '') +
@@ -10614,9 +10615,12 @@ function _issueCardTree(links) {
 }
 
 // ── 이슈 상세 ────────────────────────────────────────────────
-async function showIssueDetail(issueId) {
+// fresh = 목록 카드에서 새로 연 경우 — 같은 이슈라도 탭을 처음(영향 요약)으로 되돌린다.
+// 그 밖의 다시 그리기(새로고침·단계 변경·연결 해제·요약 생성·과거 뉴스 보강·기사에서 돌아오기)는 보던 탭을 지킨다.
+async function showIssueDetail(issueId, fresh) {
   var i = (_issueCache || []).find(function(x) { return String(x.id) === String(issueId); });
   if (!i) return;
+  if (fresh) _issueTabFor = null;
   selectedIssueId = i.id;
   _issueView = 'detail';
   var all = (i._links || []).slice().sort(function(a, b) {
@@ -10743,11 +10747,15 @@ async function showIssueDetail(issueId) {
     _issueCardClose();
   }
 
-  // ── 타임라인 + 관련 법령 2열 ──
-  h += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px;margin-bottom:12px">';
+  // ── 관계도 아래 칸은 탭으로 나눈다(2026-10-03 운영자 요청) — 한 줄로 이어 붙이면 연대기가 길 때
+  //    결론인 SKT 영향 요약이 맨 아래로 밀려 스크롤로 찾아야 했다. 머리글·관계도는 탭 밖에 두고,
+  //    칸마다 문자열을 따로 모아 탭 패널로 감싼다. 패널은 모두 DOM에 두고 표시만 바꾼다 —
+  //    숨은 패널 안의 id(issue-archive-result·issue-impact-box)를 보강·요약 생성 함수가 그대로 찾는다.
+  var hTop = h, issuePane = {};
+  h = '';
 
   // 연대기 타임라인 카드
-  h += _issueCardOpen(true) +
+  h += _issueCardOpen() +
     '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">' +
       '<span style="font-size:13px;font-weight:600;color:var(--text-primary)"><i class="ti ti-timeline"></i> 연대기 타임라인</span>' +
       (isAdminUser() ? '<button class="btn" id="issue-archive-btn" onclick="enrichIssueArchive(' + i.id + ')" ' +
@@ -10812,6 +10820,8 @@ async function showIssueDetail(issueId) {
     h += '</div>';
   }
   h += _issueCardClose();
+  issuePane.timeline = h;
+  h = '';
 
   // 관련 법령 카드 — 그래프가 아니라 칩. 개정 진행 상황을 배지로 함께 보여준다.
   // 주제 큐레이션이 있으면 주제의 법령 목록이 '관련 법령'의 정본(운영자 지시 2026-08-27:
@@ -10826,15 +10836,16 @@ async function showIssueDetail(issueId) {
     return !_topicLawNames[nm];
   });
   var hasTopic = (i._topicRel || []).length > 0;
-  h += _issueCardOpen(true) + _issueSecTitle('ti-scale', '관련 법령', '');
-  if (!lawLinks.length && !hasTopic) {
-    h += '<div style="font-size:12px;color:var(--text-secondary);line-height:1.7">연결된 법령이 없습니다.</div>';
-  } else {
+  // 연결된 법령이 없으면 탭째 숨긴다(이해관계자·과거 사례와 같은 규칙)
+  var lawCount = chipLinks.length + (i._topicRel || []).reduce(function(s, tp) { return s + tp.rels.length; }, 0);
+  if (lawLinks.length || hasTopic) {
+    h += _issueCardOpen() + _issueSecTitle('ti-scale', '관련 법령', '');
+    // 칩은 줄바꿈을 허용한다 — nowrap이면 긴 법령명+배지가 카드 오른쪽 밖으로 잘렸다(2026-10-03 「…시행 예」)
     if (chipLinks.length) h += '<div style="display:flex;flex-wrap:wrap;gap:6px">' +
       chipLinks.map(function(l) {
         var st = _issueLawState(l);
         var name = String(l.title || l.item_id).replace(/\s*\((proposed|pending|promoted)\)\s*$/, '');
-        return '<span onclick="openIssueLinkItem(' + l.id + ')" style="font-size:11px;padding:5px 11px;border-radius:12px;cursor:pointer;white-space:nowrap;' +
+        return '<span onclick="openIssueLinkItem(' + l.id + ')" style="font-size:11px;padding:5px 11px;border-radius:12px;cursor:pointer;max-width:100%;word-break:keep-all;line-height:1.5;' +
           'background:' + st.bg + ';color:' + st.color + '">' + (st.badge ? '<i class="ti ti-alert-triangle"></i> ' : '') + escHtml(name) +
           (st.badge ? ' · ' + escHtml(st.badge) : '') + '</span>';
       }).join('') + '</div>';
@@ -10865,15 +10876,16 @@ async function showIssueDetail(issueId) {
         escHtml(parent) + '의 하위법령 · ' +
         subs.slice(0, 4).map(function(nm) {
           return '<span data-law="' + escHtml(nm) + '" onclick="openLawByName(this.getAttribute(\'data-law\'))" ' +
-            'style="color:#16807f;background:rgba(31,158,158,0.12);padding:2px 9px;border-radius:10px;cursor:pointer;white-space:nowrap;display:inline-block;margin:2px 3px 0 0">' +
+            'style="color:#16807f;background:rgba(31,158,158,0.12);padding:2px 9px;border-radius:10px;cursor:pointer;max-width:100%;word-break:keep-all;display:inline-block;margin:2px 3px 0 0">' +
             escHtml(nm) + '</span>';
         }).join('') +
         (s.noticeCount ? ' <span onclick="go(\'lawmap\',null)" style="cursor:pointer;text-decoration:underline">고시·행정규칙 ' + s.noticeCount + '건 — 법령 관계도에서</span>' : '') +
       '</div>';
     });
+    h += _issueCardClose();
+    issuePane.laws = h;
   }
-  h += _issueCardClose();
-  h += '</div>';   // 2열 그리드 닫기
+  h = '';
 
   // ── 이해관계자 카드 — 찬반 라벨 없이 '누가 어떤 입장·행동인지' 요지 문장만 (성향 단정어 금지 가드와 동일 철학) ──
   if (stakeholders.length) {
@@ -10886,7 +10898,9 @@ async function showIssueDetail(issueId) {
           (_issueNotePublic(l.note) ? '<div style="font-size:11px;color:var(--text-secondary);line-height:1.65;margin-top:3px">' + escHtml(_issueNotePublic(l.note)) + '</div>' : '') +
         '</div>';
       }).join('') + '</div>' + _issueCardClose();
+    issuePane.stake = h;
   }
+  h = '';
 
   // ── SKT 영향 요약 카드 — 무슨 일 / 왜 중요 / 무엇을 해야 3문 + 근거 [n] ──
   h += _issueCardOpen() +
@@ -10902,6 +10916,8 @@ async function showIssueDetail(issueId) {
     '</div>' +
     '<div id="issue-impact-box">' + _issueImpactHtml(i, all) + '</div>' +
   _issueCardClose();
+  issuePane.impact = h;
+  h = '';
 
   // ── 과거 유사 사례 카드 — 60일 뉴스로는 볼 수 없는 옛 사건. 세션 웹리서치로 KB에 적재한 문서. ──
   if (cases.length) {
@@ -10914,11 +10930,59 @@ async function showIssueDetail(issueId) {
             (admin ? ' <span onclick="event.stopPropagation();unlinkIssueItem(' + l.id + ')" title="연결 해제" style="cursor:pointer">✕</span>' : '') + '</div>' +
         '</div>';
       }).join('') + '</div>' + _issueCardClose();
+    issuePane.cases = h;
   }
 
+  // ── 탭 바 + 패널 — 결론(영향 요약)이 먼저, 0건 칸은 탭째 숨긴다 ──
+  var tabs = [
+    { key:'impact',   label:'영향 요약' },
+    { key:'timeline', label:'경과',       n: links.length },
+    { key:'laws',     label:'관련 법령',  n: lawCount },
+    { key:'stake',    label:'이해관계자', n: stakeholders.length },
+    { key:'cases',    label:'과거 사례',  n: cases.length }
+  ].filter(function(t) { return issuePane[t.key]; });
+  // 다른 이슈(또는 목록에서 새로 연 이슈)는 영향 요약부터 — 요약이 아직 없으면 빈 안내 대신 경과부터.
+  if (_issueTabFor !== i.id || !issuePane[_issueTab]) {
+    _issueTab = (i.impact_summary && i.impact_summary.what) ? 'impact' : 'timeline';
+  }
+  _issueTabFor = i.id;
+  h = hTop +
+    '<div id="issue-tabs" class="issue-tabs" role="tablist">' +
+      tabs.map(function(t) {
+        var on = t.key === _issueTab;
+        return '<button class="guide-chip' + (on ? ' active' : '') + '" role="tab" aria-selected="' + on + '" data-itab-btn="' + t.key + '" ' +
+          'onclick="switchIssueTab(\'' + t.key + '\')">' + escHtml(t.label) + (t.n ? '<span>' + t.n + '</span>' : '') + '</button>';
+      }).join('') +
+    '</div>' +
+    '<div id="issue-tab-panes">' +
+      tabs.map(function(t) {
+        return '<div role="tabpanel" data-itab="' + t.key + '"' + (t.key === _issueTab ? '' : ' style="display:none"') + '>' + issuePane[t.key] + '</div>';
+      }).join('') +
+    '</div>';
 
   var el = document.getElementById('issuemap-body');
   if (el) { el.innerHTML = h; _issueScrollTop(el); }
+}
+
+// 이슈 상세 탭 전환 — 다시 그리지 않고 표시만 바꾼다.
+// 연대기를 내려 읽다가 탭을 누르면 새 칸의 처음이 붙박이 탭 바로 아래에 오게 되감는다
+// (탭 바 위의 관계도까지 올리면 새 칸이 화면 밖에 남는다). 아직 탭 위쪽을 보고 있으면 그대로 둔다.
+function switchIssueTab(tab) {
+  _issueTab = tab;
+  document.querySelectorAll('#issue-tab-panes [data-itab]').forEach(function(p) {
+    p.style.display = p.getAttribute('data-itab') === tab ? '' : 'none';
+  });
+  document.querySelectorAll('#issue-tabs [data-itab-btn]').forEach(function(b) {
+    var on = b.getAttribute('data-itab-btn') === tab;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-selected', on ? 'true' : 'false');
+  });
+  var bar = document.getElementById('issue-tabs'), panes = document.getElementById('issue-tab-panes');
+  var sc = bar && bar.closest ? bar.closest('.content') : null;
+  if (!bar || !panes || !sc) return;
+  var gap = parseFloat(getComputedStyle(bar).marginBottom) || 0;
+  var over = bar.getBoundingClientRect().bottom + gap - panes.getBoundingClientRect().top;
+  if (over > 0) sc.scrollTop -= over;
 }
 
 async function setIssueStage(issueId, stage) {

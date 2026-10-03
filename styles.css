@@ -490,6 +490,17 @@ mark.kb-hit { background: rgba(245, 197, 24, .38); color: inherit; border-radius
 @media (max-width: 768px) {
   .settings-tabs { top: -14px; margin: -14px -14px 10px; padding: 10px 14px 8px; }   /* 모바일 .content 여백 14px */
 }
+/* 이슈 상세 탭(2026-10-03) — 설정 탭과 같은 칩·같은 붙박이. 관계도 아래 화면 중간에 있으므로 위쪽 음수 여백은 없고,
+   붙었을 때 .content 여백까지 덮도록 top과 좌우만 음수. 전환은 app.js switchIssueTab */
+.issue-tabs {
+  display: flex; flex-wrap: wrap; gap: 6px; position: sticky; top: -20px; z-index: 5;
+  margin: 0 -20px 12px; padding: 10px 20px;
+  background: var(--bg-primary); border-bottom: 0.5px solid var(--border-light);
+}
+.issue-tabs .guide-chip { font-size: 12px; padding: 5px 13px; }
+@media (max-width: 768px) {
+  .issue-tabs { top: -14px; margin: 0 -14px 10px; padding: 8px 14px; }
+}
 
 /* 구획 머리(중앙전파관리소 업무안내 · 2단 / 법령 요약 · 3단) */
 .guide-sec {
