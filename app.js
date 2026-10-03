@@ -14737,7 +14737,7 @@ async function lawmapVerifyRelation(rel) {
 }
 function lawmapSkipNote(skipped) {
   if (!skipped || !skipped.length) return '';
-  return ' · <span style="color:#b45309">조문 미확인으로 제외 ' + skipped.length + '건: ' +
+  return ' · <span style="color:#b45309">저장 제외 ' + skipped.length + '건: ' +
     skipped.map(function(s) { return lmEsc(s.law) + '(' + lmEsc(s.reason) + ')'; }).join(', ') + '</span>';
 }
 
@@ -14746,9 +14746,11 @@ function lawmapSkipNote(skipped) {
 async function saveLawmapData(data, src) {
   if (!sb || !data || !data.topic || !Array.isArray(data.relations)) return {};
   src = src || 'ai';
+  // 기존 노드는 이름 길이와 무관하게 찾는다 — 60자 상한은 새로 만들 때만(긴 협정·고시 노드가 이미 있으면 승인 시 선이 소리 없이 빠지던 것, #273-보론3)
+  var LAWMAP_NODE_NAME_MAX = 60;
   async function getOrCreateNode(name, type, desc) {
     name = String(name || '').trim();
-    if (!name || name.length > 60) return null;
+    if (!name) return null;
     var ex = await sb.from('law_graph_nodes').select('id,description').eq('name', name).maybeSingle();
     if (ex.data && ex.data.id) {
       if (desc && !ex.data.description) {
@@ -14756,7 +14758,8 @@ async function saveLawmapData(data, src) {
       }
       return ex.data.id;
     }
-    var ins = await sb.from('law_graph_nodes').insert({ name: name, node_type: type, description: desc || null, source: src }).select('id').single();
+    if (name.length > LAWMAP_NODE_NAME_MAX) return null;
+    var ins =await sb.from('law_graph_nodes').insert({ name: name, node_type: type, description: desc || null, source: src }).select('id').single();
     if (ins.error) {
       // unique 충돌(동시 생성) 시 재조회
       var again = await sb.from('law_graph_nodes').select('id').eq('name', name).maybeSingle();
@@ -14786,7 +14789,11 @@ async function saveLawmapData(data, src) {
     var rel = verified[i];
     var t = validTypes[rel.type] ? rel.type : guessLawNodeType(String(rel.law));
     var lawId = await getOrCreateNode(rel.law, t, rel.law_desc || null);
-    if (!lawId || lawId === topicId) continue;
+    if (!lawId) {
+      skipped.push({ law: rel.law, reason: String(rel.law).trim().length > LAWMAP_NODE_NAME_MAX ? '노드 이름 60자 초과(신규 생성 불가)' : '노드 저장 실패' });
+      continue;
+    }
+    if (lawId === topicId) continue;
     var desc = (rel.relation || '관련') + (rel.basis ? ' (' + rel.basis + ')' : '') + (rel._tag ? ' ' + rel._tag : '');
     var exE = await sb.from('law_graph_edges').select('id,weight').eq('source_id', topicId).eq('target_id', lawId).eq('relation_type', '근거').maybeSingle();
     if (exE.data && exE.data.id) {
