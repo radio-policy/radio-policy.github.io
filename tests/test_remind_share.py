@@ -40,12 +40,19 @@ class EventShare(unittest.TestCase):
         self.assertEqual(crawler._event_share_fn([], lambda r: True)('a b c', 'd'), (0, 0))
 
 
-def _core(items, prior_title, age_h, remind_share, group_fn=None):
-    """키워드 경로 리마인드 상황 — 기보도 1건이 age_h시간 전 대표."""
+def _same(new, old):
+    """재보도 대조 가짜 — 새 기사마다 후보 첫 기사(= 키워드로 걸린 사건의 대표, T18이 맨 앞에 넣는다)와 같은 소식."""
+    return [0] * len(new)
+
+
+def _core(items, prior_title, age_h, remind_share, group_fn=None, match_fn=_same):
+    """키워드 일치 상황 — 기보도 1건이 age_h시간 전 대표. T18(2026-09-30)부터 대표가 18시간을 넘으면 ①은 🔁를 정하지 않고
+    ①-2(match_fn)에 넘긴다 — 🔁와 보류 문턱은 ①-2가 '같음'이라고 한 기사에만 붙는다(기본 가짜 = 같음)."""
     from news_dedup import extract_keywords
     prior = [{'title': prior_title, 'kw': extract_keywords(prior_title)}]
     prior_at = {prior_title: (datetime.now(KST) - timedelta(hours=age_h)).isoformat()}
-    return crawler._suppress_core(items, prior, prior_at, {}, group_fn, log=None, remind_share=remind_share)
+    return crawler._suppress_core(items, prior, prior_at, {}, group_fn, log=None, remind_share=remind_share,
+                                  match_fn=match_fn)
 
 
 class RemindGate(unittest.TestCase):
@@ -84,11 +91,28 @@ class RemindGate(unittest.TestCase):
         self.assertEqual(len(_core([{'title': self.NEW, 'url': 'n'}], self.OLD, 30, lambda a, b: (0, 0))[0]), 1)
 
     def test_fresh_followup_still_suppressed_not_reminded(self):
-        # 대표가 24시간 안이면 문턱과 무관하게 종전대로 억제
-        reps, sup, rem, _m = _core([{'title': self.NEW, 'url': 'n'}], self.OLD, 5, lambda a, b: (9, 10))
+        # 대표가 18시간 안이면 문턱·대조와 무관하게 종전대로 키워드 억제(①-2는 부르지도 않는다)
+        calls = []
+        reps, sup, rem, _m = _core([{'title': self.NEW, 'url': 'n'}], self.OLD, 5, lambda a, b: (9, 10),
+                                   match_fn=lambda n, o: calls.append(1) or [0])
         self.assertEqual(reps, [])
         self.assertEqual(rem, [])
         self.assertFalse(sup[0]['shared_keywords'].startswith('['))
+        self.assertEqual(calls, [])
+
+    def test_without_match_no_reminder_and_no_gate(self):
+        """T18: ①-2를 못 쓰는 실행(match_fn None)이면 넘긴 기사는 대조 없이 알림 — 🔁도 보류 문턱도 없다(운영자 결정 2026-09-30)."""
+        for share in (lambda a, b: (30, 170), lambda a, b: (9, 10), None):
+            reps, sup, rem, _m = _core([{'title': self.NEW, 'url': 'n'}], self.OLD, 30, share, match_fn=None)
+            self.assertEqual(([r['title'] for r in reps], sup, rem), ([self.NEW], [], []))
+            self.assertNotIn('_remind', reps[0])
+
+    def test_not_same_is_plain_alert_even_with_low_share(self):
+        """①-2가 '다름'이라고 한 기사는 표시 없는 새 알림 — 보류 문턱은 '같음'에만 걸린다."""
+        reps, sup, rem, _m = _core([{'title': self.NEW, 'url': 'n'}], self.OLD, 30, lambda a, b: (30, 170),
+                                   match_fn=lambda n, o: [None] * len(n))
+        self.assertEqual(([r['title'] for r in reps], sup, rem), ([self.NEW], [], []))
+        self.assertNotIn('_remind', reps[0])
 
     def test_semantic_path_gate(self):
         # 키워드 3개 미만이라 ①은 못 잡고 ①-2 의미 판정이 기보도와 묶는 경우에도 문턱이 걸린다
