@@ -14513,6 +14513,8 @@ async function loadLawmapProposals(show) {
   if (!panel || !sb || !isAdminUser()) return;
   if (show) panel.style.display = '';
   panel.innerHTML = '<div style="font-size:12px;color:var(--text-secondary);padding:10px">검토 대기 제안을 불러오는 중…</div>';
+  // 카드 머리의 「기존 주제 · 선 N개」 표시는 관계도 전체 노드·선으로 정한다 — 아직 안 받았으면 먼저 받는다(실패해도 표시만 빠짐)
+  if (!_lawMapLoaded) { try { await loadLawMap(); } catch(e) {} }
   var r = await sb.from('lawmap_proposals').select('*').eq('status', 'pending').order('created_at', { ascending: false }).limit(50);
   if (r.error) { panel.innerHTML = '<div style="font-size:12px;color:#c0392b;padding:10px">불러오기 실패: ' + lmEsc(r.error.message) + '</div>'; return; }
   _lawmapProposals = r.data || [];
@@ -14521,13 +14523,36 @@ async function loadLawmapProposals(show) {
   panel.innerHTML = _lawmapProposals.map(_lawmapProposalCardHtml).join('');
 }
 
-var LAWMAP_ORIGIN_LABEL = { advisory: 'AI 자문 답변', generate: 'AI로 관계도 생성', enrich: 'AI 보강', request: '추가 요청' };
+var LAWMAP_ORIGIN_LABEL = { advisory: 'AI 자문 답변', generate: 'AI로 관계도 생성', enrich: 'AI 보강', request: '추가 요청', review: '관계도 검토' };
 
 function _lawmapGateBadge(g) {
   if (!g) return '<span style="font-size:10px;color:var(--text-muted)">미검사</span>';
   if (g.ok && !g.tag) return '<span style="font-size:10px;color:#15803d;font-weight:600">조문 확인 ✓</span>';
   if (g.ok && g.tag) return '<span style="font-size:10px;color:#b45309;font-weight:600" title="' + lmEsc(g.reason) + '">KB 미보유 — 법제처 확인 필요</span>';
   return '<span style="font-size:10px;color:#b91c1c;font-weight:600">' + lmEsc(g.reason || '조문 미확인') + '</span>';
+}
+
+/** 제안 주제가 이미 있는 주제인지 — 승인(saveLawmapData)이 이름 그대로 같은 주제 노드를 찾으므로 같은 기준(앞뒤 공백만 무시).
+ *  관계도 데이터를 아직 못 받았으면 빈 문자열(표시 생략). */
+function _lawmapProposalTopicBadge(p, rels) {
+  if (!_lawMapLoaded || !_lawMapNodes.length) return '';
+  var name = String(p.topic || '').trim();
+  var t = _lawMapNodes.find(function(n) { return n.name === name && n.node_type === 'topic'; });
+  var sty = 'font-size:10px;font-weight:700;padding:0 6px;border-radius:4px;';
+  if (!t) {
+    return '<span title="승인하면 이 이름으로 주제가 새로 만들어집니다" style="' + sty + 'color:#b45309;border:1px solid #b45309">새 주제</span>';
+  }
+  var linked = {};
+  _lawMapEdges.forEach(function(e) {
+    if (e.source_id === t.id) linked[e.target_id] = 1;
+    else if (e.target_id === t.id) linked[e.source_id] = 1;
+  });
+  var have = Object.keys(linked).length;
+  var newN = rels.filter(function(r) {
+    var ln = _lawMapNodes.find(function(n) { return n.name === String(r.law || '').trim() && n.node_type !== 'topic'; });
+    return !(ln && linked[ln.id]);
+  }).length;
+  return '<span title="이미 있는 주제에 선을 더하는 제안입니다 — 승인해도 주제는 새로 생기지 않습니다(주제 칸 글자를 바꾸면 새 주제가 됩니다)" style="' + sty + 'color:#15803d;border:1px solid #15803d">기존 주제 · 선 ' + have + '개 + 새 선 ' + newN + '개</span>';
 }
 
 function _lawmapProposalCardHtml(p) {
@@ -14555,6 +14580,7 @@ function _lawmapProposalCardHtml(p) {
   return '<div class="card" id="lmp-card-' + p.id + '" style="cursor:default;padding:12px 14px;margin-bottom:10px">' +
     '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">' +
       '<span style="font-size:10px;font-weight:700;color:#6366f1;border:1px solid #6366f1;padding:0 6px;border-radius:4px">' + lmEsc(LAWMAP_ORIGIN_LABEL[p.origin] || p.origin) + '</span>' +
+      _lawmapProposalTopicBadge(p, rels) +
       '<span style="font-size:11px;color:var(--text-muted)">' + lmEsc(when) + ' · ' + lmEsc(p.requester || '') + '</span>' +
       '<span style="margin-left:auto;font-size:11px;color:var(--text-muted)">관계 ' + rels.length + '건 · 조문 확인 ' + gate.filter(function(g) { return g && g.ok && !g.tag; }).length + '건</span>' +
     '</div>' +
