@@ -600,3 +600,27 @@ div.vis-tooltip { white-space: pre-wrap; max-width: 460px; line-height: 1.5; fon
   .brief-link { text-decoration-color: #8b82e8; }
   .brief-link:hover, .brief-link:focus-visible { color: #a79ff0; }
 }
+
+/* 이슈맵 목록 카드의 미리보기 관계도 (2026-10-03) — 이슈에서 관련법·이해관계자·관련 기사 세 갈래.
+   이름이 길어 SVG 대신 가지 모양 HTML(칩은 줄을 넘겨 감싸고, 긴 이름은 말줄임 + title로 전문). */
+.iss-tree { margin: 8px 0 6px 6px; }
+.iss-row { position: relative; display: flex; gap: 8px; align-items: flex-start; padding: 3px 0 3px 16px; min-width: 0; }
+.iss-row::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; border-left: 1.5px solid var(--border-mid); }
+.iss-row:first-child::before { top: 4px; }
+.iss-row:last-child::before { bottom: auto; height: 14px; }
+.iss-row::after { content: ""; position: absolute; left: 0; top: 13px; width: 11px; border-top: 1.5px solid var(--border-mid); }
+.iss-lb { flex: 0 0 74px; font-size: 11px; color: var(--text-secondary); padding-top: 3px; white-space: nowrap; }
+.iss-chips { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; flex: 1; }
+.iss-chip { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; min-width: 0; font-size: 11px; line-height: 1.5; padding: 2px 8px; border-radius: 6px; }
+.iss-chip-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.iss-chip-st { flex: 0 0 auto; font-size: 10px; font-weight: 600; opacity: .85; }
+.iss-chip-law { background: rgba(46,160,96,0.14); color: #1f7a48; }
+.iss-chip-bill { background: rgba(91,127,245,0.14); color: #3f5fd0; }
+.iss-chip-sh { background: var(--bg-primary); color: var(--text-primary); box-shadow: inset 0 0 0 0.5px var(--border-mid); }
+.iss-more { font-size: 11px; color: var(--text-secondary); padding: 2px 2px; white-space: nowrap; }
+.iss-news { font-size: 11.5px; color: var(--text-secondary); padding-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1; }
+.iss-desc { font-size: 11px; color: var(--text-secondary); line-height: 1.6; margin-top: 2px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+@media (prefers-color-scheme: dark) {
+  .iss-chip-law { background: rgba(46,160,96,0.20); color: #6fd39b; }
+  .iss-chip-bill { background: rgba(91,127,245,0.22); color: #a3b6ff; }
+}

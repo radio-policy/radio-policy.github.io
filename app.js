@@ -10300,6 +10300,13 @@ function _issueIsAdmin() { return typeof isAdminUser === 'function' && isAdminUs
 function _issueDefPublic(def) {
   var t = String(def || '').trim();
   if (!t || _issueIsAdmin()) return t;
+  return _issueDefHead(t);
+}
+
+// 정의문에서 판정 기준 앞부분만 — 목록 카드는 관리자에게도 이것만 두 줄로 보인다(전문은 상세 화면).
+function _issueDefHead(def) {
+  var t = String(def || '').trim();
+  if (!t) return t;
   var marks = ['해당:', '해당 :', '해당없음', '해당 없음', '보도만 해당', '기사만 해당', '만 해당하며', '만 해당한다'];
   var cut = -1;
   marks.forEach(function(m) {
@@ -10474,21 +10481,136 @@ function setIssueFilter(stage, category) {
 function _issueCardHtml(i) {
   var links = i._links || [];
   var hot   = _issueHotCount(i);
-  var nLaw  = links.filter(function(l) { return l.item_type === 'law' || l.item_type === 'diff'; }).length;
-  var nCase = links.filter(function(l) { return l.item_type === 'kb_case'; }).length;
   var last  = (i.last_activity_at || '').slice(5, 10).replace('-', '/');
+  var desc  = _issueDefHead(i.definition);
   return '<div onclick="showIssueDetail(' + i.id + ')" style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius-md);padding:12px 14px;cursor:pointer">' +
     '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;flex-wrap:wrap">' +
       _issueStageBadge(i.stage, i.dormant) +
       (i.category ? '<span style="font-size:11px;color:var(--text-tertiary)">' + escHtml(i.category) + '</span>' : '') +
       (hot >= 3 ? '<span style="margin-left:auto;font-size:11px;color:#ef4444;white-space:nowrap">🔥 7일 ' + hot + '건</span>' : '') +
     '</div>' +
-    '<div style="font-size:13px;font-weight:600;color:var(--text-primary);line-height:1.5;margin-bottom:4px">' + escHtml(i.title) + '</div>' +
-    (_issueDefPublic(i.definition) ? '<div style="font-size:11px;color:var(--text-secondary);line-height:1.6;margin-bottom:8px">' + escHtml(_issueDefPublic(i.definition)) + '</div>' : '') +
-    '<div style="font-size:11px;color:var(--text-tertiary)">연결 ' + links.length + '건' +
-      (nLaw ? ' · 법령 ' + nLaw : '') + (nCase ? ' · 유사사례 ' + nCase : '') +
+    '<div style="font-size:13px;font-weight:600;color:var(--text-primary);line-height:1.5;margin-bottom:2px">' + escHtml(i.title) + '</div>' +
+    _issueCardTree(links) +
+    (desc ? '<div class="iss-desc">' + escHtml(desc) + '</div>' : '') +
+    '<div style="font-size:11px;color:var(--text-tertiary);margin-top:6px">연결 ' + links.length + '건' +
       (last ? ' · 최근 ' + last : '') + '</div>' +
   '</div>';
+}
+
+// ── 목록 카드의 미리보기 관계도 (2026-10-03 운영자 요청) ──
+// 이슈에서 세 갈래로 뻗는다: 관련법 / 이해관계자 / 관련 기사. 상세의 renderIssueMiniMap처럼 종류별 묶음
+// ("언론기사 573건")으로 그리면 거의 모든 이슈의 구성이 같아 카드 28장이 같은 그림이 된다 — 카드는
+// 이름(법령 약칭·기관·최신 기사 제목)을 보여 이슈끼리 구별되게 한다. 이미 받은 _links만 쓴다(추가 조회·AI 0).
+// 둥근 그림(SVG) 대신 가지 모양 HTML인 이유: 법령·기관 이름이 길어 SVG 칸에선 잘리고, HTML은 줄을 넘겨 감싼다.
+var ISSUE_LAW_SHORT = [
+  ['정보통신망 이용촉진 및 정보보호 등에 관한 법률', '정보통신망법'],
+  ['전기통신금융사기 피해 방지 및 피해금 환급에 관한 특별법', '통신사기피해환급법'],
+  ['인공지능 발전과 신뢰 기반 조성 등에 관한 기본법', 'AI 기본법'],
+  ['인공지능 데이터센터 산업 진흥에 관한 특별법', 'AIDC 특별법'],
+  ['표시·광고의 공정화에 관한 법률', '표시광고법'],
+  ['독점규제 및 공정거래에 관한 법률', '공정거래법'],
+  ['이동통신단말장치 유통구조 개선에 관한 법률', '단통법'],
+  ['위치정보의 보호 및 이용 등에 관한 법률', '위치정보법']
+];
+var ISSUE_ORG_SHORT = [
+  ['국회 과학기술정보방송통신위원회', '국회 과방위'],
+  ['과학기술정보통신부', '과기정통부'],
+  ['개인정보보호위원회', '개인정보위'],
+  ['방송미디어통신위원회', '방미통위']
+];
+
+function _issueByLinkId(a, b) { return Number(a.id) - Number(b.id); }
+
+// 법령·DIFF 링크 하나 → { name: 약칭(시행령 등 꼬리 유지), st: { rank, label } | null }.
+// 국회 개정안과 그 조문 대비 DIFF는 null — 관련법 줄에서 「국회 개정안 N건」으로 따로 센다.
+// 상태는 날짜가 이긴다: 링크 제목의 (pending) 표식은 시행일이 지나도 그대로 남는다(#2 실측 — 10-01 시행분이 pending).
+function _issueLawItem(l, today, recentCut) {
+  var t = String(l.title || l.item_id || '');
+  if (l.item_type === 'bill' || /일부개정법률안|의원안|개정안 조문 대비/.test(t)) return null;
+  var name = t.replace(/\s*[(（].*$/, '').replace(/\s*[—–].*$/, '')
+    .replace(/\s*제\s?\d+\s?조.*$/, '').replace(/\s*개정안?\s*$/, '').trim();
+  for (var k = 0; k < ISSUE_LAW_SHORT.length; k++) {
+    if (name.indexOf(ISSUE_LAW_SHORT[k][0]) === 0) { name = ISSUE_LAW_SHORT[k][1] + name.slice(ISSUE_LAW_SHORT[k][0].length); break; }
+  }
+  var st = null;
+  if (/proposed/.test(t)) st = { rank: 2, label: '개정 추진' };
+  else if (!/replaced/.test(t)) {
+    var m = t.match(/(\d{4}-\d{2}-\d{2})\s*시행/);
+    var d = m ? m[1] : (l.item_type === 'diff' && /pending|promoted/.test(t) ? String(l.item_date || '') : '');
+    if (d) {
+      if (d > today) st = { rank: 3, label: '시행 예정' };
+      else if (d >= recentCut) st = { rank: 4, label: '최근 시행' };
+    } else if (/pending/.test(t)) st = { rank: 3, label: '시행 예정' };
+  }
+  return { name: name, st: st };
+}
+
+// 이해관계자 이름 — 괄호 설명은 떼되, 사람 이름처럼 짧으면(3자 이하) 직함이 정보라 남긴다.
+function _issueStakeLabel(t) {
+  var s = String(t || '').trim();
+  var base = s.replace(/\s*[(（].*$/, '').trim();
+  s = base.length >= 4 ? base : s.replace(/\s+([(（])/, '$1');
+  ISSUE_ORG_SHORT.forEach(function(p) { s = s.split(p[0]).join(p[1]); });
+  return s;
+}
+
+function _issueTreeRow(icon, label, body) {
+  return '<div class="iss-row"><span class="iss-lb"><i class="ti ' + icon + '"></i> ' + escHtml(label) + '</span>' +
+    '<span class="iss-chips">' + body + '</span></div>';
+}
+
+function _issueCardTree(links) {
+  var today = _todayKstStr();
+  var recentCut = new Date(Date.now() + 9 * 3600000 - 60 * 86400000).toISOString().slice(0, 10);
+  var byId = (links || []).slice().sort(_issueByLinkId);   // 연결 순서 = 큐레이션 순서(중요한 것이 앞)
+  var rows = [];
+
+  // 관련법 — 같은 법은 칩 하나로 합치고(법령·DIFF 여러 건), 지금 움직이는 법(상태 있음)을 앞으로
+  var groups = [], byName = {}, bills = 0;
+  byId.forEach(function(l) {
+    if (l.item_type === 'bill') { bills++; return; }
+    if (l.item_type !== 'law' && l.item_type !== 'diff') return;
+    var it = _issueLawItem(l, today, recentCut);
+    if (!it || !it.name) return;
+    var g = byName[it.name];
+    if (!g) { g = byName[it.name] = { name: it.name, st: null, ord: groups.length }; groups.push(g); }
+    if (it.st && (!g.st || it.st.rank > g.st.rank)) g.st = it.st;
+  });
+  // 같은 상태끼리는 법률 → 시행령 → 시행규칙 → 고시·기준 순, 그다음 연결 순서
+  var lvl = function(n) { return /시행령$/.test(n) ? 1 : /시행규칙$/.test(n) ? 2 : /(법|법률)$/.test(n) ? 0 : 3; };
+  groups.sort(function(a, b) {
+    return ((b.st ? b.st.rank : 0) - (a.st ? a.st.rank : 0)) || (lvl(a.name) - lvl(b.name)) || (a.ord - b.ord);
+  });
+  if (groups.length || bills) {
+    var lc = groups.slice(0, 3).map(function(g) {
+      return '<span class="iss-chip iss-chip-law" title="' + escHtml(g.name + (g.st ? ' · ' + g.st.label : '')) + '">' +
+        '<span class="iss-chip-t">' + escHtml(g.name) + '</span>' +
+        (g.st ? '<span class="iss-chip-st">' + g.st.label + '</span>' : '') + '</span>';
+    });
+    if (bills) lc.push('<span class="iss-chip iss-chip-bill"><span class="iss-chip-t">국회 개정안 ' + bills + '건</span></span>');
+    if (groups.length > 3) lc.push('<span class="iss-more">+' + (groups.length - 3) + '</span>');
+    rows.push(_issueTreeRow('ti-scale', '관련법', lc.join('')));
+  }
+
+  // 이해관계자 — 큐레이션 순서 앞 4개(SK텔레콤은 대개 맨 끝에 붙어 있어 자연히 빠지고, 중심인 이슈에선 앞에 있다)
+  var sh = byId.filter(function(l) { return l.item_type === 'stakeholder'; });
+  if (sh.length) {
+    var sc = sh.slice(0, 4).map(function(l) {
+      var nm = _issueStakeLabel(l.title || l.item_id);
+      return '<span class="iss-chip iss-chip-sh" title="' + escHtml(l.title || l.item_id) + '"><span class="iss-chip-t">' + escHtml(nm) + '</span></span>';
+    });
+    if (sh.length > 4) sc.push('<span class="iss-more">+' + (sh.length - 4) + '</span>');
+    rows.push(_issueTreeRow('ti-users', '이해관계자', sc.join('')));
+  }
+
+  // 관련 기사 — 건수 + 가장 최근 기사 제목 한 줄(links는 loadIssueMap에서 최신순 정렬돼 있다)
+  var news = (links || []).filter(function(l) { return l.item_type === 'news'; });
+  if (news.length) {
+    var hl = String(news[0].title || '');
+    rows.push(_issueTreeRow('ti-news', '기사 ' + news.length + '건',
+      '<span class="iss-news" title="' + escHtml(hl) + '">' + escHtml(hl) + '</span>'));
+  }
+  return rows.length ? '<div class="iss-tree">' + rows.join('') + '</div>' : '';
 }
 
 // ── 이슈 상세 ────────────────────────────────────────────────
