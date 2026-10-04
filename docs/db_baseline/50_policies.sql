@@ -343,14 +343,14 @@ create policy urgency_rule_verdicts_sel on public.urgency_rule_verdicts as PERMI
    FROM teams t
   WHERE (t.division = ( SELECT my_division() AS my_division)))))));
 
-create policy urgency_rule_verdicts_sel_anon on public.urgency_rule_verdicts as PERMISSIVE for SELECT to anon
-  using ((status = 'done'::text));
-
 create policy urgency_rules_ins on public.urgency_rules as PERMISSIVE for INSERT to authenticated
   with check ((( SELECT is_admin() AS is_admin) OR ((team_id IS NOT NULL) AND ( SELECT is_approved_user() AS is_approved_user) AND (team_id = ( SELECT my_team() AS my_team)))));
 
-create policy urgency_rules_sel on public.urgency_rules as PERMISSIVE for SELECT to anon, authenticated
+create policy urgency_rules_sel on public.urgency_rules as PERMISSIVE for SELECT to authenticated
   using (true);
+
+create policy urgency_rules_sel_anon on public.urgency_rules as PERMISSIVE for SELECT to anon
+  using ((team_id IS NULL));
 
 create policy urgency_rules_upd on public.urgency_rules as PERMISSIVE for UPDATE to authenticated
   using ((( SELECT is_admin() AS is_admin) OR ((team_id IS NOT NULL) AND ( SELECT is_approved_user() AS is_approved_user) AND (team_id = ( SELECT my_team() AS my_team)))))
