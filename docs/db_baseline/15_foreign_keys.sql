@@ -30,6 +30,24 @@ alter table public.subscriber_alert_log add constraint subscriber_alert_log_news
 
 alter table public.team_criteria add constraint team_criteria_team_id_fkey FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE;
 
+alter table public.team_grading_answers add constraint team_grading_answers_item_fkey FOREIGN KEY (set_id, news_id) REFERENCES team_grading_items(set_id, news_id) ON DELETE CASCADE;
+
+alter table public.team_grading_items add constraint team_grading_items_news_id_fkey FOREIGN KEY (news_id) REFERENCES news_feed(id) ON DELETE CASCADE;
+
+alter table public.team_grading_items add constraint team_grading_items_set_id_fkey FOREIGN KEY (set_id) REFERENCES team_grading_sets(id) ON DELETE CASCADE;
+
+alter table public.team_grading_sets add constraint team_grading_sets_team_id_fkey FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE;
+
+alter table public.team_grading_trial_items add constraint team_grading_trial_items_news_id_fkey FOREIGN KEY (news_id) REFERENCES news_feed(id) ON DELETE CASCADE;
+
+alter table public.team_grading_trial_items add constraint team_grading_trial_items_trial_id_fkey FOREIGN KEY (trial_id) REFERENCES team_grading_trials(id) ON DELETE CASCADE;
+
+alter table public.team_grading_trial_verdicts add constraint team_grading_trial_verdicts_news_id_fkey FOREIGN KEY (news_id) REFERENCES news_feed(id) ON DELETE CASCADE;
+
+alter table public.team_grading_trial_verdicts add constraint team_grading_trial_verdicts_trial_id_fkey FOREIGN KEY (trial_id) REFERENCES team_grading_trials(id) ON DELETE CASCADE;
+
+alter table public.team_grading_trials add constraint team_grading_trials_set_id_fkey FOREIGN KEY (set_id) REFERENCES team_grading_sets(id) ON DELETE CASCADE;
+
 alter table public.team_urgency add constraint team_urgency_news_id_fkey FOREIGN KEY (news_id) REFERENCES news_feed(id) ON DELETE CASCADE;
 
 alter table public.team_urgency add constraint team_urgency_team_id_fkey FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE;

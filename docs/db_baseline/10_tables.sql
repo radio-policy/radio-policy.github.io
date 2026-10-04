@@ -683,8 +683,8 @@ create table if not exists public.subscriber_queue (
   audience text,
   level text,
   constraint subscriber_queue_pkey PRIMARY KEY (id),
-  constraint subscriber_queue_news_shape_check CHECK ((((topic = 'news'::text) AND (audience ~ '^(c|t:[0-9]+|d:.+)$'::text) AND (level = ANY (ARRAY['긴급'::text, '보통'::text])) AND (news_url IS NOT NULL)) OR ((topic <> 'news'::text) AND (audience IS NULL) AND (level IS NULL)))),
-  constraint subscriber_queue_topic_check CHECK ((topic = ANY (ARRAY['urgent'::text, 'assembly'::text, 'kmcc'::text, 'news'::text])))
+  constraint subscriber_queue_news_shape_check CHECK ((((topic = 'news'::text) AND (audience ~ '^(c|t:[0-9]+|d:.+)$'::text) AND (level = ANY (ARRAY['긴급'::text, '보통'::text])) AND (news_url IS NOT NULL)) OR ((topic = 'team'::text) AND (audience ~ '^t:[0-9]+$'::text) AND (level IS NULL) AND (news_url IS NULL)) OR ((topic <> ALL (ARRAY['news'::text, 'team'::text])) AND (audience IS NULL) AND (level IS NULL)))),
+  constraint subscriber_queue_topic_check CHECK ((topic = ANY (ARRAY['urgent'::text, 'assembly'::text, 'kmcc'::text, 'news'::text, 'team'::text])))
 );
 alter table public.subscriber_queue enable row level security;
 
@@ -712,10 +712,12 @@ create table if not exists public.team_criteria (
   rev integer default 1 not null,
   updated_at timestamp with time zone default now() not null,
   updated_by uuid,
+  unconverted text default ''::text not null,
   constraint team_criteria_pkey PRIMARY KEY (team_id),
   constraint team_criteria_criteria_check CHECK ((char_length(criteria) <= 500)),
   constraint team_criteria_examples_check CHECK ((char_length(examples) <= 1000)),
-  constraint team_criteria_keywords_check CHECK ((cardinality(keywords) <= 20))
+  constraint team_criteria_keywords_check CHECK ((cardinality(keywords) <= 20)),
+  constraint team_criteria_unconverted_check CHECK ((char_length(unconverted) <= 2000))
 );
 alter table public.team_criteria enable row level security;
 
@@ -733,6 +735,115 @@ create table if not exists public.team_criteria_history (
   constraint team_criteria_history_pkey PRIMARY KEY (id)
 );
 alter table public.team_criteria_history enable row level security;
+
+create table if not exists public.team_grading_answers (
+  set_id bigint not null,
+  news_id uuid not null,
+  user_id uuid default auth.uid() not null,
+  answer text not null,
+  updated_at timestamp with time zone default now() not null,
+  changed_after_lock boolean default false not null,
+  constraint team_grading_answers_pkey PRIMARY KEY (set_id, news_id, user_id),
+  constraint team_grading_answers_answer_check CHECK ((answer = ANY (ARRAY['긴급'::text, '보통'::text, '참고'::text, '모르겠음'::text])))
+);
+alter table public.team_grading_answers enable row level security;
+
+create table if not exists public.team_grading_items (
+  set_id bigint not null,
+  news_id uuid not null,
+  seq smallint not null,
+  slot text not null,
+  hit_kind_at_build text not null,
+  common_level_at_build text not null,
+  team_level_at_build text not null,
+  team_source_at_build text not null,
+  rule_id_at_build text,
+  rule_sentence_at_build boolean default false not null,
+  constraint team_grading_items_pkey PRIMARY KEY (set_id, news_id),
+  constraint team_grading_items_common_check CHECK ((common_level_at_build = ANY (ARRAY['긴급'::text, '보통'::text, '참고'::text]))),
+  constraint team_grading_items_kind_check CHECK ((hit_kind_at_build = ANY (ARRAY['rule_changed'::text, 'rule_same'::text, 'word_hit_false'::text, 'near'::text, 'unrelated'::text]))),
+  constraint team_grading_items_slot_check CHECK ((slot = ANY (ARRAY['tune'::text, 'check'::text]))),
+  constraint team_grading_items_source_check CHECK ((team_source_at_build = ANY (ARRAY['common'::text, 'rule'::text, 'human'::text, 'ai'::text]))),
+  constraint team_grading_items_team_check CHECK ((team_level_at_build = ANY (ARRAY['긴급'::text, '보통'::text, '참고'::text])))
+);
+alter table public.team_grading_items enable row level security;
+
+create table if not exists public.team_grading_sets (
+  id bigint generated always as identity not null,
+  team_id smallint not null,
+  status text default 'requested'::text not null,
+  requested_by uuid,
+  built_at timestamp with time zone,
+  pool_from timestamp with time zone,
+  pool_to timestamp with time zone,
+  pool_thin boolean default false not null,
+  noise_mismatch integer,
+  noise_compared integer,
+  seed bigint,
+  build_attempts smallint default 0 not null,
+  note text default ''::text not null,
+  created_at timestamp with time zone default now() not null,
+  closed_at timestamp with time zone,
+  constraint team_grading_sets_pkey PRIMARY KEY (id),
+  constraint team_grading_sets_status_check CHECK ((status = ANY (ARRAY['requested'::text, 'building'::text, 'open'::text, 'scored'::text, 'applied'::text, 'closed'::text, 'too_small'::text, 'no_rules'::text, 'failed'::text])))
+);
+alter table public.team_grading_sets enable row level security;
+
+create table if not exists public.team_grading_trial_items (
+  trial_id bigint not null,
+  news_id uuid not null,
+  level_pred text not null,
+  source_pred text not null,
+  rule_pred text,
+  hit_kind_pred text,
+  rule_sentence_pred boolean default false not null,
+  updated_at timestamp with time zone default now() not null,
+  constraint team_grading_trial_items_pkey PRIMARY KEY (trial_id, news_id),
+  constraint team_grading_trial_items_kind_check CHECK (((hit_kind_pred IS NULL) OR (hit_kind_pred = ANY (ARRAY['rule_changed'::text, 'rule_same'::text, 'word_hit_false'::text, 'near'::text, 'unrelated'::text])))),
+  constraint team_grading_trial_items_level_check CHECK ((level_pred = ANY (ARRAY['긴급'::text, '보통'::text, '참고'::text]))),
+  constraint team_grading_trial_items_source_check CHECK ((source_pred = ANY (ARRAY['common'::text, 'rule'::text, 'human'::text, 'ai'::text, 'cand'::text])))
+);
+alter table public.team_grading_trial_items enable row level security;
+
+create table if not exists public.team_grading_trial_verdicts (
+  trial_id bigint not null,
+  cand_idx smallint not null,
+  news_id uuid not null,
+  verdict boolean not null,
+  reason text default ''::text not null,
+  input_kind text default ''::text not null,
+  model text default ''::text not null,
+  cost_usd numeric(10,6) default 0 not null,
+  reused boolean default false not null,
+  created_at timestamp with time zone default now() not null,
+  constraint team_grading_trial_verdicts_pkey PRIMARY KEY (trial_id, cand_idx, news_id),
+  constraint team_grading_trial_verdicts_kind_check CHECK ((input_kind = ANY (ARRAY[''::text, 'body'::text, 'snippet'::text, 'title'::text])))
+);
+alter table public.team_grading_trial_verdicts enable row level security;
+
+create table if not exists public.team_grading_trials (
+  id bigint generated always as identity not null,
+  set_id bigint not null,
+  team_id smallint not null,
+  kind text default 'trial'::text not null,
+  candidates jsonb default '[]'::jsonb not null,
+  status text default 'pending'::text not null,
+  applied_rev jsonb,
+  cost_usd numeric(10,6) default 0 not null,
+  attempts smallint default 0 not null,
+  created_by uuid,
+  created_at timestamp with time zone default now() not null,
+  judged_at timestamp with time zone,
+  applied_at timestamp with time zone,
+  copied_at timestamp with time zone,
+  note text default ''::text not null,
+  constraint team_grading_trials_pkey PRIMARY KEY (id),
+  constraint team_grading_trials_applied_check CHECK (((applied_rev IS NULL) OR (jsonb_typeof(applied_rev) = 'object'::text))),
+  constraint team_grading_trials_cand_check CHECK (((jsonb_typeof(candidates) = 'array'::text) AND (jsonb_array_length(candidates) <= 20) AND (octet_length((candidates)::text) <= 40000))),
+  constraint team_grading_trials_kind_check CHECK ((kind = ANY (ARRAY['trial'::text, 'noise'::text]))),
+  constraint team_grading_trials_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'judged'::text, 'applied'::text, 'failed'::text])))
+);
+alter table public.team_grading_trials enable row level security;
 
 create table if not exists public.team_urgency (
   news_id uuid not null,
@@ -757,6 +868,7 @@ create table if not exists public.teams (
   created_at timestamp with time zone default now() not null,
   division text,
   sort_order smallint default 100 not null,
+  grader_user_id uuid,
   constraint teams_name_key UNIQUE (name),
   constraint teams_pkey PRIMARY KEY (id)
 );
@@ -812,6 +924,7 @@ create table if not exists public.telegram_subscribers (
   division text,
   news_level text default 'urgent'::text not null,
   last_normal_sent_at timestamp with time zone,
+  last_team_sent_at timestamp with time zone,
   constraint telegram_subscribers_pkey PRIMARY KEY (chat_id),
   constraint telegram_subscribers_briefing_hour_check CHECK (((briefing_hour >= 6) AND (briefing_hour <= 12))),
   constraint telegram_subscribers_days_check CHECK ((days = ANY (ARRAY['daily'::text, 'weekday'::text]))),

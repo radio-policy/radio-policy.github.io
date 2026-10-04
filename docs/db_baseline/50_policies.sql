@@ -244,11 +244,59 @@ create policy team_criteria_sel on public.team_criteria as PERMISSIVE for SELECT
   WHERE (t.division = ( SELECT my_division() AS my_division)))))));
 
 create policy team_criteria_upd on public.team_criteria as PERMISSIVE for UPDATE to authenticated
-  using (( SELECT is_admin() AS is_admin))
-  with check (( SELECT is_admin() AS is_admin));
+  using ((( SELECT is_admin() AS is_admin) OR (( SELECT is_approved_user() AS is_approved_user) AND (team_id = ( SELECT my_team() AS my_team)))))
+  with check ((( SELECT is_admin() AS is_admin) OR (( SELECT is_approved_user() AS is_approved_user) AND (team_id = ( SELECT my_team() AS my_team)))));
 
 create policy team_criteria_history_sel on public.team_criteria_history as PERMISSIVE for SELECT to authenticated
-  using (( SELECT is_admin() AS is_admin));
+  using ((( SELECT is_admin() AS is_admin) OR (( SELECT is_approved_user() AS is_approved_user) AND (team_id = ( SELECT my_team() AS my_team))) OR (( SELECT is_approved_user() AS is_approved_user) AND (( SELECT my_division() AS my_division) IS NOT NULL) AND (team_id IN ( SELECT t.id
+   FROM teams t
+  WHERE (t.division = ( SELECT my_division() AS my_division)))))));
+
+create policy team_grading_answers_ins on public.team_grading_answers as PERMISSIVE for INSERT to authenticated
+  with check (((user_id = auth.uid()) AND grading_answer_open(set_id)));
+
+create policy team_grading_answers_sel on public.team_grading_answers as PERMISSIVE for SELECT to authenticated
+  using (grading_team_visible(grading_set_team(set_id)));
+
+create policy team_grading_answers_upd on public.team_grading_answers as PERMISSIVE for UPDATE to authenticated
+  using ((user_id = auth.uid()))
+  with check (((user_id = auth.uid()) AND grading_answer_open(set_id)));
+
+create policy team_grading_items_sel on public.team_grading_items as PERMISSIVE for SELECT to authenticated
+  using (grading_team_visible(grading_set_team(set_id)));
+
+create policy team_grading_sets_ins on public.team_grading_sets as PERMISSIVE for INSERT to authenticated
+  with check ((( SELECT is_admin() AS is_admin) OR (( SELECT is_approved_user() AS is_approved_user) AND (team_id = ( SELECT my_team() AS my_team)))));
+
+create policy team_grading_sets_sel on public.team_grading_sets as PERMISSIVE for SELECT to authenticated
+  using (grading_team_visible(team_id));
+
+create policy team_grading_sets_upd on public.team_grading_sets as PERMISSIVE for UPDATE to authenticated
+  using ((( SELECT is_approved_user() AS is_approved_user) AND (team_id = ( SELECT my_team() AS my_team))))
+  with check ((( SELECT is_approved_user() AS is_approved_user) AND (team_id = ( SELECT my_team() AS my_team))));
+
+create policy team_grading_trial_items_ins on public.team_grading_trial_items as PERMISSIVE for INSERT to authenticated
+  with check (grading_trial_item_ok(trial_id, news_id));
+
+create policy team_grading_trial_items_sel on public.team_grading_trial_items as PERMISSIVE for SELECT to authenticated
+  using (grading_team_visible(grading_trial_team(trial_id)));
+
+create policy team_grading_trial_items_upd on public.team_grading_trial_items as PERMISSIVE for UPDATE to authenticated
+  using (grading_trial_item_ok(trial_id, news_id))
+  with check (grading_trial_item_ok(trial_id, news_id));
+
+create policy team_grading_trial_verdicts_sel on public.team_grading_trial_verdicts as PERMISSIVE for SELECT to authenticated
+  using (grading_team_visible(grading_trial_team(trial_id)));
+
+create policy team_grading_trials_ins on public.team_grading_trials as PERMISSIVE for INSERT to authenticated
+  with check ((( SELECT is_approved_user() AS is_approved_user) AND (team_id = ( SELECT my_team() AS my_team)) AND (kind = 'trial'::text)));
+
+create policy team_grading_trials_sel on public.team_grading_trials as PERMISSIVE for SELECT to authenticated
+  using (grading_team_visible(team_id));
+
+create policy team_grading_trials_upd on public.team_grading_trials as PERMISSIVE for UPDATE to authenticated
+  using ((( SELECT is_approved_user() AS is_approved_user) AND (team_id = ( SELECT my_team() AS my_team))))
+  with check ((( SELECT is_approved_user() AS is_approved_user) AND (team_id = ( SELECT my_team() AS my_team))));
 
 create policy team_urgency_del on public.team_urgency as PERMISSIVE for DELETE to authenticated
   using (((source = ANY (ARRAY['human'::text, 'rule'::text])) AND (( SELECT is_admin() AS is_admin) OR (( SELECT is_approved_user() AS is_approved_user) AND (team_id = ( SELECT my_team() AS my_team))))));

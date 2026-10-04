@@ -106,6 +106,16 @@ CREATE INDEX subscriber_alert_log_news_idx ON public.subscriber_alert_log USING 
 
 CREATE INDEX subscriber_queue_created_idx ON public.subscriber_queue USING btree (created_at);
 
+CREATE INDEX team_grading_items_news_idx ON public.team_grading_items USING btree (news_id);
+
+CREATE UNIQUE INDEX team_grading_sets_active_uq ON public.team_grading_sets USING btree (team_id) WHERE (status = ANY (ARRAY['requested'::text, 'building'::text, 'open'::text, 'scored'::text]));
+
+CREATE INDEX team_grading_trial_items_news_idx ON public.team_grading_trial_items USING btree (news_id);
+
+CREATE INDEX team_grading_trial_verdicts_news_idx ON public.team_grading_trial_verdicts USING btree (news_id);
+
+CREATE INDEX team_grading_trials_set_idx ON public.team_grading_trials USING btree (set_id);
+
 CREATE INDEX team_urgency_team_idx ON public.team_urgency USING btree (team_id, news_id);
 
 CREATE INDEX tech_terms_category_idx ON public.tech_terms USING btree (category);

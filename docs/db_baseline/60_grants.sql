@@ -331,7 +331,7 @@ grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE on
 revoke all on public.team_criteria from public, anon, authenticated, service_role;
 grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE on public.team_criteria to service_role;
 grant INSERT (team_id, criteria, keywords, examples) on public.team_criteria to authenticated;
-grant SELECT (team_id, criteria, keywords, examples, rev, updated_at) on public.team_criteria to authenticated;
+grant SELECT (team_id, criteria, keywords, examples, rev, updated_at, unconverted) on public.team_criteria to authenticated;
 grant UPDATE (team_id, criteria, keywords, examples) on public.team_criteria to authenticated;
 
 revoke all on public.team_criteria_history from public, anon, authenticated, service_role;
@@ -340,6 +340,46 @@ grant SELECT (id, team_id, rev, criteria, keywords, examples, updated_at, replac
 
 revoke all on sequence public.team_criteria_history_id_seq from public, anon, authenticated, service_role;
 grant SELECT, USAGE on sequence public.team_criteria_history_id_seq to service_role;
+
+revoke all on public.team_grading_answers from public, anon, authenticated, service_role;
+grant SELECT on public.team_grading_answers to authenticated;
+grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE on public.team_grading_answers to service_role;
+grant INSERT (set_id, news_id, answer) on public.team_grading_answers to authenticated;
+grant UPDATE (set_id, news_id, answer) on public.team_grading_answers to authenticated;
+
+revoke all on public.team_grading_items from public, anon, authenticated, service_role;
+grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE on public.team_grading_items to service_role;
+grant SELECT (set_id, news_id, seq, hit_kind_at_build, common_level_at_build, team_level_at_build, team_source_at_build, rule_id_at_build, rule_sentence_at_build) on public.team_grading_items to authenticated;
+
+revoke all on public.team_grading_sets from public, anon, authenticated, service_role;
+grant SELECT on public.team_grading_sets to authenticated;
+grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE on public.team_grading_sets to service_role;
+grant INSERT (team_id) on public.team_grading_sets to authenticated;
+grant UPDATE (status) on public.team_grading_sets to authenticated;
+
+revoke all on sequence public.team_grading_sets_id_seq from public, anon, authenticated, service_role;
+grant SELECT, USAGE on sequence public.team_grading_sets_id_seq to authenticated;
+grant SELECT, USAGE on sequence public.team_grading_sets_id_seq to service_role;
+
+revoke all on public.team_grading_trial_items from public, anon, authenticated, service_role;
+grant SELECT on public.team_grading_trial_items to authenticated;
+grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE on public.team_grading_trial_items to service_role;
+grant INSERT (trial_id, news_id, level_pred, source_pred, rule_pred, hit_kind_pred, rule_sentence_pred) on public.team_grading_trial_items to authenticated;
+grant UPDATE (trial_id, news_id, level_pred, source_pred, rule_pred, hit_kind_pred, rule_sentence_pred) on public.team_grading_trial_items to authenticated;
+
+revoke all on public.team_grading_trial_verdicts from public, anon, authenticated, service_role;
+grant SELECT on public.team_grading_trial_verdicts to authenticated;
+grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE on public.team_grading_trial_verdicts to service_role;
+
+revoke all on public.team_grading_trials from public, anon, authenticated, service_role;
+grant SELECT on public.team_grading_trials to authenticated;
+grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE on public.team_grading_trials to service_role;
+grant INSERT (set_id, team_id, candidates) on public.team_grading_trials to authenticated;
+grant UPDATE (status, applied_rev) on public.team_grading_trials to authenticated;
+
+revoke all on sequence public.team_grading_trials_id_seq from public, anon, authenticated, service_role;
+grant SELECT, USAGE on sequence public.team_grading_trials_id_seq to authenticated;
+grant SELECT, USAGE on sequence public.team_grading_trials_id_seq to service_role;
 
 revoke all on public.team_urgency from public, anon, authenticated, service_role;
 grant DELETE, INSERT, SELECT, UPDATE on public.team_urgency to authenticated;
@@ -517,6 +557,32 @@ grant EXECUTE on function public.get_my_quota() to service_role;
 
 revoke all on function public.gh_api_get(p_path text) from public, anon, authenticated, service_role;
 grant EXECUTE on function public.gh_api_get(p_path text) to service_role;
+
+revoke all on function public.grading_answer_open(p_set bigint) from public, anon, authenticated, service_role;
+grant EXECUTE on function public.grading_answer_open(p_set bigint) to authenticated;
+grant EXECUTE on function public.grading_answer_open(p_set bigint) to service_role;
+
+revoke all on function public.grading_branch(p_ans text, p_team text, p_common text, p_kind text, p_sentence boolean, p_source text) from public, anon, authenticated, service_role;
+grant EXECUTE on function public.grading_branch(p_ans text, p_team text, p_common text, p_kind text, p_sentence boolean, p_source text) to service_role;
+
+revoke all on function public.grading_level_rank(p text) from public, anon, authenticated, service_role;
+grant EXECUTE on function public.grading_level_rank(p text) to service_role;
+
+revoke all on function public.grading_set_team(p_set bigint) from public, anon, authenticated, service_role;
+grant EXECUTE on function public.grading_set_team(p_set bigint) to authenticated;
+grant EXECUTE on function public.grading_set_team(p_set bigint) to service_role;
+
+revoke all on function public.grading_team_visible(p_team smallint) from public, anon, authenticated, service_role;
+grant EXECUTE on function public.grading_team_visible(p_team smallint) to authenticated;
+grant EXECUTE on function public.grading_team_visible(p_team smallint) to service_role;
+
+revoke all on function public.grading_trial_item_ok(p_trial bigint, p_news uuid) from public, anon, authenticated, service_role;
+grant EXECUTE on function public.grading_trial_item_ok(p_trial bigint, p_news uuid) to authenticated;
+grant EXECUTE on function public.grading_trial_item_ok(p_trial bigint, p_news uuid) to service_role;
+
+revoke all on function public.grading_trial_team(p_trial bigint) from public, anon, authenticated, service_role;
+grant EXECUTE on function public.grading_trial_team(p_trial bigint) to authenticated;
+grant EXECUTE on function public.grading_trial_team(p_trial bigint) to service_role;
 
 revoke all on function public.handle_new_user() from public, anon, authenticated, service_role;
 grant EXECUTE on function public.handle_new_user() to anon;
@@ -737,6 +803,30 @@ grant EXECUTE on function public.submit_answer_feedback(p_log_id uuid, p_rating 
 revoke all on function public.team_criteria_before() from public, anon, authenticated, service_role;
 grant EXECUTE on function public.team_criteria_before() to service_role;
 
+revoke all on function public.team_grader_uid(p_team smallint) from public, anon, authenticated, service_role;
+grant EXECUTE on function public.team_grader_uid(p_team smallint) to authenticated;
+grant EXECUTE on function public.team_grader_uid(p_team smallint) to service_role;
+
+revoke all on function public.team_grading_answers_touch() from public, anon, authenticated, service_role;
+grant EXECUTE on function public.team_grading_answers_touch() to service_role;
+
+revoke all on function public.team_grading_score(p_set bigint, p_trial bigint) from public, anon, authenticated, service_role;
+grant EXECUTE on function public.team_grading_score(p_set bigint, p_trial bigint) to authenticated;
+grant EXECUTE on function public.team_grading_score(p_set bigint, p_trial bigint) to service_role;
+
+revoke all on function public.team_grading_sets_guard() from public, anon, authenticated, service_role;
+grant EXECUTE on function public.team_grading_sets_guard() to service_role;
+
+revoke all on function public.team_grading_trial_items_touch() from public, anon, authenticated, service_role;
+grant EXECUTE on function public.team_grading_trial_items_touch() to service_role;
+
+revoke all on function public.team_grading_trials_guard() from public, anon, authenticated, service_role;
+grant EXECUTE on function public.team_grading_trials_guard() to service_role;
+
+revoke all on function public.team_rules_export(p_key text, p_since timestamp with time zone) from public, anon, authenticated, service_role;
+grant EXECUTE on function public.team_rules_export(p_key text, p_since timestamp with time zone) to anon;
+grant EXECUTE on function public.team_rules_export(p_key text, p_since timestamp with time zone) to service_role;
+
 revoke all on function public.team_urgency_export(p_key text) from public, anon, authenticated, service_role;
 grant EXECUTE on function public.team_urgency_export(p_key text) to anon;
 grant EXECUTE on function public.team_urgency_export(p_key text) to service_role;
@@ -746,6 +836,9 @@ grant EXECUTE on function public.team_urgency_touch() to anon;
 grant EXECUTE on function public.team_urgency_touch() to authenticated;
 grant EXECUTE on function public.team_urgency_touch() to public;
 grant EXECUTE on function public.team_urgency_touch() to service_role;
+
+revoke all on function public.teams_grader_check() from public, anon, authenticated, service_role;
+grant EXECUTE on function public.teams_grader_check() to service_role;
 
 revoke all on function public.trigger_admin_report() from public, anon, authenticated, service_role;
 grant EXECUTE on function public.trigger_admin_report() to service_role;

@@ -10,6 +10,7 @@ import os
 import re
 import json
 import time
+import random
 import smtplib
 from datetime import datetime, timezone, timedelta
 from email.mime.multipart import MIMEMultipart
@@ -33,6 +34,7 @@ import notify   # 텔레그램 전송 공용 유틸 (개선⑪) — 전송부만
 import urgency_rules   # 긴급도 공통 낱말 규칙 매처(#216) — 사내판·대시보드 JS와 같은 계약
 import news_known      # 뉴스 중복 대조 공용(#234) — 후보만 DB 함수로, 실패 시 전량 조회
 import retry_util      # 재시도 공용(#217) — 문장 판정 기록·팀 행 쓰기(#251)에만, Anthropic 호출에는 쓰지 않는다
+import team_grading    # 팀 채점 세트 고르기·시험 후보 정리(#277) — 순수 함수, DB·AI는 여기(crawler.py)서
 import anthropic
 
 # ── 환경변수 ────────────────────────────────────────────
@@ -2336,6 +2338,17 @@ def _sentence_body(content) -> str:
     return _ws(content)[:SENTENCE_BODY_CHARS]
 
 
+def _sentence_input(n: dict) -> dict:
+    """판정 입력 하나 — 대기 처리·되살림·팀 채점 시험·noise 시험이 **모두 이 함수로** 만든다(시험 payload = 운영 payload,
+    팀 채점 설계 §11-7 — tests/test_team_grading.py가 바이트 동일을 잠근다). n = news_feed 행(title·screen_text·summary·content).
+    title = 제목, snippet = rule_input_text(screen_text, summary)(대시보드 재적용과 같은 글), body = _sentence_body(content),
+    kind = body | snippet | title(판정 기록 input_kind)."""
+    snippet = urgency_rules.rule_input_text(n.get('screen_text'), n.get('summary')) or ''
+    body = _sentence_body(n.get('content'))
+    return {'title': n.get('title') or '', 'snippet': snippet, 'body': body,
+            'kind': 'body' if body else ('snippet' if _ws(snippet) else 'title')}
+
+
 def _rev_of(rule) -> int:
     """규칙의 지금 문장 판 — 정수가 아니면 0(urgency_rules.sentence_verdict와 같은 규칙)."""
     v = rule.get('sentence_rev', 0) if isinstance(rule, dict) else 0
@@ -2611,13 +2624,23 @@ def save_sentence_verdict_rows(inserted) -> int:
 
 
 def process_open_sentence_verdicts() -> None:
-    """매 실행(새 기사가 없어도) — ① 대기 행 판정(_process_open_sentence_rows — 이번 실행 새 기사의 대기 행 포함)
-    ② 팀별 월 비용 알림(_sentence_budget_alert). main()이 긴급 알림·구독자 큐 **뒤**, heartbeat 앞에서 부른다 — 판정이
-    느려도 알림을 늦추지 않는다. 둘 다 fail-open."""
+    """매 실행(새 기사가 없어도) — ⓪ 팀 채점 적용 복사(copy_applied_grading_trials, #277 — 대기 처리 **앞**: 브라우저 재적용이
+    넣은 같은 열쇠의 대기 행을 시험 판정으로 덮어 다시 묻지 않게) ① 대기 행 판정(_process_open_sentence_rows — 이번 실행 새
+    기사의 대기 행 포함) ② 팀 채점 세트 만들기·시험 판정(run_team_grading, #277 — 수집 경로·대시보드 요청 판정 뒤)
+    ③ 팀별 월 비용 알림(_sentence_budget_alert — 시험 비용 포함). main()이 긴급 알림·구독자 큐 **뒤**, heartbeat 앞에서
+    부른다 — 판정이 느려도 알림을 늦추지 않는다. 모두 fail-open."""
+    try:
+        copy_applied_grading_trials()
+    except Exception as e:
+        print(f'[팀 채점] 적용 복사 실패(무시 — 다음 실행에서 다시): {str(e)[:120]}')
     try:
         _process_open_sentence_rows()
     except Exception as e:
         print(f'[문장 판정] 대기 처리 실패(무시 — 대기 행은 그대로, 다음 실행에서 다시): {str(e)[:120]}')
+    try:
+        run_team_grading()
+    except Exception as e:
+        print(f'[팀 채점] 실패(무시 — 다음 실행에서 다시): {str(e)[:120]}')
     try:
         _sentence_budget_alert()
     except Exception as e:
@@ -2860,26 +2883,22 @@ def _process_open_sentence_rows() -> dict:
                                              attempts=t['attempts']), news_id=row.get('news_id')))
             st['nohit'] += 1
             continue
-        body = _sentence_body(n.get('content'))
-        if row.get('status') == 'wait_body' and not body and \
+        inp = _sentence_input(n)
+        if row.get('status') == 'wait_body' and not inp['body'] and \
                 t['age_h'] is not None and t['age_h'] < SENTENCE_WAIT_BODY_HOURS:
             st['kept'] += 1                  # 아직 본문 대기 — 재수집(lampmanH-pc 10분마다)을 기다린다
             continue
-        kind = 'body' if body else ('snippet' if _ws(snippet) else 'title')
-        jobs.append(dict(t, title=n.get('title') or '', snippet=snippet, body=body, kind=kind))
+        jobs.append(dict(t, **inp))
     revivals, revived_jobs = [], []
     for t in revive_ok:
         row = t['row']
         n = news.get(row.get('news_id'))
         if not n:
             continue
-        snippet = urgency_rules.rule_input_text(n.get('screen_text'), n.get('summary')) or ''
         # created_at = 지금 — 옛 요청 시각 그대로면 다음 실행의 3일 기한에 판정 전 failed가 된다(requested_by는 보내지 않아 보존)
         revivals.append(dict(_verdict_row(row.get('rule_id'), row.get('sentence_rev'), row.get('team_id'), 'pending',
                                           attempts=t['attempts']), news_id=row.get('news_id'), created_at=now_iso))
-        body = _sentence_body(n.get('content'))
-        kind = 'body' if body else ('snippet' if _ws(snippet) else 'title')
-        revived_jobs.append(dict(t, title=n.get('title') or '', snippet=snippet, body=body, kind=kind, revived=True))
+        revived_jobs.append(dict(t, **_sentence_input(n), revived=True))
     # 되살림은 판정 전에 먼저 저장 — 저장 못 한 것은 이번에 판정하지 않는다(stale 그대로, 다음 실행에서 다시)
     saved_rev, err = _upsert_rows('urgency_rule_verdicts', revivals, SENTENCE_CHUNK,
                                   on_conflict='rule_id,sentence_rev,news_id')
@@ -3045,12 +3064,21 @@ def _sentence_budget_config():
 
 
 def _team_month_cost(team_id, since_iso: str) -> float:
-    """그 팀 판정 기록 중 judged_at ≥ since의 cost_usd 합계 — PostgREST 1,000행 상한 때문에 PK 정렬로 페이지를 넘긴다(#233)."""
+    """그 팀 판정 기록 중 judged_at ≥ since의 cost_usd 합계 + 팀 채점 시험 비용(team_grading_trials.cost_usd, judged_at ≥ since,
+    #277 — 적용 복사 행은 비용 0이라 두 번 세지 않는다). PostgREST 1,000행 상한 때문에 유일 열 정렬로 페이지를 넘긴다(#233)."""
     total, lo, page = 0.0, 0, 1000
     while True:
         data = sb.table('urgency_rule_verdicts').select('cost_usd').eq('team_id', team_id) \
             .gte('judged_at', since_iso).order('rule_id').order('sentence_rev').order('news_id') \
             .range(lo, lo + page - 1).execute().data or []
+        total += sum(float(r.get('cost_usd') or 0) for r in data)
+        if len(data) < page:
+            break
+        lo += page
+    lo = 0
+    while True:
+        data = sb.table('team_grading_trials').select('cost_usd').eq('team_id', team_id) \
+            .gte('judged_at', since_iso).order('id').range(lo, lo + page - 1).execute().data or []
         total += sum(float(r.get('cost_usd') or 0) for r in data)
         if len(data) < page:
             return total
@@ -3107,6 +3135,470 @@ def _sentence_budget_alert() -> int:
         except Exception as e:
             print(f'[문장 판정] 비용 알림 표시 저장 실패(다음 실행에서 한 번 더 갈 수 있음): {str(e)[:120]}')
     return sent
+
+
+# ═══════════════════════════════════════════════════════
+#  팀 채점(#277, 2026-10-04 — 설계 local_docs/팀채점_설계_261004.md §3·§7·§10·§11, Fable 재검토 대기)
+#  · 세트 만들기(build_grading_sets, AI 0): 관리자·팀이 요청한 세트(team_grading_sets 'requested')를 다음 실행이 만든다.
+#    풀 = 최근 30일 수집 경로 기사(origin null, #236) · 앞 세트 기사 제외 · 본문 ≥200자 · 같은 사건 1건. 그 팀의 지금 규칙·
+#    사람 수정·저장 판정으로 갈래를 나눠 20건(team_grading.pick_set). 판정 대기 기사는 뽑지 않는다. 세트가 열리면 noise 시험
+#    (지금 문장 그대로 한 번 더 — 「AI 흔들림 N건」) + 그 팀 지정 구독자 큐 topic 'team'(발송은 정기 :25 — S3 몫)
+#  · 시험 판정(judge_grading_trials): 「다시 채점」 후보 규칙(≤5)의 문장을, 세트 기사 중 그 후보 낱말이 걸린 것만 **운영과 같은
+#    함수**(_sentence_input → _judge_jobs → _judge_sentence_batch)로 **한 묶음**(≤20, 후보 하나 = 한 호출) 판정 →
+#    team_grading_trial_verdicts. 운영 규칙·판정 표는 건드리지 않는다. 기존 규칙과 문장이 같은 후보는 지금 판 운영 판정을
+#    그대로 쓴다(호출 0 — 같은 판 = 같은 답, reused). 실행당 상한·시간 예산·차단기는 운영 판정과 공유하고 대기 처리
+#    (수집 경로 → 대시보드 요청 → 되살림) **뒤**에 돈다 — 수집 경로 판정을 밀어내지 않는다(설계 §11-6)
+#  · 적용 복사(copy_applied_grading_trials): 팀이 적용하면(규칙 저장 → 시험 applied·applied_rev) 다음 실행 문장 처리 **맨 앞**에서
+#    시험 판정을 운영 판정 표로 upsert(requested_by = GRADING_BY, 비용 0 — 시험 쪽에 이미 셈, judged_at = 복사 시각 — 사내
+#    다리가 judged_at 이후분을 받는다) → 세트 기사의 운영 등급 = 시험 점수(설계 §3-2·§11-3). 규칙 사본보다 뒤에 적용된
+#    시험은 다음 실행(새 사본)으로 미룬다. 지금 규칙과 판·문장·팀이 다르면 복사하지 않는다(그 사이 또 고침).
+# ═══════════════════════════════════════════════════════
+GRADING_BY = '00000000-0000-0000-0000-000000000001'   # 적용 복사 행의 requested_by 표식 — 수집 경로(null)가 아니므로 늦은 팀
+                                                     # 알림(#252 B2) 후보가 아니다. null로 바꾸지 말 것
+GRADING_POOL_DAYS = 30
+GRADING_SETS_PER_RUN = 2            # 실행당 만드는 세트 수
+GRADING_BUILD_MAX_ATTEMPTS = 3      # 만들기 실패가 이만큼이면 failed(운영자 봇 한 줄)
+GRADING_TRIAL_CALLS_PER_RUN = 3     # 실행당 시험 판정 호출(설계 §11-6)
+GRADING_TRIAL_MAX_ATTEMPTS = 3      # '호출은 됐는데 답에 기사가 빠짐'이 이만큼이면 failed
+GRADING_TRIAL_MAX_HOURS = 24        # 대기 시험이 이보다 오래되면 failed(장애가 길어도 여기서 끝)
+GRADING_APPLY_MAX_HOURS = 24        # 적용 복사를 이만큼 미뤄도 판이 안 맞으면 복사 없이 닫는다
+GRADING_PAGE = 1000
+_GRADING_POOL_COLS = 'id,title,screen_text,summary,urgency,created_at'
+_GRADING_TRIAL_COLS = 'id,set_id,team_id,kind,status,candidates,applied_rev,applied_at,attempts,created_at'
+_GRADING_URL = 'https://radio-policy.github.io/?p=grading&set={}'
+
+
+def _page_all(q_fn) -> list:
+    """q_fn(lo, hi) → 쿼리. 1,000행씩 끝까지 읽는다(정렬은 부르는 쪽이 유일 열을 끝에 — #233)."""
+    out, lo = [], 0
+    while True:
+        data = q_fn(lo, lo + GRADING_PAGE - 1).execute().data or []
+        out.extend(data)
+        if len(data) < GRADING_PAGE:
+            return out
+        lo += GRADING_PAGE
+
+
+def _grading_alert(text: str) -> None:
+    """운영자 봇 한 줄(세트 풀 부족·규칙 없음·만들기 실패) — 실패는 로그만."""
+    try:
+        notify.send_telegram(text, chat_id=TELEGRAM_CHAT_ID)
+    except Exception as e:
+        print(f'[팀 채점] 운영자 알림 실패(무시): {str(e)[:80]}')
+
+
+def compose_grading_set(team_id: int, seed: int, now=None) -> dict:
+    """세트 재료를 DB에서 읽어 20건을 고른다 — **쓰기 0, AI 0**. build_grading_sets와 tools_grading_probe.py(dry-run)가 같이 쓴다.
+    반환 {'status': 'open'|'too_small'|'no_rules'|'retry', 'note', 'pick'(pick_set 결과, 항목에 text 포함), 'pool', 'waiting',
+          'pool_from', 'pool_to', 'rules'(그 팀 켜진 규칙)}. 'retry' = 규칙 표 조회 실패·그 팀 규칙 형식 오류(다음 실행에서 다시)."""
+    now = now or datetime.now(timezone.utc)
+    team_rules = load_team_urgency_rules()
+    enabled = _TEAM_RULES_ENABLED
+    if enabled is None:
+        return {'status': 'retry', 'note': '규칙 표 조회 실패'}
+    trules = team_rules.get(team_id) or []
+    if not trules:
+        if any(r.get('team_id') == team_id for r in enabled.values()):
+            return {'status': 'retry', 'note': '그 팀 규칙 형식 오류 — 이번 실행에서 빠짐'}
+        return {'status': 'no_rules', 'note': '켜진 팀 규칙 0개'}
+    kw = sb.table('team_criteria').select('keywords').eq('team_id', team_id).limit(1).execute().data or []
+    keywords = (kw[0].get('keywords') if kw else None) or []
+    prev = [s['id'] for s in sb.table('team_grading_sets').select('id').eq('team_id', team_id).execute().data or []]
+    exclude = set()
+    for i in range(0, len(prev), SENTENCE_ID_CHUNK):
+        for r in sb.table('team_grading_items').select('news_id').in_('set_id', prev[i:i + SENTENCE_ID_CHUNK]) \
+                .execute().data or []:
+            exclude.add(r.get('news_id'))                # 앞 세트 기사는 다시 뽑지 않는다(설계 §7-7)
+    pool_from = (now - timedelta(days=GRADING_POOL_DAYS)).isoformat()
+    pool = [n for n in _page_all(lambda lo, hi: sb.table('news_feed').select(_GRADING_POOL_COLS).is_('origin', 'null')
+                                 .gte('created_at', pool_from).order('id').range(lo, hi))
+            if n.get('id') not in exclude]
+    team_rows = {r.get('news_id'): r for r in _page_all(
+        lambda lo, hi: sb.table('team_urgency').select('news_id,team_id,source,rule_id,urgency').eq('team_id', team_id)
+        .order('news_id').range(lo, hi))}
+    srules = sorted(r['id'] for r in trules if urgency_rules.has_sentence(r))
+    vrows = {}
+    if srules:
+        for v in _page_all(lambda lo, hi: sb.table('urgency_rule_verdicts')
+                           .select('rule_id,sentence_rev,news_id,verdict').in_('rule_id', srules).eq('status', 'done')
+                           .order('rule_id').order('sentence_rev').order('news_id').range(lo, hi)):
+            vrows.setdefault(v.get('news_id'), []).append(v)
+    words = team_grading.near_words(trules, keywords)
+    classified = []
+    for n in pool:
+        c = team_grading.classify_article(n, trules, team_rows.get(n.get('id')), vrows.get(n.get('id')), words)
+        if c and not c.get('waiting'):
+            c['text'] = urgency_rules.rule_input_text(n.get('screen_text'), n.get('summary')) or ''
+        classified.append(c)
+    waiting = sum(1 for c in classified if c and c.get('waiting'))
+    buckets = team_grading.bucket_lists(classified, seed)
+    ids = team_grading.prefetch_ids(buckets)
+    body_ok = set()
+    for i in range(0, len(ids), SENTENCE_ID_CHUNK):
+        for n in sb.table('news_feed').select('id,content').in_('id', ids[i:i + SENTENCE_ID_CHUNK]).execute().data or []:
+            if isinstance(n.get('content'), str) and len(n['content'].strip()) >= team_grading.BODY_MIN:
+                body_ok.add(n.get('id'))
+    from news_dedup import extract_keywords
+    pick = team_grading.pick_set(buckets, seed, body_ok, lambda c: extract_keywords(c.get('title') or ''))
+    k = pick['counts']
+    note = (f"A{k['A']} B{k['B']} S{k['S']} C{k['C']} D{k['D']} · 공통 긴급 {pick['common_urgent']} · "
+            f"풀 {len(pool)} · 판정 대기 제외 {waiting}" + (' · 풀 얇음' if pick['pool_thin'] else ''))
+    return {'status': 'too_small' if pick['too_small'] else 'open', 'note': note, 'pick': pick, 'pool': len(pool),
+            'waiting': waiting, 'pool_from': pool_from, 'pool_to': now.isoformat(), 'rules': trules}
+
+
+def _grading_item_row(set_id, c: dict) -> dict:
+    return {'set_id': set_id, 'news_id': c['id'], 'seq': c['seq'], 'slot': c['slot'], 'hit_kind_at_build': c['kind'],
+            'common_level_at_build': c['common'], 'team_level_at_build': c['team_level'],
+            'team_source_at_build': c['team_source'], 'rule_id_at_build': c.get('rule_id'),
+            'rule_sentence_at_build': bool(c.get('rule_sentence'))}
+
+
+def _noise_candidates(trules: list, items: list) -> list:
+    """noise 시험 후보 = 그 팀의 지금 문장 규칙 중 세트 기사에 낱말이 걸리는 것(규칙 행 그대로 + sentence_rev)."""
+    out = []
+    for r in trules:
+        if not urgency_rules.has_sentence(r):
+            continue
+        if not any(urgency_rules.match_urgency_rules([r], c.get('title') or '', c.get('text') or '') for c in items):
+            continue
+        out.append({'rule_id': r.get('id'), 'position': r.get('position', 100), 'mode': r.get('mode'),
+                    'level': r.get('level'), 'any_words': r.get('any_words') or [], 'and_any': r.get('and_any') or [],
+                    'none_words': r.get('none_words') or [], 'sentence': r.get('sentence') or '',
+                    'sentence_rev': _rev_of(r), 'enabled': True})
+    return out
+
+
+def _grading_notice_html(set_id, n: int) -> str:
+    """채점 준비 알림(구독자 봇, #184 꼴 — 제목 한 줄 굵게·본문 blockquote·링크에 ?p=, #190)."""
+    url = _GRADING_URL.format(set_id).replace('&', '&amp;')
+    return (f'<b>📝 우리 팀 뉴스 기준 채점 {n}건이 준비됐습니다</b>\n'
+            '<blockquote>대시보드 「긴급도 설정 → 우리 팀 → 채점」에서 기사마다 중요·보통·참고를 골라 주세요(로그인 필요). '
+            '답은 우리 팀 규칙이 맞는지 재는 데만 쓰고, 기사 등급은 바꾸지 않습니다.</blockquote>\n'
+            f'📊 <a href="{url}">채점 화면 열기</a>')
+
+
+def build_grading_sets() -> int:
+    """요청된 세트(requested — 또는 앞 실행이 만들다 멈춘 building)를 만든다(설계 §7). 반환 = 끝낸 세트 수. 세트가 없으면 조회 1번.
+    열림 = 항목 저장 → noise 시험 → 큐 topic 'team'. too_small·no_rules·failed = 운영자 봇 한 줄(채점 안 열림)."""
+    sets = sb.table('team_grading_sets').select('id,team_id,status,build_attempts').in_('status', ['requested', 'building']) \
+        .order('id').limit(GRADING_SETS_PER_RUN).execute().data or []
+    done = 0
+    for s in sets:
+        sid, tid = s.get('id'), s.get('team_id')
+        attempts = _as_int(s.get('build_attempts')) + 1
+        try:
+            sb.table('team_grading_sets').update({'status': 'building', 'build_attempts': attempts}).eq('id', sid).execute()
+            seed = random.SystemRandom().randrange(1, 2 ** 31)
+            res = compose_grading_set(tid, seed)
+            if res['status'] == 'retry':
+                raise RuntimeError(res['note'])
+            name = _team_name(tid)
+            if res['status'] == 'no_rules':
+                sb.table('team_grading_sets').update({'status': 'no_rules', 'note': res['note']}).eq('id', sid).execute()
+                _grading_alert(f'📝 팀 채점 세트 못 만듦 — {name}: 켜진 팀 규칙이 없습니다(규칙을 먼저 등록)')
+                print(f'[팀 채점] 세트 {sid}({name}) 규칙 없음 — no_rules')
+                done += 1
+                continue
+            pick = res['pick']
+            items = [_grading_item_row(sid, c) for c in pick['items']]
+            if res['status'] == 'open':
+                sb.table('team_grading_items').delete().eq('set_id', sid).execute()   # 멈췄던 만들기의 남은 항목
+                sb.table('team_grading_items').insert(items).execute()
+            sb.table('team_grading_sets').update({
+                'status': res['status'], 'built_at': datetime.now(timezone.utc).isoformat(),
+                'pool_from': res['pool_from'], 'pool_to': res['pool_to'], 'pool_thin': bool(pick['pool_thin']),
+                'seed': seed, 'note': res['note'][:500]}).eq('id', sid).execute()
+            done += 1
+            print(f"[팀 채점] 세트 {sid}({name}) {res['status']} — {len(items)}건 · {res['note']}")
+            if res['status'] == 'too_small':
+                _grading_alert(f'📝 팀 채점 세트 풀 부족 — {name}: {len(items)}건(14건 미만, 채점 안 열림) · {res["note"]}')
+                continue
+            cands = _noise_candidates(res['rules'], pick['items'])
+            if cands:
+                sb.table('team_grading_trials').insert({'set_id': sid, 'team_id': tid, 'kind': 'noise',
+                                                        'candidates': cands}).execute()
+            else:
+                sb.table('team_grading_sets').update({'noise_mismatch': 0, 'noise_compared': 0}).eq('id', sid).execute()
+            from subscriber_notify import queue_team_notice
+            queue_team_notice(sb, tid, _grading_notice_html(sid, len(items)))
+        except Exception as e:
+            back = 'failed' if attempts >= GRADING_BUILD_MAX_ATTEMPTS else 'requested'
+            print(f'[팀 채점] 세트 {sid} 만들기 실패({attempts}회째 → {back}): {str(e)[:120]}')
+            try:
+                sb.table('team_grading_sets').update({'status': back, 'note': f'만들기 실패: {str(e)[:200]}'}) \
+                    .eq('id', sid).execute()
+            except Exception as e2:
+                print(f'[팀 채점] 세트 {sid} 상태 되돌리기 실패(다음 실행이 building을 다시 집는다): {str(e2)[:80]}')
+            if back == 'failed':
+                _grading_alert(f'📝 팀 채점 세트 {sid} 만들기 {attempts}번 실패 — {str(e)[:120]}')
+    return done
+
+
+def _trial_plan(t: dict, news: dict, ids: list) -> tuple:
+    """시험 하나의 판정 계획 → (계획 [(cand_idx, 규칙, 걸린 news_id 목록)], 오류 글). 문장 없는 후보는 판정할 것이 없다."""
+    plan = []
+    for idx, cand in enumerate(t.get('candidates') or []):
+        rule, err = team_grading.candidate_rule(cand, idx, t.get('team_id'))
+        if err:
+            return [], err
+        if not urgency_rules.has_sentence(rule):
+            continue
+        hits = [nid for nid in ids if nid in news and urgency_rules.match_urgency_rules(
+            [rule], news[nid].get('title') or '',
+            urgency_rules.rule_input_text(news[nid].get('screen_text'), news[nid].get('summary')) or '')]
+        plan.append((idx, rule, hits))
+    return plan, ''
+
+
+def _trial_reuse_rows(t: dict, idx: int, rule: dict, nids: list, enabled) -> list:
+    """기존 규칙과 문장이 같은 후보(kind 'trial') — 지금 판 운영 done 판정을 그대로 시험 판정으로(호출 0, reused).
+    noise 시험은 다시 쓰지 않는다(흔들림을 재는 것이 목적)."""
+    if t.get('kind') != 'trial' or not nids or not isinstance(enabled, dict):
+        return []
+    r = enabled.get(rule.get('id'))
+    if not r or r.get('team_id') != t.get('team_id') or not urgency_rules.has_sentence(r) \
+            or not team_grading.same_sentence(r.get('sentence'), rule.get('sentence')):
+        return []
+    rows = []
+    for i in range(0, len(nids), SENTENCE_ID_CHUNK):
+        for v in sb.table('urgency_rule_verdicts').select('news_id,verdict,reason,input_kind,model') \
+                .eq('rule_id', r['id']).eq('sentence_rev', _rev_of(r)).eq('status', 'done') \
+                .in_('news_id', nids[i:i + SENTENCE_ID_CHUNK]).execute().data or []:
+            if isinstance(v.get('verdict'), bool):
+                rows.append({'trial_id': t['id'], 'cand_idx': idx, 'news_id': v['news_id'], 'verdict': v['verdict'],
+                             'reason': v.get('reason') or '', 'input_kind': v.get('input_kind') or '',
+                             'model': v.get('model') or '', 'cost_usd': 0.0, 'reused': True})
+    return rows
+
+
+def _trial_finish(t: dict, status: str, note: str = '') -> float:
+    """시험을 judged·failed로 닫는다 — 비용 = 그 시험 판정 행 합계. noise면 운영 판정과 대조해 세트에 흔들림을 적는다.
+    반환 = 시험 비용(USD)."""
+    tv = sb.table('team_grading_trial_verdicts').select('cand_idx,news_id,verdict,cost_usd') \
+        .eq('trial_id', t['id']).execute().data or []
+    cost = round(sum(float(v.get('cost_usd') or 0) for v in tv), 6)
+    sb.table('team_grading_trials').update({'status': status, 'judged_at': datetime.now(timezone.utc).isoformat(),
+                                            'cost_usd': cost, 'note': note[:300]}).eq('id', t['id']).execute()
+    if t.get('kind') == 'noise' and status == 'judged':
+        mism, comp = _noise_compare(t, tv)
+        sb.table('team_grading_sets').update({'noise_mismatch': len(mism), 'noise_compared': len(comp)}) \
+            .eq('id', t['set_id']).execute()
+        print(f'[팀 채점] 세트 {t["set_id"]} AI 흔들림 {len(mism)}/{len(comp)}건(같은 문장을 다시 판정해 저장 판정과 다름)')
+    return cost
+
+
+def _noise_compare(t: dict, tv: list) -> tuple:
+    """noise 판정 vs 운영 done 판정(같은 규칙·같은 판·같은 기사) → (어긋난 기사 집합, 대조한 기사 집합)."""
+    cands = t.get('candidates') or []
+    by_rule = {}
+    for v in tv:
+        idx = _as_int(v.get('cand_idx'), -1)
+        if 0 <= idx < len(cands) and isinstance(cands[idx], dict):
+            c = cands[idx]
+            by_rule.setdefault((c.get('rule_id'), _as_int(c.get('sentence_rev'))), {})[v.get('news_id')] = v.get('verdict')
+    mism, comp = set(), set()
+    for (rid, rev), got in by_rule.items():
+        nids = sorted(got)
+        for i in range(0, len(nids), SENTENCE_ID_CHUNK):
+            for o in sb.table('urgency_rule_verdicts').select('news_id,verdict').eq('rule_id', rid) \
+                    .eq('sentence_rev', rev).eq('status', 'done').in_('news_id', nids[i:i + SENTENCE_ID_CHUNK]) \
+                    .execute().data or []:
+                nid = o.get('news_id')
+                if isinstance(o.get('verdict'), bool) and nid in got:
+                    comp.add(nid)
+                    if o['verdict'] != got[nid]:
+                        mism.add(nid)
+    return mism, comp
+
+
+def judge_grading_trials(trials: list) -> dict:
+    """대기 시험(pending — noise·trial)을 판정한다(설계 §3-2·§3-3). 후보마다 세트 기사 중 낱말이 걸린 것을 **한 묶음**으로 —
+    실행당 남은 상한이 묶음보다 작거나 시간 예산이 지났으면 그 시험은 다음 실행(묶음을 쪼개지 않는다, §3-1(a)).
+    호출 통째 실패 = 시도 수 불변·이번 실행 판정 중단(차단기 공유), 답에 빠진 기사 = 시도 1회. 반환 = 로그용 집계."""
+    st = {'judged': 0, 'failed': 0, 'calls': 0, 'reused': 0, 'left': 0}
+    if not trials:
+        return st
+    now = datetime.now(timezone.utc)
+    t0 = time.monotonic()
+    client = None
+    enabled = None
+    if any(t.get('kind') == 'trial' for t in trials):
+        load_team_urgency_rules()
+        enabled = _TEAM_RULES_ENABLED
+    for t in trials:
+        created = _parse_ts(t.get('created_at'))
+        attempts = _as_int(t.get('attempts'))
+        if attempts >= GRADING_TRIAL_MAX_ATTEMPTS or (created and (now - created).total_seconds() > GRADING_TRIAL_MAX_HOURS * 3600):
+            _trial_finish(t, 'failed', '시도·기한 초과')
+            st['failed'] += 1
+            continue
+        ids = [r.get('news_id') for r in sb.table('team_grading_items').select('news_id').eq('set_id', t['set_id'])
+               .order('news_id').execute().data or []]
+        news = _fetch_news(ids, _NEWS_JUDGE_COLS)
+        plan, err = _trial_plan(t, news, ids)
+        if err:
+            _trial_finish(t, 'failed', f'후보 형식 오류: {err}')
+            st['failed'] += 1
+            continue
+        have = {(_as_int(v.get('cand_idx')), v.get('news_id')) for v in
+                sb.table('team_grading_trial_verdicts').select('cand_idx,news_id').eq('trial_id', t['id']).execute().data or []}
+        complete, stop, missing = True, False, 0
+        for idx, rule, hits in plan:
+            todo = [nid for nid in hits if (idx, nid) not in have]
+            reuse = _trial_reuse_rows(t, idx, rule, todo, enabled)
+            if reuse:
+                saved, _e = _upsert_rows('team_grading_trial_verdicts', reuse, SENTENCE_CHUNK,
+                                         on_conflict='trial_id,cand_idx,news_id')
+                st['reused'] += len(saved)
+                have |= {(idx, r['news_id']) for r in saved}
+                todo = [nid for nid in todo if (idx, nid) not in have]
+            if not todo:
+                continue
+            room = SENTENCE_PER_RUN_MAX - _SENTENCE_RUN.get('judged', 0)
+            if st['calls'] >= GRADING_TRIAL_CALLS_PER_RUN or room < len(todo) or _SENTENCE_RUN.get('broken') \
+                    or time.monotonic() - t0 > SENTENCE_TIME_BUDGET_S:
+                complete, stop = False, True
+                break
+            if client is None:
+                client = _sentence_client()
+                if client is None:
+                    complete, stop = False, True
+                    break
+            inputs = [dict(_sentence_input(news[nid]), news_id=nid) for nid in todo]
+            res = _judge_jobs(client, (rule.get('sentence') or '').strip(), inputs, t0)
+            st['calls'] += 1
+            if any(r is None for r in res):          # 보내지 않음·호출 통째 실패 — 시도 수 불변, 다음 실행
+                complete, stop = False, True
+                break
+            rows = []
+            for j, r in zip(inputs, res):
+                match, why, share = r
+                if match is None:
+                    missing += 1
+                    continue
+                rows.append({'trial_id': t['id'], 'cand_idx': idx, 'news_id': j['news_id'], 'verdict': match,
+                             'reason': why, 'input_kind': j['kind'], 'model': SCREEN_MODEL, 'cost_usd': share,
+                             'reused': False})
+            saved, e2 = _upsert_rows('team_grading_trial_verdicts', rows, SENTENCE_CHUNK,
+                                     on_conflict='trial_id,cand_idx,news_id')
+            run_cost = sum(float(x.get('cost_usd') or 0) for x in saved)
+            _SENTENCE_RUN_COST[t['team_id']] = _SENTENCE_RUN_COST.get(t['team_id'], 0.0) + run_cost
+            if len(saved) < len(rows):
+                complete = False
+                print(f'[팀 채점] 시험 {t["id"]} 판정 저장 일부 실패(다음 실행에서 다시): {e2}')
+            if missing:
+                complete = False
+        if stop:                                     # 상한·시간·키 없음·호출 장애 — 남은 시험도 다음 실행
+            st['left'] += 1
+            break
+        if not complete:
+            if missing:
+                n = attempts + 1
+                sb.table('team_grading_trials').update({'attempts': n}).eq('id', t['id']).execute()
+                if n >= GRADING_TRIAL_MAX_ATTEMPTS:
+                    _trial_finish(t, 'failed', f'답에 빠진 기사 {missing}건이 {n}번')
+                    st['failed'] += 1
+                    continue
+            st['left'] += 1
+            continue
+        _trial_finish(t, 'judged')
+        st['judged'] += 1
+    return st
+
+
+def copy_applied_grading_trials(trials=None) -> int:
+    """적용된 시험의 판정 → 운영 판정 표(설계 §3-2 「적용」). process_open_sentence_verdicts **맨 앞**에서 부른다 — 브라우저 재적용이
+    넣은 같은 (규칙·판·기사) 대기 행을 done으로 덮어 다시 묻지 않는다(_rev_bump_catchup·되살림은 지금 판 행이 있으면 건너뜀).
+    시험이 적용된 시각이 이 실행의 규칙 사본(−SENTENCE_SNAPSHOT_MARGIN_S)보다 뒤면 다음 실행으로 미룬다 — 사본에 새 판이 없다.
+    후보마다 지금 규칙(사본)의 팀·판(applied_rev)·문장이 시험 때와 같을 때만 복사한다. 복사 뒤 그 (팀, 기사)의 rule 행을 지금 결정과
+    맞춘다(_rewrite_team_rows — human·ai 행 불가침). 반환 = 복사한 판정 행 수. 적용 시험이 없으면 조회 1번(trials를 넘기면 0번)."""
+    if trials is None:
+        trials = sb.table('team_grading_trials').select(_GRADING_TRIAL_COLS).eq('status', 'applied') \
+            .is_('copied_at', 'null').order('id').limit(20).execute().data or []
+    trials = [t for t in trials if t.get('status') == 'applied']
+    if not trials:
+        return 0
+    team_rules = load_team_urgency_rules()
+    enabled = _TEAM_RULES_ENABLED
+    if enabled is None:
+        print(f'[팀 채점] 적용 복사 {len(trials)}건 건너뜀 — 규칙 표 조회 실패(다음 실행에서 다시)')
+        return 0
+    snap = (_RULES_LOADED_AT - timedelta(seconds=SENTENCE_SNAPSHOT_MARGIN_S)) if _RULES_LOADED_AT else None
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+    total = 0
+    for t in trials:
+        applied = _parse_ts(t.get('applied_at'))
+        late = bool(applied and (now - applied).total_seconds() > GRADING_APPLY_MAX_HOURS * 3600)
+        if applied and snap and applied >= snap:
+            continue                                 # 규칙 사본보다 뒤에 적용 — 다음 실행(새 사본)에서
+        cands = t.get('candidates') or []
+        ar = t.get('applied_rev') if isinstance(t.get('applied_rev'), dict) else {}
+        wanted, notes, wait = {}, [], False
+        for key in sorted(ar, key=lambda k: _as_int(k, -1)):
+            idx, m = _as_int(key, -1), ar[key]
+            if not (0 <= idx < len(cands)) or not isinstance(m, dict) or not isinstance(cands[idx], dict):
+                notes.append(f'{key}: 형식 오류')
+                continue
+            if not urgency_rules.has_sentence(cands[idx]):
+                continue                             # 낱말만 바꾼 후보 — 복사할 판정 없음
+            rid, rev = m.get('rule_id'), m.get('rev')
+            r = enabled.get(rid)
+            if r and r.get('team_id') == t['team_id'] and _rev_of(r) == rev \
+                    and team_grading.same_sentence(r.get('sentence'), cands[idx].get('sentence')):
+                wanted[idx] = (rid, rev)
+            elif (r is None or _rev_of(r) < _as_int(rev)) and not late:
+                wait = True                          # 사본이 아직 옛 판(드묾) — 기한 안에서 다음 실행
+            else:
+                notes.append(f'{rid}: 지금 규칙과 다름(판 {_rev_of(r) if r else "없음"} ≠ {rev}) — 복사 안 함')
+        if wait:
+            continue
+        rows = []
+        if wanted:
+            for v in sb.table('team_grading_trial_verdicts').select('cand_idx,news_id,verdict,reason,input_kind,model') \
+                    .eq('trial_id', t['id']).in_('cand_idx', sorted(wanted)).execute().data or []:
+                rid, rev = wanted[_as_int(v.get('cand_idx'))]
+                rows.append(dict(_verdict_row(rid, rev, t['team_id'], 'done', verdict=bool(v.get('verdict')),
+                                              reason=v.get('reason') or '', input_kind=v.get('input_kind') or '',
+                                              model=v.get('model') or '', cost=0.0, attempts=1, judged_at=now_iso),
+                                 news_id=v.get('news_id'), requested_by=GRADING_BY))
+        saved, err = _upsert_rows('urgency_rule_verdicts', rows, SENTENCE_CHUNK,
+                                  on_conflict='rule_id,sentence_rev,news_id') if rows else ([], '')
+        if rows and not saved:
+            print(f'[팀 채점] 시험 {t["id"]} 적용 복사 실패(다음 실행에서 다시): {err}')
+            continue
+        total += len(saved)
+        pairs = {}
+        for s in saved:
+            pairs.setdefault(s['team_id'], set()).add(s['news_id'])
+        if pairs:
+            try:
+                news = _fetch_news([n for v in pairs.values() for n in v], 'id,title,screen_text,summary,urgency')
+                _rewrite_team_rows(pairs, news, team_rules)
+            except Exception as e:
+                print(f'[팀 채점] 시험 {t["id"]} 팀 행 다시 쓰기 실패(무시): {str(e)[:120]}')
+        if err:
+            notes.append(f'일부 저장 실패: {err[:80]}')
+        sb.table('team_grading_trials').update({'copied_at': now_iso, 'note': ' · '.join(notes)[:300]}) \
+            .eq('id', t['id']).execute()
+        print(f'[팀 채점] 시험 {t["id"]} 적용 복사 {len(saved)}건' + (f' · {"; ".join(notes)}' if notes else ''))
+    return total
+
+
+def run_team_grading() -> None:
+    """세트 만들기 → 대기 시험 판정(process_open_sentence_verdicts의 대기 처리 뒤). 할 일이 없으면 조회 2번(세트·시험)."""
+    try:
+        build_grading_sets()
+    except Exception as e:
+        print(f'[팀 채점] 세트 만들기 실패(무시): {str(e)[:120]}')
+    trials = sb.table('team_grading_trials').select(_GRADING_TRIAL_COLS).eq('status', 'pending') \
+        .order('created_at').order('id').limit(10).execute().data or []
+    if not trials:
+        return
+    st = judge_grading_trials(trials)
+    print(f"[팀 채점] 시험 판정 — 대기 {len(trials)}건 → 끝 {st['judged']} · 실패 {st['failed']} · 다음 실행 {st['left']}"
+          f" · 호출 {st['calls']} · 운영 판정 재사용 {st['reused']}건")
 
 
 def generate_summary(title: str, source: str, published_at: str, content: str) -> str:

@@ -25,7 +25,7 @@ DASHBOARD_URL = 'https://radio-policy.github.io/?p=minutes'
 # kmcc = 방미통위 동향(위원회 회의 의사일정·위원회 결과, 2026-09-11 #154). subscriber_queue.topic CHECK 도 같이 갱신됨.
 # news = 받는 단위(공통 보통 'c'·팀 't:<id>'·실장 'd:<실>')별 기사 행(#252, 2026-09-27) — audience·level·news_url이 있어야 하는
 # 모양(표 CHECK subscriber_queue_news_shape_check)이라 queue_audience_rows로만 넣는다(queue_for_subscribers는 거절).
-_VALID_TOPICS = ('urgent', 'assembly', 'kmcc', 'news')
+_VALID_TOPICS = ('urgent', 'assembly', 'kmcc', 'news', 'team')
 # 큐 적재 직후 발송 함수를 바로 부르는 토픽 — 수집 당일·직후 배달이 목적인 것들.
 # assembly 는 정시(:25)만 — 법안 단계변경·입법예고는 하루 한 묶음이 적절하다.
 _IMMEDIATE_TOPICS = ('urgent', 'kmcc')
@@ -43,6 +43,9 @@ def queue_for_subscribers(sb, topic: str, html_text: str) -> bool:
         return False
     if topic == 'news':      # 받는 단위·등급·기사 url이 필요한 행 — 묶음 HTML 한 덩이로는 표 CHECK에 걸린다(#252)
         print('[구독자 큐] news 토픽은 queue_audience_rows로만 적재 — 건너뜀')
+        return False
+    if topic == 'team':      # 받는 팀(audience 't:<팀>')이 필요한 행 — 표 CHECK(#277)
+        print('[구독자 큐] team 토픽은 queue_team_notice로만 적재 — 건너뜀')
         return False
     if not html_text or not html_text.strip():
         return False
@@ -429,6 +432,27 @@ def news_row(audience: str, level: str, item: dict) -> dict:
         tags = []
     return {'topic': 'news', 'audience': audience, 'level': level, 'news_url': url,
             'tags': [str(t) for t in tags], 'html': body[:3500]}
+
+
+def queue_team_notice(sb, team_id, html_text: str) -> bool:
+    """팀 채점 준비 알림(#277) — topic 'team' 행 하나(audience 't:<팀>', level·news_url 없음 — 표 CHECK).
+    받는 사람 = 그 팀으로 지정된 활성 구독자, 발송은 send-subscriber-briefing의 창 안 정기 발송(워터마크 last_team_sent_at —
+    S3 몫, 그 전까지 행은 72시간 뒤 버려진다 — 채점 대기 배지는 화면에 남는다). **즉시 배달 호출 없음**. 반환 = 성공 여부,
+    어떤 예외도 밖으로 던지지 않는다(fail-open)."""
+    try:
+        tid = int(team_id)
+    except (TypeError, ValueError):
+        print(f'[구독자 큐] team 행 — 팀 번호 이상: {team_id!r}')
+        return False
+    if not html_text or not html_text.strip():
+        return False
+    try:
+        sb.table('subscriber_queue').insert({'topic': 'team', 'html': html_text[:3500], 'audience': f't:{tid}'}).execute()
+        print(f'[구독자 큐] team t:{tid} 적재 완료 — 그 팀 구독자의 수신 창에 발송됨')
+        return True
+    except Exception as e:
+        print(f'[구독자 큐] team 적재 실패(무시): {str(e)[:160]}')
+        return False
 
 
 def queue_audience_rows(sb, rows: list) -> dict:
