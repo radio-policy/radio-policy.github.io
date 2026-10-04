@@ -524,6 +524,50 @@ function ok(name, cond, extra) {
   var sumPara = '사업자는 중요통신시설마다 재난대응담당자(정ㆍ부) 2인을 지정하고 역할 및 임무를 부여하여야 하며, 사업자에 소속된 근로자로 통신재난 대응 인력을 24시간 운용하여야 한다. [요약 문서 기반 — 원문 확인 권장: 통신시설 등급관리 요약]';
   eq('요약 문서 기반 표시 문단은 자동 표시 안 함', [CV.autoTagVerbatim(sumPara, [g10]).added, CV.tagUntaggedQuotes('제10조는\n\n' + sumPara).answer.indexOf(CV.QUOTE_MARK)], [0, -1]);
 
+  // ── 사내 인계(2026-10-04): 「…가이드라인」처럼 약한 이름 앞의 인용 — 이름을 버리고 번호만으로 다른 고시 제1조와 대조하지 않는다 ──
+  // 기계 표시: 맞으면 그 문서 이름을 낫표째, 못 맞추면 표시 안 함 / 모델 표시: 낫표 제목을 못 맞추면 앞 법령을 잇지 않고 원문 없음
+  var GL = '이동통신용 무선설비 예비전원설비 설치 가이드라인';
+  var NP = '이동전화서비스 번호이동성 시행 등에 관한 기준(과학기술정보통신부고시)(제2023-41호)(20240101)';
+  var gl1 = { id: 'gl1', doc_name: GL, article_no: '1조(목적)', chunk_index: 0, content: '제1조(목적) 이 지침은「방송통신설비의 기술기준에 관한 규정」제10조 제2항의 규정에 의한 사업용방송통신설비(이동통신용 무선설비)의 예비전원설비 설치기준과 관련하여 필요한 사항과 절차를 정함을 목적으로 한다.' };
+  var np1 = { id: 'np1', doc_name: NP, article_no: '1조(목적)', chunk_index: 0, content: '제1조(목적) 이 고시는 「전기통신사업법」 제58조제5항에 따라 이동전화서비스 번호이동성의 시행에 관한 사항과 번호이동성관리기관의 지정 및 그 업무처리 등에 관하여 필요한 사항을 정함을 목적으로 한다.' };
+  var glIntro = '「' + GL + '」 제1조(목적)은';
+  eq('약한 이름: 문서군 없이는 표시 대상 없음(종전 「제1조」 — 이름을 버렸다)', CV.introCiteLabel(glIntro, 40), null);
+  eq('약한 이름: 검색 자료의 문서군과 맞으면 그 문서 이름(낫표째)', CV.introCiteLabel(glIntro, 40, [CV.docFamily(NP), GL]), '「' + GL + '」 제1조');
+  eq('약한 이름: 맞는 문서가 없으면 표시 대상 없음', CV.introCiteLabel(glIntro, 40, [CV.docFamily(NP)]), null);
+  eq('강한 이름·이름 없음·동법은 종전대로', [CV.introCiteLabel('「전기통신사업법」 제2조는 ', 12, []), CV.introCiteLabel('제2조는 ', 12, []), CV.introCiteLabel('같은 법 제3조는 ', 12, [])],
+     ['전기통신사업법 제2조', '제2조', '동법 제3조']);
+  // 재현: 「「…가이드라인」 제1조(목적)에 따르면 다음과 같이 규정되어 있습니다.」 + 다음 문단 따옴표 인용(조금 바꿔 씀 → 판정기 경로)
+  var glQuote = '"이 지침은 방송통신설비의 기술기준에 관한 규정 제10조제2항에 의한 이동통신용 무선설비의 예비전원설비 설치기준에 관하여 필요한 사항과 절차를 정하는 것을 목적으로 한다."';
+  var glAns = '「' + GL + '」 제1조(목적)에 따르면 다음과 같이 규정되어 있습니다.\n\n' + glQuote + '\n\n그래서 설치기준을 봐야 합니다.';
+  var glJudged = [];
+  var glHaiku = async function (sys, user) {   // 번호이동성 원문과 대조되면 '불일치'(사내 실측과 같은 결과)
+    glJudged.push(user);
+    return user.indexOf('번호이동성') !== -1 ? '[{"id":1,"verdict":"불일치","reason":"다른 고시의 목적 조항"}]' : '[{"id":1,"verdict":"일치","reason":"x"}]';
+  };
+  var vgA = await CV.verifyCitations({ answer: glAns, chunks: [np1], callHaiku: glHaiku });
+  eq('재현: 가이드라인이 검색 자료에 없으면 기계 표시 안 붙임(번호이동성 기준 제1조와 대조 안 함)', [vgA.quoteTagged, vgA.verdicts.length, glJudged.length, vgA.answer === glAns], [0, 0, 0, true]);
+  var vgB = await CV.verifyCitations({ answer: glAns, chunks: [np1, gl1], callHaiku: glHaiku });
+  eq('재현: 가이드라인이 있으면 그 문서 제1조와 대조, 표시엔 이름 한 번·낫표 없이',
+     [vgB.verdicts.map(function (v) { return [v.key, v.status, v.law, v.auto]; }), glJudged.every(function (u) { return u.indexOf('번호이동성') === -1; }), (vgB.answer.match(/\[원문 확인됨: [^\]]*\]/) || [''])[0]],
+     [[['1조', 'ok', GL, 'quote']], true, '[원문 확인됨: ' + GL + ' 제1조]']);
+  // 한 낱말 제목 — 낫표 없이 적으면 다시 읽을 때 이름이 안 되어(낱말 1개는 약한 후보도 아님) 앞 법령·어느 문서든으로 샌다
+  var ONE = '예비전원가이드라인';
+  var one1 = { id: 'one1', doc_name: ONE, article_no: '1조(목적)', chunk_index: 0, content: gl1.content };
+  var vgC = await CV.verifyCitations({ answer: '「' + ONE + '」 제1조(목적)에 따르면 다음과 같이 규정되어 있습니다.\n\n' + glQuote, chunks: [np1, one1], callHaiku: glHaiku });
+  eq('한 낱말 제목도 그 문서와 대조', vgC.verdicts.map(function (v) { return [v.status, v.law, v.doc]; }), [['ok', ONE, ONE]]);
+  // 그 문서의 다른 조문만 검색됐으면(제1조 조각 없음) 원문 없음 — 낫표 없이 적으면 어느 문서든이 되어 번호이동성 제1조와 대조됐다
+  var one2 = { id: 'one2', doc_name: ONE, article_no: '2조(적용범위)', chunk_index: 1, content: '제2조(적용범위) 이 지침은 이동통신사업자가 주파수를 할당받아 기간통신역무를 제공하기 위하여 개설 신고하는 무선국에 적용한다.' };
+  glJudged = [];
+  var vgC2 = await CV.verifyCitations({ answer: '「' + ONE + '」 제1조(목적)에 따르면 다음과 같이 규정되어 있습니다.\n\n' + glQuote, chunks: [np1, one2], callHaiku: glHaiku });
+  eq('한 낱말 제목 + 그 문서 제1조 조각 없음 → 원문 없음(다른 고시와 대조 안 함)', [vgC2.verdicts.map(function (v) { return [v.status, v.law]; }), glJudged.length], [[['missing', ONE]], 0]);
+  // 모델이 직접 붙인 표시 — 낫표 제목이 검색 자료에 없으면 원문 없음(종전: 이어받을 법령이 없어 어느 문서든 → 번호이동성 제1조와 대조)
+  eq('lawScope: 낫표 제목을 못 맞추면 [](이어받기·어느 문서든 아님)', CV.lawScope(CV.lawNameBefore('「' + GL + '」 '), null, [CV.docFamily(NP)]), []);
+  glJudged = [];
+  var vgD = await CV.verifyCitations({ answer: '「' + GL + '」 제1조(목적)는 ' + glQuote + '라고 정합니다. [원문 확인됨]', chunks: [np1], callHaiku: glHaiku });
+  eq('모델 표시: 낫표 제목을 못 맞추면 원문 없음, 판정기 안 부름', [vgD.verdicts.map(function (v) { return v.status; }), glJudged.length], [['missing'], 0]);
+  var vgE = await CV.verifyCitations({ answer: '「' + GL + '」 제1조(목적)는 ' + glQuote + '라고 정합니다. [원문 확인됨]', chunks: [np1, gl1], callHaiku: glHaiku });
+  eq('모델 표시: 낫표 제목이 있으면 그 문서와 대조', vgE.verdicts.map(function (v) { return [v.status, v.doc]; }), [['ok', GL]]);
+
   console.log('\n' + (total - fails) + '/' + total + ' passed');
   process.exit(fails ? 1 : 0);
 })().catch(function (e) { console.error(e); process.exit(2); });

@@ -10537,6 +10537,7 @@ function _issueCardHtml(i) {
 var ISSUE_LAW_SHORT = [
   ['정보통신망 이용촉진 및 정보보호 등에 관한 법률', '정보통신망법'],
   ['전기통신금융사기 피해 방지 및 피해금 환급에 관한 특별법', '통신사기피해환급법'],
+  ['전기통신금융사기 피해 방지 및 피해자산 환급에 관한 특별법', '통신사기피해환급법'],   // 같은 법의 개정안 표기
   ['인공지능 발전과 신뢰 기반 조성 등에 관한 기본법', 'AI 기본법'],
   ['인공지능 데이터센터 산업 진흥에 관한 특별법', 'AIDC 특별법'],
   ['표시·광고의 공정화에 관한 법률', '표시광고법'],
@@ -10556,14 +10557,19 @@ function _issueByLinkId(a, b) { return Number(a.id) - Number(b.id); }
 // 법령·DIFF 링크 하나 → { name: 약칭(시행령 등 꼬리 유지), st: { rank, label } | null }.
 // 국회 개정안과 그 조문 대비 DIFF는 null — 관련법 줄에서 「국회 개정안 N건」으로 따로 센다.
 // 상태는 날짜가 이긴다: 링크 제목의 (pending) 표식은 시행일이 지나도 그대로 남는다(#2 실측 — 10-01 시행분이 pending).
+// 정식 이름 앞부분을 약칭으로 — 「… 시행령」 같은 꼬리는 그대로 붙는다. 카드 가지와 상세 관계도 노드가 같이 쓴다.
+function _issueLawShort(name) {
+  for (var k = 0; k < ISSUE_LAW_SHORT.length; k++) {
+    if (name.indexOf(ISSUE_LAW_SHORT[k][0]) === 0) return ISSUE_LAW_SHORT[k][1] + name.slice(ISSUE_LAW_SHORT[k][0].length);
+  }
+  return name;
+}
+
 function _issueLawItem(l, today, recentCut) {
   var t = String(l.title || l.item_id || '');
   if (l.item_type === 'bill' || /일부개정법률안|의원안|개정안 조문 대비/.test(t)) return null;
-  var name = t.replace(/\s*[(（].*$/, '').replace(/\s*[—–].*$/, '')
-    .replace(/\s*제\s?\d+\s?조.*$/, '').replace(/\s*개정안?\s*$/, '').trim();
-  for (var k = 0; k < ISSUE_LAW_SHORT.length; k++) {
-    if (name.indexOf(ISSUE_LAW_SHORT[k][0]) === 0) { name = ISSUE_LAW_SHORT[k][1] + name.slice(ISSUE_LAW_SHORT[k][0].length); break; }
-  }
+  var name = _issueLawShort(t.replace(/\s*[(（].*$/, '').replace(/\s*[—–].*$/, '')
+    .replace(/\s*제\s?\d+\s?조.*$/, '').replace(/\s*개정안?\s*$/, '').trim());
   var st = null;
   if (/proposed/.test(t)) st = { rank: 2, label: '개정 추진' };
   else if (!/replaced/.test(t)) {
@@ -11347,12 +11353,105 @@ function _issueDateRange(sortedDates) {
   return (ya !== thisYear ? ya.slice(2) + '년 ' : '') + fmt(a, false) + ' ~ ' + fmt(b, false);
 }
 
-// SVG는 자동 줄바꿈이 없어 라벨을 미리 줄여야 한다. 괄호 보충설명을 먼저 떼고, 그래도 길면 말줄임.
+// SVG는 자동 줄바꿈이 없어 라벨을 미리 줄여야 한다. 괄호 보충설명을 먼저 떼고, 그래도 길면 「 — 」 뒤 설명을 떼고, 그래도 길면 말줄임.
 function _issueMapLabel(s, max) {
   var t = String(s == null ? '' : s).trim();
   var noParen = t.replace(/\s*[(（].*$/, '');
   if (noParen.length >= 4) t = noParen;
+  if (t.length > max) {
+    var noDash = t.replace(/\s+[—–]\s.*$/, '');
+    if (noDash.length >= 4) t = noDash;
+  }
   return t.length > max ? t.slice(0, max - 1) + '…' : t;
+}
+
+// ── 관계도 개별 노드(법령·DIFF·사례·법안) 이름 ──
+// 정식 이름 앞 14자만 남기면 정보통신망법 계열 다섯 노드가 모두 「정보통신망 이용촉진 및 정…」으로 서서
+// 법률인지 시행령인지도 알 수 없었다(사내 인계 2026-10-04, 이슈 「개정 정보통신망법 시행」). 그래서
+// ① 법령 계열은 약칭(ISSUE_LAW_SHORT)으로 줄이고, 넘치면 앞을 줄여 「시행령」·「개정」 꼬리를 남기며
+// ② 같은 카드에서 이름이 겹치면 겹친 것끼리만 시행일·발의 의원(없으면 정식 이름의 끝 낱말)을 붙인다.
+// 글자 수가 아니라 폭으로 잰다 — 숫자·공백은 한글의 절반 남짓이라 「정보통신망법 개정 26.10.01」도 상자에 들어간다.
+var ISSUE_MAP_NODE_W = 13.6; // 12px 굵은 글씨, 상자 폭 168 — 예전 15자 상한(한글 12 + 공백 2 + …)과 같은 폭
+var ISSUE_MAP_TAIL_RE = /\s+((?:시행령|시행규칙)(?:\s+개정안?)?|개정안?)$/;
+
+// 글자 크기 배수로 어림한 폭: 한글·한자·전각·「…」 1, 공백·문장부호 0.3, 그 밖의 영문·숫자 0.6
+function _issueMapW(s) {
+  var w = 0;
+  for (var i = 0; i < s.length; i++) {
+    var ch = s.charAt(i);
+    w += /[\s.,·:;'"()\[\]~\-]/.test(ch) ? 0.3 : (ch.charCodeAt(0) < 0x2000 ? 0.6 : 1);
+  }
+  return w;
+}
+
+// 폭이 넘치면 앞(head)만 줄이고 꼬리(tail)는 남긴다. 줄인 끝에 한 글자만 매달리면(「전기통신사업법 개…」) 그 조각은 버린다.
+function _issueMapFit(head, tail, maxW) {
+  var full = tail ? head + ' ' + tail : head;
+  if (_issueMapW(full) <= maxW + 0.01) return full;   // 0.01 = 소수 덧셈 오차
+  var room = maxW - _issueMapW('…') - (tail ? _issueMapW(' ' + tail) : 0);
+  var h = head;
+  while (h && _issueMapW(h) > room + 0.01) h = h.slice(0, -1);
+  h = h.replace(/[\s·,]+$/, '');
+  var sp = Math.max(h.lastIndexOf(' '), h.lastIndexOf('·'));
+  if (sp > 0 && h.length - sp - 1 === 1) h = h.slice(0, sp).replace(/[\s·,]+$/, '');
+  return h + '…' + (tail ? ' ' + tail : '');
+}
+
+function _issueMapBase(n) {
+  var t = String(n.label || '').trim();
+  var noParen = t.replace(/\s*[(（].*$/, '');
+  if (noParen.length >= 4) t = noParen;
+  var noDash = t.replace(/\s+[—–]\s.*$/, '');
+  if (noDash.length >= 4) t = noDash;
+  if (n.type === 'kb_case') return t;
+  return _issueLawShort(t).replace(/\s*(일부|전부)개정법률안$/, function(m, k) { return k === '일부' ? ' 개정안' : ' 전부개정안'; });
+}
+
+// 겹친 이름을 가를 꼬리 — 법안은 발의 의원, 그 밖에는 시행일(제목의 「YYYY-MM-DD 시행」, 없으면 연결 날짜)
+function _issueMapTag(n) {
+  var t = String((n.link && n.link.title) || n.label || '');
+  var d = (t.match(/(\d{4}-\d{2}-\d{2})\s*시행/) || t.match(/(\d{4}-\d{2}-\d{2})/) || [])[1] ||
+    String((n.link && n.link.item_date) || '');
+  var dt = /^\d{4}-\d{2}-\d{2}/.test(d) ? d.slice(2, 10).replace(/-/g, '.') : '';
+  if (n.type !== 'bill') return dt;
+  var who = (t.match(/([가-힣]{2,4})\s?의원/) || [])[1] || '';
+  var no = (t.match(/의안\s?(\d{6,8})/) || [])[1] || '';
+  return who || dt || (no ? '의안 ' + no : '');
+}
+
+function _issueAllDistinct(arr) {
+  return arr.every(function(v, i) { return arr.indexOf(v) === i; });
+}
+
+// nodes(renderIssueMiniMap의 노드 배열) → 같은 순서의 표시 이름 배열
+function _issueMapNodeLabels(nodes) {
+  var maxW = ISSUE_MAP_NODE_W;
+  var info = nodes.map(function(n) {
+    if (!n.link) return null;
+    var base = _issueMapBase(n);
+    var m = n.type === 'kb_case' ? null : base.match(ISSUE_MAP_TAIL_RE);
+    var label = m ? _issueMapFit(base.slice(0, m.index), m[1], maxW) : _issueMapFit(base, '', maxW);
+    return { base: base, label: label };
+  });
+  var groups = {};
+  info.forEach(function(x, i) { if (x) (groups[x.label] = groups[x.label] || []).push(i); });
+  Object.keys(groups).forEach(function(lb) {
+    var idx = groups[lb];
+    if (idx.length < 2) return;
+    var tags = idx.map(function(i) { return _issueMapTag(nodes[i]); });
+    if (tags.every(Boolean) && _issueAllDistinct(tags)) {
+      idx.forEach(function(i, k) { info[i].label = _issueMapFit(info[i].base, tags[k], maxW); });
+      return;
+    }
+    for (var nw = 1; nw <= 3; nw++) {
+      var cand = idx.map(function(i) {
+        var w = info[i].base.split(/\s+/);
+        return w.length > nw ? _issueMapFit(w.slice(0, -nw).join(' '), w.slice(-nw).join(' '), maxW) : info[i].label;
+      });
+      if (_issueAllDistinct(cand)) { idx.forEach(function(i, k) { info[i].label = cand[k]; }); return; }
+    }
+  });
+  return nodes.map(function(n, i) { return info[i] ? info[i].label : _issueMapLabel(n.label, 15); });
 }
 function _issueCardClose() { return '</div>'; }
 function _issueSecTitle(icon, label, hint) {
@@ -11414,6 +11513,12 @@ function renderIssueMiniMap(iss, links) {
   });
   if (!nodes.length) return '';
   nodes = nodes.slice(0, 6);
+  var disp = _issueMapNodeLabels(nodes);
+  nodes.forEach(function(n, k) {
+    n.disp = disp[k];
+    // 줄인 이름의 전체 — 노드마다 <title>을 달아 마우스를 올리면 보이게 한다
+    n.full = n.link ? String(n.link.title || n.link.item_id || '') : n.label + (n.sub ? ' · ' + n.sub : '');
+  });
 
   var BW = 168, BH = 46, W = 700;
   var left = nodes.filter(function(n, k) { return k % 2 === 0; });
@@ -11442,20 +11547,21 @@ function renderIssueMiniMap(iss, links) {
     var c = ISSUE_MAP_COLORS[p.n.type] || ISSUE_MAP_COLORS.news;
     var clickable = p.n.link ? ' onclick="openIssueLinkItem(' + p.n.link.id + ')" style="cursor:pointer"'
       : (p.n.group ? ' onclick="showIssueTypeList(' + iss.id + ',\'' + p.n.group + '\')" style="cursor:pointer"' : '');
-    svg += '<g' + clickable + '>' +
+    svg += '<g' + clickable + '><title>' + lmEsc(p.n.full) + '</title>' +
       '<rect x="' + p.x + '" y="' + p.y + '" width="' + BW + '" height="' + BH + '" rx="9" fill="' + c.bg + '" stroke="' + c.bd + '" stroke-width="1.2"/>' +
       '<text x="' + (p.x + BW / 2) + '" y="' + (p.y + (p.n.sub ? 20 : 28)) + '" text-anchor="middle" font-size="12" font-weight="600" fill="' + c.tx + '">' +
-        lmEsc(_issueMapLabel(p.n.label, 15)) + '</text>' +
+        lmEsc(p.n.disp) + '</text>' +
       (p.n.sub ? '<text x="' + (p.x + BW / 2) + '" y="' + (p.y + 35) + '" text-anchor="middle" font-size="10" fill="' + c.tx + '" fill-opacity=".8">' +
         lmEsc(_issueMapLabel(p.n.sub, 20)) + '</text>' : '') +
     '</g>';
   });
   var ic = ISSUE_MAP_COLORS.issue;
-  svg += '<rect x="' + (cx - CW / 2) + '" y="' + (cy - CH / 2) + '" width="' + CW + '" height="' + CH + '" rx="11" fill="' + ic.bg + '" stroke="' + ic.bd + '" stroke-width="1.6"/>' +
+  svg += '<g><title>' + lmEsc(iss.title) + '</title>' +
+    '<rect x="' + (cx - CW / 2) + '" y="' + (cy - CH / 2) + '" width="' + CW + '" height="' + CH + '" rx="11" fill="' + ic.bg + '" stroke="' + ic.bd + '" stroke-width="1.6"/>' +
     '<text x="' + cx + '" y="' + (cy - 2) + '" text-anchor="middle" font-size="13" font-weight="700" fill="' + ic.tx + '">' +
       lmEsc(_issueMapLabel(iss.title, 15)) + '</text>' +
     '<text x="' + cx + '" y="' + (cy + 15) + '" text-anchor="middle" font-size="10" fill="' + ic.tx + '" fill-opacity=".8">이슈 · ' + lmEsc(iss.stage) + '</text>' +
-  '</svg>';
+  '</g></svg>';
   return svg;
 }
 
