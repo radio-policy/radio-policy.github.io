@@ -751,6 +751,10 @@ grant EXECUTE on function public.pending_versions_for_docs(p_docs text[]) to aut
 grant EXECUTE on function public.pending_versions_for_docs(p_docs text[]) to public;
 grant EXECUTE on function public.pending_versions_for_docs(p_docs text[]) to service_role;
 
+revoke all on function public.people_export(p_key text) from public, anon, authenticated, service_role;
+grant EXECUTE on function public.people_export(p_key text) to anon;
+grant EXECUTE on function public.people_export(p_key text) to service_role;
+
 revoke all on function public.press_index() from public, anon, authenticated, service_role;
 grant EXECUTE on function public.press_index() to anon;
 grant EXECUTE on function public.press_index() to authenticated;

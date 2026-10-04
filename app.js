@@ -369,6 +369,7 @@ function applyAuthUI() {
   refreshTeamLayer();
   _urAuthChanged();
   _grAuthChanged();   // 딥링크 ?p=grading&set= — 로그인되면 그 세트를 연다(#277 S3)
+  _peopleAuthChanged();   // 인물(#279) — 로그인되면 미뤄 둔 화면을 열고, 로그아웃되면 명부를 버린다
 }
 
 /** 입력창 아래 잔여 한도 표시 */
@@ -3939,7 +3940,7 @@ function smartRefresh() {
     'panel-lawmap':   function() { loadLawMap(true); },
     'panel-assembly': function() { loadAssemblyBills(true); },
     'panel-minutes':  function() { loadAssemblyMinutes(true); },
-    'panel-people':   function() { loadPeople(true); },   // 상세 유지 로직은 loadPeople 내부에서 처리
+    'panel-people':   function() { if (aiReady()) loadPeople(true); },   // 상세 유지 로직은 loadPeople 내부에서 처리 · 승인 계정 전용(#279)
     'panel-overseas': function() { loadOverseasNews(true); },
     // 상세를 보던 중이면 갱신 후에도 그 화면을 유지한다(새로고침 때문에 목록으로 튕기지 않게)
     'panel-issuemap': function() {
@@ -10167,11 +10168,46 @@ var PAGE_TO_NAV = {
   law: 'kb', press: 'kb', guide: 'kb', itu: 'kb', custom: 'kb'
 };
 
+// 인물 화면은 승인 계정 전용(#279, 2026-10-04 운영자 결정 A안) — 로그인 없이 보이는 의원별 페이지(AI 발언 요약)가
+// 「SKT Comm센터」 제목 아래에서 「SKT가 의원을 관리한다」로 읽힐 수 있어 사외판 노출만 내렸다(수집·회의록 화면·사내판은 그대로).
+// 메뉴는 data-login-only로 숨기고, 주소(?p=people)·버튼 어느 경로로 와도 go()가 막는다. 실제 관문은 RLS(people_sel = 승인 계정).
+// 로그인 확정 전 딥링크는 기본 화면으로 열고 확정 뒤 이어서 연다(세트 딥링크 §11-18과 같은 처리).
+// loadPeople·renderPersonStance 등 인물 함수는 사내 콘솔이 그대로 옮겨 쓰므로(port_console_js.py) 게이트를 그 안에 넣지 않는다.
+var _peoplePending = false, _peopleAsked = false, _peopleAuthBooted = false;
+function _peopleAuthChanged() {
+  if (!_peopleAuthBooted) return;
+  if (aiReady()) {
+    if (_peoplePending) { _peoplePending = false; go('people'); }
+    return;
+  }
+  // 로그아웃·승인 해제 — 받아 둔 명부를 버리고, 인물 화면에 있었으면 기본 화면(관계도)으로.
+  // 로그인은 됐는데 프로필 조회만 실패한 때(일시 오류, currentProfile null)는 화면을 그대로 둔다.
+  if (!currentUser || currentProfile) {
+    _peopleCache = null;
+    var pnl = document.getElementById('panel-people');
+    if (pnl && pnl.classList.contains('active')) {
+      var pb = document.getElementById('people-body');
+      if (pb) pb.innerHTML = '';
+      go('lawmap');
+    }
+  }
+  if (!_peoplePending || _peopleAsked) return;
+  _peopleAsked = true;
+  if (!currentUser) { openLoginModal(); _loginNote('인물 화면은 승인된 계정으로 로그인한 뒤 열립니다 — 로그인하면 바로 이어서 엽니다.'); }
+  else { _peoplePending = false; alert(aiGateMsg()); }
+}
+
 function go(page, navEl, sourceType) {
   // 운영 상태는 로그인 뒤에만(#177) — 주소·버튼 어느 경로로 와도 설정(로그인) 화면으로 보낸다
   if (page === 'opsstatus' && !currentUser) {
     page = 'settings'; navEl = null;
     setTimeout(function() { alert('운영 상태는 로그인 후 볼 수 있습니다.'); }, 50);
+  }
+  // 인물은 승인 계정 전용(#279) — 화면을 바꾸지 않고 로그인 창(또는 승인 대기 안내)
+  if (page === 'people' && !aiReady()) {
+    _peoplePending = true; _peopleAsked = false;
+    _peopleAuthChanged();
+    return;
   }
   document.querySelectorAll('.panel').forEach(function(p) { p.classList.remove('active'); });
   document.querySelectorAll('.nav-item').forEach(function(n) { n.classList.remove('active'); });
@@ -16699,6 +16735,8 @@ document.addEventListener('DOMContentLoaded', function() {
       // 팀 채점 딥링크(#277 S3) — 구독자 봇 알림의 `?p=grading&set=<id>`. 화면은 뉴스(우리 팀 등급·60일 적중 계산에 뉴스 목록을 쓴다)로
       // 열고, 로그인이 확정되면 채점 창을 띄운다(_grAuthChanged — 비로그인이면 로그인 창, 로그인 뒤 이어서)
       if (p === 'grading') { _grPendingSet = Number(qs.get('set')) || null; return 'news'; }
+      // 인물 딥링크(#279) — 승인 계정 전용이라 기본 화면으로 열고, 로그인 확정 뒤 _peopleAuthChanged가 잇는다(비로그인이면 로그인 창)
+      if (p === 'people') { _peoplePending = true; return DEFAULT_PAGE; }
       return PAGE_TO_NAV[p] ? p : DEFAULT_PAGE;
     } catch(e) { return DEFAULT_PAGE; }
   })();
@@ -16706,7 +16744,10 @@ document.addEventListener('DOMContentLoaded', function() {
   go(startPage);
   // 로그인 상태를 먼저 확정해야 AI 기능 게이트가 올바로 잠긴다(fail-closed).
   // 세션 복원 전에는 aiReady()가 false이므로, 자동 AI 기능도 이 시점 전에는 돌지 않는다.
-  Promise.resolve(refreshAuthState()).catch(function() {}).then(function() { _grAuthBooted = true; _grAuthChanged(); });
+  Promise.resolve(refreshAuthState()).catch(function() {}).then(function() {
+    _grAuthBooted = true; _grAuthChanged();
+    _peopleAuthBooted = true; _peopleAuthChanged();   // 인물 딥링크(#279)
+  });
   if (sb) {
     // supabase-js v2 는 구독 즉시 INITIAL_SESSION 을 쏜다(실측 2026-09-25) — 바로 위 직접 호출과 같은 일이라 건너뛴다.
     // TOKEN_REFRESHED(약 1시간마다)는 같은 사람의 토큰만 바뀐 것이라 프로필·한도를 다시 읽지 않는다.
