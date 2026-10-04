@@ -1649,6 +1649,7 @@ AS $function$
 declare
   s record;
   tr record;
+  v_trial jsonb := null;
   v_admin boolean := public.is_admin();
   v_grader uuid;
   v_final boolean;
@@ -1670,6 +1671,8 @@ begin
     if not found then
       raise exception 'TEAM_GRADING_TRIAL_NOT_FOUND' using errcode = 'P0002';
     end if;
+    v_trial := jsonb_build_object('id', tr.id, 'kind', tr.kind, 'status', tr.status, 'judged_at', tr.judged_at,
+                                  'cost_usd', tr.cost_usd);
   end if;
   v_grader := public.team_grader_uid(s.team_id);
   v_final := s.status in ('applied','closed');
@@ -1737,8 +1740,6 @@ begin
   if p_trial is not null and v_check is not null then
     bc := (v_check->>'base_match')::int; tc := (v_check->>'trial_match')::int;
     td := (v_check->>'denom')::int; tl := (v_check->>'trial_lowered')::int;
-    -- 적용 권장(안내, 설계 §4-3): 확인용 분모 < 6 = 보류 / 확인용에 공통 긴급 내림 틀림 = 권장 안 함 /
-    -- 기준선보다 2건 이상 나쁨 = 과적합 경고 / 기준선 이상 = 권장(같으면 화면이 「확인용 변화 없음」)
     v_advice := case when td < 6 then 'too_few'
                      when (v_check->>'trial_missing')::int > 0 then 'incomplete'
                      when tl > 0 then 'lowered'
@@ -1752,9 +1753,7 @@ begin
     'set', jsonb_build_object('id', s.id, 'team_id', s.team_id, 'status', s.status, 'pool_thin', s.pool_thin,
                               'noise_mismatch', s.noise_mismatch, 'noise_compared', s.noise_compared,
                               'built_at', s.built_at, 'note', s.note),
-    'trial', case when p_trial is null then null
-             else jsonb_build_object('id', tr.id, 'kind', tr.kind, 'status', tr.status, 'judged_at', tr.judged_at,
-                                     'cost_usd', tr.cost_usd) end,
+    'trial', v_trial,
     'grader_set', v_grader is not null,
     'is_grader', v_grader is not null and v_grader = auth.uid(),
     'tune', coalesce(v_tune, '{}'::jsonb),

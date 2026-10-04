@@ -36,6 +36,11 @@ MIN_COMMON_URGENT = 3        # 세트 전체 공통 긴급 ≥3(갈래 「공통
 POOL_THIN_AB = 10            # A+B가 이보다 적으면 pool_thin
 MIN_SET = 14                 # 전체가 이보다 적으면 too_small(채점 안 열림)
 EVENT_OVERLAP = 3            # 같은 사건 = 제목 키워드 3개 이상 공유(억제·묶기·리마인드 문턱과 같다) — 세트에 1건만
+EVENT_OVERLAP_RULE = 2       # A·B 갈래(규칙 적중)는 그 규칙 낱말을 뺀 키워드 2개 공유 — 한 규칙이 고른 기사들은 규칙 낱말을
+                             # 이미 공유해 제목의 나머지가 짧다(10-04 R2: 「유령 공공와이파이」 한 사건이 A 6건을 다 차지)
+RULE_CAP_PER_BRANCH = 2      # A·B 갈래마다 한 규칙이 정한 기사 최대 수(10-04 R2 운영자 결정) — 위 문턱으로도 그 사건 12건 중
+                             # 3건만 걸러졌다(제목 숫자 표기가 1,600곳·1600곳·1천643곳으로 제각각). 같은 사건이 고칠 몫·확인용에
+                             # 갈려 들어가면 과적합 경고가 약해진다. 규칙이 적은 팀은 세트가 작아져 too_small이 될 수 있다(정직한 결과)
 BODY_MIN = 200               # 본문(content, 앞뒤 공백 뺀 길이) 하한
 PREFETCH = 40                # 본문 길이를 확인할 후보 수(갈래 목록마다 앞에서부터)
 KINDS = ('rule_changed', 'rule_same', 'word_hit_false', 'near', 'unrelated')
@@ -55,6 +60,11 @@ def _flat_words(v):
         elif isinstance(x, list):
             out.extend(w for w in x if isinstance(w, str) and w.strip())
     return out
+
+
+def rule_words(rule) -> list:
+    """규칙 하나의 낱말(any_words + and_any) — 같은 사건 비교에서 뺄 것(pick_set rule_words_of)."""
+    return _flat_words((rule or {}).get('any_words')) + _flat_words((rule or {}).get('and_any'))
 
 
 def near_words(team_rules, keywords) -> list:
@@ -133,11 +143,36 @@ def prefetch_ids(buckets: dict, k: int = PREFETCH) -> list:
     return out
 
 
-def pick_set(buckets: dict, seed: int, body_ok, kw_of) -> dict:
+def strip_rule_words(kw, words) -> set:
+    """제목 키워드에서 규칙 낱말에 든 것(또는 규칙 낱말을 품은 것)을 뺀다 — 대소문자·공백 무시.
+    extract_keywords가 「공공와이파이」를 「공공와이파」로 자르므로 양쪽 부분 일치로 본다."""
+    ws = [_nfc(w).replace(' ', '').casefold() for w in words or () if isinstance(w, str) and w.strip()]
+    if not ws:
+        return set(kw)
+    out = set()
+    for k in kw:
+        kk = _nfc(k).casefold()
+        if not any(w in kk or kk in w for w in ws):
+            out.add(k)
+    return out
+
+
+def pick_set(buckets: dict, seed: int, body_ok, kw_of, rule_words_of=None) -> dict:
     """20건 고르기(설계 §7-3~5). body_ok = 본문 ≥BODY_MIN인 기사 id 집합(prefetch_ids로 확인한 것 — 그 밖은 뽑지 않는다),
     kw_of(재료) → 제목 키워드 집합(같은 사건 = EVENT_OVERLAP 이상 공유 → 세트에 1건).
+    rule_words_of(재료) → 그 기사를 정한 규칙의 낱말 — 주면 A·B 갈래 후보만 「양쪽에서 그 낱말을 뺀 키워드 EVENT_OVERLAP_RULE
+    공유」로 같은 사건을 본다(이미 고른 모든 기사와 비교). 다른 갈래는 그대로 EVENT_OVERLAP. A·B 갈래는 또 한 규칙(rule_id)이
+    정한 기사를 갈래마다 RULE_CAP_PER_BRANCH건까지만 뽑는다.
     반환 {'items': [재료 + slot·seq], 'counts': {갈래: 건수}, 'pool_thin', 'too_small', 'common_urgent'}."""
     used, kws, picked = set(), [], {}
+
+    def same_event(name, c, kw):
+        if rule_words_of and name in ('A', 'B'):
+            words = rule_words_of(c) or ()
+            if words:
+                mine = strip_rule_words(kw, words)
+                return any(len(mine & strip_rule_words(p, words)) >= EVENT_OVERLAP_RULE for p in kws)
+        return any(len(kw & p) >= EVENT_OVERLAP for p in kws)
 
     def take(name, k):
         got = []
@@ -146,8 +181,12 @@ def pick_set(buckets: dict, seed: int, body_ok, kw_of) -> dict:
                 break
             if c['id'] in used or c['id'] not in body_ok:
                 continue
+            rid = c.get('rule_id')
+            if name in ('A', 'B') and rid and \
+                    sum(1 for p in picked.get(name, []) + got if p.get('rule_id') == rid) >= RULE_CAP_PER_BRANCH:
+                continue
             kw = kw_of(c)
-            if any(len(kw & p) >= EVENT_OVERLAP for p in kws):
+            if same_event(name, c, kw):
                 continue
             got.append(c)
             used.add(c['id'])

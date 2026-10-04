@@ -12,4 +12,4 @@ role_settings     5
 cron             16
 storage           2
 vault_names       5
-migrations      192
+migrations      193

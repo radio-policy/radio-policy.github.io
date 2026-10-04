@@ -12,7 +12,7 @@
 import { deepStrictEqual, strictEqual, ok } from 'node:assert/strict';
 import {
   type QueueRow, type PickSub, audienceKey, maxCreatedAt, planSubscriber, watermarkPatch,
-  renderNormalBatch, fetchAllPages, NORMAL_BATCH_MAX,
+  renderNormalBatch, renderTeamNotices, fetchAllPages, NORMAL_BATCH_MAX,
 } from '../supabase/functions/_shared/subscriber_queue.ts';
 import { matchTags } from '../supabase/functions/_shared/news_tags.ts';
 
@@ -365,4 +365,42 @@ Deno.test('holdMs — 새 행은 평가·발송에서 빠지고, 0이면 종전�
   // 8분이 지나면 다음 호출에서 평가된다
   const later = planSubscriber(q, common, { dayStartMs: DAY2, nowMs: NOW2 + 6 * 60 * 1000, immediate: true, holdMs: 8 * 60 * 1000 });
   deepStrictEqual(later.urgentEligible.map((r) => r.id), [1, 2]);
+});
+
+// ── 팀 채점 알림(#277 S3, 2026-10-04): topic 'team'·audience 't:<팀>' — 팀 구독자만, 기록 없으면 72h 전부 ─────────
+Deno.test('팀 채점 알림 — 자기 팀 t: 행만, 공통·실장·다른 팀은 안 받고, 워터마크는 맨 뒤', () => {
+  const tRow = (id: number, at: number, aud: string, html = '<b>📝 우리 팀 뉴스 기준 채점 20건이 준비됐습니다</b>'): QueueRow =>
+    ({ id, topic: 'team', html, created_at: iso(at), news_url: null, tags: null, audience: aud, level: null });
+  const q = mixedQueue().concat([
+    tRow(9001, DAY0 - 5 * H, 't:2'),                // 어제 저녁(수신 창 밖) — 기록 없으면 받는다
+    tRow(9002, NOW - 30 * 60 * 1000, 't:2'),
+    tRow(9003, NOW - 20 * 60 * 1000, 't:3'),
+  ]);
+  const p = planSubscriber(q, baseSub({ team_id: 2 }), { dayStartMs: DAY0, nowMs: NOW, immediate: false });
+  deepStrictEqual(ids(p.teamEligible), [9001, 9002]);
+  const patch = watermarkPatch(p);
+  strictEqual(patch.last_team_sent_at, q.find((r) => r.id === 9002)!.created_at);
+  strictEqual(Object.keys(patch).pop(), 'last_team_sent_at', '칸 순서 맨 뒤');
+  // 즉시 호출에서도 평가한다(크롤러는 팀 알림으로 즉시 호출하지 않지만 다른 즉시 호출에 함께 실려도 된다)
+  deepStrictEqual(ids(planSubscriber(q, baseSub({ team_id: 2 }), { dayStartMs: DAY0, nowMs: NOW, immediate: true }).teamEligible), [9001, 9002]);
+  // 워터마크 뒤만
+  const p2 = planSubscriber(q, baseSub({ team_id: 2, last_team_sent_at: iso(NOW - 40 * 60 * 1000) }),
+    { dayStartMs: DAY0, nowMs: NOW, immediate: false });
+  deepStrictEqual(ids(p2.teamEligible), [9002]);
+  // 공통·실장은 안 받고 칸도 안 생긴다 — 공통 구독자는 종전 본문 그대로(위 assertSameAsOld가 news·team 섞인 큐로도 대조)
+  for (const s of [baseSub(), baseSub({ division: '정책개발실' })]) {
+    const pc = planSubscriber(q, s, { dayStartMs: DAY0, nowMs: NOW, immediate: false });
+    deepStrictEqual(pc.teamEligible, []);
+    ok(!('last_team_sent_at' in watermarkPatch(pc)));
+  }
+  assertSameAsOld(q.filter((r) => r.topic !== 'news'), baseSub(), 'team 행 섞인 큐');
+});
+
+Deno.test('renderTeamNotices — 같은 글 한 번, 구분선, 건수 머리로 합치지 않음', () => {
+  const r = (id: number, html: string): QueueRow =>
+    ({ id, topic: 'team', html, created_at: iso(NOW), news_url: null, tags: null, audience: 't:2', level: null });
+  const a = '<b>📝 우리 팀 뉴스 기준 채점 20건이 준비됐습니다</b>\n<blockquote>…</blockquote>\n📊 <a href="x?p=grading&amp;set=1">채점 화면 열기</a>';
+  const b = a.replace('set=1', 'set=2');
+  strictEqual(renderTeamNotices([r(1, a), r(2, a), r(3, b)]), a + '\n\n───\n\n' + b);
+  strictEqual(renderTeamNotices([]), '');
 });

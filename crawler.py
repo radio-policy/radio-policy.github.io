@@ -3239,7 +3239,9 @@ def compose_grading_set(team_id: int, seed: int, now=None) -> dict:
             if isinstance(n.get('content'), str) and len(n['content'].strip()) >= team_grading.BODY_MIN:
                 body_ok.add(n.get('id'))
     from news_dedup import extract_keywords
-    pick = team_grading.pick_set(buckets, seed, body_ok, lambda c: extract_keywords(c.get('title') or ''))
+    rwords = {r.get('id'): team_grading.rule_words(r) for r in trules}
+    pick = team_grading.pick_set(buckets, seed, body_ok, lambda c: extract_keywords(c.get('title') or ''),
+                                 lambda c: rwords.get(c.get('rule_id')) or ())
     k = pick['counts']
     note = (f"A{k['A']} B{k['B']} S{k['S']} C{k['C']} D{k['D']} · 공통 긴급 {pick['common_urgent']} · "
             f"풀 {len(pool)} · 판정 대기 제외 {waiting}" + (' · 풀 얇음' if pick['pool_thin'] else ''))

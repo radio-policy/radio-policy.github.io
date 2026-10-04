@@ -344,6 +344,33 @@ class TestPick(unittest.TestCase):
         self.assertEqual(p['counts']['A'], 1, '같은 사건은 한 건')
         self.assertFalse({'near-000', 'near-001'} & {c['id'] for c in p['items']}, '본문 없는 기사는 뽑지 않음')
 
+    def test_rule_branch_event_and_cap(self):
+        """R2(10-04): A·B는 규칙 낱말을 뺀 키워드 2개 공유 = 같은 사건, 그리고 한 규칙은 갈래마다 2건까지."""
+        from news_dedup import extract_keywords
+        ttl = ['경기도 ‘유령 공공와이파이’ 429곳… 전국서 미사용 비율 가장 높아',
+               "'유령 와이파이' 경기 429곳 최다…전남광주도 236곳",        # 규칙 낱말 빼고 429곳·경기·유령 → 같은 사건
+               '세금 들인 공공와이파이 1600곳 이용 無…낮은 활용도 도마',
+               '경남 유령 공공와이파이 전국 최고…127곳 접속 한 건도 없어',
+               '청주시, 버스 공공와이파이 5G 전환 추진']
+        cl = [dict(_mk(i, 'rule_changed', '참고', title=t), rule_id='wifi') for i, t in enumerate(ttl)]
+        cl += [dict(_mk(10 + i, 'rule_changed', '참고', title=t), rule_id='spec')
+               for i, t in enumerate(['주파수 재할당 대가 산정 기준 발표', '6G 주파수 로드맵 공개', '재할당 심사위원회 구성 완료'])]
+        cl += [_mk(i, 'near') for i in range(20)] + [_mk(i, 'unrelated', '긴급') for i in range(10)]
+        self.assertEqual(team_grading.strip_rule_words(extract_keywords(ttl[0]), ['공공와이파이', '공공 와이파이']),
+                         {'429곳', '가장', '경기', '높아', '미사용', '비율', '유령', '전국서'}, '「공공와이파」도 뺀다')
+        words = {'wifi': ['공공와이파이', '공공 와이파이', '와이파이'], 'spec': ['주파수', '재할당']}
+        b = {'A': [c for c in cl if c['kind'] == 'rule_changed'], 'B': [], 'S': [], 'C': [c for c in cl if c['kind'] == 'near'],
+             'D긴급': [c for c in cl if c['kind'] == 'unrelated'], 'D보통': [], 'D참고': []}
+        p = team_grading.pick_set(b, 1, {c['id'] for c in cl}, lambda c: extract_keywords(c['title']),
+                                  lambda c: words.get(c['rule_id']))
+        got = [c['title'] for c in p['items'] if c['kind'] == 'rule_changed']
+        self.assertEqual(sum(1 for c in p['items'] if c.get('rule_id') == 'wifi'), 2, '한 규칙은 A에 2건까지')
+        self.assertNotIn(ttl[1], got, '규칙 낱말 빼고 2개 공유 = 같은 사건')
+        self.assertEqual(sum(1 for c in p['items'] if c.get('rule_id') == 'spec'), 2)
+        # rule_words_of 없이(옛 호출)도 규칙당 상한은 rule_id로 걸린다
+        p2 = team_grading.pick_set(b, 1, {c['id'] for c in cl}, _kw_unique)
+        self.assertEqual(sum(1 for c in p2['items'] if c.get('rule_id') == 'wifi'), 2)
+
     def test_waiting_and_bad_level_excluded(self):
         cl = self.classified() + [{'id': 'w', 'waiting': True}, None]
         b = team_grading.bucket_lists(cl, 1)
@@ -486,9 +513,11 @@ class TestBuild(_Base):
         news = [_news(f'a{i}', f'공공와이파이 {w[i]}역 끊김', urgency='보통') for i in range(8)]
         news += [_news(f'b{i}', f'공공와이파이 {w[i]}구 확대', urgency='참고') for i in range(6)]
         news += [_news(f'd{i}', f'{w[i]} {w[13 - i]} 수출', urgency=('긴급', '보통', '참고')[i % 3]) for i in range(12)]
+        news += [_news(f'c{i}', f'{w[i]} 통신 요금', urgency='보통') for i in range(14)]     # 팀 키워드 「요금」 = 주제 근처
         vr = [{'rule_id': 's_wifi', 'sentence_rev': 1, 'news_id': f'a{i}', 'verdict': True, 'status': 'done'} for i in range(8)]
         vr += [{'rule_id': 's_wifi', 'sentence_rev': 1, 'news_id': f'b{i}', 'verdict': False, 'status': 'done'} for i in range(6)]
-        self.db.tables.update({'news_feed': news, 'urgency_rule_verdicts': vr, 'team_urgency': [], 'team_criteria': [],
+        self.db.tables.update({'news_feed': news, 'urgency_rule_verdicts': vr, 'team_urgency': [],
+                               'team_criteria': [{'team_id': 7, 'keywords': ['요금']}],
                                'team_grading_items': [], 'team_grading_trials': [], 'subscriber_queue': [],
                                'team_grading_sets': [{'id': 1, 'team_id': 7, 'status': 'requested', 'build_attempts': 0}],
                                'teams': [{'id': 7, 'name': '시험팀'}]})
@@ -497,8 +526,11 @@ class TestBuild(_Base):
         s = self.db.tables['team_grading_sets'][0]
         self.assertEqual(s['status'], 'open', log)
         items = self.db.tables['team_grading_items']
-        self.assertEqual(len(items), 14)            # A6 B4 C0(근처 기사 없음) D4 = 14 = MIN_SET → 열림
-        self.assertEqual({i['hit_kind_at_build'] for i in items}, {'rule_changed', 'word_hit_false', 'unrelated'})
+        self.assertEqual(len(items), 20)            # 규칙 하나 → A2 B2(규칙당 상한, R2) · C12(근처로 채움) · D4
+        kinds = [i['hit_kind_at_build'] for i in items]
+        self.assertEqual({k: kinds.count(k) for k in set(kinds)},
+                         {'rule_changed': 2, 'word_hit_false': 2, 'near': 12, 'unrelated': 4})
+        self.assertTrue(s['pool_thin'])
         self.assertTrue(all(i['set_id'] == 1 for i in items))
         tr = self.db.tables['team_grading_trials']
         self.assertEqual([(t['kind'], [c['rule_id'] for c in t['candidates']]) for t in tr], [('noise', ['s_wifi'])])

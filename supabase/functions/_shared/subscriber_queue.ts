@@ -11,6 +11,9 @@
 //  · 팀·실장의 중요   = topic 'news' · level '긴급' · audience == 키. 워터마크는 공통과 같은 last_urgent_sent_at.
 //  · 보통(중요+보통을 고른 사람만) = topic 'news' · level '보통' · audience == (키 ?? 'c'), **정기 발송(:25)만** —
 //    크롤러의 즉시 호출(`x-delivery: immediate`)에서는 평가도 워터마크 전진도 하지 않는다.
+//  · 팀 채점 알림(#277 S3, 2026-10-04) = topic 'team' · audience 't:<팀 id>'(level·news_url null — DB CHECK) — 팀이 지정된
+//    구독자만(실장 'd:'·공통은 안 받는다). 켜고 끄는 칸 없음. 워터마크 last_team_sent_at, 기록이 없으면 큐 조회 범위(72h) 전부 —
+//    드문 알림이라 오늘 0시로 자르면 어제 저녁(수신 창 밖)에 만든 세트 알림을 영영 못 받는다. 크롤러는 즉시 호출하지 않는다.
 // ============================================================================
 
 import { matchTags } from './news_tags.ts';
@@ -32,6 +35,7 @@ export interface PickSub {
   last_assembly_sent_at: string | null;
   last_kmcc_sent_at: string | null;
   last_normal_sent_at?: string | null;
+  last_team_sent_at?: string | null;   // 팀 채점 알림(topic 'team') 워터마크(#277)
   team_id?: number | null;
   division?: string | null;
   news_level?: string | null;   // 'urgent'(기본) | 'normal'
@@ -56,6 +60,7 @@ export interface SubPlan {
   normalEligible: QueueRow[];
   normal: QueueRow[];
   moreButton: boolean;           // 주요 뉴스 '더 보기' — 중요+보통 사람에게는 안 붙인다(보통을 이미 받는다)
+  teamEligible: QueueRow[];      // 팀 채점 알림(#277) — 태그 거름 없음(평가 = 발송)
 }
 
 export const COMMON_NORMAL_AUDIENCE = 'c';
@@ -139,6 +144,11 @@ export function planSubscriber(queue: QueueRow[], s: PickSub, o: PickOpts): SubP
   const normalDeliver = urgentUrls.size
     ? normalEligible.filter((r) => !urgentUrls.has((r.news_url || '').trim()))
     : normalEligible;
+  // 팀 채점 알림 — 팀 단위('t:')만. 기록이 없으면 하한 없음(호출측 큐 조회가 이미 72h로 자른다)
+  const teamFromMs = s.last_team_sent_at ? new Date(s.last_team_sent_at).getTime() : -Infinity;
+  const teamEligible = audience !== null && audience.startsWith('t:')
+    ? queue.filter((r) => r.topic === 'team' && r.audience === audience && new Date(r.created_at).getTime() > teamFromMs)
+    : [];
 
   return {
     audience,
@@ -151,6 +161,7 @@ export function planSubscriber(queue: QueueRow[], s: PickSub, o: PickOpts): SubP
     normalEligible,
     normal: matchTags(normalDeliver, s.tags),
     moreButton: !isNormal,
+    teamEligible,
   };
 }
 
@@ -158,6 +169,7 @@ export function planSubscriber(queue: QueueRow[], s: PickSub, o: PickOpts): SubP
  * 발송 성공 뒤 쓸 워터마크 칸(브리핑 날짜는 호출측이 앞에 넣는다 — 칸 순서까지 종전과 같게).
  * delivered가 아니라 **eligible** 기준, nowIso가 아니라 **max(created_at)**.
  * 보통은 평가했을 때만 — 중요만인 사람·즉시 호출은 last_normal_sent_at을 건드리지 않는다.
+ * 팀 채점 알림은 맨 뒤(last_team_sent_at) — 팀 행이 없으면 칸이 없어 공통 구독자의 본문은 종전과 바이트 같다.
  */
 export function watermarkPatch(p: SubPlan): Record<string, string> {
   const patch: Record<string, string> = {};
@@ -165,11 +177,29 @@ export function watermarkPatch(p: SubPlan): Record<string, string> {
   const aMark = maxCreatedAt(p.assemblyEligible);
   const kMark = maxCreatedAt(p.kmccEligible);
   const nMark = p.normalOn ? maxCreatedAt(p.normalEligible) : null;
+  const tMark = maxCreatedAt(p.teamEligible || []);
   if (uMark) patch.last_urgent_sent_at = uMark;
   if (aMark) patch.last_assembly_sent_at = aMark;
   if (kMark) patch.last_kmcc_sent_at = kMark;
   if (nMark) patch.last_normal_sent_at = nMark;
+  if (tMark) patch.last_team_sent_at = tMark;
   return patch;
+}
+
+/**
+ * 팀 채점 알림 한 덩어리 — 행 html은 크롤러가 만든 완성 블록(제목·blockquote·링크, crawler._grading_notice_html)이라
+ * 파싱하지 않고 같은 글은 한 번만, 구분선으로 잇는다. mergeQueueBlocks를 거치지 않는다(제목의 「20건」을 건수 머리로 오인).
+ */
+export function renderTeamNotices(rows: QueueRow[]): string {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const r of rows) {
+    const h = (r.html || '').trim();
+    if (!h || seen.has(h)) continue;
+    seen.add(h);
+    out.push(h);
+  }
+  return out.join('\n\n───\n\n');
 }
 
 /**

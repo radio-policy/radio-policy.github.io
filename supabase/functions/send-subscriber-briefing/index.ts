@@ -22,6 +22,8 @@
 //     바이트 불변). 「중요+보통」을 고른 사람은 **정기 발송(:25)에서만** level '보통' 행을 한 시간치 한 통으로 받는다
 //     — 크롤러 즉시 호출(헤더 `x-delivery: immediate`)은 보통을 평가하지도 워터마크를 옮기지도 않는다.
 //     고르는 규칙은 _shared/subscriber_queue.ts(순수 함수, tests/subscriber_queue.test.ts).
+//   - 팀 채점 알림(#277 S3, 2026-10-04): 크롤러가 세트를 열면 topic 'team'·audience 't:<팀>' 한 행 — 그 팀이 지정된
+//     구독자에게 창 안에서(즉시 호출 없음) 맨 뒤에 붙여 보낸다. 워터마크 last_team_sent_at.
 //
 //  보안: x-cron-secret == CRON_SECRET (Vault `subscriber_cron_secret`와 동일값).
 // ============================================================================
@@ -34,7 +36,7 @@ import { briefingToTelegramHtml, splitByLines, sendTelegramHtml, DASHBOARD_URL, 
 import { matchTags } from '../_shared/news_tags.ts';
 import { moreButton } from '../_shared/news_more.ts';
 import {
-  type QueueRow, maxCreatedAt, planSubscriber, watermarkPatch, renderNormalBatch, fetchAllPages,
+  type QueueRow, maxCreatedAt, planSubscriber, watermarkPatch, renderNormalBatch, renderTeamNotices, fetchAllPages,
 } from '../_shared/subscriber_queue.ts';
 import {
   type HoldLookup, type HoldTeamRow, holdRecheckRows, holdKey, holdTeamsNeeded, holdDropKeys,
@@ -82,6 +84,7 @@ interface Sub {
   division: string | null;
   news_level: string;
   last_normal_sent_at: string | null;   // 보통 묶음 워터마크(중요+보통을 고른 사람만 전진)
+  last_team_sent_at: string | null;     // 팀 채점 알림(topic 'team', #277 S3) 워터마크 — 팀이 지정된 구독자만 전진
 }
 // QueueRow(news_url·audience·level 규약)는 _shared/subscriber_queue.ts로 옮겼다(#252 — 테스트가 같은 타입을 쓴다)
 
@@ -294,7 +297,7 @@ Deno.serve(async (req: Request) => {
     let q = sb.from('telegram_subscribers')
       // ⚠ select('*')가 아니라 **명시 목록**이다. 컬럼을 빠뜨리면 값이 undefined가 되어
       //   "전체 수신"으로 조용히 퇴화하고 타입 검사도 못 잡는다. 컬럼 추가 시 여기부터 고칠 것.
-      .select('chat_id, days, topic_briefing, topic_urgent, topic_assembly, topic_kmcc, briefing_hour, end_hour, last_briefing_sent_date, last_urgent_sent_at, last_assembly_sent_at, last_kmcc_sent_at, tags, team_id, division, news_level, last_normal_sent_at')
+      .select('chat_id, days, topic_briefing, topic_urgent, topic_assembly, topic_kmcc, briefing_hour, end_hour, last_briefing_sent_date, last_urgent_sent_at, last_assembly_sent_at, last_kmcc_sent_at, tags, team_id, division, news_level, last_normal_sent_at, last_team_sent_at')
       // 수신 창: briefing_hour(오전 6~10) ≤ 지금 ≤ end_hour(오후 6~10).
       // end_hour는 종전에 코드에 박혀 있던 '23시 이후 무발송'을 구독자가 고르게 바꾼 것.
       // 창을 벗어난 시간대의 큐는 버리지 않는다 — 워터마크가 안 움직이므로 다음 날 시작 시각에 전달된다.
@@ -401,7 +404,7 @@ Deno.serve(async (req: Request) => {
       const assembly = plan.assemblyEligible;
       const kmcc = plan.kmccEligible;
 
-      // 순서 = 브리핑(위) → 주요 뉴스 → 보통 → 국회·법률 → 방미통위
+      // 순서 = 브리핑(위) → 주요 뉴스 → 보통 → 국회·법률 → 방미통위 → 팀 채점 알림(#277)
       const groups: Array<{ topic: string; rows: QueueRow[] }> = [
         { topic: 'urgent', rows: urgent },
         { topic: 'normal', rows: plan.normal },
@@ -409,9 +412,16 @@ Deno.serve(async (req: Request) => {
         // kmcc 행은 첫 줄이 "📋 <b>방미통위 제N차 회의 의사일정 …</b>" 꼴이라 HEADER_COUNT_RE(숫자+건)에 안 걸리고
         // 줄은 '· ' 불릿뿐이라 mergeQueueBlocks 가 그대로 통과시킨다(assembly 와 같은 legacy 경로).
         { topic: 'kmcc', rows: kmcc },
+        { topic: 'team', rows: plan.teamEligible },
       ];
       for (const { topic, rows: grp } of groups) {
         if (!grp.length) continue;
+        // 팀 채점 알림(#277) — 완성 블록을 같은 글 한 번씩 잇기만(제목의 「20건」을 mergeQueueBlocks가 건수 머리로 오인하지 않게)
+        if (topic === 'team') {
+          const tb = renderTeamNotices(grp);
+          if (tb.trim()) for (const c of splitByLines(tb)) msgs.push({ text: c });
+          continue;
+        }
         // ── 이중 경로 판별 ──
         //  news_url NOT NULL = 기사 단위 행 → 신규 렌더러(헤더 1회 + 번호 + 칩, 순수 append)
         //  news_url NULL     = 구버전 묶음 행(html에 제목이 이미 포함) → mergeQueueBlocks(존치)

@@ -368,6 +368,7 @@ function applyAuthUI() {
   // 팀 층(#250) — 계정·팀이 바뀐 때만 팀 등급을 다시 읽는다. 비로그인·팀 없는 계정은 조회 0회(공통값 그대로)
   refreshTeamLayer();
   _urAuthChanged();
+  _grAuthChanged();   // 딥링크 ?p=grading&set= — 로그인되면 그 세트를 연다(#277 S3)
 }
 
 /** 입력창 아래 잔여 한도 표시 */
@@ -682,7 +683,7 @@ async function saveSubscriberTeam(i, btn) {
 // 지금은 저장만 한다 — 판정·수집에 쓰는 코드는 아직 없다(수집 확대·팀별 AI 판정은 Fable 결정 뒤).
 // rev·updated_at은 트리거가 정한다(내용이 같으면 그대로, 바뀌면 옛 판을 team_criteria_history에).
 // updated_by(계정 uuid)는 칸 GRANT 밖이라 읽지 않는다(#269 원칙) — select는 꼭 TC_COLS로.
-var TC_COLS = 'team_id,criteria,keywords,examples,rev,updated_at';
+var TC_COLS = 'team_id,criteria,keywords,examples,rev,updated_at,unconverted';   // unconverted = 규칙으로 옮기지 못한 줄(변환 세션이 씀, 읽기만 — #277)
 var TC_MAX_CRITERIA = 500, TC_MAX_EXAMPLES = 1000, TC_MAX_KEYWORDS = 20, TC_KW_RECOMMEND = 10, TC_MAX_KW_LEN = 30;
 // 흔한 낱말 — 혼자서는 거의 모든 기사에 걸린다(제출 양식 「쓰실 때」 3번). 경고만 하고 저장은 막지 않는다
 var TC_GENERIC_WORDS = ['AI', '통신', 'SKT', 'SK텔레콤', 'KT', 'LG유플러스', 'LGU+', '통신3사', '이동통신', '5G', '6G', '정부', '과기정통부', '규제', '정책'];
@@ -759,9 +760,16 @@ function renderTeamCriteria(note) {
     '<textarea id="tc-examples" rows="3" maxlength="' + TC_MAX_EXAMPLES + '" oninput="_tcCount()" style="' + fieldCss + '"></textarea>' +
     '<div style="display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap">' +
       '<button class="btn btn-primary" style="font-size:12px" onclick="saveTeamCriteria(this)"><i class="ti ti-device-floppy"></i>저장</button>' +
-      '<span style="font-size:11px;color:var(--text-tertiary)">지금은 저장만 합니다 — 등급에는 아직 쓰이지 않습니다.</span>' +
-    '</div>';
+      '<span style="font-size:11px;color:var(--text-tertiary)">기준문은 기록입니다 — 등급은 팀 규칙이 정합니다(변환 세션이 규칙으로 옮김). 첫 등록 뒤에는 그 팀이 「긴급도 설정 → 우리 팀」에서 직접 고칩니다.</span>' +
+    '</div>' +
+    (row && (row.unconverted || '').trim()
+      ? '<div style="font-size:11px;margin-top:8px;padding:6px 8px;border:1px solid #f59e0b;border-radius:4px"><b style="color:#b45309">규칙으로 옮기지 못한 줄</b>(변환 세션 기록, 읽기만)' +
+        '<div style="white-space:pre-wrap;line-height:1.6;margin-top:3px">' + escHtml(row.unconverted) + '</div></div>'
+      : '') +
+    // 팀 채점(#277 S3, 설계 §5-2·§10-2) — 채점 대표(그 팀 승인·활성 계정) + 「채점 세트 만들기」. _tcGradingLoad가 채운다
+    '<div id="tc-grading" style="margin-top:14px;padding-top:10px;border-top:0.5px solid var(--border-secondary)"></div>';
   el.innerHTML = html;
+  _tcGradingLoad();
   // 값은 DOM 속성으로 넣는다(HTML 조립에 사용자 글을 섞지 않는다)
   document.getElementById('tc-criteria').value = row ? row.criteria || '' : '';
   document.getElementById('tc-keywords').value = row ? (row.keywords || []).join(', ') : '';
@@ -839,6 +847,100 @@ async function saveTeamCriteria(btn) {
   renderTeamCriteria(before && before.rev === saved.rev ? who + ': 변경 없음' : '✅ ' + who + ': 판 ' + saved.rev + '으로 저장했습니다');
 }
 
+// ── 설정 「팀 기준문」 카드 아래 — 팀 채점 대표·세트(#277 S3, 설계 §5-2·§10-2) ──
+// 대표 = 그 팀의 승인·활성 대시보드 계정(teams.grader_user_id — 외래키 없음, 트리거가 그 팀 승인·활성인지 확인, #266-보론).
+// 대표 답이 정답, 없으면 팀원 답(서로 다르면 회색지대). 세트 만들기 = team_grading_sets에 요청 행 — 다음 수집(10분)이 20건을 고른다.
+// 승인 계정이 없는 팀은 채점할 사람이 없으므로 버튼을 막는다(「가입 안내」). 관리자는 월 2회 제한 없음(트리거)
+var GR_STATUS = {
+  requested: '요청됨 — 다음 수집(10분 안)에 20건을 고릅니다', building: '만드는 중', open: '열림 — 답 받는 중',
+  scored: '채점 중(첫 다시 채점 뒤 — 답 잠김, 대표만 고침)', applied: '적용됨 — 끝', closed: '닫힘 — 끝',
+  too_small: '풀 부족 — 고를 기사가 14건 미만이라 채점이 안 열렸습니다', no_rules: '켜진 팀 규칙이 없어 만들지 못함', failed: '만들기 실패(3번)'
+};
+var GR_ACTIVE = ['requested', 'building', 'open', 'scored'];
+var GR_SET_COLS = 'id,team_id,status,built_at,pool_thin,noise_mismatch,noise_compared,note,created_at,closed_at';
+async function _tcGradingLoad(note) {
+  var el = document.getElementById('tc-grading');
+  if (!el || !sb || _tcSel == null || !isAdminUser()) return;
+  var sel = _tcSel, tid = Number(sel);
+  el.innerHTML = '<div style="font-size:11px;color:var(--text-tertiary)">팀 채점 정보 불러오는 중…</div>';
+  try {
+    var res = await Promise.all([
+      sb.from('teams').select('id,grader_user_id').eq('id', tid).maybeSingle(),
+      sb.from('profiles').select('user_id,name,role,approved,active').eq('team_id', tid).order('name'),
+      sb.from('team_grading_sets').select(GR_SET_COLS).eq('team_id', tid).order('id', { ascending: false }).limit(3)
+    ]);
+    if (_tcSel !== sel) return;
+    res.forEach(function(r) { if (r.error) throw r.error; });
+    var grader = res[0].data ? res[0].data.grader_user_id : null;
+    var ok = (res[1].data || []).filter(function(p) { return p.approved && p.active; });
+    var sets = res[2].data || [];
+    var last = sets[0] || null, active = last && GR_ACTIVE.indexOf(last.status) !== -1;
+    var graderOk = !!grader && ok.some(function(p) { return p.user_id === grader; });
+    var opts = '<option value="">(대표 없음 — 팀원 답으로 채점)</option>' + ok.map(function(p) {
+      return '<option value="' + escHtml(p.user_id) + '"' + (p.user_id === grader ? ' selected' : '') + '>' + chEsc((p.name || '(이름 없음)') + (p.role === 'leader' ? ' · 팀장' : '')) + '</option>';
+    }).join('');
+    var selCss = 'padding:4px 6px;font-size:12px;border:0.5px solid var(--border-mid);border-radius:4px;background:var(--bg-secondary);color:var(--text-primary);font-family:inherit';
+    var html = (note ? '<div style="font-size:11.5px;color:var(--text-secondary);margin-bottom:6px">' + note + '</div>' : '') +
+      '<div style="font-size:12px;font-weight:600;color:var(--text-secondary);margin-bottom:6px">📝 팀 채점</div>' +
+      '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;font-size:11.5px">채점 대표 ' +
+        '<select id="tc-grader" style="' + selCss + '"' + (ok.length ? '' : ' disabled') + '>' + opts + '</select>' +
+        '<button class="btn" style="font-size:11px;padding:3px 10px" onclick="saveTeamGrader(this)"' + (ok.length ? '' : ' disabled') + '>대표 저장</button>' +
+        '<span style="color:var(--text-tertiary)">승인 계정 ' + ok.length + '명' +
+          (grader && !graderOk ? ' · ⚠️ 지정된 대표가 비활성이거나 다른 팀이라 없음으로 봅니다' : '') + '</span></div>' +
+      '<div style="font-size:11.5px;margin-top:8px;line-height:1.7">' +
+        (last ? '최근 세트 #' + last.id + ' · ' + escHtml(GR_STATUS[last.status] || last.status) +
+                (last.built_at ? ' · ' + escHtml(_kstYmd(last.built_at)) : '') +
+                (last.note ? '<br><span style="color:var(--text-tertiary)">' + escHtml(last.note) + '</span>' : '')
+              : '아직 만든 채점 세트가 없습니다.') + '</div>' +
+      '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px">' +
+        (ok.length
+          ? '<button class="btn" style="font-size:11px;padding:3px 10px" onclick="grRequestSet(' + tid + ', this)"' + (active ? ' disabled title="진행 중인 세트가 끝나야 새로 만듭니다"' : '') + '><i class="ti ti-list-check"></i> 채점 세트 만들기</button>'
+          : '<button class="btn" style="font-size:11px;padding:3px 10px" disabled title="채점할 사람이 없습니다 — 그 팀 사람이 가입하고 승인돼야 합니다">승인 계정 없음 — 가입 안내</button>') +
+        (last && ['open', 'scored', 'applied', 'closed'].indexOf(last.status) !== -1
+          ? '<button class="btn" style="font-size:11px;padding:3px 10px" onclick="openGrading(' + last.id + ')">세트 보기</button>' : '') +
+        '<span style="font-size:10.5px;color:var(--text-tertiary)">팀이 지정된 구독자에게 준비 알림(창 안 정기 발송) · 관리자는 월 2회 제한 없음</span>' +
+      '</div>';
+    el.innerHTML = html;
+  } catch (e) {
+    if (_tcSel === sel) el.innerHTML = '<div style="font-size:11px;color:var(--text-tertiary)">팀 채점 정보 조회 실패: ' + escHtml((e && e.message) || String(e)) + '</div>';
+  }
+}
+async function saveTeamGrader(btn) {
+  if (!sb || _tcSel == null || !isAdminUser()) return;
+  var s = document.getElementById('tc-grader');
+  var uid = s && s.value ? s.value : null;
+  if (btn) btn.disabled = true;
+  var r = await sb.from('teams').update({ grader_user_id: uid }).eq('id', Number(_tcSel)).select('id,grader_user_id');
+  if (btn) btn.disabled = false;
+  if (r.error) {
+    alert(/TEAM_GRADER_NOT_MEMBER/.test(r.error.message || '') ? '채점 대표는 그 팀의 승인·활성 계정만 지정할 수 있습니다.' : '대표 저장 실패: ' + r.error.message);
+    return;
+  }
+  if (!r.data || !r.data.length) { alert('저장된 행이 없습니다(권한 확인).'); return; }
+  _tcGradingLoad('✅ ' + escHtml(_teamName(_tcSel)) + ': 채점 대표를 ' + (uid ? '지정' : '비움') + '했습니다');
+}
+// 세트 요청 — 관리자(설정 카드) 또는 우리 팀(긴급도 설정 우리 팀 탭 「새 20건」). 상태·만든 값은 트리거가 정하고(요청만),
+// 팀 요청은 월 2회(TEAM_GRADING_MONTHLY_CAP), 진행 중 세트가 있으면 유일 색인(23505)
+async function grRequestSet(teamId, btn) {
+  if (!sb) return;
+  var admin = isAdminUser();
+  if (!admin && Number(teamId) !== myTeamId()) { alert(teamEditGateMsg()); return; }
+  if (!confirm((admin ? _teamName(teamId) + ' ' : '우리 팀 ') + '채점 세트(기사 20건)를 만들까요?\n다음 수집(10분 안)에 최근 30일 기사에서 고르고, 그 팀 구독자에게 준비 알림이 갑니다.' +
+               (admin ? '' : '\n(팀 요청은 한 달에 2번까지)'))) return;
+  if (btn) btn.disabled = true;
+  var r = await sb.from('team_grading_sets').insert({ team_id: Number(teamId) }).select('id,status');
+  if (btn) btn.disabled = false;
+  if (r.error) {
+    var m = r.error.message || '';
+    if (r.error.code === '23505') alert('진행 중인 채점 세트가 있습니다 — 그 세트를 적용하거나 닫은 뒤 새로 만드세요.');
+    else if (/MONTHLY_CAP/.test(m)) alert('새 채점 세트는 팀당 한 달에 2번까지입니다.');
+    else alert('세트 요청 실패: ' + m);
+    return;
+  }
+  if (admin && document.getElementById('tc-grading')) _tcGradingLoad('✅ 세트 #' + r.data[0].id + ' 요청 — 다음 수집에 만듭니다');
+  _grTeamBox = null; _urGradingRender();
+}
+
 // ── 「긴급도 설정」 우리 팀 탭 — 우리 팀 기준문 보기(읽기 전용, #270). 등록·수정은 관리자가 설정 화면에서 ──
 var _tcMine = null, _tcMineKey = null, _tcMineErr = '';
 function _urTeamCriteriaRender() {
@@ -862,16 +964,80 @@ function _urTeamCriteriaRender() {
   if (_tcMine === null) return;
   var row = _tcMine;
   if (!row || (!row.criteria && !(row.keywords || []).length)) {
-    el.innerHTML = '<div style="font-size:11px;color:var(--text-tertiary)">우리 팀 기준문이 아직 등록되지 않았습니다 — 팀에서 보낸 기준문은 관리자가 등록합니다.</div>';
+    el.innerHTML = '<div style="font-size:11px;color:var(--text-tertiary)">우리 팀 기준문이 아직 등록되지 않았습니다 — 팀에서 보낸 기준문은 관리자가 처음 한 번 등록합니다(그 뒤로는 우리 팀이 여기서 고칩니다).</div>';
     return;
   }
-  el.innerHTML = '<details style="font-size:11.5px;border:0.5px solid var(--border-secondary);border-radius:var(--radius-md);padding:6px 10px">' +
+  // 팀 편집(#277 S3, 설계 §5-3) — 행이 있어야 UPDATE가 되므로 「관리자 첫 등록 뒤」에만 열린다(RLS team_criteria_upd). 고정 안내:
+  // 기준문은 기록이고 등급은 규칙이 정한다 — 고쳐도 판정·수집에는 아무 영향이 없다(옮기지 못한 줄 unconverted는 변환 세션이 적는다)
+  var editing = _tcMineEdit && teamEditor();
+  var NOTE = '기준문은 기록이고 등급은 아래 규칙이 정합니다 — 고친 기준문을 규칙에 반영하려면 「규칙으로 옮기기」(말로 적기) 또는 관리자에게.';
+  var unconv = (row.unconverted || '').trim();
+  var fieldCss = 'width:100%;box-sizing:border-box;padding:6px 8px;font-size:12px;line-height:1.6;border:0.5px solid var(--border-mid);border-radius:4px;background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;resize:vertical';
+  el.innerHTML = '<details' + (editing || unconv ? ' open' : '') + ' style="font-size:11.5px;border:0.5px solid var(--border-secondary);border-radius:var(--radius-md);padding:6px 10px">' +
     '<summary style="cursor:pointer;color:var(--text-secondary)"><b>우리 팀 기준문</b> · 판 ' + row.rev + ' · ' +
       escHtml(new Date(row.updated_at).toLocaleDateString('ko-KR', { year: '2-digit', month: '2-digit', day: '2-digit' })) +
-      ' <span style="color:var(--text-tertiary)">(등록만 됨 — 등급에는 아직 쓰이지 않음)</span></summary>' +
-    '<div style="white-space:pre-wrap;line-height:1.7;margin-top:6px;color:var(--text-primary)">' + escHtml(row.criteria || '') + '</div>' +
-    ((row.keywords || []).length ? '<div style="margin-top:6px">' + _urChips(row.keywords) + '</div>' : '') +
+      ' <span style="color:var(--text-tertiary)">(기록 — 등급은 규칙이 정함)</span>' +
+      (unconv ? ' <span style="color:#b45309">· 규칙으로 옮기지 못한 줄 있음</span>' : '') + '</summary>' +
+    (editing
+      ? '<div style="font-size:10.5px;color:#b45309;margin:6px 0 4px;line-height:1.6">' + escHtml(NOTE) + '</div>' +
+        '<div style="font-weight:600;margin:6px 0 2px">기준문 <span id="tcm-criteria-n" style="font-weight:400;color:var(--text-tertiary)"></span></div>' +
+        '<textarea id="tcm-criteria" rows="6" maxlength="' + TC_MAX_CRITERIA + '" oninput="_tcMineCount()" style="' + fieldCss + '"></textarea>' +
+        '<div style="font-weight:600;margin:6px 0 2px">키워드 <span style="font-weight:400;color:var(--text-tertiary)">(쉼표·줄바꿈 구분, 최대 ' + TC_MAX_KEYWORDS + '개)</span></div>' +
+        '<textarea id="tcm-keywords" rows="2" style="' + fieldCss + '"></textarea>' +
+        '<div style="font-weight:600;margin:6px 0 2px">기사 예 <span style="font-weight:400;color:var(--text-tertiary)">(선택)</span></div>' +
+        '<textarea id="tcm-examples" rows="2" maxlength="' + TC_MAX_EXAMPLES + '" style="' + fieldCss + '"></textarea>' +
+        '<div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap"><button class="btn btn-primary" style="font-size:11.5px" onclick="saveMyTeamCriteria(this)"><i class="ti ti-device-floppy"></i> 저장</button>' +
+        '<button class="btn" style="font-size:11.5px" onclick="_tcMineEdit=false;_urTeamCriteriaRender()">취소</button>' +
+        '<span style="font-size:10.5px;color:var(--text-tertiary);align-self:center">사외 서버에 저장되니 대외비는 넣지 마세요</span></div>'
+      : '<div style="white-space:pre-wrap;line-height:1.7;margin-top:6px;color:var(--text-primary)">' + escHtml(row.criteria || '') + '</div>' +
+        ((row.keywords || []).length ? '<div style="margin-top:6px">' + _urChips(row.keywords) + '</div>' : '') +
+        (unconv ? '<div style="margin-top:8px;padding:6px 8px;border:1px solid #f59e0b;border-radius:var(--radius-md)"><b style="color:#b45309">규칙으로 옮기지 못한 줄</b> — 구체 주제(어떤 규제·어떤 회사·어떤 사안)로 풀어 주세요. 이 줄은 지금 등급에 쓰이지 않습니다.' +
+                  '<div style="white-space:pre-wrap;line-height:1.7;margin-top:4px;color:var(--text-primary)">' + escHtml(unconv) + '</div></div>' : '') +
+        (teamEditor()
+          ? '<div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;align-items:center">' +
+              '<button class="btn" style="font-size:11px;padding:2px 8px" onclick="_tcMineEdit=true;_urTeamCriteriaRender();_tcMineFill()"><i class="ti ti-pencil"></i> 기준문 고치기</button>' +
+              '<button class="btn" style="font-size:11px;padding:2px 8px" onclick="_tcToRule()" title="새 규칙 창의 「말로 적기」에 옮길 줄을 적어 AI가 규칙 칸을 채우게 합니다"><i class="ti ti-arrow-right"></i> 규칙으로 옮기기</button>' +
+              '<span style="font-size:10.5px;color:var(--text-tertiary)">' + escHtml(NOTE) + '</span></div>'
+          : '')) +
     '</details>';
+}
+var _tcMineEdit = false;
+function _tcMineFill() {
+  var r = _tcMine || {};
+  var set = function(id, v) { var e = document.getElementById(id); if (e) e.value = v; };
+  set('tcm-criteria', r.criteria || ''); set('tcm-keywords', (r.keywords || []).join(', ')); set('tcm-examples', r.examples || '');
+  _tcMineCount();
+}
+function _tcMineCount() {
+  var c = document.getElementById('tcm-criteria'), n = document.getElementById('tcm-criteria-n');
+  if (c && n) n.textContent = c.value.trim().length + ' / ' + TC_MAX_CRITERIA + '자';
+}
+// 「규칙으로 옮기기」 — 새 규칙 창을 열고 「말로 적기」 칸에 커서를 둔다(옮길 줄은 팀이 골라 붙인다 — 기준문 전체를 한 규칙에 넣지 않는다)
+function _tcToRule() {
+  editUrgencyRule(null);
+  var ta = document.getElementById('ur-f-nl');
+  if (ta) { ta.placeholder = '기준문에서 규칙으로 옮길 줄 하나를 붙여 넣으세요 — 예: ' + UR_EXAMPLES.team.nl.replace(/^예: /, ''); try { ta.focus(); } catch (e) { /* 포커스만 생략 */ } }
+}
+// 우리 팀이 기준문 고치기 — UPDATE만(INSERT는 관리자, 설계 §5-3). 판·이력은 트리거가 정한다. 0행 = 권한 없음(첫 등록 전이거나 팀이 바뀜)
+async function saveMyTeamCriteria(btn) {
+  var tid = myTeamId();
+  if (!sb || tid == null || !teamEditor()) { alert(teamEditGateMsg()); return; }
+  var v = function(id) { var e = document.getElementById(id); return e ? e.value.trim() : ''; };
+  var crit = v('tcm-criteria'), ex = v('tcm-examples');
+  var kws = _urSplit(v('tcm-keywords'));
+  if (crit.length > TC_MAX_CRITERIA) { alert('기준문은 ' + TC_MAX_CRITERIA + '자까지입니다.'); return; }
+  if (kws.length > TC_MAX_KEYWORDS) { alert('키워드는 ' + TC_MAX_KEYWORDS + '개까지입니다.'); return; }
+  if (kws.some(function(w) { return w.length > TC_MAX_KW_LEN; })) { alert(TC_MAX_KW_LEN + '자 넘는 키워드가 있습니다 — 쉼표가 빠졌는지 보세요.'); return; }
+  if (btn) btn.disabled = true;
+  var r = await sb.from('team_criteria').update({ criteria: crit, keywords: kws, examples: ex }).eq('team_id', tid).select(TC_COLS);
+  if (btn) btn.disabled = false;
+  if (r.error) { alert('기준문 저장 실패: ' + (r.error.message || r.error)); return; }
+  if (!r.data || !r.data.length) { alert('저장된 행이 없습니다 — 관리자의 첫 등록 전이거나 권한이 없습니다.'); return; }
+  var before = _tcMine && _tcMine.rev;
+  _tcMine = r.data[0]; _tcMineEdit = false;
+  _tcRows[String(tid)] = _tcMine;   // 설정 화면 사본도
+  _urTeamCriteriaRender();
+  _urMsg(before === _tcMine.rev ? '기준문: 변경 없음' : '기준문을 판 ' + _tcMine.rev + '으로 저장했습니다 — 등급은 바뀌지 않습니다(규칙이 정함).');
 }
 
 async function claudeFetch(init) {
@@ -4799,6 +4965,8 @@ function _urRenderTabs() {
     var e = document.getElementById(p[0]); if (e) e.placeholder = ex[p[1]];
   });
   _urTeamCostRender();  _urTeamCriteriaRender();   // 우리 팀 기준문 보기(#270) — 우리 팀 탭에서만
+  _urLoweredRender();   _urGradingRender();        // 이번 주 내린 공통 중요(§8)·채점 상자(#277 S3) — 우리 팀 탭에서만
+  _urSaveGate();
 }
 // 로그인·로그아웃·팀 변경 뒤(applyAuthUI) — 탭·버튼을 새 권한에 맞추고, 편집 권한이 없어졌으면 폼을 닫는다
 function _urAuthChanged() {
@@ -4873,14 +5041,28 @@ function renderUrgencyRules() {
           ? '<span style="font-size:10px;white-space:nowrap;padding:0 6px;border-radius:10px;border:0.5px solid var(--accent);color:var(--accent)" title="①~③ 낱말이 걸린 기사 중 AI가 AI 확인 조건에 맞다고 본 기사에만 적용 — 확인은 다음 수집부터 10분마다 최대 100건씩(기사당 약 2~4원), 한 번 확인한 기사는 다시 묻지 않음">AI 확인</span>'
           : '') +
         (r.enabled ? '' : '<span style="font-size:10px;color:#b45309">꺼짐 — 적용 안 함</span>') +
+        (function() {   // 우리 팀 내림 규칙 — 최근 30일 공통 중요를 내린 수(§8 ②, #277 S3)
+          if (_urTab !== 'team' || !_urIsLowering(r)) return '';
+          var c = _urRuleLoweredCount(r);
+          return c == null ? '' : '<span style="font-size:10px;white-space:nowrap;color:' + (c ? '#b45309' : 'var(--text-tertiary)') + '" title="최근 30일 공통 중요 기사 중 이 규칙이 우리 팀에서 내린 수 — 그 기사는 우리 팀 구독자에게 중요 알림이 가지 않습니다">⬇ 공통 중요 내림 ' + c + '건(30일)</span>';
+        })() +
         (admin ? '<button class="btn" style="font-size:10.5px;padding:2px 8px;margin-left:auto" data-rid="' + escHtml(r.id) + '" onclick="editUrgencyRule(this.getAttribute(\'data-rid\'))">편집</button>' : '') +
       '</div>' +
       '<div style="font-size:11.5px;color:var(--text-secondary);margin-top:5px;line-height:1.8">' + _urSentenceHtml(r) + '</div></div>';
   }).join('');
 }
 
+// 쉼표·줄바꿈으로 나눈 낱말 — 같은 낱말은 한 번만(F8, 10-04 임시 계정 시험: 「말로 적기」가 인하·확대를 두세 번 넣었다).
+// 같은지는 NFC + 공백 묶음으로 본다(대소문자는 매처가 그대로 보므로 구분한다)
 function _urSplit(s) {
-  return (s || '').split(/[,，\n]/).map(function(w) { return w.trim(); }).filter(Boolean);
+  var seen = {};
+  return (s || '').split(/[,，\n]/).map(function(w) { return w.trim(); }).filter(function(w) {
+    if (!w) return false;
+    var k = w.normalize('NFC').replace(/\s+/g, ' ');
+    if (seen[k]) return false;
+    seen[k] = 1;
+    return true;
+  });
 }
 
 function _urFormRow() {
@@ -4953,6 +5135,7 @@ function editUrgencyRule(id) {
     (tabRules.map(function(x) { return x.position + ' ' + _urShortName(x); }).join(' · ') || '(아직 없음)');
   form.style.display = 'block';
   _urFormOpen = true;
+  _urLastPreview = null;
   _urFormSentence();
   var pv = document.getElementById('ur-preview'); if (pv) pv.innerHTML = '';
   _urMsg('');
@@ -4967,6 +5150,7 @@ function _urFormSentence() {
   var row = _urFormRow();
   el.innerHTML = '<div style="font-size:10.5px;color:var(--text-tertiary);margin-bottom:2px">이렇게 읽힙니다' +
     (row.enabled ? '' : ' (꺼짐 — 저장해도 적용 안 함)') + '</div>' + _urSentenceHtml(row);
+  _urSaveGate();   // 칸을 고치면 미리보기를 다시 돌려야 저장된다(F6, 우리 팀 탭)
 }
 
 // 편집 칸 검증 — 매처 검증(validateRules)의 영문 메시지 전에 칸 이름으로 먼저 알린다
@@ -4988,7 +5172,7 @@ function _urFormErrors(row) {
 function cancelUrgencyRuleEdit() {
   var form = document.getElementById('ur-form');
   if (form) form.style.display = 'none';
-  _urFormOpen = false; _urEditing = null;
+  _urFormOpen = false; _urEditing = null; _urLastPreview = null;
   var pv = document.getElementById('ur-preview'); if (pv) pv.innerHTML = '';
 }
 
@@ -5047,8 +5231,12 @@ async function previewUrgencyRules(fromForm) {
   var hits = [], perRule = {}, changed = 0, total = 0, pinned = 0, tDecided = 0;
   var cands = [], sc = { yes: 0, no: 0, wait: 0, none: 0, fresh: 0, failed: 0 };   // 문장 규칙 후보와 판정 상태별 수(fresh = 저장 뒤 새로 판정)
   var rb = _urRulesById();
+  // 팀 채점 설계 §2-4·§8·F6·F8(#277 S3) — 우리 팀 탭에서 편집 중 규칙의 60일 낱말 적중(넓은 낱말 차단)과 공통 긴급 내림 수
+  var cut60 = Date.now() - 60 * 86400000, hit60 = 0, lowered = [], lowPend = 0;
+  var inWin = function(n) { var t = Date.parse(n.published_at || n.created_at || ''); return !isNaN(t) && t >= cut60; };
   newsDataCache.forEach(function(n) {
     var text = UrgencyRules.ruleInputText(texts[String(n.id)], n.summary);
+    if (team && target && inWin(n) && UrgencyRules.matchUrgencyRules([target], n.title || '', text)) hit60++;
     if (team) {
       var row = _teamRowsMode === 'team' ? (_teamRows[String(n.id)] || null) : null;
       if (row && (row.source === 'human' || row.source === 'ai')) { pinned++; return; }
@@ -5064,7 +5252,9 @@ async function previewUrgencyRules(fromForm) {
         var s = tNew ? 'fresh' : _urVerdictState(vr);
         sc[s]++;
         cands.push({ n: n, cur: curT, res: tres, st: s, vr: vr });
+        if (common === '긴급' && target.mode === 'set' && target.level !== '긴급' && inWin(n) && s !== 'yes' && s !== 'no' && s !== 'failed') lowPend++;
       }
+      if (dec && target && dec.rule_id === target.id && common === '긴급' && dec.level !== '긴급' && inWin(n)) lowered.push(n);
       if (!dec) return;
       perRule[dec.rule_id] = (perRule[dec.rule_id] || 0) + 1;
       total++;
@@ -5107,6 +5297,16 @@ async function previewUrgencyRules(fromForm) {
         : '') +
       '</div>';
   }
+  // 우리 팀 탭 + 편집 중 규칙 — 60일 낱말 적중(F8 ③: 저장 전에)·넓은 낱말 차단(§2-4)·공통 긴급 내림(§8)·순서 경고(§2-3).
+  // 저장 버튼은 이 미리보기가 지금 폼 그대로 돈 뒤에만 열린다(F6 — _urSaveGate)
+  var tgt = null;
+  if (team && target) {
+    tgt = _urTeamTargetCheck(target, rules, hit60, lowered, lowPend);
+    tgt.changed = changed; tgt.ask = tSent ? (tNew ? sc.fresh : sc.none) : 0;
+    head += tgt.html;
+  }
+  _urLastPreview = tgt ? Object.assign({ sig: _urFormSig() }, tgt) : null;
+  _urSaveGate();
   var list = '';
   if (tSent) {
     var RANK = { yes: 0, wait: 1, none: 2, fresh: 2, failed: 3, no: 4 };
@@ -5137,6 +5337,47 @@ async function previewUrgencyRules(fromForm) {
   }
   pv.innerHTML = head + list +
     '<div style="font-size:10.5px;color:var(--text-tertiary);margin-top:6px;line-height:1.6">⚠️ 낱말은 글자 일부만 같아도 걸립니다(예: 「인사」는 「인사말」에도 걸림). 두세 글자 낱말은 ② 칸과 함께 쓰고, 위 목록에 엉뚱한 기사가 없는지 읽어 보세요.</div>';
+}
+
+// ── 우리 팀 규칙 저장 전 확인(팀 채점 설계 §2-3·§2-4·§8·F6, #277 S3) ──
+// 올림 규칙 = 적어도(아무 등급)·무조건 중요 / 내림 규칙 = 무조건 보통·참고. 넓은 낱말 차단은 **팀** 올림 규칙 중 AI 확인 조건이 없는 것만
+// (공통 규칙은 관리자 몫이라 대상 아님). 200 = #269의 30일 307건(하루 ≈8통)의 절반 수준이자 F8 627건을 막는 선 — 운영 뒤 조정
+var UR_WIDE_WORDS_60D = 200;
+var _urLastPreview = null;       // 마지막 폼 미리보기 결과(우리 팀 탭) — sig가 지금 폼과 같아야 저장 버튼이 열린다(F6)
+function _urIsLowering(r) { return !!r && r.mode === 'set' && r.level !== '긴급'; }
+function _urFormSig() { try { return JSON.stringify(_urFormRow()); } catch (e) { return ''; } }
+// 저장 버튼 — 우리 팀 탭은 지금 폼 그대로 미리보기를 돌린 뒤에만(F6). 공통 탭은 종전 그대로
+function _urSaveGate() {
+  var b = document.getElementById('ur-save-btn');
+  if (!b) return;
+  var gated = _urTab === 'team' && _urFormOpen && !(_urLastPreview && _urLastPreview.sig === _urFormSig());
+  b.disabled = gated;
+  b.title = gated ? '먼저 「이 규칙으로 미리 보기」를 눌러 바뀌는 기사·비용을 확인하세요(칸을 고치면 다시)' : '';
+}
+// 미리보기 머리에 붙일 확인 줄 + 저장 확인 창 재료. rules = 편집 중 규칙을 넣은 지금 탭의 켜진 규칙(순서대로)
+function _urTeamTargetCheck(target, rules, hit60, lowered, lowPend) {
+  var lowering = _urIsLowering(target);
+  var wide = !lowering && target.enabled && !UrgencyRules.hasSentence(target) && hit60 >= UR_WIDE_WORDS_60D;
+  // 순서(§2-3): 내림 규칙이 올림 규칙보다 앞이면 올림을 가린다 — 좁은 거름 규칙이면 괜찮으므로 경고만
+  var order = false;
+  rules.forEach(function(lo, i) {
+    if (!_urIsLowering(lo)) return;
+    for (var j = i + 1; j < rules.length; j++) if (!_urIsLowering(rules[j])) { order = true; return; }
+  });
+  var st = 'font-size:11px;margin-bottom:6px;padding:6px 8px;border-radius:var(--radius-md);line-height:1.7;';
+  var html = '<div style="font-size:11px;color:var(--text-secondary);margin-bottom:4px">이 규칙 낱말이 걸린 최근 60일 기사 <b>' + hit60.toLocaleString('ko-KR') + '건</b></div>';
+  if (wide) html += '<div style="' + st + 'color:#ef4444;border:1px solid #ef4444">⛔ 낱말이 넓습니다(60일 ' + hit60.toLocaleString('ko-KR') + '건 — 기준 ' + UR_WIDE_WORDS_60D + '건) — 「AI 확인 조건」을 넣거나 ② 칸으로 낱말을 좁히세요. 이대로는 저장할 수 없습니다.</div>';
+  if (lowering) {
+    html += '<div style="' + st + 'color:#b45309;border:1px solid #f59e0b">⬇ 최근 60일 공통 <b>중요 ' + lowered.length + '건</b>을 우리 팀에서 내립니다 — 그 기사는 우리 팀 구독자에게 중요 알림이 가지 않습니다.' +
+      (lowPend ? '<br>AI 확인을 기다리는 공통 중요 ' + lowPend + '건도 확인되면 내려갑니다.' : '') +
+      (UrgencyRules.hasSentence(target) ? '<br>AI 확인 조건이 있는 내림 규칙은 알림을 막지 못하고 화면 등급만 내립니다(알림이 판정보다 먼저 나갑니다).' : '') +
+      (lowered.length ? '<details style="margin-top:2px"><summary style="cursor:pointer">내려가는 기사 보기</summary>' +
+        lowered.slice(0, 30).map(function(n) { return '<div style="color:var(--text-secondary)">· ' + escHtml((n.published_at || '').slice(5, 10)) + ' ' + escHtml(n.title || '') + '</div>'; }).join('') +
+        (lowered.length > 30 ? '<div>… 외 ' + (lowered.length - 30) + '건</div>' : '') + '</details>' : '') +
+      '</div>';
+  }
+  if (order) html += '<div style="' + st + 'color:#b45309;border:0.5px solid var(--border-mid)">⚠️ 내림 규칙(무조건 보통·참고)이 올림 규칙보다 앞에 있습니다 — 위 규칙부터 처음 걸린 하나만 적용하므로 올림이 가려집니다. 좁은 거름 규칙이 아니면 「고급 — 먼저 볼 순서」를 크게 해 뒤로 보내세요.</div>';
+  return { html: html, hit60: hit60, wide: wide, lowering: lowering, lowered: lowered.length, lowPend: lowPend, order: order };
 }
 
 // 기사가 편집 중 문장 규칙(rid)까지 내려오나(#251) — UrgencyRules.sentenceCandidates와 같은 걸음: 앞의 낱말 규칙이 걸리면
@@ -5221,6 +5462,7 @@ var UR_NL_SYSTEM =
   '낱말로는 다 가르지 못하므로 notes에 「(그 말) 조건은 대표 낱말로 어림했다 — 미리보기에서 빠진 기사·엉뚱한 기사를 보라」고 적는다.\n' +
   '- 운영자 문장에 없는 조건을 지어내지 않는다. 뜻이 둘로 읽히거나 낱말이 넓어 엉뚱한 기사가 걸릴 것 같으면 notes에 한두 문장으로 적는다.\n' +
   '- 두세 글자 낱말만으로 된 조건은 다른 묶음과 함께 쓰고, 뻔한 오탐 꼴은 none_words에 넣는다(예: 인사 → 인사말·인사이드, KT → KTX·KT&G).\n' +
+  '- any_words는 5개 이하로 하고, 같은 낱말을 두 번 넣지 않는다. 흔한 낱말(요금·추가·증가·확대·인하처럼 한 낱말로 뜻이 넓은 것)은 any_words에 혼자 두지 말고 and_groups 묶음 안에만 쓴다.\n' +
   '- name은 20자 안팎 명사구로, 등급·방식 말(적어도·최소·긴급 등)은 넣지 않는다 — 화면이 따로 보여 준다.\n' +
   '- 규칙 하나로 옮길 수 없는 요구(본문·출처·날짜 조건, 여러 등급을 한꺼번에)는 가장 가까운 규칙 하나만 만들고 notes에 못 담은 부분을 적는다.';
 var UR_NL_TOOL = {
@@ -5332,6 +5574,21 @@ async function saveUrgencyRule(btn) {
   if (!row.note) errs.push('규칙 이름을 적어 주세요');
   if (team && row.team_id == null) errs.push('팀이 지정되지 않은 계정입니다');
   if (errs.length) { _urMsg(errs.join(' / '), true); return; }
+  if (team) {
+    // F6·§2-4·§8(#277 S3) — 지금 폼 그대로 돈 미리보기가 있어야 하고, 넓은 낱말 올림 규칙은 막고, 확인 창에 바뀌는 수·비용·내림을
+    var pre = _urLastPreview;
+    if (!pre || pre.sig !== _urFormSig()) { _urMsg('먼저 「이 규칙으로 미리 보기」를 눌러 바뀌는 기사와 비용을 확인해 주세요.', true); _urSaveGate(); return; }
+    if (pre.wide) { _urMsg('낱말이 넓어(60일 ' + pre.hit60.toLocaleString('ko-KR') + '건) 저장할 수 없습니다 — AI 확인 조건을 넣거나 낱말을 좁혀 주세요.', true); return; }
+    var lines = ['우리 팀 기사 ' + pre.changed.toLocaleString('ko-KR') + '건의 우리 팀 등급이 바로 바뀝니다(불러온 기사 기준).'];
+    if (pre.ask) lines.push('AI 확인 대기 ' + pre.ask.toLocaleString('ko-KR') + '건 · 약 ' + _urWonEst(Math.min(pre.ask, UR_VERDICT_REQ_CAP)) + '원');
+    if (pre.lowering) {
+      lines.push('최근 60일 공통 중요 ' + pre.lowered + '건을 우리 팀에서 내립니다 — 그 기사는 우리 팀 구독자에게 중요 알림이 가지 않습니다.' +
+        (pre.lowPend ? ' (AI 확인 대기 ' + pre.lowPend + '건 더)' : ''));
+      if (UrgencyRules.hasSentence(row)) lines.push('AI 확인 조건이 있는 내림 규칙은 알림을 막지 못하고 화면 등급만 내립니다.');
+    }
+    if (pre.order) lines.push('⚠️ 내림 규칙이 올림 규칙보다 앞에 있습니다(거름 규칙이 아니면 뒤로).');
+    if (!confirm(lines.join('\n') + '\n\n저장할까요?')) return;
+  }
   if (btn) btn.disabled = true;
   _urMsg('저장 중...');
   try {
@@ -5586,6 +5843,27 @@ function _kstYmd(ts) {
 }
 function _lvRo(lv) { return _urLvLabel(lv) + (lv === '보통' ? '으로' : '로'); }   // 중요로·보통으로·참고로
 
+// 우리 팀 등급 표시 문법 넷(F2, 팀 채점 설계 §9) — 뉴스 상세·채점 화면·우리 팀 탭이 같은 함수를 쓴다.
+//   공통 따름 「공통을 따름 (보통)」 · 팀 규칙 「팀 규칙 「이름」」 · 우리 팀 수정 · AI 확인 「문장」(문장 조건 규칙)
+// 10-04 임시 계정 시험 F2: 팀 값이 없을 때도 우리 팀 칸을 진하게 칠해 「이미 정해 둔 값」으로 읽혔다 → set=false면 칠하지 않는다.
+// level = 우리 팀이 보는 값, source = effectiveTeamUrgency의 출처, rule = 그 값을 정한 규칙 행(없으면 null).
+// 반환 { text, tip, set } — 사람 이름은 넣지 않는다(E7)
+function _teamGradeLabel(level, source, rule) {
+  var lv = _urLvLabel(level);
+  if (source === 'human') return { text: '우리 팀 수정', tip: '우리 팀에서 직접 고친 값', set: true };
+  if (source === 'ai') return { text: '우리 팀 AI', tip: '우리 팀 관점으로 AI가 판정한 값', set: true };
+  if (source === 'rule' || source === 'cand') {
+    if (rule && UrgencyRules.hasSentence(rule)) {
+      var s = _urSentenceNorm(rule.sentence);
+      return { text: 'AI 확인 「' + (s.length > 24 ? s.slice(0, 24) + '…' : s) + '」',
+               tip: '우리 팀 규칙 「' + _urShortName(rule) + '」(' + _urModeLabel(rule.mode, rule.level) + ') — AI 확인 조건: 「' + s + '」', set: true };
+    }
+    var nm = rule ? _urShortName(rule) : '';
+    return { text: '팀 규칙 「' + (nm || '이름 없음') + '」', tip: rule ? (rule.note || rule.id) + ' (' + _urModeLabel(rule.mode, rule.level) + ')' : '', set: true };
+  }
+  return { text: '공통을 따름 (' + lv + ')', tip: '우리 팀이 따로 정한 값이 없어 공통 등급을 그대로 봅니다', set: false };
+}
+
 // 팀 층 이름표 — 팀 값이 공통과 다른 출처일 때만(공통이면 '' → 호출부가 공통 이름표). 사람 이름은 넣지 않는다(E7)
 function _teamSourceHtml(n) {
   var te = n && n._teamEff;
@@ -5607,16 +5885,14 @@ function _teamSourceHtml(n) {
   if (te.source === 'rule') {
     var rid = te.row && te.row.rule_id;
     var r = _urRulesById()[rid];
-    var name = r ? _urShortName(r) : rid;
-    var tip = r ? (r.note || r.id) + ' (' + _urModeLabel(r.mode, r.level) + ')' : rid;
-    // 문장 조건 규칙(#251)이면 「· AI 판정」 — 판정 이유는 판정 기록을 이미 읽었을 때만 풍선말에(여기서는 조회하지 않는다)
-    var sent = !!r && UrgencyRules.hasSentence(r);
-    if (sent) {
-      tip += ' · AI 확인 조건: 「' + _urSentenceNorm(r.sentence) + '」';
+    var lb = _teamGradeLabel(te.level, 'rule', r || null);   // 「팀 규칙 「이름」」 / 「AI 확인 「문장」」(F2 문법)
+    var tip = r ? lb.tip : rid;
+    // 문장 조건 규칙(#251) — 판정 이유는 판정 기록을 이미 읽었을 때만 풍선말에(여기서는 조회하지 않는다)
+    if (r && UrgencyRules.hasSentence(r)) {
       var vr = _verdictRowFor(n.id, r);
       if (vr && vr.status === 'done' && vr.reason) tip += ' · AI 판단: ' + vr.reason;
     }
-    return '<span style="' + st + '" title="' + escHtml('우리 팀 규칙 — ' + tip) + '">· 우리 팀 규칙: ' + escHtml(name) + (sent ? ' · AI 판정' : '') + '</span>';
+    return '<span style="' + st + '" title="' + escHtml(tip) + '">· ' + escHtml(r ? lb.text : '팀 규칙 「' + rid + '」') + '</span>';
   }
   if (te.source === 'ai') return '<span style="' + st + '" title="우리 팀 관점으로 AI가 판정한 값">· 우리 팀 AI</span>';
   return '';
@@ -5631,13 +5907,16 @@ function _teamEffOf(n) {
   return { level: e.level, source: e.source, row: row };
 }
 
-function _teamSelHtml(newsId, current) {
+// isSet = 우리 팀이 정한 값인가(F2) — 아니면(공통을 따름) 지금 값 칸을 칠하지 않고 테두리만 그 색으로
+function _teamSelHtml(newsId, current, isSet) {
+  if (isSet === undefined) isSet = true;
   return ['긴급', '보통', '참고'].map(function(v) {
     var r = IMPORTANCE_RULES[v] || {};
-    var act = (current === v);
+    var act = (current === v), fill = act && isSet;
     return '<span onclick="setTeamImportance(\'' + newsId + '\',\'' + v + '\')" ' +
-      'style="cursor:pointer;font-size:10px;padding:2px 7px;border-radius:4px;white-space:nowrap;border:1px solid ' + (act ? r.color : 'var(--border-secondary)') + ';' +
-      'color:' + (act ? '#fff' : 'var(--text-tertiary)') + ';background:' + (act ? r.color : 'transparent') + '">' + (v === '긴급' ? '중요' : v) + '</span>';
+      (act && !isSet ? 'title="지금은 공통 등급을 따르는 값 — 누르면 아무것도 바뀌지 않습니다" ' : '') +
+      'style="cursor:pointer;font-size:10px;padding:2px 7px;border-radius:4px;white-space:nowrap;border:1px ' + (act && !isSet ? 'dashed ' : 'solid ') + (act ? r.color : 'var(--border-secondary)') + ';' +
+      'color:' + (fill ? '#fff' : (act ? r.color : 'var(--text-tertiary)')) + ';background:' + (fill ? r.color : 'transparent') + '">' + (v === '긴급' ? '중요' : v) + '</span>';
   }).join('');
 }
 
@@ -5659,10 +5938,12 @@ function _impBlockHtml(n) {
   }
   if (tid != null) {
     var te = _teamEffOf(n);
+    var tl = _teamGradeLabel(te.level, te.source, te.source === 'rule' && te.row ? (_urRulesById()[te.row.rule_id] || null) : null);
     out += line(lbl(admin ? '우리 팀' : '우리 팀 등급') +
       '<span id="imp-tsel-' + id + '" title="' + escHtml(myTeamName() + ' 화면에만 적용 — 공통값·알림·브리핑은 그대로. 수정 내역은 우리 팀 학습 기록에만 남습니다') + '" style="display:inline-flex;gap:4px">' +
-        _teamSelHtml(id, te.level) + '</span>' +
-      (admin ? '' : muted('공통: ' + escHtml(_urLvLabel(common)))) +
+        _teamSelHtml(id, te.level, tl.set) + '</span>' +
+      '<span style="font-size:10px;color:' + (tl.set ? 'var(--text-secondary)' : 'var(--text-muted)') + ';white-space:nowrap" title="' + escHtml(tl.tip) + '">· ' + escHtml(tl.text) + '</span>' +
+      (admin || !tl.set ? '' : muted('공통: ' + escHtml(_urLvLabel(common)))) +
       (te.source === 'human'
         ? '<span onclick="revertTeamImportance(\'' + id + '\')" title="우리 팀이 고친 값을 지우고 공통값(우리 팀 규칙에 걸리면 그 값)으로 돌아갑니다" ' +
           'style="cursor:pointer;font-size:10px;color:var(--accent);white-space:nowrap;text-decoration:underline">공통값으로 되돌리기</span>'
@@ -5707,6 +5988,18 @@ async function setTeamImportance(newsId, newVal) {
   var oldRow = _teamRows[key] || null;
   var oldEff = _teamEffOf(n).level;
   if (oldEff === newVal) return;
+  // F5(팀 채점 설계 §9, 10-04 임시 계정 시험): 공통값(= 규칙이 없을 때의 값) 또는 팀 규칙이 정할 값과 같은 값을 누르면 **되돌리기** —
+  // 사람 수정 행·학습 기록을 새로 만들지 않는다(「긴급→긴급」 학습 줄·고정 행 오염). 사람 수정 행이 있으면 지우고, 없으면 아무것도 안 한다.
+  // 「공통값에 고정」이 필요하면 팀 규칙을 고친다(규칙이 올린 기사를 공통값으로 누르면 안내만)
+  var commonLv = n._common || n.importance || n.urgency || '참고';
+  if (oldRow && oldRow.source === 'human') {
+    var ruleLv = newVal === commonLv ? null : await _teamRuleLevelOf(n);
+    if (newVal === commonLv || (ruleLv && newVal === ruleLv)) { await revertTeamImportance(newsId, { quiet: true }); return; }
+  } else if (newVal === commonLv) {
+    alert('공통값(' + _urLvLabel(commonLv) + ')과 같은 값이라 우리 팀 등급으로 따로 저장하지 않습니다.' +
+      (oldRow && oldRow.source === 'rule' ? '\n지금 값은 우리 팀 규칙이 정했습니다 — 바꾸려면 「긴급도 설정 → 우리 팀」에서 그 규칙을 고치세요.' : ''));
+    return;
+  }
   // 화면부터 바꾸고(낙관적 갱신 — setNewsImportance와 같은 방식, #130) DB가 실패하면 되돌린다
   var apply = function(row) {
     if (row) _teamRows[key] = row; else delete _teamRows[key];
@@ -5759,15 +6052,33 @@ function _teamEnabledRules(tid) {
   return _urRules.filter(function(r) { return r.enabled && r.team_id != null && Number(r.team_id) === tid; });
 }
 
+// 사람 수정이 없다면 우리 팀 규칙이 정할 값(F5) — 수집 때와 같은 입력(검색 요약·그 기사 판정 기록)·같은 함수. 규칙에 안 걸리거나
+// 못 읽으면 null(호출부는 종전처럼 사람 수정으로 저장 — 실패를 되돌리기로 넘기지 않는다)
+async function _teamRuleLevelOf(n) {
+  try {
+    var rules = _teamEnabledRules(myTeamId());
+    if (!rules.length) return null;
+    var screen = await _screenTextOf(n.id);
+    var vm = rules.some(UrgencyRules.hasSentence) ? UrgencyRules.verdictMap(await _loadNewsVerdicts(n.id, true)) : {};
+    var dec = UrgencyRules.teamRuleDecisionJudged(rules, n.title || '', UrgencyRules.ruleInputText(screen, n.summary),
+                                                  n._common || n.importance || n.urgency || '참고', vm);
+    return dec ? dec.level : null;
+  } catch (e) {
+    console.warn('[팀 등급] 규칙 값 계산 실패(되돌리기 판단 생략):', e);
+    return null;
+  }
+}
+
 // ── 「공통값으로 되돌리기」 — 우리 팀 사람 수정 행 + 팀 학습 기록을 지우고, 그 기사에 팀 규칙을 다시 판정 ──
-async function revertTeamImportance(newsId) {
+// opts.quiet = 확인 창 없이(F5 — 같은 값을 눌러 되돌릴 때)
+async function revertTeamImportance(newsId, opts) {
   if (!teamEditor()) { alert(teamEditGateMsg()); return; }
   var n = newsDataCache.find(function(x) { return String(x.id) === String(newsId); });
   if (!n || !sb) return;
   var tid = myTeamId(), key = String(n.id);
   var row = _teamRows[key];
   if (!row || row.source !== 'human') return;
-  if (!confirm('우리 팀이 고친 등급을 지우고 공통값(우리 팀 규칙에 걸리면 그 값)으로 되돌릴까요?')) return;
+  if (!(opts && opts.quiet) && !confirm('우리 팀이 고친 등급을 지우고 공통값(우리 팀 규칙에 걸리면 그 값)으로 되돌릴까요?')) return;
   try {
     // RLS 삭제는 막혀도 오류 없이 0행 — 지운 행 수로 성공을 판정한다(#48)
     var d = await sb.from('team_urgency').delete().eq('news_id', n.id).eq('team_id', tid).eq('source', 'human').select('news_id');
@@ -6149,6 +6460,59 @@ function _urTeamCostRender() {
     (s.cost >= cap ? ' <span style="color:#b45309">⚠️ 기준 $' + escHtml(capTxt) + ' 넘음 — 운영자에게 알림, 판정은 계속</span>' : '');
 }
 
+// ── 우리 팀이 내린 공통 중요(팀 채점 설계 §8 ②, #277 S3) — 확인 상대는 팀(운영자 결정): 운영자 봇·구독자 봇 줄은 보내지 않는다 ──
+// 우리 팀 값이 규칙·사람 수정으로 공통 중요보다 낮은 기사(불러온 기사, 공통값 = 지금 값). 알림은 우리 팀 값 기준이라
+// 「중요만」 구독자에게는 그 기사가 가지 않는다. 계산은 덧씌우기와 같은 함수(_teamEffOf) — 조회 없음
+function _urLoweredList(sinceMs) {
+  if (_teamRowsMode !== 'team') return null;
+  var out = [];
+  newsDataCache.forEach(function(n) {
+    if ((n._common || n.importance || n.urgency) !== '긴급') return;
+    var t = Date.parse(n.published_at || n.created_at || '');
+    if (isNaN(t) || t < sinceMs) return;
+    var te = _teamEffOf(n);
+    if (te.level === '긴급' || (te.source !== 'rule' && te.source !== 'human')) return;
+    out.push({ n: n, te: te });
+  });
+  return out;
+}
+function _kstWeekStartMs() {   // 이번 주 월요일 0시(KST)
+  var k = new Date(Date.now() + 9 * 3600 * 1000);
+  var dow = (k.getUTCDay() + 6) % 7;   // 월 = 0
+  return Date.UTC(k.getUTCFullYear(), k.getUTCMonth(), k.getUTCDate() - dow) - 9 * 3600 * 1000;
+}
+function _urLoweredRender() {
+  var el = document.getElementById('ur-team-lowered');
+  if (!el) return;
+  if (_urTab !== 'team' || !teamEditor()) { el.style.display = 'none'; el.innerHTML = ''; return; }
+  var list = _urLoweredList(_kstWeekStartMs());
+  if (!list) { el.style.display = 'none'; el.innerHTML = ''; return; }
+  el.style.display = '';
+  if (!list.length) { el.innerHTML = '<span style="color:var(--text-tertiary)">⬇ 이번 주 우리 팀이 내린 공통 중요 0건</span>'; return; }
+  var rb = _urRulesById();
+  el.innerHTML = '<details><summary style="cursor:pointer;color:#b45309">⬇ 이번 주 우리 팀이 내린 공통 중요 <b>' + list.length + '건</b> — 우리 팀 구독자에게 중요 알림이 가지 않은 기사</summary>' +
+    list.slice(0, 50).map(function(x) {
+      var r = x.te.source === 'rule' && x.te.row ? rb[x.te.row.rule_id] : null;
+      var by = x.te.source === 'human' ? '우리 팀 수정' : _teamGradeLabel(x.te.level, 'rule', r || null).text;
+      return '<div style="padding:2px 0;color:var(--text-secondary)">· ' + escHtml((x.n.published_at || '').slice(5, 10)) + ' ' + escHtml(x.n.title || '') +
+        ' <span style="color:var(--text-tertiary)">→ ' + escHtml(_urLvLabel(x.te.level)) + ' · ' + escHtml(by) + '</span></div>';
+    }).join('') + (list.length > 50 ? '<div style="color:var(--text-tertiary)">… 외 ' + (list.length - 50) + '건</div>' : '') + '</details>';
+}
+// 규칙 줄 「⬇ 공통 중요 내림 N건(30일)」 — 그 규칙이 정한 우리 팀 값이 공통 중요보다 낮은 기사 수(내림 규칙만 표시)
+function _urRuleLoweredCount(rule) {
+  if (_teamRowsMode !== 'team') return null;
+  var since = Date.now() - 30 * 86400000, n30 = 0;
+  newsDataCache.forEach(function(n) {
+    var row = _teamRows[String(n.id)];
+    if (!row || row.source !== 'rule' || row.rule_id !== rule.id) return;
+    if ((n._common || n.importance || n.urgency) !== '긴급') return;
+    var t = Date.parse(n.published_at || n.created_at || '');
+    if (isNaN(t) || t < since) return;
+    if (_teamEffOf(n).level !== '긴급') n30++;
+  });
+  return n30;
+}
+
 // 팀 규칙 행 넣기 — 충돌(이미 행 있음)은 건너뛴다(ignoreDuplicates = ON CONFLICT DO NOTHING): 그사이 팀원이 넣은
 // 사람 수정 행을 절대 덮지 않는다(크롤러와 같은 원칙). 60일 정리로 이미 지워진 기사(외래키 23503)가 섞이면
 // 살아 있는 기사만 골라 한 번 더. 돌려주는 값 = 실제로 넣은 news_id 목록.
@@ -6242,6 +6606,1000 @@ async function reapplyTeamRules() {
   applyTeamOverlay();
   return { added: a, changed: b, released: c, skipped: add.length + chg.length + rel.length - a - b - c,
            requested: requested, waiting: waiting + requested, capped: capped, reqError: reqError };
+}
+
+// ════════════════════════════════════════════
+//  팀 채점 화면 (#277 S3, 2026-10-04 — 설계 local_docs/팀채점_설계_261004.md §3·§4·§9·§10·§11, Fable 재검토 대기)
+//  팀이 세트 기사(최대 20건)마다 「중요·보통·참고·모르겠음」을 답하면 RPC team_grading_score가 우리 팀 규칙이 그 답과 얼마나
+//  맞는지 센다. 답은 **운영 등급과 분리** — team_urgency·importance_feedback에 쓰지 않는다(이 화면에 「우리 팀 등급으로 저장」 없음).
+//  20건 = 고칠 몫(기사별 결과·틀린 갈래·고칠 안) + 확인용(건수만 — 고칠 때 안 본 기사로 과적합을 잰다, 몫은 slot 칸이라 GRANT 밖).
+//  「다시 채점」 = 바꿀 규칙 후보(≤5)를 시험 표(team_grading_trials)에 넣는다 — 운영 규칙은 그대로. 낱말 부분은 여기서 바로(같은
+//  매처 _shared/urgency_rules.js), AI 확인 조건은 크롤러가 다음 수집(10분)에 운영과 같은 함수·한 묶음으로 판정한다. 브라우저는 결과를
+//  시험 결과 표(team_grading_trial_items)에 20건 모두 쓴다(점수 RPC가 읽음).
+//  「적용」 = 마지막 다시 채점 후보를 운영 규칙으로 저장하고 시험을 applied로(applied_rev = {후보 번호: {rule_id, rev}}) — 크롤러가
+//  시험 판정을 운영 판정 표로 옮겨 세트 기사의 운영 등급 = 시험 점수(설계 §3-2). 적용·닫기면 세트가 끝나고 확인용이 기사별로 공개된다.
+//  권한: 읽기 = 관리자·우리 팀·우리 실장, 답·다시 채점·적용·닫기 = 우리 팀 승인 계정(관문은 RLS·트리거 — 하루 5회·후보 5개·답 잠금).
+//  답하기 전에는 그 기사의 지금 팀 등급을 보이지 않는다 — 기준선을 보고 답을 맞추는 닻 효과를 막는다. 사람 이름은 내지 않는다(E7).
+//  사내판: 반입 없음(사내 회신 10-03, 설계 §12) — 이 블록은 사내 콘솔이 옮겨 쓰는 함수가 아니다.
+// ════════════════════════════════════════════
+var GR_ANSWERS = ['긴급', '보통', '참고', '모르겠음'];
+var GR_TRIAL_DAILY = 5, GR_CAND_MAX = 5, GR_POLL_MS = 45 * 1000;
+var GR_ITEM_COLS = 'set_id,news_id,seq,hit_kind_at_build,common_level_at_build,team_level_at_build,team_source_at_build,rule_id_at_build,rule_sentence_at_build';
+var GR_TRIAL_COLS = 'id,set_id,team_id,kind,status,candidates,applied_rev,cost_usd,created_at,judged_at,applied_at,copied_at,note';
+var GR_NEWS_COLS = 'id,title,url,source,published_at,created_at,summary,screen_text,urgency';
+// 틀린 갈래(DB grading_branch와 같은 코드, 설계 §4-4 + S1 추가분)
+var GR_BRANCH = {
+  ok_common: { t: '맞음(공통 그대로)', c: 'var(--green)' },
+  ok: { t: '맞음(우리 팀 규칙 덕분)', c: 'var(--green)' },
+  miss_word: { t: '정답보다 낮게 봄 — 우리 팀 규칙 낱말이 안 걸림', c: '#ef4444' },
+  miss_sentence: { t: '정답보다 낮게 봄 — 낱말은 걸렸는데 AI 확인에서 빠짐', c: '#ef4444' },
+  rule_level: { t: '정답보다 낮게 봄 — 걸린 규칙의 등급이 낮음', c: '#ef4444' },
+  wide_word: { t: '정답보다 높게 봄 — 낱말 규칙이 넓음', c: '#b45309' },
+  wide_sentence: { t: '정답보다 높게 봄 — AI 확인 조건이 넓음', c: '#b45309' },
+  common_urgent_lowered: { t: '공통 중요를 잘못 내림', c: '#ef4444' },
+  common_high: { t: '정답보다 높게 봄 — 규칙 없이 공통 등급이 높음', c: '#b45309' },
+  human: { t: '우리 팀이 직접 고친 값과 다름(규칙으로 못 고침)', c: 'var(--text-secondary)' }
+};
+var GR_ADVICE = {
+  too_few: { t: '적용 판정 보류 — 확인용 답(모르겠음·회색지대 뺀 것)이 6건 미만이라 1건이 17점 넘게 흔듭니다', c: 'var(--text-secondary)' },
+  incomplete: { t: '다시 채점이 아직 끝나지 않았습니다 — AI 확인 결과를 기다리는 기사가 있습니다', c: 'var(--text-secondary)' },
+  lowered: { t: '적용 권장 안 함 — 확인용에서 공통 중요를 잘못 내립니다', c: '#ef4444' },
+  worse: { t: '고칠 몫은 좋아졌을 수 있지만 확인용은 나빠졌습니다 — 정답에만 맞춘 규칙(과적합)일 수 있습니다', c: '#ef4444' },
+  recommend: { t: '적용 권장 — 확인용이 기준선 이상이고 공통 중요를 잘못 내리지 않습니다', c: 'var(--green)' },
+  neutral: { t: '확인용 1건 나빠짐 — 잡음 범위(적용은 팀 판단)', c: '#b45309' }
+};
+var GR_STOP = ['관련', '대한', '위한', '통해', '대해', '기반', '위해', '이후', '이전', '지난', '오는', '올해', '내년', '지금', '현재',
+               '새로운', '이번', '해당', '추진', '기자', '뉴스', '사진', '오늘', '내일', '어제', '최근', '밝혔다', '나선다', '위해서'];
+var _gr = null;              // 열린 세트 상태(_grLoad)
+var _grPollTimer = null;
+var _grPendingSet = null;    // 딥링크 ?p=grading&set= — 로그인 확정 뒤 연다
+var _grPendingAsked = false, _grAuthBooted = false;
+var _grTeamBox = null;       // 「긴급도 설정 → 우리 팀」 채점 상자 상태
+
+// ── 우리 팀 탭 「채점」 상자 — 세트 상태 + 내가 아직 안 답한 수(「채점 대기 N건」, 설계 §10-5) ──
+function _urGradingRender() {
+  var el = document.getElementById('ur-team-grading');
+  if (!el) return;
+  var tid = myTeamId();
+  if (_urTab !== 'team' || tid == null || !sb || !currentUser) { el.style.display = 'none'; el.innerHTML = ''; return; }
+  el.style.display = '';
+  var key = currentUser.id + '|' + tid;
+  if (!_grTeamBox || _grTeamBox.key !== key) {
+    var box = _grTeamBox = { key: key, loading: true };
+    el.innerHTML = '<div style="font-size:11px;color:var(--text-tertiary)">우리 팀 채점 불러오는 중…</div>';
+    (async function() {
+      try {
+        var s = await sb.from('team_grading_sets').select(GR_SET_COLS).eq('team_id', tid).order('id', { ascending: false }).limit(1);
+        if (s.error) throw s.error;
+        box.set = (s.data || [])[0] || null;
+        if (box.set && (box.set.status === 'open' || box.set.status === 'scored')) {
+          var res = await Promise.all([
+            sb.from('team_grading_items').select('news_id', { count: 'exact', head: true }).eq('set_id', box.set.id),
+            sb.from('team_grading_answers').select('news_id').eq('set_id', box.set.id).eq('user_id', currentUser.id)
+          ]);
+          if (res[0].error) throw res[0].error;
+          if (res[1].error) throw res[1].error;
+          box.total = res[0].count || 0; box.mine = (res[1].data || []).length;
+        }
+      } catch (e) { box.err = (e && e.message) || String(e); }
+      box.loading = false;
+      if (_grTeamBox === box) _urGradingRender();
+    })();
+    return;
+  }
+  var b = _grTeamBox;
+  if (b.loading) return;
+  var btn = function(label, on, primary) {
+    return '<button class="btn' + (primary ? ' btn-primary' : '') + '" style="font-size:11px;padding:2px 10px" onclick="' + on + '">' + label + '</button>';
+  };
+  var req = btn('새 20건 요청', 'grRequestSet(' + tid + ', this)');
+  var s = b.set, html;
+  if (b.err) html = '<span style="color:var(--text-tertiary)">📝 우리 팀 채점을 불러오지 못했습니다(' + escHtml(b.err) + ')</span>';
+  else if (!s) html = '<span>📝 <b>우리 팀 채점</b> — 기사 20건에 우리 팀 기준 답을 달아 우리 팀 규칙이 맞는지 잽니다. 아직 세트가 없습니다.</span>' + req;
+  else if (s.status === 'requested' || s.status === 'building') html = '<span>📝 채점 세트 #' + s.id + ' 만드는 중 — 다음 수집(10분 안)에 기사가 준비됩니다</span>';
+  else if (s.status === 'open' || s.status === 'scored') {
+    var left = Math.max(0, (b.total || 0) - (b.mine || 0));
+    html = '<span>📝 <b style="color:' + (left ? '#b45309' : 'var(--text-primary)') + '">' + (left ? '채점 대기 ' + left + '건' : '내 답 끝') + '</b> · 세트 #' + s.id + ' · ' +
+      escHtml(GR_STATUS[s.status]) + '</span>' + btn('채점 열기', 'openGrading(' + s.id + ')', true);
+  } else {
+    html = '<span style="color:var(--text-secondary)">📝 지난 채점 세트 #' + s.id + ' · ' + escHtml(GR_STATUS[s.status] || s.status) +
+      (s.closed_at ? ' · ' + escHtml(_kstYmd(s.closed_at)) : '') + '</span>' +
+      (s.status === 'applied' || s.status === 'closed' ? btn('결과 보기', 'openGrading(' + s.id + ')') : '') + req;
+  }
+  el.innerHTML = '<div style="font-size:11.5px;border:0.5px solid var(--border-secondary);border-radius:var(--radius-md);padding:6px 10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;line-height:1.6">' + html + '</div>';
+}
+
+// ── 열기·닫기·읽기 ──
+async function openGrading(setId) {
+  setId = Number(setId);
+  if (!sb || !setId) return;
+  if (!aiReady()) {
+    _grPendingSet = setId; _grPendingAsked = false; _grAuthBooted = true;
+    _grAuthChanged();
+    return;
+  }
+  var m = document.getElementById('gr-modal');
+  if (!m) return;
+  m.style.display = 'flex';
+  var body = document.getElementById('gr-body');
+  if (body && (!_gr || _gr.setId !== setId)) body.innerHTML = '<div style="font-size:12px;color:var(--text-tertiary);padding:14px 0">채점 세트 불러오는 중…</div>';
+  try { await _grLoad(setId); }
+  catch (e) {
+    if (body) body.innerHTML = '<div style="font-size:12px;color:#ef4444;padding:14px 0">채점 세트를 열지 못했습니다: ' + escHtml((e && e.message) || String(e)) + '</div>';
+    return;
+  }
+  _grRender();
+  _grPollSchedule();
+}
+function closeGrading() {
+  var m = document.getElementById('gr-modal');
+  if (m) m.style.display = 'none';
+  if (_grPollTimer) { clearTimeout(_grPollTimer); _grPollTimer = null; }
+  _gr = null;
+  _grTeamBox = null;   // 우리 팀 탭 상자의 「채점 대기 N건」을 다시 센다
+  _urGradingRender();
+}
+// 로그인 확정 뒤(applyAuthUI 끝·첫 refreshAuthState 뒤) — 딥링크로 받은 세트를 연다. 비로그인이면 로그인 창을 한 번 띄운다(설계 §11-18)
+function _grAuthChanged() {
+  if (!_grPendingSet || !_grAuthBooted) return;
+  if (aiReady()) { var s = _grPendingSet; _grPendingSet = null; openGrading(s); return; }
+  if (_grPendingAsked) return;
+  _grPendingAsked = true;
+  if (!currentUser) { openLoginModal(); _loginNote('채점 화면은 로그인 후 열립니다 — 로그인하면 바로 이어서 엽니다.'); }
+  else alert(aiGateMsg());
+}
+
+async function _grLoad(setId) {
+  var s = await sb.from('team_grading_sets').select(GR_SET_COLS).eq('id', setId).maybeSingle();
+  if (s.error) throw s.error;
+  if (!s.data) throw new Error('세트를 찾지 못했습니다 — 다른 팀 세트이거나 권한이 없습니다');
+  var set = s.data, tid = Number(set.team_id);
+  var it = await sb.from('team_grading_items').select(GR_ITEM_COLS).eq('set_id', setId).order('seq');
+  if (it.error) throw it.error;
+  var items = it.data || [], ids = items.map(function(x) { return x.news_id; });
+  var none = Promise.resolve({ data: [] });
+  var q = await Promise.all([
+    ids.length ? sb.from('news_feed').select(GR_NEWS_COLS).in('id', ids) : none,
+    sb.from('team_grading_answers').select('news_id,user_id,answer,updated_at,changed_after_lock').eq('set_id', setId),
+    ids.length ? sb.from('urgency_rule_verdicts').select(VERDICT_COLS).in('news_id', ids).eq('team_id', tid) : none,
+    sb.from('team_grading_trials').select(GR_TRIAL_COLS).eq('set_id', setId).order('id'),
+    sb.from('team_criteria').select('keywords').eq('team_id', tid).maybeSingle()
+  ]);
+  q.forEach(function(r) { if (r && r.error) throw r.error; });
+  await loadUrgencySources(true);   // 지금 규칙(다른 팀원이 바꿨을 수 있다) — 후보 계산·적용 전 비교의 기준
+  var news = {}, verd = {};
+  (q[0].data || []).forEach(function(n) { news[n.id] = n; });
+  (q[2].data || []).forEach(function(v) { (verd[v.news_id] = verd[v.news_id] || []).push(v); });
+  var trials = (q[3].data || []).filter(function(t) { return t.kind === 'trial'; });
+  var last = trials.length ? trials[trials.length - 1] : null;
+  var tvRows = [];
+  if (last && last.status !== 'pending') {
+    var tv = await sb.from('team_grading_trial_verdicts').select('cand_idx,news_id,verdict,reason,input_kind,reused').eq('trial_id', last.id);
+    if (tv.error) throw tv.error;
+    tvRows = tv.data || [];
+  }
+  var prev = _gr && _gr.setId === setId ? _gr : null;
+  _gr = {
+    setId: setId, set: set, teamId: tid, mine: tid === myTeamId(), items: items, news: news, ans: q[1].data || [],
+    verdicts: verd, trials: trials, last: last, tvRows: tvRows, tvMap: _grTvMap(tvRows),
+    keywords: (q[4].data && q[4].data.keywords) || [], score: null, scoreErr: '', scoreStale: false,
+    // 후보 편집기 — 고치던 것이 있으면 그대로, 아니면 마지막 다시 채점 후보(없으면 빈 목록)
+    cands: prev && prev.dirty ? prev.cands : (last ? _grClone(last.candidates || []) : []),
+    dirty: prev ? prev.dirty : false, impact: prev ? prev.impact : null, msg: prev ? prev.msg : ''
+  };
+  // 판정이 끝난 다시 채점 — 시험 결과 20건을 AI 확인까지 넣어 다시 쓴다(점수 RPC가 읽음). 세트가 끝났으면 쓰기 불가(정책)이므로 건너뜀
+  if (last && last.status === 'judged' && _gr.mine && (set.status === 'open' || set.status === 'scored')) {
+    try { await _grWriteTrialItems(last); } catch (e) { _gr.msg = '⚠️ 시험 결과 저장 실패: ' + ((e && e.message) || e); }
+  }
+  await _grFetchScore();
+  // 60일 적중 수(제안 옆 숫자)용 검색 요약 — 화면을 막지 않고 뒤에서(5분 재사용)
+  // 결과 칸만 다시 그린다(후보 편집 칸은 건드리지 않음 — 입력 중 포커스를 잃지 않게)
+  loadScreenTexts().then(function(t) {
+    if (!_gr || _gr.setId !== setId) return;
+    _gr.texts = t;
+    _gr.items.forEach(function(it) { _grRenderResult(it.news_id); });
+  }, function() { /* 저장 요약으로 셈 */ });
+}
+function _grClone(x) { return JSON.parse(JSON.stringify(x || [])); }
+function _grTvMap(rows) {   // {cand_idx: {news_id: bool}}
+  var m = {};
+  (rows || []).forEach(function(v) { if (typeof v.verdict === 'boolean') (m[v.cand_idx] = m[v.cand_idx] || {})[v.news_id] = v.verdict; });
+  return m;
+}
+async function _grFetchScore() {
+  var r = await sb.rpc('team_grading_score', { p_set: _gr.setId, p_trial: _gr.last ? _gr.last.id : null });
+  if (r.error) { _gr.score = null; _gr.scoreErr = r.error.message || String(r.error); return; }
+  _gr.score = r.data || null; _gr.scoreErr = ''; _gr.scoreStale = false;
+}
+function _grPollSchedule() {
+  if (_grPollTimer) { clearTimeout(_grPollTimer); _grPollTimer = null; }
+  if (!_gr || !_gr.last || _gr.last.status !== 'pending') return;
+  var sid = _gr.setId, tidl = _gr.last.id;
+  _grPollTimer = setTimeout(async function() {
+    _grPollTimer = null;
+    if (!_gr || _gr.setId !== sid) return;
+    var r = await sb.from('team_grading_trials').select('id,status').eq('id', tidl).maybeSingle();
+    if (!_gr || _gr.setId !== sid) return;
+    if (!r.error && r.data && r.data.status !== 'pending') {
+      try { await _grLoad(sid); _gr.msg = r.data.status === 'judged' ? '✅ 다시 채점의 AI 확인이 끝났습니다 — 점수를 새로 셌습니다' : '⚠️ 다시 채점이 실패했습니다 — 아래 메모를 보고 다시 시도하세요'; _grRender(); }
+      catch (e) { console.warn('[채점] 다시 읽기 실패:', e); }
+    }
+    _grPollSchedule();
+  }, GR_POLL_MS);
+}
+
+// ── 권한(화면 게이트 — 관문은 RLS·트리거) ──
+function _grOpen() { return _gr && (_gr.set.status === 'open' || _gr.set.status === 'scored'); }
+function _grFinal() { return _gr && (_gr.set.status === 'applied' || _gr.set.status === 'closed'); }
+function _grIsGrader() { return !!(_gr && _gr.score && _gr.score.is_grader); }
+function _grCanAnswer() { return !!(_gr && _gr.mine && (_gr.set.status === 'open' || (_gr.set.status === 'scored' && _grIsGrader()))); }
+function _grCanTrial() { return !!(_gr && _gr.mine && _grOpen()); }
+
+// ── 답 ──
+function _grAnsOf(newsId) {   // { mine, known(서로 다른 답 — 모르겠음 뺌), n }
+  var me = currentUser ? currentUser.id : '', mine = null, known = {}, n = 0;
+  _gr.ans.forEach(function(a) {
+    if (a.news_id !== newsId) return;
+    n++;
+    if (a.user_id === me) mine = a.answer;
+    if (a.answer !== '모르겠음') known[a.answer] = 1;
+  });
+  return { mine: mine, known: Object.keys(known), n: n };
+}
+async function grAnswer(newsId, ans) {
+  if (!_gr || GR_ANSWERS.indexOf(ans) === -1) return;
+  if (!_grCanAnswer()) {
+    alert(!_gr.mine ? '다른 팀 세트는 보기만 합니다.' : (_grFinal() ? '끝난 세트입니다.' : '첫 다시 채점 뒤에는 답이 잠깁니다 — 대표만 고칠 수 있습니다(정답을 AI 결과에 맞추지 않게).'));
+    return;
+  }
+  var r = await sb.from('team_grading_answers').upsert({ set_id: _gr.setId, news_id: newsId, answer: ans }, { onConflict: 'set_id,news_id,user_id' })
+    .select('news_id,user_id,answer,updated_at,changed_after_lock');
+  if (r.error) { alert(r.error.code === '42501' ? '답을 저장할 수 없습니다 — 답이 잠겼거나(첫 다시 채점 뒤 대표만) 세트가 끝났습니다.' : '답 저장 실패: ' + r.error.message); return; }
+  var row = (r.data || [])[0];
+  if (!row) { alert('답이 저장되지 않았습니다(권한 확인).'); return; }
+  var me = currentUser.id;
+  _gr.ans = _gr.ans.filter(function(a) { return !(a.news_id === newsId && a.user_id === me); }).concat([row]);
+  _gr.scoreStale = true;
+  _grRenderItem(newsId);
+  _grRenderHead();
+  _grRenderScore();
+  // 점수는 답이 잦아든 뒤 한 번만 다시 센다(연달아 누를 때 RPC를 줄이고, 결과 줄의 「정답」이 곧 내 답으로 바뀌게)
+  var sid = _gr.setId;
+  if (_grScoreTimer) clearTimeout(_grScoreTimer);
+  _grScoreTimer = setTimeout(async function() {
+    _grScoreTimer = null;
+    if (!_gr || _gr.setId !== sid) return;
+    await _grFetchScore();
+    if (!_gr || _gr.setId !== sid) return;
+    _grRenderHead();
+    _grRenderScore();
+    _gr.items.forEach(function(it) { _grRenderResult(it.news_id); });
+  }, 1500);
+}
+var _grScoreTimer = null;
+
+// ── 후보 규칙 → 계산 ──
+// 후보 하나 → 규칙 행. 아이디 = 기존 규칙 id 또는 'cand_<번호>'(크롤러 team_grading.candidate_rule과 같음).
+// 문장 판(sentence_rev): useTrial이면 늘 가짜 판 -(번호+1) — 시험 판정(재사용 포함)으로만 본다. 아니면 기존 규칙과 문장이 같을 때
+// 그 규칙의 지금 판(저장된 판정 그대로 — 크롤러도 재사용한다), 바뀌었거나 새 규칙이면 가짜 판(판정 없음 = AI 확인 대기)
+function _grCandRule(c, i, useTrial) {
+  var r = { id: c.rule_id || ('cand_' + i), team_id: _gr.teamId, position: Number(c.position) || 100, mode: c.mode, level: c.level,
+            any_words: c.any_words || [], and_any: c.and_any || [], none_words: c.none_words || [], sentence: c.sentence || '',
+            note: c.note || '', enabled: true };
+  var base = c.rule_id ? _urRulesById()[c.rule_id] : null;
+  r._cand = i;
+  r._same = !!base && _urSentenceNorm(r.sentence) === (base.sentence || '');
+  r.sentence_rev = (!useTrial && r._same && UrgencyRules.hasSentence(r)) ? (Number(base.sentence_rev) || 0) : -(i + 1);
+  r._fresh = UrgencyRules.hasSentence(r) && (useTrial ? false : !r._same);
+  return r;
+}
+// 세트 기사마다 후보를 넣은 우리 팀 등급(설계 §4-2 「시험 점수」) — 크롤러 classify_article과 같은 갈래.
+// 공통값·사람 수정은 세트를 만든 때 값(*_at_build) — 규칙 차이만 재기 위해. 다른 팀 규칙 = 지금 켜진 것. tvMap = 시험 판정(없으면 null).
+// 반환 {news_id: {level, source('common'|'rule'|'cand'|'human'|'ai'), rule_id, kind, sent, pending}}
+function _grEval(cands, tvMap) {
+  var tid = _gr.teamId, crs = (cands || []).map(function(c, i) { return _grCandRule(c, i, !!tvMap); });
+  var cid = {};
+  crs.forEach(function(r) { cid[r.id] = r; });
+  var rules = _teamEnabledRules(tid).filter(function(r) { return !cid[r.id]; }).concat(crs).sort(_urRuleCmp);
+  var words = [];
+  rules.forEach(function(r) { var v = UrgencyRules.ruleView(r); words = words.concat(v.any); v.groups.forEach(function(g) { words = words.concat(g); }); });
+  words = words.concat(_gr.keywords || []).map(function(w) { return String(w).normalize('NFC'); }).filter(Boolean);
+  var out = {};
+  _gr.items.forEach(function(it) {
+    var nid = it.news_id, n = _gr.news[nid] || {};
+    var common = it.common_level_at_build;
+    if (it.team_source_at_build === 'human' || it.team_source_at_build === 'ai') {
+      out[nid] = { level: it.team_level_at_build, source: it.team_source_at_build, rule_id: null, kind: it.hit_kind_at_build, sent: false };
+      return;
+    }
+    var title = n.title || '', text = UrgencyRules.ruleInputText(n.screen_text, n.summary);
+    var vm = UrgencyRules.verdictMap(_gr.verdicts[nid] || []);
+    if (tvMap) crs.forEach(function(r) {
+      var v = tvMap[r._cand] && tvMap[r._cand][nid];
+      if (typeof v === 'boolean') { if (!vm[r.id]) vm[r.id] = Object.create(null); vm[r.id][String(r.sentence_rev)] = v; }
+    });
+    var waiting = UrgencyRules.sentenceCandidates(rules, title, text, vm).filter(function(rid) { return cid[rid] && UrgencyRules.hasSentence(cid[rid]); });
+    if (waiting.length) { out[nid] = { pending: true, waitingRule: waiting[0] }; return; }
+    var dec = UrgencyRules.teamRuleDecisionJudged(rules, title, text, common, vm);
+    if (dec) {
+      var dr = cid[dec.rule_id] || _urRulesById()[dec.rule_id];
+      out[nid] = { level: dec.level, source: cid[dec.rule_id] ? 'cand' : 'rule', rule_id: dec.rule_id,
+                   kind: dec.level !== common ? 'rule_changed' : 'rule_same', sent: !!dr && UrgencyRules.hasSentence(dr) };
+      return;
+    }
+    var fr = null;
+    for (var i = 0; i < rules.length && !fr; i++) {
+      var r = rules[i];
+      if (UrgencyRules.hasSentence(r) && UrgencyRules.sentenceVerdict(vm, r) === false && UrgencyRules.matchUrgencyRules([r], title, text)) fr = r;
+    }
+    if (fr) { out[nid] = { level: common, source: 'common', rule_id: fr.id, kind: 'word_hit_false', sent: true }; return; }
+    var norm = UrgencyRules.normalizeText(title, text);
+    out[nid] = { level: common, source: 'common', rule_id: null, kind: words.some(function(w) { return w && norm.indexOf(w) !== -1; }) ? 'near' : 'unrelated', sent: false };
+  });
+  return out;
+}
+// 시험 결과 20건 쓰기 — AI 확인을 기다리는 기사는 빼고(점수 RPC가 「아직 안 끝남」으로 센다). 같은 열쇠는 덮어쓴다
+async function _grWriteTrialItems(t) {
+  var pred = _grEval(t.candidates || [], t.status === 'judged' ? _grTvMap(_gr.tvRows) : null);
+  var rows = [];
+  _gr.items.forEach(function(it) {
+    var p = pred[it.news_id];
+    if (!p || p.pending) return;
+    rows.push({ trial_id: t.id, news_id: it.news_id, level_pred: p.level, source_pred: p.source, rule_pred: p.rule_id || null,
+                hit_kind_pred: p.kind, rule_sentence_pred: !!p.sent });
+  });
+  if (!rows.length) return 0;
+  var r = await sb.from('team_grading_trial_items').upsert(rows, { onConflict: 'trial_id,news_id' }).select('news_id');
+  if (r.error) throw r.error;
+  return (r.data || []).length;
+}
+
+// ── 그리기 ──
+function _grRender() {
+  var body = document.getElementById('gr-body');
+  if (!body || !_gr) return;
+  var sub = document.getElementById('gr-sub');
+  if (sub) sub.textContent = _teamName(_gr.teamId) + ' · 세트 #' + _gr.setId;
+  body.innerHTML =
+    '<div id="gr-head"></div>' +
+    '<div id="gr-msg" style="font-size:11.5px;margin:6px 0;line-height:1.6"></div>' +
+    '<div id="gr-items"></div>' +
+    '<div id="gr-score" style="margin-top:12px"></div>' +
+    '<div id="gr-cands" style="margin-top:12px"></div>';
+  _grRenderHead();
+  _grSetMsg(_gr.msg || '');
+  var html = _gr.items.map(function(it) { return '<div id="gr-it-' + escHtml(it.news_id) + '" style="padding:8px 0;border-top:0.5px solid var(--border-tertiary)"></div>'; }).join('');
+  document.getElementById('gr-items').innerHTML = html || '<div style="font-size:12px;color:var(--text-tertiary)">세트에 기사가 없습니다.</div>';
+  _gr.items.forEach(function(it) { _grRenderItem(it.news_id); });
+  _grRenderScore();
+  _grRenderCands();
+}
+function _grSetMsg(text, isErr) {
+  if (_gr) _gr.msg = text || '';
+  var el = document.getElementById('gr-msg');
+  if (!el) return;
+  el.style.display = text ? '' : 'none';
+  el.style.color = isErr ? '#ef4444' : 'var(--text-secondary)';
+  el.textContent = text || '';
+}
+function _grRenderHead() {
+  var el = document.getElementById('gr-head');
+  if (!el || !_gr) return;
+  var set = _gr.set, me = currentUser ? currentUser.id : '';
+  var mine = 0, answered = 0, gray = 0;
+  _gr.items.forEach(function(it) {
+    var a = _grAnsOf(it.news_id);
+    if (a.mine) mine++;
+    if (a.n) answered++;
+    if (a.known.length >= 2) gray++;
+  });
+  var sc = _gr.score || {};
+  var lines = [
+    '<b>' + escHtml(_teamName(_gr.teamId)) + '</b> · ' + escHtml(GR_STATUS[set.status] || set.status) + (set.built_at ? ' · ' + escHtml(_kstYmd(set.built_at)) + ' 만듦' : ''),
+    '내 답 <b>' + mine + '/' + _gr.items.length + '</b> · 팀 답이 있는 기사 ' + answered + '건' + (gray ? ' · <span style="color:#b45309">회색지대 ' + gray + '건</span>' : '') +
+      ' · 채점 대표: ' + (sc.grader_set ? (sc.is_grader ? '<b>나</b>(내 답이 정답)' : '지정됨(대표 답이 정답)') : '없음(팀원 답이 정답 — 서로 다르면 회색지대)'),
+    (set.noise_compared != null
+      ? 'AI 흔들림 ' + (set.noise_mismatch || 0) + '/' + set.noise_compared + '건 <span style="color:var(--text-tertiary)">(같은 AI 확인 조건을 한 번 더 판정해 다르게 나온 기사 — 이만큼은 규칙을 고쳐도 쫓지 마세요)</span>'
+      : '') + (set.pool_thin ? ' · <span style="color:#b45309">풀 얇음 — 규칙에 걸린 기사가 적어 주제 근처 기사로 채움</span>' : '')
+  ].filter(Boolean);
+  var guide = _grFinal()
+    ? '끝난 세트입니다 — 확인용까지 기사별 결과를 볼 수 있습니다.'
+    : (_gr.mine
+      ? '기사마다 <b>우리 팀 기준</b>으로 중요·보통·참고를 고르세요(애매하면 「모르겠음」). 답은 우리 팀 규칙이 맞는지 재는 데만 쓰고 <b>기사 등급은 바꾸지 않습니다</b>. ' +
+        '답한 기사부터 지금 우리 팀 등급이 보입니다(답하기 전에 보면 그 값에 끌립니다). 기사 절반(고칠 몫)은 기사별 결과·고칠 안을, 나머지(확인용)는 건수만 보여 줍니다.'
+      : '다른 팀 세트 — 보기만 합니다.');
+  el.innerHTML = '<div style="font-size:11.5px;color:var(--text-secondary);line-height:1.8">' + lines.join('<br>') + '</div>' +
+    '<div style="font-size:11px;color:var(--text-tertiary);line-height:1.7;margin-top:4px;padding:6px 8px;border-radius:var(--radius-md);background:var(--bg-secondary)">' + guide + '</div>';
+}
+// 점수 RPC가 기사별로 준 항목(고칠 몫 — 세트가 끝났거나 관리자면 확인용도) → {news_id: 항목}
+function _grScoreItems() {
+  var m = {}, sc = _gr && _gr.score;
+  if (!sc) return m;
+  ['tune', 'check'].forEach(function(k) { ((sc[k] && sc[k].items) || []).forEach(function(x) { x._slot = k; m[x.news_id] = x; }); });
+  return m;
+}
+function _grRenderItem(newsId) {
+  var el = document.getElementById('gr-it-' + newsId);
+  if (!el || !_gr) return;
+  var it = _gr.items.find(function(x) { return x.news_id === newsId; });
+  if (!it) return;
+  var n = _gr.news[newsId] || {};
+  var a = _grAnsOf(newsId), can = _grCanAnswer();
+  var btns = GR_ANSWERS.map(function(v) {
+    var rr = IMPORTANCE_RULES[v] || { color: 'var(--text-secondary)' };
+    var on = a.mine === v;
+    return '<span ' + (can ? 'onclick="grAnswer(\'' + escHtml(newsId) + '\',\'' + v + '\')" ' : '') +
+      'style="cursor:' + (can ? 'pointer' : 'not-allowed') + ';font-size:11px;padding:2px 9px;border-radius:4px;white-space:nowrap;border:1px solid ' + (on ? rr.color : 'var(--border-secondary)') + ';' +
+      'color:' + (on ? '#fff' : 'var(--text-secondary)') + ';background:' + (on ? rr.color : 'transparent') + (can ? '' : ';opacity:.6') + '">' + escHtml(v === '긴급' ? '중요' : v) + '</span>';
+  }).join('');
+  var others = a.n - (a.mine ? 1 : 0);
+  var meta = (others ? '<span style="font-size:10.5px;color:var(--text-tertiary)">팀 답 ' + a.n + '명</span>' : '') +
+    (a.known.length >= 2 ? '<span style="font-size:10.5px;color:#b45309" title="두 사람 이상의 답이 달라 점수에서 뺍니다 — 대표가 답하면 대표 답이 정답">회색지대(답 갈림)</span>' : '');
+  el.innerHTML =
+    '<div style="display:flex;gap:6px;align-items:baseline;flex-wrap:wrap">' +
+      '<span style="font-size:10.5px;color:var(--text-muted);min-width:18px">' + it.seq + '</span>' +
+      (n.url ? '<a href="' + escHtml(safeUrl(n.url)) + '" target="_blank" rel="noopener" style="font-size:12.5px;color:var(--text-primary);font-weight:600;text-decoration:none">' + escHtml(n.title || '(제목 없음)') + '</a>'
+             : '<span style="font-size:12.5px;color:var(--text-primary);font-weight:600">' + escHtml(n.title || '(지워진 기사)') + '</span>') +
+      '<span style="font-size:10.5px;color:var(--text-tertiary);white-space:nowrap">' + escHtml(n.source || '') + ' · ' + escHtml(_kstYmd(n.published_at || n.created_at)) + '</span>' +
+    '</div>' +
+    (n.summary ? '<div style="font-size:11px;color:var(--text-tertiary);line-height:1.5;margin:2px 0 0 24px">' + escHtml(String(n.summary).replace(/\s+/g, ' ').slice(0, 140)) + '</div>' : '') +
+    '<div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap;margin:5px 0 0 24px">' + btns + meta + '</div>' +
+    '<div id="gr-res-' + escHtml(newsId) + '" style="margin:4px 0 0 24px;font-size:11px;line-height:1.7"></div>';
+  _grRenderResult(newsId);
+}
+// 기사별 결과 — 점수 RPC가 기사별로 준 기사(고칠 몫 / 끝난 세트·관리자면 확인용도)이고, 내가 답했거나 답할 수 없는 화면일 때만
+function _grRenderResult(newsId) {
+  var el = document.getElementById('gr-res-' + newsId);
+  if (!el || !_gr) return;
+  var si = _grScoreItems()[newsId];
+  var a = _grAnsOf(newsId);
+  if (!a.mine && _grCanAnswer() && !_grFinal()) { el.innerHTML = ''; return; }   // 답하기 전에는 아무것도(닻 효과)
+  if (!si) {
+    el.innerHTML = _grFinal() || !_gr.score ? '' : '<span style="color:var(--text-muted)">확인용 — 결과는 건수로만(세트를 적용하거나 닫으면 공개)</span>';
+    return;
+  }
+  var it = _gr.items.find(function(x) { return x.news_id === newsId; });
+  var rb = _urRulesById();
+  var rule = si.rule_id ? rb[si.rule_id] : null;
+  var lb = _teamGradeLabel(si.team_level, si.team_source, si.team_source === 'rule' ? rule : null);
+  var lvSpan = function(lv) { var r = IMPORTANCE_RULES[lv] || {}; return '<b style="color:' + (r.color || 'inherit') + '">' + escHtml(_urLvLabel(lv)) + '</b>'; };
+  var out = [];
+  out.push('<span style="color:var(--text-tertiary)">' + (si._slot === 'check' ? '확인용 · ' : '') + '세트 만들 때 우리 팀</span> ' + lvSpan(si.team_level) +
+    ' <span style="color:var(--text-tertiary)" title="' + escHtml(lb.tip) + '">· ' + escHtml(lb.text) + '</span>' +
+    (si.answer ? ' <span style="color:var(--text-tertiary)">· 정답</span> ' + lvSpan(si.answer) : (si.gray ? ' <span style="color:#b45309">· 회색지대</span>' : ' <span style="color:var(--text-muted)">· 정답 없음(모르겠음·미답)</span>')));
+  if (si.base_branch) {
+    var b = GR_BRANCH[si.base_branch] || { t: si.base_branch, c: 'inherit' };
+    out.push('<span style="color:' + b.c + '">● ' + escHtml(b.t) + '</span>');
+    if (_gr.mine && !_grFinal() && si._slot === 'tune') {
+      var sug = _grSuggestHtml(it, si);
+      if (sug) out.push(sug);
+    }
+  }
+  if (si.trial_level) {
+    var tb = si.trial_branch ? (GR_BRANCH[si.trial_branch] || { t: si.trial_branch, c: 'inherit' }) : null;
+    out.push('<span style="color:var(--text-tertiary)">마지막 다시 채점 →</span> ' + lvSpan(si.trial_level) + (tb ? ' <span style="color:' + tb.c + '">' + escHtml(tb.t) + '</span>' : ''));
+  }
+  out.push('<span id="gr-pred-' + escHtml(newsId) + '"></span>');
+  el.innerHTML = out.join('<br>');
+  _grRenderPred(newsId);
+}
+// 편집 중 후보를 넣으면(낱말 즉시, AI 확인은 시험 뒤) — 고칠 몫·공개 기사만
+function _grRenderPred(newsId, pred) {
+  var el = document.getElementById('gr-pred-' + newsId);
+  if (!el || !_gr) return;
+  if (!_gr.cands.length || !_gr.mine || _grFinal()) { el.innerHTML = ''; return; }
+  pred = pred || _grEval(_gr.cands, (!_gr.dirty && _gr.last && _gr.last.status === 'judged') ? _gr.tvMap : null);
+  var p = pred[newsId], si = _grScoreItems()[newsId];
+  if (!p) { el.innerHTML = ''; return; }
+  if (p.pending) { el.innerHTML = '<span style="color:var(--accent)">후보를 넣으면 → AI 확인 필요(다시 채점하면 다음 수집에 판정)</span>'; return; }
+  var r = IMPORTANCE_RULES[p.level] || {};
+  var ok = si && si.answer ? (si.answer === p.level ? ' <span style="color:var(--green)">맞음</span>' : ' <span style="color:#ef4444">틀림</span>') : '';
+  el.innerHTML = '<span style="color:var(--accent)">후보를 넣으면 →</span> <b style="color:' + (r.color || 'inherit') + '">' + escHtml(_urLvLabel(p.level)) + '</b>' + ok;
+}
+function _grRenderPreds() {
+  if (!_gr) return;
+  var pred = _gr.cands.length ? _grEval(_gr.cands, (!_gr.dirty && _gr.last && _gr.last.status === 'judged') ? _gr.tvMap : null) : null;
+  _gr.items.forEach(function(it) { _grRenderPred(it.news_id, pred); });
+}
+
+// 틀린 갈래별 고칠 안(설계 §4-4, AI 0) — 고칠 몫 기사에만. 「후보로」 = 그 규칙을 아래 후보 편집기에 넣는다(운영 규칙은 그대로)
+function _grSuggestHtml(it, si) {
+  var rb = _urRulesById(), br = si.base_branch;
+  var rid = si.rule_id || (it && it.rule_id_at_build) || null, rule = rid ? rb[rid] : null;
+  var nm = rule ? '「' + escHtml(_urShortName(rule)) + '」' : '';
+  var candBtn = function(label, id) {
+    return ' <button class="btn" style="font-size:10.5px;padding:1px 7px" data-rid="' + escHtml(id || '') + '" onclick="grAddCand(this.getAttribute(\'data-rid\'))">' + label + '</button>';
+  };
+  var why = function() {
+    if (!rule) return '';
+    var vr = (_gr.verdicts[si.news_id] || []).find(function(v) { return v.rule_id === rule.id && Number(v.sentence_rev) === (Number(rule.sentence_rev) || 0) && v.status === 'done'; });
+    return vr && vr.reason ? ' <span style="color:var(--text-tertiary)">AI 판단: ' + escHtml(vr.reason) + '</span>' : '';
+  };
+  var hits = function(r) { var h = _grHits60(r); return h == null ? '' : ' · 최근 60일 낱말 적중 ' + h.toLocaleString('ko-KR') + '건'; };
+  if (br === 'miss_word' || br === 'common_high') {
+    var ws = _grWordSuggest(_gr.news[si.news_id] || {});
+    var opts = _teamEnabledRules(_gr.teamId).filter(function(r) { return br === 'miss_word' ? !_urIsLowering(r) : _urIsLowering(r); })
+      .map(function(r) { return '<option value="' + escHtml(r.id) + '">' + escHtml(_urShortName(r)) + '</option>'; }).join('');
+    return '<span style="color:var(--text-secondary)">' + (br === 'miss_word' ? '후보 낱말(누르면 고른 규칙에 더함):' : '내리려면 「무조건 ' + escHtml(_urLvLabel(si.answer || '보통')) + '」 규칙 — 낱말:') + '</span> ' +
+      (ws.length ? ws.map(function(w) {
+        return '<span data-w="' + escHtml(w) + '" onclick="grAddWord(\'' + escHtml(si.news_id) + '\', this.getAttribute(\'data-w\'))" style="cursor:pointer;display:inline-block;font-size:10.5px;padding:0 6px;margin:1px 2px;border-radius:4px;border:0.5px dashed var(--accent);color:var(--accent)">+ ' + escHtml(w) + '</span>';
+      }).join('') : '<span style="color:var(--text-muted)">(제목에서 고를 낱말 없음)</span>') +
+      ' <select id="gr-sug-' + escHtml(si.news_id) + '" style="font-size:10.5px;padding:1px 4px;border:0.5px solid var(--border-mid);border-radius:4px;background:var(--bg-secondary);color:var(--text-primary)">' +
+        opts + '<option value="">새 규칙</option></select>' +
+      (br === 'common_high' ? '<br><span style="color:var(--text-tertiary)">내림 규칙은 그 기사의 우리 팀 중요 알림을 막습니다 — 적용 전에 「후보 미리보기」로 내려가는 공통 중요 수를 보세요.</span>' : '');
+  }
+  if (br === 'miss_sentence') return '<span style="color:var(--text-secondary)">' + nm + ' AI 확인 조건이 이 기사를 빼냈습니다.</span>' + why() + candBtn('조건 넓히기 → 후보로', rid);
+  if (br === 'rule_level') return '<span style="color:var(--text-secondary)">' + nm + ' 규칙이 걸렸지만 등급이 낮습니다.</span>' + candBtn('등급 올리기 → 후보로', rid);
+  if (br === 'wide_word') return '<span style="color:var(--text-secondary)">' + nm + ' 낱말이 넓습니다' + (rule ? hits(rule) : '') + ' — ② 칸(그리고 이 낱말도)으로 좁히거나 AI 확인 조건을 넣으세요.</span>' + candBtn('낱말 좁히기 → 후보로', rid);
+  if (br === 'wide_sentence') return '<span style="color:var(--text-secondary)">' + nm + ' AI 확인 조건이 넓습니다.</span>' + why() + candBtn('조건 좁히기 → 후보로', rid);
+  if (br === 'common_urgent_lowered') {
+    if (si.team_source === 'human') return '<span style="color:var(--text-secondary)">우리 팀이 직접 내린 기사입니다 — 기사 상세에서 「공통값으로 되돌리기」.</span>';
+    return '<span style="color:var(--text-secondary)">' + (nm || '우리 팀 규칙') + '이(가) 공통 중요를 내렸습니다 — 그 기사는 우리 팀 구독자에게 중요 알림이 가지 않습니다.</span>' + (rid ? candBtn('규칙 고치기 → 후보로', rid) : '');
+  }
+  if (br === 'human') return '<span style="color:var(--text-tertiary)">사람이 정한 값이라 규칙으로 고치지 못합니다(기사 상세에서 되돌리면 규칙이 다시 적용).</span>';
+  return '';
+}
+// 규칙 하나의 최근 60일 낱말 적중 수 — 불러온 뉴스(검색 요약을 받아 뒀으면 그것, 아니면 저장 요약). 뉴스가 없으면 null
+function _grHits60(rule) {
+  if (!newsDataCache.length) return null;
+  var cut = Date.now() - 60 * 86400000, t = (_gr && _gr.texts) || {}, n60 = 0;
+  newsDataCache.forEach(function(n) {
+    var ts = Date.parse(n.published_at || n.created_at || '');
+    if (isNaN(ts) || ts < cut) return;
+    if (UrgencyRules.matchUrgencyRules([rule], n.title || '', UrgencyRules.ruleInputText(t[String(n.id)], n.summary))) n60++;
+  });
+  return n60;
+}
+// 놓친 기사 제목·요약에서 후보 낱말(최대 5) — 우리 팀 규칙 낱말·기준문 키워드에 이미 있는(또는 품은) 것과 흔한 말은 뺀다(AI 0)
+function _grWordSuggest(n) {
+  var have = [];
+  _teamEnabledRules(_gr.teamId).concat(_gr.cands || []).forEach(function(r) {
+    var v = UrgencyRules.ruleView(Object.assign({ id: 'x', mode: 'min', level: '보통' }, r));
+    have = have.concat(v.any); v.groups.forEach(function(g) { have = have.concat(g); });
+  });
+  have = have.concat(_gr.keywords || []).map(function(w) { return String(w).replace(/\s+/g, '').toLowerCase(); }).filter(Boolean);
+  var toks = ((n.title || '') + ' ' + String(n.summary || '').slice(0, 200)).match(/[가-힣A-Za-z0-9+]{2,}/g) || [];
+  var out = [], seen = {};
+  toks.forEach(function(w) {
+    if (out.length >= 5) return;
+    if (/^[가-힣]/.test(w)) w = w.replace(/(으로|에서|부터|까지|로서|로는|로도|에는|에도|이나|이며|이고|로|을|를|이|가|은|는|의|에|과|와|도|만)$/, '');
+    if (w.length < 2 || /^[0-9+]+$/.test(w) || GR_STOP.indexOf(w) !== -1) return;
+    var k = w.toLowerCase();
+    if (seen[k] || have.some(function(h) { return h.indexOf(k) !== -1 || k.indexOf(h) !== -1; })) return;
+    seen[k] = 1;
+    out.push(w);
+  });
+  return out;
+}
+
+// ── 점수판 ──
+function _grRenderScore() {
+  var el = document.getElementById('gr-score');
+  if (!el || !_gr) return;
+  if (_gr.scoreErr) { el.innerHTML = '<div style="font-size:11.5px;color:#ef4444">점수를 세지 못했습니다: ' + escHtml(_gr.scoreErr) + '</div>'; return; }
+  var sc = _gr.score;
+  if (!sc) { el.innerHTML = ''; return; }
+  var t = sc.tune || {}, c = sc.check || {};
+  var pct = function(k, d) { return d ? ' <span style="color:var(--text-tertiary)">(' + Math.round(100 * k / d) + '%)</span>' : ''; };
+  var trial = sc.trial;
+  var row = function(label, o, showTrial) {
+    var d = o.denom || 0;
+    return '<div><b>' + label + '</b> — 정답 ' + d + '건 중 우리 팀 규칙(만들 때) <b>' + (o.base_match || 0) + '</b>' + pct(o.base_match || 0, d) +
+      ' · 공통 등급 ' + (o.common_match || 0) +
+      (showTrial && o.trial_match != null ? ' · <span style="color:var(--accent)">마지막 다시 채점 <b>' + o.trial_match + '</b>' + pct(o.trial_match, d) + '</span>' +
+        (o.trial_missing ? ' <span style="color:var(--text-tertiary)">(AI 확인 대기 ' + o.trial_missing + '건)</span>' : '') : '') +
+      ((o.gray || o.unknown || o.unanswered) ? ' <span style="color:var(--text-tertiary)">· 회색지대 ' + (o.gray || 0) + ' · 모르겠음 ' + (o.unknown || 0) + ' · 미답 ' + (o.unanswered || 0) + '</span>' : '') +
+      ((o.base_lowered || o.trial_lowered) ? ' <span style="color:#ef4444">· 공통 중요 잘못 내림 ' + (o.base_lowered || 0) + (o.trial_lowered != null ? '→' + o.trial_lowered : '') + '</span>' : '') +
+      '</div>';
+  };
+  var adv = sc.advice ? GR_ADVICE[sc.advice] : null;
+  if (adv && sc.advice === 'recommend' && c.trial_match === c.base_match) adv = { t: '확인용 변화 없음 — 기준선과 같습니다(적용은 팀 판단)', c: 'var(--text-secondary)' };
+  var counts = function(m) {
+    return Object.keys(m || {}).filter(function(k) { return k !== 'ok' && k !== 'ok_common'; }).map(function(k) { return escHtml((GR_BRANCH[k] || { t: k }).t) + ' ' + m[k]; }).join(' · ');
+  };
+  var tc = counts(t.base_branches);
+  el.innerHTML = '<div style="font-size:12px;font-weight:700;color:var(--text-primary);margin-bottom:4px">점수 ' +
+      '<button class="btn" style="font-size:10.5px;padding:1px 8px;margin-left:6px" onclick="grRefreshScore(this)"><i class="ti ti-refresh"></i> 새로 세기</button>' +
+      (_gr.scoreStale ? ' <span style="font-size:10.5px;font-weight:400;color:#b45309">답이 바뀌었습니다 — 새로 세기</span>' : '') + '</div>' +
+    '<div style="font-size:11.5px;color:var(--text-secondary);line-height:1.8;padding:8px 10px;border:0.5px solid var(--border-secondary);border-radius:var(--radius-md)">' +
+      row('고칠 몫', t, !!trial) + row('확인용', c, !!trial) +
+      (tc ? '<div style="color:var(--text-tertiary)">고칠 몫 틀린 갈래: ' + tc + '</div>' : '') +
+      (trial ? '<div style="color:var(--text-tertiary)">마지막 다시 채점 #' + trial.id + ' · ' +
+                escHtml(({ pending: 'AI 확인 대기 — 다음 수집(10분 안)', judged: '판정 끝', applied: '적용됨', failed: '실패' })[trial.status] || trial.status) +
+                (Number(trial.cost_usd) ? ' · 약 ' + Math.round(Number(trial.cost_usd) * 1400).toLocaleString('ko-KR') + '원' : '') +
+                (_gr.last && _gr.last.note ? ' · ' + escHtml(_gr.last.note) : '') + '</div>' : '') +
+      (adv ? '<div style="margin-top:4px;color:' + adv.c + ';font-weight:600">' + escHtml(adv.t) + '</div>' : '') +
+    '</div>';
+}
+async function grRefreshScore(btn) {
+  if (!_gr) return;
+  if (btn) btn.disabled = true;
+  try { await _grFetchScore(); } finally { if (btn) btn.disabled = false; }
+  _grRenderHead();
+  _grRenderScore();
+  _gr.items.forEach(function(it) { _grRenderResult(it.news_id); });
+}
+
+// ── 후보 편집기(고칠 안) ──
+function _grCandFromRule(r) {
+  return { rule_id: r.id, note: r.note || '', position: r.position, mode: r.mode, level: r.level,
+           any_words: (r.any_words || []).slice(), and_any: _urGroups(r.and_any), none_words: (r.none_words || []).slice(),
+           sentence: r.sentence || '', sentence_rev: Number(r.sentence_rev) || 0, enabled: true, _was_off: !r.enabled };
+}
+function _grNewCand(level, mode) {
+  var maxPos = _urRules.filter(function(r) { return r.team_id != null && Number(r.team_id) === _gr.teamId; })
+    .reduce(function(m, r) { return Math.max(m, r.position || 0); }, 0);
+  return { rule_id: null, note: '', position: maxPos + 10, mode: mode || 'min', level: level || '보통',
+           any_words: [], and_any: [], none_words: [], sentence: '', sentence_rev: 0, enabled: true };
+}
+function grAddCand(ruleId) {
+  if (!_grCanTrial()) { alert('열린 우리 팀 세트에서만 후보를 만듭니다.'); return; }
+  _grCandsRead();
+  var idx = -1;
+  if (ruleId) idx = _gr.cands.findIndex(function(c) { return c.rule_id === ruleId; });
+  if (idx === -1) {
+    if (_gr.cands.length >= GR_CAND_MAX) { alert('한 번에 바꾸는 규칙은 ' + GR_CAND_MAX + '개까지입니다.'); return; }
+    var r = ruleId ? _urRulesById()[ruleId] : null;
+    if (ruleId && (!r || Number(r.team_id) !== _gr.teamId)) { alert('우리 팀 규칙을 찾지 못했습니다 — 새로고침 뒤 다시.'); return; }
+    _gr.cands.push(r ? _grCandFromRule(r) : _grNewCand());
+    idx = _gr.cands.length - 1;
+    _gr.dirty = true;
+  }
+  _grRenderCands();
+  _grRenderPreds();
+  var card = document.getElementById('gr-c-' + idx);
+  if (card) try { card.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (e) { /* 구형 브라우저 */ }
+}
+function grAddWord(newsId, word) {
+  if (!_grCanTrial() || !word) return;
+  _grCandsRead();
+  var sel = document.getElementById('gr-sug-' + newsId);
+  var rid = sel ? sel.value : '';
+  var si = _grScoreItems()[newsId] || {};
+  var idx = rid ? _gr.cands.findIndex(function(c) { return c.rule_id === rid; })
+                : _gr.cands.findIndex(function(c) { return !c.rule_id && c._from === newsId; });
+  if (idx === -1) {
+    if (_gr.cands.length >= GR_CAND_MAX) { alert('한 번에 바꾸는 규칙은 ' + GR_CAND_MAX + '개까지입니다.'); return; }
+    var r = rid ? _urRulesById()[rid] : null;
+    var c = r ? _grCandFromRule(r)
+              : _grNewCand(si.answer && si.answer !== '모르겠음' ? si.answer : '보통', si.base_branch === 'common_high' ? 'set' : 'min');
+    if (!r) c._from = newsId;
+    _gr.cands.push(c);
+    idx = _gr.cands.length - 1;
+  }
+  var cc = _gr.cands[idx];
+  if (cc.any_words.indexOf(word) === -1) cc.any_words.push(word);
+  _gr.dirty = true;
+  _grRenderCands();
+  _grRenderPreds();
+}
+function grRemoveCand(i) {
+  _grCandsRead();
+  _gr.cands.splice(i, 1);
+  _gr.dirty = true;
+  _gr.impact = null;
+  _grRenderCands();
+  _grRenderPreds();
+}
+// 편집 칸 → 후보 객체(카드가 그려져 있을 때만 — 다시 그리기 전에 부른다)
+function _grCandsRead() {
+  if (!_gr) return;
+  _gr.cands.forEach(function(c, i) {
+    var g = function(k) { var e = document.getElementById('gr-c-' + i + '-' + k); return e ? e.value : null; };
+    if (g('mode') == null) return;
+    c.mode = g('mode'); c.level = g('level');
+    c.position = parseInt(g('pos'), 10) || c.position || 100;
+    c.any_words = _urSplit(g('any'));
+    c.and_any = String(g('and') || '').split('\n').map(_urSplit).filter(function(a) { return a.length; });
+    c.none_words = _urSplit(g('none'));
+    c.sentence = _urSentenceNorm(g('sent'));
+    if (!c.rule_id) c.note = String(g('name') || '').trim();
+  });
+}
+var _grPredTimer = null;
+function grCandInput(i) {
+  _grCandsRead();
+  _gr.dirty = true;
+  _gr.impact = null;
+  var c = _gr.cands[i], rd = document.getElementById('gr-c-' + i + '-read');
+  if (c && rd) rd.innerHTML = _urSentenceHtml(_grCandRule(c, i, false)) + _grCandNote(c, i);
+  var imp = document.getElementById('gr-impact'); if (imp) imp.innerHTML = '';
+  if (_grPredTimer) clearTimeout(_grPredTimer);
+  _grPredTimer = setTimeout(function() { _grPredTimer = null; _grRenderPreds(); _grRenderCandButtons(); }, 250);
+}
+function _grCandNote(c, i) {
+  var r = _grCandRule(c, i, false), notes = [];
+  if (c._was_off) notes.push('꺼진 규칙 — 적용하면 켜집니다');
+  if (UrgencyRules.hasSentence(r)) notes.push(r._fresh ? 'AI 확인 조건이 바뀜 — 다시 채점하면 세트 기사 중 낱말 걸린 것만 AI가 확인(다음 수집)' : 'AI 확인 조건 그대로 — 저장된 판정을 그대로 씀(AI 호출 없음)');
+  if (_urIsLowering(r)) notes.push('내림 규칙 — 공통 중요를 내리면 그 기사의 우리 팀 중요 알림이 막힙니다');
+  return notes.length ? '<div style="font-size:10.5px;color:var(--text-tertiary);margin-top:2px">' + notes.map(escHtml).join(' · ') + '</div>' : '';
+}
+function _grRenderCands() {
+  var el = document.getElementById('gr-cands');
+  if (!el || !_gr) return;
+  if (!_gr.mine || _grFinal()) {
+    el.innerHTML = _grFinal() && _gr.last && _gr.last.status === 'applied'
+      ? '<div style="font-size:11.5px;color:var(--text-secondary)">이 세트에서 적용한 후보: ' + (_gr.last.candidates || []).map(function(c, i) {
+          return escHtml(c.rule_id ? _urShortName(_urRulesById()[c.rule_id] || { id: c.rule_id }) : (c.note || '새 규칙 ' + (i + 1)));
+        }).join(', ') + '</div>' : '';
+    return;
+  }
+  if (!_grOpen()) { el.innerHTML = ''; return; }
+  var fieldCss = 'width:100%;box-sizing:border-box;padding:4px 6px;font-size:11.5px;border:0.5px solid var(--border-mid);border-radius:4px;background:var(--bg-primary);color:var(--text-primary);font-family:inherit';
+  var selCss = 'padding:3px 5px;font-size:11.5px;border:0.5px solid var(--border-mid);border-radius:4px;background:var(--bg-primary);color:var(--text-primary)';
+  var ruleOpts = _urRules.filter(function(r) { return r.team_id != null && Number(r.team_id) === _gr.teamId; }).sort(_urRuleCmp)
+    .map(function(r) { return '<option value="' + escHtml(r.id) + '">' + escHtml(_urShortName(r) + (r.enabled ? '' : ' (꺼짐)')) + '</option>'; }).join('');
+  var cards = _gr.cands.map(function(c, i) {
+    var base = c.rule_id ? _urRulesById()[c.rule_id] : null;
+    var opt = function(v, label, cur) { return '<option value="' + v + '"' + (cur === v ? ' selected' : '') + '>' + label + '</option>'; };
+    var oi = 'oninput="grCandInput(' + i + ')"';
+    return '<div id="gr-c-' + i + '" style="margin-top:8px;padding:8px 10px;border:1px solid var(--accent);border-radius:var(--radius-md);background:var(--bg-secondary)">' +
+      '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;font-size:12px">' +
+        '<b>' + (i + 1) + '. ' + (base ? '「' + escHtml(_urShortName(base)) + '」 고치기' : '새 규칙') + '</b>' +
+        (base ? '' : '<input id="gr-c-' + i + '-name" ' + oi + ' placeholder="규칙 이름(20자 안팎)" style="' + fieldCss + ';width:200px">') +
+        '<select id="gr-c-' + i + '-mode" onchange="grCandInput(' + i + ')" style="' + selCss + '">' + opt('min', '적어도', c.mode) + opt('set', '무조건', c.mode) + '</select>' +
+        '<select id="gr-c-' + i + '-level" onchange="grCandInput(' + i + ')" style="' + selCss + '">' + opt('긴급', '중요', c.level) + opt('보통', '보통', c.level) + opt('참고', '참고', c.level) + '</select>' +
+        '<span style="font-size:10.5px;color:var(--text-tertiary)">순서</span><input id="gr-c-' + i + '-pos" type="number" ' + oi + ' style="' + fieldCss + ';width:64px">' +
+        '<button class="btn" style="font-size:10.5px;padding:1px 7px;margin-left:auto" onclick="grRemoveCand(' + i + ')">빼기</button>' +
+      '</div>' +
+      '<div style="font-size:10.5px;color:var(--text-tertiary);margin-top:4px">① 이 낱말 중 하나(쉼표)</div><input id="gr-c-' + i + '-any" ' + oi + ' style="' + fieldCss + '">' +
+      '<div style="font-size:10.5px;color:var(--text-tertiary);margin-top:3px">② 이 낱말도(한 줄에 한 묶음)</div><textarea id="gr-c-' + i + '-and" rows="2" ' + oi + ' style="' + fieldCss + ';resize:vertical"></textarea>' +
+      '<div style="font-size:10.5px;color:var(--text-tertiary);margin-top:3px">③ 이 낱말은 없을 때</div><input id="gr-c-' + i + '-none" ' + oi + ' style="' + fieldCss + '">' +
+      '<div style="font-size:10.5px;color:var(--text-tertiary);margin-top:3px">🤖 AI 확인 조건(선택, 200자)</div><textarea id="gr-c-' + i + '-sent" rows="2" maxlength="200" ' + oi + ' style="' + fieldCss + ';resize:vertical"></textarea>' +
+      '<div id="gr-c-' + i + '-read" style="font-size:11px;color:var(--text-secondary);line-height:1.7;margin-top:4px"></div>' +
+    '</div>';
+  }).join('');
+  el.innerHTML = '<div style="font-size:12px;font-weight:700;color:var(--text-primary)">고칠 안 — 바꿀 규칙 후보 <span style="font-weight:400;font-size:11px;color:var(--text-tertiary)">(최대 ' + GR_CAND_MAX + '개 · 운영 규칙은 「적용」 전까지 그대로)</span></div>' +
+    '<div style="font-size:11px;color:var(--text-tertiary);line-height:1.6;margin-top:2px">위 기사의 「→ 후보로」·후보 낱말을 누르거나, 규칙을 골라 넣으세요. 낱말을 고치면 고칠 몫 기사의 「후보를 넣으면 →」가 바로 바뀝니다. 점수는 「다시 채점」해야 셉니다.</div>' +
+    '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:6px">' +
+      '<select id="gr-add-rule" style="' + selCss + '">' + ruleOpts + '<option value="">새 규칙</option></select>' +
+      '<button class="btn" style="font-size:11px;padding:2px 9px" onclick="grAddCand(document.getElementById(\'gr-add-rule\').value)">후보에 넣기</button>' +
+    '</div>' + cards +
+    '<div id="gr-impact" style="font-size:11px;line-height:1.7;margin-top:8px"></div>' +
+    '<div id="gr-cand-btns" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:8px"></div>';
+  // 값은 DOM 속성으로(HTML 조립에 사용자 글을 섞지 않는다)
+  _gr.cands.forEach(function(c, i) {
+    var set = function(k, v) { var e = document.getElementById('gr-c-' + i + '-' + k); if (e) e.value = v; };
+    set('name', c.note || ''); set('pos', c.position);
+    set('any', (c.any_words || []).join(', '));
+    set('and', _urGroups(c.and_any).map(function(g) { return g.join(', '); }).join('\n'));
+    set('none', (c.none_words || []).join(', ')); set('sent', c.sentence || '');
+    var rd = document.getElementById('gr-c-' + i + '-read');
+    if (rd) rd.innerHTML = _urSentenceHtml(_grCandRule(c, i, false)) + _grCandNote(c, i);
+  });
+  _grRenderImpact();
+  _grRenderCandButtons();
+}
+// 오늘(KST) 이 세트에서 한 다시 채점 수 — 화면 안내용(한도 관문은 트리거: 팀 전체 세트 합산 하루 5회)
+function _grTrialsToday() {
+  var today = _kstYmd(new Date().toISOString());
+  return (_gr ? _gr.trials : []).filter(function(t) { return _kstYmd(t.created_at) === today; }).length;
+}
+function _grRenderCandButtons() {
+  var el = document.getElementById('gr-cand-btns');
+  if (!el || !_gr) return;
+  var used = _grTrialsToday(), last = _gr.last;
+  var pending = last && last.status === 'pending';
+  var canApply = last && last.status === 'judged';
+  el.innerHTML =
+    '<button class="btn" style="font-size:11.5px" onclick="grImpact(this)"' + (_gr.cands.length ? '' : ' disabled') + '><i class="ti ti-chart-bar"></i> 후보 미리보기(최근 60일)</button>' +
+    '<button class="btn btn-primary" style="font-size:11.5px" onclick="grRunTrial(this)"' + (_gr.cands.length && used < GR_TRIAL_DAILY && !pending ? '' : ' disabled') + '>' +
+      '<i class="ti ti-player-play"></i> 다시 채점</button>' +
+    '<span style="font-size:10.5px;color:var(--text-tertiary)">오늘 ' + used + '/' + GR_TRIAL_DAILY + '회' + (pending ? ' · 마지막 다시 채점이 AI 확인을 기다리는 중' : '') + '</span>' +
+    '<span style="flex:1"></span>' +
+    '<button class="btn" style="font-size:11.5px" onclick="grApply(this)"' + (canApply ? '' : ' disabled title="판정이 끝난 다시 채점이 있어야 적용합니다"') + '><i class="ti ti-check"></i> 적용</button>' +
+    '<button class="btn" style="font-size:11.5px" onclick="grCloseSet(this)"><i class="ti ti-x"></i> 세트 닫기</button>';
+}
+
+// 후보 미리보기 — 불러온 뉴스 전체(60일)에 후보를 넣어: 후보별 60일 낱말 적중·넓은 낱말 차단, 우리 팀 등급이 바뀌는 기사,
+// 공통 중요를 내리는 기사(설계 §4-4 「미리보기 건수」·§2-4·§8). 판정 기록은 우리 팀 것(받아 둔 것) — AI 0
+async function _grImpact(cands) {
+  if (_newsFillPromise) { try { await _newsFillPromise; } catch (e0) { /* 1단계분만 */ } }
+  if (!newsDataCache.length) throw new Error('불러온 뉴스가 없습니다 — 뉴스 화면을 한 번 연 뒤 다시');
+  var texts = await loadScreenTexts();
+  if (_gr) _gr.texts = texts;
+  var tid = _gr.teamId;
+  var crs = cands.map(function(c, i) { return _grCandRule(c, i, false); });
+  var cid = {};
+  crs.forEach(function(r) { cid[r.id] = r; });
+  var rules = _teamEnabledRules(tid).filter(function(r) { return !cid[r.id]; }).concat(crs).sort(_urRuleCmp);
+  var anySent = rules.some(UrgencyRules.hasSentence);
+  if (anySent) { await loadSentenceVerdicts(); if (!_vdAll) throw new Error('AI 확인 기록을 불러오지 못했습니다' + (_vdError ? '(' + _vdError + ')' : '')); }
+  var cut = Date.now() - 60 * 86400000, rb = _urRulesById();
+  var out = { per: crs.map(function() { return { hit60: 0 }; }), changed: 0, lowered: 0, pend: 0, list: [] };
+  newsDataCache.forEach(function(n) {
+    var key = String(n.id), ts = Date.parse(n.published_at || n.created_at || ''), in60 = !isNaN(ts) && ts >= cut;
+    var title = n.title || '', text = UrgencyRules.ruleInputText(texts[key], n.summary);
+    if (in60) crs.forEach(function(r, i) { if (UrgencyRules.matchUrgencyRules([r], title, text)) out.per[i].hit60++; });
+    var row = _teamRowsMode === 'team' ? (_teamRows[key] || null) : null;
+    if (row && (row.source === 'human' || row.source === 'ai')) return;
+    var common = n._common || n.importance || n.urgency || '참고';
+    var vm = anySent ? _verdictMapFor(key) : {};
+    var cur = UrgencyRules.effectiveTeamUrgency(common, row, rb).level;
+    if (UrgencyRules.sentenceCandidates(rules, title, text, vm).some(function(rid) { return cid[rid] && cid[rid]._fresh; })) { out.pend++; return; }
+    var dec = UrgencyRules.teamRuleDecisionJudged(rules, title, text, common, vm);
+    var nv = dec ? dec.level : common;
+    if (nv !== cur) out.changed++;
+    if (in60 && common === '긴급' && nv !== '긴급' && dec && cid[dec.rule_id]) { out.lowered++; if (out.list.length < 30) out.list.push(n); }
+  });
+  out.per.forEach(function(p, i) {
+    var r = crs[i];
+    p.wide = !_urIsLowering(r) && !UrgencyRules.hasSentence(r) && p.hit60 >= UR_WIDE_WORDS_60D;
+  });
+  return out;
+}
+async function grImpact(btn) {
+  if (!_gr) return;
+  _grCandsRead();
+  if (btn) btn.disabled = true;
+  try { _gr.impact = await _grImpact(_gr.cands); }
+  catch (e) { _gr.impact = { error: (e && e.message) || String(e) }; }
+  finally { if (btn) btn.disabled = false; }
+  _grRenderImpact();
+}
+function _grRenderImpact() {
+  var el = document.getElementById('gr-impact');
+  if (!el || !_gr) return;
+  var im = _gr.impact;
+  if (!im) { el.innerHTML = ''; return; }
+  if (im.error) { el.innerHTML = '<span style="color:#ef4444">미리보기 실패: ' + escHtml(im.error) + '</span>'; return; }
+  el.innerHTML = '<div style="padding:6px 8px;border:0.5px solid var(--border-secondary);border-radius:var(--radius-md)">' +
+    _gr.cands.map(function(c, i) {
+      var p = im.per[i] || {};
+      return (i + 1) + '번 후보 · 최근 60일 낱말 적중 <b>' + (p.hit60 || 0).toLocaleString('ko-KR') + '건</b>' +
+        (p.wide ? ' <span style="color:#ef4444">⛔ 넓음(기준 ' + UR_WIDE_WORDS_60D + '건) — AI 확인 조건을 넣거나 ② 칸으로 좁혀야 적용됩니다</span>' : '');
+    }).join('<br>') +
+    '<br>불러온 기사 중 우리 팀 등급이 바뀌는 기사 <b>' + im.changed.toLocaleString('ko-KR') + '건</b>' +
+    (im.pend ? ' · AI 확인이 필요한 기사 ' + im.pend.toLocaleString('ko-KR') + '건(적용 뒤 판정)' : '') +
+    '<br><span style="color:' + (im.lowered ? '#b45309' : 'inherit') + '">⬇ 최근 60일 공통 중요를 우리 팀에서 내리는 기사 <b>' + im.lowered + '건</b>' +
+      (im.lowered ? ' — 그 기사는 우리 팀 구독자에게 중요 알림이 가지 않습니다' : '') + '</span>' +
+    (im.list.length ? '<details><summary style="cursor:pointer">내려가는 기사 보기</summary>' + im.list.map(function(n) {
+      return '<div style="color:var(--text-secondary)">· ' + escHtml((n.published_at || '').slice(5, 10)) + ' ' + escHtml(n.title || '') + '</div>';
+    }).join('') + '</details>' : '') +
+    '</div>';
+}
+
+// ── 다시 채점(시험) ──
+async function grRunTrial(btn) {
+  if (!_gr || !_grCanTrial()) return;
+  _grCandsRead();
+  var cands = _gr.cands;
+  if (!cands.length) { alert('바꿀 규칙 후보를 하나 이상 넣어 주세요.'); return; }
+  var errs = [];
+  cands.forEach(function(c, i) {
+    var r = _grCandRule(c, i, false);
+    var e = UrgencyRules.validateRules([r]);
+    if (e.length) errs.push((i + 1) + '번 후보: ' + (r.any_words.length ? e[0] : '① 칸에 낱말을 하나 이상 적어 주세요'));
+    if (_urSentenceLen(c.sentence) > 200) errs.push((i + 1) + '번 후보: AI 확인 조건은 200자 이하');
+    if (!c.rule_id && !String(c.note || '').trim()) errs.push((i + 1) + '번 새 규칙: 이름을 적어 주세요');
+  });
+  if (errs.length) { alert(errs.join('\n')); return; }
+  var fresh = cands.filter(function(c, i) { return _grCandRule(c, i, false)._fresh; }).length;
+  var used = _grTrialsToday();
+  if (!confirm('다시 채점합니다 — 운영 규칙은 그대로 두고, 세트 기사에 후보 ' + cands.length + '개를 넣어 봅니다.\n' +
+      (fresh ? 'AI 확인 조건이 바뀐 후보 ' + fresh + '개는 다음 수집(10분 안)에 AI가 세트 기사 중 낱말이 걸린 것만 확인합니다(후보당 약 40원 이하).\n' : '낱말만 바뀌어 AI 호출 없이 바로 셉니다.\n') +
+      '오늘 ' + (used + 1) + '/' + GR_TRIAL_DAILY + '번째 · ' + (_gr.set.status === 'open' ? '첫 다시 채점부터 답이 잠깁니다(대표만 고침).' : ''))) return;
+  var payload = cands.map(function(c) {
+    return { rule_id: c.rule_id || null, note: c.rule_id ? '' : String(c.note || '').trim(), position: Number(c.position) || 100,
+             mode: c.mode, level: c.level, any_words: c.any_words, and_any: c.and_any, none_words: c.none_words,
+             sentence: _urSentenceNorm(c.sentence), sentence_rev: c.rule_id ? (Number(c.sentence_rev) || 0) : 0, enabled: true };
+  });
+  if (btn) btn.disabled = true;
+  var r = await sb.from('team_grading_trials').insert({ set_id: _gr.setId, team_id: _gr.teamId, candidates: payload }).select(GR_TRIAL_COLS);
+  if (btn) btn.disabled = false;
+  if (r.error) {
+    var m = r.error.message || '';
+    alert(/DAILY_CAP/.test(m) ? '다시 채점은 팀당 하루 ' + GR_TRIAL_DAILY + '번까지입니다.' :
+          /CANDIDATES/.test(m) ? '후보 모양이 맞지 않습니다(한 번에 1~' + GR_CAND_MAX + '개, 조건 200자).' :
+          /TRIAL_SET/.test(m) ? '열린 우리 팀 세트에서만 다시 채점할 수 있습니다.' : '다시 채점 실패: ' + m);
+    return;
+  }
+  var t = (r.data || [])[0];
+  if (!t) { alert('다시 채점이 저장되지 않았습니다(권한 확인).'); return; }
+  _gr.dirty = false;
+  try {
+    await _grLoad(_gr.setId);           // 새 시험이 마지막 — 세트는 scored(답 잠금)
+    var n = await _grWriteTrialItems(_gr.last);
+    await _grFetchScore();
+    _gr.msg = t.status === 'pending' && fresh
+      ? '다시 채점 #' + t.id + ' — 낱말 결과 ' + n + '건은 바로 셌고, AI 확인이 필요한 기사는 다음 수집(10분 안)에 판정합니다. 이 창을 열어 두면 끝나는 대로 다시 셉니다.'
+      : '다시 채점 #' + t.id + ' — 결과 ' + n + '건을 셌습니다.';
+  } catch (e) {
+    _gr.msg = '⚠️ 다시 채점은 저장됐지만 결과를 쓰지 못했습니다: ' + ((e && e.message) || e) + ' — 창을 다시 열면 다시 씁니다.';
+  }
+  _grRender();
+  _grPollSchedule();
+}
+
+// ── 적용 ── 마지막 다시 채점 후보를 운영 규칙으로 저장 → 시험 applied(applied_rev) → 우리 팀 기사에 즉시 재적용.
+// 막는 것: 판정 안 끝남 · 그사이 우리 팀 규칙이 바뀜(시험이 본 규칙과 다름) · 넓은 낱말 올림(§2-4). 확인 창: 권장 판정·내림(§8)
+async function grApply(btn) {
+  if (!_gr || !_grCanTrial()) return;
+  var t = _gr.last;
+  if (!t || t.status !== 'judged') { alert('판정이 끝난 다시 채점이 있어야 적용합니다.'); return; }
+  if (_gr.dirty && !confirm('후보를 고친 뒤 아직 다시 채점하지 않았습니다 — 적용은 「마지막으로 다시 채점한 후보」 그대로 저장합니다. 계속할까요?')) return;
+  if (btn) btn.disabled = true;
+  try {
+    await loadUrgencySources(true);
+    var since = Date.parse(t.created_at);
+    var moved = _urRules.filter(function(r) { return r.team_id != null && Number(r.team_id) === _gr.teamId && r.updated_at && Date.parse(r.updated_at) > since; });
+    if (moved.length) {
+      alert('다시 채점한 뒤 우리 팀 규칙이 바뀌었습니다(' + moved.map(_urShortName).join(', ') + ') — 지금 규칙으로 다시 채점한 뒤 적용하세요.');
+      return;
+    }
+    var cands = t.candidates || [];
+    var im = await _grImpact(cands);
+    var wide = im.per.map(function(p, i) { return p.wide ? (i + 1) + '번 후보(60일 ' + p.hit60 + '건)' : ''; }).filter(Boolean);
+    if (wide.length) { alert('⛔ 낱말이 넓은 올림 후보가 있어 적용할 수 없습니다: ' + wide.join(', ') + '\nAI 확인 조건을 넣거나 ② 칸으로 좁힌 뒤 다시 채점하세요.'); return; }
+    var sc = _gr.score || {}, adv = sc.advice ? GR_ADVICE[sc.advice] : null;
+    var lines = [];
+    if (adv) lines.push(adv.t);
+    var nUpd = cands.filter(function(c) { return c.rule_id; }).length;
+    lines.push('우리 팀 규칙 ' + cands.length + '개를 저장합니다(고치기 ' + nUpd + ' · 새 규칙 ' + (cands.length - nUpd) + ') — 저장하면 불러온 우리 팀 기사 ' + im.changed + '건의 등급이 바로 바뀝니다.' +
+      (im.pend ? '\nAI 확인 조건이 바뀌어 다시 판정할 기사 ' + im.pend.toLocaleString('ko-KR') + '건 — 다음 수집부터 판정해 반영(약 ' + _urWonEst(Math.min(im.pend, UR_VERDICT_REQ_CAP)) + '원, 세트 기사는 다시 채점 결과를 그대로 옮김)' : ''));
+    if (cands.some(function(c) { return _urIsLowering(c); }) || im.lowered)
+      lines.push('⬇ 최근 60일 공통 중요 ' + im.lowered + '건을 우리 팀에서 내립니다 — 그 기사는 우리 팀 구독자에게 중요 알림이 가지 않습니다.' +
+        (cands.some(function(c) { return _urIsLowering(c) && UrgencyRules.hasSentence(c); }) ? ' (AI 확인 조건이 있는 내림 규칙은 알림을 막지 못하고 화면 등급만 내립니다)' : ''));
+    lines.push('세트 기사의 AI 확인 결과는 다시 채점 결과 그대로 운영에 옮겨집니다(다음 수집). 적용하면 이 세트는 끝나고 확인용 결과가 공개됩니다.');
+    var warn = sc.advice === 'worse' || sc.advice === 'lowered';
+    if (!confirm((warn ? '⚠️ ' : '') + lines.join('\n\n') + '\n\n적용할까요?')) return;
+    // 저장 — 기존 규칙은 고치기(문장이 같으면 판 그대로, 바뀌면 트리거가 +1), 새 규칙은 넣기(판 0)
+    var applied = {}, done = [];
+    var ymd = new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(2, 10).replace(/-/g, '');
+    for (var i = 0; i < cands.length; i++) {
+      var c = cands[i];
+      var body = { position: Number(c.position) || 100, mode: c.mode, level: c.level, any_words: c.any_words || [], and_any: c.and_any || [],
+                   none_words: c.none_words || [], sentence: _urSentenceNorm(c.sentence), enabled: true };
+      var r;
+      if (c.rule_id) {
+        r = await sb.from('urgency_rules').update(body).eq('id', c.rule_id).eq('team_id', _gr.teamId).select('id,sentence_rev,updated_at');
+      } else {
+        var id = 'grading_s' + _gr.setId + '_' + (i + 1) + '_' + ymd, base = id, k = 2;
+        while (_urRules.some(function(x) { return x.id === id; })) id = base + '_' + (k++);
+        r = await sb.from('urgency_rules').insert(Object.assign({ id: id, team_id: _gr.teamId, note: String(c.note || '').trim() || '채점에서 만든 규칙' }, body))
+          .select('id,sentence_rev,updated_at');
+      }
+      if (r.error || !r.data || !r.data.length) {
+        alert('규칙 저장 실패(' + (i + 1) + '번 후보): ' + (r.error ? r.error.message : '저장된 행 없음(권한 확인)') +
+          (done.length ? '\n이미 저장된 규칙: ' + done.join(', ') + ' — 다시 채점은 적용으로 표시하지 않았습니다(그 규칙의 AI 확인은 평소처럼 새로 판정).' : ''));
+        await openGrading(_gr.setId);
+        return;
+      }
+      applied[String(i)] = { rule_id: r.data[0].id, rev: Number(r.data[0].sentence_rev) || 0 };
+      done.push(r.data[0].id);
+    }
+    var u = await sb.from('team_grading_trials').update({ status: 'applied', applied_rev: applied }).eq('id', t.id).select('id,status');
+    if (u.error || !u.data || !u.data.length) {
+      alert('규칙은 저장됐지만 다시 채점을 적용으로 표시하지 못했습니다: ' + (u.error ? u.error.message : '권한 확인') + ' — 세트 기사의 AI 확인은 평소처럼 새로 판정됩니다.');
+    }
+    var msg = '✅ 적용했습니다 — 규칙 ' + done.length + '개 저장.';
+    try {
+      await loadUrgencySources(true);
+      var st = await reapplyTeamRules();
+      msg += ' 우리 팀 기사 ' + (st.added + st.changed + st.released).toLocaleString('ko-KR') + '건에 바로 반영' +
+        (st.waiting ? ' · AI 확인 대기 ' + st.waiting.toLocaleString('ko-KR') + '건(세트 기사는 다시 채점 결과로 옮겨짐)' : '') + '.';
+    } catch (e2) { msg += ' 다만 불러온 기사에 바로 반영하지 못했습니다(' + ((e2 && e2.message) || e2) + ') — 「긴급도 설정」에서 규칙을 한 번 더 저장하면 반영합니다.'; }
+    _gr.dirty = false;
+    await _grLoad(_gr.setId);
+    _gr.msg = msg;
+    _grRender();
+    if (document.getElementById('ur-modal') && document.getElementById('ur-modal').style.display === 'flex') renderUrgencyRules();
+  } catch (e) {
+    alert('적용 실패: ' + ((e && e.message) || e));
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+async function grCloseSet(btn) {
+  if (!_gr || !_grCanTrial()) return;
+  if (!confirm('이 세트를 적용 없이 닫을까요? 닫으면 확인용 결과가 공개되고, 새 세트는 「새 20건 요청」으로 만듭니다(팀은 한 달에 2번).')) return;
+  if (btn) btn.disabled = true;
+  var r = await sb.from('team_grading_sets').update({ status: 'closed' }).eq('id', _gr.setId).select('id,status');
+  if (btn) btn.disabled = false;
+  if (r.error || !r.data || !r.data.length) { alert('닫기 실패: ' + (r.error ? r.error.message : '권한 확인')); return; }
+  await _grLoad(_gr.setId);
+  _gr.msg = '세트를 닫았습니다 — 확인용 결과도 기사별로 보입니다.';
+  _grRender();
 }
 
 // 목록을 다시 그리지 않고 선택 표시·읽음 점만 제자리에서 바꾼다(§4-3-12).
@@ -15336,7 +16694,11 @@ document.addEventListener('DOMContentLoaded', function() {
   var DEFAULT_PAGE = 'lawmap';
   var startPage = (function() {
     try {
-      var p = (new URLSearchParams(location.search).get('p') || (location.hash || '').replace(/^#/, '') || '').trim();
+      var qs = new URLSearchParams(location.search);
+      var p = (qs.get('p') || (location.hash || '').replace(/^#/, '') || '').trim();
+      // 팀 채점 딥링크(#277 S3) — 구독자 봇 알림의 `?p=grading&set=<id>`. 화면은 뉴스(우리 팀 등급·60일 적중 계산에 뉴스 목록을 쓴다)로
+      // 열고, 로그인이 확정되면 채점 창을 띄운다(_grAuthChanged — 비로그인이면 로그인 창, 로그인 뒤 이어서)
+      if (p === 'grading') { _grPendingSet = Number(qs.get('set')) || null; return 'news'; }
       return PAGE_TO_NAV[p] ? p : DEFAULT_PAGE;
     } catch(e) { return DEFAULT_PAGE; }
   })();
@@ -15344,7 +16706,7 @@ document.addEventListener('DOMContentLoaded', function() {
   go(startPage);
   // 로그인 상태를 먼저 확정해야 AI 기능 게이트가 올바로 잠긴다(fail-closed).
   // 세션 복원 전에는 aiReady()가 false이므로, 자동 AI 기능도 이 시점 전에는 돌지 않는다.
-  refreshAuthState();
+  Promise.resolve(refreshAuthState()).catch(function() {}).then(function() { _grAuthBooted = true; _grAuthChanged(); });
   if (sb) {
     // supabase-js v2 는 구독 즉시 INITIAL_SESSION 을 쏜다(실측 2026-09-25) — 바로 위 직접 호출과 같은 일이라 건너뛴다.
     // TOKEN_REFRESHED(약 1시간마다)는 같은 사람의 토큰만 바뀐 것이라 프로필·한도를 다시 읽지 않는다.

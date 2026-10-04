@@ -55,6 +55,7 @@ type QueueRow = { topic: string; created_at: string };
 const QUEUE_LABEL: Record<string, string> = {
   briefing: '모닝 브리핑', urgent: '주요 뉴스', assembly: '국회·법률 동향', kmcc: '방미통위 동향',
   news: '팀·보통 뉴스',   // #252 — 받는 단위(팀·실·공통 보통)별 기사 행이라 사람 수가 아니라 (단위×기사) 행 수
+  team: '팀 채점 알림',   // #277 — 세트가 열릴 때 팀마다 한 행(audience t:<팀>)
 };
 
 const CMD_LABEL: Record<string, string> = {
