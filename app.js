@@ -3802,6 +3802,11 @@ let currentNewsSourceType = 'gov'; // 'gov' | 'media' | 'all'
 let newsDataCache = [];      // 전체 로드된 뉴스 캐시
 let selectedNewsId = null;   // 현재 선택된 뉴스 id
 let currentNewsSearch = '';  // 뉴스 검색어 (클라이언트 필터 — 중요도와 AND 결합)
+// F3(10-04 임시 계정 시험): 검색으로 목록을 바꿔도 오른쪽 상세가 앞서 연 기사에 남아, 목록에 없는 기사의 팀 등급을 고치는
+// 실수가 두 번 났다. 사용자가 목록 조건(검색·중요도·출처·기관)을 바꾸면 이 깃발을 세우고, 다음 renderNewsList가 열린 기사가
+// 새 목록에 없으면 상세를 닫는다. 등급 수정·팀 덧씌우기·잠금으로 다시 그릴 때는 깃발이 없어 닫지 않는다(방금 고친 기사가
+// 필터에서 빠져도 패널이 남아야 되돌릴 수 있다).
+let _newsCheckSelected = false;
 // 6개 기관 자동 수집 확장(2026-08)에 맞춰 접두 추가 — '방송통신위원회 보도자료' 등은
 // 기존 '방통위' 접두와 별개 문자열이라 명시해야 정부 탭에 잡힌다.
 // 2026-09-11 (#154): 방통위→방송미디어통신위원회 개편 반영 — 새 소스명('방송미디어통신위원회 보도자료/위원회 회의/공지사항')을
@@ -3871,6 +3876,7 @@ function hideGovAgencyTabs() {
 
 function filterGovAgency(agency) {
   currentGovAgency = agency;
+  _newsCheckSelected = true;   // F3
   renderNewsList();
 }
 
@@ -4275,13 +4281,16 @@ function _renderSingleItem(n) {
   var urlIcon = safeU
     ? ' <a href="' + safeU + '" target="_blank" onclick="event.stopPropagation()" style="color:var(--accent);font-size:11px;vertical-align:middle"><i class="ti ti-external-link"></i></a>'
     : '';
-  var lockIcon = ' <span onclick="event.stopPropagation();toggleNewsLock(\'' + n.id + '\')" ' +
+  // 잠금·삭제 아이콘은 관리자에게만(F1, 10-04 임시 계정 시험 — 팀원에게도 보여 누르면 안내창만 떴다). data-admin-only라
+  // 로그인·로그아웃 때 applyAuthUI가 다시 그리지 않고 켜고 끈다. 관문은 여전히 DB(news_feed_edit_guard·삭제 정책)
+  var adminDisp = canEditNews() ? '' : 'display:none;';
+  var lockIcon = ' <span data-admin-only onclick="event.stopPropagation();toggleNewsLock(\'' + n.id + '\')" ' +
     'title="' + (n.locked ? '잠금 해제 (해제 시 60일 경과 후 삭제됨)' : '잠금 (60일이 지나도 삭제되지 않음)') + '" ' +
-    'style="cursor:pointer;font-size:11px;vertical-align:middle;color:' + (n.locked ? 'var(--accent)' : 'var(--text-tertiary)') + ';opacity:' + (n.locked ? '1' : '.4') + '">' +
+    'style="' + adminDisp + 'cursor:pointer;font-size:11px;vertical-align:middle;color:' + (n.locked ? 'var(--accent)' : 'var(--text-tertiary)') + ';opacity:' + (n.locked ? '1' : '.4') + '">' +
     '<i class="ti ti-' + (n.locked ? 'lock' : 'lock-open') + '"></i></span>';
-  var delIcon = ' <span onclick="event.stopPropagation();deleteNewsItem(\'' + n.id + '\')" ' +
+  var delIcon = ' <span data-admin-only onclick="event.stopPropagation();deleteNewsItem(\'' + n.id + '\')" ' +
     'title="기사 삭제" ' +
-    'style="cursor:pointer;font-size:11px;vertical-align:middle;color:var(--text-tertiary);opacity:.4">' +
+    'style="' + adminDisp + 'cursor:pointer;font-size:11px;vertical-align:middle;color:var(--text-tertiary);opacity:.4">' +
     '<i class="ti ti-trash"></i></span>';
   return '<div class="news-item" data-nid="' + escHtml(String(n.id)) + '" onclick="showNewsDetail(\'' + n.id + '\')" style="cursor:pointer;border-left:' + rule.border + ';' + (isSelected ? 'background:var(--bg-secondary);border-radius:var(--radius-md)' : '') + '">' +
     '<div class="news-dot ' + (n.is_read ? 'dot-read' : 'dot-new') + '"></div>' +
@@ -4335,6 +4344,12 @@ function renderNewsList() {
     return new Date(b.published_at || b.created_at) - new Date(a.published_at || a.created_at);
   });
 
+  // F3 — 사용자가 조건을 바꾼 뒤 첫 그리기에서만: 열린 기사가 새 목록에 없으면 상세를 닫는다(_newsCheckSelected 주석)
+  if (_newsCheckSelected) {
+    _newsCheckSelected = false;
+    if (selectedNewsId != null && !sorted.some(function(n) { return String(n.id) === String(selectedNewsId); })) closeNewsDetail();
+  }
+
   var listEl = document.getElementById('news-list');
   if (!listEl) return;
 
@@ -4385,7 +4400,7 @@ function renderNewsList() {
                 newsPreviewHtml(n, '', 'margin-top:2px;font-size:11px;color:var(--text-tertiary);overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical') +
               '</div>' +
               '<span style="font-size:11px;color:var(--text-tertiary);flex-shrink:0;margin-left:8px">' + escHtml(n.source||'') + '</span>' +
-              '<span onclick="event.stopPropagation();deleteNewsItem(\'' + n.id + '\')" title="기사 삭제" style="cursor:pointer;font-size:11px;color:var(--text-tertiary);opacity:.5;flex-shrink:0;margin-left:6px"><i class="ti ti-trash"></i></span>' +
+              '<span data-admin-only onclick="event.stopPropagation();deleteNewsItem(\'' + n.id + '\')" title="기사 삭제" style="' + (canEditNews() ? '' : 'display:none;') + 'cursor:pointer;font-size:11px;color:var(--text-tertiary);opacity:.5;flex-shrink:0;margin-left:6px"><i class="ti ti-trash"></i></span>' +
             '</div>';
           }).join('') +
         '</div>' +
@@ -4413,6 +4428,7 @@ function onNewsSearchInput(value) {
   clearTimeout(_newsSearchTimer);
   _newsSearchTimer = setTimeout(function() {
     currentNewsSearch = (value || '').trim();
+    _newsCheckSelected = true;   // F3
     renderNewsList();
   }, 200);
 }
@@ -4421,6 +4437,7 @@ function filterNewsByImportance(el, importance) {
   document.querySelectorAll('#news-filter-tabs .tag').forEach(function(t) { t.classList.remove('selected'); });
   el.classList.add('selected');
   currentNewsFilter = importance;
+  _newsCheckSelected = true;   // F3
   renderNewsList();
 }
 
@@ -6261,13 +6278,15 @@ async function showNewsDetail(newsId) {
   var urlBtn = safeU
     ? '<a href="' + safeU + '" target="_blank" class="btn" style="font-size:11px;padding:4px 10px;text-decoration:none;white-space:nowrap"><i class="ti ti-external-link"></i> 원문 보기</a>'
     : '';
-  var lockBtn = '<button class="btn" id="lock-btn-' + n.id + '" onclick="toggleNewsLock(\'' + n.id + '\')" ' +
+  // 잠금·삭제 버튼은 관리자에게만(F1) — 목록 아이콘과 같은 data-admin-only 방식
+  var adminDisp = canEditNews() ? '' : 'display:none;';
+  var lockBtn = '<button class="btn" data-admin-only id="lock-btn-' + n.id + '" onclick="toggleNewsLock(\'' + n.id + '\')" ' +
     'title="잠금 시 60일이 지나도 삭제되지 않고 AI 자문에서 계속 참조됩니다" ' +
-    'style="font-size:11px;padding:4px 10px;cursor:pointer;white-space:nowrap;' + (n.locked ? 'color:var(--accent)' : '') + '">' +
+    'style="' + adminDisp + 'font-size:11px;padding:4px 10px;cursor:pointer;white-space:nowrap;' + (n.locked ? 'color:var(--accent)' : '') + '">' +
     (n.locked ? '<i class="ti ti-lock"></i> 잠금됨' : '<i class="ti ti-lock-open"></i> 잠금') + '</button>';
-  var delBtn = '<button class="btn" onclick="deleteNewsItem(\'' + n.id + '\')" ' +
+  var delBtn = '<button class="btn" data-admin-only onclick="deleteNewsItem(\'' + n.id + '\')" ' +
     'title="이 기사를 목록에서 영구 삭제합니다 (재수집되지 않음)" ' +
-    'style="font-size:11px;padding:4px 10px;cursor:pointer;color:#d04545;white-space:nowrap">' +
+    'style="' + adminDisp + 'font-size:11px;padding:4px 10px;cursor:pointer;color:#d04545;white-space:nowrap">' +
     '<i class="ti ti-trash"></i> 삭제</button>';
 
   // 등급 고르기 묶음(#250) — 관리자 「공통」(+「우리 팀」) / 팀 계정 「우리 팀 등급」 / 실장 보기만 / 그 밖 종전 잠긴 셀렉터
@@ -8050,6 +8069,9 @@ function applySettingsLock() {
           ? '관리자 승인 대기 중입니다.'
           : '이 계정에는 관리자 권한이 없습니다.');
   }
+  // 「로그인」 버튼은 로그인 안 했을 때만(F4, 10-04 임시 계정 시험 — 로그인한 팀원에게도 보였다)
+  var loginBtn = document.getElementById('settings-login-btn');
+  if (loginBtn) loginBtn.style.display = currentUser ? 'none' : '';
   if (ok) {
     switchSettingsTab();   // 설정 탭 — applyAuthUI가 관리자 카드를 다시 보이게 한 뒤에도 지금 탭만 남게
     var spd = document.getElementById('system-prompt-display');
@@ -8802,7 +8824,10 @@ function go(page, navEl, sourceType) {
   if (navTarget && navTarget.classList) navTarget.classList.add('active');
 
   // 뉴스 소스 타입 설정
-  if (page === 'news' && sourceType !== undefined) currentNewsSourceType = sourceType;
+  if (page === 'news' && sourceType !== undefined) {
+    if (sourceType !== currentNewsSourceType) _newsCheckSelected = true;   // F3 — 정부/언론 전환도 목록이 바뀐다
+    currentNewsSourceType = sourceType;
+  }
 
   // 상위 그룹 탭 바 (통합 모니터링 / 법령 개정 추적 / 지식베이스)
   renderGroupTabs(page);

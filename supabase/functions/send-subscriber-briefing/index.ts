@@ -36,6 +36,9 @@ import { moreButton } from '../_shared/news_more.ts';
 import {
   type QueueRow, maxCreatedAt, planSubscriber, watermarkPatch, renderNormalBatch, fetchAllPages,
 } from '../_shared/subscriber_queue.ts';
+import {
+  type HoldLookup, type HoldTeamRow, holdRecheckRows, holdKey, holdTeamsNeeded, holdDropKeys,
+} from '../_shared/subscriber_hold.ts';
 
 // env는 반드시 trim — 콘솔 붙여넣기 시 줄바꿈이 섞이면 시크릿 비교가 조용히 어긋난다(401)
 const env = (k: string) => (Deno.env.get(k) || '').trim();
@@ -212,6 +215,69 @@ export function renderNewsItems(rows: QueueRow[], subTags: string[] | null): str
 }
 // ── 기사 단위 큐 유틸 끝 ────────────────────────────────────────────────────────
 
+// ── 보류 재확인 조회(10-05 S0) — 무엇을 뺄지는 _shared/subscriber_hold.ts holdDropKeys(순수 함수)가 정한다 ──
+// 단위 행(t:/d:)이 있을 때만 팀 층을 읽는다. 조각마다 실패를 따로 둔다: 기사 조회 실패 = 아무것도 안 뺌(종전),
+// 팀 목록 실패 = 실장 행만 안 뺌, 규칙·팀 행 실패 = 단위 행 전부 안 뺌. teamNote = 하트비트에 남길 실패 표시.
+async function loadHoldLookup(rows: QueueRow[]): Promise<{ lk: HoldLookup; teamNote: string }> {
+  const lk: HoldLookup = { news: null, teamRows: null, rulesById: null, divTeams: null };
+  const urls = [...new Set(rows.map((r) => (r.news_url || '').trim()).filter(Boolean))];
+  const news = new Map<string, { id: string; urgency: string }>();
+  for (let i = 0; i < urls.length; i += 100) {
+    const { data, error } = await sb.from('news_feed').select('id, url, urgency').in('url', urls.slice(i, i + 100));
+    if (error) { console.error('[보류 등급 재확인 실패 — 이번엔 빼지 않음]', error); return { lk, teamNote: '' }; }
+    for (const r of (data || []) as Array<{ id: string; url: string; urgency: string }>) {
+      news.set(String(r.url).trim(), { id: String(r.id), urgency: String(r.urgency) });
+    }
+  }
+  lk.news = news;
+  const unit = rows.filter((r) => r.topic === 'news');
+  if (!unit.length) return { lk, teamNote: '' };
+  const fails: string[] = [];
+  // 실 → 팀(크롤러 _alert_units와 같은 순서 sort_order·id). 실장 행이 없으면 읽지 않는다
+  if (unit.some((r) => (r.audience || '').startsWith('d:'))) {
+    const { data, error } = await sb.from('teams').select('id, division').order('sort_order').order('id');
+    if (error) { console.error('[보류 재확인 — 팀 목록 조회 실패, 실장 행은 빼지 않음]', error); fails.push('팀 목록'); }
+    else {
+      const dt: Record<string, number[]> = {};
+      for (const t of (data || []) as Array<{ id: number; division: string | null }>) {
+        if (t.division) (dt[t.division] ||= []).push(Number(t.id));
+      }
+      lk.divTeams = dt;
+    }
+  } else lk.divTeams = {};
+  try {
+    // 팀 규칙 — 꺼진 것 포함(alertTeamLevel이 enabled를 본다). 칸 목록으로 읽는다(updated_by는 읽지 않음, #269)
+    const { data: rs, error: re } = await sb.from('urgency_rules')
+      .select('id, team_id, enabled, mode, level').not('team_id', 'is', null);
+    if (re) throw re;
+    const rulesById: Record<string, unknown> = {};
+    for (const r of (rs || []) as Array<{ id: string }>) rulesById[r.id] = r;
+    // team_urgency — 단위 행 기사 × 필요한 팀. 한 기사에 팀 수만큼 행이 오므로 묶음 = 1,000 ÷ 팀 수(1,000행 상한, #233)
+    const tids = holdTeamsNeeded(unit, lk.divTeams);
+    const ids = [...new Set(unit.map((r) => news.get((r.news_url || '').trim())?.id).filter((x): x is string => !!x))];
+    const teamRows = new Map<string, Record<number, HoldTeamRow>>();
+    if (tids.length && ids.length) {
+      const step = Math.max(1, Math.min(100, Math.floor(1000 / tids.length)));
+      for (let i = 0; i < ids.length; i += step) {
+        const { data, error } = await sb.from('team_urgency').select('news_id, team_id, urgency, source, rule_id')
+          .in('news_id', ids.slice(i, i + step)).in('team_id', tids);
+        if (error) throw error;
+        for (const t of (data || []) as HoldTeamRow[]) {
+          const m = teamRows.get(String(t.news_id)) || {};
+          m[Number(t.team_id)] = { ...t, team_id: Number(t.team_id) };
+          teamRows.set(String(t.news_id), m);
+        }
+      }
+    }
+    lk.rulesById = rulesById;
+    lk.teamRows = teamRows;
+  } catch (e) {
+    console.error('[보류 재확인 — 팀 규칙·팀 등급 조회 실패, 팀·실 행은 빼지 않음]', e);
+    fails.push('팀 등급');
+  }
+  return { lk, teamNote: fails.length ? ` · 팀 재확인 실패(${fails.join('·')})` : '' };
+}
+
 Deno.serve(async (req: Request) => {
   if (!CRON_SECRET || req.headers.get('x-cron-secret') !== CRON_SECRET) {
     return new Response('unauthorized', { status: 401 });
@@ -292,9 +358,11 @@ Deno.serve(async (req: Request) => {
     // 켜져 있는 동안: ① 중요 행은 created_at이 minutes 이전인 것만 평가·발송(planSubscriber holdMs) ② 발송 직전에 공통 등급을
     // 다시 읽어 운영자가 대시보드에서 내린 기사(긴급 아님)·지운 기사는 발송분에서 뺀다(eligible엔 남겨 워터마크는 전진 → 큐에
     // 고이지 않음). 설정·재확인 조회가 실패하면 보류·취소 없이 종전대로(fail-open — 보내는 쪽).
+    // 팀·실 행(10-05 S0): 공통값이 아니라 그 단위의 지금 알림 등급(alertTeamLevel·alertDivisionLevel)으로 본다 —
+    // 종전엔 팀 규칙이 올린 팀 전용 긴급을 공통값(보통·참고)으로 보고 전부 뺐다. 규칙은 _shared/subscriber_hold.ts.
     let holdMs = 0;
     let holdNote = '';
-    const dropUrls = new Set<string>();
+    let dropKeys = new Set<string>();
     try {
       const { data: hc } = await sb.from('app_config').select('value').eq('key', 'subscriber_hold').maybeSingle();
       if (hc?.value) {
@@ -307,18 +375,12 @@ Deno.serve(async (req: Request) => {
       console.error('[보류 설정 읽기 실패 — 보류 없이 진행]', e);
     }
     if (holdMs > 0 && !qerr) {
-      const urls = [...new Set(queue
-        .filter((r) => (r.topic === 'urgent' || (r.topic === 'news' && r.level === '긴급')) && !!r.news_url)
-        .map((r) => (r.news_url as string).trim()))];
-      const grade = new Map<string, string>();
-      let okLookup = true;
-      for (let i = 0; i < urls.length; i += 100) {
-        const { data, error } = await sb.from('news_feed').select('url, urgency').in('url', urls.slice(i, i + 100));
-        if (error) { okLookup = false; console.error('[보류 등급 재확인 실패 — 이번엔 빼지 않음]', error); break; }
-        for (const r of (data || []) as Array<{ url: string; urgency: string }>) grade.set(String(r.url).trim(), String(r.urgency));
-      }
-      if (okLookup) for (const u of urls) if (grade.get(u) !== '긴급') dropUrls.add(u);
-      holdNote = ` · 보류 ${Math.round(holdMs / 60000)}분 · 취소 ${dropUrls.size}건`;
+      const recheck = holdRecheckRows(queue);
+      const { lk, teamNote } = await loadHoldLookup(recheck);
+      dropKeys = holdDropKeys(recheck, lk);
+      // 「취소 N건」은 종전처럼 기사 수, 괄호 = 뺀 큐 행 열쇠 수(공통 1 + 단위마다 1)
+      const dropUrlN = new Set([...dropKeys].map((k) => k.split('\u0000')[1])).size;
+      holdNote = ` · 보류 ${Math.round(holdMs / 60000)}분 · 취소 ${dropUrlN}건(행 ${dropKeys.size})${teamNote}`;
     }
 
     for (const s of subs) {
@@ -333,8 +395,9 @@ Deno.serve(async (req: Request) => {
       // 개념이 없어 태그 필터를 적용하지 않는다. 보통은 「중요+보통」·주요 뉴스 켬·정기 발송일 때만 채워진다.
       const plan = planSubscriber(queue, s, { dayStartMs, nowMs, immediate, holdMs });
       const urgentEligible = plan.urgentEligible;
-      // 보류 중 취소분(운영자가 내린·지운 기사)은 발송분에서만 뺀다 — eligible은 그대로라 워터마크가 넘어간다
-      const urgent = dropUrls.size ? plan.urgent.filter((r) => !dropUrls.has((r.news_url || '').trim())) : plan.urgent;
+      // 보류 중 취소분(운영자가 내린·지운 기사, 팀·실 행은 그 단위 등급이 긴급 아님)은 발송분에서만 뺀다 — eligible은
+      // 그대로라 워터마크가 넘어간다. 열쇠 = 공통 행 url / 단위 행 audience + url(holdKey)
+      const urgent = dropKeys.size ? plan.urgent.filter((r) => !dropKeys.has(holdKey(r))) : plan.urgent;
       const assembly = plan.assemblyEligible;
       const kmcc = plan.kmccEligible;
 
