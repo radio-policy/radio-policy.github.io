@@ -209,8 +209,8 @@ create policy news_feed_upd_auth on public.news_feed as PERMISSIVE for UPDATE to
   using (is_approved_user())
   with check (is_approved_user());
 
-create policy people_sel on public.people as PERMISSIVE for SELECT to public
-  using (true);
+create policy people_sel on public.people as PERMISSIVE for SELECT to authenticated
+  using (is_approved_user());
 
 create policy people_upd on public.people as PERMISSIVE for UPDATE to authenticated
   using (is_admin())

@@ -280,12 +280,10 @@ grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE on
 grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE on public.news_screen_cache to service_role;
 
 revoke all on public.people from public, anon, authenticated, service_role;
-grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE on public.people to anon;
 grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE on public.people to authenticated;
 grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE on public.people to service_role;
 
 revoke all on sequence public.people_id_seq from public, anon, authenticated, service_role;
-grant SELECT, UPDATE, USAGE on sequence public.people_id_seq to anon;
 grant SELECT, UPDATE, USAGE on sequence public.people_id_seq to authenticated;
 grant SELECT, UPDATE, USAGE on sequence public.people_id_seq to service_role;
 
