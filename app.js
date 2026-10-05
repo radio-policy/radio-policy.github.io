@@ -2903,13 +2903,7 @@ async function buildAdvisoryContext(userText) {
   // L1′ 상한 구제(#283) — 문서당 상한(3) 때문에만 상위 15에서 빠진 조문·별표 중 아직 어디에도 없는 것 ADDON_OPTS.spillMax개(2)를
   // 조문 정밀검색 구역 **끝에** 덧붙인다(상위 15·정밀검색 칸은 그대로). rag.ts buildAdvisoryContext와 동일 유지.
   var spillChunks = RagCore.pickSpill(ragChunks.spill || [], ragChunks.concat(lawExtra), RagCore.ADDON_OPTS.spillMax);
-  var lawArticleContext = '';
   if (lawExtra.length) {
-    lawArticleContext = '\n\n---\n\n[조문 정밀검색 결과 — 질문 의도에 직접 대응하는 조문]\n' +
-      '위 RAG 결과에 없더라도 아래 조문이 질문의 핵심 근거일 가능성이 높습니다. 우선 확인하세요:\n\n' +
-      lawExtra.map(function(h, i) {
-        return '[조문 ' + (i + 1) + '] ' + h.doc_name + (h.article_no ? ' ' + h.article_no : '') + '\n' + h.content;
-      }).join('\n\n---\n\n');
     // 출처 목록 **앞쪽**에 놓는다(#89) — 참조 문서 배지는 6개만 보여주므로(sourceTagsHtml(..., 6)),
     // RAG 15개를 먼저 채우면 정작 답변이 인용한 조문이 잘려 나간다. 봇에서 실제로 그랬다:
     // 전파법 제21조제2항을 [원문 확인됨]으로 인용해 놓고 출처에는 지방세법 시행령·논문·세미나
@@ -2940,14 +2934,18 @@ async function buildAdvisoryContext(userText) {
       if (ex.expanded) console.log('조문 통째 보강:', ex.expanded + '개 조문(조각 +' + _advAddedIds.length + ')');
     } catch(e) { console.warn('조문 보강 실패(검색 결과 그대로 진행):', e); }
   }
-  // 상한 구제분(#283)을 조문 정밀검색 구역 끝에 — 번호는 정밀검색분 다음부터(rag.ts와 같은 자리·같은 꼴)
-  if (spillChunks.length) {
-    lawArticleContext += lawArticleContext ? '\n\n---\n\n'
-      : '\n\n---\n\n[조문 정밀검색 결과 — 질문 의도에 직접 대응하는 조문]\n위 RAG 결과에 없더라도 아래 조문이 질문의 핵심 근거일 가능성이 높습니다. 우선 확인하세요:\n\n';
-    lawArticleContext += spillChunks.map(function(h, i) {
-      return '[조문 ' + (lawExtra.length + i + 1) + '] ' + h.doc_name + (h.article_no ? ' ' + h.article_no : '') + '\n' + h.content;
-    }).join('\n\n---\n\n');
-  }
+  // 조문 정밀검색 구역 — **통째 보강이 끝난 글**로 만든다(rag.ts와 같은 자리·같은 꼴, #283-보론). 상한 구제분(#283)은 끝에 이어
+  // 번호가 정밀검색분 다음부터 간다. 종전(#89~#283)에는 이 글을 보강 **전에** 만들어 대시보드 프롬프트의 정밀검색 조문이 검색이 집은
+  // 조각 그대로였다(보강된 전문은 인용 대조 대상에만 쓰였다). 봇은 보강 뒤에 만들어 두 판의 참조 자료가 달랐다.
+  // 무료 측정(10-06): 이 구역이 문항당 평균 +2.5K자(개발 20)·+2.0K자(검증 29), 최대 +7.0K자.
+  var lawItems = (lawExtra || []).concat(spillChunks);
+  var lawArticleContext = lawItems.length
+    ? '\n\n---\n\n[조문 정밀검색 결과 — 질문 의도에 직접 대응하는 조문]\n' +
+      '위 RAG 결과에 없더라도 아래 조문이 질문의 핵심 근거일 가능성이 높습니다. 우선 확인하세요:\n\n' +
+      lawItems.map(function(h, i) {
+        return '[조문 ' + (i + 1) + '] ' + h.doc_name + (h.article_no ? ' ' + h.article_no : '') + '\n' + h.content;
+      }).join('\n\n---\n\n')
+    : '';
   // L7 위임 따라가기 + L4 같은 고시 이웃 조(#283) — 위 조문과 위임 표로 한 걸음 이어진 하위·상위 조문, 같은 고시에 조가 2개 이상
   // 실렸으면 그 고시의 나머지 조. 규칙·문구·상한은 rag_core.js fetchAddOns 한 곳. 역참조와 독립이라 동시에 시작하고,
   // 역참조·제재 칸의 입력에는 넣지 않는다(설계 H5). rag.ts buildAdvisoryContext와 동일 유지.
