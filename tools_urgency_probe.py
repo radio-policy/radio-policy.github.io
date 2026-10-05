@@ -17,6 +17,7 @@
   G1  1단계: 도구 출력 scope → grade → basis(기준문 글자 그대로)                      세트 A·B·C·D·S
   G1b 영역 칸을 등급 뒤에(G1이 통과 기준 a·c에서 걸릴 때만)                           세트 A·B·C
   T1  2단계: G1 + 기준문 v0.1(설계 4-2) + 피드백 49~53을 「보통」으로 옮긴 블록(4-3)    세트 A·B·C·D·S
+  P1  B0 + 개인정보·해킹 원칙(2026-10-06 운영자 결정, P1_EDITS)                           세트 A·B·C·X
   상한(G1·T1 출력 위에서 호출 없이): raw 없음 / R1 타영역 긴급 → 보통 / R2 R1 + 언저리 긴급 중 basis가 R2_KEEP 밖이면 보통
 
 읽는 법:
@@ -128,6 +129,32 @@ V01_EDITS = (
      '  (주파수 논의도 여기다 — 정부가 정한 것만 위 즉시대응 주파수 항목)'),
 )
 
+# ── P1: 개인정보·해킹 원칙(운영자 결정 2026-10-06) — (지금 글자, 바꿀 글자) ─────────────────────────────────────
+# 통신과 연결되지 않은 유출은 새로 터진 대규모 사고의 첫 보도만 즉시대응, 후속은 금주검토. 통신사·통신망·통신 이용자 피해와
+# 연결된 사건은 후속이어도 새 소식·비판이면 즉시대응. 근거 local_docs/긴급도_개인정보원칙_실측_261006/
+P1_EDITS = (
+    ('  · 통신사·통신망의 해킹·개인정보 유출·대규모 장애·먹통 — **자사·경쟁사를 가리지 않는다**\n',
+     '  · 통신사·통신망의 해킹·개인정보 유출·대규모 장애·먹통 — **자사·경쟁사를 가리지 않는다**\n'
+     '    — 통신사·통신망·통신 이용자 피해와 연결된 사건은 **후속이어도 새 소식이나 비판이 나오면 즉시대응**이다\n'),
+    ('  · 플랫폼·부가통신 사업자의 **대규모** 개인정보 유출과 그 조사·보상·제재 경과\n',
+     '  · 플랫폼·부가통신 사업자의 **대규모** 개인정보 유출이 **새로 터진 것**\n'),
+    ('      (예: 3,954만 계정이 털린 OTT 유출, 통신사 보상으로 준 이용권 계정이 재유출된 사건 → 즉시대응)\n',
+     '      (예: 3,954만 계정이 털린 OTT 유출, 통신사 보상으로 준 이용권 계정이 재유출된 사건 → 즉시대응)\n'
+     '    — **통신과 연결되지 않은 유출은 새로 터진 사고의 첫 보도만 즉시대응이다**(유출 사실·규모·원인이 처음 드러난 보도).\n'
+     '      그 뒤의 후속 — 보상안·보상 신청률, 국감·의원실 지적, 통계·집계, 기업의 문구·조직 변경, 규제기관의 권한 미행사 비판,\n'
+     '      조사·수사 경과, 이용자 반응, 보안 대책 — 은 규모가 커도 → 금주검토\n'
+     '      (실측: 쿠팡 유출 뒤 CPO 지정 문구 삭제 지적, 티빙 보상 신청률, 카카오페이 정보 국외이전에 중지명령 0건 기사가 즉시대응이 됐다)\n'),
+    ('  · 사고 대응의 적정성이 쟁점이 된 보도 — 신고 지연, 로그 삭제, 증거인멸, 조사 방해 의혹\n'
+     '  · 진행 중인 침해사고·제재 사건의 수사·조사·소송 경과와 선고·처분 일정\n',
+     '  · **통신사·통신망 사고**에서 대응의 적정성이 쟁점이 된 보도 — 신고 지연, 로그 삭제, 증거인멸, 조사 방해 의혹\n'
+     '  · 진행 중인 **통신사·통신망** 침해사고·제재 사건의 수사·조사·소송 경과와 선고·처분 일정\n'
+     '    (통신과 연결되지 않은 사건의 이런 후속은 위 플랫폼 유출 항목대로 → 금주검토)\n'),
+    ('  · **이용자보호 업무 평가의 결과·등급 공표**는 특정 사업자 성과 보도처럼 보여도 제도 사안이다 → 즉시대응\n',
+     '  · **이용자보호 업무 평가의 결과·등급 공표**는 특정 사업자 성과 보도처럼 보여도 제도 사안이다 → 즉시대응\n'
+     '  · 통신과 연결되지 않은 회사에 대한 처분(과징금 부과·시정명령 등)은 **처분이 처음 나온 보도만** 즉시대응이다.\n'
+     '    그 뒤의 후속 — 불복·소송, 해설, 집계·비교, 재보도 — 은 → 금주검토\n'),
+)
+
 # ── 주파수 문장 규칙 — 기술정책팀 min 긴급 ─────────────────────────────────────────────────────────────
 # v0.1(설계 5절): s3 「아님」 6건 해당으로 불통과(#267). v0.2(판정 local_docs/긴급도_2단구조_판정_261002.md 4절): 포함에서
 # 「전망」을 빼고(증권 2건의 원인), 주어를 「한국 정부의 이동통신 주파수」로, 제외를 걸린 것 그대로(특화망·증권·무선충전) 적음.
@@ -141,6 +168,58 @@ SPECTRUM_SENTENCE = ('한국 정부의 이동통신 주파수 할당·재할당�
                      '무선충전 등 이동통신 밖의 주파수, 다른 주제 기사에서 스친 언급은 해당하지 않는다.')
 SPECTRUM_RULE = {'id': 'probe-spectrum', 'mode': 'min', 'level': '긴급', 'any_words': SPECTRUM_WORDS, 'enabled': True}
 
+# ── 개인정보 좁은 질문(시제품, 2026-10-06 — 결과_P1.md 「다음 후보」) ─────────────────────────────────────────
+# 등급 호출은 글자 그대로 두고, B0가 긴급이라 한 기사 중 제목·검색 요약에 아래 낱말이 있는 것만 따로 묻는다.
+# 내리는 조건(privacy_lower): 개인정보·해킹 사건 + 통신 무관 + (후속 | 소규모 사고). 나머지는 긴급 그대로.
+PRIV_WORDS = re.compile(r'(유출|해킹|개인정보|침해|털렸|털린|털려|랜섬|정보보호|보안|과징금|국외이전|크리덴셜|스미싱|피싱|도청|탈취|악성코드|디도스|사이버)')
+PRIV_SYSTEM = (
+    '당신은 SK텔레콤 Comm센터의 통신정책 뉴스 모니터링 AI입니다.\n'
+    '아래 기사는 1차 판정에서 즉시대응(긴급)으로 분류됐습니다. 운영자의 개인정보·해킹 원칙에 따라 긴급을 유지할지 가리기 위해\n'
+    '기사를 읽고 record_privacy_check 도구로 기록하세요.\n\n'
+    '[운영자 원칙]\n'
+    '1. 통신사·통신망·통신 서비스·통신 이용자 피해와 연결된 사건은 후속이어도 새 소식이나 비판이면 긴급이다.\n'
+    '2. 통신과 연결되지 않은 사건(OTT·쇼핑몰·플랫폼·은행·금융사·공공기관·군·일반 기업 등)은\n'
+    '   수백만 명·계정 이상의 유출이 새로 드러난 첫 보도와, 그 회사에 대한 정부 처분이 처음 나온 보도만 긴급이다.\n'
+    '   그 뒤의 후속 — 보상안·보상 신청률, 국감·의원실 지적, 통계·집계, 기업의 문구·조직 변경, 규제기관의 권한 미행사 비판,\n'
+    '   조사·수사 경과, 이용자·시민 반응, 보안 대책·해설·기고, 예방 캠페인·주의보 — 은 긴급이 아니다.\n'
+    '   수백만 미만 규모의 유출·해킹은 첫 보도도 긴급이 아니다.\n'
+    '3. 법·시행령·고시의 제개정과 시행, 정부가 통신 3사와 함께 하는 회동·사업은 이 원칙 밖이다.\n'
+)
+PRIV_TOPICS = ['개인정보·해킹 사건', '그 밖']
+PRIV_TELECOM = ['통신 연결', '통신 무관']
+PRIV_STAGES = ['대규모 새 사고 첫 보도', '처분 첫 보도', '제도·정부-통신3사', '후속', '소규모 사고']
+PRIV_TOOL = {
+    'name': 'record_privacy_check',
+    'description': '기사 한 건의 개인정보·해킹 원칙 확인을 기록한다. 칸은 topic → telecom → stage → why 순서로 채운다.',
+    'strict': True,
+    'input_schema': {'type': 'object', 'additionalProperties': False,
+                     'required': ['topic', 'telecom', 'stage', 'why'],
+                     'properties': {
+                         'topic': {'type': 'string', 'enum': PRIV_TOPICS,
+                                   'description': '개인정보·해킹 사건 = 개인정보 유출·해킹·침해사고와 그 처분·보상·조사·후속이 기사의 본론 / '
+                                                  '그 밖 = 그 외(보안이라는 낱말만 스친 기사 포함)'},
+                         'telecom': {'type': 'string', 'enum': PRIV_TELECOM,
+                                     'description': '통신 연결 = SK텔레콤·KT·LG유플러스 등 통신사, 통신망, 통신 서비스, 통신 이용자 피해가 '
+                                                    '이 사건의 당사자·본론(여러 기업을 다루면 통신사가 당사자로 들어 있을 때) / '
+                                                    '통신 무관 = 통신이 앞선 사건·비교 사례·배경으로만 스치거나 아예 없음'},
+                         'stage': {'type': 'string', 'enum': PRIV_STAGES,
+                                   'description': '대규모 새 사고 첫 보도 = 수백만 이상 유출이 새로 드러남 / 처분 첫 보도 = 정부 처분이 처음 나옴 / '
+                                                  '제도·정부-통신3사 = 원칙 3번 / 후속 = 원칙 2번의 후속 목록 / 소규모 사고 = 수백만 미만 유출·해킹'},
+                         'why': {'type': 'string', 'description': '판단 근거 한 줄(40자 안)'},
+                     }},
+}
+PRIV_LOWER_STAGES = {'후속', '소규모 사고'}
+
+
+def privacy_hit(art: dict) -> bool:
+    return bool(PRIV_WORDS.search((art.get('title') or '') + ' ' + ws(art.get('screen_text'))))
+
+
+def privacy_lower(out: dict) -> bool:
+    return (out.get('topic') == '개인정보·해킹 사건' and out.get('telecom') == '통신 무관'
+            and out.get('stage') in PRIV_LOWER_STAGES)
+
+
 VARIANTS = {
     'B0': {'rubric': 'cur', 'tool': None, 'fb': 'now', 'sets': 'ABC'},
     'R3': {'rubric': 'R3', 'tool': None, 'fb': 'now', 'sets': 'ABC'},
@@ -152,6 +231,8 @@ VARIANTS = {
     'G1ns': {'rubric': 'cur', 'tool': 'sgb-ns', 'fb': 'now', 'sets': 'ABC'},
     # 짧은 본문 보완(#267-보론)의 기준선 — 짧은 본문도 본문으로 쓰던 그 전 입력. 세트 X = --extra 파일의 기사
     'B0L': {'rubric': 'cur', 'tool': None, 'fb': 'now', 'sets': 'X', 'in': 'legacy'},
+    # 개인정보·해킹 원칙(2026-10-06) — 세트 X = --extra 개인정보 세트(정답은 실측 폴더의 gold.json)
+    'P1': {'rubric': 'P1', 'tool': None, 'fb': 'now', 'sets': 'ABCX'},
 }
 
 
@@ -171,6 +252,10 @@ def criteria_of(cur: str, rubric: str) -> str:
         return cur
     if rubric == 'V01':
         for old, new in V01_EDITS:
+            cur = _replace_once(cur, old, new)
+        return cur
+    if rubric == 'P1':
+        for old, new in P1_EDITS:
             cur = _replace_once(cur, old, new)
         return cur
     raise ValueError(rubric)
@@ -572,6 +657,80 @@ def run_variants(a, fx, snap):
     print(f'[끝] 호출 {len(plan)}회 · 오류 {errs} · {time.time() - t0:.0f}s · 결과 파일 누적 실비 ≈${real:.2f} → {res_path}')
 
 
+def privacy_judge(client, user: str) -> dict:
+    """개인정보 좁은 질문 한 건. ⚠️ create를 이 함수 안에서 직접 — api_usage 라벨 'tools_urgency_probe.py:privacy_judge'."""
+    last = None
+    for attempt in range(4):
+        try:
+            resp = client.messages.create(model=MODEL, max_tokens=200, temperature=0, system=PRIV_SYSTEM,
+                                          tools=[PRIV_TOOL], tool_choice={'type': 'tool', 'name': 'record_privacy_check'},
+                                          messages=[{'role': 'user', 'content': user}])
+            u = resp.usage
+            out = {'in': getattr(u, 'input_tokens', 0) or 0, 'out': getattr(u, 'output_tokens', 0) or 0, 'parse': 'bad'}
+            for b in resp.content:
+                if getattr(b, 'type', '') == 'tool_use':
+                    inp = b.input or {}
+                    if inp.get('topic') in PRIV_TOPICS and inp.get('telecom') in PRIV_TELECOM and inp.get('stage') in PRIV_STAGES:
+                        out.update({k: inp.get(k) for k in ('topic', 'telecom', 'stage', 'why')}, parse='ok')
+            return out
+        except Exception as e:
+            last = e
+            time.sleep(4 * (attempt + 1))
+    return {'parse': 'error', 'raw': str(last)[:160]}
+
+
+def run_privacy(a, fx, snap):
+    """B0가 긴급이라 한 기사(세트 a.sets, 기본 ABCX) 중 privacy_hit만 좁은 질문 — 결과 privacy.jsonl(key = 프롬프트 지문)."""
+    b0 = {}
+    for r in load_results(os.path.join(a.out, 'results.jsonl')):
+        if r['var'] == 'B0' and r.get('rep', 1) == 1 and r.get('parse') != 'error':
+            b0[r['id']] = r['grade']
+    path = os.path.join(a.out, 'privacy.jsonl')
+    done = {r['key'] for r in load_results(path) if r.get('parse') != 'error'}
+    tool_js = json.dumps(PRIV_TOOL, ensure_ascii=False)
+    plan, skipped = [], Counter()
+    for cid in set_ids(fx, a.sets or 'ABCX', snap):
+        art = snap['articles'].get(cid)
+        if not art:
+            skipped['합성'] += 1; continue
+        if b0.get(cid) != '긴급':
+            skipped['B0 긴급 아님'] += 1; continue
+        if not privacy_hit(art):
+            skipped['낱말 없음'] += 1; continue
+        um = user_msg(art)
+        key = hashlib.sha1('\x00'.join([MODEL, PRIV_SYSTEM, tool_js, um]).encode('utf-8')).hexdigest()
+        if key in done:
+            skipped['이미 끝남'] += 1; continue
+        plan.append({'id': cid, 'key': key, 'user': um})
+    cost = sum(((len(PRIV_SYSTEM) + len(tool_js) + len(it['user'])) / CHARS_PER_TOKEN + TOOL_OVERHEAD_TOK) * PRICE['in'] / 1e6
+               + 60 * PRICE['out'] / 1e6 for it in plan)
+    print(f'[개인정보 질문] 새 호출 {len(plan)}회 · 건너뜀 {dict(skipped)} · 어림 ${cost:.2f}')
+    if not a.allow_api:
+        print('dry-run — 실제 호출은 --allow-api(운영자 고지 뒤)')
+        return
+    if cost > a.cap:
+        raise SystemExit(f'어림 ${cost:.2f} > 상한 ${a.cap}')
+    import anthropic
+    import api_usage
+    api_usage.install()
+    import crawler
+    client = anthropic.Anthropic(api_key=crawler.ANTHROPIC_API_KEY)
+    lock = threading.Lock()
+    fout = open(path, 'a', encoding='utf-8')
+
+    def work(it):
+        row = {'id': it['id'], 'key': it['key'], **privacy_judge(client, it['user'])}
+        with lock:
+            fout.write(json.dumps(row, ensure_ascii=False) + '\n'); fout.flush()
+        return row
+    with ThreadPoolExecutor(max_workers=a.workers) as ex:
+        rows = list(ex.map(work, plan))
+    fout.close()
+    real = sum(r.get('in', 0) * PRICE['in'] + r.get('out', 0) * PRICE['out'] for r in rows) / 1e6
+    print(f'[끝] 호출 {len(rows)}회 · 오류 {sum(r.get("parse") == "error" for r in rows)} · 해석 실패 '
+          f'{sum(r.get("parse") == "bad" for r in rows)} · 실비 ≈${real:.2f} · 내림 {sum(privacy_lower(r) for r in rows)} → {path}')
+
+
 # ═══════════════════════════════════════════════════════════════════════════════════════════
 #  주파수 문장 규칙(T-S) — 운영 판정기 crawler._judge_sentence_batch 그대로
 # ═══════════════════════════════════════════════════════════════════════════════════════════
@@ -860,6 +1019,7 @@ def main() -> int:
     ap.add_argument('--sets', default='', help='세트 덮어쓰기(A·B·C·D·S 글자) — 없으면 변형별 기본')
     ap.add_argument('--rep', type=int, default=1, help='2 이상이면 같은 프롬프트를 새로 부른다(흔들림)')
     ap.add_argument('--sentence', action='store_true', help='주파수 문장 규칙 판정(T-S)')
+    ap.add_argument('--privacy', action='store_true', help='개인정보 좁은 질문 시제품(B0 긴급 + 낱말 적중 기사만, 2026-10-06)')
     ap.add_argument('--report', action='store_true', help='통과 기준 대조표(API 0회)')
     ap.add_argument('--cap-mode', default='R1', choices=['raw', 'R1', 'R2'], help='2단계 비교에 쓸 상한')
     ap.add_argument('--out', default=OUT_DEFAULT)
@@ -898,6 +1058,8 @@ def main() -> int:
         report(a, fx, snap)
     elif a.sentence:
         run_sentence(a, fx, snap)
+    elif a.privacy:
+        run_privacy(a, fx, snap)
     else:
         run_variants(a, fx, snap)
     return 0
