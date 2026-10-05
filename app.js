@@ -3017,6 +3017,7 @@ async function callClaude(userText, onDelta) {
   var stopReason = null;
   var sawStop = false;        // message_stop(끝 신호) 수신 여부 — 없이 멈추면 잘린 것(#205, B-7)
   var streamCut = null;       // 절단 사유(연결 끊김·무수신) — 받은 부분은 버리지 않고 이 사유를 답변 끝에 붙인다
+  var afterNonText = false;   // 마지막 text 블록 뒤에 text 아닌 블록이 시작됐나 — 그때만 다음 text 블록 앞에 빈 줄(#282)
   var reader = null;
   var idleTimer = null;
   // 인용 수집은 부가 정보 — 여기서 터져도 답변 표시는 살아야 하므로 통째로 삼킨다(fail-open)
@@ -3067,8 +3068,13 @@ async function callClaude(userText, onDelta) {
           } else if (evt.type === 'content_block_start' && evt.content_block) {
             (evt.content_block.citations || []).forEach(addCitation);
             // 웹검색 전 서술("먼저 조문을 검색하겠습니다.")과 검색 후 본문이 다른 text 블록으로 오는데 이어 붙이면
-            // "…검색하겠습니다.# 분석:"처럼 붙는다(11:20 실측) — 블록 사이에 빈 줄을 넣는다. rag.ts와 동일 유지
-            if (evt.content_block.type === 'text' && aiText && !/\n\s*$/.test(aiText)) aiText += '\n\n';
+            // "…검색하겠습니다.# 분석:"처럼 붙는다(11:20 실측) — 앞 text 블록 뒤에 비본문 블록(웹검색 호출·결과·추론)이 끼었을 때만
+            // 빈 줄을 넣는다. 웹검색 도구가 있으면 옮겨 적은 인용 구간이 citations:[] 달린 별도 text 블록으로 와서, 연속 text 블록
+            // 사이에 넣으면 「…받아야 한다 ⏎⏎ . 다만」처럼 문장 한가운데가 끊긴다(#282). rag.ts와 동일 유지
+            if (evt.content_block.type === 'text') {
+              if (afterNonText && aiText && !/\n\s*$/.test(aiText)) aiText += '\n\n';
+              afterNonText = false;
+            } else afterNonText = true;
           } else if (evt.type === 'message_delta' && evt.delta && evt.delta.stop_reason) {
             stopReason = evt.delta.stop_reason;
           } else if (evt.type === 'message_stop') {

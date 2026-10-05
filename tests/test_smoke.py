@@ -1864,6 +1864,24 @@ class TestDashboardCacheBuster(unittest.TestCase):
             self.assertGreaterEqual(buster, last, f'{f}: 마지막 수정 {last} > 캐시 번호 {buster} — index.html의 ?v=를 올릴 것')
 
 
+class TestAdvisoryStreamBlockJoin(unittest.TestCase):
+    """자문 스트림 text 블록 잇기(#282, 2026-10-05) — app.js callClaude·rag.ts callSonnet 두 곳이 같은 규칙이어야 한다.
+    웹검색 도구가 있으면 옮겨 적은 인용 구간이 citations:[] 달린 별도 text 블록으로 와서, 「text 블록 시작마다 빈 줄」이면
+    문장 한가운데가 끊긴다(10-05 실측 67답에서 827곳 중 825곳). 빈 줄은 앞 text 블록 뒤에 비본문 블록이 끼었을 때만."""
+
+    def _src(self, rel):
+        return open(os.path.join(_ROOT, rel), encoding='utf-8').read()
+
+    def test_blank_line_only_after_non_text_block(self):
+        for rel, var in (('app.js', 'aiText'), ('supabase/functions/_shared/rag.ts', 'text')):
+            src = self._src(rel)
+            self.assertIn('if (afterNonText && ' + var + ' && !/\\n\\s*$/.test(' + var + ')) ' + var + " += '\\n\\n';", src, rel)
+            self.assertIn('afterNonText = false;', src, rel)
+            self.assertIn('} else afterNonText = true;', src, rel)
+            # 옛 규칙(text 블록 시작마다 빈 줄)으로 되돌아가지 않았는지
+            self.assertNotRegex(src, r"type === 'text' && " + var + r" && !/\\n\\s\*\$/\.test\(" + var + r"\)\) " + var + r" \+= '\\n\\n'", rel)
+
+
 class TestSpeakerNormalize(unittest.TestCase):
     """#164: 호환 한자(U+F900~) 발언자명이 표준 한자로 모여야 인물 명부가 갈라지지 않는다."""
 

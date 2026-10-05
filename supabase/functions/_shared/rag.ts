@@ -353,6 +353,7 @@ async function callSonnet(apiKey: string, system: string | SystemBlock[], questi
   let stopReason: string | null = null;
   let sawStop = false;
   let cut: string | null = null;
+  let afterNonText = false;   // 마지막 text 블록 뒤에 text 아닌 블록이 시작됐나 — 그때만 다음 text 블록 앞에 빈 줄(#282)
   let idleTimer: ReturnType<typeof setTimeout> | undefined;
   try {
   while (true) {
@@ -381,8 +382,15 @@ async function callSonnet(apiKey: string, system: string | SystemBlock[], questi
               webRefs.push({ url: c.url, title: (c.title || '').trim() || c.url });
             }
           }
-          // 웹검색 전후의 text 블록이 붙어 "…검색하겠습니다.# 분석:"이 되지 않게 블록 사이에 빈 줄 (app.js와 동일)
-          else if (d.type === 'content_block_start' && d.content_block?.type === 'text' && text && !/\n\s*$/.test(text)) text += '\n\n';
+          // 웹검색 전후의 text 블록이 붙어 "…검색하겠습니다.# 분석:"이 되지 않게, 앞 text 블록 뒤에 비본문 블록(웹검색 호출·결과·추론)이
+          // 끼었을 때만 빈 줄 (app.js와 동일). 웹검색 도구가 있으면 모델이 옮겨 적은 인용 구간이 citations:[] 달린 별도 text 블록으로
+          // 오는데(10-05 원시 이벤트 확인, 도구 없으면 한 블록) 그 사이에 빈 줄을 넣으면 문장 한가운데가 끊긴다(#282)
+          else if (d.type === 'content_block_start') {
+            if (d.content_block?.type === 'text') {
+              if (afterNonText && text && !/\n\s*$/.test(text)) text += '\n\n';
+              afterNonText = false;
+            } else afterNonText = true;
+          }
           else if (d.type === 'message_start' && d.message?.usage) usage = mergeUsage(usage, d.message.usage);
           else if (d.type === 'message_delta') {
             if (d.usage) usage = mergeUsage(usage, d.usage);
