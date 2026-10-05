@@ -328,7 +328,11 @@ async function callSonnet(apiKey: string, system: string | SystemBlock[], questi
     headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
     body: JSON.stringify({
       model: 'claude-sonnet-5',
-      max_tokens: 5000,   // 제도(조문)+동향(기사)을 함께 답하게 했으므로 여유를 조금 더 줌   // 텔레그램 답변용 — 대시보드(24000)와 달리 3메시지 한도에 맞춤
+      // Sonnet 5는 thinking 미지정 = 적응형 추론이고 max_tokens는 추론+본문 합계 — 5000이면 추론이 한도를 먹어
+      // 20문항 중 7개가 잘렸다(10-05, 본문 0자 포함). 노력 medium + 12000: 잘림 0·빠뜨림은 추론 끔/high와 같음,
+      // 출력 최대 5,260·중앙 42초(#281). 답 길이는 아래 텔레그램 지침(3,000자)이 정한다 — 한도는 추론 여유분.
+      max_tokens: 12000,
+      output_config: { effort: 'medium' },
       stream: true,
       system,
       tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 3 }],
@@ -1077,7 +1081,7 @@ export async function answerAdvisory(sb: SupabaseClient, systemPrompt: string, q
   const { webRefs, usage } = sonnet;
   let rawAnswer = sonnet.text;
   await recordApiUsage(sb, 'rag.ts:callSonnet', 'claude-sonnet-5', usage);
-  // 잘린 답이 정상인 척하지 않게 표시(#205, B-7). 세 경우: 연결 절단 / 길이 상한(max_tokens 5000) / 끝 신호 없이 멈춤.
+  // 잘린 답이 정상인 척하지 않게 표시(#205, B-7). 세 경우: 연결 절단 / 길이 상한(max_tokens 12000, #281) / 끝 신호 없이 멈춤.
   if (sonnet.cut) rawAnswer += `\n\n⚠️ 답변이 도중에 끊겼습니다 — ${sonnet.cut}. 위 내용은 받은 부분까지입니다.`;
   else if (sonnet.stopReason === 'max_tokens') rawAnswer += '\n\n…(길이 제한으로 잘림 — 질문을 좁혀 다시 물어보세요)';
   else if (!sonnet.sawStop) rawAnswer += '\n\n⚠️ 답변 수신이 끝 신호 없이 멈췄습니다(잘렸을 수 있음).';
