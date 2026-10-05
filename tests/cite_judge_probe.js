@@ -7,6 +7,7 @@
 //
 //    node tests/cite_judge_probe.js                         # 구성·어림 비용
 //    node tests/cite_judge_probe.js --allow-api [--rep1 3] [--rep2 3] [--rep2g 1] [--variants prod,s55m] [--green-stage2] [--only F1,T1]
+//    node tests/cite_judge_probe.js --from-run a.json,b.json --variants o48pg [--allow-api]   # 이전 결과의 입력·1차를 재사용(2차만)
 //
 //  1차는 자문 단위 묶음(운영과 같은 한 호출)을 rep1번, 2차는 대상 항목 하나씩 rep2번(변형마다). 2차 'prod' 변형은 cite_verify.js의
 //  JUDGE2_MODEL·JUDGE2_REQUEST 그대로다(운영 요청과 같다). 결과 전문은 local_docs/cite_judge_probe/(git 무시)에 남긴다.
@@ -18,6 +19,9 @@
 //  F6을 고치고 F5를 4/4로 되돌려 기각. 초록 표본 64항목: 1차 192회 중 41회 불일치(17항목) → prod 2차 1회: 주황 1(제19조①에 없는 무선국 폐지 신고)·일치 7·판단불가 9.
 //  o48(Opus 4.8 추론 끔 — 사내 후보, 같은 날 사내 요청): 거짓 주황 0/20이지만 T1b(그림 07 꼴, 주체 한정 생략)를 4/4 「주체 생략됐으나 내용 일치」로 놓침 —
 //  2차 일치 = 초록이면 진짜 주황이 초록이 된다(그 밖 진짜 24/24 주황, F1은 판단불가 4/4).
+//  사내 요청 꼴(inline — system 비우고 지시문을 user 앞에, 추론 끔): o48pg 거짓 0/20·진짜 28/28(T1b도 4/4 — 요청 꼴만 바꿨는데 잡음),
+//  s5pg F5 4/4 거짓 주황·S2 2/4. 초록 표본 17항목(1차 불일치) 눈가림 정답 대비: o48pg 정답 일치 → 주황 1·정답 판단불가 → 주황 5·정답 불일치 → 초록 0,
+//  s5pg 정답 일치 → 주황 4, prod(Opus 5.5) 정답 일치·판단불가 → 주황 0.
 // ============================================================================
 'use strict';
 const fs = require('fs');
@@ -32,6 +36,7 @@ const ALLOW = argv.includes('--allow-api');
 const REP1 = +arg('--rep1', 3), REP2 = +arg('--rep2', 3), REP2G = +arg('--rep2g', 1);   // REP2G = 초록 표본 항목의 2차 반복
 const ONLY = arg('--only', '') ? arg('--only', '').split(',') : null;
 const GREEN2 = argv.includes('--green-stage2');
+const FROM = arg('--from-run', '') ? arg('--from-run', '').split(',') : null;   // 이전 실측 결과 파일(쉼표로 여럿) — 1차를 다시 부르지 않는다
 const HAIKU = 'claude-haiku-4-5-20251001';
 const VARIANTS = {
   prod: { model: CV.JUDGE2_MODEL, extra: CV.JUDGE2_REQUEST, max: CV.JUDGE2_MAX_TOKENS },
@@ -39,6 +44,9 @@ const VARIANTS = {
   s55m: { model: 'claude-sonnet-5-5', extra: { output_config: { effort: 'medium' } }, max: 8000 },
   o55m: { model: 'claude-opus-5-5', extra: { output_config: { effort: 'medium' } }, max: 8000 },
   o48: { model: 'claude-opus-4-8', extra: { thinking: { type: 'disabled' } }, max: 2000 },   // 사내판 후보(사내 플랫폼에 Opus 5.5 없음, 2026-10-05 사내 요청)
+  // 사내 Agent 요청 꼴(inline): system 칸을 비우고 user 메시지 = 지시문 + "\n\n" + 항목 글, 추론 끔, 온도류 없음, max_tokens 8000(2026-10-05 사내 요청)
+  o48pg: { model: 'claude-opus-4-8', extra: { thinking: { type: 'disabled' } }, max: 8000, inline: true },
+  s5pg: { model: 'claude-sonnet-5', extra: { thinking: { type: 'disabled' } }, max: 8000, inline: true },
   // 지시문 후보 시험용 — system을 바꿔 보낸다(운영 JUDGE2_SYSTEM은 그대로). 후보 글은 아래 CAND_SYSTEM
   s55m_cand: { model: 'claude-sonnet-5-5', extra: { output_config: { effort: 'medium' } }, max: 8000, cand: true },
 };
@@ -122,7 +130,7 @@ async function callModel(model, extra, maxTokens, system, user, site) {
   for (let attempt = 0; ; attempt++) {
     const res = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST',
       headers: { 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-      body: JSON.stringify(Object.assign({ model: model, max_tokens: maxTokens }, extra || {}, { system: system, messages: [{ role: 'user', content: user }] })) });
+      body: JSON.stringify(Object.assign({ model: model, max_tokens: maxTokens }, extra || {}, system ? { system: system } : {}, { messages: [{ role: 'user', content: user }] })) });
     if ((res.status === 429 || res.status === 529 || res.status >= 500) && attempt < 4) { await new Promise(function (r) { setTimeout(r, 4000 * (attempt + 1)); }); continue; }
     const data = await res.json();
     if (!res.ok) throw new Error(model + ' HTTP ' + res.status + ' ' + JSON.stringify(data).slice(0, 200));
@@ -142,7 +150,22 @@ const keyRe = function (k) { return new RegExp('\\s' + k.replace(/[.*+?^${}()|[\
   const sp = (await sbGet('app_config?key=eq.system_prompt&select=value'))[0];
   const systemPrompt = sp ? sp.value : '';
   // ── 세트 구성 ──
+  let sel = [], allItems = [];
+  if (FROM) {
+    // --from-run: 이전 실측 결과의 판정기 입력·1차 결과를 그대로 쓴다(1차 API 0). 고정 사례는 뒤 파일 우선, 초록은 1차 불일치가 난 항목만
+    const byKey = new Map();
+    for (const f of FROM) {
+      const d = JSON.parse(fs.readFileSync(path.resolve(f), 'utf8'));
+      for (const it of d.items) {
+        if (it.case === 'G' && !(it.s1 || []).some(function (s) { return s.indexOf('불일치') === 0; })) continue;
+        byKey.set(it.case !== 'G' ? it.case : 'G|' + it.target + '|' + it.claim,
+          { id: 1, target: it.target, claim: it.claim, source: it.source, case: it.case, gold: it.gold, s1: it.s1 || [] });
+      }
+    }
+    allItems = [...byKey.values()].filter(function (it) { return !ONLY || ONLY.indexOf(it.case) !== -1; });
+  }
   const batches = [];   // {name, items:[{...,case}], cases}
+  if (!FROM) {
   const realIds = [...new Set(FX.real.map(function (r) { return r.chat_log; }))];
   const green = await sbGet('chat_logs?select=id,created_at,answer,chunk_ids,cite_verdicts&answer=like.*%5B%EC%9B%90%EB%AC%B8*&created_at=lte.' + encodeURIComponent(FX.cutoff) + '&order=created_at.asc');
   const rows = green.slice();
@@ -162,20 +185,22 @@ const keyRe = function (k) { return new RegExp('\\s' + k.replace(/[.*+?^${}()|[\
     items.forEach(function (it) { it.case = s.key; it.gold = s.gold; });
     batches.push({ name: s.key, items: items });
   }
-  const sel = ONLY ? batches.filter(function (b) { return b.items.some(function (it) { return ONLY.indexOf(it.case) !== -1; }); }) : batches;
-  const allItems = [].concat.apply([], sel.map(function (b) { return b.items; }));
+  sel = ONLY ? batches.filter(function (b) { return b.items.some(function (it) { return ONLY.indexOf(it.case) !== -1; }); }) : batches;
+  allItems = [].concat.apply([], sel.map(function (b) { return b.items; }));
+  }
   const fixed = allItems.filter(function (it) { return it.case !== 'G'; });
   const missingCases = FX.real.concat(FX.synthetic).map(function (c) { return c.key; }).filter(function (k) { return !allItems.some(function (it) { return it.case === k; }) && (!ONLY || ONLY.indexOf(k) !== -1); });
   console.log('묶음 ' + sel.length + ' · 항목 ' + allItems.length + ' (고정 사례 ' + fixed.length + ': ' + fixed.map(function (x) { return x.case; }).join(',') + ')' + (missingCases.length ? ' · ⚠ 판정기로 안 간 사례: ' + missingCases.join(',') : ''));
   // 어림 비용
   const sys1 = tok(CV.JUDGE_SYSTEM), sys2 = tok(CV.JUDGE2_SYSTEM);
   let in1 = 0; for (const b of sel) in1 += sys1 + b.items.reduce(function (a, it) { return a + tok(it.claim) + tok(it.source) + 30; }, 0);
-  const n2 = fixed.length * REP2 + (GREEN2 ? (allItems.length - fixed.length) * REP2G : 0);   // 2차 호출 수(변형마다)
+  const n2 = fixed.length * REP2 + ((GREEN2 || FROM) ? (allItems.length - fixed.length) * REP2G : 0);   // 2차 호출 수(변형마다)
   const est = (in1 * REP1 * 1 + sel.length * REP1 * 150 * 5) / 1e6 + VARS.reduce(function (a, v) { const pr = PRICE[VARIANTS[v].model] || [4, 20]; return a + n2 * ((sys2 + 600) * pr[0] + (VARIANTS[v].model === 'claude-sonnet-5' ? 200 : 400) * pr[1]) / 1e6; }, 0);
   console.log('어림 비용 ≈ $' + est.toFixed(2) + ' (1차 ' + sel.length + '묶음×' + REP1 + ', 2차 변형마다 ' + n2 + '회 × ' + VARS.join('/') + ')');
   if (!ALLOW) { console.log('--dry-run: API 0회. 실제 판정은 --allow-api'); return; }
 
-  // ── 1차: 자문 묶음째 REP1번 ──
+  // ── 1차: 자문 묶음째 REP1번(--from-run이면 건너뛰고 이전 결과) ──
+  if (!FROM) {
   const t1 = [];
   for (const b of sel) for (let k = 0; k < REP1; k++) t1.push(function () {
     return CV.judgeCitations(b.items, function (s, u) { return callModel(HAIKU, null, 3000, s, u, 'cite_judge_probe:stage1'); })
@@ -184,6 +209,7 @@ const keyRe = function (k) { return new RegExp('\\s' + k.replace(/[.*+?^${}()|[\
   const r1 = await pool(t1, 4);
   for (const it of allItems) it.s1 = [];
   for (const x of r1) for (const it of x.b.items) it.s1.push(x.err ? 'ERR' : ((x.v[String(it.id)] || {}).verdict || '없음') + (x.v[String(it.id)] && x.v[String(it.id)].verdict === '불일치' ? ':' + x.v[String(it.id)].reason : ''));
+  }
   // ── 2차: 고정 사례 전부 + (green은 1차 불일치가 한 번이라도 난 것, --green-stage2면 전부) ──
   const t2 = [];
   for (const it of allItems) {
@@ -194,7 +220,11 @@ const keyRe = function (k) { return new RegExp('\\s' + k.replace(/[.*+?^${}()|[\
       it.s2[vn] = [];
       for (let k = 0; k < (it.case === 'G' ? REP2G : REP2); k++) t2.push(function () {
         const V = VARIANTS[vn];
-        return CV.judgeCitations2([Object.assign({}, it, { id: 1 })], function (s, u) { return callModel(V.model, V.extra, V.max, V.cand ? CAND_SYSTEM : s, u, 'cite_judge_probe:stage2:' + vn); })
+        return CV.judgeCitations2([Object.assign({}, it, { id: 1 })], function (s, u) {
+          const sys = V.cand ? CAND_SYSTEM : s;
+          return V.inline ? callModel(V.model, V.extra, V.max, '', sys + '\n\n' + u, 'cite_judge_probe:stage2:' + vn)
+            : callModel(V.model, V.extra, V.max, sys, u, 'cite_judge_probe:stage2:' + vn);
+        })
           .then(function (v) { it.s2[vn].push(v['1'] || { verdict: '없음' }); }, function (e) { it.s2[vn].push({ verdict: 'ERR', reason: String(e.message || e) }); });
       });
     }
