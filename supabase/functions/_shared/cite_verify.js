@@ -439,6 +439,57 @@
     }
     return out;
   }
+  const PROMPT_DOC_SUFFIX = '(시스템 프롬프트 핵심 조문)';
+  const isPromptDoc = function (docName) { return String(docName || '').slice(-PROMPT_DOC_SUFFIX.length) === PROMPT_DOC_SUFFIX; };
+
+  // 판정 원문이 지침서 글뿐인 조문 → 실DB 조문으로 바꾼다(#284, 2026-10-06 Fable 판정 §4-3 5). 지침서 「핵심 조문」이 원문보다 짧았을 때
+  // (전파법 제16조③ 한정어 없음 등) 줄인 글을 옮긴 인용이 그 글과 「일치」해 초록으로 지나갔다 — 운영 69개 중 47개가 지침서 글로 채점됐다.
+  // 인용 표시가 가리키는 조(cites의 key·후보 key)만, 검색 자료에 같은 법령군·조의 실제 조문이 없을 때만 받는다(있으면 그 조문이 이미 원문으로
+  // 뽑힌다 — checkCitation은 같은 조의 문서 중 가장 긴 글을 고른다). 판 고르기: 지침서 머리줄의 「제N호」(제24조②는 시행예정판 제21553호)가
+  // 있으면 그 판, 없으면 현행판(status 'current', 여럿이면 문서명 끝 날짜가 늦은 쪽).
+  //   fetchLawArticle(family, key) → [{id, doc_name, article_no, chunk_index, content, status}] (현행·시행예정 판을 함께, 호출측 DB 조회)
+  //   → { chunks, swapped: Set('법령군|조'), failed: Set('법령군|조') }
+  async function swapPromptArticles(cites, chunks, fetchLawArticle) {
+    const swapped = new Set(), failed = new Set();
+    const pseudo = (chunks || []).filter(function (c) { return isPromptDoc(c.doc_name); });
+    if (!pseudo.length || typeof fetchLawArticle !== 'function') return { chunks: chunks, swapped: swapped, failed: failed };
+    const keys = new Set();
+    for (const c of cites || []) {
+      if (c.key) keys.add(c.key);
+      for (const cand of c.candidates || []) if (cand && cand.key) keys.add(cand.key);
+    }
+    const dateOf = function (n) { const m = String(n || '').match(/\((\d{8})\)\s*$/); return m ? m[1] : ''; };
+    const jobs = [];
+    for (const p of pseudo) {
+      const fam = docFamily(p.doc_name), key = articleKey(p.article_no);
+      if (!key || !keys.has(key)) continue;
+      const hasReal = (chunks || []).some(function (c) { return !isPromptDoc(c.doc_name) && docFamily(c.doc_name) === fam && articleKey(c.article_no) === key; });
+      if (hasReal) continue;
+      const hint = (String(p.content || '').split('\n')[0].match(/제\s?(\d+)호/) || [])[1];
+      jobs.push(Promise.resolve().then(function () { return fetchLawArticle(fam, key); }).then(function (rows) {
+        const own = (rows || []).filter(function (r) { return r && !isPromptDoc(r.doc_name) && docFamily(r.doc_name) === fam && articleKey(r.article_no) === key && r.content; });
+        const docs = [];
+        for (const r of own) if (docs.indexOf(r.doc_name) === -1) docs.push(r.doc_name);
+        let doc = hint ? docs.find(function (d) { return d.indexOf('(제' + hint + '호)') !== -1; }) : null;
+        if (!doc) {
+          const cur = docs.filter(function (d) { return own.some(function (r) { return r.doc_name === d && (r.status == null || r.status === 'current'); }); });
+          cur.sort(function (a, b) { return dateOf(b).localeCompare(dateOf(a)); });
+          doc = hint ? null : cur[0];
+        }
+        if (!doc) { failed.add(fam + '|' + key); return null; }
+        swapped.add(fam + '|' + key);
+        return { pseudo: p, rows: own.filter(function (r) { return r.doc_name === doc; }).map(function (r) {
+          return { id: r.id, doc_name: r.doc_name, article_no: r.article_no, chunk_index: r.chunk_index, content: r.content };
+        }) };
+      }, function () { failed.add(fam + '|' + key); return null; }));
+    }
+    if (!jobs.length) return { chunks: chunks, swapped: swapped, failed: failed };
+    const got = (await Promise.all(jobs)).filter(Boolean);
+    const drop = new Set(got.map(function (g) { return g.pseudo; }));
+    const out = (chunks || []).filter(function (c) { return !drop.has(c); });
+    for (const g of got) for (const r of g.rows) out.push(r);
+    return { chunks: out, swapped: swapped, failed: failed };
+  }
 
   // 인용 직전의 법령명 후보 — "실제로 판례에서 전기통신사업법 제32조의14"에서 뒤에서부터
   // ["전기통신사업법", "판례에서 전기통신사업법", ...] 순으로 돌려주고, 호출측이 문서명과 맞춰 본다.
@@ -1078,6 +1129,7 @@
   //  1차 결과·메모는 보여 주지 않는다(앞선 판정에 끌리지 않게). 「불일치」면 어긋나는 구절을 원문·인용문에서 글자 그대로 내게 하고
   //  코드가 그 구절이 판정기에 보낸 원문·인용문에 실제로 있는지 본다(spanIn) — 없으면 주황이 아니라 회색.
   //  ⚠️ 이 글자를 고치면 tests/cite_judge_probe.js로 실측 세트를 다시 잰다(시험이 지문으로 잠근다).
+  //  #284(2026-10-06)부터는 1차 결과와 상관없이 판정 대상 전부를 이 지시문으로 보낸다(verifyCitations 관문) — 지시문·모델·요청값은 그대로.
   const JUDGE2_SYSTEM =
     '당신은 법령 인용 검증자입니다. 각 항목의 "인용문"(AI 답변의 한 대목)이 "원문"(법령·고시 조문)의 내용을 사실과 다르게 옮겼는지만 판정합니다.\n' +
     '먼저 원문을 끝까지 읽고, 인용문이 말하는 것(누가·무엇을·어떤 요건에서·어떤 효과)을 원문의 해당 부분과 하나씩 맞춰 봅니다.\n' +
@@ -1128,6 +1180,28 @@
       out[String(v.id)] = { verdict: verdict, reason: String(v.reason || '').slice(0, 120), source_span: src.slice(0, 200), claim_span: clm.slice(0, 200),
         grounded: verdict === '불일치' && spanIn(src, it.source) && spanIn(clm, it.claim) };
     }
+    return out;
+  }
+
+  // 관문 Pㄱ1(#284)의 2차 호출 꼴 — 항목 하나 = 호출 하나(id 1), 동시 JUDGE2_CONCURRENCY. 실패(throw)·결과 없음은 한 번 더 부르고,
+  // 그래도 안 되면 {err}. 실측(2026-10-06, 53항목 × 2회): 호출당 중앙 5.5초·90% 8.7초·최대 12.5초 — 6개씩이면 판정 대상 24개 상한에서 약 40초.
+  const JUDGE2_CONCURRENCY = 6;
+  async function judgeEachSecond(items, callJudge2) {
+    const out = new Array(items.length);
+    const one = async function (it) {
+      let err = null;
+      for (let t = 0; t < 2; t++) {
+        try {
+          const v = await judgeCitations2([Object.assign({}, it, { id: 1 })], callJudge2);
+          if (v['1']) return { v: v['1'] };
+          err = '2차 판정 결과 없음';
+        } catch (e) { err = String(e && e.message || e); }
+      }
+      return { err: err };
+    };
+    let next = 0;
+    const worker = async function () { while (next < items.length) { const i = next++; out[i] = await one(items[i]); } };
+    await Promise.all(Array.from({ length: Math.min(JUDGE2_CONCURRENCY, items.length) }, worker));
     return out;
   }
 
@@ -1271,8 +1345,10 @@
   }
 
   // 종합: 답변 → 표시 검증·교체
-  //   { answer, chunks, annexSources, systemPrompt, callHaiku, callJudge2, maxJudge, autoTag, quoteTag }
-  //   callJudge2(system, user) — 1차 불일치만 다시 보는 2차 판정기(선택, 3-2). 없으면 1차 불일치가 그대로 주황.
+  //   { answer, chunks, annexSources, systemPrompt, callHaiku, callJudge2, fetchLawArticle, maxJudge, autoTag, quoteTag }
+  //   callJudge2(system, user) — 2차 판정기(선택, 3-2). 있으면 판정 대상 전부를 항목 하나씩 보내고 2차가 표시를 정한다(#284 관문 Pㄱ1,
+  //     1차는 기록·예비). 없으면 1차가 표시를 정한다(1차 불일치 = 주황).
+  //   fetchLawArticle(family, key) — 지침서 핵심 조문만 있는 인용을 실DB 조문으로 바꿔 대조(선택, #284 swapPromptArticles).
   //   → { answer, verdicts: [{tag, kind, key, law, status, reason, judge, auto}], changed, autoTagged, quoteTagged, citedDocs }
   async function verifyCitations(args) {
     const chunks = ((args && args.chunks) || []).concat(args && args.systemPrompt ? pseudoChunksFromPrompt(args.systemPrompt) : []);
@@ -1285,11 +1361,21 @@
     const answer = qt.answer;
     const cites = findCitations(answer);
     if (!cites.length) return { answer: answer, verdicts: [], changed: 0, autoTagged: at.added, quoteTagged: 0, citedDocs: [] };
+    // 인용이 가리키는 조문이 지침서 글뿐이면 실DB 조문으로 바꿔 대조한다(#284 — fetchLawArticle이 없으면 종전대로 지침서 글)
+    const sw = await swapPromptArticles(cites, chunks, args && args.fetchLawArticle);
     const results = cites.map(function (c) {
       const auto = String(c.tag).indexOf(QUOTE_MARK) !== -1;
       // 직전 인용 문단에 같은 조의 표시가 이미 있는 토막 표시는 중복 — 판정하지 않고 지운다(#176)
       if (c.dupOfPrev) return Object.assign({}, c, { status: 'dup', reason: '직전 인용 문단의 표시와 중복', key: c.tagTarget.key, auto: auto });
-      return Object.assign({}, c, checkCitation(c, chunks, (args && args.annexSources) || []), { auto: auto });
+      const r = Object.assign({}, c, checkCitation(c, sw.chunks, (args && args.annexSources) || []), { auto: auto });
+      // 판정 원문의 출처를 남긴다(10-12 집계용): swap = 지침서 대신 받은 실DB 조문, kept = 지침서 글 그대로(바꿀 수단 없음), failed = 받지 못함
+      const fk = r.doc ? docFamily(r.doc) + '|' + r.key : '';
+      if (r.doc && isPromptDoc(r.doc)) {
+        r.srcPrompt = sw.failed.has(fk) ? 'failed' : 'kept';
+        // 실DB 조문을 받으려 했으나 못 받았다 — 줄인 지침서 글과만 맞춰 본 초록은 내지 않는다(Fable 판정 §4-3 5 「못 받으면 회색」)
+        if (r.srcPrompt === 'failed' && r.status === 'ok') { r.status = 'unclear'; r.reason = '법령 원문을 받지 못해 지침서 요약과만 대조됨'; }
+      } else if (fk && sw.swapped.has(fk)) r.srcPrompt = 'swap';
+      return r;
     });
     // 8 → 24 (#169-보론5). 실측 답변 하나에 표시가 22개였는데 9번째부터 판정 없이 초록이었다.
     // 판정은 여러 인용을 한 콜에 묶어 보내므로 상한을 올려도 호출 수는 늘지 않는다.
@@ -1299,6 +1385,7 @@
     const toJudge = judgeable.slice(0, maxJudge);
     // 상한을 넘긴 것·판정기가 없는 것은 '대조 못 함'으로 남긴다 — 조용히 초록으로 두지 않는다.
     judgeable.slice(maxJudge).forEach(function (r) { r.status = 'unjudged'; r.reason = '문구 판정 상한(' + maxJudge + '건) 초과'; });
+    const useJ2 = !!(args && typeof args.callJudge2 === 'function');
     if (toJudge.length && !(args && typeof args.callHaiku === 'function'))
       toJudge.forEach(function (r) { r.status = 'unjudged'; r.reason = '판정기 미가동'; });
     if (toJudge.length && args && typeof args.callHaiku === 'function') {
@@ -1311,40 +1398,55 @@
           source: r.text.length > 4000 ? r.text.slice(0, 4000) + '\n…(이하 생략)' : r.text,
         };
       });
-      try {
-        const verdicts = await judgeCitations(items, args.callHaiku);
-        toJudge.forEach(function (r, i) {
-          const v = verdicts[String(i + 1)];
-          if (!v) { r.status = 'unjudged'; r.reason = '판정 결과 없음'; return; }
-          r.judge = v;
-          if (v.verdict === '불일치') { r.status = 'mismatch'; r.reason = v.reason; }
-          else if (v.verdict !== '일치') r.status = 'unclear';
-        });
-      } catch (e) {
-        // 종전에는 judgeError 만 남기고 status 를 ok 로 두어, 판정기가 죽어도 전건이 초록이었다.
-        toJudge.forEach(function (r) {
-          if (r.status === 'ok') { r.status = 'unjudged'; r.reason = '판정 호출 실패'; }
-          r.judgeError = String(e && e.message || e);
-        });
-      }
-      // 2차 판정(callJudge2가 있을 때만 — 없으면 1차 불일치가 그대로 주황, 종전 동작): 둘 다 불일치이고 2차가 댄 두 구절이 실재할 때만 주황.
-      // 2차가 일치면 초록(1차 「일치」도 초록이므로 같은 기준 — 더 정확한 판정기의 일치), 판단불가·구절 확인 실패·결과 없음·호출 실패는 회색.
-      const second = [];
-      toJudge.forEach(function (r, i) { if (r.status === 'mismatch') second.push({ r: r, item: items[i] }); });
-      if (second.length && typeof args.callJudge2 === 'function') {
+      if (!useJ2) {
+        // 2차 판정기가 없는 호출측(시험·옛 도구): 1차가 표시를 정한다 — #280 이전 동작
         try {
-          const v2 = await judgeCitations2(second.map(function (x, k) { return Object.assign({}, x.item, { id: k + 1 }); }), args.callJudge2);
-          second.forEach(function (x, k) {
-            const v = v2[String(k + 1)], r = x.r;
-            if (!v) { r.status = 'unclear'; r.reason = '2차 판정 결과 없음'; return; }
-            r.judge2 = v;
-            if (v.verdict === '불일치' && v.grounded) { r.status = 'mismatch'; r.reason = v.reason || r.reason; }
-            else if (v.verdict === '일치') { r.status = 'ok'; r.reason = null; }
-            else { r.status = 'unclear'; r.reason = v.verdict === '불일치' ? '2차 판정의 근거 구절을 원문·인용문에서 못 찾음' : '2차 판정 보류'; }
+          const verdicts = await judgeCitations(items, args.callHaiku);
+          toJudge.forEach(function (r, i) {
+            const v = verdicts[String(i + 1)];
+            if (!v) { r.status = 'unjudged'; r.reason = '판정 결과 없음'; return; }
+            r.judge = v;
+            if (v.verdict === '불일치') { r.status = 'mismatch'; r.reason = v.reason; }
+            else if (v.verdict !== '일치') r.status = 'unclear';
           });
         } catch (e) {
-          second.forEach(function (x) { x.r.status = 'unclear'; x.r.reason = '2차 판정 실패'; x.r.judge2Error = String(e && e.message || e); });
+          // 종전에는 judgeError 만 남기고 status 를 ok 로 두어, 판정기가 죽어도 전건이 초록이었다.
+          toJudge.forEach(function (r) {
+            if (r.status === 'ok') { r.status = 'unjudged'; r.reason = '판정 호출 실패'; }
+            r.judgeError = String(e && e.message || e);
+          });
         }
+      } else {
+        // 관문(#284, 2026-10-06 Fable 판정 Pㄱ1·운영자 결정): 판정 대상 **전부**를 2차로 보내고 2차가 표시를 정한다.
+        // #280은 1차(Haiku) 「불일치」만 2차로 보냈는데, 틀린 인용 19개 중 10개를 Haiku가 3번 모두 「일치」라 해 2차까지 못 가고 초록이 됐다
+        // (재량 「할 수 있다」→「한다」·한정어 생략). 전부 보내면 19개 중 18개 주황, 맞는 인용의 거짓 주황 0 → 약 1%.
+        // 2차는 **항목 하나 = 호출 하나**(잰 꼴 그대로, 동시 JUDGE2_CONCURRENCY) — 한 답의 항목을 묶어 보내는 꼴은 잰 적이 없고
+        // 예전 1차 오판(다른 항목 원문을 읽음)·출력 잘림(#281)이 다시 날 수 있다.
+        // 1차는 지시문 그대로 함께 돌려 judge에 남긴다(1·2차 갈림 집계용) — 2차가 두 번 다 실패한 항목만 1차 결과로 물러난다(일치 → 초록, 그 밖 → 회색).
+        // 2차: 불일치 + 두 구절 실재(grounded) → 주황, 일치 → 초록(D2), 판단불가·구절 확인 실패 → 회색.
+        const both = await Promise.all([
+          judgeCitations(items, args.callHaiku).then(function (v) { return { v: v }; }, function (e) { return { err: String(e && e.message || e) }; }),
+          judgeEachSecond(items, args.callJudge2),
+        ]);
+        const r1 = both[0], r2 = both[1];
+        toJudge.forEach(function (r, i) {
+          const v1 = r1.v ? r1.v[String(i + 1)] : null;
+          if (v1) r.judge = v1;
+          if (r1.err) r.judgeError = r1.err;
+          const s = r2[i];
+          if (s && s.v) {
+            const v = s.v;
+            r.judge2 = v;
+            if (v.verdict === '불일치' && v.grounded) { r.status = 'mismatch'; r.reason = v.reason || (v1 && v1.reason) || '2차 판정 불일치'; }
+            else if (v.verdict === '일치') { r.status = 'ok'; r.reason = null; }
+            else { r.status = 'unclear'; r.reason = v.verdict === '불일치' ? '2차 판정의 근거 구절을 원문·인용문에서 못 찾음' : '2차 판정 보류'; }
+            return;
+          }
+          r.judge2Error = (s && s.err) || '2차 판정 결과 없음';
+          if (!v1) { r.status = 'unjudged'; r.reason = r1.err ? '판정 호출 실패' : '판정 결과 없음'; }
+          else if (v1.verdict === '일치') { r.status = 'ok'; r.reason = null; }
+          else { r.status = 'unclear'; r.reason = '2차 판정 실패'; }
+        });
       }
     }
     let out = answer, changed = 0, quoteTagged = 0;
@@ -1388,8 +1490,9 @@
           paras: r.paras || [], items: r.items || [], status: r.status, reason: r.reason || null, judge: r.judge || null, doc: r.doc || null,
           verbatim: !!r.verbatim, overlap: typeof r.overlap === 'number' ? Math.round(r.overlap * 100) / 100 : null };
         if (r.auto) v.auto = 'quote';
-        if (r.judge2) v.judge2 = r.judge2;                    // 2차 판정(1차 불일치만) — 1·2차가 갈린 건수를 나중에 셀 수 있게
-        if (r.judge2Error) v.judge2Error = r.judge2Error.slice(0, 200);
+        if (r.judge2) v.judge2 = r.judge2;                    // 2차 판정(#284부터 판정 대상 전부, #280은 1차 불일치만) — 1·2차가 갈린 건수를 나중에 셀 수 있게
+        if (r.judge2Error) v.judge2Error = r.judge2Error.slice(0, 200);   // 2차가 두 번 다 실패 → 1차 결과로 물러남
+        if (r.srcPrompt) v.srcPrompt = r.srcPrompt;           // 판정 원문 출처(#284): swap 지침서 대신 실DB 조문 · kept 지침서 글 · failed 못 받음(회색)
         return v;
       }),
     };
@@ -1407,6 +1510,7 @@
     judgeCitations: judgeCitations, verifyCitations: verifyCitations, autoTagVerbatim: autoTagVerbatim,
     JUDGE_SYSTEM: JUDGE_SYSTEM, JUDGE2_SYSTEM: JUDGE2_SYSTEM, judgeCitations2: judgeCitations2, spanIn: spanIn,
     JUDGE2_MODEL: JUDGE2_MODEL, JUDGE2_REQUEST: JUDGE2_REQUEST, JUDGE2_MAX_TOKENS: JUDGE2_MAX_TOKENS,
+    JUDGE2_CONCURRENCY: JUDGE2_CONCURRENCY, judgeEachSecond: judgeEachSecond, swapPromptArticles: swapPromptArticles, isPromptDoc: isPromptDoc,
   };
   root.CiteVerify = CiteVerify;
   if (typeof module !== 'undefined' && module.exports) module.exports = CiteVerify;

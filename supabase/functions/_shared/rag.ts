@@ -424,6 +424,15 @@ async function fetchArticleChunks(sb: SupabaseClient, docName: string, key: stri
     .like('article_no', key + '%').order('chunk_index', { ascending: true }).limit(40);
   return (r.data || []) as Chunk[];
 }
+// ── 인용 판정 원문이 지침서 핵심 조문뿐일 때 받을 실DB 조문(#284) — 법령군(문서명 '(' 앞)·조로 현행·시행예정 판을 함께 받는다.
+//    판 고르기·조 번호 대조(16조%에 16조의2도 온다)는 cite_verify.js swapPromptArticles. verify-citations/index.ts와 같은 조건.
+async function fetchLawArticleByFamily(sb: SupabaseClient, family: string, key: string): Promise<(Chunk & { status?: string })[]> {
+  const r = await sb.from('document_chunks').select('id, doc_name, article_no, chunk_index, content, status')
+    .like('doc_name', family + '(%').in('status', ['current', 'pending']).eq('is_approved', true)
+    .like('article_no', key + '%').order('chunk_index', { ascending: true }).limit(80);
+  if (r.error) throw new Error(r.error.message);
+  return (r.data || []) as (Chunk & { status?: string })[];
+}
 // ── 번호로 지목한 조문(#245)의 이름 맞추기 재료 — 그 번호의 조문을 가진 현행 문서(조문 제목은 'N조(제목)', #92).
 //    '16조%'면 16조의2 등도 오지만 rag_core.js pickNamedArticles가 번호를 다시 대조한다. app.js fetchArticleKeyRows와 동일 조건.
 async function fetchArticleKeyRows(sb: SupabaseClient, key: string): Promise<{ doc_name: string; article_no: string }[]> {
@@ -1172,8 +1181,10 @@ export async function answerAdvisory(sb: SupabaseClient, systemPrompt: string, q
       // 덧붙인 조문(#283 상한 구제·위임·같은 고시)도 대조 대상 — 판정 규칙(cite_verify.js)은 그대로, 근거 조각이 늘 뿐
       answer: rawAnswer, chunks: (extra2 as unknown as Chunk[]).concat(chunks2).concat(citing.chunks).concat(spill2).concat(addOns.chunks), annexSources: annex.sources, systemPrompt,
       callHaiku: (sys: string, u: string) => callHaikuText(sb, apiKey, sys, u, 'rag.ts:citeJudge', 3000),   // 900은 24건 판정 JSON에 빠듯(#205)
-      // 1차 「불일치」만 다시 보는 2차 판정(2026-10-05) — 둘 다 불일치이고 근거 구절이 실재할 때만 「원문과 다름」
+      // 2차 판정(Opus 5.5) — #284부터 판정 대상 전부를 항목 하나씩 보내고 2차가 표시를 정한다(1차는 기록·예비)
       callJudge2: (sys: string, u: string) => callCiteJudge2(sb, apiKey, sys, u, 'rag.ts:citeJudge2'),
+      // 판정 원문이 지침서 핵심 조문뿐이면 실DB 조문으로(#284)
+      fetchLawArticle: (fam: string, key: string) => fetchLawArticleByFamily(sb, fam, key),
     });
     answer = vr.answer;
     verdicts = vr.verdicts || [];

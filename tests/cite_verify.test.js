@@ -620,9 +620,72 @@ function ok(name, cond, extra) {
   var v55e = await CV.verifyCitations({ answer: ans55, chunks: [a55], callHaiku: j1False, callJudge2: async function () { throw new Error('HTTP 529'); } });
   var v55f = await CV.verifyCitations({ answer: ans55, chunks: [a55], callHaiku: j1False, callJudge2: async function () { return '[]'; } });
   eq('B: 2차 판단불가·호출 실패·결과 없음은 회색', [v55d.verdicts[0].status, v55e.verdicts[0].status, v55e.verdicts[0].judge2Error, v55f.verdicts[0].status], ['unclear', 'unclear', 'HTTP 529', 'unclear']);
+  // ── #284 관문 Pㄱ1(2026-10-06): 판정 대상 전부를 2차로, 2차가 표시를 정한다, 항목 하나 = 호출 하나 ──
+  var j1True = async function () { return '[{"id":1,"verdict":"일치","reason":""}]'; };
   var called2 = 0;
-  await CV.verifyCitations({ answer: ans55, chunks: [a55], callHaiku: async function () { return '[{"id":1,"verdict":"일치","reason":""}]'; }, callJudge2: async function () { called2++; return '[]'; } });
-  eq('B: 1차가 일치면 2차를 부르지 않는다', called2, 0);
+  var v55g = await CV.verifyCitations({ answer: ans55, chunks: [a55], callHaiku: j1True, callJudge2: async function () { called2++; return '[]'; } });
+  eq('#284: 1차가 일치여도 2차를 부른다 — 결과 없으면 한 번 더, 그래도 없으면 1차 결과(일치 → 초록)', [called2, v55g.verdicts[0].status, v55g.verdicts[0].judge.verdict, v55g.verdicts[0].judge2Error], [2, 'ok', '일치', '2차 판정 결과 없음']);
+  var v55h = await CV.verifyCitations({ answer: ans55, chunks: [a55], callHaiku: j1True,
+    callJudge2: async function () { return '[{"id":1,"verdict":"불일치","source_span":"제52조제1항에 따른 조치가 있는 경우에 금지행위로 피해를 입은 자는","claim_span":"피해 이용자는","reason":"피해자 범위를 이용자로 좁힘"}]'; } });
+  eq('#284: 1차 일치라도 2차가 근거 있는 불일치면 주황(메모는 2차 사유)', [v55h.verdicts[0].status, v55h.verdicts[0].judge.verdict, v55h.verdicts[0].judge2.grounded, /\[원문과 다름 — 판정기 메모: 피해자 범위를 이용자로 좁힘/.test(v55h.answer)], ['mismatch', '일치', true, true]);
+  var v55i = await CV.verifyCitations({ answer: ans55, chunks: [a55], callHaiku: async function () { throw new Error('haiku down'); }, callJudge2: async function () { return '[{"id":1,"verdict":"일치","reason":""}]'; } });
+  var v55j = await CV.verifyCitations({ answer: ans55, chunks: [a55], callHaiku: async function () { throw new Error('haiku down'); }, callJudge2: async function () { throw new Error('HTTP 529'); } });
+  eq('#284: 1차가 죽어도 2차가 정한다 · 둘 다 죽으면 대조 못 함', [v55i.verdicts[0].status, v55i.verdicts[0].judge, v55j.verdicts[0].status, v55j.verdicts[0].judge2Error], ['ok', null, 'unjudged', 'HTTP 529']);
+  var j2Calls = 0;
+  await CV.verifyCitations({ answer: ans55, chunks: [a55], callHaiku: j1False, callJudge2: async function () { j2Calls++; if (j2Calls === 1) throw new Error('HTTP 529'); return '[{"id":1,"verdict":"일치","reason":""}]'; } });
+  eq('#284: 2차 실패는 한 번 다시 부른다', j2Calls, 2);
+  // 한 답의 두 인용 → 1차는 한 호출에 묶고(지시문·꼴 그대로), 2차는 항목마다 따로(각각 「항목 1」 하나만)
+  var ans55two = '제55조제1항에 따라 제51조의3제1항 또는 제2항에 따른 조치가 있는 경우 위반행위로 피해를 입은 자는 손해배상을 청구할 수 있습니다 [원문 확인됨: 전기통신사업법 제55조제1항]\n\n' + ans55;
+  var seen1 = [], seen2b = [];
+  var v2two = await CV.verifyCitations({ answer: ans55two, chunks: [a55], callHaiku: async function (s, u) { seen1.push(u); return '[{"id":1,"verdict":"일치","reason":""},{"id":2,"verdict":"일치","reason":""}]'; },
+    callJudge2: async function (s, u) { seen2b.push(u); return '[{"id":1,"verdict":"일치","reason":""}]'; } });
+  ok('#284: 1차는 묶음 1호출, 2차는 항목마다 1호출(항목 1만, 서로 다른 대상)',
+     seen1.length === 1 && /### 항목 2\n/.test(seen1[0]) && seen2b.length === 2 && seen2b.every(function (u) { return /^### 항목 1\n/.test(u) && u.indexOf('### 항목 2') === -1; }) &&
+     seen2b.some(function (u) { return /55조 제1항/.test(u); }) && seen2b.some(function (u) { return /55조 제2항/.test(u); }) && v2two.verdicts.every(function (v) { return v.status === 'ok'; }), [seen1.length, seen2b]);
+  // 동시 호출 상한
+  var inflight = 0, peak = 0;
+  var many = []; for (var mi = 0; mi < 9; mi++) many.push({ id: mi + 1, target: 't' + mi, claim: 'c' + mi, source: 's' + mi });
+  var outMany = await CV.judgeEachSecond(many, async function (s, u) { inflight++; peak = Math.max(peak, inflight); await new Promise(function (r) { setTimeout(r, 5); }); inflight--; return '[{"id":1,"verdict":"일치","reason":"' + u.match(/\[인용 대상\] (t\d)/)[1] + '"}]'; });
+  eq('#284: 2차 동시 호출은 JUDGE2_CONCURRENCY(6)까지, 결과는 항목 순서대로', [CV.JUDGE2_CONCURRENCY, peak, outMany.map(function (x) { return x.v.reason; }).join(',')], [6, 6, 't0,t1,t2,t3,t4,t5,t6,t7,t8']);
+
+  // ── #284 판정 원문이 지침서 글뿐이면 실DB 조문으로(swapPromptArticles) ──
+  var promptSw = '…\n■ 전파법 제16조(재할당) [원문 확인됨]\n① 과기정통부장관은 이용기간이 끝난 주파수를 이용기간이 끝날 당시의 주파수 이용자에게 재할당할 수 있다.\n③ 과기정통부장관은 재할당을 하지 아니하는 경우 또는 새로운 조건을 붙이려는 경우 이용기간이 끝나기 1년 전에 미리 주파수 이용자에게 알려야 한다.\n\n' +
+    '■ 전파법 제24조 제2항 — 무선국 자기적합확인 (2026.4.21 신설, 법률 제21553호, 시행 2026.10.22) [원문 확인됨]\n② 제1항에도 불구하고 대통령령으로 정하는 무선국의 시설자는 스스로 확인하고 그 결과를 제출하여 준공검사를 갈음할 수 있다.';
+  var full16 = '제16조(재할당)\n① 과학기술정보통신부장관은 이용기간이 끝난 주파수를 이용기간이 끝날 당시의 주파수 이용자에게 재할당할 수 있다.\n③ 과학기술정보통신부장관은 제1항제2호나 제3호에 해당하여 재할당을 하지 아니하는 경우 또는 제12조에 따라 할당한 주파수를 제11조제1항 단서에 따라 주파수할당 대가를 받고 재할당하는 등 새로운 조건을 붙이려는 경우에는 이용기간이 끝나기 1년 전에 미리 주파수 이용자에게 알려야 한다.';
+  var lawRows = {
+    '전파법|16조': [{ id: 1601, doc_name: '전파법(법률)(제21553호)(20261022)', article_no: '16조(재할당)', chunk_index: 32, content: full16, status: 'pending' },
+                   { id: 1602, doc_name: '전파법(법률)(제21065호)(20260102)', article_no: '16조(재할당)', chunk_index: 32, content: full16, status: 'current' },
+                   { id: 1603, doc_name: '전파법(법률)(제21065호)(20260102)', article_no: '16조의2(주파수이용권의 양도)', chunk_index: 34, content: '제16조의2 …', status: 'current' }],
+    '전파법|24조': [{ id: 2401, doc_name: '전파법(법률)(제21065호)(20260102)', article_no: '24조(검사)', chunk_index: 60, content: '제24조(검사)\n① 옛 판 … ② 옛 판의 제2항', status: 'current' },
+                   { id: 2402, doc_name: '전파법(법률)(제21553호)(20261022)', article_no: '24조(검사)', chunk_index: 61, content: '제24조(검사)\n① …\n② 제1항에도 불구하고 대통령령으로 정하는 무선국의 시설자는 대통령령으로 정하는 바에 따라 그 무선설비가 기술기준에 적합한지의 여부에 대하여 스스로 확인하고 그 결과를 과학기술정보통신부장관에게 제출하여 준공검사를 갈음할 수 있다.', status: 'pending' }],
+  };
+  var fetched = [];
+  var fetchLaw = async function (fam, key) { fetched.push(fam + '|' + key); return lawRows[fam + '|' + key] || []; };
+  var ans16 = '전파법 제16조제3항에 따라 재할당을 하지 아니하는 경우 또는 새로운 조건을 붙이려는 경우 이용기간이 끝나기 1년 전에 미리 주파수 이용자에게 알려야 합니다 [원문 확인됨: 전파법 제16조제3항]';
+  var src2 = [];
+  var vSw = await CV.verifyCitations({ answer: ans16, chunks: [], systemPrompt: promptSw, callHaiku: j1True, fetchLawArticle: fetchLaw,
+    callJudge2: async function (s, u) { src2.push(u); return '[{"id":1,"verdict":"불일치","source_span":"제1항제2호나 제3호에 해당하여 재할당을 하지 아니하는 경우","claim_span":"재할당을 하지 아니하는 경우 또는","reason":"통지 대상 사유 한정 누락"}]'; } });
+  eq('#284 원문 바꾸기: 지침서 글뿐인 제16조 → 실DB 현행판(16조의2 제외)으로 대조, 출처 swap, 주황',
+     [fetched, vSw.verdicts[0].doc, vSw.verdicts[0].srcPrompt, vSw.verdicts[0].status, /제1항제2호나 제3호에 해당하여/.test(src2[0] || ''), vSw.verdicts[0].verbatim],
+     [['전파법|16조'], '전파법(법률)(제21065호)(20260102)', 'swap', 'mismatch', true, false]);
+  var vKeep = await CV.verifyCitations({ answer: ans16, chunks: [], systemPrompt: promptSw, callHaiku: j1True });
+  eq('#284 원문 바꾸기: 받을 수단이 없으면 종전대로 지침서 글(출처 kept)', [vKeep.verdicts[0].doc, vKeep.verdicts[0].srcPrompt, vKeep.verdicts[0].status], ['전파법(시스템 프롬프트 핵심 조문)', 'kept', 'ok']);
+  var vFail = await CV.verifyCitations({ answer: ans16, chunks: [], systemPrompt: promptSw, callHaiku: j1True, callJudge2: async function () { throw new Error('불려선 안 됨'); },
+    fetchLawArticle: async function () { throw new Error('db down'); } });
+  eq('#284 원문 바꾸기: 못 받으면 지침서 글과 맞아도 회색(출처 failed, 판정기 안 부름)', [vFail.verdicts[0].srcPrompt, vFail.verdicts[0].status, /\[원문 없음 — 자동 대조 못 함, 직접 확인/.test(vFail.answer)], ['failed', 'unclear', true]);
+  fetched = [];
+  var ans24b = '전파법 제24조제2항에 따라 대통령령으로 정하는 무선국의 시설자는 스스로 확인한 결과를 제출해 준공검사를 갈음할 수 있습니다 [원문 확인됨: 전파법 제24조제2항]';
+  var vHint = await CV.verifyCitations({ answer: ans24b, chunks: [], systemPrompt: promptSw, callHaiku: j1True, callJudge2: async function () { return '[{"id":1,"verdict":"일치","reason":""}]'; }, fetchLawArticle: fetchLaw });
+  eq('#284 원문 바꾸기: 지침서 머리줄의 「제N호」가 있으면 그 판(시행예정 제21553호)', [fetched, vHint.verdicts[0].doc, vHint.verdicts[0].srcPrompt, vHint.verdicts[0].status], [['전파법|24조'], '전파법(법률)(제21553호)(20261022)', 'swap', 'ok']);
+  var vHintMiss = await CV.verifyCitations({ answer: ans24b, chunks: [], systemPrompt: promptSw, callHaiku: j1True, fetchLawArticle: async function () { return [lawRows['전파법|24조'][0]]; } });
+  eq('#284 원문 바꾸기: 「제N호」 판이 없으면 현행판으로 대신하지 않는다(회색)', [vHintMiss.verdicts[0].srcPrompt, vHintMiss.verdicts[0].status], ['failed', 'unclear']);
+  fetched = [];
+  var real16 = { id: 98637, doc_name: '전파법(법률)(제21065호)(20260102)', article_no: '16조(재할당)', chunk_index: 32, content: full16 };
+  var vReal = await CV.verifyCitations({ answer: ans16, chunks: [real16], systemPrompt: promptSw, callHaiku: j1True, fetchLawArticle: fetchLaw });
+  eq('#284 원문 바꾸기: 검색 자료에 같은 조 실제 조문이 있으면 받지 않는다(그 조문이 원문)', [fetched, vReal.verdicts[0].doc, vReal.verdicts[0].srcPrompt || null], [[], '전파법(법률)(제21065호)(20260102)', null]);
+  fetched = [];
+  await CV.verifyCitations({ answer: '전기통신사업법 제55조제2항에 따라 피해자는 손해배상을 청구할 수 있습니다 [원문 확인됨: 전기통신사업법 제55조제2항]', chunks: [a55], systemPrompt: promptSw, callHaiku: j1True, fetchLawArticle: fetchLaw });
+  eq('#284 원문 바꾸기: 인용이 가리키지 않은 지침서 조문은 받지 않는다', fetched, []);
   // 진짜 불일치(사내 그림 07 꼴 — 원문이 한정한 주체 「다음 각 호의 어느 하나에 해당하는 자」를 뺀 인용): 둘 다 불일치 + 두 구절 실재 → 주황, 메모는 2차 사유
   var r24 = { id: 98665, doc_name: '전파법(법률)(제21065호)(20260102)', article_no: '24조(검사)', chunk_index: 60, content: '제24조(검사)\n① 다음 각 호의 어느 하나에 해당하는 자는 무선설비가 준공된 경우 과학기술정보통신부장관에게 준공신고를 하고 그 무선설비가 기술기준 및 무선종사자의 자격ㆍ정원배치기준에 적합한지의 여부에 대하여 검사(이하 "준공검사"라 한다)를 받아야 한다.\n1. 제21조제4항에 따라 무선국 개설허가 또는 변경허가를 받은 자\n2. 제22조의2제1항에 따라 제19조의2제1항제3호 또는 제4호에 해당하는 무선국의 개설신고 또는 변경신고를 한 자' };
   var ans24 = '전파법 제24조제1항에 따르면 "무선설비가 준공된 경우 과학기술정보통신부장관에게 준공신고를 하고 그 무선설비가 기술기준에 적합한지의 여부에 대하여 검사(준공검사)를 받아야 한다" [원문 확인됨: 전파법 제24조제1항]';

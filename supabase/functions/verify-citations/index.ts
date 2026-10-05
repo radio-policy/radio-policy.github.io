@@ -75,6 +75,14 @@ Deno.serve(async (req) => {
       .like('article_no', key + '%').order('chunk_index', { ascending: true }).limit(40);
     return (r.data || []) as Row[];
   };
+  // 인용 판정 원문이 지침서 핵심 조문뿐일 때 받을 실DB 조문(#284) — rag.ts fetchLawArticleByFamily와 같은 조건, 판 고르기는 cite_verify.js
+  const fetchLawArticle = async (family: string, key: string): Promise<(Row & { status?: string })[]> => {
+    const r = await sb.from('document_chunks').select('id, doc_name, article_no, chunk_index, content, status')
+      .like('doc_name', family + '(%').in('status', ['current', 'pending']).eq('is_approved', true)
+      .like('article_no', key + '%').order('chunk_index', { ascending: true }).limit(80);
+    if (r.error) throw new Error(r.error.message);
+    return (r.data || []) as (Row & { status?: string })[];
+  };
   try {
     const ex = await CiteVerify.expandArticles(chunks, fetchArticle, EXPAND_OPTS);
     chunks = ex.chunks;
@@ -89,10 +97,12 @@ Deno.serve(async (req) => {
       callHaiku: ANTHROPIC_KEY
         ? (sys: string, u: string) => callHaikuText(sb, ANTHROPIC_KEY, sys, u, 'verify-citations:citeJudge', 3000)   // 900은 24건 판정 JSON에 빠듯(#205)
         : null,
-      // 1차 「불일치」만 다시 보는 2차 판정(2026-10-05) — 둘 다 불일치이고 근거 구절이 실재할 때만 「원문과 다름」
+      // 2차 판정(Opus 5.5) — #284부터 판정 대상 전부를 항목 하나씩 보내고 2차가 표시를 정한다(1차는 기록·예비)
       callJudge2: ANTHROPIC_KEY
         ? (sys: string, u: string) => callCiteJudge2(sb, ANTHROPIC_KEY, sys, u, 'verify-citations:citeJudge2')
         : null,
+      // 판정 원문이 지침서 핵심 조문뿐이면 실DB 조문으로(#284)
+      fetchLawArticle,
     });
     console.log('[인용 검증]', user.email || user.id, 'auto+' + (vr.autoTagged || 0), 'quote+' + (vr.quoteTagged || 0), JSON.stringify(vr.verdicts.map((v: { key: string; status: string; reason: string }) => [v.key, v.status, v.reason])));
     return json(200, { answer: vr.answer, verdicts: vr.verdicts, changed: vr.changed, autoTagged: vr.autoTagged || 0, quoteTagged: vr.quoteTagged || 0, citedDocs: vr.citedDocs || [] }, cors);
