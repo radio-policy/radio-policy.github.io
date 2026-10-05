@@ -16,6 +16,8 @@
 //  (= 지금까지의 거짓 주황). 2차 고정 사례 12개(거짓 5 + 진짜 T1·T1b·T2·S1~S4) × 4회: prod(Opus 5.5 medium) 거짓 주황 0/20 · 진짜 28/28 주황.
 //  s5(Sonnet 5, 추론 끔) F5 6/8 거짓 주황 · T2·S2 일부 놓침, s55m(Sonnet 5.5 medium) F6 4/8 거짓 주황, 지시문 후보(일부만 든 것을 대상 일반으로 넓힘)는
 //  F6을 고치고 F5를 4/4로 되돌려 기각. 초록 표본 64항목: 1차 192회 중 41회 불일치(17항목) → prod 2차 1회: 주황 1(제19조①에 없는 무선국 폐지 신고)·일치 7·판단불가 9.
+//  o48(Opus 4.8 추론 끔 — 사내 후보, 같은 날 사내 요청): 거짓 주황 0/20이지만 T1b(그림 07 꼴, 주체 한정 생략)를 4/4 「주체 생략됐으나 내용 일치」로 놓침 —
+//  2차 일치 = 초록이면 진짜 주황이 초록이 된다(그 밖 진짜 24/24 주황, F1은 판단불가 4/4).
 // ============================================================================
 'use strict';
 const fs = require('fs');
@@ -36,6 +38,7 @@ const VARIANTS = {
   s5: { model: 'claude-sonnet-5', extra: { thinking: { type: 'disabled' } }, max: 2000 },
   s55m: { model: 'claude-sonnet-5-5', extra: { output_config: { effort: 'medium' } }, max: 8000 },
   o55m: { model: 'claude-opus-5-5', extra: { output_config: { effort: 'medium' } }, max: 8000 },
+  o48: { model: 'claude-opus-4-8', extra: { thinking: { type: 'disabled' } }, max: 2000 },   // 사내판 후보(사내 플랫폼에 Opus 5.5 없음, 2026-10-05 사내 요청)
   // 지시문 후보 시험용 — system을 바꿔 보낸다(운영 JUDGE2_SYSTEM은 그대로). 후보 글은 아래 CAND_SYSTEM
   s55m_cand: { model: 'claude-sonnet-5-5', extra: { output_config: { effort: 'medium' } }, max: 8000, cand: true },
 };
@@ -44,7 +47,7 @@ const CAND_SYSTEM = CV.JUDGE2_SYSTEM.replace(
   '원문이 어느 하나에 해당하면 되는 대상·행위를 여럿 나열하는데 인용문이 그중 일부만 든 것(든 것이 원문 목록에 있으면 일치)',
   '원문이 정한 대상(주체·상대방·행위·조항 목록) 가운데 일부만 들어 말한 것 — 든 것이 원문에 들어 있으면 일치(인용문이 「…이란 …이다」처럼 정의를 통째로 옮기면서 일부를 뺀 것은 제외)');
 const VARS = arg('--variants', 'prod').split(',').filter(function (v) { return VARIANTS[v]; });
-const PRICE = { 'claude-haiku-4-5-20251001': [1, 5], 'claude-sonnet-5': [2, 10], 'claude-sonnet-5-5': [2, 10], 'claude-opus-5-5': [4, 20] };   // $/MTok 입력·출력
+const PRICE = { 'claude-haiku-4-5-20251001': [1, 5], 'claude-sonnet-5': [2, 10], 'claude-sonnet-5-5': [2, 10], 'claude-opus-5-5': [4, 20], 'claude-opus-4-8': [5, 25] };   // $/MTok 입력·출력
 
 const env = {};
 for (const line of fs.readFileSync(path.join(REPO, '.env'), 'utf8').split(/\r?\n/)) {
