@@ -27,7 +27,10 @@ var NAMES = ['PRIORITY_KW_RE', 'VERB_TAIL', 'extractKeywords', 'LAW_SYNONYMS', '
   'expandQueryForSemantic', 'GENERIC_QUERY_WORDS', 'QUERY_TITLE_STOP', 'isTitleStop', 'lawRank', 'DOMAIN_DOC_RE',
   'extractNewsKeywords', 'PERDOC_LIMIT', 'TOTAL_CHUNK_CUT', 'STREAM_IDLE_MS', 'EXPAND_OPTS', 'CITING_OPTS',
   'ANNEX_MAX_UNITS', 'ANNEX_MAX_CHUNKS', 'ASM_RARE_MAX', 'RRF_K', 'articleBonus', 'rankChunks', 'titleActWeights',
-  'rankLawHits', 'NAMED_ARTICLE_MAX', 'namedArticleRefs', 'pickNamedArticles', 'fetchNamedArticles', 'buildRagContext', 'buildKbContext'];
+  'rankLawHits', 'NAMED_ARTICLE_MAX', 'namedArticleRefs', 'pickNamedArticles', 'fetchNamedArticles', 'buildRagContext', 'buildKbContext',
+  // 자문 빠뜨림 1차 덧붙이기(#283)
+  'ADDON_OPTS', 'DELEG_OPTS', 'NEIGHBOR_OPTS', 'NOTICE_DOC_RE', 'unitKey', 'capSpill', 'pickSpill', 'delegationBases', 'pickDelegations',
+  'neighborTarget', 'pickNeighbors', 'buildAddOnContext', 'fetchAddOns', 'trimAddOns'];
 NAMES.forEach(function (n) { ok('export ' + n, RC[n] !== undefined); });
 
 // ── 법령 키워드 추출 ──
@@ -208,6 +211,123 @@ var asyncTests = (async function () {
   eq('fetchNamedArticles 조회 실패는 빈 배열', await RC.fetchNamedArticles('전파법 제16조', function () { return Promise.reject(new Error('x')); }, function () { return []; }), []);
 })();
 
+// ── 자문 빠뜨림 1차 덧붙이기(#283) — 상한 구제·위임 따라가기·같은 고시 이웃 조 ──
+(function () {
+  eq('unitKey 조·별표·그 밖', [RC.unitKey('16조의2(대가)'), RC.unitKey('별표 13(제96조 관련)'), RC.unitKey('부칙'), RC.unitKey(null)], ['16조의2', '별표13', null, null]);
+  // capSpill: rankChunks와 같은 순서로 훑어 15칸이 차기 전 문서당 상한(3)으로만 빠진 조문·별표. 파일 문서·부칙은 뺀다.
+  var D = '전파법 시행령(대통령령)(제1호)(20250101)', F = '논문.pdf';
+  var rs = [];
+  for (var i = 0; i < 5; i++) rs.push({ id: i + 1, doc_name: D, article_no: (95 + i) + '조(수수료)', _hybrid_score: 1 - i * 0.01 });
+  rs.push({ id: 10, doc_name: D, article_no: '부칙', _hybrid_score: 0.5 });
+  for (var j = 0; j < 4; j++) rs.push({ id: 20 + j, doc_name: F, article_no: '3조(x)', _hybrid_score: 0.4 - j * 0.01 });
+  eq('capSpill 상한으로만 빠진 조문(파일·부칙 제외)', RC.capSpill(rs).map(function (r) { return r.id; }), [4, 5]);
+  // rankChunks 결과는 그대로(계약 불변) — 같은 입력에서 채택분과 상한 구제 후보가 겹치지 않는다
+  var rs2 = rs.map(function (r) { return Object.assign({}, r, { content: '' }); });
+  var picked = RC.rankChunks(rs2, [], [], '');
+  ok('capSpill과 rankChunks 채택분이 겹치지 않음', RC.capSpill(rs2).every(function (r) { return picked.indexOf(r) < 0; }));
+  // 15칸이 다 찬 뒤의 조각은 후보가 아니다
+  var many = [];
+  for (var k = 0; k < 20; k++) many.push({ id: 100 + k, doc_name: '법' + k + '(법률)(a)(b)', article_no: '1조(x)', _hybrid_score: 1 - k * 0.01 });
+  many.push({ id: 999, doc_name: '법0(법률)(a)(b)', article_no: '2조(x)', _hybrid_score: 0.01 });
+  many.push({ id: 998, doc_name: '법0(법률)(a)(b)', article_no: '3조(x)', _hybrid_score: 0.005 });
+  many.push({ id: 997, doc_name: '법0(법률)(a)(b)', article_no: '4조(x)', _hybrid_score: 0.001 });
+  eq('capSpill 15칸이 찬 뒤는 후보 아님', RC.capSpill(many), []);
+  // pickSpill: 이미 든 조각 id·같은 단위 제외, 자기끼리도 한 번, 상한
+  var cands = [{ id: 4, doc_name: D, article_no: '98조(a)' }, { id: 7, doc_name: D, article_no: '98조(a)' }, { id: 5, doc_name: D, article_no: '99조(b)' },
+    { id: 6, doc_name: D, article_no: '96조(c)' }, { id: 8, doc_name: D, article_no: '별표 13(d)' }];
+  eq('pickSpill 이미 든 단위 제외·중복 제외·상한', RC.pickSpill(cands, [{ id: 5, doc_name: D, article_no: '97조(z)' }, { id: 9, doc_name: D, article_no: '96조(c)' }], 2).map(function (r) { return r.id; }), [4, 8]);
+})();
+
+(function () {
+  var L = '전파법(법률)(제1호)(20260102)', R = '전파법 시행령(대통령령)(제2호)(20251001)', N = '재난문자방송 기준 및 운영규정(행정안전부예규)(제3호)(20250101)';
+  var bases = RC.delegationBases([[{ doc_name: L, article_no: '24조(검사)' }, { doc_name: 'x.pdf', article_no: '24조' }],
+    [{ doc_name: R, article_no: '별표 13(a)' }, { doc_name: L, article_no: '24조(검사)' }, { doc_name: N, article_no: '5조(송출)' }]]);
+  eq('delegationBases 순서·조만·파일 제외·중복 제외', bases.map(function (b) { return [b.fam, b.key, b.notice]; }),
+    [['전파법', '24조', false], ['재난문자방송 기준 및 운영규정', '5조', true]]);
+  var rows = [
+    { parent_law: '전파법', parent_article: '24조', child_law: '전파법 시행령', child_article: '45조', child_title: '검사의 시기', child_kind: '시행령' },
+    { parent_law: '전파법', parent_article: '24조', child_law: '전파법 시행령', child_article: '44조', child_title: '정기검사의 유효기간', child_kind: '시행령' },
+    { parent_law: '전파법', parent_article: '24조', child_law: '전파법 시행규칙', child_article: '10조', child_title: '검사 신청', child_kind: '시행규칙' },
+    { parent_law: '전파법', parent_article: '24조', child_law: '전파법 시행령', child_article: '2조', child_title: '정의', child_kind: '시행령' },
+    { parent_law: '전파법', parent_article: '24조', child_law: '무선국 검사업무 처리기준', child_article: '전체', child_kind: '고시' },
+    { parent_law: '재난 및 안전관리 기본법 시행령', parent_article: '46조의2', child_law: '재난문자방송 기준 및 운영규정', child_article: '전체', child_kind: '예규' },
+    { parent_law: '재난 및 안전관리 기본법', parent_article: '38조의2', child_law: '재난문자방송 기준 및 운영규정', child_article: '전체', child_kind: '예규' },
+    { parent_law: '전파법', parent_article: '69조', parent_title: '수수료', child_law: '전파법', child_article: '24조', child_kind: '시행령' },
+  ];
+  var pd = RC.pickDelegations(bases, rows, new Set(['전파법 시행령|44조']), { perBase: 2, down: 4, up: 4, spare: 0 });
+  eq('pickDelegations 아래: 이미 든 조·정의·고시 전체 제외, 시행령 먼저·번호 순, 근거당 2', pd.down.map(function (x) { return x.fam + ' ' + x.key; }),
+    ['전파법 시행령 45조', '전파법 시행규칙 10조']);
+  eq('pickDelegations 위: 법률 먼저, 고시 조면 그 고시 전체 행의 부모', pd.up.map(function (x) { return x.fam + ' ' + x.key + (x.whole ? ' (전체)' : ''); }),
+    ['전파법 69조', '재난 및 안전관리 기본법 38조의2 (전체)', '재난 및 안전관리 기본법 시행령 46조의2 (전체)']);
+  var pd1 = RC.pickDelegations(bases, rows, new Set(), { perBase: 2, down: 1, up: 4, spare: 1 });
+  eq('pickDelegations 방향 상한 + 예비 후보', pd1.down.length, 2);
+
+  var nt = RC.neighborTarget([[{ doc_name: N, article_no: '5조(a)' }, { doc_name: N, article_no: '5조(a)' }, { doc_name: L, article_no: '1조' }],
+    [{ doc_name: N, article_no: '12조(b)' }]]);
+  eq('neighborTarget 고시에 서로 다른 조 2개 이상', nt, { doc_name: N, keys: ['5조', '12조'] });
+  eq('neighborTarget 1개뿐이면 없음', RC.neighborTarget([[{ doc_name: N, article_no: '5조(a)' }, { doc_name: L, article_no: '1조' }, { doc_name: L, article_no: '2조' }]]), null);
+  var doc = [];
+  ['1조(목적)', '4조(a)', '5조(a)', '6조(b)', '6조의2(c)', '7조(준용)', '11조(d)', '12조(e)', '13조(f)'].forEach(function (a, i) {
+    doc.push({ id: 500 + i, doc_name: N, article_no: a, chunk_index: i, content: a + ' 본문' });
+  });
+  doc.push({ id: 600, doc_name: N, article_no: '별표 1(x)', chunk_index: 20, content: '표' });
+  eq('pickNeighbors 작으면 남은 조 전부(별표 제외)', RC.pickNeighbors(doc, ['5조', '12조'], { wholeChars: 6000, max: 4 }).map(function (x) { return x.key; }),
+    ['1조', '4조', '6조', '6조의2', '7조', '11조', '13조']);
+  eq('pickNeighbors 크면 문서 순서상 앞뒤 조·준용 조만, max', RC.pickNeighbors(doc, ['5조', '12조'], { wholeChars: 10, max: 4 }).map(function (x) { return x.key; }),
+    ['4조', '6조', '7조', '11조']);
+})();
+
+var addOnTests = (async function () {
+  var L = '전파법(법률)(제1호)(20260102)', R = '전파법 시행령(대통령령)(제2호)(20251001)', R0 = '전파법 시행령(대통령령)(제1호)(20240101)';
+  var calls = [];
+  var fetchers = {
+    delegations: function (fams, keys) {
+      calls.push('deleg:' + fams.join('/') + ':' + keys.join('/'));
+      return Promise.resolve([
+        { parent_law: '전파법', parent_article: '24조', child_law: '전파법 시행령', child_article: '44조', child_title: '정기검사의 유효기간', child_kind: '시행령' },
+        { parent_law: '전파법', parent_article: '24조', child_law: '전파법 시행령', child_article: '99조', child_title: '없는 조', child_kind: '시행령' },
+        { parent_law: '전파법', parent_article: '24조', child_law: '전파법 시행령', child_article: '45조', child_title: '검사의 시기', child_kind: '시행령' }]);
+    },
+    familyArticle: function (fam, key) {
+      calls.push('art:' + fam + ':' + key);
+      if (key === '99조') return Promise.resolve([]);   // 위임 표가 낡음 — 현행 문서에 없음
+      if (key === '45조') return Promise.reject(new Error('x'));
+      return Promise.resolve([
+        { id: 71, doc_name: R, article_no: '44조(정기검사의 유효기간)', chunk_index: 2, content: '② 별표 13에 따른다.' },
+        { id: 70, doc_name: R, article_no: '44조(정기검사의 유효기간)', chunk_index: 1, content: '제44조(정기검사의 유효기간) ①' },
+        { id: 72, doc_name: R, article_no: '44조(정기검사의 유효기간)', chunk_index: 3, content: '③ 셋째' },
+        { id: 60, doc_name: R0, article_no: '44조(옛판)', chunk_index: 1, content: '옛 판' },
+        { id: 61, doc_name: R, article_no: '44조의2(딴 조)', chunk_index: 4, content: '딴 조' }]);
+    },
+    docArticles: function () { calls.push('doc'); return Promise.resolve([]); },
+  };
+  var r = await RC.fetchAddOns({ extra: [{ id: 1, doc_name: L, article_no: '24조(검사)', content: '제24조' }], spill: [], rag: [{ id: 2, doc_name: 'a.pdf', article_no: '3조', content: 'x' }] }, fetchers, { deleg: { perBase: 3 } });
+  eq('fetchAddOns 조회 순서(고시 없으면 문서 조회 안 함)', calls, ['deleg:전파법:24조', 'art:전파법 시행령:44조', 'art:전파법 시행령:45조', 'art:전파법 시행령:99조']);
+  eq('fetchAddOns 없는 조·조회 실패는 건너뜀, 최신 판 앞 2조각', r.ids, [70, 71]);
+  eq('fetchAddOns 항목 기록', r.items, [{ sec: 'deleg', dir: 'down', fam: '전파법 시행령', key: '44조' }]);
+  ok('fetchAddOns 구역 머리·위임 꼬리·잘림 표시', r.text.indexOf('[위임 관계로 이어진 조문') >= 0 && r.text.indexOf('[위임 1] ' + R + ' 44조(정기검사의 유효기간) — 전파법 제24조의 위임을 받은 조문') >= 0
+    && r.text.indexOf('전체 3조각 중 앞 2조각만') >= 0 && r.text.indexOf('옛 판') < 0, r.text);
+  eq('fetchAddOns 별표 동반 입력(deleg)·별표 인용', [r.deleg.map(function (c) { return c.id; }), r.annexCites], [[70], ['전파법 시행령 별표 13']]);
+  var r2 = await RC.fetchAddOns({ extra: [{ id: 1, doc_name: L, article_no: '24조(검사)' }] }, {
+    delegations: function () { return Promise.reject(new Error('표 없음')); }, familyArticle: function () { throw new Error('불림'); }, docArticles: function () { return []; } });
+  eq('fetchAddOns 위임 표 조회 실패 → 빈 결과(지금과 같음)', [r2.text, r2.ids], ['', []]);
+  var r3 = await RC.fetchAddOns({ extra: [{ id: 1, doc_name: L, article_no: '24조(검사)' }] }, fetchers, { budget: 10 });
+  eq('fetchAddOns 예산을 넘는 항목은 넣지 않음', r3.text, '');
+  // trimAddOns: 전체 상한을 넘으면 같은 고시 → 위 → 아래 순으로 뒤에서 덜어 다시 묶는다
+  var mk = function (dir, key) { return { dir: dir, fam: '전파법 시행령', key: key, base: { fam: '전파법', key: '24조' }, doc_name: R, article_no: key + '(x)', content: 'x'.repeat(100), ids: [Number(key.replace(/\D/g, ''))] }; };
+  var nb = { doc_name: '어느 고시(과학기술정보통신부고시)(제1호)(20260101)', article_no: '3조(y)', key: '3조', content: 'y'.repeat(100), ids: [903] };
+  var full = { text: '', parts: null };
+  full = RC.trimAddOns(Object.assign({}, full), 0, 1);   // text 없으면 그대로
+  eq('trimAddOns 빈 결과는 그대로', full.text, '');
+  var whole = await RC.fetchAddOns({ extra: [{ id: 1, doc_name: L, article_no: '24조(검사)' }] }, fetchers, { deleg: { perBase: 3 } });
+  eq('trimAddOns 상한 안이면 그대로(같은 객체)', RC.trimAddOns(whole, 0, 1e9) === whole, true);
+  var t1 = RC.trimAddOns(whole, 0, 10);
+  eq('trimAddOns 상한을 못 맞추면 덧붙인 것을 모두 덜어 냄', [t1.text, t1.ids, t1.trimmed], ['', [], 1]);
+  ok('trimAddOns 덜어 낸 결과에 parts 유지', !!(t1.parts && t1.parts.deleg));
+  var packed = RC.trimAddOns({ text: 'z'.repeat(999), parts: { deleg: [mk('down', '44조'), mk('up', '45조')], neighbor: [nb], spillItems: [] } }, 0, 400);
+  eq('trimAddOns 같은 고시 → 위 순으로 덜어 냄', [packed.items.map(function (x) { return x.sec + '/' + (x.dir || '') + x.key; }), packed.ids, packed.trimmed], [['deleg/down44조'], [44], 2]);
+})();
+
 // ── 컨텍스트 문구 ──
 (function () {
   var t = RC.buildRagContext([
@@ -243,7 +363,7 @@ var asyncTests = (async function () {
   });
 })();
 
-asyncTests.catch(function (e) { fails++; total++; console.log('FAIL  비동기 검사 예외 ' + (e && e.message)); }).then(function () {
+Promise.all([asyncTests, addOnTests]).catch(function (e) { fails++; total++; console.log('FAIL  비동기 검사 예외 ' + (e && e.message)); }).then(function () {
   console.log('\n' + (fails ? 'FAIL ' + fails + '/' + total : 'ALL OK ' + total + '/' + total));
   process.exit(fails ? 1 : 0);
 });

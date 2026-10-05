@@ -16,6 +16,11 @@
 //                     규칙 변경이 인자를 바꾸지 않는 갈래(trgm·의미검색·요약)는 A/B 양쪽이 같은 결과를 받아 잡음이 0이 되고,
 //                     키워드가 바뀐 갈래(search_chunks_keywords 등)만 새로 조회된다. 파일이 커지므로 git 제외 폴더에 둘 것.
 // 출력의 lab = 청크 id → '문서명 앞부분 조문' 이름표(rag_regress_diff.py가 있으면 이름으로 보여 준다).
+// 자문 빠뜨림 1차(#283, 2026-10-06): 덧붙이기 구역(상한 구제 spill · 위임/같은 고시 addon)의 조각 id·항목도 따로 남긴다 —
+//   기존 갈래(rag·extra·added·citing)는 그대로 비교하고, 덧붙인 것만 새 칸에서 본다.
+//   --with-text      질문마다 Sonnet에 들어갈 참조 자료 전문(systemVariable)을 sv 칸에 저장(필수 조문 재현율 측정용, 파일이 커진다)
+//   --core-opts JSON 덧붙이기 상한을 이번 실행에만 바꾼다(무료 측정으로 상한 고르기) — 예: '{"DELEG_OPTS":{"up":2},"ADDON_OPTS":{"spillMax":1}}'
+//                    rag_core.js의 DELEG_OPTS·NEIGHBOR_OPTS·ADDON_OPTS 객체에 합친다(운영 코드는 그대로).
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 
 const ROOT = new URL('../', import.meta.url);
@@ -43,9 +48,19 @@ const argv = (name: string) => { const i = args.indexOf(name); return i >= 0 ? a
 const tag = argv('--tag') || 'run';
 const only = argv('--only') ? new Set(argv('--only').split(',')) : null;
 const deterministic = !args.includes('--raw');
+const withText = args.includes('--with-text');
 const ragPath = argv('--rag') ? new URL(argv('--rag'), ROOT) : new URL('supabase/functions/_shared/rag.ts', ROOT);
 
 const rag = await import(ragPath.href);
+const coreOpts = argv('--core-opts') ? JSON.parse(argv('--core-opts')) as Record<string, Record<string, unknown>> : null;
+if (coreOpts) {
+  // deno-lint-ignore no-explicit-any
+  const RC = (globalThis as any).RagCore;
+  for (const [k, v] of Object.entries(coreOpts)) {
+    if (!RC || !RC[k] || typeof RC[k] !== 'object') throw new Error('--core-opts: RagCore.' + k + ' 객체가 없음');
+    Object.assign(RC[k], v);
+  }
+}
 const set = JSON.parse(await Deno.readTextFile(setPath));
 let cache: Record<string, number[]> = {};
 try { cache = JSON.parse(await Deno.readTextFile(cachePath)); } catch { cache = {}; }
@@ -141,7 +156,7 @@ console.log = (...a: unknown[]) => {
 };
 
 const ids = (list: { id?: unknown }[]) => (list || []).map((c) => c && c.id);
-const out = { tag, at: new Date().toISOString(), rag: ragPath.pathname, set: setPath.pathname, noExpand, deterministic, expandDelayMs: expandDelay, results: [] as Record<string, unknown>[], cacheMiss: [] as string[], totalMs: 0 };
+const out = { tag, at: new Date().toISOString(), rag: ragPath.pathname, set: setPath.pathname, noExpand, deterministic, expandDelayMs: expandDelay, coreOpts, results: [] as Record<string, unknown>[], cacheMiss: [] as string[], totalMs: 0 };
 for (const q of set.questions) {
   if (only && !only.has(q.id)) continue;
   logLines = []; rpcLog = [];
@@ -152,9 +167,10 @@ for (const q of set.questions) {
   const annex = ctx.annex as { text: string; sources: string[] } | undefined;
   const citing = ctx.citing as { text: string; ids: number[] } | undefined;
   const news = ctx.news as { text: string; sources: string[] } | undefined;
+  const addOns = ctx.addOns as { text: string; chunks: unknown[]; ids: number[]; items: unknown[] } | undefined;
   const lab: Record<string, string> = {};
   for (const c of ([] as { id?: unknown; doc_name?: string; article_no?: string }[])
-    .concat((ctx.chunks as []) || [], (ctx.extra as []) || [], (citing?.chunks as []) || [])) {
+    .concat((ctx.chunks as []) || [], (ctx.extra as []) || [], (citing?.chunks as []) || [], (ctx.spill as []) || [], (addOns?.chunks as []) || [])) {
     if (c && c.id != null) lab[String(c.id)] = String(c.doc_name || '').split('(')[0].slice(0, 30) + ' ' + String(c.article_no || '').split('(')[0];
   }
   out.results.push({
@@ -162,9 +178,12 @@ for (const q of set.questions) {
     rag: ids(ctx.chunks as []), extra: ids(ctx.extra as []), added: ctx.addedIds || [], citing: citing?.ids || [],
     annex: annex?.sources || [], kb: ((ctx.kb as { doc_id: string; chunk_idx: number }[]) || []).map((r) => r.doc_id + ':' + r.chunk_idx),
     news: news?.sources || [],
+    spill: ids((ctx.spill as []) || []), addon: addOns?.ids || [], addItems: addOns?.items || [],
     lens: { law: String(ctx.lawContext || '').length, citing: (citing?.text || '').length, annex: (annex?.text || '').length,
-            news: (news?.text || '').length, asm: String(ctx.asm || '').length, systemVariable: String(ctx.systemVariable || '').length },
+            news: (news?.text || '').length, asm: String(ctx.asm || '').length, addon: (addOns?.text || '').length,
+            systemVariable: String(ctx.systemVariable || '').length },
     log: logLines.slice(), rpc: rpcLog.slice(), lab,
+    ...(withText ? { sv: String(ctx.systemVariable || '') } : {}),
   });
   origLog('[ragRegress]', q.id, ms + 'ms', err || '');
 }
