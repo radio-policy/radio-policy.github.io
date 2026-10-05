@@ -1104,14 +1104,32 @@ async function fetchDelegations(fams, keys) {
   var rows = [], seen = new Set();
   (res[0].data || []).concat(res[1].data || []).forEach(function(r) { if (!seen.has(r.id)) { seen.add(r.id); rows.push(r); } });
   metaNote('law_delegations', t0, err ? { error: err } : { data: rows });
+  // 한쪽이라도 1,000행(limit)에 닿으면 후보가 조용히 빠졌을 수 있다 — capped로 남긴다(#283-보론2, rag.ts와 같음)
+  if (!err && lastAdvSearchMeta && lastAdvSearchMeta.length && ((res[0].data || []).length >= 1000 || (res[1].data || []).length >= 1000)) lastAdvSearchMeta[lastAdvSearchMeta.length - 1].capped = true;
   if (err) throw new Error(err.message || 'law_delegations 조회 실패');
   return rows;
 }
-async function fetchFamilyArticle(fam, key) {
+// 법령군의 현행 문서명 — 법령 감시 표(law_watch)에서 한 번에(#283-보론2). 감시 표에 없는 법령군(고시 등)은 아래 'X(%' 조회로 찾는다.
+async function fetchFamilyDocs(fams) {
   if (!sb) return [];
-  var r = await sb.from('document_chunks').select('id, doc_name, article_no, chunk_index, content')
-    .like('doc_name', fam + '(%').eq('status', 'current').eq('is_approved', true)
+  var r = await sb.from('law_watch').select('law_name, doc_name').in('law_name', fams).not('doc_name', 'is', null).limit(200);
+  if (r.error) throw new Error(r.error.message);
+  return r.data || [];
+}
+// 문서명을 알면 그 문서만, 모르면 'X(%' — 'X(%' 조회는 현행 조각 4만여 행을 훑는다(#283-보론2, rag.ts와 같은 조건)
+async function fetchFamilyArticle(fam, key, docName) {
+  if (!sb) return [];
+  var q = sb.from('document_chunks').select('id, doc_name, article_no, chunk_index, content');
+  var r = await (docName ? q.eq('doc_name', docName) : q.like('doc_name', fam + '(%')).eq('status', 'current').eq('is_approved', true)
     .like('article_no', key + '%').order('chunk_index', { ascending: true }).limit(40);
+  return r.data || [];
+}
+// 덧붙인 조문이 가리킨 별표 한 개의 조각 — 별표 동반(buildAnnexContext)과 같은 조건 + id(#283-보론2, rag.ts fetchAnnexRows와 같음)
+async function fetchAnnexRows(docName, no) {
+  if (!sb) return [];
+  var r = await sb.from('document_chunks').select('id, chunk_index, article_no, content')
+    .eq('doc_name', docName).eq('status', 'current')
+    .like('article_no', '별표 ' + no + '(%').order('chunk_index', { ascending: true });
   return r.data || [];
 }
 async function fetchDocArticles(docName) {
@@ -2946,16 +2964,18 @@ async function buildAdvisoryContext(userText) {
         return '[조문 ' + (i + 1) + '] ' + h.doc_name + (h.article_no ? ' ' + h.article_no : '') + '\n' + h.content;
       }).join('\n\n---\n\n')
     : '';
-  // L7 위임 따라가기 + L4 같은 고시 이웃 조(#283) — 위 조문과 위임 표로 한 걸음 이어진 하위·상위 조문, 같은 고시에 조가 2개 이상
-  // 실렸으면 그 고시의 나머지 조. 규칙·문구·상한은 rag_core.js fetchAddOns 한 곳. 역참조와 독립이라 동시에 시작하고,
-  // 역참조·제재 칸의 입력에는 넣지 않는다(설계 H5). rag.ts buildAdvisoryContext와 동일 유지.
-  var addT0 = performance.now();
-  var addOnsEmpty = { text: '', chunks: [], ids: [], deleg: [], items: [], chars: 0 };
+  // L7 위임 따라가기 + L3′ 공통 인용 + L4 같은 고시 이웃 조 + 덧붙인 조문의 별표 1칸(#283, 2차 #283-보론2) — 위 조문과 위임 표로 한 걸음
+  // 이어진 하위·상위 조문, 위 조문 둘 이상이 번호로 가리킨 같은 법령의 조, 같은 고시에 조가 2개 이상 실렸으면 그 고시의 나머지 조, 그 조문들이
+  // 가리킨 별표. 규칙·문구·상한은 rag_core.js fetchAddOns 한 곳. 역참조·별표와 독립이라 동시에 시작하고, 역참조·제재 칸의 입력에는 넣지
+  // 않는다(설계 H5). search_meta의 addons 행은 전체 상한을 적용한 뒤 남긴다(trimmed = 덜어 낸 개수). rag.ts buildAdvisoryContext와 동일 유지.
+  var addT0 = performance.now(), addMs = 0, addErr = null;
+  var addOnsEmpty = { text: '', chunks: [], ids: [], deleg: [], items: [], chars: 0, annexSources: [] };
   var addOnsP = (sb ? RagCore.fetchAddOns({ extra: lawExtra, spill: spillChunks, rag: ragChunks },
-      { delegations: fetchDelegations, familyArticle: fetchFamilyArticle, docArticles: fetchDocArticles })
-      .then(function(r) { metaNote('addons', addT0, { data: r.items }); return r; })
+      { delegations: fetchDelegations, familyDocs: fetchFamilyDocs, familyArticle: fetchFamilyArticle, docArticles: fetchDocArticles, annexRows: fetchAnnexRows },
+      { question: userText })
+      .then(function(r) { addMs = Math.round(performance.now() - addT0); return r; })
     : Promise.resolve(addOnsEmpty))
-    .catch(function(e) { console.warn('위임·같은 고시 덧붙이기 실패(건너뜀):', e); metaNote('addons', addT0, { error: { message: String(e && e.message || e) } }); return addOnsEmpty; });
+    .catch(function(e) { console.warn('위임·같은 고시 덧붙이기 실패(건너뜀):', e); addMs = Math.round(performance.now() - addT0); addErr = String(e && e.message || e); return addOnsEmpty; });
 
   // 역참조 발췌(#155-보론4) — 검색된 조문을 인용하는 같은 법령의 다른 조문(제재·조사·준용)에서 인용 문장만.
   // 발췌 원본 조각 id는 lastAdvChunkIds에 넣어 verify-citations가 그 조문으로 검증한다. rag.ts와 동일 유지.
@@ -2971,8 +2991,8 @@ async function buildAdvisoryContext(userText) {
   // ragChunks만 넘기면 조문 섹션에만 있는 조문(예: 전파법 시행령 제14조 「별표 3에 따라
   // 산정한다」)의 인용을 놓친다. ragChunks를 앞에 둬야 상한 2개가 상위 RAG 조문에 먼저 간다.
   // rag.ts buildAdvisoryContext 호출부와 동일 유지 — 한쪽만 고치지 말 것.
-  // 입력 끝에 상한 구제분과 위임으로 이어진 조문(L7)을 잇는다(#283) — 앞쪽 입력이 그대로라 상한 2개는 종전 별표에 먼저 간다.
-  var annexP = addOnsP.then(function(ao) { return buildAnnexContext(ragChunks.concat(lawExtra || []).concat(spillChunks).concat(ao.deleg || []), userText); });
+  // 덧붙인 조문(상한 구제·위임·공통 인용)의 별표는 여기 넣지 않는다 — 덧붙이기 구역의 따로 1칸(예산 안, rag_core.js fetchAddOns)이다(#283-보론2).
+  var annexP = buildAnnexContext(ragChunks.concat(lawExtra || []), userText);
   var citingContext = '', _advCitingIds = [];
   var ce = await citingP;
   citingContext = ce.text || '';
@@ -3005,7 +3025,14 @@ async function buildAdvisoryContext(userText) {
   // 나머지 = 프롬프트에 들어가는 다른 구역 전부(관계도 블록 지침은 빼고 — 주제 목록 길이만큼의 차이).
   var restLen = [ragContext, lawArticleContext, citingContext, annexContext, pendingContext, kbContext, customContext, newsContext, lawTrackContext, assemblyContext]
     .reduce(function(a, t) { return a + String(t || '').length; }, 0);
-  var addOns = RagCore.trimAddOns(await addOnsP, restLen);
+  // 대시보드는 봇에 없는 세 구역(시행예정·팀 추가 지식·개정 동향)이 나머지 길이에 더 들어가므로 상한에 그 몫(dashboardExtraChars)을 더한다(#283-보론2, 운영자 결정)
+  var addOns = RagCore.trimAddOns(await addOnsP, restLen, RagCore.ADDON_OPTS.maxTotalChars + RagCore.ADDON_OPTS.dashboardExtraChars);
+  if (lastAdvSearchMeta) lastAdvSearchMeta.push({ fn: 'addons', ms: addMs, rows: addErr ? null : addOns.items.length, error: addErr, trimmed: addOns.trimmed || 0 });
+  // 덧붙인 조문의 별표(#283-보론2) — 답변 아래 별표 배지와 인용 대조의 별표 목록에도
+  (addOns.annexSources || []).forEach(function(s) {
+    if (lastAnnexSources.indexOf(s) === -1) lastAnnexSources.push(s);
+    if (lastRagSources.indexOf(ANNEX_SRC_PREFIX + s) === -1) lastRagSources.push(ANNEX_SRC_PREFIX + s);
+  });
   if (addOns.items.length) console.log('덧붙이기:', addOns.items.map(function(x) { return x.sec + (x.dir ? '/' + x.dir : '') + ' ' + x.fam + ' ' + x.key; }).join(', ') + (addOns.trimmed ? ' (전체 상한으로 ' + addOns.trimmed + '개 덜어 냄)' : ''));
   // 덧붙인 조문(#283)의 조각 id·문서는 맨 뒤에 — verify-citations가 그 조문으로도 대조한다. 앞쪽 순서는 종전 그대로.
   spillChunks.map(function(c) { return c.id; }).concat(addOns.ids || []).forEach(function(id) {

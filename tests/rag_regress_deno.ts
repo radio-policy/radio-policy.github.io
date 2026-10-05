@@ -20,7 +20,9 @@
 //   기존 갈래(rag·extra·added·citing)는 그대로 비교하고, 덧붙인 것만 새 칸에서 본다.
 //   --with-text      질문마다 Sonnet에 들어갈 참조 자료 전문(systemVariable)을 sv 칸에 저장(필수 조문 재현율 측정용, 파일이 커진다)
 //   --core-opts JSON 덧붙이기 상한을 이번 실행에만 바꾼다(무료 측정으로 상한 고르기) — 예: '{"DELEG_OPTS":{"up":2},"ADDON_OPTS":{"spillMax":1}}'
-//                    rag_core.js의 DELEG_OPTS·NEIGHBOR_OPTS·ADDON_OPTS 객체에 합친다(운영 코드는 그대로).
+//                    rag_core.js의 DELEG_OPTS·NEIGHBOR_OPTS·ADDON_OPTS 객체에 합친다(운영 코드는 그대로). 2차(10-06)부터 XREF_OPTS도.
+//   --rest-pad N     대시보드 조건 흉내(2차, 10-06) — 전체 상한(trimAddOns)의 「나머지 길이」에 N자를 더한다(대시보드에만 있는
+//                    시행예정·팀 추가 지식·법령 개정 동향 구역 몫). 결과의 meta(search_meta의 addons·law_delegations 행)에 덜어 낸 개수가 남는다.
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 
 const ROOT = new URL('../', import.meta.url);
@@ -53,6 +55,8 @@ const ragPath = argv('--rag') ? new URL(argv('--rag'), ROOT) : new URL('supabase
 
 const rag = await import(ragPath.href);
 const coreOpts = argv('--core-opts') ? JSON.parse(argv('--core-opts')) as Record<string, Record<string, unknown>> : null;
+const restPad = Number(argv('--rest-pad') || 0);
+if (restPad) rag.testHooks.restPad = restPad;
 if (coreOpts) {
   // deno-lint-ignore no-explicit-any
   const RC = (globalThis as any).RagCore;
@@ -156,7 +160,7 @@ console.log = (...a: unknown[]) => {
 };
 
 const ids = (list: { id?: unknown }[]) => (list || []).map((c) => c && c.id);
-const out = { tag, at: new Date().toISOString(), rag: ragPath.pathname, set: setPath.pathname, noExpand, deterministic, expandDelayMs: expandDelay, coreOpts, results: [] as Record<string, unknown>[], cacheMiss: [] as string[], totalMs: 0 };
+const out = { tag, at: new Date().toISOString(), rag: ragPath.pathname, set: setPath.pathname, noExpand, deterministic, expandDelayMs: expandDelay, coreOpts, restPad, results: [] as Record<string, unknown>[], cacheMiss: [] as string[], totalMs: 0 };
 for (const q of set.questions) {
   if (only && !only.has(q.id)) continue;
   logLines = []; rpcLog = [];
@@ -183,6 +187,7 @@ for (const q of set.questions) {
             news: (news?.text || '').length, asm: String(ctx.asm || '').length, addon: (addOns?.text || '').length,
             systemVariable: String(ctx.systemVariable || '').length },
     log: logLines.slice(), rpc: rpcLog.slice(), lab,
+    meta: ((ctx.searchMeta as { fn: string }[]) || []).filter((m) => m.fn === 'addons' || m.fn === 'law_delegations'),
     ...(withText ? { sv: String(ctx.systemVariable || '') } : {}),
   });
   origLog('[ragRegress]', q.id, ms + 'ms', err || '');

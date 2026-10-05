@@ -30,7 +30,9 @@ var NAMES = ['PRIORITY_KW_RE', 'VERB_TAIL', 'extractKeywords', 'LAW_SYNONYMS', '
   'rankLawHits', 'NAMED_ARTICLE_MAX', 'namedArticleRefs', 'pickNamedArticles', 'fetchNamedArticles', 'buildRagContext', 'buildKbContext',
   // 자문 빠뜨림 1차 덧붙이기(#283)
   'ADDON_OPTS', 'DELEG_OPTS', 'NEIGHBOR_OPTS', 'NOTICE_DOC_RE', 'unitKey', 'capSpill', 'pickSpill', 'delegationBases', 'pickDelegations',
-  'neighborTarget', 'pickNeighbors', 'buildAddOnContext', 'fetchAddOns', 'trimAddOns'];
+  'neighborTarget', 'pickNeighbors', 'buildAddOnContext', 'fetchAddOns', 'trimAddOns',
+  // 2차(#283-보론2)
+  'XREF_OPTS', 'pickXrefs', 'xrefTargets', 'annexWanted', 'annexBlock', 'docDate'];
 NAMES.forEach(function (n) { ok('export ' + n, RC[n] !== undefined); });
 
 // ── 법령 키워드 추출 ──
@@ -328,6 +330,93 @@ var addOnTests = (async function () {
   eq('trimAddOns 같은 고시 → 위 순으로 덜어 냄', [packed.items.map(function (x) { return x.sec + '/' + (x.dir || '') + x.key; }), packed.ids, packed.trimmed], [['deleg/down44조'], [44], 2]);
 })();
 
+// ── 자문 빠뜨림 2차(#283-보론2) — 형제 순서·공통 인용(L3′)·덧붙인 조문의 별표 1칸·채우는/덜어 내는 순서 ──
+(function () {
+  var L = '전파법(법률)(제1호)(20260102)', R = '전파법 시행령(대통령령)(제2호)(20251001)';
+  eq('docDate 문서명 끝 8자리', [RC.docDate(R), RC.docDate('x.pdf')], [20251001, 0]);
+
+  // xrefTargets — 같은 법령 인용 · 다른 법령 인용 거르기(isOtherLawRef) · 시행령의 「법 제N조」→ 모법 · 시행규칙의 「영 제N조」→ 시행령
+  var t = function (fam, content) { return RC.xrefTargets({ content: content }, fam).map(function (x) { return x.fam + ' ' + x.key; }); };
+  eq('xrefTargets 같은 법령·자기 조 머리', t('전파법', '제24조(검사) ① 제19조에 따라 허가를 받은 자는 제21조의2를 따른다.'), ['전파법 24조', '전파법 19조', '전파법 21조의2']);
+  eq('xrefTargets 다른 법령(낫표·같은 법·법령명)은 뺀다', t('전파법', '「전기통신사업법」 제5조, 같은 법 제6조, 방송법 제7조 및 이 법 제8조'), ['전파법 8조']);
+  eq('xrefTargets 시행령의 「법 제N조」는 모법, 나열 뒤도', t('전파법 시행령', '법 제89조의2, 제89조의3 및 제90조에 따라 이 영 제5조를 적용한다.'),
+    ['전파법 89조의2', '전파법 89조의3', '전파법 90조', '전파법 시행령 5조']);
+  eq('xrefTargets 시행령의 「같은 법 제N조」는 앞 법령 — 모법으로 옮기지 않음', t('전파법 시행령', '「전기통신사업법」 제2조 및 같은 법 제6조'), []);
+  eq('xrefTargets 시행규칙의 「영 제N조」→ 시행령, 「법 제N조」→ 모법', t('전파법 시행규칙', '영 제14조와 법 제16조에 따라'), ['전파법 시행령 14조', '전파법 16조']);
+  eq('xrefTargets 법률 본문의 「법 제N조」는 다른 법령으로 둔다', t('전파법', '법 제3조'), []);
+
+  // pickXrefs — 서로 다른 근거 2곳 이상, 가리킨 곳 수 ↓ → 앞선 근거, 이미 든 조·위임 고른 조·자기 자신·정의 조 출발 제외
+  var lists = [[{ doc_name: L, article_no: '24조(검사)', content: '제24조(검사) 제19조·제20조·제30조' }],
+    [{ doc_name: R, article_no: '44조(유효기간)', content: '법 제19조 및 법 제30조, 이 영 제50조' }],
+    [{ doc_name: L, article_no: '25조(x)', content: '제19조, 제20조, 제24조' }, { doc_name: L, article_no: '2조(정의)', content: '제30조 제50조' },
+     { doc_name: R, article_no: '46조(y)', content: '제50조' }, { doc_name: 'a.pdf', article_no: '1조', content: '제30조' }]];
+  var present = new Set(['전파법|24조', '전파법 시행령|44조', '전파법|25조', '전파법|2조', '전파법 시행령|46조']);
+  var px = RC.pickXrefs(lists, present, { '전파법|20조': 1 }, { max: 5, spare: 0 });
+  eq('pickXrefs 2곳 이상·곳 수 순·제외 규칙', px.map(function (x) { return x.fam + ' ' + x.key + ' ' + x.bases.length; }), ['전파법 19조 3', '전파법 30조 2', '전파법 시행령 50조 2']);
+  eq('pickXrefs 같은 법령 인용은 근거 문서명을 대상 문서로', [px[0].doc, px[2].doc], [L, R]);
+  eq('pickXrefs max', RC.pickXrefs(lists, present, {}, { max: 1, spare: 0 }).length, 1);
+
+  // annexWanted / annexBlock — 별표 동반(#90)과 같은 규칙·꼴
+  eq('annexWanted 다른 법령 별표·별표 조각 제외·중복 제외', RC.annexWanted([{ doc_name: R, article_no: '96조', content: '별표 13에 따른다. 「전기통신사업법 시행령」 별표 4 및 별표 13' },
+    { doc_name: R, article_no: '별표 2(x)', content: '별표 9' }, { doc_name: L, article_no: '5조', content: '별표 제2' }]), [{ doc_name: R, no: '13' }, { doc_name: L, no: '2' }]);
+  var arows = [];
+  for (var i = 0; i < 9; i++) arows.push({ id: 900 + i, chunk_index: i, article_no: '별표 13(검사수수료(제96조제1항 관련))', content: i === 0 ? '표 머리' : (i === 7 ? '변경신고 수수료' : '칸' + i) });
+  var blk = RC.annexBlock(R, '13', arows, '무선국 변경신고 수수료');
+  ok('annexBlock 첫 조각·질문 낱말 조각·생략 표시·출처', blk.ids[0] === 900 && blk.ids.indexOf(907) >= 0 && blk.ids.length === RC.ANNEX_MAX_CHUNKS
+    && blk.text.indexOf('[' + R + ' 별표 13(검사수수료(제96조제1항 관련))]\n※ 이 별표는 전체 9개 조각 중') === 0 && blk.source === '전파법 시행령 별표 13', blk);
+  eq('annexBlock 빈 입력', RC.annexBlock(R, '13', [], 'x'), null);
+})();
+
+var addOnTests2 = (async function () {
+  var L = '전파법(법률)(제1호)(20260102)', R9 = '전파법 시행령(대통령령)(제9999호)(20240101)', R10 = '전파법 시행령(대통령령)(제10000호)(20250101)';
+  var calls = [];
+  var fetchers = {
+    delegations: function () { return Promise.resolve([
+      { parent_law: '전파법', parent_article: '24조', child_law: '전파법 시행령', child_article: '44조', child_title: 'a', child_kind: '시행령' }]); },
+    familyDocs: function (fams) { calls.push('docs:' + fams.join('/')); return Promise.resolve([{ law_name: '전파법 시행령', doc_name: R10 }]); },
+    familyArticle: function (fam, key, doc) {
+      calls.push('art:' + fam + ':' + key + ':' + (doc || '-'));
+      if (fam === '전파법 시행령') return Promise.resolve([
+        { id: 61, doc_name: R9, article_no: key + '(옛)', chunk_index: 1, content: '옛 판' },
+        { id: 62, doc_name: R10, article_no: key + '(새)', chunk_index: 1, content: '제' + key + ' 별표 13에 따른다.' }]);
+      return Promise.resolve([{ id: 70 + Number(key.replace(/\D/g, '')), doc_name: L, article_no: key + '(x)', chunk_index: 1, content: '제' + key + ' 본문' }]);
+    },
+    docArticles: function () { return Promise.resolve([]); },
+    annexRows: function (doc, no) { calls.push('annex:' + no); return Promise.resolve([{ id: 800, chunk_index: 0, article_no: '별표 ' + no + '(수수료)', content: 'x'.repeat(50) }]); },
+  };
+  var lists = { extra: [{ id: 1, doc_name: L, article_no: '24조(검사)', content: '제19조 및 제22조' }],
+    rag: [{ id: 2, doc_name: L, article_no: '25조(x)', content: '제19조와 제22조, 별표 5' }] };
+  var r = await RC.fetchAddOns(lists, fetchers, { question: '수수료' });
+  ok('fetchAddOns 문서명 모르는 법령군만 한 번에 받아 그 문서로 조회, 같은 법령 인용은 근거 문서', calls.indexOf('docs:전파법 시행령') >= 0 && calls.indexOf('art:전파법 시행령:44조:' + R10) >= 0
+    && calls.indexOf('art:전파법:19조:' + L) >= 0, calls);
+  eq('fetchAddOns 시행일이 늦은 판(문자열로는 제9999호가 뒤)', r.parts.deleg[0].doc_name, R10);
+  eq('fetchAddOns 항목 — 위임·공통 인용·별표', r.items.map(function (x) { return x.sec + ':' + x.key; }), ['deleg:44조', 'xref:19조', 'xref:22조', 'annex:별표13']);
+  ok('fetchAddOns 공통 인용 구역 머리·꼬리', r.text.indexOf('[위 조문 여러 곳이 함께 가리키는 조문') >= 0 && r.text.indexOf('[공통 인용 1] ' + L + ' 19조(x) — 위 전파법 제24조·전파법 제25조에서 가리킨 조문') >= 0, r.text);
+  ok('fetchAddOns 별표 구역은 맨 끝·출처·조각 id', /\[위에 덧붙인 조문이 가리키는 별표 원문\][\s\S]*\[전파법 시행령\(대통령령\)\(제10000호\)\(20250101\) 별표 13\(수수료\)\]/.test(r.text)
+    && r.annexSources[0] === '전파법 시행령 별표 13' && r.ids.indexOf(800) >= 0, r);
+  // 종전 별표 2칸(RAG → 정밀검색 순 앞 두 개)에 든 별표는 덧붙인 별표 칸에서 뺀다
+  calls = [];
+  var r2 = await RC.fetchAddOns({ extra: lists.extra, rag: [{ id: 2, doc_name: R10, article_no: '30조(y)', content: '별표 13' }] }, fetchers, {});
+  ok('fetchAddOns 종전 별표 칸에 든 별표는 다시 싣지 않음', calls.every(function (c) { return c.indexOf('annex:') !== 0; }) && !r2.parts.annex, calls);
+  var r3 = await RC.fetchAddOns(lists, fetchers, { annex: false });
+  eq('fetchAddOns annex:false면 별표 칸 없음', r3.items.filter(function (x) { return x.sec === 'annex'; }).length, 0);
+  var r4 = await RC.fetchAddOns(lists, { delegations: fetchers.delegations, familyArticle: fetchers.familyArticle, docArticles: fetchers.docArticles }, {});
+  eq('fetchAddOns familyDocs·annexRows 없으면 문서명 없이 조회·별표 칸 없음(사내판 조회 shim 그대로 돈다)', [r4.parts.deleg.length, !!r4.parts.annex], [1, false]);
+  // 예산 순서 — fillOrder에서 별표를 공통 인용보다 앞에 두면 예산이 작을 때 별표가 먼저 들어간다
+  var small = await RC.fetchAddOns(lists, fetchers, { budget: 250, fillOrder: ['down', 'up', 'annex', 'xref', 'neighbor'] });
+  var small2 = await RC.fetchAddOns(lists, fetchers, { budget: 250, fillOrder: ['down', 'up', 'xref', 'annex', 'neighbor'] });
+  eq('fetchAddOns fillOrder — 예산이 모자라면 순서가 앞선 것만', [small.items.map(function (x) { return x.sec; }), small2.items.map(function (x) { return x.sec; })], [['deleg', 'annex'], ['deleg', 'xref']]);
+  // trimAddOns — 별표 → 같은 고시 → 공통 인용 → 위 → 아래
+  var mk = function (sec, dir, key) { return { sec: sec, dir: dir, fam: '전파법', key: key, base: { fam: '전파법', key: '24조' }, bases: ['전파법|1조', '전파법|2조'], doc_name: L, article_no: key + '(x)', content: 'x'.repeat(100), ids: [Number(key.replace(/\D/g, ''))] }; };
+  var full = { text: 'z'.repeat(2000), parts: { deleg: [mk(undefined, 'down', '1조'), mk(undefined, 'up', '2조')], xref: [mk('xref', undefined, '3조')],
+    neighbor: [{ doc_name: '어느 고시(과학기술정보통신부고시)(제1호)(20260101)', article_no: '4조(y)', key: '4조', content: 'y'.repeat(100), ids: [4] }],
+    annex: { doc_name: L, key: '별표5', no: '5', article_no: '별표 5(z)', content: 'w', text: 'w'.repeat(600), ids: [5], source: '전파법 별표 5' }, spillItems: [] } };
+  var t1 = RC.trimAddOns(full, 0, 1200);
+  eq('trimAddOns 별표부터 덜어 냄', [t1.items.map(function (x) { return x.sec + (x.dir ? '/' + x.dir : ''); }), t1.trimmed], [['deleg/down', 'deleg/up', 'xref', 'neighbor'], 1]);
+  var t2 = RC.trimAddOns(full, 0, 400);
+  eq('trimAddOns 별표 → 같은 고시 → 공통 인용 → 위 순', [t2.items.map(function (x) { return x.sec + (x.dir ? '/' + x.dir : ''); }), t2.trimmed], [['deleg/down'], 4]);
+})();
+
 // ── 컨텍스트 문구 ──
 (function () {
   var t = RC.buildRagContext([
@@ -341,6 +430,15 @@ var addOnTests = (async function () {
   var k = RC.buildKbContext([{ title: '전파법 요약', law_type: '법률', law_number: '제20000호', enforcement_date: '2026-01-01', content: '요약' }]);
   ok('buildKbContext 3문장 지시문', k.indexOf('법의 취지·실무 대응·담당부처를 물을 때 활용하세요') >= 0 && k.indexOf('[법령요약 1] 전파법 요약 [법률 | 법령번호: 제20000호 | 시행일: 2026-01-01]') >= 0);
   eq('buildKbContext 빈 입력', RC.buildKbContext(null), '');
+})();
+
+// ── 대시보드 전체 상한(#283-보론2, 운영자 결정 10-06) — app.js만 maxTotalChars + dashboardExtraChars로 덜어 낸다, rag.ts는 기본 상한 ──
+(function () {
+  var app = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8');
+  var ragTs = fs.readFileSync(path.join(ROOT, 'supabase', 'functions', '_shared', 'rag.ts'), 'utf8');
+  ok('app.js trimAddOns에 대시보드 몫', app.indexOf('RagCore.trimAddOns(await addOnsP, restLen, RagCore.ADDON_OPTS.maxTotalChars + RagCore.ADDON_OPTS.dashboardExtraChars)') >= 0);
+  ok('rag.ts trimAddOns는 기본 상한(봇)', /RagCore\.trimAddOns\(await addOnsP, restLen\);/.test(ragTs));
+  eq('ADDON_OPTS 대시보드 몫 8,000자', RC.ADDON_OPTS.dashboardExtraChars, 8000);
 })();
 
 // ── 구조 가드: app.js·rag.ts에 같은 이름을 다시 정의하지 않았나 ──
@@ -363,7 +461,7 @@ var addOnTests = (async function () {
   });
 })();
 
-Promise.all([asyncTests, addOnTests]).catch(function (e) { fails++; total++; console.log('FAIL  비동기 검사 예외 ' + (e && e.message)); }).then(function () {
+Promise.all([asyncTests, addOnTests, addOnTests2]).catch(function (e) { fails++; total++; console.log('FAIL  비동기 검사 예외 ' + (e && e.message)); }).then(function () {
   console.log('\n' + (fails ? 'FAIL ' + fails + '/' + total : 'ALL OK ' + total + '/' + total));
   process.exit(fails ? 1 : 0);
 });
