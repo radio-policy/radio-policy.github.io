@@ -568,6 +568,74 @@ function ok(name, cond, extra) {
   var vgE = await CV.verifyCitations({ answer: '「' + GL + '」 제1조(목적)는 ' + glQuote + '라고 정합니다. [원문 확인됨]', chunks: [np1, gl1], callHaiku: glHaiku });
   eq('모델 표시: 낫표 제목이 있으면 그 문서와 대조', vgE.verdicts.map(function (v) { return [v.status, v.doc]; }), [['ok', GL]]);
 
+  // ── 2026-10-05 거짓 「원문과 다름」: A 인용문 경계(표시가 문장·칸을 닫음) ──
+  var ACT5 = '전기통신사업법(법률)(제21503호)(20261001)';
+  var a99 = { id: 991, doc_name: ACT5, article_no: '99조(벌칙)', chunk_index: 230, content: '제99조(벌칙) 다음 각 호의 어느 하나에 해당하는 자는 3억원 이하의 벌금에 처한다.\n1.  제32조의12제1항을 위반하여 부당하게 차별적인 지원금을 지급한 이동통신사업자\n2.  제32조의13제2항을 위반하여 장려금을 제공할 때 이동통신사업자, 대리점 또는 판매점으로 하여금 이용자에게 부당하게 차별적인 지원금을 지급하도록 지시, 강요, 요구, 유도하는 등의 행위를 한 이동통신단말장치 제조업자\n3.  제32조의13제3항을 위반하여 대리점으로 하여금 이용자에게 부당하게 차별적인 지원금을 지급하도록 지시, 강요, 요구, 유도하는 등의 행위를 하거나 특정 부가서비스 또는 요금제 등을 부당하게 차별적으로 권유하도록 하는 특약 또는 조건을 정한 이동통신사업자(그 계열회사를 포함한다)' };
+  var a53b = { id: 531, doc_name: ACT5, article_no: '53조(금지행위 등에 대한 과징금의 부과)', chunk_index: 180, content: '제53조(금지행위 등에 대한 과징금의 부과)\n① 방송미디어통신위원회는 제50조제1항을 위반한 행위가 있는 경우에는 해당 전기통신사업자에게 대통령령으로 정하는 매출액의 100분의 3 이하에 해당하는 금액을 과징금으로 부과할 수 있다.' };
+  // c19c247f(10-05 00:19): 표시가 마침표 앞에서 문장을 닫았는데 앞 문장이 22자라 '제목 줄'로 읽혀 다음 글머리가 인용문이 됐다
+  var ans99 = '**③ 제재 수준**\n- 제32조의13제3항 위반 시: \n\n제32조의13제3항을 위반하여 대리점으로 하여금 이용자에게 부당하게 차별적인 지원금을 지급하도록 지시, 강요, 요구, 유도하는 등의 행위를 하거나 특정 부가서비스 또는 요금제 등을 부당하게 차별적으로 권유하도록 하는 특약 또는 조건을 정한 이동통신사업자(그 계열회사를 포함한다) [원문 확인됨: 전기통신사업법 제99조]\n\n' +
+    '는 전기통신사업법 제99조제3호에 따라 **3억원 이하 벌금**에 처해질 수 있습니다[원문 확인됨: 전기통신사업법 제99조제3호].\n- 제50조제1항 위반(금지행위) 시: 방송미디어통신위원회의 시정조치(제52조제1항) 및 \n\n' +
+    '해당 전기통신사업자에게 대통령령으로 정하는 매출액의 100분의 3 이하에 해당하는 금액을 과징금으로 부과 [원문 확인됨: 전기통신사업법 제53조]\n\n할 수 있습니다.';
+  var c99 = CV.findCitations(ans99);
+  eq('A 경계: 마침표 앞 표시는 closed, 뒤 문단 없음', [c99[1].closed, c99[1].after], [true, '']);
+  var seen99 = [];
+  var v99 = await CV.verifyCitations({ answer: ans99, chunks: [a99, a53b], callHaiku: async function (s, u) { seen99.push(u); return '[{"id":1,"verdict":"일치","reason":""}]'; } });
+  ok('A 경계: 판정기 인용문은 그 문장(3억원 이하 벌금), 다음 글머리(시정조치·제52조) 아님',
+     seen99.length === 1 && /\[인용 대상\] 전기통신사업법 99조 제3호\n\[인용문\]\n는 전기통신사업법 제99조제3호에 따라 3억원 이하 벌금에 처해질 수 있습니다\n\[원문\]/.test(seen99[0]) && seen99[0].indexOf('시정조치') === -1, seen99[0]);
+  eq('A 경계: 상태(99조 통째 인용 확인 · 99조3호 판정 일치 · 53조 통째)', v99.verdicts.map(function (v) { return [v.key, v.status]; }), [['99조', 'ok'], ['99조', 'ok'], ['53조', 'ok']]);
+  // 8a3a167a(09-26 18:53): 모델이 빈 줄로 끊은 표 행 — 인용 문단 뒤 칸 「 (제53조) [표시] |」가 다음 표 행을 인용문으로 썼다
+  var ansTb = '| 위반 조문 | 제재 | 근거 |\n|---|---|---|\n| 제50조제1항제5호 (금지행위) | 매출액 100분의 3 이하 과징금 | \n\n"방송미디어통신위원회는 제50조제1항을 위반한 행위가 있는 경우에는 해당 전기통신사업자에게 대통령령으로 정하는 매출액의 100분의 3 이하에 해당하는 금액을 과징금으로 부과할 수 있다." [원문 확인됨: 전기통신사업법 제53조]\n\n' +
+    ' (제53조) [원문 확인됨: 전기통신사업법 제53조제1항] |\n| 제50조제1항제5호 (금지행위) | 시정조치(중지·공표 등), 미이행시 이행강제금(매출액 0.3% 이내/1일) | 제52조, 제52조의2 |';
+  var cTb = CV.findCitations(ansTb);
+  eq('A 경계: 표 칸 끝 표시는 closed, 뒤는 그 줄 나머지(" |")만', [cTb[1].closed, cTb[1].after], [true, ' |']);
+  var vTb = await CV.verifyCitations({ answer: ansTb, chunks: [a53b], callHaiku: async function () { throw new Error('불려선 안 됨'); } });
+  eq('A 경계: 칸 표시는 직전 인용 문단의 같은 조 표시와 중복(dup)으로 지움', [vTb.verdicts.map(function (v) { return [v.key, v.status]; }), vTb.answer.indexOf('제53조제1항]') === -1], [[['53조', 'ok'], ['53조', 'dup']], true]);
+  // 쉼표·빗금으로 이어진 다음 구절도 표시의 인용문이 아니다(6090c533 「…3년간[표시] / 통신사실확인자료…」, a30d8d4e 「…하며 [표시], 팀 내부 정리에 따르면…」)
+  eq('A 경계: 쉼표·빗금 뒤는 closed', CV.findCitations('전송내역은 제5조에 따라 3년간[원문 확인됨] / 통신사실확인자료 보관기간은 별도 법령 원문 확인이 필요합니다.\n' +
+     '이 고시는 제1조에 따라 시장의 공정한 경쟁을 목적으로 하며 [원문 확인됨], 팀 내부 정리에 따르면 초고속인터넷 결합판매에만 적용됩니다.').map(function (c) { return [c.closed, c.after]; }), [[true, ''], [true, '']]);
+  // 제목 줄 정상 꼴은 그대로(#155-보론5): 표시 뒤가 줄바꿈·콜론·내용 이어짐이면 뒤 문단이 인용문
+  eq('A 경계: 제목 줄·콜론·이어지는 문장은 closed 아님', CV.findCitations('**전파법 제67조(전파사용료)** [원문 확인됨]: "과학기술정보통신부장관은 시설자에게 전파사용료를 부과ㆍ징수할 수 있다."\n\n' +
+     '이용기간이 끝난 뒤 계속 이용하려면 **전파법 시행령 제18조(재할당)** [원문 확인됨]에 따라 반드시 주파수이용기간 만료 6개월 전까지 재할당 신청을 해야 합니다.').map(function (c) { return c.closed; }), [false, false]);
+
+  // ── 2026-10-05 B: 1차 「불일치」만 2차 판정(근거 구절 기계 확인) ──
+  eq('B spanIn: 공백·문장부호 차이 무시', CV.spanIn('제52조제1항에 따른 조치가 있는 경우', '② 제52조제1항에 따른  조치가 있는 경우에 금지행위로'), true);
+  eq('B spanIn: 말줄임 조각은 순서대로', [CV.spanIn('제52조제1항에 … 금지행위로', '제52조제1항에 따른 조치가 있는 경우에 금지행위로'), CV.spanIn('금지행위로 … 제52조제1항에', '제52조제1항에 따른 조치가 있는 경우에 금지행위로')], [true, false]);
+  eq('B spanIn: 없는 구절·너무 짧은 구절은 근거 아님', [CV.spanIn('제52조제1항의 조치가 아닌', '② 제52조제1항에 따른 조치가 있는 경우'), CV.spanIn('조치', '조치가 있는 경우'), CV.spanIn('', 'x')], [false, false, false]);
+  var a55 = { id: 551, doc_name: ACT5, article_no: '55조(손해배상)', chunk_index: 190, content: '제55조(손해배상)\n① 제51조의3제1항 또는 제2항에 따른 조치가 있는 경우에 그 조치의 원인이 된 위반행위로 피해를 입은 자는 위반행위를 한 자에게 손해배상을 청구할 수 있으며, 그 위반행위를 한 자는 고의 또는 과실이 없었음을 증명하지 못하면 책임을 면할 수 없다. <신설 2025.1.21>\n② 제52조제1항에 따른 조치가 있는 경우에 금지행위로 피해를 입은 자는 금지행위를 한 전기통신사업자에게 손해배상을 청구할 수 있으며, 그 전기통신사업자는 고의 또는 과실이 없었음을 증명하지 못하면 책임을 면할 수 없다. <개정 2025.1.21>' };
+  // eb51e653(10-05 14:50) 제55조② — 1차(Haiku)가 원문을 거꾸로 읽어 낸 거짓 '원문과 다름'
+  var ans55 = '- 손해배상: 제52조제1항 조치가 있는 경우 피해 이용자는 손해배상을 청구할 수 있고, 사업자가 고의·과실 없음을 증명하지 못하면 책임을 면할 수 없습니다 [원문 확인됨: 전기통신사업법 제55조제2항]';
+  var j1False = async function () { return '[{"id":1,"verdict":"불일치","reason":"제52조제1항의 조치가 아닌 금지행위 위반 시 손해배상"}]'; };
+  var v55a = await CV.verifyCitations({ answer: ans55, chunks: [a55], callHaiku: j1False });
+  eq('B: 2차 판정기가 없으면 종전대로 1차 불일치 = 주황', [v55a.verdicts[0].status, /\[원문과 다름 — 판정기 메모: 제52조제1항의 조치가 아닌/.test(v55a.answer)], ['mismatch', true]);
+  var seen2 = [];
+  var v55b = await CV.verifyCitations({ answer: ans55, chunks: [a55], callHaiku: j1False,
+    callJudge2: async function (s, u) { seen2.push([s, u]); return '```json\n[{"id":1,"verdict":"일치","source_span":"","claim_span":"","reason":"②항 내용과 같음"}]\n```'; } });
+  eq('B: 2차가 일치로 뒤집으면 초록, 표시 그대로, 1·2차 기록', [v55b.verdicts[0].status, v55b.answer === ans55, v55b.verdicts[0].judge.verdict, v55b.verdicts[0].judge2.verdict, v55b.changed], ['ok', true, '불일치', '일치', 0]);
+  ok('B: 2차 입력 = 2차 지시문 + 1차와 같은 항목 글(1차 결과·메모는 안 보임)',
+     seen2.length === 1 && seen2[0][0] === CV.JUDGE2_SYSTEM && /^### 항목 1\n\[인용 대상\] 전기통신사업법 55조 제2항\n\[인용문\]\n- 손해배상: 제52조제1항 조치가 있는 경우/.test(seen2[0][1]) && seen2[0][1].indexOf('제52조제1항의 조치가 아닌') === -1, seen2[0]);
+  var v55c = await CV.verifyCitations({ answer: ans55, chunks: [a55], callHaiku: j1False,
+    callJudge2: async function () { return '[{"id":1,"verdict":"불일치","source_span":"제52조제1항의 조치가 아닌 금지행위 위반","claim_span":"제52조제1항 조치가 있는 경우","reason":"조치 요건이 다름"}]'; } });
+  eq('B: 2차 불일치라도 원문 구절이 원문에 없으면 회색(자동 대조 못 함)', [v55c.verdicts[0].status, v55c.verdicts[0].judge2.grounded, /\[원문 없음 — 자동 대조 못 함, 직접 확인 \(전기통신사업법 제55조제2항\)\]/.test(v55c.answer)], ['unclear', false, true]);
+  var v55d = await CV.verifyCitations({ answer: ans55, chunks: [a55], callHaiku: j1False, callJudge2: async function () { return '[{"id":1,"verdict":"판단불가","reason":"x"}]'; } });
+  var v55e = await CV.verifyCitations({ answer: ans55, chunks: [a55], callHaiku: j1False, callJudge2: async function () { throw new Error('HTTP 529'); } });
+  var v55f = await CV.verifyCitations({ answer: ans55, chunks: [a55], callHaiku: j1False, callJudge2: async function () { return '[]'; } });
+  eq('B: 2차 판단불가·호출 실패·결과 없음은 회색', [v55d.verdicts[0].status, v55e.verdicts[0].status, v55e.verdicts[0].judge2Error, v55f.verdicts[0].status], ['unclear', 'unclear', 'HTTP 529', 'unclear']);
+  var called2 = 0;
+  await CV.verifyCitations({ answer: ans55, chunks: [a55], callHaiku: async function () { return '[{"id":1,"verdict":"일치","reason":""}]'; }, callJudge2: async function () { called2++; return '[]'; } });
+  eq('B: 1차가 일치면 2차를 부르지 않는다', called2, 0);
+  // 진짜 불일치(사내 그림 07 꼴 — 원문이 한정한 주체 「다음 각 호의 어느 하나에 해당하는 자」를 뺀 인용): 둘 다 불일치 + 두 구절 실재 → 주황, 메모는 2차 사유
+  var r24 = { id: 98665, doc_name: '전파법(법률)(제21065호)(20260102)', article_no: '24조(검사)', chunk_index: 60, content: '제24조(검사)\n① 다음 각 호의 어느 하나에 해당하는 자는 무선설비가 준공된 경우 과학기술정보통신부장관에게 준공신고를 하고 그 무선설비가 기술기준 및 무선종사자의 자격ㆍ정원배치기준에 적합한지의 여부에 대하여 검사(이하 "준공검사"라 한다)를 받아야 한다.\n1. 제21조제4항에 따라 무선국 개설허가 또는 변경허가를 받은 자\n2. 제22조의2제1항에 따라 제19조의2제1항제3호 또는 제4호에 해당하는 무선국의 개설신고 또는 변경신고를 한 자' };
+  var ans24 = '전파법 제24조제1항에 따르면 "무선설비가 준공된 경우 과학기술정보통신부장관에게 준공신고를 하고 그 무선설비가 기술기준에 적합한지의 여부에 대하여 검사(준공검사)를 받아야 한다" [원문 확인됨: 전파법 제24조제1항]';
+  var v24 = await CV.verifyCitations({ answer: ans24, chunks: [r24], callHaiku: async function () { return '[{"id":1,"verdict":"불일치","reason":"주체 생략"}]'; },
+    callJudge2: async function () { return '[{"id":1,"verdict":"불일치","source_span":"다음 각 호의 어느 하나에 해당하는 자는","claim_span":"무선설비가 준공된 경우 과학기술정보통신부장관에게 준공신고를 하고","reason":"의무 주체(각 호의 자) 한정을 뺌"}]'; } });
+  eq('B: 둘 다 불일치 + 구절 실재 → 주황, 메모는 2차 사유', [v24.verdicts[0].status, v24.verdicts[0].judge2.grounded, v24.answer.indexOf('[원문과 다름 — 판정기 메모: 의무 주체(각 호의 자) 한정을 뺌 (전파법 제24조제1항)]') !== -1], ['mismatch', true, true]);
+  // 지시문 지문 잠금 — 1차는 2차 보정의 바탕이라 글자 그대로, 2차는 실측(tests/cite_judge_probe.js) 뒤에만 고친다
+  var sha = function (s) { return require('crypto').createHash('sha256').update(s, 'utf8').digest('hex').slice(0, 16); };
+  eq('지문: 1차 판정 지시문(JUDGE_SYSTEM)', sha(CV.JUDGE_SYSTEM), '89a3482f020ae02d');
+  eq('지문: 2차 판정 지시문(JUDGE2_SYSTEM)', sha(CV.JUDGE2_SYSTEM), '8128f42faa2faa66');
+  eq('2차 판정기 요청(실측한 모델·추론 수준 — 바꾸면 다시 잰다, 온도류 없음)', [CV.JUDGE2_MODEL, CV.JUDGE2_REQUEST, CV.JUDGE2_MAX_TOKENS],
+     ['claude-opus-5-5', { output_config: { effort: 'medium' } }, 8000]);
+
   console.log('\n' + (total - fails) + '/' + total + ' passed');
   process.exit(fails ? 1 : 0);
 })().catch(function (e) { console.error(e); process.exit(2); });

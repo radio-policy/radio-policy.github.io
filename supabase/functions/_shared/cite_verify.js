@@ -792,10 +792,23 @@
         const kind = function (h) { return h[2] === '|' ? '|' : /\d/.test(h[2]) ? '1' : '-'; };
         if (kind(lineHead) === '|' || (nextHead && kind(nextHead) === kind(lineHead) && nextHead[1].length === lineHead[1].length)) { after = rest; sibling = true; }
       }
+      // 표시가 문장·구절·표 칸을 닫는 자리면(closed, 2026-10-05) 표시 뒤는 다음 문장·다음 칸이다 — 인용문은 표시 앞뿐.
+      //  ① 표시 바로 뒤가 마침표·쉼표·쌍반점·빗금 ② 그 줄 나머지에 표 칸 경계 '|'(모델이 빈 줄로 끊은 표 행 포함 — 그 줄 나머지만).
+      // c19c247f: 「…제99조제3호에 따라 **3억원 이하 벌금**에 처해질 수 있습니다[표시].\n- 제50조제1항 위반(금지행위) 시: …시정조치(제52조제1항) 및」 —
+      // 앞 문장이 이름·번호를 빼면 22자라 '제목 줄'(#155-보론5)로 읽혀 다음 글머리가 인용문이 됐고, 판정기가 「제52조제1항을 언급하나 원문 제99조는
+      // 벌칙만」으로 거짓 '원문과 다름'을 냈다. 과거 자문 61건·표시 225개 재연: 바뀐 표시 3개(모두 바로잡힘), 제목 줄 정상 꼴은 그대로.
+      let closed = false;
+      if (!sibling) {
+        const eol0 = after.indexOf('\n');
+        const rest0 = eol0 === -1 ? after : after.slice(0, eol0);
+        if (/^[ \t*]*[.,;/。]/.test(after)) { after = ''; closed = true; }
+        else if (rest0.indexOf('|') !== -1) { after = rest0; closed = true; }
+      }
       // line = 표시가 있는 줄만(조 번호가 없어 segment가 앞 문단으로 넓어졌어도 겹침 판정은 이 줄로도 본다)
       // sibling = 표 행·형제 목록 항목(#240-보론2): 그 줄이 인용문의 전부다 — 토막 문단 규칙(#176)으로 앞 문단을 가져오지 않고(표 앞 안내
       // 문장이 인용문이 되던 구멍, Fable 재검토 2026-09-27) 짧아도 12자부터 판정기로 보낸다(checkCitation MIN_CLAIM_SIBLING).
-      const c = Object.assign({ tagStart: tagStart, tagEnd: tagEnd, tag: m[0], segment: text.slice(segStart, tagStart), line: text.slice(starts[0], tagStart), after: after, sibling: sibling }, parsed);
+      // closed = 표시가 문장·칸을 닫음 — 최소 길이는 sibling과 같은 12자(그 앞이 인용문의 전부라는 같은 이유)
+      const c = Object.assign({ tagStart: tagStart, tagEnd: tagEnd, tag: m[0], segment: text.slice(segStart, tagStart), line: text.slice(starts[0], tagStart), after: after, sibling: sibling, closed: closed }, parsed);
       // 꼬리표 안에 대상이 적힌 형식(#155-보론6, 2026-09-11 운영자 결정): 「[원문 확인됨: 전기통신사업법 제32조의14제1항]」
       // 「[원문 확인됨: 전파법 시행령 별표 3]」 — 있으면 앞뒤 문장 추측 없이 이것이 1순위 후보. 옛 형식(「[원문 확인됨]」,
       // 「[원문 확인됨, 참조4]」)은 종전대로 앞뒤에서 추측한다.
@@ -863,8 +876,10 @@
       // 규칙: 꼬리표에만 대상이 있고(줄 자체에 조 번호 없음) 그 줄의 본문이 24자 미만이면, **앞으로** 거슬러 올라가
       // 본문이 있는 첫 문단(최대 3개, 직전 표시 경계를 넘어도 됨)을 인용문으로 쓴다. 그 문단에 같은 조의 표시가
       // 이미 있으면(직전 인용문의 자동 확인 등) 이 표시는 중복이라 지운다. 제목 줄 표시(#155-보론5)는 줄에 조 번호가
-      // 있어 여기 걸리지 않고 종전대로 뒤 문단을 본다.
-      if (c.tagTarget && !c.sibling && !(parsed.mentions && parsed.mentions.length) && stripCiteBody(c.line).length < 24) {
+      // 있어 여기 걸리지 않고 종전대로 뒤 문단을 본다. 표시가 문장·칸을 닫았으면(closed) 뒤 문단은 인용문이 아니므로 줄에 조 번호가 있어도
+      // 본문이 12자 미만이면 이 규칙을 탄다(8a3a167a: 인용 문단 뒤 표 칸 「 (제53조) [표시] |」 — 직전 인용 문단의 같은 조 표시와 중복).
+      if (c.tagTarget && !c.sibling && (c.closed ? stripCiteBody(c.line).length < MIN_CLAIM_SIBLING
+        : !(parsed.mentions && parsed.mentions.length) && stripCiteBody(c.line).length < 24)) {
         let pEnd = text.lastIndexOf('\n\n', tagStart), looked = 0;
         while (pEnd > 0 && looked < 3) {
           const pStart = text.lastIndexOf('\n\n', pEnd - 1);
@@ -950,7 +965,7 @@
     // 내용 길이 = 조 번호·괄호 제목·법령명을 뺀 나머지(정규화 24자 미만이면 "제목·번호뿐"). 표 행·형제 목록 항목(sibling, #240-보론2)은
     // 한 줄이 인용문의 전부라 12자부터 판정기로 보낸다(Fable 재검토 2026-09-27) — 「| 제5항 | 재할당 시 … 조건을 붙일 수 있음 |」(22자)이
     // 24자 규칙으로는 '대조할 내용 없음'(회색)이 되어 맞는 인용도 직접 확인하라고 나갔다. 판정기 기준의 '번호·제목만 → 판단불가'가 짧은 줄을 받친다.
-    const minClaim = cite.sibling ? MIN_CLAIM_SIBLING : MIN_CLAIM;
+    const minClaim = (cite.sibling || cite.closed) ? MIN_CLAIM_SIBLING : MIN_CLAIM;   // closed(표시가 문장·칸을 닫음)도 그 앞이 인용문의 전부
     const stripCite = stripCiteBody;
     const beforeBody = stripCite(before);
     const headingOnly = beforeBody.length < minClaim && normQ(cite.after || '').length >= 24;
@@ -1054,6 +1069,65 @@
     const arr = JSON.parse(s.slice(i, j + 1));
     const out = {};
     for (const v of arr) if (v && v.id != null) out[String(v.id)] = { verdict: String(v.verdict || ''), reason: String(v.reason || '').slice(0, 120) };
+    return out;
+  }
+
+  // 3-2) 2차 판정(2026-10-05) — 1차(위 Haiku)가 「불일치」라 한 항목만 더 강한 모델(호출측 callJudge2)이 다시 본다.
+  //  외부판 판정기 주황은 전 기간 7개가 모두 거짓이었다(일부만 든 것을 불일치로·요약을 불일치로·원문 ② 오독·대상 오선택). 1차 지시문은
+  //  글자 그대로 둔다 — 초록이 되는 「일치」의 보정을 건드리지 않고(#268 「1차 호출은 그대로, 양성만 따로 확인」과 같은 꼴) 주황만 걸러 낸다.
+  //  1차 결과·메모는 보여 주지 않는다(앞선 판정에 끌리지 않게). 「불일치」면 어긋나는 구절을 원문·인용문에서 글자 그대로 내게 하고
+  //  코드가 그 구절이 판정기에 보낸 원문·인용문에 실제로 있는지 본다(spanIn) — 없으면 주황이 아니라 회색.
+  //  ⚠️ 이 글자를 고치면 tests/cite_judge_probe.js로 실측 세트를 다시 잰다(시험이 지문으로 잠근다).
+  const JUDGE2_SYSTEM =
+    '당신은 법령 인용 검증자입니다. 각 항목의 "인용문"(AI 답변의 한 대목)이 "원문"(법령·고시 조문)의 내용을 사실과 다르게 옮겼는지만 판정합니다.\n' +
+    '먼저 원문을 끝까지 읽고, 인용문이 말하는 것(누가·무엇을·어떤 요건에서·어떤 효과)을 원문의 해당 부분과 하나씩 맞춰 봅니다.\n' +
+    '불일치로 보는 경우: 조문 번호·항·호가 원문과 다르다 / 의무의 주체·상대방이 바뀌었다(원문이 한정한 주체를 빼서 대상이 넓어진 경우 포함) / 요건·효과·기한·수치·예외가 원문과 다르다(원문이 적용 범위를 좁힌 말을 빼서 범위가 달라진 경우 포함) / 원문에 없는 내용을 원문의 규정처럼 서술했다.\n' +
+    '불일치가 아닌 경우: 법적 의미가 그대로인 요약·생략·표현 차이 / 원문이 어느 하나에 해당하면 되는 대상·행위를 여럿 나열하는데 인용문이 그중 일부만 든 것(든 것이 원문 목록에 있으면 일치) / 원문에 근거한 해석·의견 / 다른 조문을 함께 언급 / 인용문이 조문 번호·제목만 적고 내용을 옮기지 않음(→ "판단불가").\n' +
+    '"불일치"라고 답할 때는 어긋나는 곳을 원문과 인용문에서 각각 글자 그대로 옮겨 적습니다 — source_span(원문에서)·claim_span(인용문에서), 각 60자 이내, 고치거나 줄이지 말 것. 빠뜨린 것이 문제면 source_span에 빠진 원문 구절을, claim_span에 그 자리의 인용문 구절을 적습니다. 그런 두 구절을 댈 수 없으면 "불일치"가 아닙니다.\n' +
+    '확신이 없으면 "판단불가". 출력은 JSON 배열만, 설명 금지: [{"id":1,"verdict":"일치|불일치|판단불가","source_span":"","claim_span":"","reason":"40자 이내"}]';
+
+  // 2차 판정기 요청 — 운영(rag.ts·verify-citations → _shared/cite_judge2.ts)과 실측 도구(tests/cite_judge_probe.js)가 같은 값을 읽는다.
+  // 실측(2026-10-05, 고정 사례 12개 × 4회): Opus 5.5(추론 medium) = 거짓 5개 주황 0 · 진짜 7개 주황 4/4. Sonnet 5(추론 끔)는 「목록 중 하나만 든」
+  // 제51조를 6/8 주황(1차와 같은 오판), Sonnet 5.5(medium)는 「피해를 입은 자 → 피해 이용자」 요약의 제55조②를 4/8 주황. 호출당 ≈ $0.013.
+  // Opus 5.5는 추론을 끌 수 없다(thinking 생략 = adaptive). 온도류 값은 넣지 않는다(온도류 금지 규칙 — 예외는 크롤러 긴급도·재보도 대조 두 곳뿐).
+  const JUDGE2_MODEL = 'claude-opus-5-5';
+  const JUDGE2_REQUEST = { output_config: { effort: 'medium' } };
+  const JUDGE2_MAX_TOKENS = 8000;
+
+  // 판정기가 옮겨 적은 구절이 hay(판정기에 보낸 원문·인용문)에 실제로 있는가 — 공백·문장부호·괄호 차이는 보지 않고(normQ),
+  // 말줄임(… ...)으로 나눈 조각은 순서대로 있어야 한다. 조각 합 4자 미만은 근거로 치지 않는다.
+  function spanIn(span, hay) {
+    const parts = String(span || '').split(/…|\.{3}/).map(normQ).filter(function (p) { return p.length >= 2; });
+    let total = 0;
+    for (const p of parts) total += p.length;
+    if (total < 4) return false;
+    const h = normQ(hay);
+    let pos = 0;
+    for (const p of parts) { const i = h.indexOf(p, pos); if (i < 0) return false; pos = i + p.length; }
+    return true;
+  }
+
+  // items: 1차와 같은 {id, target, claim, source} — callJudge2(system, user) → Promise<string(JSON 배열 텍스트)>
+  // 반환 id → {verdict, reason, source_span, claim_span, grounded}(grounded = 불일치이고 두 구절이 모두 실재)
+  async function judgeCitations2(items, callJudge2) {
+    if (!items.length || typeof callJudge2 !== 'function') return {};
+    const user = items.map(function (it) {
+      return '### 항목 ' + it.id + '\n[인용 대상] ' + it.target + '\n[인용문]\n' + it.claim + '\n[원문]\n' + it.source;
+    }).join('\n\n');
+    const raw = await callJudge2(JUDGE2_SYSTEM, user);
+    const s = String(raw || '');
+    const i = s.indexOf('['), j = s.lastIndexOf(']');
+    if (i === -1 || j <= i) throw new Error('2차 판정 JSON 없음');
+    const arr = JSON.parse(s.slice(i, j + 1));
+    const byId = new Map(items.map(function (it) { return [String(it.id), it]; }));
+    const out = {};
+    for (const v of arr) {
+      if (!v || v.id == null || !byId.has(String(v.id))) continue;
+      const it = byId.get(String(v.id));
+      const verdict = String(v.verdict || ''), src = String(v.source_span || ''), clm = String(v.claim_span || '');
+      out[String(v.id)] = { verdict: verdict, reason: String(v.reason || '').slice(0, 120), source_span: src.slice(0, 200), claim_span: clm.slice(0, 200),
+        grounded: verdict === '불일치' && spanIn(src, it.source) && spanIn(clm, it.claim) };
+    }
     return out;
   }
 
@@ -1197,7 +1271,8 @@
   }
 
   // 종합: 답변 → 표시 검증·교체
-  //   { answer, chunks, annexSources, systemPrompt, callHaiku, maxJudge, autoTag, quoteTag }
+  //   { answer, chunks, annexSources, systemPrompt, callHaiku, callJudge2, maxJudge, autoTag, quoteTag }
+  //   callJudge2(system, user) — 1차 불일치만 다시 보는 2차 판정기(선택, 3-2). 없으면 1차 불일치가 그대로 주황.
   //   → { answer, verdicts: [{tag, kind, key, law, status, reason, judge, auto}], changed, autoTagged, quoteTagged, citedDocs }
   async function verifyCitations(args) {
     const chunks = ((args && args.chunks) || []).concat(args && args.systemPrompt ? pseudoChunksFromPrompt(args.systemPrompt) : []);
@@ -1227,16 +1302,16 @@
     if (toJudge.length && !(args && typeof args.callHaiku === 'function'))
       toJudge.forEach(function (r) { r.status = 'unjudged'; r.reason = '판정기 미가동'; });
     if (toJudge.length && args && typeof args.callHaiku === 'function') {
+      const items = toJudge.map(function (r, i) {
+        const claim = String(r.claim || r.segment || '').replace(/\*\*/g, '').replace(/\s+/g, ' ').trim();
+        return {
+          id: i + 1,
+          target: (r.lawDoc || r.lawText || '') + ' ' + r.key + (r.paras.length ? ' 제' + r.paras.join('·') + '항' : '') + (r.items.length ? ' 제' + r.items.join('·') + '호' : ''),
+          claim: claim.length > 900 ? '…' + claim.slice(-900) : claim,
+          source: r.text.length > 4000 ? r.text.slice(0, 4000) + '\n…(이하 생략)' : r.text,
+        };
+      });
       try {
-        const items = toJudge.map(function (r, i) {
-          const claim = String(r.claim || r.segment || '').replace(/\*\*/g, '').replace(/\s+/g, ' ').trim();
-          return {
-            id: i + 1,
-            target: (r.lawDoc || r.lawText || '') + ' ' + r.key + (r.paras.length ? ' 제' + r.paras.join('·') + '항' : '') + (r.items.length ? ' 제' + r.items.join('·') + '호' : ''),
-            claim: claim.length > 900 ? '…' + claim.slice(-900) : claim,
-            source: r.text.length > 4000 ? r.text.slice(0, 4000) + '\n…(이하 생략)' : r.text,
-          };
-        });
         const verdicts = await judgeCitations(items, args.callHaiku);
         toJudge.forEach(function (r, i) {
           const v = verdicts[String(i + 1)];
@@ -1251,6 +1326,25 @@
           if (r.status === 'ok') { r.status = 'unjudged'; r.reason = '판정 호출 실패'; }
           r.judgeError = String(e && e.message || e);
         });
+      }
+      // 2차 판정(callJudge2가 있을 때만 — 없으면 1차 불일치가 그대로 주황, 종전 동작): 둘 다 불일치이고 2차가 댄 두 구절이 실재할 때만 주황.
+      // 2차가 일치면 초록(1차 「일치」도 초록이므로 같은 기준 — 더 정확한 판정기의 일치), 판단불가·구절 확인 실패·결과 없음·호출 실패는 회색.
+      const second = [];
+      toJudge.forEach(function (r, i) { if (r.status === 'mismatch') second.push({ r: r, item: items[i] }); });
+      if (second.length && typeof args.callJudge2 === 'function') {
+        try {
+          const v2 = await judgeCitations2(second.map(function (x, k) { return Object.assign({}, x.item, { id: k + 1 }); }), args.callJudge2);
+          second.forEach(function (x, k) {
+            const v = v2[String(k + 1)], r = x.r;
+            if (!v) { r.status = 'unclear'; r.reason = '2차 판정 결과 없음'; return; }
+            r.judge2 = v;
+            if (v.verdict === '불일치' && v.grounded) { r.status = 'mismatch'; r.reason = v.reason || r.reason; }
+            else if (v.verdict === '일치') { r.status = 'ok'; r.reason = null; }
+            else { r.status = 'unclear'; r.reason = v.verdict === '불일치' ? '2차 판정의 근거 구절을 원문·인용문에서 못 찾음' : '2차 판정 보류'; }
+          });
+        } catch (e) {
+          second.forEach(function (x) { x.r.status = 'unclear'; x.r.reason = '2차 판정 실패'; x.r.judge2Error = String(e && e.message || e); });
+        }
       }
     }
     let out = answer, changed = 0, quoteTagged = 0;
@@ -1294,6 +1388,8 @@
           paras: r.paras || [], items: r.items || [], status: r.status, reason: r.reason || null, judge: r.judge || null, doc: r.doc || null,
           verbatim: !!r.verbatim, overlap: typeof r.overlap === 'number' ? Math.round(r.overlap * 100) / 100 : null };
         if (r.auto) v.auto = 'quote';
+        if (r.judge2) v.judge2 = r.judge2;                    // 2차 판정(1차 불일치만) — 1·2차가 갈린 건수를 나중에 셀 수 있게
+        if (r.judge2Error) v.judge2Error = r.judge2Error.slice(0, 200);
         return v;
       }),
     };
@@ -1309,6 +1405,8 @@
     lawNameBefore: lawNameBefore, familyMatches: familyMatches, resolveLaw: resolveLaw, lawScope: lawScope, quoteOverlap: quoteOverlap,
     parseSegment: parseSegment, findCitations: findCitations, checkCitation: checkCitation,
     judgeCitations: judgeCitations, verifyCitations: verifyCitations, autoTagVerbatim: autoTagVerbatim,
+    JUDGE_SYSTEM: JUDGE_SYSTEM, JUDGE2_SYSTEM: JUDGE2_SYSTEM, judgeCitations2: judgeCitations2, spanIn: spanIn,
+    JUDGE2_MODEL: JUDGE2_MODEL, JUDGE2_REQUEST: JUDGE2_REQUEST, JUDGE2_MAX_TOKENS: JUDGE2_MAX_TOKENS,
   };
   root.CiteVerify = CiteVerify;
   if (typeof module !== 'undefined' && module.exports) module.exports = CiteVerify;

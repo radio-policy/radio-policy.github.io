@@ -17,6 +17,7 @@ import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { corsHeaders } from '../_shared/http.ts';
 import '../_shared/cite_verify.js';
 import { callHaikuText } from '../_shared/usage.ts';
+import { callCiteJudge2 } from '../_shared/cite_judge2.ts';
 
 // deno-lint-ignore no-explicit-any
 const CiteVerify = (globalThis as any).CiteVerify;
@@ -87,6 +88,10 @@ Deno.serve(async (req) => {
       answer, chunks, annexSources, systemPrompt,
       callHaiku: ANTHROPIC_KEY
         ? (sys: string, u: string) => callHaikuText(sb, ANTHROPIC_KEY, sys, u, 'verify-citations:citeJudge', 3000)   // 900은 24건 판정 JSON에 빠듯(#205)
+        : null,
+      // 1차 「불일치」만 다시 보는 2차 판정(2026-10-05) — 둘 다 불일치이고 근거 구절이 실재할 때만 「원문과 다름」
+      callJudge2: ANTHROPIC_KEY
+        ? (sys: string, u: string) => callCiteJudge2(sb, ANTHROPIC_KEY, sys, u, 'verify-citations:citeJudge2')
         : null,
     });
     console.log('[인용 검증]', user.email || user.id, 'auto+' + (vr.autoTagged || 0), 'quote+' + (vr.quoteTagged || 0), JSON.stringify(vr.verdicts.map((v: { key: string; status: string; reason: string }) => [v.key, v.status, v.reason])));

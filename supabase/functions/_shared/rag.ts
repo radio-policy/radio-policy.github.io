@@ -17,6 +17,7 @@ import './cite_verify.js';
 // 자문 검색의 순수 규칙(#215) — 브라우저·node 테스트와 같은 파일이라 역시 globalThis로 받는다
 import './rag_core.js';
 import { recordApiUsage, callHaikuText, mergeUsage, type ApiUsage } from './usage.ts';
+import { callCiteJudge2 } from './cite_judge2.ts';
 // deno-lint-ignore no-explicit-any
 const CiteVerify = (globalThis as any).CiteVerify;
 // deno-lint-ignore no-explicit-any
@@ -1091,7 +1092,9 @@ export async function answerAdvisory(sb: SupabaseClient, systemPrompt: string, q
   try {
     const vr = await CiteVerify.verifyCitations({
       answer: rawAnswer, chunks: (extra2 as unknown as Chunk[]).concat(chunks2).concat(citing.chunks), annexSources: annex.sources, systemPrompt,
-      callHaiku: (sys: string, u: string) => callHaikuText(sb, apiKey, sys, u, 'rag.ts:citeJudge', 3000)   // 900은 24건 판정 JSON에 빠듯(#205),
+      callHaiku: (sys: string, u: string) => callHaikuText(sb, apiKey, sys, u, 'rag.ts:citeJudge', 3000),   // 900은 24건 판정 JSON에 빠듯(#205)
+      // 1차 「불일치」만 다시 보는 2차 판정(2026-10-05) — 둘 다 불일치이고 근거 구절이 실재할 때만 「원문과 다름」
+      callJudge2: (sys: string, u: string) => callCiteJudge2(sb, apiKey, sys, u, 'rag.ts:citeJudge2'),
     });
     answer = vr.answer;
     verdicts = vr.verdicts || [];
