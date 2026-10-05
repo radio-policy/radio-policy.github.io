@@ -459,12 +459,14 @@
       for (const cand of c.candidates || []) if (cand && cand.key) keys.add(cand.key);
     }
     const dateOf = function (n) { const m = String(n || '').match(/\((\d{8})\)\s*$/); return m ? m[1] : ''; };
-    const jobs = [];
+    const jobs = [], dropReal = new Set();
     for (const p of pseudo) {
       const fam = docFamily(p.doc_name), key = articleKey(p.article_no);
       if (!key || !keys.has(key)) continue;
       const hasReal = (chunks || []).some(function (c) { return !isPromptDoc(c.doc_name) && docFamily(c.doc_name) === fam && articleKey(c.article_no) === key; });
-      if (hasReal) continue;
+      // 검색 자료에 실제 조문이 있으면 지침서 조각은 뺀다 — checkCitation은 같은 조의 문서 중 **가장 긴 글**을 고르는데, 지침서 조각은
+      // 「→ 핵심 기한」 주석 줄까지 붙어 짧은 실제 조문(시행령 제18조)보다 길어 원문으로 뽑혔다(10-06 배포본 확인 — 출처 kept)
+      if (hasReal) { dropReal.add(p); continue; }
       const hint = (String(p.content || '').split('\n')[0].match(/제\s?(\d+)호/) || [])[1];
       jobs.push(Promise.resolve().then(function () { return fetchLawArticle(fam, key); }).then(function (rows) {
         const own = (rows || []).filter(function (r) { return r && !isPromptDoc(r.doc_name) && docFamily(r.doc_name) === fam && articleKey(r.article_no) === key && r.content; });
@@ -483,9 +485,9 @@
         }) };
       }, function () { failed.add(fam + '|' + key); return null; }));
     }
-    if (!jobs.length) return { chunks: chunks, swapped: swapped, failed: failed };
+    if (!jobs.length && !dropReal.size) return { chunks: chunks, swapped: swapped, failed: failed };
     const got = (await Promise.all(jobs)).filter(Boolean);
-    const drop = new Set(got.map(function (g) { return g.pseudo; }));
+    const drop = new Set(got.map(function (g) { return g.pseudo; }).concat(Array.from(dropReal)));
     const out = (chunks || []).filter(function (c) { return !drop.has(c); });
     for (const g of got) for (const r of g.rows) out.push(r);
     return { chunks: out, swapped: swapped, failed: failed };

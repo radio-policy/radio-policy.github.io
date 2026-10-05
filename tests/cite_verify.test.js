@@ -683,6 +683,13 @@ function ok(name, cond, extra) {
   var real16 = { id: 98637, doc_name: '전파법(법률)(제21065호)(20260102)', article_no: '16조(재할당)', chunk_index: 32, content: full16 };
   var vReal = await CV.verifyCitations({ answer: ans16, chunks: [real16], systemPrompt: promptSw, callHaiku: j1True, fetchLawArticle: fetchLaw });
   eq('#284 원문 바꾸기: 검색 자료에 같은 조 실제 조문이 있으면 받지 않는다(그 조문이 원문)', [fetched, vReal.verdicts[0].doc, vReal.verdicts[0].srcPrompt || null], [[], '전파법(법률)(제21065호)(20260102)', null]);
+  // 지침서 조각이 주석 줄까지 붙어 실제 조문보다 길어도 실제 조문이 원문(10-06 배포본 확인 — 시행령 제18조가 kept로 나왔다)
+  var prompt18 = '…\n■ 전파법 시행령 제18조(재할당) [원문 확인됨]\n① 법 제16조제1항 본문에 따라 주파수할당을 받은 자가 주파수이용기간이 만료되어 주파수재할당을 받으려면 주파수이용기간 만료 6개월 전에 재할당신청을 하여야 한다.\n→ 핵심 기한: 주파수이용기간 만료 6개월 전까지 재할당 신청 (법정 기한) — 이 주석 줄 때문에 지침서 조각이 더 길다';
+  var real18 = { id: 38449, doc_name: '전파법 시행령(대통령령)(제35801호)(20251001)', article_no: '18조(재할당)', chunk_index: 30, content: '제18조(재할당)\n① 법 제16조제1항 본문에 따라 주파수할당을 받은 자가 주파수이용기간이 만료되어 주파수재할당을 받으려면 주파수이용기간 만료 6개월 전에 재할당신청을 하여야 한다.' };
+  var ans18 = '시행령상 재할당 신청은 이용기간 만료 6개월 전까지 해야 하며 늦으면 재할당 대상에서 빠질 수 있습니다 [원문 확인됨: 전파법 시행령 제18조제1항]';
+  var v18 = await CV.verifyCitations({ answer: ans18, chunks: [real18], systemPrompt: prompt18, callHaiku: j1True, fetchLawArticle: fetchLaw });
+  var v18old = await CV.verifyCitations({ answer: ans18, chunks: [real18], systemPrompt: prompt18, callHaiku: j1True });
+  eq('#284 원문 바꾸기: 지침서 조각이 더 길어도 실제 조문이 있으면 그것이 원문(받을 수단이 없으면 종전대로)', [v18.verdicts[0].doc, v18old.verdicts[0].doc], ['전파법 시행령(대통령령)(제35801호)(20251001)', '전파법 시행령(시스템 프롬프트 핵심 조문)']);
   fetched = [];
   await CV.verifyCitations({ answer: '전기통신사업법 제55조제2항에 따라 피해자는 손해배상을 청구할 수 있습니다 [원문 확인됨: 전기통신사업법 제55조제2항]', chunks: [a55], systemPrompt: promptSw, callHaiku: j1True, fetchLawArticle: fetchLaw });
   eq('#284 원문 바꾸기: 인용이 가리키지 않은 지침서 조문은 받지 않는다', fetched, []);
