@@ -7,6 +7,7 @@
 //   node tools_cite_replay.js --old path/old.js     # 옛 판 파일을 직접 지정
 //   node tools_cite_replay.js --since 2026-10-01    # 기간
 //   node tools_cite_replay.js --all-mismatch        # 판정기를 모두 「불일치」로 모의 — "주황이 될 수 있는 표시"가 어떻게 달라지는지(#286 ⓒ 회색 규칙)
+//   node tools_cite_replay.js --dump out.json       # 새 판의 표시별 결과(답변 id·질문·tag·key·law·doc·status·reason·cmp·lawGuess)를 JSON으로 — 지금 코드 기준 회색·원문 없음 목록용
 //
 //   .env의 SUPABASE_URL·SUPABASE_SERVICE_KEY를 읽는다(service_role — chat_logs는 RLS로 묶여 있다). 세션 셸에서는 HTTP(S)_PROXY를 빼고 돌릴 것.
 //   같은 코드 두 번 = 차이 0이어야 한다(판정기가 없으니 잡음도 없다). 규칙·문턱·불용어를 바꾼 뒤 이 재연과 node tests/cite_verify.test.js를 함께 본다.
@@ -121,6 +122,7 @@ function brief(v) {
   console.log('rows', rows.length, 'since', since, ALLMIS ? '(모의 판정: 전부 불일치)' : '(판정기 없음 — 구조만)', '| old =', oldPath);
   let items = 0, diffs = 0;
   const summary = { old: {}, new: {} };
+  const dumpPath = arg('--dump', null), dump = [];
   for (const row of rows) {
     if (!Array.isArray(row.cite_verdicts) || !row.cite_verdicts.length) continue;
     const ids = (row.chunk_ids || []).filter(function (x) { return typeof x === 'number'; }).slice(0, 80);
@@ -135,6 +137,7 @@ function brief(v) {
       const vr = await CV.verifyCitations({ answer: answer, chunks: chunks, annexSources: [], systemPrompt: sp, callHaiku: judges.callHaiku, callJudge2: judges.callJudge2, fetchLawArticle: fetchLawArticle });
       out[name] = vr.verdicts.map(brief);
       for (const v of out[name]) summary[name][v.status] = (summary[name][v.status] || 0) + 1;
+      if (name === 'new' && dumpPath) for (const v of vr.verdicts) dump.push({ id: row.id, created_at: row.created_at, channel: row.channel, question: String(row.question || '').slice(0, 80), tag: v.tag, key: v.key, law: v.law, doc: v.doc, status: v.status, reason: v.reason, cmp: v.cmp || null, lawGuess: v.lawGuess || null, guessEvidence: v.guessEvidence == null ? null : v.guessEvidence, verbatim: v.verbatim, overlap: v.overlap });
     }
     const n = Math.max(out.old.length, out.new.length);
     items += n;
@@ -153,4 +156,5 @@ function brief(v) {
   console.log('\nitems', items, 'changed', diffs);
   console.log('old', JSON.stringify(summary.old));
   console.log('new', JSON.stringify(summary.new));
+  if (dumpPath) { fs.writeFileSync(dumpPath, JSON.stringify(dump, null, 1), 'utf8'); console.log('dump', dump.length, '→', dumpPath); }
 })().catch(function (e) { console.error(e); process.exit(1); });
