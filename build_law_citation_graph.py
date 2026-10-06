@@ -113,6 +113,182 @@ CITE_BLOCKLIST = {
 }
 
 
+# ── 「법령명」 인용의 약칭·변형 이름 → 정식 문서명 (#285-보론, 2026-10-06 — 관계도 IDC 재검토 Q4 (c)) ──
+# 법령 본문은 다른 법령을 약칭(「정보통신망법」)·옛 이름(「정보통신망의 이용촉진 및 …」)·「등」 빠진 이름으로도 인용한다.
+# 종전엔 「」 안 글자를 그대로 노드로 만들어, 원문 있는 정식 노드와 따로 노는 스텁(doc_name 없음, 주제 선 0)에 인용선이
+# 붙었다(개인정보 보호법 → 「정보통신망법」 12회). 노드를 지워도 citation 선을 매 실행 다시 만들어 되살아난다.
+# 그래서 인용을 셀 때 이름을 정식 문서(docs의 base) **하나에만** 맞을 때 그 이름으로 푼다:
+#  ① 약칭 표 — 자문 인용 검증기(cite_verify.js LAW_ALIASES)를 그대로 읽는다(규칙 두 벌 금지, familyMatches와 같은 뜻:
+#     약칭은 법률의 것, 「약칭 시행령·시행규칙」은 같은 꼬리 문서). 표를 못 읽으면 ①은 건너뛴다.
+#  ② 「등」·「의」 차이 — 낱말 끝 「의」(정보통신망의 → 정보통신망)·「등에」(→ 에)·홀로 쓴 「등」을 뺀 열쇠가 같은 정식 문서.
+# 이름 끝 일치(「전자거래기본법」 → 「전자문서 및 전자거래 기본법」)는 넓어서 쓰지 않고 보고에 후보로만 보인다.
+LAW_ALIAS_SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'supabase', 'functions', '_shared', 'cite_verify.js')
+SUBDOC_RE = re.compile(r'(시행령|시행규칙)$')
+
+
+def load_law_aliases(path=LAW_ALIAS_SRC):
+    """cite_verify.js의 LAW_ALIASES {약칭: 정식명에 든 문자열}. 실패하면 {}(약칭 풀이 없이 진행)."""
+    try:
+        with open(path, encoding='utf-8') as f:
+            src = f.read()
+        m = re.search(r'const LAW_ALIASES = \{(.*?)\};', src, re.S)
+        pairs = re.findall(r"'([^']+)'\s*:\s*'([^']+)'", m.group(1)) if m else []
+        if not pairs:
+            raise ValueError('LAW_ALIASES를 찾지 못함')
+        return dict(pairs)
+    except Exception as e:
+        print(f'⚠️ 약칭 표(cite_verify.js LAW_ALIASES) 읽기 실패 — 약칭 풀이 없이 진행: {e}')
+        return {}
+
+
+class CiteNameResolver:
+    """인용 이름 → 정식 문서 base. resolve(name) → (base|None, 규칙 'alias'|'loose'|'')."""
+
+    def __init__(self, bases, aliases):
+        self.bases = list(bases)
+        self.exact = {self.key(b) for b in self.bases}
+        self.by_loose = defaultdict(list)
+        for b in self.bases:
+            self.by_loose[self.loose(b)].append(b)
+        self.aliases = {self.key(k): self.key(v) for k, v in (aliases or {}).items()}
+        self.cache = {}
+
+    @staticmethod
+    def key(s):
+        return nrm_key(s).replace('·', '')
+
+    @classmethod
+    def loose(cls, s):
+        out = []
+        for w in norm_name(s).split(' '):
+            if w == '등':
+                continue
+            if w == '등에':
+                w = '에'
+            elif len(w) > 2 and w.endswith('의'):
+                w = w[:-1]
+            out.append(w)
+        return cls.key(''.join(out))
+
+    def _alias_target(self, b, alias, sub):
+        nb = self.key(b)
+        if sub:
+            if not nb.endswith(sub):
+                return False
+            nb = nb[:-len(sub)]
+        elif SUBDOC_RE.search(nb):
+            return False
+        return bool(re.search(r'(법|법률)$', nb)) and alias in nb
+
+    def resolve(self, name):
+        if name in self.cache:
+            return self.cache[name]
+        k = self.key(name)
+        out = (None, '')
+        if k not in self.exact:
+            m = SUBDOC_RE.search(k)
+            sub = m.group(1) if m else ''
+            alias = self.aliases.get(k[:-len(sub)] if sub else k)
+            if alias:
+                c = [b for b in self.bases if self._alias_target(b, alias, sub)]
+                out = (c[0], 'alias') if len(c) == 1 else (None, '')
+            if not out[0]:
+                c = self.by_loose.get(self.loose(name), [])
+                if len(c) == 1:
+                    out = (c[0], 'loose')
+        self.cache[name] = out
+        return out
+
+    def suffix_candidates(self, name):
+        """보고용 — 이름 끝 일치로만 맞는 정식 문서(적용 안 함)"""
+        k = self.key(name)
+        if len(k) < 4 or k in self.exact:
+            return []
+        return [b for b in self.bases if self.key(b).endswith(k) and self.key(b) != k]
+
+
+def report_name_resolution(resolved, resolver, cites, cited_names, existing, existing_nrm, keep_pairs, docs):
+    """약칭·변형 이름 풀이 보고(#285-보론) — 읽기만. 고아가 될 스텁 = 풀린 이름의 기존 노드 중 원문 없는 citation 노드로
+    다른 출처 선(seed·ai·review 등, 재구축이 안 지우는 선)이 없고 위임 선 대상도 아닌 것 → 실제 실행 끝의 고아 정리가 지운다."""
+    print('\n── 「법령명」 인용의 약칭·변형 이름 풀이(#285-보론) ──')
+    by_rule = defaultdict(lambda: [0, 0, 0, 0, 0])   # 이름, 다시 붙는 인용, 다시 붙는 선, 자기 인용으로 빠지는 인용, 그 선
+    for (_, canon), rv in resolved.items():
+        r = by_rule[rv['rule']]
+        r[0] += 1
+        for src, c in rv['srcs'].items():
+            if src == canon:          # 풀고 나니 자기 문서 인용(개정문 등) → 종전 규칙대로 빠진다
+                r[3] += c
+                r[4] += 1
+            else:
+                r[1] += c
+                r[2] += 1
+    tot = [sum(v[i] for v in by_rule.values()) for i in range(5)]
+    print(f'  정식 문서로 푼 인용 이름 {tot[0]}개 — 정식 노드로 다시 붙는 인용 {tot[1]}회·선 {tot[2]}개'
+          f' / 풀고 나니 자기 문서 인용이라 빠지는 인용 {tot[3]}회·선 {tot[4]}개')
+    for rule, v in sorted(by_rule.items()):
+        print(f'    규칙 {rule}: 이름 {v[0]}개 · 다시 붙음 {v[1]}회·{v[2]}선 · 자기 인용 {v[3]}회·{v[4]}선')
+    for (name, canon), rv in sorted(resolved.items(), key=lambda kv: (-kv[1]['count'], kv[0])):
+        srcs = sorted(rv['srcs'])
+        self_note = ' · 자기 인용(빠짐)' if canon in rv['srcs'] else ''
+        print(f'    [{rv["rule"]}] {name} → {canon}  인용 {rv["count"]}회 · 인용 문서 {len(srcs)}개'
+              f' ({", ".join(srcs[:3])}{" 외" if len(srcs) > 3 else ""}){self_note}')
+    keep_names = {n for pair in keep_pairs for n in pair}
+    stubs = {}
+    for (name, canon) in resolved:
+        row = existing.get(name) or existing_nrm.get(nrm_key(name))
+        if row and not row.get('doc_name') and name not in docs:
+            stubs[row['id']] = (row.get('name') or name, canon)
+    orphans, kept = [], []
+    if stubs:
+        ids = list(stubs)
+        now_edges, other = defaultdict(int), defaultdict(int)
+        for col in ('source_id', 'target_id'):
+            for i in range(0, len(ids), 100):
+                r = sb.table('law_graph_edges').select('id,source_id,target_id,source').in_(col, ids[i:i + 100]).execute()
+                for e in r.data or []:
+                    nid = e[col]
+                    now_edges[nid] += 1
+                    if e['source'] not in ('citation', 'family', 'thdcmp', 'delegation'):
+                        other[nid] += 1
+        nsrc = {}
+        for i in range(0, len(ids), 100):
+            for r in sb.table('law_graph_nodes').select('id,source').in_('id', ids[i:i + 100]).execute().data or []:
+                nsrc[r['id']] = r.get('source')
+        for nid, (sname, canon) in sorted(stubs.items(), key=lambda kv: kv[1]):
+            why = []
+            if nsrc.get(nid) != 'citation':
+                why.append(f'source={nsrc.get(nid)}')
+            if other[nid]:
+                why.append(f'다른 출처 선 {other[nid]}')
+            if sname in keep_names:
+                why.append('위임 선이 남음(law_delegations에 이 이름)')
+            if sname in cited_names:
+                why.append('인용 선이 남음')
+            (kept if why else orphans).append((sname, canon, now_edges[nid], nid, ', '.join(why)))
+    print(f'  고아가 될 스텁 노드(실제 실행 끝 정리에서 삭제): {len(orphans)}개')
+    for sname, canon, n, nid, _ in orphans:
+        print(f'    {sname} ({nid[:8]}, 지금 선 {n}개) → 선은 {canon}로')
+    if kept:
+        print(f'  풀렸지만 남는 스텁 노드: {len(kept)}개')
+        for sname, canon, n, nid, why in kept:
+            print(f'    {sname} ({nid[:8]}, 지금 선 {n}개) — {why}')
+    # 이름 끝 일치로만 정식 문서 하나에 맞는 인용 이름 — 적용하지 않음(후보)
+    cnt = defaultdict(int)
+    for (_, nm), info in cites.items():
+        cnt[nm] += info['count']
+    cand = []
+    for nm in sorted(cited_names):
+        if nm in docs:
+            continue
+        c = resolver.suffix_candidates(nm)
+        if len(c) == 1:
+            cand.append((nm, c[0], cnt.get(nm, 0)))
+    print(f'  (적용 안 함) 이름 끝 일치로만 정식 문서 하나에 맞는 인용 이름: {len(cand)}개')
+    for nm, c, n in cand:
+        print(f'    {nm} → {c}?  인용 {n}회')
+    return {'resolved': len(resolved), 'orphans': len(orphans), 'kept': len(kept), 'suffix_candidates': len(cand)}
+
+
 def norm_name(name: str) -> str:
     """가운뎃점 이형 통일 + 표 괘선 제거 + 공백 정리 — 같은 법령의 중복 노드 방지"""
     name = (name or '').translate(MID_DOT_TRANS)
@@ -501,6 +677,8 @@ def main(dry_run=False):
     cited_names = set()
     corrupt_skipped = defaultdict(int)   # 표 괘선으로 깨져 버린 인용(스텁 노드 방지) 집계
     CITE_BLOCKLIST_KEYS = _blocklist_keys()
+    resolver = CiteNameResolver(docs.keys(), load_law_aliases())   # 약칭·변형 이름 → 정식 문서(#285-보론)
+    resolved = defaultdict(lambda: {'count': 0, 'srcs': defaultdict(int), 'rule': ''})   # (인용 이름, 정식) → 집계(보고용)
 
     for ch in chunks:
         src = base_of_doc.get(ch['doc_name'])
@@ -521,6 +699,15 @@ def main(dry_run=False):
                 continue
             if nrm_key(name) in CITE_BLOCKLIST_KEYS:
                 continue  # 부칙 상용구 인용 제외
+            canon, rule = resolver.resolve(name)
+            if canon:
+                if nrm_key(canon) in CITE_BLOCKLIST_KEYS:
+                    continue  # 약칭이 폐지 법령으로 풀린 경우(「단통법」)도 제외
+                rv = resolved[(name, canon)]
+                rv['count'] += 1
+                rv['srcs'][src] += 1
+                rv['rule'] = rule
+                name = canon
             if name == src:
                 continue  # 자기 자신 인용(개정문 등) 제외
             e = cites[(src, name)]
@@ -722,6 +909,12 @@ def main(dry_run=False):
     print(f'\n── 노드 doc_name 현행본 갱신: {len(refresh_preview)}건 ──')
     for name, old, new in sorted(refresh_preview):
         print(f'    {name}: {old} → {new}')
+
+    try:
+        report_name_resolution(resolved, resolver, cites, cited_names, existing, existing_nrm,
+                               list(deleg_ok_pairs) + list(thd_ok_pairs), docs)
+    except Exception as e:   # 보고만 — 실패해도 적재는 계속
+        print(f'⚠️ 약칭 풀이 보고 실패(적재는 계속): {e}')
 
     if dry_run:
         print(f'\n[DRY-RUN] DB 무변경 — 노드/엣지 쓰기 없이 종료'

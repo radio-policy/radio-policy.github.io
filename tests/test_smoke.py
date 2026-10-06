@@ -813,6 +813,48 @@ class TestLawmapCurrentVersion(unittest.TestCase):
         self.assertIsNone(m.doc_date('이동통신용 무선설비 예비전원설비 설치 가이드라인'))
 
 
+class TestCitationNameResolver(unittest.TestCase):
+    """인용망 빌더의 「법령명」 약칭·변형 이름 → 정식 문서 풀이(#285-보론, 2026-10-06) — 네트워크 없음"""
+
+    @staticmethod
+    def _resolver_ns():
+        import ast, re
+        from collections import defaultdict
+        path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'build_law_citation_graph.py')
+        tree = ast.parse(open(path, encoding='utf-8').read())
+        want_fn = {'load_law_aliases', 'norm_name', 'nrm_key', 'CiteNameResolver'}
+        want_var = {'MID_DOT_CHARS', 'MID_DOT_TRANS', 'TABLE_RULE_CHARS', 'TABLE_RULE_RE', 'LAW_ALIAS_SRC', 'SUBDOC_RE'}
+        body = [n for n in tree.body if isinstance(n, ast.Assign) and any(getattr(t, 'id', None) in want_var for t in n.targets)]
+        body += [n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.ClassDef)) and n.name in want_fn]
+        ns = {'re': re, 'os': os, 'defaultdict': defaultdict, '__file__': path}
+        exec(compile(ast.Module(body=body, type_ignores=[]), path, 'exec'), ns)
+        return ns
+
+    def test_aliases_read_from_cite_verify(self):
+        al = self._resolver_ns()['load_law_aliases']()
+        self.assertIn('정보통신망법', al)          # 약칭 표는 cite_verify.js 한 곳(규칙 두 벌 금지)
+        self.assertIn('망법', al)
+
+    def test_resolve(self):
+        ns = self._resolver_ns()
+        canon = '정보통신망 이용촉진 및 정보보호 등에 관한 법률'
+        bases = [canon, canon + ' 시행령', '재난안전통신망법', '전기통신사업법', '전자문서 및 전자거래 기본법',
+                 '가나다 및 B 등에 관한 고시', '가나다 및 B에 관한 고시']   # 끝 둘은 「등」만 다른 정식 문서 두 개(모호)
+        r = ns['CiteNameResolver'](bases, ns['load_law_aliases']())
+        self.assertEqual(r.resolve('정보통신망법'), (canon, 'alias'))
+        self.assertEqual(r.resolve('망법'), (canon, 'alias'))                          # 끝 일치(재난안전통신망법)는 안 봄
+        self.assertEqual(r.resolve('정보통신망법 시행령'), (canon + ' 시행령', 'alias'))
+        self.assertEqual(r.resolve('정보통신망 이용촉진 및 정보보호에 관한 법률'), (canon, 'loose'))       # 「등」 빠짐
+        self.assertEqual(r.resolve('정보통신망의 이용촉진 및 정보보호 등에 관한 법률'), (canon, 'loose'))  # 옛 이름
+        self.assertEqual(r.resolve(canon), (None, ''))                                # 이미 정식
+        self.assertEqual(r.resolve('정보통신망  이용촉진 및 정보보호 등에 관한 법률'), (None, ''))   # 공백만 다름 = 정식
+        self.assertEqual(r.resolve('전파법'), (None, ''))
+        self.assertEqual(r.resolve('전자거래기본법'), (None, ''))                       # 이름 끝 일치는 적용 안 함
+        self.assertEqual(r.suffix_candidates('전자거래기본법'), ['전자문서 및 전자거래 기본법'])
+        self.assertEqual(r.resolve('가나다의 및 B에 관한 고시'), (None, ''))            # 「의」를 빼면 정식 문서 둘에 맞음 → 안 풂
+        self.assertEqual(r.resolve('가나다의 및 B 등에 관한 고시'), (None, ''))
+
+
 class TestLawmapPendingMark(unittest.TestCase):
     """관계도 설명의 시행 전 조문 표기(#273, 2026-10-03) — 「YYYY.M.D 시행」 판정, 네트워크 없음"""
 
