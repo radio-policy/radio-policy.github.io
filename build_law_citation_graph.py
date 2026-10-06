@@ -122,6 +122,15 @@ CITE_BLOCKLIST = {
 #     약칭은 법률의 것, 「약칭 시행령·시행규칙」은 같은 꼬리 문서). 표를 못 읽으면 ①은 건너뛴다.
 #  ② 「등」·「의」 차이 — 낱말 끝 「의」(정보통신망의 → 정보통신망)·「등에」(→ 에)·홀로 쓴 「등」을 뺀 열쇠가 같은 정식 문서.
 # 이름 끝 일치(「전자거래기본법」 → 「전자문서 및 전자거래 기본법」)는 넓어서 쓰지 않고 보고에 후보로만 보인다.
+#  ③ 옛 정식 이름(개명·통합) — 아래 표의 쌍만(규칙 아님). 넣기 전에 그 이름이 어디에 나오는지 원문으로 확인한다:
+#     10-06 운영자 결정 「추천대로」 — 다섯 이름 모두 부칙(2012 개명 개정문·타법개정, ISMS-P 고시의 옛 고시 폐지 문구)에만 나와
+#     풀면 대부분 자기 문서 인용으로 빠지고, 남던 스텁 노드 5개가 고아 정리로 사라진다. 시행령·시행규칙 꼬리는 같은 꼬리 문서로.
+#     약칭(①)과 달리 자문 인용 검증기에는 넣지 않았다(검증기는 모델 답의 이름을 읽는 곳이라 옛 이름이 나올 일이 드물다).
+LAW_RENAMED = {
+    '전자거래기본법': '전자문서 및 전자거래 기본법',                                          # 2012.6.1 법률 제11461호 개명
+    '정보보호 관리체계 인증 등에 관한 고시': '정보보호 및 개인정보보호 관리체계 인증 등에 관한 고시',   # 2018.11.7 통합(ISMS)
+    '개인정보보호 관리체계 인증 등에 관한 고시': '정보보호 및 개인정보보호 관리체계 인증 등에 관한 고시',  # 2018.11.7 통합(PIMS)
+}
 LAW_ALIAS_SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'supabase', 'functions', '_shared', 'cite_verify.js')
 SUBDOC_RE = re.compile(r'(시행령|시행규칙)$')
 
@@ -142,11 +151,13 @@ def load_law_aliases(path=LAW_ALIAS_SRC):
 
 
 class CiteNameResolver:
-    """인용 이름 → 정식 문서 base. resolve(name) → (base|None, 규칙 'alias'|'loose'|'')."""
+    """인용 이름 → 정식 문서 base. resolve(name) → (base|None, 규칙 'renamed'|'alias'|'loose'|'')."""
 
-    def __init__(self, bases, aliases):
+    def __init__(self, bases, aliases, renamed=None):
         self.bases = list(bases)
         self.exact = {self.key(b) for b in self.bases}
+        self.by_key = {self.key(b): b for b in self.bases}
+        self.renamed = {self.key(k): v for k, v in (LAW_RENAMED if renamed is None else renamed).items()}
         self.by_loose = defaultdict(list)
         for b in self.bases:
             self.by_loose[self.loose(b)].append(b)
@@ -188,7 +199,11 @@ class CiteNameResolver:
         if k not in self.exact:
             m = SUBDOC_RE.search(k)
             sub = m.group(1) if m else ''
-            alias = self.aliases.get(k[:-len(sub)] if sub else k)
+            stem = k[:-len(sub)] if sub else k
+            new = self.renamed.get(stem)
+            if new and self.key(new + sub) in self.by_key:
+                out = (self.by_key[self.key(new + sub)], 'renamed')
+            alias = None if out[0] else self.aliases.get(stem)
             if alias:
                 c = [b for b in self.bases if self._alias_target(b, alias, sub)]
                 out = (c[0], 'alias') if len(c) == 1 else (None, '')
@@ -227,6 +242,16 @@ def report_name_resolution(resolved, resolver, cites, cited_names, existing, exi
           f' / 풀고 나니 자기 문서 인용이라 빠지는 인용 {tot[3]}회·선 {tot[4]}개')
     for rule, v in sorted(by_rule.items()):
         print(f'    규칙 {rule}: 이름 {v[0]}개 · 다시 붙음 {v[1]}회·{v[2]}선 · 자기 인용 {v[3]}회·{v[4]}선')
+    via = defaultdict(int)   # (인용 문서, 정식) → 풀이로 온 인용 수
+    for (_, canon), rv in resolved.items():
+        for src, c in rv['srcs'].items():
+            if src != canon:
+                via[(src, canon)] += c
+    new_pairs = sorted(k for k, c in via.items() if cites[k]['count'] - c <= 0)
+    print(f'  다시 붙는 선 {len(via)}개 중 새로 생기는 (인용 문서 → 정식) 선 {len(new_pairs)}개'
+          f' / 이미 정식 이름으로도 인용하던 선에 합쳐짐 {len(via) - len(new_pairs)}개')
+    for src, canon in new_pairs:
+        print(f'    [새 선] {src} → {canon} (인용 {via[(src, canon)]}회)')
     for (name, canon), rv in sorted(resolved.items(), key=lambda kv: (-kv[1]['count'], kv[0])):
         srcs = sorted(rv['srcs'])
         self_note = ' · 자기 인용(빠짐)' if canon in rv['srcs'] else ''
@@ -677,7 +702,7 @@ def main(dry_run=False):
     cited_names = set()
     corrupt_skipped = defaultdict(int)   # 표 괘선으로 깨져 버린 인용(스텁 노드 방지) 집계
     CITE_BLOCKLIST_KEYS = _blocklist_keys()
-    resolver = CiteNameResolver(docs.keys(), load_law_aliases())   # 약칭·변형 이름 → 정식 문서(#285-보론)
+    resolver = CiteNameResolver(docs.keys(), load_law_aliases())   # 옛 이름·약칭·변형 이름 → 정식 문서(#285-보론)
     resolved = defaultdict(lambda: {'count': 0, 'srcs': defaultdict(int), 'rule': ''})   # (인용 이름, 정식) → 집계(보고용)
 
     for ch in chunks:

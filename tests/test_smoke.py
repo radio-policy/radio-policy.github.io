@@ -823,7 +823,7 @@ class TestCitationNameResolver(unittest.TestCase):
         path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'build_law_citation_graph.py')
         tree = ast.parse(open(path, encoding='utf-8').read())
         want_fn = {'load_law_aliases', 'norm_name', 'nrm_key', 'CiteNameResolver'}
-        want_var = {'MID_DOT_CHARS', 'MID_DOT_TRANS', 'TABLE_RULE_CHARS', 'TABLE_RULE_RE', 'LAW_ALIAS_SRC', 'SUBDOC_RE'}
+        want_var = {'MID_DOT_CHARS', 'MID_DOT_TRANS', 'TABLE_RULE_CHARS', 'TABLE_RULE_RE', 'LAW_ALIAS_SRC', 'SUBDOC_RE', 'LAW_RENAMED'}
         body = [n for n in tree.body if isinstance(n, ast.Assign) and any(getattr(t, 'id', None) in want_var for t in n.targets)]
         body += [n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.ClassDef)) and n.name in want_fn]
         ns = {'re': re, 'os': os, 'defaultdict': defaultdict, '__file__': path}
@@ -838,7 +838,8 @@ class TestCitationNameResolver(unittest.TestCase):
     def test_resolve(self):
         ns = self._resolver_ns()
         canon = '정보통신망 이용촉진 및 정보보호 등에 관한 법률'
-        bases = [canon, canon + ' 시행령', '재난안전통신망법', '전기통신사업법', '전자문서 및 전자거래 기본법',
+        bases = [canon, canon + ' 시행령', '재난안전통신망법', '전기통신사업법', '전자문서 및 전자거래 기본법', '전자문서 및 전자거래 기본법 시행령',
+                 '정보보호 및 개인정보보호 관리체계 인증 등에 관한 고시', '가나다 라마 기본법',
                  '가나다 및 B 등에 관한 고시', '가나다 및 B에 관한 고시']   # 끝 둘은 「등」만 다른 정식 문서 두 개(모호)
         r = ns['CiteNameResolver'](bases, ns['load_law_aliases']())
         self.assertEqual(r.resolve('정보통신망법'), (canon, 'alias'))
@@ -849,8 +850,13 @@ class TestCitationNameResolver(unittest.TestCase):
         self.assertEqual(r.resolve(canon), (None, ''))                                # 이미 정식
         self.assertEqual(r.resolve('정보통신망  이용촉진 및 정보보호 등에 관한 법률'), (None, ''))   # 공백만 다름 = 정식
         self.assertEqual(r.resolve('전파법'), (None, ''))
-        self.assertEqual(r.resolve('전자거래기본법'), (None, ''))                       # 이름 끝 일치는 적용 안 함
-        self.assertEqual(r.suffix_candidates('전자거래기본법'), ['전자문서 및 전자거래 기본법'])
+        self.assertEqual(r.resolve('라마 기본법'), (None, ''))                          # 이름 끝 일치는 적용 안 함(후보로만)
+        self.assertEqual(r.suffix_candidates('라마 기본법'), ['가나다 라마 기본법'])
+        # 옛 정식 이름(LAW_RENAMED 쌍만, 10-06 운영자 결정) — 시행령 꼬리는 같은 꼬리 문서로
+        self.assertEqual(r.resolve('전자거래기본법'), ('전자문서 및 전자거래 기본법', 'renamed'))
+        self.assertEqual(r.resolve('전자거래기본법 시행령'), ('전자문서 및 전자거래 기본법 시행령', 'renamed'))
+        self.assertEqual(r.resolve('전자거래기본법 시행규칙'), (None, ''))               # 그 꼬리 정식 문서가 없으면 안 풂
+        self.assertEqual(r.resolve('정보보호 관리체계 인증 등에 관한 고시'), ('정보보호 및 개인정보보호 관리체계 인증 등에 관한 고시', 'renamed'))
         self.assertEqual(r.resolve('가나다의 및 B에 관한 고시'), (None, ''))            # 「의」를 빼면 정식 문서 둘에 맞음 → 안 풂
         self.assertEqual(r.resolve('가나다의 및 B 등에 관한 고시'), (None, ''))
 
