@@ -1,0 +1,131 @@
+// tools_cite_replay.js — 과거 대시보드 자문을 인용 판정기(cite_verify.js) 두 판으로 재연해 **대상 선택·구조 판정**의 차이만 본다 (#286).
+//   Anthropic 호출 0. chat_logs 행(답변·chunk_ids·cite_verdicts가 있는 것 — 2026-09-26부터 저장)마다 그때의 근거 청크를 다시 읽고
+//   조문 보강(expandArticles)까지 운영과 같게 한 뒤, 옛 판과 새 판의 verifyCitations를 판정기 없이 돌려 (조·문서군·상태)가 달라진 표시를 찍는다.
+//   저장된 답변은 검증 뒤 본문이라 바뀐 표시(「원문 없음 — …」·「원문과 다름 — …」)를 모델이 쓴 꼴(「[원문 확인됨: 대상]」)로 되돌려 넣는다.
+//
+//   node tools_cite_replay.js                       # HEAD 커밋의 cite_verify.js(옛) vs 작업 사본(새), 2026-09-01 이후
+//   node tools_cite_replay.js --old path/old.js     # 옛 판 파일을 직접 지정
+//   node tools_cite_replay.js --since 2026-10-01    # 기간
+//   node tools_cite_replay.js --all-mismatch        # 판정기를 모두 「불일치」로 모의 — "주황이 될 수 있는 표시"가 어떻게 달라지는지(#286 ⓒ 회색 규칙)
+//
+//   .env의 SUPABASE_URL·SUPABASE_SERVICE_KEY를 읽는다(service_role — chat_logs는 RLS로 묶여 있다). 세션 셸에서는 HTTP(S)_PROXY를 빼고 돌릴 것.
+//   같은 코드 두 번 = 차이 0이어야 한다(판정기가 없으니 잡음도 없다). 규칙·문턱·불용어를 바꾼 뒤 이 재연과 node tests/cite_verify.test.js를 함께 본다.
+const fs = require('fs'), path = require('path'), vm = require('vm'), os = require('os'), cp = require('child_process');
+const REPO = __dirname;
+const arg = function (name, dflt) { const i = process.argv.indexOf(name); return i !== -1 ? process.argv[i + 1] : dflt; };
+const since = arg('--since', '2026-09-01');
+const ALLMIS = process.argv.indexOf('--all-mismatch') !== -1;
+const newPath = path.join(REPO, 'supabase', 'functions', '_shared', 'cite_verify.js');
+let oldPath = arg('--old', null);
+if (!oldPath) {
+  oldPath = path.join(os.tmpdir(), 'cite_verify_head_' + process.pid + '.js');
+  fs.writeFileSync(oldPath, cp.execSync('git show HEAD:supabase/functions/_shared/cite_verify.js', { cwd: REPO, maxBuffer: 1 << 24 }));
+}
+
+const env = {};
+for (const line of fs.readFileSync(path.join(REPO, '.env'), 'utf8').split(/\r?\n/)) {
+  const m = line.match(/^([A-Z_]+)=(.*)$/); if (m) env[m[1]] = m[2].trim().replace(/^"|"$/g, '');
+}
+const URL = env.SUPABASE_URL, KEY = env.SUPABASE_SERVICE_KEY;
+if (!URL || !KEY) { console.error('.env에 SUPABASE_URL / SUPABASE_SERVICE_KEY 없음'); process.exit(2); }
+async function rest(q) {
+  const r = await fetch(URL + '/rest/v1/' + q, { headers: { apikey: KEY, Authorization: 'Bearer ' + KEY } });
+  if (!r.ok) throw new Error('REST ' + r.status + ' ' + q.slice(0, 120));
+  return r.json();
+}
+const enc = encodeURIComponent;
+
+function loadModule(p) {   // 두 판을 서로 다른 전역에 올린다(globalThis.CiteVerify가 덮이지 않게)
+  const src = fs.readFileSync(p, 'utf8');
+  const ctx = { module: { exports: {} }, console, setTimeout, clearTimeout, Promise };
+  ctx.globalThis = ctx;
+  vm.runInNewContext(src, ctx, { filename: p });
+  return ctx.module.exports;
+}
+function loadSystemPrompt() {   // 운영은 app_config.system_prompt — 저장소의 system_prompt.js와 같아야 한다(tools_release.py ③)
+  const src = fs.readFileSync(path.join(REPO, 'system_prompt.js'), 'utf8') + '\n;this.__SP = typeof SYSTEM_PROMPT !== "undefined" ? SYSTEM_PROMPT : null;';
+  const ctx = { window: {}, console }; ctx.globalThis = ctx;
+  vm.runInNewContext(src, ctx);
+  return ctx.__SP || (ctx.window && ctx.window.SYSTEM_PROMPT) || '';
+}
+function untag(answer) {
+  return String(answer || '').replace(/\[(원문 없음 — |원문과 다름 — 판정기 메모: )([^\]]*)\]/g, function (all, head, body) {
+    const m = body.match(/^(.*) \(([^()]*)\)$/);
+    const tgt = m ? m[2].split(' · ')[0].trim() : '';   // 「(대상 · 법령 이름 없음 → …)」의 추측 메모는 뺀다
+    return tgt && !/^법령 이름/.test(tgt) ? '[원문 확인됨: ' + tgt + ']' : '[원문 확인됨]';
+  });
+}
+const EXPAND_OPTS = { maxArticles: 10, maxChunksPerArticle: 4, maxAddedChunks: 14 };   // verify-citations/index.ts와 같은 값
+const SEL = 'id,doc_name,article_no,chunk_index,content';
+async function fetchChunksByIds(ids) {
+  if (!ids.length) return [];
+  const rows = await rest('document_chunks?select=' + SEL + '&id=in.(' + ids.join(',') + ')');
+  const by = new Map(rows.map(function (r) { return [r.id, r]; }));
+  return ids.map(function (id) { return by.get(id); }).filter(Boolean);
+}
+const artCache = new Map();
+function fetchArticle(docName, key) {
+  const k = docName + '|' + key;
+  if (!artCache.has(k)) artCache.set(k, rest('document_chunks?select=' + SEL + '&doc_name=eq.' + enc(docName) + '&status=eq.current&is_approved=eq.true&article_no=like.' + enc(key + '*') + '&order=chunk_index.asc&limit=40'));
+  return artCache.get(k);
+}
+const lawCache = new Map();
+function fetchLawArticle(family, key) {
+  const k = family + '|' + key;
+  if (!lawCache.has(k)) lawCache.set(k, rest('document_chunks?select=' + SEL + ',status&doc_name=like.' + enc(family + '(*') + '&status=in.(current,pending)&is_approved=eq.true&article_no=like.' + enc(key + '*') + '&order=chunk_index.asc&limit=80'));
+  return lawCache.get(k);
+}
+function fakeJudges() {   // 1차 전부 불일치, 2차 전부 불일치 + 원문·인용문의 실제 조각을 근거 구절로(grounded)
+  return {
+    callHaiku: async function (sys, user) {
+      const n = (user.match(/### 항목 \d+/g) || []).length;
+      return JSON.stringify(Array.from({ length: n }, function (_, i) { return { id: i + 1, verdict: '불일치', reason: '모의' }; }));
+    },
+    callJudge2: async function (sys, user) {
+      const claim = (user.split('[인용문]\n')[1] || '').split('\n[원문]\n')[0], src = user.split('\n[원문]\n')[1] || '';
+      return JSON.stringify([{ id: 1, verdict: '불일치', source_span: src.replace(/\s+/g, ' ').trim().slice(0, 40), claim_span: claim.replace(/\s+/g, ' ').trim().slice(0, 30), reason: '모의 불일치' }]);
+    },
+  };
+}
+function brief(v) {
+  return { tag: v.tag, key: v.key, law: v.law, doc: v.doc ? v.doc.split('(')[0] : null, status: v.status === 'unjudged' ? 'found' : v.status, reason: v.reason, guess: v.lawGuess || null, ev: v.guessEvidence == null ? null : !!v.guessEvidence };
+}
+(async function main() {
+  const OLD = loadModule(oldPath), NEW = loadModule(newPath), sp = loadSystemPrompt();
+  const rows = await rest('chat_logs?select=id,created_at,channel,question,answer,chunk_ids,cite_verdicts&created_at=gte.' + since + '&cite_verdicts=not.is.null&chunk_ids=not.is.null&order=created_at.asc&limit=300');
+  console.log('rows', rows.length, 'since', since, ALLMIS ? '(모의 판정: 전부 불일치)' : '(판정기 없음 — 구조만)', '| old =', oldPath);
+  let items = 0, diffs = 0;
+  const summary = { old: {}, new: {} };
+  for (const row of rows) {
+    if (!Array.isArray(row.cite_verdicts) || !row.cite_verdicts.length) continue;
+    const ids = (row.chunk_ids || []).filter(function (x) { return typeof x === 'number'; }).slice(0, 80);
+    const chunks0 = await fetchChunksByIds(ids);
+    const answer = untag(row.answer);
+    const out = {};
+    for (const pair of [['old', OLD], ['new', NEW]]) {
+      const name = pair[0], CV = pair[1];
+      let chunks = chunks0.slice();
+      try { chunks = (await CV.expandArticles(chunks, fetchArticle, EXPAND_OPTS)).chunks; } catch (e) { console.warn('expand fail', e.message); }
+      const judges = ALLMIS ? fakeJudges() : { callHaiku: null, callJudge2: null };
+      const vr = await CV.verifyCitations({ answer: answer, chunks: chunks, annexSources: [], systemPrompt: sp, callHaiku: judges.callHaiku, callJudge2: judges.callJudge2, fetchLawArticle: fetchLawArticle });
+      out[name] = vr.verdicts.map(brief);
+      for (const v of out[name]) summary[name][v.status] = (summary[name][v.status] || 0) + 1;
+    }
+    const n = Math.max(out.old.length, out.new.length);
+    items += n;
+    for (let i = 0; i < n; i++) {
+      const a = out.old[i], b = out.new[i];
+      const ka = a ? [a.key, a.doc, a.status].join('|') : '-', kb = b ? [b.key, b.doc, b.status].join('|') : '-';
+      if (ka !== kb) {
+        diffs++;
+        console.log('\n# ' + row.created_at.slice(0, 16) + ' ' + row.id.slice(0, 8) + ' Q: ' + String(row.question || '').slice(0, 40));
+        console.log('  tag : ' + (a || b).tag);
+        console.log('  old : ' + ka + (a && a.reason ? '  — ' + a.reason : ''));
+        console.log('  new : ' + kb + (b && b.reason ? '  — ' + b.reason : '') + (b && b.guess ? '  [guess=' + b.guess + ' ev=' + b.ev + ']' : ''));
+      }
+    }
+  }
+  console.log('\nitems', items, 'changed', diffs);
+  console.log('old', JSON.stringify(summary.old));
+  console.log('new', JSON.stringify(summary.new));
+})().catch(function (e) { console.error(e); process.exit(1); });
