@@ -120,7 +120,11 @@ def fetch_law_articles(mst: str, ef_date: str = None):
     r = requests.get(DRF_SERVICE, params=params, timeout=60)
     r.raise_for_status()
     d = r.json()['법령']
-    basic = d.get('기본정보', {})
+    return law_articles(d) + _addenda(d) + _tables(d), d.get('기본정보', {})
+
+
+def law_articles(d):
+    """법령 응답 본문('법령') → 조문만 [(article_no, text)] — 부칙·별표 없이(세율·감면 감시 tax_clause_watch도 쓴다, #287)."""
     out = []
     for a in d['조문']['조문단위']:
         no = _txt(a.get('조문번호'))
@@ -155,7 +159,7 @@ def fetch_law_articles(mst: str, ef_date: str = None):
         text = "\n".join(p for p in parts if p)
         if len(text.strip()) > 10:
             out.append((art_no, text))
-    return out + _addenda(d) + _tables(d), basic
+    return out
 
 
 def _addenda(body):
@@ -304,8 +308,37 @@ def fetch_admrul_articles(rule_id: str):
 
 # ── 청킹 ──────────────────────────────────────────────────
 
+# 별표 구간 머리 (#287, 2026-10-06) — 별표가 「<제1종> … <제2종> …」처럼 홑 줄 머리로 구간을 나누면, 800자 조각은 머리가 든
+# 조각 하나만 그 구간 이름을 안다. 지방세법 시행령 별표 1(면허 종류와 종별, 96조각)의 무선국 행(제128호)은 머리 <제3종>에서
+# 15조각 뒤라 어느 검색 경로로 가져와도 모델이 종별을 몰라 법 제34조 세율표(제3종 금액)와 잇지 못했다(과거 등록면허세 자문 2건 모두
+# 제3종·금액 0회). 그래서 조각 시작 위치에서 유효한 머리를 첫 줄 「〔제3종〕」으로 붙인다 — 자른 뒤 붙이므로 경계·겹침·원문 글자는 그대로다.
+# 좁게: 「제N종·류·군·급」 꼴 홑 줄(<…>가 줄 전체)이 같은 별표에 2개 이상일 때만. 「줄 전체가 <…> 2~12자」만으로는 표 제목·절 이름
+# (<일반 주석>/<특별 주석> 해상업무용 기술기준 별표 1 26조각, <용어정리>/<작성요령>, <신용등급> 두 번)까지 걸려 이 꼴로 줄였다 —
+# 10-06 실DB 전 상태 별표 중 걸리는 것은 지방세법 시행령 별표 1(현행·구판 2)뿐. 규칙은 이 함수 한 곳(tools_annex_repair도 이 함수로
+# 옛 조각을 다시 만든다 — 이 규칙 전에 적재된 그 별표는 글자 대조가 어긋나 건너뛴다).
+ANNEX_HEAD_RE = re.compile(r'^[ \t]*(<[ \t]*(제[ \t]*\d+[ \t]*[종류군급])[ \t]*>)[ \t]*$', re.M)
+
+
+def _annex_heads(art_no, text):
+    """별표·별지 본문의 구간 머리 [(「<」 위치, '제3종')] — 2개 이상일 때만, 아니면 []."""
+    if not re.match(r'(별표|별지)', art_no or ''):
+        return []
+    heads = [(m.start(1), re.sub(r'\s', '', m.group(2))) for m in ANNEX_HEAD_RE.finditer(text)]
+    return heads if len(heads) >= 2 else []
+
+
+def _head_at(heads, pos):
+    """조각 첫 글자 위치 pos에서 유효한 머리 이름 — 앞에 머리가 없거나 조각이 머리 줄로 시작하면 None."""
+    cur = None
+    for p, name in heads:
+        if p > pos:
+            break
+        cur = (p, name)
+    return cur[1] if cur and cur[0] < pos else None
+
+
 def chunk_articles(articles):
-    """조문 단위 청킹. 조문이 길면 분할하되 article_no는 유지."""
+    """조문 단위 청킹. 조문이 길면 분할하되 article_no는 유지. 구간 머리가 있는 별표는 조각마다 머리를 첫 줄에(#287)."""
     chunks = []
     for art_no, text in articles:
         text = text.strip()
@@ -314,11 +347,14 @@ def chunk_articles(articles):
         if len(text) <= CHUNK_SIZE:
             chunks.append({'article_no': art_no, 'content': text})
             continue
+        heads = _annex_heads(art_no, text)
         start = 0
         while start < len(text):
-            piece = text[start:start + CHUNK_SIZE].strip()
+            raw = text[start:start + CHUNK_SIZE]
+            piece = raw.strip()
             if len(piece) > 50:
-                chunks.append({'article_no': art_no, 'content': piece})
+                head = _head_at(heads, start + len(raw) - len(raw.lstrip())) if heads else None
+                chunks.append({'article_no': art_no, 'content': f'〔{head}〕\n{piece}' if head else piece})
             start += CHUNK_SIZE - CHUNK_OVERLAP
     return chunks
 

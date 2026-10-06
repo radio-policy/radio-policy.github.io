@@ -979,6 +979,80 @@ class TestAnnexLabelAndTextFix(unittest.TestCase):
         self.assertEqual((bad[0], bad[1]), ('│2) 전기냉장?냉동기류 │ 사이에 “?”을 삽입', 0))
 
 
+class TestAnnexSectionHeads(unittest.TestCase):
+    """별표 구간 머리 되붙이기(#287, 2026-10-06) — law_sync.chunk_articles 한 곳. 네트워크 없음"""
+
+    LABEL = '별표 1(면허에 대한 등록면허세를 부과할 면허의 종류와 종별 구분(제39조 관련))'
+
+    @staticmethod
+    def _rows(lo, hi):
+        return ''.join(f'{i}. 「전파법」 제19조에 따른 무선국의 개설 허가 및 신고 줄 {i}\n' for i in range(lo, hi))
+
+    def _annex(self, heads=('제1종', '제2종', '제3종')):
+        text = '■ 지방세법 시행령 [별표 1] <개정 2026. 6. 23.>\n면허의 종류와 종별 구분(제39조 관련)\n'
+        for k, h in enumerate(heads):
+            text += (f'<{h}>\n' if h else '') + self._rows(1 + 60 * k, 60 + 60 * k)
+        return text
+
+    @staticmethod
+    def _strip(c):
+        return c['content'].split('\n', 1)[1] if c['content'].startswith('〔') else c['content']
+
+    def test_heads_prefix_without_moving_boundaries(self):
+        import law_sync as L
+        text = self._annex()
+        got = L.chunk_articles([(self.LABEL, text)])
+        plain = L.chunk_articles([('39조(면허의 구분)', text)])          # 조문에는 붙이지 않는다 — 옛 규칙 그대로의 기준
+        self.assertTrue(all(not c['content'].startswith('〔') for c in plain))
+        self.assertEqual([self._strip(c) for c in got], [c['content'] for c in plain])   # 경계·겹침·원문 글자 그대로
+        self.assertGreater(len(got), 5)
+        step = L.CHUNK_SIZE - L.CHUNK_OVERLAP
+        pos = {h: text.index(f'<{h}>') for h in ('제1종', '제2종', '제3종')}
+        for i, c in enumerate(got):
+            start = i * step                                               # 이 시험 글은 조각마다 공백으로 시작하지 않는다
+            want = None
+            for h in ('제1종', '제2종', '제3종'):
+                if pos[h] < start:
+                    want = h
+            if want:
+                self.assertTrue(c['content'].startswith(f'〔{want}〕\n'), (i, want))
+            else:
+                self.assertFalse(c['content'].startswith('〔'), i)
+        self.assertFalse(got[0]['content'].startswith('〔'))                # 첫 머리는 첫 조각 안(시작 뒤) — 붙일 것 없음
+
+    def test_head_inside_piece_keeps_previous_section(self):
+        import law_sync as L
+        got = L.chunk_articles([(self.LABEL, self._annex())])
+        mid = [c for c in got if '\n<제2종>\n' in c['content'] and not self._strip(c).startswith('<제2종>')]
+        self.assertTrue(mid)
+        self.assertTrue(all(c['content'].startswith('〔제1종〕\n') for c in mid))   # 조각 첫머리는 아직 제1종 구간
+        nxt = got[got.index(mid[-1]) + 1]
+        self.assertTrue(nxt['content'].startswith('〔제2종〕\n'))
+
+    def test_piece_starting_with_head_line_gets_no_prefix(self):
+        import law_sync as L
+        step = L.CHUNK_SIZE - L.CHUNK_OVERLAP
+        first = '<제1종>\n' + 'ㄱ' * (step - len('<제1종>\n') - 1) + '\n'     # 두 번째 조각이 정확히 <제2종> 줄에서 시작
+        text = first + '<제2종>\n' + self._rows(1, 60)
+        got = L.chunk_articles([(self.LABEL, text)])
+        self.assertTrue(got[1]['content'].startswith('<제2종>\n'))
+        self.assertTrue(got[2]['content'].startswith('〔제2종〕\n'))
+
+    def test_one_or_no_head_and_table_titles_unchanged(self):
+        import law_sync as L
+        for heads in (('제1종', ''), ('', '')):
+            got = L.chunk_articles([(self.LABEL, self._annex(heads))])
+            self.assertTrue(len(got) > 1 and all(not c['content'].startswith('〔') for c in got), heads)
+        # 표 제목·절 이름·개정 표지 홑 줄은 구간 머리가 아니다(해상업무용 기술기준 별표 1의 <일반 주석>/<특별 주석> 등)
+        for heads in (('일반 주석', '특별 주석'), ('용어정리', '작성요령'), ('개정 2019. 2. 8.', '신설 2020. 12. 31.'), ('표 4.1', '표 4.2')):
+            got = L.chunk_articles([(self.LABEL, self._annex(heads))])
+            self.assertTrue(all(not c['content'].startswith('〔') for c in got), heads)
+        self.assertEqual(L._annex_heads('별지 3(서식)', '<제1군>\n가\n< 제 2 군 >\n나'), [(0, '제1군'), (8, '제2군')])
+        self.assertEqual(L._annex_heads('부칙 제1호', '<제1군>\n가\n<제2군>\n나'), [])
+        short = '■ [별표 2]\n<제1종>\n가. 짧은 별표\n<제2종>\n나. 끝'
+        self.assertEqual(L.chunk_articles([(self.LABEL, short)]), [{'article_no': self.LABEL, 'content': short}])
+
+
 class TestAssemblyAlertBatch(unittest.TestCase):
     """assembly_crawler 알림 묶음(#140·#193) — 실행당 한 통, 구독자는 위원회 통과 이후만, 폐기류는 양쪽 제외, 그룹당 10건 + 외 N건"""
 

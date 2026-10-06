@@ -168,3 +168,16 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python okf_drift_check.py --notify
+
+      # 무선국 등록면허세 근거 조문 감시 (#287). AI 0회. 지방세법 제34조 세율표·시행령 별표 1 무선국 행(KB 현행본 —
+      # 앞 단계 law_sync 교체 뒤를 본다)·지방세특례제한법 무선국·이동통신 감면 조문(법제처 현행본, KB에 없음)의
+      # 글자 지문을 app_config 'tax_clause_watch'에 두고 달라진 날만 운영자 텔레그램. 조회 실패는 3회 연속일 때 한 번.
+      - name: Watch radio-station license tax clauses
+        continue-on-error: true
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          LAW_OC_KEY: ${{ secrets.LAW_OC_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python tax_clause_watch.py
