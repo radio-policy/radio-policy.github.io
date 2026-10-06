@@ -15841,63 +15841,38 @@ async function askLawMap() {
 
   // ── "법령명 + 제N조" 질문 (2026-09-05, 배경역사 #124): 주제 단어 매칭이 아니라 그 조문을 근거로 삼는 주제로 간다 ──
   //  "전기통신사업법 37조"가 '통신사업 회계분리'(제49조)에 부분일치로 붙어 엉뚱한 조문을 보여준 사고.
-  var artQ = lawmapParseArticleQuery(q);
-  if (artQ) {
-    var lawNode = lawmapFindNodeByName(artQ.law);
-    if (lawNode) {
-      var hits = [];
-      _lawMapEdges.forEach(function(e) {
-        if (e.source_id !== lawNode.id && e.target_id !== lawNode.id) return;
-        var otherId = e.source_id === lawNode.id ? e.target_id : e.source_id;
-        var t = _lawMapNodes.find(function(x) { return x.id === otherId; });
-        if (t && t.node_type === 'topic' && lawmapDescCites(e.description, artQ.key)) hits.push({ topic: t, edge: e });
-      });
-      if (hits.length) {
-        // 그 조문만 콕 찍은(인용 조문 수가 적은) 주제를 앞에 — 재난로밍(제37·38·44조)보다 무선통신시설 공동이용(제37조)
-        hits.sort(function(a, b) { return lawmapDescArticleCount(a.edge.description) - lawmapDescArticleCount(b.edge.description) || (b.edge.weight || 0) - (a.edge.weight || 0); });
-        var first = hits[0].topic;
-        var sel0 = document.getElementById('lawmap-topic-select');
-        if (sel0) sel0.value = first.id;
-        renderLawMapGraph(first.id);
-        var others = hits.slice(1).map(function(h) {
-          return '<button class="btn" style="font-size:11px;padding:2px 8px" onclick="lawmapGoTopic(\'' + h.topic.id + '\',\'' + lawNode.id + '\')">' + lmEsc(h.topic.name) + '</button>';
-        }).join(' ');
-        setLawMapStatus('✔ <b>' + lmEsc(lawNode.name) + ' 제' + lmEsc(artQ.key) + '</b>를 근거로 하는 주제: <b>' + lmEsc(first.name) + '</b>' +
-          (others ? ' · 같은 조문을 근거로 하는 다른 주제: ' + others : '') + ' — API 호출 없음');
-        showLawMapNodeDetail(lawNode.id);   // 주제 맥락의 법령 카드: 🎯 역할 + 📌 제N조 발췌
-        return;
-      }
-      // 이 조문을 근거로 삼는 주제가 없음 → 법령 노드 포커스 + 해당 조문 원문 발췌 (엉뚱한 주제로 가지 않음)
-      renderLawMapGraph(lawNode.id);
-      setLawMapStatus(lmEsc(lawNode.name) + ' 제' + lmEsc(artQ.key) + '를 근거로 삼는 주제가 아직 없습니다 — 법령 중심 관계와 조문 원문을 표시합니다 · ' +
-        '' + _lawmapGenBtnHtml() + '');
-      await showLawMapNodeDetail(lawNode.id);
-      var docName0 = lawNode.doc_name || null;
-      if (!docName0) {
-        try { var dq0 = await sb.from('document_chunks').select('doc_name').ilike('doc_name', lawNode.name + '%').limit(1); if (dq0.data && dq0.data.length) docName0 = dq0.data[0].doc_name; } catch(e) {}
-      }
-      if (docName0) fillLawMapArticle(lawNode, '제' + artQ.key, docName0, lawNode.name, null);
+  //  판정은 lawmapMatchQuery(순수 함수 — 도구·시험과 같은 코드), 여기서는 그리기만 한다(#285).
+  var res = lawmapMatchQuery(q, _lawMapNodes, _lawMapEdges);
+  if (res.mode === 'article') {
+    var artQ = res.artQ, lawNode = res.lawNode, hits = res.hits;
+    if (hits.length) {
+      // 본래 선 먼저(인접 선은 뒤), 그 안에서 그 조문만 콕 찍은(인용 조문 수가 적은) 주제를 앞에 — 재난로밍(제37·38·44조)보다 무선통신시설 공동이용(제37조)
+      var first = hits[0].topic;
+      var sel0 = document.getElementById('lawmap-topic-select');
+      if (sel0) sel0.value = first.id;
+      renderLawMapGraph(first.id);
+      var others = hits.slice(1).map(function(h) {
+        return '<button class="btn" style="font-size:11px;padding:2px 8px" onclick="lawmapGoTopic(\'' + h.topic.id + '\',\'' + lawNode.id + '\')">' + lmEsc(h.topic.name) + (h.adj ? ' (인접)' : '') + '</button>';
+      }).join(' ');
+      setLawMapStatus('✔ <b>' + lmEsc(lawNode.name) + ' 제' + lmEsc(artQ.key) + '</b>를 근거로 하는 주제: <b>' + lmEsc(first.name) + '</b>' +
+        (others ? ' · 같은 조문을 근거로 하는 다른 주제: ' + others : '') + ' — API 호출 없음');
+      showLawMapNodeDetail(lawNode.id);   // 주제 맥락의 법령 카드: 🎯 역할 + 📌 제N조 발췌
       return;
     }
-    // 법령 노드가 관계망에 없으면 아래 일반 주제 매칭으로 (법령명 토큰은 매칭에서 제외됨)
+    // 이 조문을 근거로 삼는 주제가 없음 → 법령 노드 포커스 + 해당 조문 원문 발췌 (엉뚱한 주제로 가지 않음)
+    renderLawMapGraph(lawNode.id);
+    setLawMapStatus(lmEsc(lawNode.name) + ' 제' + lmEsc(artQ.key) + '를 근거로 삼는 주제가 아직 없습니다 — 법령 중심 관계와 조문 원문을 표시합니다 · ' +
+      '' + _lawmapGenBtnHtml() + '');
+    await showLawMapNodeDetail(lawNode.id);
+    var docName0 = lawNode.doc_name || null;
+    if (!docName0) {
+      try { var dq0 = await sb.from('document_chunks').select('doc_name').ilike('doc_name', lawNode.name + '%').limit(1); if (dq0.data && dq0.data.length) docName0 = dq0.data[0].doc_name; } catch(e) {}
+    }
+    if (docName0) fillLawMapArticle(lawNode, '제' + artQ.key, docName0, lawNode.name, null);
+    return;
   }
-
-  // 양방향 매칭: ① 주제명의 핵심 단어가 질문에 실제로 들어있어야 함(질문 공백 제거 후 부분일치)
-  //             ② 질문 키워드가 주제 설명에 들어가면 가점(동점 해소)
-  //  법령명 토큰("전기통신사업법", "전파법 시행령")은 먼저 걷어낸다 — '통신사업'이 '전기통신사업법' 안에 부분일치하는 오탐 차단(#124)
-  var qStripped = q.replace(/(^|\s)[가-힣A-Za-z0-9·ㆍ]*(?:법|법률|시행령|시행규칙|규칙|고시)(?=\s|$|\d)/g, '$1 ');
-  var qns = qStripped.replace(/\s+/g, '').toLowerCase();
-  var kws = extractKeywords(q).filter(function(k) { return !LAWMAP_MATCH_STOP[k]; });
-  var best = null, bestScore = 0;
-  _lawMapNodes.filter(function(n) { return n.node_type === 'topic'; }).forEach(function(n) {
-    var words = lawmapTopicWords(n.name);
-    var nameHits = words.filter(function(w) { return qns.indexOf(w.toLowerCase()) !== -1; });
-    if (nameHits.length === 0) return;   // 주제의 핵심 단어가 질문에 없으면 후보 아님(오탐 차단)
-    var s = nameHits.length * 3;
-    var desc = (n.description || '').toLowerCase();
-    kws.forEach(function(k) { if (desc.indexOf(k.toLowerCase()) !== -1) s += 1; });
-    if (s > bestScore) { bestScore = s; best = n; }
-  });
+  // 법령 노드가 관계망에 없거나 조문 질문이 아니면 주제 매칭 결과(res.mode === 'topic') — 법령명 토큰은 매칭에서 제외됨
+  var best = res.best, bestScore = res.score;
   if (best && bestScore >= 3) {
     var sel = document.getElementById('lawmap-topic-select');
     if (sel) sel.value = best.id;
@@ -15939,35 +15914,211 @@ function lawmapParseArticleQuery(q) {   // "전기통신사업법 37조", "전�
   return { law: law, key: m[2] + '조' + (m[3] ? '의' + m[3] : '') };
 }
 function lawmapFindNodeByName(name) {   // 노드명 정규화 일치(가운뎃점·공백 무시), 주제 제외
-  var k = lmNormName(name);
-  return _lawMapNodes.find(function(n) { return n.node_type !== 'topic' && lmNormName(n.name) === k; }) || null;
+  return lawmapNodeByName(_lawMapNodes, name);
 }
-var LAWMAP_DESC_ART_RE = /제\s*(\d+(?:\s*[·ㆍ,~∼\-]\s*\d+)*)\s*조(?:\s*의\s*(\d+))?/g;
-function lawmapDescCites(desc, key) {   // 설명이 그 조문을 인용하나 — "제37조", "제35~37조", "제35·37조" 인식, 제37조≠제37조의2
+function lawmapNodeByName(nodes, name) {
+  var k = lmNormName(name);
+  return (nodes || []).find(function(n) { return n.node_type !== 'topic' && lmNormName(n.name) === k; }) || null;
+}
+// 선 설명 속 조 번호. 「제37조의2~의4」의 뒤 「의N」(m[3])까지 한 매치 — lawmapDescNormRange가 「제23조의2~제23조의4」를 이 꼴로 접는다.
+var LAWMAP_DESC_ART_RE = /제\s*(\d+(?:\s*[·ㆍ,~∼\-]\s*\d+)*)\s*조(?:\s*의\s*(\d+)(?:\s*[~∼\-]\s*의\s*(\d+))?)?/g;
+// ── 선 설명의 「자기 법령」 조 번호 (#285, 2026-10-06, Fable 판정 Q2 ㄴ·ㄷ — local_docs/관계도_IDC주제_재검토_판정_261006.md) ──
+//  선 설명에 적힌 *다른 법령*의 조 번호(「전파법 제37조」·「법 제47조의2」·「등급기준 제2조」)를 그 선 법령의 조로 읽어
+//  관계도 전체 주제 선 143개·인용 211개가 허상이었다(무선설비규칙에 없는 제37조로 「기지국 예비전원」이 떴다).
+//  조 번호 바로 앞(공백·」 허용)의 낱말이 법령 꼴(…법·법률·령·시행령·시행규칙·규칙·고시·규정·기준·지침·분배표, 「영」은 그 한 글자만)이면
+//  다른 법령으로 친다. 예외(자기 법령): ⓐ 낱말이 자기 노드 이름(공백·가운뎃점 뺀 것)의 끝과 같음(「사업법」 in 전기통신사업법)
+//  ⓑ 종류 낱말 하나뿐이고 자기 이름이 그 종류로 끝남(「법」·「법률」↔…법/법률, 「시행령」·「영」↔…시행령, 「시행규칙」·「규칙」↔…규칙,
+//  「고시」·「규정」·「기준」·「지침」·「분배표」↔ 그 낱말) · 「이 법」·「이 지침」. 「같은 법」·「동법」·「같은 영」은 앞에 든 다른 법을 받는 말이라 다른 법령.
+//  가운뎃점·쉼표·물결·①②·제N항·제N호만 사이에 둔 목록(「전파법 제37조·제45조」, 「제23조②·제23조의2」)은 앞 항목 판정을 물려받는다.
+//  lawNode(노드 또는 이름)가 없으면 모두 자기 조로 본다(종전 동작 — AI 저장 관문 lawmapVerifyRelation).
+//  관계도 '조문 단위 보기'의 lmaBasisKeys(lawmap_articles.js, lawmap_edge_check.py 이식)는 규칙이 다르다(「법 제N조」를 늘 상위법으로 봄) — 합치지 말 것(별도 판정 대상).
+var LAWMAP_KIND_WORDS = { '법': ['법', '법률'], '법률': ['법', '법률'], '시행령': ['시행령'], '영': ['시행령'], '시행규칙': ['규칙'], '규칙': ['규칙'],
+  '고시': ['고시'], '규정': ['규정'], '기준': ['기준'], '지침': ['지침'], '분배표': ['분배표'] };
+var LAWMAP_PREFIX_WORD_RE = /([가-힣A-Za-z0-9]+)[」』]?\s*$/;
+var LAWMAP_LAWISH_RE = /(?:법|법률|령|규칙|고시|규정|기준|지침|분배표)$/;
+var LAWMAP_LIST_GAP_RE = /^(?:\s*(?:제\s*\d+\s*항|제\s*\d+\s*호|[①-⑳]))*\s*[·ㆍ,~∼\-]\s*$/;
+function lawmapDescOwnRefs(desc, lawNode) {   // → [{lo, hi, ui, uiEnd, list, own, prefix, width}] — 설명 속 조 번호 전부(다른 법령 것은 own:false)
+  var ownName = typeof lawNode === 'string' ? lawNode : (lawNode && lawNode.name) || '';
+  var own = lmNormName(ownName);
+  var d = lawmapDescNormRange(desc), out = [], m, prevEnd = -1, prevOwn = true;
+  var re = new RegExp(LAWMAP_DESC_ART_RE.source, 'g');
+  while ((m = re.exec(d))) {
+    var parts = m[1].split(/[·ㆍ,]/).map(function(p) {
+      var r = p.split(/[~∼\-]/).map(function(x) { return parseInt(x, 10); });
+      return (r.length === 2 && !isNaN(r[0]) && !isNaN(r[1]) && r[0] <= r[1]) ? { lo: r[0], hi: r[1] } : { lo: r[0], hi: r[0] };
+    });
+    var isOwn = true, prefix = '';
+    if (own) {
+      var before = d.slice(0, m.index);
+      if (prevEnd >= 0 && LAWMAP_LIST_GAP_RE.test(d.slice(prevEnd, m.index))) {
+        isOwn = prevOwn;                                       // 목록 — 앞 항목 판정을 물려받음
+      } else if (/(?:^|[\s(「『·,])(?:같은|동)\s*(?:법률|법|시행령|영|시행규칙|규칙)(?:\s*(?:시행령|시행규칙))?\s*$/.test(before)) {
+        isOwn = false; prefix = '같은 법';                     // 「같은 법」·「동법」·「같은 영」 — 앞에 든 다른 법
+      } else if (/(?:^|[\s(「『·,])이\s*(?:법률|법|시행령|영|시행규칙|규칙|고시|규정|기준|지침)\s*$/.test(before)) {
+        isOwn = true;                                          // 「이 법」·「이 지침」
+      } else {
+        var pw = LAWMAP_PREFIX_WORD_RE.exec(before);
+        var w = pw ? pw[1] : '';
+        if (w && (LAWMAP_LAWISH_RE.test(w) || w === '영')) {
+          prefix = w;
+          var kinds = LAWMAP_KIND_WORDS[w];
+          isOwn = (w.length >= 2 && own.slice(-w.length) === w) ||                                  // ⓐ 자기 이름 끝
+            !!(kinds && kinds.some(function(k) { return own.slice(-k.length) === k; }));            // ⓑ 종류 낱말 하나뿐
+        }
+      }
+    }
+    var single = parts.length === 1 && parts[0].lo === parts[0].hi;
+    var ui = m[2] ? parseInt(m[2], 10) : null, uiEnd = (m[3] && ui !== null) ? parseInt(m[3], 10) : null;
+    var width = parts.reduce(function(s, p) { return s + (p.hi - p.lo + 1); }, 0);
+    if (single && ui !== null && uiEnd !== null && uiEnd > ui) width = uiEnd - ui + 1;
+    out.push({ lo: parts[0].lo, hi: parts[parts.length - 1].hi, parts: parts, ui: ui, uiEnd: uiEnd, list: parts.length > 1, own: isOwn, prefix: prefix, width: width });
+    prevEnd = m.index + m[0].length; prevOwn = isOwn;
+  }
+  return out;
+}
+function lawmapRefCovers(r, n, ui) {   // 조 번호 하나(r)가 n조(의ui)를 덮나 — ui는 숫자 또는 null
+  if (r.list) {   // 「제35·37조」 목록: 종전 규칙 그대로(의N이 있으면 같은 의N만)
+    var inList = r.parts.some(function(p) { return n >= p.lo && n <= p.hi; });
+    return inList && (ui === null || r.ui === ui);
+  }
+  var p = r.parts[0];
+  if (p.lo === p.hi) {   // 한 조: 「제37조」≠「제37조의2」, 「제23조의2~의4」는 의2~의4
+    if (n !== p.lo) return false;
+    if (r.ui === null) return ui === null;
+    return ui !== null && ui >= r.ui && ui <= (r.uiEnd !== null ? r.uiEnd : r.ui);
+  }
+  // 범위: 「제35~38조」는 의 없는 조만, 「제35~39조의2」는 35조~39조(그 사이 의N 포함)와 39조의1~의2 (Q2 ㄷ — 종전엔 의2를 범위 전체에 붙여 35·36조를 놓쳤다)
+  if (n < p.lo || n > p.hi) return false;
+  if (r.ui === null) return ui === null;
+  if (ui === null || n < p.hi) return true;
+  return ui <= r.ui;
+}
+function lawmapDescCites(desc, key, lawNode) {   // 설명이 (자기 법령의) 그 조문을 인용하나 — "제37조", "제35~37조", "제35·37조" 인식, 제37조≠제37조의2
   var mm = String(key || '').match(/^(\d+)조(?:의(\d+))?$/);
   if (!mm) return false;
-  var n = parseInt(mm[1], 10), ui = mm[2] || null, m;
-  var d = lawmapDescNormRange(desc);
-  LAWMAP_DESC_ART_RE.lastIndex = 0;
-  while ((m = LAWMAP_DESC_ART_RE.exec(d))) {
-    var parts = m[1].split(/[·ㆍ,]/), hit = false;
-    parts.forEach(function(p) {
-      var r = p.split(/[~∼\-]/).map(function(x) { return parseInt(x, 10); });
-      if (r.length === 2 && !isNaN(r[0]) && !isNaN(r[1])) { if (n >= r[0] && n <= r[1]) hit = true; }
-      else if (r[0] === n) hit = true;
+  var n = parseInt(mm[1], 10), ui = mm[2] ? parseInt(mm[2], 10) : null;
+  return lawmapDescOwnRefs(desc, lawNode).some(function(r) { return r.own && lawmapRefCovers(r, n, ui); });
+}
+function lawmapDescNormRange(desc) {   // "제35조~제38조" → "제35~38조" (범위를 한 매치로), "제23조의2~제23조의4" → "제23조의2~의4"
+  return String(desc || '').replace(/조\s*([~∼\-])\s*제?\s*(\d+)\s*조/g, '$1$2조')
+    .replace(/제\s*(\d+)\s*조\s*의\s*(\d+)\s*([~∼\-])\s*제?\s*(\d+)\s*조\s*의\s*(\d+)/g, function(s, a, u1, t, b, u2) { return a === b ? '제' + a + '조의' + u1 + t + '의' + u2 : s; });
+}
+function lawmapDescArticleCount(desc, lawNode) {   // 자기 법령 조 인용 수 — 범위는 폭(「제6장, 제35조~제39조의2」 = 5), 다른 법령 조는 안 셈 (Q2-4)
+  return lawmapDescOwnRefs(desc, lawNode).reduce(function(s, r) { return s + (r.own ? r.width : 0); }, 0);
+}
+function lawmapIsAdjacent(desc) {   // 「[인접 제도]」로 시작하는 선(앞에 「[시행예정 — …]」 같은 꺾쇠 표기만 허용) — 설명 중간의 [인접 제도]는 본래 선
+  return /^\s*(?:\[[^\]]*\]\s*)*\[인접 제도\]/.test(String(desc || ''));
+}
+// 「법령명 + 제N조」 → 그 조문을 근거로 삼는 주제 선(정렬됨). 정렬(Q2 (a)): ① 인접 선은 뒤로 ② 자기 조 인용 수 적은 선 먼저(#124) ③ weight 큰 선 먼저
+function lawmapArticleHits(lawNode, key, nodes, edges) {
+  var hits = [];
+  (edges || []).forEach(function(e) {
+    if (e.source_id !== lawNode.id && e.target_id !== lawNode.id) return;
+    var otherId = e.source_id === lawNode.id ? e.target_id : e.source_id;
+    var t = nodes.find(function(x) { return x.id === otherId; });
+    if (t && t.node_type === 'topic' && lawmapDescCites(e.description, key, lawNode)) hits.push({ topic: t, edge: e, adj: lawmapIsAdjacent(e.description) });
+  });
+  hits.sort(function(a, b) {
+    return (a.adj ? 1 : 0) - (b.adj ? 1 : 0) ||
+      lawmapDescArticleCount(a.edge.description, lawNode) - lawmapDescArticleCount(b.edge.description, lawNode) ||
+      (b.edge.weight || 0) - (a.edge.weight || 0);
+  });
+  return hits;
+}
+var _lawMapTopicDeg = null;   // {edges, nodes, deg:{노드 id: 주제 선 수}} — 관계도를 다시 받으면 배열이 바뀌어 새로 센다
+function lawmapTopicDegree(nodeId, nodes, edges) {
+  if (!_lawMapTopicDeg || _lawMapTopicDeg.edges !== edges || _lawMapTopicDeg.nodes !== nodes) {
+    var isTopic = {}, deg = {};
+    (nodes || []).forEach(function(n) { if (n.node_type === 'topic') isTopic[n.id] = true; });
+    (edges || []).forEach(function(e) {
+      if (isTopic[e.source_id] === isTopic[e.target_id]) return;
+      var lid = isTopic[e.source_id] ? e.target_id : e.source_id;
+      deg[lid] = (deg[lid] || 0) + 1;
     });
-    if (!hit) continue;
-    if (ui ? (m[2] === ui) : (!m[2] || parts.length > 1)) return true;
+    _lawMapTopicDeg = { edges: edges, nodes: nodes, deg: deg };
   }
-  return false;
+  return _lawMapTopicDeg.deg[nodeId] || 0;
 }
-function lawmapDescNormRange(desc) {   // "제35조~제38조" → "제35~38조" (범위를 한 매치로)
-  return String(desc || '').replace(/조\s*([~∼\-])\s*제?\s*(\d+)\s*조/g, '$1$2조');
+// 약칭 법령명(「정보통신망법 46조」) — 노드를 못 찾았거나 찾은 것이 원문 없는 인용 스텁인데 주제 선이 0이면, 자문 인용 검증기의
+// 약칭 규칙(CiteVerify.familyMatches — LAW_ALIASES·「약칭 시행령」)으로 주제 선 있는 노드를 다시 찾는다. 하나만 맞을 때만(Q4 (b)).
+// 인용망 빌더가 「정보통신망법」 스텁을 매일 다시 만들어 데이터 정리로는 안 된다. CiteVerify가 없는 곳(사내 콘솔)은 종전 동작.
+function lawmapAliasNode(lawName, nodes, edges) {
+  if (typeof CiteVerify === 'undefined' || !CiteVerify || typeof CiteVerify.familyMatches !== 'function') return null;
+  var c = (nodes || []).filter(function(n) {
+    return n.node_type !== 'topic' && lawmapTopicDegree(n.id, nodes, edges) > 0 && CiteVerify.familyMatches(n.name, lawName);
+  });
+  if (c.length === 1) return c[0];
+  // 둘 이상이면: 이름 끝 일치가 아니라 약칭 표로 맞은 것이 하나뿐일 때만 그것 — 「망법」은 끝 일치로 「재난안전통신망법」에도 걸린다
+  var q = lmNormName(lawName);
+  var byAlias = c.filter(function(n) { var k = lmNormName(n.name); return k !== q && k.slice(-q.length) !== q; });
+  return byAlias.length === 1 ? byAlias[0] : null;
 }
-function lawmapDescArticleCount(desc) {
-  var c = 0, d = lawmapDescNormRange(desc); LAWMAP_DESC_ART_RE.lastIndex = 0;
-  while (LAWMAP_DESC_ART_RE.exec(d)) c++;
-  return c;
+// 주제 이름 낱말 전체(소문자) — 더 긴 낱말 안에 든 짧은 낱말 판정용(Q3 ⓐ). 노드 배열이 바뀌면 다시 만든다.
+var _lawMapTopicWordSet = null;
+function lawmapTopicWordSet(nodes) {
+  if (!_lawMapTopicWordSet || _lawMapTopicWordSet.nodes !== nodes) {
+    var seen = {}, words = [];
+    (nodes || []).forEach(function(n) {
+      if (n.node_type !== 'topic') return;
+      lawmapTopicWords(n.name).forEach(function(w) { var k = w.toLowerCase(); if (!seen[k]) { seen[k] = 1; words.push(k); } });
+    });
+    _lawMapTopicWordSet = { nodes: nodes, words: words };
+  }
+  return _lawMapTopicWordSet.words;
+}
+function lawmapWordShadowed(w, qns, words) {   // 질문에서 w가 나온 자리가 모두 더 긴 주제 낱말(W ⊃ w)의 출현 구간 안인가
+  var spans = [], i, p;
+  words.forEach(function(W) {
+    if (W.length <= w.length || W.indexOf(w) === -1) return;
+    for (p = qns.indexOf(W); p !== -1; p = qns.indexOf(W, p + 1)) spans.push([p, p + W.length]);
+  });
+  if (!spans.length) return false;
+  for (p = qns.indexOf(w); p !== -1; p = qns.indexOf(w, p + 1)) {
+    var at = p;
+    if (!spans.some(function(s) { return at >= s[0] && at + w.length <= s[1]; })) return false;
+  }
+  return true;
+}
+// 관계도 질문 판정(화면 갱신 없음) — askLawMap과 tools_lawmap_match.js·tests/lawmap_desc.test.js가 같은 함수를 쓴다.
+//  → {mode:'article', artQ, lawNode, via:'name'|'alias', hits} 또는 {mode:'topic', best, score, scored}
+function lawmapMatchQuery(q, nodes, edges) {
+  var artQ = lawmapParseArticleQuery(q);
+  if (artQ) {
+    var lawNode = lawmapNodeByName(nodes, artQ.law), via = 'name';
+    if (!lawNode || (!lawNode.doc_name && lawmapTopicDegree(lawNode.id, nodes, edges) === 0)) {
+      var al = lawmapAliasNode(artQ.law, nodes, edges);
+      if (al) { lawNode = al; via = 'alias'; }
+    }
+    if (lawNode) return { mode: 'article', artQ: artQ, lawNode: lawNode, via: via, hits: lawmapArticleHits(lawNode, artQ.key, nodes, edges) };
+    // 법령 노드가 관계망에 없으면 아래 일반 주제 매칭으로 (법령명 토큰은 매칭에서 제외됨)
+  }
+  // 양방향 매칭: ① 주제명의 핵심 단어가 질문에 실제로 들어있어야 함(질문 공백 제거 후 부분일치)
+  //             ② 질문 키워드가 주제 설명에 들어가면 가점(동점 해소)
+  //  법령명 토큰("전기통신사업법", "전파법 시행령")은 먼저 걷어낸다 — '통신사업'이 '전기통신사업법' 안에 부분일치하는 오탐 차단(#124)
+  //  Q3 ⓐ 다른 주제의 더 긴 이름 낱말 안에만 나타난 짧은 낱말은 일치에서 뺀다(「통신시설」 ⊂ 「집적정보통신시설」)
+  //  Q3 ⓑⓒ 동점이면 일치한 이름 낱말 길이 합 → 이름 낱말 중 일치 비율 → 목록 순(「데이터센터」 5 > 「AI」 2)
+  var qStripped = q.replace(/(^|\s)[가-힣A-Za-z0-9·ㆍ]*(?:법|법률|시행령|시행규칙|규칙|고시)(?=\s|$|\d)/g, '$1 ');
+  var qns = qStripped.replace(/\s+/g, '').toLowerCase();
+  var kws = extractKeywords(q).filter(function(k) { return !LAWMAP_MATCH_STOP[k]; });
+  var allWords = lawmapTopicWordSet(nodes);
+  var best = null, bestScore = 0, bestLen = 0, bestRatio = 0, scored = [];
+  (nodes || []).filter(function(n) { return n.node_type === 'topic'; }).forEach(function(n) {
+    var words = lawmapTopicWords(n.name);
+    var nameHits = words.filter(function(w) {
+      var lw = w.toLowerCase();
+      return qns.indexOf(lw) !== -1 && !lawmapWordShadowed(lw, qns, allWords);
+    });
+    if (nameHits.length === 0) return;   // 주제의 핵심 단어가 질문에 없으면 후보 아님(오탐 차단)
+    var s = nameHits.length * 3;
+    var desc = (n.description || '').toLowerCase();
+    kws.forEach(function(k) { if (desc.indexOf(k.toLowerCase()) !== -1) s += 1; });
+    var len = nameHits.reduce(function(a, w) { return a + w.length; }, 0), ratio = nameHits.length / words.length;
+    scored.push({ node: n, score: s, len: len, ratio: ratio, nameHits: nameHits });
+    if (s > bestScore || (best && s === bestScore && (len > bestLen || (len === bestLen && ratio > bestRatio)))) {
+      best = n; bestScore = s; bestLen = len; bestRatio = ratio;
+    }
+  });
+  return { mode: 'topic', best: best, score: bestScore, scored: scored };
 }
 function lawmapGoTopic(topicId, nodeId) {   // 상태줄의 "다른 주제" 버튼 — 주제 전환 후 같은 법령 카드 유지
   var sel = document.getElementById('lawmap-topic-select');
@@ -16584,7 +16735,7 @@ async function showLawMapNodeDetail(nodeId) {
     }
   }
   // 주제 포커스면 관련 조문 발췌를 먼저 표시. 법령 전체 요약(OKF)은 펼쳐서 표시.
-  if (focusTopic) fillLawMapArticle(n, (topicEdge && topicEdge.description) || '', docName, focusTopic.name, parentBasis);
+  if (focusTopic) fillLawMapArticle(n, (topicEdge && topicEdge.description) || '', docName, focusTopic.name, parentBasis, parentBasis ? parentName : null);
   fillLawMapMainContent(n, true);
 }
 
@@ -16612,18 +16763,18 @@ function lawmapArtNoMatch(c, wants) {
   var aa = (c.article_no || '').replace(/^제/, '');
   return wants.some(function(w) { return aa === w || aa.indexOf(w + '(') === 0; });
 }
-function lawmapArtNums(basisText) {   // "제24~25조", "제24조의2" → 조문 키 배열
-  var m = (basisText || '').match(/제\s*(\d+)\s*조?(?:의\s*(\d+))?\s*(?:[~∼\-]\s*(?:제\s*)?(\d+))?/);
-  if (!m) return { nums: [], wants: [] };
-  var start = parseInt(m[1], 10);
-  var end = m[3] ? parseInt(m[3], 10) : start;
-  if (isNaN(end) || end < start || end - start > 4) end = start;
-  var nums = [], wants = [start + '조' + (m[2] ? '의' + m[2] : '')];
-  for (var a = start; a <= end; a++) { nums.push(a); if (a !== start || !m[2]) wants.push(a + '조'); }
+function lawmapArtNums(basisText, lawNode) {   // "제24~25조", "제24조의2" → 조문 키 배열 — 첫 *자기 법령* 조(lawNode 주면 「전파법 제37조」 같은 다른 법령 조는 건너뜀, #285)
+  var r = lawmapDescOwnRefs(basisText, lawNode).filter(function(x) { return x.own; })[0];
+  if (!r) return { nums: [], wants: [] };
+  var p = r.parts[0], start = p.lo, end = p.hi;
+  var ui = (p.lo === p.hi && !r.list) ? r.ui : null;   // 「의N」은 한 조에만(범위·목록은 종전처럼 의 없는 조)
+  if (end - start > 4) end = start;
+  var nums = [], wants = [start + '조' + (ui !== null ? '의' + ui : '')];
+  for (var a = start; a <= end; a++) { nums.push(a); if (a !== start || ui === null) wants.push(a + '조'); }
   return { nums: nums, wants: wants.filter(function(v, i, arr) { return arr.indexOf(v) === i; }) };
 }
 
-async function fillLawMapArticle(n, basisText, docName, topicName, parentBasis) {
+async function fillLawMapArticle(n, basisText, docName, topicName, parentBasis, parentName) {
   var box = document.getElementById('lawmap-article');
   if (!box || !sb || !docName) return;
   try {
@@ -16634,14 +16785,14 @@ async function fillLawMapArticle(n, basisText, docName, topicName, parentBasis) 
 
     var picked = [], mode = '근거', searchMode = 'kw';
     // ① 명시된 조문
-    var w1 = lawmapArtNums(basisText);
+    var w1 = lawmapArtNums(basisText, n);
     if (w1.wants.length) all.forEach(function(c) { if (lawmapArtNoMatch(c, w1.wants) && picked.indexOf(c) === -1) picked.push(c); });
 
     // 위임 연결 후보군: 시행령·시행규칙이 상위법 근거 조문(parentBasis)을 "법 제N조"로 인용하는 조문 집합.
     //  이 집합으로 후보를 '구조적으로' 좁히고(아래 하이브리드가 그 안에서 주제 관련성으로 순위 매김).
     var delegSet = null;
     if (!picked.length && parentBasis) {
-      var pnums = lawmapArtNums(parentBasis).nums;
+      var pnums = lawmapArtNums(parentBasis, parentName || null).nums;
       if (pnums.length) {
         var delegRe = new RegExp('법\\s*제\\s*(?:' + pnums.join('|') + ')\\s*조');
         var cand = {};
@@ -16662,7 +16813,7 @@ async function fillLawMapArticle(n, basisText, docName, topicName, parentBasis) 
 
       // (a) 키워드: **조문 단위로 한 번만** 집계(청크 수 편향 제거). 제목 매칭 ×5, 본문 ×1.
       var terms = extractKeywords(queryText).filter(function(k) { return !LAWMAP_MATCH_STOP[k]; });
-      (topicName || '').split(/[\s·]+/).forEach(function(w) { w = w.trim(); if (w.length >= 2 && !LAWMAP_MATCH_STOP[w] && terms.indexOf(w) === -1) terms.push(w); });
+      lawmapTopicWords(topicName || '').forEach(function(w) { if (terms.indexOf(w) === -1) terms.push(w); });   // 괄호 붙은 낱말(「집적정보통신시설(IDC」) 없이 — 주제 매칭과 같은 낱말 나누기(#285)
       var byArt = {};
       all.forEach(function(c) {
         var art = c.article_no || '';
