@@ -11,6 +11,11 @@
   py -3.12 tools_urgency_probe.py --allow-api --sentence                  # 주파수 문장 규칙(T-S) — 운영 판정기 그대로
   py -3.12 tools_urgency_probe.py --report                                # 통과 기준(설계 9-3) 대조표(API 0회)
 
+개인정보 좁은 질문(실측 폴더 local_docs/긴급도_개인정보원칙_실측_261006/, --out은 그 안의 probe):
+  py -3.12 tools_urgency_probe.py --out <probe> --extract-w2              # 국감 주간 새 표본 W(10-06~10-12 KST)를 굳힘 + 정답 매김 입력
+  py -3.12 tools_urgency_probe.py --out <probe> --privacy --runs Q2:ABCX,Q2:W,L1:W   # 어림만 → --allow-api(운영자 고지 뒤, 한 번)
+  py -3.12 tools_urgency_probe.py --out <probe> --privacy-report          # P1~P6(판정 §5) + R-a~R-d → 결과_Q2.md·probe/q2_join.json
+
 변형(설계 9-2):
   B0  지금 배포 조합 그대로(기준문·피드백 블록·한 낱말 출력)                         세트 A·B·C
   R3  B0에서 #264-보론 세 줄(해외 주파수·성과·집계)만 뺌                              세트 A·B·C
@@ -18,6 +23,7 @@
   G1b 영역 칸을 등급 뒤에(G1이 통과 기준 a·c에서 걸릴 때만)                           세트 A·B·C
   T1  2단계: G1 + 기준문 v0.1(설계 4-2) + 피드백 49~53을 「보통」으로 옮긴 블록(4-3)    세트 A·B·C·D·S
   P1  B0 + 개인정보·해킹 원칙(2026-10-06 운영자 결정, P1_EDITS)                           세트 A·B·C·X
+  좁은 질문(--privacy, 등급 호출은 그대로): L1 시제품(모델이 통신 연결까지 판단) / Q2 사실만 적고 내림은 코드(privacy_lower)
   상한(G1·T1 출력 위에서 호출 없이): raw 없음 / R1 타영역 긴급 → 보통 / R2 R1 + 언저리 긴급 중 basis가 R2_KEEP 밖이면 보통
 
 읽는 법:
@@ -215,9 +221,127 @@ def privacy_hit(art: dict) -> bool:
     return bool(PRIV_WORDS.search((art.get('title') or '') + ' ' + ws(art.get('screen_text'))))
 
 
-def privacy_lower(out: dict) -> bool:
+def privacy_lower_l1(out: dict, art: dict = None) -> bool:
+    """L1(시제품) 내림 조건 — 모델이 telecom 칸으로 통신 연결까지 정한다. Q2의 같은 표본 기준선."""
     return (out.get('topic') == '개인정보·해킹 사건' and out.get('telecom') == '통신 무관'
             and out.get('stage') in PRIV_LOWER_STAGES)
+
+
+# ── 개인정보 좁은 질문 Q2(Fable 판정 2026-10-06, 실측 폴더 판정_좁은질문_261006.md §3) ─────────────────────────
+# 모델은 사실만 적고 내릴지는 코드(privacy_lower)가 정한다. system·tool·user는 판정 문서의 글자 그대로 — 시험이 해시로 잠근다
+# (tests/test_urgency_probe.py). 칸 순서(parties → topic → stage → scale → why)도 측정값이라 바꾸면 다시 잰다.
+Q2_SYSTEM = (
+    '당신은 SK텔레콤 Comm센터의 통신정책 뉴스 모니터링 AI입니다.\n'
+    '아래 기사는 긴급(즉시대응)으로 분류돼 있습니다. 긴급을 유지할지는 프로그램이 정합니다 — 당신은 기사에서 읽히는\n'
+    '사실만 record_privacy_check 도구의 칸에 그대로 적습니다. 결론을 먼저 정하고 칸을 거기에 맞추지 마세요.\n'
+    '\n'
+    '[칸 채우는 기준]\n'
+    '· parties(당사자): 이 기사에서 당사자로 나오는 회사·기관 이름 — 사고가 난 회사, 증인·소환 대상, 제재·조사·점검 대상,\n'
+    '  보상을 주는 회사, 비판받는 회사, 공동 선언·회동의 주체. 앞선 사건·비교·배경으로 한 줄 스치는 이름은 넣지 않는다.\n'
+    '  기사에 쓰인 표기 그대로(「SK텔레콤」「통신 3사」 등), 없으면 빈 목록.\n'
+    '· topic(본론): 「특정 유출·해킹 사건」 = 어느 회사·기관의 개인정보 유출·해킹·침해사고(또는 같은 시기의 몇 건)가 축인 기사 —\n'
+    '  사고 자체만이 아니라 그 사건의 뒷이야기(보상·보상 신청률, 조사·수사 경과, 처분, 국감·의원실 지적, 소송, 통계,\n'
+    '  회사의 사과·대책·문구 변경, 피해 사례, 이용자 반응)도 여기다 / 「법·제도·정책 일반」 = 법·시행령·고시의 제개정·시행,\n'
+    '  정부·위원회의 정책·대책·예산·조직, 캠페인·주의보, 제도 해설·기고 / 「그 밖」 = 사업·실적·증권, 특정 사건이 축이 아닌\n'
+    '  국감·정치 공방 등.\n'
+    '· stage(단계) — 본론이 「특정 유출·해킹 사건」일 때만: 「사고 첫 보도」 = 유출·해킹 사실·규모·원인이 이 기사에서 처음 알려짐\n'
+    '  (회사 공지, 정부 조사결과 발표, 같은 날의 사과 포함) / 「처분 첫 보도」 = 그 회사에 대한 과징금·과태료·시정명령 등 처분이\n'
+    '  처음 나옴 / 「뒷이야기」 = 이미 알려진 사건의 그 밖의 모든 보도. 본론이 사건이 아니면 「해당 없음」.\n'
+    '· scale(규모) — 본론이 사건일 때 기사에 적힌 유출·피해 규모: 「수백만 명·계정 이상」 / 「그 미만」 / 「규모 안 적힘」.\n'
+    '  사건이 아니면 「해당 없음」.\n'
+    '· why: 근거 한 줄(40자 안).\n'
+)
+Q2_TOOL = json.loads('''{"name": "record_privacy_check",
+ "description": "기사 한 건에서 읽히는 사실을 기록한다. 칸은 parties → topic → stage → scale → why 순서로 채운다.",
+ "strict": true,
+ "input_schema": {"type": "object", "additionalProperties": false,
+   "required": ["parties", "topic", "stage", "scale", "why"],
+   "properties": {
+     "parties": {"type": "array", "items": {"type": "string"},
+                 "description": "당사자 회사·기관 이름 목록(기사 표기 그대로, 최대 8개, 없으면 빈 목록)"},
+     "topic":   {"type": "string", "enum": ["특정 유출·해킹 사건", "법·제도·정책 일반", "그 밖"]},
+     "stage":   {"type": "string", "enum": ["사고 첫 보도", "처분 첫 보도", "뒷이야기", "해당 없음"]},
+     "scale":   {"type": "string", "enum": ["수백만 명·계정 이상", "그 미만", "규모 안 적힘", "해당 없음"]},
+     "why":     {"type": "string", "description": "근거 한 줄(40자 안)"}}}}''')
+_Q2P = Q2_TOOL['input_schema']['properties']
+Q2_TOPICS, Q2_STAGES, Q2_SCALES = _Q2P['topic']['enum'], _Q2P['stage']['enum'], _Q2P['scale']['enum']
+Q2_MAX_TOKENS = 300
+
+TELCO_NAME = re.compile(r'(SK텔레콤|SKT|에스케이텔레콤|KT(?![A-Za-z&])|케이티|LG\s?유플러스|LGU\+|LG\s?U\+|엘지유플러스|유플러스'
+                        r'|이통\s?3사|통신\s?3사|이동통신\s?3사)')
+# 넓은 낱말(통신사·이통사·통신망·유심·알뜰폰)은 넣지 않는다 — 배경 언급과 못 가른다(이 세트: 맞게 내린 21건 중 3건을 막음)
+
+
+def q2_user_msg(art: dict) -> str:
+    """Q2 사용자 메시지(판정 §3-3) — 등급 호출의 user_msg와 다른 함수. 검색 요약 300자·본문 600자 둘 다(있을 때만),
+    짧은 본문도 넣는다. 둘 다 없으면 제목만."""
+    lines = [f"제목: {art['title']}"]
+    summ = ws(art.get('screen_text'))[:300]
+    body = ws(art.get('content'))[:600]
+    if summ:
+        lines.append(f'검색 요약: {summ}')
+    if body:
+        lines.append(f'본문: {body}')
+    return '\n'.join(lines)
+
+
+def telco_party(out, art):
+    if any(TELCO_NAME.search(p or '') for p in out.get('parties') or []): return True
+    return bool(TELCO_NAME.search((art.get('title') or '') + ' ' + ws(art.get('screen_text'))))   # 안전장치: rule_input_text와 같은 글
+
+
+def privacy_lower(out, art):
+    if out.get('topic') != '특정 유출·해킹 사건': return False
+    if telco_party(out, art): return False
+    if out.get('stage') == '뒷이야기': return True
+    if out.get('stage') == '사고 첫 보도' and out.get('scale') == '그 미만': return True
+    return False      # 처분 첫 보도 → 유지(규모 무관) · 규모 안 적힘 → 유지(R-a)
+
+
+Q2_RULES = ('R-a', 'R-b', 'R-c', 'R-d')
+
+
+def privacy_lower_rule(out: dict, art: dict, rule: str = 'R-a') -> bool:
+    """오프라인 비교 변형(판정 §3-5, 같은 결과 행에서 API 0). R-a = privacy_lower 그대로 /
+    R-b = 사고 첫 보도 & 규모 안 적힘도 내림 / R-c = topic 관문 없이 / R-d = 이름 안전장치 없이(parties만)."""
+    if rule == 'R-a':
+        return privacy_lower(out, art)
+    if rule != 'R-c' and out.get('topic') != '특정 유출·해킹 사건':
+        return False
+    if rule == 'R-d':
+        if any(TELCO_NAME.search(p or '') for p in out.get('parties') or []):
+            return False
+    elif telco_party(out, art):
+        return False
+    st, sc = out.get('stage'), out.get('scale')
+    if st == '뒷이야기':
+        return True
+    if st == '사고 첫 보도' and (sc == '그 미만' or (rule == 'R-b' and sc == '규모 안 적힘')):
+        return True
+    return False
+
+
+def _parse_l1(inp: dict):
+    if inp.get('topic') in PRIV_TOPICS and inp.get('telecom') in PRIV_TELECOM and inp.get('stage') in PRIV_STAGES:
+        return {k: inp.get(k) for k in ('topic', 'telecom', 'stage', 'why')}
+    return None
+
+
+def _parse_q2(inp: dict):
+    pa = inp.get('parties')
+    if (isinstance(pa, list) and all(isinstance(p, str) for p in pa) and inp.get('topic') in Q2_TOPICS
+            and inp.get('stage') in Q2_STAGES and inp.get('scale') in Q2_SCALES and isinstance(inp.get('why'), str)):
+        return {'parties': pa, **{k: inp.get(k) for k in ('topic', 'stage', 'scale', 'why')}}
+    return None
+
+
+# 좁은 질문 변형 — 결과 privacy.jsonl의 pv 칸(옛 L1 행에는 pv가 없다 = L1). key 공식은 L1 때와 같다(옛 행이 '이미 끝남'으로 잡히게)
+PRIV_VARIANTS = {
+    'L1': {'system': PRIV_SYSTEM, 'tool': PRIV_TOOL, 'max_tokens': 200, 'user': lambda art: user_msg(art),
+           'parse': _parse_l1, 'lower': privacy_lower_l1, 'out_tok': 140},   # out_tok = 출력 어림(L1 실측 평균 140)
+    'Q2': {'system': Q2_SYSTEM, 'tool': Q2_TOOL, 'max_tokens': Q2_MAX_TOKENS, 'user': q2_user_msg,
+           'parse': _parse_q2, 'lower': privacy_lower, 'out_tok': 190},   # parties 목록만큼 더 잡음
+}
 
 
 VARIANTS = {
@@ -657,21 +781,25 @@ def run_variants(a, fx, snap):
     print(f'[끝] 호출 {len(plan)}회 · 오류 {errs} · {time.time() - t0:.0f}s · 결과 파일 누적 실비 ≈${real:.2f} → {res_path}')
 
 
-def privacy_judge(client, user: str) -> dict:
-    """개인정보 좁은 질문 한 건. ⚠️ create를 이 함수 안에서 직접 — api_usage 라벨 'tools_urgency_probe.py:privacy_judge'."""
+def privacy_judge(client, pv: str, user: str) -> dict:
+    """개인정보 좁은 질문 한 건(pv = L1·Q2). ⚠️ create를 이 함수 안에서 직접 — api_usage 라벨 'tools_urgency_probe.py:privacy_judge'."""
+    spec = PRIV_VARIANTS[pv]
     last = None
     for attempt in range(4):
         try:
-            resp = client.messages.create(model=MODEL, max_tokens=200, temperature=0, system=PRIV_SYSTEM,
-                                          tools=[PRIV_TOOL], tool_choice={'type': 'tool', 'name': 'record_privacy_check'},
+            resp = client.messages.create(model=MODEL, max_tokens=spec['max_tokens'], temperature=0, system=spec['system'],
+                                          tools=[spec['tool']], tool_choice={'type': 'tool', 'name': 'record_privacy_check'},
                                           messages=[{'role': 'user', 'content': user}])
             u = resp.usage
-            out = {'in': getattr(u, 'input_tokens', 0) or 0, 'out': getattr(u, 'output_tokens', 0) or 0, 'parse': 'bad'}
+            out = {'in': getattr(u, 'input_tokens', 0) or 0, 'out': getattr(u, 'output_tokens', 0) or 0, 'parse': 'bad',
+                   'stop': resp.stop_reason}
             for b in resp.content:
                 if getattr(b, 'type', '') == 'tool_use':
-                    inp = b.input or {}
-                    if inp.get('topic') in PRIV_TOPICS and inp.get('telecom') in PRIV_TELECOM and inp.get('stage') in PRIV_STAGES:
-                        out.update({k: inp.get(k) for k in ('topic', 'telecom', 'stage', 'why')}, parse='ok')
+                    got = spec['parse'](b.input or {})
+                    if got is not None:
+                        out.update(got, parse='ok')
+                    else:
+                        out['raw'] = json.dumps(b.input, ensure_ascii=False)[:300]
             return out
         except Exception as e:
             last = e
@@ -679,32 +807,190 @@ def privacy_judge(client, user: str) -> dict:
     return {'parse': 'error', 'raw': str(last)[:160]}
 
 
-def run_privacy(a, fx, snap):
-    """B0가 긴급이라 한 기사(세트 a.sets, 기본 ABCX) 중 privacy_hit만 좁은 질문 — 결과 privacy.jsonl(key = 프롬프트 지문)."""
+# ── 국감 주간 새 표본(세트 W, 판정 §5) — w2_sample.json에 기사 글을 굳힌다 ─────────────────────────────────────────
+W2_FILE = 'w2_sample.json'
+
+
+def load_w2(out_dir: str) -> dict:
+    p = os.path.join(out_dir, W2_FILE)
+    if not os.path.exists(p):
+        raise SystemExit(f'새 표본이 없다: {p} — 먼저 --extract-w2')
+    with open(p, encoding='utf-8') as f:
+        return json.load(f)
+
+
+def parse_runs(s: str) -> list:
+    """'Q2:ABCX,Q2:W,L1:W' → [('Q2','ABCX'), ...]. 세트 W = 새 표본(질문 대상만), 나머지는 B0 긴급 + 낱말 적중."""
+    out = []
+    for part in [x.strip() for x in (s or 'L1:ABCX').split(',') if x.strip()]:
+        pv, _, sets = part.partition(':')
+        if pv not in PRIV_VARIANTS:
+            raise SystemExit(f'좁은 질문 변형 {pv}가 없다({", ".join(PRIV_VARIANTS)})')
+        out.append((pv, sets or 'ABCX'))
+    return out
+
+
+def privacy_plan(a, fx, snap) -> tuple:
+    """--runs의 실행 계획 — (새 호출 목록, 건너뜀 집계). 같은 key(변형·글자 같음)는 한 번만 부른다."""
     b0 = {}
     for r in load_results(os.path.join(a.out, 'results.jsonl')):
         if r['var'] == 'B0' and r.get('rep', 1) == 1 and r.get('parse') != 'error':
             b0[r['id']] = r['grade']
     path = os.path.join(a.out, 'privacy.jsonl')
     done = {r['key'] for r in load_results(path) if r.get('parse') != 'error'}
-    tool_js = json.dumps(PRIV_TOOL, ensure_ascii=False)
-    plan, skipped = [], Counter()
-    for cid in set_ids(fx, a.sets or 'ABCX', snap):
-        art = snap['articles'].get(cid)
-        if not art:
-            skipped['합성'] += 1; continue
-        if b0.get(cid) != '긴급':
-            skipped['B0 긴급 아님'] += 1; continue
-        if not privacy_hit(art):
-            skipped['낱말 없음'] += 1; continue
-        um = user_msg(art)
-        key = hashlib.sha1('\x00'.join([MODEL, PRIV_SYSTEM, tool_js, um]).encode('utf-8')).hexdigest()
-        if key in done:
-            skipped['이미 끝남'] += 1; continue
-        plan.append({'id': cid, 'key': key, 'user': um})
-    cost = sum(((len(PRIV_SYSTEM) + len(tool_js) + len(it['user'])) / CHARS_PER_TOKEN + TOOL_OVERHEAD_TOK) * PRICE['in'] / 1e6
-               + 60 * PRICE['out'] / 1e6 for it in plan)
-    print(f'[개인정보 질문] 새 호출 {len(plan)}회 · 건너뜀 {dict(skipped)} · 어림 ${cost:.2f}')
+    w2 = None
+    plan, skipped, seen = [], Counter(), set()
+    for pv, sets in parse_runs(a.runs):
+        spec = PRIV_VARIANTS[pv]
+        tool_js = json.dumps(spec['tool'], ensure_ascii=False)
+        for k in sets:
+            if k == 'W':
+                w2 = w2 or load_w2(a.out)
+                pairs = [(cid, w2['articles'][cid]) for cid in w2['order'] if w2['articles'][cid]['asked']]
+            else:
+                pairs = []
+                for cid in set_ids(fx, k, snap):
+                    art = snap['articles'].get(cid)
+                    if not art:
+                        skipped[f'{pv}:{k} 합성'] += 1; continue
+                    if b0.get(cid) != '긴급':
+                        skipped[f'{pv}:{k} B0 긴급 아님'] += 1; continue
+                    pairs.append((cid, art))
+            for cid, art in pairs:
+                if not privacy_hit(art):
+                    skipped[f'{pv}:{k} 낱말 없음'] += 1; continue
+                um = spec['user'](art)
+                key = hashlib.sha1('\x00'.join([MODEL, spec['system'], tool_js, um]).encode('utf-8')).hexdigest()
+                if key in done or key in seen:
+                    skipped[f'{pv}:{k} 이미 끝남'] += 1; continue
+                seen.add(key)
+                plan.append({'id': cid, 'key': key, 'user': um, 'pv': pv, 'set': k,
+                             'est_in': (len(spec['system']) + len(tool_js) + len(um)) / CHARS_PER_TOKEN + PRIV_TOOL_OVERHEAD_TOK,
+                             'est_out': spec['out_tok']})
+    return plan, skipped
+
+
+PRIV_TOOL_OVERHEAD_TOK = 1430   # strict 도구 강제 때 API가 덧붙이는 글 + 글자 어림 차 — L1 150건 실측(입력 토큰 − 글자 어림, 중앙값 1,427)
+LABEL_BODY = 1200               # 정답 매김 입력의 본문 길이(모델 입력 600자보다 길게 — 정답은 잣대)
+
+
+def _kst(ts: str) -> str:
+    """ISO 시각 → KST 'YYYY-MM-DD HH:MM'."""
+    from datetime import datetime, timedelta, timezone
+    if not ts:
+        return ''
+    d = datetime.fromisoformat(ts.replace('Z', '+00:00'))
+    return d.astimezone(timezone(timedelta(hours=9))).strftime('%Y-%m-%d %H:%M')
+
+
+def extract_w2(a, fx, snap):
+    """판정 §5의 새 표본 — [from, to) KST에 들어온 운영 기사(origin null) 중
+      ① 2차 확인 뒤 저장 등급(관리자 수정 전 = importance_feedback.ai_importance, 없으면 news_feed.urgency)이 긴급
+         그리고 privacy_hit → 좁은 질문 대상(asked)
+      ② 그 기간 관리자가 공통 등급을 바꾼 기사 전부(내린 것·올린 것 — 기사 날짜 무관)
+    옛 세트(A~D·X) 기사는 뺀다. DB 읽기만. 기사 글·등급·관리자 수정을 w2_sample.json에 굳히고 정답 매김 입력을 만든다."""
+    from datetime import datetime, timedelta, timezone
+    import crawler
+    sb = crawler.sb
+    kst = timezone(timedelta(hours=9))
+    t_from = datetime.fromisoformat(a.w2_from).replace(tzinfo=kst)
+    t_to = datetime.fromisoformat(a.w2_to).replace(tzinfo=kst)
+    path = os.path.join(a.out, W2_FILE)
+    if os.path.exists(path) and not a.refresh:
+        raise SystemExit(f'{path}가 이미 있다 — 표본은 한 번만 굳힌다(다시 뽑으려면 --refresh, 결과 key는 그대로)')
+    if datetime.now(kst) < t_to and not a.partial:
+        raise SystemExit(f'표본 기간이 아직 안 끝났다(끝 {t_to:%m-%d %H:%M} KST) — 시험 추출은 --partial(다른 --out 폴더에)')
+    old = set(all_ids(fx)) | set(snap.get('extra', []))
+    cols = 'id,title,screen_text,urgency,urgency_rule,urgency_check_scope,urgency_check_capped,published_at,created_at'
+    feed, i = [], 0
+    while True:                                      # 1000행씩(PostgREST 상한)
+        rows = sb.table('news_feed').select(cols).is_('origin', 'null') \
+            .gte('created_at', t_from.isoformat()).lt('created_at', t_to.isoformat()) \
+            .order('created_at').range(i, i + 999).execute().data or []
+        feed += rows
+        if len(rows) < 1000:
+            break
+        i += 1000
+    fb = sb.table('importance_feedback').select('news_id,ai_importance,user_importance,updated_at,created_at') \
+        .is_('team_id', 'null').gte('updated_at', t_from.isoformat()).execute().data or []
+    fb_by = {r['news_id']: r for r in fb if r.get('news_id')}
+    # 기간 안 기사의 관리자 수정 행(수정 시각이 기간 밖이어도 수정 전 등급을 읽기 위해)
+    ids_in = [r['id'] for r in feed]
+    for j in range(0, len(ids_in), 150):
+        for r in sb.table('importance_feedback').select('news_id,ai_importance,user_importance,updated_at,created_at') \
+                .is_('team_id', 'null').in_('news_id', ids_in[j:j + 150]).execute().data or []:
+            fb_by.setdefault(r['news_id'], r)
+    changed = {nid for nid, r in fb_by.items() if r.get('user_importance') and t_from <= datetime.fromisoformat(
+        r['updated_at'].replace('Z', '+00:00')) < t_to}
+    by_id = {r['id']: r for r in feed}
+    extra = [nid for nid in changed if nid not in by_id]          # ② 중 기간 밖에 들어온 기사
+    for j in range(0, len(extra), 80):
+        for r in sb.table('news_feed').select(cols + ',origin').in_('id', extra[j:j + 80]).execute().data or []:
+            if r.get('origin') is None:
+                by_id[r['id']] = r
+    rules = {r['id']: r for r in (sb.table('urgency_rules').select('id,mode,level,team_id').execute().data or [])}
+    arts, cnt = {}, Counter()
+    for nid, r in by_id.items():
+        if nid in old:
+            cnt['옛 세트라 뺌'] += 1; continue
+        f = fb_by.get(nid)
+        pipe = (f or {}).get('ai_importance') or r.get('urgency')
+        art = {'title': r['title'], 'screen_text': r.get('screen_text') or ''}
+        in1 = pipe == '긴급' and privacy_hit(art)
+        in2 = nid in changed
+        if not (in1 or in2):
+            continue
+        rule = rules.get(r.get('urgency_rule')) if r.get('urgency_rule') else None
+        skip = None                                  # 운영이라면 좁은 질문을 건너뛸 기사(2차 확인과 같은 건너뜀 — 참고용)
+        if in1:
+            if rule and rule.get('level') == '긴급':
+                skip = 'rule'
+            elif not r.get('urgency_check_scope'):
+                skip = 'no_check'                    # 2차 확인을 안 부름(사람 즉시대응 유사 사례·실패) — 3차도 같은 자리
+        arts[nid] = {**art, 'published_at': r.get('published_at'), 'created_at': r.get('created_at'),
+                     'urgency': r.get('urgency'), 'pipe': pipe, 'urgency_rule': r.get('urgency_rule'),
+                     'check_scope': r.get('urgency_check_scope'), 'capped': r.get('urgency_check_capped'),
+                     'admin': ({'ai': f.get('ai_importance'), 'user': f.get('user_importance'), 'at': f.get('updated_at')}
+                               if in2 else None),
+                     'in1': in1, 'in2': in2, 'asked': in1, 'prod_skip': skip}
+        cnt['①'] += in1; cnt['②'] += in2; cnt['①∩②'] += in1 and in2
+    ids = list(arts)
+    for j in range(0, len(ids), 60):                 # 본문은 표본만
+        for r in sb.table('news_feed').select('id,content').in_('id', ids[j:j + 60]).execute().data or []:
+            arts[r['id']]['content'] = r.get('content') or ''
+    order = sorted(ids, key=lambda x: (arts[x]['created_at'] or '', x))
+    w2 = {'made': time.strftime('%Y-%m-%dT%H:%M:%S'), 'window': [a.w2_from, a.w2_to], 'partial': bool(a.partial),
+          'feed_rows': len(feed), 'counts': dict(cnt), 'order': order, 'articles': arts}
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(w2, f, ensure_ascii=False)
+    # 정답 매김 입력 — 등급·관리자 수정·모델 출력은 넣지 않는다(눈가림). 날짜순(같은 사건의 첫 보도를 가리게)
+    lab = []
+    for nid in order:
+        x = arts[nid]
+        t = [f"제목: {x['title']}"]
+        if ws(x['screen_text']):
+            t.append(f"검색 요약: {ws(x['screen_text'])[:300]}")
+        if ws(x.get('content')):
+            t.append(f"본문: {ws(x.get('content'))[:LABEL_BODY]}")
+        lab.append({'id': nid, 'date': _kst(x['published_at'] or x['created_at']), 'text': '\n'.join(t)})
+    lab.sort(key=lambda r: (r['date'], r['id']))     # 매기는 쪽이 보는 날짜 순
+    with open(os.path.join(a.out, 'label_input_w2.json'), 'w', encoding='utf-8') as f:
+        json.dump(lab, f, ensure_ascii=False, indent=1)
+    with open(os.path.join(a.out, 'label_titles_w2.txt'), 'w', encoding='utf-8') as f:
+        f.write('\n'.join(f"{x['date']}  {x['text'].split(chr(10))[0][4:]}" for x in lab) + '\n')
+    asked = sum(x['asked'] for x in arts.values())
+    print(f'[새 표본] 기간 {a.w2_from} ~ {a.w2_to} KST · 운영 기사 {len(feed)}행 → 표본 {len(arts)}건 {dict(cnt)} · '
+          f'질문 대상 {asked} (운영이라면 건너뜀 {Counter(x["prod_skip"] for x in arts.values() if x["asked"] and x["prod_skip"])}) '
+          f'→ {path} · 정답 매김 입력 label_input_w2.json')
+
+
+def run_privacy(a, fx, snap):
+    """--runs(기본 L1:ABCX)의 좁은 질문 — 결과 privacy.jsonl(key = 프롬프트 지문, pv = 변형, set = 세트 글자)."""
+    path = os.path.join(a.out, 'privacy.jsonl')
+    plan, skipped = privacy_plan(a, fx, snap)
+    cost = sum(it['est_in'] * PRICE['in'] / 1e6 + it['est_out'] * PRICE['out'] / 1e6 for it in plan)
+    per = Counter(f"{it['pv']}:{it['set']}" for it in plan)
+    print(f'[개인정보 질문] 새 호출 {len(plan)}회 {dict(per)} · 건너뜀 {dict(skipped)} · 어림 ${cost:.2f} (상한 ${a.cap})')
     if not a.allow_api:
         print('dry-run — 실제 호출은 --allow-api(운영자 고지 뒤)')
         return
@@ -717,9 +1003,10 @@ def run_privacy(a, fx, snap):
     client = anthropic.Anthropic(api_key=crawler.ANTHROPIC_API_KEY)
     lock = threading.Lock()
     fout = open(path, 'a', encoding='utf-8')
+    t0 = time.time()
 
     def work(it):
-        row = {'id': it['id'], 'key': it['key'], **privacy_judge(client, it['user'])}
+        row = {'id': it['id'], 'key': it['key'], 'pv': it['pv'], 'set': it['set'], **privacy_judge(client, it['pv'], it['user'])}
         with lock:
             fout.write(json.dumps(row, ensure_ascii=False) + '\n'); fout.flush()
         return row
@@ -727,8 +1014,163 @@ def run_privacy(a, fx, snap):
         rows = list(ex.map(work, plan))
     fout.close()
     real = sum(r.get('in', 0) * PRICE['in'] + r.get('out', 0) * PRICE['out'] for r in rows) / 1e6
+    # 결과를 열지 않는다 — 건수·실패·비용만(내림 판단은 --privacy-report가 정답과 함께 표로)
     print(f'[끝] 호출 {len(rows)}회 · 오류 {sum(r.get("parse") == "error" for r in rows)} · 해석 실패 '
-          f'{sum(r.get("parse") == "bad" for r in rows)} · 실비 ≈${real:.2f} · 내림 {sum(privacy_lower(r) for r in rows)} → {path}')
+          f'{sum(r.get("parse") == "bad" for r in rows)} · 잘림 {sum(r.get("stop") == "max_tokens" for r in rows)} · '
+          f'{time.time() - t0:.0f}s · 실비 ≈${real:.2f} → {path}')
+
+
+# ── 좁은 질문 보고 — 판정 §5 통과 기준 P1~P6(측정 전 고정), API 0 ─────────────────────────────────────────────
+# 10-02 정답이 U지만 새 원칙(비통신 사건의 후속)으로는 N이 맞는 2건 — 결과_P1.md 2차 절·판정 §2-1. 옛 세트 「U 손실」에서만 N으로 센다
+# (「L1이 맞게 내린 21건」은 이 둘을 넣지 않은 수 — 정답 그대로 N인 것만).
+NEWP_N = {'97e60a1b-6d6b-4848-984e-089614adf280',      # 윤상현 CJENM 대표 국감 증인 안 나간다
+          '75028355-4cbe-42a1-b6f2-b9a4bec95320'}      # [단독] 티빙 유출 후…포털 털리고 보이스피싱 엮이고
+
+
+def _load_gold(path: str) -> dict:
+    if not os.path.exists(path):
+        return {}
+    with open(path, encoding='utf-8') as f:
+        return {g['id']: g for g in json.load(f)}
+
+
+def privacy_report(a, fx, snap):
+    rows = {}
+    for r in load_results(os.path.join(a.out, 'privacy.jsonl')):
+        if r.get('parse') == 'error':
+            continue
+        rows[(r.get('pv') or 'L1', r['id'])] = r
+    errs = Counter(r.get('pv') or 'L1' for r in load_results(os.path.join(a.out, 'privacy.jsonl')) if r.get('parse') == 'error')
+    w2 = load_w2(a.out)
+    W = w2['articles']
+    gx, gw = _load_gold(a.gold_x), _load_gold(a.gold_w)
+    # 옛 세트 정답: A·C(10-02 정답) + X(gold.json, 개인정보 원칙). B(안정성)는 정답 없음
+    og, otel = {}, {}
+    for k in ('A', 'C'):
+        for c in fx['sets'][k]:
+            og.setdefault(c['id'], c['gold'])
+    for i, g in gx.items():
+        og[i], otel[i] = g['gold'], g.get('telecom')
+    og_adj = {i: ('N' if i in NEWP_N else g) for i, g in og.items()}
+    wg = {i: g['gold'] for i, g in gw.items()}
+    wtel = {i: bool(g.get('telecom')) for i, g in gw.items()}
+    miss = [i for i in W if i not in gw]
+    old_art = lambda i: snap['articles'][i]
+
+    def tally(pv, ids, art_of, gold, tel, rule='R-a'):
+        asked = [i for i in ids if (pv, i) in rows]
+        ok = [i for i in asked if rows[(pv, i)].get('parse') == 'ok']
+        lower = (lambda o, ar: privacy_lower_rule(o, ar, rule)) if pv == 'Q2' else PRIV_VARIANTS[pv]['lower']
+        low = [i for i in ok if lower(rows[(pv, i)], art_of(i))]
+        U = [i for i in asked if gold.get(i) == 'U']
+        N = [i for i in asked if gold.get(i) == 'N']
+        cost = sum(rows[(pv, i)].get('in', 0) * PRICE['in'] + rows[(pv, i)].get('out', 0) * PRICE['out'] for i in asked) / 1e6
+        return {'n': len(asked), 'bad': len(asked) - len(ok), 'low': low, 'U': U, 'N': N,
+                'B': [i for i in asked if gold.get(i) == 'B'], 'nogold': [i for i in asked if i not in gold],
+                'lowU': [i for i in low if gold.get(i) == 'U'], 'lowUT': [i for i in low if gold.get(i) == 'U' and tel.get(i)],
+                'lowN': [i for i in low if gold.get(i) == 'N'], 'cost': cost,
+                'cut': sum(rows[(pv, i)].get('stop') == 'max_tokens' for i in asked)}
+
+    old_ids = [i for i in dict.fromkeys(all_ids(fx) + list(snap.get('extra', []))) if i in snap['articles']]
+    w_ids = [i for i in w2['order'] if W[i]['asked']]
+    wart = lambda i: W[i]
+    qw = {r: tally('Q2', w_ids, wart, wg, wtel, r) for r in Q2_RULES}
+    lw = tally('L1', w_ids, wart, wg, wtel)
+    qo = {r: tally('Q2', old_ids, old_art, og_adj, otel, r) for r in Q2_RULES}
+    lo = tally('L1', old_ids, old_art, og_adj, otel)
+    l1_ok21 = [i for i in tally('L1', old_ids, old_art, og, otel)['lowN']]
+    pct = lambda x, n: f'{x}/{n} ({x / n:.0%})' if n else f'{x}/0'
+    L = []
+    p = L.append
+    p(f'# 개인정보 좁은 질문 Q2 측정 결과 — P1~P6 (생성 {time.strftime("%Y-%m-%d %H:%M")}, `tools_urgency_probe.py --privacy-report`)\n')
+    p('판정 문서: `판정_좁은질문_261006.md` §5(통과 기준은 측정 전 고정). 이 표는 도구가 만든 것이고, 결과를 보고 문안·규칙을 고치지 않았다.\n')
+    p(f'- 새 표본 W: {w2["window"][0]} ~ {w2["window"][1]} KST{" (⚠️ 부분 추출)" if w2.get("partial") else ""} · 표본 {len(W)}건 {w2["counts"]} · '
+      f'질문 대상 {len(w_ids)}건 · 정답 {len(gw)}건(빠짐 {len(miss)}) · 정답 분포(질문 대상) U {len(qw["R-a"]["U"])} · N {len(qw["R-a"]["N"])} · '
+      f'B {len(qw["R-a"]["B"])}(채점 제외)')
+    p(f'- 옛 세트(ⓐ 회귀): 질문 대상 {qo["R-a"]["n"]}건(10-02 A·C 정답 + X gold.json, 새 원칙 N 2건 반영) · L1이 맞게 내린 {len(l1_ok21)}건')
+    p(f'- 호출 오류(결과 파일, 재시도 대상) {dict(errs) or 0}\n')
+    nW = qw['R-a']['n']
+    p2_thr = 1 if nW <= 100 else 0.01 * nW
+    r, l = qw['R-a'], lw
+    q2o = qo['R-a']
+    keep21 = sum(1 for i in l1_ok21 if i in q2o['low'])
+    tel_u = [i for i in r['U'] if wtel.get(i) and rows[('Q2', i)].get('parse') == 'ok']
+    tel_named = [i for i in tel_u if any(TELCO_NAME.search(x or '') for x in rows[('Q2', i)].get('parties') or [])]
+    q2_all = [rows[k] for k in rows if k[0] == 'Q2']
+    per_call = sum(x.get('in', 0) * PRICE['in'] + x.get('out', 0) * PRICE['out'] for x in q2_all) / 1e6 / max(1, len(q2_all))
+    bad_all = sum(x.get('parse') != 'ok' for x in q2_all) + errs.get('Q2', 0)
+    ok = lambda b: '통과' if b else '**못 미침**'
+    p('## 통과 기준 (새 표본 W, R-a)\n')
+    p('| | 기준 | 측정 | 판정 |')
+    p('|---|---|---|---|')
+    p(f'| P1 | 정답 U·통신 연결 내림 0 | {len(r["lowUT"])} | {ok(not r["lowUT"])} |')
+    p(f'| P2 | 정답 U 내림 ≤1건(n>100이면 ≤1 %) | {len(r["lowU"])} (n={nW}, 한도 {p2_thr:g}) | {ok(len(r["lowU"]) <= p2_thr)} |')
+    p(f'| P3 | 정답 N 내림 ≥60 %, 같은 표본 L1보다 많음 | Q2 {pct(len(r["lowN"]), len(r["N"]))} · L1 {pct(len(l["lowN"]), len(l["N"]))} | '
+      f'{ok(r["N"] and len(r["lowN"]) / len(r["N"]) >= 0.6 and len(r["lowN"]) > len(l["lowN"]))} |')
+    p(f'| P4 | 옛 세트: L1이 맞게 내린 {len(l1_ok21)}건 중 Q2도 내림 ≥19, 정답 U 손실 ≤ L1({len(lo["lowU"])}) | '
+      f'{keep21}/{len(l1_ok21)} · U 손실 {len(q2o["lowU"])} | {ok(keep21 >= 19 and len(q2o["lowU"]) <= len(lo["lowU"]))} |')
+    p(f'| P5 | 정답 U·통신 연결 중 parties에 통신사 이름 ≥85 % (R-d) | {pct(len(tel_named), len(tel_u))} | '
+      f'{ok(tel_u and len(tel_named) / len(tel_u) >= 0.85) if tel_u else "해당 없음(0건)"} |')
+    p(f'| P6 | 질문당 비용 ≤ $0.01, 해석 실패 0 | ${per_call:.4f} · 실패 {bad_all} (Q2 {len(q2_all)}회, 잘림 '
+      f'{sum(x.get("stop") == "max_tokens" for x in q2_all)}) | {ok(per_call <= 0.01 and bad_all == 0)} |')
+    p('')
+    p('## 오프라인 비교 (같은 결과 행, API 0)\n')
+    p('| 세트 | 규칙 | 질문 | 내림 | 정답 U 내림 | 그중 통신 연결 | 정답 N 내림 | 해석 실패 |')
+    p('|---|---|---|---|---|---|---|---|')
+    for lab, d in (('W', qw), ('옛 세트', qo)):
+        for rule in Q2_RULES:
+            t = d[rule]
+            p(f'| {lab} | Q2 {rule} | {t["n"]} | {len(t["low"])} | {len(t["lowU"])} | {len(t["lowUT"])} | {pct(len(t["lowN"]), len(t["N"]))} | {t["bad"]} |')
+        t = lw if lab == 'W' else lo
+        p(f'| {lab} | L1 | {t["n"]} | {len(t["low"])} | {len(t["lowU"])} | {len(t["lowUT"])} | {pct(len(t["lowN"]), len(t["N"]))} | {t["bad"]} |')
+    p('')
+    sk = Counter(W[i]['prod_skip'] for i in r['low'] if W[i]['prod_skip'])
+    p(f'- W에서 R-a가 내린 {len(r["low"])}건 중 운영이라면 질문을 건너뛸 기사(낱말 하한 긴급·2차 확인 안 부름) {dict(sk) or 0}')
+    outside = [i for i in w2['order'] if not W[i]['asked']]
+    od = Counter((wg.get(i), (W[i].get('admin') or {}).get('ai'), (W[i].get('admin') or {}).get('user')) for i in outside)
+    p(f'- 질문 밖(② 관리자 수정만, 운영 등급이 긴급이 아니었거나 낱말 없음) {len(outside)}건 — (정답, 수정 전, 수정 후): '
+      + ', '.join(f'{k} {v}' for k, v in od.most_common()))
+    if miss:
+        p(f'- ⚠️ 정답 없는 표본 {len(miss)}건 — 채점에서 빠짐')
+    p('')
+
+    def line(i, art, gold_row, pv='Q2'):
+        o = rows.get((pv, i)) or {}
+        return (f'  - {art["title"][:70]} — parties {o.get("parties")} · {o.get("topic")}·{o.get("stage")}·{o.get("scale")} · '
+                f'「{o.get("why")}」 / 정답 근거 「{(gold_row or {}).get("why", "")}」')
+    p('## 정답 U인데 내린 기사 (P1·P2·P4 대상)\n')
+    p(f'- 새 표본 W (R-a) {len(r["lowU"])}건')
+    for i in r['lowU']:
+        p(line(i, W[i], gw.get(i)) + (' · **통신 연결**' if wtel.get(i) else ''))
+    p(f'- 옛 세트 (R-a) {len(q2o["lowU"])}건')
+    for i in q2o['lowU']:
+        p(line(i, old_art(i), gx.get(i)))
+    p(f'- 옛 세트: L1이 맞게 내렸는데 Q2(R-a)가 안 내린 것 {len(l1_ok21) - keep21}건')
+    for i in l1_ok21:
+        if i not in q2o['low']:
+            p(line(i, old_art(i), gx.get(i)))
+    md = '\n'.join(L) + '\n'
+    with open(a.md, 'w', encoding='utf-8') as f:
+        f.write(md)
+    # 판정 세션용 기사별 묶음(칸·내림 규칙별·정답) — 원인 분류는 판정 세션 몫
+    join = []
+    for lab, ids, art_of, gold, grow, tel in (('W', [i for i in w2['order']], wart, wg, gw, wtel),
+                                              ('old', [i for i in old_ids if ('Q2', i) in rows or ('L1', i) in rows], old_art, og_adj, gx, otel)):
+        for i in ids:
+            ar = art_of(i)
+            q, l1 = rows.get(('Q2', i)), rows.get(('L1', i))
+            join.append({'set': lab, 'id': i, 'title': ar['title'], 'gold': gold.get(i), 'gold_telecom': tel.get(i),
+                         'gold_why': (grow.get(i) or {}).get('why'), 'gold_kind': (grow.get(i) or {}).get('kind'),
+                         'q2': {k: q.get(k) for k in ('parties', 'topic', 'stage', 'scale', 'why', 'parse')} if q else None,
+                         'q2_lower': {rule: privacy_lower_rule(q, ar, rule) for rule in Q2_RULES} if q and q.get('parse') == 'ok' else None,
+                         'telco_title_summary': bool(TELCO_NAME.search((ar.get('title') or '') + ' ' + ws(ar.get('screen_text')))),
+                         'l1': {k: l1.get(k) for k in ('topic', 'telecom', 'stage', 'why')} if l1 else None,
+                         'l1_lower': privacy_lower_l1(l1) if l1 and l1.get('parse') == 'ok' else None,
+                         **({k: ar.get(k) for k in ('pipe', 'urgency', 'admin', 'prod_skip', 'asked', 'in1', 'in2')} if lab == 'W' else {})})
+    with open(os.path.join(a.out, 'q2_join.json'), 'w', encoding='utf-8') as f:
+        json.dump(join, f, ensure_ascii=False, indent=1)
+    print(md)
+    print(f'→ {a.md} · 기사별 묶음 {os.path.join(a.out, "q2_join.json")}')
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════
@@ -1019,7 +1461,16 @@ def main() -> int:
     ap.add_argument('--sets', default='', help='세트 덮어쓰기(A·B·C·D·S 글자) — 없으면 변형별 기본')
     ap.add_argument('--rep', type=int, default=1, help='2 이상이면 같은 프롬프트를 새로 부른다(흔들림)')
     ap.add_argument('--sentence', action='store_true', help='주파수 문장 규칙 판정(T-S)')
-    ap.add_argument('--privacy', action='store_true', help='개인정보 좁은 질문 시제품(B0 긴급 + 낱말 적중 기사만, 2026-10-06)')
+    ap.add_argument('--privacy', action='store_true', help='개인정보 좁은 질문(B0 긴급 + 낱말 적중 / 세트 W는 새 표본 질문 대상)')
+    ap.add_argument('--runs', default='L1:ABCX', help="좁은 질문 실행 목록 '변형:세트,…' — 예 Q2:ABCX,Q2:W,L1:W (한 번에 어림·상한)")
+    ap.add_argument('--extract-w2', action='store_true', help='국감 주간 새 표본(세트 W)을 DB에서 뽑아 굳힌다(읽기만, 판정 §5)')
+    ap.add_argument('--w2-from', default='2026-10-06T00:00', help='새 표본 시작(KST, 포함)')
+    ap.add_argument('--w2-to', default='2026-10-13T00:00', help='새 표본 끝(KST, 제외)')
+    ap.add_argument('--partial', action='store_true', help='기간이 안 끝났어도 추출(시험용 — 다른 --out 폴더에)')
+    ap.add_argument('--privacy-report', action='store_true', help='좁은 질문 통과 기준 P1~P6 + R-a~R-d(API 0회)')
+    ap.add_argument('--gold-x', default='', help='옛 세트 X 정답(기본 --out 위 폴더의 gold.json)')
+    ap.add_argument('--gold-w', default='', help='새 표본 정답(기본 --out 위 폴더의 gold_w2.json)')
+    ap.add_argument('--md', default='', help='좁은 질문 보고 파일(기본 --out 위 폴더의 결과_Q2.md)')
     ap.add_argument('--report', action='store_true', help='통과 기준 대조표(API 0회)')
     ap.add_argument('--cap-mode', default='R1', choices=['raw', 'R1', 'R2'], help='2단계 비교에 쓸 상한')
     ap.add_argument('--out', default=OUT_DEFAULT)
@@ -1028,6 +1479,10 @@ def main() -> int:
     ap.add_argument('--cap', type=float, default=5.0, help='한 번 실행의 어림 비용 상한($, 설계 D7)')
     ap.add_argument('--extra', default='', help='임시 세트 X — 기사 id를 쉼표·줄바꿈으로 적은 파일(스냅숏에 더해 읽는다)')
     a = ap.parse_args()
+    up = os.path.dirname(os.path.abspath(a.out))
+    a.gold_x = a.gold_x or os.path.join(up, 'gold.json')
+    a.gold_w = a.gold_w or os.path.join(up, 'gold_w2.json')
+    a.md = a.md or os.path.join(up, '결과_Q2.md')
     for k in ('HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy'):
         os.environ.pop(k, None)
     fx = load_fixture()
@@ -1056,6 +1511,10 @@ def main() -> int:
             print(f'⚠️ 제목이 고정 자료와 다르다: {c["id"][:8]} {c["title"][:30]} / {snap["articles"][c["id"]]["title"][:30]}')
     if a.report:
         report(a, fx, snap)
+    elif a.extract_w2:
+        extract_w2(a, fx, snap)
+    elif a.privacy_report:
+        privacy_report(a, fx, snap)
     elif a.sentence:
         run_sentence(a, fx, snap)
     elif a.privacy:

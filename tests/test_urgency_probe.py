@@ -133,6 +133,84 @@ class TestToolAndCaps(unittest.TestCase):
             self.assertEqual(crawler._feedback_fixed_block(), block)
 
 
+Q2_LOCK = '731c934f0ed45926ceac1d4a9356ca3bd90bc8db0c73b16b38810bc3d13d028f'
+
+
+class TestPrivacyQ2(unittest.TestCase):
+    """개인정보 좁은 질문 Q2(판정 local_docs/긴급도_개인정보원칙_실측_261006/판정_좁은질문_261006.md §3) — 글자 그대로 잠근다."""
+    ARTS = [{'title': '제목', 'content': '', 'screen_text': ''},
+            {'title': '제목', 'content': '  본문  가 ', 'screen_text': ''},
+            {'title': '제목', 'content': '', 'screen_text': ' 요약 '},
+            {'title': '제목', 'content': '나' * 700, 'screen_text': '다' * 400}]
+
+    def test_lock(self):
+        s = (P.Q2_SYSTEM + '\n' + json.dumps(P.Q2_TOOL, ensure_ascii=False) + '\n' + str(P.Q2_MAX_TOKENS) + '\n'
+             + '\n\x00'.join(P.q2_user_msg(a) for a in self.ARTS))
+        self.assertEqual(hashlib.sha256(s.encode('utf-8')).hexdigest(), Q2_LOCK,
+                         'Q2 system·tool·user·max_tokens가 바뀌었다 — 새 표본으로 다시 잰 뒤에만 지문을 고친다(판정 §5, 같은 표본에 두 번째 판 없음)')
+
+    def test_tool_shape(self):
+        t = P.Q2_TOOL
+        self.assertEqual(list(t), ['name', 'description', 'strict', 'input_schema'])
+        self.assertTrue(t['strict'])
+        self.assertEqual(list(t['input_schema']['properties']), ['parties', 'topic', 'stage', 'scale', 'why'])
+        self.assertEqual(t['input_schema']['required'], ['parties', 'topic', 'stage', 'scale', 'why'])
+        self.assertNotIn('원칙', P.Q2_SYSTEM)              # 원칙 글은 프롬프트에서 뺐다 — 정책은 코드에
+        self.assertEqual(P.PRIV_VARIANTS['Q2']['max_tokens'], 300)
+
+    def test_user_msg(self):
+        self.assertEqual([P.q2_user_msg(a) for a in self.ARTS[:3]],
+                         ['제목: 제목', '제목: 제목\n본문: 본문 가', '제목: 제목\n검색 요약: 요약'])
+        both = P.q2_user_msg(self.ARTS[3])
+        self.assertEqual(both, '제목: 제목\n검색 요약: ' + '다' * 300 + '\n본문: ' + '나' * 600)
+        short = {'title': '제목', 'content': '짧은 본문', 'screen_text': '요약 글'}   # 등급 호출과 달리 짧은 본문도 넣는다
+        self.assertEqual(P.q2_user_msg(short), '제목: 제목\n검색 요약: 요약 글\n본문: 짧은 본문')
+        self.assertEqual(P.user_msg(short), '제목: 제목\n요약: 요약 글')             # 등급 호출 입력은 그대로
+
+    def test_telco_name(self):
+        hit = ['SK텔레콤 유심', 'SKT 해킹', 'KT는 이날', 'KT 소액결제', '케이티', 'LG유플러스', 'LG 유플러스', 'LGU+', 'LG U+',
+               '유플러스', '이통3사', '이통 3사', '통신3사', '통신 3사', '이동통신 3사', '에스케이텔레콤']
+        miss = ['KTX 운행', 'KT&G 인삼', 'KTOA', '통신사 보안', '이통사', '알뜰폰', '유심 교체', '통신망 장애']
+        for s in hit:
+            self.assertTrue(P.TELCO_NAME.search(s), s)
+        for s in miss:
+            self.assertFalse(P.TELCO_NAME.search(s), s)
+
+    def test_lower_rules(self):
+        art = {'title': '티빙 보상 접수', 'screen_text': '요약'}
+        tel_art = {'title': '티빙 보상', 'screen_text': '이동통신 3사 CISO도 증인'}
+        o = lambda topic='특정 유출·해킹 사건', stage='뒷이야기', scale='규모 안 적힘', parties=('티빙',): \
+            {'topic': topic, 'stage': stage, 'scale': scale, 'parties': list(parties), 'why': ''}
+        self.assertTrue(P.privacy_lower(o(), art))
+        self.assertFalse(P.privacy_lower(o(topic='법·제도·정책 일반'), art))
+        self.assertFalse(P.privacy_lower(o(parties=('티빙', 'SK텔레콤')), art))      # parties에 통신사
+        self.assertFalse(P.privacy_lower(o(), tel_art))                                # 안전장치: 요약에 이름
+        self.assertTrue(P.privacy_lower(o(stage='사고 첫 보도', scale='그 미만'), art))
+        self.assertFalse(P.privacy_lower(o(stage='사고 첫 보도', scale='수백만 명·계정 이상'), art))
+        self.assertFalse(P.privacy_lower(o(stage='사고 첫 보도', scale='규모 안 적힘'), art))   # R-a: 규모 안 적힘은 유지
+        self.assertFalse(P.privacy_lower(o(stage='처분 첫 보도', scale='그 미만'), art))        # 처분 첫 보도는 규모 무관 유지
+        cases =[o(), o(topic='그 밖'), o(stage='사고 첫 보도', scale='규모 안 적힘'), o(parties=('KT',))]
+        for c in cases:
+            for ar in (art, tel_art):
+                self.assertEqual(P.privacy_lower_rule(c, ar, 'R-a'), P.privacy_lower(c, ar))
+        self.assertTrue(P.privacy_lower_rule(o(stage='사고 첫 보도', scale='규모 안 적힘'), art, 'R-b'))
+        self.assertTrue(P.privacy_lower_rule(o(topic='그 밖'), art, 'R-c'))              # topic 관문 없음
+        self.assertTrue(P.privacy_lower_rule(o(), tel_art, 'R-d'))                       # 안전장치 없음(parties만)
+        self.assertFalse(P.privacy_lower_rule(o(parties=('통신 3사',)), art, 'R-d'))
+
+    def test_parse_and_l1_unchanged(self):
+        good = {'parties': ['티빙'], 'topic': '그 밖', 'stage': '해당 없음', 'scale': '해당 없음', 'why': 'x'}
+        self.assertEqual(P._parse_q2(good)['parties'], ['티빙'])
+        for k, v in (('parties', '티빙'), ('topic', '개인정보·해킹 사건'), ('stage', '후속'), ('scale', '대규모'), ('why', None)):
+            self.assertIsNone(P._parse_q2({**good, k: v}), k)
+        l1 = {'topic': '개인정보·해킹 사건', 'telecom': '통신 무관', 'stage': '후속'}
+        self.assertTrue(P.privacy_lower_l1(l1))
+        self.assertFalse(P.privacy_lower_l1({**l1, 'telecom': '통신 연결'}))
+        self.assertEqual(P.parse_runs('Q2:ABCX, Q2:W ,L1:W'), [('Q2', 'ABCX'), ('Q2', 'W'), ('L1', 'W')])
+        self.assertEqual(P.parse_runs(''), [('L1', 'ABCX')])
+
+
+import hashlib       # noqa: E402
 import unittest.mock  # noqa: E402
 
 if __name__ == '__main__':
