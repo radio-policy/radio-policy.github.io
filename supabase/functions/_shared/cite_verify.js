@@ -103,7 +103,11 @@
     const li = tp.lawInfo;
     if (li && li.candidates && fam) {
       if (li.title && norm(li.title) === norm(fam)) return false;
-      return !li.candidates.some(function (c) { return familyMatches(fam, c) || familyMatches(fam, stripTypeTail(c) || ''); });
+      // 「동 가이드라인 제3조」·「같은 고시」의 「동·같은·이」는 이름이 아니다(사내 관찰 ④) — 떼고 견주고, 남은 한 낱말이 문서 이름 끝과 같으면 같은 문서
+      return !li.candidates.some(function (c) {
+        const bare = c.replace(/^(동|같은|이)\s+/, '');
+        return familyMatches(fam, c) || familyMatches(fam, stripTypeTail(c) || '') || familyMatches(fam, bare) || norm(fam).endsWith(norm(bare));
+      });
     }
     return false;
   }
@@ -815,7 +819,14 @@
       const cm = tail.match(/^\s*(?:\([^)]*\))?\s*([①-⑳])/);
       if (cm) { const n = CIRCLED.indexOf(cm[1]) + 1; if (rec.paras.indexOf(n) === -1) rec.paras.push(n); }
       const iRe = /(?:제\s?)?(\d+)\s?호(?:\s?의\s?(\d+))?/g;
-      while ((pm = iRe.exec(tail))) { const it = pm[1] + (pm[2] ? '의' + pm[2] : ''); if (rec.items.indexOf(it) === -1) rec.items.push(it); }
+      while ((pm = iRe.exec(tail))) {
+        // 법령 번호는 호가 아니다(사내 관찰 ②, #286-보론2): 「(법률 제21553호)」·「고시 제2026-11호」 — 종류 낱말 뒤의 「제N호」, 「-」 뒤의 숫자, 4자리 이상 번호는 건너뛴다.
+        // 지침서 핵심 조문 머리줄 「전파법 제24조제2항 — … 법률 제21553호 …」을 모델이 표시에 옮기면 제21553호가 「원문 없음(조문 일부만 검색됨)」이 됐다.
+        const head = tail.slice(0, pm.index);
+        if (pm[1].length >= 4 || /\d-\s*$/.test(head) || /(법률|대통령령|총리령|부령|[가-힣]+령|고시|훈령|예규|규칙|공고|지침)\s*$/.test(head)) continue;
+        const it = pm[1] + (pm[2] ? '의' + pm[2] : '');
+        if (rec.items.indexOf(it) === -1) rec.items.push(it);
+      }
     }
     const p = mentions[0];
     return { kind: 'article', key: p.key, paras: p.paras, items: p.items, lawInfo: p.lawInfo, mentions: mentions };
@@ -1164,7 +1175,7 @@
     //       봤는지 적음). 38abd528(10-06): 3절 끝 「전파법 제92조제3호」를 이어받은 5절 표의 「법 제19조①」(폐업 60일 전 서류 제출)·「법 제19조③3호」가
     //    전파법 제19조(무선국 개설허가)와 대조돼 거짓 '원문과 다름' 3개, 「영 제24조①」·「법 제96조②」는 전파법 시행령·전파법에서 찾아 거짓 '원문 없음'
     //    2개 — 전기통신사업법 제19조·시행령 제24조·제96조는 자료에 있었다. 이름을 적은 법령은 종전대로 그 법령만(#240 ① — 못 맞춘 이름도 원문 없음).
-    let chosen = null, chosenRatio = -1, chosenDoc = null, chosenText = '', chosenLaw = null, chosenGuess = null, missGuess = null;
+    let chosen = null, chosenRatio = -1, chosenDoc = null, chosenText = '', chosenLaw = null, chosenGuess = null, chosenRel = null, missGuess = null;
     const misses = [], missLabels = [];
     const longestOf = function (rows, fam, key) {
       let t = '';
@@ -1221,7 +1232,19 @@
       const docs = new Set(cands.map(function (c) { return c.doc_name; }));
       for (const doc of docs) { const t = mergedOf(doc + '|' + cand.key); if (t.length > bestText.length) { best = doc; bestText = t; } }
       const r = quoteOverlap(claim, bestText);
-      if (r > chosenRatio) { chosen = cand; chosenRatio = r; chosenDoc = best; chosenText = bestText; chosenLaw = lawDoc; chosenGuess = guess; }
+      // 겹침이 같으면(바꿔 쓴 인용은 둘 다 0): 인용문 낱말 수가 뚜렷이(3개 이상) 다르면 더 드는 조문 → 아니면 이름을 적은(추측 아닌) 후보 →
+      // 그래도 같으면 앞의 것(사내 관찰 ①, #286-보론2). 종전 「같으면 앞의 것」은 #286 ⓑ로 이름 없는 의무 조문도 찾히게 되자
+      // 「제N조제M항 위반 시 ○○법 제K조 … 과태료」 줄의 과태료 문장을 앞에 적힌 의무 조문과 대조했다(의무 조문 낱말 3/7이라 ⓒ 회색에도 안 걸림).
+      // 뚜렷한 낱말 차이만 이름보다 앞세우는 까닭: 「…제19조①은 60일 전 고지를 정하며 벌칙은 ○○법 제96조 참조」처럼 이름 적은 조문이 곁가지일 때
+      // 이름을 앞세우면 거짓 주황이 나지만, 제재 조문은 의무 조문의 말을 되풀이해 낱말 수가 비슷하기 일쑤라(표 행 「전파법 제25조의2①, 영 제51조」 5 대 7)
+      // 작은 차이로 모델이 이름 적은 쪽을 버리면 안 된다.
+      const rel = claimRelevance(claim, bestText);
+      let better = r > chosenRatio;
+      if (!better && chosen && r === chosenRatio) {
+        if (Math.abs(rel.hits - chosenRel.hits) >= 3) better = rel.hits > chosenRel.hits;
+        else if (guessed !== !!chosenGuess) better = !guessed;
+      }
+      if (better) { chosen = cand; chosenRatio = r; chosenDoc = best; chosenText = bestText; chosenLaw = lawDoc; chosenGuess = guess; chosenRel = rel; }
     }
     if (!chosen) return Object.assign({ status: 'missing', reason: misses.map(function (s) { return s.trim(); }).join('·') + ' 원문 없음', lawDoc: null, lookFor: missLabels.join('·') },
       missGuess ? { lawGuess: missGuess.how, guessLabel: missGuess.label } : {});

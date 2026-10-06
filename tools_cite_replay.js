@@ -54,14 +54,32 @@ function loadSystemPrompt() {   // 운영은 app_config.system_prompt — 저장
 //   #286-보론부터 법령 이름 없는 초록이 대조한 조문으로 채워지므로, 저장된 초록은 모델이 이름을 적은 것과 구별할 수 없다(이름 적은 표시로 재연된다).
 function untag(answer) {
   return String(answer || '').replace(/\[(원문 없음 — |원문과 다름 — )([^\]]*)\]/g, function (all, head, body) {
-    const sm = body.match(/(?:^|[(·] ?)표시: ([^()·]+?)\)?$/);
+    // 옛 꼴을 먼저 가른다(사내 관찰 ③ — 새 꼴 판별식 「검색 자료에 … 없음」이 옛 꼴 「검색 자료에 해당 조문 없음 (대상)」에도 걸려 대상을 잃었다)
+    const isOld = /^판정기 메모: |^검색 자료에 해당 조문 없음|^자동 대조 못 함, 직접 확인(?: \(|$)/.test(body);
+    if (isOld) {
+      const m = body.match(/^(.*) \(([^()]*)\)$/);
+      const tgt = m ? m[2].split(' · ')[0].trim() : '';
+      return tgt && !/^법령 이름/.test(tgt) ? '[원문 확인됨: ' + tgt + ']' : '[원문 확인됨]';
+    }
+    const sm = body.match(/(?:^|[(·] ?)표시: ([^()·]+?)\)?$/);   // 새 꼴 — 모델 글자는 「표시: …」에만
     if (sm) return '[원문 확인됨: ' + sm[1].trim() + ']';
-    if (/와 대조: |과 대조: |검색 자료에 .+ 없음|직접 확인: /.test(body)) return '[원문 확인됨]';   // 새 형식 — 대조 조문은 판정기 것이지 모델 글자가 아니다
-    const m = body.match(/^(.*) \(([^()]*)\)$/);   // 옛 형식
-    const tgt = m ? m[2].split(' · ')[0].trim() : '';
-    return tgt && !/^법령 이름/.test(tgt) ? '[원문 확인됨: ' + tgt + ']' : '[원문 확인됨]';
+    return '[원문 확인됨]';   // 대조 조문은 판정기 것이지 모델 글자가 아니다
   });
 }
+// 되돌리기 자기 검사 — 꼴을 바꾸면 여기부터 깨진다
+(function selfTest() {
+  const cases = [
+    ['[원문 없음 — 검색 자료에 해당 조문 없음 (전기통신사업법 제52조의3제2항)]', '[원문 확인됨: 전기통신사업법 제52조의3제2항]'],
+    ['[원문과 다름 — 판정기 메모: 주체가 다름 (전파법 제24조제1항)]', '[원문 확인됨: 전파법 제24조제1항]'],
+    ['[원문 없음 — 자동 대조 못 함, 직접 확인 (전기통신사업법 제55조제2항)]', '[원문 확인됨: 전기통신사업법 제55조제2항]'],
+    ['[원문 없음 — 검색 자료에 해당 조문 없음]', '[원문 확인됨]'],
+    ['[원문 없음 — 검색 자료에 전파법 시행령 제24조제1항 없음 (법령 이름 없음 → 전파법 시행령으로 봄)]', '[원문 확인됨]'],
+    ['[원문 없음 — 검색 자료에 전파법 제5조 없음 (법령 이름 못 맞춤 → 전파법으로 봄 · 표시: 주파수 세부사항 제5조)]', '[원문 확인됨: 주파수 세부사항 제5조]'],
+    ['[원문과 다름 — 전파법 제19조제1항과 대조: 무선국 개설허가 규정 (표시: 전기통신사업법 제19조제1항)]', '[원문 확인됨: 전기통신사업법 제19조제1항]'],
+    ['[원문 없음 — 자동 대조 못 함, 직접 확인: 전기통신사업법 제55조제2항]', '[원문 확인됨]'],
+  ];
+  for (const [inp, want] of cases) { const got = untag(inp); if (got !== want) { console.error('untag 자기 검사 실패:', inp, '→', got, '(기대 ' + want + ')'); process.exit(2); } }
+})();
 const EXPAND_OPTS = { maxArticles: 10, maxChunksPerArticle: 4, maxAddedChunks: 14 };   // verify-citations/index.ts와 같은 값
 const SEL = 'id,doc_name,article_no,chunk_index,content';
 async function fetchChunksByIds(ids) {

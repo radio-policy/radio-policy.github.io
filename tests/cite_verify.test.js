@@ -764,6 +764,24 @@ function ok(name, cond, extra) {
   var gb = await CV.verifyCitations({ answer: ansB, chunks: [goal1].concat(g19only), annexSources: [] });
   eq('#286 목적 조문(제1조)으로는 바꿔 고르지 않는다', [gb.verdicts[1].status, gb.verdicts[1].lawGuess], ['missing', 'inherit']);
 
+  // ── #286-보론2(2026-10-07, 사내 관찰 ①②④) ──
+  // ① 겹침 동률(둘 다 0)이면 낱말 근거 → 이름 적은 후보 → 앞의 것: 「제19조제1항(…) 위반 시 전기통신사업법 제104조제5항제2호 … 과태료」 줄은 제104조와 대조
+  var ansTie = '전기통신사업법 제19조제1항은 60일 전 고지를 정합니다. [원문 확인됨: 전기통신사업법 제19조제1항]\n\n- 제19조제1항(사업의 휴업·폐업) 위반 시 전기통신사업법 제104조제5항제2호에 따라 1천만원 이하의 과태료가 부과됩니다. [원문 확인됨]';
+  var vTie = await CV.verifyCitations({ answer: ansTie, chunks: G.chunks, annexSources: [] });
+  eq('#286-보론2 ① 과태료 문장은 앞의 이름 없는 의무 조문(제19조)이 아니라 낱말이 드는 이름 적은 제104조와 대조', [vTie.verdicts[1].key, vTie.verdicts[1].law, vTie.verdicts[1].lawGuess || null, vTie.verdicts[1].cmp], ['104조', '전기통신사업법', null, '전기통신사업법 제104조제5항제2호']);
+  // 뚜렷한 낱말 차이(3개 이상)만 이름보다 앞: 이름 적은 조문이 곁가지(「벌칙은 … 제96조 참조」)인 줄은 본문이 말하는 이름 없는 조문과 대조
+  var ansSide = '전파법 제92조제3호: 신고 없는 폐지는 과태료. [원문 확인됨: 전파법 제92조제3호]\n\n- 제19조제1항은 기간통신사업의 휴업·폐업 예정일 60일 전까지 이용자에게 알리고 승인을 받도록 정하며, 벌칙은 전기통신사업법 제96조 참조 [원문 확인됨]';
+  var vSide = await CV.verifyCitations({ answer: ansSide, chunks: G.chunks, annexSources: [] });
+  eq('#286-보론2 ① 이름 적은 조문이 곁가지면(낱말 3개 이상 차이) 본문이 말하는 이름 없는 조문(제19조, 바꿔 고른 전기통신사업법)과 대조', [vSide.verdicts[1].key, vSide.verdicts[1].law, vSide.verdicts[1].lawGuess], ['19조', '전기통신사업법', 'claim']);
+  // 작은 차이(표 행 「전파법 제25조의2①, 영 제51조」 5 대 7)는 이름 적은 쪽, 둘 다 이름 없으면(「법 제19조①, 영 제24조①」 6 대 7) 앞의 것 — 위 5절 표 기대값이 그것
+  // ② 법령 번호는 호가 아니다
+  var p21553 = CV.parseSegment('전파법 제24조제2항(법률 제21553호) ');
+  eq('#286-보론2 ② 「(법률 제21553호)」·「고시 제2026-11호」·「대통령령 제35801호」는 호로 읽지 않는다', [p21553.key, p21553.paras, p21553.items, CV.parseSegment('방송미디어통신위원회고시 제2026-11호 제1조 ').items, CV.parseSegment('전파법 시행령 제51조(대통령령 제35801호) 제2항 제3호 ').items], ['24조', [2], [], [], ['3']]);
+  var v21553 = await CV.verifyCitations({ answer: '전파법 제24조제2항에 따라 스스로 확인한 결과를 제출해 준공검사를 갈음할 수 있습니다 [원문 확인됨: 전파법 제24조제2항(법률 제21553호)]', chunks: [lawRows['전파법|24조'][1]], annexSources: [] });
+  eq('#286-보론2 ② 표시 안 「(법률 제21553호)」가 있어도 호 검사로 원문 없음이 되지 않는다', [v21553.verdicts[0].status, v21553.verdicts[0].items], ['unjudged', []]);
+  // ④ 「동 가이드라인 제3조」의 「동」은 이름이 아니다 — (표시: …) 메모 안 붙음
+  eq('#286-보론2 ④ 「동 가이드라인 제3조」는 그 가이드라인과 같은 문서로 본다(표시 메모 없음)', [CV.shownDiffers('동 가이드라인 제3조', { key: '3조', kind: 'article' }, '이동통신용 무선설비 예비전원설비 설치 가이드라인'), CV.shownDiffers('전파법 제3조', { key: '3조', kind: 'article' }, '전기통신사업법')], [false, true]);
+
   // 지시문 지문 잠금 — 1차는 2차 보정의 바탕이라 글자 그대로, 2차는 실측(tests/cite_judge_probe.js) 뒤에만 고친다
   var sha = function (s) { return require('crypto').createHash('sha256').update(s, 'utf8').digest('hex').slice(0, 16); };
   eq('지문: 1차 판정 지시문(JUDGE_SYSTEM)', sha(CV.JUDGE_SYSTEM), '89a3482f020ae02d');
