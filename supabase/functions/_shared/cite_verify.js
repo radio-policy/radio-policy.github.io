@@ -32,24 +32,80 @@
   const CIRCLED = '①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳';
   // 표시는 세 상태(2026-09-20 운영자 결정, #176). 읽는 사람이 표시만 보고 "믿어라 / 직접 확인해라 / 틀렸을 수 있다"
   // 셋 중 하나로 읽어야 한다. (#169-보론5의 '[원문 확인 안 됨]' 단일 표시는 '못 찾음'과 '틀림'을 구분 못 해 폐기)
-  //   ok       → [원문 확인됨: …]                         (그대로)
-  //   missing  → [원문 없음 — 검색 자료에 해당 조문 없음 (대상)]   AI 기억으로 쓴 것일 수 있으니 직접 확인
-  //   mismatch → [원문과 다름 — 판정기 메모: … (대상)]        틀렸을 가능성 높음, 무엇이 다른지 한 줄
+  //   ok       → [원문 확인됨: <조문>]                       법령 이름 없는 표시(「[원문 확인됨]」·「동법 제N조」)는 대조한 조문으로 채운다(#286-보론)
+  //   missing  → [원문 없음 — 검색 자료에 <조문> 없음]          AI 기억으로 쓴 것일 수 있으니 직접 확인
+  //   mismatch → [원문과 다름 — <조문>와 대조: …]             틀렸을 가능성 높음, 무엇과 대조해 무엇이 다른지 한 줄
   //   그 밖(판정 보류·호출 실패·호 구조 못 찾음·대조할 문장 없음)은 드물고 읽는 사람이 할 일이 같아 '원문 없음' 머리에
-  //   꼬리만 달리 적는다: [원문 없음 — 자동 대조 못 함, 직접 확인 (대상)]
+  //   꼬리만 달리 적는다: [원문 없음 — 자동 대조 못 함, 직접 확인: <조문>]
+  //   <조문>은 표시 안 글자가 아니라 **판정기가 실제로 대조한(찾은) 문서·조·항·호**(#286-보론, 운영자 결정 2026-10-07 「X와 대조:」) —
+  //   모델이 표시 안에 적은 대상이 그것과 다르면(법령·조 번호·별표 번호) 끝에 「(표시: …)」로 남긴다. 대시보드·텔레그램은 머리말
+  //   「원문 확인됨」·「원문 없음 — 」·「원문과 다름 — 」만 보고 색을 입히므로 머리말은 바꾸지 않는다.
   const TAG_MISSING = '[원문 없음 — 검색 자료에 해당 조문 없음]';
   const TAG_UNCHECKED = '[원문 없음 — 자동 대조 못 함, 직접 확인]';
-  const TAG_MISMATCH_HEAD = '[원문과 다름 — 판정기 메모: ';
+  const TAG_MISMATCH_HEAD = '[원문과 다름 — ';
   const TAG_UNVERIFIED = TAG_MISSING;    // 옛 이름 유지(외부 참조 호환)
   const TAG_MISMATCH = TAG_MISMATCH_HEAD + '…]';
-  function buildTag(status, reason, target) {
-    const tail = target ? ' (' + target + ')]' : ']';
+  function buildTag(status, reason, cmp, notes) {
+    const ns = Array.isArray(notes) ? notes.filter(Boolean) : (notes ? [String(notes)] : []);
+    const tail = (ns.length ? ' (' + ns.join(' · ') + ')' : '') + ']';
+    const c = String(cmp || '').trim();
     if (status === 'mismatch') {
       const memo = String(reason || '').replace(/\s+/g, ' ').replace(/[\[\]]/g, '').trim().slice(0, 80) || '원문과 다르게 설명됨';
-      return TAG_MISMATCH_HEAD + memo + tail;
+      return TAG_MISMATCH_HEAD + (c ? withWa(c) + ' 대조: ' : '') + memo + tail;
     }
-    if (status === 'missing') return TAG_MISSING.slice(0, -1) + tail;
-    return TAG_UNCHECKED.slice(0, -1) + tail;
+    if (status === 'missing') {
+      const part = /조문 일부만 검색됨/.test(String(reason || '')) ? '(조문 일부만 검색됨)' : '';
+      return (c ? '[원문 없음 — 검색 자료에 ' + c + ' 없음' + part : TAG_MISSING.slice(0, -1)) + tail;
+    }
+    return TAG_UNCHECKED.slice(0, -1) + (c ? ': ' + c : '') + tail;
+  }
+  // 「X와 대조」·「X과 대조」 — 끝 글자의 받침(한글 종성, 숫자는 읽는 소리)으로 고른다
+  function withWa(label) {
+    const s = String(label || '');
+    if (!s) return s;
+    const ch = s.charAt(s.length - 1), code = ch.charCodeAt(0);
+    let batchim = false;
+    if (code >= 0xAC00 && code <= 0xD7A3) batchim = (code - 0xAC00) % 28 !== 0;
+    else if (/\d/.test(ch)) batchim = '013678'.indexOf(ch) !== -1;
+    return s + (batchim ? '과' : '와');
+  }
+  // 조문 이름표 「전기통신사업법 제19조제3항제3호」 — 판정기가 대조한(찾은) 조문을 표시에 적을 때
+  function articleLabel(fam, key, paras, items) {
+    let s = (fam ? fam + ' ' : '') + (key ? '제' + key : '');
+    if (paras && paras.length) s += paras.map(function (n) { return '제' + n + '항'; }).join('·');
+    if (items && items.length) s += items.map(function (i) { return '제' + String(i).replace(/^(\d+)(의\d+)?$/, '$1호$2'); }).join('·');   // 5의2 → 제5호의2
+    return s.trim();
+  }
+  // 판정 결과 하나가 대조한(찾은) 조문 — withGuess면 법령 추측 표기(#286)를 앞에 붙인다
+  function cmpLabelOf(r, withGuess) {
+    const fam = r.lawDoc || (r.doc ? docFamily(r.doc) : '');
+    let s;
+    if (r.kind === 'annex') s = fam ? ((fam + ' ' + (r.annexType || '별표') + (r.annex ? ' ' + r.annex : '')).trim()) : (r.lookFor || ((r.annexType || '별표') + (r.annex ? ' ' + r.annex : '')));
+    else if (r.key && (fam || r.doc)) s = articleLabel(fam, r.key, r.paras, r.items);
+    else s = r.lookFor || r.guessLabel || (r.key ? articleLabel('', r.key, r.paras, r.items) : '');
+    if (withGuess && r.lawGuess && s) s = (r.lawGuess === 'weak' ? '법령 이름 못 맞춤 → ' : '법령 이름 없음 → ') + s;
+    return s || '';
+  }
+  // 표시 안에 법령 이름이 적혀 있는가(「동법」·「법」·「시행령 제N조」·번호만은 아니다) — 없으면 초록을 대조한 조문으로 채운다
+  function tagNamesLaw(inner) {
+    if (!inner || !(/제\s?\d+\s?조|별표|별지/.test(inner))) return false;
+    const tp = parseTagInner(inner);
+    return !!(tp && tp.lawInfo && tp.lawInfo.candidates);
+  }
+  // 모델이 표시 안에 적은 대상이 판정기가 대조한 조문과 다른가(법령·조 번호·별표 번호) — 다르면 「(표시: …)」로 남긴다
+  function shownDiffers(tgt, r, fam) {
+    if (!tgt || !(/제\s?\d+\s?조|별표|별지/.test(tgt))) return false;
+    const tp = parseTagInner(tgt);
+    if (!tp) return false;
+    if (!fam) fam = String(r.lookFor || r.guessLabel || '').split(/\s제\d|\s별표|\s별지/)[0].trim();   // 못 찾은 조문은 찾아본 법령으로 견준다
+    if (tp.kind === 'annex') return r.kind !== 'annex' || String(tp.annex || '') !== String(r.annex || '');
+    if (r.key && tp.key && tp.key !== r.key) return true;
+    const li = tp.lawInfo;
+    if (li && li.candidates && fam) {
+      if (li.title && norm(li.title) === norm(fam)) return false;
+      return !li.candidates.some(function (c) { return familyMatches(fam, c) || familyMatches(fam, stripTypeTail(c) || ''); });
+    }
+    return false;
   }
   // 인용문 본문 길이(정규화) — 조 번호·괄호 제목·법령명을 뺀 나머지. 24자 미만이면 "번호·제목뿐"으로 본다.
   // 법령 이름은 **조·별표·별지 참조 바로 앞**(표 칸 경계 '|' 하나는 건너뜀)에 있고 줄 머리·구분 기호(| - * : , ( 「 [ .) 뒤에서 시작하는
@@ -830,8 +886,14 @@
   }
   const REL_MIN_HITS = 2, REL_MIN_SCORE = 0.2;
   function relEvidence(x) { return !!x && x.hits >= REL_MIN_HITS && x.score >= REL_MIN_SCORE; }
-  // 「…제19조로」·「…제1항으로」 — 추측한 조문 이름표 뒤의 조사
-  function withRo(label) { return label + (/항$/.test(label) ? '으로' : '로'); }
+  // 「…제19조로」·「…제1항으로」·「전기통신사업법으로」·「전파법 시행령으로」 — 끝 글자 받침(ㄹ 받침은 「로」)으로 조사를 고른다
+  function withRo(label) {
+    const s = String(label || '');
+    const code = s.charCodeAt(s.length - 1);
+    if (!(code >= 0xAC00 && code <= 0xD7A3)) return s + '로';
+    const jong = (code - 0xAC00) % 28;
+    return s + (jong === 0 || jong === 8 ? '로' : '으로');
+  }
 
   // 줄 머리의 표 행·목록 항목 표시 — [1] 들여쓰기, [2] '|' · 글머리(-·*·•) · 번호(1. 1))
   const SIBLING_RE = /^([ \t]*)(\||[-*•](?=\s)|\d+[.)](?=\s))/;
@@ -1041,7 +1103,8 @@
         (!cite.annex && cite.annexRel ? pool.find(function (p) { return p.rel === cite.annexRel && p.key.indexOf(label) === 0 && inScope(p); }) : null);
       const lawLabel = (scope && scope[0]) || (cite.lawInfo && (cite.lawInfo.title || cite.lawInfo.text)) || '';
       return hit ? { status: 'ok', kind: 'annex', lawDoc: hit.fam || null }
-        : { status: 'missing', reason: (lawLabel ? lawLabel + ' ' : '') + label + (cite.annex ? ' ' + cite.annex : '') + ' 원문 없음', lawDoc: (scope && scope[0]) || null };
+        : { status: 'missing', reason: (lawLabel ? lawLabel + ' ' : '') + label + (cite.annex ? ' ' + cite.annex : '') + ' 원문 없음', lawDoc: (scope && scope[0]) || null,
+            lookFor: ((lawLabel ? lawLabel + ' ' : '') + label + (cite.annex ? ' ' + cite.annex : '')).trim() };
     }
     // 문서·조별 정본 텍스트 (같은 조가 현행·시행예정 두 판으로 있을 수 있어 문서별로 묶는다)
     const articleText = new Map();   // doc_name|key → merged text
@@ -1102,7 +1165,7 @@
     //    전파법 제19조(무선국 개설허가)와 대조돼 거짓 '원문과 다름' 3개, 「영 제24조①」·「법 제96조②」는 전파법 시행령·전파법에서 찾아 거짓 '원문 없음'
     //    2개 — 전기통신사업법 제19조·시행령 제24조·제96조는 자료에 있었다. 이름을 적은 법령은 종전대로 그 법령만(#240 ① — 못 맞춘 이름도 원문 없음).
     let chosen = null, chosenRatio = -1, chosenDoc = null, chosenText = '', chosenLaw = null, chosenGuess = null, missGuess = null;
-    const misses = [];
+    const misses = [], missLabels = [];
     const longestOf = function (rows, fam, key) {
       let t = '';
       const docs = new Set(rows.filter(function (c) { return docFamily(c.doc_name) === fam; }).map(function (c) { return c.doc_name; }));
@@ -1148,7 +1211,9 @@
       }
       if (!cands.length) {
         const ctxText = cand.ctxLaw && cand.ctxLaw.text;
-        misses.push(((scope && scope[0]) || (cand.lawInfo && (cand.lawInfo.title || cand.lawInfo.text)) || ctxText || '') + ' ' + cand.key);
+        const lawLab = (scope && scope[0]) || (cand.lawInfo && (cand.lawInfo.title || cand.lawInfo.text)) || ctxText || '';
+        misses.push(lawLab + ' ' + cand.key);
+        missLabels.push(articleLabel(lawLab, cand.key, cand.paras, cand.items));
         if (guessed && scope && scope.length && !missGuess) missGuess = { how: gk, label: scope[0] + ' 제' + cand.key };
         continue;
       }
@@ -1158,7 +1223,7 @@
       const r = quoteOverlap(claim, bestText);
       if (r > chosenRatio) { chosen = cand; chosenRatio = r; chosenDoc = best; chosenText = bestText; chosenLaw = lawDoc; chosenGuess = guess; }
     }
-    if (!chosen) return Object.assign({ status: 'missing', reason: misses.map(function (s) { return s.trim(); }).join('·') + ' 원문 없음', lawDoc: null },
+    if (!chosen) return Object.assign({ status: 'missing', reason: misses.map(function (s) { return s.trim(); }).join('·') + ' 원문 없음', lawDoc: null, lookFor: missLabels.join('·') },
       missGuess ? { lawGuess: missGuess.how, guessLabel: missGuess.label } : {});
     // 항·호는 원문에 그 구조가 있을 때만 검사 (단항 조문에 "제1항"이라고 쓴 것까지 잡지 않는다)
     const paras = chosen.paras || [], items = chosen.items || [];
@@ -1169,13 +1234,13 @@
     if (paras.length && /[①-⑳]/.test(chosenText)) {
       for (const n of paras) {
         if (n >= 1 && n <= 20 && chosenText.indexOf(CIRCLED[n - 1]) === -1)
-          return Object.assign({ status: 'missing', reason: chosen.key + ' 제' + n + '항 원문 없음(조문 일부만 검색됨)', lawDoc: chosenLaw, doc: chosenDoc, key: chosen.key }, guessFields);
+          return Object.assign({ status: 'missing', reason: chosen.key + ' 제' + n + '항 원문 없음(조문 일부만 검색됨)', lawDoc: chosenLaw, doc: chosenDoc, key: chosen.key, paras: [n], items: [] }, guessFields);
       }
     }
     if (items.length && /(^|\n)\s*\d+(의\d+)?\.\s/.test(chosenText)) {
       for (const it of items) {
         if (!new RegExp('(^|\\n)\\s*' + it + '\\.\\s').test(chosenText))
-          return Object.assign({ status: 'missing', reason: chosen.key + ' 제' + it + '호 원문 없음(조문 일부만 검색됨)', lawDoc: chosenLaw, doc: chosenDoc, key: chosen.key }, guessFields);
+          return Object.assign({ status: 'missing', reason: chosen.key + ' 제' + it + '호 원문 없음(조문 일부만 검색됨)', lawDoc: chosenLaw, doc: chosenDoc, key: chosen.key, paras: paras, items: [it] }, guessFields);
       }
     } else if (items.length) {
       // 호를 주장했는데 원문에 호 구조가 없다 — 청크 경계에서 줄바꿈이 사라지면
@@ -1550,19 +1615,28 @@
         });
       }
     }
-    let out = answer, changed = 0, quoteTagged = 0;
+    let out = answer, changed = 0, quoteTagged = 0, filled = 0;
     const cut = function (r) {   // 표시를 지운다(앞 공백 하나 포함)
       const lead = /\s$/.test(out.slice(0, r.tagStart)) ? r.tagStart - 1 : r.tagStart;
       out = out.slice(0, lead) + out.slice(r.tagEnd);
     };
     for (const r of results.slice().reverse()) {
-      // 꼬리표에 대상이 적혀 있었으면 바꾼 표시에도 남긴다 — 어느 조문 얘기인지 읽는 사람이 알 수 있게
-      let tgt = r.tagTarget ? String(r.tag).replace(QUOTE_MARK, '').slice(1, -1).replace(/^원문\s*확인됨/, '').replace(/^[\s:：—\-–,]+/, '').trim() : '';
-      // 이름 없는 참조를 어느 법령의 조문으로 봤는지 읽는 사람에게 보인다(#286) — 법령 추측이 결과를 갈랐을 표시(원문 없음·주황·ⓒ 회색)에만
-      if (r.lawGuess && r.guessLabel && (r.status === 'missing' || r.status === 'mismatch' || r.guessGrey)) {
-        const note = (r.lawGuess === 'weak' ? '법령 이름 못 맞춤 → ' : '법령 이름 없음 → ') + withRo(r.guessLabel) + (r.status === 'missing' && !r.doc ? ' 봄' : ' 대조');
-        tgt = tgt ? tgt + ' · ' + note : note;
+      // 표시 안 글자(모델이 적은 대상)와 판정기가 실제로 대조한(찾은) 조문(cmp) — 바뀐 표시는 cmp를 적고, 둘이 다르면 「(표시: …)」(#286-보론)
+      const inner = String(r.tag).replace(QUOTE_MARK, '').slice(1, -1).replace(/^원문\s*확인됨/, '').replace(/^[\s:：—\-–,]+/, '').trim();
+      const tgt = r.tagTarget ? inner : '';
+      const fam = r.lawDoc || (r.doc ? docFamily(r.doc) : '');
+      let cmpPlain = cmpLabelOf(r, false), cmp = cmpLabelOf(r, true);
+      // 이름을 적었는데 자료에 그 법령이 없어 못 찾은 것(#240 ①)은 찾아본 조문 이름표가 「시행령 제24조」처럼 토막이 된다 — 모델이 적은 대상 그대로
+      if (r.status === 'missing' && !fam && tgt && !r.lawGuess) { cmpPlain = tgt; cmp = tgt; }
+      const notes = [];
+      // 원문 없음은 「검색 자료에 <조문> 없음」 뒤 괄호에 법령 추측을 적는다(앞에 붙이면 「검색 자료에 법령 이름 없음 → …」로 읽혀 어색)
+      if (r.status === 'missing' && r.lawGuess) {
+        const gfam = fam || String(r.guessLabel || r.lookFor || '').split(/\s제\d/)[0].trim();
+        if (gfam) notes.push((r.lawGuess === 'weak' ? '법령 이름 못 맞춤 → ' : '법령 이름 없음 → ') + withRo(gfam) + ' 봄');
       }
+      if (r.status !== 'ok' && tgt && cmpPlain !== tgt && shownDiffers(tgt, r, fam)) notes.push('표시: ' + tgt);
+      // ⓒ(#286) 추측한 조문에 인용문 낱말이 없어 회색이 된 「불일치」 — 무엇과 대조하면 다른지까지 적는다
+      const cmpG = r.status === 'missing' ? cmpPlain : (r.guessGrey && cmp ? withWa(cmp) + ' 대조하면 다름(인용문 낱말이 그 조문에 없음)' : cmp);
       if (r.auto) {
         // 기계가 붙인 인용 대조 표시(#230): 대조할 것이 없던 것은 흔적 없이 지우고, 확인된 것은 법령명을 채워 남긴다
         if (r.status === 'dup' || r.status === 'unparsed' || r.status === 'noclaim') { cut(r); continue; }
@@ -1576,13 +1650,18 @@
           out = out.slice(0, r.tagStart) + '[원문 확인됨: ' + label + ']' + out.slice(r.tagEnd);
           continue;
         }
-        out = out.slice(0, r.tagStart) + buildTag(r.status, r.reason, tgt) + out.slice(r.tagEnd); changed++;
+        out = out.slice(0, r.tagStart) + buildTag(r.status, r.reason, cmpG, notes) + out.slice(r.tagEnd); changed++;
         continue;
       }
-      // ok(= 실제로 대조해 맞음)는 그대로. 나머지는 세 상태 표시(#176)로 바꾸고, 중복(dup)은 지운다.
-      if (r.status === 'ok') continue;
+      if (r.status === 'ok') {
+        // 초록: 법령 이름 없는 표시(「[원문 확인됨]」·「[원문 확인됨: 제19조제1항]」·「동법 제N조」)는 대조한 조문으로 채운다(#286-보론, 운영자 결정) —
+        // 이름이 있으면 모델 글자 그대로(글자 그대로 일치가 번호 오기를 바로잡은 #155-보론6도 그대로). 별표 표시는 건드리지 않는다.
+        if (r.kind === 'article' && cmpPlain && !tagNamesLaw(inner)) { out = out.slice(0, r.tagStart) + '[원문 확인됨: ' + cmpPlain + ']' + out.slice(r.tagEnd); filled++; }
+        continue;
+      }
+      // 나머지는 세 상태 표시(#176)로 바꾸고, 중복(dup)은 지운다.
       if (r.status === 'dup') { cut(r); changed++; continue; }
-      out = out.slice(0, r.tagStart) + buildTag(r.status, r.reason, tgt) + out.slice(r.tagEnd); changed++;
+      out = out.slice(0, r.tagStart) + buildTag(r.status, r.reason, cmpG, notes) + out.slice(r.tagEnd); changed++;
     }
     // 답변이 실제로 인용해 확인된 문서 — 출처 목록을 이 순서로 앞세우는 데 쓴다(#176)
     const citedDocs = [];
@@ -1590,11 +1669,11 @@
     // 지운 기계 표시는 기록에서도 뺀다(판정 대상이 아니었다)
     const kept = results.filter(function (r) { return !(r.auto && (r.status === 'dup' || r.status === 'unparsed' || r.status === 'noclaim')); });
     return {
-      answer: out, changed: changed, autoTagged: at.added, quoteTagged: quoteTagged, citedDocs: citedDocs,
+      answer: out, changed: changed, filled: filled, autoTagged: at.added, quoteTagged: quoteTagged, citedDocs: citedDocs,
       verdicts: kept.map(function (r) {
         const v = { tag: String(r.tag).replace(QUOTE_MARK, ''), kind: r.kind, key: r.key || (r.kind === 'annex' ? (r.annexType || '별표') + (r.annex ? ' ' + r.annex : '') : null), law: r.lawDoc || r.lawText || null,
           paras: r.paras || [], items: r.items || [], status: r.status, reason: r.reason || null, judge: r.judge || null, doc: r.doc || null,
-          verbatim: !!r.verbatim, overlap: typeof r.overlap === 'number' ? Math.round(r.overlap * 100) / 100 : null };
+          verbatim: !!r.verbatim, overlap: typeof r.overlap === 'number' ? Math.round(r.overlap * 100) / 100 : null, cmp: cmpLabelOf(r, false) || null };
         if (r.auto) v.auto = 'quote';
         if (r.judge2) v.judge2 = r.judge2;                    // 2차 판정(#284부터 판정 대상 전부, #280은 1차 불일치만) — 1·2차가 갈린 건수를 나중에 셀 수 있게
         if (r.judge2Error) v.judge2Error = r.judge2Error.slice(0, 200);   // 2차가 두 번 다 실패 → 1차 결과로 물러남
@@ -1620,6 +1699,7 @@
     JUDGE2_CONCURRENCY: JUDGE2_CONCURRENCY, judgeEachSecond: judgeEachSecond, swapPromptArticles: swapPromptArticles, isPromptDoc: isPromptDoc,
     guessKind: guessKind, isGuessedRef: isGuessedRef, isBoilerplateArticle: isBoilerplateArticle, claimRelevance: claimRelevance, relEvidence: relEvidence,
     REL_MIN_HITS: REL_MIN_HITS, REL_MIN_SCORE: REL_MIN_SCORE,
+    withWa: withWa, articleLabel: articleLabel, cmpLabelOf: cmpLabelOf, tagNamesLaw: tagNamesLaw, shownDiffers: shownDiffers,
   };
   root.CiteVerify = CiteVerify;
   if (typeof module !== 'undefined' && module.exports) module.exports = CiteVerify;

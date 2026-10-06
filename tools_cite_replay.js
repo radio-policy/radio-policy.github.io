@@ -48,10 +48,17 @@ function loadSystemPrompt() {   // 운영은 app_config.system_prompt — 저장
   vm.runInNewContext(src, ctx);
   return ctx.__SP || (ctx.window && ctx.window.SYSTEM_PROMPT) || '';
 }
+// 옛 형식(~#286): 「[원문 없음 — 검색 자료에 해당 조문 없음 (대상)]」·「[원문과 다름 — 판정기 메모: … (대상)]」 — 괄호 안이 모델이 적은 대상.
+// 새 형식(#286-보론~): 「[원문과 다름 — <대조 조문>와 대조: …]」·「[원문 없음 — 검색 자료에 <조문> 없음 (… · 표시: <대상>)]」·「[… 직접 확인: <조문> (표시: <대상>)]」
+//   — 모델이 적은 대상은 「표시: …」에만 있고(대조 조문과 다를 때만), 없으면 대상 없는 「[원문 확인됨]」으로 되돌린다.
+//   #286-보론부터 법령 이름 없는 초록이 대조한 조문으로 채워지므로, 저장된 초록은 모델이 이름을 적은 것과 구별할 수 없다(이름 적은 표시로 재연된다).
 function untag(answer) {
-  return String(answer || '').replace(/\[(원문 없음 — |원문과 다름 — 판정기 메모: )([^\]]*)\]/g, function (all, head, body) {
-    const m = body.match(/^(.*) \(([^()]*)\)$/);
-    const tgt = m ? m[2].split(' · ')[0].trim() : '';   // 「(대상 · 법령 이름 없음 → …)」의 추측 메모는 뺀다
+  return String(answer || '').replace(/\[(원문 없음 — |원문과 다름 — )([^\]]*)\]/g, function (all, head, body) {
+    const sm = body.match(/(?:^|[(·] ?)표시: ([^()·]+?)\)?$/);
+    if (sm) return '[원문 확인됨: ' + sm[1].trim() + ']';
+    if (/와 대조: |과 대조: |검색 자료에 .+ 없음|직접 확인: /.test(body)) return '[원문 확인됨]';   // 새 형식 — 대조 조문은 판정기 것이지 모델 글자가 아니다
+    const m = body.match(/^(.*) \(([^()]*)\)$/);   // 옛 형식
+    const tgt = m ? m[2].split(' · ')[0].trim() : '';
     return tgt && !/^법령 이름/.test(tgt) ? '[원문 확인됨: ' + tgt + ']' : '[원문 확인됨]';
   });
 }
