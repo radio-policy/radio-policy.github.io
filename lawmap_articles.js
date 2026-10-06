@@ -523,8 +523,12 @@ async function lmaFetchArticles(docName, keys) {
   return out;
 }
 // 인접 청크는 앞뒤 100자가 겹친다(청킹 overlap, 정답표 실측) — 겹치는 머리를 잘라 이어 붙인다(그대로 붙이면 문장 조각이 두 번 나옴)
+// #287(2026-10-07): 구간 머리가 있는 별표의 조각은 첫 줄에 「〔제3종〕」이 붙는다(law_sync.chunk_articles) — 뒷 조각의 그 한 줄을 떼고
+// 맞춰야 겹침이 맞고 원문 그대로 이어진다(안 떼면 이음매마다 ≈100자가 두 번 나왔다 — 사내 회신으로 확인)
+var LMA_HEAD_PREFIX_RE = /^〔[^〕\n]{1,12}〕\n/;
 function lmaJoinChunks(acc, next) {
   if (!acc) return next;
+  next = next.replace(LMA_HEAD_PREFIX_RE, '');
   var max = Math.min(140, acc.length, next.length);
   for (var k = max; k >= 20; k--) { if (acc.slice(-k) === next.slice(0, k)) return acc + next.slice(k); }
   return acc + '\n' + next;

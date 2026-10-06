@@ -135,5 +135,22 @@ eq('artno null', lmaArtNoMatches(null, '19조'), false);
   total++; if (!ok4) fails++; console.log((ok4 ? 'ok  ' : 'FAIL') + ' 별표 표제 자신은 제외');
 })();
 
+// #287: 구간 머리 접두(「〔제3종〕」)가 붙은 별표 조각 — 뒷 조각의 접두를 떼고 겹침을 맞춰 원문 그대로 이어야 한다
+(function () {
+  var text = '■ [별표 1]\n<제1종>\n' + Array.from({ length: 30 }, function (_, i) { return (i + 1) + '. 「어떤법」 제' + (i + 1) + '조에 따른 영업 허가 줄'; }).join('\n')
+    + '\n<제2종>\n' + Array.from({ length: 30 }, function (_, i) { return (i + 1) + '. 「다른법」 제' + (i + 1) + '조에 따른 등록 줄'; }).join('\n');
+  var parts = [], start = 0;                       // law_sync.chunk_articles와 같은 800자/700 보폭, 둘째 조각부터 머리 접두
+  while (start < text.length) {
+    var piece = text.slice(start, start + 800).trim();
+    var head = start > text.indexOf('<제2종>') ? '제2종' : (start > 0 ? '제1종' : '');
+    parts.push(head ? '〔' + head + '〕\n' + piece : piece);
+    start += 700;
+  }
+  var acc = '';
+  parts.forEach(function (p) { acc = lmaJoinChunks(acc, p); });
+  eq('lmaJoinChunks: 별표 구간 머리 접두를 떼고 원문 그대로', acc === text && parts.length > 2 && parts[1].indexOf('〔제1종〕') === 0, true);
+  eq('lmaJoinChunks: 접두 없는 조문 조각은 종전대로', lmaJoinChunks('제1조(목적) 이 법은 무선국의 개설 허가와 신고 절차를 정한다', '무선국의 개설 허가와 신고 절차를 정한다. 제2조'), '제1조(목적) 이 법은 무선국의 개설 허가와 신고 절차를 정한다. 제2조');
+})();
+
 console.log('\n' + (total - fails) + '/' + total + ' passed' + (fails ? ', ' + fails + ' FAILED' : ''));
 process.exit(fails ? 1 : 0);
