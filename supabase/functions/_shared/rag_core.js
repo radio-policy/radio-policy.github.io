@@ -497,15 +497,24 @@
   // L8 경과조치 따라가기(#290, 2026-10-07 — Fable 판정 local_docs/자문세문제_판정_261007.md §13-2, Fable 재검토 대상): 부칙은 검색으로 열지 않고
   // (상위 15·정밀검색·감점·문턱은 그대로) 덧붙이기 한 칸으로만 연다. 발동 = A ∧ B.
   //  A(조회 전에 본다 — 안 걸리면 DB 왕복 0): 질문에 시점·전환 낱말. 「시행령·시행규칙·변경신고·변경허가·기한」은 뺐고(실제 기록에서 경과와 무관한 적중),
-  //    「신설」은 「통신설비」의 앞뒤 글자(통·신설·비)에 걸려 「신설비」를 뺀다(V2 n17 「전기통신설비는 …」). 실제 자문 기록 108문항 중 10개
-  //    (9c07d80f 전송자격인증 포함)·개발 20 중 0·V2 20 중 5(n02·n06·n08·n11·n14) — 판정 목표 「≤12/108·9c07d80f 포함」.
+  //    「신설」은 「통신설비」의 앞뒤 글자(통·신설·비)에 걸려 「신설비」를 뺀다(V2 n17 「전기통신설비는 …」). 「폐지하·변경하」(「변경하려면·폐지하려는」 —
+  //    하려는 행위를 묻는 말투, 사내 154문항의 무관 부착 3건이 전부 이 꼴)도 뺀다 — 「변경된·폐지된·변경 전」은 그대로(#290-보론 D3).
+  //    실제 자문 기록 108문항 중 10개(9c07d80f 전송자격인증 포함)·개발 20 중 0·V2 20 중 5(n02·n06·n08·n11·n14)·사내 33 중 1 — 판정 목표 「≤12/108·9c07d80f 포함」.
   //  B: 본래 근거 조문(정밀검색·상한 구제·RAG — 위임 근거와 같은 목록, 덧붙인 조문은 아니다, 정의·목적 조문 제외)을 같은 문서 현행 부칙의
-  //    경과조치·적용례·특례 조가 「…의 개정규정」 앞에서 번호로 가리킬 때(「제N조부터 제M조까지」는 범위, 항까지 적은 것은 조로).
+  //    경과조치·적용례·특례 조가 「…의 개정규정」·「…까지의 규정」 앞에서 번호로 가리킬 때(「제N조부터 제M조까지」는 범위, 항까지 적은 것은 조로 —
+  //    「까지의 규정」 닻은 #290-보론 D5: 「제8조부터 제10조까지의 규정을 … 이행」 같은 유예 경과조치). 타법개정 부칙 단위(「부칙(○○ 일부개정에 관한
+  //    대통령령)」 — 개정하는 법령 자신의 조 번호를 적는다, D2)는 빼고, 그 부칙 조 본문(머리 「제N조(…)」 뺌)에 질문 키워드가 하나는 들어야 한다
+  //    (ADDENDUM_GENERIC_RE 설명 — 근거 조문이 질문과 무관하면 그 부칙도 무관하다, D4).
   //  부칙 조 단위로 최대 max개·budgetChars자(#283 예산 12,000자 밖의 따로 몫, trimAddOns가 가장 먼저 덜어 냄), 공포일 최근순(날짜 없는 부칙은 맨 뒤).
-  //  끄는 법(10-21 집계 뒤 판단): ADDENDUM_TRIGGER_RE를 null로 — 상수 하나, 재배포.
-  const ADDENDUM_TRIGGER_RE = /도입|바뀌|바뀐|생겼|신설(?!비)|개정|폐지|전환|소급|시행\s?당시|유예|경과|종전|기존|아직|이미\s?(?:등록|허가|인증|신고)|언제|이력|연혁|구법|새로|시행(?!령|규칙)|변경(?!신고|허가)/;
+  //  끄는 법(10-21 집계 뒤 판단): ADDENDUM_OPTS.on = false — 상수 하나, 재배포. (ADDENDUM_TRIGGER_RE를 null로 하면 addendumWanted가 예외를 던져
+  //    덧붙이기 전체(위임·별표·공통 인용·같은 고시)가 빠진다 — Fable 재검토 F2, D6)
+  const ADDENDUM_TRIGGER_RE = /도입|바뀌|바뀐|생겼|신설(?!비)|개정|폐지(?!하)|전환|소급|시행\s?당시|유예|경과|종전|기존|아직|이미\s?(?:등록|허가|인증|신고)|언제|이력|연혁|구법|새로|시행(?!령|규칙)|변경(?!신고|허가|하)/;
   const ADDENDUM_OPTS = { on: true, max: 3, budgetChars: 1500 };
   const ADDENDUM_TITLE_RE = /경과\s?조치|적용례|특례/;
+  // B 관련성 문턱(#290-보론 D4): 질문 키워드(extractKeywords — 상한 5)에서 발동 낱말(ADDENDUM_TRIGGER_RE에 걸리는 것 — 부칙 본문엔 거의 늘 「개정」·「시행」이
+  //   든다)·제목 불용어(isTitleStop)·이 낱말들을 뺀 것이 부칙 조 본문에 하나라도 부분 문자열로 들어야 한다. 뺀 뒤 남는 키워드가 없으면 문턱 없음(fail-open).
+  //   외부 9항목(V2 n02·n08·n14, 실제 15c71cd7·9c07d80f): 관련 4/4 유지·무관 5/5 제거. 전파 영역의 흔한 명사(「무선국」) 하나로도 통과한다 — 10-21에 다시 본다.
+  const ADDENDUM_GENERIC_RE = /^(?:규정|조항|조문|법령|법률|시행령|고시)$/;
   // 고시·훈령·예규·공고 문서 — 문서명의 종류 괄호로 판별(「…세부사항(과학기술정보통신부고시)(제2026-23호)(20260416)」)
   const NOTICE_DOC_RE = /^[^(]+\([^()]*(?:고시|훈령|예규|공고)\)/;
   // 위임 표의 조 제목(괄호 없음, 예: '정의')이 정의·목적이면 따라가지 않는다 — 거의 모든 조가 정의 조와 이어져 칸만 먹는다(#230과 같은 이유)
@@ -788,6 +797,26 @@
 
   // ── L8 경과조치 따라가기(#290 — 위 ADDENDUM_* 설명) ──
   function addendumWanted(question) { return ADDENDUM_OPTS.on !== false && ADDENDUM_TRIGGER_RE.test(String(question || '')); }
+  // 관련성 문턱의 키워드(D4) — 비면 문턱 없음
+  function addendumKeywords(question) {
+    const q = String(question || '');
+    return extractKeywords(q).filter(function (w) { return !ADDENDUM_TRIGGER_RE.test(w) && !isTitleStop(w, q) && !ADDENDUM_GENERIC_RE.test(w); });
+  }
+  // 타법개정 부칙 단위(D2) — 단위 글이 「부칙(」+이름으로 시작하고(「부칙(제2024-20호)」 같은 번호 괄호는 자기 부칙) 그 이름이 호스트 법령군과 다르다.
+  // 실DB 2,010단위 중 603 — 그 경과조치·적용례가 「제1조부터 제61조까지의 개정규정」처럼 적는 번호는 개정령 자신의 조다(전수 4/4, 호스트 조를 가리킨 것 0)
+  function addendumForeign(text, fam) {
+    const s = String(text || ''), m = s.match(/^\s*부\s*칙\s*\(/);
+    if (!m) return false;
+    let depth = 1, name = '';
+    for (let i = m[0].length; i < s.length; i++) {
+      const ch = s[i];
+      if (ch === '(') depth++;
+      else if (ch === ')' && --depth === 0) break;
+      name += ch;
+    }
+    if (/^\s*제?\s*\d/.test(name)) return false;
+    return name.replace(/[「」\s]/g, '') !== String(fam || '').replace(/\s/g, '');
+  }
   // 근거 = 위임 따라가기와 같은 목록([정밀검색, 상한 구제, RAG] — 덧붙인 조문은 근거가 아니다, 설계 H5 「한 걸음만」), 파일 문서·조 아닌 것·정의·목적 조문 제외.
   // 부칙은 근거 조문과 **같은 문서**의 것만 보므로 문서명|조 열쇠로 모은다.
   function addendumBases(lists) {
@@ -803,22 +832,38 @@
     });
     return { keys: keys, docs: docs };
   }
-  // 부칙 조 글이 가리키는 본칙 조 — 한 문장(줄·「…다.」) 안에서 마지막 「개정규정」 앞의 조 참조 전부(「제22조제2항 및 제22조의11의 개정규정」 —
-  // 마지막 조만 잡으면 앞 조가 빠진다), 「제N조부터 제M조까지」는 범위. 남의 법(「…」·같은 법 — CiteVerify.isOtherLawRef, 나열 꼬리 포함)과
-  // 「종전의 제N조」(옛 번호)는 뺀다. 항·호까지 적은 것은 조로 접는다(XREF_RE). 반환 [{lo:[번호,의], hi:[번호,의]}]
+  // 부칙 조 글이 가리키는 본칙 조 — 한 문장(줄·「…다.」) 안에서 마지막 닻(「개정규정」·「까지의 규정」, D5) 앞의 조 참조 전부(「제22조제2항 및 제22조의11의
+  // 개정규정」 — 마지막 조만 잡으면 앞 조가 빠진다), 「제N조부터 제M조까지」는 범위. 남의 법(「…」·같은 법 — CiteVerify.isOtherLawRef, 나열 꼬리 포함)과
+  // 옛 번호·남의 부칙(ADD_NOT_HOST_RE — 나열 머리에 붙어도 나열 전부)은 뺀다. 항·호까지 적은 것은 조로 접는다(XREF_RE). 반환 [{lo:[번호,의], hi:[번호,의]}]
   const ADD_RANGE_RE = /제\s?(\d+)\s?조(?:\s?의\s?(\d+))?(?:\s?제\s?\d+\s?항)?\s*부터\s*제\s?(\d+)\s?조(?:\s?의\s?(\d+))?(?:\s?제\s?\d+\s?항)?\s*까지/g;
+  // 부칙 조 자신의 머리 「제2조(…경과조치)」
+  const ADD_HEAD_RE = /^\s*제\s?\d+\s?조(?:\s?의\s?\d+)?\s*\([^)\n]{0,80}\)/;
+  // 호스트 본칙이 아닌 조 번호의 앞말: 「종전의」(옛 번호) · 「부칙」(+번호 — 「…일부개정법률 부칙 제2조 본문에 따라」, 「법 부칙 제11조」) ·
+  // 「일부개정법률/령」(남의 개정 법령의 조 — D10, ★ 전기통신사업법 시행령 부칙 제36281호 제4조가 본칙 제2조(보편적 역무)로 읽혔다)
+  const ADD_NOT_HOST_RE = /(?:종전의?|부칙(?:\s*\(\s*제?\s*[\d-]+\s*호\s*\)|\s*<[^>]{0,30}>|\s*제\s?[\d-]+\s?호)?|일부\s?개정\s?(?:법률|령))$/;
+  // 나열 꼬리(조·항·호·이음말) — CiteVerify.isOtherLawRef와 같은 꼴. 「종전의 제11조부터 제14조까지, 제29조 및 제31조부터 제34조까지의 규정」의 제29조·제31조도
+  // 나열 머리 「종전의」를 따른다(전자서명법 부칙 제17354호 제5조 — 바로 앞 낱말만 보면 옛 번호가 본칙으로 읽힌다)
+  const ADD_ENUM_TAIL_RE = /(?:제\s?\d+\s?(?:조(?:의\s?\d+)?|항|호(?:의\s?\d+)?)|[가-하]목|각\s?호|본문|단서|전단|후단|[,ㆍ·]|및|또는|부터|까지|이나|와|과|\s)+$/;
   function addendumRefs(text) {
     const CV = root.CiteVerify;
     const other = function (seg, at) {
       const before = seg.slice(Math.max(0, at - 80), at);
-      return (CV && CV.isOtherLawRef ? CV.isOtherLawRef(before) : false) || /종전의?\s*$/.test(before);
+      if (CV && CV.isOtherLawRef && CV.isOtherLawRef(before)) return true;
+      let b = before.replace(/\s+$/, '');
+      if (ADD_NOT_HOST_RE.test(b)) return true;
+      const run = b.match(ADD_ENUM_TAIL_RE);
+      if (!run || !/제\s?\d+\s?조/.test(run[0])) return false;
+      b = b.slice(0, run.index).replace(/\s+$/, '');
+      return ADD_NOT_HOST_RE.test(b);
     };
     const out = [];
     // 부칙 조 자신의 머리 「제2조(…경과조치)」는 참조가 아니다 — 떼지 않으면 부칙 제5조가 본칙 제5조를 가리킨 것으로 읽힌다
-    String(text || '').replace(/^\s*제\s?\d+\s?조(?:\s?의\s?\d+)?\s*\([^)\n]{0,80}\)/, '').split(/\n|다\.\s*/).forEach(function (sent) {
+    String(text || '').replace(ADD_HEAD_RE, '').split(/\n|다\.\s*/).forEach(function (sent) {
       let a, lastAnchor = -1;
-      const are = /개정\s?규정/g;
-      while ((a = are.exec(sent))) lastAnchor = a.index;
+      // 닻 자리는 「규정」 앞 — 「까지의 규정」이면 「…제10조까지의 」가 앞에 남아 범위로 읽힌다(닻이 「까지의」 앞이면 「까지」가 잘려 낱개 [8,10]).
+      // lookbehind는 쓰지 않는다(옛 Safari가 못 읽어 이 파일 로드 자체가 깨진다)
+      const are = /(?:개정|까지의)\s?규정/g;
+      while ((a = are.exec(sent))) lastAnchor = a.index + a[0].length - 2;
       if (lastAnchor < 0) return;
       const seg = sent.slice(0, lastAnchor), spans = [];
       let m;
@@ -845,10 +890,12 @@
   // 조회한 부칙 조각(근거 문서들의 현행 부칙) → 근거 조문을 가리키는 경과조치·적용례·특례 조. 부칙 한 단위(문서 × article_no)는 800자가 넘으면 여러 조각
   // (100자 겹침)이라 chunk_index 순으로 이어(CiteVerify.mergeChunkTexts) 「제M조(」 머리로 자른다(CiteVerify.addendumArticles — 판정기와 같은 자르기).
   // present = 자료에 이미 든 부칙 단위(문서명|article_no — 정밀검색 상위 5는 부칙을 거르지 않아 통째로 들어올 수 있다, 10-02 n02) → 뺀다.
+  // 타법개정 부칙 단위(addendumForeign, D2)는 빼고, question을 주면 관련성 문턱(addendumKeywords, D4)을 건다.
   // 공포일(article_no 괄호 날짜) 최근순, 날짜 없는 부칙(「부칙 #N」)은 맨 뒤, 같으면 근거 문서·단위·조 순. 반환은 고르기 전 후보 전부.
-  function addendumCandidates(rows, bases, present) {
+  function addendumCandidates(rows, bases, present, question) {
     const CV = root.CiteVerify;
     if (!CV || !CV.addendumUnitOf || !CV.addendumArticles) return [];
+    const kws = addendumKeywords(question);
     const units = {}, order = [];
     (rows || []).forEach(function (r) {
       if (!r || !bases.docs.length || bases.docs.indexOf(r.doc_name) === -1) return;
@@ -864,6 +911,7 @@
       const u = units[k];
       const rs = u.rows.slice().sort(function (a, b) { return (a.chunk_index || 0) - (b.chunk_index || 0); });
       const text = CV.mergeChunkTexts(rs.map(function (r) { return r.content || ''; }));
+      if (addendumForeign(text, famOf(u.doc_name))) return;
       const baseKeys = [];
       bases.keys.forEach(function (bk) { if (bk.slice(0, bk.lastIndexOf('|')) === u.doc_name) baseKeys.push(bk.slice(bk.lastIndexOf('|') + 1)); });
       CV.addendumArticles(text).forEach(function (a, ai) {
@@ -872,6 +920,10 @@
         const refs = addendumRefs(body);
         const hit = baseKeys.filter(function (bk) { const n = artNum(bk); return refs.some(function (r) { return inRange(n, r); }); }).sort(cmpArt);
         if (!hit.length) return;
+        if (kws.length) {
+          const plain = body.replace(ADD_HEAD_RE, '');
+          if (!kws.some(function (w) { return plain.indexOf(w) !== -1; })) return;
+        }
         // 그 조가 든 조각만(조각 id 기록·대시보드 인용 대조용) — 머리·꼬리 글이 든 조각과 그 사이
         const probeA = body.slice(0, 30), probeB = body.slice(-30);
         let lo = -1, hi = -1;
@@ -1085,7 +1137,7 @@
     if (aBases) {
       const presentUnits = new Set();
       [extra, spill, rag].forEach(function (list) { (list || []).forEach(function (c) { if (c && /^부칙/.test(c.article_no || '')) presentUnits.add(c.doc_name + '|' + c.article_no); }); });
-      addendum = pickAddenda(addendumCandidates(await addP, aBases, presentUnits));
+      addendum = pickAddenda(addendumCandidates(await addP, aBases, presentUnits, opts.question));
     }
     return packAddOns({ deleg: deleg, xref: xref, neighbor: neighbor, annex: annex, addendum: addendum, spillItems: items });
   }
@@ -1198,6 +1250,7 @@
     annexWanted: annexWanted, annexBlock: annexBlock, docDate: docDate,
     // L8 경과조치 따라가기(#290)
     ADDENDUM_TRIGGER_RE: ADDENDUM_TRIGGER_RE, ADDENDUM_OPTS: ADDENDUM_OPTS, ADDENDUM_TITLE_RE: ADDENDUM_TITLE_RE,
+    ADDENDUM_GENERIC_RE: ADDENDUM_GENERIC_RE, addendumKeywords: addendumKeywords, addendumForeign: addendumForeign,   // #290-보론 D2·D4
     addendumWanted: addendumWanted, addendumBases: addendumBases, addendumRefs: addendumRefs, addendumCandidates: addendumCandidates,
     addendumHead: addendumHead, pickAddenda: pickAddenda,
     buildRagContext: buildRagContext, buildKbContext: buildKbContext,

@@ -50,7 +50,9 @@ Deno.serve(async (req) => {
   try { body = await req.json(); } catch { return json(400, { error: { type: 'bad_request', message: '요청 형식이 올바르지 않습니다.' } }, cors); }
   const answer = String(body.answer || '');
   if (!answer) return json(400, { error: { type: 'bad_request', message: 'answer 없음' } }, cors);
-  const ids = (Array.isArray(body.chunk_ids) ? body.chunk_ids : []).filter((v): v is number => typeof v === 'number').slice(0, 80);
+  // 조각 id 상한 120(#290-보론 D7 — 80은 #283·#290 전 값: 덧붙인 조각 id는 맨 뒤에 붙어 넘치면 조용히 잘리고 대시보드만 거짓 「원문 없음」이 된다,
+  // 하네스 개발 q13이 이미 80)
+  const ids = (Array.isArray(body.chunk_ids) ? body.chunk_ids : []).filter((v): v is number => typeof v === 'number').slice(0, 120);
   const annexSources = (Array.isArray(body.annex_sources) ? body.annex_sources : []).map((s) => String(s)).slice(0, 10);
 
   // 표시도 근거도 없으면 할 일이 없다. 표시가 없어도 근거 청크가 있으면 통째 인용에 표시를 붙여 준다(#155-보론7).

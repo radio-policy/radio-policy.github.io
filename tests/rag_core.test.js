@@ -37,7 +37,9 @@ var NAMES = ['PRIORITY_KW_RE', 'VERB_TAIL', 'extractKeywords', 'LAW_SYNONYMS', '
   'LAW_TERM_SYNONYMS', 'LAW_TERM_MAX', 'lawTermKeywords',
   // L8 경과조치 따라가기(#290)
   'ADDENDUM_TRIGGER_RE', 'ADDENDUM_OPTS', 'ADDENDUM_TITLE_RE', 'addendumWanted', 'addendumBases', 'addendumRefs', 'addendumCandidates',
-  'addendumHead', 'pickAddenda'];
+  'addendumHead', 'pickAddenda',
+  // #290-보론(Fable 재검토 D2·D4)
+  'ADDENDUM_GENERIC_RE', 'addendumKeywords', 'addendumForeign'];
 NAMES.forEach(function (n) { ok('export ' + n, RC[n] !== undefined); });
 
 // ── 법령 키워드 추출 ──
@@ -469,10 +471,43 @@ var addendumTests = (async function () {
       refKeys('제51조의2의 개정규정은 이 법 시행 이후 위원회가 제51조제5항에 따라 명하는 경우부터 적용한다.'), refKeys('종전의 제17조제1항에 따라 승인을 신청한 자는 제17조제1항의 개정규정에 따른다.'),
       refKeys('이 고시는 제5조의 규정에 따른다.')],
      [['10.0', '18.0', '104.0'], ['8.0~10.0'], ['51.2'], ['17.0'], []]);
+  // #290-보론 D5 — 「까지의 규정」 닻(닻 자리 「규정」 앞이라 범위로 읽힘) + 「종전의」가 나열 머리면 나열 전부 옛 번호
+  eq('L8 참조: 「까지의 규정」 닻 → 범위(55321·55322·국가회계법 시행령), 「종전의」 나열 전부 제외(전자서명법 부칙 제17354호 제5조)',
+     [refKeys('제2조(관리기준 이행에 대한 경과조치) 주요 집적정보통신시설 사업자등은 2024년도 기본계획 수립 시의 중요통신시설에 대하여 제8조부터 제10조까지의 규정을 다음 표의 기간까지 이행하여야 한다.'),
+      refKeys('제2조(적용례) 제3조부터 제5조까지의 규정은 2009회계연도 결산부터 적용한다.'),
+      refKeys('③ 제1항 및 제2항을 위반하는 경우에 대해서는 종전의 제11조부터 제14조까지, 제29조 및 제31조부터 제34조까지의 규정에 따른다.'),
+      refKeys('종전의 제5조에 따라 받은 허가는 제6조의 개정규정에 따른 허가로 본다.'),
+      refKeys('이 고시는 제5조의 규정에 따른다.')],
+     [['8.0~10.0'], ['3.0~5.0'], [], ['6.0'], []]);
+  // #290-보론 D10 — 앞말 「부칙(제N호)」·「일부개정법률/령」의 조는 본칙 조가 아니다(★ 전기통신사업법 시행령 부칙 제36281호 제4조 → 본칙 제2조로 읽혔다)
+  eq('L8 참조: 「…일부개정법률 부칙 제2조」·「법 부칙 제11조」·「일부개정령 제3조」·「부칙(제2024-20호) 제2조」 제외, 나열 꼬리도',
+     [refKeys('제4조(등록 요건에 관한 적용례) 법률 제20792호 전기통신사업법 일부개정법률 부칙 제2조 본문에 따라 특수한 유형의 부가통신역무를 제공하는 사업을 등록한 것으로 보는 자로서 이 영 시행 당시 같은 조 단서에 따라 6개월 이내에 등록하지 못한 자는 이 영 시행 이후 6개월 이내에 별표 3 제2호의 개정규정에 따른 등록 요건을 갖추어 등록해야 한다.'),
+      refKeys('⑤ 이 영 시행 당시 법 부칙 제11조에 따라 과업심의위원회로 보는 종전의 과업변경심의위원회 중 제45조제2항 후단의 개정규정을 충족하지 못한 경우'),
+      refKeys('대통령령 제33000호 ○○법 시행령 일부개정령 제3조에 따른 자는 제7조의 개정규정에 따른다.'),
+      refKeys('부칙(제2024-20호) 제2조 및 제3조에도 불구하고 제9조의 개정규정을 적용한다.')],
+     [[], ['45.0'], ['7.0'], ['9.0']]);
+  // #290-보론 D3 — 하려는 행위 말투(「변경하려면·폐지하려는」)는 안 걸리고 「변경된·폐지된」은 걸림
+  eq('L8 발동 A: 「변경하려면」·「폐지하려는」·「변경하려는」 비적중, 「변경된」·「폐지된」·「변경 전」 적중',
+     [RC.addendumWanted('기간통신사업 등록을 변경하려면 어떻게 해야 하나'), RC.addendumWanted('무선국을 폐지하려는 경우 신고 절차는?'),
+      RC.addendumWanted('이용약관을 변경하려는 경우 신고해야 하나'), RC.addendumWanted('변경된 등록 기준은?'), RC.addendumWanted('폐지된 제도의 근거는?'),
+      RC.addendumWanted('변경 전 허가는 유효한가')],
+     [false, false, false, true, true, true]);
+  // #290-보론 D2 — 타법개정 부칙 단위(「부칙(이름)」 + 이름 ≠ 호스트 법령군)
+  eq('L8 타법개정 부칙 단위 판별 — 이름 다르면 타법, 번호 괄호·꺾쇠·같은 이름은 자기 부칙',
+     [RC.addendumForeign('부칙(소상공인 경제회복 지원을 위한 61개 법령의 일부개정에 관한 대통령령) <제33434호,2023.4.25>\n제1조(시행일)', '위치정보의 보호 및 이용 등에 관한 법률 시행령'),
+      RC.addendumForeign('부칙(제2024-20호)\n제1조(시행일)', '주요통신사업자의 통신시설 등급 지정 및 관리 기준'),
+      RC.addendumForeign('부칙 <제20792호,2025.3.18>\n제1조(시행일)', '전기통신사업법'),
+      RC.addendumForeign('부칙(전기통신사업법) <제20792호>', '전기통신사업법')],
+     [true, false, false, false]);
+  // #290-보론 D4 — 관련성 문턱 키워드: 발동 낱말·제목 불용어(관련)·「시행령」류 뺌
+  eq('L8 관련성 키워드 — 발동 낱말(도입·아직·바뀐)·관련·시행령 뺌, 다 빠지면 빈 목록(문턱 없음)',
+     [RC.addendumKeywords('전송자격인증제가 도입되었으나 재판매사들이 아직까지 전송자격인증을 신청하지 못하고 있는데 어떠한 문제가 발생할수 있나'),
+      RC.addendumKeywords('알뜰폰 전파사용료 감면 관련 전파법 시행령 개정 이력 찾아줘'), RC.addendumKeywords('언제 바뀌었나?')],
+     [['신청하지', '전송자격인증제', '재판매사들'], ['전파사용료', '전파법', '알뜰폰', '감면'], []]);
   var TEL = '전기통신사업법(법률)(제21503호)(20261001)';
-  var rows = [
-    { id: 31603, doc_name: TEL, article_no: '부칙 제20792호(20250318)', chunk_index: 251, content: '부칙 <제20792호,2025.3.18>\n제1조(시행일) 이 법은 공포 후 6개월이 경과한 날부터 시행한다.\n제2조(전송자격인증에 관한 경과조치) 이 법 시행 당시 종전의 규정에 따라 등록한 자는 제22조제2항의 개정규정에 따라 등록한 것으로 본다. 다만, 이 법 시행 이후 6개월 이내에 제22조의11의 개정규정에 따른 전송자격인증을 받아야 한다.' },
-    { id: 31606, doc_name: TEL, article_no: '부칙 제20151호(20240130)', chunk_index: 254, content: '부칙 <제20151호,2024.1.30>\n제1조(시행일) 이 법은 공포 후 6개월이 경과한 날부터 시행한다.\n제2조(신설되는 금지행위에 관한 경과조치) 이 법 시행 당시 이미 체결된 이용계약에 대해서는 제50조제1항제5호의3의 개정규정을 적용하지 아니한다.' },
+  var rows = [   // 31603·31606은 실DB 조각 글 그대로(10-07)
+    { id: 31603, doc_name: TEL, article_no: '부칙 제20792호(20250318)', chunk_index: 251, content: '부칙 <제20792호,2025.3.18>\n제1조(시행일) 이 법은 공포 후 6개월이 경과한 날부터 시행한다.\n제2조(전송자격인증에 관한 경과조치) 이 법 시행 당시 종전의 규정에 따라 제2조제14호나목에 따른 특수한 유형의 부가통신역무를 제공하는 사업을 등록하고, 「정보통신망 이용촉진 및 정보보호 등에 관한 법률」 제50조의4제4항에 따라 사업자가 자율적으로 시행한 전송자격인증제에 따라 인증을 받은 자는 제22조제2항의 개정규정에 따라 등록한 것으로 본다. 다만, 이 법 시행 이후 6개월 이내에 제22조의11의 개정규정에 따른 전송자격인증을 받고 제22조제2항의 개정규정에 따라 등록하여야 한다.' },
+    { id: 31606, doc_name: TEL, article_no: '부칙 제20151호(20240130)', chunk_index: 254, content: '부칙 <제20151호,2024.1.30>\n제1조(시행일) 이 법은 공포 후 6개월이 경과한 날부터 시행한다.\n제2조(신설되는 금지행위에 관한 경과조치) 이 법 시행 당시 이미 체결된 전기통신서비스 이용계약에 대해서는 이용계약의 약정기간 동안 제50조제1항제5호의3의 개정규정을 적용하지 아니한다.' },
     { id: 31596, doc_name: TEL, article_no: '부칙 제21652호(20260519)', chunk_index: 244, content: '부칙 <제21652호,2026.5.19>\n제1조(시행일) 이 법은 공포 후 6개월이 경과한 날부터 시행한다.\n제2조(최대주주 변경 등에 관한 적용례) 제10조, 제18조 및 제104조의 개정규정은 이 법 시행 이후 최초로 최대주주가 변경된 경우부터 적용한다.' },
     { id: 31598, doc_name: TEL, article_no: '부칙 제21503호(20260331)', chunk_index: 246, content: '부칙(전기통신금융사기 피해 방지 및 피해자산 환급에 관한 특별법) <제21503호,2026.3.31>\n제1조(시행일) 이 법은 공포 후 6개월이 경과한 날부터 시행한다.\n제7조(다른 법률의 개정) ⑥ 전기통신사업법 일부를 다음과 같이 개정한다. 제22조제2항 중 「…」을 「…」으로 한다.' },
   ];
@@ -484,9 +519,10 @@ var addendumTests = (async function () {
   var lists = { extra: [{ id: 1, doc_name: TEL, article_no: '22조(부가통신사업의 신고 등)', content: '제22조' }, { id: 2, doc_name: TEL, article_no: '2조(정의)', content: '제2조(정의)' }],
     spill: [], rag: [{ id: 3, doc_name: TEL, article_no: '22조의11(전송자격인증)', content: '제22조의11' }, { id: 4, doc_name: TEL, article_no: '50조(금지행위)', content: '제50조' }] };
   var Q = '전송자격인증제가 도입되었으나 재판매사들이 아직까지 인증을 신청하지 못하면 어떤 문제가 있나';
+  var QB = '전송자격인증제 도입 전에 체결된 이용계약은 아직 유효한가';   // 두 부칙 모두와 겹치는 질문(전송자격인증제·이용계약)
   var none = await RC.fetchAddOns(lists, fetchers, { question: '전송자격인증을 받지 못하면 어떤 문제가 있나' });
   eq('L8 발동 A 안 걸리면 부칙 조회 0회·칸 없음', [calls.length, none.items.filter(function (x) { return x.sec === 'addendum'; }).length, none.addendum], [0, 0, 0]);
-  var r = await RC.fetchAddOns(lists, fetchers, { question: Q, budget: 10 });
+  var r = await RC.fetchAddOns(lists, fetchers, { question: QB, budget: 10 });
   eq('L8 조회는 근거 문서 한 번(정의 조문만 든 문서도 근거 문서 목록엔 본래 근거로)', calls, ['add:' + TEL]);
   eq('L8 항목 — 공포일 최근순(2025 → 2024), 근거 안 가리킨 적용례(제10·18·104조)·「다른 법률의 개정」은 빠짐, 예산 12,000자 밖 따로 몫',
      [r.items.map(function (x) { return x.sec + ':' + x.key; }), r.addendum, r.ids], [['addendum:부칙제20792호제2조', 'addendum:부칙제20151호제2조'], 2, [31603, 31606]]);
@@ -498,8 +534,22 @@ var addendumTests = (async function () {
   eq('L8 판정기용 조각 — 단위 article_no + 그 조 글', r.chunks.filter(function (c) { return c._addon === 'addendum'; }).map(function (c) { return [c.id, c.article_no, c.content.slice(0, 6)]; }),
      [[31603, '부칙 제20792호(20250318)', '제2조(전송'], [31606, '부칙 제20151호(20240130)', '제2조(신설']]);
   // 자료에 이미 든 부칙 단위는 빼고, 정의 조문은 근거가 아니다
-  var r2 = await RC.fetchAddOns({ extra: lists.extra.concat([{ id: 31603, doc_name: TEL, article_no: '부칙 제20792호(20250318)', content: 'x' }]), rag: lists.rag }, fetchers, { question: Q });
+  var r2 = await RC.fetchAddOns({ extra: lists.extra.concat([{ id: 31603, doc_name: TEL, article_no: '부칙 제20792호(20250318)', content: 'x' }]), rag: lists.rag }, fetchers, { question: QB });
   eq('L8 자료에 이미 든 같은 부칙 단위는 다시 싣지 않음', r2.items.filter(function (x) { return x.sec === 'addendum'; }).map(function (x) { return x.key; }), ['부칙제20151호제2조']);
+  // #290-보론 D4 — 관련성 문턱: 부칙 조 본문(머리 뺌)에 질문 키워드가 하나는 들어야(통과·차단), 키워드가 다 빠지면 문턱 없음(fail-open)
+  var keys = function (x) { return x.items.filter(function (i) { return i.sec === 'addendum'; }).map(function (i) { return i.key; }); };
+  var rq = await RC.fetchAddOns(lists, fetchers, { question: Q });
+  var rf = await RC.fetchAddOns(lists, fetchers, { question: '언제 바뀌었나?' });
+  var rh = await RC.fetchAddOns(lists, fetchers, { question: '금지행위 규정이 도입되었나?' });   // 「금지행위」는 31606 머리 「제2조(신설되는 금지행위에 관한 경과조치)」에만 있다
+  eq('L8 관련성 문턱 — 통과(전송자격인증제)·차단(이용계약 부칙)·fail-open(키워드 없음)·머리 글자는 안 셈',
+     [keys(rq), keys(rf), keys(rh)], [['부칙제20792호제2조'], ['부칙제20792호제2조', '부칙제20151호제2조'], []]);
+  // #290-보론 D2 — 타법개정 부칙 단위의 적용례는 개정령 자신의 조(「제1조부터 제61조까지」)라 근거 제5조를 가리킨 것으로 보지 않는다
+  var LOC = '위치정보의 보호 및 이용 등에 관한 법률 시행령(대통령령)(제36084호)(20260210)';
+  var locRows = [{ id: 7001, doc_name: LOC, article_no: '부칙 제33434호(20230425)', chunk_index: 90, content: '부칙(소상공인 경제회복 지원을 위한 61개 법령의 일부개정에 관한 대통령령) <제33434호,2023.4.25>\n제1조(시행일) 이 영은 공포한 날부터 시행한다.\n제2조(행정처분ㆍ과징금 또는 과태료에 관한 적용례) 제1조부터 제61조까지의 개정규정은 이 영 시행 전의 위반행위에 대하여 이 영 시행 이후 행정처분을 하거나 과징금 또는 과태료 부과처분을 하는 경우에도 적용한다.' }];
+  var rl = await RC.fetchAddOns({ extra: [{ id: 7000, doc_name: LOC, article_no: '5조(위치정보사업의 허가 등)', content: '제5조' }] },
+    { delegations: fetchers.delegations, familyArticle: fetchers.familyArticle, docArticles: fetchers.docArticles, addendaRows: function () { return Promise.resolve(locRows); } },
+    { question: '위치정보사업 과태료 적용례가 바뀌었나' });
+  eq('L8 타법개정 부칙 단위는 후보에서 뺌(위치정보법 시행령 부칙 제33434호 → 제5조)', rl.addendum, 0);
   var r3 = await RC.fetchAddOns({ extra: [{ id: 2, doc_name: TEL, article_no: '2조(정의)', content: '제2조(정의)' }] }, fetchers, { question: Q });
   eq('L8 정의·목적 조문은 근거가 아님(제2조를 가리키는 부칙이 있어도)', [r3.addendum, calls[calls.length - 1]], [0, 'add:' + TEL]);
   var r4 = await RC.fetchAddOns(lists, { delegations: fetchers.delegations, familyArticle: fetchers.familyArticle, docArticles: fetchers.docArticles }, { question: Q });
