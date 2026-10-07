@@ -1169,11 +1169,12 @@ async function verifyCitationsRemote(answer, chunkIds, annexSources) {
   return res.json();
 }
 // 답변 하단 '인용 대조' 요약 한 줄 — 검증이 실제로 돈 답변에만 붙는다(정상 답변은 꼬리표 색만 바뀜)
-// 본문 표시는 세 상태(#176): [원문 확인됨] / [원문 없음 — …] / [원문과 다름 — 판정기 메모: …] — 이용자가 할 일은
+// 본문 표시는 두 상태(#292, 종전 세 상태 #176): [원문 확인됨] / [원문 미확인 — 이유] — 이용자가 할 일은
 // 어느 갈래든 같다(원문 보기). 갈래는 이 요약 줄에서만 보여 준다: 운영자가 어디가 약한지 알아야
 // 고칠 수 있고(호 대조 불가가 많으면 KB 청킹 문제다), 검증이 아예 안 돈 경우도 여기서 드러난다.
+// 갈래 이름은 표시의 이유 글과 같은 말로 쓴다(옛 머리말 「원문 없음」·「원문과 다름」을 되살리지 않는다).
 var CITE_STATUS_LABEL = {
-  missing: '원문 없음', mismatch: '원문과 다름', unclear: '판정 보류', unparsed: '인용 미식별',
+  missing: '검색 자료에 없음', mismatch: '대조해 차이 있음', unclear: '판정 보류', unparsed: '인용 미식별',
   noclaim: '인용 내용 없음', nocheck: '호 대조 못 함', unjudged: '판정 미실행', dup: '중복 표시 삭제'
 };
 function citeVerdictSummaryHtml(verdicts) {
@@ -1198,7 +1199,7 @@ function citeVerdictSummaryHtml(verdicts) {
   var detail = Object.keys(by).map(function(k) { return k + ' ' + by[k]; }).join(' · ');
   return '<div class="rag-sources" style="margin-top:8px"><i class="ti ti-shield-check"></i>인용 대조('
     + counted + '건' + (quoted ? ', 표시 없던 인용 ' + quoted + '건 포함' : '') + '): 확인 ' + ok
-    + (bad ? ' · <span class="cite cite-miss">확인 못 함 ' + bad + '</span>'
+    + (bad ? ' · <span class="cite cite-miss">미확인 ' + bad + '</span>'
              + (detail ? ' (' + detail + ')' : '') : '')
     + '</div>';
 }
@@ -3218,7 +3219,7 @@ async function callClaude(userText, onDelta) {
   aiText = aiText.replace(/<lawmap>[\s\S]*?<\/lawmap>/g, '').replace(/<lawmap>[\s\S]*$/, '').replace(/\s+$/, '');
 
   // [원문 확인됨] 검증(#155-2·3안) — 표시가 붙은 인용의 원문이 실제로 근거 청크에 있었는지 서버가 대조하고,
-  // 있었으면 Haiku가 원문과 설명의 일치를 판정한다. 없으면 「원문 없음」, 다르면 「원문과 다름 — 판정기 메모」(#176).
+  // 있었으면 판정기가 원문과 설명의 일치를 판정한다. 확인 못 한 것은 모두 회색 「원문 미확인 — 이유」(#292, 종전 #176 세 상태).
   // 표시가 없는 답변은 verifyCitationsRemote가 그냥 null을 돌려준다. 실패해도 답변은 그대로(fail-open).
   window._advCiteVerdicts = null;
   window._advCiteFailed = null;
@@ -3268,14 +3269,16 @@ function renderMd(text) {
     .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     .replace(/`(.+?)`/g, '<code>$1</code>')
-    // 인용 꼬리표(#155): 확인됨=초록 / 미확인=회색 / 다르게 설명됨=주황 / 학습 데이터=보라. 글자는 그대로, 색만.
-    // 표시 세 상태(#176): 확인됨(초록) / 원문 없음(회색 — 직접 확인) / 원문과 다름(빨강 — 틀렸을 수 있음). 옛 문구도 회색으로 남긴다.
+    // 인용 꼬리표(#155): 확인됨=초록 / 미확인=회색 / 학습 데이터=보라. 글자는 그대로, 색만.
+    // 표시 두 상태(#292, 종전 세 상태 #176): 원문 확인됨(초록) / 원문 미확인 — 이유(회색 — 직접 확인). 주황은 쓰지 않는다 —
+    // 저장된 옛 답변의 「원문 없음」·「원문과 다름」·옛 문구도 회색으로 그린다(글자는 그대로).
     .replace(/\[(원문 확인됨[^\]]*)\]/g, '<span class="cite cite-ok">[$1]</span>')
+    .replace(/\[(원문 미확인[^\]]*)\]/g, '<span class="cite cite-miss">[$1]</span>')
     .replace(/\[(원문 없음[^\]]*)\]/g, '<span class="cite cite-miss">[$1]</span>')
-    .replace(/\[(원문과 다름[^\]]*)\]/g, '<span class="cite cite-bad">[$1]</span>')
+    .replace(/\[(원문과 다름[^\]]*)\]/g, '<span class="cite cite-miss">[$1]</span>')
     .replace(/\[(원문 확인 안 됨[^\]]*)\]/g, '<span class="cite cite-miss">[$1]</span>')
     .replace(/\[(⚠️ 원문 미확인[^\]]*)\]/g, '<span class="cite cite-miss">[$1]</span>')
-    .replace(/\[(⚠️ 원문과 다르게 설명됨[^\]]*)\]/g, '<span class="cite cite-bad">[$1]</span>')
+    .replace(/\[(⚠️ 원문과 다르게 설명됨[^\]]*)\]/g, '<span class="cite cite-miss">[$1]</span>')
     .replace(/\[(학습 데이터 기반[^\]]*|요약 문서 기반[^\]]*|근거 조문 미확인[^\]]*)\]/g, '<span class="cite cite-learn">[$1]</span>');   // 요약 문서 기반: 프롬프트 3-⑧(#257)
   const splitRow = r => r.trim().replace(/^\||\|$/g, '').split('|').map(c => c.trim());
 

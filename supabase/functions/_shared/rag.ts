@@ -1214,8 +1214,9 @@ export async function answerAdvisory(sb: SupabaseClient, systemPrompt: string, q
   else if (!sonnet.sawStop) rawAnswer += '\n\n⚠️ 답변 수신이 끝 신호 없이 멈췄습니다(잘렸을 수 있음).';
 
   // [원문 확인됨] 검증(#155-2·3안) — 표시가 붙은 인용의 조문(법령명·조·항·호·별표)이 실제로 위 컨텍스트에
-  // 있었는지 대조하고(2안), 있었으면 Haiku가 원문과 설명이 맞는지 판정한다(3안). 없으면 「⚠️ 원문 미확인」,
-  // 다르면 「⚠️ 원문과 다르게 설명됨」으로 표시를 바꾼다. 시스템 프롬프트의 핵심 조문 5개도 대조 대상.
+  // 있었는지 대조하고(2안), 있었으면 판정기가 원문과 설명이 맞는지 판정한다(3안). 확인되지 않은 것은 갈래(없음·차이·대조 못 함)와
+  // 상관없이 「[원문 미확인 — 이유]」 한 꼴로 표시를 바꾼다(#292 — 텔레그램은 색이 없어 머리말 글자가 곧 표시다; 갈래는 cite_verdicts[].status에).
+  // 시스템 프롬프트의 핵심 조문 5개도 대조 대상.
   // 검증 자체가 실패하면 답변은 그대로 나간다(fail-open). 대시보드는 verify-citations Edge가 같은 모듈을 쓴다.
   let answer = rawAnswer;
   let verdicts: unknown[] = [];          // chat_logs.cite_verdicts 에 남긴다 — 검증기 오탐률 측정 재료(#176)

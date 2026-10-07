@@ -152,16 +152,16 @@ function ok(name, cond, extra) {
   // 표시는 세 상태(#176): 확인됨 / 원문 없음(missing·그 밖) / 원문과 다름(mismatch, 판정기 메모). 갈래는 verdict.status 에도 남는다.
   eq('종합: 바뀐 표시 2개(불일치·판단불가)', v.changed, 2);
   ok('종합: 50조 표시가 미확인 문구로(대조한 조문 + 메모, #286-보론)', v.verdicts[1].status === 'mismatch'
-     && /예외입니다\. \[원문과 다름 — 법령 이름 없음 → 전기통신사업법 제50조제1항·제2항제5호·제5호의2와 대조: 주체가/.test(v.answer) && v.answer.indexOf('[원문 확인됨, 참조4]') === -1, v.answer.match(/\[원문과 다름[^\]]*\]/g));
+     && /예외입니다\. \[원문 미확인 — 법령 이름 없음 → 전기통신사업법 제50조제1항·제2항제5호·제5호의2와 대조해 차이 있음, 직접 확인: 주체가/.test(v.answer) && v.answer.indexOf('[원문 확인됨, 참조4]') === -1, v.answer.match(/\[원문 미확인[^\]]*\]/g));
   ok('종합: 법령 이름 없는 초록은 대조한 조문으로 채움(#286-보론), 판단불가는 미확인 + 대조 조문', v.verdicts[2].status === 'unclear'
      && /\[원문 확인됨: [^\]]*제\d+조[^\]]*\] 즉 명칭이/.test(v.answer) && v.answer.indexOf('[원문 확인됨] 즉 명칭이') === -1
-     && /인정합니다\. \[원문 없음 — 자동 대조 못 함, 직접 확인: [^\]]*제\d+조[^\]]*\]/.test(v.answer) && v.answer.indexOf('[원문 확인됨, 참조1]') === -1, v.answer.match(/\[원문[^\]]*\]/g));
+     && /인정합니다\. \[원문 미확인 — 자동 대조 못 함, 직접 확인: [^\]]*제\d+조[^\]]*\]/.test(v.answer) && v.answer.indexOf('[원문 확인됨, 참조1]') === -1, v.answer.match(/\[원문[^\]]*\]/g));
   ok('종합: Haiku에 원문·인용문 3항목', /### 항목 3/.test(judged) && /\[원문\]\n제50조\(금지행위\)/.test(judged));
   // 그날 상황: 50조 missing → Haiku에는 2건만, 표시는 미확인 문구
   var v2 = await CV.verifyCitations({ answer: FX.answer, chunks: thatDay, annexSources: [], callHaiku: async function (s, u) { judged = u; return '[{"id":1,"verdict":"일치"},{"id":2,"verdict":"일치"}]'; } });
   eq('그날: 상태', v2.verdicts.map(function (x) { return x.status; }), ['ok', 'missing', 'ok']);
   // #286부터 이름 없는 참조(앞 법령 이어받음)의 원문 없음에는 어느 법령으로 봤는지 붙는다
-  ok('그날: 원문 없음 문구(없는 항 + 조문 일부만 + 법령 추측)', /\[원문 없음 — 검색 자료에 전기통신사업법 제50조제1항 없음\(조문 일부만 검색됨\) \(법령 이름 없음 → 전기통신사업법으로 봄\)\]/.test(v2.answer) && v2.answer.indexOf('[원문 확인됨, 참조4]') === -1, v2.answer.match(/\[원문 없음[^\]]*\]/g));
+  ok('그날: 원문 없음 문구(없는 항 + 조문 일부만 + 법령 추측)', /\[원문 미확인 — 검색 자료에 전기통신사업법 제50조제1항 없음\(조문 일부만 검색됨\) \(법령 이름 없음 → 전기통신사업법으로 봄\)\]/.test(v2.answer) && v2.answer.indexOf('[원문 확인됨, 참조4]') === -1, v2.answer.match(/\[원문 없음[^\]]*\]/g));
   ok('그날: Haiku 2항목', /### 항목 2/.test(judged) && !/### 항목 3/.test(judged));
   // Haiku 실패는 fail-closed — 판정 대상이던 인용은 전부 unjudged (#169-보론5, 종전에는 ok 유지)
   var v3 = await CV.verifyCitations({ answer: FX.answer, chunks: full, annexSources: [], callHaiku: async function () { throw new Error('boom'); } });
@@ -194,7 +194,7 @@ function ok(name, cond, extra) {
   eq('꼬리표 대상 우선(52조 아님)', [CV.checkCitation(t2[0], full, []).status, CV.checkCitation(t2[0], full, []).key], ['ok', '50조']);
   // 꼬리표 대상이 컨텍스트에 없으면 missing, 바뀐 표시에 대상이 남는다
   var t3 = await CV.verifyCitations({ answer: '이통사가 면책됩니다. [원문 확인됨: 전기통신사업법 제52조의3제2항]', chunks: full });
-  eq('꼬리표 대상 없음 → missing + 대상 표기', [t3.verdicts[0].status, t3.answer], ['missing', '이통사가 면책됩니다. [원문 없음 — 검색 자료에 전기통신사업법 제52조의3제2항 없음]']);
+  eq('꼬리표 대상 없음 → missing + 대상 표기', [t3.verdicts[0].status, t3.answer], ['missing', '이통사가 면책됩니다. [원문 미확인 — 검색 자료에 전기통신사업법 제52조의3제2항 없음]']);
   // 꼬리표에 엉뚱한 조를 적었지만 인용문이 다른 조문 그대로면 겹침이 바로잡는다
   var t4 = CV.checkCitation(CV.findCitations(q50 + ' [원문 확인됨: 전기통신사업법 제32조의14]')[0], full, []);
   eq('꼬리표 오기 + 통째 인용: 겹치는 50조로 교정', [t4.status, t4.key, t4.verbatim], ['ok', '50조', true]);
@@ -316,7 +316,7 @@ function ok(name, cond, extra) {
   eq('#230 무표시 인용: 판정 결과(장려금 → 다름, 제32조의14 → 원문 그대로 확인)', vq.verdicts.map(function (v) { return [v.key, v.status, v.auto || null]; }),
      [['2조', 'mismatch', 'quote'], ['32조의14', 'ok', 'quote']]);
   ok('#230 무표시 인용: 표시 문구 — 다름은 세 상태 표시, 확인됨은 법령명 채움, 표지 문자 없음',
-     vq.answer.indexOf('[원문과 다름 — 전기통신사업법 제2조와 대조: 판매에 관하여·모든 누락]') !== -1
+     vq.answer.indexOf('[원문 미확인 — 전기통신사업법 제2조와 대조해 차이 있음, 직접 확인: 판매에 관하여·모든 누락]') !== -1
      && vq.answer.indexOf('[원문 확인됨: 전기통신사업법 제32조의14제1항]') !== -1 && vq.answer.indexOf(CV.QUOTE_MARK) === -1, vq.answer);
   ok('#230 무표시 인용: 판정기에는 인용 문단만(앞 문장·보도 인용 제외)', judged.length === 1 && judged[0].indexOf('보도') === -1 && /\[인용문\]\n"장려금"이란 .*경제적 이익\n\[원문\]/.test(judged[0]), judged[0]);
   eq('#230 무표시 인용: quoteTagged', vq.quoteTagged, 2);
@@ -336,7 +336,7 @@ function ok(name, cond, extra) {
   var v240a = await CV.verifyCitations({ answer: q53, chunks: [a50, d50, d53], callHaiku: async function (s, u) { w1.push(u); return '[{"id":1,"verdict":"불일치","reason":"완전히 다른 법령"}]'; } });
   eq('#240 표시 대상(제53조) 없음 → 인용문 속 교차참조 제50조·다른 법령 제53조로 넘어가지 않고 원문 없음',
      [v240a.verdicts[0].status, v240a.verdicts[0].key, w1.length], ['missing', '53조', 0]);
-  ok('#240 표시 대상 없음 → 표시 문구는 원문 없음 + 대상', v240a.answer.indexOf('[원문 없음 — 검색 자료에 전기통신사업법 제53조제1항 없음]') !== -1, v240a.answer);
+  ok('#240 표시 대상 없음 → 표시 문구는 원문 없음 + 대상', v240a.answer.indexOf('[원문 미확인 — 검색 자료에 전기통신사업법 제53조제1항 없음]') !== -1, v240a.answer);
 
   // 표시에 별표가 적혀 있으면 앞 문장의 '법 제50조제1항제5호'가 아니라 그 별표 — 있는지만 본다(판정기 안 부름)
   var qAnnex = '**① 전기통신사업법 제50조제1항제5호 및 시행령 [별표 4] 5호 마목4)**\n\n"협정 등에 따라 이용자와의 계약체결 등을 대리 또는 위탁받아 처리하는 자에게 수수료 등 경제적 이익을 부당하거나 과도하게 제공하여 이용자의 차별을 유도하는 행위"\n\n를 규정하고 있습니다. [원문 확인됨: 전기통신사업법 시행령 별표 4]';
@@ -346,7 +346,7 @@ function ok(name, cond, extra) {
      ['annex', '별표 4', 'ok', '전기통신사업법 시행령', 0]);
   // 별표 존재 확인도 그 법령의 것만 — 다른 법령의 같은 번호 별표로는 확인됨이 되지 않는다
   var v240c = await CV.verifyCitations({ answer: qAnnex, chunks: [a50], annexSources: ['개인정보 보호법 시행령 별표 4'] });
-  eq('#240 다른 법령의 별표 4만 있으면 원문 없음', [v240c.verdicts[0].status, /\[원문 없음 — 검색 자료에 전기통신사업법 시행령 별표 4 없음\]/.test(v240c.answer)], ['missing', true]);
+  eq('#240 다른 법령의 별표 4만 있으면 원문 없음', [v240c.verdicts[0].status, /\[원문 미확인 — 검색 자료에 전기통신사업법 시행령 별표 4 없음\]/.test(v240c.answer)], ['missing', true]);
   // 별지 서식 — 청크의 article_no 「별지 3(…)」과 맞춘다
   var fm = { id: 4, doc_name: '이동통신사업자 등의 자료제출 방법 등에 대한 고시(방송미디어통신위원회고시)(제2026-1호)(20260101)', article_no: '별지 3(장려금 지급 현황)', chunk_index: 9, content: '장려금 지급 현황 서식' };
   var cfm = CV.findCitations('제출 서식은 다음과 같습니다. [원문 확인됨: 이동통신사업자 등의 자료제출 방법 등에 대한 고시 별지 제3호서식]')[0];
@@ -607,7 +607,7 @@ function ok(name, cond, extra) {
   var ans55 = '- 손해배상: 제52조제1항 조치가 있는 경우 피해 이용자는 손해배상을 청구할 수 있고, 사업자가 고의·과실 없음을 증명하지 못하면 책임을 면할 수 없습니다 [원문 확인됨: 전기통신사업법 제55조제2항]';
   var j1False = async function () { return '[{"id":1,"verdict":"불일치","reason":"제52조제1항의 조치가 아닌 금지행위 위반 시 손해배상"}]'; };
   var v55a = await CV.verifyCitations({ answer: ans55, chunks: [a55], callHaiku: j1False });
-  eq('B: 2차 판정기가 없으면 종전대로 1차 불일치 = 주황', [v55a.verdicts[0].status, /\[원문과 다름 — 전기통신사업법 제55조제2항과 대조: 제52조제1항의 조치가 아닌/.test(v55a.answer)], ['mismatch', true]);
+  eq('B: 2차 판정기가 없으면 종전대로 1차 불일치 = 주황', [v55a.verdicts[0].status, /\[원문 미확인 — 전기통신사업법 제55조제2항과 대조해 차이 있음, 직접 확인: 제52조제1항의 조치가 아닌/.test(v55a.answer)], ['mismatch', true]);
   var seen2 = [];
   var v55b = await CV.verifyCitations({ answer: ans55, chunks: [a55], callHaiku: j1False,
     callJudge2: async function (s, u) { seen2.push([s, u]); return '```json\n[{"id":1,"verdict":"일치","source_span":"","claim_span":"","reason":"②항 내용과 같음"}]\n```'; } });
@@ -616,7 +616,7 @@ function ok(name, cond, extra) {
      seen2.length === 1 && seen2[0][0] === CV.JUDGE2_SYSTEM && /^### 항목 1\n\[인용 대상\] 전기통신사업법 55조 제2항\n\[인용문\]\n- 손해배상: 제52조제1항 조치가 있는 경우/.test(seen2[0][1]) && seen2[0][1].indexOf('제52조제1항의 조치가 아닌') === -1, seen2[0]);
   var v55c = await CV.verifyCitations({ answer: ans55, chunks: [a55], callHaiku: j1False,
     callJudge2: async function () { return '[{"id":1,"verdict":"불일치","source_span":"제52조제1항의 조치가 아닌 금지행위 위반","claim_span":"제52조제1항 조치가 있는 경우","reason":"조치 요건이 다름"}]'; } });
-  eq('B: 2차 불일치라도 원문 구절이 원문에 없으면 회색(자동 대조 못 함)', [v55c.verdicts[0].status, v55c.verdicts[0].judge2.grounded, /\[원문 없음 — 자동 대조 못 함, 직접 확인: 전기통신사업법 제55조제2항\]/.test(v55c.answer)], ['unclear', false, true]);
+  eq('B: 2차 불일치라도 원문 구절이 원문에 없으면 회색(자동 대조 못 함)', [v55c.verdicts[0].status, v55c.verdicts[0].judge2.grounded, /\[원문 미확인 — 자동 대조 못 함, 직접 확인: 전기통신사업법 제55조제2항\]/.test(v55c.answer)], ['unclear', false, true]);
   var v55d = await CV.verifyCitations({ answer: ans55, chunks: [a55], callHaiku: j1False, callJudge2: async function () { return '[{"id":1,"verdict":"판단불가","reason":"x"}]'; } });
   var v55e = await CV.verifyCitations({ answer: ans55, chunks: [a55], callHaiku: j1False, callJudge2: async function () { throw new Error('HTTP 529'); } });
   var v55f = await CV.verifyCitations({ answer: ans55, chunks: [a55], callHaiku: j1False, callJudge2: async function () { return '[]'; } });
@@ -628,7 +628,7 @@ function ok(name, cond, extra) {
   eq('#284: 1차가 일치여도 2차를 부른다 — 결과 없으면 한 번 더, 그래도 없으면 1차 결과(일치 → 초록)', [called2, v55g.verdicts[0].status, v55g.verdicts[0].judge.verdict, v55g.verdicts[0].judge2Error], [2, 'ok', '일치', '2차 판정 결과 없음']);
   var v55h = await CV.verifyCitations({ answer: ans55, chunks: [a55], callHaiku: j1True,
     callJudge2: async function () { return '[{"id":1,"verdict":"불일치","source_span":"제52조제1항에 따른 조치가 있는 경우에 금지행위로 피해를 입은 자는","claim_span":"피해 이용자는","reason":"피해자 범위를 이용자로 좁힘"}]'; } });
-  eq('#284: 1차 일치라도 2차가 근거 있는 불일치면 주황(메모는 2차 사유)', [v55h.verdicts[0].status, v55h.verdicts[0].judge.verdict, v55h.verdicts[0].judge2.grounded, /\[원문과 다름 — 전기통신사업법 제55조제2항과 대조: 피해자 범위를 이용자로 좁힘/.test(v55h.answer)], ['mismatch', '일치', true, true]);
+  eq('#284: 1차 일치라도 2차가 근거 있는 불일치면 주황(메모는 2차 사유)', [v55h.verdicts[0].status, v55h.verdicts[0].judge.verdict, v55h.verdicts[0].judge2.grounded, /\[원문 미확인 — 전기통신사업법 제55조제2항과 대조해 차이 있음, 직접 확인: 피해자 범위를 이용자로 좁힘/.test(v55h.answer)], ['mismatch', '일치', true, true]);
   var v55i = await CV.verifyCitations({ answer: ans55, chunks: [a55], callHaiku: async function () { throw new Error('haiku down'); }, callJudge2: async function () { return '[{"id":1,"verdict":"일치","reason":""}]'; } });
   var v55j = await CV.verifyCitations({ answer: ans55, chunks: [a55], callHaiku: async function () { throw new Error('haiku down'); }, callJudge2: async function () { throw new Error('HTTP 529'); } });
   eq('#284: 1차가 죽어도 2차가 정한다 · 둘 다 죽으면 대조 못 함', [v55i.verdicts[0].status, v55i.verdicts[0].judge, v55j.verdicts[0].status, v55j.verdicts[0].judge2Error], ['ok', null, 'unjudged', 'HTTP 529']);
@@ -673,7 +673,7 @@ function ok(name, cond, extra) {
   eq('#284 원문 바꾸기: 받을 수단이 없으면 종전대로 지침서 글(출처 kept)', [vKeep.verdicts[0].doc, vKeep.verdicts[0].srcPrompt, vKeep.verdicts[0].status], ['전파법(시스템 프롬프트 핵심 조문)', 'kept', 'ok']);
   var vFail = await CV.verifyCitations({ answer: ans16, chunks: [], systemPrompt: promptSw, callHaiku: j1True, callJudge2: async function () { throw new Error('불려선 안 됨'); },
     fetchLawArticle: async function () { throw new Error('db down'); } });
-  eq('#284 원문 바꾸기: 못 받으면 지침서 글과 맞아도 회색(출처 failed, 판정기 안 부름)', [vFail.verdicts[0].srcPrompt, vFail.verdicts[0].status, /\[원문 없음 — 자동 대조 못 함, 직접 확인/.test(vFail.answer)], ['failed', 'unclear', true]);
+  eq('#284 원문 바꾸기: 못 받으면 지침서 글과 맞아도 회색(출처 failed, 판정기 안 부름)', [vFail.verdicts[0].srcPrompt, vFail.verdicts[0].status, /\[원문 미확인 — 자동 대조 못 함, 직접 확인/.test(vFail.answer)], ['failed', 'unclear', true]);
   fetched = [];
   var ans24b = '전파법 제24조제2항에 따라 대통령령으로 정하는 무선국의 시설자는 스스로 확인한 결과를 제출해 준공검사를 갈음할 수 있습니다 [원문 확인됨: 전파법 제24조제2항]';
   var vHint = await CV.verifyCitations({ answer: ans24b, chunks: [], systemPrompt: promptSw, callHaiku: j1True, callJudge2: async function () { return '[{"id":1,"verdict":"일치","reason":""}]'; }, fetchLawArticle: fetchLaw });
@@ -699,7 +699,7 @@ function ok(name, cond, extra) {
   var ans24 = '전파법 제24조제1항에 따르면 "무선설비가 준공된 경우 과학기술정보통신부장관에게 준공신고를 하고 그 무선설비가 기술기준에 적합한지의 여부에 대하여 검사(준공검사)를 받아야 한다" [원문 확인됨: 전파법 제24조제1항]';
   var v24 = await CV.verifyCitations({ answer: ans24, chunks: [r24], callHaiku: async function () { return '[{"id":1,"verdict":"불일치","reason":"주체 생략"}]'; },
     callJudge2: async function () { return '[{"id":1,"verdict":"불일치","source_span":"다음 각 호의 어느 하나에 해당하는 자는","claim_span":"무선설비가 준공된 경우 과학기술정보통신부장관에게 준공신고를 하고","reason":"의무 주체(각 호의 자) 한정을 뺌"}]'; } });
-  eq('B: 둘 다 불일치 + 구절 실재 → 주황, 메모는 2차 사유', [v24.verdicts[0].status, v24.verdicts[0].judge2.grounded, v24.answer.indexOf('[원문과 다름 — 전파법 제24조제1항과 대조: 의무 주체(각 호의 자) 한정을 뺌]') !== -1], ['mismatch', true, true]);
+  eq('B: 둘 다 불일치 + 구절 실재 → 주황, 메모는 2차 사유', [v24.verdicts[0].status, v24.verdicts[0].judge2.grounded, v24.answer.indexOf('[원문 미확인 — 전파법 제24조제1항과 대조해 차이 있음, 직접 확인: 의무 주체(각 호의 자) 한정을 뺌]') !== -1], ['mismatch', true, true]);
   // ── #286(2026-10-07) 법령 이름 없는 참조(「법 제N조」·「영 제N조」·맨 「제N조」)의 법령 추측 — 38abd528 「3G 서비스 종료 절차」 5절 표 ──
   // 3절 끝 「전파법 제92조제3호」를 이어받은 표의 「법 제19조①」(폐업 60일 전 서류 제출)이 전파법 제19조(무선국 개설허가)와 대조돼 거짓 '원문과 다름' 3개,
   // 「영 제24조①」·「법 제96조②」는 전파법 시행령·전파법에서 찾아 거짓 '원문 없음' 2개. 전기통신사업법 제19조·시행령 제24조·제96조는 자료에 있었다.
@@ -732,12 +732,12 @@ function ok(name, cond, extra) {
   var j2Mis = async function (s, u) { var src = (u.split('\n[원문]\n')[1] || '').replace(/\s+/g, ' ').trim(); return JSON.stringify([{ id: 1, verdict: '불일치', source_span: src.slice(0, 40), claim_span: '폐업 예정일 60일 전까지 서류 제출', reason: '제19조①은 무선국 개설허가 규정' }]); };
   var gc = await CV.verifyCitations({ answer: ansG, chunks: g19only, annexSources: [], callHaiku: jMis, callJudge2: j2Mis });
   eq('#286 ⓒ 이어받은 전파법 제19조에 인용문 낱말이 없으면(0/8) 2차 불일치라도 회색 + 「…으로 대조」 표기, 주황 아님',
-     [gc.verdicts[1].status, gc.verdicts[1].lawGuess, gc.verdicts[1].guessEvidence, /\| 법 제19조① \[원문 없음 — 자동 대조 못 함, 직접 확인: 법령 이름 없음 → 전파법 제19조제1항과 대조하면 다름\(인용문 낱말이 그 조문에 없음\)\] \|/.test(gc.answer), gc.verdicts[1].reason],
+     [gc.verdicts[1].status, gc.verdicts[1].lawGuess, gc.verdicts[1].guessEvidence, /\| 법 제19조① \[원문 미확인 — 자동 대조 못 함, 직접 확인: 법령 이름 없음 → 전파법 제19조제1항과 대조하면 다름\(인용문 낱말이 그 조문에 없음\)\] \|/.test(gc.answer), gc.verdicts[1].reason],
      ['unclear', 'inherit', false, true, '법령 이름 없는 인용 — 전파법 제19조제1항으로 보고 대조하면 다름(인용문 낱말이 그 조문에 없음)']);
   // 같은 글에 전기통신사업법 제19조도 있으면 그쪽으로 바꿔 고르고(낱말 6/8), 그때의 「불일치」는 종전대로 주황 — 어느 조문으로 봤는지 함께
   var gc2 = await CV.verifyCitations({ answer: ansG, chunks: G.chunks, annexSources: [], callHaiku: jMis, callJudge2: j2Mis });
   eq('#286 바꿔 고른 법령에 낱말 근거가 있으면 「불일치」는 주황 그대로(+ 어느 조문으로 봤는지)',
-     [gc2.verdicts[1].status, gc2.verdicts[1].law, gc2.verdicts[1].lawGuess, /\[원문과 다름 — 법령 이름 없음 → 전기통신사업법 제19조제1항과 대조: 제19조①은 무선국 개설허가 규정\]/.test(gc2.answer)], ['mismatch', '전기통신사업법', 'claim', true]);
+     [gc2.verdicts[1].status, gc2.verdicts[1].law, gc2.verdicts[1].lawGuess, /\[원문 미확인 — 법령 이름 없음 → 전기통신사업법 제19조제1항과 대조해 차이 있음, 직접 확인: 제19조①은 무선국 개설허가 규정\]/.test(gc2.answer)], ['mismatch', '전기통신사업법', 'claim', true]);
   // 이름을 적은 법령은 종전 그대로(#240 ①): 낱말이 전기통신사업법 쪽에 들어도 전파법 제19조와 대조하고 「불일치」는 주황
   var ansN = '| 승인신청 시점 | 폐업 예정일 **60일 전까지** 서류 제출 | 전파법 제19조① [원문 확인됨: 전파법 제19조제1항] |';
   var gn = await CV.verifyCitations({ answer: ansN, chunks: G.chunks, annexSources: [], callHaiku: jMis, callJudge2: j2Mis });
@@ -750,7 +750,7 @@ function ok(name, cond, extra) {
   // #288 ⓑ: 「…고시 제2026-11호」는 고시 번호로 적은 이름 — 자료에 그 번호의 문서가 없으면(여기 고시는 제2026-20호) 앞 법령(전기통신사업법)을
   // 이어받지 않고 그 이름대로 원문 없음(종전 #286은 이름을 못 읽어 「전기통신사업법 제1조 없음 (법령 이름 없음 → …)」이었다). 목적 조문으로도 안 바꾼다
   eq('#288 ⓑ 「…고시 제2026-11호 제1조」 — 자료에 그 번호 문서가 없으면 그 이름대로 원문 없음(이어받지 않음, 다른 고시의 목적 조문으로도 안 바꿈)',
-     [gw.verdicts[1].status, gw.verdicts[1].reason, gw.verdicts[1].lawGuess || null, gw.answer.indexOf('[원문 없음 — 검색 자료에 방송미디어통신위원회고시 제2026-11호 제1조 없음]') !== -1], ['missing', '방송미디어통신위원회고시 제2026-11호 1조 원문 없음', null, true]);
+     [gw.verdicts[1].status, gw.verdicts[1].reason, gw.verdicts[1].lawGuess || null, gw.answer.indexOf('[원문 미확인 — 검색 자료에 방송미디어통신위원회고시 제2026-11호 제1조 없음]') !== -1], ['missing', '방송미디어통신위원회고시 제2026-11호 1조 원문 없음', null, true]);
   // 이름을 적었는데 못 맞춘 것(「주파수 이용 지침」 — 지침으로 끝나 보통 이름, 문서 없음)은 #240 ①대로 원문 없음, 추측 아님
   var x5 = { id: 'x5', doc_name: '전기통신사업법(법률)(제21503호)(20261001)', article_no: '5조(전기통신사업의 구분 등)', chunk_index: 5, content: '제5조(전기통신사업의 구분 등)\n① 전기통신사업은 기간통신사업 및 부가통신사업으로 구분한다.\n② 기간통신사업은 전기통신회선설비를 설치하거나 이용하여 기간통신역무를 제공하는 사업으로 한다.' };
   var ansNm = '전파법 제92조제3호: 신고를 하지 않은 경우 100만원 이하의 과태료. [원문 확인됨: 전파법 제92조제3호]\n\n주파수 이용 지침 제5조는 전기통신사업을 기간통신사업과 부가통신사업으로 구분하고 기간통신사업을 기간통신역무를 제공하는 사업으로 정합니다. [원문 확인됨: 주파수 이용 지침 제5조]';
@@ -760,7 +760,7 @@ function ok(name, cond, extra) {
   var ansWk = ansNm.replace(/주파수 이용 지침 제5조/g, '주파수 세부사항 제5조');
   var gwk = await CV.verifyCitations({ answer: ansWk, chunks: [x5].concat(g19only), annexSources: [] });
   eq('#286 못 맞춘 약한 이름은 이어받은 전파법에서 찾아 원문 없음 — 낱말이 전기통신사업법 제5조에 들어도 바꾸지 않는다(종류 weak)',
-     [gwk.verdicts[1].status, gwk.verdicts[1].reason, gwk.verdicts[1].lawGuess || null, /\[원문 없음 — 검색 자료에 전파법 제5조 없음 \(법령 이름 못 맞춤 → 전파법으로 봄 · 표시: 주파수 세부사항 제5조\)\]/.test(gwk.answer)], ['missing', '전파법 5조 원문 없음', 'weak', true]);
+     [gwk.verdicts[1].status, gwk.verdicts[1].reason, gwk.verdicts[1].lawGuess || null, /\[원문 미확인 — 검색 자료에 전파법 제5조 없음 \(법령 이름 못 맞춤 → 전파법으로 봄 · 표시: 주파수 세부사항 제5조\)\]/.test(gwk.answer)], ['missing', '전파법 5조 원문 없음', 'weak', true]);
   // 목적·정의 조문으로는 바꿔 고르지 않는다 — 맨 「제1조」가 앞 법령(전파법)에 없고 낱말이 다른 법령 제1조에 들어도
   var ansB = '전파법 제92조제3호: 신고를 하지 않은 경우 100만원 이하의 과태료. [원문 확인됨: 전파법 제92조제3호]\n\n제1조는 금지행위 중 부당한 이용자 차별행위의 세부기준을 정함을 목적으로 합니다. [원문 확인됨]';
   var gb = await CV.verifyCitations({ answer: ansB, chunks: [goal1].concat(g19only), annexSources: [] });
@@ -819,10 +819,10 @@ function ok(name, cond, extra) {
      [vNumOk.verdicts[0].status, vNumOk.verdicts[0].law, vNumOk.verdicts[0].lawGuess, vNumOk.answer.indexOf('[원문 확인됨: 방송미디어통신위원회고시 제2026-11호 제1조]') !== -1], ['ok', '경제적 이익 등 제공의 부당한 이용자 차별행위에 관한 세부기준', 'number', true]);
   var vNumMis = await CV.verifyCitations({ answer: ansNum, chunks: [n1, a50], annexSources: [], callHaiku: allOk1, callJudge2: misGround });
   eq('#288 ⓑ 번호로 고른 문서의 「불일치」는 낱말 근거가 있어도 회색 + 「고시 번호로 봄 → …(같은 번호의 다른 고시일 수 있음)」',
-     [vNumMis.verdicts[0].status, vNumMis.answer.indexOf('[원문 없음 — 자동 대조 못 함, 직접 확인: 고시 번호로 봄 → 경제적 이익 등 제공의 부당한 이용자 차별행위에 관한 세부기준 제1조와 대조하면 다름(같은 번호의 다른 고시일 수 있음)') !== -1], ['unclear', true]);
+     [vNumMis.verdicts[0].status, vNumMis.answer.indexOf('[원문 미확인 — 자동 대조 못 함, 직접 확인: 고시 번호로 봄 → 경제적 이익 등 제공의 부당한 이용자 차별행위에 관한 세부기준 제1조와 대조하면 다름(같은 번호의 다른 고시일 수 있음)') !== -1], ['unclear', true]);
   var vNum2 = await CV.verifyCitations({ answer: ansNum, chunks: [n1, n2, a50], annexSources: [] });
   eq('#288 ⓑ 같은 번호의 문서가 자료에 둘이면 고르지 않는다 — 그 이름대로 원문 없음 + 「번호가 같은 고시 2개」',
-     [vNum2.verdicts[0].status, vNum2.verdicts[0].lawGuess || null, vNum2.answer.indexOf('[원문 없음 — 검색 자료에 방송미디어통신위원회고시 제2026-11호 제1조 없음 (번호가 같은 고시 2개 — 어느 것인지 몰라 대조하지 않음)]') !== -1], ['missing', null, true]);
+     [vNum2.verdicts[0].status, vNum2.verdicts[0].lawGuess || null, vNum2.answer.indexOf('[원문 미확인 — 검색 자료에 방송미디어통신위원회고시 제2026-11호 제1조 없음 (번호가 같은 고시 2개 — 어느 것인지 몰라 대조하지 않음)]') !== -1], ['missing', null, true]);
 
   // ⓓ′ 다중 원문 — 표시 하나가 조문 둘 이상을 덮으면 자료에 있는 후보 조문 전부를 한 원문으로(2차 호출 1회)
   var j2Log = [];
@@ -848,7 +848,7 @@ function ok(name, cond, extra) {
   var gP = await CV.verifyCitations({ answer: G.answer, chunks: G.chunks, annexSources: [], callHaiku: allOk1, callJudge2: allOk2, fetchLawArticle: gFetch });
   var row7 = gP.verdicts.filter(function (v) { return v.key === '96조' && v.paras[0] === 2; })[0];
   eq('#288 §5 「법 제96조②, 제104조⑤2호」(c66) — 제96조는 단항이라 회색 「조문에 항 구분 없음(제2항 표기) · 제2호를 뜻했을 수 있음」',
-     [row7.status, row7.nopara, row7.multi || null, gP.answer.indexOf('[원문 없음 — 자동 대조 못 함, 직접 확인: 법령 이름 없음 → 전기통신사업법 제96조제2항 (조문에 항 구분 없음(제2항 표기) · 제2호를 뜻했을 수 있음)]') !== -1], ['unclear', 2, null, true]);
+     [row7.status, row7.nopara, row7.multi || null, gP.answer.indexOf('[원문 미확인 — 자동 대조 못 함, 직접 확인: 법령 이름 없음 → 전기통신사업법 제96조제2항 (조문에 항 구분 없음(제2항 표기) · 제2호를 뜻했을 수 있음)]') !== -1], ['unclear', 2, null, true]);
   eq('#288 §5 DB 조문을 못 받으면 종전대로(판정기행) — 위 gAll(fetchLawArticle 없음)의 같은 행은 초록', gAll.verdicts.filter(function (v) { return v.key === '96조' && v.paras[0] === 2; })[0].status, 'ok');
   var gFetchCirc = async function (fam, key) { var rows = await gFetch(fam, key); return rows.map(function (r) { return key === '96조' ? Object.assign({}, r, { content: r.content.replace('다음 각 호', '① 다음 각 호') }) : r; }); };
   var gP2 = await CV.verifyCitations({ answer: G.answer, chunks: G.chunks, annexSources: [], callHaiku: allOk1, callJudge2: allOk2, fetchLawArticle: gFetchCirc });
@@ -870,7 +870,7 @@ function ok(name, cond, extra) {
   eq('#288 ⓒ 이름 적은 제53조①이 자료에 없으면 DB 현행판과 대조 — 그대로 인용이면 「[원문 확인됨(검색 자료 밖 조문과 대조): …]」, srcFetched db',
      [vOut.verdicts[0].status, vOut.verdicts[0].srcFetched, vOut.verdicts[0].doc, vOut.answer.indexOf('[원문 확인됨(검색 자료 밖 조문과 대조): 전기통신사업법 제53조제1항]') !== -1, vOut.citedDocs.indexOf(CUR) !== -1], ['ok', 'db', CUR, true, true]);
   var vOutM = await CV.verifyCitations({ answer: q53o.replace('100분의 3 이하에 해당하는 금액을', '100분의 3 이하 금액을'), chunks: [a50], annexSources: [], callHaiku: allOk1, callJudge2: misGround, fetchLawArticle: dbFetch, listLawDocs: dbDocs });
-  eq('#288 ⓒ 받은 조문과 다르면 주황 + 「(검색 자료 밖 조문)」', [vOutM.verdicts[0].status, /\[원문과 다름 — 전기통신사업법 제53조제1항과 대조: 모의 불일치 \(검색 자료 밖 조문\)\]/.test(vOutM.answer)], ['mismatch', true]);
+  eq('#288 ⓒ 받은 조문과 다르면 주황 + 「(검색 자료 밖 조문)」', [vOutM.verdicts[0].status, /\[원문 미확인 — 전기통신사업법 제53조제1항과 대조해 차이 있음, 직접 확인: 모의 불일치 \(검색 자료 밖 조문\)\]/.test(vOutM.answer)], ['mismatch', true]);
   var vOutH = await CV.verifyCitations({ answer: q53o.replace('[원문 확인됨: 전기통신사업법 제53조제1항]', '[원문 확인됨: 전기통신사업법 제53조제1항(법률 제21652호)]'), chunks: [a50], annexSources: [], fetchLawArticle: dbFetch, listLawDocs: dbDocs });
   eq('#288 ⓒ 인용 줄·표시의 「(법률 제21652호)」가 그 법령의 판이면 그 판(시행예정)', vOutH.verdicts[0].doc, PEND);
   eq('#288 ⓒ 판 고르기: 힌트 → 현행(늦은 날짜) → 시행예정(이른 날짜)', [CV.pickVersion(dbRowsAll, '21652'), CV.pickVersion(dbRowsAll, '99999'), CV.pickVersion([dbRowsAll[1]], null)], [PEND, CUR, PEND]);
@@ -940,7 +940,7 @@ function ok(name, cond, extra) {
   var a3b = ck(claim3, chAdd);
   eq('#290 ③ 번호 없는 부칙 제2조 — 그 법령 부칙이 둘이면 원문 없음(본칙 제2조(정의)와 대조하지 않는다)', [a3b.status, a3b.addAmbig, a3b.key || null], ['missing', 2, null]);
   var v3 = await CV.verifyCitations({ answer: claim3, chunks: chAdd, annexSources: [] });
-  ok('#290 ③ 표시 글 「부칙 번호 없음 — 자료에 이 법령 부칙 2개」', /원문 없음 — 검색 자료에 전기통신사업법 부칙 제2조 없음 \(부칙 번호 없음 — 자료에 이 법령 부칙 2개\)\]/.test(v3.answer), v3.answer);
+  ok('#290 ③ 표시 글 「부칙 번호 없음 — 자료에 이 법령 부칙 2개」', /원문 미확인 — 검색 자료에 전기통신사업법 부칙 제2조 없음 \(부칙 번호 없음 — 자료에 이 법령 부칙 2개\)\]/.test(v3.answer), v3.answer);
   eq('#290 ⑨ cite_verdicts[].kind = addendum(원문 없음이어도)', [v3.verdicts[0].kind, v3.verdicts[0].status], ['addendum', 'missing']);
   // ⑤ 「부칙」이 조 바로 앞이 아니면 본칙
   var a5 = ck('부칙 제20792호에 따라 등록 간주되므로 제22조의11에 따른 전송자격인증을 과기정통부장관이 지정하는 기관에서 받아야 합니다. [원문 확인됨]');

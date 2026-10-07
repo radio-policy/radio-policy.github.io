@@ -35,19 +35,21 @@
 
   const TAG_RE = /\[원문\s*확인됨[^\]]*\]/g;
   const CIRCLED = '①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳';
-  // 표시는 세 상태(2026-09-20 운영자 결정, #176). 읽는 사람이 표시만 보고 "믿어라 / 직접 확인해라 / 틀렸을 수 있다"
-  // 셋 중 하나로 읽어야 한다. (#169-보론5의 '[원문 확인 안 됨]' 단일 표시는 '못 찾음'과 '틀림'을 구분 못 해 폐기)
+  // 표시는 두 상태(#292, 2026-10-07 Fable 판정 + 운영자 승인 — 종전 세 상태 #176). 읽는 사람은 "믿어라 / 직접 확인해라" 둘 중
+  // 하나로 읽는다. 주황 「원문과 다름」은 운영에서 낸 것이 전부 거짓이었고(#280·#284·#286) 진짜 틀린 인용은 회색으로도 잡혀,
+  // 회색과 하나로 합쳤다. **안쪽 판정 상태(cite_verdicts[].status — ok/missing/mismatch/unclear …)는 그대로** — 바뀐 것은 글자뿐이다.
   //   ok       → [원문 확인됨: <조문>]                       법령 이름 없는 표시(「[원문 확인됨]」·「동법 제N조」)는 대조한 조문으로 채운다(#286-보론)
-  //   missing  → [원문 없음 — 검색 자료에 <조문> 없음]          AI 기억으로 쓴 것일 수 있으니 직접 확인
-  //   mismatch → [원문과 다름 — <조문>와 대조: …]             틀렸을 가능성 높음, 무엇과 대조해 무엇이 다른지 한 줄
-  //   그 밖(판정 보류·호출 실패·호 구조 못 찾음·대조할 문장 없음)은 드물고 읽는 사람이 할 일이 같아 '원문 없음' 머리에
-  //   꼬리만 달리 적는다: [원문 없음 — 자동 대조 못 함, 직접 확인: <조문>]
-  //   <조문>은 표시 안 글자가 아니라 **판정기가 실제로 대조한(찾은) 문서·조·항·호**(#286-보론, 운영자 결정 2026-10-07 「X와 대조:」) —
-  //   모델이 표시 안에 적은 대상이 그것과 다르면(법령·조 번호·별표 번호) 끝에 「(표시: …)」로 남긴다. 대시보드·텔레그램은 머리말
-  //   「원문 확인됨」·「원문 없음 — 」·「원문과 다름 — 」만 보고 색을 입히므로 머리말은 바꾸지 않는다.
-  const TAG_MISSING = '[원문 없음 — 검색 자료에 해당 조문 없음]';
-  const TAG_UNCHECKED = '[원문 없음 — 자동 대조 못 함, 직접 확인]';
-  const TAG_MISMATCH_HEAD = '[원문과 다름 — ';
+  //   missing  → [원문 미확인 — 검색 자료에 <조문> 없음]          AI 기억으로 쓴 것일 수 있으니 직접 확인
+  //   mismatch → [원문 미확인 — <조문>와 대조해 차이 있음, 직접 확인: <2차 판정 근거>]
+  //   그 밖(판정 보류·호출 실패·호 구조 못 찾음·대조할 문장 없음) → [원문 미확인 — 자동 대조 못 함, 직접 확인: <조문>]
+  //   <조문>은 표시 안 글자가 아니라 **판정기가 실제로 대조한(찾은) 문서·조·항·호**(#286-보론, 운영자 결정 2026-10-07 「X와 대조」) —
+  //   모델이 표시 안에 적은 대상이 그것과 다르면(법령·조 번호·별표 번호) 끝에 「(표시: …)」로 남긴다. 대시보드는 머리말
+  //   「원문 확인됨」(초록)·「원문 미확인 — 」(회색)만 보고 색을 입히고 사내판 콘솔도 이 머리말을 열쇠로 쓰므로 머리말은 바꾸지 않는다.
+  //   옛 머리말(「원문 없음 — 」·「원문과 다름 — 」)은 저장된 옛 답변에만 남는다 — 화면은 둘 다 회색, 재연(tools_cite_replay.js)은 계속 읽는다.
+  const TAG_HEAD_UNVERIFIED = '[원문 미확인 — ';
+  const TAG_MISSING = TAG_HEAD_UNVERIFIED + '검색 자료에 해당 조문 없음]';
+  const TAG_UNCHECKED = TAG_HEAD_UNVERIFIED + '자동 대조 못 함, 직접 확인]';
+  const TAG_MISMATCH_HEAD = TAG_HEAD_UNVERIFIED;
   // 검색 자료 밖 조문과 대조해 확인된 표시(#288 ⓒ) — 「[원문 확인됨(검색 자료 밖 조문과 대조): 전기통신사업법 제53조제1항]」. 머리말이 「원문 확인됨」이라
   // 색은 초록 그대로이고, 다시 읽을 때(재검증·재연)는 괄호를 떼고 대상만 읽는다.
   const OUTSIDE_TAG_HEAD = '[원문 확인됨(검색 자료 밖 조문과 대조): ';
@@ -60,11 +62,11 @@
     const c = String(cmp || '').trim();
     if (status === 'mismatch') {
       const memo = String(reason || '').replace(/\s+/g, ' ').replace(/[\[\]]/g, '').trim().slice(0, 80) || '원문과 다르게 설명됨';
-      return TAG_MISMATCH_HEAD + (c ? withWa(c) + ' 대조: ' : '') + memo + tail;
+      return TAG_MISMATCH_HEAD + (c ? withWa(c) : '원문과') + ' 대조해 차이 있음, 직접 확인: ' + memo + tail;
     }
     if (status === 'missing') {
       const part = /조문 일부만 검색됨/.test(String(reason || '')) ? '(조문 일부만 검색됨)' : '';
-      return (c ? '[원문 없음 — 검색 자료에 ' + c + ' 없음' + part : TAG_MISSING.slice(0, -1)) + tail;
+      return (c ? TAG_HEAD_UNVERIFIED + '검색 자료에 ' + c + ' 없음' + part : TAG_MISSING.slice(0, -1)) + tail;
     }
     return TAG_UNCHECKED.slice(0, -1) + (c ? ': ' + c : '') + tail;
   }
@@ -1756,7 +1758,7 @@
   function tagUntaggedQuotes(answer, families) {
     const text = String(answer || '');
     const parts = text.split(/(\n[ \t]*\n)/);   // 문단과 구분자를 번갈아 보존
-    const hasTag = function (p) { return /\[(원문\s*확인됨|원문 없음|원문과 다름|⚠️ 원문|학습 데이터 기반|요약 문서 기반|근거 조문 미확인)[^\]]*\]/.test(p); };
+    const hasTag = function (p) { return /\[(원문\s*확인됨|원문 미확인|원문 없음|원문과 다름|⚠️ 원문|학습 데이터 기반|요약 문서 기반|근거 조문 미확인)[^\]]*\]/.test(p); };
     const skip = function (p) { return !p.trim() || /^\s*#/.test(p) || /^\s*\|/.test(p) || hasTag(p); };
     let added = 0;
     for (let i = 0; i < parts.length; i += 2) {
@@ -2073,7 +2075,7 @@
         else if (r.kind === 'article' && cmpPlain && !tagNamesLaw(inner)) { out = out.slice(0, r.tagStart) + '[원문 확인됨: ' + cmpPlain + ']' + out.slice(r.tagEnd); filled++; }
         continue;
       }
-      // 나머지는 세 상태 표시(#176)로 바꾸고, 중복(dup)은 지운다.
+      // 나머지는 회색 「원문 미확인 — <이유>」 표시(#292, 종전 세 상태 #176)로 바꾸고, 중복(dup)은 지운다.
       if (r.status === 'dup') { cut(r); changed++; continue; }
       out = out.slice(0, r.tagStart) + buildTag(r.status, r.reason, cmpG, notes) + out.slice(r.tagEnd); changed++;
     }

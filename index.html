@@ -122,7 +122,7 @@ window.LAWMAP_POS_URL = 'lawmap_positions.json?v=20260928a';
               🔎 <strong>어떻게 답을 찾나요</strong><br>
               · 질문하신 표현이 법령의 공식 용어와 달라도 뜻을 알아듣고 관련 조문을 찾아냅니다. (예: "커버리지 맵" → "이용가능 지역 정보 제공")<br>
               · 답변에는 조항 번호와 시행일을 함께 적고, 재할당 대가·과징금·과태료 같은 수치에는 그 수치를 정한 근거 조문(항·호까지)을 함께 적습니다. 학습 지식에 기댄 부분에는 <span class="cite cite-learn">[학습 데이터 기반]</span>, 근거 조문을 찾지 못한 수치에는 <span class="cite cite-learn">[근거 조문 미확인]</span>이 붙습니다.<br>
-              · 인용 표시는 AI가 스스로 붙인 것이 아니라 <strong>답변이 끝난 뒤 시스템이 원문과 한 번 더 대조한 결과</strong>입니다 —<span class="cite cite-ok">[원문 확인됨]</span> 원문과 맞음 · <span class="cite cite-miss">[원문 없음]</span> 찾은 자료에 그 조문이 없거나 자동 대조를 못 함 · <span class="cite cite-bad">[원문과 다름]</span> 원문과 다르게 옮겼을 가능성이 높음. 회색·주황 표시가 붙은 인용은 지식베이스에서 원문을 직접 확인해 주세요. 대조는 표시에 적힌 법령·조문(별표·서식 포함)만 보며, 표시 없이 조문을 옮겨 적은 인용도 찾아 함께 대조합니다.<br>
+              · 인용 표시는 AI가 스스로 붙인 것이 아니라 <strong>답변이 끝난 뒤 시스템이 원문과 한 번 더 대조한 결과</strong>입니다 —<span class="cite cite-ok">[원문 확인됨]</span> 원문과 맞음 · <span class="cite cite-miss">[원문 미확인 — 이유]</span> 찾은 자료에 그 조문이 없거나, 대조해 차이가 있거나, 자동 대조를 못 함(이유는 표시 안에 적힘). 회색 표시가 붙은 인용은 지식베이스에서 원문을 직접 확인해 주세요. 대조는 표시에 적힌 법령·조문(별표·서식 포함)만 보며, 표시 없이 조문을 옮겨 적은 인용도 찾아 함께 대조합니다.<br>
               · 답변 아래에는 <strong>검색해 참고 자료로 넣은 문서·기사 목록</strong>을 배지로 보여드립니다. 답변이 인용한 문서가 앞에 오고, 인용 대조 결과(확인 몇 건 등)도 한 줄로 요약합니다.<br><br>
               📄 <strong>법령·고시</strong> (전체 목록: 지식베이스)<br>
               · 전파법·전기통신사업법 등 <strong>법령·고시·기술기준 원문 약 270종</strong>과 정부 계획·보도자료 등 참고 문서 약 140종 — 주파수 분배표, 전자파 기준, 적합성평가, 무선국 등록면허세까지<br>
@@ -1310,12 +1310,12 @@ window.LAWMAP_POS_URL = 'lawmap_positions.json?v=20260928a';
 
 <!-- 업로드·Word 저장 전용 라이브러리(pdf.js·JSZip·mammoth, 압축 전 1.06MB)는 첫 화면에서 받지 않는다 —
      쓰는 순간 app.js 의 loadUploadLib()가 한 번만 받는다(§4-3-11, #223). 주소·버전은 app.js UPLOAD_LIBS 한 곳에 있다. -->
-<script src="system_prompt.js?v=20261007b"></script>
+<script src="system_prompt.js?v=20261007c"></script>
 <!-- 인용 조문 통째 보강·[원문 확인됨] 검증 로직 — 텔레그램 rag.ts와 같은 파일(#155). GitLab Pages는 .gitlab-ci.yml cp 목록에 있어야 실린다 -->
-<script src="supabase/functions/_shared/cite_verify.js?v=20261007f"></script>
+<script src="supabase/functions/_shared/cite_verify.js?v=20261007g"></script>
 <script src="supabase/functions/_shared/rag_core.js?v=20261007b"></script>   <!-- 자문 검색 순수 규칙(#215) — app.js보다 먼저 -->
 <script src="supabase/functions/_shared/urgency_rules.js?v=20260927c"></script>   <!-- 긴급도 규칙 매처(#216) + 팀 층 함수(#250) + 문장 조건 함수(#251) + 알림 등급 함수(#252) — app.js보다 먼저 -->
-<script src="app.js?v=20261007c"></script>
+<script src="app.js?v=20261007d"></script>
 <script src="lawmap_articles.js?v=20261007a"></script>
 </body>
 </html>
