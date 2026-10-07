@@ -888,6 +888,18 @@ function ok(name, cond, extra) {
   eq('#288 resolveLaw strict: 종류 낱말을 뗀 이름도 문서가 하나일 때만(자료 안에서는 종전대로 첫 문서)',
      [CV.resolveLaw(CV.lawNameBefore('정보보호 고시 '), ['통신 정보보호', '방송 정보보호'], true), CV.resolveLaw(CV.lawNameBefore('정보보호 고시 '), ['통신 정보보호', '방송 정보보호'])], [null, '통신 정보보호']);
 
+  // #288-보론(사내 관찰 ④): 띄어 쓴 「같은 고시」·「동 기준」·「이 규정」도 붙여 쓴 꼴(동고시·이고시)처럼 이어받기 — 종전엔 이름 「같은 고시」로 읽혀 원문 없음
+  var ih = function (s) { var r = CV.lawNameBefore(s); return r && r.inherit ? (r.level || 'same') : (r && r.candidates ? 'name:' + r.text : null); };
+  eq('#288-보론 「같은 고시 / 동 고시 / 이 규정 / 같은 기준 / 같은고시 / 동고시」는 이어받기, 「같은 법률」은 법 수준, 「…세부기준 고시」는 이름',
+     [ih('같은 고시 '), ih('동 고시 '), ih('이 규정 '), ih('같은 기준 '), ih('같은고시 '), ih('동고시 '), ih('같은 법률 '), ih('같은 법 '), ih('경제적 이익 등 제공의 부당한 이용자 차별행위에 관한 세부기준 고시 ')],
+     ['same', 'same', 'same', 'same', 'same', 'same', '법', '법', 'name:고시']);
+  eq('#288-보론 「동 가이드라인」은 종전대로 약한 이름(이어받기로 바꾸지 않음)', [CV.lawNameBefore('동 가이드라인 ').weak, !!CV.lawNameBefore('동 가이드라인 ').inherit], [true, false]);
+  var STD = '주요통신사업자의 통신시설 등급 지정 및 관리 기준(과학기술정보통신부고시)(제2025-3호)(20250301)';
+  var s10 = { id: 's10', doc_name: STD, article_no: '10조(관리기준)', chunk_index: 10, content: '제10조(관리기준) 주요통신사업자는 등급별 통신시설에 대하여 별표의 관리기준에 따라 이중화 등 보호조치를 하여야 한다.' };
+  var s5 = { id: 's5', doc_name: STD, article_no: '5조(등급의 지정)', chunk_index: 5, content: '제5조(등급의 지정) 과학기술정보통신부장관은 통신시설의 중요도에 따라 A급부터 D급까지 등급을 지정한다.' };
+  var vSame = await CV.verifyCitations({ answer: '주요통신사업자의 통신시설 등급 지정 및 관리 기준 제10조는 등급별 통신시설에 이중화 등 보호조치를 하도록 정합니다. [원문 확인됨: 주요통신사업자의 통신시설 등급 지정 및 관리 기준 제10조]\n\n같은 고시 제5조는 장관이 통신시설 중요도에 따라 A급부터 D급까지 등급을 지정한다고 정합니다. [원문 확인됨: 같은 고시 제5조]', chunks: [s10, s5], annexSources: [] });
+  eq('#288-보론 표시 「같은 고시 제5조」는 앞 표시의 기준(고시)을 이어받아 그 제5조와 대조(종전엔 원문 없음)', [vSame.verdicts[1].status, vSame.verdicts[1].law, vSame.verdicts[1].lawGuess], ['unjudged', '주요통신사업자의 통신시설 등급 지정 및 관리 기준', 'inherit']);
+
   // 지시문 지문 잠금 — 1차는 2차 보정의 바탕이라 글자 그대로, 2차는 실측(tests/cite_judge_probe.js) 뒤에만 고친다
   var sha = function (s) { return require('crypto').createHash('sha256').update(s, 'utf8').digest('hex').slice(0, 16); };
   eq('지문: 1차 판정 지시문(JUDGE_SYSTEM)', sha(CV.JUDGE_SYSTEM), '89a3482f020ae02d');
