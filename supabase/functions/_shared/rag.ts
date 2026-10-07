@@ -510,8 +510,17 @@ async function fetchDocArticles(sb: SupabaseClient, docName: string): Promise<Ch
     .not('article_no', 'is', null).order('chunk_index', { ascending: true }).limit(300);
   return (r.data || []) as Chunk[];
 }
-export interface AddOns { text: string; chunks: Chunk[]; ids: number[]; deleg: Chunk[]; items: { sec: string; dir?: string; fam: string; key: string }[]; chars: number; annexCites?: string[]; annexSources?: string[]; trimmed?: number }
-const EMPTY_ADDONS: AddOns = { text: '', chunks: [], ids: [], deleg: [], items: [], chars: 0, annexSources: [] };
+// L8 경과조치 따라가기(#290) — 근거 문서들의 현행 부칙 조각 전부를 한 번에. 부칙 한 단위가 여러 조각(100자 겹침)이라 본문 낱말로 거르지 않는다
+// (이어진 조각에는 「경과조치」 낱말이 없을 수 있다). 고르기·자르기는 rag_core.js(addendumCandidates·pickAddenda). app.js fetchAddendaRows와 같은 조건.
+async function fetchAddendaRows(sb: SupabaseClient, docNames: string[]): Promise<Chunk[]> {
+  const r = await sb.from('document_chunks').select('id, doc_name, article_no, chunk_index, content')
+    .in('doc_name', docNames).eq('status', 'current').eq('is_approved', true)
+    .like('article_no', '부칙%').order('chunk_index', { ascending: true }).limit(600);
+  if (r.error) throw new Error(r.error.message);
+  return (r.data || []) as Chunk[];
+}
+export interface AddOns { text: string; chunks: Chunk[]; ids: number[]; deleg: Chunk[]; items: { sec: string; dir?: string; fam: string; key: string }[]; chars: number; annexCites?: string[]; annexSources?: string[]; trimmed?: number; addendum?: number }
+const EMPTY_ADDONS: AddOns = { text: '', chunks: [], ids: [], deleg: [], items: [], chars: 0, annexSources: [], addendum: 0 };
 
 // ── /law 키워드 검색 전용 (LLM 답변 없이 조문만 찾아 준다) ──
 // 실측(2026-08-01): "3G 종료를 하는 방법"에 trgm 단독은 흔한 단어 '방법'에 끌려 개인정보·위치정보
@@ -1129,6 +1138,7 @@ export async function buildAdvisoryContext(sb: SupabaseClient, question: string)
     familyArticle: (f: string, k: string, d?: string | null) => fetchFamilyArticle(sb, f, k, d),
     docArticles: (d: string) => fetchDocArticles(sb, d),
     annexRows: (d: string, no: string) => fetchAnnexRows(sb, d, no),
+    addendaRows: (docs: string[]) => fetchAddendaRows(sb, docs),   // L8 경과조치(#290) — 질문에 시점·전환 낱말이 있을 때만 불린다
   }, { question }).then((r: AddOns) => { addMs = Math.round(performance.now() - addT0); return r; })
     .catch((e: unknown) => { console.warn('위임·같은 고시 덧붙이기 실패(건너뜀):', e); addMs = Math.round(performance.now() - addT0); addErr = String((e as Error)?.message || e); return EMPTY_ADDONS; });
 
@@ -1158,7 +1168,8 @@ export async function buildAdvisoryContext(sb: SupabaseClient, question: string)
   const restLen = buildRagContext(chunks2).length + lawContext.length + citing.text.length + annex.text.length + buildKbContext(kb).length + news.text.length + asm.length
     + (testHooks.restPad || 0);
   const addOns: AddOns = RagCore.trimAddOns(await addOnsP, restLen);
-  meta.push({ fn: 'addons', ms: addMs, rows: addErr ? null : addOns.items.length, error: addErr, trimmed: addOns.trimmed || 0 });
+  // addendum = L8 경과조치 칸에 실린 부칙 조 수(#290 — 배포 뒤 발동 건수를 세는 근거, 전체 상한으로 덜어 낸 뒤)
+  meta.push({ fn: 'addons', ms: addMs, rows: addErr ? null : addOns.items.length, error: addErr, trimmed: addOns.trimmed || 0, addendum: addOns.addendum || 0 });
   if (addOns.items.length) console.log(`[덧붙이기] ${addOns.items.map((x) => x.sec + (x.dir ? '/' + x.dir : '') + ' ' + x.fam + ' ' + x.key).join(', ')}${addOns.trimmed ? ` (전체 상한으로 ${addOns.trimmed}개 덜어 냄)` : ''}`);
 
   // 국회 동향은 '근거'가 아니라 '배경'이라 맨 뒤 — 조문·요약·기사보다 앞에 두지 말 것

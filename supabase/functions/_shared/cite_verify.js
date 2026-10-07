@@ -80,7 +80,7 @@
   }
   // 조문 이름표 「전기통신사업법 제19조제3항제3호」 — 판정기가 대조한(찾은) 조문을 표시에 적을 때
   function articleLabel(fam, key, paras, items) {
-    let s = (fam ? fam + ' ' : '') + (key ? '제' + key : '');
+    let s = (fam ? fam + ' ' : '') + (key ? keyText(key) : '');   // 부칙 열쇠(#290)는 「부칙 제N호 제M조」
     if (paras && paras.length) s += paras.map(function (n) { return '제' + n + '항'; }).join('·');
     if (items && items.length) s += items.map(function (i) { return '제' + String(i).replace(/^(\d+)(의\d+)?$/, '$1호$2'); }).join('·');   // 5의2 → 제5호의2
     return s.trim();
@@ -100,20 +100,22 @@
   }
   // 표시 안에 법령 이름이 적혀 있는가(「동법」·「법」·「시행령 제N조」·번호만은 아니다) — 없으면 초록을 대조한 조문으로 채운다
   function tagNamesLaw(inner) {
-    if (!inner || !(/제\s?\d+\s?조|별표|별지/.test(inner))) return false;
+    if (!inner || !(/제\s?\d+\s?조|별표|별지|부칙/.test(inner))) return false;
     const tp = parseTagInner(inner);
     return !!(tp && tp.lawInfo && tp.lawInfo.candidates);
   }
   // 모델이 표시 안에 적은 대상이 판정기가 대조한 조문과 다른가(법령·조 번호·별표 번호) — 다르면 「(표시: …)」로 남긴다
   function shownDiffers(tgt, r, fam) {
-    if (!tgt || !(/제\s?\d+\s?조|별표|별지/.test(tgt))) return false;
+    if (!tgt || !(/제\s?\d+\s?조|별표|별지|부칙/.test(tgt))) return false;
     const tp = parseTagInner(tgt);
     if (!tp) return false;
     // 다중 원문(#288 ⓓ′): 표시에 적힌 조가 대조한 조문들 가운데 다 있으면 같다
     if (r.multi && r.multi.length > 1 && tp.kind === 'article') return (tp.mentions || []).some(function (x) { return !r.multi.some(function (m) { return m.key === x.key; }); });
     if (!fam) fam = String(r.lookFor || r.guessLabel || '').split(/\s제\d|\s별표|\s별지/)[0].trim();   // 못 찾은 조문은 찾아본 법령으로 견준다
     if (tp.kind === 'annex') return r.kind !== 'annex' || String(tp.annex || '') !== String(r.annex || '');
-    if (r.key && tp.key && tp.key !== r.key) return true;
+    // 번호 없이 적은 부칙 표시(「부칙 제2조」)를 자료의 부칙 하나로 푼 것(「부칙제20792호제2조」)은 같은 대상(#290)
+    const sameAdd = isAddendumKey(tp.key) && isAddendumKey(r.key) && !parseAddKey(tp.key).unit && parseAddKey(tp.key).art === parseAddKey(r.key).art;
+    if (r.key && tp.key && tp.key !== r.key && !sameAdd) return true;
     const li = tp.lawInfo;
     if (li && li.candidates && fam) {
       if (li.title && norm(li.title) === norm(fam)) return false;
@@ -171,6 +173,80 @@
     }
     return out;
   }
+
+  // ── 부칙 열쇠(#290, 2026-10-07 — Fable 판정 local_docs/자문세문제_판정_261007.md §13-3, Fable 재검토 대상) ──
+  // 부칙 조각은 article_no가 「부칙 제20792호(20250318)」·「부칙 제2024-20호(20240523)」(번호가 없으면 「부칙(20240101)」·「부칙 #3」 — law_sync.py)라
+  // articleKey가 null이다. 그래서 expandArticles·fetchNamedArticles·역참조·#283 덧붙이기는 부칙을 건너뛰고(그대로 둔다 — §13-3 ⑧), 판정기도 부칙 표시의
+  // 원문을 못 찾았다: 「전기통신사업법 부칙 제20792호 제2조」 → 약한 이름 「…부칙 제20792호」 + 본칙 열쇠 「2조」 → 거짓 「원문 없음」, 맨 「부칙 제2조」 →
+  // 앞 법령 본칙 제2조(정의)와 대조. 판정기 안에서만 부칙 열쇠를 따로 둔다 — 단위 「부칙제20792호」(고시 「부칙제2024-20호」, 하이픈 번호 그대로) ·
+  // 조 「부칙제20792호제2조」 · 번호 없이 적은 「부칙제2조」(자료 안에서 그 법령 부칙이 하나일 때만 푼다).
+  function isAddendumKey(key) { return /^부칙/.test(String(key || '')); }
+  const ADD_NO_RE = /제\s?(\d{4}\s?[-‐–－]\s?\d{1,4}|\d+)\s?호/;
+  function normAddNo(s) { return String(s || '').replace(/\s/g, '').replace(/[‐–－]/, '-'); }
+  // 부칙 조각 article_no → { no, date, label(단위 열쇠) } — 부칙이 아니면 null
+  function addendumUnitOf(articleNo) {
+    const a = String(articleNo || '');
+    if (!/^부칙/.test(a)) return null;
+    const m = a.match(/^부칙\s*(?:제\s?(\d{4}\s?[-‐–－]\s?\d{1,4}|\d+)\s?호)?\s*(?:\((\d{8})\))?\s*(?:#\s?(\d+))?/) || [];
+    const no = m[1] ? normAddNo(m[1]) : null;
+    return { no: no, date: m[2] || null, label: no ? '부칙제' + no + '호' : m[3] ? '부칙#' + m[3] : '부칙' + (m[2] ? '(' + m[2] + ')' : '') };
+  }
+  // 부칙 열쇠 → { unit: 단위 열쇠(번호 없이 적었으면 null), art: '2조'·'2조의2'·null }
+  function parseAddKey(key) {
+    const m = String(key || '').match(/^(부칙(?:제[\d-]+호|#\d+|\(\d{8}\))?)(?:제(\d+조(?:의\d+)?))?$/);
+    if (!m) return { unit: null, art: null };
+    return { unit: m[1] === '부칙' ? null : m[1], art: m[2] || null };
+  }
+  // 열쇠를 사람이 읽는 꼴로 — '2조' → '제2조', '부칙제20792호제2조' → '부칙 제20792호 제2조', '부칙제2조' → '부칙 제2조'
+  function keyText(key) {
+    if (!isAddendumKey(key)) return '제' + key;
+    const p = parseAddKey(key);
+    const u = p.unit ? p.unit.replace(/^부칙/, '').replace(/^제/, ' 제').replace(/^#/, ' #') : '';
+    return ('부칙' + u + (p.art ? ' 제' + p.art : '')).trim();
+  }
+  // 부칙 본문의 조 머리 「제M조(」 — 줄머리, 또는 문장 끝(.)·꺾쇠(>) 바로 뒤(고시 부칙은 줄바꿈 없이 「…23.>제1조(시행일) …시행한다.제2조(…」로 잇는다).
+  // 번호가 앞 머리보다 커야 머리로 친다(본문 속 「제5조(…)에 따라」 같은 인용을 머리로 읽지 않게). 반환 [{key:'2조', title, start, end}] — end = 다음 머리 앞
+  function addendumArticles(text) {
+    const s = String(text || ''), out = [];
+    const re = /(^|\n|[.>][ \t]*)[ \t]*제\s?(\d+)\s?조(?:\s?의\s?(\d+))?\s*\(/g;
+    let m, last = [0, 0];
+    while ((m = re.exec(s))) {
+      const n = [Number(m[2]), Number(m[3] || 0)];
+      if (n[0] < last[0] || (n[0] === last[0] && n[1] <= last[1])) continue;
+      last = n;
+      const start = s.indexOf('제', m.index + m[1].length);
+      const open = m.index + m[0].length - 1, close = s.indexOf(')', open);
+      out.push({ key: n[0] + '조' + (n[1] ? '의' + n[1] : ''), title: close > open && close - open < 80 ? s.slice(open + 1, close).trim() : '', start: start, end: s.length });
+      if (out.length > 1) out[out.length - 2].end = start;
+    }
+    return out;
+  }
+  // 부칙 단위 글에서 그 조(artKey)만 — 조 머리가 하나도 없는 단위(「이 법은 공포한 날부터 시행한다.」 한 문장)는 단위 전체(§13-3 ④),
+  // 머리는 있는데 그 조가 없으면 null(자료에 없는 조 — 일부 조각만 들어온 단위도 그렇다). artKey가 없으면(조 없는 「부칙 제N호」, §13-3 ⑥) 단위 전체.
+  function addendumSlice(text, artKey) {
+    const s = String(text || '');
+    if (!artKey) return { text: s, title: '', whole: true };
+    const arts = addendumArticles(s);
+    if (!arts.length) return { text: s, title: '', whole: true };
+    const a = arts.find(function (x) { return x.key === artKey; });
+    return a ? { text: s.slice(a.start, a.end).trim(), title: a.title, whole: false } : null;
+  }
+  // 조 참조 바로 앞이 「부칙」(+ 번호 표기만)인가(§13-3 ⑤) — 「부칙 제2조」·「부칙 제20792호 제2조」·「부칙 <제20792호,2025.3.18> 제2조」·「부칙(제2024-20호) 제2조」·
+  // 「부칙 제20792호(20250318) 제2조」. 사이에 다른 말이 있으면 본칙이다(「부칙 제20792호에 따라 등록 간주되므로 제22조제2항」).
+  // 반환 { no(번호 또는 null), rest(「부칙」 앞 글 — 법령 이름은 여기서 읽는다, §13-3 ①) } 또는 null
+  function addendumBefore(before) {
+    let b = String(before || '').replace(/\s+$/, ''), no = null;
+    for (let guard = 0; guard < 4; guard++) {
+      let mm = b.match(/(?:<[^<>\n]{0,40}>|[(（][^()（）\n]{0,40}[)）])$/);
+      if (mm) { const n = mm[0].match(ADD_NO_RE); if (n && !no) no = normAddNo(n[1]); b = b.slice(0, mm.index).replace(/\s+$/, ''); continue; }
+      mm = b.match(/제\s?(\d{4}\s?[-‐–－]\s?\d{1,4}|\d+)\s?호$/);
+      if (mm) { if (!no) no = normAddNo(mm[1]); b = b.slice(0, mm.index).replace(/\s+$/, ''); continue; }
+      break;
+    }
+    if (!/(^|[^가-힣])부칙$/.test(b)) return null;
+    return { no: no, rest: b.slice(0, -2) };
+  }
+  function addKey(no, art) { return '부칙' + (no ? '제' + no + '호' : '') + (art ? '제' + art : ''); }
 
   // 1) 인용 조문 통째 보강.
   //   chunks: [{id, doc_name, article_no, chunk_index, content, ...}] (순위순 — 앞쪽이 먼저 보강된다)
@@ -811,7 +887,7 @@
       if (r.kind === 'annex' && !r.annex) r.annexRel = annexRelOf(s.slice(am.index));
       return r;
     }
-    return parseSegment(s + ' ');
+    return parseSegment(s + ' ', { addendumUnit: true });   // 조 없는 「부칙 제N호」 표시도 대상(#290 ⑥)
   }
 
   // 표시 하나의 앞 문단에서 인용 대상을 읽는다.
@@ -828,7 +904,14 @@
       // 별표·별지(서식) — 앞의 법령 이름도 읽는다(#240: 존재 확인을 그 법령의 별표로 좁힌다). 「시행령 [별표 4]」의 '['는 떼고 본다
       // 번호 없는 별표(annex '')는 꼬리표 안(parseTagInner → opts.bareAnnex)에서만
       const bm = s.match(ANNEX_RE) || (opts && opts.bareAnnex ? s.match(ANNEX_BARE_RE) : null);
-      if (!bm) return { kind: 'none' };
+      if (!bm) {
+        // 조 없이 「부칙 제20792호」만 적은 표시(#290, §13-3 ⑥) — 꼬리표 안(parseTagInner → opts.addendumUnit)에서만. 단위 전체와 대조한다
+        const um = opts && opts.addendumUnit ? s.match(/(^|[^가-힣])부칙\s*(?:[<(（]\s*(?:법률|대통령령|[가-힣]*령|[가-힣]*고시)?\s*)?제\s?(\d{4}\s?[-‐–－]\s?\d{1,4}|\d+)\s?호/) : null;
+        if (!um) return { kind: 'none' };
+        const ukey = addKey(normAddNo(um[2]), null);
+        const urec = { key: ukey, idx: um.index + um[1].length, paras: [], items: [], lawInfo: lawNameBefore(s.slice(0, um.index + um[1].length)), ctxLaw: null, addendum: { no: normAddNo(um[2]), art: null } };
+        return { kind: 'article', key: ukey, paras: [], items: [], lawInfo: urec.lawInfo, mentions: [urec] };
+      }
       const lawInfo = lawNameBefore(s.slice(0, bm.index).replace(/[\s\[【「『<(]+$/, ' '));
       if (bm[1] === undefined && bm[2] === undefined) return { kind: 'annex', annexType: '별표', annex: '', lawInfo: lawInfo };
       if (bm[1]) return { kind: 'annex', annexType: '별표', annex: bm[1].replace(/\s+/g, ''), lawInfo: lawInfo };
@@ -839,14 +922,22 @@
     let lastNamed = null;   // 이 글에서 앞서 이름이 나온 법령 — 이름 없는 '제N조'·'동법'·'시행령'이 이어받는다(#240)
     for (let i = 0; i < raw.length; i++) {
       const m = raw[i];
-      let rec = byKey.get(m.key);
+      // 조 참조 바로 앞이 「부칙」(+번호)이면 부칙 조(#290, §13-3 ①⑤) — 열쇠 「부칙제N호제M조」, 법령 이름은 「부칙」 앞 글에서 읽는다
+      // (「동법 부칙 제2조」·「같은 법 부칙 제2조」·「영 부칙 제2조」가 이어받기를 탄다)
+      const ad = addendumBefore(s.slice(0, m.idx));
+      const key = ad ? addKey(ad.no, m.key) : m.key;
+      let rec = byKey.get(key);
       if (!rec) {
-        rec = { key: m.key, idx: m.idx, paras: [], items: [], lawInfo: lawNameBefore(s.slice(0, m.idx)), ctxLaw: lastNamed };
-        byKey.set(m.key, rec); mentions.push(rec);
+        rec = { key: key, idx: m.idx, paras: [], items: [], lawInfo: lawNameBefore(ad ? ad.rest : s.slice(0, m.idx)), ctxLaw: lastNamed };
+        if (ad) rec.addendum = { no: ad.no, art: m.key };
+        byKey.set(key, rec); mentions.push(rec);
         if (rec.lawInfo && rec.lawInfo.candidates && !rec.lawInfo.weak) lastNamed = rec.lawInfo;
       }
       const stop = i + 1 < raw.length ? raw[i + 1].idx : s.length;
-      const tail = s.slice(m.end, stop);
+      let tail = s.slice(m.end, stop);
+      // 다음 참조가 부칙 조면 그 「부칙 제N호」 번호를 이 조의 호로 읽지 않는다(#290 — 「제22조의11·부칙 제97호 제2조」)
+      const bi = tail.search(/(^|[^가-힣])부칙/);
+      if (bi !== -1 && i + 1 < raw.length && addendumBefore(s.slice(0, raw[i + 1].idx))) tail = tail.slice(0, bi);
       let pm;
       const pRe = /제\s?(\d+)\s?항/g;
       while ((pm = pRe.exec(tail))) if (rec.paras.indexOf(+pm[1]) === -1) rec.paras.push(+pm[1]);
@@ -1027,7 +1118,7 @@
       // 인용문(과 앞 줄)에서 마지막으로 이름이 나온 법령 — 표시 대상이 이름 없이 '제N조'·'별표 N'만 적혔을 때 이어받는다
       const segNamed = (parsed.mentions || []).filter(function (x) { return x.lawInfo && x.lawInfo.candidates && !x.lawInfo.weak; });
       const segLaw = segNamed.length ? segNamed[segNamed.length - 1].lawInfo : (parsed.kind === 'annex' && parsed.lawInfo && parsed.lawInfo.candidates ? parsed.lawInfo : null);
-      const tp = (inner && (/제\s?\d+\s?조|별표\s*제?\s*\d+|별지\s*(?:제\s*)?\d+/.test(inner) || ANNEX_BARE_RE.test(inner))) ? parseTagInner(inner) : null;
+      const tp = (inner && (/제\s?\d+\s?조|별표\s*제?\s*\d+|별지\s*(?:제\s*)?\d+|부칙\s*[<(（]?\s*(?:법률\s*)?제\s?\d/.test(inner) || ANNEX_BARE_RE.test(inner))) ? parseTagInner(inner) : null;
       if (tp && tp.kind === 'annex') {
         // 표시에 별표·별지가 적혀 있으면 그것이 대상 — 앞 문장의 조 번호(「법 제50조제1항제5호 및 시행령 [별표 4]」의 제50조)로
         // 넘어가지 않는다(#240: 「[원문 확인됨: 전기통신사업법 시행령 별표 4]」가 법 제50조와 대조돼 맞는 인용이 '원문과 다름')
@@ -1208,7 +1299,44 @@
       if (!articleText.has(gk)) articleText.set(gk, []);
       articleText.get(gk).push(c);
     }
+    // 부칙(#290, §13-3): 단위(doc_name|「부칙제N호」)마다 조각을 chunk_index 순으로 잇고 「제M조(」 머리로 잘라 조 열쇠 「부칙제N호제M조」의 글을 만든다.
+    // addText = doc_name|부칙 열쇠 → 글(조마다 + 단위 전체). famAddUnits = 법령군 → 자료 안 부칙 단위 열쇠들(번호 없이 적은 「부칙 제M조」 풀기, §13-3 ③)
+    const addUnits = new Map(), famAddUnits = new Map(), addText = new Map(), addVerbatim = [];
+    for (const c of chunks || []) {
+      const u = addendumUnitOf(c.article_no);
+      if (!u) continue;
+      const gk = c.doc_name + '|' + u.label;
+      if (!addUnits.has(gk)) addUnits.set(gk, { doc: c.doc_name, label: u.label, rows: [] });
+      addUnits.get(gk).rows.push(c);
+      const f = docFamily(c.doc_name);
+      if (!famAddUnits.has(f)) famAddUnits.set(f, new Set());
+      famAddUnits.get(f).add(u.label);
+    }
+    addUnits.forEach(function (u) {
+      u.text = mergeChunkTexts(u.rows.slice().sort(function (a, b) { return (a.chunk_index || 0) - (b.chunk_index || 0); }).map(function (c) { return c.content || ''; }));
+      addendumArticles(u.text).forEach(function (a) {
+        const gk = u.doc + '|' + u.label + '제' + a.key;
+        addText.set(gk, u.text.slice(a.start, a.end).trim());
+        // 「원문 그대로」 대조 후보는 부칙 조만, 「다른 법률의 개정」 조는 빼고 — 그 조는 본칙 문구를 「…」을 「…」으로 옮겨 적어 본칙 인용과 겹친다
+        if (!/다른\s*법(?:률|령)의\s*개정/.test(a.title)) addVerbatim.push(gk);
+      });
+      addText.set(u.doc + '|' + u.label, u.text);
+    });
+    // 부칙 열쇠 하나가 자료에서 가리키는 글 — [{doc, key(번호를 푼 열쇠), text}]. 번호 없이 적었으면 그 법령군의 자료 안 부칙 단위가 하나일 때만
+    const addendumHits = function (key) {
+      const p = parseAddKey(key), out = [];
+      addUnits.forEach(function (u) {
+        if (p.unit ? u.label !== p.unit : famAddUnits.get(docFamily(u.doc)).size !== 1) return;
+        const sl = addendumSlice(u.text, p.art);
+        if (!sl) return;
+        const rk = u.label + (p.art ? '제' + p.art : '');
+        addText.set(u.doc + '|' + rk, sl.text);
+        out.push({ doc: u.doc, key: rk, text: sl.text });
+      });
+      return out;
+    };
     const mergedOf = function (gk) {
+      if (addText.has(gk)) return addText.get(gk);
       const list = articleText.get(gk).slice().sort(function (a, b) { return (a.chunk_index || 0) - (b.chunk_index || 0); });
       return mergeChunkTexts(list.map(function (c) { return c.content || ''; }));
     };
@@ -1238,7 +1366,7 @@
     //    제목 줄과 13자 그대로 겹쳐(100%) 뒤 칸 내용을 판정하지 않고 초록이 됐다 — 제목만 맞는 거짓 초록.
     const vbBefore = stripCite(before).length >= minClaim, vbLine = !!cite.line && stripCite(cite.line).length >= minClaim;
     let vbBest = null, vbRatio = 0;
-    for (const gk of articleText.keys()) {
+    for (const gk of Array.from(articleText.keys()).concat(addVerbatim)) {   // 본칙 조문 먼저(같은 겹침이면 본칙), 부칙 조는 뒤(#290)
       const t = mergedOf(gk);
       const r = Math.max(vbBefore ? quoteOverlap(before, t) : 0, vbLine ? quoteOverlap(cite.line, t) : 0, cite.after ? quoteOverlap(cite.after, t) : 0);
       if (r > vbRatio) { vbRatio = r; vbBest = gk; }
@@ -1257,21 +1385,26 @@
     //       봤는지 적음). 38abd528(10-06): 3절 끝 「전파법 제92조제3호」를 이어받은 5절 표의 「법 제19조①」(폐업 60일 전 서류 제출)·「법 제19조③3호」가
     //    전파법 제19조(무선국 개설허가)와 대조돼 거짓 '원문과 다름' 3개, 「영 제24조①」·「법 제96조②」는 전파법 시행령·전파법에서 찾아 거짓 '원문 없음'
     //    2개 — 전기통신사업법 제19조·시행령 제24조·제96조는 자료에 있었다. 이름을 적은 법령은 종전대로 그 법령만(#240 ① — 못 맞춘 이름도 원문 없음).
-    let chosen = null, chosenRatio = -1, chosenDoc = null, chosenText = '', chosenLaw = null, chosenGuess = null, chosenRel = null, missGuess = null;
+    let chosen = null, chosenRatio = -1, chosenDoc = null, chosenText = '', chosenLaw = null, chosenGuess = null, chosenRel = null, missGuess = null, chosenKey = null;
     const misses = [], missLabels = [];
     const found = [];   // 자료에 있는 후보(후보 순서) — 다중 원문(#288 ⓓ′)·후보별 구조 검사에 쓴다
-    let numAmbig = 0;
-    const longestOf = function (rows, fam, key) {
+    let numAmbig = 0, addAmbig = 0;
+    const longestOf = function (rows, fam, keyOf) {
       let t = '';
       const docs = new Set(rows.filter(function (c) { return docFamily(c.doc_name) === fam; }).map(function (c) { return c.doc_name; }));
-      for (const doc of docs) { const m = mergedOf(doc + '|' + key); if (m.length > t.length) t = m; }
+      for (const doc of docs) { const m = mergedOf(doc + '|' + keyOf(doc)); if (m.length > t.length) t = m; }
       return t;
     };
     for (let ci = 0; ci < candidates.length; ci++) {
       const cand = candidates[ci], scope = scopes[ci];
       const gk = guessKind(cand.lawInfo, families);              // 'none' 이름으로 못 박음 / 'inherit' 이어받기 추측 / 'weak' 못 맞춘 약한 이름
       const guessed = gk !== 'none', maySwitch = gk === 'inherit';
-      const all = (chunks || []).filter(function (c) { return articleKey(c.article_no) === cand.key; });
+      // 부칙 열쇠(#290)는 자료의 부칙 단위에서 찾는다 — 조각 대신 {doc_name, _rk(번호를 푼 열쇠)}. 번호 없이 적은 「부칙 제M조」는 문서마다 푼 열쇠가 다르다
+      const isAdd = isAddendumKey(cand.key);
+      const addHits = isAdd ? addendumHits(cand.key) : null;
+      const all = isAdd ? addHits.map(function (h) { return { doc_name: h.doc, article_no: null, _rk: h.key }; })
+        : (chunks || []).filter(function (c) { return articleKey(c.article_no) === cand.key; });
+      const rkOf = function (doc) { if (!isAdd) return cand.key; const h = addHits.find(function (x) { return x.doc === doc; }); return h ? h.key : cand.key; };
       let lawDoc = null, cands = all, guess = null;
       if (scope) {
         let picked = [];
@@ -1286,7 +1419,7 @@
         for (const c of all) { const f = docFamily(c.doc_name); if (famsHere.indexOf(f) === -1) famsHere.push(f); }
         const rel = famsHere.map(function (f) {
           const rows = all.filter(function (c) { return docFamily(c.doc_name) === f; });
-          return Object.assign({ fam: f, boiler: rows.some(function (c) { return isBoilerplateArticle(c.article_no, cand.key); }) }, claimRelevance(claim, longestOf(all, f, cand.key)));
+          return Object.assign({ fam: f, boiler: rows.some(function (c) { return isBoilerplateArticle(c.article_no, cand.key); }) }, claimRelevance(claim, longestOf(all, f, rkOf)));
         });
         rel.sort(function (a, b) { return b.hits - a.hits || b.score - a.score; });
         const inh = lawDoc ? rel.filter(function (x) { return x.fam === lawDoc; })[0] : null;
@@ -1307,16 +1440,20 @@
       if (!cands.length) {
         const ctxText = cand.ctxLaw && cand.ctxLaw.text;
         const lawLab = (scope && scope[0]) || (cand.lawInfo && (cand.lawInfo.title || cand.lawInfo.text)) || ctxText || '';
-        misses.push(lawLab + ' ' + cand.key);
+        misses.push(lawLab + ' ' + (isAdd ? keyText(cand.key) : cand.key));
         missLabels.push(articleLabel(lawLab, cand.key, cand.paras, cand.items));
+        // 번호 없이 적은 부칙 조인데 그 법령의 자료 안 부칙 단위가 둘 이상 — 어느 부칙인지 몰라 대조하지 않았다(§13-3 ③, 검증기는 자료만 본다)
+        if (isAdd && !parseAddKey(cand.key).unit && !addAmbig) {
+          for (const f of (scope || Array.from(famAddUnits.keys()))) { const n = famAddUnits.has(f) ? famAddUnits.get(f).size : 0; if (n >= 2) { addAmbig = n; break; } }
+        }
         // 고시 번호 이름(#288 ⓑ)인데 그 번호의 문서가 자료에 둘 이상 — 「없음」이 아니라 고르지 않은 것임을 적는다(c19c247f: 제2026-11호 고시 2개)
         if (cand.lawInfo && cand.lawInfo.numbered && !numAmbig) { const k = (numIndex.get(cand.lawInfo.number) || []).length; if (k >= 2) numAmbig = k; }
-        if (guessed && scope && scope.length && !missGuess) missGuess = { how: gk, label: scope[0] + ' 제' + cand.key };
+        if (guessed && scope && scope.length && !missGuess) missGuess = { how: gk, label: scope[0] + ' ' + keyText(cand.key) };
         continue;
       }
       let best = null, bestText = '';
       const docs = new Set(cands.map(function (c) { return c.doc_name; }));
-      for (const doc of docs) { const t = mergedOf(doc + '|' + cand.key); if (t.length > bestText.length) { best = doc; bestText = t; } }
+      for (const doc of docs) { const t = mergedOf(doc + '|' + rkOf(doc)); if (t.length > bestText.length) { best = doc; bestText = t; } }
       const r = quoteOverlap(claim, bestText);
       // 겹침이 같으면(바꿔 쓴 인용은 둘 다 0): 인용문 낱말 수가 뚜렷이(3개 이상) 다르면 더 드는 조문 → 아니면 이름을 적은(추측 아닌) 후보 →
       // 그래도 같으면 앞의 것(사내 관찰 ①, #286-보론2). 종전 「같으면 앞의 것」은 #286 ⓑ로 이름 없는 의무 조문도 찾히게 되자
@@ -1325,16 +1462,16 @@
       // 이름을 앞세우면 거짓 주황이 나지만, 제재 조문은 의무 조문의 말을 되풀이해 낱말 수가 비슷하기 일쑤라(표 행 「전파법 제25조의2①, 영 제51조」 5 대 7)
       // 작은 차이로 모델이 이름 적은 쪽을 버리면 안 된다.
       const rel = claimRelevance(claim, bestText);
-      found.push({ cand: cand, doc: best, text: bestText, lawDoc: lawDoc, guess: guess });
+      found.push({ cand: cand, doc: best, text: bestText, lawDoc: lawDoc, guess: guess, rkey: rkOf(best) });
       let better = r > chosenRatio;
       if (!better && chosen && r === chosenRatio) {
         if (Math.abs(rel.hits - chosenRel.hits) >= 3) better = rel.hits > chosenRel.hits;
         else if (guessed !== !!chosenGuess) better = !guessed;
       }
-      if (better) { chosen = cand; chosenRatio = r; chosenDoc = best; chosenText = bestText; chosenLaw = lawDoc; chosenGuess = guess; chosenRel = rel; }
+      if (better) { chosen = cand; chosenRatio = r; chosenDoc = best; chosenText = bestText; chosenLaw = lawDoc; chosenGuess = guess; chosenRel = rel; chosenKey = rkOf(best); }
     }
     if (!chosen) return Object.assign({ status: 'missing', reason: misses.map(function (s) { return s.trim(); }).join('·') + ' 원문 없음', lawDoc: null, lookFor: missLabels.join('·') },
-      missGuess ? { lawGuess: missGuess.how, guessLabel: missGuess.label } : {}, numAmbig ? { numAmbig: numAmbig } : {});
+      missGuess ? { lawGuess: missGuess.how, guessLabel: missGuess.label } : {}, numAmbig ? { numAmbig: numAmbig } : {}, addAmbig ? { addAmbig: addAmbig } : {});
     const paras = chosen.paras || [], items = chosen.items || [];
     // 추측한 법령의 기록(#286): 어떻게 골랐나(inherit 이어받음 / claim 인용문 낱말 / any 아무 문서 / number 고시 번호)·인용문 낱말이 그 조문에 드는가(guessEvidence)
     const guessFieldsOf = function (f) {
@@ -1342,7 +1479,7 @@
       if (!g) return {};
       const gfam = g.fam || (f.doc ? docFamily(f.doc) : '');
       const ps = f.cand.paras || [];
-      return { lawGuess: g.how, guessEvidence: relEvidence(g), guessHits: g.hits, guessAmbig: !!g.ambig, guessLabel: gfam + ' 제' + f.cand.key + (ps.length ? '제' + ps[0] + '항' : '') };
+      return { lawGuess: g.how, guessEvidence: relEvidence(g), guessHits: g.hits, guessAmbig: !!g.ambig, guessLabel: gfam + ' ' + keyText(f.rkey || f.cand.key) + (ps.length ? '제' + ps[0] + '항' : '') };
     };
     const chosenF = found.find(function (f) { return f.cand === chosen; });
     const guessFields = guessFieldsOf(chosenF);
@@ -1357,14 +1494,14 @@
     // 항·호는 원문에 그 구조가 있을 때만 검사 (단항 조문에 "제1항"이라고 쓴 것까지 잡지 않는다) — 다중 원문이면 후보마다, 하나라도 걸리면 그 상태
     const paraChecks = [];
     const structFail = function (f) {
-      const text = f.text, key = f.cand.key, ps = f.cand.paras || [], its = f.cand.items || [];
+      const text = f.text, key = f.rkey || f.cand.key, ps = f.cand.paras || [], its = f.cand.items || [];
       const gf = guessFieldsOf(f);
       if (ps.length && /[①-⑳]/.test(text)) {
         for (const n of ps) {
           if (n >= 1 && n <= 20 && text.indexOf(CIRCLED[n - 1]) === -1)
             return Object.assign({ status: 'missing', reason: key + ' 제' + n + '항 원문 없음(조문 일부만 검색됨)', lawDoc: f.lawDoc, doc: f.doc, key: key, paras: [n], items: [] }, gf);
         }
-      } else if (ps.some(function (n) { return n >= 2; })) {
+      } else if (!isAddendumKey(key) && ps.some(function (n) { return n >= 2; })) {   // 부칙 조(#290)는 DB 저장본 확인 길이 없다 — 판정기로
         // 항 구분(①…)이 전혀 없는 조문에 제2항 이상(#288 §5, c66 「법 제96조②」 — 제96조는 단항, 호만 있다). 자료 조각만으로는 청크가 ①을 잃은 것과
         // 가를 수 없으므로 여기서는 표지만 달고, verifyCitations가 DB 저장본(fetchLawArticle)에도 ①~⑳이 없을 때만 회색으로 바꾼다. 제1항은 종전대로
         // 통과(단항 조문을 「제1항」이라 부르는 관행). 실DB 현행 8,919조 중 스스로 제2항을 말하면서 ①이 없는 조문은 3개(§12-2) — 맞는 인용이 걸릴 일은 드물다.
@@ -1389,21 +1526,21 @@
     if ((headingOnly ? normQ(cite.after || '') : beforeBody).length < minClaim)
       // 번호·제목만 적고 내용을 옮기지 않았다 — 대조할 주장이 없으므로 '확인됨'이 될 수 없다.
       // (프롬프트에서도 이런 인용을 금지한다 — system_prompt [핵심 원칙] 1)
-      return Object.assign({ status: 'noclaim', kind: 'article', lawDoc: chosenLaw, doc: chosenDoc, key: chosen.key, paras: paras, items: items, text: chosenText, overlap: chosenRatio, claim: claim, reason: '조문 번호·제목만 적혀 대조할 내용이 없음' }, guessFields);
+      return Object.assign({ status: 'noclaim', kind: 'article', lawDoc: chosenLaw, doc: chosenDoc, key: chosenKey, paras: paras, items: items, text: chosenText, overlap: chosenRatio, claim: claim, reason: '조문 번호·제목만 적혀 대조할 내용이 없음' }, guessFields);
     const extra = {};
     if (paraChecks.length) extra.paraChecks = paraChecks;
     if (members) {
-      extra.multi = members.map(function (f) { return { lawDoc: f.lawDoc, doc: f.doc, key: f.cand.key, paras: f.cand.paras || [], items: f.cand.items || [] }; });
+      extra.multi = members.map(function (f) { return { lawDoc: f.lawDoc, doc: f.doc, key: f.rkey || f.cand.key, paras: f.cand.paras || [], items: f.cand.items || [] }; });
       extra.text = members.map(function (f) {
         const t = f.text.length > MULTI_SRC_MAX ? f.text.slice(0, MULTI_SRC_MAX) + '\n…(이하 생략)' : f.text;
-        return '■ ' + articleLabel(docFamily(f.doc), f.cand.key) + '\n' + t;
+        return '■ ' + articleLabel(docFamily(f.doc), f.rkey || f.cand.key) + '\n' + t;   // 혼합 표시의 부칙 조는 부칙 조문으로(#290 ⑦)
       }).join('\n\n');
       // 추측 기록은 대표 조문의 것 그대로. 다른 후보가 낱말 근거 없이 추측한 조문이면(#286 ⓒ) 「불일치」를 주황으로 내지 않는다 — 그 조문을 대조 원문에
       // 넣은 것 자체가 틀렸을 수 있다(verifyCitations setMismatch). 무엇 때문인지 적으려고 그 후보 이름표를 남긴다.
       const weakG = members.find(function (f) { return f !== chosenF && f.guess && (f.guess.how === 'number' || !relEvidence(f.guess)); });
       if (weakG) extra.multiWeakGuess = guessFieldsOf(weakG).guessLabel;
     }
-    return Object.assign({ status: 'ok', kind: 'article', lawDoc: chosenLaw, doc: chosenDoc, key: chosen.key, paras: paras, items: items, text: chosenText, overlap: chosenRatio, claim: claim }, guessFields, extra);
+    return Object.assign({ status: 'ok', kind: 'article', lawDoc: chosenLaw, doc: chosenDoc, key: chosenKey, paras: paras, items: items, text: chosenText, overlap: chosenRatio, claim: claim }, guessFields, extra);
   }
   const MULTI_MAX = 4;          // 다중 원문 후보 상한(표시 하나)
   const MULTI_SRC_MAX = 3000;   // 다중 원문의 조문당 글자 상한 — 단일 원문은 종전대로 4,000자(verifyCitations)
@@ -1726,7 +1863,8 @@
       const elig = [];
       results.forEach(function (r, i) {
         if (r.status !== 'missing' || r.kind !== 'article' || r.lawGuess || /조문 일부만/.test(r.reason || '')) return;
-        const named = (cites[i].candidates || []).filter(function (x) { return x && x.key && guessKind(x.lawInfo, ctxFams) === 'none'; });
+        // 부칙 열쇠(#290)는 DB에서 받지 않는다 — fetchLawArticle은 본칙 조 열쇠로 찾는다(부칙은 검색 자료 안에서만 대조)
+        const named = (cites[i].candidates || []).filter(function (x) { return x && x.key && !isAddendumKey(x.key) && guessKind(x.lawInfo, ctxFams) === 'none'; });
         if (named.length) elig.push({ i: i, named: named });
       });
       if (elig.length) {
@@ -1905,6 +2043,7 @@
       if (r.nopara) { notes.push('조문에 항 구분 없음(제' + r.nopara.n + '항 표기)'); if (r.nopara.items) notes.push('제' + r.nopara.n + '호를 뜻했을 수 있음'); }
       if (r.srcFetched === 'db' && r.status !== 'ok') notes.push('검색 자료 밖 조문');   // ⓒ(#288)로 받은 조문과 대조한 결과
       if (r.status === 'missing' && r.numAmbig) notes.push('번호가 같은 고시 ' + r.numAmbig + '개 — 어느 것인지 몰라 대조하지 않음');   // ⓑ(#288)
+      if (r.status === 'missing' && r.addAmbig) notes.push('부칙 번호 없음 — 자료에 이 법령 부칙 ' + r.addAmbig + '개');   // 번호 없이 적은 부칙 조(#290 ③)
       if (r.status !== 'ok' && tgt && cmpPlain !== tgt && shownDiffers(tgt, r, fam)) notes.push('표시: ' + tgt);
       // ⓒ(#286) 추측한 조문에 인용문 낱말이 없어 회색이 된 「불일치」 — 무엇과 대조하면 다른지까지 적는다(고시 번호 추측은 그 까닭을)
       const cmpG = r.status === 'missing' ? cmpPlain : (r.guessGrey && cmp ? withWa(cmp) + ' 대조하면 다름(' + (r.lawGuess === 'number' ? '같은 번호의 다른 고시일 수 있음'
@@ -1949,7 +2088,8 @@
     return {
       answer: out, changed: changed, filled: filled, autoTagged: at.added, quoteTagged: quoteTagged, citedDocs: citedDocs,
       verdicts: kept.map(function (r) {
-        const v = { tag: String(r.tag).replace(QUOTE_MARK, ''), kind: r.kind, key: r.key || (r.kind === 'annex' ? (r.annexType || '별표') + (r.annex ? ' ' + r.annex : '') : null), law: r.lawDoc || r.lawText || null,
+        // kind: 부칙 조·단위 표시는 'addendum'(#290 ⑨ — 배포 뒤 끄는 조건 「부칙 표시의 거짓 원문 없음·거짓 주황」을 셀 근거)
+        const v = { tag: String(r.tag).replace(QUOTE_MARK, ''), kind: r.kind === 'article' && isAddendumKey(r.key) ? 'addendum' : r.kind, key: r.key || (r.kind === 'annex' ? (r.annexType || '별표') + (r.annex ? ' ' + r.annex : '') : null), law: r.lawDoc || r.lawText || null,
           paras: r.paras || [], items: r.items || [], status: r.status, reason: r.reason || null, judge: r.judge || null, doc: r.doc || null,
           verbatim: !!r.verbatim, overlap: typeof r.overlap === 'number' ? Math.round(r.overlap * 100) / 100 : null, cmp: cmpLabelOf(r, false) || null };
         if (r.auto) v.auto = 'quote';
@@ -1969,6 +2109,9 @@
   const CiteVerify = {
     TAG_UNVERIFIED: TAG_UNVERIFIED, TAG_MISSING: TAG_MISSING, TAG_MISMATCH: TAG_MISMATCH, TAG_UNCHECKED: TAG_UNCHECKED, buildTag: buildTag,
     articleKey: articleKey, docFamily: docFamily, mergeChunkTexts: mergeChunkTexts,
+    // 부칙 열쇠(#290) — rag_core.js 경과조치 덧붙이기(L8)도 같은 단위 읽기·조 머리 자르기를 쓴다
+    isAddendumKey: isAddendumKey, addendumUnitOf: addendumUnitOf, parseAddKey: parseAddKey, keyText: keyText,
+    addendumArticles: addendumArticles, addendumSlice: addendumSlice, addendumBefore: addendumBefore,
     expandArticles: expandArticles, pseudoChunksFromPrompt: pseudoChunksFromPrompt,
     buildCitingExcerpts: buildCitingExcerpts, citeRegex: citeRegex, excerptAround: excerptAround,
     isOtherLawRef: isOtherLawRef, isSanctionTitle: isSanctionTitle, selfCiteIndexes: selfCiteIndexes, sanctionExcerpt: sanctionExcerpt,

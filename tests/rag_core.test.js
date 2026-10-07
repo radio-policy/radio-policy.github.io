@@ -34,7 +34,10 @@ var NAMES = ['PRIORITY_KW_RE', 'VERB_TAIL', 'extractKeywords', 'LAW_SYNONYMS', '
   // 2차(#283-보론2)
   'XREF_OPTS', 'pickXrefs', 'xrefTargets', 'annexWanted', 'annexBlock', 'docDate',
   // 법령 용어 동의어(L5′, #289)
-  'LAW_TERM_SYNONYMS', 'LAW_TERM_MAX', 'lawTermKeywords'];
+  'LAW_TERM_SYNONYMS', 'LAW_TERM_MAX', 'lawTermKeywords',
+  // L8 경과조치 따라가기(#290)
+  'ADDENDUM_TRIGGER_RE', 'ADDENDUM_OPTS', 'ADDENDUM_TITLE_RE', 'addendumWanted', 'addendumBases', 'addendumRefs', 'addendumCandidates',
+  'addendumHead', 'pickAddenda'];
 NAMES.forEach(function (n) { ok('export ' + n, RC[n] !== undefined); });
 
 // ── 법령 키워드 추출 ──
@@ -446,6 +449,75 @@ var addOnTests2 = (async function () {
   eq('trimAddOns 별표 → 같은 고시 → 공통 인용 → 위 순', [t2.items.map(function (x) { return x.sec + (x.dir ? '/' + x.dir : ''); }), t2.trimmed], [['deleg/down'], 4]);
 })();
 
+// ── L8 경과조치 따라가기(#290, 판정 §13-2) — 실DB 조각 31603·31606·31596·31598 꼴 ──
+var addendumTests = (async function () {
+  // 발동 A — 질문 시점·전환 낱말(조회 전에 본다)
+  eq('L8 발동 A: n02(9c07d80f) 걸림', RC.addendumWanted('전송자격인증제가 도입되었으나 재판매사들이 아직까지 전송자격인증을 신청하지 못하고 있는데 어떠한 문제가 발생할수 있나'), true);
+  eq('L8 발동 A: 「변경신고」·「시행령」·「통신설비」(신설)·「기한」은 안 걸림',
+     [RC.addendumWanted('무선국 변경신고 금액은 얼마야?'), RC.addendumWanted('전파법 시행령 조항 찾아줘'), RC.addendumWanted('전기통신설비는 아무나 제공받을 수 있나?'),
+      RC.addendumWanted('주파수 재할당 신청 절차와 법정 기한을 알려줘'), RC.addendumWanted('전파법 시행규칙 개정안')],
+     [false, false, false, false, true]);
+  var dev = JSON.parse(fs.readFileSync(path.join(ROOT, 'tests', 'fixtures', 'rag_regression_set.json'), 'utf8')).questions;
+  eq('L8 발동 A: 개발 20문항은 하나도 안 걸림(무해 확인 조건)', dev.filter(function (q) { return RC.addendumWanted(q.question); }).map(function (q) { return q.id; }), []);
+  // 참조 읽기 — 한 문장의 「개정규정」 앞 조 전부, 범위, 남의 법·옛 번호 제외
+  var refKeys = function (t) { return RC.addendumRefs(t).map(function (r) { return r.lo.join('.') + (r.hi.join('.') !== r.lo.join('.') ? '~' + r.hi.join('.') : ''); }); };
+  eq('L8 참조: 「…」 남의 법 제외, 「제22조제2항의 개정규정」·「제22조의11의 개정규정」',
+     refKeys('제2조(전송자격인증에 관한 경과조치) 이 법 시행 당시 종전의 규정에 따라 제2조제14호나목에 따른 사업을 등록하고, 「정보통신망 이용촉진 및 정보보호 등에 관한 법률」 제50조의4제4항에 따라 인증을 받은 자는 제22조제2항의 개정규정에 따라 등록한 것으로 본다. 다만, 이 법 시행 이후 6개월 이내에 제22조의11의 개정규정에 따른 전송자격인증을 받아야 한다.'),
+     ['2.0', '22.0', '22.11']);
+  eq('L8 참조: 나열 전부·범위·「개정규정」 뒤 조는 아님·옛 번호 제외',
+     [refKeys('제10조, 제18조 및 제104조의 개정규정은 이 법 시행 이후 적용한다.'), refKeys('제8조부터 제10조까지의 개정규정은 같다.'),
+      refKeys('제51조의2의 개정규정은 이 법 시행 이후 위원회가 제51조제5항에 따라 명하는 경우부터 적용한다.'), refKeys('종전의 제17조제1항에 따라 승인을 신청한 자는 제17조제1항의 개정규정에 따른다.'),
+      refKeys('이 고시는 제5조의 규정에 따른다.')],
+     [['10.0', '18.0', '104.0'], ['8.0~10.0'], ['51.2'], ['17.0'], []]);
+  var TEL = '전기통신사업법(법률)(제21503호)(20261001)';
+  var rows = [
+    { id: 31603, doc_name: TEL, article_no: '부칙 제20792호(20250318)', chunk_index: 251, content: '부칙 <제20792호,2025.3.18>\n제1조(시행일) 이 법은 공포 후 6개월이 경과한 날부터 시행한다.\n제2조(전송자격인증에 관한 경과조치) 이 법 시행 당시 종전의 규정에 따라 등록한 자는 제22조제2항의 개정규정에 따라 등록한 것으로 본다. 다만, 이 법 시행 이후 6개월 이내에 제22조의11의 개정규정에 따른 전송자격인증을 받아야 한다.' },
+    { id: 31606, doc_name: TEL, article_no: '부칙 제20151호(20240130)', chunk_index: 254, content: '부칙 <제20151호,2024.1.30>\n제1조(시행일) 이 법은 공포 후 6개월이 경과한 날부터 시행한다.\n제2조(신설되는 금지행위에 관한 경과조치) 이 법 시행 당시 이미 체결된 이용계약에 대해서는 제50조제1항제5호의3의 개정규정을 적용하지 아니한다.' },
+    { id: 31596, doc_name: TEL, article_no: '부칙 제21652호(20260519)', chunk_index: 244, content: '부칙 <제21652호,2026.5.19>\n제1조(시행일) 이 법은 공포 후 6개월이 경과한 날부터 시행한다.\n제2조(최대주주 변경 등에 관한 적용례) 제10조, 제18조 및 제104조의 개정규정은 이 법 시행 이후 최초로 최대주주가 변경된 경우부터 적용한다.' },
+    { id: 31598, doc_name: TEL, article_no: '부칙 제21503호(20260331)', chunk_index: 246, content: '부칙(전기통신금융사기 피해 방지 및 피해자산 환급에 관한 특별법) <제21503호,2026.3.31>\n제1조(시행일) 이 법은 공포 후 6개월이 경과한 날부터 시행한다.\n제7조(다른 법률의 개정) ⑥ 전기통신사업법 일부를 다음과 같이 개정한다. 제22조제2항 중 「…」을 「…」으로 한다.' },
+  ];
+  var calls = [];
+  var fetchers = {
+    delegations: function () { return Promise.resolve([]); }, familyArticle: function () { return Promise.resolve([]); }, docArticles: function () { return Promise.resolve([]); },
+    addendaRows: function (docs) { calls.push('add:' + docs.join('/')); return Promise.resolve(rows); },
+  };
+  var lists = { extra: [{ id: 1, doc_name: TEL, article_no: '22조(부가통신사업의 신고 등)', content: '제22조' }, { id: 2, doc_name: TEL, article_no: '2조(정의)', content: '제2조(정의)' }],
+    spill: [], rag: [{ id: 3, doc_name: TEL, article_no: '22조의11(전송자격인증)', content: '제22조의11' }, { id: 4, doc_name: TEL, article_no: '50조(금지행위)', content: '제50조' }] };
+  var Q = '전송자격인증제가 도입되었으나 재판매사들이 아직까지 인증을 신청하지 못하면 어떤 문제가 있나';
+  var none = await RC.fetchAddOns(lists, fetchers, { question: '전송자격인증을 받지 못하면 어떤 문제가 있나' });
+  eq('L8 발동 A 안 걸리면 부칙 조회 0회·칸 없음', [calls.length, none.items.filter(function (x) { return x.sec === 'addendum'; }).length, none.addendum], [0, 0, 0]);
+  var r = await RC.fetchAddOns(lists, fetchers, { question: Q, budget: 10 });
+  eq('L8 조회는 근거 문서 한 번(정의 조문만 든 문서도 근거 문서 목록엔 본래 근거로)', calls, ['add:' + TEL]);
+  eq('L8 항목 — 공포일 최근순(2025 → 2024), 근거 안 가리킨 적용례(제10·18·104조)·「다른 법률의 개정」은 빠짐, 예산 12,000자 밖 따로 몫',
+     [r.items.map(function (x) { return x.sec + ':' + x.key; }), r.addendum, r.ids], [['addendum:부칙제20792호제2조', 'addendum:부칙제20151호제2조'], 2, [31603, 31606]]);
+  ok('L8 구간 머리말(부칙 시행일 ≠ 법 시행일)·항목 머리(현행 시행일 직접·공포일·가리킨 근거)·그 조만',
+     r.text.indexOf('[경과조치·적용례 — 위 자료의 조문을 가리키는 부칙 조문]') >= 0 && r.text.indexOf('그 개정분의 시행 시점') >= 0 &&
+     r.text.indexOf('[경과조치 1] 전기통신사업법(현행 시행일 2026-10-01) 부칙 제20792호(공포 2025.3.18) 제2조(전송자격인증에 관한 경과조치) — 위 전기통신사업법 제22조·제22조의11에 관한 부칙 조문\n제2조(전송자격인증에 관한 경과조치)') >= 0 &&
+     r.text.indexOf('[경과조치 2] 전기통신사업법(현행 시행일 2026-10-01) 부칙 제20151호(공포 2024.1.30) 제2조(신설되는 금지행위에 관한 경과조치) — 위 전기통신사업법 제50조에 관한 부칙 조문') >= 0 &&
+     r.text.indexOf('제1조(시행일)') === -1, r.text);
+  eq('L8 판정기용 조각 — 단위 article_no + 그 조 글', r.chunks.filter(function (c) { return c._addon === 'addendum'; }).map(function (c) { return [c.id, c.article_no, c.content.slice(0, 6)]; }),
+     [[31603, '부칙 제20792호(20250318)', '제2조(전송'], [31606, '부칙 제20151호(20240130)', '제2조(신설']]);
+  // 자료에 이미 든 부칙 단위는 빼고, 정의 조문은 근거가 아니다
+  var r2 = await RC.fetchAddOns({ extra: lists.extra.concat([{ id: 31603, doc_name: TEL, article_no: '부칙 제20792호(20250318)', content: 'x' }]), rag: lists.rag }, fetchers, { question: Q });
+  eq('L8 자료에 이미 든 같은 부칙 단위는 다시 싣지 않음', r2.items.filter(function (x) { return x.sec === 'addendum'; }).map(function (x) { return x.key; }), ['부칙제20151호제2조']);
+  var r3 = await RC.fetchAddOns({ extra: [{ id: 2, doc_name: TEL, article_no: '2조(정의)', content: '제2조(정의)' }] }, fetchers, { question: Q });
+  eq('L8 정의·목적 조문은 근거가 아님(제2조를 가리키는 부칙이 있어도)', [r3.addendum, calls[calls.length - 1]], [0, 'add:' + TEL]);
+  var r4 = await RC.fetchAddOns(lists, { delegations: fetchers.delegations, familyArticle: fetchers.familyArticle, docArticles: fetchers.docArticles }, { question: Q });
+  eq('L8 addendaRows 공급이 없으면 칸 없음(사내판 shim 전 그대로 돈다)', r4.addendum, 0);
+  var r5 = await RC.fetchAddOns(lists, { delegations: fetchers.delegations, familyArticle: fetchers.familyArticle, docArticles: fetchers.docArticles, addendaRows: function () { return Promise.reject(new Error('x')); } }, { question: Q });
+  eq('L8 조회 실패 → 칸 없음(나머지는 그대로)', r5.addendum, 0);
+  // 상한 — 최대 3조·1,500자(머리 포함), 한 조가 넘치면 잘라 「(이하 생략)」
+  var long = [{ doc_name: TEL, article_no: '부칙 제1호(20200101)', unit: '부칙제1호', date: '20200101', art: '2조', title: '경과조치', text: '가'.repeat(3000), bases: ['22조'], ids: [9], fam: '전기통신사업법' }];
+  var pk = RC.pickAddenda(long);
+  ok('L8 한 조가 1,500자를 넘으면 잘라 「(이하 생략)」·머리 포함 1,500자 안', pk.length === 1 && /\(이하 생략\)$/.test(pk[0].content) && RC.addendumHead(pk[0], 0).length + pk[0].content.length + 20 <= 1500, pk[0] && pk[0].content.length);
+  var many = [1, 2, 3, 4].map(function (i) { return { doc_name: TEL, article_no: '부칙 제' + i + '호(2020010' + i + ')', unit: '부칙제' + i + '호', date: '2020010' + i, art: '2조', title: '경과조치', text: '나'.repeat(100), bases: ['22조'], ids: [i], fam: '전기통신사업법' }; });
+  eq('L8 최대 3조', RC.pickAddenda(many).length, 3);
+  eq('L8 끄기 — ADDENDUM_OPTS.on=false면 발동 없음', (function () { RC.ADDENDUM_OPTS.on = false; var w = RC.addendumWanted(Q); RC.ADDENDUM_OPTS.on = true; return w; })(), false);
+  // trimAddOns — 경과조치를 가장 먼저 덜어 냄
+  var t = RC.trimAddOns(r, 0, r.text.length - 10);
+  eq('trimAddOns 경과조치부터 덜어 냄', [t.items.filter(function (x) { return x.sec === 'addendum'; }).length, t.trimmed, t.addendum], [1, 1, 1]);
+})();
+
 // ── 컨텍스트 문구 ──
 (function () {
   var t = RC.buildRagContext([
@@ -490,7 +562,7 @@ var addOnTests2 = (async function () {
   });
 })();
 
-Promise.all([asyncTests, addOnTests, addOnTests2]).catch(function (e) { fails++; total++; console.log('FAIL  비동기 검사 예외 ' + (e && e.message)); }).then(function () {
+Promise.all([asyncTests, addOnTests, addOnTests2, addendumTests]).catch(function (e) { fails++; total++; console.log('FAIL  비동기 검사 예외 ' + (e && e.message)); }).then(function () {
   console.log('\n' + (fails ? 'FAIL ' + fails + '/' + total : 'ALL OK ' + total + '/' + total));
   process.exit(fails ? 1 : 0);
 });
