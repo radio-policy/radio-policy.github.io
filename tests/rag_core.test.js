@@ -32,7 +32,9 @@ var NAMES = ['PRIORITY_KW_RE', 'VERB_TAIL', 'extractKeywords', 'LAW_SYNONYMS', '
   'ADDON_OPTS', 'DELEG_OPTS', 'NEIGHBOR_OPTS', 'NOTICE_DOC_RE', 'unitKey', 'capSpill', 'pickSpill', 'delegationBases', 'pickDelegations',
   'neighborTarget', 'pickNeighbors', 'buildAddOnContext', 'fetchAddOns', 'trimAddOns',
   // 2차(#283-보론2)
-  'XREF_OPTS', 'pickXrefs', 'xrefTargets', 'annexWanted', 'annexBlock', 'docDate'];
+  'XREF_OPTS', 'pickXrefs', 'xrefTargets', 'annexWanted', 'annexBlock', 'docDate',
+  // 법령 용어 동의어(L5′, #289)
+  'LAW_TERM_SYNONYMS', 'LAW_TERM_MAX', 'lawTermKeywords'];
 NAMES.forEach(function (n) { ok('export ' + n, RC[n] !== undefined); });
 
 // ── 법령 키워드 추출 ──
@@ -63,6 +65,33 @@ eq('expandQueryForSemantic 원문 유지', RC.expandQueryForSemantic('무선국 
 eq('PRACTICE_TERMS 기관명 별칭', RC.lawSynonymKeywords('방통위 의결'), ['방송통신위원회', '방통위', '방송미디어통신위원회', '방미통위']);
 eq('LAW_SYNONYMS 폐업→휴업·폐업(#244)', RC.lawSynonymKeywords('기간통신사업을 폐업하려면'), ['휴업', '폐업']);
 eq('LAW_SYNONYMS 휴업→휴업·폐업(#244)', RC.lawSynonymKeywords('역무 휴업 승인 요건'), ['휴업', '폐업']);
+// 법령 용어 동의어(L5′, #289) — 기존 두 표 출력 뒤에 붙고, 이 표 출신만 질문당 LAW_TERM_MAX(4)개
+eq('L5′ IDC → 집적정보통신시설', RC.lawSynonymKeywords('재난대비 IDC 관련 규정은?'), ['집적정보통신시설']);
+eq('L5′ 소문자 idc도', RC.lawSynonymKeywords('idc 보호조치'), ['집적정보통신시설']);
+eq('L5′ 데이터 센터(띄어 씀) → 집적정보통신시설', RC.lawSynonymKeywords('데이터 센터 재난 대비'), ['집적정보통신시설']);
+eq('L5′ IDC·데이터센터 함께 → 한 번만', RC.lawSynonymKeywords('IDC(데이터센터) 등급'), ['집적정보통신시설']);
+eq('L5′ 면허세 → 등록면허세', RC.lawSynonymKeywords('무선국 면허세 납기'), ['등록면허세']);
+eq('L5′ 질문에 이미 든 말은 내지 않음(등록면허세 — 사전 출신 가중으로 정밀검색만 흔들지 않게)', RC.lawSynonymKeywords('무선국 등록면허세 감면'), []);
+eq('L5′ 질문에 이미 든 말은 내지 않음(집적정보통신시설)', RC.lawSynonymKeywords('IDC 집적정보통신시설 보호지침'), []);
+eq('L5′ 기존 표 출력 뒤에 붙음(3G 종료 8개는 그대로 + 1)', RC.lawSynonymKeywords('3G 서비스 종료 때 IDC 이전'),
+  ['휴업', '폐업', '폐지', '휴지', '운용휴지', '주파수회수', '주파수할당의 취소', '이용기간', '집적정보통신시설']);
+eq('L5′ 기존 표가 이미 낸 말은 이 표 몫에서 뺀다', RC.lawTermKeywords('IDC', ['집적정보통신시설']), []);
+eq('L5′ 질문 글귀만 있는 쌍은 없음(장비 세금)', RC.lawSynonymKeywords('이동통신회사가 장비관련해서 내는 세금은 무엇이 있나?'), []);
+eq('L5′ 질문 글귀만 있는 쌍은 없음(보관)', RC.lawSynonymKeywords('개인정보 보관 기관에 대한 내용'), []);
+(function () {   // 상한·두 글자 표제어 규칙 — 시험용 표로 바꿔 끼워 본다(운영 표엔 두 글자 표제어가 아직 없다)
+  var T = RC.LAW_TERM_SYNONYMS, saved = T.splice(0, T.length);
+  T.push(['보관', ['보관기간']], ['가나다', ['ㄱ1', 'ㄱ2', 'ㄱ3']], ['라마바', ['ㄴ1', 'ㄴ2']]);
+  try {
+    eq('L5′ 두 글자 표제어 — 낱말이 같으면', RC.lawTermKeywords('개인정보 보관 기관'), ['보관기간']);
+    eq('L5′ 두 글자 표제어 — 조사 뗀 낱말이 같으면', RC.lawTermKeywords('자료를 보관은 어디에'), ['보관기간']);
+    eq('L5′ 두 글자 표제어 — 낱말 안에 들어 있기만 하면 안 걸림(정보관리)', RC.lawTermKeywords('정보관리 책임자 지정'), []);
+    eq('L5′ 이 표 출신 질문당 4개 상한', RC.lawTermKeywords('가나다 라마바'), ['ㄱ1', 'ㄱ2', 'ㄱ3', 'ㄴ1']);
+  } finally { T.splice(0, T.length); saved.forEach(function (x) { T.push(x); }); }
+})();
+eq('L5′ 시험 뒤 운영 표 복구', RC.LAW_TERM_SYNONYMS.length, 3);
+eq('L5′ 개발 20문항엔 이 표가 걸리는 질문 없음(자리 앞·뒤가 결과를 안 바꾸는 근거)',
+  JSON.parse(require('fs').readFileSync(require('path').join(__dirname, 'fixtures', 'rag_regression_set.json'), 'utf8')).questions
+    .filter(function (q) { return RC.lawTermKeywords(q.question).length; }).map(function (q) { return q.id; }), []);
 
 // ── 제외어·위계 ──
 ok('isTitleStop 일반어', RC.isTitleStop('직접', '직접 운영') === true);

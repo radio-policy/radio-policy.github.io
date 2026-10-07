@@ -98,6 +98,53 @@
     [/대리점|판매점|유통점|직영/, ['대리점', '판매점', '판매점 선임에 대한 승낙', '공정한 유통 환경 조성']],
     [/추가지원금|공시지원금|공통지원금|보조금/, ['지원금', '지원금의 차별 지급 금지']],
   ];
+  // ── 법령 용어 동의어 (L5′, #289, 2026-10-07) ──────────────────────────────
+  //  질문의 통용어 → 법령 원문 용어. 「재난대비 IDC 관련 규정은?」에서 Haiku 확장도 「집적정보통신시설」을 내지 못해
+  //  집적정보 통신시설 보호지침·정보통신망법 제46조가 참조 자료에 하나도 안 들어왔다(자문 세 문제 준비자료 §2).
+  //  위 두 표와 달리 **넣는 규칙이 있다**(Fable 판정 `local_docs/자문세문제_판정_261007.md` §12-3) — 쌍 a → b는 검증 세트 밖에서
+  //  다음 중 하나로 증명될 때만: ① b가 법령·고시의 조문 제목·정의 조문에 있고 a가 b의 부분 문자열 ② 법령·고시 본문·별표가
+  //  「b(a)」로 나란히 적음 ③ KB에 적재된 보도자료·정책문서가 「a(b)」·「b(a)」로 나란히 적음 — 이어서 두 단계까지.
+  //  질문 글귀만 있는 쌍(「장비 세금 → 등록면허세」·「특수목적 예산 → 특별회계」·「차별 → 공평」)은 넣지 않는다(질문 해석은
+  //  Haiku 확장 몫). 낱말 → 낱말만(조 번호·문서명 금지), 증명 조각을 줄마다 적는다.
+  //  이 표 출신은 질문당 LAW_TERM_MAX개까지(위 두 표는 상한 없음 — 「3G 서비스 종료」는 8개, 그 기준선은 그대로 둔다).
+  //  표제어는 공백을 지운 질문에서 찾고(「데이터 센터」), 두 글자 표제어는 질문 낱말(조사 뗀 것)과 완전히 같을 때만
+  //  (「보관」⊂「정보관리」 같은 오발동). 출력은 lawSynonymKeywords 끝에 붙어 확장어보다 앞에 선다(아래 slice(0,10)에서
+  //  잘리지 않게 — 개발 20문항엔 이 표가 걸리는 질문이 없어 앞·뒤 자리가 결과를 바꾸지 않는다, 측정 `local_docs/L5동의어_261007/`).
+  //  ✗ 「보관 → 보관기간」: 판정 문서는 통신비밀보호법 시행령 제41조 제목이라 했으나 실제 제목은 「전기통신사업자의 협조의무 등」
+  //    (보관기간은 ②항 본문)이고 「보관기간」을 제목·정의에 가진 조문이 KB에 없어 ①을 못 넘는다(10-07 실DB).
+  const LAW_TERM_SYNONYMS = [
+    // ③ 과기정통부_보도자료_2024·2025·2026.md(부가통신 실태조사 표) 「인터넷 데이터센터(IDC)」 → ② 아래 줄 — 두 단계
+    ['IDC', ['집적정보통신시설']],
+    // ② 주요통신사업자의 통신시설 등급 지정 및 관리 기준(과학기술정보통신부고시 제2026-12호) 별표 1 「4. 집적정보통신시설(데이터센터)」
+    ['데이터센터', ['집적정보통신시설']],
+    // ① 지방세법 제37조(이미 납부한 등록면허세에 대한 조치)·같은 법 시행령 제49조(등록면허세 납부 확인 등)·시행령 별표 1 제목
+    ['면허세', ['등록면허세']],
+  ];
+  const LAW_TERM_MAX = 4;
+  function termHeadHit(query, head) {
+    if (head.length <= 2) {
+      return String(query || '').split(/[\s,.·()[\]「」『』<>:;!?/]+/).some(function (w) {
+        const t = w.replace(/[^가-힣a-zA-Z0-9]/g, '');
+        return t === head || t.replace(KW_JOSA, '') === head;
+      });
+    }
+    return String(query || '').replace(/\s+/g, '').toUpperCase().indexOf(head.toUpperCase()) >= 0;
+  }
+  // 법령 용어 동의어 표 출신만(상한 적용) — exclude(위 두 표가 낸 말)와 **질문에 이미 든 말**은 빼고 센다.
+  // 질문에 든 말을 내면 그 말이 사전 출신 가중(rankChunks 4·titleActWeights 7)을 받아 조문 정밀검색만 흔든다
+  // (「등록면허세는 연간 얼마」에서 면허세 → 등록면허세가 그랬다 — 세제 미니 세트 t01·t02 구성 변화, 10-07 측정). 이 표는 질문에 없는 법령 용어를 더하는 일만 한다.
+  function lawTermKeywords(query, exclude) {
+    const ex = exclude || [];
+    const qn = String(query || '').replace(/\s+/g, '').toUpperCase();
+    const out = [];
+    LAW_TERM_SYNONYMS.forEach(function (pair) {
+      if (termHeadHit(query, pair[0])) pair[1].forEach(function (t) {
+        if (out.length < LAW_TERM_MAX && ex.indexOf(t) === -1 && out.indexOf(t) === -1 &&
+            qn.indexOf(t.replace(/\s+/g, '').toUpperCase()) === -1) out.push(t);
+      });
+    });
+    return out;
+  }
   // 질문에 정책 동사·실무 용어가 있으면 대응하는 법령 표제어를 돌려준다 (검색 키워드에 추가 투입용)
   function lawSynonymKeywords(query) {
     const q = String(query || '');
@@ -108,7 +155,7 @@
     PRACTICE_TERMS.forEach(function (pair) {
       if (pair[0].test(q)) pair[1].forEach(function (t) { if (out.indexOf(t) === -1) out.push(t); });
     });
-    return out;
+    return out.concat(lawTermKeywords(q, out));
   }
   // 시맨틱 검색용 질의 보강 — 원 질의는 지우지 않고 뒤에 덧붙인다(원 표현이 맞는 경우를 잃지 않도록)
   function expandQueryForSemantic(query) {
@@ -973,6 +1020,7 @@
     PRIORITY_KW_RE: PRIORITY_KW_RE, VERB_TAIL: VERB_TAIL, extractKeywords: extractKeywords,
     LAW_SYNONYMS: LAW_SYNONYMS, PRACTICE_TERMS: PRACTICE_TERMS,
     lawSynonymKeywords: lawSynonymKeywords, expandQueryForSemantic: expandQueryForSemantic,
+    LAW_TERM_SYNONYMS: LAW_TERM_SYNONYMS, LAW_TERM_MAX: LAW_TERM_MAX, lawTermKeywords: lawTermKeywords,   // L5′(#289)
     GENERIC_QUERY_WORDS: GENERIC_QUERY_WORDS, QUERY_TITLE_STOP: QUERY_TITLE_STOP, isTitleStop: isTitleStop,
     lawRank: lawRank, DOMAIN_DOC_RE: DOMAIN_DOC_RE,
     extractNewsKeywords: extractNewsKeywords,
