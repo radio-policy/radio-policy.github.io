@@ -12605,6 +12605,321 @@ function _issueBackBar(label) {
       '<i class="ti ti-arrow-left"></i> ' + escHtml(label || '이슈로 돌아가기') + '</span></div>';
 }
 
+// ── 이슈맵 기사 본문 읽기 보기 (2026-10-07) ─────────────────────
+// 저장 본문은 줄바꿈 없는 한 덩어리(연결 기사 2,817건 중 1,365건이 1,500자에서 잘림)에 제목 반복·공유 버튼 글자·
+// 사진 설명이 섞여 있다. 화면에서만 다듬는다 — DB 본문은 그대로(자문·요약이 원문을 쓴다). AI 호출 0회.
+// ① 머리(기자 줄 앞: 부제·사진 설명)와 본문을 나누고 ② 문장 두세 개씩 문단으로 ③ 지금 보고 있는 이슈의 제목·정의 낱말로
+// 문장마다 점수를 매겨 핵심 문장은 배경(NB_REL_STRONG 이상), 관련 문장은 낱말만 굵게(NB_REL_LIGHT 이상) 표시한다.
+// 같은 기사라도 어느 이슈에서 열었느냐에 따라 표시가 다르다(표본 105건: 이슈 둘 이상 기사 36건 중 33건이 이슈마다 다름,
+// 배경 문장은 기사당 중앙값 16%·상위 10% 38%). 규칙 시험: node tests/issue_news_body.test.js
+var _NB_JUNK = [
+  /SNS 기사보내기[\s\S]{0,400}?닫기/g,
+  /글자크기 설정[\s\S]{0,60}?변경됩니다\.?/g,
+  /공유하기(?:\s+(?:X|카카오톡|카카오스토리|페이스북|트위터|복사하기|URL\s?복사|링크\s?복사|답글쓰기|댓글쓰기|밴드|이메일|스크랩|기사스크랩|인쇄|프린트))+/g,
+  /(?:입력|수정|승인|등록|기사입력|업데이트|발행일)\s*:?\s*\d{4}[.\-]\s?\d{1,2}[.\-]\s?\d{1,2}\.?(?:\s*\([월화수목금토일]\))?(?:\s*\d{1,2}:\d{2}(?::\d{2})?)?/g,
+  /\d{4}-\d{2}-\d{2} \d{2}:\d{2}(?::\d{2})?(?:\s*[ㅣ|│]\s*\d{4}-\d{2}-\d{2} \d{2}:\d{2}(?::\d{2})?)?/g,
+  /[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g,
+  /(?:이전|다음) 기사\s?보기|본문 글씨 (?:줄이기|키우기)|(?:^|\s)advertisement(?=\s)|기사\s?스크랩|프린트하기|인쇄하기|바로가기/g
+];
+// 본문 뒤 잡음 — 관련기사 목록·저작권 줄부터 끝까지(본문 뒤쪽 70% 안에 나올 때만)
+var _NB_TAIL = /\s(?:관련\s?기사|저작권자\s?[©ⓒ(]|Copyright\s?[©ⓒ(]|무단\s?전재|이 기자가 작성한 다른 기사|기자의 다른 기사|많이 본 뉴스|인기 기사)/;
+// 기자 줄 — [뉴스토마토 이지은 기자]·(서울=연합뉴스) 홍길동 기자 =·|스마트투데이=최아랑 기자| (방송 원고의 [기자]는 이름이 없어 빠진다)
+var _NB_BYLINE = /[\[［【]\s*[^\[\]［］【】\n]{2,30}?기자\s*[\]］】]\s*=?|[|｜]\s*[^|｜\[\]\n]{2,24}?기자\s*[|｜]|\(\s*[가-힣]+\s*=\s*[^)\n]{1,12}\)\s*(?:[가-힣]{2,4}\s+){1,6}기자\s*=|(?:^|\s)[가-힣]{2,4}\s+기자\s*=/g;
+// 사진 출처 표시 — 바로 앞의 짧은(「…하고 있다」류) 문장은 사진 설명으로 따로 흐리게
+var _NB_PHOTO = /\(\s*(?:사진|이미지|그래픽|자료|출처)\s*[=＝:][^)\n]{0,30}\)|\[\s*(?:사진|이미지|그래픽|자료|출처)\s*(?:제공)?\s*[=＝:][^\]\n]{0,30}\]|(?:사진|이미지|출처)\s*[=＝ㅣ|]\s*[^\s\[\]()]{1,20}(?:\s*기자)?|ⓒ\s*\S+|\d{4}\.\d{1,2}\.\d{1,2}\.?(?=\s|$)|\[연합뉴스\]/g;
+var _NB_CAPTION_END = /(?:(?:하고|고|어|아|해|돼|되어|여|며) 있다|모습|전경|사옥|로고|참여사|기념촬영)\.?\s*$/;
+var NB_BODY_MAX = 4000;   // 저장 본문 최대 3,379자(2026-10-07 실측) — 넉넉히 다 보여 준다
+
+function _nbNorm(s) { return String(s || '').replace(/[ \t ]+/g, ' ').trim(); }
+
+function _nbSentences(text) {
+  // 문장 끝 = 한글 + 마침표·물음표·느낌표(+닫는 따옴표·괄호) 뒤 공백. 숫자 사이 점(3.9조·2026.10.6)은 끊지 않는다.
+  return text.replace(/([가-힣][.!?](?:["”’'」』)\]]+)?)\s+/g, '$1\n').split('\n')
+    .map(function(s) { return s.trim(); }).filter(Boolean);
+}
+
+// 본문 → { lead, leadCut, paras:[[{t, cap}]], cut, junk }
+function _newsBodyParts(content, title) {
+  var text = String(content || '').slice(0, NB_BODY_MAX).replace(/\r/g, '');
+  _NB_JUNK.forEach(function(re) { text = text.replace(re, ' '); });
+  var tm = _NB_TAIL.exec(text);
+  if (tm && tm.index > text.length * 0.3) text = text.slice(0, tm.index);
+  // 머리/본문 나누기 — 앞쪽 절반(최대 700자) 안의 마지막 기자 줄
+  var lead = '', cutAt = -1, cutEnd = -1, m;
+  _NB_BYLINE.lastIndex = 0;
+  while ((m = _NB_BYLINE.exec(text))) {
+    if (m.index > Math.min(700, text.length * 0.5)) break;
+    cutAt = m.index; cutEnd = m.index + m[0].length;
+  }
+  if (cutAt >= 0) { lead = text.slice(0, cutAt); text = text.slice(cutEnd); }
+  // 제목 반복 지우기 — 목록 제목이 「...」로 잘렸으면 이어지는 낱말 조각도 떼고 화면에서 앞에 …를 붙인다
+  var tFull = _nbNorm(title), trunc = /(?:\.\.\.|…)$/.test(tFull);
+  var t = tFull.replace(/\s*(?:\.\.\.|…)$/, '');
+  if (lead) {
+    lead = _nbNorm(lead.replace(/\n+/g, ' '));
+    if (t.length >= 8 && lead.indexOf(t) === 0) {
+      lead = lead.slice(t.length);
+      if (trunc) lead = lead.replace(/^\S{0,8}/, '');
+    } else trunc = false;
+    lead = _nbNorm(lead.replace(_NB_PHOTO, ' '));
+  } else {
+    if (t.length >= 8 && _nbNorm(text.slice(0, t.length + 20)).indexOf(t) === 0) {
+      // 머리가 없는데 본문이 제목으로 시작 — 줄바꿈이 가까우면 그 줄을, 아니면 제목 글자만 뗀다
+      var nl = text.indexOf('\n');
+      if (nl > 0 && nl < t.length + 60) text = text.slice(nl + 1);
+      else { text = _nbNorm(text).slice(t.length); if (trunc) text = text.replace(/^\S{0,8}/, ''); }
+    }
+    trunc = false;
+  }
+  // 문단: 원래 줄바꿈이 있으면 그것으로, 없으면 문장 두세 개(170자 남짓)씩
+  var hasNl = /\n/.test(text.trim());
+  var blocks = hasNl ? text.split(/\n+/) : [text];
+  var paras = [], sentCount = 0, bodyLen = 0;
+  blocks.forEach(function(b) {
+    b = _nbNorm(b);
+    if (!b) return;
+    if (t.length >= 8 && b.indexOf(t) === 0 && b.length < t.length + 40) return;   // 줄로 된 제목 반복
+    // 사진 출처 표시 자리에서 끊고, 그 앞 짧은 설명 문장을 사진 설명으로
+    var segs = [], last = 0, pm;
+    _NB_PHOTO.lastIndex = 0;
+    while ((pm = _NB_PHOTO.exec(b))) { segs.push({ s: b.slice(last, pm.index), photo: true }); last = pm.index + pm[0].length; }
+    segs.push({ s: b.slice(last), photo: false });
+    var cur = [], curLen = 0;
+    var flush = function() { if (cur.length) paras.push(cur); cur = []; curLen = 0; };
+    segs.forEach(function(seg) {
+      var ss = _nbSentences(seg.s);
+      ss.forEach(function(s, i) {
+        if (seg.photo && i === ss.length - 1 && s.length <= 160 && (_NB_CAPTION_END.test(s) || s.length < 40)) {
+          flush(); paras.push([{ t: s, cap: true }]); return;
+        }
+        if (/[가-힣][.!?]["”’'」』)\]]*$/.test(s)) sentCount++;
+        cur.push({ t: s });
+        curLen += s.length; bodyLen += s.length;
+        if (!hasNl && curLen >= 170) flush();
+      });
+    });
+    flush();
+  });
+  var lastP = paras.length ? paras[paras.length - 1] : null;
+  var lastS = lastP ? lastP[lastP.length - 1].t : '';
+  return {
+    lead: lead,
+    leadCut: !!lead && trunc,
+    paras: paras,
+    // 문장 중간에서 끝나면 「잘림」(저장 본문은 앞부분만인 경우가 많다)
+    cut: !!lastS && !/[.!?]["”’'」』)\]]*$/.test(lastS),
+    // 사이트 메뉴 글자만 수집됐거나 글자가 깨진 본문 — 끝맺은 한글 문장이 500자에 하나도 안 된다
+    junk: bodyLen === 0 || sentCount < Math.max(1, bodyLen / 500)
+  };
+}
+
+// ── 이슈 관련 문장 찾기 ──
+function _nbWordSet(s) { var o = {}; s.split(' ').forEach(function(w) { o[w] = 1; }); return o; }
+var _NB_STOP = _nbWordSet('국내 해외 정부 정책 제도 논의 논란 추진 문제 관련 등 및 대한 위한 통한 이슈 쟁점 사안 방안 계획 강화 개선 확대 도입 검토 서비스 구축 사업 시장 업계 기업 국회 의원 통신 이동통신 관리 운영 대응 현황 의혹 조치 기준 정보 규제 체계 이용 이용자 산업 기술 발표 시행 개정 법 법안 영향 신규 지원 전략 동향 경쟁 요구 발생 결과 신청 진행 해당 경우 이후 이전 최근 올해 지난해 내년 가능 필요 내용 여부 둘러싼 이어지는 따른 위해 대해 그리고 또는 이를 이에 있는 하는 것 수 중 후 전 간 내 외 3사 생긴 사건 미국 회사 일부 모두 각종 주요 전반 시대 개편 후속 계기 확산 대책 방침 전환 본격화 차원 협의 참여');
+// 같은 대상의 다른 이름 — 이슈 제목은 정식 이름, 기사는 약칭을 쓰는 일이 많다
+var _NB_ALIAS = {
+  'LG유플러스': ['LGU+', 'LG U+', '엘지유플러스', '유플러스'],
+  'SK텔레콤': ['SKT'], 'SKT': ['SK텔레콤'],
+  '과학기술정보통신부': ['과기정통부', '과기부'], '과기정통부': ['과학기술정보통신부', '과기부'],
+  '방송미디어통신위원회': ['방미통위', '방통위'], '방미통위': ['방송미디어통신위원회', '방통위'],
+  '개인정보보호위원회': ['개인정보위', '개보위'],
+  '요금': ['통신비', '요금제'], '통신비': ['요금'],
+  '저궤도': ['LEO'], '국정감사': ['국감'], '국감': ['국정감사']
+};
+var _NB_VERBY = /(?:면서|으며|이며|하며|하고|했다|한다|된다|됐다|하는|되는|되면|하면|해서|되어|돼|됐|했|해|며|지|게|던|니다)$/;
+var NB_REL_LIGHT = 2, NB_REL_STRONG = 4;
+
+function _nbTokens(s, verbFilter) {
+  return String(s || '').replace(/\([^)]*\d{4}[^)]*\)/g, ' ')
+    .split(/[^0-9A-Za-z가-힣+]+/)
+    .map(function(w) {
+      // 조사 떼기 — 덜 뗀 낱말도 기사 쪽 부분 일치로 잡히므로(게이트웨이 → 게이트웨) 넉넉히 뗀다
+      if (w.length >= 3 && /[가-힣]$/.test(w)) w = w.replace(/(?:에서|으로|와|과|의|을|를|은|는|이|가|에|로|도|만)$/, '');
+      return w;
+    })
+    .filter(function(w) {
+      return w.length >= 2 && !_NB_STOP[w] && !/^\d+[가-힣]?$/.test(w) && !(verbFilter && _NB_VERBY.test(w));
+    });
+}
+
+// 이슈 → 찾을 낱말 [{t, w, forms}] — 제목 속 따옴표 묶음('모두의 AI') 3점, 제목 낱말 2점, 정의 첫 문장 낱말 1점
+function _issueNewsTerms(issue) {
+  if (!issue) return [];
+  var out = [], seen = {};
+  var add = function(w, wt) {
+    if (seen[w]) { if (seen[w].w < wt) seen[w].w = wt; return; }
+    var o = { t: w, w: wt, forms: [w].concat(_NB_ALIAS[w] || []) };
+    seen[w] = o; out.push(o);
+  };
+  var title = String(issue.title || '');
+  var quoted = [];
+  title = title.replace(/['‘’"“”「」『』]([^'‘’"“”「」『』]{2,20})['‘’"“”「」『』]/g, function(_, q) { quoted.push(q.trim()); return ' '; });
+  quoted.forEach(function(q) { add(q, 3); });
+  _nbTokens(title).forEach(function(w) { add(w, 2); });
+  var def = String(issue.definition || '');
+  var dm = /[가-힣)]\.\s|\s—\s|해당\s*:/.exec(def);
+  _nbTokens((dm ? def.slice(0, dm.index + 1) : def).slice(0, 240), true).forEach(function(w) { add(w, 1); });
+  return out;
+}
+
+function _nbHas(s, form) {
+  if (/[A-Za-z]/.test(form)) {
+    // 영문은 낱말 경계로만(KT가 SKT 안에서 맞지 않게)
+    var re = new RegExp('(^|[^A-Za-z])' + form.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?![A-Za-z])', 'i');
+    return re.test(s);
+  }
+  if (s.indexOf(form) >= 0) return true;
+  // 넉 자 합성어는 두 자씩 나뉘어 같은 문장에 있어도 맞음(증거인멸 ↔ 증거를 인멸)
+  if (/^[가-힣]{4}$/.test(form)) return s.indexOf(form.slice(0, 2)) >= 0 && s.indexOf(form.slice(2)) >= 0;
+  return false;
+}
+
+// 문장마다 점수 → rel 2(문장 배경)·1(낱말만 굵게)·0. 그 기사 문장 60% 넘게 나오는 낱말은 기사 전체의 배경이라 빼고 센다.
+function _nbMarkRelevant(parts, terms) {
+  var sents = [];
+  parts.paras.forEach(function(p) { p.forEach(function(s) { if (!s.cap) sents.push(s); }); });
+  var res = { strong: 0, light: 0, wide: [] };   // wide = 기사 전반에 나와 뺀 제목 낱말(안내 문구용)
+  if (!terms.length || !sents.length) return res;
+  var df = terms.map(function(o) {
+    return sents.filter(function(s) { return o.forms.some(function(f) { return _nbHas(s.t, f); }); }).length;
+  });
+  var isWide = terms.map(function(o, i) { return sents.length >= 5 && df[i] / sents.length > 0.6; });
+  terms.forEach(function(o, i) { if (isWide[i] && o.w >= 2) res.wide.push(o.t); });
+  sents.forEach(function(s) {
+    var score = 0, hits = [];
+    terms.forEach(function(o, i) {
+      if (isWide[i]) return;
+      var f = o.forms.filter(function(x) { return _nbHas(s.t, x); });
+      if (f.length) { score += o.w; hits = hits.concat(f); }
+    });
+    s.score = score; s.hits = hits;
+    s.rel = score >= NB_REL_STRONG ? 2 : score >= NB_REL_LIGHT ? 1 : 0;
+    if (s.rel === 2) res.strong++; else if (s.rel === 1) res.light++;
+  });
+  return res;
+}
+
+// 저장 본문이 다른 기사인 경우(수집기가 옆 기사·추천 기사를 긁어 옴) — 제목 낱말이 넷 이상인데 본문에 하나도 없다.
+// 표본 99건(메뉴 글자 본문 제외)에서 정상 기사는 최저 1/8이라 「하나도 없음」만 잡는다.
+function _nbTitleMismatch(title, parts) {
+  var tk = _nbTokens(String(title || '').replace(/\s*(?:\.\.\.|…)$/, ''));
+  if (tk.length < 4) return false;
+  var body = parts.lead + ' ' + parts.paras.map(function(p) { return p.map(function(s) { return s.t; }).join(' '); }).join(' ');
+  return !tk.some(function(w) { return _nbHas(body, w); });
+}
+
+// 맞은 낱말이 든 어절(띄어쓰기 단위, 괄호 앞까지)을 굵게 — 이스케이프는 조각마다
+function _nbBoldHtml(text, forms) {
+  var rs = [], low = text.toLowerCase();
+  (forms || []).forEach(function(f) {
+    var pieces = (!/[A-Za-z]/.test(f) && text.indexOf(f) < 0 && /^[가-힣]{4}$/.test(f)) ? [f.slice(0, 2), f.slice(2)] : [f];
+    pieces.forEach(function(p) {
+      var pl = p.toLowerCase(), i = 0;
+      while ((i = low.indexOf(pl, i)) >= 0) {
+        var a = i, b = i + p.length;
+        if (/[A-Za-z]/.test(p) && (/[A-Za-z]/.test(text.charAt(a - 1)) || /[A-Za-z]/.test(text.charAt(b)))) { i = b; continue; }
+        while (a > 0 && /[0-9A-Za-z가-힣+]/.test(text.charAt(a - 1))) a--;
+        while (b < text.length && /[0-9A-Za-z가-힣+]/.test(text.charAt(b))) b++;
+        rs.push([a, b]); i = b;
+      }
+    });
+  });
+  rs.sort(function(x, y) { return x[0] - y[0]; });
+  var h = '', at = 0;
+  rs.forEach(function(r) {
+    if (r[1] <= at) return;
+    var a = Math.max(r[0], at);
+    h += escHtml(text.slice(at, a)) + '<b style="font-weight:700">' + escHtml(text.slice(a, r[1])) + '</b>';
+    at = r[1];
+  });
+  return h + escHtml(text.slice(at));
+}
+
+// 이슈맵에서 연 기사 한 건 — issue는 지금 보고 있는 이슈(_issueCache 행, 없으면 표시 없이 정리만)
+function _renderIssueNews(n, issue) {
+  var u = safeUrl(n.url);
+  var rule = IMPORTANCE_RULES[n.urgency];
+  var h = '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:11px;color:var(--text-tertiary);margin-bottom:6px">' +
+      '<span>' + escHtml((n.published_at || '').slice(0, 10)) + '</span><span>·</span><span>' + escHtml(n.source || '') + '</span>' +
+      (rule ? '<span style="font-size:10px;font-weight:700;color:' + rule.color + ';background:' + rule.bg + ';padding:1px 7px;border-radius:4px;white-space:nowrap">' + rule.label + '</span>'
+            : (n.urgency ? '<span>· ' + escHtml(n.urgency) + '</span>' : '')) +
+    '</div>' +
+    '<div style="font-size:16px;font-weight:700;color:var(--text-primary);line-height:1.5;margin-bottom:12px;max-width:720px;word-break:keep-all">' + escHtml(n.title) + '</div>';
+
+  var parts = _newsBodyParts(n.content, n.title);
+  var terms = _issueNewsTerms(issue);
+  var rel = n.content && !parts.junk ? _nbMarkRelevant(parts, terms) : { strong: 0, light: 0, wide: [] };
+  var mainForms = [];
+  terms.forEach(function(o) { if (o.w >= 2) mainForms = mainForms.concat(o.forms); });
+
+  // 이 이슈 기준 표시 안내
+  if (issue && n.content && !parts.junk) {
+    var it = String(issue.title || '');
+    if (it.length > 30) it = it.slice(0, 30) + '…';
+    var bits = [];
+    if (rel.strong) bits.push('<span style="background:rgba(250,204,21,.32);border-radius:3px;padding:0 6px;color:var(--text-primary)">노란 문장</span> 「' + escHtml(it) + '」 핵심 ' + rel.strong + '곳');
+    else if (rel.light) bits.push('「' + escHtml(it) + '」 이슈와 직접 겹치는 문장은 없어 관련 낱말만 굵게 표시');
+    if (rel.strong) bits.push('<b style="color:var(--text-primary)">굵은 글씨</b> 관련 낱말');
+    // 거의 모든 문장에 나오는 제목 낱말은 문장을 가르지 못해 점수에서 뺀다 — 「표시 없음」이 「관련 없음」으로 읽히지 않게 알린다
+    if (rel.wide.length) bits.push('「' + escHtml(rel.wide.slice(0, 3).join('·')) + '」 낱말은 기사 전반에 나와 강조에서 뺐습니다');
+    var msg = bits.length ? bits.join(' · ')
+      : '본문에서 「' + escHtml(it) + '」 이슈 관련 낱말을 찾지 못했습니다' + (parts.cut ? ' — 저장된 본문은 앞부분뿐이라 원문 뒷부분에 있을 수 있습니다' : '');
+    h += '<div style="display:flex;align-items:flex-start;gap:6px;font-size:11px;color:var(--text-secondary);line-height:1.7;margin-bottom:12px">' +
+      '<i class="ti ti-highlight" style="font-size:13px;flex-shrink:0;margin-top:1px"></i><span style="flex:1;min-width:0">' + msg + '</span></div>';
+  }
+
+  if (n.summary) {
+    h += '<div style="background:var(--bg-secondary);border-radius:var(--radius-md);padding:10px 12px;margin-bottom:12px;max-width:720px">' +
+      '<div style="font-size:10px;font-weight:700;color:var(--text-secondary);letter-spacing:.4px;margin-bottom:6px">요약</div>' +
+      renderSummaryHtml(n.summary) + '</div>';
+  }
+
+  if (!n.content) {
+    h += '<div style="font-size:12px;color:var(--text-secondary)">저장된 본문이 없습니다 — 「원문 보기」로 확인하세요.</div>';
+  } else if (parts.junk) {
+    // 메뉴 글자만 수집됐거나 글자가 깨진 본문 — 검색 요약을 대신 보이고 저장 글자는 접어 둔다
+    h += '<div style="font-size:12px;color:var(--text-secondary);background:var(--bg-secondary);border-radius:var(--radius-md);padding:10px 12px;margin-bottom:10px;max-width:720px;line-height:1.7">' +
+        '<i class="ti ti-alert-circle"></i> 본문을 제대로 가져오지 못했습니다(사이트 메뉴 글자 등만 저장됨). 「원문 보기」로 확인하세요.</div>' +
+      (n.screen_text ? '<div style="font-size:13px;color:var(--text-primary);line-height:1.85;margin-bottom:10px;max-width:720px;word-break:keep-all">' +
+        '<span style="font-size:10px;font-weight:700;color:var(--text-secondary);margin-right:6px">검색 요약</span>' + _nbBoldHtml(String(n.screen_text), mainForms) + '</div>' : '') +
+      '<details style="margin-bottom:6px"><summary style="font-size:11px;color:var(--text-tertiary);cursor:pointer">저장된 글자 그대로 보기</summary>' +
+        '<div style="font-size:11px;color:var(--text-tertiary);line-height:1.7;white-space:pre-wrap;word-break:break-all;margin-top:6px">' + escHtml(String(n.content).slice(0, NB_BODY_MAX)) + '</div></details>';
+  } else {
+    if (_nbTitleMismatch(n.title, parts)) {
+      h += '<div style="font-size:12px;color:var(--text-secondary);background:var(--bg-secondary);border-radius:var(--radius-md);padding:10px 12px;margin-bottom:12px;max-width:720px;line-height:1.7">' +
+        '<i class="ti ti-alert-circle"></i> 저장된 본문에 제목 낱말이 하나도 없습니다 — 다른 기사의 글이 저장됐을 수 있으니 「원문 보기」로 확인하세요.</div>';
+    }
+    if (parts.lead) {
+      h += '<div style="font-size:12px;color:var(--text-secondary);line-height:1.75;border-left:3px solid var(--border);padding:2px 0 2px 10px;margin-bottom:14px;max-width:720px;word-break:keep-all">' +
+        (parts.leadCut ? '…' : '') + _nbBoldHtml(parts.lead, mainForms) + '</div>';
+    }
+    h += '<div style="max-width:720px;font-size:13px;line-height:1.9;color:var(--text-primary);word-break:keep-all;overflow-wrap:anywhere">';
+    parts.paras.forEach(function(p) {
+      if (p.length === 1 && p[0].cap) {
+        h += '<div style="display:flex;gap:5px;font-size:11px;color:var(--text-tertiary);line-height:1.6;margin:-4px 0 14px">' +
+          '<i class="ti ti-photo" style="margin-top:2px"></i><span>' + escHtml(p[0].t) + '</span></div>';
+        return;
+      }
+      h += '<p style="margin:0 0 14px">' + p.map(function(s) {
+        var inner = s.rel ? _nbBoldHtml(s.t, s.hits) : escHtml(s.t);
+        return s.rel === 2
+          ? '<span style="background:rgba(250,204,21,.26);border-radius:3px;padding:1px 0;-webkit-box-decoration-break:clone;box-decoration-break:clone">' + inner + '</span>'
+          : inner;
+      }).join(' ') + '</p>';
+    });
+    h += '</div>';
+    if (parts.cut) {
+      h += '<div style="font-size:11px;color:var(--text-tertiary);margin:-6px 0 4px">… 저장된 본문은 여기까지입니다 — 나머지는 「원문 보기」에서 확인하세요.</div>';
+    }
+  }
+
+  h += '<div style="margin-top:12px;display:flex;gap:6px;flex-wrap:wrap">' +
+      (u ? '<a href="' + u + '" target="_blank" rel="noopener" class="btn" style="font-size:11px;padding:4px 12px;text-decoration:none"><i class="ti ti-external-link"></i> 원문 보기</a>' : '') +
+      '<button class="btn" data-nt="' + escHtml(String(n.title).slice(0, 50)) + '" onclick="askQ(this.getAttribute(\'data-nt\') + \' SKT 영향 분석해줘\')" style="font-size:11px;padding:4px 12px"><i class="ti ti-message-2"></i> AI 자문에서 분석</button>' +
+    '</div>';
+  return h;
+}
+
 async function openIssueLinkItem(linkId) {
   var link = _findIssueLink(linkId);
   if (!link || !sb) return;
@@ -12618,22 +12933,13 @@ async function openIssueLinkItem(linkId) {
 
   try {
     if (link.item_type === 'news') {
-      var r = await sb.from('news_feed').select('title,source,url,summary,content,published_at,urgency,category')
+      var r = await sb.from('news_feed').select('title,source,url,summary,content,screen_text,published_at,urgency,category')
         .eq('id', link.item_id).maybeSingle();
       var n = r && r.data;
       if (!n) { body = '<div style="font-size:12px;color:var(--text-secondary)">기사를 찾지 못했습니다(삭제되었을 수 있습니다).</div>'; }
       else {
-        var u = safeUrl(n.url);
-        body = '<div style="font-size:11px;color:var(--text-tertiary);margin-bottom:6px">' +
-            escHtml((n.published_at || '').slice(0, 10)) + ' · ' + escHtml(n.source || '') +
-            (n.urgency ? ' · ' + escHtml(n.urgency) : '') + '</div>' +
-          '<div style="font-size:15px;font-weight:700;color:var(--text-primary);line-height:1.5;margin-bottom:10px">' + escHtml(n.title) + '</div>' +
-          (n.summary ? '<div style="font-size:12px;color:var(--text-primary);line-height:1.8;background:var(--bg-secondary);border-radius:var(--radius-md);padding:10px 12px;margin-bottom:10px">' + escHtml(n.summary) + '</div>' : '') +
-          (n.content ? '<div style="font-size:12px;color:var(--text-secondary);line-height:1.85;white-space:pre-wrap">' + escHtml(String(n.content).slice(0, 2500)) + '</div>' : '') +
-          '<div style="margin-top:12px;display:flex;gap:6px;flex-wrap:wrap">' +
-            (u ? '<a href="' + u + '" target="_blank" rel="noopener" class="btn" style="font-size:11px;padding:4px 12px;text-decoration:none"><i class="ti ti-external-link"></i> 원문 보기</a>' : '') +
-            '<button class="btn" data-nt="' + escHtml(String(n.title).slice(0, 50)) + '" onclick="askQ(this.getAttribute(\'data-nt\') + \' SKT 영향 분석해줘\')" style="font-size:11px;padding:4px 12px"><i class="ti ti-message-2"></i> AI 자문에서 분석</button>' +
-          '</div>';
+        var curIssue = (_issueCache || []).filter(function(i) { return String(i.id) === String(link.issue_id); })[0] || null;
+        body = _renderIssueNews(n, curIssue);
       }
     } else if (link.item_type === 'press_chunk' || link.item_type === 'minutes') {
       // 청크 1건이 아니라 그 섹션 전체를 보여준다 — 다음 '## ' 섹션을 만나기 전까지 이어붙임
