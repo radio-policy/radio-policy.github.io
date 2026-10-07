@@ -83,6 +83,14 @@ Deno.serve(async (req) => {
     if (r.error) throw new Error(r.error.message);
     return (r.data || []) as (Row & { status?: string })[];
   };
+  // 검색 자료 밖 조문 대조(#288 ⓒ)의 이름 맞추기 재료 — DB 문서명(현행·시행예정). 이름 적은 조문이 자료에 없을 때만 부른다(≈0.9초, service_role 전용 RPC).
+  // rag.ts listLawDocNames와 같은 조회 — 법령·고시 꼴만 고르는 것은 cite_verify.js
+  let lawDocsP: Promise<string[]> | null = null;
+  const listLawDocs = (): Promise<string[]> => lawDocsP ||= (async () => {
+    const [a, b] = await Promise.all([sb.rpc('kb_doc_names', { p_status: 'current' }), sb.rpc('kb_doc_names', { p_status: 'pending' })]);
+    if (a.error || b.error) throw new Error((a.error || b.error)!.message);
+    return ([] as { doc_name: string }[]).concat(a.data || [], b.data || []).map((x) => x.doc_name);
+  })();
   try {
     const ex = await CiteVerify.expandArticles(chunks, fetchArticle, EXPAND_OPTS);
     chunks = ex.chunks;
@@ -101,8 +109,9 @@ Deno.serve(async (req) => {
       callJudge2: ANTHROPIC_KEY
         ? (sys: string, u: string) => callCiteJudge2(sb, ANTHROPIC_KEY, sys, u, 'verify-citations:citeJudge2')
         : null,
-      // 판정 원문이 지침서 핵심 조문뿐이면 실DB 조문으로(#284)
+      // 판정 원문이 지침서 핵심 조문뿐이면 실DB 조문으로(#284) · 항 구분 확인·검색 자료 밖 조문 대조(#288)
       fetchLawArticle,
+      listLawDocs,
     });
     console.log('[인용 검증]', user.email || user.id, 'auto+' + (vr.autoTagged || 0), 'quote+' + (vr.quoteTagged || 0), JSON.stringify(vr.verdicts.map((v: { key: string; status: string; reason: string }) => [v.key, v.status, v.reason])));
     return json(200, { answer: vr.answer, verdicts: vr.verdicts, changed: vr.changed, autoTagged: vr.autoTagged || 0, quoteTagged: vr.quoteTagged || 0, citedDocs: vr.citedDocs || [] }, cors);

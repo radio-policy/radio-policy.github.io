@@ -721,7 +721,8 @@ function ok(name, cond, extra) {
   // 판정기가 모두 「일치」면 표 6행이 전부 초록으로 남는다(표시 글자 그대로)
   var gAll = await CV.verifyCitations({ answer: G.answer, chunks: G.chunks, annexSources: [], callHaiku: async function (s, u) { var n = (u.match(/### 항목 \d+/g) || []).length; return JSON.stringify(Array.from({ length: n }, function (_, i) { return { id: i + 1, verdict: '일치', reason: '' }; })); },
     callJudge2: async function () { return '[{"id":1,"verdict":"일치","reason":""}]'; } });
-  eq('#286 판정기 모두 일치 → 표 6행 전부 초록, 법령 이름 없던 표시는 대조한 조문으로 채움(#286-보론)', [gAll.verdicts.slice(11).map(function (v) { return v.status; }), gAll.answer.indexOf('| 법 제19조①, 영 제24조① [원문 확인됨: 전기통신사업법 제19조제1항] |') !== -1, gAll.answer.indexOf('| 영 제24조① [원문 확인됨: 전기통신사업법 시행령 제24조제1항] |') !== -1, gAll.answer.indexOf('[원문 확인됨: 전기통신사업법 제19조제1항]') !== -1, gAll.filled], [['ok', 'ok', 'ok', 'ok', 'ok', 'ok'], true, true, true, 6]);
+  // #288 ⓓ′: 1행 「법 제19조①, 영 제24조①」은 두 조문을 한 원문으로 대조하므로 채운 이름표도 둘
+  eq('#286 판정기 모두 일치 → 표 6행 전부 초록, 법령 이름 없던 표시는 대조한 조문으로 채움(#286-보론, 다중 원문은 조문 모두 #288)', [gAll.verdicts.slice(11).map(function (v) { return v.status; }), gAll.answer.indexOf('| 법 제19조①, 영 제24조① [원문 확인됨: 전기통신사업법 제19조제1항·전기통신사업법 시행령 제24조제1항] |') !== -1, gAll.answer.indexOf('| 영 제24조① [원문 확인됨: 전기통신사업법 시행령 제24조제1항] |') !== -1, gAll.answer.indexOf('[원문 확인됨: 전기통신사업법 제19조제1항]') !== -1, gAll.filled], [['ok', 'ok', 'ok', 'ok', 'ok', 'ok'], true, true, true, 6]);
   // 이름을 적은 초록(1~3절 11개)은 글자 그대로 — 바뀐 표시 0, 채움은 5절 표의 6개뿐(전파법 제25조의2 행도 「[원문 확인됨]」만 적어 채움)
   eq('#286-보론 이름 적은 초록은 글자 그대로', [gAll.changed, gAll.answer.indexOf('[원문 확인됨: 전기통신사업법 제19조제3항]') !== -1, gAll.answer.indexOf('[원문 확인됨: 전파법 제25조의2제1항]') !== -1], [0, true, true]);
   // ⓒ 추측한 법령의 조문에 인용문 낱말이 없으면 「불일치」는 주황이 아니라 회색 + 어느 조문으로 봤는지. 전기통신사업법 제19조가 자료에 없어 바꿔 고를 데도 없는 경우
@@ -746,9 +747,10 @@ function ok(name, cond, extra) {
     content: '제1조(목적) 이 기준은 「전기통신사업법」 제50조제1항제5호에 따른 금지행위 중 경제적 이익 등 제공의 부당한 이용자 차별행위의 세부기준을 정함을 목적으로 한다.' };
   var ansW = '전기통신사업법 제50조제1항은 금지행위를 정합니다. [원문 확인됨: 전기통신사업법 제50조제1항]\n\n방송미디어통신위원회고시 제2026-11호 제1조는 전기통신사업법 제50조제1항제5호의 금지행위 중 부당한 이용자 차별행위의 세부기준을 정함을 목적으로 합니다. [원문 확인됨: 방송미디어통신위원회고시 제2026-11호 제1조]';
   var gw = await CV.verifyCitations({ answer: ansW, chunks: [a50, goal1], annexSources: [] });
-  // 「…고시 제2026-11호」는 '-' 때문에 이름으로 읽히지 않아(lawNameBefore null) 이름 없는 참조다 — 그래도 목적 조문(제1조)으로는 안 바꾼다
-  eq('#286 「…고시 제2026-11호 제1조」(이름으로 안 읽힘)도 다른 고시의 목적 조문으로 바꾸지 않는다(원문 없음 그대로 + 어느 법령으로 봤는지)',
-     [gw.verdicts[1].status, gw.verdicts[1].reason, gw.verdicts[1].lawGuess || null, /\[원문 없음 — 검색 자료에 전기통신사업법 제1조 없음 \(법령 이름 없음 → 전기통신사업법으로 봄\)\]/.test(gw.answer)], ['missing', '전기통신사업법 1조 원문 없음', 'inherit', true]);
+  // #288 ⓑ: 「…고시 제2026-11호」는 고시 번호로 적은 이름 — 자료에 그 번호의 문서가 없으면(여기 고시는 제2026-20호) 앞 법령(전기통신사업법)을
+  // 이어받지 않고 그 이름대로 원문 없음(종전 #286은 이름을 못 읽어 「전기통신사업법 제1조 없음 (법령 이름 없음 → …)」이었다). 목적 조문으로도 안 바꾼다
+  eq('#288 ⓑ 「…고시 제2026-11호 제1조」 — 자료에 그 번호 문서가 없으면 그 이름대로 원문 없음(이어받지 않음, 다른 고시의 목적 조문으로도 안 바꿈)',
+     [gw.verdicts[1].status, gw.verdicts[1].reason, gw.verdicts[1].lawGuess || null, gw.answer.indexOf('[원문 없음 — 검색 자료에 방송미디어통신위원회고시 제2026-11호 제1조 없음]') !== -1], ['missing', '방송미디어통신위원회고시 제2026-11호 1조 원문 없음', null, true]);
   // 이름을 적었는데 못 맞춘 것(「주파수 이용 지침」 — 지침으로 끝나 보통 이름, 문서 없음)은 #240 ①대로 원문 없음, 추측 아님
   var x5 = { id: 'x5', doc_name: '전기통신사업법(법률)(제21503호)(20261001)', article_no: '5조(전기통신사업의 구분 등)', chunk_index: 5, content: '제5조(전기통신사업의 구분 등)\n① 전기통신사업은 기간통신사업 및 부가통신사업으로 구분한다.\n② 기간통신사업은 전기통신회선설비를 설치하거나 이용하여 기간통신역무를 제공하는 사업으로 한다.' };
   var ansNm = '전파법 제92조제3호: 신고를 하지 않은 경우 100만원 이하의 과태료. [원문 확인됨: 전파법 제92조제3호]\n\n주파수 이용 지침 제5조는 전기통신사업을 기간통신사업과 부가통신사업으로 구분하고 기간통신사업을 기간통신역무를 제공하는 사업으로 정합니다. [원문 확인됨: 주파수 이용 지침 제5조]';
@@ -768,7 +770,8 @@ function ok(name, cond, extra) {
   // ① 겹침 동률(둘 다 0)이면 낱말 근거 → 이름 적은 후보 → 앞의 것: 「제19조제1항(…) 위반 시 전기통신사업법 제104조제5항제2호 … 과태료」 줄은 제104조와 대조
   var ansTie = '전기통신사업법 제19조제1항은 60일 전 고지를 정합니다. [원문 확인됨: 전기통신사업법 제19조제1항]\n\n- 제19조제1항(사업의 휴업·폐업) 위반 시 전기통신사업법 제104조제5항제2호에 따라 1천만원 이하의 과태료가 부과됩니다. [원문 확인됨]';
   var vTie = await CV.verifyCitations({ answer: ansTie, chunks: G.chunks, annexSources: [] });
-  eq('#286-보론2 ① 과태료 문장은 앞의 이름 없는 의무 조문(제19조)이 아니라 낱말이 드는 이름 적은 제104조와 대조', [vTie.verdicts[1].key, vTie.verdicts[1].law, vTie.verdicts[1].lawGuess || null, vTie.verdicts[1].cmp], ['104조', '전기통신사업법', null, '전기통신사업법 제104조제5항제2호']);
+  // #288 ⓓ′: 한 줄에 조문 둘(제19조·제104조)이 다 자료에 있으면 둘 다 원문으로 보낸다 — 대표 조문(기록 key)은 종전 규칙대로 이름 적은 제104조
+  eq('#286-보론2 ① 과태료 문장은 앞의 이름 없는 의무 조문(제19조)이 아니라 낱말이 드는 이름 적은 제104조가 대표(#288부터 제19조도 함께 대조)', [vTie.verdicts[1].key, vTie.verdicts[1].law, vTie.verdicts[1].lawGuess || null, vTie.verdicts[1].cmp, vTie.verdicts[1].multi], ['104조', '전기통신사업법', null, '전기통신사업법 제19조제1항·전기통신사업법 제104조제5항제2호', ['전기통신사업법 제19조제1항', '전기통신사업법 제104조제5항제2호']]);
   // 뚜렷한 낱말 차이(3개 이상)만 이름보다 앞: 이름 적은 조문이 곁가지(「벌칙은 … 제96조 참조」)인 줄은 본문이 말하는 이름 없는 조문과 대조
   var ansSide = '전파법 제92조제3호: 신고 없는 폐지는 과태료. [원문 확인됨: 전파법 제92조제3호]\n\n- 제19조제1항은 기간통신사업의 휴업·폐업 예정일 60일 전까지 이용자에게 알리고 승인을 받도록 정하며, 벌칙은 전기통신사업법 제96조 참조 [원문 확인됨]';
   var vSide = await CV.verifyCitations({ answer: ansSide, chunks: G.chunks, annexSources: [] });
@@ -781,6 +784,109 @@ function ok(name, cond, extra) {
   eq('#286-보론2 ② 표시 안 「(법률 제21553호)」가 있어도 호 검사로 원문 없음이 되지 않는다', [v21553.verdicts[0].status, v21553.verdicts[0].items], ['unjudged', []]);
   // ④ 「동 가이드라인 제3조」의 「동」은 이름이 아니다 — (표시: …) 메모 안 붙음
   eq('#286-보론2 ④ 「동 가이드라인 제3조」는 그 가이드라인과 같은 문서로 본다(표시 메모 없음)', [CV.shownDiffers('동 가이드라인 제3조', { key: '3조', kind: 'article' }, '이동통신용 무선설비 예비전원설비 설치 가이드라인'), CV.shownDiffers('전파법 제3조', { key: '3조', kind: 'article' }, '전기통신사업법')], [false, true]);
+
+  // ── #288 (2026-10-07, Fable 판정 local_docs/자문세문제_판정_261007.md §4·§5·§12) ──
+  var allOk1 = async function (s, u) { var n = (u.match(/### 항목 \d+/g) || []).length; return JSON.stringify(Array.from({ length: n }, function (_, i) { return { id: i + 1, verdict: '일치', reason: '' }; })); };
+  var allOk2 = async function () { return '[{"id":1,"verdict":"일치","reason":""}]'; };
+  // 2차 「불일치」 + 근거 구절이 실제로 있는 꼴(grounded) — 원문·인용문 앞부분을 그대로 옮긴다
+  var misGround = async function (s, u) {
+    var claim = (u.split('[인용문]\n')[1] || '').split('\n[원문]\n')[0], src = u.split('\n[원문]\n')[1] || '';
+    return JSON.stringify([{ id: 1, verdict: '불일치', source_span: src.replace(/\s+/g, ' ').trim().slice(0, 30), claim_span: claim.replace(/\s+/g, ' ').trim().slice(0, 20), reason: '모의 불일치' }]);
+  };
+  var famOf = CV.docFamily;
+  // ⓐ 대상 없는 토막 표시 — 바로 앞 문단에 표시가 있으면 중복(지움), 숫자 든 토막은 종전대로, 앞 문단에 표시가 없으면 그 문단으로 대조
+  var ansFrag = '전기통신사업법 제50조제1항의 \n\n"이용약관과 다르게 전기통신서비스를 제공하거나 전기통신이용자의 이익을 해치는 행위" [원문 확인됨: 전기통신사업법 제50조제1항제5호]\n\n 등 금지행위와 연계될 소지가 있습니다[원문 확인됨].\n- 다음 항목';
+  var vFrag = await CV.verifyCitations({ answer: ansFrag, chunks: [a50], annexSources: [], autoTag: false, quoteTag: false });
+  eq('#288 ⓐ 토막 표시(c08 꼴): 바로 앞 인용 문단에 표시가 있으면 중복으로 지운다', [vFrag.verdicts[1].status, vFrag.verdicts[1].key, vFrag.answer.indexOf('소지가 있습니다.') !== -1], ['dup', '50조', true]);
+  var vFragN = await CV.verifyCitations({ answer: ansFrag.replace(' 등 금지행위와 연계될 소지가 있습니다', '과태료는 3천만원입니다'), chunks: [a50], annexSources: [], autoTag: false, quoteTag: false });
+  eq('#288 ⓐ 숫자 든 토막(「과태료는 3천만원입니다[표시]」)은 지우지 않는다 — 종전대로 못 읽음(회색)', vFragN.verdicts[1].status, 'unparsed');
+  var vFrag2 = await CV.verifyCitations({ answer: '전기통신사업법 제50조제1항제5호는 이용약관과 다르게 전기통신서비스를 제공하거나 전기통신이용자의 이익을 해치는 행위를 금지행위로 정합니다\n\n고 규정합니다[원문 확인됨].', chunks: [a50], annexSources: [], autoTag: false, quoteTag: false });
+  eq('#288 ⓐ 앞 문단에 표시가 없으면 그 문단의 조문·글로 대조(판정기행)', [vFrag2.verdicts[0].status, vFrag2.verdicts[0].key, vFrag2.verdicts[0].law], ['unjudged', '50조', '전기통신사업법']);
+  var vFrag3 = await CV.verifyCitations({ answer: '규정 설명은 위와 같습니다. 조문을 보면 이용약관과 다른 제공이 문제입니다\n\n고 규정합니다[원문 확인됨].', chunks: [a50], annexSources: [], autoTag: false, quoteTag: false });
+  eq('#288 ⓐ 앞 문단에 표시도 조 언급도 없으면 종전대로 못 읽음', vFrag3.verdicts[0].status, 'unparsed');
+
+  // ⓑ 고시 번호로 적은 이름 — 자료 안에서 그 번호의 문서가 하나일 때만, 추측 등급(불일치 = 회색)
+  eq('#288 ⓑ lawNameBefore: 「…고시 제2026-11호」는 번호 이름, 기관 낱말은 위원회·부·청·처·원·소로 끝날 때만',
+     [CV.lawNameBefore('방송미디어통신위원회고시 제2026-11호 ').number, CV.lawNameBefore('방송미디어통신위원회고시 제2026-11호 ').text, CV.lawNameBefore('이에 따라 고시 제2026-11호 ').text, CV.lawNameBefore('과학기술정보통신부 고시 제2017 - 7호 ').text, CV.guessKind(CV.lawNameBefore('방송미디어통신위원회고시 제2026-11호 '), [])],
+     ['2026-11', '방송미디어통신위원회고시 제2026-11호', '고시 제2026-11호', '과학기술정보통신부 고시 제2017-7호', 'number']);
+  eq('#288 ⓑ 「…이 문구 하나로 제32조의13제3항」의 「하나로」는 이름이 아니다(약한 이름 → 추측, ⓒ 대상 아님)', CV.guessKind(CV.lawNameBefore('이 문구 하나로 '), ['경제적 이익 등 제공의 부당한 이용자 차별행위에 관한 세부기준']), 'weak');
+  var NOTI = '경제적 이익 등 제공의 부당한 이용자 차별행위에 관한 세부기준(방송미디어통신위원회고시)(제2026-11호)(20260518)';
+  var n1 = { id: 'n1', doc_name: NOTI, article_no: '1조(목적)', chunk_index: 1, content: '제1조(목적) 이 기준은 「전기통신사업법」 제50조제3항, 같은 법 시행령 제42조제2항 및 별표 4 제5호 마목 1)ㆍ3)에 따라 전기통신서비스 판매와 관련한 경제적 이익 등을 다른 이용자에 비하여 부당하게 차별적으로 제공하거나 이를 제안하는 행위의 세부기준을 정함을 목적으로 한다.' };
+  var n2 = { id: 'n2', doc_name: '금지행위 위반에 대한 과징금 부과 세부기준(방송미디어통신위원회고시)(제2026-11호)(20260518)', article_no: '1조(목적)', chunk_index: 1, content: '제1조(목적) 이 고시는 전기통신사업법 제53조에 따른 과징금의 부과기준을 정함을 목적으로 한다.' };
+  var ansNum = '방송미디어통신위원회고시 제2026-11호 제1조는 전기통신서비스 판매와 관련한 경제적 이익을 다른 이용자보다 부당하게 차별적으로 제공하는 행위의 세부기준을 정합니다. [원문 확인됨: 방송미디어통신위원회고시 제2026-11호 제1조]';
+  var vNumOk = await CV.verifyCitations({ answer: ansNum, chunks: [n1, a50], annexSources: [], callHaiku: allOk1, callJudge2: allOk2 });
+  eq('#288 ⓑ 자료에 그 번호의 문서가 하나면 그 문서와 대조(일치 → 초록, 표시는 모델 글자 그대로, 추측 number 기록)',
+     [vNumOk.verdicts[0].status, vNumOk.verdicts[0].law, vNumOk.verdicts[0].lawGuess, vNumOk.answer.indexOf('[원문 확인됨: 방송미디어통신위원회고시 제2026-11호 제1조]') !== -1], ['ok', '경제적 이익 등 제공의 부당한 이용자 차별행위에 관한 세부기준', 'number', true]);
+  var vNumMis = await CV.verifyCitations({ answer: ansNum, chunks: [n1, a50], annexSources: [], callHaiku: allOk1, callJudge2: misGround });
+  eq('#288 ⓑ 번호로 고른 문서의 「불일치」는 낱말 근거가 있어도 회색 + 「고시 번호로 봄 → …(같은 번호의 다른 고시일 수 있음)」',
+     [vNumMis.verdicts[0].status, vNumMis.answer.indexOf('[원문 없음 — 자동 대조 못 함, 직접 확인: 고시 번호로 봄 → 경제적 이익 등 제공의 부당한 이용자 차별행위에 관한 세부기준 제1조와 대조하면 다름(같은 번호의 다른 고시일 수 있음)') !== -1], ['unclear', true]);
+  var vNum2 = await CV.verifyCitations({ answer: ansNum, chunks: [n1, n2, a50], annexSources: [] });
+  eq('#288 ⓑ 같은 번호의 문서가 자료에 둘이면 고르지 않는다 — 그 이름대로 원문 없음 + 「번호가 같은 고시 2개」',
+     [vNum2.verdicts[0].status, vNum2.verdicts[0].lawGuess || null, vNum2.answer.indexOf('[원문 없음 — 검색 자료에 방송미디어통신위원회고시 제2026-11호 제1조 없음 (번호가 같은 고시 2개 — 어느 것인지 몰라 대조하지 않음)]') !== -1], ['missing', null, true]);
+
+  // ⓓ′ 다중 원문 — 표시 하나가 조문 둘 이상을 덮으면 자료에 있는 후보 조문 전부를 한 원문으로(2차 호출 1회)
+  var j2Log = [];
+  var capJ2 = async function (s, u) { j2Log.push(u); return '[{"id":1,"verdict":"일치","reason":""}]'; };
+  var gM = await CV.verifyCitations({ answer: G.answer, chunks: G.chunks, annexSources: [], callHaiku: allOk1, callJudge2: capJ2 });
+  var row1 = gM.verdicts.filter(function (v) { return v.multi && v.multi[0] === '전기통신사업법 제19조제1항'; })[0];
+  var row1Prompt = j2Log.filter(function (u) { return u.indexOf('폐업 예정일') !== -1 && u.indexOf('서류 제출') !== -1 && u.indexOf('■ 전기통신사업법 시행령 제24조') !== -1; })[0] || '';
+  eq('#288 ⓓ′ 「법 제19조①, 영 제24조①」(c61) — 두 조문을 한 원문으로, 대상도 둘, 호출 1회',
+     [row1 && row1.multi, /\[인용 대상\] 전기통신사업법 19조 제1항 · 전기통신사업법 시행령 24조 제1항/.test(row1Prompt), row1Prompt.indexOf('■ 전기통신사업법 제19조\n') !== -1, j2Log.length],
+     [['전기통신사업법 제19조제1항', '전기통신사업법 시행령 제24조제1항'], true, true, gM.verdicts.filter(function (v) { return v.judge2; }).length]);
+  eq('#288 ⓓ′ 「전파법 제25조의2①, 영 제51조」(c65)도 둘 · 대상 하나인 표시(「법 제19조③3호」)는 종전 단일 원문',
+     [gM.verdicts.filter(function (v) { return v.multi && v.multi[0] === '전파법 제25조의2제1항'; }).map(function (v) { return v.multi; })[0], gM.verdicts.filter(function (v) { return v.key === '19조' && v.paras[0] === 3 && v.items[0] === '3'; }).map(function (v) { return v.multi || null; })[0]],
+     [['전파법 제25조의2제1항', '전파법 시행령 제51조'], null]);
+  // 낱말 근거 없이 추측한 조문이 다중 원문에 섞이면 「불일치」는 회색(#286 ⓒ와 같은 까닭)
+  var dec51 = { id: 'd51', doc_name: '전기통신사업법 시행령(대통령령)(제36735호)(20261001)', article_no: '51조(무관 조문)', chunk_index: 1, content: '제51조(무관 조문) 무선국 운용 휴지 신고서의 서식은 따로 정한다.' };
+  var g19t = G.chunks.filter(function (c) { return /^19조/.test(c.article_no) && /^전기통신사업법\(/.test(c.doc_name); });
+  var vWk = await CV.verifyCitations({ answer: '| 승인신청 시점 | 폐업 예정일 **60일 전까지** 서류 제출 | 전기통신사업법 제19조①, 영 제51조 [원문 확인됨] |', chunks: g19t.concat([dec51]), annexSources: [], callHaiku: allOk1, callJudge2: misGround });
+  eq('#288 ⓓ′ 다중 원문에 낱말 근거 없는 추측 조문(영 제51조)이 섞이면 「불일치」는 회색, 어느 조문 때문인지 적음',
+     [vWk.verdicts[0].status, vWk.verdicts[0].multi, vWk.answer.indexOf('대조하면 다름(법령을 추측한 전기통신사업법 시행령 제51조에 인용문 낱말이 없음)') !== -1], ['unclear', ['전기통신사업법 제19조제1항', '전기통신사업법 시행령 제51조'], true]);
+
+  // §5 항 구분 없는 조문에 제2항 이상 — DB 저장본에도 ①~⑳이 없을 때만 회색(호가 있으면 「제N호를 뜻했을 수 있음」)
+  var gFetch = async function (fam, key) { return G.chunks.filter(function (c) { return famOf(c.doc_name) === fam && CV.articleKey(c.article_no) === key; }).map(function (c) { return Object.assign({ status: 'current' }, c); }); };
+  var gP = await CV.verifyCitations({ answer: G.answer, chunks: G.chunks, annexSources: [], callHaiku: allOk1, callJudge2: allOk2, fetchLawArticle: gFetch });
+  var row7 = gP.verdicts.filter(function (v) { return v.key === '96조' && v.paras[0] === 2; })[0];
+  eq('#288 §5 「법 제96조②, 제104조⑤2호」(c66) — 제96조는 단항이라 회색 「조문에 항 구분 없음(제2항 표기) · 제2호를 뜻했을 수 있음」',
+     [row7.status, row7.nopara, row7.multi || null, gP.answer.indexOf('[원문 없음 — 자동 대조 못 함, 직접 확인: 법령 이름 없음 → 전기통신사업법 제96조제2항 (조문에 항 구분 없음(제2항 표기) · 제2호를 뜻했을 수 있음)]') !== -1], ['unclear', 2, null, true]);
+  eq('#288 §5 DB 조문을 못 받으면 종전대로(판정기행) — 위 gAll(fetchLawArticle 없음)의 같은 행은 초록', gAll.verdicts.filter(function (v) { return v.key === '96조' && v.paras[0] === 2; })[0].status, 'ok');
+  var gFetchCirc = async function (fam, key) { var rows = await gFetch(fam, key); return rows.map(function (r) { return key === '96조' ? Object.assign({}, r, { content: r.content.replace('다음 각 호', '① 다음 각 호') }) : r; }); };
+  var gP2 = await CV.verifyCitations({ answer: G.answer, chunks: G.chunks, annexSources: [], callHaiku: allOk1, callJudge2: allOk2, fetchLawArticle: gFetchCirc });
+  eq('#288 §5 DB 저장본에 ①이 있으면(청크가 ①을 잃은 꼴) 회색으로 바꾸지 않는다', gP2.verdicts.filter(function (v) { return v.key === '96조' && v.paras[0] === 2; })[0].status, 'ok');
+  var gP3 = await CV.verifyCitations({ answer: '| 위반 제재 | 미승인 시 2년 이하 징역/1억원 이하 벌금 | 전기통신사업법 제96조① [원문 확인됨] |', chunks: G.chunks, annexSources: [], callHaiku: allOk1, callJudge2: allOk2, fetchLawArticle: gFetch });
+  eq('#288 §5 단항 조문을 「제1항」이라 부른 것은 종전대로 통과', [gP3.verdicts[0].status, gP3.verdicts[0].nopara || null], ['ok', null]);
+
+  // ⓒ 검색 자료 밖 조문 — 이름 적은 참조가 자료에 없으면 DB 문서명 유일 일치 문서의 조문을 받아 대조
+  var CUR = '전기통신사업법(법률)(제21503호)(20261001)', PEND = '전기통신사업법(법률)(제21652호)(20261120)';
+  var t53 = '제53조(과징금의 부과 등) ① 방송미디어통신위원회는 제50조제1항을 위반한 행위가 있는 경우에는 해당 전기통신사업자에게 대통령령으로 정하는 매출액의 100분의 3 이하에 해당하는 금액을 과징금으로 부과할 수 있다.';
+  var dbRowsAll = [{ id: 9001, doc_name: CUR, article_no: '53조(과징금의 부과 등)', chunk_index: 1, content: t53, status: 'current' },
+    { id: 9002, doc_name: PEND, article_no: '53조(과징금의 부과 등)', chunk_index: 1, content: t53.replace('100분의 3', '100분의 5'), status: 'pending' }];
+  for (var k = 54; k <= 58; k++) dbRowsAll.push({ id: 9000 + k, doc_name: CUR, article_no: k + '조(가상)', chunk_index: 1, content: '제' + k + '조(가상) 방송미디어통신위원회는 가상 조문 ' + k + '의 내용을 정한다.', status: 'current' });
+  var fetchedLog = [];
+  var dbFetch = async function (fam, key) { fetchedLog.push(fam + '|' + key); return dbRowsAll.filter(function (r) { return famOf(r.doc_name) === fam && CV.articleKey(r.article_no) === key; }); };
+  var dbDocs = async function () { return [CUR, PEND, '전기통신사업법 시행령(대통령령)(제36735호)(20261001)', '과기정통부_보도자료_2026.md']; };
+  var q53o = '- **금지행위 위반**: "방송미디어통신위원회는 제50조제1항을 위반한 행위가 있는 경우에는 해당 전기통신사업자에게 대통령령으로 정하는 매출액의 100분의 3 이하에 해당하는 금액을 과징금으로 부과할 수 있다." [원문 확인됨: 전기통신사업법 제53조제1항]';
+  var vOut = await CV.verifyCitations({ answer: q53o, chunks: [a50], annexSources: [], callHaiku: allOk1, callJudge2: allOk2, fetchLawArticle: dbFetch, listLawDocs: dbDocs });
+  eq('#288 ⓒ 이름 적은 제53조①이 자료에 없으면 DB 현행판과 대조 — 그대로 인용이면 「[원문 확인됨(검색 자료 밖 조문과 대조): …]」, srcFetched db',
+     [vOut.verdicts[0].status, vOut.verdicts[0].srcFetched, vOut.verdicts[0].doc, vOut.answer.indexOf('[원문 확인됨(검색 자료 밖 조문과 대조): 전기통신사업법 제53조제1항]') !== -1, vOut.citedDocs.indexOf(CUR) !== -1], ['ok', 'db', CUR, true, true]);
+  var vOutM = await CV.verifyCitations({ answer: q53o.replace('100분의 3 이하에 해당하는 금액을', '100분의 3 이하 금액을'), chunks: [a50], annexSources: [], callHaiku: allOk1, callJudge2: misGround, fetchLawArticle: dbFetch, listLawDocs: dbDocs });
+  eq('#288 ⓒ 받은 조문과 다르면 주황 + 「(검색 자료 밖 조문)」', [vOutM.verdicts[0].status, /\[원문과 다름 — 전기통신사업법 제53조제1항과 대조: 모의 불일치 \(검색 자료 밖 조문\)\]/.test(vOutM.answer)], ['mismatch', true]);
+  var vOutH = await CV.verifyCitations({ answer: q53o.replace('[원문 확인됨: 전기통신사업법 제53조제1항]', '[원문 확인됨: 전기통신사업법 제53조제1항(법률 제21652호)]'), chunks: [a50], annexSources: [], fetchLawArticle: dbFetch, listLawDocs: dbDocs });
+  eq('#288 ⓒ 인용 줄·표시의 「(법률 제21652호)」가 그 법령의 판이면 그 판(시행예정)', vOutH.verdicts[0].doc, PEND);
+  eq('#288 ⓒ 판 고르기: 힌트 → 현행(늦은 날짜) → 시행예정(이른 날짜)', [CV.pickVersion(dbRowsAll, '21652'), CV.pickVersion(dbRowsAll, '99999'), CV.pickVersion([dbRowsAll[1]], null)], [PEND, CUR, PEND]);
+  var vOutN = await CV.verifyCitations({ answer: q53o.replace('전기통신사업법 제53조제1항]', '세부기준 제4조]'), chunks: [a50], annexSources: [], fetchLawArticle: dbFetch,
+    listLawDocs: async function () { return ['경제적 이익 등 제공의 부당한 이용자 차별행위에 관한 세부기준(방송미디어통신위원회고시)(제2026-11호)(20260518)', '금지행위 위반에 대한 과징금 부과 세부기준(방송미디어통신위원회고시)(제2026-11호)(20260518)']; } });
+  eq('#288 ⓒ DB 문서명이 하나로 맞지 않으면(「세부기준」 → 2개) 받지 않는다 — 원문 없음 그대로, srcFetched nodoc', [vOutN.verdicts[0].status, vOutN.verdicts[0].srcFetched], ['missing', 'nodoc']);
+  fetchedLog = [];
+  var vOutI = await CV.verifyCitations({ answer: '전기통신사업법 제50조제1항은 이용약관과 다르게 전기통신서비스를 제공하는 행위를 금지합니다. [원문 확인됨: 전기통신사업법 제50조제1항]\n\n법 제53조제1항: 방송미디어통신위원회는 위반 사업자에게 매출액의 100분의 3 이하 과징금을 부과할 수 있습니다. [원문 확인됨]', chunks: [a50], annexSources: [], fetchLawArticle: dbFetch, listLawDocs: dbDocs });
+  eq('#288 ⓒ 이름 없는 참조(「법 제53조①」 — 이어받기 추측)는 받지 않는다', [vOutI.verdicts[1].status, vOutI.verdicts[1].srcFetched || null, fetchedLog.length], ['missing', null, 0]);
+  var ansCap = [53, 54, 55, 56, 57].map(function (n) { return '- 전기통신사업법 제' + n + '조는 방송미디어통신위원회가 가상 조문 ' + n + '의 내용을 정하도록 규정합니다. [원문 확인됨: 전기통신사업법 제' + n + '조]'; }).join('\n\n');
+  var vCap = await CV.verifyCitations({ answer: ansCap, chunks: [a50], annexSources: [], fetchLawArticle: dbFetch, listLawDocs: dbDocs });
+  eq('#288 ⓒ 조문 단위 상한 4 — 답변 순서로 넷까지, 다섯째는 cap', vCap.verdicts.map(function (v) { return v.srcFetched || null; }), ['db', 'db', 'db', 'db', 'cap']);
+  var reTag = CV.findCitations('- 과징금: 매출액의 100분의 3 이하. [원문 확인됨(검색 자료 밖 조문과 대조): 전기통신사업법 제53조제1항]')[0];
+  eq('#288 새 표시 꼴 「[원문 확인됨(검색 자료 밖 조문과 대조): …]」을 다시 읽으면 괄호를 떼고 대상만', [reTag.tagTarget && reTag.tagTarget.key, reTag.lawInfo && reTag.lawInfo.text, reTag.paras], ['53조', '전기통신사업법', [1]]);
+  eq('#288 resolveLaw strict: 종류 낱말을 뗀 이름도 문서가 하나일 때만(자료 안에서는 종전대로 첫 문서)',
+     [CV.resolveLaw(CV.lawNameBefore('정보보호 고시 '), ['통신 정보보호', '방송 정보보호'], true), CV.resolveLaw(CV.lawNameBefore('정보보호 고시 '), ['통신 정보보호', '방송 정보보호'])], [null, '통신 정보보호']);
 
   // 지시문 지문 잠금 — 1차는 2차 보정의 바탕이라 글자 그대로, 2차는 실측(tests/cite_judge_probe.js) 뒤에만 고친다
   var sha = function (s) { return require('crypto').createHash('sha256').update(s, 'utf8').digest('hex').slice(0, 16); };

@@ -436,6 +436,13 @@ async function fetchLawArticleByFamily(sb: SupabaseClient, family: string, key: 
   if (r.error) throw new Error(r.error.message);
   return (r.data || []) as (Chunk & { status?: string })[];
 }
+// ── 검색 자료 밖 조문 대조(#288 ⓒ)의 이름 맞추기 재료 — DB 문서명(현행·시행예정, RPC kb_doc_names는 service_role 전용).
+//    이름 적은 조문이 자료에 없을 때만 cite_verify.js가 부른다(≈0.9초). verify-citations/index.ts listLawDocs와 같은 조회.
+async function listLawDocNames(sb: SupabaseClient): Promise<string[]> {
+  const [a, b] = await Promise.all([sb.rpc('kb_doc_names', { p_status: 'current' }), sb.rpc('kb_doc_names', { p_status: 'pending' })]);
+  if (a.error || b.error) throw new Error((a.error || b.error)!.message);
+  return ([] as { doc_name: string }[]).concat(a.data || [], b.data || []).map((x) => x.doc_name);
+}
 // ── 번호로 지목한 조문(#245)의 이름 맞추기 재료 — 그 번호의 조문을 가진 현행 문서(조문 제목은 'N조(제목)', #92).
 //    '16조%'면 16조의2 등도 오지만 rag_core.js pickNamedArticles가 번호를 다시 대조한다. app.js fetchArticleKeyRows와 동일 조건.
 async function fetchArticleKeyRows(sb: SupabaseClient, key: string): Promise<{ doc_name: string; article_no: string }[]> {
@@ -1209,8 +1216,9 @@ export async function answerAdvisory(sb: SupabaseClient, systemPrompt: string, q
       callHaiku: (sys: string, u: string) => callHaikuText(sb, apiKey, sys, u, 'rag.ts:citeJudge', 3000),   // 900은 24건 판정 JSON에 빠듯(#205)
       // 2차 판정(Opus 5.5) — #284부터 판정 대상 전부를 항목 하나씩 보내고 2차가 표시를 정한다(1차는 기록·예비)
       callJudge2: (sys: string, u: string) => callCiteJudge2(sb, apiKey, sys, u, 'rag.ts:citeJudge2'),
-      // 판정 원문이 지침서 핵심 조문뿐이면 실DB 조문으로(#284)
+      // 판정 원문이 지침서 핵심 조문뿐이면 실DB 조문으로(#284) · 항 구분 확인·검색 자료 밖 조문 대조(#288)
       fetchLawArticle: (fam: string, key: string) => fetchLawArticleByFamily(sb, fam, key),
+      listLawDocs: () => listLawDocNames(sb),
     });
     answer = vr.answer;
     verdicts = vr.verdicts || [];
