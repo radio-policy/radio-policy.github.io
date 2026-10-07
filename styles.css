@@ -491,7 +491,9 @@ mark.kb-hit { background: rgba(245, 197, 24, .38); color: inherit; border-radius
   .settings-tabs { top: -14px; margin: -14px -14px 10px; padding: 10px 14px 8px; }   /* 모바일 .content 여백 14px */
 }
 /* 이슈 상세 탭(2026-10-03) — 설정 탭과 같은 칩·같은 붙박이. 관계도 아래 화면 중간에 있으므로 위쪽 음수 여백은 없고,
-   붙었을 때 .content 여백까지 덮도록 top과 좌우만 음수. 전환은 app.js switchIssueTab */
+   붙었을 때 .content 여백까지 덮도록 top과 좌우만 음수. 전환은 app.js switchIssueTab.
+   인물 상세 탭(2026-10-08, #person-tabs · switchPersonTab)도 이 클래스를 그대로 쓴다 — 머리 카드 아래 같은 자리라 같은 값이 맞다.
+   사내 콘솔은 이 규칙을 자기 index.html에 옮겨 두었으므로 값을 바꾸면 사내에도 알릴 것 */
 .issue-tabs {
   display: flex; flex-wrap: wrap; gap: 6px; position: sticky; top: -20px; z-index: 5;
   margin: 0 -20px 12px; padding: 10px 20px;

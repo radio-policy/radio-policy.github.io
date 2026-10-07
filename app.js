@@ -13590,6 +13590,9 @@ var _peopleTab = '의원';        // 의원 | 정부·참고인
 var _peopleQuery = '';
 var _personSpeeches = [];       // 상세에서 쟁점 칩 필터용
 var _personTopicFilter = '';
+// 상세 탭(2026-10-08 운영자 결정) — 이슈 상세 탭과 같은 칩·붙박이(.issue-tabs)·전환 방식. 요약이 처음, 0건 탭은 숨긴다.
+var PERSON_TABS = [['summary', '요약'], ['speeches', '발언'], ['bills', '법안'], ['news', '뉴스']];
+var _personTab = 'summary', _personTabFor = null;   // 보고 있는 탭과 그 탭을 고른 인물 id(다른 인물을 열면 요약부터)
 // 목록 정렬: 'count' = 관련 발언 많은 순(같으면 가나다) / 'name' = 이름 가나다순. 보는 사람 브라우저에 기억(편의용, 실패해도 기본값).
 var _peopleSort = (function() { try { return localStorage.getItem('peopleSort') === 'name' ? 'name' : 'count'; } catch (e) { return 'count'; } })();
 
@@ -13859,7 +13862,18 @@ async function showPersonDetail(id) {
   var p = (_peopleCache || []).find(function(x) { return String(x.id) === String(id); });
   if (!el || !p || !sb) return;
   _peopleView = 'detail'; selectedPersonId = p.id; _personTopicFilter = '';
+  if (_personTabFor !== p.id) _personTab = 'summary';
+  _personTabFor = p.id;
   var sub = [p.party, p.position, p.terms].filter(Boolean).join(' · ');
+  // 탭 바·칸 — 머리 카드는 탭 위에 늘 보인다. 요약 말고는 건수를 받은 뒤 _personTabCount가 보이게 한다(0건이면 계속 숨김).
+  // 같은 인물을 다시 그릴 때 보던 탭은 불러오는 동안에도 보인다. #person-* id는 사내 콘솔(감싸기·이식)이 그대로 쓰므로 바꾸지 않는다.
+  var paneHtml = {
+    summary:  '<div id="person-fields"></div><div id="person-stance"></div><div id="person-more"></div>',
+    speeches: '<div id="person-monthly"></div><div id="person-topics"></div>' +
+              '<div id="person-speeches"><div style="font-size:12px;color:var(--text-tertiary)">발언 이력 불러오는 중...</div></div>',
+    bills:    '<div id="person-bills"></div>',
+    news:     '<div id="person-news"></div>'
+  };
   el.innerHTML =
     '<button class="btn" onclick="renderPeopleList()" style="font-size:12px;padding:4px 12px;margin-bottom:10px"><i class="ti ti-arrow-left"></i> 인물 목록</button>' +
     '<div style="border:1px solid var(--border);border-radius:12px;padding:14px 16px;background:var(--bg-secondary);margin-bottom:10px">' +
@@ -13870,13 +13884,18 @@ async function showPersonDetail(id) {
       '</div>' +
       '<div id="person-roles"></div>' +
     '</div>' +
-    '<div id="person-fields"></div>' +
-    '<div id="person-stance"></div>' +
-    '<div id="person-topics"></div>' +
-    '<div id="person-monthly"></div>' +
-    '<div id="person-speeches"><div style="font-size:12px;color:var(--text-tertiary)">발언 이력 불러오는 중...</div></div>' +
-    '<div id="person-bills"></div>' +
-    '<div id="person-news"></div>';
+    '<div id="person-tabs" class="issue-tabs" role="tablist">' +
+      PERSON_TABS.map(function(t) {
+        var on = t[0] === _personTab;
+        return '<button class="guide-chip' + (on ? ' active' : '') + '" role="tab" aria-selected="' + on + '" data-ptab-btn="' + t[0] + '"' +
+          (t[0] === 'summary' || on ? '' : ' style="display:none"') + ' onclick="switchPersonTab(\'' + t[0] + '\')">' + escHtml(t[1]) + '</button>';
+      }).join('') +
+    '</div>' +
+    '<div id="person-tab-panes">' +
+      PERSON_TABS.map(function(t) {
+        return '<div role="tabpanel" data-ptab="' + t[0] + '"' + (t[0] === _personTab ? '' : ' style="display:none"') + '>' + paneHtml[t[0]] + '</div>';
+      }).join('') +
+    '</div>';
   _issueScrollTop(el);
   renderPersonStance(p);
 
@@ -13902,6 +13921,8 @@ async function showPersonDetail(id) {
       .order('published_at', { ascending: false }).limit(8));
   }
   var rs = await Promise.all(jobs.map(function(j) { return j.then(function(r) { return r; }, function(e) { return { error: e }; }); }));
+  // 기다리는 사이 다른 인물을 열었으면 그 인물의 칸(같은 id)에 이 사람 자료를 그리지 않는다
+  if (_peopleView !== 'detail' || selectedPersonId !== p.id) return;
   _personSpeeches = (rs[0] && rs[0].data) || [];
   if (rs[2] && rs[2].data) _speechFieldsCfg = _parseSpeechFieldsCfg(rs[2].data);
   renderPersonRoles(p, (rs[1] && rs[1].data) || []);   // 자격 이력은 발언(관련)·분야 집계(전체)가 와야 계산된다
@@ -13909,8 +13930,60 @@ async function showPersonDetail(id) {
   renderPersonTopics(p);
   renderPersonMonthly(p);
   renderPersonSpeeches(p);
-  if (billsIdx >= 0) renderPersonBills(p, (rs[billsIdx] && rs[billsIdx].data) || []);
-  if (newsIdx >= 0) renderPersonNews(p, (rs[newsIdx] && rs[newsIdx].data) || []);
+  var bills = billsIdx >= 0 ? ((rs[billsIdx] && rs[billsIdx].data) || []) : [];
+  var news = newsIdx >= 0 ? ((rs[newsIdx] && rs[newsIdx].data) || []) : [];
+  if (billsIdx >= 0) renderPersonBills(p, bills);
+  if (newsIdx >= 0) renderPersonNews(p, news);
+  // 탭 건수 — 「발언」은 발언 이력 제목과 같은 값(주제 필터 없이 센 내용 발언 수). 진행·단편 발언만 있으면 0건으로 숨긴다.
+  var counts = {
+    speeches: _personSpeeches.filter(function(s) { return !_isProceduralSpeech(s); }).length,
+    bills: bills.length,
+    news: news.length
+  };
+  Object.keys(counts).forEach(function(k) { _personTabCount(k, counts[k]); });
+  renderPersonMore(counts.speeches);
+  if (_personTab !== 'summary' && !counts[_personTab]) switchPersonTab('summary');
+}
+
+// 탭 단추에 건수를 넣고, 0건이면 숨긴다(라벨은 PERSON_TABS)
+function _personTabCount(key, n) {
+  var b = document.querySelector('#person-tabs [data-ptab-btn="' + key + '"]');
+  var t = PERSON_TABS.filter(function(x) { return x[0] === key; })[0];
+  if (!b || !t) return;
+  b.innerHTML = escHtml(t[1]) + (n ? '<span>' + n + '</span>' : '');
+  b.style.display = n ? '' : 'none';
+}
+
+// 「요약」 탭 맨 끝의 「원문 발언 보기 →」(2026-10-08 운영자 결정, 완화안 가) — 요약을 원문 발언과 맞춰 보는 길.
+// #person-stance 밖의 따로 칸이다(사내판이 renderPersonStance를 감싸 그 칸 안에 덧붙인다). 내용 발언이 0건이면 단추 없음.
+function renderPersonMore(n) {
+  var box = document.getElementById('person-more');
+  if (!box) return;
+  box.innerHTML = n
+    ? '<div style="margin-top:12px"><button class="btn" onclick="switchPersonTab(\'speeches\')" style="font-size:12px;padding:5px 14px">원문 발언 보기 →</button></div>'
+    : '';
+}
+
+// 인물 상세 탭 전환 — switchIssueTab과 같은 방식: 다시 그리지 않고 표시만 바꾸고, 내려 읽다가 탭을 누르면
+// 새 칸의 처음을 붙박이 탭 바 바로 아래로 되감는다(아직 탭 위쪽을 보고 있으면 그대로). 그래서 주제 필터·대수 토글 상태도 탭을 오가도 남는다.
+// switchIssueTab은 사내 이식 목록에 이름으로 올라가 있어 묶지 않고 따로 둔다. 문자열 onclick으로만 불리므로
+// 사내 port_console_js.py의 진입 목록에 이 이름이 있어야 사내 콘솔에서 눌린다.
+function switchPersonTab(tab) {
+  _personTab = tab;
+  document.querySelectorAll('#person-tab-panes [data-ptab]').forEach(function(p) {
+    p.style.display = p.getAttribute('data-ptab') === tab ? '' : 'none';
+  });
+  document.querySelectorAll('#person-tabs [data-ptab-btn]').forEach(function(b) {
+    var on = b.getAttribute('data-ptab-btn') === tab;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-selected', on ? 'true' : 'false');
+  });
+  var bar = document.getElementById('person-tabs'), panes = document.getElementById('person-tab-panes');
+  var sc = bar && bar.closest ? bar.closest('.content') : null;
+  if (!bar || !panes || !sc) return;
+  var gap = parseFloat(getComputedStyle(bar).marginBottom) || 0;
+  var over = bar.getBoundingClientRect().bottom + gap - panes.getBoundingClientRect().top;
+  if (over > 0) sc.scrollTop -= over;
 }
 
 function _personSec(title, hint) {
