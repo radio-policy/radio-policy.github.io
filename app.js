@@ -9346,11 +9346,19 @@ function renderBriefingNewsItem(block, importance, briefingIdx, itemIdx) {
       + '</div>';
   }
 
-  // 보통·참고 — 별도 표시 없이 일반 텍스트
+  // 보통·참고 — 별도 표시 없이 일반 텍스트.
+  // 단, 저장된 영향 분석은 🔴가 없어도 그린다. 분석은 코드가 DB 긴급도로 붙이고(add_urgent_analyses)
+  // 🔴는 모델이 입력에서 옮겨 적는 것이라 둘이 따로 논다 — 9/16부터 모델이 🔴를 자주 빠뜨려
+  // (9/24부터 매일 0개) 저장 분석 107개 중 83개가 이 분기에서 버려졌다(10/7: 5개 → 화면 0개).
+  // 「중요」 칸과 즉석 분석(data-needs-analysis)은 그대로 🔴 기준이다 — 여기는 AI를 부르지 않는다.
+  var plainAnalysisHtml = storedAnalysis
+    ? '<div style="margin-top:6px;padding:8px 10px;background:rgba(239,68,68,0.06);border-radius:8px;border:1px solid rgba(239,68,68,0.2);font-size:12px;color:var(--text-primary);line-height:1.7"><span style="font-weight:700">⚠️ SKT 영향 분석</span> ' + mdBold(storedAnalysis) + '</div>'
+    : '';
   return '<div style="padding:6px 0;margin-bottom:6px">'
     + '<div style="margin-bottom:4px">' + titleHtml + '</div>'
     + summaryHtml
     + linkHtml
+    + plainAnalysisHtml
     + '</div>';
 }
 
