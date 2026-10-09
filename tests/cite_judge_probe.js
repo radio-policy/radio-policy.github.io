@@ -8,6 +8,7 @@
 //    node tests/cite_judge_probe.js                         # 구성·어림 비용
 //    node tests/cite_judge_probe.js --allow-api [--rep1 3] [--rep2 3] [--rep2g 1] [--variants prod,s55m] [--green-stage2] [--only F1,T1]
 //    node tests/cite_judge_probe.js --from-run a.json,b.json --variants o48pg [--allow-api]   # 이전 결과의 입력·1차를 재사용(2차만)
+//    node tests/cite_judge_probe.js --report a.json,b.json,...   # 통과 기준표 P1~P6(API 0) · --dump = 고정 사례 입력 파일 · --claim-has 글 = 초록 표본 한 항목만
 //
 //  1차는 자문 단위 묶음(운영과 같은 한 호출)을 rep1번, 2차는 대상 항목 하나씩 rep2번(변형마다). 2차 'prod' 변형은 cite_verify.js의
 //  JUDGE2_MODEL·JUDGE2_REQUEST 그대로다(운영 요청과 같다). 결과 전문은 local_docs/cite_judge_probe/(git 무시)에 남긴다.
@@ -22,6 +23,13 @@
 //  사내 요청 꼴(inline — system 비우고 지시문을 user 앞에, 추론 끔): o48pg 거짓 0/20·진짜 28/28(T1b도 4/4 — 요청 꼴만 바꿨는데 잡음),
 //  s5pg F5 4/4 거짓 주황·S2 2/4. 초록 표본 17항목(1차 불일치) 눈가림 정답 대비: o48pg 정답 일치 → 주황 1·정답 판단불가 → 주황 5·정답 불일치 → 초록 0,
 //  s5pg 정답 일치 → 주황 4, prod(Opus 5.5) 정답 일치·판단불가 → 주황 0.
+//
+//  2026-10-10(합계 ≈ $3.6) 2단계 판정 후보 v2(아래 CAND_SYSTEM, local_docs/인용판정기_2단계_판정_261009.md §2-1)와 고정 사례 N1~N8(9개, 사내 ㉮ 4꼴·
+//  「예외 N호(…)만」 2·60f0153b 정의 꼴·한정 빠뜨림 2)을 미리 박은 통과 기준 P1~P6(--report)으로 쟀다. prod_cand(Opus 5.5·후보) × 4회: 기존 거짓 0/16·
+//  진짜 28/28·새 거짓 0/24·새 진짜 12/12였으나 초록 표본 정답 「일치」 1항목(「원칙적으로 기존 이용자에게 재할당」 ↔ 원문 「재할당할 수 있다」)에 주황 1 → P5 실패.
+//  그 항목만 4회씩 다시: prod 1/4·prod_cand 1/4(같은 비율 — 후보 문장 탓이 아니라 이 경계 항목에서 원래 흔들림, 뺄 문장 없음). 기준선 prod(새 사례 × 2)는
+//  새 거짓 0/12·새 진짜 6/6로 이미 다 맞혀(P6 0/4) 바꿔서 얻는 것이 측정되지 않았다 → ① 보류(두 판 지시문 그대로, 판정 §2-4 분기). o48pg_cand(사내 꼴·후보)는
+//  F6 0 → 4/4 새 거짓 주황·T1b 3/4·새 거짓 13/24로 실패, o48pg 기준선은 N1·N4·N5a 거짓 주황에 N6(진짜) 0/2 — 사내 2차 모델(Opus 4.8 inline) 문제.
 // ============================================================================
 'use strict';
 const fs = require('fs');
@@ -49,11 +57,20 @@ const VARIANTS = {
   s5pg: { model: 'claude-sonnet-5', extra: { thinking: { type: 'disabled' } }, max: 8000, inline: true },
   // 지시문 후보 시험용 — system을 바꿔 보낸다(운영 JUDGE2_SYSTEM은 그대로). 후보 글은 아래 CAND_SYSTEM
   s55m_cand: { model: 'claude-sonnet-5-5', extra: { output_config: { effort: 'medium' } }, max: 8000, cand: true },
+  prod_cand: { model: CV.JUDGE2_MODEL, extra: CV.JUDGE2_REQUEST, max: CV.JUDGE2_MAX_TOKENS, cand: true },   // 운영 요청 그대로 + 후보 지시문(2026-10-10)
+  o48pg_cand: { model: 'claude-opus-4-8', extra: { thinking: { type: 'disabled' } }, max: 8000, inline: true, cand: true },   // 사내 꼴 + 후보 지시문
 };
-// 2차 지시문 후보(채택하면 cite_verify.js JUDGE2_SYSTEM으로 옮기고 시험 지문을 갱신한다). 아래는 2026-10-05에 기각한 후보 — 다음 후보를 잴 때 바꿔 쓴다
-const CAND_SYSTEM = CV.JUDGE2_SYSTEM.replace(
-  '원문이 어느 하나에 해당하면 되는 대상·행위를 여럿 나열하는데 인용문이 그중 일부만 든 것(든 것이 원문 목록에 있으면 일치)',
-  '원문이 정한 대상(주체·상대방·행위·조항 목록) 가운데 일부만 들어 말한 것 — 든 것이 원문에 들어 있으면 일치(인용문이 「…이란 …이다」처럼 정의를 통째로 옮기면서 일부를 뺀 것은 제외)');
+// 2차 지시문 후보(채택하면 cite_verify.js JUDGE2_SYSTEM으로 옮기고 시험 지문을 갱신한다). 2026-10-05 후보(일부만 든 것을 대상 일반으로 넓힘)는 기각.
+// 지금 후보 = v2(2026-10-09 2단계 판정 local_docs/인용판정기_2단계_판정_261009.md §2-1): 운영 지시문 6줄 중 3번째(불일치)·4번째(불일치 아님)
+// 줄을 통째로 바꾸고 3번째 뒤에 빠뜨림 잣대 한 줄을 더한다(1·2·5·6줄 그대로). 줄이 기대와 다르면(운영 글이 바뀜) 멈춘다.
+const CAND_SYSTEM = (function () {
+  const L = CV.JUDGE2_SYSTEM.split('\n');
+  if (L.length !== 6 || L[2].indexOf('불일치로 보는 경우:') !== 0 || L[3].indexOf('불일치가 아닌 경우:') !== 0) throw new Error('JUDGE2_SYSTEM 줄 구성이 후보 작성 때와 다름');
+  const L3 = '불일치로 보는 경우: 조문 번호·항·호가 원문과 다르다 / 의무의 주체·상대방이 바뀌었다(원문이 한정한 주체를 빼서 대상이 넓어진 경우 포함) / 요건·효과·기한·수치·예외가 원문과 다르다(원문이 적용 범위를 좁힌 말을 빼서 범위가 달라진 경우 포함) / 원문에 없는 내용을 원문의 규정처럼 서술했다 / 나열의 일부만 들면서 그것뿐인 것처럼 말했다(「…란 …를 말한다」로 정의 전체처럼 옮기거나 「…만」·「…에 한한다」로 닫은 경우 — 나열을 다 들었으면 해당하지 않습니다).';
+  const L3b = '빠뜨린 것을 불일치로 보는 것은 빠진 말이 적용 범위를 좁히는 한정(「…만」·「…에 한정」·기간·장소·관할·주체의 한정)이어서 인용문이 원문보다 넓은 경우에도 적용되는 것처럼 읽힐 때뿐입니다 — 그때 source_span에 빠진 한정 구절을 적습니다.';
+  const L4 = '불일치가 아닌 경우: 법적 의미가 그대로인 요약·생략·표현 차이 / 원문이 어느 하나에 해당하면 되는 주체·대상·행위·호를 「또는」이나 나열로 여럿 든 것 중 인용문이 일부만 든 것(든 것이 원문 목록에 있으면 일치 — 범위가 좁아질 뿐 넓어지지 않습니다. 함께 갖추어야 할 요건의 나열은 해당하지 않습니다) / 원문의 한 문장을 처음부터 끝까지 그대로 옮기고 다른 문장·단서·항을 함께 옮기지 않은 부분 인용 / 원문 문장의 요건 부분만 옮긴 것, 또는 효과 부분만 옮기되 그 효과의 대상·요건을 원문보다 넓게 말하지 않은 것(옮긴 부분이 원문과 같으면 일치) / 인용문의 「N호」 뒤에 내용 N개가 나열되면 호의 개수를 뜻합니다 / 원문에 근거한 해석·의견 / 다른 조문을 함께 언급 / 인용문이 조문 번호·제목만 적고 내용을 옮기지 않음(→ "판단불가").';
+  return [L[0], L[1], L3, L3b, L4, L[4], L[5]].join('\n');
+})();
 const VARS = arg('--variants', 'prod').split(',').filter(function (v) { return VARIANTS[v]; });
 const PRICE = { 'claude-haiku-4-5-20251001': [1, 5], 'claude-sonnet-5': [2, 10], 'claude-sonnet-5-5': [2, 10], 'claude-opus-5-5': [4, 20], 'claude-opus-4-8': [5, 25] };   // $/MTok 입력·출력
 
@@ -80,7 +97,7 @@ async function fetchArticle(doc, key) {
     '&order=chunk_index.asc&limit=40&select=id,doc_name,article_no,chunk_index,content');
 }
 // 저장된 답변(검증 뒤 꼬리표)을 모델 원래 답변으로 되돌린다 — 판정 기록이 있으면 순서대로 정확히, 없으면 꼬리표 꼴로
-const ANY_TAG_RE = /\[(?:원문\s*확인됨|원문 없음 — [^\]]*|원문과 다름 — 판정기 메모: )[^\]]*\]/g;
+const ANY_TAG_RE = /\[(?:원문\s*확인됨|원문 미확인 — |원문 없음 — [^\]]*|원문과 다름 — 판정기 메모: )[^\]]*\]/g;   // 「원문 미확인 — 」 = #292(10-07~) 두 상태 꼴
 function restoreAnswer(answer, verdicts) {
   const vs = (verdicts || []).filter(function (v) { return v.status !== 'dup'; });
   const tags = [];
@@ -146,6 +163,63 @@ async function pool(tasks, n) {
 }
 const keyRe = function (k) { return new RegExp('\\s' + k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(\\s|$)'); };
 
+// ── 통과 기준표(2026-10-10, 2단계 판정 §2-4 P1~P6 — 미리 박은 기준, 결과를 보고 고치지 않는다) ──
+//  node tests/cite_judge_probe.js --report a.json,b.json,...   (API 0 — 실측 결과 파일들을 합쳐 변형마다 센다)
+//  주황 = 2차 「불일치」 ∧ 두 구절 실재(grounded) — #284부터 2차가 색을 정한다. 초록 표본 정답은 10-05 눈가림 정답
+//  (local_docs/cite_judge_probe/blind_items.json·blind_gold.json, 인용 대상 + 인용문으로 맞춤 — 없으면 P5는 「정답 없음」).
+const P_FALSE_OLD = ['F1', 'F5', 'F6', 'F7'], P_TRUE_OLD = ['T1', 'T1b', 'T2', 'S1', 'S2', 'S3', 'S4'];
+const P_FALSE_NEW = ['N1', 'N2', 'N3', 'N4', 'N5a', 'N5b'], P_TRUE_NEW = ['N6', 'N7', 'N8'];
+function passReport(files) {
+  const merged = new Map();   // key → {case, gold, target, claim, s2:{variant:[...]}}
+  for (const f of files) {
+    const d = JSON.parse(fs.readFileSync(path.resolve(f), 'utf8'));
+    for (const it of d.items) {
+      if (!it.s2) continue;
+      const k = it.case !== 'G' ? it.case : 'G|' + it.target + '|' + it.claim;
+      const m = merged.get(k) || { case: it.case, gold: it.gold, target: it.target, claim: it.claim, s2: {} };
+      for (const v in it.s2) m.s2[v] = (m.s2[v] || []).concat(it.s2[v]);
+      merged.set(k, m);
+    }
+  }
+  const goldDir = path.join(REPO, 'local_docs', 'cite_judge_probe');
+  const greenGold = new Map();
+  try {
+    const bi = JSON.parse(fs.readFileSync(path.join(goldDir, 'blind_items.json'), 'utf8'));
+    const bg = new Map(JSON.parse(fs.readFileSync(path.join(goldDir, 'blind_gold.json'), 'utf8')).map(function (x) { return [x.n, x.label]; }));
+    for (const x of bi) greenGold.set('G|' + x.target + '|' + x.claim, bg.get(x.n));
+  } catch (e) { /* 정답 파일 없음 — P5는 「정답 없음」 */ }
+  const vars = [...new Set([].concat.apply([], [...merged.values()].map(function (m) { return Object.keys(m.s2); })))];
+  const orange = function (k, v) { const m = merged.get(k); const a = (m && m.s2[v]) || []; return { o: a.filter(function (x) { return x.grounded; }).length, n: a.length, err: a.filter(function (x) { return x.verdict === 'ERR' || x.verdict === '없음'; }).length }; };
+  const cell = function (r) { return r.n ? r.o + '/' + r.n + (r.err ? '(오류 ' + r.err + ')' : '') : '-'; };
+  console.log('\n사례별 주황(2차 불일치 ∧ 근거 실재) — ' + vars.join(' | '));
+  for (const k of P_FALSE_OLD.concat(['F3'], P_TRUE_OLD, P_FALSE_NEW, P_TRUE_NEW)) if (merged.has(k)) console.log(k + ' (' + merged.get(k).gold + ') | ' + vars.map(function (v) { return cell(orange(k, v)); }).join(' | '));
+  console.log('\n기준 | ' + vars.join(' | '));
+  const row = function (name, f) { console.log(name + ' | ' + vars.map(function (v) { return f(v); }).join(' | ')); };
+  const sum = function (keys, v) { return keys.reduce(function (a, k) { const r = orange(k, v); return { o: a.o + r.o, n: a.n + r.n, miss: a.miss + (r.n ? 0 : 1) }; }, { o: 0, n: 0, miss: 0 }); };
+  const verdict = function (ok, txt, miss) { return miss ? txt + ' (사례 ' + miss + '개 결과 없음)' : (ok ? '통과 ' : '실패 ') + txt; };
+  row('P1 기존 거짓 F1·F5·F6·F7 주황 0 (F3 경계 따로)', function (v) { const s = sum(P_FALSE_OLD, v); return verdict(s.o === 0, s.o + '/' + s.n + ' · F3 ' + cell(orange('F3', v)), s.miss); });
+  row('P2 기존 진짜 7개 모두 주황', function (v) { const s = sum(P_TRUE_OLD, v); return verdict(s.n > 0 && s.o === s.n, s.o + '/' + s.n, s.miss); });
+  row('P3 새 거짓 6개 각 ≤1/4 ∧ 합 ≤2/24', function (v) {
+    const s = sum(P_FALSE_NEW, v); const each = P_FALSE_NEW.every(function (k) { const r = orange(k, v); return r.o * 4 <= r.n; });
+    return verdict(each && s.o * 12 <= s.n, s.o + '/' + s.n + (each ? '' : ' · 사례별 초과: ' + P_FALSE_NEW.filter(function (k) { const r = orange(k, v); return r.o * 4 > r.n; }).join(',')), s.miss);
+  });
+  row('P4 새 진짜 N6·N7·N8 각 모두 주황', function (v) { const s = sum(P_TRUE_NEW, v); return verdict(s.n > 0 && s.o === s.n, s.o + '/' + s.n + ' · ' + P_TRUE_NEW.map(function (k) { return k + ' ' + cell(orange(k, v)); }).join(' '), s.miss); });
+  row('P5 초록 표본 — 정답별 주황(일치·판단불가·불일치)', function (v) {
+    const t = { '일치': [0, 0], '판단불가': [0, 0], '불일치': [0, 0] }; let nog = 0;
+    for (const [k, m] of merged) {
+      if (m.case !== 'G' || !m.s2[v]) continue;
+      const g = greenGold.get(k); if (!g || !t[g]) { nog++; continue; }
+      t[g][0] += m.s2[v].filter(function (x) { return x.grounded; }).length; t[g][1] += m.s2[v].length;
+    }
+    if (!t['일치'][1] && !t['판단불가'][1]) return '-';
+    const lim = v.indexOf('o48pg') === 0 ? { '일치': 1, '판단불가': 5 } : { '일치': 0 };   // prod 계열: 정답 일치에 주황 0 / o48pg 계열: 10-05 o48pg 값 이하
+    const ok = Object.keys(lim).every(function (g) { return t[g][0] <= lim[g]; });
+    return (ok ? '통과 ' : '실패 ') + Object.keys(t).map(function (g) { return g + ' ' + t[g][0] + '/' + t[g][1]; }).join(' · ') + (nog ? ' · 정답 없음 ' + nog : '');
+  });
+  row('P6(참고) N1~N4 중 주황이 한 번이라도 난 사례 수(기준선이면 ≥2)', function (v) { return P_FALSE_NEW.slice(0, 4).filter(function (k) { return orange(k, v).o > 0; }).length + '/4'; });
+}
+if (arg('--report', '')) { passReport(arg('--report', '').split(',')); process.exit(0); }
+
 (async function main() {
   const sp = (await sbGet('app_config?key=eq.system_prompt&select=value'))[0];
   const systemPrompt = sp ? sp.value : '';
@@ -162,7 +236,8 @@ const keyRe = function (k) { return new RegExp('\\s' + k.replace(/[.*+?^${}()|[\
           { id: 1, target: it.target, claim: it.claim, source: it.source, case: it.case, gold: it.gold, s1: it.s1 || [] });
       }
     }
-    allItems = [...byKey.values()].filter(function (it) { return !ONLY || ONLY.indexOf(it.case) !== -1; });
+    const HAS = arg('--claim-has', '');   // 초록 표본 중 인용문에 이 글이 든 항목만(한 항목을 반복해 잴 때)
+    allItems = [...byKey.values()].filter(function (it) { return (!ONLY || ONLY.indexOf(it.case) !== -1) && (!HAS || it.case !== 'G' || it.claim.indexOf(HAS) !== -1); });
   }
   const batches = [];   // {name, items:[{...,case}], cases}
   if (!FROM) {
@@ -197,6 +272,12 @@ const keyRe = function (k) { return new RegExp('\\s' + k.replace(/[.*+?^${}()|[\
   const n2 = fixed.length * REP2 + ((GREEN2 || FROM) ? (allItems.length - fixed.length) * REP2G : 0);   // 2차 호출 수(변형마다)
   const est = (in1 * REP1 * 1 + sel.length * REP1 * 150 * 5) / 1e6 + VARS.reduce(function (a, v) { const pr = PRICE[VARIANTS[v].model] || [4, 20]; return a + n2 * ((sys2 + 600) * pr[0] + (VARIANTS[v].model === 'claude-sonnet-5' ? 200 : 400) * pr[1]) / 1e6; }, 0);
   console.log('어림 비용 ≈ $' + est.toFixed(2) + ' (1차 ' + sel.length + '묶음×' + REP1 + ', 2차 변형마다 ' + n2 + '회 × ' + VARS.join('/') + ')');
+  if (argv.includes('--dump')) {   // 고정 사례가 판정기에 가는 글(인용 대상·인용문·원문)을 파일로 — API 쓰기 전 눈으로 확인
+    const f = path.join(REPO, 'local_docs', 'cite_judge_probe', 'items_dump.json');
+    fs.mkdirSync(path.dirname(f), { recursive: true });
+    fs.writeFileSync(f, JSON.stringify(fixed.map(function (x) { return { case: x.case, gold: x.gold, target: x.target, claim: x.claim, source: x.source }; }), null, 1));
+    console.log('고정 사례 입력 → ' + path.relative(REPO, f));
+  }
   if (!ALLOW) { console.log('--dry-run: API 0회. 실제 판정은 --allow-api'); return; }
 
   // ── 1차: 자문 묶음째 REP1번(--from-run이면 건너뛰고 이전 결과) ──

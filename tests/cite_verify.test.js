@@ -982,7 +982,7 @@ function ok(name, cond, extra) {
   var byVer = function (src) { return /스스로 확인/.test(src) ? { verdict: '일치', reason: '같음' }
     : { verdict: '불일치', source_span: '준공기한을 연장할 수 있다', claim_span: '준공검사 없이도', reason: '2항은 준공기한 연장' }; };
   var pick = function (v, keys) { var o = {}; keys.forEach(function (k) { o[k] = v[k === 'law_guess' ? 'lawGuess' : k]; }); return o; };
-  var vk = function (exp) { return Object.keys(exp).filter(function (k) { return k !== 'alt_judged'; }); };
+  var vk = function (exp) { return Object.keys(exp).filter(function (k) { return k !== 'alt_judged'; }); };   // alt_judged(사내 칸 이름)는 ajOf로 따로 견준다(외부 칸 altJudged)
   // c1 표시 안 「(법률 제21553호)」 → 시행예정판, 초록 이름표에 판
   var x1 = vcase('c1'), j2 = j2By(byVer);
   var v1 = await CV.verifyCitations({ answer: x1.answer, chunks: x1.chunks, annexSources: [], callHaiku: j1All('일치'), callJudge2: j2 });
@@ -996,20 +996,31 @@ function ok(name, cond, extra) {
   var x3 = vcase('c3'), r3 = [];
   for (var a3 of x3.answer) { var vv3 = (await CV.verifyCitations({ answer: a3, chunks: x3.chunks, annexSources: [] })).verdicts[0]; r3.push(pick(vv3, Object.keys(x3.expect.verdicts[0]))); }
   eq('#294 c3 표지 없음 → 현행판(종전 「긴 글」은 시행예정판) · 「<개정 2013.3.23>」은 표지 아님', r3, x3.expect.verdicts);
-  // c4·c4b·c4c [2단계] — 외부 1단계는 다른 판 재판정을 넣지 않는다 → 현행판 2차 불일치(두 구절 실재) → 주황, 메모 머리 「현행 판과 대조 — 」, 2차 1회
+  // c4·c4b·c4c [2단계] — 규칙 B(#294-보론, 2026-10-10 — 2단계 Fable 판정 §3-3): 표지 없이 기본 판(현행)을 고른 표시가 2차 불일치면 다른 판으로 1차·2차 한 번 더,
+  // 2차 일치 ∧ 1차 불일치 아님이면 초록 + 판 꼬리. 기대값 = 사내 실행 결과(alt_judged는 외부 altJudged — 기대에 적힌 칸만 견준다)
+  var ajOf = function (v, exp) { var o = {}; Object.keys(exp || {}).forEach(function (k) { o[k] = (v.altJudged || {})[k]; }); return o; };
   var x4 = vcase('c4'); j2 = j2By(byVer);
   var v4 = await CV.verifyCitations({ answer: x4.answer, chunks: x4.chunks, annexSources: [], callHaiku: j1All('일치'), callJudge2: j2 });
-  eq('#294 c4(1단계) 표지 없음 → 현행판 불일치 → 주황·메모 머리 「현행 판과 대조 — 」·다른 판 재판정 없음(2차 1회)·㉠ 글자',
-     [v4.verdicts[0].status, v4.verdicts[0].doc, v4.verdicts[0].reason, v4.verdicts[0].ver, j2.calls.length, 'alt_judged' in v4.verdicts[0],
-      v4.answer.indexOf('[원문 미확인 — 전파법 제24조제2항과 대조해 판정기가 다르다고 봄(직접 확인): 현행 판과 대조 — 2항은 준공기한 연장]') !== -1],
-     ['mismatch', VC, '현행 판과 대조 — 2항은 준공기한 연장', x4.expect.verdict.ver, 1, false, true]);
+  eq('#294 c4 표지 없음 → 현행판 2차 불일치 → 시행예정판으로 1차·2차 한 번 더 → 일치 → 초록·판 이름표·altJudged·2차 2회(현행 → 시행예정)',
+     [pick(v4.verdicts[0], vk(x4.expect.verdict)), ajOf(v4.verdicts[0], x4.expect.verdict.alt_judged), j2.calls.length, j2.calls.map(function (c) { return c.source.slice(0, 80); }),
+      v4.answer.indexOf('[원문 확인됨: 전파법 제24조제2항(2026.10.22 시행 판)]') !== -1],
+     [pick(x4.expect.verdict, vk(x4.expect.verdict)), x4.expect.verdict.alt_judged, x4.expect.judge2_calls, x4.expect.judge2_sources.map(function (s) { return s.slice(0, 80); }), x4.expect.answer_ok]);
   var x4b = vcase('c4b'); j2 = j2By(function () { return { verdict: '불일치', source_span: '기술기준에 적합한지', claim_span: '준공검사 없이도', reason: '요건 다름' }; });
   var v4b = await CV.verifyCitations({ answer: x4b.answer, chunks: x4b.chunks, annexSources: [], callHaiku: j1All('일치'), callJudge2: j2 });
-  eq('#294 c4b(1단계) 늘 불일치 → 주황(현행 판 메모), 표시 글은 사내와 같음, 2차 1회',
-     [pick(v4b.verdicts[0], vk(x4b.expect.verdict)), j2.calls.length, v4b.answer.indexOf(x4b.expect.tag) !== -1], [pick(x4b.expect.verdict, vk(x4b.expect.verdict)), 1, true]);
+  eq('#294 c4b 두 판 다 불일치 → 첫 판(현행) 메모로 주황·메모 머리 「현행 판과 대조 — 」·altJudged mismatch·2차 2회',
+     [pick(v4b.verdicts[0], vk(x4b.expect.verdict)), ajOf(v4b.verdicts[0], x4b.expect.verdict.alt_judged), j2.calls.length, v4b.answer.indexOf(x4b.expect.tag) !== -1],
+     [pick(x4b.expect.verdict, vk(x4b.expect.verdict)), x4b.expect.verdict.alt_judged, x4b.expect.judge2_calls, true]);
   var x4c = vcase('c4c'); j2 = j2By(byVer);
   var v4c = await CV.verifyCitations({ answer: x4c.answer, chunks: x4c.chunks, annexSources: [], callHaiku: j1All('불일치'), callJudge2: j2 });
-  eq('#294 c4c(1단계) 1차 불일치·2차 현행 불일치 → 주황 유지(초록 아님)', pick(v4c.verdicts[0], vk(x4c.expect.verdict)), pick(x4c.expect.verdict, vk(x4c.expect.verdict)));
+  eq('#294 c4c 다른 판에서 1차 불일치·2차 일치 → 초록 아님(altJudged unclear) → 첫 판 주황 유지',
+     [pick(v4c.verdicts[0], vk(x4c.expect.verdict)), ajOf(v4c.verdicts[0], x4c.expect.verdict.alt_judged)], [pick(x4c.expect.verdict, vk(x4c.expect.verdict)), x4c.expect.verdict.alt_judged]);
+  // c4d 번호 표지로 고른 시행예정판이 2차 불일치 → 재판정 없음(답의 판 표기 오류) — 사내 c4d와 같은 입력
+  j2 = j2By(function () { return { verdict: '불일치', source_span: '스스로 확인하고', claim_span: '준공검사 없이도', reason: '요건 다름' }; });
+  var v4d = await CV.verifyCitations({ answer: x1.answer, chunks: x1.chunks, annexSources: [], callHaiku: j1All('일치'), callJudge2: j2 });
+  eq('#294 c4d 번호 표지로 고른 시행예정판이 2차 불일치 → 재판정 없음(2차 1회)·주황 「시행예정 판과 대조 — 」·altJudged 없음',
+     [v4d.verdicts[0].status, v4d.verdicts[0].doc, v4d.verdicts[0].reason, j2.calls.length, 'altJudged' in v4d.verdicts[0]], ['mismatch', VP, '시행예정 판과 대조 — 요건 다름', 1, false]);
+  var v4e = await CV.verifyCitations({ answer: x4.answer, chunks: x4.chunks, annexSources: [], callHaiku: j1All('일치') });
+  eq('#294 c4 2차 판정기 없는 호출측(1차만)은 재판정하지 않는다', ['altJudged' in v4e.verdicts[0], v4e.verdicts[0].status], [false, 'ok']);
   // c5 비교 문장(현행 + 2026.10.22 시행) → 두 판 다중 원문(머리 둘), 2차 1회
   var x5 = vcase('c5'); j2 = j2By(function () { return { verdict: '불일치', source_span: '준공기한을 연장할 수 있다', claim_span: '자기적합확인을 신설', reason: '다름' }; });
   var v5 = await CV.verifyCitations({ answer: x5.answer, chunks: x5.chunks, annexSources: [], callHaiku: j1All('일치'), callJudge2: j2 });
@@ -1075,6 +1086,46 @@ function ok(name, cond, extra) {
   var vV0 = await CV.verifyCitations({ answer: curVerbatim.replace('(법률 제21553호)', ''), chunks: curOnly, annexSources: [], fetchLawArticle: dbAmend });
   eq('#294 외부 ② 현행 글 그대로 + 시행예정 번호 → 그대로 일치 초록 아님, 시행예정판으로 판정기행 / 번호 없으면 현행과 그대로 일치(초록)',
      [vV.verdicts[0].status, vV.verdicts[0].doc, vV.verdicts[0].verbatim, vV0.verdicts[0].status, vV0.verdicts[0].doc, vV0.verdicts[0].verbatim], ['unjudged', VP, false, 'ok', VC, true]);
+  // c11 위와 같은 입력에 판정기(시행예정판 「1회에 한하여」 → 불일치, 현행 → 일치) — 번호 표지라 재판정 없이 주황(현행으로 세탁하지 않음, 사내 c11과 같다)
+  j2 = j2By(function (src) { return /1회에 한하여/.test(src) ? { verdict: '불일치', source_span: '1회에 한하여 연장할 수 있다', claim_span: '준공기한을 연장할 수 있다', reason: '1회 한정 빠뜨림' } : { verdict: '일치', reason: '같음' }; });
+  var v11 = await CV.verifyCitations({ answer: curVerbatim, chunks: curOnly, annexSources: [], callHaiku: j1All('일치'), callJudge2: j2, fetchLawArticle: dbAmend });
+  eq('#294 c11 현행 글 그대로 + 「(법률 제21553호)」(DB 시행예정판은 「1회에 한하여」) → 시행예정판 불일치, 다른 판(현행) 재판정으로 세탁하지 않음 → 초록 아님',
+     [v11.verdicts[0].status, v11.verdicts[0].doc, v11.verdicts[0].reason, j2.calls.length, v11.answer.indexOf('[원문 확인됨') !== -1], ['mismatch', VP, '시행예정 판과 대조 — 1회 한정 빠뜨림', 1, false]);
+  // S1 「개정안」(국회 계류안)은 판 표지가 아니다 — 두 판이 있으면 현행판(mark none), 판이 하나면 받지 않는다(사내 1702debe와 같다)
+  var vBill = await CV.verifyCitations({ answer: x4.answer.replace('전파법 제24조제2항은', '전파법 제24조제2항(개정안 발의)은'), chunks: x4.chunks, annexSources: [] });
+  eq('#294-보론 S1 「개정안」은 판 표지 아님 → 현행판·mark none · versionWanted 안 받음 · 「시행 예정」은 그대로 표지',
+     [vBill.verdicts[0].doc, vBill.verdicts[0].ver.mark, CV.versionWanted('개정안 발의', VC, false), CV.versionWanted('시행 예정', VC, false), CV.versionWanted('시행 예정', VC, true)],
+     [VC, 'none', null, 'word', null]);
+  // S4 그대로 일치 동률 → 기본 판(현행) · 시행예정판에서만 그대로 일치하면 초록 이름표에 판 꼬리
+  var sameTxt = x1.chunks.map(function (c) { return Object.assign({}, c, { content: x1.chunks.filter(function (z) { return z.status === 'current'; })[0].content }); });
+  var curQ = '「과학기술정보통신부장관은 시설자가 천재지변 등 부득이한 사유로 준공기한 내에 준공할 수 없는 경우에는 준공기한을 연장할 수 있다.」 [원문 확인됨: 전파법 제24조제2항]';
+  var pendOnlyQ = '「' + (x1.chunks.filter(function (z) { return z.status === 'pending'; })[0].content.match(/②[^\n]*/) || [''])[0].replace(/^②\s*/, '').replace(/\s*<[^>]*>/g, '') + '」 [원문 확인됨: 전파법 제24조제2항]';   // 「<신설 2026.4.21>」 꼬리는 표지라 뺀다
+  var v4s = await CV.verifyCitations({ answer: curQ, chunks: sameTxt.slice().reverse(), annexSources: [] });
+  var v4t = await CV.verifyCitations({ answer: pendOnlyQ, chunks: x1.chunks, annexSources: [] });
+  eq('#294-보론 S4 두 판 글자가 같은 조문의 그대로 일치 → 현행판(종전엔 앞에 잡힌 판) · 시행예정 글만 그대로 일치 → 초록 + 「(2026.10.22 시행 판)」',
+     [v4s.verdicts[0].verbatim, v4s.verdicts[0].doc, v4t.verdicts[0].verbatim, v4t.verdicts[0].doc, v4t.answer.indexOf('[원문 확인됨: 전파법 제24조제2항(2026.10.22 시행 판)]') !== -1, v4t.verdicts[0].ver],
+     [true, VC, true, VP, true, { mark: 'none', default: VC }]);
+  // S5 versionWanted 조회가 same(다른 판이 DB에 없음)이면 OUTSIDE_MAX 자리를 돌려준다 — 헛조회 4개 뒤의 판 받기가 막히지 않는다
+  var otherArts = ['30조', '31조', '32조', '33조'].map(function (k, n) { return { id: 900 + n, doc_name: VC, article_no: k + '(가)', chunk_index: 300 + n, content: '제' + k.replace('조', '') + '조(가) ① 시설자는 2026.12.1 시행 무선국의 운용 기록을 보관하여야 한다.' }; });
+  var aS5 = otherArts.map(function (c) { return '2026.12.1 시행 기준으로 시설자는 무선국 운용 기록을 장부에 적어 두어야 합니다. [원문 확인됨: 전파법 ' + c.article_no.replace(/\(.*$/, '').replace(/^/, '제') + ']'; }).join('\n\n') + '\n\n' + x1.answer;
+  var flog5 = [];
+  var vS5 = await CV.verifyCitations({ answer: aS5, chunks: curOnly.concat(otherArts.map(function (c) { var o = Object.assign({}, c); return o; })), annexSources: [], callHaiku: j1All('일치'), callJudge2: j2By(byVer),
+    fetchLawArticle: function (fam, key) { flog5.push(key); return Promise.resolve(key === '24조' ? x1.chunks.map(function (r) { return Object.assign({}, r); }) : otherArts.filter(function (c) { return c.article_no.indexOf(key) === 0; }).map(function (c) { return Object.assign({ status: 'current' }, c); })); } });
+  eq('#294-보론 S5 시행일 표지 헛조회 4개(same) 뒤에도 다섯째 표시의 판 받기가 된다(상한에 안 막힘)',
+     [vS5.verdicts.slice(0, 4).map(function (v) { return (v.ver || {}).fetched; }), vS5.verdicts[4].doc, (vS5.verdicts[4].ver || {}).fetched], [['same', 'same', 'same', 'same'], VP, 'db']);
+  // S6 closed-before 표시는 판정 기록에 closedBefore
+  var vS6 = await CV.verifyCitations({ answer: x7.answer.main, chunks: x7.chunks, annexSources: [], callHaiku: j1All('일치'), callJudge2: j2By(function () { return { verdict: '일치', reason: '' }; }) });
+  eq('#294-보론 S6 closed-before 표시만 판정 기록에 closedBefore: true', vS6.verdicts.map(function (v) { return !!v.closedBefore; }), [true, false]);
+  // S3 법령명 지우기는 이름 범위만 — 내용이 앞·법령명이 뒤인 문장의 내용을 남긴다(종전: 줄 머리부터 법령명까지 통째로 지움)
+  eq('#294-보론 S3 stripCiteBody: 「…한다고 법/전기통신사업법 제N조」는 앞 내용 남김 · 표 칸·긴 이름·제목 줄·낫표 이름·「신청절차·대가 산정·징수는 시행령」',
+     ['프랜차이즈 본사가 판매점 지위를 가지려면 사전승낙 등 요건을 포함하여야 한다고 법 제32조의14제3항이 명시하고 있습니다.',
+      '이용자에게 폐업 예정일 60일 전까지 알려야 한다고 전기통신사업법 제19조제1항이 정하고 있습니다.',
+      '| 전기통신사업법 제19조제1항 | 폐업 60일 전 고지 |', '경제적 이익 등 제공의 부당한 이용자 차별행위에 관한 세부기준 제3조',
+      '**전파법 시행령 제18조(재할당)**', '「전기통신사업법」 제50조에 따라', '- 신청절차·대가 산정·징수는 시행령 제12조', '이에 따라 동 규정 제10조제2항 본문은'].map(function (s) { return CV.stripCiteBody(s); }),
+     ['프랜차이즈본사가판매점지위를가지려면사전승낙등요건을포함하여야한다고제3항이명시하고있습니다', '이용자에게폐업예정일60일전까지알려야한다고제1항이정하고있습니다',
+      '제1항폐업60일전고지', '', '', '에따라', '신청절차대가산정징수는', '이에따라제2항본문은']);
+  eq('#294-보론 S3 claimRelevance: 법령명 뒤에 와도 내용 낱말을 센다(종전 hits 0)',
+     [CV.claimRelevance('이용자에게 폐업 예정일 60일 전까지 알려야 한다고 전기통신사업법 제19조제1항이 정하고 있습니다.', '① 기간통신사업자는 … 폐업하려면 … 폐업 예정일 60일 전까지 이용자에게 알리고 …').hits >= 2], [true]);
 
   // 지시문 지문 잠금 — 1차는 2차 보정의 바탕이라 글자 그대로, 2차는 실측(tests/cite_judge_probe.js) 뒤에만 고친다
   var sha = function (s) { return require('crypto').createHash('sha256').update(s, 'utf8').digest('hex').slice(0, 16); };

@@ -145,8 +145,26 @@
   // 고시(…) 제14조」(8낱말) 이름 칸을 인용문으로 남겨 옛 코드가 판정기로 보내던 뒤 칸 조문 내용을 버렸고, 「… — 통신시설 등급 지정·관리 기준 제8조」
   // 소제목 줄도 줄표 뒤 이름을 못 지워 소제목이 인용문이 됐다.
   const LAW_NAME_BEFORE_REF_RE = /(^|[|\-*•:;,.(「『\[>—–])(\s*(?:\*\*)?)((?:[가-힣A-Za-z0-9·ㆍ]+\s+){0,11}?[가-힣A-Za-z0-9·ㆍ]*(?:법률|법|시행령|시행규칙|규칙|고시|규정|기준|세칙|지침)[」』\]]?(?:\*\*)?\s*(?:\([^)]*\))?)(?=\s*\|?\s*(?:제\s?\d+\s?조|\[?별표|\[?별지))/g;
+  // 이름 범위만 지운다(S3, 2026-10-10 — 2단계 Fable 판정 §4-7, #294-보론): 위 정규식은 줄 머리·마지막 구분 기호부터 법령명 끝까지(최대 12낱말)를 통째로
+  // 이름으로 잡아, 「…요건을 포함하여야 한다고 법 제32조의14제3항이 명시하고 있습니다」·「…알려야 한다고 전기통신사업법 제19조제1항이 정하고 있습니다」처럼
+  // **내용이 앞·법령명이 뒤**인 문장(한국어의 흔한 어순)은 내용까지 지웠다(남은 몸통 12자·11자, claimRelevance 낱말 근거 0 → #286 낱말 고르기가 못 돌고
+  // 24자 미만이라 「제목 줄」로 읽혀 다음 문단이 인용문이 되는 길). 잡힌 낱말 묶음에서 **법령 이름이 될 수 없는 낱말**(서술어·연결 어미·주제/목적 조사로
+  // 끝나는 낱말, 「따라·해당·관련」 같은 가리키는 말) 뒤부터만 이름으로 보고 지운다 — lawNameBefore가 이름으로 읽는 범위(「법」·「동 규정」·「전기통신사업법」·
+  // 낫표 제목)와 같고, 「경제적 이익 등 제공의 부당한 이용자 차별행위에 관한 세부기준」 같은 긴 이름은 그런 낱말이 없어 종전대로 통째로 지운다.
+  // 대가: 「국가를 당사자로 하는 계약에 관한 법률」처럼 목적 조사·관형 어미가 든 이름은 앞 몇 낱말이 내용으로 남는다(내용을 더 세는 쪽 — 판정기로 간다).
+  const NAME_STOP_RE = /^(?:관련|해당|위|상기|본|당해|그|각|따라|따르면|의하면|의하여|의해|의거하여|근거하여|위반하여|이에)$|(?:[한된있없았었였겠이했됐]다|는다|하다|[하되있없이았었였겠다라않]고|[하되있이으]며|면|[여해아어려]야|[하되]여|[어아여해]서|에서|로서|은|는|을|를|에게)$/;
+  function lawNameKeep(g) {   // 정규식이 이름으로 잡은 글 g → 남길 앞 글(이름이 될 수 없는 낱말까지)
+    const parts = String(g || '').split(/(\s+)/);   // 짝수 칸 = 낱말
+    for (let i = parts.length - 3; i >= 0; i -= 2) {
+      if (NAME_STOP_RE.test(parts[i].replace(/^[*「『[]+|[*」』\]]+$/g, ''))) return parts.slice(0, i + 2).join('');
+    }
+    return '';
+  }
+  function stripLawNames(s) {
+    return String(s || '').replace(LAW_NAME_BEFORE_REF_RE, function (all, p1, p2, p3) { return p1 + p2 + lawNameKeep(p3); });
+  }
   function stripCiteBody(s) {
-    return normQ(String(s || '').replace(LAW_NAME_BEFORE_REF_RE, '$1$2')
+    return normQ(stripLawNames(s)
       .replace(/제\s?\d+\s?조(?:\s?의\s?\d+)?(?:\s?\([^)]*\))?/g, ''));
   }
   // closed-before(아래 findCitations ③, 2026-10-09 사내 선행 이식) 줄의 내용 길이 — 조 번호만 뺀다. 위 법령명 지우기는 「- 신청절차·대가 산정·징수는
@@ -1048,8 +1066,8 @@
   const REL_PARTICLE_RE = /[은는이가을를의에로와과도만]$/;
   function claimRelevance(claim, text) {
     const nt = normQ(text);
-    const body = String(claim || '').replace(/\[[^\]]*\]/g, ' ').replace(/\*\*/g, ' ')
-      .replace(LAW_NAME_BEFORE_REF_RE, '$1$2').replace(/제\s?\d+\s?조(?:\s?의\s?\d+)?(?:\s?\([^)]*\))?/g, ' ')
+    const body = stripLawNames(String(claim || '').replace(/\[[^\]]*\]/g, ' ').replace(/\*\*/g, ' '))   // 이름 범위만 지운다(S3)
+      .replace(/제\s?\d+\s?조(?:\s?의\s?\d+)?(?:\s?\([^)]*\))?/g, ' ')
       .replace(/제\s?\d+\s?[항호](?:\s?의\s?\d+)?/g, ' ').replace(/[①-⑳]/g, ' ');
     const seen = {}; let n = 0, hits = 0;
     for (const raw of body.split(/[^가-힣A-Za-z0-9]+/)) {
@@ -1495,7 +1513,8 @@
     };
     // ① 원문 그대로 대조도 판 표지가 가리킨 판만 본다(② 외부 보탬, 2026-10-09): 같은 조의 판이 둘 이상이고 표지가 그중 일부를 가리키면 나머지 판은 ①에서 뺀다 —
     // 현행 글을 그대로 옮기고 「(법률 제N호)」로 시행예정 판을 단 인용이 현행과 그대로 일치해 초록이 되지 않게(그 판과 대조해 판정기로). 표지가 없으면 판을 빼지 않는다.
-    const vbSkip = new Set();
+    const vbSkip = new Set(), vbInfo = new Map();   // vbInfo: 법령군|조 → verInfo(판이 둘 이상이고 상태를 아는 조 — S4)
+    const fkOf = function (gk) { return docFamily(gk.slice(0, gk.lastIndexOf('|'))) + '|' + gk.slice(gk.lastIndexOf('|') + 1); };
     {
       const byFamKey = new Map();
       articleText.forEach(function (rows, gk) {
@@ -1505,7 +1524,9 @@
       });
       byFamKey.forEach(function (rows, fk) {
         const vi = verInfo(rows);
-        if (!vi || !vi.mk.hit.length) return;
+        if (!vi) return;
+        vbInfo.set(fk, vi);
+        if (!vi.mk.hit.length) return;
         const k = fk.slice(fk.lastIndexOf('|') + 1);
         vi.docs.forEach(function (d) { if (vi.mk.hit.indexOf(d) === -1) vbSkip.add(d + '|' + k); });
       });
@@ -1516,11 +1537,19 @@
       if (vbSkip.has(gk)) continue;
       const t = mergedOf(gk);
       const r = Math.max(vbBefore ? quoteOverlap(before, t) : 0, vbLine ? quoteOverlap(cite.line, t) : 0, cite.after ? quoteOverlap(cite.after, t) : 0);
-      if (r > vbRatio) { vbRatio = r; vbBest = gk; }
+      // S4(2026-10-10, 2단계 Fable 판정 §4-8): 같은 조의 두 판이 같은 겹침(글자가 같은 조문)이면 기본 판(현행) — 종전엔 앞에 잡힌 판이라
+      // 7ebd328e 「전기통신사업법 제32조의13제3항」(두 판 md5까지 같음)이 시행예정판(제21652호) 문서로 적혔다(색은 같고 doc·citedDocs·집계만 어긋남)
+      const tieToDefault = r > 0 && r === vbRatio && vbBest && !isAddendumKey(gk.slice(gk.lastIndexOf('|') + 1)) && fkOf(gk) === fkOf(vbBest) &&
+        vbInfo.has(fkOf(gk)) && vbInfo.get(fkOf(gk)).def === gk.slice(0, gk.lastIndexOf('|'));
+      if (r > vbRatio || tieToDefault) { vbRatio = r; vbBest = gk; }
     }
     if (vbBest && vbRatio >= VERBATIM_MIN) {
       const [doc, key] = [vbBest.slice(0, vbBest.lastIndexOf('|')), vbBest.slice(vbBest.lastIndexOf('|') + 1)];
       const vr = { status: 'ok', kind: 'article', lawDoc: docFamily(doc), doc: doc, key: key, text: mergedOf(vbBest), verbatim: true, overlap: vbRatio, claim: claim, reason: '원문 그대로 인용(' + Math.round(vbRatio * 100) + '%)' };
+      // S4 덤: 판이 둘 이상인 조에서 그대로 일치한 판이 기본 판(현행)이 아니면 — 시행예정 글을 옮긴 것 — 판정 길과 같이 판 기록을 달아
+      // 초록 이름표에 판 꼬리 「(… 시행 판)」가 붙게 한다(종전엔 그대로 일치 길에 verDefault가 없어 꼬리가 안 붙었다)
+      const vbi = isAddendumKey(key) ? null : vbInfo.get(docFamily(doc) + '|' + key);
+      if (vbi) { vr.verMark = vbi.mk.hit.length ? vbi.mk.kinds.join('+') : 'none'; vr.verDefault = vbi.def; vr.verPending = vbi.pend; }
       // 외부 ②: 그대로 일치한 판이 자료의 유일한 판인데 표지가 다른 판(시행예정)을 가리키면 그 판을 받아 다시 대조한다(verifyCitations — 현행 글 + 시행예정 번호)
       if (!isAddendumKey(key) && !isPromptDoc(doc) && !Array.from(articleText.keys()).some(function (g) { return g !== vbBest && g.slice(g.lastIndexOf('|') + 1) === key && docFamily(g.slice(0, g.lastIndexOf('|'))) === docFamily(doc); })) {
         const w = versionWanted(verSrc, doc, (articleText.get(vbBest) || []).some(function (c) { return c.status === 'pending'; }));
@@ -2002,17 +2031,18 @@
   // 사내 10/8 첨부 자문은 「전파법 제24조제2항(법률 제21553호, 2026.10.22 시행)」을 현행판(②준공기한 연장)과 대조해 거짓 「차이 있음」 2개. 표지를 읽어 판을 고른다 —
   // 표시 안 글·인용문·그 줄에서:
   //   번호 「법률 제N호」·「…고시 제YYYY-N호」·괄호 「(제N호)」(4자리 이상 또는 YYYY-N) → 문서명 「(제N호)」가 같은 판 /
-  //   시행일 「YYYY.M.D 시행」·「시행 YYYY-MM-DD」 → 문서명 끝 날짜가 같은 판 / 「시행예정」·「시행 예정」·「개정안」, 현행판 날짜보다 뒤의 「신설」·「개정」+날짜
+  //   시행일 「YYYY.M.D 시행」·「시행 YYYY-MM-DD」 → 문서명 끝 날짜가 같은 판 / 「시행예정」·「시행 예정」, 현행판 날짜보다 뒤의 「신설」·「개정」+날짜
   //   → 시행예정판(조문 안 「<개정 2013.3.23>」 같은 옛 날짜는 아니다) / 「현행」 → 현행판.
   // 한 판만 가리키면 그 판, 둘 다 가리키면(비교 문장) 두 판을 한 원문으로(머리에 판·번호·시행일), 표지가 없으면 현행판(pickVersion과 같은 순서).
-  // 사내에 있는 「2차 불일치 → 다른 판으로 한 번 더 판정」은 외부에 넣지 않았다(2단계 Fable 판정 뒤 — 운영자 결정 2026-10-09).
+  // 「개정안」은 표지가 아니다(2단계 Fable 판정 S1, 2026-10-09 — 이 체계에서 개정안은 국회 계류 법안이라 KB의 어느 판도 아니고, 시행예정판을 고르면 맞는 현행 인용이
+  // 시행예정판과 대조됐다. 외부 답 3건 모두 계류안 뜻, 사내 1702debe와 같은 정규식). 「2차 불일치 → 다른 판으로 한 번 더 판정」은 규칙 B(verifyCitations 관문 뒤).
   const VER_NO_RE = /(?:(?:법률|대통령령|총리령|부령|[가-힣]*령|[가-힣]*고시|훈령|예규|공고)\s*제\s?|[(（]\s*제\s?)(\d{4}\s?[-‐–－]\s?\d{1,4}|\d{4,})\s?호/g;
   const VER_DATE_RE = /(20\d{2})\s*[.\-/년]\s*(\d{1,2})\s*[.\-/월]\s*(\d{1,2})\s*(?:일|\.)?/g;
   const VER_EFF_BEFORE_RE = /시행\s*(?:일자|일)?\s*[:：(]?\s*$/;
   const VER_EFF_AFTER_RE = /^\s*\)?\s*(?:부터\s*)?시행/;
   const VER_AMEND_BEFORE_RE = /(?:신설|개정)\s*[,<(]?\s*$/;
   const VER_AMEND_AFTER_RE = /^\s*[)>]?\s*(?:신설|개정)/;
-  const VER_PENDING_RE = /시행\s?예정|개정안/;
+  const VER_PENDING_RE = /시행\s?예정/;
   function docDate(n) { const m = String(n || '').match(/\((\d{8})\)\s*$/); return m ? m[1] : ''; }
   function dotDate(d) { return d.slice(0, 4) + '.' + Number(d.slice(4, 6)) + '.' + Number(d.slice(6, 8)); }
   function normVerNo(s) { return String(s || '').replace(/\s/g, '').replace(/[‐–－]/g, '-'); }
@@ -2046,7 +2076,7 @@
   // 외부 ②(외부 전용): 검색 자료에 이 조의 판이 하나(doc)뿐일 때 표지가 다른 판을 가리키는가 — 받아 보기 전엔 다른 판의 문서명을 모르므로 표지 꼴만 본다
   // (받은 뒤의 고르기는 versionMarks). 헛조회를 줄이려고 이 판보다 **뒤** 것만 센다(DB에 남는 판은 현행·시행예정뿐이고 시행예정은 번호·시행일이 현행보다 뒤다):
   //  번호 — 이 판 번호가 아니고, 종류 낱말이 있으면 문서명 종류 괄호와 같고(「대통령령 제N호」는 법률 문서의 판이 아니다), 이 판 번호보다 큼 /
-  //  시행일 — 이 판 날짜보다 뒤 / 「신설·개정」+날짜 — 이 판 날짜보다 뒤 / 「시행예정·개정안」 낱말. 이 판이 시행예정이면 낱말·개정 날짜는 보지 않는다.
+  //  시행일 — 이 판 날짜보다 뒤 / 「신설·개정」+날짜 — 이 판 날짜보다 뒤 / 「시행예정」 낱말. 이 판이 시행예정이면 낱말·개정 날짜는 보지 않는다.
   //  반환: 'number'·'date'·'word' 또는 null
   function verNoCmp(a, b) {
     const pa = a.split('-').map(Number), pb = b.split('-').map(Number);
@@ -2193,35 +2223,39 @@
     //  {want} 외부 전용 — 자료에 판이 하나뿐인데 표지가 다른 판을 가리킨다 → 자료의 그 조 조각을 받은 판들로 갈아 끼우고 versionMarks로 다시 고른다.
     //         다시 고른 판이 처음 판과 같으면(번호가 다른 법령 것이었다 등) 처음 결과 그대로('same').
     // 못 받으면 처음 결과 그대로('error'), 상한이면 'cap'. verdicts[].ver.fetched에 남긴다.
+    // 답변 순서로 하나씩 받는다(S5, 2026-10-10 — 2단계 Fable 판정 §4-2): {want} 조회가 'same'(다른 판 없음·같은 판을 다시 고름 — 다른 법령의 시행일 같은 헛조회)이면
+    // 이 표시가 잡은 자리를 돌려줘 뒤 표시가 OUTSIDE_MAX에 막히지 않게 한다(동시에 돌리면 자리 판단이 조회 결과보다 먼저라 돌려줘도 쓸 데가 없다). 판 받기는 드물다(25답 129표시 중 1).
     if (canFetch) {
-      await Promise.all(results.map(async function (r, i) {
-        const vf = r.verFetch;
-        if (!vf || ['ok', 'missing', 'nocheck', 'noclaim'].indexOf(r.status) === -1) return;
+      for (let i = 0; i < results.length; i++) {
+        const r = results[i], vf = r.verFetch;
+        if (!vf || ['ok', 'missing', 'nocheck', 'noclaim'].indexOf(r.status) === -1) continue;
         const id = vf.fam + '|' + vf.key;
-        if (!picked.has(id)) { if (picked.size >= OUTSIDE_MAX) { r.verFetched = 'cap'; return; } picked.add(id); }
+        const took = !picked.has(id);
+        if (took) { if (picked.size >= OUTSIDE_MAX) { r.verFetched = 'cap'; continue; } picked.add(id); }
+        const release = function () { if (took && vf.want) picked.delete(id); };
         const rows = await dbRows(vf.fam, vf.key);
-        if (rows === null) { r.verFetched = 'error'; return; }
+        if (rows === null) { r.verFetched = 'error'; continue; }
         const asRow = function (x) { return { id: x.id, doc_name: x.doc_name, article_no: x.article_no, chunk_index: x.chunk_index, content: x.content, status: x.status || 'current' }; };
         let priv;
         if (vf.want) {
           const docs = [];
           for (const x of rows) if (docs.indexOf(x.doc_name) === -1) docs.push(x.doc_name);
-          if (!docs.some(function (d) { return d !== r.doc; })) { r.verFetched = 'same'; return; }   // 다른 판이 DB에도 없다
+          if (!docs.some(function (d) { return d !== r.doc; })) { r.verFetched = 'same'; release(); continue; }   // 다른 판이 DB에도 없다
           priv = sw.chunks.filter(function (x) { return !(docFamily(x.doc_name) === vf.fam && articleKey(x.article_no) === vf.key); }).concat(rows.map(asRow));
         } else {
           const own = rows.filter(function (x) { return x.doc_name === vf.doc; });
           const have = sw.chunks.filter(function (x) { return x.doc_name === vf.doc && articleKey(x.article_no) === vf.key; });
-          if (own.length <= have.reduce(function (s, x) { return s + (x._parts || 1); }, 0)) { r.verFetched = 'same'; return; }
+          if (own.length <= have.reduce(function (s, x) { return s + (x._parts || 1); }, 0)) { r.verFetched = 'same'; continue; }
           priv = sw.chunks.filter(function (x) { return !(x.doc_name === vf.doc && articleKey(x.article_no) === vf.key); }).concat(own.map(asRow));
         }
         const r2 = checkCitation(cites[i], priv, (args && args.annexSources) || []);
-        if (vf.want && r2.doc === r.doc && !r2.verDocs) { r.verFetched = 'same'; return; }
+        if (vf.want && r2.doc === r.doc && !r2.verDocs) { r.verFetched = 'same'; release(); continue; }
         const nr = Object.assign({}, cites[i], r2, { auto: r.auto, verFetched: 'db' });
         if (vf.want) nr.verWant = vf.want;
         delete nr.verFetch;
         if (r.srcPrompt) nr.srcPrompt = r.srcPrompt;
         results[i] = nr;
-      }));
+      }
     }
     // §5 항 구분 확인(#288): 자료 조문에 ①~⑳이 없는데 제2항 이상을 적은 인용 — DB 저장본에도 없으면 회색 「조문에 항 구분 없음(제N항 표기)」,
     // 호가 있는 조문이면 「제N호를 뜻했을 수 있음」(c66 「법 제96조②」 = 제96조제2호). 못 받으면 종전대로(판정기로). 조문 단위 상한 PARA_FETCH_MAX.
@@ -2337,10 +2371,41 @@
           else if (v1.verdict === '일치') { r.status = 'ok'; r.reason = null; }
           else { r.status = 'unclear'; r.reason = '2차 판정 실패'; }
         });
+        // ② 다른 판 재판정 — 규칙 B(2026-10-10, 2단계 Fable 판정 §3-3 · 사내 1702debe와 같은 조건): 같은 조의 판이 둘 이상인데 **표지 없이 기본 판(현행)을
+        // 고른 것**(verMark를 「+」로 자른 첫 토막이 none — none·none+항호)이 2차 「불일치」(근거 구절 실재 여부 무관)면 다른 판(첫 것) 원문으로 1차(묶음 한 호출)·
+        // 2차(항목 하나씩)를 한 번 더 돌린다. **2차 「일치」 ∧ 1차 「불일치」 아님**일 때만 그 판으로 바꿔 초록 + 판 꼬리 「(… 시행 판)」(이 길만 D2 예외 —
+        // 이미 한 번 불일치가 난 항목이라 1차를 초록을 막는 쪽으로만 쓴다), 아니면 첫 판 판정·메모 그대로(주황이면 「현행 판과 대조 — 」 머리). altJudged에 남긴다.
+        // 표지(번호·시행일·낱말)가 고른 판의 불일치는 답의 판 표기 오류라 재판정하지 않는다 — 「현행 ② 글 그대로 + (법률 제21553호)」가 vbSkip으로 시행예정판과
+        // 대조돼 불일치인데 다른 판(현행)에서 일치하면 번호째 초록이 됐다(판정 §3-2 반례 1, 사내 재현). 두 판 다중 원문(verDocs)·조문 여럿(multi)은 하지 않는다.
+        // 2차가 두 번 다 실패하면 초록이 아니다(사내 _judge_gate는 그때 1차 일치로 초록 — 다른 점, 사내에 알림).
+        const alts = [];
+        toJudge.forEach(function (r, i) {
+          if (r.altDocs && r.altDocs.length && !r.multi && !r.verDocs && String(r.verMark || '').split('+')[0] === 'none' && r.judge2 && r.judge2.verdict === '불일치') alts.push({ r: r, it: items[i] });
+        });
+        if (alts.length) {
+          const its2 = alts.map(function (a, k) { const t = a.r.altDocs[0].text; return Object.assign({}, a.it, { id: k + 1, source: t.length > 4000 ? t.slice(0, 4000) + '\n…(이하 생략)' : t }); });
+          const both2 = await Promise.all([
+            judgeCitations(its2, args.callHaiku).then(function (v) { return { v: v }; }, function (e) { return { err: String(e && e.message || e) }; }),
+            judgeEachSecond(its2, args.callJudge2),
+          ]);
+          alts.forEach(function (a, k) {
+            const r = a.r, alt = r.altDocs[0];
+            const v1 = both2[0].v ? both2[0].v[String(k + 1)] : null, s = both2[1][k], v2 = s && s.v ? s.v : null;
+            const ok = !!(v2 && v2.verdict === '일치' && !(v1 && v1.verdict === '불일치'));
+            // 다른 판 결과의 상태(기록용) — 관문과 같은 규칙: 불일치+구절 실재 → mismatch(추측 법령이면 setMismatch처럼 회색), 일치인데 1차 불일치 → unclear
+            let st = ok ? 'ok' : 'unclear';
+            if (v2 && v2.verdict === '불일치' && v2.grounded) {
+              const tmp = { lawGuess: r.lawGuess, guessEvidence: r.guessEvidence, guessLabel: r.guessLabel };
+              setMismatch(tmp, v2.reason); st = tmp.status;
+            } else if (!v2) st = 'unjudged';
+            r.altJudged = { doc: alt.doc, status: st, judge: v1 ? v1.verdict : null, judge2: v2 ? v2.verdict : null, reason: (v2 && v2.reason) || (s && s.err) || null };
+            if (ok) { r.status = 'ok'; r.reason = null; r.doc = alt.doc; r.text = alt.text; delete r.guessGrey; }
+          });
+        }
       }
     }
     // 판이 둘 이상인 조문의 주황은 어느 판과 대조했는지 메모 머리에 적는다(② — 사내와 같은 글자 「현행 판과 대조 — 」·「시행예정 판과 대조 — 」·「현행·시행예정 두 판과 대조 — 」).
-    // 외부는 다른 판 재판정을 하지 않지만(2단계) 같은 조의 다른 판이 있다는 사실과 어느 판을 봤는지는 읽는 사람이 알아야 직접 확인할 판을 고른다.
+    // 같은 조의 다른 판이 있다는 사실과 어느 판을 봤는지는 읽는 사람이 알아야 직접 확인할 판을 고른다.
     for (const r of results) {
       if (r.status === 'mismatch' && ((r.altDocs && r.altDocs.length) || r.verDocs)) {
         r.reason = (r.verDocs ? '현행·시행예정 두 판과 대조 — ' : (r.verPending || []).indexOf(r.doc) !== -1 ? '시행예정 판과 대조 — ' : '현행 판과 대조 — ') + String(r.reason || '');
@@ -2443,6 +2508,8 @@
           if (want) ver.want = want;
           v.ver = ver;
         }
+        if (r.altJudged) v.altJudged = r.altJudged;            // ② 다른 판 재판정(규칙 B, 2026-10-10): doc·status·1차·2차 verdict·메모 — 사내 alt_judged와 같은 칸
+        if (r.closedBefore) v.closedBefore = true;              // ③ closed-before 줄(S6, 10-21 집계용 — 회색 「자동 대조 못 함」 + 다음 문단 낫표 인용 꼴을 셀 근거)
         return v;
       }),
     };
