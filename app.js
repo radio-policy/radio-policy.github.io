@@ -1173,8 +1173,9 @@ async function verifyCitationsRemote(answer, chunkIds, annexSources) {
 // 어느 갈래든 같다(원문 보기). 갈래는 이 요약 줄에서만 보여 준다: 운영자가 어디가 약한지 알아야
 // 고칠 수 있고(호 대조 불가가 많으면 KB 청킹 문제다), 검증이 아예 안 돈 경우도 여기서 드러난다.
 // 갈래 이름은 표시의 이유 글과 같은 말로 쓴다(옛 머리말 「원문 없음」·「원문과 다름」을 되살리지 않는다).
+// mismatch는 「판정기가 다르다고 봄」(#294 ㉠, 2026-10-09 — 종전 「대조해 차이 있음」, 사내 요약 줄과 같은 말)
 var CITE_STATUS_LABEL = {
-  missing: '검색 자료에 없음', mismatch: '대조해 차이 있음', unclear: '판정 보류', unparsed: '인용 미식별',
+  missing: '검색 자료에 없음', mismatch: '판정기가 다르다고 봄', unclear: '판정 보류', unparsed: '인용 미식별',
   noclaim: '인용 내용 없음', nocheck: '호 대조 못 함', unjudged: '판정 미실행', dup: '중복 표시 삭제'
 };
 function citeVerdictSummaryHtml(verdicts) {

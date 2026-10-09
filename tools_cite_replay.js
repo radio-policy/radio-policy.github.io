@@ -7,7 +7,7 @@
 //   node tools_cite_replay.js --old path/old.js     # 옛 판 파일을 직접 지정
 //   node tools_cite_replay.js --since 2026-10-01    # 기간
 //   node tools_cite_replay.js --all-mismatch        # 판정기를 모두 「불일치」로 모의 — "주황이 될 수 있는 표시"가 어떻게 달라지는지(#286 ⓒ 회색 규칙)
-//   node tools_cite_replay.js --dump out.json       # 새 판의 표시별 결과(답변 id·질문·tag·key·law·doc·status·reason·cmp·lawGuess)를 JSON으로 — 지금 코드 기준 회색·원문 없음 목록용
+//   node tools_cite_replay.js --dump out.json       # 새 판의 표시별 결과(답변 id·질문·tag·key·law·doc·status·reason·cmp·lawGuess·ver(#294 판 고르기))를 JSON으로 — 지금 코드 기준 회색·원문 없음 목록용
 //   출력 셋(#288): changed(조·문서·상태가 바뀐 표시) · path-only(상태는 같고 대조 조문 이름표 cmp나 ⓒ 시도 기록만 바뀐 것 — 다중 원문) · shown-text(검증 뒤 본문의 표시 글자)
 //   ⓒ(검색 자료 밖 조문 대조)는 DB 문서명 목록(RPC kb_doc_names)과 fetchLawArticle을 쓴다 — 실DB 읽기만, AI 0회
 //
@@ -61,6 +61,8 @@ function loadSystemPrompt() {   // 운영은 app_config.system_prompt — 저장
 //   「[원문 미확인 — 자동 대조 못 함, 직접 확인: X …]」 — 모델 글자는 역시 「표시: …」에만 있다. 이 머리말은 #286-보론 뒤에 생겨
 //   옛 꼴(괄호 안이 대상)이 없으므로 옛 꼴 판별을 하지 않는다(대상 없는 「검색 자료에 해당 조문 없음 (표시: …)」을 옛 꼴로 읽지 않게).
 //   옛 머리말 둘(「원문 없음 — 」·「원문과 다름 — 」)은 #292 전에 저장된 답변에 남아 있으므로 계속 읽는다 — 지우지 말 것.
+// #294 ㉠(2026-10-09~): 주황 이유 글이 「X와 대조해 판정기가 다르다고 봄(직접 확인): …」로 바뀌었다(사내 35fd1814와 같은 글자). 모델 글자는 역시 「표시: …」에만 있어
+//   되돌리기 규칙은 그대로이고, 옛 꼴 「…대조해 차이 있음, 직접 확인: …」도 같은 규칙으로 읽는다(아래 자기 검사에 둘 다).
 function untag(answer) {
   return String(answer || '').replace(/\[원문 확인됨\(검색 자료 밖[^)]*\): ([^\]]*)\]/g, '[원문 확인됨: $1]').replace(/\[(원문 미확인 — |원문 없음 — |원문과 다름 — )([^\]]*)\]/g, function (all, head, body) {
     // 옛 꼴을 먼저 가른다(사내 관찰 ③ — 새 꼴 판별식 「검색 자료에 … 없음」이 옛 꼴 「검색 자료에 해당 조문 없음 (대상)」에도 걸려 대상을 잃었다)
@@ -103,6 +105,11 @@ function untag(answer) {
     ['[원문 미확인 — 원문과 대조해 차이 있음, 직접 확인: 주체가 다름]', '[원문 확인됨]'],
     ['[원문 미확인 — 전기통신사업법 제53조제1항과 대조해 차이 있음, 직접 확인: 비율 다름 (검색 자료 밖 조문 · 표시: 사업법 제53조①)]', '[원문 확인됨: 사업법 제53조①]'],
     ['[원문 미확인 — 자동 대조 못 함, 직접 확인: 전기통신사업법 제55조제2항]', '[원문 확인됨]'],
+    // #294 ㉠ 새 꼴(이유 글 안의 괄호 「(직접 확인)」가 「표시: …」 읽기를 흐리지 않는다) · 판이 둘인 조문의 메모 머리
+    ['[원문 미확인 — 전파법 제24조제2항과 대조해 판정기가 다르다고 봄(직접 확인): 요건 다름 (표시: 전파법 제24조②)]', '[원문 확인됨: 전파법 제24조②]'],
+    ['[원문 미확인 — 원문과 대조해 판정기가 다르다고 봄(직접 확인): 주체가 다름]', '[원문 확인됨]'],
+    ['[원문 미확인 — 전파법 제24조제2항과 대조해 판정기가 다르다고 봄(직접 확인): 현행 판과 대조 — 요건 다름]', '[원문 확인됨]'],
+    ['[원문 미확인 — 전기통신사업법 제53조제1항과 대조해 판정기가 다르다고 봄(직접 확인): 비율 다름 (검색 자료 밖 조문 · 표시: 사업법 제53조①)]', '[원문 확인됨: 사업법 제53조①]'],
     ['[원문 미확인 — 자동 대조 못 함, 직접 확인 (조문에 항 구분 없음(제2항 표기) · 표시: 전기통신사업법 제96조②)]', '[원문 확인됨: 전기통신사업법 제96조②]'],
     ['[원문 미확인 — 자동 대조 못 함, 직접 확인: 고시 번호로 봄 → 경제적 이익 등 제공의 부당한 이용자 차별행위에 관한 세부기준 제1조와 대조하면 다름(같은 번호의 다른 고시일 수 있음) (표시: 방송미디어통신위원회고시 제2026-11호 제1조)]', '[원문 확인됨: 방송미디어통신위원회고시 제2026-11호 제1조]'],
   ];
@@ -182,7 +189,7 @@ function shownTags(answer) { return String(answer || '').match(/\[원문[^\]]*\]
       out[name] = vr.verdicts.map(brief);
       shown[name] = shownTags(vr.answer);
       for (const v of out[name]) summary[name][v.status] = (summary[name][v.status] || 0) + 1;
-      if (name === 'new' && dumpPath) for (const v of vr.verdicts) dump.push({ id: row.id, created_at: row.created_at, channel: row.channel, question: String(row.question || '').slice(0, 80), tag: v.tag, key: v.key, law: v.law, doc: v.doc, status: v.status, reason: v.reason, cmp: v.cmp || null, lawGuess: v.lawGuess || null, guessEvidence: v.guessEvidence == null ? null : v.guessEvidence, verbatim: v.verbatim, overlap: v.overlap, multi: v.multi || null, srcFetched: v.srcFetched || null, nopara: v.nopara || null });
+      if (name === 'new' && dumpPath) for (const v of vr.verdicts) dump.push({ id: row.id, created_at: row.created_at, channel: row.channel, question: String(row.question || '').slice(0, 80), tag: v.tag, key: v.key, law: v.law, doc: v.doc, status: v.status, reason: v.reason, cmp: v.cmp || null, lawGuess: v.lawGuess || null, guessEvidence: v.guessEvidence == null ? null : v.guessEvidence, verbatim: v.verbatim, overlap: v.overlap, multi: v.multi || null, srcFetched: v.srcFetched || null, nopara: v.nopara || null, ver: v.ver || null });
     }
     const n = Math.max(out.old.length, out.new.length);
     items += n;
