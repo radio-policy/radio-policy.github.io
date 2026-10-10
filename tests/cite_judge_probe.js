@@ -30,6 +30,12 @@
 //  그 항목만 4회씩 다시: prod 1/4·prod_cand 1/4(같은 비율 — 후보 문장 탓이 아니라 이 경계 항목에서 원래 흔들림, 뺄 문장 없음). 기준선 prod(새 사례 × 2)는
 //  새 거짓 0/12·새 진짜 6/6로 이미 다 맞혀(P6 0/4) 바꿔서 얻는 것이 측정되지 않았다 → ① 보류(두 판 지시문 그대로, 판정 §2-4 분기). o48pg_cand(사내 꼴·후보)는
 //  F6 0 → 4/4 새 거짓 주황·T1b 3/4·새 거짓 13/24로 실패, o48pg 기준선은 N1·N4·N5a 거짓 주황에 N6(진짜) 0/2 — 사내 2차 모델(Opus 4.8 inline) 문제.
+//
+//  2026-10-10 오후(≈ $1.04, 운영자 승인) 판 이름표(#294-보론2 — 판이 둘인 조의 한 판을 보낼 때 원문 맨 앞 「■ 전파법 제24조 — 시행예정(법률 제21553호,
+//  시행 2026.10.22)」)를 고정 사례 H1~H4(전파법 제24조 두 판, with_status — 운영처럼 fetchLawArticle을 넘겨 지침서 조각을 빼고 판 고르기가 돈다)로
+//  이름표 있음/없음(--no-ver-head) × prod·o48pg × 4회: H1(사내 사례 2 꼴)·H2·H4(정답 일치) 모두 0/4(이름표 없어도 0 — 사내 사례 2의 거짓 경고는 재현 안 됨),
+//  H3(시행일을 2026.12.1로 틀림, 정답 불일치) prod 3/4 → 4/4 · o48pg 0/4 → 4/4. 미리 박은 Q1~Q4(일치 사례 ≤1/4·없을 때보다 늘지 않음 / 틀린 시행일 prod ≥3/4 /
+//  기존 21개 입력 글자 같음) 통과 → 반영. 이름표 있음/없음은 결과 파일을 따로 --report 한다(변형 이름이 같다).
 // ============================================================================
 'use strict';
 const fs = require('fs');
@@ -44,6 +50,7 @@ const ALLOW = argv.includes('--allow-api');
 const REP1 = +arg('--rep1', 3), REP2 = +arg('--rep2', 3), REP2G = +arg('--rep2g', 1);   // REP2G = 초록 표본 항목의 2차 반복
 const ONLY = arg('--only', '') ? arg('--only', '').split(',') : null;
 const GREEN2 = argv.includes('--green-stage2');
+const NOVH = argv.includes('--no-ver-head');   // 판 이름표(#294-보론2) 없이 판정기 입력을 만든다 — 기준선
 const FROM = arg('--from-run', '') ? arg('--from-run', '').split(',') : null;   // 이전 실측 결과 파일(쉼표로 여럿) — 1차를 다시 부르지 않는다
 const HAIKU = 'claude-haiku-4-5-20251001';
 const VARIANTS = {
@@ -85,9 +92,9 @@ async function sbGet(p) {
   if (!r.ok) throw new Error('supabase ' + r.status + ' ' + (await r.text()).slice(0, 200));
   return r.json();
 }
-async function chunksByIds(ids) {
+async function chunksByIds(ids, withStatus) {   // withStatus: 판 상태까지(두 판 사례 — 운영에선 DB에서 받은 행만 상태가 있다)
   let out = [];
-  for (let i = 0; i < ids.length; i += 60) out = out.concat(await sbGet('document_chunks?id=in.(' + ids.slice(i, i + 60).join(',') + ')&select=id,doc_name,article_no,chunk_index,content'));
+  for (let i = 0; i < ids.length; i += 60) out = out.concat(await sbGet('document_chunks?id=in.(' + ids.slice(i, i + 60).join(',') + ')&select=id,doc_name,article_no,chunk_index,content' + (withStatus ? ',status' : '')));
   const by = new Map(out.map(function (c) { return [c.id, c]; }));
   return ids.map(function (id) { return by.get(id); }).filter(Boolean);
 }
@@ -120,10 +127,14 @@ function restoreAnswer(answer, verdicts) {
     .replace(/\[원문 확인 안 됨[^\]]*\]/g, '[원문 확인됨]');
 }
 // 운영과 같은 경로로 판정기 입력 항목을 뽑는다(판정은 흉내 — '일치')
-async function judgeItems(answer, chunks, systemPrompt) {
+// dbRows(선택): 두 판 사례(with_status)는 운영과 같이 fetchLawArticle을 넘긴다 — 지침서 「핵심 조문」 조각은 검색 자료에 실제 조문이 있으면 빠지고
+// (swapPromptArticles는 fetchLawArticle이 있을 때만 돈다) 판 고르기가 돈다. 기존 사례는 넘기지 않는다(10-05 이후 입력 그대로).
+async function judgeItems(answer, chunks, systemPrompt, dbRows) {
   const ex = await CV.expandArticles(chunks, fetchArticle, { maxArticles: 10, maxChunksPerArticle: 4, maxAddedChunks: 14 });
   const items = [];
-  await CV.verifyCitations({ answer: answer, chunks: ex.chunks, annexSources: [], systemPrompt: systemPrompt, callHaiku: async function (sys, user) {
+  await CV.verifyCitations({ answer: answer, chunks: ex.chunks, annexSources: [], systemPrompt: systemPrompt, verHead: !NOVH,
+    fetchLawArticle: dbRows ? function (fam, key) { return Promise.resolve(dbRows.filter(function (r) { return CV.docFamily(r.doc_name) === fam && CV.articleKey(r.article_no) === key; }).map(function (r) { return Object.assign({}, r); })); } : undefined,
+    callHaiku: async function (sys, user) {
     for (const p of user.split(/\n\n(?=### 항목 \d+\n)/)) {
       const mm = p.match(/^### 항목 (\d+)\n\[인용 대상\] (.*)\n\[인용문\]\n([\s\S]*?)\n\[원문\]\n([\s\S]*)$/);
       if (mm) items.push({ id: +mm[1], target: mm[2], claim: mm[3], source: mm[4] });
@@ -169,6 +180,7 @@ const keyRe = function (k) { return new RegExp('\\s' + k.replace(/[.*+?^${}()|[\
 //  (local_docs/cite_judge_probe/blind_items.json·blind_gold.json, 인용 대상 + 인용문으로 맞춤 — 없으면 P5는 「정답 없음」).
 const P_FALSE_OLD = ['F1', 'F5', 'F6', 'F7'], P_TRUE_OLD = ['T1', 'T1b', 'T2', 'S1', 'S2', 'S3', 'S4'];
 const P_FALSE_NEW = ['N1', 'N2', 'N3', 'N4', 'N5a', 'N5b'], P_TRUE_NEW = ['N6', 'N7', 'N8'];
+const P_VER = ['H1', 'H2', 'H3', 'H4'];   // 판 이름표(#294-보론2) 사례 — 이름표 있음/없음은 결과 파일을 따로 --report
 function passReport(files) {
   const merged = new Map();   // key → {case, gold, target, claim, s2:{variant:[...]}}
   for (const f of files) {
@@ -192,7 +204,7 @@ function passReport(files) {
   const orange = function (k, v) { const m = merged.get(k); const a = (m && m.s2[v]) || []; return { o: a.filter(function (x) { return x.grounded; }).length, n: a.length, err: a.filter(function (x) { return x.verdict === 'ERR' || x.verdict === '없음'; }).length }; };
   const cell = function (r) { return r.n ? r.o + '/' + r.n + (r.err ? '(오류 ' + r.err + ')' : '') : '-'; };
   console.log('\n사례별 주황(2차 불일치 ∧ 근거 실재) — ' + vars.join(' | '));
-  for (const k of P_FALSE_OLD.concat(['F3'], P_TRUE_OLD, P_FALSE_NEW, P_TRUE_NEW)) if (merged.has(k)) console.log(k + ' (' + merged.get(k).gold + ') | ' + vars.map(function (v) { return cell(orange(k, v)); }).join(' | '));
+  for (const k of P_FALSE_OLD.concat(['F3'], P_TRUE_OLD, P_FALSE_NEW, P_TRUE_NEW, P_VER)) if (merged.has(k)) console.log(k + ' (' + merged.get(k).gold + ') | ' + vars.map(function (v) { return cell(orange(k, v)); }).join(' | '));
   console.log('\n기준 | ' + vars.join(' | '));
   const row = function (name, f) { console.log(name + ' | ' + vars.map(function (v) { return f(v); }).join(' | ')); };
   const sum = function (keys, v) { return keys.reduce(function (a, k) { const r = orange(k, v); return { o: a.o + r.o, n: a.n + r.n, miss: a.miss + (r.n ? 0 : 1) }; }, { o: 0, n: 0, miss: 0 }); };
@@ -256,7 +268,8 @@ if (arg('--report', '')) { passReport(arg('--report', '').split(',')); process.e
     batches.push({ name: r.id.slice(0, 8), items: items });
   }
   for (const s of FX.synthetic) {
-    const items = await judgeItems(s.answer, await chunksByIds(s.chunk_ids), systemPrompt);
+    const sc = await chunksByIds(s.chunk_ids, !!s.with_status);
+    const items = await judgeItems(s.answer, sc, systemPrompt, s.with_status ? sc : null);
     items.forEach(function (it) { it.case = s.key; it.gold = s.gold; });
     batches.push({ name: s.key, items: items });
   }

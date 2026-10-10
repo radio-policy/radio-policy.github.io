@@ -2311,6 +2311,13 @@
     if (toJudge.length && !(args && typeof args.callHaiku === 'function'))
       toJudge.forEach(function (r) { r.status = 'unjudged'; r.reason = '판정기 미가동'; });
     if (toJudge.length && args && typeof args.callHaiku === 'function') {
+      // 판 이름표(#294-보론2, 2026-10-10 — 사내 실재연 사례 2, 운영자 결정 「먼저 재고 통과하면 넣음」): 같은 조의 판이 둘 이상(verInfo)인데 한 판만 보내면
+      // 원문 맨 앞에 두 판 다중 원문과 같은 머리 「■ 전파법 제24조 — 시행예정(법률 제21553호, 시행 2026.10.22)」를 붙인다. 시행일은 문서명에만 있고
+      // 조문 글엔 「<신설 2026.4.21>」 같은 다른 날짜뿐이라, 날짜 표지로 시행예정판을 맞게 고른 인용을 2차가 「시행일 수치가 원문과 다름」으로 봤다.
+      // args.verHead === false면 붙이지 않는다(실측 기준선용 — tests/cite_judge_probe.js --no-ver-head).
+      const verHeadOn = !(args && args.verHead === false);
+      const capSrc = function (t) { return t.length > 4000 ? t.slice(0, 4000) + '\n…(이하 생략)' : t; };
+      const verHeadOf = function (r, doc) { return (verHeadOn && r.verDefault && doc && !r.verDocs && !r.multi) ? '■ ' + articleLabel(docFamily(doc), r.key) + ' — ' + versionHead(doc, (r.verPending || []).indexOf(doc) !== -1) + '\n' : ''; };
       const items = toJudge.map(function (r, i) {
         const claim = String(r.claim || r.segment || '').replace(/\*\*/g, '').replace(/\s+/g, ' ').trim();
         const tgtOf = function (law, key, ps, its) { return (law || '') + ' ' + key + (ps.length ? ' 제' + ps.join('·') + '항' : '') + (its.length ? ' 제' + its.join('·') + '호' : ''); };
@@ -2319,7 +2326,7 @@
           id: i + 1,
           target: r.multi ? r.multi.map(function (x) { return tgtOf(x.lawDoc || docFamily(x.doc), x.key, x.paras, x.items); }).join(' · ') : tgtOf(r.lawDoc || r.lawText, r.key, r.paras, r.items),
           claim: claim.length > 900 ? '…' + claim.slice(-900) : claim,
-          source: (r.multi || r.verDocs) ? r.text : (r.text.length > 4000 ? r.text.slice(0, 4000) + '\n…(이하 생략)' : r.text),   // 두 판 다중 원문(②)도 판마다 이미 잘랐다
+          source: (r.multi || r.verDocs) ? r.text : verHeadOf(r, r.doc) + capSrc(r.text),   // 두 판 다중 원문(②)도 판마다 이미 잘랐다 · 판이 둘인 조의 한 판은 판 이름표
         };
       });
       if (!useJ2) {
@@ -2380,10 +2387,13 @@
         // 2차가 두 번 다 실패하면 초록이 아니다(사내 _judge_gate는 그때 1차 일치로 초록 — 다른 점, 사내에 알림).
         const alts = [];
         toJudge.forEach(function (r, i) {
-          if (r.altDocs && r.altDocs.length && !r.multi && !r.verDocs && String(r.verMark || '').split('+')[0] === 'none' && r.judge2 && r.judge2.verdict === '불일치') alts.push({ r: r, it: items[i] });
+          // 두 판 글이 같으면(normQ — 띄어쓰기·조각 경계만 다른, 개정 안 된 조문) 재판정하지 않는다(#294-보론2, 2026-10-10 — 사내 실재연, 운영자 결정 「지금 고침」):
+          // 고칠 「판 짐작」이 없어 재판정은 주황에만 주는 같은 판정의 재시도가 되고, 틀린 인용도 재시도에서 우연히 「일치」로 초록이 될 수 있다(사내 전파법 제16조③ 3회 중 1회)
+          if (r.altDocs && r.altDocs.length && !r.multi && !r.verDocs && String(r.verMark || '').split('+')[0] === 'none' && r.judge2 && r.judge2.verdict === '불일치' &&
+            normQ(r.altDocs[0].text) !== normQ(r.text)) alts.push({ r: r, it: items[i] });
         });
         if (alts.length) {
-          const its2 = alts.map(function (a, k) { const t = a.r.altDocs[0].text; return Object.assign({}, a.it, { id: k + 1, source: t.length > 4000 ? t.slice(0, 4000) + '\n…(이하 생략)' : t }); });
+          const its2 = alts.map(function (a, k) { const alt = a.r.altDocs[0]; return Object.assign({}, a.it, { id: k + 1, source: verHeadOf(a.r, alt.doc) + capSrc(alt.text) }); });
           const both2 = await Promise.all([
             judgeCitations(its2, args.callHaiku).then(function (v) { return { v: v }; }, function (e) { return { err: String(e && e.message || e) }; }),
             judgeEachSecond(its2, args.callJudge2),

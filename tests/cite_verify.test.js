@@ -1001,10 +1001,17 @@ function ok(name, cond, extra) {
   var ajOf = function (v, exp) { var o = {}; Object.keys(exp || {}).forEach(function (k) { o[k] = (v.altJudged || {})[k]; }); return o; };
   var x4 = vcase('c4'); j2 = j2By(byVer);
   var v4 = await CV.verifyCitations({ answer: x4.answer, chunks: x4.chunks, annexSources: [], callHaiku: j1All('일치'), callJudge2: j2 });
+  // 판정기에 보낸 원문: 판이 둘인 조의 한 판이라 맨 앞에 판 이름표 한 줄(#294-보론2) — 이름표를 뗀 글은 사내 기대값과 같다
+  var unHead = function (s) { return s.replace(/^■ [^\n]*\n/, ''); };
   eq('#294 c4 표지 없음 → 현행판 2차 불일치 → 시행예정판으로 1차·2차 한 번 더 → 일치 → 초록·판 이름표·altJudged·2차 2회(현행 → 시행예정)',
-     [pick(v4.verdicts[0], vk(x4.expect.verdict)), ajOf(v4.verdicts[0], x4.expect.verdict.alt_judged), j2.calls.length, j2.calls.map(function (c) { return c.source.slice(0, 80); }),
+     [pick(v4.verdicts[0], vk(x4.expect.verdict)), ajOf(v4.verdicts[0], x4.expect.verdict.alt_judged), j2.calls.length, j2.calls.map(function (c) { return unHead(c.source).slice(0, 80); }),
       v4.answer.indexOf('[원문 확인됨: 전파법 제24조제2항(2026.10.22 시행 판)]') !== -1],
      [pick(x4.expect.verdict, vk(x4.expect.verdict)), x4.expect.verdict.alt_judged, x4.expect.judge2_calls, x4.expect.judge2_sources.map(function (s) { return s.slice(0, 80); }), x4.expect.answer_ok]);
+  eq('#294-보론2 판이 둘인 조의 한 판을 보낼 때 원문 맨 앞 판 이름표(재판정 쪽은 다른 판 이름표)',
+     j2.calls.map(function (c) { return c.source.split('\n')[0]; }), ['■ 전파법 제24조 — 현행(법률 제21065호, 시행 2026.1.2)', '■ 전파법 제24조 — 시행예정(법률 제21553호, 시행 2026.10.22)']);
+  j2 = j2By(byVer);
+  await CV.verifyCitations({ answer: x4.answer, chunks: x4.chunks, annexSources: [], callHaiku: j1All('일치'), callJudge2: j2, verHead: false });
+  eq('#294-보론2 verHead:false(실측 기준선)면 이름표 없음', j2.calls.map(function (c) { return /^■ /.test(c.source); }), [false, false]);
   var x4b = vcase('c4b'); j2 = j2By(function () { return { verdict: '불일치', source_span: '기술기준에 적합한지', claim_span: '준공검사 없이도', reason: '요건 다름' }; });
   var v4b = await CV.verifyCitations({ answer: x4b.answer, chunks: x4b.chunks, annexSources: [], callHaiku: j1All('일치'), callJudge2: j2 });
   eq('#294 c4b 두 판 다 불일치 → 첫 판(현행) 메모로 주황·메모 머리 「현행 판과 대조 — 」·altJudged mismatch·2차 2회',
@@ -1105,6 +1112,11 @@ function ok(name, cond, extra) {
   eq('#294-보론 S4 두 판 글자가 같은 조문의 그대로 일치 → 현행판(종전엔 앞에 잡힌 판) · 시행예정 글만 그대로 일치 → 초록 + 「(2026.10.22 시행 판)」',
      [v4s.verdicts[0].verbatim, v4s.verdicts[0].doc, v4t.verdicts[0].verbatim, v4t.verdicts[0].doc, v4t.answer.indexOf('[원문 확인됨: 전파법 제24조제2항(2026.10.22 시행 판)]') !== -1, v4t.verdicts[0].ver],
      [true, VC, true, VP, true, { mark: 'none', default: VC }]);
+  // #294-보론2 두 판 글이 같으면(개정 안 된 조문) 다른 판 재판정을 하지 않는다 — 같은 판정의 재시도라 틀린 인용이 우연히 초록이 될 수 있다
+  j2 = j2By(byVer);
+  var vSame = await CV.verifyCitations({ answer: x4.answer, chunks: sameTxt, annexSources: [], callHaiku: j1All('일치'), callJudge2: j2 });
+  eq('#294-보론2 두 판 글이 같으면 재판정 없음(2차 1회)·altJudged 없음·주황 「현행 판과 대조 — 」',
+     [vSame.verdicts[0].status, vSame.verdicts[0].doc, j2.calls.length, 'altJudged' in vSame.verdicts[0], vSame.verdicts[0].reason], ['mismatch', VC, 1, false, '현행 판과 대조 — 2항은 준공기한 연장']);
   // S5 versionWanted 조회가 same(다른 판이 DB에 없음)이면 OUTSIDE_MAX 자리를 돌려준다 — 헛조회 4개 뒤의 판 받기가 막히지 않는다
   var otherArts = ['30조', '31조', '32조', '33조'].map(function (k, n) { return { id: 900 + n, doc_name: VC, article_no: k + '(가)', chunk_index: 300 + n, content: '제' + k.replace('조', '') + '조(가) ① 시설자는 2026.12.1 시행 무선국의 운용 기록을 보관하여야 한다.' }; });
   var aS5 = otherArts.map(function (c) { return '2026.12.1 시행 기준으로 시설자는 무선국 운용 기록을 장부에 적어 두어야 합니다. [원문 확인됨: 전파법 ' + c.article_no.replace(/\(.*$/, '').replace(/^/, '제') + ']'; }).join('\n\n') + '\n\n' + x1.answer;
