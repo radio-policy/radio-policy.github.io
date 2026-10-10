@@ -7895,10 +7895,11 @@ async function summarizeNews(newsId) {
         '원문 수집 중...' +
       '</div>';
     bodySnippet = await _fetchArticleBody(n.url);
-    if (bodySnippet && sb) {
-      // 수집 성공 시 DB에 저장해 다음번엔 바로 사용
+    if (bodySnippet) n.content = bodySnippet;
+    // 수집 성공 시 DB에 저장해 다음번엔 바로 사용 — 승인 계정만(읽음 처리와 같은 조건, #29x).
+    // anon은 news_feed 쓰기 권한이 없어(2026-10-10 회수) 비로그인 저장은 403 헛요청·콘솔 오류만 남긴다.
+    if (bodySnippet && sb && aiReady()) {
       sb.from('news_feed').update({ content: bodySnippet }).eq('id', n.id).then(function() {});
-      n.content = bodySnippet;
     }
   }
 

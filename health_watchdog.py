@@ -237,7 +237,9 @@ if not any(p.startswith("⛔") for p in problems):
 #   ⓑ 비용 급증: 최근 24시간 추정 비용 > 그 전 7일(24시간 단위) 중앙값 × 2 이고 $1 이상이면 경고 + 상위 3곳.
 # 단가는 추정용(청구서 아님). 캐시 쓰기는 1시간 캐시 기준 입력 2배, 읽기 0.1배.
 CACHED_SITES = ("crawler.py:_screen_batch_haiku", "crawler.py:classify_urgency")
-PRICES = {"haiku": (1.0, 5.0), "sonnet": (2.0, 10.0), "opus": (5.0, 25.0)}   # $/백만 토큰 (입력, 출력)
+PRICES = {"haiku": (1.0, 5.0), "sonnet": (2.0, 10.0), "opus": (5.0, 25.0),   # $/백만 토큰 (입력, 출력)
+          # voyage-embed가 #29x부터 기록 — 모르는 모델은 sonnet 단가로 세므로 넣지 않으면 KB 임베딩 채우기가 급증 오경보가 된다
+          "voyage-law": (0.12, 0.0), "voyage": (0.02, 0.0)}
 # 실행마다 자기 비용을 텔레그램으로 알리는 작업은 급증 계산에서 뺀다(중복 경고 방지) — okf_refresh(#198, 교체 있는 날만 ≈$2)
 SELF_REPORTED = ("okf_refresh.py:",)
 
@@ -315,6 +317,46 @@ if not any(p.startswith("⛔") for p in problems):
             print("[워치독] 표시 없는 옛 기사 유입 %d건 (정상)" % len(unmarked))
     except Exception as e:
         problems.append("표시 없는 옛 기사 감시 확인 실패: %s" % e)
+
+# ── ③-5 보안 정기 점검 (#29x, 2026-10-10 — 시스템 평가 보안 판정 Q7) ──
+# DB 함수 security_audit()(service_role 전용) 한 번: ㉡ 허용 목록 위반(anon 쓰기·anon 실행 DEFINER·기본 권한…)은
+# 고칠 때까지 매일, ㉠ 권한 지문 변화는 바뀐 날 한 번(함수가 새 값을 스스로 저장), 만료 30일 안은 월요일만,
+# 비밀값 RPC(사내 다리)가 알려진 출처 밖에서 성공했거나 평일 근무시간 호출 0이면 한 줄.
+# 허용 목록은 함수 본문에만 있다(app_config로 옮기지 말 것 — anon이 읽고 관리자가 고친다).
+# 조회 실패도 알린다(fail-open 아님 — 보안 점검이 안 돈 것도 알아야 한다).
+if not any(p.startswith("⛔") for p in problems):
+    try:
+        req = urllib.request.Request(
+            SUPABASE_URL + "/rest/v1/rpc/security_audit", data=b"{}",
+            headers=dict(sb_headers, **{"Content-Type": "application/json"}), method="POST")
+        with urllib.request.urlopen(req, timeout=30) as r:
+            audit = json.loads(r.read().decode("utf-8"))
+        viol = audit.get("violations") or []
+        if viol:
+            problems.append("보안 허용 목록 위반 %d건 — %s (고칠 때까지 매일, #29x)"
+                            % (len(viol), ", ".join("%s %s%s" % (v.get("k"), v.get("obj"), (" " + v["priv"]) if v.get("priv") else "")
+                                                    for v in viol[:5])))
+        if audit.get("changed") and not audit.get("first"):
+            diff = ["+" + s for s in (audit.get("added") or [])[:5]] + ["-" + s for s in (audit.get("removed") or [])[:5]]
+            problems.append("권한 지문이 바뀜(한 번만 알림) — 의도한 변경인지 확인: %s" % "; ".join(x[:90] for x in diff))
+        due = audit.get("secrets_due") or []
+        if due and datetime.datetime.now(KST).weekday() == 0:
+            problems.append("비밀값 만료 30일 안: %s" % ", ".join("%s %s" % (d.get("name"), d.get("expires")) for d in due))
+        br = audit.get("bridge") or {}
+        unknown = br.get("unknown") or []
+        if unknown:
+            problems.append("비밀값 RPC가 알려진 출처 밖에서 성공 %d회(%s) — 사내 다리의 새 출구인지 사내에 먼저 확인, "
+                            "아니면 키 교체(security_config.bridge_known_sources)"
+                            % (sum(u.get("n") or 0 for u in unknown),
+                               ", ".join("%s·%s" % (u.get("ip16"), (u.get("ua") or "?")[:30]) for u in unknown[:3])))
+        if not br.get("known_config", True):
+            problems.append("security_config.bridge_known_sources 없음 — 비밀값 RPC 출처 대조가 꺼져 있음")
+        if br.get("weekday_today") and datetime.datetime.now(KST).hour >= 18 and not br.get("biz_calls_today"):
+            problems.append("사내 다리 호출 0건(오늘 10~18시, 비밀값 RPC) — 사내 다리 확인")
+        print("[워치독] 보안 점검: 위반 %d · 지문 %s · 다리 24h %s회(출처 밖 %d)"
+              % (len(viol), "변화" if audit.get("changed") else "같음", br.get("calls_24h"), len(unknown)))
+    except Exception as e:
+        problems.append("security_audit 조회 실패: %s" % e)
 
 # ── ④ 결과 → 텔레그램(이상 있을 때만, 정상이면 무음) ──
 if problems:

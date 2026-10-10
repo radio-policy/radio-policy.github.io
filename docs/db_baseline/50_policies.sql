@@ -92,7 +92,10 @@ CASE
     ELSE (( SELECT is_admin() AS is_admin) OR (( SELECT is_approved_user() AS is_approved_user) AND (team_id = ( SELECT my_team() AS my_team))))
 END);
 
-create policy imp_fb_sel on public.importance_feedback as PERMISSIVE for SELECT to anon, authenticated
+create policy imp_fb_sel_anon on public.importance_feedback as PERMISSIVE for SELECT to anon
+  using ((team_id IS NULL));
+
+create policy imp_fb_sel_auth on public.importance_feedback as PERMISSIVE for SELECT to authenticated
   using (((team_id IS NULL) OR ( SELECT is_admin() AS is_admin) OR (team_id = ( SELECT my_team() AS my_team))));
 
 create policy imp_fb_upd on public.importance_feedback as PERMISSIVE for UPDATE to authenticated

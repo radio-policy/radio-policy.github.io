@@ -16,6 +16,8 @@
      2026-10-30부터 Supabase가 새 테이블에 자동 GRANT를 주지 않으므로, 세션이 MCP로 만든 테이블이 API에서 42501이 난다)
   ⑦ DB 설계도 — docs/db_baseline/(tools_db_baseline.py)이 실DB 정의와 다른지(#227; DB는 git 밖에서 바뀌므로
      바꾼 세션이 커밋할 때 설계도도 함께 갱신하게)
+  ⑨ Edge verify_jwt — 배포된 9개 함수의 verify_jwt가 기대표(VERIFY_JWT_EXPECTED)와 같은지(#29x; 재배포 때
+     --no-verify-jwt를 빠뜨리거나 붙이면 조용히 바뀐다. verify_jwt는 관문이 아니다 — 관문은 함수 안 getUser·비밀값)
 """
 import os
 import re
@@ -221,17 +223,53 @@ def check_grants():
         return []
     kind = {'r': '테이블', 'p': '테이블', 'v': '뷰', 'S': '시퀀스'}
     todo = []
+    # #29x(2026-10-10): anon 기본 제안을 뺐다 — anon은 SELECT만, 그것도 비로그인 화면이나 사내 다리가 실제로 읽는
+    # 표에 anon SELECT 정책과 함께만 준다(security_audit()이 정책 없는 anon GRANT·GRANT 없는 anon 정책을 매일 잡는다).
     for row in rows:
         name, k = row['relname'], row['relkind']
         if k == 'S':
-            fix = 'grant usage, select on public.%s to anon, authenticated, service_role;' % name
+            fix = 'grant usage, select on sequence public.%s to service_role;  -- 로그인 쓰기가 있으면 authenticated도' % name
         elif k == 'v':
-            fix = 'grant select on public.%s to anon, authenticated;' % name
+            fix = 'grant select on public.%s to service_role;  -- 읽는 역할만 더함(뷰는 security_invoker=on으로)' % name
         else:
-            fix = ('grant select on public.%s to anon; grant select, insert, update, delete on public.%s '
-                   'to authenticated, service_role;' % (name, name))
-        todo.append('⑥ %s public.%s 에 어느 역할도 GRANT 없음 → Data API 42501. 역할별로 줄여 실행(#214):\n     %s'
+            fix = ('grant select, insert, update, delete on public.%s to service_role;  -- 로그인 화면이 쓰면 authenticated, '
+                   '비로그인이 읽으면 anon SELECT + anon 정책' % name)
+        todo.append('⑥ %s public.%s 에 어느 역할도 GRANT 없음 → Data API 42501. 누가 읽고 쓰는지 정한 뒤 역할별로(#214·#29x):\n     %s'
                     % (kind[k], name, fix))
+    return todo
+
+
+# ── ⑨ Edge verify_jwt 기대표 (#29x) ──
+# True = 플랫폼이 JWT 없는 요청을 먼저 거른다(관문 아님 — anon 키도 JWT). False = 함수가 자체 비밀값으로 막는 곳
+# (텔레그램 웹훅 비밀·cron 비밀) 또는 외부 호출(텔레그램 서버)이라 JWT가 없는 곳. 바꾸려면 이 표와 지침 운영 표를 함께.
+VERIFY_JWT_EXPECTED = {
+    'admin-daily-report': False, 'assembly-search': True, 'claude-proxy': True, 'news-archive-search': True,
+    'operator-webhook': False, 'send-subscriber-briefing': False, 'telegram-webhook': False,
+    'verify-citations': False, 'voyage-embed': True,
+}
+
+
+def check_verify_jwt():
+    tok = os.environ.get('SUPABASE_ACCESS_TOKEN', '').strip()
+    if not tok:
+        return ['⑨ SUPABASE_ACCESS_TOKEN 없음 — Edge verify_jwt 대조 건너뜀']
+    try:
+        live = {f['slug']: f.get('verify_jwt') for f in http_json(
+            'https://api.supabase.com/v1/projects/%s/functions' % PROJECT_REF,
+            {'Authorization': 'Bearer ' + tok, 'User-Agent': 'tools_release'})}
+    except Exception as e:  # noqa: BLE001
+        return ['⑨ Edge 목록 조회 실패: %s' % str(e)[:80]]
+    todo = []
+    for slug in sorted(set(live) | set(VERIFY_JWT_EXPECTED)):
+        want, got = VERIFY_JWT_EXPECTED.get(slug), live.get(slug)
+        if slug not in live:
+            todo.append('⑨ 기대표의 Edge 함수 %s 가 배포돼 있지 않음' % slug)
+        elif slug not in VERIFY_JWT_EXPECTED:
+            todo.append('⑨ 새 Edge 함수 %s(verify_jwt=%s) — VERIFY_JWT_EXPECTED·지침 운영 표에 추가' % (slug, got))
+        elif want != got:
+            todo.append('⑨ %s verify_jwt=%s (기대 %s) → 재배포 명령의 --no-verify-jwt 확인' % (slug, got, want))
+    if not todo:
+        print('  ⑨ Edge verify_jwt %d개 기대표와 같음' % len(live))
     return todo
 
 
@@ -303,6 +341,7 @@ def main():
     todo += check_bat(changed)
     todo += check_grants()   # 테이블은 git 밖(MCP)에서 생기므로 바뀐 파일과 무관하게 늘 본다
     todo += check_baseline()   # 같은 이유로 늘 본다
+    todo += check_verify_jwt()   # 배포 설정도 git 밖에서 바뀐다
     print()
     if todo:
         print('할 일 %d건:' % len(todo))

@@ -12,7 +12,7 @@
 ## 복구 순서 (새 Supabase 프로젝트 — SQL Editor에서 파일 순서대로)
 1. `00_extensions.sql` → `05_sequences.sql` → `10_tables.sql` → `15_foreign_keys.sql`
 2. `20_functions.sql`(맨 위 `set check_function_bodies = off`) → `25_views.sql` → `30_indexes.sql` → `40_triggers.sql`
-3. `50_policies.sql` → `60_grants.sql`(전부 회수 후 지금 권한만 부여 — 칸 단위 권한 포함, #253) → `65_role_settings.sql`(statement_timeout — 실행 뒤 `NOTIFY pgrst, 'reload config';`)
+3. `50_policies.sql` → `60_grants.sql`(전부 회수 후 지금 권한만 부여 — 칸 단위 권한 포함, #253) → `62_default_privileges.sql`(앞으로 만들 객체의 기본 권한 — anon 없음·함수는 service_role만, #29x) → `65_role_settings.sql`(statement_timeout — 실행 뒤 `NOTIFY pgrst, 'reload config';`)
 4. Vault 값 재입력: `90_vault_names.txt`의 이름마다 `vault.create_secret(값, 이름)` — 값은 운영자 보관분·재발급
    (`github_pat`는 조직 `radio-policy` 소유 fine-grained PAT, Actions R/W 필수 — 지침 #18·#116)
 5. `70_cron.sql` — 1~4가 끝난 뒤(잡이 Vault·함수를 부른다). 파일의 `<OPERATOR_CHAT_ID>`는 실제 값으로 바꾼다(20_functions도 동일)

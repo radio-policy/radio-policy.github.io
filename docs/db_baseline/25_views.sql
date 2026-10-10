@@ -1,6 +1,6 @@
 -- views — tools_db_baseline.py가 실DB에서 생성(손으로 고치지 말 것), 비밀 마스킹됨
 
-create or replace view public.kb_quality_article_parse as
+create or replace view public.kb_quality_article_parse with (security_invoker=on) as
  SELECT doc_name,
     count(*)::integer AS total_chunks,
     count(*) FILTER (WHERE article_no IS NOT NULL AND article_no <> ''::text)::integer AS parsed_chunks,
@@ -14,7 +14,7 @@ create or replace view public.kb_quality_article_parse as
   ORDER BY (round(100.0 * count(*) FILTER (WHERE article_no IS NOT NULL AND article_no <> ''::text)::numeric / count(*)::numeric, 1)), (count(*)::integer) DESC
  LIMIT 15;
 
-create or replace view public.kb_quality_low_docs as
+create or replace view public.kb_quality_low_docs with (security_invoker=on) as
  WITH doc AS (
          SELECT document_chunks.doc_name,
             document_chunks.doc_category,

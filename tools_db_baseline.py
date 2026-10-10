@@ -101,6 +101,30 @@ select format('revoke all on %s from public, anon, authenticated, service_role;%
                   where o.roid is not null and a.attrelid=o.roid and a.attacl is not null and a.attnum>0 and not a.attisdropped
                     and coalesce(r.rolname, 'public') in ('public','anon','authenticated','service_role') group by 1, 2) y), '')) s
 from o order by o.g, o.k""",
+ # 기본 권한(#29x, 2026-10-10) — postgres가 앞으로 만드는 객체가 받는 권한. postgres 역할의 전역(IN SCHEMA 없음)·public·
+ # extensions 행만 적는다(supabase_admin 몫은 postgres가 바꿀 수 없다). 빠지면 복구한 DB에서 새 표·함수가 다시 anon에 열린다.
+ # 전역 함수 항목이 없으면 Postgres 내장 기본값(PUBLIC EXECUTE)이 살아 있다는 뜻 — 그 경우도 한 줄로 드러낸다.
+ 'default_acl': r"""
+with d as (
+  select d.defaclrole::regrole::text rl, d.defaclnamespace nsp, d.defaclobjtype t, d.defaclacl acl
+  from pg_default_acl d
+  where d.defaclrole = 'postgres'::regrole
+    and (d.defaclnamespace = 0 or d.defaclnamespace in ('public'::regnamespace, 'extensions'::regnamespace))
+), x as (
+  select d.*, case d.t when 'r' then 'tables' when 'S' then 'sequences' when 'f' then 'functions' when 'T' then 'types' else 'schemas' end obj,
+         case when d.nsp = 0 then '' else format(' in schema %I', d.nsp::regnamespace::text) end sc
+  from d
+)
+select format('alter default privileges for role %I%s revoke all on %s from public, anon, authenticated, service_role;%s', x.rl, x.sc, x.obj,
+  coalesce((select string_agg(format(E'\nalter default privileges for role %I%s grant %s on %s to %s;', x.rl, x.sc, y.privs, x.obj, y.grantee), '' order by y.grantee)
+            from (select coalesce(r.rolname, 'public') grantee, string_agg(a.privilege_type, ', ' order by a.privilege_type) privs
+                  from aclexplode(x.acl) a left join pg_roles r on r.oid = a.grantee
+                  where coalesce(r.rolname, 'public') in ('public','anon','authenticated','service_role') group by 1) y), '')) s
+from x
+union all
+select '-- 경고: postgres 전역 함수 기본 항목 없음 = 새 함수가 PUBLIC EXECUTE를 받는다(#29x)'
+where not exists (select 1 from pg_default_acl where defaclrole = 'postgres'::regrole and defaclnamespace = 0 and defaclobjtype = 'f')
+order by 1""",
  # 값은 따옴표로('3s'는 따옴표 없이는 문법 오류). session_preload_libraries는 플랫폼 관리 목록이라 뺀다
  'role_settings': "select format('alter role %I set %s = %L;', rolname, split_part(cfg, '=', 1), substr(cfg, strpos(cfg, '=') + 1)) s "
                   "from pg_roles, unnest(rolconfig) cfg where rolname in ('anon','authenticated','service_role','authenticator') "
@@ -120,7 +144,8 @@ from o order by o.g, o.k""",
 FILES = [('extensions', '00_extensions.sql'), ('sequences', '05_sequences.sql'), ('tables', '10_tables.sql'),
          ('foreign_keys', '15_foreign_keys.sql'), ('functions', '20_functions.sql'), ('views', '25_views.sql'),
          ('indexes', '30_indexes.sql'), ('triggers', '40_triggers.sql'), ('policies', '50_policies.sql'),
-         ('grants', '60_grants.sql'), ('role_settings', '65_role_settings.sql'), ('cron', '70_cron.sql'),
+         ('grants', '60_grants.sql'), ('default_acl', '62_default_privileges.sql'),
+         ('role_settings', '65_role_settings.sql'), ('cron', '70_cron.sql'),
          ('storage', '80_storage.sql'), ('vault_names', '90_vault_names.txt')]
 PREAMBLE = {
     # SQL 함수 본문은 만들 때 표·뷰 존재를 검사한다 — 복구 순서에 걸리지 않게 끈다.
@@ -145,7 +170,7 @@ README = """# DB 설계도 (docs/db_baseline) — 자동 생성, 손으로 고�
 ## 복구 순서 (새 Supabase 프로젝트 — SQL Editor에서 파일 순서대로)
 1. `00_extensions.sql` → `05_sequences.sql` → `10_tables.sql` → `15_foreign_keys.sql`
 2. `20_functions.sql`(맨 위 `set check_function_bodies = off`) → `25_views.sql` → `30_indexes.sql` → `40_triggers.sql`
-3. `50_policies.sql` → `60_grants.sql`(전부 회수 후 지금 권한만 부여 — 칸 단위 권한 포함, #253) → `65_role_settings.sql`(statement_timeout — 실행 뒤 `NOTIFY pgrst, 'reload config';`)
+3. `50_policies.sql` → `60_grants.sql`(전부 회수 후 지금 권한만 부여 — 칸 단위 권한 포함, #253) → `62_default_privileges.sql`(앞으로 만들 객체의 기본 권한 — anon 없음·함수는 service_role만, #29x) → `65_role_settings.sql`(statement_timeout — 실행 뒤 `NOTIFY pgrst, 'reload config';`)
 4. Vault 값 재입력: `90_vault_names.txt`의 이름마다 `vault.create_secret(값, 이름)` — 값은 운영자 보관분·재발급
    (`github_pat`는 조직 `radio-policy` 소유 fine-grained PAT, Actions R/W 필수 — 지침 #18·#116)
 5. `70_cron.sql` — 1~4가 끝난 뒤(잡이 Vault·함수를 부른다). 파일의 `<OPERATOR_CHAT_ID>`는 실제 값으로 바꾼다(20_functions도 동일)

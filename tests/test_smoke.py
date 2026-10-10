@@ -316,7 +316,8 @@ class TestIssuemapOriginMarker(unittest.TestCase):
         self.assertIn("sb.from('news_feed').select('created_at').is('origin', null)", self._src('app.js'))
         fn = self._src('docs/db_baseline/20_functions.sql')
         j = fn.index('FUNCTION public.check_news_health()')
-        self.assertIn('FROM news_feed WHERE origin IS NULL', fn[j:j + 1500])
+        # #29x(10-10)부터 search_path '' — 표 이름이 public. 으로 한정된다
+        self.assertRegex(fn[j:j + 1500], r'FROM (public\.)?news_feed WHERE origin IS NULL')
         # Fable 재검토(2026-09-27) 전수 조사에서 더 찾은 두 곳 — 브리핑 해외 동향(created_at 24h)·긴급도 감사 도구(30일 표본)
         mb = self._src('morning_briefing.py')
         i = mb.index('def fetch_overseas_items')
@@ -1984,6 +1985,68 @@ class TestDashboardCacheBuster(unittest.TestCase):
                 continue
             last = datetime.fromtimestamp(int(ct), kst).strftime('%Y%m%d')
             self.assertGreaterEqual(buster, last, f'{f}: 마지막 수정 {last} > 캐시 번호 {buster} — index.html의 ?v=를 올릴 것')
+
+
+class TestSecurityBlueprint(unittest.TestCase):
+    """DB 설계도(docs/db_baseline) 권한 정적 시험(#29x, 2026-10-10 — 시스템 평가 보안 판정 Q7 ③, 네트워크 0).
+    anon(공개 키)은 읽기만: 표·칸 GRANT는 SELECT만(예외 lawmap_proposals INSERT — 비로그인 관계도 요청),
+    시퀀스 GRANT 없음, anon·PUBLIC이 실행하는 SECURITY DEFINER는 비밀값 RPC 3개뿐. 실DB는 security_audit()이
+    매일 보고, 이 시험은 설계도를 재생성해 커밋하는 순간 같은 규칙을 본다. 허용 목록을 바꾸려면 두 곳을 함께."""
+
+    ANON_DEFINER_OK = {'people_export', 'team_rules_export', 'team_urgency_export'}
+    ANON_WRITE_OK = {('lawmap_proposals', 'INSERT')}
+
+    def _read(self, name):
+        return open(os.path.join(_ROOT, 'docs', 'db_baseline', name), encoding='utf-8').read()
+
+    def test_anon_table_and_column_grants_select_only(self):
+        bad = []
+        for m in re.finditer(r'^grant (.+?) on (sequence |function )?public\.(\w+)(?:\(.*?\))? to anon;$',
+                             self._read('60_grants.sql'), re.M):
+            privs, kind, obj = m.group(1), m.group(2), m.group(3)
+            if kind:
+                if kind.strip() == 'sequence':
+                    bad.append(f'sequence {obj}: {privs}')
+                continue
+            for p in re.findall(r'([A-Z]+)(?:\s*\([^)]*\))?', privs):
+                if p != 'SELECT' and (obj, p) not in self.ANON_WRITE_OK:
+                    bad.append(f'{obj}: {p}')
+        self.assertEqual(bad, [], 'anon에 SELECT 밖 권한 — 회수하거나 허용 목록(security_audit()·이 시험)을 함께 고칠 것')
+
+    def test_anon_public_definer_only_secret_rpcs(self):
+        fns = self._read('20_functions.sql')
+        definer = set()
+        for blk in re.split(r'(?m)^CREATE OR REPLACE FUNCTION ', fns)[1:]:
+            name = re.match(r'public\.(\w+)\(', blk)
+            head = blk.split('AS $', 1)[0]
+            if name and 'SECURITY DEFINER' in head:
+                definer.add(name.group(1))
+        self.assertGreater(len(definer), 10, '20_functions.sql에서 SECURITY DEFINER를 못 읽음 — 형식이 바뀌었나')
+        grants = self._read('60_grants.sql')
+        anon = set(re.findall(r'^grant EXECUTE on function public\.(\w+)\(.*\) to anon;$', grants, re.M))
+        public = set(re.findall(r'^grant EXECUTE on function public\.(\w+)\(.*\) to public;$', grants, re.M))
+        self.assertEqual(sorted(definer & anon), sorted(self.ANON_DEFINER_OK),
+                         'anon이 실행하는 SECURITY DEFINER는 비밀값 RPC 3개뿐이어야 한다(#186·#29x)')
+        self.assertEqual(sorted(definer & public), [], 'PUBLIC이 실행하는 SECURITY DEFINER가 있으면 anon도 실행한다')
+
+    def test_default_privileges_closed(self):
+        # 함수의 PUBLIC EXECUTE는 내장 기본값이라 전역 행으로만 빠진다(스키마 단위 revoke는 무동작) — 10-10 Fable 점검 Q-a
+        path = os.path.join(_ROOT, 'docs', 'db_baseline', '62_default_privileges.sql')
+        self.assertTrue(os.path.isfile(path), '62_default_privileges.sql 없음 — py -3.12 tools_db_baseline.py')
+        src = open(path, encoding='utf-8').read()
+        self.assertNotIn('전역 함수 기본 항목 없음', src, '새 함수가 PUBLIC EXECUTE를 받는 상태')
+        self.assertIsNone(re.search(r'in schema public grant [^;]* to anon;', src), 'public 새 객체가 anon에 열림')
+        self.assertIsNone(re.search(r'in schema public grant [^;]* on functions to (authenticated|public);', src),
+                          'public 새 함수가 로그인 계정 전원에 열림(새 RPC는 마이그레이션에서 명시 grant)')
+        self.assertRegex(src, r'for role postgres revoke all on functions from public')
+        self.assertIsNone(re.search(r'for role postgres grant [^;]* on functions to public;', src))
+        self.assertRegex(src, r'in schema extensions grant EXECUTE on functions to public;',
+                         'extensions 스키마는 PUBLIC 유지(postgres 소유 확장 설치·갱신이 깨지지 않게)')
+
+    def test_voyage_embed_gate(self):
+        src = open(os.path.join(_ROOT, 'supabase', 'functions', 'voyage-embed', 'index.ts'), encoding='utf-8').read()
+        for needle in ('auth.getUser', 'approved', 'MAX_QUERY_CHARS', 'recordApiUsage', 'corsHeaders('):
+            self.assertIn(needle, src, f'voyage-embed 관문/상한/기록 요소 {needle} 가 없음(#29x)')
 
 
 class TestAdvisoryStreamBlockJoin(unittest.TestCase):

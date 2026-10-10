@@ -124,6 +124,16 @@ create table if not exists public.assembly_speeches (
 );
 alter table public.assembly_speeches enable row level security;
 
+create table if not exists public.bridge_export_log (
+  id bigint generated always as identity not null,
+  fn text not null,
+  at timestamp with time zone default now() not null,
+  ua text,
+  ip text,
+  constraint bridge_export_log_pkey PRIMARY KEY (id)
+);
+alter table public.bridge_export_log enable row level security;
+
 create table if not exists public.changes (
   id uuid default gen_random_uuid() not null,
   doc_name text not null,
@@ -625,6 +635,25 @@ create table if not exists public.profiles (
   constraint profiles_role_check CHECK ((role = ANY (ARRAY['admin'::text, 'leader'::text, 'member'::text])))
 );
 alter table public.profiles enable row level security;
+
+create table if not exists public.security_audit_log (
+  id bigint generated always as identity not null,
+  at timestamp with time zone default now() not null,
+  hash text not null,
+  lines jsonb,
+  violations jsonb default '[]'::jsonb not null,
+  changed boolean not null,
+  constraint security_audit_log_pkey PRIMARY KEY (id)
+);
+alter table public.security_audit_log enable row level security;
+
+create table if not exists public.security_config (
+  key text not null,
+  value jsonb not null,
+  updated_at timestamp with time zone default now() not null,
+  constraint security_config_pkey PRIMARY KEY (key)
+);
+alter table public.security_config enable row level security;
 
 create table if not exists public.speech_field_stats (
   id bigint generated always as identity not null,

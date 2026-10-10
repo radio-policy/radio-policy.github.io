@@ -14,6 +14,8 @@ CREATE INDEX assembly_speeches_date_idx ON public.assembly_speeches USING btree 
 
 CREATE INDEX assembly_speeches_speaker_idx ON public.assembly_speeches USING btree (speaker);
 
+CREATE INDEX bridge_export_log_at_idx ON public.bridge_export_log USING btree (at);
+
 CREATE INDEX idx_chat_logs_user ON public.chat_logs USING btree (user_id);
 
 CREATE INDEX document_chunks_category_idx ON public.document_chunks USING btree (doc_category);
@@ -95,6 +97,8 @@ CREATE INDEX news_feed_created_at_idx ON public.news_feed USING btree (created_a
 CREATE INDEX news_screen_cache_judged_at_idx ON public.news_screen_cache USING btree (judged_at);
 
 CREATE INDEX idx_profiles_team ON public.profiles USING btree (team_id);
+
+CREATE INDEX security_audit_log_at_idx ON public.security_audit_log USING btree (at);
 
 CREATE INDEX speech_field_stats_date_idx ON public.speech_field_stats USING btree (meeting_date);
 
