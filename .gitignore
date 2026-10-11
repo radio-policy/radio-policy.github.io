@@ -1,4 +1,5 @@
-.env 
+.env
+.env.bak*
 PROJECT_지침.md
 refetch_log.txt
 __pycache__/
