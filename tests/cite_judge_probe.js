@@ -39,6 +39,11 @@
 //  2026-10-12(≈ $0.27): 사내 실재연에서 사례 2가 이름표 뒤에도 주황(사내 2차가 조문 안 「<신설 2026.4.21>」을 시행일로 읽음, 4/4)이라 같은 꼴 H5·H6
 //  (표 칸 「원문과 부합, 단 제24조제2항(자기적합확인, 2026.10.22 시행)과는 별개 제도」)을 더해 재현 시도 — prod 0/8·o48pg 0/8 주황(재현 안 됨) →
 //  외부 지시문 그대로, 사내 2차 모델(사내 플랫폼 Opus 4.8 inline) 문제로 넘김(운영자 결정).
+//  2026-10-12(≈ $2.90, 운영자 승인 — 사내 설계 D 「다시」 ⓪) 사내가 가짜 판정기로 다시 만든 사례 2의 정확한 2차 입력 = H7(표시가 「원문과 부합」 바로 뒤,
+//  인용문은 표시 뒤 토막 「, 단 제24조제2항(…)과는 별개 제도 |」 — H5·H6는 인용문에 「원문과 부합」이 들어 있어 달랐다). H7 × 4: prod 0/4 · o48pg **4/4**
+//  (「제2항 신설일은 2026.4.21」, 사내와 같은 이유 — 바깥 흉내로 재현됨) · o48pg_think(Opus 4.8 inline + adaptive, 노력 기본) 0/4. 고정 사례 28개 × o48pg_think × 4
+//  (입력은 기준선과 글자 같음, 출력 호출당 ≈380): H7 0/8·N1 2/2 → 0/4·N5a 2/2 → 1/4로 고쳤으나 **F6 0/4 → 4/4 새 거짓 주황**(「피해 이용자」를 청구권자를
+//  좁힌 것으로 봄)·N4 4/4 그대로·진짜 N6 0/4 놓침 그대로, 진짜 28/28·N7·N8·H3 유지 → P1·P3·P4 실패, P2·P5 통과(기준선 o48pg는 P1·P2·P5 통과).
 // ============================================================================
 'use strict';
 const fs = require('fs');
@@ -64,6 +69,8 @@ const VARIANTS = {
   o48: { model: 'claude-opus-4-8', extra: { thinking: { type: 'disabled' } }, max: 2000 },   // 사내판 후보(사내 플랫폼에 Opus 5.5 없음, 2026-10-05 사내 요청)
   // 사내 Agent 요청 꼴(inline): system 칸을 비우고 user 메시지 = 지시문 + "\n\n" + 항목 글, 추론 끔, 온도류 없음, max_tokens 8000(2026-10-05 사내 요청)
   o48pg: { model: 'claude-opus-4-8', extra: { thinking: { type: 'disabled' } }, max: 8000, inline: true },
+  // 같은 꼴 + 추론 켬(사내 설계 D 「다시(10/12)」 ① 후보 — Opus 4.8의 켜는 꼴은 adaptive뿐, 노력은 기본(high)). 추론도 max_tokens에 들어가 16000
+  o48pg_think: { model: 'claude-opus-4-8', extra: { thinking: { type: 'adaptive' } }, max: 16000, inline: true, out: 600 },   // out = 어림용 출력(10-12 실측: 추론 켬 호출당 H7 ≈200 · 고정 사례 전체 평균 ≈380)
   s5pg: { model: 'claude-sonnet-5', extra: { thinking: { type: 'disabled' } }, max: 8000, inline: true },
   // 지시문 후보 시험용 — system을 바꿔 보낸다(운영 JUDGE2_SYSTEM은 그대로). 후보 글은 아래 CAND_SYSTEM
   s55m_cand: { model: 'claude-sonnet-5-5', extra: { output_config: { effort: 'medium' } }, max: 8000, cand: true },
@@ -183,7 +190,7 @@ const keyRe = function (k) { return new RegExp('\\s' + k.replace(/[.*+?^${}()|[\
 //  (local_docs/cite_judge_probe/blind_items.json·blind_gold.json, 인용 대상 + 인용문으로 맞춤 — 없으면 P5는 「정답 없음」).
 const P_FALSE_OLD = ['F1', 'F5', 'F6', 'F7'], P_TRUE_OLD = ['T1', 'T1b', 'T2', 'S1', 'S2', 'S3', 'S4'];
 const P_FALSE_NEW = ['N1', 'N2', 'N3', 'N4', 'N5a', 'N5b'], P_TRUE_NEW = ['N6', 'N7', 'N8'];
-const P_VER = ['H1', 'H2', 'H3', 'H4'];   // 판 이름표(#294-보론2) 사례 — 이름표 있음/없음은 결과 파일을 따로 --report
+const P_VER = ['H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'H7'];   // 판 이름표(#294-보론2) 사례 — 이름표 있음/없음은 결과 파일을 따로 --report
 function passReport(files) {
   const merged = new Map();   // key → {case, gold, target, claim, s2:{variant:[...]}}
   for (const f of files) {
@@ -286,7 +293,7 @@ if (arg('--report', '')) { passReport(arg('--report', '').split(',')); process.e
   const sys1 = tok(CV.JUDGE_SYSTEM), sys2 = tok(CV.JUDGE2_SYSTEM);
   let in1 = 0; for (const b of sel) in1 += sys1 + b.items.reduce(function (a, it) { return a + tok(it.claim) + tok(it.source) + 30; }, 0);
   const n2 = fixed.length * REP2 + ((GREEN2 || FROM) ? (allItems.length - fixed.length) * REP2G : 0);   // 2차 호출 수(변형마다)
-  const est = (in1 * REP1 * 1 + sel.length * REP1 * 150 * 5) / 1e6 + VARS.reduce(function (a, v) { const pr = PRICE[VARIANTS[v].model] || [4, 20]; return a + n2 * ((sys2 + 600) * pr[0] + (VARIANTS[v].model === 'claude-sonnet-5' ? 200 : 400) * pr[1]) / 1e6; }, 0);
+  const est = (in1 * REP1 * 1 + sel.length * REP1 * 150 * 5) / 1e6 + VARS.reduce(function (a, v) { const pr = PRICE[VARIANTS[v].model] || [4, 20]; return a + n2 * ((sys2 + 600) * pr[0] + (VARIANTS[v].out || (VARIANTS[v].model === 'claude-sonnet-5' ? 200 : 400)) * pr[1]) / 1e6; }, 0);   // out = 추론 켠 변형의 출력 어림
   console.log('어림 비용 ≈ $' + est.toFixed(2) + ' (1차 ' + sel.length + '묶음×' + REP1 + ', 2차 변형마다 ' + n2 + '회 × ' + VARS.join('/') + ')');
   if (argv.includes('--dump')) {   // 고정 사례가 판정기에 가는 글(인용 대상·인용문·원문)을 파일로 — API 쓰기 전 눈으로 확인
     const f = path.join(REPO, 'local_docs', 'cite_judge_probe', 'items_dump.json');
