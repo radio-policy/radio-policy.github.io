@@ -8,6 +8,8 @@
 //   node tools_cite_replay.js --since 2026-10-01    # 기간
 //   node tools_cite_replay.js --all-mismatch        # 판정기를 모두 「불일치」로 모의 — "주황이 될 수 있는 표시"가 어떻게 달라지는지(#286 ⓒ 회색 규칙)
 //   node tools_cite_replay.js --dump out.json       # 새 판의 표시별 결과(답변 id·질문·tag·key·law·doc·status·reason·cmp·lawGuess·ver(#294 판 고르기))를 JSON으로 — 지금 코드 기준 회색·원문 없음 목록용
+//   node tools_cite_replay.js --inputs              # 판정기에 가는 (인용 대상, 인용문)만 견준다 — 판정기는 모두 「일치」로 모의하고 1차 입력을 받아 적는다
+//                                                   (2026-10-12 설계 D ④ 표 행 「행 전체 인용문」 — 대상·상태는 같고 인용문만 바뀌는 규칙을 사내 재연과 같은 잣대로 센다)
 //   출력 셋(#288): changed(조·문서·상태가 바뀐 표시) · path-only(상태는 같고 대조 조문 이름표 cmp나 ⓒ 시도 기록만 바뀐 것 — 다중 원문) · shown-text(검증 뒤 본문의 표시 글자)
 //   ⓒ(검색 자료 밖 조문 대조)는 DB 문서명 목록(RPC kb_doc_names)과 fetchLawArticle을 쓴다 — 실DB 읽기만, AI 0회
 //
@@ -18,6 +20,7 @@ const REPO = __dirname;
 const arg = function (name, dflt) { const i = process.argv.indexOf(name); return i !== -1 ? process.argv[i + 1] : dflt; };
 const since = arg('--since', '2026-09-01');
 const ALLMIS = process.argv.indexOf('--all-mismatch') !== -1;
+const INPUTS = process.argv.indexOf('--inputs') !== -1;
 const newPath = path.join(REPO, 'supabase', 'functions', '_shared', 'cite_verify.js');
 let oldPath = arg('--old', null);
 if (!oldPath) {
@@ -159,6 +162,19 @@ function fakeJudges() {   // 1차 전부 불일치, 2차 전부 불일치 + 원�
     },
   };
 }
+function captureJudges(log) {   // --inputs: 1차·2차 모두 「일치」, 1차에 간 항목의 (대상, 인용문)을 log에 순서대로
+  return {
+    callHaiku: async function (sys, user) {
+      const ids = [];
+      for (const p of user.split(/\n\n(?=### 항목 \d+\n)/)) {
+        const mm = p.match(/^### 항목 (\d+)\n\[인용 대상\] (.*)\n\[인용문\]\n([\s\S]*?)\n\[원문\]\n/);
+        if (mm) { ids.push(+mm[1]); log.push({ target: mm[2], claim: mm[3] }); }
+      }
+      return JSON.stringify(ids.map(function (n) { return { id: n, verdict: '일치', reason: '모의' }; }));
+    },
+    callJudge2: async function () { return '[{"id":1,"verdict":"일치","source_span":"","claim_span":"","reason":"모의"}]'; },
+  };
+}
 function brief(v) {
   return { tag: v.tag, key: v.key, law: v.law, doc: v.doc ? v.doc.split('(')[0] : null, status: v.status === 'unjudged' ? 'found' : v.status, reason: v.reason, guess: v.lawGuess || null, ev: v.guessEvidence == null ? null : !!v.guessEvidence,
     cmp: v.cmp || null, src: v.srcFetched || null };
@@ -168,8 +184,8 @@ function shownTags(answer) { return String(answer || '').match(/\[원문[^\]]*\]
 (async function main() {
   const OLD = loadModule(oldPath), NEW = loadModule(newPath), sp = loadSystemPrompt();
   const rows = await rest('chat_logs?select=id,created_at,channel,question,answer,chunk_ids,cite_verdicts&created_at=gte.' + since + '&cite_verdicts=not.is.null&chunk_ids=not.is.null&order=created_at.asc&limit=300');
-  console.log('rows', rows.length, 'since', since, ALLMIS ? '(모의 판정: 전부 불일치)' : '(판정기 없음 — 구조만)', '| old =', oldPath);
-  let items = 0, diffs = 0, pathDiffs = 0, textDiffs = 0;
+  console.log('rows', rows.length, 'since', since, ALLMIS ? '(모의 판정: 전부 불일치)' : INPUTS ? '(모의 판정: 전부 일치 — 판정기 입력 대조)' : '(판정기 없음 — 구조만)', '| old =', oldPath);
+  let items = 0, diffs = 0, pathDiffs = 0, textDiffs = 0, inItems = 0, inDiffs = 0;
   const textLog = [];
   const summary = { old: {}, new: {} };
   const dumpPath = arg('--dump', null), dump = [];
@@ -178,18 +194,30 @@ function shownTags(answer) { return String(answer || '').match(/\[원문[^\]]*\]
     const ids = (row.chunk_ids || []).filter(function (x) { return typeof x === 'number'; }).slice(0, 80);
     const chunks0 = await fetchChunksByIds(ids);
     const answer = untag(row.answer);
-    const out = {}, shown = {};
+    const out = {}, shown = {}, inp = { old: [], new: [] };
     for (const pair of [['old', OLD], ['new', NEW]]) {
       const name = pair[0], CV = pair[1];
       let chunks = chunks0.slice();
       try { chunks = (await CV.expandArticles(chunks, fetchArticle, EXPAND_OPTS)).chunks; } catch (e) { console.warn('expand fail', e.message); }
-      const judges = ALLMIS ? fakeJudges() : { callHaiku: null, callJudge2: null };
+      const judges = ALLMIS ? fakeJudges() : INPUTS ? captureJudges(inp[name]) : { callHaiku: null, callJudge2: null };
       // listLawDocs(#288 ⓒ)는 옛 판이 모르는 인자라 넘겨도 무시된다
       const vr = await CV.verifyCitations({ answer: answer, chunks: chunks, annexSources: [], systemPrompt: sp, callHaiku: judges.callHaiku, callJudge2: judges.callJudge2, fetchLawArticle: fetchLawArticle, listLawDocs: listLawDocs });
       out[name] = vr.verdicts.map(brief);
       shown[name] = shownTags(vr.answer);
       for (const v of out[name]) summary[name][v.status] = (summary[name][v.status] || 0) + 1;
       if (name === 'new' && dumpPath) for (const v of vr.verdicts) dump.push({ id: row.id, created_at: row.created_at, channel: row.channel, question: String(row.question || '').slice(0, 80), tag: v.tag, key: v.key, law: v.law, doc: v.doc, status: v.status, reason: v.reason, cmp: v.cmp || null, lawGuess: v.lawGuess || null, guessEvidence: v.guessEvidence == null ? null : v.guessEvidence, verbatim: v.verbatim, overlap: v.overlap, multi: v.multi || null, srcFetched: v.srcFetched || null, nopara: v.nopara || null, ver: v.ver || null });
+    }
+    if (INPUTS) {   // 판정기 입력 (대상, 인용문) — 순서대로 견준다
+      const m = Math.max(inp.old.length, inp.new.length);
+      inItems += m;
+      for (let i = 0; i < m; i++) {
+        const a = inp.old[i], b = inp.new[i];
+        if (a && b && a.target === b.target && a.claim === b.claim) continue;
+        inDiffs++;
+        console.log('\n# ' + row.created_at.slice(0, 16) + ' ' + row.id.slice(0, 8) + ' [판정기 입력] Q: ' + String(row.question || '').slice(0, 40));
+        console.log('  old : ' + (a ? '[' + a.target + '] ' + a.claim.replace(/\n/g, ' ⏎ ') : '-'));
+        console.log('  new : ' + (b ? '[' + b.target + '] ' + b.claim.replace(/\n/g, ' ⏎ ') : '-'));
+      }
     }
     const n = Math.max(out.old.length, out.new.length);
     items += n;
@@ -216,6 +244,7 @@ function shownTags(answer) { return String(answer || '').match(/\[원문[^\]]*\]
     for (let i = 0; i < m2; i++) if (shown.old[i] !== shown.new[i]) { textDiffs++; textLog.push(row.id.slice(0, 8) + ' #' + i + '\n    old ' + (shown.old[i] || '-') + '\n    new ' + (shown.new[i] || '-')); }
   }
   console.log('\nitems', items, 'changed', diffs, 'path-only', pathDiffs, 'shown-text', textDiffs);
+  if (INPUTS) console.log('judge-inputs', inItems, 'changed-inputs', inDiffs);
   if (textLog.length) console.log('\n[표시 글자 변화]\n  ' + textLog.join('\n  '));
   console.log('old', JSON.stringify(summary.old));
   console.log('new', JSON.stringify(summary.new));

@@ -1139,6 +1139,31 @@ function ok(name, cond, extra) {
   eq('#294-보론 S3 claimRelevance: 법령명 뒤에 와도 내용 낱말을 센다(종전 hits 0)',
      [CV.claimRelevance('이용자에게 폐업 예정일 60일 전까지 알려야 한다고 전기통신사업법 제19조제1항이 정하고 있습니다.', '① 기간통신사업자는 … 폐업하려면 … 폐업 예정일 60일 전까지 이용자에게 알리고 …').hits >= 2], [true]);
 
+  // c12 표 행 「행 전체 인용문」(2026-10-12 사내 선행 99faa500 설계 D ④ 이식 — 사내 시험 c12 두 줄과 같은 입력·기대값): 앞 칸이 짧아 표시 뒤를 고를 때
+  //   앞 칸에 번호 말고 말이 있으면 그 행 전체를 판정기에 보낸다. 사내 10/8 사례 2 꼴 — 뒤 토막만 가면 사내 2차가 「2026.10.22 시행」을 「<신설 2026.4.21>」과
+  //   맞대 거짓 주황(외부 흉내 H7 o48pg 4/4) / 앞 칸이 번호뿐(「| 제5항 [표시] | 내용 |」)이면 종전대로 뒤 칸만, 목록 항목은 row 아님
+  var head12 = '| 조문 | 대조 |\n|---|---|\n';
+  var ans12 = head12 + '| 전파법 제24조 (검사) | 원문과 부합 [원문 확인됨: 전파법 제24조], 단 제24조제2항(자기적합확인, 2026.10.22 시행)과는 별개 제도 |\n';
+  var j12 = j2By(function () { return { verdict: '일치', reason: '같음' }; });
+  var v12 = await CV.verifyCitations({ answer: ans12, chunks: x1.chunks, annexSources: [], callHaiku: j1All('일치'), callJudge2: j12 });
+  var ans12e = head12 + '| 제4조②(검사 시 확인) | 전파법 제24조 | [원문 확인됨: 전파법 제24조] — 준공검사·정기검사와 부합. 단 제24조제2항(자기적합확인, 2026.10.22 시행예정)과는 별개 제도 |\n';
+  var j12e = j2By(function () { return { verdict: '일치', reason: '같음' }; });
+  await CV.verifyCitations({ answer: ans12e, chunks: x1.chunks, annexSources: [], callHaiku: j1All('일치'), callJudge2: j12e });
+  eq('설계 D ④ c12 표 행 앞 칸에 말(「원문과 부합」·「검사 시 확인」) + 뒤 토막 → 인용문은 행 전체(판은 시행일 표지로 시행예정 그대로)',
+     [CV.findCitations(ans12)[0].row, j12.calls[0].claim, j12.calls[0].source.split('\n')[0], v12.verdicts[0].status,
+      j12e.calls[0].claim.indexOf('| 제4조②(검사 시 확인) | 전파법 제24조 |') === 0 && /별개 제도 \|$/.test(j12e.calls[0].claim)],
+     [true, '| 전파법 제24조 (검사) | 원문과 부합 , 단 제24조제2항(자기적합확인, 2026.10.22 시행)과는 별개 제도 |', '■ 전파법 제24조 — 시행예정(법률 제21553호, 시행 2026.10.22)', 'ok', true]);
+  var a16_5 = { id: 1605, doc_name: VC, article_no: '16조(재할당)', chunk_index: 41, status: 'current',
+    content: '제16조(재할당) ⑤ 과학기술정보통신부장관은 재할당하는 경우 주파수 이용 효율을 높이기 위하여 필요한 조건을 붙일 수 있다.' };
+  var ans12n = head12 + '| 제5항 [원문 확인됨: 전파법 제16조제5항] | 재할당 시 주파수 이용 효율을 높이기 위해 필요한 조건을 붙일 수 있음 |\n';
+  var j12n = j2By(function () { return { verdict: '일치', reason: '같음' }; });
+  await CV.verifyCitations({ answer: ans12n, chunks: [a16_5], annexSources: [], callHaiku: j1All('일치'), callJudge2: j12n });
+  var lst12 = '- 제5항 [원문 확인됨: 전파법 제16조제5항] 재할당 시 주파수 이용 효율을 높이기 위해 필요한 조건을 붙일 수 있음\n- 제6항 따로 정함\n';
+  eq('설계 D ④ c12 반례: 앞 칸이 번호뿐(「| 제5항 [표시] | 내용 |」) → 종전대로 뒤 칸만 / 목록 항목은 row 아님 / 「나목」·「제3항」은 말로 안 셈',
+     [j12n.calls[0].claim, CV.findCitations(lst12)[0].sibling, CV.findCitations(lst12)[0].row,
+      CV.rowWords(CV.stripCiteBody('| 제3호 나목 ')), CV.rowWords(CV.stripCiteBody('| **전파법 제16조제5항** '))],
+     ['| 재할당 시 주파수 이용 효율을 높이기 위해 필요한 조건을 붙일 수 있음 |', true, false, false, false]);
+
   // 지시문 지문 잠금 — 1차는 2차 보정의 바탕이라 글자 그대로, 2차는 실측(tests/cite_judge_probe.js) 뒤에만 고친다
   var sha = function (s) { return require('crypto').createHash('sha256').update(s, 'utf8').digest('hex').slice(0, 16); };
   eq('지문: 1차 판정 지시문(JUDGE_SYSTEM)', sha(CV.JUDGE_SYSTEM), '89a3482f020ae02d');

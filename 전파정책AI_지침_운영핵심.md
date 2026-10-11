@@ -391,6 +391,9 @@ B: 본래 근거 조문(위임 따라가기와 같은 [정밀검색·상한 구�
    서술어·연결 어미·주제/목적 조사로 끝나는 낱말 뒤부터). 그대로 일치 동률은 현행판, 시행예정판에서만 그대로 일치면 판 꼬리. 판 받기는 답변 순서로 하나씩(`want` same이면 자리 반환). `closedBefore` 기록.
    2차 지시문 `JUDGE2_SYSTEM`은 그대로(v2 후보 실측 보류 — `tests/cite_judge_probe.js` 머리 주석). **#294-보론2(같은 날)**: 두 판 글이 같으면(normQ) 재판정하지 않고,
    판이 둘인 조의 한 판을 판정기에 보낼 때 원문 맨 앞에 판 이름표 「■ 전파법 제24조 — 시행예정(법률 제21553호, 시행 2026.10.22)」(재판정 쪽은 다른 판 이름표).
+   **#294-보론3(2026-10-12, 사내 선행 99faa500 설계 D ④ 이식)**: 표 행 표시(`row` — sibling 중 「|」 줄)가 앞 칸이 짧아 표시 뒤를 인용문으로 고를 때(headingOnly), 앞 칸에 번호 말고
+   말이 있으면(`rowWords` — `stripCiteBody` 뒤 조·항·호·목·동그라미 숫자·숫자를 빼고 2자 이상) 인용문 = 그 행 전체(앞 칸 + 뒤 토막, 표시만 빠짐). 앞 칸이 번호뿐(「| 제5항 [표시] | 내용 |」)이거나
+   목록 항목이면 종전대로 뒤 칸만, noclaim 판정은 headingOnly 그대로. 판정기에 가는 (대상, 인용문) 대조는 `node tools_cite_replay.js --inputs`(AI 0회).
    **토막 문단 표시(#176)**: 꼬리표에만 대상이 있고 그 줄 본문이 24자 미만이면(「고 하면서,」·「을 열거하고 있습니다.」) 앞 문단
    (본문 있는 첫 문단, 최대 3개, 직전 표시 경계 무시)을 인용문으로 쓴다. 그 문단에 같은 조의 표시가 이미 있으면 이 표시는
    중복(`dup`)이라 **지운다** — 9/17 대시보드 답변의 '확인 안 됨' 5건이 전부 이 오탐이었다. 판정 목록은 `chat_logs.cite_verdicts`에
@@ -1354,6 +1357,8 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **AI 자문 "Failed to fetch"**: 무거운 질문 2분+ idle 끊김 → stream:true로 해결됨. 사내망 프록시·확장프로그램·F12 네트워크 확인.
 
 ## 하지 말아야 할 것 (규칙 + 한 줄 이유 / 상세는 배경역사 문서)
+
+- **인용 판정기에서 표 행 표시의 인용문을 「앞 칸이 짧으면 표시 뒤 토막만」으로 되돌리지 말 것(앞 칸에 번호 말고 말이 있으면 행 전체) / 앞 칸이 번호뿐인 행·목록 항목까지 넓히지 말 것 / 두 판 중 한쪽만 바꾸지 말 것 (2026-10-12, #294-보론3 — 사내 선행 99faa500 설계 D ④ 이식)** — 「| 전파법 제24조 (검사) | 원문과 부합 [표시], 단 제24조제2항(자기적합확인, 2026.10.22 시행)과는 별개 제도 |」의 뒤 토막만 가면 옮긴 조문 내용이 없어 사내 2차(Opus 4.8, 추론 없음)가 「2026.10.22 시행」을 원문 꼬리 「<신설 2026.4.21>」(공포일)과 맞대 거짓 주황 4/4(외부 흉내 H7도 4/4), 행 전체는 0/4. 사내 2차에 추론을 켜면 이 사례는 고치나 기존 거짓 F6이 새로 4/4 주황이라 보류. 번호뿐인 앞 칸은 대조할 말이 없어 종전대로(사내 c12 반례와 같게). 외부 과거 자문 29건 판정기 입력 변화 0 · 사내 49건 2(같은 표).
 
 - **anon(공개 키)에 SELECT 밖 표 권한·칸 권한·시퀀스 권한·SECURITY DEFINER 실행권을 주지 말 것 — 예외는 `lawmap_proposals` INSERT(비로그인 관계도 요청)와 비밀값 RPC 3개(`people_export`·`team_rules_export`·`team_urgency_export`)뿐 / public 기본 권한에 anon을 되살리거나 함수 기본 EXECUTE를 authenticated·PUBLIC에 되돌리지 말 것(전역 `… FOR ROLE postgres REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC` 행을 지우지 말 것) / 새 RPC는 같은 마이그레이션에 역할별 `grant execute`를 적을 것 (#295, 2026-10-10 밤 — 시스템 평가 ③ Fable 판정 + 운영자 결정 R1~R8, 구현 창 사실 정정은 Fable 짧은 점검)** — 실측: anon 표 권한 INSERT 41·UPDATE 40·DELETE 41·TRUNCATE 41·REFERENCES·TRIGGER·MAINTAIN 46과 anon 실행 DEFINER 33개가 남아 있었다. RLS 한 겹이 막아 효력은 없었지만 원인이 public 기본 권한(새 표 anon=arwdDxtm·함수 anon=X·시퀀스 anon=rwU)과 Postgres 내장 기본값(새 함수마다 PUBLIC EXECUTE)이라 #226·#186을 사람이 기억해도 객체마다 다시 열렸다. 마이그레이션 `anon_closed_20261010`·`bridge_export_log_20261010`·`definer_search_path_*`·`search_invoker_20261010`으로 회수하고 기본 권한을 닫았다(public 새 표·시퀀스 anon 없음, 새 함수 EXECUTE service_role만, **extensions 스키마만 `GRANT EXECUTE … TO PUBLIC`으로 종전과 같게** — postgres 소유 확장 pgcrypto·uuid-ossp를 설치·갱신할 때 깨지지 않게). 이제 RPC·RLS 도우미를 만들고 grant를 빠뜨리면 42501로 **크게** 깨진다(의도 — 조용히 열리는 것보다 낫다). 공개 검색 6개(`match_*`·`search_chunks_trgm`·`list_kb_guide_docs`)는 SECURITY INVOKER, `search_path` 없는 DEFINER는 0(검색 4개는 `OPERATOR(public.<=>)`로 한정 — HNSW 계획·결과 동일 실측). 함수 속성 `SET hnsw.*`가 든 함수를 만들 때는 마이그레이션 맨 위에 vector 선로드 한 줄(#185). `extension_in_public` 2(vector·pg_net)는 받아들임 — `public.vector`가 칸 타입·함수 시그니처에 박혀 이동은 큰 공사. 확인은 `security_audit()`(21:30 워치독)·`tests/test_smoke.py` `TestSecurityBlueprint`·설계도 `62_default_privileges.sql`. (배경역사 #295)
 

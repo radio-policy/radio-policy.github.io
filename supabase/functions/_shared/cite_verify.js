@@ -1101,6 +1101,11 @@
   // 인용문 최소 길이(정규화 글자 수) — 이보다 짧으면 '번호·제목뿐'(noclaim). 표 행·형제 목록 항목은 12(위 sibling 설명).
   const MIN_CLAIM = 24;
   const MIN_CLAIM_SIBLING = 12;
+  // 표 행 앞 칸에 번호 말고 남는 말이 있나(checkCitation 「행 전체 인용문」, 2026-10-12 사내 선행 99faa500 설계 D ④ 이식) — stripCiteBody가 남기는
+  // 항·호·목 번호(「나목」 포함)와 동그라미 숫자를 마저 빼고 2자 이상. 「| 제5항 [표시] | 내용 |」(번호뿐 → 종전대로 뒤 칸만)와
+  // 「| 전파법 제24조 (검사) | 원문과 부합 [표시], 단 … |」를 가른다. 사내 _ROW_NUM_RE·_row_words와 같은 글.
+  const ROW_NUM_RE = /제\s*\d+\s*(?:조(?:\s*의\s*\d+)?|항|호|목)|[가나다라마바사아자차카타파하]\s*목|[①-⑳]|\d+/g;
+  function rowWords(body) { return normQ(String(body || '').replace(ROW_NUM_RE, '')).length >= 2; }
 
   // 답변에서 표시를 전부 찾아 각 표시의 인용 대상을 붙인다
   // 답 안에서 이름이 나온 법령의 자리 — [{pos, info}], 조 참조 바로 앞 이름(앞 120자)과 낫표 제목. 「규정·고시」 이어받기(④)의 재료
@@ -1165,14 +1170,14 @@
       // 제5항이 대조돼 '원문과 다름 — 제5항이 아닌 제6항 내용'이 됐다(2026-09-27 사내 반례). 표 행은 늘, 목록은 다음 줄이 같은 들여쓰기의
       // 같은 꼴 항목일 때만 이 줄로 끊는다(들여 쓴 내용이 이어지는 「- **제32조의14** [원문 확인됨]」 제목형 항목은 종전대로).
       const lineHead = text.slice(lineStart, tagStart).match(SIBLING_RE);
-      let sibling = false;
+      let sibling = false, row = false;   // row = 표 행(sibling 중 '|' 줄) — checkCitation 「행 전체 인용문」(설계 D ④)
       if (lineHead) {
         const eol = after.indexOf('\n');
         const rest = eol === -1 ? after : after.slice(0, eol);
         const nextLine = eol === -1 ? '' : (after.slice(eol + 1).split('\n').find(function (l) { return l.trim(); }) || '');
         const nextHead = nextLine.match(SIBLING_RE);
         const kind = function (h) { return h[2] === '|' ? '|' : /\d/.test(h[2]) ? '1' : '-'; };
-        if (kind(lineHead) === '|' || (nextHead && kind(nextHead) === kind(lineHead) && nextHead[1].length === lineHead[1].length)) { after = rest; sibling = true; }
+        if (kind(lineHead) === '|' || (nextHead && kind(nextHead) === kind(lineHead) && nextHead[1].length === lineHead[1].length)) { after = rest; sibling = true; row = kind(lineHead) === '|'; }
       }
       // 표시가 문장·구절·표 칸을 닫는 자리면(closed, 2026-10-05) 표시 뒤는 다음 문장·다음 칸이다 — 인용문은 표시 앞뿐.
       //  ① 표시 바로 뒤가 마침표·쉼표·쌍반점·빗금 ② 그 줄 나머지에 표 칸 경계 '|'(모델이 빈 줄로 끊은 표 행 포함 — 그 줄 나머지만).
@@ -1200,7 +1205,7 @@
       // sibling = 표 행·형제 목록 항목(#240-보론2): 그 줄이 인용문의 전부다 — 토막 문단 규칙(#176)으로 앞 문단을 가져오지 않고(표 앞 안내
       // 문장이 인용문이 되던 구멍, Fable 재검토 2026-09-27) 짧아도 12자부터 판정기로 보낸다(checkCitation MIN_CLAIM_SIBLING).
       // closed = 표시가 문장·칸을 닫음 — 최소 길이는 sibling과 같은 12자(그 앞이 인용문의 전부라는 같은 이유)
-      const c = Object.assign({ tagStart: tagStart, tagEnd: tagEnd, tag: m[0], segment: text.slice(segStart, tagStart), line: text.slice(starts[0], tagStart), after: after, sibling: sibling, closed: closed }, parsed);
+      const c = Object.assign({ tagStart: tagStart, tagEnd: tagEnd, tag: m[0], segment: text.slice(segStart, tagStart), line: text.slice(starts[0], tagStart), after: after, sibling: sibling, closed: closed, row: row }, parsed);
       if (closedBefore) c.closedBefore = true;
       // 표시가 있는 줄 자체에 적힌 조(#288 ⓓ′ 다중 원문의 후보 — 「| … | 법 제19조①, 영 제24조① [표시]」)
       const lineParsed = parseSegment(c.line);
@@ -1458,7 +1463,13 @@
     // closed-before(문장으로 닫힌 줄, ③)는 조 번호만 뺀 길이로 센다(stripRefBody — 법령명 지우기가 앞 낱말까지 지운다)
     const beforeBody = (cite.closedBefore && !cite.claimOverride) ? stripRefBody(before) : stripCite(before);
     const headingOnly = beforeBody.length < minClaim && normQ(cite.after || '').length >= 24;
-    const claim = headingOnly ? cite.after : before;
+    let claim = headingOnly ? cite.after : before;
+    // 표 행에서 앞 칸이 짧아 표시 뒤를 고를 때, 앞 칸에 번호 말고 말이 있으면 인용문은 **그 행 전체**(앞 칸 + 뒤 토막, 표시만 빠짐 — 2026-10-12 사내 선행
+    // 99faa500 설계 D ④ 이식, 두 판 같은 규칙). 사내 10/8 사례 2 「| 전파법 제24조 (검사) | 원문과 부합 [표시], 단 제24조제2항(자기적합확인, 2026.10.22 시행)과는
+    // 별개 제도 |」: 뒤 토막만 가면 옮긴 조문 내용이 없어 사내 2차(Opus 4.8, 추론 없음)가 「2026.10.22 시행」을 원문 꼬리 「<신설 2026.4.21>」(공포일)과 맞대
+    // 거짓 주황 4/4(외부 흉내 고정 사례 H7도 4/4), 앞 칸까지 든 꼴(H5·H6)은 0/8. 앞 칸이 번호뿐이면(「| 제5항 [표시] | 내용 |」)·목록 항목은 종전대로 뒤 칸만.
+    // noclaim 판정(아래)은 그대로 headingOnly 기준.
+    if (headingOnly && cite.row && !cite.claimOverride && rowWords(beforeBody)) claim = before + (cite.after || '');
 
     // 후보 조문과 각 후보가 대조될 수 있는 문서군(lawScope — 이름 적은 법령만 / 이어받은 법령 계열만, #240)
     const candidates = (cite.candidates && cite.candidates.length) ? cite.candidates : [{ key: cite.key, paras: cite.paras || [], items: cite.items || [], lawInfo: cite.lawInfo, ctxLaw: cite.ctxLaw }];
@@ -2547,6 +2558,7 @@
     guessPrefix: guessPrefix, pickVersion: pickVersion, LAW_DOC_NAME_RE: LAW_DOC_NAME_RE, OUTSIDE_TAG_HEAD: OUTSIDE_TAG_HEAD,
     // ② 판 고르기·③ closed-before·④ 종류 낱말 이어받기(#294, 2026-10-09 사내 선행 이식)
     versionMarks: versionMarks, versionWanted: versionWanted, versionHead: versionHead, versionTail: versionTail, stripRefBody: stripRefBody,
+    rowWords: rowWords,   // 표 행 「행 전체 인용문」(2026-10-12 설계 D ④ 이식) — 앞 칸에 번호 말고 말이 있나
     suffixPick: suffixPick, suffixFits: suffixFits, namedLawsIn: namedLawsIn,
     OUTSIDE_MAX: OUTSIDE_MAX, MULTI_MAX: MULTI_MAX, MULTI_SRC_MAX: MULTI_SRC_MAX,
   };
