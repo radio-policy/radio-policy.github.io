@@ -9805,3 +9805,35 @@ v4도 85·75에는 못 미친다(전체 수치는 절반을 보고 고쳤으므�
 **사내 권고 ⓐⓑ 반영 (10-11 17:2x, 사내 04467e9c — 다음 17:00 회차부터).** 판정 §6의 권고(ⓐ `select=*` → 명시 칸, ⓑ 빈 목록 가드 확대)를 사내가 받아들여 스냅샷이 15표(위 13표 + `document_chunks`·`app_config`)를 칸을 적어 읽고, 0행·절반 넘게 줄면 덮지 않고 지난 파일 유지(정말 지운 것이면 사내가 한 줄로 받아들임), `document_chunks`가 0행·절반 미만이면 스냅샷 전체를 멈춘다. 칸을 빼거나 이름을 바꾸면 그 표만 400/401로 건너뜀, 칸을 더하면 사내로 안 들어오지만 사내가 매 회차 `docs/db_baseline/10_tables.sql`과 대조해 알린다. 그래서 지침의 #295 금지 조항을 「칸 추가·삭제·이름 변경과 anon 좁히기·정책 삭제 전 사내 통보 + 설계도 재생성」으로 고쳤다. 사내 dry-run(외부 ab7da35 뒤): 15표 행 수가 10-11 17:00 manifest와 같고 칸 대조 새 칸 0·없어짐 0.
 
 **10-30 플랫폼 변경 관찰 자리.** (10-31 첫 창이 `select defaclrole::regrole, defaclnamespace, defaclobjtype, defaclacl from pg_default_acl` 한 번 읽어 여기 적는다 — 전역 행 포함.)
+
+---
+
+**#296 (2026-10-12 오후) 이슈맵 자동 연결 — 덮어쓰기 금지·경로 메모(F), 연결 해제 기억 표 `issue_link_excludes`(E), 세션 행 added_by 복구(R6), merged_into 세션 규칙 개정 (10-12 Fable 판정의 구현 ①, (Opus 5.5, 엑스트라)).**
+경위: #245 「AI 자동화 해킹 확산과 범정부 보안 대응」에 10-06 채택 뒤 자동 연결이 297건 붙었고 그중 상당수가 정의의 '해당 없음' 갈래(경찰 수사 단신·망분리·금융 감독 등)였다. 준비자료(`local_docs/이슈맵_묶음연결_원인_준비자료_261012.md`) → (Fable 5.1, 최대) 판정(`local_docs/이슈맵_묶음연결_원인_판정_261012.md`): 주 원인은 R2(뉴스 관련 판정 지시문에 정의문의 '해당 없음'을 적용하라는 문장이 없다 — 규제 지시문엔 있다), R1(묶음 전원 연결)은 밀린 실행 전용 증폭기, merged_into '재제안 막기'는 기능 오해(R3), 세션 해제의 무기억(R5), 그리고 새 발견 R6 — `_link_news`의 upsert가 세션 행을 덮어쓴다. 운영자 「추천대로」로 결정 7개(§7). 판정 창이 데이터 두 가지를 먼저 적용(merged_into 7건 비움 — #249·#258·#259·#261·#244·#235·#263, #245 정의 933 → 1,125자 보강). 이 항목은 그 뒤 구현 세션(코드 3e6f29d)이다. 판정 지시문(A′/B)은 건드리지 않았다 — 측정은 별도 (Opus 5.5, 높음) 세션(판정 §3, 통과 기준 P1~P6 고정).
+
+F — 경로 기록 + insert-ignore. `_link_news(sb, issue_id, rows, added_by, path, seen_ids, group_size)`·`_link_reg(sb, issue_id, link, path)`가 `upsert(..., ignore_duplicates=True)`(ON CONFLICT DO NOTHING)로 쓴다 — 이미 있는 행은 `added_by`·`title`·`item_date`·`note` 모두 그대로. 새 행에만 note `(자동 연결: <경로> · 묶음 N건[ · 판정이 본 기사] · MM-DD HH:MM)`(KST). 경로 이름: 과반 겹침 a/b · 과반 겹침 a/b→판정 예 · 직결·제목 어휘 3개 공유/제목 열쇠 일치/유사도 x(→판정 예) · 겹침 a/b→판정 예 · 유사도 x→판정 예(0.60~0.80 경계) · 합친 기각 #N와 같은 주제→판정 예 · 제안 전 판정·유사도 x→판정 예(발제 기준 + ≥0.35) · 생성 제목 유사 ≥0.80(→판정 예) · 생성 제목이 합친 기각 #N와 유사→판정 예 · 제안 근거 · 규제: 같은 번호(·합친 기각 #N)·요약 유사도 x(→판정 예). '판정이 본 기사' = 판정기가 제목을 본 기사(일괄 판정은 대표 + 같은 묶음 2건 `groups[ci][:3]`, 즉석 판정 `_judge_one`은 생성 제목 + `news_rows[1:3]`) — 판정 R1(판정기가 못 본 채 묶음째 붙은 기사)을 행 단위로 바로 센다. 대시보드 `_issueNotePublic`의 정규식(`\((?:세션…|KB…|자동[^)]*|공식 자료…)\)\s*$`)이 비로그인 화면에서 메모를 벗기는데, 안쪽에 `)`가 있으면 거기서 끊겨 메모가 남는다 — 경로 이름은 괄호 대신 가운뎃점(첫 초안의 `직결(제목 어휘…)`을 고침, 스모크가 소스의 경로 문자열을 검사). 신규 연결이 0이면 `issues.last_activity_at`을 건드리지 않는다(종전엔 같은 쌍을 다시 upsert해도 갱신). 같은 덮어쓰기가 Edge `news-archive-search`(과거 기사 보강)에도 있어 `ignoreDuplicates: true`로 함께 고쳤다(판정 §6 목록 밖 — 같은 원인).
+
+E — 연결 해제 기억. 새 표 `issue_link_excludes(issue_id bigint → issues on delete cascade, item_type, item_id, reason, excluded_by, created_at, PK(issue_id,item_type,item_id))`(마이그레이션 `issue_link_excludes_20261012`). 권한: `revoke all` 뒤 authenticated SELECT·INSERT·DELETE + RLS 정책 3개 `is_issue_editor()`(issue_links와 같은 꼴), service_role 전부, anon 없음(공개 화면이 볼 필요 없음 — #295 기본 권한 원칙). 시퀀스 없음. `security_audit()` 위반 없음(RLS 켬·anon 무권한), 권한 지문은 바뀌어 그날 21:30 「변화 1회」 알림이 예상된다. 적용:
+
+| 곳 | 동작 |
+|---|---|
+| `run_suggest` | 실행마다 표를 `_fetch_all`(정렬 issue_id·item_type·item_id)로 읽어 모듈 집합 `_excluded`. 못 읽으면 예외 → 크롤러가 격리하고 heartbeat가 안 찍혀 같은 시각 안 다음 크롤에서 다시 시도(빈 집합으로 돌면 사람이 뺀 기사를 다시 붙인다) |
+| `_link_news`·`_link_reg` | 그 쌍을 빼고 넣는다 — 한 곳에서 거르므로 뉴스 ①~⑦·`_propose`·규제 경로가 모두 덮인다. 뺀 기사는 잠그지도 않는다 |
+| `_suggest_from_news` 판정 앞 | `_undecided(group, 이슈, linked_to)` = 그 이슈에 안 붙었고 그 이슈에서 해제되지도 않은 구성원. 비면 그 이슈와는 판정하지 않는다(과반 겹침·직결·겹침 3건↑·경계 0.60~0.80·합친 기각 경로; 로그 「…— 남은 기사 모두 해제 기록 … 건너뜀」) — 되돌린 기사 묶음을 7일 창 내내 매 실행 판정에 올리던 공회전 차단. 발제 기준 + ≥0.35 경로는 제안과 함께 가므로 그대로(판정이 예면 연결 0·제안 없음, 종전과 같은 보수적 결과) |
+| 대시보드 `unlinkIssueItem` | 기사·법안·DIFF 해제 때 해제 기록을 **먼저** insert(reason 'dashboard', excluded_by = 계정 id, 23505 무시) → 실패하면 해제도 안 한다. 확인 창에 「자동 연결이 이 이슈에 다시 붙이지 않게 기록합니다」 |
+| 대시보드 `linkNewsToIssue` | 연결 뒤 그 쌍의 해제 기록을 지운다(사람이 다시 붙이면 풀림, 실패는 무시 — 이미 있는 연결엔 영향 없음) |
+| `news-archive-search` | 그 이슈의 해제 기사 id를 읽어 그 url도 후보에서 뺀다(못 읽으면 지운 기사 목록처럼 503으로 멈춤), url 표기가 달라 빠져나온 같은 id도 건너뜀 |
+| `ihelp.unlink_news(iid, nid, reason)` | 해제 기록을 쓰고 해제(reason 필수, `record=False`는 방금 잘못 붙인 것 되돌리기용) |
+| `ihelp.link_news`·`add_link`(bill·diff) | 그 쌍의 해제 기록을 지운다 |
+
+판정 설계와 다른 점 하나: 판정 §2-2 E는 「전부 이미 연결됨 건너뜀」 계산에도 해제 쌍을 넣으라고 했으나, 그 검사는 이슈를 가리지 않아(어느 이슈에든 연결됐으면 건너뜀) 해제 기사를 '어디에서든 결정됨'으로 치게 된다 — #245에서 뺀 기사가 #46 같은 다른 이슈로 가는 길까지 막는다. 판정이 말한 「그 이슈에 대해 결정됨」을 정확히 지키려고 이슈별 `_undecided` 검사로만 했다(공회전 차단 효과는 같다 — 판정 호출은 이슈별로 나가므로). 반례(판정 그대로): 정의가 바뀌어 다시 '해당'이 된 기사는 해제 기록을 손으로 지워야 붙는다(의도된 수동) · 해제는 이슈별.
+
+R6 — 세션 행 added_by 복구. 판정 실측: 뉴스 링크 auto 2,159행 중 note 있는 276행은 사실상 세션 행(자동 경로는 note를 쓴 적이 없다). 이번 세션 재확인: item_type별로 보니 DIFF에도 같은 덮어쓰기 2행(#51·#52, 9/6·9/7 세션 메모) — stakeholder 38·law_topic 5의 auto+note는 operator-webhook 자동 보강이 쓴 진짜 auto라 제외. **F 배포(push 14:2x KST, 다음 제안 실행 15시) 뒤** 스크립트 `issuemap_tools/r6_restore_apply.py`(저장소 밖)로 `added_by='auto' ∧ item_type∈{news,diff} ∧ note 있음 ∧ note가 '(자동 연결:'로 시작하지 않음` 278행(뉴스 276·DIFF 2)을 `session`으로 — 대상 중 남은 auto 0, 백업 `issuemap_tools/backup_r6_restore_20261012.json`. 먼저 했다면 다음 실행의 옛 upsert가 다시 덮었다. 운영자 대시보드 연결(operator) 행이 덮인 것은 note가 없어 가를 수 없다(수 모름). **#296부터 자동 행도 note를 쓰므로 「note 있는 auto = 세션 행」 가정은 이 복구로 끝** — 이후 가르기는 note 머리로.
+
+D(세션 규칙) — 지침 #243 항목의 「기각하며 합칠 때 merged_into를 빠뜨리지 말 것」을 판정 §4 문안으로 교체: merged_into는 「주제 전체가 대상의 '해당' 범위」일 때만, '해당 없음' 갈래·혼합 제안·재제안 막기엔 두지 않는다(기각만으로 막힌다), 채택하며 '해당 없음'을 적을 때는 그 이슈로 merged_into한 기각 제안을 훑어 비운다. 이슈맵 절 자동 제안 설명에도 한 줄. 세션 도구 `ihelp.py`(저장소 밖)에 `reject(iid, why, merged_into=None)` 하나로 통일 — 세션 스크립트 다섯 개(review200·208·240·263·audit1006)가 각자 복사해 쓰던 것; why 필수, merged_into를 주면 대상이 active인지 확인하고 대상 정의의 '해당 없음'을 찍으며, why에 「해당 없음」이 있으면 DB를 읽기 전에 거부. `merged_audit()` — merged_into가 active를 가리키는 기각 이슈와 대상의 '해당 없음'을 찍는 세션 시작 점검(10-12 현재 33쌍, #245 ← #240·#241·#242·#243·#247·#251 — 판정이 유지로 본 6건).
+
+검증: 스모크 599 OK(신규 `TestIssueLinkWrites` 3 — insert-ignore·해제 쌍 제외·새 행 메모·'판정이 본 기사'·공개 정규식이 메모를 통째로 벗김·신규 0이면 최근 활동 안 바꿈·규제 쌍 제외·소스 가드(issue_links upsert 전부 ignore_duplicates, 경로 문자열 괄호 없음, 대시보드 기록 먼저·연결 때 풀기, news-archive-search) / `test_excluded_members_not_rejudged` — 과반·겹침 3건 경로에서 남은 기사가 전부 해제면 판정 0, 하나 남으면 판정, 다른 이슈 해제는 무관). 실DB 드라이런(판정·프로필 가짜, Anthropic 0·Voyage 1, DB 무변경): 해제 기록 0쌍 읽음, 오류 없음, 판정 1콜(14항목). `ihelp` 해제 기록 쓰기·풀기 왕복(가짜 항목, 지움)·reason/merged_into 가드 확인. `news-archive-search` 재배포 v13(verify_jwt true 유지, `tools_release.py` ⑨ 일치). `tools_release.py` ⑥⑦ 정상(설계도 재생성 — 10_tables·15_foreign_keys·50_policies·60_grants·MANIFEST + migrations 1).
+
+사내판: 코드 이식 불필요 — 사내 저장소에 `issue_suggest`·`merged_into`·`issue_link_excludes`를 쓰는 코드 0, `issues`·`issue_links`는 스냅샷 열람만(칸·item_type 변화 없음). 고지 2줄: ① 새 자동 연결 행의 note `(자동 연결: …)`가 사내 콘솔 이슈 링크 아래에 보일 수 있다(외부 공개 화면은 `_issueNotePublic`이 벗김 — 사내 이식본이 그 함수를 그대로 쓰면 관리자 여부에 따라 같다) ② 새 표 `issue_link_excludes`는 스냅샷 15표 밖.
+
+남은 것: #245 정리(판정 §5 — 297건 라벨 → 운영자 경계 확인 → `ihelp.unlink_news(245, id, reason='정리 10-xx: <갈래>')`로 해제 기록과 함께 걷기, 백업 먼저) → 측정(§3, 별도 (Opus 5.5, 높음) 세션, 정답 = 정리 라벨) → A′/B. F 메모로 2주간 #245 신규 자동 연결의 경로·'판정이 본 기사' 비율을 본다.
