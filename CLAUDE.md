@@ -128,6 +128,7 @@ python okf_refresh.py --dry-run        # OKF 요약 자동 갱신(#198) 대상·
 python law_terms_sync.py --dry-run     # 법적 용어 정의(현행 법령·고시 제N조(정의) 원문) → law_terms 재추출 시험. 실제는 11:00 law_crawl.yml 승격 직후 단계(law_watch 앞), AI 0회. 대시보드 '법적·기술 용어' 탭 1의 데이터 (#156)
 python upload_law_pdf.py <file> "<name>" 고시   # upload law/notice/ITU-R to RAG
 py -3.12 tools_urgency_probe.py --dry-run   # 긴급도 개별 판정 실측(#267) — 변형(B0·R3·G1·G1b·T1)·세트·어림 비용만(API 0). 실제는 --allow-api(변형당 ≈$0.8, 운영자 고지 뒤) · --report = 통과 기준표
+py -3.12 tools_issue_judge_probe.py --dry-run   # 이슈맵 뉴스 관련 판정 지시문 실측(#296-보론2) — 세트·호출 수(API 0); --count-tokens 무료 계산, --allow-api --variants V0,A1,B,B2 --repeat 2 --save 파일(10-12 전체 ≈$1.9, 운영자 고지 뒤), --report 파일 = 재채점. 운영 판정 요청을 바꾸면 tests/test_issue_judge_probe.py가 깨진다
 py -3.12 tools_dedup_probe.py --dry-run   # 긴급 억제 ①-2 재보도 대조 지시문 실측 세트(#263) — 구성·어림 비용만(API 0). 실제 판정은 --allow-api(전체 ≈$1, 운영자 고지 뒤)
 py -3.12 tools_db_baseline.py --dry-run   # DB 설계도(docs/db_baseline) 대 실DB 차이만 — 인수 없이 돌리면 바뀐 파일만 다시 씀 (#227, 읽기 전용, 비밀 마스킹)
 

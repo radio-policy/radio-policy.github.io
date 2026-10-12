@@ -564,6 +564,10 @@ def _haiku_relate_batch(pairs, groups, kind='news'):
             messages=[{'role': 'user', 'content': '\n'.join(lines)}])
         text = ''.join(b.text for b in resp.content if getattr(b, 'text', None))
         m = re.search(r'\{[\s\S]*\}', text)
+        if kind == 'news' and getattr(resp, 'stop_reason', None) == 'max_tokens':
+            # 동작은 그대로(잘린 글엔 }가 없어 빈 집합 = 이 호출의 모든 쌍 '소속 아님') — 보이게만 한다. 10-12 측정: 지금 정의문으로는
+            # Sonnet 5가 「다른 말 금지」를 어기고 항목별 이유를 쓰다 400에서 잘린다(운영 10-01~10-12 47호출 중 6). 고침은 측정 뒤(Fable 설계)
+            print(f'  [관련 판정 응답 잘림(보류)] 항목 {len(pairs)}개 — 이 호출 전부 연결 안 함, 다음 실행에서 다시 판정 :: {text[:60]!r}')
         if kind == 'reg' and (not m or getattr(resp, 'stop_reason', None) == 'max_tokens'):
             print(f'  [관련 판정 응답 불가(보류)] {text[:80]!r}')
             return None
