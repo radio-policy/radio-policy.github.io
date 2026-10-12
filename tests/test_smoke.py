@@ -2523,7 +2523,8 @@ class TestIssueSuggestReg(unittest.TestCase):
         iss = {'id': 1, 'title': 't', 'definition': 'd'}
         with mock.patch.object(isg, 'ANTHROPIC_API_KEY', ''):
             self.assertIsNone(isg._haiku_relate_batch([(0, 'x', iss)], None, kind='reg'))
-            self.assertEqual(isg._haiku_relate_batch([(0, 'x', iss)], [[{'title': 'x'}]]), set())   # 뉴스는 종전대로
+            self.assertIsNone(isg._haiku_relate_batch([(0, 'x', iss)], [[{'title': 'x'}]]))   # 뉴스도 보류(#296-보론3)
+        self.assertEqual(isg._haiku_relate_batch([], [], kind='news'), set())                 # 판정할 것이 없으면 빈 집합
 
     def _run(self, judge_result):
         import io, contextlib
@@ -2804,7 +2805,7 @@ class TestIssueSuggestOverlapMerged(unittest.TestCase):
         excl[0]['definition'] = '해당: 감면 사각지대. 해당 없음: 명절 트래픽'
         log, calls, new = self._run(excl, [], lambda pairs: set(), [0, 0, 0, 1], gen_vec=[1, 0, 0, 0])
         self.assertEqual(calls['judge'][-1], [('취약계층 통신비 감면 사각지대', 171)])
-        self.assertIn('배제 기준 이슈라 연결·제안 모두 보류(판정 소속 아님·실패)', log)
+        self.assertIn('배제 기준 이슈라 연결·제안 모두 보류(판정 소속 아님)', log)
         self.assertEqual(new, [])
         excl = self._issues()
         excl[0]['definition'] = '해당 없음: 명절 트래픽'
@@ -2815,6 +2816,72 @@ class TestIssueSuggestOverlapMerged(unittest.TestCase):
         log, calls, new = self._run(self._issues(), [], lambda pairs: set(), [0, 0, 0, 1], gen_vec=[1, 0, 0, 0])
         self.assertIn('— 제안 대신 연결', log)
         self.assertEqual(calls['judge'], [[]])
+        # 즉석 판정 실패·잘림(None)도 보류 — 로그가 '소속 아님'과 갈린다(#296-보론3)
+        excl = self._issues()
+        excl[0]['definition'] = '해당 없음: 명절 트래픽'
+        log, calls, new = self._run(excl, [], lambda pairs: None if pairs else set(), [0, 0, 0, 1], gen_vec=[1, 0, 0, 0])
+        self.assertIn('배제 기준 이슈라 연결·제안 모두 보류(판정 실패(보류))', log)
+        self.assertEqual(new, [])
+
+    def test_truncated_judge_holds_pre_proposal_cluster(self):
+        """#296-보론3 — 발제 기준을 넘은 묶음이 active와 ≥0.35면 제안 전에 관련 판정을 받는데, 그 판정이 잘리거나(max_tokens)
+        실패하면 '소속 아님'이 아니라 보류: 이 실행에서 연결도 제안도 하지 않는다. 10-12 20시 실행은 잘림을 빈 집합으로 읽어
+        #245에서 정리로 뺀 갈래로 제안 #284~#286을 만들었다. 진짜 판정 함수를 가짜 Anthropic으로 돌린다(요청은 그대로)."""
+        import io, contextlib
+        import anthropic
+        isg = self.isg
+
+        def run(reply):
+            isg._proposed_this_run = 0
+            issues = self._issues()
+            news = [{'id': f'n{k}', 'title': ('낚시형 대표 제목' if k == 0 else f'감면 사각지대 후속 {k}'),
+                     'published_at': f'2026-09-2{k % 5}T00:00:00+00:00', 'urgency': '보통'} for k in range(10)]
+            sb = self._SB({'news_feed': news, 'issue_links': []})
+            calls = {'api': 0, 'profile': 0}
+
+            class _Client:
+                def __init__(self, *a, **k):
+                    self.messages = self
+
+                def create(self, **kw):
+                    calls['api'] += 1
+                    if reply is None:
+                        raise RuntimeError('API 실패')
+                    text, stop = reply
+                    return type('R', (), {'content': [type('B', (), {'text': text})()], 'stop_reason': stop})()
+
+            def profile(rep, members):
+                calls['profile'] += 1
+                return {'title': '취약계층 통신비 감면 사각지대', 'definition': '감면 미신청', 'category': '규제·CR'}
+
+            # 대표 벡터 ↔ #171 = 0.447(≥0.35, 0.60 미만) → 발제 기준 통과 묶음이 '제안 전 판정'으로
+            embed = lambda texts, input_type='query': [[0.5, 0, 0, 1] if t == '낚시형 대표 제목' else [0, 0, 0, 1]
+                                                        for t in texts]
+            out = io.StringIO()
+            with mock.patch.object(isg, 'ANTHROPIC_API_KEY', 'test'), mock.patch.object(anthropic, 'Anthropic', _Client), \
+                    mock.patch.object(isg, 'cluster_star', lambda rows: [(rows[0], rows[1:])]), \
+                    mock.patch.object(isg, '_embed', embed), mock.patch.object(isg, '_haiku_profile', profile), \
+                    contextlib.redirect_stdout(out):
+                isg._suggest_from_news(sb, issues, dry=True)
+            return out.getvalue(), calls, [i for i in issues if i['state'] == 'proposed']
+
+        for reply in (('1. 기사는 감면 사각지대 후속으로 보이나 이슈 정의의', 'max_tokens'),   # 잘림
+                      ('{"belong": [1]', 'max_tokens'),                                     # JSON 도중 잘림
+                      ('판정 결과를 정리하면', 'end_turn'),                                   # JSON 없음
+                      None):                                                                # 호출 예외
+            log, calls, new = run(reply)
+            self.assertEqual(calls['api'], 1, reply)
+            self.assertIn('[관련 판정 보류 — 연결·제안 안 함] "낚시형 대표 제목" ? [171]', log, reply)
+            self.assertNotIn('[연결·관련판정]', log, reply)
+            self.assertEqual((calls['profile'], new), (0, []), reply)          # 잘림이면 제안 0
+        self.assertIn('[관련 판정 응답 잘림(보류)] 항목 1개', run(('이유를 쓰다', 'max_tokens'))[0])
+        # 끝까지 쓴 판정은 종전대로 — 아니오면 제안, 예면 연결
+        log, calls, new = run(('{"belong": []}', 'end_turn'))
+        self.assertIn('[관련 판정 — 소속 아님]', log)
+        self.assertEqual((calls['profile'], len(new)), (1, 1))
+        log, calls, new = run(('이유…\n```json\n{"belong": [1]}\n```', 'end_turn'))
+        self.assertIn('[연결·관련판정] "낚시형 대표 제목" → [171] (10건)', log)
+        self.assertEqual((calls['profile'], new), (0, []))
 
     def test_excluded_members_not_rejudged(self):
         """#296 — 묶음의 남은 기사가 전부 사람이 그 이슈에서 뺀 것이면 판정에 다시 올리지 않는다(7일 창 내내 같은 묶음을

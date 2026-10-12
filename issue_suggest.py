@@ -371,7 +371,7 @@ def _link_reg(sb, issue_id, link, path=None):
 
 
 def _judge_one(title, definition, iss, news_rows, link_item):
-    """제안 직전 한 건 즉석 관련 판정(#243) — True 속함 / False 아님 / None 실패(규제만 구별, 뉴스 실패는 False)."""
+    """제안 직전 한 건 즉석 관련 판정(#243) — True 속함 / False 아님 / None 실패·응답 잘림(보류 — 뉴스도 #296-보론3부터)."""
     if link_item:
         ok = _haiku_relate_batch([(0, f'{title} — {definition or ""}'[:400], iss)], None, kind='reg')
     else:
@@ -409,7 +409,7 @@ def _propose(sb, issues, title, definition, category, norm_key, reason, dry,
                 ok = None if link_item else _judge_one(title, definition, i, news_rows, None)
                 if not ok:
                     print(f'[제안→병합 재검사] "{title}" ≈ active [{i["id"]}] {i["title"][:20]} — 배제 기준 이슈라 '
-                          f'연결·제안 모두 보류({"세션 확인" if link_item else "판정 소속 아님·실패"})')
+                          f'연결·제안 모두 보류({"세션 확인" if link_item else "판정 실패(보류)" if ok is None else "판정 소속 아님"})')
                     return False
             print(f'[제안→병합 재검사] "{title}" ≈ active [{i["id"]}] {i["title"][:20]} — 제안 대신 연결')
             _p = '생성 제목 유사 ≥0.80' + ('→판정 예' if _has_exclusion(i) else '')
@@ -517,14 +517,14 @@ def _match_states(issues, norm_key, vec):
 def _haiku_relate_batch(pairs, groups, kind='news'):
     """경계(0.60~0.80) 후보를 Sonnet 1콜로 일괄 판정.
     pairs: [(idx, 제목·내용, candidate_issue)] → 관련 확정된 idx 집합.
-    kind='news'(뉴스 클러스터): 실패 시 빈 집합(보수적 — 관련이 아니라고 보고 다음 시간에 재평가).
-    kind='reg'(법안·DIFF, #231): 실패·파싱 불가면 None — 판정 대상은 '관련 없음'이면 곧장 제안으로 가므로,
-    실패를 '관련 없음'과 구별해 호출부가 다음 실행으로 미룬다."""
-    fail = set() if kind == 'news' else None
+    실패(키 없음·호출 예외)·응답 잘림(stop_reason max_tokens)·JSON 없음은 None — 판정 대상은 '관련 없음'이면
+    곧장 제안으로 갈 수 있으므로 실패를 '관련 없음'(빈 집합)과 구별해 호출부가 그 실행에서 연결도 제안도 하지 않고
+    다음 실행으로 미룬다. 규제(kind='reg', #231)는 처음부터 그랬고 뉴스는 #296-보론3(2026-10-12)부터 — 종전 뉴스는
+    빈 집합이라 '제안 전 판정(≥0.35)' 경로에서 잘림이 곧 제안이 됐다(10-12 20시 #284~#286)."""
     if not pairs:
         return set()
     if not ANTHROPIC_API_KEY:
-        return fail
+        return None
     try:
         import anthropic
         lines = []
@@ -565,10 +565,11 @@ def _haiku_relate_batch(pairs, groups, kind='news'):
         text = ''.join(b.text for b in resp.content if getattr(b, 'text', None))
         m = re.search(r'\{[\s\S]*\}', text)
         if kind == 'news' and getattr(resp, 'stop_reason', None) == 'max_tokens':
-            # 동작은 그대로(잘린 글엔 }가 없어 빈 집합 = 이 호출의 모든 쌍 '소속 아님') — 보이게만 한다. 10-12 측정: 지금 정의문으로는
-            # Sonnet 5가 「다른 말 금지」를 어기고 항목별 이유를 쓰다 400에서 잘린다(운영 10-01~10-12 47호출 중 6). 고침은 측정 뒤(Fable 설계)
-            print(f'  [관련 판정 응답 잘림(보류)] 항목 {len(pairs)}개 — 이 호출 전부 연결 안 함, 다음 실행에서 다시 판정 :: {text[:60]!r}')
-        if kind == 'reg' and (not m or getattr(resp, 'stop_reason', None) == 'max_tokens'):
+            # 10-12 측정: 지금 정의문으로는 Sonnet 5가 「다른 말 금지」를 어기고 항목별 이유를 쓰다 400에서 잘린다(운영 10-01~10-12
+            # 47호출 중 6). 잘림 자체(지시문·max_tokens·판정 단위)는 측정 뒤 Fable 설계 — 여기선 '소속 아님'으로 읽지 않고 보류만(#296-보론3)
+            print(f'  [관련 판정 응답 잘림(보류)] 항목 {len(pairs)}개 — 이 호출 전부 연결도 제안도 안 함, 다음 실행에서 다시 판정 :: {text[:60]!r}')
+            return None
+        if not m or getattr(resp, 'stop_reason', None) == 'max_tokens':
             print(f'  [관련 판정 응답 불가(보류)] {text[:80]!r}')
             return None
         nums = (json.loads(m.group(0)).get('belong') or []) if m else []
@@ -580,7 +581,7 @@ def _haiku_relate_batch(pairs, groups, kind='news'):
         return keep
     except Exception as e:
         print(f'  [관련 판정 실패(보류)] {e}')
-        return fail
+        return None
 
 
 # 주간 모음·브리핑류 기사 — 통신 3사 이름이 늘 나열돼 회사명만으로 클러스터 임계(3)를
@@ -764,10 +765,17 @@ def _suggest_from_news(sb, issues, dry):
                 route[ci] = f'제안 전 판정·유사도 {sim_a:.2f}→판정 예'
             to_propose.append((ci, nk))
 
-    # ③ 경계 후보 일괄 관련 판정(Haiku 1콜) → 확정분 연결
+    # ③ 경계 후보 일괄 관련 판정(Sonnet 1콜) → 확정분 연결
     related = _haiku_relate_batch(borderline, groups)
+    held = set()
+    if related is None:
+        # 판정 실패·응답 잘림 = 보류(#296-보론3) — 판정에 간 묶음은 이 실행에서 연결도 제안도 하지 않는다(④에서도 뺀다).
+        # 종전엔 빈 집합('소속 아님')이라 '제안 전 판정(≥0.35)' 묶음이 그대로 제안이 됐다(10-12 20시 #284~#286, 정리로 뺀 갈래).
+        held, related = {ci for ci, _t, _i in borderline}, set()
     for ci, title, iss in borderline:
-        if ci in related:
+        if ci in held:
+            print(f'[관련 판정 보류 — 연결·제안 안 함] "{title[:28]}" ? [{iss["id"]}] — 다음 실행에서 다시 판정')
+        elif ci in related:
             # 판정기는 대표 제목 + 같은 묶음 2건(groups[ci][:3])을 본다 — 나머지 구성원도 함께 붙는다(10-12 판정 R1)
             n = 0 if dry else _link_news(sb, iss['id'], groups[ci], path=route.get(ci, '관련 판정 예'),
                                          seen_ids=[r['id'] for r in groups[ci][:3]])
@@ -775,9 +783,9 @@ def _suggest_from_news(sb, issues, dry):
         else:
             print(f'[관련 판정 — 소속 아님] "{title[:28]}" ≠ [{iss["id"]}]')
 
-    # ④ 제안 생성 — 관련 판정으로 기존 이슈에 붙은 클러스터는 제외
+    # ④ 제안 생성 — 관련 판정으로 기존 이슈에 붙은 클러스터와 판정이 보류된 클러스터는 제외
     for ci, nk in to_propose:
-        if ci in related:
+        if ci in related or ci in held:
             continue
         group = groups[ci]
         days = {(r.get('published_at') or '')[:10] for r in group if r.get('published_at')}

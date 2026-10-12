@@ -28,7 +28,7 @@ class TestIssueJudgeProbe(unittest.TestCase):
         class _Msgs:
             def create(self, **kw):
                 sent.update(kw)
-                raise RuntimeError('stop')     # 요청만 받고 끝 — 뉴스 판정은 실패를 빈 집합으로 처리
+                raise RuntimeError('stop')     # 요청만 받고 끝 — 호출 실패는 보류(None, #296-보론3)
 
         class _Client:
             def __init__(self, *a, **k):
@@ -40,7 +40,7 @@ class TestIssueJudgeProbe(unittest.TestCase):
         import anthropic
         with mock.patch.object(isg, 'ANTHROPIC_API_KEY', 'test'), mock.patch.object(anthropic, 'Anthropic', _Client):
             got = isg._haiku_relate_batch(pairs, groups)
-        self.assertEqual(got, set())
+        self.assertIsNone(got)
         return sent
 
     def test_v0_equals_production_request(self):
@@ -76,8 +76,9 @@ class TestIssueJudgeProbe(unittest.TestCase):
             self.assertEqual({p for s in slots for p in s}, fresh)
             self.assertEqual(kw['messages'], self.P.build_request('V0', call, self.fx['issues'])[0]['messages'])
 
-    def test_news_truncation_logged_result_unchanged(self):
-        """뉴스 판정 응답이 max_tokens에서 잘리면 로그만 찍고 결과는 종전대로 빈 집합(10-12 운영자 결정 — 동작 불변)."""
+    def test_news_truncation_is_hold(self):
+        """뉴스 판정 응답이 max_tokens에서 잘리면 로그를 찍고 None(보류) — '소속 아님'(빈 집합)이 아니다(#296-보론3, 10-12 운영자 승인;
+        그 전 #296-보론2는 로그만 넣고 빈 집합을 유지했다). 요청(지시문·max_tokens)은 그대로 — test_v0_equals_production_request."""
         import io
         import contextlib
         import issue_suggest as isg
@@ -105,7 +106,7 @@ class TestIssueJudgeProbe(unittest.TestCase):
         with mock.patch.object(isg, 'ANTHROPIC_API_KEY', 'test'), mock.patch.object(anthropic, 'Anthropic', _Client), \
                 contextlib.redirect_stdout(buf):
             got = isg._haiku_relate_batch(pairs, groups)
-        self.assertEqual(got, set())
+        self.assertIsNone(got)
         self.assertIn('[관련 판정 응답 잘림(보류)]', buf.getvalue())
 
     def test_parse_belong_like_production(self):
