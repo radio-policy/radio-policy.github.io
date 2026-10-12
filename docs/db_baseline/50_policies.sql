@@ -110,6 +110,15 @@ CASE
     ELSE (( SELECT is_admin() AS is_admin) OR (( SELECT is_approved_user() AS is_approved_user) AND (team_id = ( SELECT my_team() AS my_team))))
 END);
 
+create policy issue_link_excludes_del on public.issue_link_excludes as PERMISSIVE for DELETE to authenticated
+  using (is_issue_editor());
+
+create policy issue_link_excludes_ins on public.issue_link_excludes as PERMISSIVE for INSERT to authenticated
+  with check (is_issue_editor());
+
+create policy issue_link_excludes_sel on public.issue_link_excludes as PERMISSIVE for SELECT to authenticated
+  using (is_issue_editor());
+
 create policy issue_links_del on public.issue_links as PERMISSIVE for DELETE to authenticated
   using (is_issue_editor());
 

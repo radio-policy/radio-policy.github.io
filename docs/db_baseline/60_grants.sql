@@ -127,6 +127,10 @@ revoke all on sequence public.importance_feedback_id_seq from public, anon, auth
 grant SELECT, UPDATE, USAGE on sequence public.importance_feedback_id_seq to authenticated;
 grant SELECT, UPDATE, USAGE on sequence public.importance_feedback_id_seq to service_role;
 
+revoke all on public.issue_link_excludes from public, anon, authenticated, service_role;
+grant DELETE, INSERT, SELECT on public.issue_link_excludes to authenticated;
+grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE on public.issue_link_excludes to service_role;
+
 revoke all on public.issue_links from public, anon, authenticated, service_role;
 grant SELECT on public.issue_links to anon;
 grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE on public.issue_links to authenticated;

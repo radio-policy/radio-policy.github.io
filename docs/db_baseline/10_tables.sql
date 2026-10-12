@@ -270,6 +270,17 @@ create table if not exists public.importance_feedback (
 );
 alter table public.importance_feedback enable row level security;
 
+create table if not exists public.issue_link_excludes (
+  issue_id bigint not null,
+  item_type text not null,
+  item_id text not null,
+  reason text,
+  excluded_by text,
+  created_at timestamp with time zone default now() not null,
+  constraint issue_link_excludes_pkey PRIMARY KEY (issue_id, item_type, item_id)
+);
+alter table public.issue_link_excludes enable row level security;
+
 create table if not exists public.issue_links (
   id bigint generated always as identity not null,
   issue_id bigint not null,

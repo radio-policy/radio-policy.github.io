@@ -13519,13 +13519,23 @@ async function openIssueCase(docName) {
 
 async function unlinkIssueItem(linkId) {
   if (!sb || !isAdminUser()) return;
-  if (!confirm('이 항목의 연결을 해제합니다.')) return;
   var owner = null, link = null;
   (_issueCache || []).forEach(function(i) {
     (i._links || []).forEach(function(l) { if (String(l.id) === String(linkId)) { owner = i; link = l; } });
   });
   if (!owner) return;
+  // 자동 연결이 쓰는 항목(기사·법안·DIFF)은 해제를 기억한다(#296) — 안 그러면 다음 자동 제안 실행이 같은 항목을
+  // 이 이슈에 다시 붙인다(10-06 세션이 되돌린 47건 중 24건 재연결). 기록이 실패하면 해제도 하지 않는다.
+  var remember = ['news', 'bill', 'diff'].indexOf(link.item_type) >= 0;
+  if (!confirm('이 항목의 연결을 해제합니다.' + (remember ? '\n자동 연결이 이 이슈에 다시 붙이지 않게 기록합니다.' : ''))) return;
   try {
+    if (remember) {
+      var x = await sb.from('issue_link_excludes').insert({
+        issue_id: owner.id, item_type: link.item_type, item_id: String(link.item_id),
+        reason: 'dashboard', excluded_by: currentUser ? currentUser.id : null
+      });
+      if (x.error && x.error.code !== '23505') throw x.error;   // 23505=이미 기록됨
+    }
     var r = await sb.from('issue_links').delete().eq('id', linkId);
     if (r.error) throw r.error;
     // 다른 이슈에 연결돼 있지 않은 기사면 잠금 해제 여부를 묻는다 (60일 정리 대상으로 되돌림)
@@ -13565,6 +13575,10 @@ async function linkNewsToIssue(newsId) {
       title: n.title, added_by: 'operator'
     });
     if (r.error && r.error.code !== '23505') throw r.error;   // 23505=이미 연결됨
+    // 사람이 다시 붙이면 해제 기억(#296)을 푼다 — 남아도 이미 있는 연결엔 영향이 없어 실패는 무시
+    var ux = await sb.from('issue_link_excludes').delete()
+      .eq('issue_id', iss.id).eq('item_type', 'news').eq('item_id', String(n.id));
+    if (ux.error) console.warn('[해제 기록 풀기 실패(무시)]', ux.error);
     // 이슈에 연결된 기사는 영구 보관 (60일 정리 제외)
     if (!n.locked) { await sb.from('news_feed').update({ locked: true }).eq('id', n.id); n.locked = true; }
     await sb.from('issues').update({ last_activity_at: new Date().toISOString() }).eq('id', iss.id);

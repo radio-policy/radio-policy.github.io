@@ -197,9 +197,17 @@ Deno.serve(async (req) => {
   const { data: linked } = await sb.from('issue_links').select('item_id').eq('issue_id', issueId).eq('item_type', 'news');
   const linkedIds = new Set((linked || []).map((r: { item_id: string }) => r.item_id));
   const deadKeys = new Set(deletedUrls.map(urlKey));
+  // 사람이 이 이슈에서 뺀 기사(issue_link_excludes, #296)도 다시 붙이지 않는다 — 못 읽으면 지운 기사 목록처럼 멈춘다
+  const { data: excl, error: exclErr } = await sb.from('issue_link_excludes').select('item_id')
+    .eq('issue_id', issueId).eq('item_type', 'news');
+  if (exclErr) {
+    return errJson(503, `연결 해제 기록을 읽지 못해 보강을 멈췄습니다(사람이 뺀 기사가 다시 붙지 않게). 잠시 뒤 다시 시도해 주세요. (${String(exclErr.message || exclErr).slice(0, 120)})`, cors);
+  }
+  const exclIds = new Set((excl || []).map((r: { item_id: string }) => String(r.item_id)));
+  const blockIds = [...new Set([...linkedIds, ...exclIds])];
 
-  const { data: linkedRows } = linkedIds.size
-    ? await sb.from('news_feed').select('id,url').in('id', [...linkedIds])
+  const { data: linkedRows } = blockIds.length
+    ? await sb.from('news_feed').select('id,url').in('id', blockIds)
     : { data: [] as { id: string; url: string }[] };
   (linkedRows || []).forEach((r) => deadKeys.add(urlKey(r.url)));
 
@@ -281,12 +289,14 @@ Deno.serve(async (req) => {
         if (insErr) continue;
         newsId = ins.id;
       } else {
+        if (exclIds.has(String(newsId))) continue;   // url 표기가 달라 위 대조를 빠져나온 해제 기사(#296)
         await sb.from('news_feed').update({ locked: true }).eq('id', newsId);
       }
+      // 이미 있는 연결 행은 덮어쓰지 않는다(#296 — upsert가 세션 행의 added_by·title을 'auto'로 바꿨다)
       await sb.from('issue_links').upsert({
         issue_id: issueId, item_type: 'news', item_id: newsId,
         item_date: c.date, title: c.title, added_by: 'auto',
-      }, { onConflict: 'issue_id,item_type,item_id' });
+      }, { onConflict: 'issue_id,item_type,item_id', ignoreDuplicates: true });
       linkedOut.push({ title: c.title, url: c.url, date: c.date });
     } catch { /* 개별 실패는 건너뛴다 */ }
   }

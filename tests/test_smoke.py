@@ -2816,6 +2816,140 @@ class TestIssueSuggestOverlapMerged(unittest.TestCase):
         self.assertIn('— 제안 대신 연결', log)
         self.assertEqual(calls['judge'], [[]])
 
+    def test_excluded_members_not_rejudged(self):
+        """#296 — 묶음의 남은 기사가 전부 사람이 그 이슈에서 뺀 것이면 판정에 다시 올리지 않는다(7일 창 내내 같은 묶음을
+        매 실행 판정하던 공회전·재연결). 하나라도 결정 안 된 기사가 있으면 종전대로 판정, 해제 기록은 이슈별이다."""
+        isg = self.isg
+        excl = self._issues()
+        excl[0]['definition'] = '해당 없음: 명절 트래픽'
+        rest = [0, 6, 7, 8, 9]
+        # 과반(5/10) 겹침 + 배제 기준 이슈 → 판정 경로인데, 나머지 5건이 모두 #171에서 해제됨
+        with mock.patch.object(isg, '_excluded', {(171, 'news', f'n{k}') for k in rest}):
+            log, calls, new = self._run(excl, [1, 2, 3, 4, 5], lambda pairs: set(), [0, 0, 0, 1])
+        self.assertIn('[과반겹침 — 남은 기사 모두 해제 기록]', log)
+        self.assertEqual((calls['judge'], calls['profile'], new), ([[]], 0, []))
+        # 하나라도 남으면 판정
+        with mock.patch.object(isg, '_excluded', {(171, 'news', f'n{k}') for k in rest[1:]}):
+            log, calls, new = self._run(excl, [1, 2, 3, 4, 5], lambda pairs: set(), [0, 0, 0, 1])
+        self.assertEqual(calls['judge'], [[('낚시형 대표 제목', 171)]])
+        # 과반 미달 겹침(3/10) → 나머지 7건 모두 해제 → 판정도 제안도 없음
+        with mock.patch.object(isg, '_excluded', {(171, 'news', f'n{k}') for k in (0, 4, 5, 6, 7, 8, 9)}):
+            log, calls, new = self._run(self._issues(), [1, 2, 3], lambda pairs: set(), [0, 0, 0, 1])
+        self.assertIn('[겹침 — 남은 기사 모두 해제 기록]', log)
+        self.assertEqual((calls['judge'], calls['profile'], new), ([[]], 0, []))
+        # 다른 이슈(#5)에서 뺀 기사는 #171 판정을 막지 않는다
+        with mock.patch.object(isg, '_excluded', {(5, 'news', f'n{k}') for k in rest}):
+            log, calls, new = self._run(excl, [1, 2, 3, 4, 5], lambda pairs: set(), [0, 0, 0, 1])
+        self.assertEqual(calls['judge'], [[('낚시형 대표 제목', 171)]])
+
+
+class TestIssueLinkWrites(unittest.TestCase):
+    """#296 자동 연결 쓰기 — 이미 있는 행은 덮어쓰지 않고(insert-ignore: upsert가 세션 행의 added_by를 auto로 바꾼 R6),
+    사람이 뺀 쌍(issue_link_excludes)은 넣지 않고, 새 행에만 경로 메모. 네트워크 0: 쓰기를 기록하는 가짜 DB."""
+
+    class _SB:
+        def __init__(self, existing=()):
+            self.calls, self.existing = [], set(existing)
+
+        def table(self, name):
+            sb = self
+
+            class Q:
+                op, row, kw = None, None, {}
+
+                def upsert(self, row, **kw):
+                    self.op, self.row, self.kw = 'upsert', row, kw
+                    return self
+
+                def update(self, row):
+                    self.op, self.row = 'update', row
+                    return self
+
+                def __getattr__(self, n):
+                    return lambda *a, **k: self
+
+                def execute(self):
+                    sb.calls.append((name, self.op, self.row, self.kw))
+                    if self.op == 'upsert':
+                        key = (self.row['issue_id'], self.row['item_type'], self.row['item_id'])
+                        return type('R', (), {'data': [] if key in sb.existing else [self.row]})()
+                    return type('R', (), {'data': []})()
+            return Q()
+
+    def setUp(self):
+        import issue_suggest as isg
+        self.isg = isg
+
+    @staticmethod
+    def _public_strip():
+        """app.js _issueNotePublic의 정규식 그대로 — 비로그인 화면에서 끝의 '(자동…)' 메모를 벗긴다."""
+        src = open(os.path.join(_ROOT, 'app.js'), encoding='utf-8').read()
+        m = re.search(r"function _issueNotePublic[\s\S]*?t\.replace\(/(.+?)/, ''\)", src)
+        rx = re.compile(m.group(1))
+        return lambda t: rx.sub('', t).strip()
+
+    def test_link_news_insert_ignore_excludes_and_note(self):
+        import io, contextlib
+        isg = self.isg
+        sb = self._SB(existing={(245, 'news', 'a')})
+        rows = [{'id': x, 'title': 't' + x, 'published_at': '2026-10-12T00:00:00+00:00'} for x in 'abcd']
+        with mock.patch.object(isg, '_excluded', {(245, 'news', 'c')}), contextlib.redirect_stdout(io.StringIO()):
+            n = isg._link_news(sb, 245, rows, path='과반 겹침 6/10→판정 예', seen_ids=['a', 'b'], group_size=10)
+        ups = [c for c in sb.calls if c[0] == 'issue_links']
+        self.assertEqual([c[2]['item_id'] for c in ups], ['a', 'b', 'd'])       # 해제한 c는 보내지 않는다
+        for c in ups:
+            self.assertEqual((c[1], c[3].get('ignore_duplicates'), c[3].get('on_conflict')),
+                             ('upsert', True, 'issue_id,item_type,item_id'))     # 이미 있는 a를 덮어쓰지 않는다
+        self.assertEqual(n, 2)                                                   # 신규는 b·d뿐
+        note_b, note_d = ups[1][2]['note'], ups[2][2]['note']
+        self.assertTrue(note_b.startswith('(자동 연결: 과반 겹침 6/10→판정 예 · 묶음 10건 · 판정이 본 기사 · '), note_b)
+        self.assertNotIn('판정이 본 기사', note_d)
+        strip = self._public_strip()
+        self.assertEqual((strip(note_b), strip(note_d)), ('', ''))              # 공개 화면엔 안 보인다
+        self.assertEqual([c[0] for c in sb.calls if c[0] != 'issue_links'], ['news_feed', 'issues'])
+        # 신규가 0이면 최근 활동 시각을 건드리지 않는다
+        sb2 = self._SB(existing={(245, 'news', 'a')})
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(isg._link_news(sb2, 245, rows[:1], path='x'), 0)
+        self.assertNotIn('issues', [c[0] for c in sb2.calls])
+
+    def test_link_reg_skips_excluded_and_ignores_duplicates(self):
+        import io, contextlib
+        isg = self.isg
+        sb = self._SB()
+        link = {'item_type': 'bill', 'item_id': '2221546', 'item_date': None, 'title': '법'}
+        with mock.patch.object(isg, '_excluded', {(51, 'bill', '2221546')}), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(isg._link_reg(sb, 51, link, path='같은 번호'), 0)
+            self.assertEqual(sb.calls, [])
+            self.assertEqual(isg._link_reg(sb, 52, link, path='같은 번호'), 1)
+        self.assertTrue(sb.calls[0][3]['ignore_duplicates'])
+        self.assertTrue(sb.calls[0][2]['note'].startswith('(자동 연결: 같은 번호 · '))
+
+    def test_source_guards(self):
+        src = open(os.path.join(_ROOT, 'issue_suggest.py'), encoding='utf-8').read()
+        # issue_links 쓰기는 전부 insert-ignore — upsert 덮어쓰기로 되돌리면 세션 행이 다시 auto가 된다(R6)
+        ms = list(re.finditer(r"table\('issue_links'\)\.upsert\(", src))
+        self.assertTrue(ms)
+        for m in ms:
+            self.assertIn('ignore_duplicates=True', src[m.end():src.index('.execute()', m.end())])
+        # 경로 이름에 괄호를 넣지 않는다 — 공개 화면 정규식('자동[^)]*')이 중간에서 끊겨 메모가 비로그인에게 보인다
+        lits = re.findall(r"(?:path=|route\[ci\] = |_p = )f?'([^']*)'", src)
+        self.assertGreaterEqual(len(lits), 10)
+        for lit in lits:
+            bare = re.sub(r'\{[^}]*\}', '', lit)
+            self.assertFalse(set(bare) & set('()'), lit)
+        self.assertIn('_excluded = _load_excludes(sb)', src)                     # 실행마다 해제 기록을 읽는다
+        # 대시보드: 해제하면 기록, 다시 붙이면 기록을 푼다 · 과거 기사 보강도 해제 기록을 읽고 덮어쓰지 않는다
+        app = open(os.path.join(_ROOT, 'app.js'), encoding='utf-8').read()
+        unl = app[app.index('async function unlinkIssueItem'):app.index('async function linkNewsToIssue')]
+        self.assertIn("from('issue_link_excludes').insert", unl)
+        self.assertLess(unl.index('issue_link_excludes'), unl.index("from('issue_links').delete()"))  # 기록 먼저
+        lnk = app[app.index('async function linkNewsToIssue'):][:3000]
+        self.assertIn("from('issue_link_excludes').delete()", lnk)
+        nas = open(os.path.join(_ROOT, 'supabase', 'functions', 'news-archive-search', 'index.ts'), encoding='utf-8').read()
+        self.assertIn("from('issue_link_excludes')", nas)
+        self.assertIn('ignoreDuplicates: true', nas)
+
 
 class TestSidebarListBody(unittest.TestCase):
     """#232 본문 자리에 사이드바 목록(사내판 인계) — 목록 머리말로 '시작'하는 칸은 본문이 아니다.

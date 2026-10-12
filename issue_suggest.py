@@ -22,6 +22,11 @@ crawler.py 말미에서 매시 호출된다(try/except 격리 — 실패해도 �
   이상이면 제안하지 않고 그 이슈와 관련 판정(#243). 세션이 기각하며 다른 이슈로 합친 제안
   (proposal_reason.merged_into)과 같은 주제면 skip하지 않고 합친 곳과 관련 판정(#243).
 
+자동 연결의 두 원칙(#296, 2026-10-12):
+  · 이미 있는 연결 행은 건드리지 않는다(insert-ignore) — 새 행에만 경로 메모 '(자동 연결: 경로 · 묶음 N건 · 시각)'.
+  · 세션·대시보드가 해제한 쌍(issue_link_excludes)은 어느 경로로도 다시 붙이지 않는다 — _link_news·_link_reg 한 곳에서
+    거르고, 그 이슈에 대해 남은 기사가 전부 해제된 것뿐인 묶음은 판정에도 올리지 않는다.
+
 규제 계열(법안·DIFF)은 법령 이름을 동일성 열쇠로 쓰지 않는다(#231, 2026-09-26):
   ① 번호 — 같은 의안번호·국회 개정안 조문대비↔그 법안·같은 공포번호면 같은 항목(active는 연결, 대기·기각은 skip)
   ② 요약 내용 벡터 — active ≥0.80 연결(배제 기준 이슈는 판정), proposed·rejected ≥0.72 skip
@@ -283,22 +288,67 @@ def _backfill_issue_embeddings(sb, issues, dry):
         i['embedding'] = v
 
 
-def _link_news(sb, issue_id, news_rows, added_by='auto'):
-    """기사들을 이슈에 연결 + 잠금 + 최근활동 갱신. 반환: 신규 연결 수."""
+# 세션·대시보드가 해제한 (issue_id, item_type, item_id) — run_suggest가 실행마다 issue_link_excludes에서 읽는다(#296).
+# 자동 경로는 이 쌍을 다시 붙이지 않는다: 10-06 21시 세션이 #245에서 되돌린 47건 중 24건이 다음 실행들에서 그대로 다시
+# 붙었다 — 되돌린 기사는 미연결이라 다음 묶음에 '새 기사'로 들어가 판정기가 또 예라고 했다.
+_excluded = set()
+
+
+def _load_excludes(sb):
+    rows = _fetch_all(lambda: sb.table('issue_link_excludes').select('issue_id,item_type,item_id')
+                      .order('issue_id').order('item_type').order('item_id'))
+    return {(r['issue_id'], r['item_type'], str(r['item_id'])) for r in rows}
+
+
+def _is_excluded(issue_id, item_type, item_id):
+    return (issue_id, item_type, str(item_id)) in _excluded
+
+
+def _undecided(group, issue_id, linked_to):
+    """묶음 기사 중 이 이슈에 아직 안 붙었고 사람이 이 이슈에서 빼지도 않은 것 — 비면 이 이슈와는 판정할 것이 없다(#296)."""
+    return [r for r in group
+            if issue_id not in linked_to.get(str(r['id']), ()) and not _is_excluded(issue_id, 'news', r['id'])]
+
+
+def _run_tag():
+    return (_now() + timedelta(hours=9)).strftime('%m-%d %H:%M')
+
+
+def _auto_note(path, extra=''):
+    """자동 연결 새 행의 경로 메모(#296) — 대시보드 _issueNotePublic이 끝의 '(자동…)'을 비로그인 화면에서 벗긴다.
+    괄호 안에 ')'를 쓰면 그 정규식이 중간에서 끊기므로 경로 이름에 괄호를 넣지 않는다."""
+    return f'(자동 연결: {path}{extra} · {_run_tag()})'
+
+
+def _link_news(sb, issue_id, news_rows, added_by='auto', path=None, seen_ids=(), group_size=None):
+    """기사들을 이슈에 연결 + 잠금 + 최근활동 갱신. 반환: 신규 연결 수.
+    이미 있는 연결은 건드리지 않는다(insert-ignore, #296) — upsert가 같은 쌍을 다시 받으면 세션이 넣은 행의
+    added_by·title·item_date를 'auto'로 덮어써, #245 채택 행 67 중 38·국감 연결 41 중 14가 auto로 바뀌었다(10-12 판정 R6).
+    사람이 이 이슈에서 뺀 기사(issue_link_excludes)는 넣지 않는다. path: 새 행 note에 남길 경로 이름 —
+    seen_ids는 판정기가 제목을 본 기사(대표·예시), group_size는 묶음 크기(기본 news_rows 수)."""
+    rows = [r for r in news_rows if not _is_excluded(issue_id, 'news', r['id'])]
+    if len(rows) < len(news_rows):
+        print(f'  [해제 기록 — 다시 안 붙임] [{issue_id}] {len(news_rows) - len(rows)}건')
+    seen = {str(x) for x in seen_ids}
     n = 0
-    for r in news_rows:
+    for r in rows:
+        note = None
+        if path:
+            note = _auto_note(path, f' · 묶음 {group_size or len(news_rows)}건'
+                                    + (' · 판정이 본 기사' if str(r['id']) in seen else ''))
         try:
-            sb.table('issue_links').upsert({
+            res = sb.table('issue_links').upsert({
                 'issue_id': issue_id, 'item_type': 'news', 'item_id': str(r['id']),
                 'item_date': (r.get('published_at') or '')[:10] or None,
-                'title': r['title'], 'added_by': added_by,
-            }, on_conflict='issue_id,item_type,item_id').execute()
-            n += 1
+                'title': r['title'], 'added_by': added_by, 'note': note,
+            }, on_conflict='issue_id,item_type,item_id', ignore_duplicates=True).execute()
+            n += len(res.data or [])
         except Exception as e:
             print(f'  [연결 실패(무시)] {e}')
-    ids = [str(r['id']) for r in news_rows]
+    ids = [str(r['id']) for r in rows]
     if ids:
         sb.table('news_feed').update({'locked': True}).in_('id', ids).eq('locked', False).execute()
+    if n:
         sb.table('issues').update({'last_activity_at': _iso(_now())}).eq('id', issue_id).execute()
     return n
 
@@ -306,10 +356,18 @@ def _link_news(sb, issue_id, news_rows, added_by='auto'):
 _proposed_this_run = 0
 
 
-def _link_reg(sb, issue_id, link):
-    """법안·DIFF를 이슈에 연결 — link: {item_type, item_id, item_date, title}. 중복은 upsert가 흡수한다."""
-    sb.table('issue_links').upsert({'issue_id': issue_id, **link, 'added_by': 'auto'},
-                                   on_conflict='issue_id,item_type,item_id').execute()
+def _link_reg(sb, issue_id, link, path=None):
+    """법안·DIFF를 이슈에 연결 — link: {item_type, item_id, item_date, title}. 반환: 신규 연결 수.
+    이미 있는 연결은 건드리지 않고(insert-ignore — 세션 행의 메모·added_by 보존, #296) 사람이 뺀 쌍은 넣지 않는다."""
+    if _is_excluded(issue_id, link['item_type'], link['item_id']):
+        print(f'  [해제 기록 — 다시 안 붙임] [{issue_id}] {link["item_type"]} {link["item_id"]}')
+        return 0
+    row = {'issue_id': issue_id, **link, 'added_by': 'auto'}
+    if path:
+        row['note'] = _auto_note(path)
+    res = sb.table('issue_links').upsert(row, on_conflict='issue_id,item_type,item_id',
+                                         ignore_duplicates=True).execute()
+    return len(res.data or [])
 
 
 def _judge_one(title, definition, iss, news_rows, link_item):
@@ -354,10 +412,13 @@ def _propose(sb, issues, title, definition, category, norm_key, reason, dry,
                           f'연결·제안 모두 보류({"세션 확인" if link_item else "판정 소속 아님·실패"})')
                     return False
             print(f'[제안→병합 재검사] "{title}" ≈ active [{i["id"]}] {i["title"][:20]} — 제안 대신 연결')
+            _p = '생성 제목 유사 ≥0.80' + ('→판정 예' if _has_exclusion(i) else '')
             if not dry and news_rows:
-                _link_news(sb, i['id'], news_rows, added_by='auto')
+                # 즉석 판정(_judge_one)은 생성 제목 + 묶음 예시 2건(news_rows[1:3])을 본다
+                _link_news(sb, i['id'], news_rows, added_by='auto', path=_p,
+                           seen_ids=[r['id'] for r in news_rows[1:3]] if _has_exclusion(i) else ())
             if not dry and link_item:
-                _link_reg(sb, i['id'], link_item)
+                _link_reg(sb, i['id'], link_item, path=_p)
             return False
     # 기각 재제안 재검사(#206) — 클러스터 단계의 기각 대조(대표 제목 벡터 0.72·어휘 3개)는
     # 지저분한 대표 제목 탓에 새는데, 생성 제목은 기각 이슈와 거의 같게 나온다(실측: 9/24 10:29 기각분이
@@ -380,10 +441,12 @@ def _propose(sb, issues, title, definition, category, norm_key, reason, dry,
             if ok:
                 print(f'[기각 병합처 연결] "{title}" ≈ 기각 [{rej["id"]}] ({rej_sim:.3f}) → 합친 곳 '
                       f'[{tgt["id"]}] {tgt["title"][:20]}')
+                _p = f'생성 제목이 합친 기각 #{rej["id"]}와 유사→판정 예'
                 if not dry and news_rows:
-                    _link_news(sb, tgt['id'], news_rows, added_by='auto')
+                    _link_news(sb, tgt['id'], news_rows, added_by='auto', path=_p,
+                               seen_ids=[r['id'] for r in news_rows[1:3]])
                 if not dry and link_item:
-                    _link_reg(sb, tgt['id'], link_item)
+                    _link_reg(sb, tgt['id'], link_item, path=_p)
                 return False
             print(f'[기각 재제안 — 건너뜀] {title}  (≈ [{rej["id"]}] {rej["title"][:20]}, {rej_sim:.3f}; '
                   f'합친 곳 [{tgt["id"]}] 판정 {"실패(보류)" if ok is None else "소속 아님"})')
@@ -412,11 +475,11 @@ def _propose(sb, issues, title, definition, category, norm_key, reason, dry,
     if news_rows:
         # 승인 전에도 근거 기사는 연결해 둔다(승인 시 재작업 불필요). 잠금은 승인 후가 원칙이나
         # 60일 삭제 경쟁이 있으므로 여기서 잠근다 — 기각 시 webhook이 잠금을 해제한다.
-        _link_news(sb, iid, news_rows, added_by='auto')
+        _link_news(sb, iid, news_rows, added_by='auto', path='제안 근거')
     if link_item:
         # 근거 법안·DIFF도 제안과 함께 연결 — 종전엔 승인 뒤 다음 실행의 이름표 일치로만 붙어,
         # 제목을 고친 이슈는 제 법안을 영영 못 찾았다(#231)
-        _link_reg(sb, iid, link_item)
+        _link_reg(sb, iid, link_item, path='제안 근거')
     body = (f'📌 이슈 제안: {title}\n'
             f'{definition or ""}\n'
             f'근거: {reason.get("detail", "")}\n{DASHBOARD_URL}')
@@ -543,6 +606,7 @@ def _suggest_from_news(sb, issues, dry):
     vecs = _embed(reps)
 
     borderline = []   # (cluster_idx, rep_title, candidate_issue) — Haiku 관련 판정 대기
+    route = {}        # cluster_idx → 판정에 들어간 경로 이름(새 연결 행의 메모, #296) — 묶음 하나는 판정 항목 하나
     to_propose = []   # (cluster_idx, nk) — 발제 기준 통과 & 어디에도 안 붙은 클러스터
     # 기사→연결 이슈 지도. PostgREST 1,000행 절단 대비 페이징(가드레일 — 링크가 이미 700행대).
     linked_to = {}
@@ -572,14 +636,21 @@ def _suggest_from_news(sb, issues, dry):
         if _cnt:
             # 겹침 최소 2건 — 2건짜리 클러스터의 1건 겹침(1/2)까지 무판정 연결하면 과확장
             if _top_n >= 2 and _top_n * 2 >= len(group):
-                _fresh = [r for r in group if _top_iss not in linked_to.get(str(r['id']), ())]
+                # 나머지가 전부 사람이 이 이슈에서 뺀 기사면 이 이슈와는 결정이 끝났다 — 판정에 다시 올리지 않는다(#296,
+                # 종전엔 되돌린 기사 묶음이 7일 창 내내 매 실행 판정에 올라 또 예를 받았다)
+                _fresh = _undecided(group, _top_iss, linked_to)
+                if not _fresh:
+                    print(f'[과반겹침 — 남은 기사 모두 해제 기록] "{group[0]["title"][:28]}" → [{_top_iss}] 건너뜀')
+                    continue
                 if _has_exclusion(by_id.get(_top_iss)):
                     # 오염이 오염을 부르는 증폭 경로 — 배제 기준 이슈는 판정을 받고 붙는다
                     borderline.append((ci, group[0]['title'], by_id[_top_iss]))
+                    route[ci] = f'과반 겹침 {_top_n}/{len(group)}→판정 예'
                     print(f'[과반겹침→판정] "{group[0]["title"][:28]}" → [{_top_iss}] (배제 기준 이슈)')
                     continue
-                if _fresh and not dry:
-                    _link_news(sb, _top_iss, _fresh)
+                if not dry:
+                    _link_news(sb, _top_iss, _fresh, path=f'과반 겹침 {_top_n}/{len(group)}',
+                               group_size=len(group))
                 print(f'[연결·과반겹침] "{group[0]["title"][:28]}" → [{_top_iss}] '
                       f'(겹침 {_top_n}/{len(group)}, 신규 {len(_fresh)}건)')
                 continue
@@ -602,11 +673,17 @@ def _suggest_from_news(sb, issues, dry):
         #    낱개 후속 기사도 기간과 무관하게 이슈에 붙어야 연대기가 자란다.
         if lex_hit is not None or (nk_state and nk_state[0] == 'active') or sim_a >= SIM_MERGE:
             target = lex_hit or (nk_state[1] if (nk_state and nk_state[0] == 'active') else best_active)
+            _how = ('제목 어휘 3개 공유' if lex_hit is not None
+                    else '제목 열쇠 일치' if (nk_state and nk_state[0] == 'active') else f'유사도 {sim_a:.2f}')
+            if not _undecided(group, target['id'], linked_to):
+                print(f'[직결 — 남은 기사 모두 해제 기록] "{group[0]["title"][:28]}" → [{target["id"]}] 건너뜀')
+                continue
             if _has_exclusion(target):
                 borderline.append((ci, group[0]['title'], target))
+                route[ci] = f'직결·{_how}→판정 예'
                 print(f'[직결→판정] "{group[0]["title"][:28]}" → [{target["id"]}] (배제 기준 이슈)')
                 continue
-            n = 0 if dry else _link_news(sb, target['id'], group)
+            n = 0 if dry else _link_news(sb, target['id'], group, path=f'직결·{_how}')
             print(f'[연결] "{group[0]["title"][:28]}" → [{target["id"]}] ({len(group)}건, sim {sim_a:.2f})')
             continue
         # ①-2 겹침 판정(#243) — 과반은 못 돼도 묶음 기사 OVERLAP_JUDGE_MIN건 이상이 한 active 이슈에 이미 붙어
@@ -614,13 +691,21 @@ def _suggest_from_news(sb, issues, dry):
         #    승인하며 제목·정의를 넓혀 벡터가 원래 보도에서 멀어졌다)도 놓쳐 중복 제안이 됐다(#199: 26건 중 8건이
         #    #171에 연결돼 있었다). 제안하지 않고 그 이슈와 관련 판정만 — 떨어지면 다음 실행에서 다시 본다(아래 경계 후보와 같다).
         if _top_n >= OVERLAP_JUDGE_MIN:
+            if not _undecided(group, _top_iss, linked_to):
+                print(f'[겹침 — 남은 기사 모두 해제 기록] "{group[0]["title"][:28]}" → [{_top_iss}] 건너뜀')
+                continue
             borderline.append((ci, group[0]['title'], by_id[_top_iss]))
+            route[ci] = f'겹침 {_top_n}/{len(group)}→판정 예'
             print(f'[겹침→판정] "{group[0]["title"][:28]}" → [{_top_iss}] (겹침 {_top_n}/{len(group)})')
             continue
         if best_active is not None and sim_a >= SIM_RELATED:
-            borderline.append((ci, group[0]['title'], best_active))
             # 관련 판정 결과를 기다린다 — 판정에서 떨어지면 아래 제안 후보로도 안 간다
             # (관련도 아니고 제안 기준도 못 넘는 어중간한 클러스터는 다음 시간에 재평가)
+            if not _undecided(group, best_active['id'], linked_to):
+                print(f'[경계 — 남은 기사 모두 해제 기록] "{group[0]["title"][:28]}" → [{best_active["id"]}] 건너뜀')
+                continue
+            borderline.append((ci, group[0]['title'], best_active))
+            route[ci] = f'유사도 {sim_a:.2f}→판정 예'
             continue
 
         # ②-0 합친 기각(#243) — 세션이 기각하며 다른 active 이슈로 합친 제안(proposal_reason.merged_into)과 같은
@@ -629,7 +714,11 @@ def _suggest_from_news(sb, issues, dry):
         _mh = _merged_hit(issues, by_id, vecs[ci], nk,
                           None if _POLICY_SIGNAL.search(titles_all) else kw_rep)
         if _mh is not None:
+            if not _undecided(group, _mh[1]['id'], linked_to):
+                print(f'[기각 병합처 — 남은 기사 모두 해제 기록] "{group[0]["title"][:28]}" → [{_mh[1]["id"]}] 건너뜀')
+                continue
             borderline.append((ci, group[0]['title'], _mh[1]))
+            route[ci] = f'합친 기각 #{_mh[0]["id"]}와 같은 주제→판정 예'
             print(f'[기각 병합처→판정] "{group[0]["title"][:28]}" ≈ 기각 [{_mh[0]["id"]}] → 합친 곳 [{_mh[1]["id"]}]')
             continue
 
@@ -668,13 +757,16 @@ def _suggest_from_news(sb, issues, dry):
             # 이 판정 없이는 같은 이슈의 후속이 별도 제안으로 새어 나간다.
             if best_active is not None and sim_a >= 0.35:
                 borderline.append((ci, group[0]['title'], best_active))
+                route[ci] = f'제안 전 판정·유사도 {sim_a:.2f}→판정 예'
             to_propose.append((ci, nk))
 
     # ③ 경계 후보 일괄 관련 판정(Haiku 1콜) → 확정분 연결
     related = _haiku_relate_batch(borderline, groups)
     for ci, title, iss in borderline:
         if ci in related:
-            n = 0 if dry else _link_news(sb, iss['id'], groups[ci])
+            # 판정기는 대표 제목 + 같은 묶음 2건(groups[ci][:3])을 본다 — 나머지 구성원도 함께 붙는다(10-12 판정 R1)
+            n = 0 if dry else _link_news(sb, iss['id'], groups[ci], path=route.get(ci, '관련 판정 예'),
+                                         seen_ids=[r['id'] for r in groups[ci][:3]])
             print(f'[연결·관련판정] "{title[:28]}" → [{iss["id"]}] ({len(groups[ci])}건)')
         else:
             print(f'[관련 판정 — 소속 아님] "{title[:28]}" ≠ [{iss["id"]}]')
@@ -793,7 +885,8 @@ def _reg_process(sb, issues, items, law_by_id, reg_links, dry):
             tgt = _merge_target(iss, by_id) if st == 'rejected' else None   # 합친 기각(#243) — 같은 번호면 합친 곳에
             if st == 'active' or tgt is not None:
                 if not dry:
-                    _link_reg(sb, (tgt or iss)['id'], it['link'])
+                    _link_reg(sb, (tgt or iss)['id'], it['link'],
+                              path=f'같은 번호·합친 기각 #{iss["id"]}' if tgt else '같은 번호')
                 print(f'[기존 이슈 연결·같은 항목{"(합친 곳)" if tgt else ""}] {it["label"]} → '
                       f'[{(tgt or iss)["id"]}] {(tgt or iss)["title"][:24]}')
             else:
@@ -813,7 +906,7 @@ def _reg_process(sb, issues, items, law_by_id, reg_links, dry):
         it['sim'] = (sim_a, sim_p, sim_r)
         if best_a is not None and sim_a >= SIM_MERGE and not _has_exclusion(best_a):
             if not dry:
-                _link_reg(sb, best_a['id'], it['link'])
+                _link_reg(sb, best_a['id'], it['link'], path=f'요약 유사도 {sim_a:.2f}')
             it['done'] = True
             print(f'[기존 이슈 연결·내용] {it["label"]} → [{best_a["id"]}] {best_a["title"][:24]} (sim {sim_a:.2f})')
         elif best_a is not None and sim_a >= SIM_REG_RELATED:
@@ -835,7 +928,7 @@ def _reg_process(sb, issues, items, law_by_id, reg_links, dry):
                 print(f'[보류 — 관련 판정 실패] {it["label"]} (후보 [{iss["id"]}])')
             elif k in related:
                 if not dry:
-                    _link_reg(sb, iss['id'], it['link'])
+                    _link_reg(sb, iss['id'], it['link'], path=f'요약 유사도 {it["sim"][0]:.2f}→판정 예')
                 it['done'] = True
                 print(f'[기존 이슈 연결·관련판정] {it["label"]} → [{iss["id"]}] {iss["title"][:24]} '
                       f'(sim {it["sim"][0]:.2f})')
@@ -1010,8 +1103,13 @@ def _stage_and_dormancy(sb, issues, dry):
 
 
 def run_suggest(sb, dry: bool = False):
+    global _excluded
     print(f'[이슈 제안 파이프] 시작 (dry={dry})')
     issues = _load_issues(sb)
+    # 사람이 뺀 연결(#296) — 못 읽으면 예외로 이번 실행을 통째로 건너뛴다(빈 집합으로 돌면 세션·대시보드가
+    # 뺀 기사를 다시 붙인다). 크롤러가 격리하고, heartbeat가 안 찍혀 같은 시각 안의 다음 크롤에서 다시 시도한다.
+    _excluded = _load_excludes(sb)
+    print(f'[연결 해제 기록] {len(_excluded)}쌍 — 자동 경로는 이 쌍을 다시 붙이지 않는다')
     try:
         _backfill_issue_embeddings(sb, issues, dry)
     except Exception as e:

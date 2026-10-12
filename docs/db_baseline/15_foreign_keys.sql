@@ -10,6 +10,8 @@ alter table public.chat_logs add constraint chat_logs_user_id_fkey FOREIGN KEY (
 
 alter table public.importance_feedback add constraint importance_feedback_team_id_fkey FOREIGN KEY (team_id) REFERENCES teams(id);
 
+alter table public.issue_link_excludes add constraint issue_link_excludes_issue_id_fkey FOREIGN KEY (issue_id) REFERENCES issues(id) ON DELETE CASCADE;
+
 alter table public.issue_links add constraint issue_links_issue_id_fkey FOREIGN KEY (issue_id) REFERENCES issues(id) ON DELETE CASCADE;
 
 alter table public.kb_chunks add constraint kb_chunks_doc_id_fkey FOREIGN KEY (doc_id) REFERENCES kb_documents(id) ON DELETE CASCADE;
