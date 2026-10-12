@@ -129,7 +129,8 @@ window.LAWMAP_POS_URL = 'lawmap_positions.json?v=20260928a';
               · 법령마다 정리해 둔 <strong>실무 요약 310여 종</strong>을 원문과 함께 참고<br>
               · 곧 바뀔 예정인 조문은 <strong>"지금은 A, ○월○일부터는 B"</strong>처럼 현행과 예정을 구분해 알려드립니다. 조문이 가리키는 별표·서식도 함께 확인<br>
               · 찾은 조문을 어겼을 때 따르는 <strong>벌칙·과태료·과징금 조문</strong>처럼, 그 조문을 인용하는 같은 법령의 다른 조문도 함께 찾아 참고합니다<br>
-              · 5G·6G 관련 국제 표준(ITU-R) 권고·보고서 9종<br><br>
+              · 5G·6G 관련 국제 표준(ITU-R) 권고·보고서 9종<br>
+              · 2G·3G 종료, 유심 정보 유출 제재, 단통법 폐지 이후 지원금 규율처럼 굵직한 쟁점의 경과와 관련 법령을 공개 자료로 정리한 <strong>쟁점 사례 문서 20여 건</strong>도 참고합니다<br><br>
               🏛️ <strong>국회에서 오간 논의</strong><br>
               · <strong>과방위 회의록 10년치(2016~2026년, 국정감사 포함)</strong>에서 질문과 관련된 의원 질의와 정부 답변을 찾아 참고합니다<br>
               · 질문과 관련된 국회 계류 법안·입법예고가 있으면 함께 알려드립니다(의견등록 마감일 포함). 아직 확정된 법이 아니므로 구분해 표기하고, 답변의 법적 근거로는 쓰지 않습니다<br><br>
@@ -139,9 +140,6 @@ window.LAWMAP_POS_URL = 'lawmap_positions.json?v=20260928a';
               · 해외 제도 비교나 최신 동향처럼 내부 자료에 없는 내용은 인터넷을 검색해서 출처 링크와 함께 알려드립니다.<br><br>
               📰 <strong>수시로 모으는 뉴스</strong><br>
               · 10분마다 모으는 국내 전파·통신 뉴스와 매일 모으는 해외 소식(미국 FCC, 영국 Ofcom, 일본 총무성 등)에서 관련 기사를 골라 참고합니다.<br><br>
-              🗂️ <strong>우리 팀의 축적 지식</strong><br>
-              · 팀이 직접 입력해 둔 검토 결과·유권해석·협의 내용도 함께 참고합니다.<br>
-              · 2G·3G 종료, 유심 정보 유출 제재, 단통법 폐지 이후 지원금 규율처럼 굵직한 쟁점의 경과와 관련 법령을 정리한 <strong>쟁점 사례 문서 20여 건</strong>도 참고합니다.<br><br>
               🕸️ <strong>법령 관계도</strong><br>
               · 답변에 쓰인 법령들이 어떻게 이어지는지 답변 아래 작은 관계도로 보여드리고, <strong>관리자 검토를 거쳐</strong> 법령 관계도 탭에 반영됩니다. 관계도 탭에서는 그 주제의 근거 조문끼리 실제로 이어진 관계만 그립니다.<br><br>
               🔐 <strong>이용 안내</strong><br>
@@ -540,6 +538,10 @@ window.LAWMAP_POS_URL = 'lawmap_positions.json?v=20260928a';
           </button>
           <span style="margin-left:auto;font-size:11px;color:var(--text-tertiary);align-self:center">AI 자문 시 자동 참조됩니다</span>
         </div>
+        <!-- 여기 넣은 글·파일은 로그인 없이 누구나 읽는다(custom_knowledge·document_chunks anon SELECT) — 외부판은 공개 자료만 (2026-10-12 운영자 결정) -->
+        <div style="font-size:12px;color:var(--text-secondary);margin:-6px 0 14px;line-height:1.6">
+          <i class="ti ti-world"></i> 이곳에 입력하거나 올린 자료는 <strong>로그인 없이 누구나 볼 수 있습니다</strong> — 법령·논문·정부 발표처럼 이미 공개된 자료만 넣어 주세요.
+        </div>
 
         <!-- 입력 탭 -->
         <div id="custom-tab-input">
@@ -547,7 +549,7 @@ window.LAWMAP_POS_URL = 'lawmap_positions.json?v=20260928a';
 
             <div>
               <div style="font-size:11px;color:var(--text-secondary);margin-bottom:4px">제목 <span style="color:#dc2626">*</span></div>
-              <input id="ck-title" type="text" placeholder="예: 6GHz 대역 공유 방안 내부 검토 결과"
+              <input id="ck-title" type="text" placeholder="예: 6GHz 대역 비면허 이용 관련 고시 조문 정리"
                 style="width:100%;box-sizing:border-box;padding:8px 12px;font-size:13px;border:0.5px solid var(--border-mid);border-radius:var(--radius-md);background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;outline:none"/>
             </div>
 
@@ -565,7 +567,7 @@ window.LAWMAP_POS_URL = 'lawmap_positions.json?v=20260928a';
 
             <div>
               <div style="font-size:11px;color:var(--text-secondary);margin-bottom:4px">내용 <span style="color:#dc2626">*</span></div>
-              <textarea id="ck-content" rows="8" placeholder="검증된 지식, 해석, 사례, 유권해석 결과 등을 자유롭게 입력하세요."
+              <textarea id="ck-content" rows="8" placeholder="공개된 법령·고시·논문·정부 발표를 바탕으로 정리한 내용을 입력하세요. 근거 조문이나 출처를 함께 적어 주세요."
                 style="width:100%;box-sizing:border-box;padding:10px 12px;font-size:13px;border:0.5px solid var(--border-mid);border-radius:var(--radius-md);background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;outline:none;resize:vertical;line-height:1.7"></textarea>
             </div>
 
@@ -1315,7 +1317,7 @@ window.LAWMAP_POS_URL = 'lawmap_positions.json?v=20260928a';
 <script src="supabase/functions/_shared/cite_verify.js?v=20261012"></script>
 <script src="supabase/functions/_shared/rag_core.js?v=20261007c"></script>   <!-- 자문 검색 순수 규칙(#215) — app.js보다 먼저 -->
 <script src="supabase/functions/_shared/urgency_rules.js?v=20260927c"></script>   <!-- 긴급도 규칙 매처(#216) + 팀 층 함수(#250) + 문장 조건 함수(#251) + 알림 등급 함수(#252) — app.js보다 먼저 -->
-<script src="app.js?v=20261012a"></script>
+<script src="app.js?v=20261012b"></script>
 <script src="lawmap_articles.js?v=20261007a"></script>
 </body>
 </html>

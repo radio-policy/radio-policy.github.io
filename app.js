@@ -2716,13 +2716,15 @@ async function searchCustomKnowledge(query) {
       if (results.length >= 3) break;
     }
     if (results.length === 0) return '';
-    var lines = ['\n\n[팀 내부 추가 지식 — 검증 완료]'];
+    // 머리말에 「팀 내부」를 쓰지 않는다 — 답변이 「팀 내부 정리에 따르면」으로 옮겨 적었다(60일 69건 중 3건).
+    // 외부판 추가 지식은 공개 자료만 (2026-10-12 운영자 결정)
+    var lines = ['\n\n[참고 메모 — 공개 법령 정리]'];
     results.slice(0, 3).forEach(function(r, i) {
       var excerpt = (r.content || '').slice(0, 2500);
       lines.push('■ [' + (r.category || '일반') + '] ' + r.title);
       lines.push('  ' + excerpt + (r.content.length > 2500 ? '...' : ''));
     });
-    lines.push('(위 내부 지식을 우선 참고하여 답변하세요.)');
+    lines.push('(위 참고 메모를 우선 참고하여 답변하세요.)');
     return lines.join('\n');
   } catch(e) {
     console.warn('추가 지식 검색 실패:', e);
@@ -3020,7 +3022,7 @@ async function buildAdvisoryContext(userText) {
 
   // 시스템 프롬프트에 컨텍스트 조합 (위에서 동시 시작한 검색 결과를 기존 순서 그대로 조립)
   const ragContext    = buildRagContext(ragChunks);
-  const customContext = await customP;                            // 팀 내부 추가 지식
+  const customContext = await customP;                            // 추가 지식(참고 메모)
   const newsContext   = await newsP;                              // 뉴스 본문+제목
   // 본문 발췌로 실제 반영된 뉴스만 출처에 합친다 (제목 목록 30건은 근거가 아니라 동향 참고용)
   if (lastNewsSources.length) lastRagSources = lastRagSources.concat(lastNewsSources);
