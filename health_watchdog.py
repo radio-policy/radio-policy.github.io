@@ -358,6 +358,42 @@ if not any(p.startswith("⛔") for p in problems):
     except Exception as e:
         problems.append("security_audit 조회 실패: %s" % e)
 
+# ── ③-6 임베딩 누락 감시 (#299, 2026-10-13) ──
+# Voyage가 멈추면(무료 한도 소진·결제 수단 없음·키 만료) 새 문서 조각은 그대로 저장되고 embedding만 비어 의미 검색에서
+# 조용히 빠진다 — 자문은 키워드 갈래로 계속 답하고 search_meta에도 오류 줄이 안 남는다(임베딩이 실패하면 RPC를 안 부름).
+# 백필이 채우는 대상과 같은 조건(status≠superseded — superseded는 일부러 비운다)으로, 들어온 지 EMB_MISSING_H 넘게
+# 빈 조각이 있으면 경고. 정상이면 매일 law_crawl 끝 백필 단계(#299)가 24시간 안에 채운다. 법령 요약(kb_chunks,
+# voyage-law-2 — 넣기 전에 임베딩하므로 빈 행은 비정상)·이슈(issue_suggest가 하루 4회 채움)도 같이 본다.
+EMB_MISSING_H = 24
+
+if not any(p.startswith("⛔") for p in problems):
+    try:
+        cut = (NOW - datetime.timedelta(hours=EMB_MISSING_H)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        chunks = http_get_json(
+            SUPABASE_URL + "/rest/v1/document_chunks?select=doc_name,created_at&embedding=is.null"
+            "&status=neq.superseded&created_at=lt.%s&order=created_at.asc&limit=1000" % cut, sb_headers)
+        kb = http_get_json(
+            SUPABASE_URL + "/rest/v1/kb_chunks?select=id&embedding=is.null&created_at=lt.%s&limit=1000" % cut, sb_headers)
+        iss = http_get_json(
+            SUPABASE_URL + "/rest/v1/issues?select=id&embedding=is.null&state=in.(active,proposed,rejected)"
+            "&created_at=lt.%s&limit=1000" % cut, sb_headers)
+        if chunks or kb or iss:
+            parts = []
+            if chunks:
+                parts.append("문서 조각 %d개(가장 오래된 %.0f시간 전, 예: %s)"
+                             % (len(chunks), hours_since(chunks[0]["created_at"]), chunks[0].get("doc_name") or "?"))
+            if kb:
+                parts.append("법령 요약 %d개" % len(kb))
+            if iss:
+                parts.append("이슈 %d개" % len(iss))
+            problems.append("임베딩이 %d시간 넘게 빈 행: %s — 의미 검색에서 빠지는 중. Voyage 무료 한도·결제·키 확인 "
+                            "(dashboard.voyageai.com Usage) 뒤 py -3.12 backfill_embeddings.py (#299)"
+                            % (EMB_MISSING_H, ", ".join(parts)))
+        else:
+            print("[워치독] 임베딩 누락 0 (%dh 넘은 빈 행 없음)" % EMB_MISSING_H)
+    except Exception as e:
+        problems.append("임베딩 누락 감시 확인 실패: %s" % e)
+
 # ── ④ 결과 → 텔레그램(이상 있을 때만, 정상이면 무음) ──
 if problems:
     msg = "⚠️ [전파정책 헬스 워치독] 이상 감지 (%s KST):\n- %s" % (

@@ -3075,3 +3075,35 @@ class TestSidebarListBody(unittest.TestCase):
                 '<article id="article-view-content-div">' + '본문 문장이다. ' * 20 + '</article></div></body></html>')
         self.assertTrue(self._fetch('https://www.pressman.kr/news/articleView.html?idxno=1', html, 'pressman')
                         .startswith('부제 줄입니다'))
+
+
+class TestEmbeddingBackfillPath(unittest.TestCase):
+    """#299 — 벡터(embedding)가 빈 문서 조각이 며칠씩 의미 검색에서 빠지지 않게: 백필을 부르는 해외 수집 워크플로에
+    Voyage 키, 매일 법령 체인 끝의 조건 없는 백필 단계, 24시간 넘게 빈 행을 알리는 워치독 ③-6. 네트워크 0."""
+
+    def _read(self, *parts):
+        with open(os.path.join(_ROOT, *parts), encoding='utf-8') as f:
+            return f.read()
+
+    def test_foreign_press_workflow_passes_voyage_key(self):
+        # foreign_press.run()이 KB 승격분 뒤에 backfill_embeddings.py를 부른다 — 키가 없으면 「키 없음」만 찍고 끝난다
+        self.assertIn('backfill_embeddings.py', self._read('foreign_press.py'))
+        self.assertIn('VOYAGE_API_KEY: ', self._read('.github', 'workflows', 'foreign_press.yml'))
+
+    def test_law_crawl_backfills_every_day(self):
+        yml = self._read('.github', 'workflows', 'law_crawl.yml')
+        i = yml.index('run: python backfill_embeddings.py')
+        step = yml[yml.rindex('- name:', 0, i):i]
+        self.assertIn('continue-on-error: true', step)    # Voyage가 멈춰도 체인 결론은 그대로
+        self.assertIn('timeout-minutes:', step)           # 재시도가 90분 잡 한도를 잡아먹지 않게
+        self.assertIn('VOYAGE_API_KEY', step)
+        self.assertNotIn('if:', step)                     # 조건 없이 매일
+
+    def test_watchdog_flags_old_null_embeddings(self):
+        src = self._read('health_watchdog.py')
+        a, b = src.index('# ── ③-6 임베딩 누락 감시'), src.index('# ── ④ 결과 → 텔레그램')
+        block = src[a:b]
+        self.assertIn('EMB_MISSING_H = 24', block)
+        self.assertIn('embedding=is.null', block)
+        self.assertIn('status=neq.superseded', block)     # 백필 대상과 같은 조건 — superseded는 일부러 비운다
+        self.assertIn('problems.append', block)

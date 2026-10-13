@@ -28,9 +28,13 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      # VOYAGE_API_KEY는 KB 승격분이 있을 때 foreign_press가 끝에 부르는 backfill_embeddings.py용(#299, 2026-10-13).
+      # 2026-08-25 신설 때 빠져 백필이 「키 없음」만 찍고 끝났다 — 같은 날 16:30 보도자료 백필이 대신 채워 드러나지
+      # 않다가, 보도자료 없는 10-10(토) 승격 4개가 3일째 의미 검색에서 빠진 채로 발견됐다.
       - name: Run foreign press collector
         env:
           SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           ANTHROPIC_API_KEY:    ${{ secrets.ANTHROPIC_API_KEY }}
+          VOYAGE_API_KEY:       ${{ secrets.VOYAGE_API_KEY }}
         run: python foreign_press.py

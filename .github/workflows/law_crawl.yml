@@ -181,3 +181,17 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python tax_clause_watch.py
+
+      # 벡터(embedding)가 빈 문서 조각 채우기 — 매일 한 번, 조건 없이 (#299, 2026-10-13). 그동안 백필은 '새 보도자료가
+      # 있는 날'(정부 공고 체인)·'법령이 바뀐 날'(law_sync)·'해외 KB 승격'(foreign_press — 키가 없어 늘 헛돌았다)에만 돌아,
+      # 보도자료 없는 날 들어온 회의록·해외 조각이 며칠씩 의미 검색에서 빠졌다(10-10 5개, 3일). 빈 행이 없으면 개수 조회
+      # 한 번으로 끝나 Voyage 호출 0. Voyage가 멈춰 재시도가 길어져도 체인을 잡아먹지 않게 15분 한도. 이 단계가 있어
+      # 정상이면 빈 행이 24시간 안에 채워지므로, 워치독 ③-6(24시간 넘게 빈 행 → 경고)이 Voyage 고장 신호가 된다.
+      - name: Backfill missing embeddings (Voyage, NULL rows only)
+        continue-on-error: true
+        timeout-minutes: 15
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
+        run: python backfill_embeddings.py
