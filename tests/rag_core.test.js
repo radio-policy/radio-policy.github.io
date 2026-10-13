@@ -309,8 +309,9 @@ var asyncTests = (async function () {
     doc.push({ id: 500 + i, doc_name: N, article_no: a, chunk_index: i, content: a + ' 본문' });
   });
   doc.push({ id: 600, doc_name: N, article_no: '별표 1(x)', chunk_index: 20, content: '표' });
-  eq('pickNeighbors 작으면 남은 조 전부(별표 제외)', RC.pickNeighbors(doc, ['5조', '12조'], { wholeChars: 6000, max: 4 }).map(function (x) { return x.key; }),
-    ['1조', '4조', '6조', '6조의2', '7조', '11조', '13조']);
+  eq('pickNeighbors 작으면 남은 조 전부(별표 제외) — 정의·목적 조는 맨 뒤(#300-보론6, 합계는 그대로)', RC.pickNeighbors(doc, ['5조', '12조'], { wholeChars: 6000, max: 4 }).map(function (x) { return x.key; }),
+    ['4조', '6조', '6조의2', '7조', '11조', '13조', '1조']);
+  eq('neighborWhole은 정의·목적 조를 합계에 넣은 그대로(#300-보론6 — 빼면 사내 사례가 전부 모드로 바뀜)', RC.neighborWhole(doc, ['5조', '12조'], { wholeChars: 10 }), false);
   eq('pickNeighbors 크면 문서 순서상 앞뒤 조·준용 조만, max', RC.pickNeighbors(doc, ['5조', '12조'], { wholeChars: 10, max: 4 }).map(function (x) { return x.key; }),
     ['4조', '6조', '7조', '11조']);
 })();
@@ -678,7 +679,7 @@ var applyTests = (async function () {
   var R = '전파법 시행령(대통령령)(제2호)(20251001)';
   var art = function (k, title, body) { return { id: 100 + Number(k.replace(/\D/g, '')), doc_name: N, article_no: k + '(' + title + ')', chunk_index: Number(k.replace(/\D/g, '')), content: '제' + k + '(' + title + ') ' + body }; };
   // 사내 사례 꼴 — 고시 4·14·17·18조가 근거, 나머지 조 합이 wholeChars를 넘는 문서
-  var doc = [art('2조', '정의', 'x'), art('3조', '적용범위', 'y'.repeat(600)), art('4조', '기본사항', 'z'.repeat(600)), art('5조', '신청', 'a'.repeat(600)), art('6조', '서류', 'b'.repeat(600)), art('7조', '보정', 'c'.repeat(600)),
+  var doc = [art('2조', '정의', 'x'.repeat(25)), art('3조', '적용범위', 'y'.repeat(600)), art('4조', '기본사항', 'z'.repeat(600)), art('5조', '신청', 'a'.repeat(600)), art('6조', '서류', 'b'.repeat(600)), art('7조', '보정', 'c'.repeat(600)),
     art('8조', '적격', '적격 여부를 1개월 이내 통보'), art('9조', '심사', 'e'.repeat(600)), art('10조', '방법', 'f'.repeat(600)), art('11조', '선정', '신청일부터 6개월 이내 통보'), art('12조', '서류 제출', '3개월 이내'), art('13조', '통지서', 'g'.repeat(600)),
     art('14조', '재할당 신청', 'h'.repeat(600)), art('15조', '심사', 'i'.repeat(600)), art('16조', '재할당대상법인 선정', '60점·70점'), art('17조', '준용규정', '재할당의 신청 및 심사방법 등에 관하여는 제5조부터 제8조까지, 제9조제2항, 제10조, 제11조제3항, 제12조 및 제13조를 준용한다.'),
     art('18조', '통지', 'j'.repeat(600)), art('19조', '기타', 'k'.repeat(600)), art('20조', '기타2', 'l'.repeat(600)), art('26조', '5G 특화망 준용규정', '5G 특화망 주파수 재할당에 관하여는 제14조 및 제18조를 준용한다.')];
@@ -694,7 +695,18 @@ var applyTests = (async function () {
   var keys = function (sec) { return r.items.filter(function (x) { return x.sec === sec; }).map(function (x) { return x.key; }); };
   eq('fetchAddOns 준용 — 제17조의 대상 9개가 쓰인 순으로, 대상 문서는 근거 문서', keys('apply'), ['5조', '6조', '7조', '8조', '9조', '10조', '11조', '12조', '13조']);
   ok('fetchAddOns 준용 조회는 근거 문서명으로', calls.indexOf('art:' + NF + ':5조:N') >= 0, calls);
-  eq('fetchAddOns 같은 고시 — 준용으로 고른 조를 「이미 든 조」로 넘겨 남은 합이 작아지면 전부(16조 포함), 준용 조와 겹치지 않음', keys('neighbor'), ['2조', '3조', '15조', '16조', '19조', '20조', '26조']);
+  eq('fetchAddOns 같은 고시 — 준용으로 고른 조를 빼고 남은 합이 작아지면 전부(16조 포함, 정의 조 2조는 맨 뒤라도 예산이 남으면 듦), 준용 조와 겹치지 않음', keys('neighbor'), ['2조', '3조', '15조', '16조', '19조', '20조', '26조']);
+  // 운영 예산 꼴(#300-보론6, 사내 실물 확인 — 883자 남았을 때 1조·2조가 16조를 밀어냄): 예산을 25자씩 늘려 둘 중 하나가 처음 드는 예산에서 16조가 든다.
+  // 채우기는 안 맞는 조를 건너뛰고 다음으로 가므로 2조와 16조의 길이(문서명+조 번호+본문+20)를 같게 맞춰 「순서」만 가른다 — 옛 조 번호 순이면 2조가 먼저 든다
+  var lenOf = function (c) { return N.length + c.article_no.length + c.content.length + 20; };
+  eq('픽스처 — 2조와 16조 길이 같음', lenOf(byKey['2조']), lenOf(byKey['16조']));
+  var firstIn = null;
+  for (var b = 2000; b <= 12000 && !firstIn; b += 25) {
+    var tt = await RC.fetchAddOns(bases, fetchers, { question: '주파수 재할당 신청 절차와 법정 기한을 알려줘', budget: b });
+    var tn = tt.items.filter(function (x) { return x.sec === 'neighbor'; }).map(function (x) { return x.key; });
+    if (tn.indexOf('16조') >= 0 || tn.indexOf('2조') >= 0) firstIn = { budget: b, keys: tn };
+  }
+  ok('fetchAddOns 예산이 빠듯해 둘 중 하나만 들면 정의 조(2조)가 아니라 16조', !!firstIn && firstIn.keys.indexOf('16조') >= 0 && firstIn.keys.indexOf('2조') === -1, firstIn);
   ok('fetchAddOns 준용 구역 머리·항목 꼬리·항 표기', r.text.indexOf('[위 조문이 준용하는 조문') >= 0 && r.text.indexOf('인용 표시는 준용되는 조문 번호') >= 0 && r.text.indexOf('[준용 1] ' + N + ' 5조(신청) — 위 ' + NF + ' 제17조가 준용하는 조문\n') >= 0
     && r.text.indexOf('[준용 7] ' + N + ' 11조(선정) — 위 ' + NF + ' 제17조가 준용하는 조문(제3항)\n') >= 0, r.text);
   eq('fetchAddOns 준용 수·조각 id·검증 chunks 표시', [r.apply, r.ids.indexOf(105) >= 0, r.chunks.filter(function (c) { return c._addon === 'apply'; }).length], [9, true, 9]);

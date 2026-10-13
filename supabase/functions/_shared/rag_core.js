@@ -663,7 +663,7 @@
   }
   // 그 문서의 조문 조각(docRows)에서 이미 든 조(keys)를 빼고 조 단위로 묶어 고른다(별표·서식·부칙은 조 열쇠가 없어 자연히 빠진다).
   // 남은 합이 wholeChars 이하면 전부, 넘으면 문서 안 순서로 이미 든 조 바로 앞·뒤 조와 제목에 「준용」이 든 조만 max개. 조 번호 순.
-  // opts.exclude = 남은 조·남은 합에서 빼되 앞뒤 조의 씨앗은 아닌 조(L9 준용 채택분, #300)
+  // opts.exclude = 남은 조·남은 합에서 빼되 앞뒤 조의 씨앗은 아닌 조(L9 준용 채택분, #300).
   function neighborRest(docRows, keys, exclude) {
     const CV = root.CiteVerify;
     const merge = CV ? CV.mergeChunkTexts : function (p) { return p.join('\n'); };
@@ -693,14 +693,21 @@
     opts = Object.assign({}, NEIGHBOR_OPTS, opts || {});
     const g = neighborRest(docRows, keys, opts.exclude);
     const all = g.all, have = g.have, rest = g.rest;
-    if (g.total <= opts.wholeChars) return rest;
+    // 정의·목적 조(ADDON_SKIP_ARTNO_RE)는 **맨 뒤에** 채운다 — 남은 합·전부 모드 판정은 그대로(#300-보론6, Fable 재검토 권고·운영자 결정 10-14: 합계에서
+    // 빼면 사내 사례(남은 합 6,167)가 6,000 아래로 내려가 D6-b 경로로 바뀌어 준용 구역이 사라진다). 사내 콘솔 실물 확인에서 예산이 883자 남았을 때
+    // 조 번호 순 1조(목적)·2조(정의)가 먼저 들어가 16조(재할당 선정 60/70점)가 약 80자 차로 밀렸다 — 뒤로 보내면 예산이 넉넉할 때만 든다.
+    const defLast = function (list) {
+      const main = list.filter(function (x) { return !ADDON_SKIP_ARTNO_RE.test(x.article_no || ''); });
+      return main.concat(list.filter(function (x) { return main.indexOf(x) === -1; }));
+    };
+    if (g.total <= opts.wholeChars) return defLast(rest);
     const near = new Set();
     all.forEach(function (k, i) {
       if (!have.has(k)) return;
       if (i > 0) near.add(all[i - 1]);
       if (i < all.length - 1) near.add(all[i + 1]);
     });
-    return rest.filter(function (x) { return near.has(x.key) || /준용/.test(x.article_no || ''); }).slice(0, opts.max);
+    return defLast(rest.filter(function (x) { return near.has(x.key) || /준용/.test(x.article_no || ''); })).slice(0, opts.max);
   }
 
   // ── L3′ 공통 인용(2차, 10-06 — Fable 재검토 §4①) ──
