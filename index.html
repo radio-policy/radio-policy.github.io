@@ -1,32 +1,35 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>?듭떊 ?뺤콉 AI Agent ??SKT Comm?쇳꽣</title>
-<!-- gitlab.io ??github.io 議곌굔遺 ?먮룞 ?대룞 (#261) ??GitLab 二쇱냼濡??ㅼ뼱???鍮좊Ⅸ GitHub ?щ낯(?뺤텞쨌?몄쿇 罹먯떆, ?붿껌????珥?鍮좊쫫)?쇰줈 ??릿??
-     github.io??alive.txt(GitHub?먮쭔 ?덉쓬)瑜?1.5珥??덉뿉 諛쏆븘 ?댁슜源뚯? 留욎쓣 ?뚮쭔 ?대룞 ??GitHub媛 ???뺤??섎㈃(404) gitlab.io??洹몃?濡??⑤뒗??
-     臾댁“嫄??대룞(?쒕쾭 ?ㅼ젙)?쇰줈 諛붽씀吏 留?寃? ?뺤? ??GitLab 二쇱냼源뚯? 404濡??뚭퀬 媛꾨떎. 濡쒓렇??硫붿씪 ???몄쬆 媛믪씠 遺숈? 二쇱냼????린吏 ?딅뒗??     (洹?二쇱냼?먯꽌 濡쒓렇?몄쓣 ?앸궦??. ??린吏 ?딄퀬 GitLab ?щ낯??蹂대젮硫??stay=gitlab. -->
+<title>통신 정책 AI Agent — SKT Comm센터</title>
+<!-- gitlab.io → github.io 조건부 자동 이동 (#261) — GitLab 주소로 들어와도 빠른 GitHub 사본(압축·인천 캐시, 요청당 ≈1초 빠름)으로 옮긴다.
+     github.io의 alive.txt(GitHub에만 있음)를 1.5초 안에 받아 내용까지 맞을 때만 이동 — GitHub가 또 정지되면(404) gitlab.io에 그대로 남는다.
+     무조건 이동(서버 설정)으로 바꾸지 말 것: 정지 때 GitLab 주소까지 404로 끌고 간다. 로그인 메일 등 인증 값이 붙은 주소는 옮기지 않는다
+     (그 주소에서 로그인을 끝낸다). 옮기지 않고 GitLab 사본을 보려면 ?stay=gitlab. -->
 <script>
 (function() {
   try {
     if (location.hostname !== 'radio-policy.gitlab.io') return;
     var q = location.search + location.hash;
     if (/[?&#](access_token|refresh_token|code|error|error_description|type)=/.test(q) || /[?&]stay=gitlab\b/.test(location.search)) return;
-    var target = 'https://radio-policy.github.io' + location.pathname + location.search + location.hash;   // app.js媛 二쇱냼瑜?怨좎튂湲??꾩뿉 ?≪븘 ?붾떎
+    var target = 'https://radio-policy.github.io' + location.pathname + location.search + location.hash;   // app.js가 주소를 고치기 전에 잡아 둔다
     var late = false, ctl = window.AbortController ? new AbortController() : null;
-    var timer = setTimeout(function() { late = true; if (ctl) ctl.abort(); }, 1500);   // ??쾶 ?ㅻ㈃ ?대? ?곌퀬 ?덈뒗 ?붾㈃??鍮쇱븮吏 ?딅뒗??    fetch('https://radio-policy.github.io/alive.txt?t=' + Date.now(), { cache: 'no-store', signal: ctl ? ctl.signal : undefined })
+    var timer = setTimeout(function() { late = true; if (ctl) ctl.abort(); }, 1500);   // 늦게 오면 이미 쓰고 있는 화면을 빼앗지 않는다
+    fetch('https://radio-policy.github.io/alive.txt?t=' + Date.now(), { cache: 'no-store', signal: ctl ? ctl.signal : undefined })
       .then(function(r) { return r.ok ? r.text() : ''; })
       .then(function(t) { clearTimeout(timer); if (!late && t.indexOf('radio-policy-mirror-ok') === 0) location.replace(target); })
       .catch(function() {});
   } catch (e) {}
 })();
 </script>
-<!-- 愿怨꾨룄 泥??쒖떆 ?욌떦湲곌린 (#255) ??DB ?곌껐??誘몃━ ?닿퀬, 愿怨꾨룄濡??쒖옉???뚮쭔 洹몃옒???쇱씠釉뚮윭由?룹쥖???뚯씪??     app.js? ?숈떆??諛쏄린 ?쒖옉?쒕떎(醫낆쟾?먮뒗 app.js媛 ??????ㅽ뻾???ㅼ뿉???붿껌???섍컮????gitlab.io?먯꽌 ???④퀎 ??.7珥?.
-     ?쒖옉 ?붾㈃ ?먯젙? app.js??startPage? 媛숆쾶(?p= ?먮뒗 #, ?놁쑝硫?湲곕낯 ?붾㈃) ??DEFAULT_PAGE瑜?諛붽씀硫??ш린??媛숈씠 怨좎튇?? -->
+<!-- 관계도 첫 표시 앞당기기 (#255) — DB 연결을 미리 열고, 관계도로 시작할 때만 그래프 라이브러리·좌표 파일을
+     app.js와 동시에 받기 시작한다(종전에는 app.js가 다 와서 실행된 뒤에야 요청이 나갔다 — gitlab.io에서 한 단계 ≈0.7초).
+     시작 화면 판정은 app.js의 startPage와 같게(?p= 또는 #, 없으면 기본 화면) — DEFAULT_PAGE를 바꾸면 여기도 같이 고친다. -->
 <link rel="preconnect" href="https://zwkjedumfuhodckmtxxn.supabase.co" crossorigin>
 <script>
-// 醫뚰몴 ?뚯씪 二쇱냼???ш린 ??怨???app.js(loadLawMap)????二쇱냼濡?諛쏅뒗?? ?뚯씪???ㅼ떆 戮묒쑝硫??v=瑜??щ┛??罹먯떆???⑥? ???뚯씪 諛⑹?, ?ㅻえ???뚯뒪?멸? ?議?.
+// 좌표 파일 주소는 여기 한 곳 — app.js(loadLawMap)도 이 주소로 받는다. 파일을 다시 뽑으면 ?v=를 올린다(캐시에 남은 옛 파일 방지, 스모크 테스트가 대조).
 window.LAWMAP_POS_URL = 'lawmap_positions.json?v=20260928a';
 (function() {
   try {
@@ -35,7 +38,7 @@ window.LAWMAP_POS_URL = 'lawmap_positions.json?v=20260928a';
     [['vendor/vis-network-9.1.9.min.js', 'script'], [window.LAWMAP_POS_URL, 'fetch']].forEach(function(a) {
       var l = document.createElement('link');
       l.rel = 'preload'; l.href = a[0]; l.as = a[1];
-      if (a[1] === 'fetch') l.crossOrigin = 'anonymous';   // fetch()??湲곕낯 紐⑤뱶? 留욎떠??諛쏆븘 ???묐떟??洹몃?濡??대떎
+      if (a[1] === 'fetch') l.crossOrigin = 'anonymous';   // fetch()의 기본 모드와 맞춰야 받아 둔 응답을 그대로 쓴다
       document.head.appendChild(l);
     });
   } catch (e) {}
@@ -52,382 +55,384 @@ window.LAWMAP_POS_URL = 'lawmap_positions.json?v=20260928a';
   <!-- Sidebar -->
   <div class="sidebar">
     <div class="sidebar-logo">
-      <div class="title"><i class="ti ti-antenna"></i>?듭떊 ?뺤콉 AI Agent <i class="ti ti-compass"></i></div>
-      <div class="subtitle">SKT Comm?쇳꽣</div>
+      <div class="title"><i class="ti ti-antenna"></i>통신 정책 AI Agent <i class="ti ti-compass"></i></div>
+      <div class="subtitle">SKT Comm센터</div>
     </div>
-    <!-- 硫붾돱 媛쒗렪 2026-08-03: 17?? ??ぉ. ?섏쐞 ?붾㈃(?뺣? 蹂대룄?먮즺쨌?댁쇅 / lawtrack쨌diff /
-         吏?앸쿋?댁뒪 5醫?? 媛??⑤꼸 ?곷떒??洹몃９ ??諛?app.js renderGroupTabs)濡??대룞.
-         ?ㅼ젙쨌?댁쁺 ?곹깭???곷떒諛??곗륫 ?깅땲쨌?곹깭?깆쑝濡??대룞. -->
+    <!-- 메뉴 개편 2026-08-03: 17→9 항목. 하위 화면(정부 보도자료·해외 / lawtrack·diff /
+         지식베이스 5종)은 각 패널 상단의 그룹 탭 바(app.js renderGroupTabs)로 이동.
+         설정·운영 상태는 상단바 우측 톱니·상태등으로 이동. -->
     <div class="nav-group">
-      <div class="nav-label">紐⑤땲?곕쭅</div>
-      <div class="nav-item" tabindex="0" role="button" data-nav="monitor" onclick="go('news',this,'media')"><i class="ti ti-news"></i>?듯빀 紐⑤땲?곕쭅</div>
-      <div class="nav-item" tabindex="0" role="button" data-nav="issuemap" onclick="go('issuemap',this)"><i class="ti ti-sitemap"></i>?댁뒋留?/div>
+      <div class="nav-label">모니터링</div>
+      <div class="nav-item" tabindex="0" role="button" data-nav="monitor" onclick="go('news',this,'media')"><i class="ti ti-news"></i>통합 모니터링</div>
+      <div class="nav-item" tabindex="0" role="button" data-nav="issuemap" onclick="go('issuemap',this)"><i class="ti ti-sitemap"></i>이슈맵</div>
       <div class="nav-item" tabindex="0" role="button" data-nav="briefing" onclick="go('briefing',this)"><i class="ti ti-coffee"></i>Daily Briefing</div>
-      <div class="nav-item" tabindex="0" role="button" data-nav="terms" onclick="go('terms',this)"><i class="ti ti-book"></i>踰뺤쟻쨌湲곗닠 ?⑹뼱</div>
+      <div class="nav-item" tabindex="0" role="button" data-nav="terms" onclick="go('terms',this)"><i class="ti ti-book"></i>법적·기술 용어</div>
     </div>
     <div class="nav-group">
-      <div class="nav-label">AI ?꾩슦誘?/div>
-      <div class="nav-item" tabindex="0" role="button" data-nav="chat" onclick="go('chat',this)"><i class="ti ti-message-circle"></i>AI ?먮Ц</div>
-      <div class="nav-item active" tabindex="0" role="button" data-nav="lawmap" onclick="go('lawmap',this)"><i class="ti ti-topology-star-3"></i>踰뺣졊 愿怨꾨룄</div>
+      <div class="nav-label">AI 도우미</div>
+      <div class="nav-item" tabindex="0" role="button" data-nav="chat" onclick="go('chat',this)"><i class="ti ti-message-circle"></i>AI 자문</div>
+      <div class="nav-item active" tabindex="0" role="button" data-nav="lawmap" onclick="go('lawmap',this)"><i class="ti ti-topology-star-3"></i>법령 관계도</div>
     </div>
     <div class="nav-group">
-      <div class="nav-label">踰뺤븞 ?숉뼢</div>
-      <div class="nav-item" tabindex="0" role="button" data-nav="assembly" onclick="go('assembly',this)"><i class="ti ti-building-bank"></i>援?쉶 踰뺤븞</div>
-      <div class="nav-item" tabindex="0" role="button" data-nav="minutes" onclick="go('minutes',this)"><i class="ti ti-microphone-2"></i><abbr class="gl" title="援?쉶 怨쇳븰湲곗닠?뺣낫諛⑹넚?듭떊?꾩썝??>怨쇰갑??/abbr> ?뚯쓽濡?/div>
-      <!-- ?몃Ъ ?꾨줈?????섏썝쨌?뺣? 諛쒖뼵 ?대젰 (2026-08-27). ?뱀씤 怨꾩젙 ?꾩슜(#279, 2026-10-04) ??鍮꾨줈洹몄씤?먭쾶??硫붾돱遺???④릿??-->
-      <div class="nav-item" data-login-only style="display:none" tabindex="0" role="button" data-nav="people" onclick="go('people',this)"><i class="ti ti-users"></i>?몃Ъ</div>
-      <div class="nav-item" tabindex="0" role="button" data-nav="lawrev" onclick="go('lawtrack',this)"><i class="ti ti-file-certificate"></i>踰뺣졊 媛쒖젙 異붿쟻</div>
+      <div class="nav-label">법안 동향</div>
+      <div class="nav-item" tabindex="0" role="button" data-nav="assembly" onclick="go('assembly',this)"><i class="ti ti-building-bank"></i>국회 법안</div>
+      <div class="nav-item" tabindex="0" role="button" data-nav="minutes" onclick="go('minutes',this)"><i class="ti ti-microphone-2"></i><abbr class="gl" title="국회 과학기술정보방송통신위원회">과방위</abbr> 회의록</div>
+      <!-- 인물 프로필 — 의원·정부 발언 이력 (2026-08-27). 승인 계정 전용(#279, 2026-10-04) — 비로그인에게는 메뉴부터 숨긴다 -->
+      <div class="nav-item" data-login-only style="display:none" tabindex="0" role="button" data-nav="people" onclick="go('people',this)"><i class="ti ti-users"></i>인물</div>
+      <div class="nav-item" tabindex="0" role="button" data-nav="lawrev" onclick="go('lawtrack',this)"><i class="ti ti-file-certificate"></i>법령 개정 추적</div>
     </div>
     <div class="nav-group">
-      <div class="nav-label">吏?앸쿋?댁뒪</div>
-      <div class="nav-item" tabindex="0" role="button" data-nav="kb" onclick="go('law',this)"><i class="ti ti-books"></i>吏?앸쿋?댁뒪</div>
+      <div class="nav-label">지식베이스</div>
+      <div class="nav-item" tabindex="0" role="button" data-nav="kb" onclick="go('law',this)"><i class="ti ti-books"></i>지식베이스</div>
     </div>
     <div class="sidebar-bottom">
-      <div class="version">v0.2 ???ㅼ젣 ?곕룞</div>
-      <div class="conn-status"><div class="conn-dot" id="sb-dot"></div><span id="sb-status">Supabase 誘몄뿰寃?/span></div>
-      <div class="conn-status" style="margin-top:2px"><div class="conn-dot" id="ai-dot"></div><span id="ai-status">AI ?먮Ц: 濡쒓렇?????ъ슜</span></div>
-      <div class="conn-status" style="margin-top:2px"><div class="conn-dot" id="rag-dot"></div><span id="rag-status">RAG ?ㅼ썙??寃??/span></div>
+      <div class="version">v0.2 — 실제 연동</div>
+      <div class="conn-status"><div class="conn-dot" id="sb-dot"></div><span id="sb-status">Supabase 미연결</span></div>
+      <div class="conn-status" style="margin-top:2px"><div class="conn-dot" id="ai-dot"></div><span id="ai-status">AI 자문: 로그인 후 사용</span></div>
+      <div class="conn-status" style="margin-top:2px"><div class="conn-dot" id="rag-dot"></div><span id="rag-status">RAG 키워드 검색</span></div>
     </div>
   </div>
 
   <!-- Main -->
   <div class="main">
     <div class="topbar">
-      <span class="topbar-title" id="topbar-title">?댁뒪</span>
+      <span class="topbar-title" id="topbar-title">뉴스</span>
       <div class="topbar-actions" style="align-items:center">
-        <!-- ?곹깭?굿룻넲????.btn???꾨땶 ?몃씪???붿냼??紐⑤컮??.topbar-actions .btn ?④? 洹쒖튃)?먯꽌??蹂댁씤??-->
-        <span class="ops-light" data-login-only data-show="inline-flex" onclick="go('opsstatus',null)" title="?댁쁺 ?곹깭" style="cursor:pointer;font-size:11px;display:none;align-items:center;gap:3px;color:var(--text-secondary);padding:4px 6px;white-space:nowrap">??<span>?뺤씤以?/span></span>
-        <!-- 怨꾩젙 ???몃씪???붿냼濡??먯뼱 紐⑤컮?쇱뿉?쒕룄 蹂댁씠寃?(.btn ?④? 洹쒖튃 ?뚰뵾) -->
-        <span id="acct-label" onclick="onAccountClick()" title="怨꾩젙" style="cursor:pointer;font-size:11px;display:inline-flex;align-items:center;gap:3px;color:var(--text-secondary);padding:4px 6px;white-space:nowrap"><i class="ti ti-user"></i>濡쒓렇??/span>
-        <span id="acct-logout" onclick="doLogout()" title="濡쒓렇?꾩썐" style="display:none;cursor:pointer;font-size:11px;color:var(--text-secondary);padding:4px 8px;white-space:nowrap;border:0.5px solid var(--border-mid);border-radius:var(--radius-md)"><i class="ti ti-logout"></i> 濡쒓렇?꾩썐</span>
-        <button class="btn" id="ui-wide-btn" onclick="toggleWide()" title="?ъ씠?쒕컮瑜??묎퀬 蹂몃Ц???붾㈃ ?덈퉬濡?(?ㅼ떆 ?꾨Ⅴ硫??먮옒?濡?"><i class="ti ti-arrows-horizontal"></i>?볤쾶 蹂닿린</button>
-        <button class="btn" onclick="smartRefresh()"><i class="ti ti-refresh"></i>?덈줈怨좎묠</button>
-        <button onclick="go('settings',null)" title="?ㅼ젙" style="background:none;border:none;cursor:pointer;color:var(--text-secondary);font-size:16px;padding:4px;line-height:1"><i class="ti ti-settings"></i></button>
+        <!-- 상태등·톱니 — .btn이 아닌 인라인 요소라 모바일(.topbar-actions .btn 숨김 규칙)에서도 보인다 -->
+        <span class="ops-light" data-login-only data-show="inline-flex" onclick="go('opsstatus',null)" title="운영 상태" style="cursor:pointer;font-size:11px;display:none;align-items:center;gap:3px;color:var(--text-secondary);padding:4px 6px;white-space:nowrap">⚪ <span>확인중</span></span>
+        <!-- 계정 — 인라인 요소로 두어 모바일에서도 보이게 (.btn 숨김 규칙 회피) -->
+        <span id="acct-label" onclick="onAccountClick()" title="계정" style="cursor:pointer;font-size:11px;display:inline-flex;align-items:center;gap:3px;color:var(--text-secondary);padding:4px 6px;white-space:nowrap"><i class="ti ti-user"></i>로그인</span>
+        <span id="acct-logout" onclick="doLogout()" title="로그아웃" style="display:none;cursor:pointer;font-size:11px;color:var(--text-secondary);padding:4px 8px;white-space:nowrap;border:0.5px solid var(--border-mid);border-radius:var(--radius-md)"><i class="ti ti-logout"></i> 로그아웃</span>
+        <button class="btn" id="ui-wide-btn" onclick="toggleWide()" title="사이드바를 접고 본문을 화면 너비로 (다시 누르면 원래대로)"><i class="ti ti-arrows-horizontal"></i>넓게 보기</button>
+        <button class="btn" onclick="smartRefresh()"><i class="ti ti-refresh"></i>새로고침</button>
+        <button onclick="go('settings',null)" title="설정" style="background:none;border:none;cursor:pointer;color:var(--text-secondary);font-size:16px;padding:4px;line-height:1"><i class="ti ti-settings"></i></button>
       </div>
     </div>
 
     <div class="content">
 
-      <!-- AI ?먮Ц -->
+      <!-- AI 자문 -->
       <div class="panel" id="panel-chat">
-        <div class="chat-wrap" id="chat-wrap"><!-- ?믪씠??styles.css #panel-chat flex 濡?移대뱶???⑤뒗 ?믪씠 ?꾨? (2026-09-19) -->
-          <!-- ?뚯옄臾??대젰쨌?꾩껜?붾㈃??踰꾪듉? 洹몃９ ??諛??ㅻⅨ履쎌뿉 洹몃┛??app.js renderGroupTabs, 2026-09-19) ???ш린 ?먮㈃ ??以꾩쓣 癒밸뒗??-->
+        <div class="chat-wrap" id="chat-wrap"><!-- 높이는 styles.css #panel-chat flex 로 카드의 남는 높이 전부 (2026-09-19) -->
+          <!-- 「자문 이력·전체화면」 버튼은 그룹 탭 바 오른쪽에 그린다(app.js renderGroupTabs, 2026-09-19) — 여기 두면 한 줄을 먹는다 -->
           <div class="chat-area" id="chat-area">
             <div class="msg msg-ai">
-              <div class="msg-name">?듭떊 ?뺤콉 AI Agent</div>
-              ?덈뀞?섏꽭?? ?꾪뙆쨌?듭떊 ?뺤콉??愿??沅곴툑??寃껋쓣 ?명븯寃?臾쇱뼱蹂댁꽭?? 踰뺣졊 ?먮Ц遺??援?쉶 ?쇱쓽, ?뺣? 諛쒗몴, 理쒖떊 ?댁뒪源뚯? ?먮（ 李얠븘蹂???<strong>洹쇨굅瑜?諛앺???/strong> ?듬??쒕┰?덈떎.<br><br>
-              ?뵊 <strong>?대뼸寃??듭쓣 李얜굹??/strong><br>
-              쨌 吏덈Ц?섏떊 ?쒗쁽??踰뺣졊??怨듭떇 ?⑹뼱? ?щ씪???살쓣 ?뚯븘?ｊ퀬 愿??議곕Ц??李얠븘?낅땲?? (?? "而ㅻ쾭由ъ? 留? ??"?댁슜媛??吏???뺣낫 ?쒓났")<br>
-              쨌 ?듬??먮뒗 議고빆 踰덊샇? ?쒗뻾?쇱쓣 ?④퍡 ?곴퀬, ?ы븷???媛쨌怨쇱쭠湲댟룰낵?쒕즺 媛숈? ?섏튂?먮뒗 洹??섏튂瑜??뺥븳 洹쇨굅 議곕Ц(??룻샇源뚯?)???④퍡 ?곸뒿?덈떎. ?숈뒿 吏?앹뿉 湲곕똾 遺遺꾩뿉??<span class="cite cite-learn">[?숈뒿 ?곗씠??湲곕컲]</span>, 洹쇨굅 議곕Ц??李얠? 紐삵븳 ?섏튂?먮뒗 <span class="cite cite-learn">[洹쇨굅 議곕Ц 誘명솗??</span>??遺숈뒿?덈떎.<br>
-              쨌 ?몄슜 ?쒖떆??AI媛 ?ㅼ뒪濡?遺숈씤 寃껋씠 ?꾨땲??<strong>?듬????앸궃 ???쒖뒪?쒖씠 ?먮Ц怨???踰????議고븳 寃곌낵</strong>?낅땲????span class="cite cite-ok">[?먮Ц ?뺤씤??</span> ?먮Ц怨?留욎쓬 쨌 <span class="cite cite-miss">[?먮Ц 誘명솗?????댁쑀]</span> 李얠? ?먮즺??洹?議곕Ц???녾굅?? ?먯젙湲곌? ?먮Ц怨??ㅻⅤ?ㅺ퀬 遊ㅺ굅?? ?먮룞 ?議곕? 紐????댁쑀???쒖떆 ?덉뿉 ?곹옒). ?뚯깋 ?쒖떆媛 遺숈? ?몄슜? 吏?앸쿋?댁뒪?먯꽌 ?먮Ц??吏곸젒 ?뺤씤??二쇱꽭?? ?議곕뒗 ?쒖떆???곹엺 踰뺣졊쨌議곕Ц(蹂꾪몴쨌?쒖떇 ?ы븿)留?蹂대ŉ, ?쒖떆 ?놁씠 議곕Ц????꺼 ?곸? ?몄슜??李얠븘 ?④퍡 ?議고빀?덈떎.<br>
-              쨌 ?듬? ?꾨옒?먮뒗 <strong>寃?됲빐 李멸퀬 ?먮즺濡??ｌ? 臾몄꽌쨌湲곗궗 紐⑸줉</strong>??諛곗?濡?蹂댁뿬?쒕┰?덈떎. ?듬????몄슜??臾몄꽌媛 ?욎뿉 ?ㅺ퀬, ?몄슜 ?議?寃곌낵(?뺤씤 紐?嫄???????以꾨줈 ?붿빟?⑸땲??<br><br>
-              ?뱞 <strong>踰뺣졊쨌怨좎떆</strong> (?꾩껜 紐⑸줉: 吏?앸쿋?댁뒪)<br>
-              쨌 ?꾪뙆踰빧룹쟾湲고넻?좎궗?낅쾿 ??<strong>踰뺣졊쨌怨좎떆쨌湲곗닠湲곗? ?먮Ц ??270醫?/strong>怨??뺣? 怨꾪쉷쨌蹂대룄?먮즺 ??李멸퀬 臾몄꽌 ??140醫???二쇳뙆??遺꾨같?? ?꾩옄??湲곗?, ?곹빀?깊룊媛, 臾댁꽑援??깅줉硫댄뿀?멸퉴吏<br>
-              쨌 踰뺣졊留덈떎 ?뺣━????<strong>?ㅻТ ?붿빟 310??醫?/strong>???먮Ц怨??④퍡 李멸퀬<br>
-              쨌 怨?諛붾??덉젙??議곕Ц? <strong>"吏湲덉? A, ?뗭썡?뗭씪遺?곕뒗 B"</strong>泥섎읆 ?꾪뻾怨??덉젙??援щ텇???뚮젮?쒕┰?덈떎. 議곕Ц??媛由ы궎??蹂꾪몴쨌?쒖떇???④퍡 ?뺤씤<br>
-              쨌 李얠? 議곕Ц???닿꼈?????곕Ⅴ??<strong>踰뚯튃쨌怨쇳깭猷뙿룰낵吏뺢툑 議곕Ц</strong>泥섎읆, 洹?議곕Ц???몄슜?섎뒗 媛숈? 踰뺣졊???ㅻⅨ 議곕Ц???④퍡 李얠븘 李멸퀬?⑸땲??br>
-              쨌 5G쨌6G 愿??援?젣 ?쒖?(ITU-R) 沅뚭퀬쨌蹂닿퀬??9醫?br>
-              쨌 2G쨌3G 醫낅즺, ?좎떖 ?뺣낫 ?좎텧 ?쒖옱, ?⑦넻踰??먯? ?댄썑 吏?먭툑 洹쒖쑉泥섎읆 援듭쭅???곸젏??寃쎄낵? 愿??踰뺣졊??怨듦컻 ?먮즺濡??뺣━??<strong>?곸젏 ?щ? 臾몄꽌 20??嫄?/strong>??李멸퀬?⑸땲??br><br>
-              ?룢截?<strong>援?쉶?먯꽌 ?ㅺ컙 ?쇱쓽</strong><br>
-              쨌 <strong>怨쇰갑???뚯쓽濡?10?꾩튂(2016~2026?? 援?젙媛먯궗 ?ы븿)</strong>?먯꽌 吏덈Ц怨?愿?⑤맂 ?섏썝 吏덉쓽? ?뺣? ?듬???李얠븘 李멸퀬?⑸땲??br>
-              쨌 吏덈Ц怨?愿?⑤맂 援?쉶 怨꾨쪟 踰뺤븞쨌?낅쾿?덇퀬媛 ?덉쑝硫??④퍡 ?뚮젮?쒕┰?덈떎(?섍껄?깅줉 留덇컧???ы븿). ?꾩쭅 ?뺤젙??踰뺤씠 ?꾨땲誘濡?援щ텇???쒓린?섍퀬, ?듬???踰뺤쟻 洹쇨굅濡쒕뒗 ?곗? ?딆뒿?덈떎<br><br>
-              ?뱼 <strong>?뺣? 諛쒗몴?먮즺</strong><br>
-              쨌 怨쇨린?뺥넻遺쨌諛⑸??듭쐞(援?諛⑺넻??쨌援?┰?꾪뙆?곌뎄?먃룹쨷?숈쟾?뚭?由ъ냼쨌ETRI쨌KISDI <strong>6媛?湲곌???蹂대룄?먮즺 ?꾨Ц</strong>(2024~2026?? 留ㅼ씪 媛깆떊)<br><br>
-              ?뙋 <strong>?명꽣??寃??/strong><br>
-              쨌 ?댁쇅 ?쒕룄 鍮꾧탳??理쒖떊 ?숉뼢泥섎읆 ?대? ?먮즺???녿뒗 ?댁슜? ?명꽣?룹쓣 寃?됲빐??異쒖쿂 留곹겕? ?④퍡 ?뚮젮?쒕┰?덈떎.<br><br>
-              ?벐 <strong>?섏떆濡?紐⑥쑝???댁뒪</strong><br>
-              쨌 10遺꾨쭏??紐⑥쑝??援?궡 ?꾪뙆쨌?듭떊 ?댁뒪? 留ㅼ씪 紐⑥쑝???댁쇅 ?뚯떇(誘멸뎅 FCC, ?곴뎅 Ofcom, ?쇰낯 珥앸Т?????먯꽌 愿??湲곗궗瑜?怨⑤씪 李멸퀬?⑸땲??<br><br>
-              ?빖截?<strong>踰뺣졊 愿怨꾨룄</strong><br>
-              쨌 ?듬????곗씤 踰뺣졊?ㅼ씠 ?대뼸寃??댁뼱吏?붿? ?듬? ?꾨옒 ?묒? 愿怨꾨룄濡?蹂댁뿬?쒕━怨? <strong>愿由ъ옄 寃?좊? 嫄곗퀜</strong> 踰뺣졊 愿怨꾨룄 ??뿉 諛섏쁺?⑸땲?? 愿怨꾨룄 ??뿉?쒕뒗 洹?二쇱젣??洹쇨굅 議곕Ц?쇰━ ?ㅼ젣濡??댁뼱吏?愿怨꾨쭔 洹몃┰?덈떎.<br><br>
-              ?뵍 <strong>?댁슜 ?덈궡</strong><br>
-              쨌 AI ?먮Ц? 濡쒓렇????愿由ъ옄 ?뱀씤??諛쏆? 怨꾩젙留??????덇퀬, ?섎（ ?댁슜 ?쒕룄媛 ?덉뒿?덈떎(?낅젰李??꾨옒???쒖떆). ?댁뒪쨌踰뺤븞쨌?뚯쓽濡씲룹??앸쿋?댁뒪 ?대엺怨?寃?됱? 濡쒓렇???놁씠 ?⑸땲??<br>
-              쨌 吏???먮Ц? ?붾㈃ ?꾩そ ?뚯옄臾??대젰?띿뿉???ㅼ떆 蹂????덉뒿?덈떎. AI??吏곸쟾 3踰덉쓽 臾몃떟源뚯?留??댁뼱??李멸퀬?섎?濡? 二쇱젣媛 諛붾뚮㈃ ?뚯깉 ??붵띾? ?뚮윭 二쇱꽭??<br>
-              쨌 ?듬????꾩쨷???딄린硫?諛쏆? 遺遺꾧퉴吏 ?④린怨??좑툘 ?쒖떆瑜?遺숈엯?덈떎 ??媛숈? 吏덈Ц???ㅼ떆 ?섎㈃ 泥섏쓬遺???듯빀?덈떎.<br><br>
-              ?듬????꾩????섏뿀?붿? <strong>?몟?몠 踰꾪듉</strong>?쇰줈 ?뚮젮二쇱꽭???좏깮 ?ы빆) ???쒖뒪??媛쒖꽑??李멸퀬?⑸땲?? 洹몃읆, 沅곴툑?섏떊 ?ы빆???낅젰??二쇱꽭??
+              <div class="msg-name">통신 정책 AI Agent</div>
+              안녕하세요. 전파·통신 정책에 관해 궁금한 것을 편하게 물어보세요. 법령 원문부터 국회 논의, 정부 발표, 최신 뉴스까지 두루 찾아본 뒤 <strong>근거를 밝혀서</strong> 답변드립니다.<br><br>
+              🔎 <strong>어떻게 답을 찾나요</strong><br>
+              · 질문하신 표현이 법령의 공식 용어와 달라도 뜻을 알아듣고 관련 조문을 찾아냅니다. (예: "커버리지 맵" → "이용가능 지역 정보 제공")<br>
+              · 답변에는 조항 번호와 시행일을 함께 적고, 재할당 대가·과징금·과태료 같은 수치에는 그 수치를 정한 근거 조문(항·호까지)을 함께 적습니다. 학습 지식에 기댄 부분에는 <span class="cite cite-learn">[학습 데이터 기반]</span>, 근거 조문을 찾지 못한 수치에는 <span class="cite cite-learn">[근거 조문 미확인]</span>이 붙습니다.<br>
+              · 인용 표시는 AI가 스스로 붙인 것이 아니라 <strong>답변이 끝난 뒤 시스템이 원문과 한 번 더 대조한 결과</strong>입니다 —<span class="cite cite-ok">[원문 확인됨]</span> 원문과 맞음 · <span class="cite cite-miss">[원문 미확인 — 이유]</span> 찾은 자료에 그 조문이 없거나, 판정기가 원문과 다르다고 봤거나, 자동 대조를 못 함(이유는 표시 안에 적힘). 회색 표시가 붙은 인용은 지식베이스에서 원문을 직접 확인해 주세요. 대조는 표시에 적힌 법령·조문(별표·서식 포함)만 보며, 표시 없이 조문을 옮겨 적은 인용도 찾아 함께 대조합니다.<br>
+              · 답변 아래에는 <strong>검색해 참고 자료로 넣은 문서·기사 목록</strong>을 배지로 보여드립니다. 답변이 인용한 문서가 앞에 오고, 인용 대조 결과(확인 몇 건 등)도 한 줄로 요약합니다.<br><br>
+              📄 <strong>법령·고시</strong> (전체 목록: 지식베이스)<br>
+              · 전파법·전기통신사업법 등 <strong>법령·고시·기술기준 원문 약 270종</strong>과 정부 계획·보도자료 등 참고 문서 약 140종 — 주파수 분배표, 전자파 기준, 적합성평가, 무선국 등록면허세까지<br>
+              · 법령마다 정리해 둔 <strong>실무 요약 310여 종</strong>을 원문과 함께 참고<br>
+              · 곧 바뀔 예정인 조문은 <strong>"지금은 A, ○월○일부터는 B"</strong>처럼 현행과 예정을 구분해 알려드립니다. 조문이 가리키는 별표·서식도 함께 확인<br>
+              · 찾은 조문을 어겼을 때 따르는 <strong>벌칙·과태료·과징금 조문</strong>처럼, 그 조문을 인용하는 같은 법령의 다른 조문도 함께 찾아 참고합니다<br>
+              · 5G·6G 관련 국제 표준(ITU-R) 권고·보고서 9종<br>
+              · 2G·3G 종료, 유심 정보 유출 제재, 단통법 폐지 이후 지원금 규율처럼 굵직한 쟁점의 경과와 관련 법령을 공개 자료로 정리한 <strong>쟁점 사례 문서 20여 건</strong>도 참고합니다<br><br>
+              🏛️ <strong>국회에서 오간 논의</strong><br>
+              · <strong>과방위 회의록 10년치(2016~2026년, 국정감사 포함)</strong>에서 질문과 관련된 의원 질의와 정부 답변을 찾아 참고합니다<br>
+              · 질문과 관련된 국회 계류 법안·입법예고가 있으면 함께 알려드립니다(의견등록 마감일 포함). 아직 확정된 법이 아니므로 구분해 표기하고, 답변의 법적 근거로는 쓰지 않습니다<br><br>
+              📢 <strong>정부 발표자료</strong><br>
+              · 과기정통부·방미통위(구 방통위)·국립전파연구원·중앙전파관리소·ETRI·KISDI <strong>6개 기관의 보도자료 전문</strong>(2024~2026년, 매일 갱신)<br><br>
+              🌐 <strong>인터넷 검색</strong><br>
+              · 해외 제도 비교나 최신 동향처럼 내부 자료에 없는 내용은 인터넷을 검색해서 출처 링크와 함께 알려드립니다.<br><br>
+              📰 <strong>수시로 모으는 뉴스</strong><br>
+              · 10분마다 모으는 국내 전파·통신 뉴스와 매일 모으는 해외 소식(미국 FCC, 영국 Ofcom, 일본 총무성 등)에서 관련 기사를 골라 참고합니다.<br><br>
+              🕸️ <strong>법령 관계도</strong><br>
+              · 답변에 쓰인 법령들이 어떻게 이어지는지 답변 아래 작은 관계도로 보여드리고, <strong>관리자 검토를 거쳐</strong> 법령 관계도 탭에 반영됩니다. 관계도 탭에서는 그 주제의 근거 조문끼리 실제로 이어진 관계만 그립니다.<br><br>
+              🔐 <strong>이용 안내</strong><br>
+              · AI 자문은 로그인 후 관리자 승인을 받은 계정만 쓸 수 있고, 하루 이용 한도가 있습니다(입력창 아래에 표시). 뉴스·법안·회의록·지식베이스 열람과 검색은 로그인 없이 됩니다.<br>
+              · 지난 자문은 화면 위쪽 「자문 이력」에서 다시 볼 수 있습니다. AI는 직전 3번의 문답까지만 이어서 참고하므로, 주제가 바뀌면 「새 대화」를 눌러 주세요.<br>
+              · 답변이 도중에 끊기면 받은 부분까지 남기고 ⚠️ 표시를 붙입니다 — 같은 질문을 다시 하면 처음부터 답합니다.<br><br>
+              답변이 도움이 되었는지 <strong>👍👎 버튼</strong>으로 알려주세요(선택 사항) — 시스템 개선에 참고합니다. 그럼, 궁금하신 사항을 입력해 주세요.
             </div>
           </div>
-          <!-- ?뚯옄二?臾삳뒗 吏덈Ц??移?8媛쒕뒗 2026-09-27 ?댁쁺??寃곗젙?쇰줈 ??젣 ??5?붿뿉 怨좊Ⅸ ?덉떆?怨??ㅼ궗?⑹? ??쒕낫???먮Ц 54嫄?以?2踰?
-               吏덈Ц ?덉떆???낅젰? ?덈궡 湲(app.js applyAuthUI placeholder)濡???꼈??-->
+          <!-- 「자주 묻는 질문」 칩 8개는 2026-09-27 운영자 결정으로 삭제 — 5월에 고른 예시였고 실사용은 대시보드 자문 54건 중 2번.
+               질문 예시는 입력란 안내 글(app.js applyAuthUI placeholder)로 옮겼다 -->
           <div class="chat-input-wrap" style="margin-top:12px">
-            <input type="text" id="chat-input" placeholder="濡쒓렇?????댁슜?????덉뒿?덈떎" disabled onkeydown="if(event.key==='Enter' && !event.shiftKey) sendChat()" />
-            <button class="btn btn-primary" id="send-btn" onclick="sendChat()" disabled><i class="ti ti-send"></i>?꾩넚</button>
+            <input type="text" id="chat-input" placeholder="로그인 후 이용할 수 있습니다" disabled onkeydown="if(event.key==='Enter' && !event.shiftKey) sendChat()" />
+            <button class="btn btn-primary" id="send-btn" onclick="sendChat()" disabled><i class="ti ti-send"></i>전송</button>
           </div>
           <div id="quota-line" style="font-size:11px;color:var(--text-tertiary);margin-top:5px;text-align:right"></div>
         </div>
       </div>
 
-      <!-- 蹂닿퀬??珥덉븞 ?쒖븞 -->
-    <!-- (?쒓굅??2026-09-09, #142) 蹂닿퀬??珥덉븞 ?쒖븞 ?⑤꼸 ???щ궡 蹂닿퀬???몃? ?쒕쾭 湲덉? -->
+      <!-- 보고서 초안 제안 -->
+    <!-- (제거됨 2026-09-09, #142) 보고서 초안 제안 패널 — 사내 보고서 외부 서버 금지 -->
 
-      <!-- 踰뺣졊 DIFF 遺꾩꽍 -->
+      <!-- 법령 DIFF 분석 -->
       <div class="panel" id="panel-diff">
-        <!-- ?먮룞 媛먯? 媛쒖젙 紐⑸줉 (law_diffs) ??2026-08-02 -->
+        <!-- 자동 감지 개정 목록 (law_diffs) — 2026-08-02 -->
         <div style="margin-bottom:12px">
           <div style="font-size:13px;font-weight:600;color:var(--text-primary);margin-bottom:4px">
-            <i class="ti ti-radar" style="color:var(--accent);margin-right:4px"></i>?먮룞 媛먯???踰뺣졊 媛쒖젙
+            <i class="ti ti-radar" style="color:var(--accent);margin-right:4px"></i>자동 감지된 법령 개정
           </div>
           <div style="font-size:11px;color:var(--text-secondary);line-height:1.6">
-            踰뺣졊 ?숆린?붽? 媛먯?쨌遺꾩꽍??媛쒖젙 ?대젰?낅땲?? ??ぉ???대┃?섎㈃ 珥앷큵 ?붿빟怨?議곕Ц蹂?蹂寃??곸꽭瑜?蹂????덉뒿?덈떎.
+            법령 동기화가 감지·분석한 개정 이력입니다. 항목을 클릭하면 총괄 요약과 조문별 변경 상세를 볼 수 있습니다.
           </div>
         </div>
         <div id="diff-auto-list">
-          <div style="color:var(--text-secondary);padding:20px;text-align:center;font-size:12px">濡쒕뵫 以?..</div>
+          <div style="color:var(--text-secondary);padding:20px;text-align:center;font-size:12px">로딩 중...</div>
         </div>
         <div id="diff-auto-detail" style="display:none"></div>
 
         <hr style="border:none;border-top:1px solid var(--border);margin:20px 0">
-        <div style="font-size:12px;font-weight:700;color:var(--text-secondary);margin-bottom:10px">?섎룞 ?뚯씪 鍮꾧탳</div>
+        <div style="font-size:12px;font-weight:700;color:var(--text-secondary);margin-bottom:10px">수동 파일 비교</div>
 
         <div style="margin-bottom:16px">
           <div style="font-size:13px;font-weight:600;color:var(--text-primary);margin-bottom:4px">
-            <i class="ti ti-arrows-diff" style="color:var(--accent);margin-right:4px"></i>踰뺣졊 DIFF 遺꾩꽍
+            <i class="ti ti-arrows-diff" style="color:var(--accent);margin-right:4px"></i>법령 DIFF 분석
           </div>
           <div style="font-size:11px;color:var(--text-secondary);line-height:1.6">
-            ?낅쾿?덇퀬쨌?됱젙?덇퀬 ?④퀎?먯꽌 <b style="color:var(--text-primary)">媛쒖젙 ?꽷룻썑 ?뚯씪</b>???щ━硫?蹂寃쎈맂 議곕Ц怨?SKT ?곹뼢?꾨? ?먮룞 遺꾩꽍?⑸땲?? (?뱀씤 怨꾩젙 ?꾩슜, ?ㅽ뻾 1?뚭? ?먮Ц ?쒕룄 1?뚮줈 怨꾩궛?⑸땲??
+            입법예고·행정예고 단계에서 <b style="color:var(--text-primary)">개정 전·후 파일</b>을 올리면 변경된 조문과 SKT 영향도를 자동 분석합니다. (승인 계정 전용, 실행 1회가 자문 한도 1회로 계산됩니다)
           </div>
         </div>
 
-        <!-- ?뚯씪 ?낅줈??2??-->
+        <!-- 파일 업로드 2열 -->
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">
           <div>
-            <div style="font-size:11px;font-weight:600;color:#ef4444;margin-bottom:6px">??媛쒖젙 ??(援?踰뺣졊)</div>
+            <div style="font-size:11px;font-weight:600;color:#ef4444;margin-bottom:6px">① 개정 전 (구 법령)</div>
             <div id="drop-before" class="diff-drop-zone" onclick="document.getElementById('file-before').click()" ondragover="event.preventDefault()" ondrop="handleDiffDrop('before',event)">
               <i class="ti ti-file-text" style="font-size:20px;opacity:.4"></i>
-              <div style="font-size:12px">?대┃ ?먮뒗 ?쒕옒洹?/div>
-              <div style="font-size:10px;opacity:.6">.txt 쨌 .pdf 쨌 .md</div>
+              <div style="font-size:12px">클릭 또는 드래그</div>
+              <div style="font-size:10px;opacity:.6">.txt · .pdf · .md</div>
             </div>
             <input type="file" id="file-before" accept=".txt,.pdf,.md,.hwp" style="display:none" onchange="handleDiffFile('before',this)">
           </div>
           <div>
-            <div style="font-size:11px;font-weight:600;color:#22c55e;margin-bottom:6px">??媛쒖젙 ??(??踰뺣졊)</div>
+            <div style="font-size:11px;font-weight:600;color:#22c55e;margin-bottom:6px">② 개정 후 (신 법령)</div>
             <div id="drop-after" class="diff-drop-zone" onclick="document.getElementById('file-after').click()" ondragover="event.preventDefault()" ondrop="handleDiffDrop('after',event)">
               <i class="ti ti-file-text" style="font-size:20px;opacity:.4"></i>
-              <div style="font-size:12px">?대┃ ?먮뒗 ?쒕옒洹?/div>
-              <div style="font-size:10px;opacity:.6">.txt 쨌 .pdf 쨌 .md</div>
+              <div style="font-size:12px">클릭 또는 드래그</div>
+              <div style="font-size:10px;opacity:.6">.txt · .pdf · .md</div>
             </div>
             <input type="file" id="file-after" accept=".txt,.pdf,.md,.hwp" style="display:none" onchange="handleDiffFile('after',this)">
           </div>
         </div>
 
-        <!-- 遺꾩꽍 踰꾪듉 -->
+        <!-- 분석 버튼 -->
         <button id="diff-analyze-btn" class="btn btn-primary" onclick="runDiffAnalysis()" disabled
           style="width:100%;justify-content:center;margin-bottom:16px;opacity:.5">
-          <i class="ti ti-search"></i> 蹂寃쎌궗??遺꾩꽍 ?쒖옉 (???뚯씪 ?낅줈?????쒖꽦??
+          <i class="ti ti-search"></i> 변경사항 분석 시작 (두 파일 업로드 후 활성화)
         </button>
 
-        <!-- 寃곌낵 ?곸뿭 -->
+        <!-- 결과 영역 -->
         <div id="diff-result" style="display:none">
-          <!-- AI 遺꾩꽍 移대뱶 -->
+          <!-- AI 분석 카드 -->
           <div class="card" style="cursor:default;padding:16px;margin-bottom:12px" id="diff-ai-result"></div>
-          <!-- 議곕Ц 蹂寃?DIFF 酉?-->
+          <!-- 조문 변경 DIFF 뷰 -->
           <div>
             <div style="font-size:11px;font-weight:700;color:var(--text-secondary);margin-bottom:8px;display:flex;align-items:center;gap:8px">
-              ??議곕Ц蹂?蹂寃쎌궗??              <span style="background:rgba(239,68,68,.1);color:#ef4444;font-size:10px;padding:1px 7px;border-radius:4px">????젣/蹂寃?/span>
-              <span style="background:rgba(34,197,94,.1);color:#16a34a;font-size:10px;padding:1px 7px;border-radius:4px">+ 異붽?/蹂寃?/span>
+              ● 조문별 변경사항
+              <span style="background:rgba(239,68,68,.1);color:#ef4444;font-size:10px;padding:1px 7px;border-radius:4px">− 삭제/변경</span>
+              <span style="background:rgba(34,197,94,.1);color:#16a34a;font-size:10px;padding:1px 7px;border-radius:4px">+ 추가/변경</span>
             </div>
             <div id="diff-view" style="background:var(--bg-secondary);border-radius:var(--radius-md);padding:12px;max-height:420px;overflow-y:auto"></div>
           </div>
         </div>
       </div>
 
-      <!-- 援?궡 踰뺣졊쨌怨좎떆 -->
+      <!-- 국내 법령·고시 -->
       <div class="panel" id="panel-law">
         <div style="display:flex;gap:8px;margin-bottom:16px;align-items:center">
-          <span style="font-size:12px;color:var(--text-secondary)">珥?<strong id="kb-total">??/strong>媛?臾몄꽌 쨌 吏??踰좎씠???ㅼ떆媛?紐⑸줉 쨌 異쒖쿂: law.go.kr 쨌 rra.go.kr</span>
-          <!-- ?낅줈??踰꾪듉 ?쒓굅(2026-08-01) ??踰뺣졊쨌怨좎떆??踰뺤젣泥?API濡?蹂몃Ц源뚯? 諛쏅뒗??
-               law_sync.py媛 議곕Ц 援ъ“(議곕Ц踰덊샇쨌??룻샇)瑜?洹몃?濡?媛?몄삤誘濡?PDF 異붿텧蹂대떎 ?뺥솗?섍퀬,
-               PDF濡??ｌ쑝硫??ㅽ엳??article_no媛 遺?뺥솗?댁쭊?? API???녿뒗 ?덉쇅 臾몄꽌(?곹샇?몄젙?묒젙쨌
-               ?뺤콉?먮즺)??PC?먯꽌 `python upload_law_pdf.py <?뚯씪> "<?대쫫>" 怨좎떆`濡??ｋ뒗?? (#52) -->
-          <span style="margin-left:auto;font-size:11px;color:var(--text-tertiary)">媛쒖젙 媛먯? ??<code>law_sync.py</code>濡??먮룞 ?꾪뻾??쨌 ?낅줈??遺덊븘??/span>
+          <span style="font-size:12px;color:var(--text-secondary)">총 <strong id="kb-total">—</strong>개 문서 · 지식 베이스 실시간 목록 · 출처: law.go.kr · rra.go.kr</span>
+          <!-- 업로드 버튼 제거(2026-08-01) — 법령·고시는 법제처 API로 본문까지 받는다.
+               law_sync.py가 조문 구조(조문번호·항·호)를 그대로 가져오므로 PDF 추출보다 정확하고,
+               PDF로 넣으면 오히려 article_no가 부정확해진다. API에 없는 예외 문서(상호인정협정·
+               정책자료)는 PC에서 `python upload_law_pdf.py <파일> "<이름>" 고시`로 넣는다. (#52) -->
+          <span style="margin-left:auto;font-size:11px;color:var(--text-tertiary)">개정 감지 시 <code>law_sync.py</code>로 자동 현행화 · 업로드 불필요</span>
         </div>
 
         <div style="position:relative;margin-bottom:14px">
           <i class="ti ti-search" style="position:absolute;left:11px;top:50%;transform:translateY(-50%);font-size:15px;color:var(--text-tertiary)"></i>
-          <input type="text" id="kb-search" placeholder="臾몄꽌 ?대쫫?쇰줈 寃??(怨듬갚?쇰줈 ?щ윭 ?⑥뼱)" oninput="loadKbDocs()" aria-label="踰뺣졊쨌怨좎떆 臾몄꽌 ?대쫫 寃??
+          <input type="text" id="kb-search" placeholder="문서 이름으로 검색 (공백으로 여러 단어)" oninput="loadKbDocs()" aria-label="법령·고시 문서 이름 검색"
                  style="width:100%;padding:7px 74px 7px 32px;font-size:12px;border:0.5px solid var(--border-mid);border-radius:var(--radius-md);background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;outline:none">
           <span id="kb-search-count" style="position:absolute;right:30px;top:50%;transform:translateY(-50%);font-size:11px;color:var(--text-tertiary)"></span>
-          <i class="ti ti-x" id="kb-search-clear" onclick="clearKbSearch()" title="寃?됱뼱 吏?곌린"
+          <i class="ti ti-x" id="kb-search-clear" onclick="clearKbSearch()" title="검색어 지우기"
              style="display:none;position:absolute;right:10px;top:50%;transform:translateY(-50%);font-size:14px;color:var(--text-tertiary);cursor:pointer"></i>
         </div>
 
-        <div id="kb-doc-groups"><div style="color:var(--text-secondary);font-size:12px;padding:16px 0">遺덈윭?ㅻ뒗 以?..</div></div>
+        <div id="kb-doc-groups"><div style="color:var(--text-secondary);font-size:12px;padding:16px 0">불러오는 중...</div></div>
       </div>
 
-      <!-- ?ㅻТ ?덈궡 (regulatory-kb ?붿빟쨌?ㅻТ 臾몄꽌) -->
+      <!-- 실무 안내 (regulatory-kb 요약·실무 문서) -->
       <div class="panel" id="panel-guide">
         <div style="display:flex;gap:8px;margin-bottom:10px;align-items:center;flex-wrap:wrap">
-          <span style="font-size:12px;color:var(--text-secondary)">?먮Ц??洹쇨굅濡??쇰뒗 ?ㅻТ ?덈궡쨌踰뺣졊 ?붿빟 (?듬? ?섎떒 <strong>李몄“ ?붿빟쨌?ㅻТ</strong> 諛곗?濡??쒖떆??</span>
-          <span style="margin-left:auto;font-size:11.5px;color:var(--text-tertiary)">?꾩껜 <strong id="guide-total">??/strong>嫄?/span>
+          <span style="font-size:12px;color:var(--text-secondary)">자문이 근거로 삼는 실무 안내·법령 요약 (답변 하단 <strong>참조 요약·실무</strong> 배지로 표시됨)</span>
+          <span style="margin-left:auto;font-size:11.5px;color:var(--text-tertiary)">전체 <strong id="guide-total">—</strong>건</span>
         </div>
 
         <div style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap">
-          <button class="guide-chip active" id="guide-chip-all"   onclick="setGuideScope('all',this)">?꾩껜</button>
-          <button class="guide-chip"        id="guide-chip-crms"  onclick="setGuideScope('crms',this)">以묒븰?꾪뙆愿由ъ냼 <span id="guide-n-crms">??/span></button>
-          <button class="guide-chip"        id="guide-chip-laws"  onclick="setGuideScope('laws',this)">踰뺣졊 ?붿빟 <span id="guide-n-laws">??/span></button>
-          <button class="btn" style="margin-left:auto;font-size:11px;padding:3px 10px" onclick="toggleGuideAll()"><i class="ti ti-chevrons-down" id="guide-expand-icon"></i> <span id="guide-expand-label">紐⑤몢 ?쇱튂湲?/span></button>
+          <button class="guide-chip active" id="guide-chip-all"   onclick="setGuideScope('all',this)">전체</button>
+          <button class="guide-chip"        id="guide-chip-crms"  onclick="setGuideScope('crms',this)">중앙전파관리소 <span id="guide-n-crms">—</span></button>
+          <button class="guide-chip"        id="guide-chip-laws"  onclick="setGuideScope('laws',this)">법령 요약 <span id="guide-n-laws">—</span></button>
+          <button class="btn" style="margin-left:auto;font-size:11px;padding:3px 10px" onclick="toggleGuideAll()"><i class="ti ti-chevrons-down" id="guide-expand-icon"></i> <span id="guide-expand-label">모두 펼치기</span></button>
         </div>
 
         <div style="position:relative;margin-bottom:14px">
           <i class="ti ti-search" style="position:absolute;left:11px;top:50%;transform:translateY(-50%);font-size:15px;color:var(--text-tertiary)"></i>
-          <input type="text" id="guide-search" placeholder="臾몄꽌 ?대쫫?쇰줈 寃??(怨듬갚?쇰줈 ?щ윭 ?⑥뼱)" oninput="loadGuideDocs()" aria-label="?ㅻТ ?덈궡 臾몄꽌 ?대쫫 寃??
+          <input type="text" id="guide-search" placeholder="문서 이름으로 검색 (공백으로 여러 단어)" oninput="loadGuideDocs()" aria-label="실무 안내 문서 이름 검색"
                  style="width:100%;padding:7px 74px 7px 32px;font-size:12px;border:0.5px solid var(--border-mid);border-radius:var(--radius-md);background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;outline:none">
           <span id="guide-search-count" style="position:absolute;right:30px;top:50%;transform:translateY(-50%);font-size:11px;color:var(--text-tertiary)"></span>
-          <i class="ti ti-x" id="guide-search-clear" onclick="clearGuideSearch()" title="寃?됱뼱 吏?곌린"
+          <i class="ti ti-x" id="guide-search-clear" onclick="clearGuideSearch()" title="검색어 지우기"
              style="display:none;position:absolute;right:10px;top:50%;transform:translateY(-50%);font-size:14px;color:var(--text-tertiary);cursor:pointer"></i>
         </div>
 
-        <div id="guide-groups"><div style="color:var(--text-secondary);font-size:12px;padding:16px 0">遺덈윭?ㅻ뒗 以?..</div></div>
+        <div id="guide-groups"><div style="color:var(--text-secondary);font-size:12px;padding:16px 0">불러오는 중...</div></div>
       </div>
 
-      <!-- ?듬? ?쇰뱶諛?(AI ?먮Ц ?섏쐞 ??쨌 ?댁쁺???꾩슜 ??紐⑸줉? 愿由ъ옄 鍮꾨?踰덊샇 RPC濡쒕쭔 議고쉶) -->
+      <!-- 답변 피드백 (AI 자문 하위 탭 · 운영자 전용 — 목록은 관리자 비밀번호 RPC로만 조회) -->
       <div class="panel" id="panel-feedback">
-        <div id="feedback-body"><div style="color:var(--text-secondary);font-size:12px;padding:16px 0">遺덈윭?ㅻ뒗 以?..</div></div>
+        <div id="feedback-body"><div style="color:var(--text-secondary);font-size:12px;padding:16px 0">불러오는 중...</div></div>
       </div>
 
-      <!-- 踰뺣졊 愿怨꾨룄 -->
-      <!-- 湲곕낯 泥??붾㈃ (2026-09-15, #170) ??JS媛 go(DEFAULT_PAGE)濡??ㅼ떆 ?≪?留? ?ш린?쒕룄 active濡??먯뼱??濡쒕뱶 ?쒓컙 鍮??붾㈃쨌?댁뒪 源쒕묀?꾩씠 ?녿떎 -->
+      <!-- 법령 관계도 -->
+      <!-- 기본 첫 화면 (2026-09-15, #170) — JS가 go(DEFAULT_PAGE)로 다시 잡지만, 여기서도 active로 두어야 로드 순간 빈 화면·뉴스 깜빡임이 없다 -->
       <div class="panel active" id="panel-lawmap">
-        <!-- 癒몃━留?(2026-09-15) ??泥??붾㈃?쇰줈 ?대┫ ???덈뒗 ?붾㈃?대씪, 洹몃┝留?蹂닿퀬 "臾댁뾿?몄?" ?????덇쾶 ??以??ㅻ챸쨌洹쒕え瑜??붾떎 -->
+        <!-- 머리말 (2026-09-15) — 첫 화면으로 열릴 수 있는 화면이라, 그림만 보고 "무엇인지" 알 수 있게 한 줄 설명·규모를 둔다 -->
         <div class="lawmap-caption">
-          <b>踰뺣쪧?볦떆?됰졊?볦떆?됯퇋移쇺볤퀬?쑣룸퀎?쒕? 議곕Ц ?⑥쐞濡??댁? 吏??/b>
+          <b>법률–시행령–시행규칙–고시·별표를 조문 단위로 이은 지도</b>
           <span id="lawmap-caption-stats"></span>
         </div>
         <div style="display:flex;gap:8px;margin-bottom:10px;align-items:center;flex-wrap:wrap">
-          <input id="lawmap-q" type="text" placeholder="踰뺣졊 愿怨꾧? 沅곴툑??二쇱젣瑜?吏덈Ц ???? 臾댁꽑援?媛쒖꽕?섎㈃ ?대뼡 鍮꾩슜???쒕굹?" style="flex:1;min-width:220px;padding:8px 12px;font-size:13px;border:0.5px solid var(--border-mid);border-radius:var(--radius-md);background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;outline:none" onkeydown="if(event.key==='Enter')askLawMap()">
-          <button class="btn btn-primary" style="font-size:12px" onclick="askLawMap()"><i class="ti ti-search"></i> 愿怨꾨룄 李얘린</button>
+          <input id="lawmap-q" type="text" placeholder="법령 관계가 궁금한 주제를 질문 — 예: 무선국 개설하면 어떤 비용이 드나?" style="flex:1;min-width:220px;padding:8px 12px;font-size:13px;border:0.5px solid var(--border-mid);border-radius:var(--radius-md);background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;outline:none" onkeydown="if(event.key==='Enter')askLawMap()">
+          <button class="btn btn-primary" style="font-size:12px" onclick="askLawMap()"><i class="ti ti-search"></i> 관계도 찾기</button>
         </div>
         <div style="display:flex;gap:8px;margin-bottom:8px;align-items:center;flex-wrap:wrap">
           <select id="lawmap-topic-select" onchange="lawMapSelectTopic(this.value)" style="padding:5px 10px;font-size:12px;border:0.5px solid var(--border-mid);border-radius:var(--radius-md);background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;outline:none;max-width:260px">
-            <option value="">?꾩껜 ?몄슜留?/option>
+            <option value="">전체 인용망</option>
           </select>
-          <button class="btn" id="lawmap-notice-toggle" style="font-size:11px;padding:3px 10px;display:none" onclick="toggleLawMapNotice()"><i class="ti ti-eye"></i> 怨좎떆 ?쇱튂湲?/button>
+          <button class="btn" id="lawmap-notice-toggle" style="font-size:11px;padding:3px 10px;display:none" onclick="toggleLawMapNotice()"><i class="ti ti-eye"></i> 고시 펼치기</button>
           <span id="lawmap-status" style="font-size:11px;color:var(--text-secondary)"></span>
-          <button class="btn" id="lawmap-pending-btn" style="margin-left:auto;font-size:11px;padding:3px 10px;display:none" onclick="toggleLawmapProposals()" title="AI媛 ?쒖븞???곌껐 ???뱀씤?댁빞 愿怨꾨룄???ㅼ뼱媛묐땲??(#147)"><i class="ti ti-inbox"></i> 寃???湲?/button>
-          <button class="btn" id="lawmap-enrich-btn" style="font-size:11px;padding:3px 10px;display:none" onclick="enrichLawMapTopic()"><i class="ti ti-sparkles"></i> AI濡?蹂닿컯</button>
-          <button class="btn fs-btn" style="font-size:11px;padding:3px 10px" onclick="toggleFullscreen('lawmap-graph')" title="洹몃옒?꾨쭔 ?꾩껜?붾㈃ (Esc濡?醫낅즺) ?????뺣?쨌?쒕옒洹맞룻겢由?洹몃?濡?><i class="ti ti-maximize"></i>?꾩껜?붾㈃</button>
+          <button class="btn" id="lawmap-pending-btn" style="margin-left:auto;font-size:11px;padding:3px 10px;display:none" onclick="toggleLawmapProposals()" title="AI가 제안한 연결 — 승인해야 관계도에 들어갑니다 (#147)"><i class="ti ti-inbox"></i> 검토 대기</button>
+          <button class="btn" id="lawmap-enrich-btn" style="font-size:11px;padding:3px 10px;display:none" onclick="enrichLawMapTopic()"><i class="ti ti-sparkles"></i> AI로 보강</button>
+          <button class="btn fs-btn" style="font-size:11px;padding:3px 10px" onclick="toggleFullscreen('lawmap-graph')" title="그래프만 전체화면 (Esc로 종료) — 휠 확대·드래그·클릭 그대로"><i class="ti ti-maximize"></i>전체화면</button>
         </div>
-        <!-- 愿由ъ옄: AI ?곌껐 ?쒖븞 寃??移대뱶 (#147) ??"寃???湲?N嫄? 踰꾪듉?쇰줈 ?쇱묠 -->
+        <!-- 관리자: AI 연결 제안 검토 카드 (#147) — "검토 대기 N건" 버튼으로 펼침 -->
         <div id="lawmap-proposals" style="display:none;margin-bottom:10px"></div>
-        <div id="lawmap-graph" class="lawmap-graph"><div style="color:var(--text-secondary);font-size:12px;padding:16px">遺덈윭?ㅻ뒗 以?..</div></div>
+        <div id="lawmap-graph" class="lawmap-graph"><div style="color:var(--text-secondary);font-size:12px;padding:16px">불러오는 중...</div></div>
         <div class="lawmap-legend">
-          <span><i class="lawmap-dot" style="background:#5b7ff5"></i> 二쇱젣</span>
-          <span><i class="lawmap-dot" style="background:#2ea060"></i> 踰뺣쪧</span>
-          <span><i class="lawmap-dot" style="background:#1f9e9e"></i> ?쒗뻾?뮤룰퇋移?/span>
-          <span><i class="lawmap-dot" style="background:#e08a3c"></i> 怨좎떆쨌?됱젙洹쒖튃</span>
-          <span><i class="lawmap-dot" style="background:#d5486a"></i> ?遺꾩빞쨌湲고?</span>
-          <span style="margin-left:auto;opacity:.7">??援듦린 = 二쇱젣?믩쾿?? 洹쇨굅 議곕Ц ??쨌 踰뺣졊?붾쾿?? 洹쇨굅 議곕Ц ?ъ씠 ?곌껐 ??쨌 ?몃뱶 ?대┃ = ?곸꽭</span>
+          <span><i class="lawmap-dot" style="background:#5b7ff5"></i> 주제</span>
+          <span><i class="lawmap-dot" style="background:#2ea060"></i> 법률</span>
+          <span><i class="lawmap-dot" style="background:#1f9e9e"></i> 시행령·규칙</span>
+          <span><i class="lawmap-dot" style="background:#e08a3c"></i> 고시·행정규칙</span>
+          <span><i class="lawmap-dot" style="background:#d5486a"></i> 타분야·기타</span>
+          <span style="margin-left:auto;opacity:.7">선 굵기 = 주제→법령: 근거 조문 수 · 법령↔법령: 근거 조문 사이 연결 수 · 노드 클릭 = 상세</span>
         </div>
-        <div id="lawmap-detail" class="lawmap-detail"><span style="color:var(--text-secondary)">?몃뱶瑜??대┃?섎㈃ ?ㅻ챸쨌二쇱슂 ?댁슜쨌洹쇨굅 議곕Ц???쒖떆?⑸땲??</span></div>
+        <div id="lawmap-detail" class="lawmap-detail"><span style="color:var(--text-secondary)">노드를 클릭하면 설명·주요 내용·근거 조문이 표시됩니다.</span></div>
       </div>
 
       <!-- ITU-R -->
       <div class="panel" id="panel-itu">
         <div style="display:flex;gap:8px;margin-bottom:16px;align-items:center">
-          <span style="font-size:12px;color:var(--text-secondary)">珥?<strong>9媛?/strong> 臾몄꽌(沅뚭퀬 8 쨌 蹂닿퀬??1) 쨌 異쒖쿂: itu.int/rec/R-REC/en 쨌 ?쒓뎅???붿빟? <strong>?ㅻТ ?덈궡</strong> ??/span>
-          <button class="btn btn-primary" data-login-only style="margin-left:auto;font-size:12px" onclick="openPdfUpload('itu')"><i class="ti ti-upload"></i> ?낅줈??(PDF쨌Word쨌MD)</button>
+          <span style="font-size:12px;color:var(--text-secondary)">총 <strong>9개</strong> 문서(권고 8 · 보고서 1) · 출처: itu.int/rec/R-REC/en · 한국어 요약은 <strong>실무 안내</strong> 탭</span>
+          <button class="btn btn-primary" data-login-only style="margin-left:auto;font-size:12px" onclick="openPdfUpload('itu')"><i class="ti ti-upload"></i> 업로드 (PDF·Word·MD)</button>
         </div>
         <div id="itu-upload-list"></div>
-        <div class="section-title">M ?쒕━利????대룞?듭떊쨌IMT</div>
+        <div class="section-title">M 시리즈 — 이동통신·IMT</div>
         <div class="card" style="cursor:default;margin-bottom:14px">
-          <div class="file-item"><div class="file-icon fi-purple"><i class="ti ti-file"></i></div><div style="flex:1"><div class="file-name">ITU-R M.2150-3</div><div class="file-size">IMT-2020(5G) 臾댁꽑?명꽣?섏씠???곸꽭 洹쒓꺽 쨌 Rev.3 (2026.02) 쨌 12MB</div></div><span class="badge badge-teal">理쒖떊</span></div>
-          <div class="file-item"><div class="file-icon fi-purple"><i class="ti ti-file"></i></div><div style="flex:1"><div class="file-name">ITU-R M.2160-0</div><div class="file-size">IMT-2030(6G) Framework 쨌 Rev.0 (2023.11) 쨌 683KB</div></div><span class="badge badge-teal">理쒖떊</span></div>
-          <div class="file-item"><div class="file-icon fi-purple"><i class="ti ti-file"></i></div><div style="flex:1"><div class="file-name">ITU-R M.1036-8</div><div class="file-size">IMT 二쇳뙆??諛곗뿴 沅뚭퀬 쨌 Rev.8 (2026.02) 쨌 1.2MB</div></div><span class="badge badge-teal">理쒖떊</span></div>
-          <div class="file-item"><div class="file-icon fi-purple"><i class="ti ti-file"></i></div><div style="flex:1"><div class="file-name">ITU-R M.2083-0</div><div class="file-size">IMT Vision ??5G ?꾨젅?꾩썙??eMBB쨌URLLC쨌mMTC) 쨌 Rev.0 (2015.09) 쨌 903KB</div></div><span class="badge badge-teal">?꾪뻾</span></div>
-          <div class="file-item"><div class="file-icon fi-purple"><i class="ti ti-file"></i></div><div style="flex:1"><div class="file-name">ITU-R M.2101-0</div><div class="file-size">怨듭쑀쨌?묐┰???곌뎄??IMT 留?紐⑤뜽留?쨌 Rev.0 (2017.02) 쨌 1.3MB</div></div><span class="badge badge-teal">?꾪뻾</span></div>
-          <div class="file-item"><div class="file-icon fi-purple"><i class="ti ti-file"></i></div><div style="flex:1"><div class="file-name">ITU-R M.1544-1</div><div class="file-size">?꾨쭏異붿뼱臾댁꽑 醫낆궗??理쒖냼 ?먭꺽湲곗? 쨌 Rev.1 (2015.09) 쨌 436KB</div></div><span class="badge badge-teal">?꾪뻾</span></div>
+          <div class="file-item"><div class="file-icon fi-purple"><i class="ti ti-file"></i></div><div style="flex:1"><div class="file-name">ITU-R M.2150-3</div><div class="file-size">IMT-2020(5G) 무선인터페이스 상세 규격 · Rev.3 (2026.02) · 12MB</div></div><span class="badge badge-teal">최신</span></div>
+          <div class="file-item"><div class="file-icon fi-purple"><i class="ti ti-file"></i></div><div style="flex:1"><div class="file-name">ITU-R M.2160-0</div><div class="file-size">IMT-2030(6G) Framework · Rev.0 (2023.11) · 683KB</div></div><span class="badge badge-teal">최신</span></div>
+          <div class="file-item"><div class="file-icon fi-purple"><i class="ti ti-file"></i></div><div style="flex:1"><div class="file-name">ITU-R M.1036-8</div><div class="file-size">IMT 주파수 배열 권고 · Rev.8 (2026.02) · 1.2MB</div></div><span class="badge badge-teal">최신</span></div>
+          <div class="file-item"><div class="file-icon fi-purple"><i class="ti ti-file"></i></div><div style="flex:1"><div class="file-name">ITU-R M.2083-0</div><div class="file-size">IMT Vision — 5G 프레임워크(eMBB·URLLC·mMTC) · Rev.0 (2015.09) · 903KB</div></div><span class="badge badge-teal">현행</span></div>
+          <div class="file-item"><div class="file-icon fi-purple"><i class="ti ti-file"></i></div><div style="flex:1"><div class="file-name">ITU-R M.2101-0</div><div class="file-size">공유·양립성 연구용 IMT 망 모델링 · Rev.0 (2017.02) · 1.3MB</div></div><span class="badge badge-teal">현행</span></div>
+          <div class="file-item"><div class="file-icon fi-purple"><i class="ti ti-file"></i></div><div style="flex:1"><div class="file-name">ITU-R M.1544-1</div><div class="file-size">아마추어무선 종사자 최소 자격기준 · Rev.1 (2015.09) · 436KB</div></div><span class="badge badge-teal">현행</span></div>
         </div>
-        <div class="section-title">M ?쒕━利?蹂닿퀬??Report) ??李멸퀬 ?먮즺</div>
+        <div class="section-title">M 시리즈 보고서(Report) — 참고 자료</div>
         <div class="card" style="cursor:default;margin-bottom:14px">
-          <div class="file-item"><div class="file-icon fi-purple"><i class="ti ti-file-description"></i></div><div style="flex:1"><div class="file-name">Report ITU-R M.2410-0</div><div class="file-size">IMT-2020(5G) 理쒖냼 ?깅뒫 ?붽뎄?ы빆(20Gbps쨌1ms ?? 쨌 (2017.11) 쨌 644KB</div></div><span class="badge badge-teal">?꾪뻾</span></div>
+          <div class="file-item"><div class="file-icon fi-purple"><i class="ti ti-file-description"></i></div><div style="flex:1"><div class="file-name">Report ITU-R M.2410-0</div><div class="file-size">IMT-2020(5G) 최소 성능 요구사항(20Gbps·1ms 등) · (2017.11) · 644KB</div></div><span class="badge badge-teal">현행</span></div>
         </div>
-        <div class="section-title">SM ?쒕━利????ㅽ럺?몃읆 愿由?/div>
+        <div class="section-title">SM 시리즈 — 스펙트럼 관리</div>
         <div class="card" style="cursor:default">
-          <div class="file-item"><div class="file-icon fi-blue"><i class="ti ti-file"></i></div><div style="flex:1"><div class="file-name">ITU-R SM.329-13</div><div class="file-size">遺덉슂諛쒖궗 ?덉슜 湲곗? 쨌 Rev.13 (2024.09) 쨌 973KB</div></div><span class="badge badge-teal">理쒖떊</span></div>
-          <div class="file-item"><div class="file-icon fi-blue"><i class="ti ti-file"></i></div><div style="flex:1"><div class="file-name">ITU-R SM.1541-7</div><div class="file-size">???쇅 ?곸뿭 遺덉슂諛쒖궗 湲곗? 쨌 Rev.7 (2024.09) 쨌 4.3MB</div></div><span class="badge badge-teal">理쒖떊</span></div>
+          <div class="file-item"><div class="file-icon fi-blue"><i class="ti ti-file"></i></div><div style="flex:1"><div class="file-name">ITU-R SM.329-13</div><div class="file-size">불요발사 허용 기준 · Rev.13 (2024.09) · 973KB</div></div><span class="badge badge-teal">최신</span></div>
+          <div class="file-item"><div class="file-icon fi-blue"><i class="ti ti-file"></i></div><div style="flex:1"><div class="file-name">ITU-R SM.1541-7</div><div class="file-size">대역외 영역 불요발사 기준 · Rev.7 (2024.09) · 4.3MB</div></div><span class="badge badge-teal">최신</span></div>
         </div>
       </div>
 
-      <!-- ?댁뒪 ??? 以묒슂??湲곕컲 遺꾨쪟 -->
+      <!-- 뉴스 — 팀 중요도 기반 분류 -->
       <div class="panel" id="panel-news">
         <div style="display:flex;gap:8px;margin-bottom:10px;align-items:center;flex-wrap:wrap">
           <span style="font-size:11px;color:var(--text-secondary);flex:1">
-            <b style="color:var(--text-primary)">?먮룞 ?섏쭛 ?댁뒪</b>
-            <span style="opacity:.8"> ??SKT 愿?⑥꽦 湲곗? 以묒슂???먮룞 遺꾨쪟</span>
+            <b style="color:var(--text-primary)">자동 수집 뉴스</b>
+            <span style="opacity:.8"> — SKT 관련성 기준 중요도 자동 분류</span>
           </span>
-          <!-- ?깃툒 湲곗? ?뚯슦由??(?ㅼ옣? ?곕━ ?? | 怨듯넻??#250) ??????덈뒗 ?뱀씤 怨꾩젙쨌?ㅼ옣?먭쾶留?app.js _gradeViewUI媛 梨꾩썙 蹂댁씤??-->
+          <!-- 등급 기준 「우리 팀(실장은 우리 실) | 공통」(#250) — 팀이 있는 승인 계정·실장에게만 app.js _gradeViewUI가 채워 보인다 -->
           <span id="news-grade-view" style="display:none;align-items:center;gap:4px"></span>
-          <!-- 湲닿툒??洹쒖튃 ?ㅼ젙(#216) ??紐⑸줉??媛由ъ? ?딄쾶 踰꾪듉留??먭퀬 李쎌쑝濡??곕떎(2026-09-25 ?댁쁺??寃곗젙). 濡쒓렇???꾩슜 -->
-          <button class="btn" data-login-only data-show="inline-flex" style="display:none;font-size:11px;padding:4px 10px;white-space:nowrap" onclick="openUrgencyRules()" title="?쒕ぉ쨌?붿빟???뺥빐 ???깅쭚???덉쑝硫??깃툒???뺥븯??洹쒖튃 蹂닿린쨌?몄쭛"><i class="ti ti-adjustments-alt"></i> 湲닿툒???ㅼ젙</button>
+          <!-- 긴급도 규칙 설정(#216) — 목록을 가리지 않게 버튼만 두고 창으로 연다(2026-09-25 운영자 결정). 로그인 전용 -->
+          <button class="btn" data-login-only data-show="inline-flex" style="display:none;font-size:11px;padding:4px 10px;white-space:nowrap" onclick="openUrgencyRules()" title="제목·요약에 정해 둔 낱말이 있으면 등급을 정하는 규칙 보기·편집"><i class="ti ti-adjustments-alt"></i> 긴급도 설정</button>
         </div>
 
-        <!-- ?섏쭛 ????몃줎쨌湲곌? (移댄뀒怨좊━蹂? -->
+        <!-- 수집 대상 언론·기관 (카테고리별) -->
         <div style="margin-bottom:12px;padding:9px 12px;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border);font-size:11px;color:var(--text-secondary)">
           <div style="display:flex;align-items:center;gap:4px;margin-bottom:7px">
             <i class="ti ti-antenna" style="font-size:13px"></i>
-            <span>?섏쭛 諛⑹떇</span>
-            <span style="opacity:.6;font-size:10px">쨌 10遺꾨쭏???먮룞 ?섏쭛</span>
+            <span>수집 방식</span>
+            <span style="opacity:.6;font-size:10px">· 10분마다 자동 수집</span>
           </div>
-          <!-- ???덈궡???ㅼ젣 ?щ·???숈옉怨??쇱튂?댁빞 ?쒕떎.
-               ?댁뒪??留ㅼ껜瑜?吏?뺥빐 湲곷뒗 諛⑹떇???꾨땲???ㅼ썙??寃???ㅼ씠踰?OpenAPI, ?ㅽ뙣 ??Google RSS)?대씪
-               ?꾨옒 留ㅼ껜 紐⑸줉? '?먯＜ ?≫엳??怨???肉??쒖젙 紐⑸줉???꾨땲?? ?뺣?湲곌? 怨듭???蹂꾨룄 ?ㅽ겕由쏀듃
-               (gov_notice_crawler.py, PC 留ㅼ씪 17??媛 ?대떦?쒕떎. ??2026-08-01 ?ㅼ젣 肄붾뱶? ?議고빐 ?뺤젙 -->
+          <!-- 이 안내는 실제 크롤러 동작과 일치해야 한다.
+               뉴스는 매체를 지정해 긁는 방식이 아니라 키워드 검색(네이버 OpenAPI, 실패 시 Google RSS)이라
+               아래 매체 목록은 '자주 잡히는 곳'일 뿐 한정 목록이 아니다. 정부기관 공지는 별도 스크립트
+               (gov_notice_crawler.py, PC 매일 17시)가 담당한다. — 2026-08-01 실제 코드와 대조해 정정 -->
           <div style="display:flex;flex-direction:column;gap:4px;line-height:1.6">
             <div style="display:flex;gap:6px">
-              <span style="width:64px;flex-shrink:0;font-weight:500;color:var(--text-secondary)">?댁뒪</span>
-              <span>?ㅼ씠踰??댁뒪 寃??二? 쨌 Google News RSS(?대갚) ???꾪뙆쨌二쇳뙆?샕룹씠?숉넻?????ㅼ썙?쒕줈 <b>留ㅼ껜 ?쒗븳 ?놁씠</b> ?섏쭛</span>
+              <span style="width:64px;flex-shrink:0;font-weight:500;color:var(--text-secondary)">뉴스</span>
+              <span>네이버 뉴스 검색(주) · Google News RSS(폴백) — 전파·주파수·이동통신 등 키워드로 <b>매체 제한 없이</b> 수집</span>
             </div>
             <div style="display:flex;gap:6px">
-              <span style="width:64px;flex-shrink:0;font-weight:500;color:var(--text-secondary)">?먯＜ ?≫엳??怨?/span>
-              <span>?꾩옄?좊Ц 쨌 ?붿??명??꾩뒪 쨌 ?붿??몃뜲?쇰━ 쨌 ZDNet Korea 쨌 ?꾩씠?댁뒪24 쨌 釉붾줈??쨌 留ㅼ씪寃쎌젣 쨌 癒몃땲?щ뜲??쨌 ?쒓뎅寃쎌젣 쨌 ?쒖슱寃쎌젣 쨌 ?고빀?댁뒪 쨌 ?댁떆??쨌 議곗꽑 쨌 以묒븰 쨌 ?숈븘 쨌 ?쒓꺼??쨌 寃쏀뼢 <span style="opacity:.7">(洹?諛뽰쓽 留ㅼ껜???ы븿??</span></span>
+              <span style="width:64px;flex-shrink:0;font-weight:500;color:var(--text-secondary)">자주 잡히는 곳</span>
+              <span>전자신문 · 디지털타임스 · 디지털데일리 · ZDNet Korea · 아이뉴스24 · 블로터 · 매일경제 · 머니투데이 · 한국경제 · 서울경제 · 연합뉴스 · 뉴시스 · 조선 · 중앙 · 동아 · 한겨레 · 경향 <span style="opacity:.7">(그 밖의 매체도 포함됨)</span></span>
             </div>
             <div style="display:flex;gap:6px">
-              <span style="width:64px;flex-shrink:0;font-weight:500;color:var(--text-secondary)">?뺣?쨌湲곌?</span>
-              <span>援?┰?꾪뙆?곌뎄??쨌 怨쇨린?뺥넻遺 쨌 諛⑹넚誘몃뵒?댄넻?좎쐞?먰쉶(蹂대룄?먮즺 + ?뚯쓽 ?섏궗?쇱젙쨌?꾩썝??寃곌낵쨌怨듭?, 留ㅼ떆) 쨌 以묒븰?꾪뙆愿由ъ냼 쨌 ?낅쾿?덇퀬 <span style="opacity:.7">(留ㅼ씪 17??쨌 <b>?뺣? 蹂대룄?먮즺쨌怨듭??ы빆</b> ??뿉 ?쒖떆)</span></span>
+              <span style="width:64px;flex-shrink:0;font-weight:500;color:var(--text-secondary)">정부·기관</span>
+              <span>국립전파연구원 · 과기정통부 · 방송미디어통신위원회(보도자료 + 회의 의사일정·위원회 결과·공지, 매시) · 중앙전파관리소 · 입법예고 <span style="opacity:.7">(매일 17시 · <b>정부 보도자료·공지사항</b> 탭에 표시)</span></span>
             </div>
             <div style="display:flex;gap:6px">
-              <span style="width:64px;flex-shrink:0;font-weight:500;color:var(--text-secondary)">?곌뎄湲곌?</span>
-              <span>ETRI 쨌 KISDI <span style="opacity:.7">(蹂대룄?먮즺 ??6G쨌?쒖??????곌뎄 ?숉뼢, 李멸퀬 ?깃툒)</span></span>
+              <span style="width:64px;flex-shrink:0;font-weight:500;color:var(--text-secondary)">연구기관</span>
+              <span>ETRI · KISDI <span style="opacity:.7">(보도자료 — 6G·표준화 등 연구 동향, 참고 등급)</span></span>
             </div>
           </div>
         </div>
 
-        <!-- 以묒슂???꾪꽣 ??-->
+        <!-- 중요도 필터 탭 -->
         <div class="tag-list" style="margin-bottom:12px" id="news-filter-tabs">
-          <span class="tag selected" onclick="filterNewsByImportance(this,'?꾩껜')">?꾩껜</span>
-          <span class="tag" onclick="filterNewsByImportance(this,'湲닿툒')" style="border-color:#ef4444;color:#ef4444">?뵶 以묒슂</span>
-          <span class="tag" onclick="filterNewsByImportance(this,'蹂댄넻')" style="border-color:#f59e0b;color:#d97706">?윞 蹂댄넻</span>
-          <span class="tag" onclick="filterNewsByImportance(this,'李멸퀬')" style="border-color:#22c55e;color:#16a34a">?윟 李멸퀬</span>
+          <span class="tag selected" onclick="filterNewsByImportance(this,'전체')">전체</span>
+          <span class="tag" onclick="filterNewsByImportance(this,'긴급')" style="border-color:#ef4444;color:#ef4444">🔴 중요</span>
+          <span class="tag" onclick="filterNewsByImportance(this,'보통')" style="border-color:#f59e0b;color:#d97706">🟡 보통</span>
+          <span class="tag" onclick="filterNewsByImportance(this,'참고')" style="border-color:#22c55e;color:#16a34a">🟢 참고</span>
         </div>
 
-        <!-- ?댁뒪 寃??(?대씪?댁뼵???꾪꽣 ??newsDataCache, 以묒슂???꾪꽣? AND 寃고빀) -->
+        <!-- 뉴스 검색 (클라이언트 필터 — newsDataCache, 중요도 필터와 AND 결합) -->
         <div style="margin-bottom:12px">
-          <input type="text" id="news-search-input" placeholder="?댁뒪 寃?????쒕ぉ쨌?붿빟쨌異쒖쿂..." aria-label="?댁뒪 寃??
+          <input type="text" id="news-search-input" placeholder="뉴스 검색 — 제목·요약·출처..." aria-label="뉴스 검색"
                  style="width:100%;max-width:360px;padding:8px 12px;font-size:12px;border:0.5px solid var(--border-mid);border-radius:var(--radius-md);background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;outline:none"
                  oninput="onNewsSearchInput(this.value)"/>
         </div>
 
-        <!-- ?뺣? 蹂대룄?먮즺 湲곌? ?꾪꽣 (?뺣? ??뿉?쒕쭔 ?쒖떆 ??app.js renderGovAgencyTabs媛 梨꾩?) -->
+        <!-- 정부 보도자료 기관 필터 (정부 탭에서만 표시 — app.js renderGovAgencyTabs가 채움) -->
         <div class="tag-list" style="margin-bottom:12px;display:none" id="gov-agency-tabs"></div>
 
-        <!-- 2?④퀎 濡쒕뱶 ?뚮┝ (#170-蹂대줎7) ??理쒖떊遺꾩쑝濡?癒쇱? 洹몃━怨??섎㉧吏瑜??ㅼ뿉??梨꾩슦???숈븞 洹??ъ떎???뚮┛??-->
+        <!-- 2단계 로드 알림 (#170-보론7) — 최신분으로 먼저 그리고 나머지를 뒤에서 채우는 동안 그 사실을 알린다 -->
         <div id="news-loading-note" style="display:none;margin-bottom:10px;font-size:11px;color:var(--text-tertiary)"></div>
 
-        <!-- 2???덉씠?꾩썐: ?댁뒪 紐⑸줉(?쇱そ) + ?곸꽭 ?⑤꼸(?ㅻⅨ履? -->
+        <!-- 2열 레이아웃: 뉴스 목록(왼쪽) + 상세 패널(오른쪽) -->
         <div style="display:flex;gap:12px;align-items:flex-start" id="news-two-col">
-          <!-- ?쇱そ: ?댁뒪 紐⑸줉 -->
+          <!-- 왼쪽: 뉴스 목록 -->
           <div style="flex:1;min-width:0">
             <div id="news-list">
-              <div style="color:var(--text-secondary);padding:20px;text-align:center;font-size:12px">遺덈윭?ㅻ뒗 以?..</div>
+              <div style="color:var(--text-secondary);padding:20px;text-align:center;font-size:12px">불러오는 중...</div>
             </div>
           </div>
 
-          <!-- ?ㅻⅨ履? ?곸꽭 & ?≪뀡 ?⑤꼸 (?댁뒪 ?좏깮 ???쒖떆) -->
+          <!-- 오른쪽: 상세 & 액션 패널 (뉴스 선택 시 표시) -->
           <div id="news-detail-panel" style="width:310px;flex-shrink:0;display:none;position:sticky;top:16px;max-height:580px;overflow-y:auto">
-            <button onclick="closeNewsDetail()" title="?リ린" style="position:absolute;top:6px;right:6px;background:none;border:none;cursor:pointer;font-size:16px;color:var(--text-tertiary);line-height:1;padding:2px 6px;border-radius:4px;z-index:10" onmouseover="this.style.color='var(--text-primary)'" onmouseout="this.style.color='var(--text-tertiary)'">??/button>
+            <button onclick="closeNewsDetail()" title="닫기" style="position:absolute;top:6px;right:6px;background:none;border:none;cursor:pointer;font-size:16px;color:var(--text-tertiary);line-height:1;padding:2px 6px;border-radius:4px;z-index:10" onmouseover="this.style.color='var(--text-primary)'" onmouseout="this.style.color='var(--text-tertiary)'">✕</button>
             <div class="card" style="cursor:default;padding:16px" id="news-detail-content">
               <div style="color:var(--text-secondary);text-align:center;padding:30px 16px;font-size:12px">
                 <i class="ti ti-news" style="font-size:28px;opacity:.3;display:block;margin-bottom:8px"></i>
-                ?댁뒪瑜??좏깮?섎㈃<br>?곸꽭 遺꾩꽍???쒖떆?⑸땲??              </div>
+                뉴스를 선택하면<br>상세 분석이 표시됩니다
+              </div>
             </div>
           </div>
         </div>
@@ -437,138 +442,138 @@ window.LAWMAP_POS_URL = 'lawmap_positions.json?v=20260928a';
       <div class="panel" id="panel-briefing">
         <div style="display:flex;gap:8px;margin-bottom:14px;align-items:center">
           <div>
-            <div style="font-size:13px;color:var(--text-secondary)">留ㅼ씪 06:00 ?먮룞 ?앹꽦 쨌 理쒓렐 30???대젰</div>
+            <div style="font-size:13px;color:var(--text-secondary)">매일 06:00 자동 생성 · 최근 30일 이력</div>
           </div>
         </div>
-        <div id="briefing-list"><div style="color:var(--text-secondary);padding:20px;text-align:center">遺덈윭?ㅻ뒗 以?..</div></div>
+        <div id="briefing-list"><div style="color:var(--text-secondary);padding:20px;text-align:center">불러오는 중...</div></div>
       </div>
 
-      <!-- 蹂대룄?먮즺 吏?앸쿋?댁뒪 -->
+      <!-- 보도자료 지식베이스 -->
       <div class="panel" id="panel-press">
         <div style="display:flex;gap:8px;margin-bottom:14px;align-items:center">
-          <span style="font-size:12px;color:var(--text-secondary)" id="press-source-line">蹂대룄?먮즺 ?섏쭛 ?꾪솴 濡쒕뵫 以?..</span>
-          <span class="badge badge-teal">?먮낯 ?뚯씪 寃??/span>
-          <!-- ?낅줈??吏꾩엯???쒓굅: 蹂대룄?먮즺??6媛?湲곌? ?먮룞 ?섏쭛?쇰줈 ?꾪솚 (2026-08-02, #53).
-               ?섎룞 ?낅줈?쒕뒗 '異붽? 吏???낅젰' ??쑝濡??쇱썝?? -->
+          <span style="font-size:12px;color:var(--text-secondary)" id="press-source-line">보도자료 수집 현황 로딩 중...</span>
+          <span class="badge badge-teal">원본 파일 검색</span>
+          <!-- 업로드 진입점 제거: 보도자료는 6개 기관 자동 수집으로 전환 (2026-08-02, #53).
+               수동 업로드는 '추가 지식 입력' 탭으로 일원화. -->
         </div>
 
-        <!-- ?섏쭛 ?ㅼ썙??愿由?(?묒씠????app_config key='press_keywords'). 濡쒓렇???꾩슜(#177): 鍮꾨줈洹몄씤 ?붾㈃???몄쭛 UI媛 蹂댁씠??寃?-->
+        <!-- 수집 키워드 관리 (접이식 — app_config key='press_keywords'). 로그인 전용(#177): 비로그인 화면에 편집 UI가 보이던 것 -->
         <div class="card" data-login-only style="display:none;cursor:default;padding:0;margin-bottom:16px">
           <div onclick="togglePressKeywordCard()" style="display:flex;align-items:center;gap:8px;padding:11px 16px;cursor:pointer;user-select:none">
             <i class="ti ti-filter" style="font-size:15px;color:var(--text-secondary)"></i>
-            <span style="font-size:13px;font-weight:600;color:var(--text-primary)">?섏쭛 ?ㅼ썙??愿由?/span>
-            <span style="font-size:11px;color:var(--text-tertiary)">蹂대룄?먮즺 ?먮룞 ?섏쭛???곕뒗 ?ㅼ썙???몄쭛</span>
+            <span style="font-size:13px;font-weight:600;color:var(--text-primary)">수집 키워드 관리</span>
+            <span style="font-size:11px;color:var(--text-tertiary)">보도자료 자동 수집에 쓰는 키워드 편집</span>
             <i id="pk-toggle-icon" class="ti ti-chevron-down" style="margin-left:auto;font-size:15px;color:var(--text-tertiary);transition:transform .2s"></i>
           </div>
           <div id="pk-body" style="display:none;padding:0 16px 14px;border-top:0.5px solid var(--border-tertiary)">
-            <div style="font-size:11px;color:var(--text-tertiary);margin:10px 0 8px">留ㅼ씪 ?섏쭛(17??? AI媛 ?쒕ぉ+蹂몃Ц??蹂닿퀬 愿?⑥꽦???먯젙?섎ŉ, ?꾨옒 ?ㅼ썙?쒕뒗 怨쇨굅遺?諛깊븘怨?AI ?μ븷 ??鍮꾩긽 ?꾪꽣濡??곗엯?덈떎. ??????ㅼ쓬 ?섏쭛遺???곸슜?⑸땲??</div>
+            <div style="font-size:11px;color:var(--text-tertiary);margin:10px 0 8px">매일 수집(17시)은 AI가 제목+본문을 보고 관련성을 판정하며, 아래 키워드는 과거분 백필과 AI 장애 시 비상 필터로 쓰입니다. 저장 시 다음 수집부터 적용됩니다.</div>
             <div id="pk-chips" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px"></div>
             <div style="display:flex;gap:8px">
-              <input type="text" id="pk-new-input" placeholder="異붽????ㅼ썙???낅젰..." onkeydown="if(event.key==='Enter'){event.preventDefault();addPressKeyword();}" style="flex:1;padding:7px 12px;font-size:12px;border:0.5px solid var(--border-mid);border-radius:var(--radius-md);background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;outline:none"/>
-              <button class="btn" style="font-size:12px" onclick="addPressKeyword()">異붽?</button>
-              <button class="btn btn-primary" style="font-size:12px" onclick="savePressKeywords(this)">???/button>
+              <input type="text" id="pk-new-input" placeholder="추가할 키워드 입력..." onkeydown="if(event.key==='Enter'){event.preventDefault();addPressKeyword();}" style="flex:1;padding:7px 12px;font-size:12px;border:0.5px solid var(--border-mid);border-radius:var(--radius-md);background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;outline:none"/>
+              <button class="btn" style="font-size:12px" onclick="addPressKeyword()">추가</button>
+              <button class="btn btn-primary" style="font-size:12px" onclick="savePressKeywords(this)">저장</button>
             </div>
             <div id="pk-msg" style="display:none;font-size:11px;margin-top:8px"></div>
           </div>
         </div>
 
-        <!-- ?곕룄蹂??듦퀎 -->
+        <!-- 연도별 통계 -->
         <div class="stat-row" style="grid-template-columns:repeat(4,1fr);margin-bottom:16px" id="press-stats">
-          <div class="stat"><div class="stat-label">?꾩껜</div><div class="stat-val" id="ps-total">??/div><div class="stat-sub">媛?蹂대룄?먮즺</div></div>
-          <div class="stat"><div class="stat-label">2026??/div><div class="stat-val" id="ps-2026">??/div><div class="stat-sub">嫄?/div></div>
-          <div class="stat"><div class="stat-label">2025??/div><div class="stat-val" id="ps-2025">??/div><div class="stat-sub">嫄?/div></div>
-          <div class="stat"><div class="stat-label">2024???댁쟾</div><div class="stat-val" id="ps-old">??/div><div class="stat-sub">嫄?/div></div>
+          <div class="stat"><div class="stat-label">전체</div><div class="stat-val" id="ps-total">—</div><div class="stat-sub">개 보도자료</div></div>
+          <div class="stat"><div class="stat-label">2026년</div><div class="stat-val" id="ps-2026">—</div><div class="stat-sub">건</div></div>
+          <div class="stat"><div class="stat-label">2025년</div><div class="stat-val" id="ps-2025">—</div><div class="stat-sub">건</div></div>
+          <div class="stat"><div class="stat-label">2024년 이전</div><div class="stat-val" id="ps-old">—</div><div class="stat-sub">건</div></div>
         </div>
 
-        <!-- 湲곌? ?꾪꽣 ??-->
+        <!-- 기관 필터 탭 -->
         <div class="tag-list" style="margin-bottom:12px" id="press-agency-tabs">
-          <span class="tag selected" onclick="filterPressAgency(this,'?꾩껜')">?꾩껜</span>
-          <span class="tag" onclick="filterPressAgency(this,'怨쇨린?뺥넻遺')">怨쇨린?뺥넻遺</span>
-          <span class="tag" onclick="filterPressAgency(this,'?꾪뙆?곌뎄??)">?꾪뙆?곌뎄??/span>
-          <span class="tag" onclick="filterPressAgency(this,'諛⑺넻??)"><abbr class="gl" title="諛⑹넚誘몃뵒?댄넻?좎쐞?먰쉶 (援?諛⑹넚?듭떊?꾩썝??">諛⑸??듭쐞</abbr></span><!-- ??'諛⑺넻????doc_name ?묐몢(??궗???대쫫), ?쇰꺼留??꾪뻾??#154 -->
-          <span class="tag" onclick="filterPressAgency(this,'?꾪뙆愿由ъ냼')">?꾪뙆愿由ъ냼</span>
+          <span class="tag selected" onclick="filterPressAgency(this,'전체')">전체</span>
+          <span class="tag" onclick="filterPressAgency(this,'과기정통부')">과기정통부</span>
+          <span class="tag" onclick="filterPressAgency(this,'전파연구원')">전파연구원</span>
+          <span class="tag" onclick="filterPressAgency(this,'방통위')"><abbr class="gl" title="방송미디어통신위원회 (구 방송통신위원회)">방미통위</abbr></span><!-- 키 '방통위'는 doc_name 접두(역사적 이름), 라벨만 현행화 #154 -->
+          <span class="tag" onclick="filterPressAgency(this,'전파관리소')">전파관리소</span>
           <span class="tag" onclick="filterPressAgency(this,'ETRI')">ETRI</span>
           <span class="tag" onclick="filterPressAgency(this,'KISDI')">KISDI</span>
         </div>
 
-        <!-- 寃?됱갹 -->
+        <!-- 검색창 -->
         <div style="display:flex;gap:8px;margin-bottom:12px">
-          <input type="text" id="press-search-input" placeholder="蹂대룄?먮즺 ?쒕ぉ쨌?댁슜 寃??.." style="flex:1;padding:8px 12px;font-size:12px;border:0.5px solid var(--border-mid);border-radius:var(--radius-md);background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;outline:none" oninput="filterPressList(this.value)"/>
-          <button class="btn" onclick="filterPressList('')">?꾩껜</button>
+          <input type="text" id="press-search-input" placeholder="보도자료 제목·내용 검색..." style="flex:1;padding:8px 12px;font-size:12px;border:0.5px solid var(--border-mid);border-radius:var(--radius-md);background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;outline:none" oninput="filterPressList(this.value)"/>
+          <button class="btn" onclick="filterPressList('')">전체</button>
         </div>
 
-        <!-- 蹂대룄?먮즺 紐⑸줉 (?숈쟻) -->
-        <div class="section-title"><span id="press-count-label">?꾩껜 蹂대룄?먮즺</span></div>
+        <!-- 보도자료 목록 (동적) -->
+        <div class="section-title"><span id="press-count-label">전체 보도자료</span></div>
         <div class="card" id="press-list" style="max-height:340px;overflow-y:auto">
           <div style="padding:20px;text-align:center;color:var(--text-secondary);font-size:12px">
-            <i class="ti ti-loader"></i> 蹂대룄?먮즺 濡쒕뵫 以?..
+            <i class="ti ti-loader"></i> 보도자료 로딩 중...
           </div>
         </div>
 
-        <!-- ?쒖슜 ?덈궡 -->
-        <div class="section-title" style="margin-top:16px">AI ?먮Ц?먯꽌 寃???덉떆</div>
+        <!-- 활용 안내 -->
+        <div class="section-title" style="margin-top:16px">AI 자문에서 검색 예시</div>
         <div class="card" style="cursor:default">
           <p style="font-size:12px;color:var(--text-secondary);line-height:2">
-            <span style="color:var(--accent);cursor:pointer" onclick="askQ('28GHz 二쇳뙆?섑븷??蹂대룄?먮즺 ?댁슜???뚮젮以?)">?뱦 28GHz 二쇳뙆?섑븷??蹂대룄?먮즺 ?댁슜???뚮젮以?/span><br>
-            <span style="color:var(--accent);cursor:pointer" onclick="askQ('6GHz ???二쇳뙆??遺꾨같 愿??蹂대룄?먮즺瑜??뚮젮以?)">?뱦 6GHz ???二쇳뙆??遺꾨같 愿??蹂대룄?먮즺瑜??뚮젮以?/span><br>
-            <span style="color:var(--accent);cursor:pointer" onclick="askQ('2025??WRC 愿??怨쇨린?뺥넻遺 蹂대룄?먮즺 ?붿빟?댁쨾')">?뱦 2025??WRC 愿??怨쇨린?뺥넻遺 蹂대룄?먮즺 ?붿빟?댁쨾</span><br>
-            <span style="color:var(--accent);cursor:pointer" onclick="askQ('?ㅽ뀒?댁??묒뒪 二쇳뙆?섑븷??愿??蹂대룄?먮즺 ?뚮젮以?)">?뱦 ?ㅽ뀒?댁??묒뒪 二쇳뙆?섑븷??愿??蹂대룄?먮즺 ?뚮젮以?/span>
+            <span style="color:var(--accent);cursor:pointer" onclick="askQ('28GHz 주파수할당 보도자료 내용을 알려줘')">📌 28GHz 주파수할당 보도자료 내용을 알려줘</span><br>
+            <span style="color:var(--accent);cursor:pointer" onclick="askQ('6GHz 대역 주파수 분배 관련 보도자료를 알려줘')">📌 6GHz 대역 주파수 분배 관련 보도자료를 알려줘</span><br>
+            <span style="color:var(--accent);cursor:pointer" onclick="askQ('2025년 WRC 관련 과기정통부 보도자료 요약해줘')">📌 2025년 WRC 관련 과기정통부 보도자료 요약해줘</span><br>
+            <span style="color:var(--accent);cursor:pointer" onclick="askQ('스테이지엑스 주파수할당 관련 보도자료 알려줘')">📌 스테이지엑스 주파수할당 관련 보도자료 알려줘</span>
           </p>
         </div>
       </div>
 
-      <!-- 異붽? 吏???낅젰 -->
+      <!-- 추가 지식 입력 -->
       <div class="panel" id="panel-custom">
 
-        <!-- ???ㅻ뜑 -->
+        <!-- 탭 헤더 -->
         <div style="display:flex;gap:6px;margin-bottom:16px;border-bottom:0.5px solid var(--border-light);padding-bottom:10px">
           <button id="ctab-input" class="btn btn-primary active" onclick="switchCustomTab('input')" style="font-size:12px">
-            <i class="ti ti-pencil-plus"></i> 吏???낅젰
+            <i class="ti ti-pencil-plus"></i> 지식 입력
           </button>
           <button id="ctab-list" class="btn" onclick="switchCustomTab('list')" style="font-size:12px">
-            <i class="ti ti-list"></i> ??λ맂 紐⑸줉
+            <i class="ti ti-list"></i> 저장된 목록
           </button>
           <button class="btn btn-primary" data-login-only onclick="openPdfUpload('custom')" style="font-size:12px">
-            <i class="ti ti-upload"></i> ?뚯씪 ?낅줈??(PDF쨌Word쨌MD)
+            <i class="ti ti-upload"></i> 파일 업로드 (PDF·Word·MD)
           </button>
-          <span style="margin-left:auto;font-size:11px;color:var(--text-tertiary);align-self:center">AI ?먮Ц ???먮룞 李몄“?⑸땲??/span>
+          <span style="margin-left:auto;font-size:11px;color:var(--text-tertiary);align-self:center">AI 자문 시 자동 참조됩니다</span>
         </div>
-        <!-- ?ш린 ?ｌ? 湲쨌?뚯씪? 濡쒓렇???놁씠 ?꾧뎄???쎈뒗??custom_knowledge쨌document_chunks anon SELECT) ???몃??먯? 怨듦컻 ?먮즺留?(2026-10-12 ?댁쁺??寃곗젙) -->
+        <!-- 여기 넣은 글·파일은 로그인 없이 누구나 읽는다(custom_knowledge·document_chunks anon SELECT) — 외부판은 공개 자료만 (2026-10-12 운영자 결정) -->
         <div style="font-size:12px;color:var(--text-secondary);margin:-6px 0 14px;line-height:1.6">
-          <i class="ti ti-world"></i> ?닿납???낅젰?섍굅???щ┛ ?먮즺??<strong>濡쒓렇???놁씠 ?꾧뎄??蹂????덉뒿?덈떎</strong> ??踰뺣졊쨌?쇰Ц쨌?뺣? 諛쒗몴泥섎읆 ?대? 怨듦컻???먮즺留??ｌ뼱 二쇱꽭??
+          <i class="ti ti-world"></i> 이곳에 입력하거나 올린 자료는 <strong>로그인 없이 누구나 볼 수 있습니다</strong> — 법령·논문·정부 발표처럼 이미 공개된 자료만 넣어 주세요.
         </div>
 
-        <!-- ?낅젰 ??-->
+        <!-- 입력 탭 -->
         <div id="custom-tab-input">
           <div style="display:flex;flex-direction:column;gap:12px;max-width:640px">
 
             <div>
-              <div style="font-size:11px;color:var(--text-secondary);margin-bottom:4px">?쒕ぉ <span style="color:#dc2626">*</span></div>
-              <input id="ck-title" type="text" placeholder="?? 6GHz ???鍮꾨㈃???댁슜 愿??怨좎떆 議곕Ц ?뺣━"
+              <div style="font-size:11px;color:var(--text-secondary);margin-bottom:4px">제목 <span style="color:#dc2626">*</span></div>
+              <input id="ck-title" type="text" placeholder="예: 6GHz 대역 비면허 이용 관련 고시 조문 정리"
                 style="width:100%;box-sizing:border-box;padding:8px 12px;font-size:13px;border:0.5px solid var(--border-mid);border-radius:var(--radius-md);background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;outline:none"/>
             </div>
 
             <div>
-              <div style="font-size:11px;color:var(--text-secondary);margin-bottom:4px">遺꾨쪟</div>
+              <div style="font-size:11px;color:var(--text-secondary);margin-bottom:4px">분류</div>
               <select id="ck-category" style="width:100%;padding:8px 12px;font-size:13px;border:0.5px solid var(--border-mid);border-radius:var(--radius-md);background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;outline:none">
-                <option value="?쇰컲">?쇰컲</option>
-                <option value="二쇳뙆??>二쇳뙆??/option>
-                <option value="?꾩옄??>?꾩옄??/option>
-                <option value="?곹빀?깊룊媛">?곹빀?깊룊媛</option>
+                <option value="일반">일반</option>
+                <option value="주파수">주파수</option>
+                <option value="전자파">전자파</option>
+                <option value="적합성평가">적합성평가</option>
                 <option value="ITU-R">ITU-R</option>
-                <option value="湲곗닠湲곗?">湲곗닠湲곗?</option>
+                <option value="기술기준">기술기준</option>
               </select>
             </div>
 
             <div>
-              <div style="font-size:11px;color:var(--text-secondary);margin-bottom:4px">?댁슜 <span style="color:#dc2626">*</span></div>
-              <textarea id="ck-content" rows="8" placeholder="怨듦컻??踰뺣졊쨌怨좎떆쨌?쇰Ц쨌?뺣? 諛쒗몴瑜?諛뷀깢?쇰줈 ?뺣━???댁슜???낅젰?섏꽭?? 洹쇨굅 議곕Ц?대굹 異쒖쿂瑜??④퍡 ?곸뼱 二쇱꽭??"
+              <div style="font-size:11px;color:var(--text-secondary);margin-bottom:4px">내용 <span style="color:#dc2626">*</span></div>
+              <textarea id="ck-content" rows="8" placeholder="공개된 법령·고시·논문·정부 발표를 바탕으로 정리한 내용을 입력하세요. 근거 조문이나 출처를 함께 적어 주세요."
                 style="width:100%;box-sizing:border-box;padding:10px 12px;font-size:13px;border:0.5px solid var(--border-mid);border-radius:var(--radius-md);background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;outline:none;resize:vertical;line-height:1.7"></textarea>
             </div>
 
             <div>
-              <div style="font-size:11px;color:var(--text-secondary);margin-bottom:4px">?쒓렇 <span style="color:var(--text-tertiary)">(?좏깮 쨌 ?쇳몴濡?援щ텇)</span></div>
-              <input id="ck-tags" type="text" placeholder="?? 6GHz, 怨듭쑀, WRC-27, 湲곗닠湲곗?"
+              <div style="font-size:11px;color:var(--text-secondary);margin-bottom:4px">태그 <span style="color:var(--text-tertiary)">(선택 · 쉼표로 구분)</span></div>
+              <input id="ck-tags" type="text" placeholder="예: 6GHz, 공유, WRC-27, 기술기준"
                 style="width:100%;box-sizing:border-box;padding:8px 12px;font-size:13px;border:0.5px solid var(--border-mid);border-radius:var(--radius-md);background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;outline:none"/>
             </div>
 
@@ -576,87 +581,88 @@ window.LAWMAP_POS_URL = 'lawmap_positions.json?v=20260928a';
 
             <div style="display:flex;justify-content:flex-end;gap:8px">
               <button id="ck-cancel-btn" class="btn" onclick="setCustomEditMode(null)" style="display:none">
-                痍⑥냼
+                취소
               </button>
               <button id="ck-save-btn" class="btn btn-primary" onclick="onSaveCustomKnowledge()" style="min-width:100px">
-                <i class="ti ti-device-floppy"></i> ??ν븯湲?              </button>
+                <i class="ti ti-device-floppy"></i> 저장하기
+              </button>
             </div>
 
           </div>
         </div>
 
-        <!-- 紐⑸줉 ??-->
+        <!-- 목록 탭 -->
         <div id="custom-tab-list" style="display:none">
           <div style="display:flex;gap:8px;margin-bottom:12px">
-            <input id="ck-list-search" type="text" placeholder="?쒕ぉ쨌?쒓렇濡?寃??.."
+            <input id="ck-list-search" type="text" placeholder="제목·태그로 검색..."
               style="flex:1;padding:7px 12px;font-size:12px;border:0.5px solid var(--border-mid);border-radius:var(--radius-md);background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;outline:none"
               oninput="renderCustomKnowledgeList(this.value)"/>
-            <button class="btn" onclick="renderCustomKnowledgeList('')">?꾩껜</button>
+            <button class="btn" onclick="renderCustomKnowledgeList('')">전체</button>
           </div>
           <div id="custom-list-items">
-            <div style="padding:20px;text-align:center;color:var(--text-secondary);font-size:12px">紐⑸줉 ??쓣 ?대┃?섎㈃ 濡쒕뱶?⑸땲??</div>
+            <div style="padding:20px;text-align:center;color:var(--text-secondary);font-size:12px">목록 탭을 클릭하면 로드됩니다.</div>
           </div>
         </div>
 
       </div><!-- panel-custom -->
 
-      <!-- 踰뺤쟻쨌湲곗닠 ?⑹뼱 ????2媛? 踰뺤쟻 ?⑹뼱 ?뺤쓽(湲곕낯, law_terms 議곕Ц ?먮Ц #156) | 湲곗닠 ?⑹뼱(tech_terms, 湲곗〈 洹몃?濡? -->
+      <!-- 법적·기술 용어 — 탭 2개: 법적 용어 정의(기본, law_terms 조문 원문 #156) | 기술 용어(tech_terms, 기존 그대로) -->
       <div class="panel" id="panel-terms">
         <div style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
-          <button class="guide-chip active" id="terms-tab-law" onclick="switchTermsTab('law')">?뱰 踰뺤쟻 ?⑹뼱 ?뺤쓽<span id="terms-tab-law-n"></span></button>
-          <button class="guide-chip" id="terms-tab-tech" onclick="switchTermsTab('tech')">?뵩 湲곗닠 ?⑹뼱<span id="terms-tab-tech-n"></span></button>
+          <button class="guide-chip active" id="terms-tab-law" onclick="switchTermsTab('law')">📖 법적 용어 정의<span id="terms-tab-law-n"></span></button>
+          <button class="guide-chip" id="terms-tab-tech" onclick="switchTermsTab('tech')">🔧 기술 용어<span id="terms-tab-tech-n"></span></button>
         </div>
 
-        <!-- ??1: 踰뺤쟻 ?⑹뼱 ?뺤쓽 ???꾪뻾 踰뺣졊쨌怨좎떆???뺤쓽 議곕Ц ?먮Ц (AI 0?? 留ㅼ씪 11:00 law_terms_sync.py) -->
+        <!-- 탭 1: 법적 용어 정의 — 현행 법령·고시의 정의 조문 원문 (AI 0회, 매일 11:00 law_terms_sync.py) -->
         <div id="terms-law-body">
           <div style="display:flex;gap:8px;margin-bottom:14px;align-items:center;flex-wrap:wrap">
-            <span style="font-size:12px;color:var(--text-secondary)">踰뺣쪧쨌?쒗뻾?뮤룹떆?됯퇋移쇑룰퀬?쑣룻썕?뮤룹삁洹쒖뿉??<b>踰뺤쟻?쇰줈 ?뺤쓽???⑥뼱</b>?낅땲????議곕Ц ?먮Ц 洹몃?濡?AI ?댁꽕 ?놁쓬), 留ㅼ씪 11:00 踰뺣졊 ?꾪뻾?????먮룞 媛깆떊</span>
-            <span class="badge badge-purple" style="margin-left:6px" id="law-terms-count-badge">??/span>
+            <span style="font-size:12px;color:var(--text-secondary)">법률·시행령·시행규칙·고시·훈령·예규에서 <b>법적으로 정의된 단어</b>입니다 — 조문 원문 그대로(AI 해설 없음), 매일 11:00 법령 현행화 뒤 자동 갱신</span>
+            <span class="badge badge-purple" style="margin-left:6px" id="law-terms-count-badge">—</span>
           </div>
           <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
-            <input type="text" id="law-terms-search-input" placeholder="?⑹뼱쨌?뺤쓽 蹂몃Ц 寃??.." style="flex:1;min-width:140px;padding:7px 12px;font-size:12px;border:0.5px solid var(--border-mid);border-radius:var(--radius-md);background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;outline:none" oninput="filterLawTerms()"/>
+            <input type="text" id="law-terms-search-input" placeholder="용어·정의 본문 검색..." style="flex:1;min-width:140px;padding:7px 12px;font-size:12px;border:0.5px solid var(--border-mid);border-radius:var(--radius-md);background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;outline:none" oninput="filterLawTerms()"/>
             <select id="law-terms-type-filter" onchange="onLawTypeFilterChange()" style="padding:7px 10px;font-size:12px;border:0.5px solid var(--border-mid);border-radius:var(--radius-md);background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;outline:none;max-width:160px">
-              <option value="">?꾩껜 踰뺤쥌</option>
+              <option value="">전체 법종</option>
             </select>
             <select id="law-terms-law-filter" onchange="filterLawTerms()" style="padding:7px 10px;font-size:12px;border:0.5px solid var(--border-mid);border-radius:var(--radius-md);background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;outline:none;max-width:260px">
-              <option value="">?꾩껜 踰뺣졊</option>
+              <option value="">전체 법령</option>
             </select>
-            <button class="btn" onclick="resetLawTermsFilter()">珥덇린??/button>
+            <button class="btn" onclick="resetLawTermsFilter()">초기화</button>
           </div>
           <div id="law-terms-list" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;max-height:560px;overflow-y:auto"></div>
         </div>
 
-        <!-- ??2: 湲곗닠 ?⑹뼱 ?꾪궎 (湲곗〈 ??id 蹂寃??놁쓬) -->
+        <!-- 탭 2: 기술 용어 위키 (기존 — id 변경 없음) -->
         <div id="terms-tech-body" style="display:none">
         <div style="display:flex;gap:8px;margin-bottom:14px;align-items:center;flex-wrap:wrap">
-          <span style="font-size:12px;color:var(--text-secondary)">?대룞?듭떊쨌?꾪뙆 遺꾩빞 湲곗닠 ?⑹뼱 ?꾪궎 ??留ㅼ씪 05:00 理쒓렐 ?댁뒪?먯꽌 ?먮룞 異붿텧쨌?ㅻ챸 ?앹꽦</span>
+          <span style="font-size:12px;color:var(--text-secondary)">이동통신·전파 분야 기술 용어 위키 — 매일 05:00 최근 뉴스에서 자동 추출·설명 생성</span>
 
-          <span class="badge badge-purple" style="margin-left:6px" id="terms-count-badge">??/span>
+          <span class="badge badge-purple" style="margin-left:6px" id="terms-count-badge">—</span>
         </div>
 
-        <!-- ?꾪꽣 + 寃??-->
+        <!-- 필터 + 검색 -->
         <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
-          <input type="text" id="terms-search-input" placeholder="?⑹뼱 寃??.." style="flex:1;min-width:140px;padding:7px 12px;font-size:12px;border:0.5px solid var(--border-mid);border-radius:var(--radius-md);background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;outline:none" oninput="filterTerms(this.value)"/>
+          <input type="text" id="terms-search-input" placeholder="용어 검색..." style="flex:1;min-width:140px;padding:7px 12px;font-size:12px;border:0.5px solid var(--border-mid);border-radius:var(--radius-md);background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;outline:none" oninput="filterTerms(this.value)"/>
           <select id="terms-cat-filter" onchange="filterTerms(document.getElementById('terms-search-input').value)" style="padding:7px 10px;font-size:12px;border:0.5px solid var(--border-mid);border-radius:var(--radius-md);background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;outline:none">
-            <option value="">?꾩껜 遺꾩빞</option>
-            <option value="二쇳뙆??>二쇳뙆??/option>
-            <option value="?ㅽ듃?뚰겕">?ㅽ듃?뚰겕</option>
-            <option value="?꾩꽦">?꾩꽦</option>
-            <option value="?⑤쭚">?⑤쭚</option>
-            <option value="洹쒖젣">洹쒖젣</option>
-            <option value="湲고?">湲고?</option>
+            <option value="">전체 분야</option>
+            <option value="주파수">주파수</option>
+            <option value="네트워크">네트워크</option>
+            <option value="위성">위성</option>
+            <option value="단말">단말</option>
+            <option value="규제">규제</option>
+            <option value="기타">기타</option>
           </select>
-          <button class="btn" onclick="filterTerms('')">珥덇린??/button>
+          <button class="btn" onclick="filterTerms('')">초기화</button>
         </div>
 
-        <!-- ?⑹뼱 移대뱶 紐⑸줉 -->
+        <!-- 용어 카드 목록 -->
         <div id="terms-list" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;max-height:480px;overflow-y:auto"></div>
         </div>
 
-        <!-- ?⑹뼱 ?곸꽭 紐⑤떖 -->
+        <!-- 용어 상세 모달 -->
         <div id="terms-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:200;align-items:center;justify-content:center">
           <div style="background:var(--bg-primary);border:0.5px solid var(--border-mid);border-radius:var(--radius-lg);padding:24px;max-width:680px;width:90%;max-height:85vh;overflow-y:auto;position:relative">
-            <button onclick="closeTermsModal()" style="position:absolute;top:12px;right:14px;background:none;border:none;font-size:18px;color:var(--text-secondary);cursor:pointer">??/button>
+            <button onclick="closeTermsModal()" style="position:absolute;top:12px;right:14px;background:none;border:none;font-size:18px;color:var(--text-secondary);cursor:pointer">✕</button>
             <div id="terms-modal-content"></div>
           </div>
         </div>
@@ -664,97 +670,100 @@ window.LAWMAP_POS_URL = 'lawmap_positions.json?v=20260928a';
 
 
 
-      <!-- ?ㅼ젙 -->
+      <!-- 설정 -->
       <div class="panel" id="panel-settings">
 
-        <!-- ?좉툑 ?붾㈃ ??愿由ъ옄 怨꾩젙?쇰줈 濡쒓렇?명빐???대┛??蹂꾨룄 鍮꾨?踰덊샇 ?놁쓬, #104) -->
+        <!-- 잠금 화면 — 관리자 계정으로 로그인해야 열린다(별도 비밀번호 없음, #104) -->
         <div id="settings-locked" style="display:flex;flex-direction:column;align-items:center;justify-content:center;padding:60px 20px;text-align:center">
-          <div style="font-size:40px;margin-bottom:16px">?뵏</div>
-          <div style="font-size:16px;font-weight:600;color:var(--text-primary);margin-bottom:6px">愿由ъ옄 ?꾩슜 ?곸뿭</div>
-          <div id="settings-lock-msg" style="font-size:13px;color:var(--text-secondary);margin-bottom:20px">?ㅼ젙? 愿由ъ옄 怨꾩젙?쇰줈 濡쒓렇?명빐??蹂????덉뒿?덈떎.</div>
-          <button class="btn btn-primary" id="settings-login-btn" onclick="openLoginModal()"><i class="ti ti-user"></i> 濡쒓렇??/button>
+          <div style="font-size:40px;margin-bottom:16px">🔒</div>
+          <div style="font-size:16px;font-weight:600;color:var(--text-primary);margin-bottom:6px">관리자 전용 영역</div>
+          <div id="settings-lock-msg" style="font-size:13px;color:var(--text-secondary);margin-bottom:20px">설정은 관리자 계정으로 로그인해야 볼 수 있습니다.</div>
+          <button class="btn btn-primary" id="settings-login-btn" onclick="openLoginModal()"><i class="ti ti-user"></i> 로그인</button>
         </div>
 
-        <!-- 愿由ъ옄 怨꾩젙 濡쒓렇?????쒖떆 -->
+        <!-- 관리자 계정 로그인 시 표시 -->
         <div id="settings-unlocked" style="display:none">
 
-          <!-- ?ㅼ젙 ??2026-10-02 ?댁쁺???붿껌) ??移몄씠 湲몄뼱???ㅽ겕濡ㅻ줈 李얜뜕 寃껋쓣, ?꾨Ⅸ ??쓽 移몃쭔 蹂댁씠寃? 移대뱶??data-stab = ???대쫫
-               (怨꾩젙 愿由?移대뱶??????씠 媛숈씠 ?곌퀬 ?덉そ 移몄쓣 data-acct-sec濡?媛瑜몃떎). ???꾪솚? app.js switchSettingsTab -->
+          <!-- 설정 탭(2026-10-02 운영자 요청) — 칸이 길어져 스크롤로 찾던 것을, 누른 탭의 칸만 보이게. 카드의 data-stab = 탭 이름
+               (계정 관리 카드는 세 탭이 같이 쓰고 안쪽 칸을 data-acct-sec로 가른다). 탭 전환은 app.js switchSettingsTab -->
           <div id="settings-tabs" class="settings-tabs">
-            <button class="guide-chip active" data-stab-btn="pending" onclick="switchSettingsTab('pending')">媛???뱀씤<span id="stab-n-pending"></span></button>
-            <button class="guide-chip" data-stab-btn="members" onclick="switchSettingsTab('members')">援ъ꽦??span id="stab-n-members"></span></button>
-            <button class="guide-chip" data-stab-btn="teams" onclick="switchSettingsTab('teams')">? ?쒕룄</button>
-            <button class="guide-chip" data-stab-btn="subs" onclick="switchSettingsTab('subs')">?붾젅洹몃옩 援щ룆??/button>
-            <button class="guide-chip" data-stab-btn="criteria" onclick="switchSettingsTab('criteria')">? 湲곗?臾?/button>
-            <button class="guide-chip" data-stab-btn="kb" onclick="switchSettingsTab('kb')">吏?앸쿋?댁뒪 ?뱀씤<span id="stab-n-kb"></span></button>
-            <button class="guide-chip" data-stab-btn="lawwatch" onclick="switchSettingsTab('lawwatch')">踰뺣졊 ?꾪뻾??span id="stab-n-lawwatch"></span></button>
-            <button class="guide-chip" data-stab-btn="system" onclick="switchSettingsTab('system')">?곌껐쨌湲고?</button>
+            <button class="guide-chip active" data-stab-btn="pending" onclick="switchSettingsTab('pending')">가입 승인<span id="stab-n-pending"></span></button>
+            <button class="guide-chip" data-stab-btn="members" onclick="switchSettingsTab('members')">구성원<span id="stab-n-members"></span></button>
+            <button class="guide-chip" data-stab-btn="teams" onclick="switchSettingsTab('teams')">팀 한도</button>
+            <button class="guide-chip" data-stab-btn="subs" onclick="switchSettingsTab('subs')">텔레그램 구독자</button>
+            <button class="guide-chip" data-stab-btn="criteria" onclick="switchSettingsTab('criteria')">팀 기준문</button>
+            <button class="guide-chip" data-stab-btn="kb" onclick="switchSettingsTab('kb')">지식베이스 승인<span id="stab-n-kb"></span></button>
+            <button class="guide-chip" data-stab-btn="lawwatch" onclick="switchSettingsTab('lawwatch')">법령 현행화<span id="stab-n-lawwatch"></span></button>
+            <button class="guide-chip" data-stab-btn="system" onclick="switchSettingsTab('system')">연결·기타</button>
           </div>
 
-          <!-- 怨꾩젙 愿由?(愿由ъ옄 怨꾩젙?쇰줈 濡쒓렇?명뻽???뚮쭔 ?쒖떆) -->
+          <!-- 계정 관리 (관리자 계정으로 로그인했을 때만 표시) -->
           <div class="card" data-admin-only data-stab="pending members teams" style="display:none;margin-bottom:12px;cursor:default">
             <div class="section-title" style="margin-bottom:6px">
-              <i class="ti ti-users"></i>怨꾩젙 愿由?              <span id="acct-pending-badge" style="font-size:11px;color:#b45309;font-weight:600;margin-left:6px"></span>
-              <button class="btn" style="font-size:11px;padding:3px 10px;margin-left:auto" onclick="loadAccountAdmin()"><i class="ti ti-refresh"></i>?덈줈怨좎묠</button>
+              <i class="ti ti-users"></i>계정 관리
+              <span id="acct-pending-badge" style="font-size:11px;color:#b45309;font-weight:600;margin-left:6px"></span>
+              <button class="btn" style="font-size:11px;padding:3px 10px;margin-left:auto" onclick="loadAccountAdmin()"><i class="ti ti-refresh"></i>새로고침</button>
             </div>
             <div data-acct-sec="pending members" style="font-size:11px;color:var(--text-tertiary);margin-bottom:10px">
-              媛???좎껌??<strong>?뱀씤?댁빞 AI 湲곕뒫???????덉뒿?덈떎</strong>. ?뱀씤 ???쨌??븷쨌?쇱씪 ?쒕룄瑜?吏?뺥븯?몄슂.
-              ??μ? ?먭린 ? ?꾩껜???먮Ц ?대젰?? ??먯? 蹂몄씤 寃껊쭔 蹂????덉뒿?덈떎.
+              가입 신청을 <strong>승인해야 AI 기능을 쓸 수 있습니다</strong>. 승인 시 팀·역할·일일 한도를 지정하세요.
+              팀장은 자기 팀 전체의 자문 이력을, 팀원은 본인 것만 볼 수 있습니다.
             </div>
-            <div id="account-admin-body"><div style="padding:14px;text-align:center;color:var(--text-secondary);font-size:12px">遺덈윭?ㅻ뒗 以?..</div></div>
+            <div id="account-admin-body"><div style="padding:14px;text-align:center;color:var(--text-secondary);font-size:12px">불러오는 중...</div></div>
           </div>
 
-          <!-- ?붾젅洹몃옩 援щ룆?????뚮┝ 湲곗? (愿由ъ옄 ?꾩슜, #252) ??援щ룆??遊뉗쓽 二쇱슂 ?댁뒪瑜?怨듯넻 / ? / ?ㅼ옣 ?깃툒?쇰줈 -->
+          <!-- 텔레그램 구독자 — 알림 기준 (관리자 전용, #252) — 구독자 봇의 주요 뉴스를 공통 / 팀 / 실장 등급으로 -->
           <div class="card" data-admin-only data-stab="subs" style="display:none;margin-bottom:12px;cursor:default">
             <div class="section-title" style="margin-bottom:6px">
-              <i class="ti ti-brand-telegram"></i>?붾젅洹몃옩 援щ룆?????뚮┝ 湲곗?
-              <button class="btn" style="font-size:11px;padding:3px 10px;margin-left:auto" onclick="loadSubscriberTeams()"><i class="ti ti-refresh"></i>?덈줈怨좎묠</button>
+              <i class="ti ti-brand-telegram"></i>텔레그램 구독자 — 알림 기준
+              <button class="btn" style="font-size:11px;padding:3px 10px;margin-left:auto" onclick="loadSubscriberTeams()"><i class="ti ti-refresh"></i>새로고침</button>
             </div>
             <div style="font-size:11px;color:var(--text-tertiary);margin-bottom:10px">
-              援щ룆?먮쭏??怨듯넻 / ? / ?ㅼ옣(????怨좊Ⅴ硫?遊뉗쓽 二쇱슂 ?댁뒪媛 洹??깃툒?쇰줈 媛묐땲?? 諛붽씀???쒓컙遺????湲곗??닿퀬, 諛붽씀湲?吏곸쟾 ?湲곕텇 紐?嫄댁? 鍮좎쭏 ???덉뒿?덈떎.
-              諛쏆쓣 ?댁뒪(以묒슂留?以묒슂+蹂댄넻)??媛곸옄 遊?/start?먯꽌 怨좊쫭?덈떎.
-              ??쒕낫??怨꾩젙???곌껐?섎㈃ 洹??щ엺??遊?/ask????쒕낫???먮Ц ?쒕룄(媛쒖씤 + ? ?⑹궛)?먯꽌 ?④퍡 ?멸퀬, /ask쨌/law ?뱀씤쨌臾댁젣?쒖? 洹?怨꾩젙???곕쫭?덈떎(?곌껐 ?????뱀씤?먮뒗 /ask쨌/law 媛곴컖 ?섎（ 10??.
+              구독자마다 공통 / 팀 / 실장(실)을 고르면 봇의 주요 뉴스가 그 등급으로 갑니다. 바꾸는 순간부터 새 기준이고, 바꾸기 직전 대기분 몇 건은 빠질 수 있습니다.
+              받을 뉴스(중요만/중요+보통)는 각자 봇 /start에서 고릅니다.
+              대시보드 계정을 연결하면 그 사람의 봇 /ask는 대시보드 자문 한도(개인 + 팀 합산)에서 함께 세고, /ask·/law 승인·무제한은 그 계정을 따릅니다(연결 안 한 승인자는 /ask·/law 각각 하루 10회).
             </div>
-            <div id="subscriber-team-body"><div style="padding:14px;text-align:center;color:var(--text-secondary);font-size:12px">遺덈윭?ㅻ뒗 以?..</div></div>
+            <div id="subscriber-team-body"><div style="padding:14px;text-align:center;color:var(--text-secondary);font-size:12px">불러오는 중...</div></div>
           </div>
 
-          <!-- ?蹂??댁뒪 湲곗?臾?(愿由ъ옄 ?꾩슜, #270) ????먯꽌 諛쏆? ?ㅼ썙??+ 500??湲곗?臾몄쓣 ?깅줉. 吏湲덉? ??λ쭔(?깃툒???곗? ?딆쓬) -->
+          <!-- 팀별 뉴스 기준문 (관리자 전용, #270) — 팀에서 받은 키워드 + 500자 기준문을 등록. 지금은 저장만(등급에 쓰지 않음) -->
           <div class="card" data-admin-only data-stab="criteria" style="display:none;margin-bottom:12px;cursor:default">
             <div class="section-title" style="margin-bottom:6px">
-              <i class="ti ti-file-text"></i>?蹂??댁뒪 湲곗?臾?              <button class="btn" style="font-size:11px;padding:3px 10px;margin-left:auto" onclick="loadTeamCriteria()"><i class="ti ti-refresh"></i>?덈줈怨좎묠</button>
+              <i class="ti ti-file-text"></i>팀별 뉴스 기준문
+              <button class="btn" style="font-size:11px;padding:3px 10px;margin-left:auto" onclick="loadTeamCriteria()"><i class="ti ti-refresh"></i>새로고침</button>
             </div>
             <div style="font-size:11px;color:var(--text-tertiary);margin-bottom:10px">
-              ??먯꽌 諛쏆? 湲곗?臾맞룻궎?뚮뱶瑜??蹂꾨줈 ?깅줉?⑸땲?? 洹?? ?뱀씤 怨꾩젙? ?뚭릿湲됰룄 ?ㅼ젙?띿쓽 ?곕━ ? ??뿉??蹂????덉뒿?덈떎.
-              ?ъ쇅 ?쒕쾭????λ릺????몃퉬???ｌ? 留덉꽭??
+              팀에서 받은 기준문·키워드를 팀별로 등록합니다. 그 팀 승인 계정은 「긴급도 설정」의 우리 팀 탭에서 볼 수 있습니다.
+              사외 서버에 저장되니 대외비는 넣지 마세요.
             </div>
-            <div id="team-criteria-body"><div style="padding:14px;text-align:center;color:var(--text-secondary);font-size:12px">遺덈윭?ㅻ뒗 以?..</div></div>
+            <div id="team-criteria-body"><div style="padding:14px;text-align:center;color:var(--text-secondary);font-size:12px">불러오는 중...</div></div>
           </div>
 
-          <!-- 吏?앸쿋?댁뒪 ?뱀씤 ?湲?-->
+          <!-- 지식베이스 승인 대기 -->
           <div class="card" data-stab="kb" style="margin-bottom:12px;cursor:default">
             <div class="section-title" style="margin-bottom:6px">
-              <i class="ti ti-checklist"></i>吏?앸쿋?댁뒪 ?뱀씤 ?湲?              <span id="pending-count-badge" style="font-size:11px;color:#b45309;font-weight:600;margin-left:6px"></span>
+              <i class="ti ti-checklist"></i>지식베이스 승인 대기
+              <span id="pending-count-badge" style="font-size:11px;color:#b45309;font-weight:600;margin-left:6px"></span>
             </div>
-            <div style="font-size:11px;color:var(--text-tertiary);margin-bottom:10px">?낅줈?쒕맂 ?뚯씪? <strong>?뱀씤?댁빞 AI ?먮Ц??諛섏쁺</strong>?⑸땲?? 吏?앷낵 臾닿???臾몄꽌????젣?섏꽭??</div>
-            <div id="pending-approval-list"><div style="padding:14px;text-align:center;color:var(--text-secondary);font-size:12px">遺덈윭?ㅻ뒗 以?..</div></div>
+            <div style="font-size:11px;color:var(--text-tertiary);margin-bottom:10px">업로드된 파일은 <strong>승인해야 AI 자문에 반영</strong>됩니다. 지식과 무관한 문서는 삭제하세요.</div>
+            <div id="pending-approval-list"><div style="padding:14px;text-align:center;color:var(--text-secondary);font-size:12px">불러오는 중...</div></div>
           </div>
 
-          <!-- 踰뺣졊 ?꾪뻾???곹깭 (law_watch) -->
+          <!-- 법령 현행화 상태 (law_watch) -->
           <div class="card" data-stab="lawwatch" style="margin-bottom:12px;cursor:default">
             <div class="section-title" style="margin-bottom:6px">
-              <i class="ti ti-refresh-alert"></i>踰뺣졊 ?꾪뻾???곹깭
+              <i class="ti ti-refresh-alert"></i>법령 현행화 상태
               <span id="lawwatch-count-badge" style="font-size:11px;color:#b45309;font-weight:600;margin-left:6px"></span>
-              <button class="btn" style="font-size:11px;padding:3px 10px;margin-left:auto" onclick="loadLawWatch()"><i class="ti ti-refresh"></i>?덈줈怨좎묠</button>
+              <button class="btn" style="font-size:11px;padding:3px 10px;margin-left:auto" onclick="loadLawWatch()"><i class="ti ti-refresh"></i>새로고침</button>
             </div>
             <div style="font-size:11px;color:var(--text-tertiary);margin-bottom:10px">
-              留ㅼ씪 11??踰뺤젣泥섏? ?議고빀?덈떎. <strong>媛쒖젙 媛먯? ??PC?먯꽌 ?꾪뻾??/strong>: <code style="font-size:10.5px">python law_sync.py --all-outdated</code>
+              매일 11시 법제처와 대조합니다. <strong>개정 감지 시 PC에서 현행화</strong>: <code style="font-size:10.5px">python law_sync.py --all-outdated</code>
             </div>
-            <div id="lawwatch-list"><div style="padding:14px;text-align:center;color:var(--text-secondary);font-size:12px">遺덈윭?ㅻ뒗 以?..</div></div>
+            <div id="lawwatch-list"><div style="padding:14px;text-align:center;color:var(--text-secondary);font-size:12px">불러오는 중...</div></div>
           </div>
 
-          <!-- API ???ㅼ젙 -->
+          <!-- API 키 설정 -->
           <div class="card" data-stab="system" style="margin-bottom:12px;cursor:default">
-            <div class="section-title" style="margin-bottom:12px"><i class="ti ti-key"></i>API ???ㅼ젙</div>
+            <div class="section-title" style="margin-bottom:12px"><i class="ti ti-key"></i>API 키 설정</div>
             <div id="api-alert"></div>
             <div style="margin-bottom:12px">
               <span class="input-label">Supabase Project URL</span>
@@ -762,90 +771,90 @@ window.LAWMAP_POS_URL = 'lawmap_positions.json?v=20260928a';
               <span class="input-label">Supabase Publishable Key</span>
               <input class="input-field" id="inp-sb-key" type="password" placeholder="sb_publishable_..." />
               <div style="font-size:11px;color:var(--text-tertiary);margin-top:8px;line-height:1.6">
-                Claude API ?ㅻ뒗 ?ш린??愿由ы븯吏 ?딆뒿?덈떎 ???쒕쾭(Edge Secret)?먮쭔 蹂닿??섎ŉ 紐⑤뱺 AI ?몄텧?
-                <code style="font-size:10.5px">claude-proxy</code>媛 ????섑뻾?⑸땲??
+                Claude API 키는 여기서 관리하지 않습니다 — 서버(Edge Secret)에만 보관되며 모든 AI 호출은
+                <code style="font-size:10.5px">claude-proxy</code>가 대신 수행합니다.
               </div>
             </div>
             <div style="display:flex;gap:8px">
-              <button class="btn btn-primary" onclick="saveApiKeys()"><i class="ti ti-device-floppy"></i>???諛??곌껐</button>
-              <button class="btn" data-admin-only onclick="testConnection()"><i class="ti ti-plug"></i>?곌껐 ?뚯뒪??/button>
-              <button class="btn" onclick="clearApiKeys()" style="margin-left:auto;color:#791F1F"><i class="ti ti-trash"></i>珥덇린??/button>
+              <button class="btn btn-primary" onclick="saveApiKeys()"><i class="ti ti-device-floppy"></i>저장 및 연결</button>
+              <button class="btn" data-admin-only onclick="testConnection()"><i class="ti ti-plug"></i>연결 테스트</button>
+              <button class="btn" onclick="clearApiKeys()" style="margin-left:auto;color:#791F1F"><i class="ti ti-trash"></i>초기화</button>
             </div>
           </div>
 
-          <!-- ?쒖뒪???꾨＼?꾪듃 -->
+          <!-- 시스템 프롬프트 -->
           <div class="card" data-stab="system" style="margin-bottom:12px;cursor:default">
-            <div class="section-title" style="margin-bottom:12px"><i class="ti ti-robot"></i>AI ?섎Ⅴ?뚮굹 (?쒖뒪???꾨＼?꾪듃)</div>
+            <div class="section-title" style="margin-bottom:12px"><i class="ti ti-robot"></i>AI 페르소나 (시스템 프롬프트)</div>
             <textarea id="system-prompt-display" rows="6" readonly style="height:110px;opacity:0.8"></textarea>
-            <div style="font-size:11px;color:var(--text-tertiary);margin-top:6px">??蹂寃쎌씠 ?꾩슂?섎㈃ system_prompt.js ?뚯씪???섏젙?섏꽭??</div>
+            <div style="font-size:11px;color:var(--text-tertiary);margin-top:6px">※ 변경이 필요하면 system_prompt.js 파일을 수정하세요.</div>
           </div>
 
-          <!-- ?뚮┝ ?ㅼ젙 -->
+          <!-- 알림 설정 -->
           <div class="card" data-stab="system" style="cursor:default">
-          <div class="section-title" style="margin-bottom:12px"><i class="ti ti-bell"></i>?뚮┝ ?ㅼ젙 (以鍮?以?</div>
+          <div class="section-title" style="margin-bottom:12px"><i class="ti ti-bell"></i>알림 설정 (준비 중)</div>
                     <div class="toggle-row">
-            <div class="toggle-info"><div class="toggle-name">怨쇨린?뺥넻遺 怨좎떆 媛쒖젙 ?뚮┝</div><div class="toggle-desc">rra.go.kr ?좉퇋 怨좎떆쨌媛쒖젙?덇퀬 媛먯?</div></div>
+            <div class="toggle-info"><div class="toggle-name">과기정통부 고시 개정 알림</div><div class="toggle-desc">rra.go.kr 신규 고시·개정예고 감지</div></div>
             <div class="toggle on" onclick="this.classList.toggle('on')"></div>
           </div>
           <div class="toggle-row">
-            <div class="toggle-info"><div class="toggle-name">?꾪뙆踰??쒗뻾??媛쒖젙 ?뚮┝</div><div class="toggle-desc">踰뺤젣泥?踰뺣졊?뺣낫 ?좉퇋 怨좎떆쨌媛쒖젙 媛먯?</div></div>
+            <div class="toggle-info"><div class="toggle-name">전파법 시행령 개정 알림</div><div class="toggle-desc">법제처 법령정보 신규 고시·개정 감지</div></div>
             <div class="toggle" onclick="this.classList.toggle('on')"></div>
           </div>
           </div><!-- card -->
         </div><!-- settings-unlocked -->
       </div><!-- panel-settings -->
 
-      <!-- ?댁쁺 ?곹깭 (?ㅼ젙 諛? -->
+      <!-- 운영 상태 (설정 밑) -->
       <div class="panel" id="panel-opsstatus">
-        <h2 style="margin:0 0 4px">?댁쁺 ?곹깭</h2>
-        <p style="color:#9ca3af;font-size:12px;margin:0 0 14px">?щ·??룸툕由ы븨쨌?몃━嫄곌? 吏湲??뺤긽?몄? ?쒕늿????寃쎄퀬瑜?諛쏆븯?????ш린遺???뺤씤?섏꽭??</p>
-        <div id="ops-status-body"><p style="color:#9ca3af">遺덈윭?ㅻ뒗 以묅?/p></div>
+        <h2 style="margin:0 0 4px">운영 상태</h2>
+        <p style="color:#9ca3af;font-size:12px;margin:0 0 14px">크롤러·브리핑·트리거가 지금 정상인지 한눈에 — 경고를 받았을 때 여기부터 확인하세요.</p>
+        <div id="ops-status-body"><p style="color:#9ca3af">불러오는 중…</p></div>
       </div>
 
-      <!-- ?됱젙遺 ?낅쾿?덇퀬쨌踰뺣졊 媛쒖젙 ??꾨씪??-->
+      <!-- 행정부 입법예고·법령 개정 타임라인 -->
       <div class="panel" id="panel-lawtrack">
         <div style="display:flex;gap:8px;margin-bottom:14px;align-items:center">
-          <span style="font-size:12px;color:var(--text-secondary)">踰뺤젣泥?Open API 쨌 留ㅼ씪 11:00 KST 媛깆떊 쨌 ?낅쾿?덇퀬?믨났?р넂?쒗뻾 ?④퀎 異붿쟻</span>
+          <span style="font-size:12px;color:var(--text-secondary)">법제처 Open API · 매일 11:00 KST 갱신 · 입법예고→공포→시행 단계 추적</span>
         </div>
         <div class="stat-row" style="grid-template-columns:repeat(4,1fr);margin-bottom:16px" id="lawtrack-stats">
-          <div class="stat-card" style="cursor:pointer" data-mode="?낅쾿?덇퀬以? onclick="filterLawTrack(this,'?낅쾿?덇퀬以?)"><div class="stat-value" id="lt-anc" style="color:var(--accent)">??/div><div class="stat-label">?낅쾿?덇퀬 以?/div></div>
-          <div class="stat-card" style="cursor:pointer" data-mode="?쒗뻾?덉젙" onclick="filterLawTrack(this,'?쒗뻾?덉젙')"><div class="stat-value" id="lt-enf">??/div><div class="stat-label">?쒗뻾 ?덉젙</div></div>
-          <div class="stat-card" style="cursor:pointer" data-mode="?좉퇋媛쒖젙" onclick="filterLawTrack(this,'?좉퇋媛쒖젙')"><div class="stat-value" id="lt-new">??/div><div class="stat-label">?좉퇋쨌媛쒖젙(90??</div></div>
-          <div class="stat-card" style="cursor:pointer" data-mode="?꾩껜" onclick="filterLawTrack(this,'?꾩껜')"><div class="stat-value" id="lt-total" style="color:var(--text-muted)">??/div><div class="stat-label">理쒓렐 1??/div></div>
+          <div class="stat-card" style="cursor:pointer" data-mode="입법예고중" onclick="filterLawTrack(this,'입법예고중')"><div class="stat-value" id="lt-anc" style="color:var(--accent)">—</div><div class="stat-label">입법예고 중</div></div>
+          <div class="stat-card" style="cursor:pointer" data-mode="시행예정" onclick="filterLawTrack(this,'시행예정')"><div class="stat-value" id="lt-enf">—</div><div class="stat-label">시행 예정</div></div>
+          <div class="stat-card" style="cursor:pointer" data-mode="신규개정" onclick="filterLawTrack(this,'신규개정')"><div class="stat-value" id="lt-new">—</div><div class="stat-label">신규·개정(90일)</div></div>
+          <div class="stat-card" style="cursor:pointer" data-mode="전체" onclick="filterLawTrack(this,'전체')"><div class="stat-value" id="lt-total" style="color:var(--text-muted)">—</div><div class="stat-label">최근 1년</div></div>
         </div>
         <div id="lawtrack-list">
-          <div style="color:var(--text-secondary);padding:20px;text-align:center;font-size:12px">遺덈윭?ㅻ뒗 以?..</div>
+          <div style="color:var(--text-secondary);padding:20px;text-align:center;font-size:12px">불러오는 중...</div>
         </div>
       </div>
 
-      <!-- 援?쉶 踰뺤븞 紐⑤땲?곕쭅 -->
+      <!-- 국회 법안 모니터링 -->
       <div class="panel" id="panel-assembly">
         <div style="display:flex;gap:8px;margin-bottom:14px;align-items:center">
-          <span style="font-size:12px;color:var(--text-secondary)">22? 援?쉶 쨌 ?꾪뙆쨌?듭떊 愿??踰뺤븞 ?먮룞 異붿쟻 쨌 留ㅼ씪 10:00 KST 媛깆떊</span>
+          <span style="font-size:12px;color:var(--text-secondary)">22대 국회 · 전파·통신 관련 법안 자동 추적 · 매일 10:00 KST 갱신</span>
         </div>
 
-        <!-- 吏꾪뻾 ?④퀎 ?ㅽ듃由?(2026-09-09, #139 ???댁쁺??寃곗젙?쇰줈 ?곷떒 移대뱶 以꾩? ?놁빊) ??諛쒖쓽 ???꾩썝???뚮? ???꾩썝???ъ궗 以????꾩썝???듦낵 ??踰뺤궗?꽷룸낯?뚯쓽 ??蹂명쉶???듦낵 | ?먭린쨌泥좏쉶.
-             移??대쫫? 移대뱶 ?곹깭 ?쇰꺼(assemblyStatusLabel)怨?媛숈? 留먯쓣 ?대떎. '?꾩썝???뚮?' 移몄씠 援?쉶 ?낅쾿?덇퀬 ?섍껄?깅줉 援ш컙. 移몄쓣 ?ㅼ떆 ?꾨Ⅴ硫??꾩껜 蹂닿린.
-             ?꾨옒 以? ?좏깮 ?곹깭 + '理쒓렐 7???④퀎 ?대룞 N嫄?(?꾨Ⅴ硫??대룞??踰뺤븞留?. -->
+        <!-- 진행 단계 스트립 (2026-09-09, #139 — 운영자 결정으로 상단 카드 줄은 없앰) — 발의 → 위원회 회부 → 위원회 심사 중 → 위원회 통과 → 법사위·본회의 → 본회의 통과 | 폐기·철회.
+             칸 이름은 카드 상태 라벨(assemblyStatusLabel)과 같은 말을 쓴다. '위원회 회부' 칸이 국회 입법예고 의견등록 구간. 칸을 다시 누르면 전체 보기.
+             아래 줄: 선택 상태 + '최근 7일 단계 이동 N건'(누르면 이동한 법안만). -->
         <div class="card" id="assembly-stages" style="cursor:default;padding:8px 10px 6px;margin-bottom:16px">
         <div class="asm-strip" style="display:flex;align-items:stretch;gap:0;overflow-x:auto">
-          <div class="asm-stage" data-mode="stage:?묒닔" onclick="filterAssembly(this,'stage:?묒닔')" title="諛쒖쓽留??섍퀬 ?꾩쭅 ?꾩썝?뚯뿉 ?뚮??섏? ?딆쓬"><div class="asm-stage-n" id="asm-stage-?묒닔">??/div><div class="asm-stage-l">諛쒖쓽</div></div>
-          <div class="asm-stage-arrow">??/div>
-          <div class="asm-stage" data-mode="stage:?뚮?" onclick="filterAssembly(this,'stage:?뚮?')" title="?뚭? ?꾩썝???뚮? ??援?쉶 ?낅쾿?덇퀬(?섍껄?깅줉)媛 ?대━??援ш컙"><div class="asm-stage-n" id="asm-stage-?뚮?">??/div><div class="asm-stage-l">?꾩썝???뚮?</div><div class="asm-stage-badge" id="asm-stage-notice" onclick="event.stopPropagation();filterAssembly(this,'?섍껄')" title="吏湲??섍껄???????덈뒗 踰뺤븞留?蹂닿린" hidden>?섍껄?깅줉 媛???붽굔</div></div>
-          <div class="asm-stage-arrow">??/div>
-          <div class="asm-stage" data-mode="stage:?ъ궗" onclick="filterAssembly(this,'stage:?ъ궗')" title="?꾩껜?뚯쓽 ?곸젙 ?댄썑 ???뚯쐞 ?ъ궗 ?ы븿(援?쉶 API???뚯쐞 ?뚮? ?뺣낫媛 ?놁뼱 援щ텇 遺덇?)"><div class="asm-stage-n" id="asm-stage-?ъ궗">??/div><div class="asm-stage-l">?꾩썝???ъ궗 以?/div></div>
-          <div class="asm-stage-arrow">??/div>
-          <div class="asm-stage" data-mode="stage:?섍껐" onclick="filterAssembly(this,'stage:?섍껐')" title="?꾩썝???섍껐(媛寃걔룸???梨꾪깮) ??蹂명쉶???湲? ?댄썑 90% ?댁긽 ?낅쾿"><div class="asm-stage-n" id="asm-stage-?섍껐">??/div><div class="asm-stage-l">?꾩썝???듦낵</div></div>
-          <div class="asm-stage-arrow">??/div>
-          <div class="asm-stage" data-mode="stage:踰뺤궗?? onclick="filterAssembly(this,'stage:踰뺤궗??)" title="踰뺤젣?щ쾿?꾩썝??泥닿퀎쨌?먭뎄 ?ъ궗, 蹂명쉶???ъ쓽"><div class="asm-stage-n" id="asm-stage-踰뺤궗??>??/div><div class="asm-stage-l">踰뺤궗?꽷룸낯?뚯쓽</div></div>
-          <div class="asm-stage-arrow">??/div>
-          <div class="asm-stage" data-mode="stage:?듦낵" onclick="filterAssembly(this,'stage:?듦낵')" title="蹂명쉶??媛寃???怨듯룷 ??踰뺣졊 議곕Ц?쇰줈 吏?앸쿋?댁뒪??諛섏쁺"><div class="asm-stage-n" id="asm-stage-?듦낵" style="color:#16a34a">??/div><div class="asm-stage-l">蹂명쉶???듦낵</div></div>
+          <div class="asm-stage" data-mode="stage:접수" onclick="filterAssembly(this,'stage:접수')" title="발의만 되고 아직 위원회에 회부되지 않음"><div class="asm-stage-n" id="asm-stage-접수">—</div><div class="asm-stage-l">발의</div></div>
+          <div class="asm-stage-arrow">›</div>
+          <div class="asm-stage" data-mode="stage:회부" onclick="filterAssembly(this,'stage:회부')" title="소관 위원회 회부 — 국회 입법예고(의견등록)가 열리는 구간"><div class="asm-stage-n" id="asm-stage-회부">—</div><div class="asm-stage-l">위원회 회부</div><div class="asm-stage-badge" id="asm-stage-notice" onclick="event.stopPropagation();filterAssembly(this,'의견')" title="지금 의견을 낼 수 있는 법안만 보기" hidden>의견등록 가능 —건</div></div>
+          <div class="asm-stage-arrow">›</div>
+          <div class="asm-stage" data-mode="stage:심사" onclick="filterAssembly(this,'stage:심사')" title="전체회의 상정 이후 — 소위 심사 포함(국회 API에 소위 회부 정보가 없어 구분 불가)"><div class="asm-stage-n" id="asm-stage-심사">—</div><div class="asm-stage-l">위원회 심사 중</div></div>
+          <div class="asm-stage-arrow">›</div>
+          <div class="asm-stage" data-mode="stage:의결" onclick="filterAssembly(this,'stage:의결')" title="위원회 의결(가결·대안 채택) — 본회의 대기, 이후 90% 이상 입법"><div class="asm-stage-n" id="asm-stage-의결">—</div><div class="asm-stage-l">위원회 통과</div></div>
+          <div class="asm-stage-arrow">›</div>
+          <div class="asm-stage" data-mode="stage:법사위" onclick="filterAssembly(this,'stage:법사위')" title="법제사법위원회 체계·자구 심사, 본회의 심의"><div class="asm-stage-n" id="asm-stage-법사위">—</div><div class="asm-stage-l">법사위·본회의</div></div>
+          <div class="asm-stage-arrow">›</div>
+          <div class="asm-stage" data-mode="stage:통과" onclick="filterAssembly(this,'stage:통과')" title="본회의 가결 — 공포 후 법령 조문으로 지식베이스에 반영"><div class="asm-stage-n" id="asm-stage-통과" style="color:#16a34a">—</div><div class="asm-stage-l">본회의 통과</div></div>
           <div class="asm-stage-arrow" style="color:var(--border)">|</div>
-          <div class="asm-stage" data-mode="stage:?먭린" onclick="filterAssembly(this,'stage:?먭린')" title="??덈컲?곹룓湲??꾩썝????덉뿉 ?≪닔)쨌泥좏쉶쨌遺寃?><div class="asm-stage-n" id="asm-stage-?먭린" style="color:#dc2626">??/div><div class="asm-stage-l">?먭린쨌泥좏쉶</div></div>
+          <div class="asm-stage" data-mode="stage:폐기" onclick="filterAssembly(this,'stage:폐기')" title="대안반영폐기(위원회 대안에 흡수)·철회·부결"><div class="asm-stage-n" id="asm-stage-폐기" style="color:#dc2626">—</div><div class="asm-stage-l">폐기·철회</div></div>
         </div>
         <div class="asm-foot" style="display:flex;justify-content:space-between;align-items:center;gap:8px;border-top:1px solid var(--border);margin-top:6px;padding-top:5px;font-size:11px;color:var(--text-secondary)">
-          <span id="asm-foot-sel">??/span>
-          <a href="javascript:void(0)" id="asm-foot-changed" data-mode="蹂寃? onclick="filterAssembly(this,'蹂寃?)" title="吏??7???덉뿉 吏꾪뻾 ?④퀎媛 諛붾?踰뺤븞留?蹂닿린" style="color:#0d9488;font-weight:600;text-decoration:none;white-space:nowrap">??/a>
+          <span id="asm-foot-sel">—</span>
+          <a href="javascript:void(0)" id="asm-foot-changed" data-mode="변경" onclick="filterAssembly(this,'변경')" title="지난 7일 안에 진행 단계가 바뀐 법안만 보기" style="color:#0d9488;font-weight:600;text-decoration:none;white-space:nowrap">—</a>
         </div>
         </div>
         <style>
@@ -861,149 +870,151 @@ window.LAWMAP_POS_URL = 'lawmap_positions.json?v=20260928a';
         </style>
 
         <div id="assembly-list">
-          <div style="color:var(--text-secondary);padding:20px;text-align:center;font-size:12px">遺덈윭?ㅻ뒗 以?..</div>
+          <div style="color:var(--text-secondary);padding:20px;text-align:center;font-size:12px">불러오는 중...</div>
         </div>
 
       </div>
 
-      <!-- 怨쇰갑???뚯쓽濡????낅┰ 硫붾돱濡??밴꺽 (2026-08-02 ?댁쁺??吏?? #54) -->
+      <!-- 과방위 회의록 — 독립 메뉴로 승격 (2026-08-02 운영자 지시, #54) -->
       <div class="panel" id="panel-minutes">
         <div style="display:flex;gap:8px;margin-bottom:10px;align-items:center">
-          <span style="font-size:12px;color:var(--text-secondary)">怨쇳븰湲곗닠?뺣낫諛⑹넚?듭떊?꾩썝???곸엫?꽷룰뎅?뺢컧???뚯쓽濡?쨌 ?듭떊쨌?꾪뙆쨌AI 愿??諛쒖뼵 諛쒖톸(SK?붾젅肄??멸툒? 二쇱젣 遺덈Ц ?섎줉) 쨌 ?섏쭛遺?20?~(2016???댄썑 ?곸엫?꽷룰뎅?뺢컧?? 2026-09-03 ?뚭툒) 쨌 留ㅼ씪 17:00 媛깆떊</span>
+          <span style="font-size:12px;color:var(--text-secondary)">과학기술정보방송통신위원회 상임위·국정감사 회의록 · 통신·전파·AI 관련 발언 발췌(SK텔레콤 언급은 주제 불문 수록) · 수집분 20대~(2016년 이후 상임위·국정감사, 2026-09-03 소급) · 매일 17:00 갱신</span>
         </div>
-        <!-- 諛쒖뼵 寃??????씠 ?꾨땲???곸떆 ?몄텧(2026-09-13). 醫낆쟾????踰덉㎏ ??뿉 ?⑥뼱 ?덉뼱
-             媛??留롮씠 ?곗씠??湲곕뒫(?붾젅洹몃옩 /assem 30??44嫄????뚮윭 蹂닿린 ?꾩뿉??紐곕옄??
-             '寃???대씪???대쫫??寃?됱갹怨???뿉 ??踰??⑥? ?딅룄濡??먮Ц 寃????? ?놁빐?? -->
+        <!-- 발언 검색 — 탭이 아니라 상시 노출(2026-09-13). 종전엔 세 번째 탭에 숨어 있어
+             가장 많이 쓰이는 기능(텔레그램 /assem 30일 44건)을 눌러 보기 전에는 몰랐다.
+             '검색'이라는 이름이 검색창과 탭에 두 번 뜨지 않도록 원문 검색 탭은 없앴다. -->
         <div style="display:flex;gap:8px;margin-bottom:6px;align-items:center;flex-wrap:wrap">
-          <input id="asm-search-q" type="text" maxlength="300" placeholder="?? 2019??援?젙媛먯궗?먯꽌 臾댁꽑援?愿?⑦빐??諛쒖뼵???댁슜??李얠븘以?
+          <input id="asm-search-q" type="text" maxlength="300" placeholder="예: 2019년 국정감사에서 무선국 관련해서 발언한 내용을 찾아줘"
                  style="flex:1;min-width:240px;padding:8px 12px;font-size:13px;border:0.5px solid var(--border-mid);border-radius:var(--radius-md);background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;outline:none"
-                 onkeyup="if(event.key==='Enter'&&!event.isComposing)searchAssemblySpeech()" aria-label="援?쉶 諛쒖뼵 寃??>
-          <button class="btn btn-primary" style="font-size:12px" onclick="searchAssemblySpeech()"><i class="ti ti-search"></i> 諛쒖뼵 李얘린</button>
+                 onkeyup="if(event.key==='Enter'&&!event.isComposing)searchAssemblySpeech()" aria-label="국회 발언 검색">
+          <button class="btn btn-primary" style="font-size:12px" onclick="searchAssemblySpeech()"><i class="ti ti-search"></i> 발언 찾기</button>
         </div>
         <div style="font-size:11px;color:var(--text-muted);margin-bottom:12px;line-height:1.6">
-          留먰븯???곕㈃ ?섏썝紐끒룹뿰?꽷룻쉶??援щ텇???뚯븘??怨⑤씪?낅땲??<code>怨듦났??댄뙆??/code> 泥섎읆 吏㏐쾶 ?⑤룄 ?⑸땲??.
-          <b>?뺣━????諛쒖뼵</b>(諛쒖뼵?먮퀎 ?붿?)?먯꽌 癒쇱? 李얘퀬, ?댁뼱??<b>援?쉶 ?뚯쓽濡??먮Ц</b>?먯꽌 李얠뒿?덈떎.
-          踰붿쐞??<b>怨쇰갑???곸엫?꽷룰뎅?뺢컧???뚯쓽濡?20?~?꾩옱</b>(2016???댄썑, 20? ?꾨컲湲?誘몃옒李쎌“怨쇳븰諛⑹넚?듭떊?꾩썝???ы븿).
-          ?먮Ц 履쎌? 臾몄옄??寃?됱씠??<b>?ㅼ젣 諛쒖뼵???섏삩 ?깅쭚 洹몃?濡?/b>?ъ빞 李얩옓?덈떎.
+          말하듯 쓰면 의원명·연도·회의 구분을 알아서 골라냅니다(<code>공공와이파이</code> 처럼 짧게 써도 됩니다).
+          <b>정리해 둔 발언</b>(발언자별 요지)에서 먼저 찾고, 이어서 <b>국회 회의록 원문</b>에서 찾습니다.
+          범위는 <b>과방위 상임위·국정감사 회의록 20대~현재</b>(2016년 이후, 20대 전반기 미래창조과학방송통신위원회 포함).
+          원문 쪽은 문자열 검색이라 <b>실제 발언에 나온 낱말 그대로</b>여야 찾힙니다.
         </div>
         <div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap;align-items:center">
-          <button id="minutes-tab-by-meeting" onclick="switchMinutesView('meeting')" style="cursor:pointer;font-size:12px;padding:5px 12px;border-radius:6px;border:1px solid var(--accent);background:var(--accent);color:#fff">?뚯쓽蹂?蹂닿린</button>
-          <button id="minutes-tab-by-speaker" onclick="switchMinutesView('speaker')" style="cursor:pointer;font-size:12px;padding:5px 12px;border-radius:6px;border:1px solid var(--border);background:var(--bg-card);color:var(--text-secondary)">諛쒖뼵?먮퀎 蹂닿린</button>
+          <button id="minutes-tab-by-meeting" onclick="switchMinutesView('meeting')" style="cursor:pointer;font-size:12px;padding:5px 12px;border-radius:6px;border:1px solid var(--accent);background:var(--accent);color:#fff">회의별 보기</button>
+          <button id="minutes-tab-by-speaker" onclick="switchMinutesView('speaker')" style="cursor:pointer;font-size:12px;padding:5px 12px;border-radius:6px;border:1px solid var(--border);background:var(--bg-card);color:var(--text-secondary)">발언자별 보기</button>
           <span id="minutes-search-crumb" style="display:none;font-size:12px;color:var(--text-secondary);margin-left:4px"></span>
         </div>
         <div id="assembly-minutes">
           <div id="assembly-minutes-list">
-            <div style="color:var(--text-secondary);padding:12px;text-align:center;font-size:12px">遺덈윭?ㅻ뒗 以?..</div>
+            <div style="color:var(--text-secondary);padding:12px;text-align:center;font-size:12px">불러오는 중...</div>
           </div>
         </div>
         <div id="assembly-speakers" style="display:none">
           <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
-            <label for="speaker-select" style="font-size:12px;color:var(--text-secondary)">諛쒖뼵??/label>
+            <label for="speaker-select" style="font-size:12px;color:var(--text-secondary)">발언자</label>
             <select id="speaker-select" onchange="renderSpeakerSpeeches(this.value)" style="flex:1;min-width:160px;max-width:280px;padding:6px 10px;font-size:12px;border:1px solid var(--border);border-radius:6px;background:var(--bg-card);color:var(--text-primary)">
-              <option value="">遺덈윭?ㅻ뒗 以?..</option>
+              <option value="">불러오는 중...</option>
             </select>
           </div>
           <div id="speaker-speeches">
-            <div style="color:var(--text-secondary);padding:12px;text-align:center;font-size:12px">諛쒖뼵?먮? ?좏깮?섏꽭??/div>
+            <div style="color:var(--text-secondary);padding:12px;text-align:center;font-size:12px">발언자를 선택하세요</div>
           </div>
         </div>
-        <!-- ?먮Ц 寃????援?쉶?뚯쓽濡앹떆?ㅽ뀥 ?ㅼ떆媛?議고쉶(assembly-search ?⑥닔 寃쎌쑀, 2026-08-14 #98) -->
+        <!-- 원문 검색 — 국회회의록시스템 실시간 조회(assembly-search 함수 경유, 2026-08-14 #98) -->
         <div id="assembly-search" style="display:none">
           <div id="asm-search-result">
-            <div style="color:var(--text-secondary);padding:12px;text-align:center;font-size:12px">李얘퀬 ?띠? 諛쒖뼵???낅젰?섏꽭??/div>
+            <div style="color:var(--text-secondary);padding:12px;text-align:center;font-size:12px">찾고 싶은 발언을 입력하세요</div>
           </div>
         </div>
       </div>
 
-      <!-- ?댁쇅 洹쒖젣?숉뼢 ???낅┰ 硫붾돱濡??밴꺽 (2026-08-02 ?댁쁺??吏?? #54) -->
+      <!-- 해외 규제동향 — 독립 메뉴로 승격 (2026-08-02 운영자 지시, #54) -->
       <div class="panel" id="panel-overseas">
         <div style="display:flex;gap:8px;margin-bottom:14px;align-items:center">
-          <span style="font-size:12px;color:var(--text-secondary)"><abbr class="gl" title="誘멸뎅 ?곕갑?듭떊?꾩썝??>FCC</abbr> 쨌 <abbr class="gl" title="?곴뎅 ?듭떊洹쒖젣泥?>Ofcom</abbr> 쨌 <abbr class="gl" title="?좊읇 ?꾩옄?듭떊洹쒖젣湲곌뎄">BEREC</abbr> 쨌 ?μ킑臾댁꽦 쨌 <abbr class="gl" title="援?젣?꾧린?듭떊?고빀">ITU</abbr> ?볾I 愿?⑥꽦 ?먯젙 + ?쒓? ?붿빟 쨌 留ㅼ씪 05:30 ?섏쭛 쨌 60??蹂닿?</span>
+          <span style="font-size:12px;color:var(--text-secondary)"><abbr class="gl" title="미국 연방통신위원회">FCC</abbr> · <abbr class="gl" title="영국 통신규제청">Ofcom</abbr> · <abbr class="gl" title="유럽 전자통신규제기구">BEREC</abbr> · 日총무성 · <abbr class="gl" title="국제전기통신연합">ITU</abbr> —AI 관련성 판정 + 한글 요약 · 매일 05:30 수집 · 60일 보관</span>
         </div>
         <div id="overseas-list">
-          <div style="color:var(--text-secondary);padding:20px;text-align:center;font-size:12px">遺덈윭?ㅻ뒗 以?..</div>
+          <div style="color:var(--text-secondary);padding:20px;text-align:center;font-size:12px">불러오는 중...</div>
         </div>
       </div>
 
-      <!-- ?몃Ъ ?꾨줈????怨쇰갑???섏썝쨌?뺣?/李멸퀬??諛쒖뼵쨌諛쒖쓽 ?대젰 (2026-08-27) -->
+      <!-- 인물 프로필 — 과방위 의원·정부/참고인 발언·발의 이력 (2026-08-27) -->
       <div class="panel" id="panel-people">
         <div id="people-body">
-          <div style="color:var(--text-secondary);padding:20px;text-align:center;font-size:12px">遺덈윭?ㅻ뒗 以?..</div>
+          <div style="color:var(--text-secondary);padding:20px;text-align:center;font-size:12px">불러오는 중...</div>
         </div>
       </div>
 
-      <!-- ?댁뒋留???以묒슂 ?댁뒋??寃쎄낵쨌愿??踰뺣졊쨌SKT ?곹뼢?????붾㈃??(2026-08-26) -->
+      <!-- 이슈맵 — 중요 이슈의 경과·관련 법령·SKT 영향을 한 화면에 (2026-08-26) -->
       <div class="panel" id="panel-issuemap">
         <div id="issuemap-body">
-          <div style="color:var(--text-secondary);padding:20px;text-align:center;font-size:12px">遺덈윭?ㅻ뒗 以?..</div>
+          <div style="color:var(--text-secondary);padding:20px;text-align:center;font-size:12px">불러오는 중...</div>
         </div>
       </div>
 
     </div><!-- content -->
   </div><!-- main -->
 
-  <!-- 紐⑤컮???섎떒 ?ㅻ퉬寃뚯씠??-->
+  <!-- 모바일 하단 네비게이션 -->
   <nav class="bottom-nav">
     <button class="bottom-nav-item active" id="bn-monitor" onclick="showMobileSubMenu('monitor-sub')">
-      <i class="ti ti-news"></i><span>紐⑤땲?곕쭅</span>
+      <i class="ti ti-news"></i><span>모니터링</span>
     </button>
     <button class="bottom-nav-item" id="bn-chat" onclick="showMobileSubMenu('chat-sub')">
-      <i class="ti ti-message-circle"></i><span>?먮Ц</span>
+      <i class="ti ti-message-circle"></i><span>자문</span>
     </button>
-    <!-- 湲곗닠?⑹뼱??紐⑤땲?곕쭅 ?쒕툕硫붾돱濡??대룞, ???щ’? 踰뺤븞 ?숉뼢?쇰줈 (2026-08-02 ?댁쁺??吏?? #54) -->
+    <!-- 기술용어는 모니터링 서브메뉴로 이동, 이 슬롯은 법안 동향으로 (2026-08-02 운영자 지시, #54) -->
     <button class="bottom-nav-item" id="bn-bills" onclick="showMobileSubMenu('bills-sub')">
-      <i class="ti ti-building-bank"></i><span>踰뺤븞 ?숉뼢</span>
+      <i class="ti ti-building-bank"></i><span>법안 동향</span>
     </button>
-    <!-- 硫붾돱 媛쒗렪 2026-08-03: 吏?앸쿋?댁뒪 5醫낆? ?⑤꼸 ?곷떒 ??쑝濡??듯빀 ???쒕툕硫붾돱 ?놁씠 諛붾줈 ?대룞 -->
+    <!-- 메뉴 개편 2026-08-03: 지식베이스 5종은 패널 상단 탭으로 통합 → 서브메뉴 없이 바로 이동 -->
     <button class="bottom-nav-item" id="bn-law" onclick="go('law',null);setBottomNav('bn-law')">
-      <i class="ti ti-books"></i><span>吏?앸쿋?댁뒪</span>
+      <i class="ti ti-books"></i><span>지식베이스</span>
     </button>
     <button class="bottom-nav-item" id="bn-more" onclick="showMobileSubMenu('more-sub')">
-      <i class="ti ti-dots"></i><span>?붾낫湲?/span>
+      <i class="ti ti-dots"></i><span>더보기</span>
     </button>
   </nav>
 
 </div><!-- app -->
 
-<!-- 紐⑤컮???쒕툕硫붾돱: 紐⑤땲?곕쭅 -->
+<!-- 모바일 서브메뉴: 모니터링 -->
   <div id="monitor-sub" class="mobile-submenu" style="display:none">
     <div class="mobile-submenu-backdrop" onclick="closeMobileSubMenu('monitor-sub')"></div>
     <div class="mobile-submenu-sheet">
-      <div class="mobile-submenu-title">紐⑤땲?곕쭅</div>
-      <!-- 硫붾돱 媛쒗렪 2026-08-03: ?뺣? 蹂대룄?먮즺쨌怨듭?/?댁쇅 洹쒖젣?숉뼢? ?듯빀 紐⑤땲?곕쭅 ?⑤꼸 ?곷떒 ??쑝濡??대룞 -->
+      <div class="mobile-submenu-title">모니터링</div>
+      <!-- 메뉴 개편 2026-08-03: 정부 보도자료·공지/해외 규제동향은 통합 모니터링 패널 상단 탭으로 이동 -->
       <button class="mobile-submenu-item" onclick="go('news',null,'media');setBottomNav('bn-monitor');closeMobileSubMenu('monitor-sub')">
-        <i class="ti ti-news"></i>?듯빀 紐⑤땲?곕쭅
+        <i class="ti ti-news"></i>통합 모니터링
       </button>
-      <!-- ?댁뒋留?(2026-08-26) ???ъ씠?쒕컮???낅┰ 硫붾돱吏留?紐⑤컮?쇱? ?щ’???놁뼱 紐⑤땲?곕쭅 ?쒕툕硫붾돱???붾떎 -->
+      <!-- 이슈맵 (2026-08-26) — 사이드바는 독립 메뉴지만 모바일은 슬롯이 없어 모니터링 서브메뉴에 둔다 -->
       <button class="mobile-submenu-item" onclick="go('issuemap',null);setBottomNav('bn-monitor');closeMobileSubMenu('monitor-sub')">
-        <i class="ti ti-sitemap"></i>?댁뒋留?      </button>
+        <i class="ti ti-sitemap"></i>이슈맵
+      </button>
       <button class="mobile-submenu-item" onclick="go('briefing',null);setBottomNav('bn-monitor');closeMobileSubMenu('monitor-sub')">
         <i class="ti ti-coffee"></i>Daily Briefing
       </button>
       <button class="mobile-submenu-item" onclick="go('terms',null);setBottomNav('bn-monitor');closeMobileSubMenu('monitor-sub')">
-        <i class="ti ti-book"></i>踰뺤쟻쨌湲곗닠 ?⑹뼱
+        <i class="ti ti-book"></i>법적·기술 용어
       </button>
     </div>
   </div>
 
-  <!-- 紐⑤컮???쒕툕硫붾돱: ?먮Ц -->
-  <!-- 紐⑤컮???쒕툕硫붾돱: 踰뺤븞 ?숉뼢 (紐⑤땲?곕쭅?먯꽌 遺꾨━ ??2026-08-02 ?댁쁺??吏?? #54) -->
+  <!-- 모바일 서브메뉴: 자문 -->
+  <!-- 모바일 서브메뉴: 법안 동향 (모니터링에서 분리 — 2026-08-02 운영자 지시, #54) -->
   <div id="bills-sub" class="mobile-submenu" style="display:none">
     <div class="mobile-submenu-backdrop" onclick="closeMobileSubMenu('bills-sub')"></div>
     <div class="mobile-submenu-sheet">
-      <div class="mobile-submenu-title">踰뺤븞 ?숉뼢</div>
+      <div class="mobile-submenu-title">법안 동향</div>
       <button class="mobile-submenu-item" onclick="go('assembly',null);setBottomNav('bn-bills');closeMobileSubMenu('bills-sub')">
-        <i class="ti ti-building-bank"></i>援?쉶 踰뺤븞
+        <i class="ti ti-building-bank"></i>국회 법안
       </button>
       <button class="mobile-submenu-item" onclick="go('minutes',null);setBottomNav('bn-bills');closeMobileSubMenu('bills-sub')">
-        <i class="ti ti-microphone-2"></i><abbr class="gl" title="援?쉶 怨쇳븰湲곗닠?뺣낫諛⑹넚?듭떊?꾩썝??>怨쇰갑??/abbr> ?뚯쓽濡?      </button>
-      <!-- ?몃Ъ ?꾨줈??(2026-08-27) ???뱀씤 怨꾩젙 ?꾩슜(#279) -->
-      <button class="mobile-submenu-item" data-login-only style="display:none" onclick="go('people',null);setBottomNav('bn-bills');closeMobileSubMenu('bills-sub')">
-        <i class="ti ti-users"></i>?몃Ъ
+        <i class="ti ti-microphone-2"></i><abbr class="gl" title="국회 과학기술정보방송통신위원회">과방위</abbr> 회의록
       </button>
-      <!-- 硫붾돱 媛쒗렪 2026-08-03: lawtrack쨌diff??'踰뺣졊 媛쒖젙 異붿쟻' ????ぉ(?⑤꼸 ?곷떒 ??2媛??쇰줈 ?듯빀 -->
+      <!-- 인물 프로필 (2026-08-27) — 승인 계정 전용(#279) -->
+      <button class="mobile-submenu-item" data-login-only style="display:none" onclick="go('people',null);setBottomNav('bn-bills');closeMobileSubMenu('bills-sub')">
+        <i class="ti ti-users"></i>인물
+      </button>
+      <!-- 메뉴 개편 2026-08-03: lawtrack·diff는 '법령 개정 추적' 한 항목(패널 상단 탭 2개)으로 통합 -->
       <button class="mobile-submenu-item" onclick="go('lawtrack',null);setBottomNav('bn-bills');closeMobileSubMenu('bills-sub')">
-        <i class="ti ti-file-certificate"></i>踰뺣졊 媛쒖젙 異붿쟻
+        <i class="ti ti-file-certificate"></i>법령 개정 추적
       </button>
     </div>
   </div>
@@ -1011,132 +1022,132 @@ window.LAWMAP_POS_URL = 'lawmap_positions.json?v=20260928a';
   <div id="chat-sub" class="mobile-submenu" style="display:none">
     <div class="mobile-submenu-backdrop" onclick="closeMobileSubMenu('chat-sub')"></div>
     <div class="mobile-submenu-sheet">
-      <div class="mobile-submenu-title">?먮Ц</div>
+      <div class="mobile-submenu-title">자문</div>
       <button class="mobile-submenu-item" onclick="go('chat',null);setBottomNav('bn-chat');closeMobileSubMenu('chat-sub')">
-        <i class="ti ti-message-circle"></i>AI ?먮Ц
+        <i class="ti ti-message-circle"></i>AI 자문
       </button>
       <button class="mobile-submenu-item" onclick="go('lawmap',null);setBottomNav('bn-chat');closeMobileSubMenu('chat-sub')">
-        <i class="ti ti-topology-star-3"></i>踰뺣졊 愿怨꾨룄
+        <i class="ti ti-topology-star-3"></i>법령 관계도
       </button>
     </div>
   </div>
 
-  <!-- 紐⑤컮???쒕툕硫붾돱: 吏?앸쿋?댁뒪 ??硫붾돱 媛쒗렪 2026-08-03濡??쒓굅(?⑤꼸 ?곷떒 ??쑝濡??듯빀, bn-law 諛붾줈 ?대룞) -->
+  <!-- 모바일 서브메뉴: 지식베이스 — 메뉴 개편 2026-08-03로 제거(패널 상단 탭으로 통합, bn-law 바로 이동) -->
 
-  <!-- 紐⑤컮???쒕툕硫붾돱: ?붾낫湲?-->
+  <!-- 모바일 서브메뉴: 더보기 -->
   <div id="more-sub" class="mobile-submenu" style="display:none">
     <div class="mobile-submenu-backdrop" onclick="closeMobileSubMenu('more-sub')"></div>
     <div class="mobile-submenu-sheet">
-      <div class="mobile-submenu-title">?붾낫湲?/div>
+      <div class="mobile-submenu-title">더보기</div>
       <button class="mobile-submenu-item" onclick="go('settings',null);setBottomNav('bn-more');closeMobileSubMenu('more-sub')">
-        <i class="ti ti-settings"></i>?ㅼ젙
+        <i class="ti ti-settings"></i>설정
       </button>
       <button class="mobile-submenu-item" data-login-only style="display:none" onclick="go('opsstatus',null);setBottomNav('bn-more');closeMobileSubMenu('more-sub')">
-        <i class="ti ti-activity"></i>?댁쁺 ?곹깭
+        <i class="ti ti-activity"></i>운영 상태
       </button>
     </div>
   </div>
 
-<!-- 蹂대룄?먮즺 ?곸꽭 紐⑤떖 -->
-<!-- 濡쒓렇??/ 媛???좎껌 (2026-08-20) ???대엺? 濡쒓렇???놁씠 媛?ν븯怨? AI ?앹꽦 湲곕뒫留???愿臾몄쓣 嫄곗튇??-->
-<!-- 湲닿툒??洹쒖튃 ?ㅼ젙 李?(#216, 2026-09-25) ????urgency_rules ?몄쭛湲? ?댁뒪 ?붾㈃ 癒몃━以꾩쓽 ?뚭릿湲됰룄 ?ㅼ젙??踰꾪듉???곕떎.
-     ?ㅼ젙 ??뿉 ?먯? ?딆? ?댁쑀: ?ㅼ젙 ??? 愿由ъ옄 ?꾩슜?대씪 ??먯씠 ?먭린 ? 洹쒖튃??紐?怨좎튇???댁쁺??寃곗젙).
-     ??#250, 2026-09-27): ?뚭났?듐?= 愿由ъ옄留??몄쭛(愿臾몄? RLS) / ?뚯슦由??(<?>)??= ????덈뒗 ?뱀씤 怨꾩젙 ?꾧뎄?? ???利됱떆 遺덈윭??湲곗궗???ъ쟻??
-     ??룔뚯깉 洹쒖튃??踰꾪듉쨌?덈궡 以꾩? app.js _urRenderTabs媛 沅뚰븳??留욎떠 諛붽씔??-->
+<!-- 보도자료 상세 모달 -->
+<!-- 로그인 / 가입 신청 (2026-08-20) — 열람은 로그인 없이 가능하고, AI 생성 기능만 이 관문을 거친다 -->
+<!-- 긴급도 규칙 설정 창 (#216, 2026-09-25) — 표 urgency_rules 편집기. 뉴스 화면 머리줄의 「긴급도 설정」 버튼이 연다.
+     설정 탭에 두지 않은 이유: 설정 탭은 관리자 전용이라 팀원이 자기 팀 규칙을 못 고친다(운영자 결정).
+     탭(#250, 2026-09-27): 「공통」 = 관리자만 편집(관문은 RLS) / 「우리 팀(<팀>)」 = 팀이 있는 승인 계정 누구나, 저장 즉시 불러온 기사에 재적용.
+     탭·「새 규칙」 버튼·안내 줄은 app.js _urRenderTabs가 권한에 맞춰 바꾼다 -->
 <div id="ur-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:1500;align-items:flex-start;justify-content:center;padding:24px 16px;overflow-y:auto" onclick="if(event.target===this)closeUrgencyRules()">
   <div style="background:var(--bg-primary);border-radius:var(--radius-lg);width:100%;max-width:760px;border:0.5px solid var(--border-light);overflow:hidden">
     <div style="display:flex;align-items:center;gap:8px;padding:12px 16px;border-bottom:0.5px solid var(--border-light)">
-      <div style="font-size:14px;font-weight:600;color:var(--text-primary)"><i class="ti ti-adjustments-alt"></i> 湲닿툒??洹쒖튃</div>
-      <span id="ur-scope" style="font-size:11px;color:var(--text-tertiary)">紐⑤뱺 ?댁슜?먃룹븣由셋룸툕由ы븨???곸슜</span>
-      <button class="btn" style="margin-left:auto" onclick="closeUrgencyRules()"><i class="ti ti-x"></i>?リ린</button>
+      <div style="font-size:14px;font-weight:600;color:var(--text-primary)"><i class="ti ti-adjustments-alt"></i> 긴급도 규칙</div>
+      <span id="ur-scope" style="font-size:11px;color:var(--text-tertiary)">모든 이용자·알림·브리핑에 적용</span>
+      <button class="btn" style="margin-left:auto" onclick="closeUrgencyRules()"><i class="ti ti-x"></i>닫기</button>
     </div>
     <div id="ur-body" style="padding:4px 16px 14px">
 
-            <div id="ur-tabs" style="display:flex;flex-wrap:wrap;gap:6px;margin:10px 0 8px">   <!-- .tag-list??紐⑤컮?쇱뿉???④꺼吏誘濡??곗? ?딅뒗??-->
-              <span class="tag selected">怨듯넻</span>
-              <span class="tag" style="opacity:.45;cursor:not-allowed" title="???吏?뺣맂 ?뱀씤 怨꾩젙留?? 洹쒖튃???곷땲??>?곕━ ?</span>
+            <div id="ur-tabs" style="display:flex;flex-wrap:wrap;gap:6px;margin:10px 0 8px">   <!-- .tag-list는 모바일에서 숨겨지므로 쓰지 않는다 -->
+              <span class="tag selected">공통</span>
+              <span class="tag" style="opacity:.45;cursor:not-allowed" title="팀이 지정된 승인 계정만 팀 규칙을 씁니다">우리 팀</span>
             </div>
-            <!-- ?덈궡쨌移??대쫫? ?뚯쟻?대룄/臾댁“嫄담띲뚢몺?△몾??#249) ?????뚯턀???섑븳)쨌吏?빧룸궞留먃룰렇由ш퀬쨌?쒖쇅?띾뒗 ?댁쁺?먭? ?살쓣 紐⑤Ⅴ寃좊떎怨???諛붽엥??
-                 ?ㅻ챸? ??以?+ ?뚯옄?명엳??#249 蹂대줎, 2026-09-27 ???댁쁺??"?ㅻ챸???덈Т 湲몃떎"). ??以꾩? ??쭏??app.js _urRenderTabs媛 諛붽씔??-->
+            <!-- 안내·칸 이름은 「적어도/무조건」「①②③」(#249) — 옛 「최소(하한)·지정·낱말·그리고·제외」는 운영자가 뜻을 모르겠다고 해 바꿨다.
+                 설명은 한 줄 + 「자세히」(#249 보론, 2026-09-27 — 운영자 "설명이 너무 길다"). 한 줄은 탭마다 app.js _urRenderTabs가 바꾼다 -->
             <div style="font-size:11.5px;color:var(--text-secondary);margin-bottom:10px;line-height:1.75">
-              <span id="ur-lead">?쒕ぉ쨌?붿빟???뺥빐 ???깅쭚濡?AI ?깃툒(以묒슂쨌蹂댄넻쨌李멸퀬)??諛붾줈?≪뒿?덈떎.</span> ??洹쒖튃遺??<b>泥섏쓬 嫄몃┛ ?섎굹留?/b> ?곸슜?⑸땲??
+              <span id="ur-lead">제목·요약에 정해 둔 낱말로 AI 등급(중요·보통·참고)을 바로잡습니다.</span> 위 규칙부터 <b>처음 걸린 하나만</b> 적용합니다.
               <details style="display:inline">
-                <summary style="display:inline;cursor:pointer;color:var(--accent)">?먯꽭??/summary>
+                <summary style="display:inline;cursor:pointer;color:var(--accent)">자세히</summary>
                 <div style="margin-top:4px">
-                  쨌 <b>?곸뼱??/b> = 洹??깃툒 ?꾨옒濡쒕뒗 ?대젮媛吏 ?딄쾶(AI媛 ???믨쾶 蹂대㈃ AI 媛? 쨌 <b>臾댁“嫄?/b> = AI ?먯젙 ?놁씠 洹??깃툒?쇰줈.<br>
-                  쨌 <span id="ur-common-note">??ν븯硫??ㅼ쓬 ?섏쭛(10遺?媛꾧꺽)遺????湲곗궗???곗씠怨? ?대? ??λ맂 湲곗궗??洹몃?濡쒖엯?덈떎. </span>洹쒖튃? 吏?곗? ?딄퀬 ?꾧린留??⑸땲??
-                  <span id="ur-team-note" style="display:none"><br>쨌 <b>?곕━ ? 洹쒖튃</b>? 怨듯넻 ?깃툒 ?꾩뿉 <b>?곕━ ???蹂대뒗 ?깃툒留?/b> ?㏃뵆?곷땲??怨듯넻媛뮻룹븣由셋룸툕由ы븨? 洹몃?濡?. ??ν븯硫?遺덈윭??湲곗궗??<b>諛붾줈</b> ?ㅼ떆 ?곸슜?섍퀬, ?욎쑝濡??섏쭛?섎뒗 湲곗궗?먮룄 ?곸슜?⑸땲?? ?곕━ ???吏곸젒 怨좎튇 湲곗궗??洹쒖튃??嫄대뱶由ъ? ?딆뒿?덈떎.<br>쨌 <b>AI ?뺤씤 議곌굔</b>???곸? 洹쒖튃? ?깅쭚??嫄몃┛ 湲곗궗 以?AI媛 洹?議곌굔??留욌떎怨?蹂?湲곗궗?먮쭔 ?곸슜?⑸땲?????뺤씤? ?ㅼ쓬 ?섏쭛遺??10遺꾨쭏??理쒕? 100嫄댁뵫?대씪, ?뺤씤??湲곗궗遺??諛섏쁺?⑸땲??</span>
+                  · <b>적어도</b> = 그 등급 아래로는 내려가지 않게(AI가 더 높게 보면 AI 값) · <b>무조건</b> = AI 판정 없이 그 등급으로.<br>
+                  · <span id="ur-common-note">저장하면 다음 수집(10분 간격)부터 새 기사에 쓰이고, 이미 저장된 기사는 그대로입니다. </span>규칙은 지우지 않고 끄기만 합니다.
+                  <span id="ur-team-note" style="display:none"><br>· <b>우리 팀 규칙</b>은 공통 등급 위에 <b>우리 팀이 보는 등급만</b> 덧씌웁니다(공통값·알림·브리핑은 그대로). 저장하면 불러온 기사에 <b>바로</b> 다시 적용되고, 앞으로 수집되는 기사에도 적용됩니다. 우리 팀이 직접 고친 기사는 규칙이 건드리지 않습니다.<br>· <b>AI 확인 조건</b>을 적은 규칙은 낱말이 걸린 기사 중 AI가 그 조건에 맞다고 본 기사에만 적용됩니다 — 확인은 다음 수집부터 10분마다 최대 100건씩이라, 확인된 기사부터 반영됩니다.</span>
                 </div>
               </details>
             </div>
-            <!-- ?대쾲 ???곕━ ? AI 臾몄옣 ?먯젙 嫄댁닔쨌鍮꾩슜(#251) ???곕━ ? ??뿉?쒕쭔, app.js _urTeamCostRender媛 梨꾩슫??-->
+            <!-- 이번 달 우리 팀 AI 문장 판정 건수·비용(#251) — 우리 팀 탭에서만, app.js _urTeamCostRender가 채운다 -->
             <div id="ur-team-cost" style="display:none;font-size:11px;color:var(--text-secondary);margin:-4px 0 8px;line-height:1.6"></div>
-            <!-- ?곕━ ? 梨꾩젏 ?곸옄(#277 S3 ???뚯콈???湲?N嫄담띉룹콈???닿린쨌??20嫄? ???곕━ ? ??뿉?쒕쭔, app.js _urGradingRender -->
+            <!-- 우리 팀 채점 상자(#277 S3 — 「채점 대기 N건」·채점 열기·새 20건) — 우리 팀 탭에서만, app.js _urGradingRender -->
             <div id="ur-team-grading" style="display:none;margin:0 0 8px"></div>
-            <!-- ?곕━ ? 湲곗?臾?#270 蹂닿린 ??#277 S3 ? ?몄쭛쨌??린吏 紐삵븳 以? ???곕━ ? ??뿉?쒕쭔, app.js _urTeamCriteriaRender媛 梨꾩슫??-->
+            <!-- 우리 팀 기준문(#270 보기 → #277 S3 팀 편집·옮기지 못한 줄) — 우리 팀 탭에서만, app.js _urTeamCriteriaRender가 채운다 -->
             <div id="ur-team-criteria" style="display:none;margin:0 0 8px"></div>
-            <!-- ?대쾲 二??곕━ ????대┛ 怨듯넻 以묒슂(?ㅺ퀎 짠8 ?????뺤씤 ?곷????) ???곕━ ? ??뿉?쒕쭔, app.js _urLoweredRender -->
+            <!-- 이번 주 우리 팀이 내린 공통 중요(설계 §8 ② — 확인 상대는 팀) — 우리 팀 탭에서만, app.js _urLoweredRender -->
             <div id="ur-team-lowered" style="display:none;font-size:11.5px;margin:0 0 8px;line-height:1.7"></div>
             <div id="ur-list"></div>
             <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap">
-              <button class="btn" style="font-size:12px" onclick="previewUrgencyRules()"><i class="ti ti-player-play"></i> 理쒓렐 湲곗궗濡?誘몃━ 蹂닿린</button>
-              <!-- 蹂댁씠湲곕뒗 app.js _urRenderTabs(吏湲???쓽 ?몄쭛 沅뚰븳 ??怨듯넻 = 愿由ъ옄, ?곕━ ? = ????덈뒗 ?뱀씤 怨꾩젙, #250) -->
-              <button class="btn" id="ur-add-btn" style="font-size:12px;display:none" onclick="editUrgencyRule(null)"><i class="ti ti-plus"></i> ??洹쒖튃</button>
+              <button class="btn" style="font-size:12px" onclick="previewUrgencyRules()"><i class="ti ti-player-play"></i> 최근 기사로 미리 보기</button>
+              <!-- 보이기는 app.js _urRenderTabs(지금 탭의 편집 권한 — 공통 = 관리자, 우리 팀 = 팀이 있는 승인 계정, #250) -->
+              <button class="btn" id="ur-add-btn" style="font-size:12px;display:none" onclick="editUrgencyRule(null)"><i class="ti ti-plus"></i> 새 규칙</button>
             </div>
             <div id="ur-form" style="display:none;margin-top:10px;padding:10px 12px;background:var(--bg-secondary);border-radius:var(--radius-md)">
-              <!-- 留먮줈 ?곴린(#249, ?대쫫? #249 蹂대줎 ?????뚮Ц?μ쑝濡??곴린?띻? ?똀I 臾몄옣 議곌굔?띻낵 ?룰컝??諛붽엥?? ??Haiku媛 ?꾨옒 移몄쓣 梨꾩슦湲곕쭔 ?쒕떎.
-                   ??λ릺??嫄??ъ쟾???깅쭚 紐⑸줉?대씪 ?섏쭛 ?뚮뒗 AI ?놁씠 媛숈? 寃곌낵(?곕━ ? ??쓽 AI ?뺤씤 議곌굔留??덉쇅 ???щ·?ш? 湲곗궗留덈떎 ??踰??먯젙????? #251).
-                   ?덉떆(placeholder)????쭏????二쇱젣濡?app.js UR_EXAMPLES媛 梨꾩슫??-->
+              <!-- 말로 적기(#249, 이름은 #249 보론 — 옛 「문장으로 적기」가 「AI 문장 조건」과 헷갈려 바꿨다) — Haiku가 아래 칸을 채우기만 한다.
+                   저장되는 건 여전히 낱말 목록이라 수집 때는 AI 없이 같은 결과(우리 팀 탭의 AI 확인 조건만 예외 — 크롤러가 기사마다 한 번 판정해 저장, #251).
+                   예시(placeholder)는 탭마다 한 주제로 app.js UR_EXAMPLES가 채운다 -->
               <div style="margin-bottom:10px;padding:10px 12px;border:1px solid var(--accent);border-radius:var(--radius-md);background:var(--bg-primary)">
-                <div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:6px">?랃툘 留먮줈 ?곴린 <span style="font-size:11.5px;font-weight:400;color:var(--text-secondary)">???대뼡 湲곗궗瑜??대뼡 ?깃툒?쇰줈 蹂쇱? ?곸쑝硫?AI媛 洹쒖튃?쇰줈 諛붽퓠?덈떎</span></div>
+                <div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:6px">✍️ 말로 적기 <span style="font-size:11.5px;font-weight:400;color:var(--text-secondary)">— 어떤 기사를 어떤 등급으로 볼지 적으면 AI가 규칙으로 바꿉니다</span></div>
                 <textarea class="input-field" id="ur-f-nl" rows="2" style="height:auto" maxlength="500" placeholder=""></textarea>
-                <div id="ur-f-nl-hint" style="display:none;font-size:11px;color:var(--text-secondary);line-height:1.6;margin:2px 0 4px">?뮕 <b>二쇱젣</b>(臾댁뾿??愿??湲곗궗)???깅쭚濡? <b>?깃꺽</b>(鍮꾪뙋쨌臾몄젣 ?쒓린 ??? ?똀I ?뺤씤 議곌굔?띿쑝濡??섎닠 梨꾩썎?덈떎 ???섏쓣 ?④퍡 ?곸뼱 二쇱꽭??</div>
+                <div id="ur-f-nl-hint" style="display:none;font-size:11px;color:var(--text-secondary);line-height:1.6;margin:2px 0 4px">💡 <b>주제</b>(무엇에 관한 기사)는 낱말로, <b>성격</b>(비판·문제 제기 등)은 「AI 확인 조건」으로 나눠 채웁니다 — 둘을 함께 적어 주세요.</div>
                 <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:6px">
-                  <button class="btn" id="ur-nl-btn" style="font-size:12px" onclick="urgencyRuleFromText(this)"><i class="ti ti-sparkles"></i> 洹쒖튃?쇰줈 諛붽씀湲?/button>
-                  <span style="font-size:10.5px;color:var(--text-tertiary)">Haiku 1????7?? 쨌 ?꾨옒 ?몃? 移몄쓣 梨꾩썙 ?쇱묩?덈떎 ??蹂닿퀬 ???/span>
+                  <button class="btn" id="ur-nl-btn" style="font-size:12px" onclick="urgencyRuleFromText(this)"><i class="ti ti-sparkles"></i> 규칙으로 바꾸기</button>
+                  <span style="font-size:10.5px;color:var(--text-tertiary)">Haiku 1회(약 7원) · 아래 세부 칸을 채워 펼칩니다 — 보고 저장</span>
                 </div>
               </div>
-              <!-- 洹쒖튃 ?몃?(#249 蹂대줎) ????洹쒖튃? ?묓? ?덈떎媛 ?뚭퇋移숈쑝濡?諛붽씀湲겹띻? 梨꾩슦硫댁꽌 ?쇱튇??癒몃━以꾩쓣 吏곸젒 ?꾨Ⅴ硫?AI ?놁씠 吏곸젒 ?곌린).
-                   湲곗〈 洹쒖튃 ?뚰렪吏묆띿? ?쇱튇 梨꾨줈 ?곕떎. ?щ떕湲곕뒗 app.js _urDetailOpen -->
+              <!-- 규칙 세부(#249 보론) — 새 규칙은 접혀 있다가 「규칙으로 바꾸기」가 채우면서 펼친다(머리줄을 직접 누르면 AI 없이 직접 쓰기).
+                   기존 규칙 「편집」은 펼친 채로 연다. 여닫기는 app.js _urDetailOpen -->
               <details id="ur-f-detail">
-                <summary style="cursor:pointer;font-size:12px;font-weight:600;color:var(--text-primary);padding:2px 0">洹쒖튃 ?몃? ???대쫫쨌?깃툒쨌?깅쭚 <span style="font-size:10.5px;font-weight:400;color:var(--text-tertiary)">(?뚭퇋移숈쑝濡?諛붽씀湲겹띻? 梨꾩썙 ?쇱묩?덈떎 쨌 吏곸젒 ?곕젮硫??꾨Ⅴ湲?</span></summary>
+                <summary style="cursor:pointer;font-size:12px;font-weight:600;color:var(--text-primary);padding:2px 0">규칙 세부 — 이름·등급·낱말 <span style="font-size:10.5px;font-weight:400;color:var(--text-tertiary)">(「규칙으로 바꾸기」가 채워 펼칩니다 · 직접 쓰려면 누르기)</span></summary>
                 <div style="padding-top:6px">
-                  <!-- ?뚯씠?뉕쾶 ?쏀옓?덈떎??#249) ???몃? 留????щ엺? 移몃낫??臾몄옣??癒쇱? ?쎈뒗??. id??#251遺??ur-f-read(ur-f-sentence??AI ?뺤씤 議곌굔 ?낅젰移? ??移??대쫫 sentence? 留욎땄) -->
+                  <!-- 「이렇게 읽힙니다」(#249) — 세부 맨 위(사람은 칸보다 문장을 먼저 읽는다). id는 #251부터 ur-f-read(ur-f-sentence는 AI 확인 조건 입력칸, 표 칸 이름 sentence와 맞춤) -->
                   <div id="ur-f-read" style="margin-bottom:8px;padding:8px 10px;border-radius:var(--radius-md);background:var(--bg-primary);border:0.5px solid var(--border-secondary);font-size:11.5px;line-height:1.8;color:var(--text-secondary)"></div>
-                  <!-- ?뚭퇋移숈쑝濡?諛붽씀湲겹?寃곌낵 ?덈궡쨌AI 硫붾え ??app.js urgencyRuleFromText媛 梨꾩슦怨?editUrgencyRule??鍮꾩슫??-->
+                  <!-- 「규칙으로 바꾸기」 결과 안내·AI 메모 — app.js urgencyRuleFromText가 채우고 editUrgencyRule이 비운다 -->
                   <div id="ur-f-ai-note" style="display:none;font-size:11px;color:var(--text-secondary);line-height:1.6;margin:-2px 0 8px"></div>
-                  <!-- AI ?뺤씤 議곌굔(#251, ???대쫫 ?뚢몿 AI 臾몄옣 議곌굔?? ??? 洹쒖튃留?DB CHECK, ?ㅺ퀎??짠10-2 C7). 蹂댁씠湲곕뒗 app.js(_urRenderTabs쨌editUrgencyRule)媛 ?곕━ ? ??뿉?쒕쭔.
-                       ?먯젙? ?щ·??Haiku)媛 ?ㅼ쓬 ?섏쭛遺??10遺꾨쭏??理쒕? 100嫄댁뵫 ??釉뚮씪?곗???AI瑜?遺瑜댁? ?딄퀬 ?湲??됰쭔 ?ｋ뒗??C3) -->
+                  <!-- AI 확인 조건(#251, 옛 이름 「④ AI 문장 조건」) — 팀 규칙만(DB CHECK, 설계안 §10-2 C7). 보이기는 app.js(_urRenderTabs·editUrgencyRule)가 우리 팀 탭에서만.
+                       판정은 크롤러(Haiku)가 다음 수집부터 10분마다 최대 100건씩 — 브라우저는 AI를 부르지 않고 대기 행만 넣는다(C3) -->
                   <div id="ur-f-sentence-row" style="display:none;margin-bottom:8px;padding:8px 10px;border:1px solid var(--accent);border-radius:var(--radius-md);background:var(--bg-primary)">
-                    <span class="input-label" style="font-weight:700;color:var(--text-primary)">?쨼 AI ?뺤씤 議곌굔 (?좏깮)</span>
+                    <span class="input-label" style="font-weight:700;color:var(--text-primary)">🤖 AI 확인 조건 (선택)</span>
                     <textarea class="input-field" id="ur-f-sentence" rows="2" style="height:auto;margin-bottom:2px" maxlength="200" placeholder="" oninput="_urFormSentence()"></textarea>
-                    <div style="font-size:10.5px;color:var(--text-tertiary);line-height:1.6">?꾨옒 ?깅쭚??嫄몃┛ 湲곗궗留덈떎 AI媛 ??議곌굔??留욌뒗吏 ??踰??뺤씤?? 留욌뒗 湲곗궗?먮쭔 ?곸슜 쨌 湲곗궗????2~4??쨌 議곌굔??怨좎튂硫??덈줈 ?뺤씤</div>
+                    <div style="font-size:10.5px;color:var(--text-tertiary);line-height:1.6">아래 낱말에 걸린 기사마다 AI가 이 조건에 맞는지 한 번 확인해, 맞는 기사에만 적용 · 기사당 약 2~4원 · 조건을 고치면 새로 확인</div>
                   </div>
-                  <span class="input-label">洹쒖튃 ?대쫫 (湲곗궗 ?곸꽭???뚭퇋移? ?대쫫?띿쑝濡?蹂댁엫 ??' ??' ?ㅼ뿉 ?곸? 留먯? 硫붾え???붾㈃????蹂댁엫)</span><input class="input-field" id="ur-f-note" type="text" placeholder="" oninput="_urFormSentence()" />
+                  <span class="input-label">규칙 이름 (기사 상세에 「규칙: 이름」으로 보임 — ' — ' 뒤에 적은 말은 메모라 화면에 안 보임)</span><input class="input-field" id="ur-f-note" type="text" placeholder="" oninput="_urFormSentence()" />
                   <div style="display:flex;gap:8px;flex-wrap:wrap">
-                    <div><span class="input-label">?대뼸寃?/span><select class="input-field" id="ur-f-mode" onchange="_urFormSentence()"><option value="min">?곸뼱??(AI媛 ???믪쑝硫?AI 媛?</option><option value="set">臾댁“嫄?(AI ?먯젙 ?앸왂)</option></select></div>
-                    <div><span class="input-label">?깃툒</span><select class="input-field" id="ur-f-level" onchange="_urFormSentence()"><option value="湲닿툒">以묒슂</option><option value="蹂댄넻">蹂댄넻</option><option value="李멸퀬">李멸퀬</option></select></div>
-                    <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--text-secondary);margin-top:18px"><input type="checkbox" id="ur-f-enabled" onchange="_urFormSentence()" /> 耳쒖쭚</label>
+                    <div><span class="input-label">어떻게</span><select class="input-field" id="ur-f-mode" onchange="_urFormSentence()"><option value="min">적어도 (AI가 더 높으면 AI 값)</option><option value="set">무조건 (AI 판정 생략)</option></select></div>
+                    <div><span class="input-label">등급</span><select class="input-field" id="ur-f-level" onchange="_urFormSentence()"><option value="긴급">중요</option><option value="보통">보통</option><option value="참고">참고</option></select></div>
+                    <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--text-secondary);margin-top:18px"><input type="checkbox" id="ur-f-enabled" onchange="_urFormSentence()" /> 켜짐</label>
                   </div>
-                  <span class="input-label">?????깅쭚 以??섎굹媛 ?덇퀬 (瑗??꾩슂 ???쇳몴濡?援щ텇)</span><input class="input-field" id="ur-f-any" type="text" placeholder="" oninput="_urFormSentence()" />
-                  <span class="input-label">?????깅쭚???덇퀬 (?좏깮 ????以꾩뿉 ??臾띠쓬, 以꾨쭏??洹?以??깅쭚 以??섎굹媛 ???덉뼱????</span><textarea class="input-field" id="ur-f-and" rows="3" style="height:auto" placeholder="" oninput="_urFormSentence()"></textarea>
-                  <span class="input-label">?????깅쭚? ?놁쓣 ??(?좏깮 ???섎굹?쇰룄 ?덉쑝硫???洹쒖튃? ??嫄몃┝)</span><input class="input-field" id="ur-f-none" type="text" placeholder="" oninput="_urFormSentence()" />
+                  <span class="input-label">① 이 낱말 중 하나가 있고 (꼭 필요 — 쉼표로 구분)</span><input class="input-field" id="ur-f-any" type="text" placeholder="" oninput="_urFormSentence()" />
+                  <span class="input-label">② 이 낱말도 있고 (선택 — 한 줄에 한 묶음, 줄마다 그 줄 낱말 중 하나가 더 있어야 함)</span><textarea class="input-field" id="ur-f-and" rows="3" style="height:auto" placeholder="" oninput="_urFormSentence()"></textarea>
+                  <span class="input-label">③ 이 낱말은 없을 때 (선택 — 하나라도 있으면 이 규칙은 안 걸림)</span><input class="input-field" id="ur-f-none" type="text" placeholder="" oninput="_urFormSentence()" />
                   <details style="margin-top:4px;font-size:11px;color:var(--text-tertiary)">
-                    <summary style="cursor:pointer">怨좉툒 ??癒쇱? 蹂??쒖꽌 쨌 ?곷Ц ?대쫫</summary>
+                    <summary style="cursor:pointer">고급 — 먼저 볼 순서 · 영문 이름</summary>
                     <div style="padding:6px 0 0 2px">
-                      <span class="input-label">癒쇱? 蹂??쒖꽌 (?묒쓣?섎줉 癒쇱?)</span><input class="input-field" id="ur-f-pos" type="number" style="width:90px" />
+                      <span class="input-label">먼저 볼 순서 (작을수록 먼저)</span><input class="input-field" id="ur-f-pos" type="number" style="width:90px" />
                       <div id="ur-f-pos-hint" style="font-size:10.5px;margin:2px 0 6px;line-height:1.6"></div>
-                      <div id="ur-f-slug-row" style="margin-bottom:6px"><span class="input-label">?곷Ц ?대쫫 (?좏깮 ??洹쒖튃 id ?욌?遺? 鍮꾩슦硫?rule)</span><input class="input-field" id="ur-f-slug" type="text" placeholder="?? skt_fine" /></div>
-                      <div>洹쒖튃 id: <code id="ur-f-id" style="font-size:10.5px"></code></div>
+                      <div id="ur-f-slug-row" style="margin-bottom:6px"><span class="input-label">영문 이름 (선택 — 규칙 id 앞부분, 비우면 rule)</span><input class="input-field" id="ur-f-slug" type="text" placeholder="예: skt_fine" /></div>
+                      <div>규칙 id: <code id="ur-f-id" style="font-size:10.5px"></code></div>
                     </div>
                   </details>
                 </div>
               </details>
               <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
-                <button class="btn" style="font-size:12px" onclick="previewUrgencyRules(true)"><i class="ti ti-player-play"></i> ??洹쒖튃?쇰줈 誘몃━ 蹂닿린</button>
-                <!-- ?곕━ ? ??? ?뚯씠 洹쒖튃?쇰줈 誘몃━ 蹂닿린?띾? 吏湲???洹몃?濡??뚮┛ ?ㅼ뿉留??대┛??F6, app.js _urSaveGate ??#277 S3) -->
-                <button class="btn btn-primary" id="ur-save-btn" style="font-size:12px" onclick="saveUrgencyRule(this)"><i class="ti ti-device-floppy"></i> ???/button>
-                <button class="btn" style="font-size:12px" onclick="cancelUrgencyRuleEdit()">痍⑥냼</button>
+                <button class="btn" style="font-size:12px" onclick="previewUrgencyRules(true)"><i class="ti ti-player-play"></i> 이 규칙으로 미리 보기</button>
+                <!-- 우리 팀 탭은 「이 규칙으로 미리 보기」를 지금 폼 그대로 돌린 뒤에만 열린다(F6, app.js _urSaveGate — #277 S3) -->
+                <button class="btn btn-primary" id="ur-save-btn" style="font-size:12px" onclick="saveUrgencyRule(this)"><i class="ti ti-device-floppy"></i> 저장</button>
+                <button class="btn" style="font-size:12px" onclick="cancelUrgencyRuleEdit()">취소</button>
               </div>
             </div>
             <div id="ur-msg" style="display:none;font-size:11px;margin-top:8px"></div>
@@ -1145,15 +1156,15 @@ window.LAWMAP_POS_URL = 'lawmap_positions.json?v=20260928a';
   </div>
 </div>
 
-<!-- ? 梨꾩젏 ?붾㈃(#277 S3, 2026-10-04 ???ㅺ퀎 local_docs/?梨꾩젏_?ㅺ퀎_261004.md 짠4쨌짠10). ?뚭릿湲됰룄 ?ㅼ젙 ???곕━ ? ??梨꾩젏 ?닿린??
-     ?ㅼ젙 ?뚰? 湲곗?臾멥?移대뱶 ?뚯꽭??蹂닿린?? 援щ룆??遊??뚮┝ ?λ쭅???p=grading&set=<id>媛 ?곕떎. ?댁슜? app.js openGrading쨌_grRender媛 洹몃┛??
-     z-index 1550 = 湲닿툒???ㅼ젙 李?1500) ?? 濡쒓렇??李?1600) ?꾨옒 -->
+<!-- 팀 채점 화면(#277 S3, 2026-10-04 — 설계 local_docs/팀채점_설계_261004.md §4·§10). 「긴급도 설정 → 우리 팀 → 채점 열기」,
+     설정 「팀 기준문」 카드 「세트 보기」, 구독자 봇 알림 딥링크 ?p=grading&set=<id>가 연다. 내용은 app.js openGrading·_grRender가 그린다.
+     z-index 1550 = 긴급도 설정 창(1500) 위, 로그인 창(1600) 아래 -->
 <div id="gr-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:1550;align-items:flex-start;justify-content:center;padding:24px 16px;overflow-y:auto" onclick="if(event.target===this)closeGrading()">
   <div style="background:var(--bg-primary);border-radius:var(--radius-lg);width:100%;max-width:820px;border:0.5px solid var(--border-light);overflow:hidden">
     <div style="display:flex;align-items:center;gap:8px;padding:12px 16px;border-bottom:0.5px solid var(--border-light);flex-wrap:wrap">
-      <div style="font-size:14px;font-weight:600;color:var(--text-primary)"><i class="ti ti-list-check"></i> ?곕━ ? ?댁뒪 湲곗? 梨꾩젏</div>
+      <div style="font-size:14px;font-weight:600;color:var(--text-primary)"><i class="ti ti-list-check"></i> 우리 팀 뉴스 기준 채점</div>
       <span id="gr-sub" style="font-size:11px;color:var(--text-tertiary)"></span>
-      <button class="btn" style="margin-left:auto" onclick="closeGrading()"><i class="ti ti-x"></i>?リ린</button>
+      <button class="btn" style="margin-left:auto" onclick="closeGrading()"><i class="ti ti-x"></i>닫기</button>
     </div>
     <div id="gr-body" style="padding:8px 16px 16px"></div>
   </div>
@@ -1162,30 +1173,30 @@ window.LAWMAP_POS_URL = 'lawmap_positions.json?v=20260928a';
 <div id="login-modal" data-tab="login" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:1600;align-items:center;justify-content:center;padding:20px" onclick="if(event.target===this)closeLoginModal()">
   <div style="background:var(--bg-primary);border-radius:var(--radius-lg);width:100%;max-width:380px;border:0.5px solid var(--border-light);overflow:hidden">
     <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:0.5px solid var(--border-light)">
-      <div id="login-title" style="font-size:14px;font-weight:600;color:var(--text-primary)"><i class="ti ti-user"></i> 濡쒓렇??/div>
-      <button class="btn" onclick="closeLoginModal()"><i class="ti ti-x"></i>?リ린</button>
+      <div id="login-title" style="font-size:14px;font-weight:600;color:var(--text-primary)"><i class="ti ti-user"></i> 로그인</div>
+      <button class="btn" onclick="closeLoginModal()"><i class="ti ti-x"></i>닫기</button>
     </div>
     <div style="padding:16px 18px;display:flex;flex-direction:column;gap:9px">
       <div id="login-name-row" style="display:none">
-        <label style="font-size:11px;color:var(--text-secondary)">?대쫫</label>
-        <input type="text" id="login-name" placeholder="?띻만?? style="width:100%;padding:8px 10px;font-size:13px;border:0.5px solid var(--border-mid);border-radius:var(--radius-md);background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;outline:none">
+        <label style="font-size:11px;color:var(--text-secondary)">이름</label>
+        <input type="text" id="login-name" placeholder="홍길동" style="width:100%;padding:8px 10px;font-size:13px;border:0.5px solid var(--border-mid);border-radius:var(--radius-md);background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;outline:none">
       </div>
       <div id="login-team-row" style="display:none">
-        <label style="font-size:11px;color:var(--text-secondary)">?뚯냽 ? <span style="color:var(--text-tertiary)">???뱀씤 ??愿由ъ옄媛 ?뺤씤?⑸땲??/span></label>
-        <select id="login-team" style="width:100%;padding:8px 10px;font-size:13px;border:0.5px solid var(--border-mid);border-radius:var(--radius-md);background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;outline:none"><option value="">?뚯냽 ???怨좊Ⅴ?몄슂</option></select>
+        <label style="font-size:11px;color:var(--text-secondary)">소속 팀 <span style="color:var(--text-tertiary)">— 승인 때 관리자가 확인합니다</span></label>
+        <select id="login-team" style="width:100%;padding:8px 10px;font-size:13px;border:0.5px solid var(--border-mid);border-radius:var(--radius-md);background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;outline:none"><option value="">소속 팀을 고르세요</option></select>
       </div>
       <div>
-        <label style="font-size:11px;color:var(--text-secondary)">?대찓??/label>
+        <label style="font-size:11px;color:var(--text-secondary)">이메일</label>
         <input type="email" id="login-email" autocomplete="username" style="width:100%;padding:8px 10px;font-size:13px;border:0.5px solid var(--border-mid);border-radius:var(--radius-md);background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;outline:none">
       </div>
       <div>
-        <label style="font-size:11px;color:var(--text-secondary)">鍮꾨?踰덊샇</label>
+        <label style="font-size:11px;color:var(--text-secondary)">비밀번호</label>
         <input type="password" id="login-pw" autocomplete="current-password" onkeydown="if(event.key==='Enter')submitLogin()" style="width:100%;padding:8px 10px;font-size:13px;border:0.5px solid var(--border-mid);border-radius:var(--radius-md);background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;outline:none">
       </div>
-      <button class="btn btn-primary" id="login-submit" onclick="submitLogin()" style="width:100%;justify-content:center;margin-top:4px">濡쒓렇??/button>
+      <button class="btn btn-primary" id="login-submit" onclick="submitLogin()" style="width:100%;justify-content:center;margin-top:4px">로그인</button>
       <div id="login-note" style="font-size:11px;color:var(--text-secondary);min-height:15px"></div>
-      <div id="login-switch" style="font-size:11px;color:var(--text-tertiary);text-align:center">怨꾩젙???놁쑝?좉??? <a href="#" onclick="switchLoginTab('signup');return false">媛???좎껌</a></div>
-      <div style="font-size:10px;color:var(--text-tertiary);text-align:center;line-height:1.5;border-top:0.5px solid var(--border-light);padding-top:8px">?대엺쨌寃?됱? 濡쒓렇???놁씠 ?댁슜?????덉뒿?덈떎.<br>AI ?먮Ц ???앹꽦 湲곕뒫怨??댁뒪 以묒슂??蹂寃승룹옞湲댟룹궘??媛숈? ?몄쭛? ?뱀씤??怨꾩젙???꾩슂?⑸땲??</div>
+      <div id="login-switch" style="font-size:11px;color:var(--text-tertiary);text-align:center">계정이 없으신가요? <a href="#" onclick="switchLoginTab('signup');return false">가입 신청</a></div>
+      <div style="font-size:10px;color:var(--text-tertiary);text-align:center;line-height:1.5;border-top:0.5px solid var(--border-light);padding-top:8px">열람·검색은 로그인 없이 이용할 수 있습니다.<br>AI 자문 등 생성 기능과 뉴스 중요도 변경·잠금·삭제 같은 편집은 승인된 계정이 필요합니다.</div>
     </div>
   </div>
 </div>
@@ -1193,8 +1204,8 @@ window.LAWMAP_POS_URL = 'lawmap_positions.json?v=20260928a';
 <div id="chat-history-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:1500;align-items:center;justify-content:center;padding:20px" onclick="if(event.target===this)closeChatHistory()">
   <div style="background:var(--bg-primary);border-radius:var(--radius-lg);width:100%;max-width:760px;max-height:85vh;display:flex;flex-direction:column;overflow:hidden;border:0.5px solid var(--border-light)">
     <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:0.5px solid var(--border-light);flex-shrink:0">
-      <div style="font-size:14px;font-weight:600;color:var(--text-primary)"><i class="ti ti-history"></i> ?먮Ц ?대젰</div>
-      <button class="btn" onclick="closeChatHistory()"><i class="ti ti-x"></i>?リ린</button>
+      <div style="font-size:14px;font-weight:600;color:var(--text-primary)"><i class="ti ti-history"></i> 자문 이력</div>
+      <button class="btn" onclick="closeChatHistory()"><i class="ti ti-x"></i>닫기</button>
     </div>
     <div id="chat-history-body" style="overflow-y:auto;padding:14px 18px"></div>
   </div>
@@ -1207,39 +1218,39 @@ window.LAWMAP_POS_URL = 'lawmap_positions.json?v=20260928a';
         <div id="press-detail-date" style="font-size:11px;color:var(--text-muted);margin-bottom:4px"></div>
         <div id="press-detail-title" style="font-size:15px;font-weight:700;color:var(--text-primary);line-height:1.4"></div>
       </div>
-      <button onclick="closePressDetail()" style="background:none;border:none;color:var(--text-muted);font-size:20px;cursor:pointer;flex-shrink:0;line-height:1;padding:0">??/button>
+      <button onclick="closePressDetail()" style="background:none;border:none;color:var(--text-muted);font-size:20px;cursor:pointer;flex-shrink:0;line-height:1;padding:0">✕</button>
     </div>
     <div id="press-detail-body" style="padding:20px 24px;overflow-y:auto;flex:1;font-size:13px;line-height:1.8;color:var(--text-secondary)"></div>
     <div style="padding:12px 24px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:8px;flex-shrink:0">
-      <button onclick="closePressDetail();go('chat');setTimeout(function(){var inp=document.getElementById('chat-input');if(inp){inp.value='&quot;'+document.getElementById('press-detail-title').textContent+'&quot; 蹂대룄?먮즺??二쇱슂 ?댁슜???붿빟??二쇱꽭??';inp.focus();}},300)" style="padding:7px 14px;background:var(--accent-purple);border:none;border-radius:var(--radius);color:#fff;cursor:pointer;font-size:13px"><i class="ti ti-robot"></i> AI ?먮Ц</button>
-      <button onclick="closePressDetail()" style="padding:7px 14px;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);color:var(--text-secondary);cursor:pointer;font-size:13px">?リ린</button>
+      <button onclick="closePressDetail();go('chat');setTimeout(function(){var inp=document.getElementById('chat-input');if(inp){inp.value='&quot;'+document.getElementById('press-detail-title').textContent+'&quot; 보도자료의 주요 내용을 요약해 주세요.';inp.focus();}},300)" style="padding:7px 14px;background:var(--accent-purple);border:none;border-radius:var(--radius);color:#fff;cursor:pointer;font-size:13px"><i class="ti ti-robot"></i> AI 자문</button>
+      <button onclick="closePressDetail()" style="padding:7px 14px;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);color:var(--text-secondary);cursor:pointer;font-size:13px">닫기</button>
     </div>
   </div>
 </div>
 
-<!-- 踰뺣졊 愿怨꾨룄: ?먮Ц 誘몃━蹂닿린 紐⑤떖 -->
+<!-- 법령 관계도: 원문 미리보기 모달 -->
 <div id="lawmap-doc-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:1500;align-items:center;justify-content:center;padding:20px" onclick="if(event.target===this)this.style.display='none'">
   <div style="background:var(--bg-primary);border-radius:var(--radius-lg);width:100%;max-width:760px;max-height:85vh;display:flex;flex-direction:column;overflow:hidden;border:0.5px solid var(--border-light)">
     <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:0.5px solid var(--border-light);flex-shrink:0;gap:12px">
-      <div id="lawmap-doc-title" style="font-size:14px;font-weight:600;color:var(--text-primary);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><i class="ti ti-file-text"></i> ?먮Ц</div>
-      <button class="btn" onclick="document.getElementById('lawmap-doc-modal').style.display='none'"><i class="ti ti-x"></i>?リ린</button>
+      <div id="lawmap-doc-title" style="font-size:14px;font-weight:600;color:var(--text-primary);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><i class="ti ti-file-text"></i> 원문</div>
+      <button class="btn" onclick="document.getElementById('lawmap-doc-modal').style.display='none'"><i class="ti ti-x"></i>닫기</button>
     </div>
     <div id="lawmap-doc-body" style="overflow-y:auto;padding:14px 18px;font-size:13px;line-height:1.75;color:var(--text-secondary);white-space:pre-wrap"></div>
   </div>
 </div>
 
-<!-- 吏?앸쿋?댁뒪 踰뺣졊 ?먮Ц ?대엺 紐⑤떖 (?꾩껜 議곕Ц + 議곕Ц 寃?? -->
+<!-- 지식베이스 법령 원문 열람 모달 (전체 조문 + 조문 검색) -->
 <div id="kb-doc-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:1500;align-items:center;justify-content:center;padding:20px" onclick="if(event.target===this)closeKbDoc()">
   <div style="background:var(--bg-primary);border-radius:var(--radius-lg);width:100%;max-width:900px;max-height:88vh;display:flex;flex-direction:column;overflow:hidden;border:0.5px solid var(--border-light)">
     <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:0.5px solid var(--border-light);flex-shrink:0;gap:12px">
       <div style="min-width:0;flex:1">
-        <div id="kb-doc-title" style="font-size:14px;font-weight:600;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><i class="ti ti-file-text"></i> ?먮Ц</div>
+        <div id="kb-doc-title" style="font-size:14px;font-weight:600;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><i class="ti ti-file-text"></i> 원문</div>
         <div id="kb-doc-meta" style="font-size:11px;color:var(--text-tertiary);margin-top:2px"></div>
       </div>
-      <button class="btn" onclick="closeKbDoc()"><i class="ti ti-x"></i>?リ린</button>
+      <button class="btn" onclick="closeKbDoc()"><i class="ti ti-x"></i>닫기</button>
     </div>
     <div id="kb-doc-searchrow" style="display:flex;gap:8px;align-items:center;padding:10px 18px;border-bottom:0.5px solid var(--border-light);flex-shrink:0">
-      <input id="kb-doc-search" type="text" placeholder="議곕Ц 寃?????? ??7議? 濡쒕컢, ?꾧린寃쎈낫" oninput="filterKbDocArticles()"
+      <input id="kb-doc-search" type="text" placeholder="조문 검색 — 예: 제37조, 로밍, 위기경보" oninput="filterKbDocArticles()"
              style="flex:1;padding:6px 10px;border:0.5px solid var(--border-mid);border-radius:var(--radius-sm);font-size:12px;background:var(--bg-primary);color:var(--text-primary)">
       <span id="kb-doc-count" style="font-size:11px;color:var(--text-tertiary);white-space:nowrap"></span>
     </div>
@@ -1247,65 +1258,66 @@ window.LAWMAP_POS_URL = 'lawmap_positions.json?v=20260928a';
   </div>
 </div>
 
-<!-- PDF ?낅줈??紐⑤떖 -->
+<!-- PDF 업로드 모달 -->
 <div id="pdf-upload-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:2000;align-items:center;justify-content:center">
   <div style="background:var(--bg-primary);border-radius:var(--radius-lg);padding:24px;width:480px;max-width:92vw;box-shadow:0 8px 32px rgba(0,0,0,0.35)">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
-      <div style="font-size:14px;font-weight:600;color:var(--text-primary)"><i class="ti ti-upload"></i> <span id="pdf-modal-title">PDF ?낅줈??/span></div>
+      <div style="font-size:14px;font-weight:600;color:var(--text-primary)"><i class="ti ti-upload"></i> <span id="pdf-modal-title">PDF 업로드</span></div>
       <button onclick="closePdfUpload()" style="background:none;border:none;cursor:pointer;color:var(--text-secondary);font-size:18px;line-height:1"><i class="ti ti-x"></i></button>
     </div>
 
-    <!-- ?뚯씪 ?좏깮 -->
+    <!-- 파일 선택 -->
     <div id="pdf-drop-zone" style="border:1.5px dashed var(--border-mid);border-radius:var(--radius-md);padding:20px;text-align:center;margin-bottom:12px;cursor:pointer;transition:border-color 0.2s" onclick="document.getElementById('pdf-file-input').click()" ondragover="event.preventDefault();this.style.borderColor='var(--accent)'" ondragleave="this.style.borderColor='var(--border-mid)'" ondrop="handlePdfDrop(event)">
       <i class="ti ti-file-upload" style="font-size:28px;color:var(--accent);display:block;margin-bottom:6px"></i>
-      <div id="pdf-file-label" style="font-size:12px;color:var(--text-secondary)">PDF 쨌 MD 쨌 Word 쨌 PPTX ?뚯씪 ?대┃ ?좏깮 ?먮뒗 ?쒕옒洹?/div>
+      <div id="pdf-file-label" style="font-size:12px;color:var(--text-secondary)">PDF · MD · Word · PPTX 파일 클릭 선택 또는 드래그</div>
     </div>
     <input type="file" id="pdf-file-input" accept=".pdf,.md,.pptx,.docx" style="display:none" multiple onchange="handlePdfFileSelect(this)">
-    <div style="font-size:10px;color:var(--text-muted);margin:-4px 0 12px;line-height:1.4">??PDF??<b>?띿뒪??湲곕컲</b>留?異붿텧?⑸땲?????ㅼ틪 ?대?吏 PDF??蹂몃Ц??鍮꾩뼱 ?낅줈?쒕릺吏 ?딆뒿?덈떎.</div>
+    <div style="font-size:10px;color:var(--text-muted);margin:-4px 0 12px;line-height:1.4">※ PDF는 <b>텍스트 기반</b>만 추출됩니다 — 스캔 이미지 PDF는 본문이 비어 업로드되지 않습니다.</div>
 
-    <!-- 臾몄꽌紐?-->
+    <!-- 문서명 -->
     <div style="margin-bottom:10px">
-      <div style="font-size:11px;color:var(--text-secondary);margin-bottom:4px">臾몄꽌紐?<span style="color:#dc2626">*</span></div>
-      <input id="pdf-doc-name" type="text" placeholder="?? ?꾪뙆踰??쒗뻾洹쒖튃 ?쇰?媛쒖젙怨좎떆" style="width:100%;box-sizing:border-box;padding:8px 12px;font-size:13px;border:0.5px solid var(--border-mid);border-radius:var(--radius-md);background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;outline:none">
+      <div style="font-size:11px;color:var(--text-secondary);margin-bottom:4px">문서명 <span style="color:#dc2626">*</span></div>
+      <input id="pdf-doc-name" type="text" placeholder="예: 전파법 시행규칙 일부개정고시" style="width:100%;box-sizing:border-box;padding:8px 12px;font-size:13px;border:0.5px solid var(--border-mid);border-radius:var(--radius-md);background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;outline:none">
     </div>
 
-    <!-- 移댄뀒怨좊━ (踰뺣졊쨌怨좎떆) -->
+    <!-- 카테고리 (법령·고시) -->
     <div id="pdf-cat-row" style="margin-bottom:10px">
-      <div style="font-size:11px;color:var(--text-secondary);margin-bottom:4px">移댄뀒怨좊━</div>
+      <div style="font-size:11px;color:var(--text-secondary);margin-bottom:4px">카테고리</div>
       <select id="pdf-category" style="width:100%;padding:8px 12px;font-size:13px;border:0.5px solid var(--border-mid);border-radius:var(--radius-md);background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;outline:none">
-        <option value="怨좎떆">怨좎떆</option>
-        <option value="踰뺣졊">踰뺣졊</option>
+        <option value="고시">고시</option>
+        <option value="법령">법령</option>
         <option value="ITU-R">ITU-R</option>
       </select>
     </div>
 
-    <!-- ?좎쭨 (蹂대룄?먮즺) -->
+    <!-- 날짜 (보도자료) -->
     <div id="pdf-date-row" style="margin-bottom:10px;display:none">
-      <div style="font-size:11px;color:var(--text-secondary);margin-bottom:4px">蹂대룄?먮즺 ?좎쭨 <span style="color:#dc2626">*</span></div>
+      <div style="font-size:11px;color:var(--text-secondary);margin-bottom:4px">보도자료 날짜 <span style="color:#dc2626">*</span></div>
       <input id="pdf-press-date" type="date" style="width:100%;box-sizing:border-box;padding:8px 12px;font-size:13px;border:0.5px solid var(--border-mid);border-radius:var(--radius-md);background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;outline:none">
     </div>
 
-    <!-- 吏꾪뻾 ?쒖떆 -->
+    <!-- 진행 표시 -->
     <div id="pdf-progress" style="display:none;margin-bottom:12px">
-      <div style="font-size:11px;color:var(--text-secondary);margin-bottom:5px" id="pdf-progress-text">泥섎━ 以?..</div>
+      <div style="font-size:11px;color:var(--text-secondary);margin-bottom:5px" id="pdf-progress-text">처리 중...</div>
       <div style="height:4px;background:var(--bg-secondary);border-radius:2px;overflow:hidden">
         <div id="pdf-progress-bar" style="height:4px;background:var(--accent);border-radius:2px;width:0%;transition:width 0.3s"></div>
       </div>
     </div>
 
     <div style="display:flex;gap:8px;justify-content:flex-end">
-      <button class="btn" onclick="closePdfUpload()">痍⑥냼</button>
-      <button id="pdf-upload-btn" class="btn btn-primary" onclick="doPdfUpload()"><i class="ti ti-upload"></i> ?낅줈??/button>
+      <button class="btn" onclick="closePdfUpload()">취소</button>
+      <button id="pdf-upload-btn" class="btn btn-primary" onclick="doPdfUpload()"><i class="ti ti-upload"></i> 업로드</button>
     </div>
   </div>
 </div>
 
-<!-- ?낅줈?쑣톆ord ????꾩슜 ?쇱씠釉뚮윭由?pdf.js쨌JSZip쨌mammoth, ?뺤텞 ??1.06MB)??泥??붾㈃?먯꽌 諛쏆? ?딅뒗????     ?곕뒗 ?쒓컙 app.js ??loadUploadLib()媛 ??踰덈쭔 諛쏅뒗??짠4-3-11, #223). 二쇱냼쨌踰꾩쟾? app.js UPLOAD_LIBS ??怨녹뿉 ?덈떎. -->
+<!-- 업로드·Word 저장 전용 라이브러리(pdf.js·JSZip·mammoth, 압축 전 1.06MB)는 첫 화면에서 받지 않는다 —
+     쓰는 순간 app.js 의 loadUploadLib()가 한 번만 받는다(§4-3-11, #223). 주소·버전은 app.js UPLOAD_LIBS 한 곳에 있다. -->
 <script src="system_prompt.js?v=20261009a"></script>
-<!-- ?몄슜 議곕Ц ?듭㎏ 蹂닿컯쨌[?먮Ц ?뺤씤?? 寃利?濡쒖쭅 ???붾젅洹몃옩 rag.ts? 媛숈? ?뚯씪(#155). GitLab Pages??.gitlab-ci.yml cp 紐⑸줉???덉뼱???ㅻ┛??-->
+<!-- 인용 조문 통째 보강·[원문 확인됨] 검증 로직 — 텔레그램 rag.ts와 같은 파일(#155). GitLab Pages는 .gitlab-ci.yml cp 목록에 있어야 실린다 -->
 <script src="supabase/functions/_shared/cite_verify.js?v=20261012"></script>
-<script src="supabase/functions/_shared/rag_core.js?v=20261013b"></script>   <!-- ?먮Ц 寃???쒖닔 洹쒖튃(#215) ??app.js蹂대떎 癒쇱? -->
-<script src="supabase/functions/_shared/urgency_rules.js?v=20260927c"></script>   <!-- 湲닿툒??洹쒖튃 留ㅼ쿂(#216) + ? 痢??⑥닔(#250) + 臾몄옣 議곌굔 ?⑥닔(#251) + ?뚮┝ ?깃툒 ?⑥닔(#252) ??app.js蹂대떎 癒쇱? -->
+<script src="supabase/functions/_shared/rag_core.js?v=20261013b"></script>   <!-- 자문 검색 순수 규칙(#215) — app.js보다 먼저 -->
+<script src="supabase/functions/_shared/urgency_rules.js?v=20260927c"></script>   <!-- 긴급도 규칙 매처(#216) + 팀 층 함수(#250) + 문장 조건 함수(#251) + 알림 등급 함수(#252) — app.js보다 먼저 -->
 <script src="app.js?v=20261013c"></script>
 <script src="lawmap_articles.js?v=20261007a"></script>
 </body>
