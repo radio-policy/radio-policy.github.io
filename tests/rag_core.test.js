@@ -39,7 +39,9 @@ var NAMES = ['PRIORITY_KW_RE', 'VERB_TAIL', 'extractKeywords', 'LAW_SYNONYMS', '
   'ADDENDUM_TRIGGER_RE', 'ADDENDUM_OPTS', 'ADDENDUM_TITLE_RE', 'addendumWanted', 'addendumBases', 'addendumRefs', 'addendumCandidates',
   'addendumHead', 'pickAddenda',
   // #290-보론(Fable 재검토 D2·D4)
-  'ADDENDUM_GENERIC_RE', 'addendumKeywords', 'addendumForeign'];
+  'ADDENDUM_GENERIC_RE', 'addendumKeywords', 'addendumForeign',
+  // L9 준용 따라가기(#300)
+  'APPLY_OPTS', 'APPLY_DIRECTIVE_RE', 'refLawOf', 'applyRefs', 'applyTargets', 'applyKeywords', 'pickApply', 'neighborWhole'];
 NAMES.forEach(function (n) { ok('export ' + n, RC[n] !== undefined); });
 
 // ── 법령 키워드 추출 ──
@@ -612,7 +614,112 @@ var addendumTests = (async function () {
   });
 })();
 
-Promise.all([asyncTests, addOnTests, addOnTests2, addendumTests]).catch(function (e) { fails++; total++; console.log('FAIL  비동기 검사 예외 ' + (e && e.message)); }).then(function () {
+// ── L9 준용 따라가기(#300, 설계 local_docs/준용따라가기_설계_261013.md §2-1·D1~D7) ──
+(function () {
+  var N = '주파수할당 신청 절차 및 방법 등 세부사항(과학기술정보통신부고시)(제2026-23호)(20260416)', NF = '주파수할당 신청 절차 및 방법 등 세부사항';
+  var T = function (fam, content, art) { return RC.applyTargets({ content: content, article_no: art || '1조(x)' }, fam).map(function (t) { return t.fam + ' ' + t.key + (t.para ? '(' + t.para + '항)' : ''); }); };
+  var pre = function (keys) { return keys.map(function (k) { return NF + ' ' + k; }); };
+  // applyRefs — 범위·항·「내지」·괄호
+  eq('applyRefs 범위·항·나열(고시 제17조)', RC.applyRefs('제5조부터 제8조까지, 제9조제2항, 제10조, 제11조제3항, 제12조 및 제13조를').map(function (r) { return r.key + (r.para ? '(' + r.para + ')' : ''); }),
+    ['5조', '6조', '7조', '8조', '9조(2)', '10조', '11조(3)', '12조', '13조']);
+  eq('applyRefs 「내지」·항 범위는 조 하나·「조의N」 범위 머리·역순 범위는 낱개·괄호 안 번호 무시',
+    [RC.applyRefs('제7조 내지 제9조').map(function (r) { return r.key; }), RC.applyRefs('제21조제1항부터 제6항까지').map(function (r) { return r.key + '(' + r.para + ')'; }),
+     RC.applyRefs('제5조의2부터 제7조까지').map(function (r) { return r.key; }), RC.applyRefs('제9조부터 제7조까지').map(function (r) { return r.key; }),
+     RC.applyRefs('제3조(「전기통신사업법」 제7조에 따른 것)를').map(function (r) { return r.key; })],
+    [['7조', '8조', '9조'], ['21조(1~6)'], ['5조의2', '6조', '7조'], ['9조', '7조'], ['3조']]);
+  eq('applyRefs 같은 번호의 「의K」 범위·끝점이 「조의」면 끝점도(허점 점검 6)', [RC.applyRefs('제28조의2부터 제28조의5까지 및 제28조의7').map(function (r) { return r.key; }),
+     RC.applyRefs('제5조부터 제8조의3까지').map(function (r) { return r.key; })], [['28조의2', '28조의3', '28조의4', '28조의5', '28조의7'], ['5조', '6조', '7조', '8조', '8조의3']]);
+  // applyTargets — 목적어 선행(조 머리 뗌)·법령은 꼬리 앞글로 한 번
+  eq('applyTargets 목적어 선행 — 고시 제17조(준용규정) 9개, 쓰인 순', T(NF, '제17조(준용규정) 재할당의 신청 및 심사방법 등에 관하여는 제5조부터 제8조까지, 제9조제2항, 제10조, 제11조제3항, 제12조 및 제13조를 준용한다.', '17조(준용규정)'),
+    pre(['5조', '6조', '7조', '8조', '9조(2항)', '10조', '11조(3항)', '12조', '13조']));
+  eq('applyTargets 꼬리 밖 「법 제50조」는 대상이 아님·항 지정', T('독점규제 및 공정거래에 관한 법률 시행령', '① 법 제50조제1항 본문에 따른 매출액의 산정에 관하여는 제13조제1항을 준용한다.'), ['독점규제 및 공정거래에 관한 법률 시행령 13조(1항)']);
+  eq('applyTargets 다른 법령(낫표)·「준용하는 경우를 포함」·「준용되는 「X」」·「준용하지 아니」·「준용할 수 없」은 대상 없음',
+    [T('소프트웨어 진흥법 시행령', '② 선정에 관하여는 「학술진흥법 시행령」 제5조부터 제10조까지의 규정을 준용한다.'), T('항공안전법', '제90조(제96조제1항에서 준용하는 경우를 포함한다)에 따른 운항증명'),
+     T('표시·광고의 공정화에 관한 법률', '① 제16조제2항에 따라 준용되는 「독점규제 및 공정거래에 관한 법률」 제81조제2항에 따른 조사'), T('전파법', '제3조 이 조는 제5조를 준용하지 아니한다. 제6조를 준용할 수 없다.')],
+    [[], [], [], []]);
+  eq('applyTargets 「같은 조 제2항부터…」는 문장 안 바로 앞 조, 「준용하되 … 준용한다」 둘 다(전파법 제16조④)',
+    T('전파법', '④ 제11조제1항 단서에 따라 주파수할당 대가를 받고 재할당하는 경우에는 같은 조 제2항부터 제5항까지(가격경쟁에 의한 대가를 받고 주파수할당을 하는 경우에 해당하는 규정은 제외한다)를 준용하되, 그러하지 아니하는 경우에는 제12조를 준용한다. <개정 2010.7.23>'),
+    ['전파법 11조(2~5항)', '전파법 12조']);
+  eq('applyTargets 분배형 「…을, …를 각각 준용한다」는 구간마다(전파법 시행령 77조③, 허점 점검 4)·괄호 안 「같은 법 제39조」는 대상 아님(전기사업법 38조, 점검 1)',
+    [T('전파법 시행령', '③ 잠정인증의 검사에 관하여는 제44조제2항을, 검사의 연기에 관하여는 제46조를 각각 준용한다.'), T('전기사업법', '① 「민법」 중 사단법인에 관한 규정(같은 법 제39조는 제외한다)을 준용한다.')],
+    [['전파법 시행령 44조(2항)', '전파법 시행령 46조'], []]);
+  eq('applyTargets 조 머리 없이 시작하는 조각(뒷조각)의 첫 문장은 머리가 잘렸을 수 있어 건너뜀(허점 점검 7)', [RC.applyTargets({ content: '제12조를 준용한다. ③ 절차는 제3조를 준용한다.', article_no: '16조(x)', chunk_index: 33 }, '전파법').map(function (t) { return t.key; }),
+    RC.applyTargets({ content: '제16조(재할당) ④ 제12조를 준용한다.', article_no: '16조(x)', chunk_index: 32 }, '전파법').map(function (t) { return t.key; })], [['3조'], ['12조']]);
+  eq('applyTargets 주어 선행 「제17조는 … 이를 준용한다」·「제7조 내지 제9조 및 제9조의2제3항ㆍ제4항의 규정은」',
+    [T('정보통신공사업법 시행령', '⑤ 제17조는 공사업자의 변경신고에 관하여 이를 준용한다.'), T('통신비밀보호법', '②제7조 내지 제9조 및 제9조의2제3항ㆍ제4항ㆍ제6항의 규정은 제1항의 규정에 의한 통신사실 확인자료제공의 절차 등에 관하여 이를 준용한다.')],
+    [['정보통신공사업법 시행령 17조'], ['통신비밀보호법 7조', '통신비밀보호법 8조', '통신비밀보호법 9조', '통신비밀보호법 9조의2(3항)']]);
+  eq('applyTargets 낱말에 붙은 조사(「기술기준은」)는 꼬리가 아님 — 앞글을 법령명으로 읽지 않음', T('x고시', '제9조(코드없는 전화기) 기술기준은 제7조 제7항제1호부터 제4호까지의 규정을 준용한다.', '9조(코드없는 전화기)'), ['x고시 7조(7항)']);
+  eq('applyTargets 시행령의 「법 제N조를 준용」은 모법·항만 적은 지시문은 없음·지시문당 상한', [T('전파법 시행령', '⑤ 절차는 법 제12조를 준용한다.'), T('전파법', '② 제2항을 준용한다.'),
+    RC.applyTargets({ content: '제104조(준용규정) 제27조부터 제31조, 제38조, 제41조, 제43조, 제45조 및 제46조, 제48조, 제50조부터 제52조, 제55조 및 제56조의 규정은 항공국에 관하여 이를 준용한다.', article_no: '104조(준용규정)' }, 'x규정', { perDirective: 3 }).map(function (t) { return t.key; })],
+    [['전파법 12조'], [], ['27조', '28조', '29조']]);
+  // applyKeywords — 제목 불용어·일반 낱말 제외
+  eq('applyKeywords', RC.applyKeywords('주파수 재할당 신청 절차와 법정 기한을 알려줘'), ['주파수', '재할당', '신청', '법정']);
+  // pickApply — 문턱 ⓐ(제목 준용)·ⓑ(질문 낱말)·fail-open·제외 규칙·상한
+  var base17 = { doc_name: N, article_no: '17조(준용규정)', content: '제17조(준용규정) 재할당의 신청 및 심사방법 등에 관하여는 제5조부터 제8조까지, 제9조제2항, 제10조, 제11조제3항, 제12조 및 제13조를 준용한다.' };
+  var base51 = { doc_name: '설비등의 제공조건 및 대가산정기준(과학기술정보통신부고시)(제1호)(20200101)', article_no: '51조(제공대가)', content: '제51조(제공대가) 「전기통신사업법 시행령」제51조의9제2항에 의한 제공대가는 제41조부터 제49조까지를 준용한다.' };
+  var base18 = { doc_name: '전파법 시행령(대통령령)(제2호)(20251001)', article_no: '18조(재할당)', content: '② 제1항에 따른 주파수 재할당의 신청절차 및 그 할당 대가의 산정ㆍ징수 등에 관하여는 제12조 및 제14조를 준용한다.' };
+  var pa = RC.pickApply([[base17], [], [base51, base18]], new Set([NF + '|8조']), { }, '알뜰폰 사업자에 대해 전파사용료를 감면하여 주는 전파법 시행령 조항 찾아줘');
+  eq('pickApply 질문 낱말 없는 지시문은 제목이 준용규정이어도 제외(허점 점검 9 — 무관한 질문에 최대 10조가 붙는 규칙은 두지 않음)', pa.length, 0);
+  var pb = RC.pickApply([[base17], [], [base51, base18]], new Set([NF + '|8조']), { }, '주파수 재할당 신청 절차와 법정 기한을 알려줘');
+  eq('pickApply 질문 낱말 적중(재할당·신청)·이미 든 조 제외·근거 기록·설비 고시 51조는 제외', pb.map(function (x) { return x.key + '/' + (x.para || '') + '/' + x.base.key; }),
+    ['5조//17조', '6조//17조', '7조//17조', '9조/2/17조', '10조//17조', '11조/3/17조', '12조//17조', '13조//17조', '12조//18조', '14조//18조']);
+  eq('pickApply skipDoc(전부 모드 문서)의 같은 문서 대상은 후보에서부터 뺌(허점 점검 14)', RC.pickApply([[base17], [], [base18]], new Set(), {}, '주파수 재할당 신청 절차', { skipDoc: N }).map(function (x) { return x.fam.slice(0, 3) + x.key; }), ['전파법12조', '전파법14조']);
+  eq('pickApply 질문 낱말이 들면 통과·위임 후보(taken)·자기 조 제외·같은 문서면 근거 문서가 대상 문서', RC.pickApply([[base18]], new Set(), { '전파법 시행령|14조': 1 }, '주파수 재할당 신청 절차와 법정 기한을 알려줘').map(function (x) { return x.key + ' ' + x.doc; }), ['12조 전파법 시행령(대통령령)(제2호)(20251001)']);
+  eq('pickApply 키워드가 없으면 끔(fail-closed, 허점 점검 10)·max+spare·on:false', [RC.pickApply([[base51]], new Set(), {}, '', { max: 2, spare: 1 }).length, RC.pickApply([[base51]], new Set(), {}, '조항').length,
+    RC.pickApply([[base51]], new Set(), {}, '제공대가 산정', { max: 2, spare: 1 }).map(function (x) { return x.key; }), RC.pickApply([[base17]], new Set(), {}, '재할당', { on: false }).length],
+    [0, 0, ['41조', '42조', '43조'], 0]);
+})();
+
+var applyTests = (async function () {
+  var N = '주파수할당 신청 절차 및 방법 등 세부사항(과학기술정보통신부고시)(제2026-23호)(20260416)', NF = '주파수할당 신청 절차 및 방법 등 세부사항';
+  var R = '전파법 시행령(대통령령)(제2호)(20251001)';
+  var art = function (k, title, body) { return { id: 100 + Number(k.replace(/\D/g, '')), doc_name: N, article_no: k + '(' + title + ')', chunk_index: Number(k.replace(/\D/g, '')), content: '제' + k + '(' + title + ') ' + body }; };
+  // 사내 사례 꼴 — 고시 4·14·17·18조가 근거, 나머지 조 합이 wholeChars를 넘는 문서
+  var doc = [art('2조', '정의', 'x'), art('3조', '적용범위', 'y'.repeat(600)), art('4조', '기본사항', 'z'.repeat(600)), art('5조', '신청', 'a'.repeat(600)), art('6조', '서류', 'b'.repeat(600)), art('7조', '보정', 'c'.repeat(600)),
+    art('8조', '적격', '적격 여부를 1개월 이내 통보'), art('9조', '심사', 'e'.repeat(600)), art('10조', '방법', 'f'.repeat(600)), art('11조', '선정', '신청일부터 6개월 이내 통보'), art('12조', '서류 제출', '3개월 이내'), art('13조', '통지서', 'g'.repeat(600)),
+    art('14조', '재할당 신청', 'h'.repeat(600)), art('15조', '심사', 'i'.repeat(600)), art('16조', '재할당대상법인 선정', '60점·70점'), art('17조', '준용규정', '재할당의 신청 및 심사방법 등에 관하여는 제5조부터 제8조까지, 제9조제2항, 제10조, 제11조제3항, 제12조 및 제13조를 준용한다.'),
+    art('18조', '통지', 'j'.repeat(600)), art('19조', '기타', 'k'.repeat(600)), art('20조', '기타2', 'l'.repeat(600)), art('26조', '5G 특화망 준용규정', '5G 특화망 주파수 재할당에 관하여는 제14조 및 제18조를 준용한다.')];
+  var byKey = {}; doc.forEach(function (c) { byKey[c.article_no.split('(')[0]] = c; });
+  var calls = [];
+  var fetchers = {
+    delegations: function () { return Promise.resolve([]); },
+    familyArticle: function (fam, key, d) { calls.push('art:' + fam + ':' + key + ':' + (d === N ? 'N' : d || '-')); return Promise.resolve(byKey[key] ? [byKey[key]] : []); },
+    docArticles: function () { calls.push('doc'); return Promise.resolve(doc); },
+  };
+  var bases = { extra: [byKey['4조'], byKey['14조'], byKey['17조'], byKey['18조']], spill: [], rag: [{ id: 5, doc_name: R, article_no: '18조(재할당)', content: '② 신청절차는 제12조 및 제14조를 준용한다.' }] };
+  var r = await RC.fetchAddOns(bases, fetchers, { question: '주파수 재할당 신청 절차와 법정 기한을 알려줘' });
+  var keys = function (sec) { return r.items.filter(function (x) { return x.sec === sec; }).map(function (x) { return x.key; }); };
+  eq('fetchAddOns 준용 — 제17조의 대상 9개가 쓰인 순으로, 대상 문서는 근거 문서', keys('apply'), ['5조', '6조', '7조', '8조', '9조', '10조', '11조', '12조', '13조']);
+  ok('fetchAddOns 준용 조회는 근거 문서명으로', calls.indexOf('art:' + NF + ':5조:N') >= 0, calls);
+  eq('fetchAddOns 같은 고시 — 준용으로 고른 조를 「이미 든 조」로 넘겨 남은 합이 작아지면 전부(16조 포함), 준용 조와 겹치지 않음', keys('neighbor'), ['2조', '3조', '15조', '16조', '19조', '20조', '26조']);
+  ok('fetchAddOns 준용 구역 머리·항목 꼬리·항 표기', r.text.indexOf('[위 조문이 준용하는 조문') >= 0 && r.text.indexOf('인용 표시는 준용되는 조문 번호') >= 0 && r.text.indexOf('[준용 1] ' + N + ' 5조(신청) — 위 ' + NF + ' 제17조가 준용하는 조문\n') >= 0
+    && r.text.indexOf('[준용 7] ' + N + ' 11조(선정) — 위 ' + NF + ' 제17조가 준용하는 조문(제3항)\n') >= 0, r.text);
+  eq('fetchAddOns 준용 수·조각 id·검증 chunks 표시', [r.apply, r.ids.indexOf(105) >= 0, r.chunks.filter(function (c) { return c._addon === 'apply'; }).length], [9, true, 9]);
+  ok('fetchAddOns 준용 구역은 위임 뒤·공통 인용 앞, 같은 고시 앞', r.text.indexOf('[위 조문이 준용하는 조문') < r.text.indexOf('[같은 고시의 다른 조문'), r.text);
+  // rag의 시행령 18조 문장 「신청절차는 제12조…」는 「신청」이 들어 후보가 되지만 가짜 조회에 시행령 문서가 없어 조용히 건너뛴다(위임과 같음)
+  eq('fetchAddOns 준용 후보가 현행 문서에 없으면 조용히 건너뜀', r.items.filter(function (x) { return x.sec === 'apply' && x.fam === '전파법 시행령'; }).map(function (x) { return x.key; }), []);
+  // 같은 고시가 근거만으로 「전부」 모드(남은 합 ≤ wholeChars)면 그 문서의 준용 대상은 건너뛴다 — 어차피 전부 들어온다(D6-b, 개발 q01 17조 잃음 사례)
+  var rw = await RC.fetchAddOns(bases, fetchers, { question: '주파수 재할당 신청 절차와 법정 기한을 알려줘', neighborOpts: { wholeChars: 20000 } });
+  eq('fetchAddOns 같은 고시 전부 모드면 같은 문서 준용은 후보에서부터 빼고 같은 고시가 전부 가져옴', [rw.items.filter(function (x) { return x.sec === 'apply'; }).length, rw.items.filter(function (x) { return x.sec === 'neighbor'; }).length], [0, 16]);
+  var noA = await RC.fetchAddOns(bases, fetchers, { question: '주파수 재할당 신청 절차와 법정 기한을 알려줘', fillOrder: ['down', 'up', 'annex', 'xref', 'neighbor'] });
+  eq('fetchAddOns fillOrder에 apply가 없으면 후보도 안 만들어 taken 손실 없음(허점 점검 15) — 종전과 같음', [noA.items.filter(function (x) { return x.sec === 'apply'; }).length, noA.items.filter(function (x) { return x.sec === 'neighbor'; }).map(function (x) { return x.key; })], [0, ['3조', '5조', '13조', '15조']]);
+  eq('pickNeighbors exclude — 남은 조·합에서 빼되 앞뒤 씨앗은 아님(허점 점검 16)', RC.pickNeighbors(doc, ['4조', '14조', '17조', '18조'], { wholeChars: 10, max: 9, exclude: ['5조', '13조', '15조'] }).map(function (x) { return x.key; }), ['3조', '16조', '19조', '26조']);
+  eq('neighborWhole', [RC.neighborWhole(doc, ['4조', '14조', '17조', '18조']), RC.neighborWhole(doc, ['4조', '14조', '17조', '18조'], { wholeChars: 20000 })], [false, true]);
+  var off = await RC.fetchAddOns(bases, fetchers, { question: '주파수 재할당 신청 절차와 법정 기한을 알려줘', apply: false });
+  eq('fetchAddOns apply:false면 종전과 같음(앞뒤 모드 4개)', [off.items.filter(function (x) { return x.sec === 'apply'; }).length, off.items.filter(function (x) { return x.sec === 'neighbor'; }).map(function (x) { return x.key; })], [0, ['3조', '5조', '13조', '15조']]);
+  var small = await RC.fetchAddOns(bases, fetchers, { question: '주파수 재할당 신청 절차와 법정 기한을 알려줘', apply: { maxChars: 1200 } });
+  eq('fetchAddOns 준용 글자 상한(maxChars) — 앞에서부터 들어가는 것만(5조 ≈745자 → 6·7·9·10·13조 못 듦 → 짧은 8·11·12조는 듦)', small.items.filter(function (x) { return x.sec === 'apply'; }).map(function (x) { return x.key; }), ['5조', '8조', '11조', '12조']);
+  // trimAddOns — 경과조치 → 별표 → 같은 고시 → 공통 인용 → 준용 → 위 → 아래
+  var mk = function (sec, dir, key) { return { sec: sec, dir: dir, fam: '전파법', key: key, base: { fam: '전파법', key: '24조' }, bases: ['전파법|1조', '전파법|2조'], doc_name: N, article_no: key + '(x)', content: 'x'.repeat(100), ids: [Number(key.replace(/\D/g, ''))] }; };
+  var full = { text: 'z'.repeat(2000), parts: { deleg: [mk(undefined, 'down', '1조'), mk(undefined, 'up', '2조')], xref: [mk('xref', undefined, '3조')], apply: [mk('apply', undefined, '6조')],
+    neighbor: [{ doc_name: N, article_no: '4조(y)', key: '4조', content: 'y'.repeat(100), ids: [4] }], spillItems: [] } };
+  var t1 = RC.trimAddOns(full, 0, 700);
+  eq('trimAddOns 같은 고시 → 공통 인용 → 준용 → 위 순', [t1.items.map(function (x) { return x.sec + (x.dir ? '/' + x.dir : ''); }), t1.trimmed], [['deleg/down', 'deleg/up'], 3]);
+  var t2 = RC.trimAddOns(full, 0, 1000);
+  eq('trimAddOns 준용은 공통 인용보다 늦게 덜림', t2.items.map(function (x) { return x.sec + (x.dir ? '/' + x.dir : ''); }), ['deleg/down', 'deleg/up', 'apply']);
+})();
+
+Promise.all([asyncTests, addOnTests, addOnTests2, addendumTests, applyTests]).catch(function (e) { fails++; total++; console.log('FAIL  비동기 검사 예외 ' + (e && e.message)); }).then(function () {
   console.log('\n' + (fails ? 'FAIL ' + fails + '/' + total : 'ALL OK ' + total + '/' + total));
   process.exit(fails ? 1 : 0);
 });

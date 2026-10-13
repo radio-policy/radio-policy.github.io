@@ -492,8 +492,10 @@
   // dashboardExtraChars = 대시보드(app.js)만 전체 상한에 더하는 몫(운영자 결정 10-06) — 대시보드에는 봇에 없는 세 구역(시행예정 개정본·
   // 팀 추가 지식·최근 법령 개정 동향, 개발 20문항 중앙 7,855자·최대 12,826자)이 더 들어가 52,500자에 먼저 닿아 20문항 중 11개에서
   // 덧붙인 것이 덜렸다(합의 핵심 봇 39 → 대시보드 37). 그 중앙값만큼 올린다.
+  // apply = L9 준용(#300, 2026-10-13 — 아래 APPLY_* 설명): 측정된 아래·위·별표 순서 뒤, 공통 인용 앞(근거 1곳의 유형 지정 참조 > 근거 2곳의 무지정 언급).
+  // 같은 고시(neighbor)는 준용으로 고른 조를 「이미 든 조」로 넘겨 받으므로 기본 순서에서 apply 뒤에 있어야 한다(앞에 두면 공유가 안 돈다 — 설계 D6).
   const ADDON_OPTS = { spillMax: 2, budgetChars: 12000, maxTotalChars: 52500, dashboardExtraChars: 8000, annex: true,
-    fillOrder: ['down', 'up', 'annex', 'xref', 'neighbor'] };
+    fillOrder: ['down', 'up', 'annex', 'apply', 'xref', 'neighbor'] };
   // L8 경과조치 따라가기(#290, 2026-10-07 — Fable 판정 local_docs/자문세문제_판정_261007.md §13-2, Fable 재검토 대상): 부칙은 검색으로 열지 않고
   // (상위 15·정밀검색·감점·문턱은 그대로) 덧붙이기 한 칸으로만 연다. 발동 = A ∧ B.
   //  A(조회 전에 본다 — 안 걸리면 DB 왕복 0): 질문에 시점·전환 낱말. 「시행령·시행규칙·변경신고·변경허가·기한」은 뺐고(실제 기록에서 경과와 무관한 적중),
@@ -659,8 +661,8 @@
   }
   // 그 문서의 조문 조각(docRows)에서 이미 든 조(keys)를 빼고 조 단위로 묶어 고른다(별표·서식·부칙은 조 열쇠가 없어 자연히 빠진다).
   // 남은 합이 wholeChars 이하면 전부, 넘으면 문서 안 순서로 이미 든 조 바로 앞·뒤 조와 제목에 「준용」이 든 조만 max개. 조 번호 순.
-  function pickNeighbors(docRows, keys, opts) {
-    opts = Object.assign({}, NEIGHBOR_OPTS, opts || {});
+  // opts.exclude = 남은 조·남은 합에서 빼되 앞뒤 조의 씨앗은 아닌 조(L9 준용 채택분, #300)
+  function neighborRest(docRows, keys, exclude) {
     const CV = root.CiteVerify;
     const merge = CV ? CV.mergeChunkTexts : function (p) { return p.join('\n'); };
     const groups = {}, order = [];
@@ -672,13 +674,24 @@
     });
     const all = order.slice().sort(cmpArt);
     const have = new Set(keys || []);
-    const rest = all.filter(function (k) { return !have.has(k); }).map(function (k) {
+    const skip = new Set((keys || []).concat(exclude || []));
+    const rest = all.filter(function (k) { return !skip.has(k); }).map(function (k) {
       const g = groups[k];
       return { key: k, doc_name: g.doc_name, article_no: g.article_no, ids: g.rows.map(function (r) { return r.id; }),
         content: merge(g.rows.map(function (r) { return r.content || ''; })) };
     });
-    const total = rest.reduce(function (a, x) { return a + x.content.length; }, 0);
-    if (total <= opts.wholeChars) return rest;
+    return { all: all, have: have, rest: rest, total: rest.reduce(function (a, x) { return a + x.content.length; }, 0) };
+  }
+  // 「전부」 모드인가 — 남은 조문 합이 wholeChars 이하. L9 준용(#300, 설계 D6-b)이 같은 문서의 대상을 건너뛸지 정할 때 근거만으로 미리 본다.
+  function neighborWhole(docRows, keys, opts) {
+    opts = Object.assign({}, NEIGHBOR_OPTS, opts || {});
+    return neighborRest(docRows, keys).total <= opts.wholeChars;
+  }
+  function pickNeighbors(docRows, keys, opts) {
+    opts = Object.assign({}, NEIGHBOR_OPTS, opts || {});
+    const g = neighborRest(docRows, keys, opts.exclude);
+    const all = g.all, have = g.have, rest = g.rest;
+    if (g.total <= opts.wholeChars) return rest;
     const near = new Set();
     all.forEach(function (k, i) {
       if (!have.has(k)) return;
@@ -707,16 +720,11 @@
     const CV = root.CiteVerify;
     if (!CV || !CV.isOtherLawRef) return [];
     const s = String(c.content || ''), out = [];
-    const sub = /(시행령|시행규칙)$/.test(fam), parent = fam.replace(/\s*(시행령|시행규칙)$/, '');
     const re = new RegExp(XREF_RE.source, 'g');
     let m;
     while ((m = re.exec(s))) {
       const key = m[1] + '조' + (m[2] ? '의' + m[2] : '');
-      const before = s.slice(Math.max(0, m.index - 80), m.index);
-      let tf = null;
-      if (!CV.isOtherLawRef(before)) tf = fam;
-      else if (sub && bareWordRef(before, '법')) tf = parent;
-      else if (/시행규칙$/.test(fam) && bareWordRef(before, '영')) tf = parent + ' 시행령';
+      const tf = refLawOf(s.slice(Math.max(0, m.index - 80), m.index), fam);   // L9(#300)와 같은 규칙 한 곳
       if (tf) out.push({ fam: tf, key: key });
     }
     return out;
@@ -793,6 +801,176 @@
       text: '[' + docName + ' ' + title + ']' +
         (omitted > 0 ? '\n※ 이 별표는 전체 ' + all.length + '개 조각 중 질문과 가까운 ' + picked.length + '개만 실었습니다. 표의 일부만 보이면 그렇게 밝히세요.' : '') +
         '\n' + content };
+  }
+
+  // ── L9 준용 따라가기(#300, 2026-10-13 — 설계 local_docs/준용따라가기_설계_261013.md, Fable 결정 D1~D10·같은 창 구현) ──
+  // 본래 근거 조문(위임·공통 인용과 같은 [정밀검색, 상한 구제, RAG] — 덧붙인 조문은 근거가 아니다, 한 걸음) 본문의 **준용 지시문**
+  // (「…에 관하여는 제5조부터 제8조까지, 제9조제2항 … 제13조를 준용한다」)이 가리키는 같은 법령의 조를 붙인다. 근거 1곳이어도 — 준용은
+  // 「이 조의 사안에 저 조의 규칙을 적용한다」는 유형이 정해진 참조라 아무 「제N조」 언급(L3′가 2곳 조건을 둔 이유)과 다르다.
+  // 사내 10-12 자문(「주파수 재할당 신청 절차와 법정 기한」)에서 고시 제17조(준용규정)가 근거였는데 그 대상 5~13조(적격 1개월·선정 6개월·서류 3개월)를
+  // 어느 갈래도 안 따라갔다 — L4는 남은 합 6,067 > 6,000이라 앞뒤 모드, L3′는 근거 1곳이라 minBases 미달 + XREF_RE가 범위를 안 펼침.
+  // 발동 문턱(D1-b): ⓐ 근거 조 제목(article_no)에 「준용」이면 무조건 ⓑ 아니면 그 지시문 문장에 질문 키워드(applyKeywords)가 하나는 들어야 한다 —
+  // 개발 20·V2 20 근거에서 문턱 없이 9+6문항이 걸렸고 그중 무관한 근거의 준용(q06 설비제공 대가 고시 51조 → 41~49조 9개 등) 5+5문항을 문턱이 전부 걸렀다(10-13).
+  // 범위(「제N조부터 제M조(까지)」·「내지」)는 정수 번호만 펼친다 — 「제N조의K」는 범위 안에 있어도 세지 않는다(사업법 45조의2~의9 4,600자, 명시된 것만).
+  // 항 지정(「제11조제3항」)은 조 단위 앞 chunksPerArticle조각 + 꼬리말 「(제3항)」. 실DB 전수(10-13): 지시문 247(212조), 지시문당 대상 중앙 1·90% 5·최대 34.
+  const APPLY_OPTS = { on: true, perDirective: 10, max: 10, chunksPerArticle: 2, maxChars: 6000, spare: 2 };
+  // 지시문 어미 — 「준용하는/되는 경우를 포함한다」(104건)·「준용하지 아니한다」·「준용되는 「X」 제N조」는 어미가 달라 안 걸린다. 「준용할 수 없다/있다」(3건)만 따로 뺀다.
+  const APPLY_DIRECTIVE_RE = /준용(?:한다|하되|하여|할(?!\s*수\s*(?:없|있))|된다|하고|하며|함)/g;
+  // 목적어 선행형의 꼬리 — 「…에 관하여는 <조·항·호·이음말·괄호 하나>을/를 준용」. isOtherLawRef의 나열 꼬리와 같은 발상에 「같은 조」·「의 규정」·조사·괄호를 더했다.
+  const APPLY_RUN_RE = /(?:제\s?\d+\s?(?:조(?:\s?의\s?\d+)?|항|호(?:\s?의\s?\d+)?)|같은\s*(?:조|항)|[가-하]목|각\s?호|본문|단서|전단|후단|의\s*규정|규정|[,ㆍ·]|및|또는|부터|까지|내지|이나|와|과|을|를|은|는|\s|\([^()]*\))+$/;
+  // 주어 선행형 — 문장 머리(①~⑳·「1.」 뒤)의 조 나열 + 「(의 규정)은/는 」(「제17조는 공사업자의 변경신고에 관하여 이를 준용한다」)
+  const APPLY_SUBJ_RE = /^\s*(?:[①-⑳]|\d+\.)?\s*((?:제\s?\d+\s?(?:조(?:\s?의\s?\d+)?|항|호(?:\s?의\s?\d+)?)|[,ㆍ·]|및|또는|부터|까지|내지|이나|와|과|\s)+?)(?:의\s*규정)?(?:은|는)\s/;
+  // 조 자신의 머리 「제17조(준용규정) 」 — 조각 첫 문장의 주어 선행형을 읽을 때 뗀다(ADD_HEAD_RE와 같은 꼴)
+  const APPLY_HEAD_RE = /^\s*제\s?\d+\s?조(?:\s?의\s?\d+)?\s*\([^)\n]{0,80}\)\s*/;
+  // 참조 앞글로 법령 정하기 — xrefTargets와 같은 규칙(다른 법령은 null, 시행령·시행규칙의 홀로 쓴 「법」·「영」은 모법·시행령). 판별 규칙을 새로 만들지 않는다.
+  function refLawOf(before, fam) {
+    const CV = root.CiteVerify;
+    if (!CV || !CV.isOtherLawRef) return null;
+    const sub = /(시행령|시행규칙)$/.test(fam), parent = fam.replace(/\s*(시행령|시행규칙)$/, '');
+    if (!CV.isOtherLawRef(before)) return fam;
+    if (sub && bareWordRef(before, '법')) return parent;
+    if (/시행규칙$/.test(fam) && bareWordRef(before, '영')) return parent + ' 시행령';
+    return null;
+  }
+  // 나열 글 → [{key, para}] — 「제5조부터 제8조까지」·「제7조 내지 제9조」는 정수 범위(폭 ≤ 40, 역순이면 둘 다 낱개), 「제9조제2항」은 조 + 항.
+  // 「제21조제1항부터 제6항까지」는 항 범위라 조 하나. 괄호 설명(「(가격경쟁에 … 제외한다)」)은 떼고 읽는다 — 그 안의 조 번호는 대상이 아니다.
+  function applyRefs(run) {
+    const s = String(run || '').replace(/\([^()]*\)/g, ' ');
+    const toks = [], out = [];
+    const re = new RegExp(XREF_RE.source, 'g');
+    let m;
+    while ((m = re.exec(s))) toks.push({ n: Number(m[1]), sub: Number(m[2] || 0), end: m.index + m[0].length });
+    for (let i = 0; i < toks.length; i++) {
+      const t = toks[i], after = s.slice(t.end, t.end + 24);
+      const key = t.n + '조' + (t.sub ? '의' + t.sub : '');
+      if (/^\s?(?:부터|내지)/.test(after) && i + 1 < toks.length) {
+        const u = toks[i + 1], ukey = u.n + '조' + (u.sub ? '의' + u.sub : '');
+        if (u.n === t.n && t.sub && u.sub >= t.sub) {            // 「제28조의2부터 제28조의5까지」 — 같은 번호의 「의K」 범위(허점 점검 6)
+          for (let s2 = t.sub; s2 <= u.sub; s2++) out.push({ key: t.n + '조의' + s2, para: null });
+        } else if (u.n > t.n && u.n - t.n <= 40) {
+          for (let n = t.n; n <= u.n; n++) out.push({ key: n === t.n ? key : n + '조', para: null });
+          if (u.sub) out.push({ key: ukey, para: null });         // 끝점이 「제8조의3」이면 끝점도(명시된 것)
+        } else { out.push({ key: key, para: null }); out.push({ key: ukey, para: null }); }
+        i++; continue;
+      }
+      const p = after.match(/^\s?제\s?(\d+)\s?항(?:\s?부터\s?제\s?(\d+)\s?항\s?까지)?/);
+      out.push({ key: key, para: p ? (p[2] ? p[1] + '~' + p[2] : p[1]) : null });
+    }
+    return out;
+  }
+  // 조각 하나의 준용 지시문이 가리키는 조 — [{fam, key, para, sent}] 쓰인 순, 지시문당 perDirective개, 같은 조 한 번. fam = 그 조각의 법령군.
+  // 문장 = 직전 「.」·줄바꿈 뒤부터 「준용」 앞. ① 목적어 선행: 꼬리(APPLY_RUN_RE)에 조가 있으면 그 조들, 법령은 꼬리 앞글로 한 번(나열 머리 규칙)
+  // ② 꼬리에 조가 없고 「같은 조」면 문장 안 바로 앞 조(전파법 제16조④ 「같은 조 제2항부터 제5항까지…를 준용하되」 → 제11조)
+  // ③ 주어 선행(APPLY_SUBJ_RE). 항만 적은 지시문(「제2항을 준용」, 133건)은 자기 조 안이라 대상 없음.
+  function applyTargets(c, fam, opts) {
+    opts = Object.assign({}, APPLY_OPTS, opts || {});
+    const s = String(c && c.content || '');
+    const out = [], seen = {};
+    const re = new RegExp(APPLY_DIRECTIVE_RE.source, 'g');
+    let m;
+    while ((m = re.exec(s))) {
+      const s0 = Math.max(s.lastIndexOf('.', m.index), s.lastIndexOf('\n', m.index)) + 1;
+      // 조 머리 「제N조(…)」로 시작하지 않는 조각(통째 보강이 안 된 조의 뒷조각 — chunk_index는 문서 전체 번호라 못 쓴다)의 첫 문장은 머리가 잘린
+      // 지시문일 수 있다(전파법 제16조 둘째 조각 「제12조를 준용한다.」) — 나열 일부만 조용히 들어오지 않게 건너뜀(허점 점검 7)
+      if (s0 === 0 && !APPLY_HEAD_RE.test(s) && !/^\s*(?:[①-⑳]|\d+\.)/.test(s)) continue;   // 「② …」로 시작하면 온전한 문장
+      let sent = s.slice(s0, m.index);
+      if (s0 === 0) sent = sent.replace(APPLY_HEAD_RE, '');
+      let law = null, refs = [];
+      // 분배형 「A에 관하여는 제X조를, B에 관하여는 제Y조를 각각 준용한다」(전파법 시행령 77조③) — 「각각」이 있으면 「을,」·「를,」 구간마다 꼬리를 읽는다(허점 점검 4)
+      if (/각각\s*$/.test(sent)) {
+        let rest = sent.replace(/각각\s*$/, ''), segs = [];
+        for (let guard = 0; guard < 12 && rest; guard++) {
+          const r = rest.match(APPLY_RUN_RE);
+          if (!r || !/제\s?\d+\s?조/.test(r[0].replace(/\([^()]*\)/g, ''))) break;
+          segs.push({ run: r[0], before: rest.slice(0, r.index) });
+          const cut = rest.slice(0, r.index).search(/[을를]\s*,\s*[^,]*$/);
+          if (cut < 0) break;
+          rest = rest.slice(0, cut + 1);
+        }
+        segs.forEach(function (sg) {
+          const lw = refLawOf(sg.before, fam);
+          if (lw && (!law || lw === law)) { law = lw; refs = applyRefs(sg.run).concat(refs); }
+        });
+        pushRefs(law, refs, sent); continue;
+      }
+      let run = sent.match(APPLY_RUN_RE);
+      // 꼬리가 낱말에 붙은 조사(「기술기준은 제7조…」의 「은」)에서 시작하면 그 조사는 앞 낱말 것 — 꼬리에서 떼지 않으면 앞글 「기술기준」이 법령명으로 읽힌다
+      if (run) {
+        let at = run.index, tail = run[0];
+        const pm = tail.match(/^(?:은|는|을|를|와|과|이나)\s*/);
+        if (pm && at > 0 && /[가-힣]/.test(sent[at - 1])) { at += pm[0].length; tail = tail.slice(pm[0].length); }
+        run = { index: at, 0: tail };
+      }
+      if (run && /제\s?\d+\s?조/.test(run[0].replace(/\([^()]*\)/g, ''))) {
+        law = refLawOf(sent.slice(0, run.index), fam);
+        if (law) refs = applyRefs(run[0]);
+      } else if (run && /같은\s*조/.test(run[0])) {
+        const head = sent.slice(0, run.index), xr = new RegExp(XREF_RE.source, 'g');
+        let p = null, pm;
+        while ((pm = xr.exec(head))) p = pm;
+        const pr = run[0].match(/같은\s*조\s*제\s?(\d+)\s?항(?:\s?부터\s?제\s?(\d+)\s?항\s?까지)?/);   // 「같은 조 제2항부터 제5항까지」 → 항 범위 꼬리(허점 점검 33)
+        if (p) { law = refLawOf(head.slice(0, p.index), fam); if (law) refs = [{ key: p[1] + '조' + (p[2] ? '의' + p[2] : ''), para: pr ? (pr[2] ? pr[1] + '~' + pr[2] : pr[1]) : null }]; }
+      } else {
+        const sm = sent.match(APPLY_SUBJ_RE);
+        if (sm && /제\s?\d+\s?조/.test(sm[1])) {
+          law = refLawOf(sent.slice(0, sm.index + sm[0].indexOf(sm[1])), fam);
+          if (law) refs = applyRefs(sm[1]);
+        }
+      }
+      pushRefs(law, refs, sent);
+    }
+    return out;
+    function pushRefs(law, refs, sent) {
+      let n = 0;
+      refs.forEach(function (r) {
+        if (n >= opts.perDirective) return;
+        const k = law + '|' + r.key;
+        if (seen[k]) return;
+        seen[k] = 1; n++;
+        out.push({ fam: law, key: r.key, para: r.para, sent: sent.trim() });
+      });
+    }
+  }
+  // 관련성 문턱의 키워드(D1-b ⓑ) — 질문 키워드에서 제목 불용어·「규정·조항·조문·법령·법률·시행령·고시」를 뺀 것. 비면 문턱 없음(fail-open).
+  function applyKeywords(question) {
+    const q = String(question || '');
+    return extractKeywords(q).filter(function (w) { return !isTitleStop(w, q) && !ADDENDUM_GENERIC_RE.test(w); });
+  }
+  // 근거(lists = [정밀검색, 상한 구제, RAG])마다 준용 대상을 모아 후보 max(+spare)개 — 근거 순 → 지시문 순 → 쓰인 순. 이미 든 조(present)·위임 후보(taken)·
+  // 근거 자신·정의·목적 조 출발·파일 문서 제외, 같은 조 한 번(먼저 가리킨 근거가 base). 문턱: 지시문 문장에 질문 키워드(applyKeywords)가 하나는 들어야 한다 —
+  // 키워드가 없으면 **끈다**(fail-closed, 허점 점검 10 — 상투어뿐인 질문에 모든 근거의 준용이 붙는 것을 막는다; L8과 달리 이 문턱이 유일하다).
+  // 「근거 조 제목에 준용이면 무조건」은 두지 않는다(허점 점검 9 — 어느 측정도 그 규칙을 시험하지 못했고, 특수 절의 준용규정이 무관한 질문에 최대 10조를 붙인다).
+  // opts.skipDoc = 같은 고시가 근거만으로 「전부」 모드인 문서(D6-b) — 그 문서의 대상은 후보에서부터 뺀다(조회·taken에도 안 든다, 허점 점검 14·15).
+  function pickApply(lists, present, taken, question, opts) {
+    opts = Object.assign({}, APPLY_OPTS, opts || {});
+    if (opts.on === false) return [];
+    const kws = applyKeywords(question);
+    if (!kws.length) return [];
+    const pres = present || new Set(), tk = taken || {};
+    const by = {}, out = [];
+    (lists || []).forEach(function (list) {
+      (list || []).forEach(function (c) {
+        if (!c || FILE_DOC_RE.test(c.doc_name || '')) return;
+        const mk = String(c.article_no || '').match(/^(\d+조(?:의\d+)?)/);
+        const fam = famOf(c.doc_name);
+        if (!mk || !fam || ADDON_SKIP_ARTNO_RE.test(c.article_no || '')) return;
+        const bk = fam + '|' + mk[1];
+        applyTargets(c, fam, opts).forEach(function (t) {
+          if (!kws.some(function (w) { return t.sent.indexOf(w) !== -1; })) return;
+          if (opts.skipDoc && t.fam === fam && c.doc_name === opts.skipDoc) return;
+          const k = t.fam + '|' + t.key;
+          if (k === bk || pres.has(k) || tk[k] || by[k]) return;
+          by[k] = 1;
+          out.push({ sec: 'apply', fam: t.fam, key: t.key, para: t.para, base: { fam: fam, key: mk[1] }, doc: t.fam === fam ? c.doc_name : null });
+        });
+      });
+    });
+    return out.slice(0, opts.max + (opts.spare || 0));
+  }
+  function applyTail(it) {
+    const b = it.base;
+    const pa = it.para == null ? '' : String(it.para).indexOf('~') > 0 ? '(제' + String(it.para).replace('~', '항~제') + '항)' : '(제' + it.para + '항)';
+    return ' — 위 ' + b.fam + ' 제' + b.key + '가 준용하는 조문' + pa;
   }
 
   // ── L8 경과조치 따라가기(#290 — 위 ADDENDUM_* 설명) ──
@@ -976,12 +1154,19 @@
   }
   // deleg(L7) → xref(L3′) → neighbor(L4) → annex(덧붙인 조문의 별표) → addendum(L8 경과조치, #290) 순. 넷째·셋째 인자는 2차에서, 다섯째는 #290에서
   // 더한 것(없으면 그 전과 같은 글).
-  function buildAddOnContext(deleg, neighbor, xref, annex, addendum) {
+  function buildAddOnContext(deleg, neighbor, xref, annex, addendum, apply) {
     let text = '';
     if (deleg && deleg.length) {
       text += '\n\n---\n\n[위임 관계로 이어진 조문 — 위 조문이 위임한 하위 조문과, 그 근거가 되는 상위 조문]\n' +
         '위 조문과 위임으로 직접 이어진 조문입니다. 질문이 묻는 기한·금액·요건·절차가 여기 있으면 상위 조문과 함께 제시하세요(관련 없으면 쓰지 않아도 됩니다):\n\n' +
         deleg.map(function (x, i) { return '[위임 ' + (i + 1) + '] ' + x.doc_name + ' ' + x.article_no + delegTail(x) + '\n' + x.content; }).join('\n\n---\n\n');
+    }
+    if (apply && apply.length) {
+      // L9 준용(#300) — 준용은 「위 조문의 사안에 아래 조문의 규칙을 그대로 적용」이라 관계를 밝히되, 다른 구역처럼 약하게(설계 D7·H11)
+      text += '\n\n---\n\n[위 조문이 준용하는 조문 — 위에 실린 조문이 「…를 준용한다」고 가리킨 같은 법령의 조문]\n' +
+        '위 조문의 사안에는 아래 조문의 요건·절차·기한·기준이 준용(그대로 적용)됩니다. 질문이 묻는 기한·요건·절차가 여기 있으면 준용하는 조문과 함께 제시하세요(관련 없으면 쓰지 않아도 됩니다). ' +
+        '인용 표시는 준용되는 조문 번호(예: 제8조제1항)로 적고, 준용하는 조문(예: 제17조)은 본문에 「제17조에 따라 준용」으로 밝히세요:\n\n' +
+        apply.map(function (x, i) { return '[준용 ' + (i + 1) + '] ' + x.doc_name + ' ' + x.article_no + applyTail(x) + '\n' + x.content; }).join('\n\n---\n\n');
     }
     if (xref && xref.length) {
       text += '\n\n---\n\n[위 조문 여러 곳이 함께 가리키는 조문 — 검색된 조문 둘 이상이 번호로 인용한 같은 법령의 조문]\n' +
@@ -1013,7 +1198,7 @@
   //   familyDocs(fams) → [{law_name, doc_name}] 법령군의 현행 문서명(선택 — 없거나 실패하면 문서명 없이 조회),
   //   familyArticle(fam, key, docName) → 그 법령군 현행 문서의 그 조 조각들(docName을 알면 그 문서만), docArticles(doc_name) → 그 문서의 조문 조각들,
   //   annexRows(doc_name, no) → 그 문서 별표 N의 조각들(선택 — 없으면 별표 칸 없음) }.
-  // opts = { question(별표 조각 고르기), deleg, xref, neighborOpts, budget, fillOrder, neighbor:false, annex:false }.
+  // opts = { question(별표 조각 고르기·L8 발동·L9 문턱), deleg, xref, apply(L9 상한, false = 끔), neighborOpts, budget, fillOrder, neighbor:false, annex:false }.
   // 반환 { text, chunks(검증용 — 조·별표마다 한 덩어리, id = 첫 조각), ids(실린 조각 id 전부), deleg(L7 덩어리), items(측정용
   //        [{sec, dir, fam, key}] — spill 포함), chars(구역 글자 수), annexCites, annexSources, parts(trimAddOns 재료) }.
   //        조회 하나가 실패해도 그 갈래만 비고 나머지는 간다.
@@ -1022,6 +1207,7 @@
     opts = opts || {};
     const dOpts = Object.assign({}, DELEG_OPTS, opts.deleg || {});
     const xOpts = Object.assign({}, XREF_OPTS, opts.xref || {});
+    const aOpts = Object.assign({}, APPLY_OPTS, opts.apply === false ? { on: false } : (opts.apply || {}));
     const budget = opts.budget != null ? opts.budget : ADDON_OPTS.budgetChars;
     const CV = root.CiteVerify;
     const merge = CV ? CV.mergeChunkTexts : function (p) { return p.join('\n'); };
@@ -1043,8 +1229,18 @@
     const cand = pickDelegations(bases, rows, present, dOpts);
     const taken = {};
     cand.down.concat(cand.up).forEach(function (it) { taken[it.fam + '|' + it.key] = 1; });
+    // L9 준용(#300) 후보 — 위임 후보처럼 taken에 넣어 공통 인용 후보에서 뺀다(채택 전 단계에서 빼야 L3′의 3칸이 준용과 겹쳐 줄지 않는다).
+    // 같은 고시(L4)가 근거만으로 이미 「전부」 모드면 그 문서의 준용 대상은 후보에서부터 뺀다(설계 D6-b) — 어차피 전부 들어올 조를 이름만 바꿔 예산을
+    // 먼저 쓰는 꼴이라, 개발 q01에서 26조(5G 특화망 준용규정)의 대상 18~23조가 앞서 들어가 전부 모드가 가져올 10·11·12·16·17조(준용규정 자신)를 밀어냈다(10-13).
+    // 꺼져 있거나(opts.apply === false) 채우기 순서에 apply가 없으면 후보도 만들지 않는다 — taken만 돌면 공통 인용에서 빠지는 손실만 남는다(허점 점검 15).
+    const fillOrder = opts.fillOrder || ADDON_OPTS.fillOrder;
+    const docRows = nt ? await docP : [];
+    const nbWhole = nt ? neighborWhole(docRows, nt.keys, opts.neighborOpts) : false;
+    const ac = (aOpts.on === false || fillOrder.indexOf('apply') < 0) ? []
+      : pickApply([extra, spill, rag], present, taken, opts.question, Object.assign({}, aOpts, nbWhole ? { skipDoc: nt.doc_name } : {}));
+    ac.forEach(function (it) { taken[it.fam + '|' + it.key] = 1; });
     const xc = opts.xref === false ? [] : pickXrefs([extra, spill, rag], present, taken, xOpts);
-    const want = cand.down.concat(cand.up).concat(xc.map(function (x) { return Object.assign({ sec: 'xref' }, x); }));
+    const want = cand.down.concat(cand.up).concat(ac).concat(xc.map(function (x) { return Object.assign({ sec: 'xref' }, x); }));
     // 문서명을 모르는 법령군은 한 번에 현행 문서명을 받아 그 문서만 조회한다 — 「'법령군(%' + 조」 조회는 현행 조각 4만여 행을 훑었다
     // (실행 계획 버퍼 9,124·40~115ms, 문항당 최대 12개 동시 → 문서명 지정 시 버퍼 212·1.2ms, Fable 재검토 §3④)
     const docOf = {};
@@ -1058,7 +1254,7 @@
     const got = await Promise.all(want.map(function (it) {
       return soft(function () { return fetchers.familyArticle(it.fam, it.key, it.doc || docOf[it.fam] || null); });
     }));
-    const ready = { down: [], up: [], xref: [] };
+    const ready = { down: [], up: [], xref: [], apply: [] };
     want.forEach(function (it, i) {
       const rs = got[i].filter(function (r) {
         return r && famOf(r.doc_name) === it.fam && !FILE_DOC_RE.test(r.doc_name || '') && (String(r.article_no || '').match(/^(\d+조(?:의\d+)?)/) || [])[1] === it.key;
@@ -1068,19 +1264,20 @@
       rs.forEach(function (r) { doc = laterDoc(doc, r.doc_name); });   // 같은 법령군이 여럿이면 문서명 끝 시행일이 늦은 쪽
       const mine = rs.filter(function (r) { return r.doc_name === doc; }).sort(function (a, b) { return (a.chunk_index || 0) - (b.chunk_index || 0); });
       if (ADDON_SKIP_ARTNO_RE.test(mine[0].article_no || '')) return;
-      const isX = it.sec === 'xref';
-      const use = mine.slice(0, isX ? xOpts.chunksPerArticle : dOpts.chunksPerArticle);
+      const isX = it.sec === 'xref', isA = it.sec === 'apply';
+      const use = mine.slice(0, isA ? aOpts.chunksPerArticle : isX ? xOpts.chunksPerArticle : dOpts.chunksPerArticle);
       let content = merge(use.map(function (r) { return r.content || ''; }));
       if (mine.length > use.length) content += '\n(※ 이 조문은 전체 ' + mine.length + '조각 중 앞 ' + use.length + '조각만 실었습니다. 보이지 않는 항·호가 있을 수 있습니다.)';
-      const slot = isX ? 'xref' : it.dir;
-      const lim = isX ? xOpts.max : it.dir === 'down' ? dOpts.down : dOpts.up;
+      const slot = isA ? 'apply' : isX ? 'xref' : it.dir;
+      const lim = isA ? aOpts.max : isX ? xOpts.max : it.dir === 'down' ? dOpts.down : dOpts.up;
       if (ready[slot].length >= lim) return;
       ready[slot].push(Object.assign({}, it, { doc_name: doc, article_no: mine[0].article_no, content: content, ids: use.map(function (r) { return r.id; }) }));
     });
     let used = spill.reduce(function (a, c) { return a + String(c.content || '').length; }, 0);
     let delegUsed = 0;
     const items = spill.map(function (c) { return { sec: 'spill', fam: famOf(c.doc_name), key: unitKey(c.article_no) || '' }; });
-    const dPick = { down: [], up: [] }, xref = [], neighbor = [];
+    const dPick = { down: [], up: [] }, xref = [], neighbor = [], apply = [];
+    let applyUsed = 0;
     const chosen = new Set();   // 문서|조 — 한 조가 두 칸으로 갈리지 않게(설계 H13): 위임·공통 인용·같은 고시끼리도 한 번만
     const fits = function (len) { if (used + len > budget) return false; used += len; return true; };
     const putDeleg = function (dir) {
@@ -1089,6 +1286,14 @@
         if (chosen.has(x.doc_name + '|' + x.key) || delegUsed + len > dOpts.maxChars || !fits(len)) return;
         delegUsed += len; chosen.add(x.doc_name + '|' + x.key);
         dPick[dir].push(x);
+      });
+    };
+    const putApply = function () {
+      ready.apply.forEach(function (x) {
+        const len = x.doc_name.length + x.article_no.length + applyTail(x).length + x.content.length + 20;
+        if (chosen.has(x.doc_name + '|' + x.key) || applyUsed + len > aOpts.maxChars || !fits(len)) return;
+        applyUsed += len; chosen.add(x.doc_name + '|' + x.key);
+        apply.push(x);
       });
     };
     const putXref = function () {
@@ -1110,13 +1315,15 @@
     };
     const guess = useAnnex ? firstAnnex(spill.concat(ready.down).concat(ready.up).concat(ready.xref)) : null;
     const guessP = guess ? loadAnnex(guess) : Promise.resolve(null);
-    const neighborCands = nt ? pickNeighbors(await docP, nt.keys, opts.neighborOpts) : [];
     let annex = null;
-    const fillOrder = opts.fillOrder || ADDON_OPTS.fillOrder;
     for (const step of fillOrder) {
       if (step === 'down' || step === 'up') putDeleg(step);
+      else if (step === 'apply') putApply();
       else if (step === 'xref') putXref();
       else if (step === 'neighbor') {
+        // 준용(L9)으로 이미 고른 그 문서의 조는 남은 합(전부 모드 판정)·후보에서 뺀다 — 앞뒤 조의 씨앗은 아니다(근거의 앞뒤만, 한 걸음 — 허점 점검 16·설계 D6)
+        const applyKeys = nt ? apply.filter(function (x) { return x.doc_name === nt.doc_name; }).map(function (x) { return x.key; }) : [];
+        const neighborCands = nt ? pickNeighbors(docRows, nt.keys, Object.assign({}, opts.neighborOpts || {}, { exclude: applyKeys })) : [];
         neighborCands.forEach(function (x) {
           const len = x.doc_name.length + x.article_no.length + x.content.length + 20;
           if (chosen.has(x.doc_name + '|' + x.key) || !fits(len)) return;
@@ -1139,27 +1346,28 @@
       [extra, spill, rag].forEach(function (list) { (list || []).forEach(function (c) { if (c && /^부칙/.test(c.article_no || '')) presentUnits.add(c.doc_name + '|' + c.article_no); }); });
       addendum = pickAddenda(addendumCandidates(await addP, aBases, presentUnits, opts.question));
     }
-    return packAddOns({ deleg: deleg, xref: xref, neighbor: neighbor, annex: annex, addendum: addendum, spillItems: items });
+    return packAddOns({ deleg: deleg, xref: xref, neighbor: neighbor, annex: annex, addendum: addendum, apply: apply, spillItems: items });
   }
   // 덧붙인 것 → 결과 꼴. parts는 trimAddOns가 다시 묶을 재료(호출측은 쓰지 않는다).
   function packAddOns(p) {
-    const deleg = p.deleg || [], xref = p.xref || [], neighbor = p.neighbor || [], annex = p.annex || null, addendum = p.addendum || [];
+    const deleg = p.deleg || [], xref = p.xref || [], neighbor = p.neighbor || [], annex = p.annex || null, addendum = p.addendum || [], apply = p.apply || [];
     const items = (p.spillItems || []).slice();
     deleg.forEach(function (x) { items.push({ sec: 'deleg', dir: x.dir, fam: x.fam, key: x.key }); });
+    apply.forEach(function (x) { items.push({ sec: 'apply', fam: x.fam, key: x.key, base: { fam: x.base.fam, key: x.base.key } }); });   // L9(#300) — base는 측정용
     xref.forEach(function (x) { items.push({ sec: 'xref', fam: x.fam, key: x.key }); });
     neighbor.forEach(function (x) { items.push({ sec: 'neighbor', fam: famOf(x.doc_name), key: x.key }); });
     if (annex) items.push({ sec: 'annex', fam: famOf(annex.doc_name), key: annex.key });
     addendum.forEach(function (x) { items.push({ sec: 'addendum', fam: x.fam, key: x.unit + '제' + x.art }); });   // 열쇠는 판정기 꼴 「부칙제N호제M조」(#290)
-    const parts = { deleg: deleg, xref: xref, neighbor: neighbor, annex: annex, addendum: addendum, spillItems: p.spillItems || [] };
-    if (!deleg.length && !xref.length && !neighbor.length && !annex && !addendum.length) {
-      return { text: '', chunks: [], ids: [], deleg: [], items: items, chars: 0, annexCites: [], annexSources: [], parts: parts, addendum: 0 };
+    const parts = { deleg: deleg, xref: xref, neighbor: neighbor, annex: annex, addendum: addendum, apply: apply, spillItems: p.spillItems || [] };
+    if (!deleg.length && !xref.length && !neighbor.length && !annex && !addendum.length && !apply.length) {
+      return { text: '', chunks: [], ids: [], deleg: [], items: items, chars: 0, annexCites: [], annexSources: [], parts: parts, addendum: 0, apply: 0 };
     }
-    const text = buildAddOnContext(deleg, neighbor, xref, annex, addendum);
+    const text = buildAddOnContext(deleg, neighbor, xref, annex, addendum, apply);
     const chunks = [], ids = [];
-    deleg.concat(xref).concat(neighbor).concat(annex ? [annex] : []).concat(addendum).forEach(function (x) {
+    deleg.concat(apply).concat(xref).concat(neighbor).concat(annex ? [annex] : []).concat(addendum).forEach(function (x) {
       // 부칙 항목(#290)은 article_no가 단위(「부칙 제20792호(20250318)」), content는 그 조만 — 판정기가 단위로 읽고 조 머리로 다시 자른다
       chunks.push({ id: x.ids[0], doc_name: x.doc_name, article_no: x.article_no, content: x.content,
-        _addon: x === annex ? 'annex' : x.unit ? 'addendum' : x.sec === 'xref' ? 'xref' : x.dir ? 'deleg' : 'neighbor' });
+        _addon: x === annex ? 'annex' : x.unit ? 'addendum' : x.sec === 'xref' ? 'xref' : x.sec === 'apply' ? 'apply' : x.dir ? 'deleg' : 'neighbor' });
       x.ids.forEach(function (id) { if (typeof id === 'number' && ids.indexOf(id) === -1) ids.push(id); });
     });
     // L7 조문이 가리키는 별표(타 법령 인용 제외) — 측정용(설계 H6)
@@ -1168,10 +1376,10 @@
       annexWanted([x]).forEach(function (w) { const t = famOf(w.doc_name) + ' 별표 ' + w.no; if (annexCites.indexOf(t) === -1) annexCites.push(t); });
     });
     return { text: text, chunks: chunks, ids: ids, deleg: chunks.filter(function (c) { return c._addon === 'deleg'; }),
-      items: items, chars: text.length, annexCites: annexCites, annexSources: annex ? [annex.source] : [], parts: parts, addendum: addendum.length };
+      items: items, chars: text.length, annexCites: annexCites, annexSources: annex ? [annex.source] : [], parts: parts, addendum: addendum.length, apply: apply.length };
   }
   // 참조 자료 전체 상한 — otherChars(덧붙이기 구역을 뺀 나머지 참조 자료 글자 수) + 덧붙이기 구역이 maxTotalChars를 넘으면
-  // 비싼 것·우선순위가 낮은 것부터(덧붙인 조문의 별표 → 같은 고시 → 공통 인용 → 위 → 아래, 각각 뒤에서) 덜어 다시 묶는다. 설계의
+  // 비싼 것·우선순위가 낮은 것부터(경과조치 → 덧붙인 조문의 별표 → 같은 고시 → 공통 인용 → 준용 → 위 → 아래, 각각 뒤에서) 덜어 다시 묶는다. 설계의
   // 「최대 48K 토큰」을 문항마다 지키는 장치. 2차에서 별표를 맨 앞에 — 1차는 넘친 원인(별표 9.8K자)은 두고 조문을 덜어 냈다(재검토 §1-6 i30).
   // 덧붙이기 구역 앞의 글(상위 15·정밀검색·역참조·별표 등)은 건드리지 않는다. 덜어낼 것이 없으면 그대로 둔다. trimmed = 덜어 낸 개수.
   function trimAddOns(ao, otherChars, maxTotal) {
@@ -1179,14 +1387,15 @@
     if (!ao || !ao.text || !ao.parts || (otherChars || 0) + ao.text.length <= cap) return ao;
     const p = ao.parts;
     let annex = p.annex || null;
-    const deleg = (p.deleg || []).slice(), xref = (p.xref || []).slice(), neighbor = (p.neighbor || []).slice(), addendum = (p.addendum || []).slice();
-    const count = function () { return deleg.length + xref.length + neighbor.length + (annex ? 1 : 0) + addendum.length; };
+    const deleg = (p.deleg || []).slice(), xref = (p.xref || []).slice(), neighbor = (p.neighbor || []).slice(), addendum = (p.addendum || []).slice(), apply = (p.apply || []).slice();
+    const count = function () { return deleg.length + xref.length + neighbor.length + (annex ? 1 : 0) + addendum.length + apply.length; };
     const before = count();
     let cur = ao;
     while (count() && (otherChars || 0) + cur.text.length > cap) {
       // L8 경과조치(#290)를 가장 먼저 — 예산도 따로 몫이라 다른 칸보다 앞서 덜어 낸다(판정 §13-2)
-      if (addendum.length) addendum.pop(); else if (annex) annex = null; else if (neighbor.length) neighbor.pop(); else if (xref.length) xref.pop(); else deleg.pop();
-      cur = packAddOns({ deleg: deleg, xref: xref, neighbor: neighbor, annex: annex, addendum: addendum, spillItems: p.spillItems });
+      // 준용(L9, #300)은 공통 인용 뒤·위임 앞 — 근거가 유형을 지정한 참조라 공통 인용보다 오래 남긴다(설계 D5)
+      if (addendum.length) addendum.pop(); else if (annex) annex = null; else if (neighbor.length) neighbor.pop(); else if (xref.length) xref.pop(); else if (apply.length) apply.pop(); else deleg.pop();
+      cur = packAddOns({ deleg: deleg, xref: xref, neighbor: neighbor, annex: annex, addendum: addendum, apply: apply, spillItems: p.spillItems });
     }
     cur.trimmed = before - count();
     return cur;
@@ -1243,7 +1452,7 @@
     fetchNamedArticles: fetchNamedArticles,
     ADDON_OPTS: ADDON_OPTS, DELEG_OPTS: DELEG_OPTS, NEIGHBOR_OPTS: NEIGHBOR_OPTS,
     NOTICE_DOC_RE: NOTICE_DOC_RE, unitKey: unitKey, capSpill: capSpill, pickSpill: pickSpill,
-    delegationBases: delegationBases, pickDelegations: pickDelegations, neighborTarget: neighborTarget, pickNeighbors: pickNeighbors,
+    delegationBases: delegationBases, pickDelegations: pickDelegations, neighborTarget: neighborTarget, pickNeighbors: pickNeighbors, neighborWhole: neighborWhole,
     buildAddOnContext: buildAddOnContext, fetchAddOns: fetchAddOns, trimAddOns: trimAddOns,
     // 자문 빠뜨림 2차(#283-보론2) — 형제 순서·공통 인용·덧붙인 조문의 별표 1칸
     XREF_OPTS: XREF_OPTS, pickXrefs: pickXrefs, xrefTargets: xrefTargets,
@@ -1253,6 +1462,8 @@
     ADDENDUM_GENERIC_RE: ADDENDUM_GENERIC_RE, addendumKeywords: addendumKeywords, addendumForeign: addendumForeign,   // #290-보론 D2·D4
     addendumWanted: addendumWanted, addendumBases: addendumBases, addendumRefs: addendumRefs, addendumCandidates: addendumCandidates,
     addendumHead: addendumHead, pickAddenda: pickAddenda,
+    // L9 준용 따라가기(#300)
+    APPLY_OPTS: APPLY_OPTS, APPLY_DIRECTIVE_RE: APPLY_DIRECTIVE_RE, refLawOf: refLawOf, applyRefs: applyRefs, applyTargets: applyTargets, applyKeywords: applyKeywords, pickApply: pickApply,
     buildRagContext: buildRagContext, buildKbContext: buildKbContext,
   };
   root.RagCore = RagCore;

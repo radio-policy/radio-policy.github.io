@@ -519,8 +519,8 @@ async function fetchAddendaRows(sb: SupabaseClient, docNames: string[]): Promise
   if (r.error) throw new Error(r.error.message);
   return (r.data || []) as Chunk[];
 }
-export interface AddOns { text: string; chunks: Chunk[]; ids: number[]; deleg: Chunk[]; items: { sec: string; dir?: string; fam: string; key: string }[]; chars: number; annexCites?: string[]; annexSources?: string[]; trimmed?: number; addendum?: number }
-const EMPTY_ADDONS: AddOns = { text: '', chunks: [], ids: [], deleg: [], items: [], chars: 0, annexSources: [], addendum: 0 };
+export interface AddOns { text: string; chunks: Chunk[]; ids: number[]; deleg: Chunk[]; items: { sec: string; dir?: string; fam: string; key: string }[]; chars: number; annexCites?: string[]; annexSources?: string[]; trimmed?: number; addendum?: number; apply?: number }
+const EMPTY_ADDONS: AddOns = { text: '', chunks: [], ids: [], deleg: [], items: [], chars: 0, annexSources: [], addendum: 0, apply: 0 };
 
 // ── /law 키워드 검색 전용 (LLM 답변 없이 조문만 찾아 준다) ──
 // 실측(2026-08-01): "3G 종료를 하는 방법"에 trgm 단독은 흔한 단어 '방법'에 끌려 개인정보·위치정보
@@ -1169,7 +1169,7 @@ export async function buildAdvisoryContext(sb: SupabaseClient, question: string)
     + (testHooks.restPad || 0);
   const addOns: AddOns = RagCore.trimAddOns(await addOnsP, restLen);
   // addendum = L8 경과조치 칸에 실린 부칙 조 수(#290 — 배포 뒤 발동 건수를 세는 근거, 전체 상한으로 덜어 낸 뒤)
-  meta.push({ fn: 'addons', ms: addMs, rows: addErr ? null : addOns.items.length, error: addErr, trimmed: addOns.trimmed || 0, addendum: addOns.addendum || 0 });
+  meta.push({ fn: 'addons', ms: addMs, rows: addErr ? null : addOns.items.length, error: addErr, trimmed: addOns.trimmed || 0, addendum: addOns.addendum || 0, apply: addOns.apply || 0 });   // apply = L9 준용(#300)
   if (addOns.items.length) console.log(`[덧붙이기] ${addOns.items.map((x) => x.sec + (x.dir ? '/' + x.dir : '') + ' ' + x.fam + ' ' + x.key).join(', ')}${addOns.trimmed ? ` (전체 상한으로 ${addOns.trimmed}개 덜어 냄)` : ''}`);
 
   // 국회 동향은 '근거'가 아니라 '배경'이라 맨 뒤 — 조문·요약·기사보다 앞에 두지 말 것

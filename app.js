@@ -3034,7 +3034,7 @@ async function buildAdvisoryContext(userText) {
   // 가리킨 별표. 규칙·문구·상한은 rag_core.js fetchAddOns 한 곳. 역참조·별표와 독립이라 동시에 시작하고, 역참조·제재 칸의 입력에는 넣지
   // 않는다(설계 H5). search_meta의 addons 행은 전체 상한을 적용한 뒤 남긴다(trimmed = 덜어 낸 개수). rag.ts buildAdvisoryContext와 동일 유지.
   var addT0 = performance.now(), addMs = 0, addErr = null;
-  var addOnsEmpty = { text: '', chunks: [], ids: [], deleg: [], items: [], chars: 0, annexSources: [], addendum: 0 };
+  var addOnsEmpty = { text: '', chunks: [], ids: [], deleg: [], items: [], chars: 0, annexSources: [], addendum: 0, apply: 0 };
   var addOnsP = (sb ? RagCore.fetchAddOns({ extra: lawExtra, spill: spillChunks, rag: ragChunks },
       { delegations: fetchDelegations, familyDocs: fetchFamilyDocs, familyArticle: fetchFamilyArticle, docArticles: fetchDocArticles, annexRows: fetchAnnexRows, addendaRows: fetchAddendaRows },
       { question: userText })
@@ -3093,7 +3093,7 @@ async function buildAdvisoryContext(userText) {
   // 대시보드는 봇에 없는 세 구역(시행예정·팀 추가 지식·개정 동향)이 나머지 길이에 더 들어가므로 상한에 그 몫(dashboardExtraChars)을 더한다(#283-보론2, 운영자 결정)
   var addOns = RagCore.trimAddOns(await addOnsP, restLen, RagCore.ADDON_OPTS.maxTotalChars + RagCore.ADDON_OPTS.dashboardExtraChars);
   // addendum = L8 경과조치 칸에 실린 부칙 조 수(#290, 전체 상한 뒤) — rag.ts와 같음
-  if (lastAdvSearchMeta) lastAdvSearchMeta.push({ fn: 'addons', ms: addMs, rows: addErr ? null : addOns.items.length, error: addErr, trimmed: addOns.trimmed || 0, addendum: addOns.addendum || 0 });
+  if (lastAdvSearchMeta) lastAdvSearchMeta.push({ fn: 'addons', ms: addMs, rows: addErr ? null : addOns.items.length, error: addErr, trimmed: addOns.trimmed || 0, addendum: addOns.addendum || 0, apply: addOns.apply || 0 });   // apply = L9 준용(#300)
   // 덧붙인 조문의 별표(#283-보론2) — 답변 아래 별표 배지와 인용 대조의 별표 목록에도
   (addOns.annexSources || []).forEach(function(s) {
     if (lastAnnexSources.indexOf(s) === -1) lastAnnexSources.push(s);
