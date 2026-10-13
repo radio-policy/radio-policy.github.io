@@ -492,10 +492,12 @@
   // dashboardExtraChars = 대시보드(app.js)만 전체 상한에 더하는 몫(운영자 결정 10-06) — 대시보드에는 봇에 없는 세 구역(시행예정 개정본·
   // 팀 추가 지식·최근 법령 개정 동향, 개발 20문항 중앙 7,855자·최대 12,826자)이 더 들어가 52,500자에 먼저 닿아 20문항 중 11개에서
   // 덧붙인 것이 덜렸다(합의 핵심 봇 39 → 대시보드 37). 그 중앙값만큼 올린다.
-  // apply = L9 준용(#300, 2026-10-13 — 아래 APPLY_* 설명): 측정된 아래·위·별표 순서 뒤, 공통 인용 앞(근거 1곳의 유형 지정 참조 > 근거 2곳의 무지정 언급).
-  // 같은 고시(neighbor)는 준용으로 고른 조를 「이미 든 조」로 넘겨 받으므로 기본 순서에서 apply 뒤에 있어야 한다(앞에 두면 공유가 안 돈다 — 설계 D6).
+  // apply = L9 준용(#300, 2026-10-13 — 아래 APPLY_* 설명): 측정된 아래·위·별표 순서 뒤. **공통 인용 뒤**(#300-보론3, 운영자 결정 10-13 — 처음엔
+  // 「근거 1곳의 유형 지정 참조 > 근거 2곳의 무지정 언급」으로 공통 인용 앞에 뒀으나, 사내 회귀 164문항에서 검색이 표류한 근거의 준용이 예산을 먼저 써
+  // 근거 2곳·5곳이 가리킨 공통 인용 정답(위치정보법 21조·전파법 10조)을 밀어냈다 — 여러 근거의 합의가 근거 하나의 준용보다 믿을 만하다).
+  // 같은 고시(neighbor)는 준용으로 고른 조를 남은 조에서 빼고 받으므로 기본 순서에서 apply 뒤에 있어야 한다(앞에 두면 공유가 안 돈다 — 설계 D6).
   const ADDON_OPTS = { spillMax: 2, budgetChars: 12000, maxTotalChars: 52500, dashboardExtraChars: 8000, annex: true,
-    fillOrder: ['down', 'up', 'annex', 'apply', 'xref', 'neighbor'] };
+    fillOrder: ['down', 'up', 'annex', 'xref', 'apply', 'neighbor'] };
   // L8 경과조치 따라가기(#290, 2026-10-07 — Fable 판정 local_docs/자문세문제_판정_261007.md §13-2, Fable 재검토 대상): 부칙은 검색으로 열지 않고
   // (상위 15·정밀검색·감점·문턱은 그대로) 덧붙이기 한 칸으로만 연다. 발동 = A ∧ B.
   //  A(조회 전에 본다 — 안 걸리면 DB 왕복 0): 질문에 시점·전환 낱말. 「시행령·시행규칙·변경신고·변경허가·기한」은 뺐고(실제 기록에서 경과와 무관한 적중),
@@ -813,7 +815,10 @@
   // 개발 20·V2 20 근거에서 문턱 없이 9+6문항이 걸렸고 그중 무관한 근거의 준용(q06 설비제공 대가 고시 51조 → 41~49조 9개 등) 5+5문항을 문턱이 전부 걸렀다(10-13).
   // 범위(「제N조부터 제M조(까지)」·「내지」)는 정수 번호만 펼친다 — 「제N조의K」는 범위 안에 있어도 세지 않는다(사업법 45조의2~의9 4,600자, 명시된 것만).
   // 항 지정(「제11조제3항」)은 조 단위 앞 chunksPerArticle조각 + 꼬리말 「(제3항)」. 실DB 전수(10-13): 지시문 247(212조), 지시문당 대상 중앙 1·90% 5·최대 34.
-  const APPLY_OPTS = { on: true, perDirective: 10, max: 10, chunksPerArticle: 2, maxChars: 6000, spare: 2 };
+  // minHits(#300-보론3, 운영자 결정 10-13): 지시문 문장에 질문 키워드가 min(minHits, 키워드 수)개 이상 — 사내 검증 36문항 중 13개가 붙고 절반이
+  // 무관했는데 전부 「신고·승인·요건·보호」 같은 넓은 낱말 하나로 통과한 것(검색이 표류한 근거). 외부 자료에서 걸린 15건 중 1개 적중은 3건뿐이고
+  // 그중 하나가 유일한 무관 부착(q08 공사업법 시행령 17조), 사내 사례·q01·n14는 2~3개 적중이라 그대로다. 낱말 목록으로 거르지 않는다(유지 부담).
+  const APPLY_OPTS = { on: true, perDirective: 10, max: 10, chunksPerArticle: 2, maxChars: 6000, spare: 2, minHits: 2 };
   // 지시문 어미 — 「준용하는/되는 경우를 포함한다」(104건)·「준용하지 아니한다」·「준용되는 「X」 제N조」는 어미가 달라 안 걸린다. 「준용할 수 없다/있다」(3건)만 따로 뺀다.
   const APPLY_DIRECTIVE_RE = /준용(?:한다|하되|하여|할(?!\s*수\s*(?:없|있))|된다|하고|하며|함)/g;
   // 목적어 선행형의 꼬리 — 「…에 관하여는 <조·항·호·이음말·괄호 하나>을/를 준용」. isOtherLawRef의 나열 꼬리와 같은 발상에 「같은 조」·「의 규정」·조사·괄호를 더했다.
@@ -939,6 +944,7 @@
   // 근거(lists = [정밀검색, 상한 구제, RAG])마다 준용 대상을 모아 후보 max(+spare)개 — 근거 순 → 지시문 순 → 쓰인 순. 이미 든 조(present)·위임 후보(taken)·
   // 근거 자신·정의·목적 조 출발·파일 문서 제외, 같은 조 한 번(먼저 가리킨 근거가 base). 문턱: 지시문 문장에 질문 키워드(applyKeywords)가 하나는 들어야 한다 —
   // 키워드가 없으면 **끈다**(fail-closed, 허점 점검 10 — 상투어뿐인 질문에 모든 근거의 준용이 붙는 것을 막는다; L8과 달리 이 문턱이 유일하다).
+  // 적중은 min(minHits, 키워드 수)개 이상(#300-보론3 — 키워드가 하나뿐인 질문은 그 하나로).
   // 「근거 조 제목에 준용이면 무조건」은 두지 않는다(허점 점검 9 — 어느 측정도 그 규칙을 시험하지 못했고, 특수 절의 준용규정이 무관한 질문에 최대 10조를 붙인다).
   // opts.skipDoc = 같은 고시가 근거만으로 「전부」 모드인 문서(D6-b) — 그 문서의 대상은 후보에서부터 뺀다(조회·taken에도 안 든다, 허점 점검 14·15).
   function pickApply(lists, present, taken, question, opts) {
@@ -955,8 +961,9 @@
         const fam = famOf(c.doc_name);
         if (!mk || !fam || ADDON_SKIP_ARTNO_RE.test(c.article_no || '')) return;
         const bk = fam + '|' + mk[1];
+        const need = Math.min(opts.minHits || 1, kws.length);
         applyTargets(c, fam, opts).forEach(function (t) {
-          if (!kws.some(function (w) { return t.sent.indexOf(w) !== -1; })) return;
+          if (kws.filter(function (w) { return t.sent.indexOf(w) !== -1; }).length < need) return;
           if (opts.skipDoc && t.fam === fam && c.doc_name === opts.skipDoc) return;
           const k = t.fam + '|' + t.key;
           if (k === bk || pres.has(k) || tk[k] || by[k]) return;
@@ -1379,7 +1386,7 @@
       items: items, chars: text.length, annexCites: annexCites, annexSources: annex ? [annex.source] : [], parts: parts, addendum: addendum.length, apply: apply.length };
   }
   // 참조 자료 전체 상한 — otherChars(덧붙이기 구역을 뺀 나머지 참조 자료 글자 수) + 덧붙이기 구역이 maxTotalChars를 넘으면
-  // 비싼 것·우선순위가 낮은 것부터(경과조치 → 덧붙인 조문의 별표 → 같은 고시 → 공통 인용 → 준용 → 위 → 아래, 각각 뒤에서) 덜어 다시 묶는다. 설계의
+  // 비싼 것·우선순위가 낮은 것부터(경과조치 → 덧붙인 조문의 별표 → 같은 고시 → 준용 → 공통 인용 → 위 → 아래, 각각 뒤에서) 덜어 다시 묶는다. 설계의
   // 「최대 48K 토큰」을 문항마다 지키는 장치. 2차에서 별표를 맨 앞에 — 1차는 넘친 원인(별표 9.8K자)은 두고 조문을 덜어 냈다(재검토 §1-6 i30).
   // 덧붙이기 구역 앞의 글(상위 15·정밀검색·역참조·별표 등)은 건드리지 않는다. 덜어낼 것이 없으면 그대로 둔다. trimmed = 덜어 낸 개수.
   function trimAddOns(ao, otherChars, maxTotal) {
@@ -1393,8 +1400,8 @@
     let cur = ao;
     while (count() && (otherChars || 0) + cur.text.length > cap) {
       // L8 경과조치(#290)를 가장 먼저 — 예산도 따로 몫이라 다른 칸보다 앞서 덜어 낸다(판정 §13-2)
-      // 준용(L9, #300)은 공통 인용 뒤·위임 앞 — 근거가 유형을 지정한 참조라 공통 인용보다 오래 남긴다(설계 D5)
-      if (addendum.length) addendum.pop(); else if (annex) annex = null; else if (neighbor.length) neighbor.pop(); else if (xref.length) xref.pop(); else if (apply.length) apply.pop(); else deleg.pop();
+      // 준용(L9, #300-보론3)은 같은 고시 뒤·공통 인용 앞에 덜어 낸다 — 채우기(공통 인용 → 준용)와 거꾸로
+      if (addendum.length) addendum.pop(); else if (annex) annex = null; else if (neighbor.length) neighbor.pop(); else if (apply.length) apply.pop(); else if (xref.length) xref.pop(); else deleg.pop();
       cur = packAddOns({ deleg: deleg, xref: xref, neighbor: neighbor, annex: annex, addendum: addendum, apply: apply, spillItems: p.spillItems });
     }
     cur.trimmed = before - count();

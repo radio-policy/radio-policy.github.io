@@ -666,8 +666,11 @@ var addendumTests = (async function () {
   eq('pickApply skipDoc(전부 모드 문서)의 같은 문서 대상은 후보에서부터 뺌(허점 점검 14)', RC.pickApply([[base17], [], [base18]], new Set(), {}, '주파수 재할당 신청 절차', { skipDoc: N }).map(function (x) { return x.fam.slice(0, 3) + x.key; }), ['전파법12조', '전파법14조']);
   eq('pickApply 질문 낱말이 들면 통과·위임 후보(taken)·자기 조 제외·같은 문서면 근거 문서가 대상 문서', RC.pickApply([[base18]], new Set(), { '전파법 시행령|14조': 1 }, '주파수 재할당 신청 절차와 법정 기한을 알려줘').map(function (x) { return x.key + ' ' + x.doc; }), ['12조 전파법 시행령(대통령령)(제2호)(20251001)']);
   eq('pickApply 키워드가 없으면 끔(fail-closed, 허점 점검 10)·max+spare·on:false', [RC.pickApply([[base51]], new Set(), {}, '', { max: 2, spare: 1 }).length, RC.pickApply([[base51]], new Set(), {}, '조항').length,
-    RC.pickApply([[base51]], new Set(), {}, '제공대가 산정', { max: 2, spare: 1 }).map(function (x) { return x.key; }), RC.pickApply([[base17]], new Set(), {}, '재할당', { on: false }).length],
+    RC.pickApply([[base51]], new Set(), {}, '전기통신사업법 제공대가', { max: 2, spare: 1 }).map(function (x) { return x.key; }), RC.pickApply([[base17]], new Set(), {}, '재할당', { on: false }).length],
     [0, 0, ['41조', '42조', '43조'], 0]);
+  // #300-보론3(운영자 결정): 키워드 2개 이상 적중 — 넓은 낱말 하나(「변경신고」·「제공대가」)로는 안 붙고, 키워드가 하나뿐인 질문은 그 하나로
+  eq('pickApply minHits — 2개 이상 적중, 키워드 하나뿐이면 하나', [RC.pickApply([[base51]], new Set(), {}, '제공대가 산정').length, RC.pickApply([[base51]], new Set(), {}, '제공대가').length,
+    RC.pickApply([[base51]], new Set(), {}, '제공대가 산정', { minHits: 1 }).length, RC.pickApply([[base18]], new Set(), {}, '무선국 변경신고 금액은 얼마야?').length], [0, 9, 9, 0]);
 })();
 
 var applyTests = (async function () {
@@ -714,9 +717,10 @@ var applyTests = (async function () {
   var full = { text: 'z'.repeat(2000), parts: { deleg: [mk(undefined, 'down', '1조'), mk(undefined, 'up', '2조')], xref: [mk('xref', undefined, '3조')], apply: [mk('apply', undefined, '6조')],
     neighbor: [{ doc_name: N, article_no: '4조(y)', key: '4조', content: 'y'.repeat(100), ids: [4] }], spillItems: [] } };
   var t1 = RC.trimAddOns(full, 0, 700);
-  eq('trimAddOns 같은 고시 → 공통 인용 → 준용 → 위 순', [t1.items.map(function (x) { return x.sec + (x.dir ? '/' + x.dir : ''); }), t1.trimmed], [['deleg/down', 'deleg/up'], 3]);
+  eq('trimAddOns 같은 고시 → 준용 → 공통 인용 → 위 순(#300-보론3)', [t1.items.map(function (x) { return x.sec + (x.dir ? '/' + x.dir : ''); }), t1.trimmed], [['deleg/down', 'deleg/up'], 3]);
   var t2 = RC.trimAddOns(full, 0, 1000);
-  eq('trimAddOns 준용은 공통 인용보다 늦게 덜림', t2.items.map(function (x) { return x.sec + (x.dir ? '/' + x.dir : ''); }), ['deleg/down', 'deleg/up', 'apply']);
+  eq('trimAddOns 준용은 공통 인용보다 먼저 덜림(채우기 순서와 거꾸로)', t2.items.map(function (x) { return x.sec + (x.dir ? '/' + x.dir : ''); }), ['deleg/down', 'deleg/up', 'xref']);
+  eq('fillOrder 기본값 — 공통 인용이 준용 앞, 같은 고시가 맨 뒤(#300-보론3)', RC.ADDON_OPTS.fillOrder, ['down', 'up', 'annex', 'xref', 'apply', 'neighbor']);
 })();
 
 Promise.all([asyncTests, addOnTests, addOnTests2, addendumTests, applyTests]).catch(function (e) { fails++; total++; console.log('FAIL  비동기 검사 예외 ' + (e && e.message)); }).then(function () {
