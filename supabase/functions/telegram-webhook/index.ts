@@ -35,7 +35,9 @@ const env = (k: string) => (Deno.env.get(k) || '').trim();
 const BOT_TOKEN = env('SUBSCRIBER_BOT_TOKEN');
 const WEBHOOK_SECRET = env('TELEGRAM_WEBHOOK_SECRET');
 const OPERATOR_CHAT_ID = Number(env('OPERATOR_CHAT_ID') || '0');
-const AI_DAILY_LIMIT = 20;   // 승인자 1인당 자문 일일 상한 (과금 폭주 방지)
+const AI_DAILY_LIMIT = 10;   // 승인자 1인당 자문 일일 상한 (과금 폭주 방지) — 20 → 10(#297, 2026-10-13 운영자 결정, /law와 같은 10회)
+// 대시보드 계정과 연결된 구독자(dashboard_user_id, #297)는 이 상한·ai_allowed·law_allowed·unlimited를 쓰지 않는다 — /ask는
+// 대시보드 자문 한도(charge_ai_usage: 개인 daily_limit + 팀 합산)에서 함께 세고, 승인·무제한은 profiles를 따른다(linkedProfile).
 // 무료 이용(#259, 2026-09-29 운영자 결정, Fable 재검토 대상) — 승인 안 된 사람도 자연어 /law·/ask를 **명령마다 통틀어** 3회
 // (하루가 아니라 합계) 쓴다. 넘으면 「추가 한도는 관리자에게 문의」 + 운영자에게 ✅ 승인 버튼(사람·명령마다 하루 한 번),
 // 승인되면 종전 승인자 한도(/ask 하루 20회, /law 하루 10회). 한 사람 한도와 별개로, 승인 안 된 사람 **모두를 합친** 무료 사용은 하루 50회(/law·/ask 합계) —
@@ -120,6 +122,8 @@ interface Sub {
   division: string | null;
   news_level: string;
   last_normal_sent_at: string | null;
+  // 연결된 대시보드 계정(#297, 2026-10-13) — 관리자가 설정 화면에서 붙인다(admin_set_subscriber_account). FK 없음.
+  dashboard_user_id?: string | null;
 }
 async function getSub(chatId: number): Promise<Sub | null> {
   const { data } = await sb.from('telegram_subscribers').select('*').eq('chat_id', chatId).maybeSingle();
@@ -137,6 +141,18 @@ async function logUsage(
     });
   } catch (e) { console.error('[usage 로그 실패(무시)]', e); }
 }
+
+// ── 대시보드 계정 연결(#297, 2026-10-13 운영자 결정) ──
+// 연결된 사람의 /ask·/law 승인·무제한은 대시보드 계정(profiles)을 따른다: 승인·활성이면 승인자, unlimited면 무제한.
+// 계정이 승인 대기·비활성이거나 지워졌으면(연결만 남음) 막는다 — 무료 3회로 넘기지 않는다(fail-closed). 조회 실패도 막는다.
+interface LinkedProfile { approved: boolean; active: boolean; unlimited: boolean }
+async function linkedProfile(userId: string): Promise<LinkedProfile | null | 'error'> {
+  const { data, error } = await sb.from('profiles').select('approved, active, unlimited').eq('user_id', userId).maybeSingle();
+  if (error) { console.error('[연결 계정 조회 실패]', error); return 'error'; }
+  return (data as LinkedProfile | null) ?? null;
+}
+const LINKED_BLOCKED = '🔒 연결된 대시보드 계정이 승인 대기 또는 비활성 상태라 이용할 수 없습니다. 관리자에게 문의해 주세요.';
+const LINKED_ERROR = '⚠️ 사용량 확인 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.';
 
 async function upsertSub(chatId: number, patch: Record<string, unknown>): Promise<void> {
   await sb.from('telegram_subscribers')
@@ -557,13 +573,21 @@ async function handleLawQuery(chatId: number, q: string): Promise<Promise<void> 
   // fail-closed. `sub && !sub.law_allowed`로 두면 **구독 행이 없는 계정**(=/start를 거치지 않고 곧장
   // /law를 보낸 경우)이 게이트·일일 한도·사용 로깅을 전부 우회한다. /ask와 같은 `!sub?.x` 형태로 맞춘다.
   let trialId: number | null = null;
-  if (!sub?.law_allowed) {
+  // 승인·무제한 — 대시보드 계정과 연결된 사람은 profiles를 따른다(#297). /law 횟수는 대시보드와 합치지 않고 종전 law_count로 센다.
+  let lawAllowed = !!sub?.law_allowed, lawUnlimited = !!sub?.unlimited;
+  if (sub?.dashboard_user_id) {
+    const p = await linkedProfile(sub.dashboard_user_id);
+    if (p === 'error') { await sendTelegramHtml(BOT_TOKEN, chatId, LINKED_ERROR); return; }
+    if (!p || !p.approved || !p.active) { await sendTelegramHtml(BOT_TOKEN, chatId, LINKED_BLOCKED); return; }
+    lawAllowed = true; lawUnlimited = !!p.unlimited;
+  }
+  if (!lawAllowed) {
     trialId = await trialGate(chatId, 'law', query, { first_name: sub?.first_name, username: sub?.username });
     if (!trialId) return;   // 막힘 — 안내·운영자 버튼은 trialGate가 보냈다
   } else if (sub) {
     const today = todayKst();
     const used = sub.law_count_date === today ? (sub.law_count || 0) : 0;
-    if (!sub.unlimited && used >= LAW_DAILY_LIMIT) {   // unlimited 면제(#86)
+    if (!lawUnlimited && used >= LAW_DAILY_LIMIT) {   // unlimited 면제(#86)
       await sendTelegramHtml(BOT_TOKEN, chatId, `⏳ 오늘 법령 검색 한도(${LAW_DAILY_LIMIT}회)를 모두 사용했습니다. 내일 다시 이용해 주세요.`);
       return;
     }
@@ -786,7 +810,31 @@ async function handleAsk(chatId: number, from: { username?: string; first_name?:
   const sub = await getSub(chatId);
   const today = todayKst();
   let trialId: number | null = null;
-  if (!sub?.ai_allowed) {
+  let chargedUser: string | null = null;   // 대시보드 자문 한도에서 뺀 계정(#297) — 실패하면 refund_ai_usage로 돌려준다
+  if (sub?.dashboard_user_id) {
+    // 대시보드 계정과 연결된 사람(#297) — 대시보드 자문과 같은 한도(개인 daily_limit + 팀 합산)에서 선차감한다.
+    // charge_ai_usage가 승인·활성·unlimited를 한 번에 본다(승인 대기·비활성·계정 없음 = not_approved). 텔레그램 쪽 ai_allowed·unlimited는 보지 않는다.
+    const { data: charge, error: chargeErr } = await sb.rpc('charge_ai_usage', { p_user: sub.dashboard_user_id, p_kind: 'advisory' });
+    if (chargeErr) { console.error('[연결 계정 한도 차감 실패]', chargeErr); await sendTelegramHtml(BOT_TOKEN, chatId, LINKED_ERROR); return; }
+    const c = (charge ?? {}) as Record<string, unknown>;
+    if (!c.ok) {
+      const reason = String(c.reason || '');
+      const msg = reason === 'not_approved' ? LINKED_BLOCKED
+        : reason === 'member_limit'
+          ? `⏳ 오늘 자문 한도(${c.limit}회)를 모두 사용했습니다 — 대시보드와 텔레그램을 합친 횟수입니다. 내일 다시 이용해 주세요.`
+        : reason === 'team_limit'
+          ? `⏳ ${escapeHtml(String(c.team_name ?? '팀'))}의 오늘 자문 한도(${c.team_limit}회)를 모두 사용했습니다 — 대시보드와 텔레그램을 합친 횟수입니다. ` +
+            '내일 다시 이용하거나 관리자에게 한도 조정을 요청해 주세요.'
+        : '⏳ 오늘 이용 한도를 초과했습니다.';
+      await sendTelegramHtml(BOT_TOKEN, chatId, msg);
+      return;
+    }
+    chargedUser = sub.dashboard_user_id;
+    // ai_count는 관찰용으로만 계속 올린다(한도 판정에 쓰지 않음)
+    const used = sub.ai_count_date === today ? sub.ai_count : 0;
+    await upsertSub(chatId, { ai_count_date: today, ai_count: used + 1 });
+    await logUsage(chatId, 'ask', q);
+  } else if (!sub?.ai_allowed) {
     // 승인 안 된 사람 → 무료 3회(#259). 막히면 안내·운영자 버튼은 trialGate가 보냈다.
     trialId = await trialGate(chatId, 'ask', q, from);
     if (!trialId) return;
@@ -849,11 +897,15 @@ async function handleAsk(chatId: number, from: { username?: string; first_name?:
     } catch (e) {
       console.error('[자문 실패]', e);
       // 쿼터 환불 — 선차감은 유지하되(동시성 안전) 실패 경로에서 -1 복원.
-      // 실측(8/1): 5차감/2성공 — 환불이 없으면 실패가 일일 상한 20회를 갉아먹는다.
+      // 실측(8/1): 5차감/2성공 — 환불이 없으면 실패가 일일 상한을 갉아먹는다.
       try {
         if (trialId) {
           await refundTrial(trialId);   // 무료 이용은 그 줄만 셈에서 뺀다(ai_count는 올리지 않았다)
         } else {
+          if (chargedUser) {   // 연결 계정(#297) — 대시보드 자문 한도에서 뺀 1회를 돌려준다(관찰용 ai_count도 아래에서 -1)
+            const { error: rfErr } = await sb.rpc('refund_ai_usage', { p_user: chargedUser, p_kind: 'advisory' });
+            if (rfErr) console.error('[연결 계정 한도 환불 실패]', rfErr);
+          }
           const cur = await getSub(chatId);
           if (cur && cur.ai_count_date === today && cur.ai_count > 0) {
             await upsertSub(chatId, { ai_count: cur.ai_count - 1 });

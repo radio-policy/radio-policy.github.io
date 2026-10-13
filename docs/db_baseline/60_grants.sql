@@ -461,6 +461,10 @@ revoke all on function public.admin_set_kb_approval(p_doc_name text, p_approved 
 grant EXECUTE on function public.admin_set_kb_approval(p_doc_name text, p_approved boolean) to authenticated;
 grant EXECUTE on function public.admin_set_kb_approval(p_doc_name text, p_approved boolean) to service_role;
 
+revoke all on function public.admin_set_subscriber_account(p_chat_id bigint, p_user_id uuid) from public, anon, authenticated, service_role;
+grant EXECUTE on function public.admin_set_subscriber_account(p_chat_id bigint, p_user_id uuid) to authenticated;
+grant EXECUTE on function public.admin_set_subscriber_account(p_chat_id bigint, p_user_id uuid) to service_role;
+
 revoke all on function public.admin_set_subscriber_team(p_chat_id bigint, p_team_id smallint, p_division text) from public, anon, authenticated, service_role;
 grant EXECUTE on function public.admin_set_subscriber_team(p_chat_id bigint, p_team_id smallint, p_division text) to authenticated;
 grant EXECUTE on function public.admin_set_subscriber_team(p_chat_id bigint, p_team_id smallint, p_division text) to service_role;

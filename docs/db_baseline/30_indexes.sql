@@ -128,6 +128,8 @@ CREATE INDEX tech_terms_content_idx ON public.tech_terms USING gin (to_tsvector(
 
 CREATE INDEX tech_terms_term_idx ON public.tech_terms USING btree (term);
 
+CREATE UNIQUE INDEX telegram_subscribers_dashboard_user_uidx ON public.telegram_subscribers USING btree (dashboard_user_id) WHERE (dashboard_user_id IS NOT NULL);
+
 CREATE INDEX idx_telegram_updates_received ON public.telegram_updates USING btree (received_at);
 
 CREATE INDEX telegram_usage_chat_idx ON public.telegram_usage USING btree (chat_id, created_at DESC);

@@ -965,6 +965,7 @@ create table if not exists public.telegram_subscribers (
   news_level text default 'urgent'::text not null,
   last_normal_sent_at timestamp with time zone,
   last_team_sent_at timestamp with time zone,
+  dashboard_user_id uuid,
   constraint telegram_subscribers_pkey PRIMARY KEY (chat_id),
   constraint telegram_subscribers_briefing_hour_check CHECK (((briefing_hour >= 6) AND (briefing_hour <= 12))),
   constraint telegram_subscribers_days_check CHECK ((days = ANY (ARRAY['daily'::text, 'weekday'::text]))),

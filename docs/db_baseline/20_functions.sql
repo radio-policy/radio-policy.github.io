@@ -150,7 +150,7 @@ end $function$
 ;
 
 CREATE OR REPLACE FUNCTION public.admin_list_subscribers()
- RETURNS TABLE(chat_id bigint, first_name text, username text, active boolean, topic_urgent boolean, news_level text, team_id smallint, division text, created_at timestamp with time zone)
+ RETURNS TABLE(chat_id bigint, first_name text, username text, active boolean, topic_urgent boolean, news_level text, team_id smallint, division text, created_at timestamp with time zone, dashboard_user_id uuid)
  LANGUAGE plpgsql
  STABLE SECURITY DEFINER
  SET search_path TO 'public'
@@ -158,7 +158,8 @@ AS $function$
 begin
   if not public.is_admin() then raise exception 'AUTH_FAILED'; end if;
   return query
-    select s.chat_id, s.first_name, s.username, s.active, s.topic_urgent, s.news_level, s.team_id, s.division, s.created_at
+    select s.chat_id, s.first_name, s.username, s.active, s.topic_urgent, s.news_level, s.team_id, s.division, s.created_at,
+           s.dashboard_user_id
       from public.telegram_subscribers s
      order by s.created_at, s.chat_id;
 end $function$
@@ -180,6 +181,33 @@ BEGIN
   RETURN n;
 END;
 $function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_set_subscriber_account(p_chat_id bigint, p_user_id uuid)
+ RETURNS integer
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare n integer;
+begin
+  if not public.is_admin() then raise exception 'AUTH_FAILED'; end if;
+  if not exists (select 1 from public.telegram_subscribers s where s.chat_id = p_chat_id) then
+    raise exception 'NOT_FOUND';
+  end if;
+  if p_user_id is not null then
+    if not exists (select 1 from public.profiles p where p.user_id = p_user_id) then raise exception 'UNKNOWN_ACCOUNT'; end if;
+    if exists (select 1 from public.telegram_subscribers s where s.dashboard_user_id = p_user_id and s.chat_id <> p_chat_id) then
+      raise exception 'ALREADY_LINKED';
+    end if;
+  end if;
+  update public.telegram_subscribers s
+     set dashboard_user_id = p_user_id, updated_at = now()
+   where s.chat_id = p_chat_id
+     and s.dashboard_user_id is distinct from p_user_id;
+  get diagnostics n = row_count;
+  return n;
+end $function$
 ;
 
 CREATE OR REPLACE FUNCTION public.admin_set_subscriber_team(p_chat_id bigint, p_team_id smallint, p_division text)

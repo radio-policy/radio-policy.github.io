@@ -596,7 +596,10 @@ async function saveTeamRow(teamId) {
 // 읽기·쓰기는 관리자 RPC(admin_list_subscribers / admin_set_subscriber_team — 안에서 is_admin 검사, 'AUTH_FAILED')로만.
 // chat_id는 화면에도 DOM id에도 싣지 않는다 — 줄은 목록 인덱스(_subTeamRows[i])로 찾는다.
 // 받을 뉴스(중요만/중요+보통)는 각자 봇 /start에서 고르므로 여기서는 읽기 전용.
+// 대시보드 계정 연결(#297, 2026-10-13): 줄마다 계정을 붙이면 그 사람의 봇 /ask는 대시보드 자문 한도(개인 + 팀 합산)에서
+// 함께 세고, /ask·/law 승인·무제한은 그 계정을 따른다(telegram-webhook linkedProfile). 쓰기는 admin_set_subscriber_account만.
 var _subTeamRows = [];
+var _subAcctProfiles = [];
 
 async function loadSubscriberTeams(note) {
   var el = document.getElementById('subscriber-team-body');
@@ -613,6 +616,9 @@ async function loadSubscriberTeams(note) {
     }
     var r = await sb.rpc('admin_list_subscribers');
     if (r.error) throw r.error;
+    var pRes = await sb.from('profiles').select('user_id,name,approved,active').order('created_at', { ascending: true });
+    if (pRes.error) throw pRes.error;
+    _subAcctProfiles = pRes.data || [];
     _subTeamRows = r.data || [];
     renderSubscriberTeams(_subTeamRows, note);
   } catch (e) {
@@ -638,6 +644,23 @@ function renderSubscriberTeams(rows, note) {
   function on(v, yes, no) {
     return '<span style="' + chipCss + (v ? 'color:var(--text-secondary)' : 'color:var(--text-tertiary);opacity:.8') + '">' + (v ? yes : no) + '</span>';
   }
+  // 대시보드 계정 고르기(#297) — 이미 다른 구독자에 붙은 계정은 고를 수 없게(서버도 ALREADY_LINKED로 막는다)
+  var linkedTo = {};
+  rows.forEach(function(s) { if (s.dashboard_user_id) linkedTo[s.dashboard_user_id] = true; });
+  function acctOptions(cur) {
+    var html = '<option value=""' + (cur ? '' : ' selected') + '>(대시보드 계정 연결 안 함)</option>';
+    var found = false;
+    _subAcctProfiles.forEach(function(p) {
+      var sel = cur && p.user_id === cur;
+      if (sel) found = true;
+      var state = !p.active ? ' · 비활성' : (!p.approved ? ' · 승인 대기' : '');
+      html += '<option value="' + escHtml(p.user_id) + '"' + (sel ? ' selected' : '') + (!sel && linkedTo[p.user_id] ? ' disabled' : '') + '>' +
+        chEsc((p.name || '(이름 없음)') + state + (!sel && linkedTo[p.user_id] ? ' · 다른 구독자에 연결됨' : '')) + '</option>';
+    });
+    // 붙어 있던 계정이 지워졌으면 그 값을 그대로 보이게 둔다 — 첫 줄이 골라져 무심코 저장 한 번에 연결이 풀리지 않게
+    if (cur && !found) html += '<option value="' + escHtml(cur) + '" selected>(없는 계정 — 봇 이용 막힘)</option>';
+    return html;
+  }
   html += rows.map(function(s, i) {
     var joined = s.created_at ? new Date(s.created_at).toLocaleDateString('ko-KR', { year: '2-digit', month: '2-digit', day: '2-digit' }) : '';
     return '<div class="card" style="margin-bottom:6px;padding:10px 12px;cursor:default;' + (s.active ? '' : 'opacity:.55') + '">' +
@@ -651,9 +674,38 @@ function renderSubscriberTeams(rows, note) {
           (s.news_level === 'normal' ? '중요+보통' : '중요만') + '</span>' +
         '<select id="st-team-' + i + '" style="' + inputCss + '">' + _teamOptions(s.team_id, s.division, '(공통 등급)') + '</select>' +
         '<button class="btn" style="font-size:11px;padding:3px 10px" onclick="saveSubscriberTeam(' + i + ', this)">저장</button>' +
+      '</div>' +
+      '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px">' +
+        '<span style="font-size:11px;color:var(--text-tertiary);min-width:80px" title="연결하면 봇 /ask를 대시보드 자문 한도(개인 + 팀 합산)에서 함께 세고, /ask·/law 승인·무제한은 그 계정을 따릅니다">대시보드 계정</span>' +
+        '<select id="st-acct-' + i + '" style="' + inputCss + '">' + acctOptions(s.dashboard_user_id) + '</select>' +
+        '<button class="btn" style="font-size:11px;padding:3px 10px" onclick="saveSubscriberAccount(' + i + ', this)">연결 저장</button>' +
       '</div></div>';
   }).join('');
   el.innerHTML = html;
+}
+
+async function saveSubscriberAccount(i, btn) {
+  var s = _subTeamRows[i];
+  var selEl = document.getElementById('st-acct-' + i);
+  if (!s || !selEl || !sb) return;
+  if (!_ensureAdminPwd()) return;
+  var who = escHtml(s.first_name || '(이름 없음)');
+  if (btn) btn.disabled = true;
+  var r = await sb.rpc('admin_set_subscriber_account', { p_chat_id: s.chat_id, p_user_id: selEl.value || null });
+  if (btn) btn.disabled = false;
+  if (r.error) {
+    var m = r.error.message || '';
+    if (/AUTH_FAILED/.test(m)) { _handleAdminRpcError(r.error, '대시보드 계정 연결'); return; }
+    if (/NOT_FOUND/.test(m)) { alert('구독자를 찾지 못했습니다 — 목록을 다시 읽습니다.'); await loadSubscriberTeams(); return; }
+    if (/UNKNOWN_ACCOUNT/.test(m)) { alert('없는 계정입니다 — 목록을 다시 읽습니다.'); await loadSubscriberTeams(); return; }
+    if (/ALREADY_LINKED/.test(m)) { alert('이 계정은 이미 다른 구독자에 연결돼 있습니다 — 그쪽 연결을 먼저 풀어 주세요.'); await loadSubscriberTeams(); return; }
+    alert('대시보드 계정 연결 저장 실패: ' + m);
+    return;
+  }
+  var n = Number(r.data);
+  await loadSubscriberTeams(n === 1
+    ? '✅ ' + who + ': ' + (selEl.value ? '대시보드 계정을 연결했습니다 — 봇 /ask는 지금부터 대시보드 한도로 셉니다' : '연결을 풀었습니다 — 봇 승인·한도는 텔레그램 설정으로 돌아갑니다')
+    : who + ': 변경 없음');
 }
 
 async function saveSubscriberTeam(i, btn) {
