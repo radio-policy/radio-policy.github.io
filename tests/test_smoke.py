@@ -1987,6 +1987,51 @@ class TestDashboardCacheBuster(unittest.TestCase):
             self.assertGreaterEqual(buster, last, f'{f}: 마지막 수정 {last} > 캐시 번호 {buster} — index.html의 ?v=를 올릴 것')
 
 
+class TestTextEncodingIntact(unittest.TestCase):
+    """저장소 글 파일의 글자 깨짐 검사(2026-10-13 — 2439405에서 index.html 캐시 번호 한 줄을 PowerShell로 고치다
+    파일 전체가 CP949로 읽혀 UTF-8(BOM)로 다시 저장됐고, 대시보드 제목·메뉴가 「?듭떊 ?뺤콉」으로 25분 깨졌다).
+    작업 트리 파일을 읽으므로 커밋 전 수정분도 본다. 세 가지: ① UTF-8 BOM 없음 ② 엄격한 UTF-8로 읽힘
+    ③ 한글 50자 이상인 파일에서 (KS X 1001 2,350자 밖 한글 + 한자) / 한글 ≤ 3 % — 깨진 판은 100 %(희귀 4,701 +
+    한자 1,756 / 한글 6,417), 정상 856개 파일 중 최대 0.5 %."""
+
+    EXTS = ('.html', '.js', '.css', '.json', '.ts', '.py', '.md', '.yml', '.yaml', '.sql', '.txt', '.toml', '.ps1')
+    MAX_RATIO = 0.03
+
+    def test_no_bom_and_no_mojibake(self):
+        import subprocess
+        try:
+            r = subprocess.run(['git', '-C', _ROOT, '-c', 'core.quotepath=off', 'ls-files', '-z'], capture_output=True)
+        except Exception:
+            self.skipTest('git 없음')
+        if r.returncode != 0:
+            self.skipTest('git 저장소 아님')
+        ksx = {bytes([a, b]).decode('cp949') for a in range(0xB0, 0xC9) for b in range(0xA1, 0xFF)}
+        hangul_re, hanja_re = re.compile('[가-힣]'), re.compile('[一-鿿]')
+        bad = []
+        for f in r.stdout.decode('utf-8').split('\0'):
+            path = os.path.join(_ROOT, f)
+            if not f.endswith(self.EXTS) or not os.path.isfile(path):
+                continue
+            with open(path, 'rb') as fh:
+                raw = fh.read()
+            if raw[:3] == b'\xef\xbb\xbf':
+                bad.append(f'{f}: UTF-8 BOM')
+                continue
+            try:
+                text = raw.decode('utf-8')
+            except UnicodeDecodeError as e:
+                bad.append(f'{f}: UTF-8 아님 ({e})')
+                continue
+            hs = hangul_re.findall(text)
+            if len(hs) < 50:
+                continue
+            odd = sum(1 for c in hs if c not in ksx) + len(hanja_re.findall(text))
+            if odd / len(hs) > self.MAX_RATIO:
+                bad.append(f'{f}: 깨진 글자로 보임 (희귀 한글+한자 {odd} / 한글 {len(hs)})')
+        self.assertEqual(bad, [], '글자 깨짐 — PowerShell Get-Content/Set-Content로 고친 파일이면 git으로 되돌리고 '
+                                  'Edit 도구로 다시 고칠 것:\n' + '\n'.join(bad))
+
+
 class TestSecurityBlueprint(unittest.TestCase):
     """DB 설계도(docs/db_baseline) 권한 정적 시험(#29x, 2026-10-10 — 시스템 평가 보안 판정 Q7 ③, 네트워크 0).
     anon(공개 키)은 읽기만: 표·칸 GRANT는 SELECT만(예외 lawmap_proposals INSERT — 비로그인 관계도 요청),
