@@ -24,6 +24,8 @@ CREATE TRIGGER teams_grader_check BEFORE UPDATE OF grader_user_id ON teams FOR E
 
 CREATE TRIGGER tech_terms_updated_at BEFORE UPDATE ON tech_terms FOR EACH ROW EXECUTE FUNCTION update_tech_terms_updated_at();
 
+CREATE TRIGGER trg_notify_new_telegram_subscriber AFTER INSERT ON telegram_subscribers FOR EACH ROW EXECUTE FUNCTION notify_new_telegram_subscriber();
+
 CREATE TRIGGER urgency_rule_verdicts_requester BEFORE INSERT ON urgency_rule_verdicts FOR EACH ROW EXECUTE FUNCTION urgency_rule_verdicts_requester();
 
 CREATE TRIGGER urgency_rules_sentence_rev BEFORE INSERT OR UPDATE ON urgency_rules FOR EACH ROW EXECUTE FUNCTION urgency_rules_sentence_rev();

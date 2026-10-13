@@ -616,6 +616,8 @@ B: 본래 근거 조문(위임 따라가기와 같은 [정밀검색·상한 구�
 국회 법안 단계변경 | 텔레그램
 국회 입법예고 시작/D-3 | 텔레그램 운영자 + **구독자 큐(topic=assembly)에도 적재**(2026-08-25 문서 정정 — 종전 "운영자 전용·큐 미적재"는 사실과 달랐다). assembly_crawler 입법예고 패스, stage 컬럼 dedupe. 운영자 방침: **주요 법안의 입법예고는 구독자에게 필요하다** — 발송을 끊지 말고 `app_config.assembly_notice_criteria`로 선별을 조인다
 과방위 회의록 신규 | 구독자 큐(topic=assembly) 다이제스트 (17:00 체인, 신규 섹션·60일 이내·발언 3건↑에서만 — #120). 운영자 즉시 알림 없음, 즉시 발송 트리거 없음(다음 :25 정시 배달). 백필·오프라인 임포트 경로는 적재 안 함
+대시보드 가입 신청 | 텔레그램 즉시 (`handle_new_user` 트리거, #104)
+구독자 봇 구독 시작 | 텔레그램 즉시 「🆕 텔레그램 구독 시작」 — 이름·@아이디·chat_id·활성 구독자 수 (`telegram_subscribers` AFTER INSERT 트리거 `notify_new_telegram_subscriber`, #301, 2026-10-13). 기존 행을 고치는 upsert(설정 버튼·/start 다시 누름·사용 횟수)·차단 뒤 복귀는 알리지 않음
 ```
 
 **② 구독자 봇 채널** (2026-08-01 신설 — `정책AI 도우미` @radio_policy_law_ai_bot, `SUBSCRIBER_BOT_TOKEN`)
@@ -1367,6 +1369,8 @@ select s.pdf_doc, s.n from s join c on c.doc_name=s.base where c.api_chars >= s.
 - **AI 자문 "Failed to fetch"**: 무거운 질문 2분+ idle 끊김 → stream:true로 해결됨. 사내망 프록시·확장프로그램·F12 네트워크 확인.
 
 ## 하지 말아야 할 것 (규칙 + 한 줄 이유 / 상세는 배경역사 문서)
+
+- **구독자 봇 「🆕 텔레그램 구독 시작」 운영자 알림(`telegram_subscribers` 트리거 `notify_new_telegram_subscriber`, #301, 2026-10-13)을 `AFTER INSERT OR UPDATE`로 넓히지 말 것 / 웹훅(`telegram-webhook`의 `/start` 갈래)에 같은 알림을 또 넣지 말 것 / 알림 블록의 예외 삼킴과 `timeout_milliseconds := 10000`을 빼지 말 것** — 웹훅은 설정 버튼 한 번·`/start` 다시 누름·`/law`·`/ask` 횟수마다 같은 행을 upsert하므로 UPDATE까지 걸면 버튼마다 알림이 간다(INSERT … ON CONFLICT DO UPDATE는 새 행일 때만 AFTER INSERT가 뜬다 — 시험에서 확인). 행은 `/start`가 아니라도 `/settings`나, 행 없이 무료 3회를 쓴 사람에게 운영자가 누른 ✅ 승인 버튼(`upsertSub(targetId, …)`)에서 처음 생길 수 있고(그 행도 기본값으로 모든 소식을 받는다 — 무료 `/law`·`/ask` 자체는 행을 만들지 않는다) 트리거는 그 경로를 모두 잡는다 — 웹훅에 넣으면 갈래마다 따로 넣어야 하고 두 통이 된다. 텔레그램 장애가 구독 저장을 막으면 안 되므로 예외를 삼킨다(가입 알림 `handle_new_user`와 같은 이유, 5초는 TLS만으로 넘긴 실측). 차단했다 돌아온 사람(`active` false → true)은 UPDATE라 알리지 않는다 — 넣으려면 그 조건만 따로 건다. (배경역사 #301)
 
 - **저장소의 UTF-8 텍스트 파일(index.html·.md·.js·.py)을 Windows PowerShell 5.1의 `Get-Content`/`Set-Content`/`-replace` 파이프로 고치지 말 것 — 한 글자 치환(캐시 번호)이라도 Python(`open(..., encoding='utf-8')`)·`[IO.File]::ReadAllText/WriteAllText(..., UTF8)`·Write/Edit 도구로 (#300-보론5, 2026-10-13)** — Windows PowerShell 5.1은 `Get-Content`가 파일을 시스템 코드페이지(CP949)로 읽고 `-Encoding UTF8`은 BOM을 붙여 쓴다. 보론3 커밋 2439405에서 index.html의 `rag_core.js?v=` 한 자리를 이렇게 올리자 한글 126줄이 깨진 채 두 Pages에 배포됐고(21:11~21:42 KST), 같은 폴더의 다른 창이 1490e15로 복구했다. 바뀐 파일은 커밋 전에 `git diff --stat`에서 바뀐 줄 수가 의도(1~2줄)와 맞는지 본다 — 그때 1,096줄이 바뀌어 있었다. 커밋 전 smoke를 돌리면 `TestTextEncodingIntact`(d23f25d)가 BOM·UTF-8 아님·CP949 오독 깨짐을 잡는다 — 이 검사를 끄거나 비율 3 %를 올리지 말 것(정상 최대 0.5 %, 깨진 판 100 %). (배경역사 #300-보론5)
 

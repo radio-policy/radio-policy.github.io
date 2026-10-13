@@ -1291,6 +1291,42 @@ begin
 end $function$
 ;
 
+CREATE OR REPLACE FUNCTION public.notify_new_telegram_subscriber()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  tok text;
+  n int;
+begin
+  begin
+    select count(*) into n from public.telegram_subscribers where active;
+    select decrypted_secret into tok from vault.decrypted_secrets where name = 'telegram_bot_token';
+    if tok is not null then
+      perform net.http_post(
+        url     := 'https://api.telegram.org/bot' || tok || '/sendMessage',
+        body    := jsonb_build_object(
+          'chat_id', '<OPERATOR_CHAT_ID>',
+          'text', '🆕 텔레그램 구독 시작' || E'\n'
+               || '이름: ' || coalesce(nullif(left(new.first_name, 64), ''), '(없음)') || E'\n'
+               || '아이디: ' || coalesce('@' || nullif(new.username, ''), '(없음)') || E'\n'
+               || 'chat_id: ' || new.chat_id::text || E'\n'
+               || '지금 구독자 ' || n || '명' || E'\n'
+               || '→ 팀·계정 연결은 대시보드 설정 > 텔레그램 구독자'
+        ),
+        headers := '{"Content-Type":"application/json"}'::jsonb,
+        timeout_milliseconds := 10000
+      );
+    end if;
+  exception when others then
+    raise warning '[구독 시작 알림 실패(구독은 정상)] %', sqlerrm;
+  end;
+  return new;
+end $function$
+;
+
 CREATE OR REPLACE FUNCTION public.ops_ai_usage_today()
  RETURNS jsonb
  LANGUAGE plpgsql

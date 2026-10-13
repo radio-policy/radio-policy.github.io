@@ -673,6 +673,9 @@ grant EXECUTE on function public.norm_article_key(a text) to service_role;
 revoke all on function public.notify_lawmap_request() from public, anon, authenticated, service_role;
 grant EXECUTE on function public.notify_lawmap_request() to service_role;
 
+revoke all on function public.notify_new_telegram_subscriber() from public, anon, authenticated, service_role;
+grant EXECUTE on function public.notify_new_telegram_subscriber() to service_role;
+
 revoke all on function public.ops_ai_usage_today() from public, anon, authenticated, service_role;
 grant EXECUTE on function public.ops_ai_usage_today() to authenticated;
 grant EXECUTE on function public.ops_ai_usage_today() to service_role;
