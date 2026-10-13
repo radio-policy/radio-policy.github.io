@@ -210,6 +210,130 @@ class TestPrivacyQ2(unittest.TestCase):
         self.assertEqual(P.parse_runs(''), [('L1', 'ABCX')])
 
 
+Q3_LOCK = '41d892ee54e29a84dbce3a0d145739acde09ede262c29004a59d4aaac7a13303'
+
+
+class TestPrivacyQ3(unittest.TestCase):
+    """개인정보 좁은 질문 Q3(판정 local_docs/긴급도_개인정보원칙_실측_261006/판정_좁은질문_261006.md §10 v2 + 운영자 결정 ③④⑥) —
+    문안·입력·질문 낱말·알뜰폰 목록을 글자 그대로 잠그고, 도구·parties 설명이 Q2와 바이트 같은지, 내림 규칙 표와 깨진 본문 두 비율을 본다."""
+    LONG = '가나다라마' * 260                       # 1,300자
+    ARTS = [{'title': '제목', 'content': '', 'screen_text': ''},
+            {'title': '제목', 'content': '  본문  가 ', 'screen_text': ''},
+            {'title': '제목', 'content': '', 'screen_text': ' 요약 '},
+            {'title': '제목', 'content': LONG, 'screen_text': '다' * 400},
+            {'title': '제목', 'content': 'Ã¬Â¹Â´Ã¬ÂÂ¸ ' * 40, 'screen_text': '요약 글'}]     # 깨진 본문
+
+    def test_lock(self):
+        s = (P.Q3_SYSTEM + '\n' + json.dumps(P.PRIV_VARIANTS['Q3']['tool'], ensure_ascii=False) + '\n'
+             + str(P.PRIV_VARIANTS['Q3']['max_tokens']) + '\n' + '\n\x00'.join(P.q3_user_msg(a) for a in self.ARTS)
+             + '\n' + P.PRIV_WORDS_Q3.pattern + '\n' + P.MVNO_NAME.pattern)
+        self.assertEqual(hashlib.sha256(s.encode('utf-8')).hexdigest(), Q3_LOCK,
+                         'Q3 system·tool·user·max_tokens·질문 낱말·알뜰폰 목록이 바뀌었다 — 판정 §10-2 글자 그대로여야 하고, '
+                         '세 번째 표본(W3)을 연 뒤에 고친 판은 네 번째 표본으로만 잰다(§10-4)')
+
+    def test_tool_and_parties_same_as_q2(self):
+        self.assertIs(P.PRIV_VARIANTS['Q3']['tool'], P.Q2_TOOL)                   # 도구는 바이트 동일(출력 형식은 눈금, #267)
+        self.assertIs(P.PRIV_VARIANTS['Q2w']['tool'], P.Q2_TOOL)
+        self.assertEqual(P.PRIV_VARIANTS['Q3']['max_tokens'], P.Q2_MAX_TOKENS)
+        self.assertEqual(P.PRIV_VARIANTS['Q2w']['system'], P.Q2_SYSTEM)           # 분리 팔 = Q2 글 + Q3 입력
+        self.assertIs(P.PRIV_VARIANTS['Q2w']['user'], P.q3_user_msg)
+        q2, q3 = P.Q2_SYSTEM.split('\n'), P.Q3_SYSTEM.split('\n')
+        self.assertEqual(q2[:8], q3[:8])                                         # 첫 세 줄 · [칸 채우는 기준] · parties 세 줄
+        self.assertTrue(q3[5].startswith('· parties(당사자)'))
+        self.assertEqual(q2[-2:], q3[-2:])                                       # why 줄 + 끝 줄바꿈
+        self.assertTrue(P.Q3_SYSTEM.endswith('· why: 근거 한 줄(40자 안).\n'))
+        flat = P.Q3_SYSTEM.replace('\n  ', '')                               # 운영자 결정 ④·⑥과 stage 설명이 문안에 있다
+        for s in ('제재·과징금·조사 권한을 강화하겠다고 밝힌 방침', '경찰·검찰의 수사 착수·입건·압수수색·기소는 처분이 아니다', '100만 명·계정 이상'):
+            self.assertIn(s, flat)
+        self.assertNotIn('원칙', P.Q3_SYSTEM)
+
+    def test_user_msg_and_input_text(self):
+        self.assertEqual([P.q3_user_msg(a) for a in self.ARTS[:3]],
+                         ['제목: 제목', '제목: 제목\n본문: 본문 가', '제목: 제목\n검색 요약: 요약'])
+        self.assertEqual(P.q3_user_msg(self.ARTS[3]), '제목: 제목\n검색 요약: ' + '다' * 300 + '\n본문: ' + self.LONG[:1200])
+        self.assertEqual(P.q3_user_msg(self.ARTS[4]), '제목: 제목\n검색 요약: 요약 글')       # 깨진 본문은 없는 것으로
+        short = {'title': '제목', 'content': '짧은 본문', 'screen_text': '요약 글'}            # 짧은 본문도 넣는다
+        self.assertEqual(P.q3_user_msg(short), P.q2_user_msg(short))
+        self.assertEqual(P.priv_key('Q2w', P.q3_user_msg(short)), P.priv_key('Q2', P.q2_user_msg(short)))   # 같은 글 = 같은 호출
+        for art in self.ARTS + [short]:                                          # S가 보는 글 = 모델이 본 글(머리말 빼고)
+            self.assertEqual(P.ws(P.q3_input_text(art)),
+                             P.ws(P.q3_user_msg(art).replace('제목: ', '').replace('검색 요약: ', '').replace('본문: ', '')))
+        self.assertEqual(P.user_msg(short), '제목: 제목\n요약: 요약 글')                     # 등급 호출 입력은 그대로
+
+    def test_broken_body(self):
+        self.assertFalse(P.broken_body(''))
+        self.assertFalse(P.broken_body('과기정통부·KISA는 이날 해킹 사고 조사 결과를 발표했다'))
+        self.assertTrue(P.broken_body('Ã¬Â¹Â´Ã¬ÂÂ¸ Ã«Â³Â´Ã¬ÂÂ'))
+        self.assertTrue(P.broken_body('Login Sign up Copyright All rights reserved'))      # 한글 음절 0
+        self.assertTrue(P.broken_body('ÿ�' + '가' * 2))                               # 대체 문자·Latin-1
+        # 경계: 깨진 글자 비율은 0.3을 「넘으면」, 한글 비율은 0.2에 「못 미치면」
+        self.assertFalse(P.broken_body('é' * 3 + '가' * 7))                                # 0.3 → 아님
+        self.assertTrue(P.broken_body('é' * 4 + '가' * 6))                                 # 0.4
+        self.assertFalse(P.broken_body('가' * 2 + 'a' * 8))                                # 한글 0.2 → 아님
+        self.assertTrue(P.broken_body('가' + 'a' * 9))                                     # 0.1
+        self.assertTrue(P.broken_body('Ｓ' * 4 + '가' * 6))                                # 전각 꼴
+        art = {'title': '제목', 'content': '가' * 1200 + 'é' * 2000, 'screen_text': ''}       # 앞 1,200자만 잰다
+        self.assertEqual(P.q3_body(art), '가' * 1200)
+
+    def test_words_and_mvno(self):
+        only_fine = {'title': '인앱결제 과징금 부과 의결 전망', 'screen_text': ''}
+        self.assertTrue(P.privacy_hit(only_fine))
+        self.assertFalse(P.privacy_hit_q3(only_fine))                            # 「과징금」만은 질문 밖
+        self.assertTrue(P.privacy_hit_q3({'title': '티빙 개인정보 유출', 'screen_text': ''}))
+        self.assertTrue(P.privacy_hit_q3({'title': '제목', 'screen_text': '금융권 해킹 수사'}))   # 검색 요약도 본다
+        self.assertEqual(P.PRIV_WORDS.pattern.replace('|과징금', ''), P.PRIV_WORDS_Q3.pattern)
+        for s in ('알뜰폰', '퍼스트모바일', 'KT M모바일', 'KT엠모바일', 'SK텔링크', '세븐모바일', '미디어로그', 'LG헬로비전', '헬로모바일',
+                  'U+유모바일', 'KB리브모바일', '리브엠', '토스모바일', '프리텔레콤', '이야기모바일', '스마텔'):
+            self.assertTrue(P.MVNO_NAME.search(s), s)
+        for s in ('SK텔레콤', '모바일 뱅킹', '티빙', '이동통신사'):
+            self.assertFalse(P.MVNO_NAME.search(s), s)
+        for s in ('통신사', '이동통신사', '이통사', '통신업계', '한국통신사업자연합회', 'KTOA'):
+            self.assertTrue(P.TELCO_BROAD.search(s), s)
+
+    def test_rule_table(self):
+        far = '가' * 700 + ' SK텔레콤 증인 ' + '나' * 100                    # 통신사 이름이 본문 600~1,200자 사이
+        base = {'title': '금융권 해킹 국감', 'content': '가' * 300, 'screen_text': '요약'}
+        arts = {'plain': base, 'far': {**base, 'content': far}, 'summ': {**base, 'screen_text': 'KT 소액결제'},
+                'beyond': {**base, 'content': '가' * 1250 + ' KT '}}           # 1,200자 밖 — 입력 글이 아니다
+        o = lambda topic='특정 유출·해킹 사건', stage='뒷이야기', scale='규모 안 적힘', parties=('신한은행',): \
+            {'topic': topic, 'stage': stage, 'scale': scale, 'parties': list(parties), 'why': ''}
+        rules = ('Q3', 'N0', 'R-a3', 'M0', 'M+', 'Q2w')
+        table = [  # (출력, 기사) → Q3 · N0 · R-a3 · M0 · M+ · Q2w(=Q2 코드 R-b)
+            (o(topic='법·제도·정책 일반'), 'plain', (0, 0, 0, 0, 0, 0)),
+            (o(topic='그 밖'), 'plain', (0, 0, 0, 0, 0, 0)),
+            (o(), 'plain', (1, 1, 1, 1, 1, 1)),
+            (o(), 'far', (0, 1, 0, 0, 0, 1)),                                   # S가 막음 — Q2식 안전장치(N0·Q2w)는 못 봄
+            (o(), 'summ', (0, 0, 0, 0, 0, 0)),
+            (o(), 'beyond', (1, 1, 1, 1, 1, 1)),
+            (o(parties=('퍼스트모바일',)), 'plain', (0, 0, 0, 1, 0, 1)),           # A3: 알뜰폰 사업자는 parties로
+            (o(parties=('이동통신사',)), 'plain', (1, 1, 1, 1, 0, 1)),             # M+만 넓은 낱말
+            (o(parties=('SKT',)), 'plain', (1, 0, 1, 1, 1, 0)),                    # 입력 글에 없는 이름 — S는 입력 글만 본다(§10-2-4)
+            (o(stage='사고 첫 보도', scale='규모 안 적힘'), 'plain', (1, 1, 0, 1, 1, 1)),   # R-b · R-a3만 유지
+            (o(stage='사고 첫 보도', scale='그 미만'), 'plain', (1, 1, 1, 1, 1, 1)),
+            (o(stage='사고 첫 보도', scale='수백만 명·계정 이상'), 'plain', (0, 0, 0, 0, 0, 0)),
+            (o(stage='처분 첫 보도', scale='그 미만'), 'plain', (0, 0, 0, 0, 0, 0)),   # 처분 첫 보도는 규모 무관 유지
+            (o(stage='해당 없음', scale='해당 없음'), 'plain', (0, 0, 0, 0, 0, 0)),
+        ]
+        for out, ak, want in table:
+            art = arts[ak]
+            got = tuple(int(P.PRIV_VARIANTS['Q2w']['lower'](out, art) if r == 'Q2w' else P.privacy_lower_q3_rule(out, art, r))
+                        for r in rules)
+            self.assertEqual(got, want, (out['topic'], out['stage'], out['scale'], out['parties'], ak))
+            self.assertEqual(P.privacy_lower_q3(out, art), P.privacy_lower_q3_rule(out, art, 'Q3'))
+            self.assertEqual(P.PRIV_VARIANTS['Q3']['lower'](out, art), bool(want[0]))
+        broken = {**base, 'content': 'Ã¬Â¹Â´ SK텔레콤 ' * 30}                    # 깨진 본문은 입력 글이 아니다 — S도 못 본다
+        self.assertTrue(P.privacy_lower_q3(o(), broken))
+
+    def test_runs_and_sets(self):
+        self.assertEqual(P.set_tokens('ABCX'), ['A', 'B', 'C', 'X'])
+        self.assertEqual(P.set_tokens('W3'), ['W3'])
+        self.assertEqual(P.set_tokens('W'), ['W'])
+        self.assertEqual(P.parse_runs('Q3:W3,Q2:W3,Q2w:W3,Q3:W,Q3:ABCX'),
+                         [('Q3', 'W3'), ('Q2', 'W3'), ('Q2w', 'W3'), ('Q3', 'W'), ('Q3', 'ABCX')])
+        self.assertEqual(P.SAMPLE_WINDOWS['W3'], ('2026-10-13T00:00', '2026-10-20T00:00'))
+        self.assertEqual(set(P.P4_EXPECTED) & set(P.P4W_NAMED), set())
+
+
 import hashlib       # noqa: E402
 import unittest.mock  # noqa: E402
 
