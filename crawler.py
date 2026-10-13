@@ -12,6 +12,7 @@ import json
 import time
 import random
 import smtplib
+import threading
 from datetime import datetime, timezone, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -35,6 +36,7 @@ import urgency_rules   # 긴급도 공통 낱말 규칙 매처(#216) — 사내�
 import news_known      # 뉴스 중복 대조 공용(#234) — 후보만 DB 함수로, 실패 시 전량 조회
 import retry_util      # 재시도 공용(#217) — 문장 판정 기록·팀 행 쓰기(#251)에만, Anthropic 호출에는 쓰지 않는다
 import team_grading    # 팀 채점 세트 고르기·시험 후보 정리(#277) — 순수 함수, DB·AI는 여기(crawler.py)서
+import news_summary    # 구독자 봇 주요 뉴스 2문장 요약(#298) — 지시문·검사·호출 하나, 붙이기·저장은 여기(attach_tg_summaries)
 import anthropic
 
 # ── 환경변수 ────────────────────────────────────────────
@@ -1122,8 +1124,13 @@ def _is_non_body(text: str) -> bool:
     return bool(_NON_BODY_RE.match(text or ''))
 
 
+BODY_STORE_MAX = 1500    # news_feed.content에 저장하는 본문 길이 — 호출부가 자른다(#298 전에는 이 함수 안에서 잘랐다)
+
+
 def fetch_article_body(url: str, source: str) -> tuple:
-    """기사 URL에서 본문 텍스트와 발행일 추출. 반환: (body: str, published_at: str)"""
+    """기사 URL에서 본문 텍스트와 발행일 추출. 반환: (body: str, published_at: str)
+    body는 **자르지 않은 전문**이다(#298) — 저장할 때는 호출부가 [:BODY_STORE_MAX]로 자른다(저장 길이는 종전 그대로).
+    전문은 구독자 봇 요약 줄의 입력으로 같은 실행 안 메모리에서만 쓴다(save_new_items → _FULL_BODIES)."""
     try:
         resp = _http_get(url, timeout=8)
         resp.raise_for_status()
@@ -1166,7 +1173,7 @@ def fetch_article_body(url: str, source: str) -> tuple:
                 import trafilatura
                 _ex = trafilatura.extract(resp.text, include_comments=False, include_tables=True)
                 if _ex and len(_ex.strip()) > 50:
-                    return _ex.strip()[:1500], pub_date
+                    return _ex.strip(), pub_date
             except Exception:
                 pass
 
@@ -1239,7 +1246,7 @@ def fetch_article_body(url: str, source: str) -> tuple:
                 text = tag.get_text(separator=' ', strip=True)
                 # 목록 상자로 시작하는 칸은 본문이 아니다 — 다음 후보를 본다(#232)
                 if len(text) > 100 and not _is_nav(text) and not _is_non_body(text):
-                    body = text[:1500]
+                    body = text
                     break
 
         # 셀렉터 미매칭 시 trafilatura 폴백
@@ -1249,7 +1256,7 @@ def fetch_article_body(url: str, source: str) -> tuple:
                 extracted = trafilatura.extract(resp.text, include_comments=False, include_tables=False)
                 if extracted and len(extracted.strip()) > 100 and not _is_nav(extracted.strip()) \
                         and not _is_non_body(extracted.strip()):
-                    body = extracted.strip()[:1500]
+                    body = extracted.strip()
             except Exception:
                 pass
 
@@ -1985,13 +1992,18 @@ def save_new_items(items: list, existing_data: tuple) -> list:
     #    본문이 있어야 ⑤ 긴급도 판정이 제목+요약이 아니라 본문(600자)을 본다.
     #    실패·빈 껍데기(#113 유형: HTTP 200에 본문 없음)는 content를 비워 두어 refetch_content(lampmanH-pc)의
     #    '100자 미만=재수집' 조건이 그대로 살고, 판정은 #188 요약 폴백으로 간다. 건수는 반드시 로그에 남긴다.
+    #    저장은 앞 BODY_STORE_MAX(1,500)자 그대로, 전문 앞 SUMMARY_INPUT_MAX자는 _FULL_BODIES(메모리)에만 — 구독자 봇 요약 줄의
+    #    입력이다(#298, 결정 6: 저장 상한은 안 바꾼다). item dict에는 넣지 않는다(이 dict가 그대로 news_feed upsert 행이다).
     print(f'[본문 수집] {"GitHub Actions" if IS_GITHUB_ACTIONS else "PC"} 환경 — {len(unique_new)}건 본문 수집 시작...')
     body_ok = body_fail = 0
+    _FULL_BODIES.clear()
     for item in unique_new:
         if item.get('url'):
-            body, article_date = fetch_article_body(item['url'], item.get('source', ''))
+            full, article_date = fetch_article_body(item['url'], item.get('source', ''))
+            body = (full or '')[:BODY_STORE_MAX]
             if body and len(body.strip()) >= 100:
                 item['content'] = body
+                _FULL_BODIES[item['url']] = full[:news_summary.SUMMARY_INPUT_MAX]
                 body_ok += 1
             else:
                 body_fail += 1          # content는 기존값(None 또는 RSS 요약) 유지 → refetch 대상
@@ -4141,6 +4153,127 @@ def suppress_repeat_alerts(urgent_items: list) -> list:
         return urgent_items
 
 
+# ═══════════════════════════════════════════════════════
+#  구독자 봇 주요 뉴스 요약 줄 (#298, 2026-10-13 운영자 결정 6개 — 지시문·검사는 news_summary.py)
+#  억제·리마인드·묶기를 지나 **구독자 큐에 실제로 들어가는 긴급 기사**에만, 큐 적재 직전에 붙인다 — 공통 urgent(main)·받는 단위의
+#  긴급 채널(_audience_channels, 'collect'·'late')·관리자 복원(restore_raised_checks). 같은 실행 안에서 기사(url)마다 한 번만
+#  만들고(_SUMMARY_MEMO) 공통·팀 경로가 같은 글을 쓴다. 입력은 수집 때 받은 전문(_FULL_BODIES, 메모리만 — DB content는 1,500자
+#  그대로). 이번 실행에 수집되지 않은 기사(늦은 판정·복원 — DB 행)는 저장된 news_feed.ai_summary를 다시 쓰고 없으면 생략.
+#  보통 채널(:25 묶음)과 운영자 봇 알림(send_telegram)에는 붙이지 않는다(결정 4 — 구독자 「주요 뉴스」만).
+#  fail-open: 키 없음·호출 실패·잘림·시간 초과는 모두 요약 없이 제목만 나간다(발송을 막지 않는다). 호출은 SUMMARY_WORKERS개
+#  병렬, 전체 SUMMARY_BUDGET_S를 넘긴 기사도 요약 없이 — 큐 적재·즉시 배달을 그 이상 늦추지 않는다.
+# ═══════════════════════════════════════════════════════
+SUMMARY_WORKERS = 4
+SUMMARY_BUDGET_S = 30
+SUMMARY_FAIL_STOP = 2                   # 한 실행에서 호출 실패(예외)가 이만큼이면 남은 기사는 부르지 않는다(#268 2차 확인과 같은 꼴)
+SUMMARY_URL_CHUNK = 20                  # 저장된 요약 조회 in_ 묶음(url은 uuid보다 길다)
+_FULL_BODIES: dict = {}                 # url → 수집 때 받은 전문 앞 SUMMARY_INPUT_MAX자 — save_new_items가 이번 실행분만 채운다
+_SUMMARY_MEMO: dict = {}                # url → 붙일 요약('' = 없음) — 이번 실행 안에서 공통·팀 경로가 같이 쓴다
+_SUMMARY_FAILS = [0]                    # 이번 실행의 호출 실패 수(병렬 작업이 같이 센다 — _SUMMARY_LOCK)
+_SUMMARY_LOCK = threading.Lock()
+
+
+def attach_tg_summaries(items: list, reuse_db: bool = False) -> list:
+    """기사 목록 → 얕은 복사본 목록 — 요약이 있는 기사에만 '_summary' 키(format_news_item이 요약 줄로 그린다).
+    원본 dict는 건드리지 않는다(공통 포장의 dict가 받는 단위 계산의 후보로 다시 쓰인다 — 보통 채널에 요약이 새지 않게).
+    reuse_db = 이번 실행에 수집되지 않은 기사(DB 행)일 수 있을 때 — 전문이 없는 기사의 저장된 ai_summary를 한 번에 읽는다.
+    어떤 예외도 밖으로 던지지 않는다."""
+    try:
+        out = [dict(it) for it in items or []]
+    except Exception:
+        return list(items or [])
+    try:
+        _fill_summary_memo(out, reuse_db)
+        for it in out:
+            s = _SUMMARY_MEMO.get(str(it.get('url') or '').strip())
+            if s:
+                it['_summary'] = s
+    except Exception as e:
+        print(f'[요약] 붙이기 실패(무시 — 제목만 보냄): {str(e)[:120]}')
+    return out
+
+
+def _fill_summary_memo(items: list, reuse_db: bool) -> None:
+    """아직 정하지 않은 기사만 — 전문이 있으면 만들고, 없으면 (reuse_db일 때) 저장본, 그 밖은 ''(본문 없음 = 생략, 결정 2)."""
+    todo, need_db, seen = [], [], set()
+    for it in items:
+        url = str(it.get('url') or '').strip()
+        if not url or url in _SUMMARY_MEMO or url in seen:
+            continue
+        seen.add(url)
+        if news_summary.usable_body(_FULL_BODIES.get(url)):
+            todo.append((url, it))
+        elif reuse_db:
+            need_db.append(url)
+        else:
+            _SUMMARY_MEMO[url] = ''
+    if need_db:
+        got = {}
+        try:
+            for part in _chunks(need_db, SUMMARY_URL_CHUNK):
+                rows = sb.table('news_feed').select('url,ai_summary').in_('url', part).execute().data or []
+                got.update({r.get('url'): str(r.get('ai_summary') or '').strip() for r in rows if r.get('url')})
+        except Exception as e:
+            print(f'[요약] 저장된 요약 조회 실패(무시 — 그 기사는 제목만): {str(e)[:100]}')
+        for u in need_db:
+            _SUMMARY_MEMO[u] = got.get(u, '')
+        n_reuse = sum(1 for u in need_db if _SUMMARY_MEMO[u])
+        print(f'[요약] 이번 실행에 수집되지 않은 기사 {len(need_db)}건 — 저장된 요약 {n_reuse}건 다시 씀')
+    if todo:
+        _generate_summaries(todo)
+
+
+def _generate_summaries(todo: list) -> None:
+    """[(url, 기사)] → 요약(news_summary.SUMMARY_MODEL, 병렬) → _SUMMARY_MEMO + news_feed.ai_summary 저장(만든 것만).
+    시간 상한을 넘긴 것은 ''."""
+    if not ANTHROPIC_API_KEY:
+        for url, _it in todo:
+            _SUMMARY_MEMO[url] = ''
+        print(f'[요약] ANTHROPIC_API_KEY 없음 — {len(todo)}건 제목만')
+        return
+    from concurrent.futures import ThreadPoolExecutor, wait
+    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY, timeout=news_summary.SUMMARY_TIMEOUT_S, max_retries=1)
+
+    def job(it, body):
+        if _SUMMARY_FAILS[0] >= SUMMARY_FAIL_STOP:
+            return {'summary': '', 'why': '실패 누적 중단'}
+        res = news_summary.news_tg_summary(client, it.get('title'), it.get('source'), body)
+        if str(res.get('why') or '').startswith('실패'):
+            with _SUMMARY_LOCK:
+                _SUMMARY_FAILS[0] += 1
+        return res
+    pool = ThreadPoolExecutor(max_workers=SUMMARY_WORKERS)
+    futs = {pool.submit(job, it, _FULL_BODIES.get(url)): url for url, it in todo}
+    done, late = wait(futs, timeout=SUMMARY_BUDGET_S)
+    pool.shutdown(wait=False, cancel_futures=True)
+    why, made = {}, {}
+    for f in futs:
+        url = futs[f]
+        if f in late:
+            res = {'summary': '', 'why': '시간 초과'}
+        else:
+            try:
+                res = f.result()
+            except Exception as e:                  # news_tg_summary는 던지지 않지만 — 그래도 제목만
+                res = {'summary': '', 'why': f'실패: {str(e)[:60]}'}
+        s = res.get('summary') or ''
+        _SUMMARY_MEMO[url] = s
+        if s:
+            made[url] = s
+        else:
+            k = str(res.get('why') or '버림').split(':')[0]
+            why[k] = why.get(k, 0) + 1
+    saved = 0
+    for url, s in made.items():
+        try:
+            sb.table('news_feed').update({'ai_summary': s}).eq('url', url).execute()
+            saved += 1
+        except Exception as e:
+            print(f'[요약] 저장 실패(무시 — 이번 알림엔 붙음): {str(e)[:80]}')
+    print(f'[요약] 주요 뉴스 {len(todo)}건 — 요약 {len(made)}건(저장 {saved})'
+          + (' · 제목만 ' + ' · '.join(f'{k} {v}' for k, v in sorted(why.items())) if why else ''))
+
+
 def send_telegram(urgent_items: list):
     """긴급 기사를 Telegram Bot으로 즉시 알림 (운영자 전용 — 분야 태그를 함께 표시)"""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
@@ -4340,6 +4473,9 @@ class _AudSkip(RuntimeError):
 def _reset_audience_state() -> None:
     _GROUP_MEMO.clear()
     _MATCH_MEMO.clear()
+    _FULL_BODIES.clear()                 # 요약 줄(#298) — 전문·요약·실패 수도 한 실행 안에서만
+    _SUMMARY_MEMO.clear()
+    _SUMMARY_FAILS[0] = 0
     _AUD_CTX.clear()
     _AUD_STATS.update({'units': 0, '긴급': 0, '보통': 0, '오류': 0, 'ai': 0})
 
@@ -4670,6 +4806,7 @@ def restore_raised_checks() -> int:
     items = [r for r in rows if r.get('id') in got]
     if not items:
         return 0
+    items = attach_tg_summaries(items, reuse_db=True)    # 요약 줄(#298) — 지난 실행 기사라 저장된 ai_summary만(없으면 제목만)
     common_ok = False
     try:
         from subscriber_notify import queue_news_items
@@ -5054,7 +5191,7 @@ def _audience_channels(ctx: dict, channels: tuple) -> int:
                 print(f'[팀 알림] {aud} {ch} 기록 {n_bad}건 못 씀(무시 — 도중에 지워진 기사 등): {err}')
             ctx['logged'].update((aud, ch, n) for n in ok_nids)
             info = {it['url']: (lv, tms) for it, lv, tms in trip}
-            qrows, r_n = [], 0
+            qrows, r_n, qitems = [], 0, []
             for nid, rep in reps:
                 if nid not in fresh:
                     continue                     # 이미 있던 기록 = 다른 실행이 보냄 — 큐에 넣지 않는다
@@ -5063,10 +5200,14 @@ def _audience_channels(ctx: dict, channels: tuple) -> int:
                 label = _alert_label(u, lv, rep.get('urgency'), tms, ctx['team_names'])
                 if label:
                     item['_label'] = label
+                qitems.append(item)
+            if ch == '긴급' and qitems:          # 요약 줄(#298) — 긴급 채널만, 공통 경로와 같은 글(실행 안 메모)
+                qitems = attach_tg_summaries(qitems, reuse_db=(stage == 'late'))
+            for item in qitems:
                 row = news_row(aud, ch, item)
                 if row:
                     qrows.append(row)
-                    r_n += 1 if rep.get('_remind') else 0
+                    r_n += 1 if item.get('_remind') else 0
             done = queue_audience_rows(sb, qrows) if qrows else {}
             n_in = sum(done.values())
             if n_in < len(qrows):
@@ -5161,9 +5302,10 @@ def main():
         # 현재 순서를 유지할 것 — 큐 장애가 유일한 감시 채널인 운영자 수신을 끊으면 안 된다.
         # trigger=False(#252) — 즉시 배달 호출은 팀 단위 행까지 넣은 뒤 아래에서 **한 번만**(두 번 부르면 두 발송 실행이
         # 겹쳐 같은 사람에게 같은 행이 두 번 갈 수 있다 — 워터마크 갱신 전 읽기).
+        # 요약 줄(#298)은 여기서 — 억제·리마인드·묶기 뒤, 운영자 알림 뒤, 큐 적재 직전. 복사본에만 붙는다(urgent_items 불변).
         try:
             from subscriber_notify import queue_news_items
-            common_queued = queue_news_items(sb, urgent_items, trigger=False)
+            common_queued = queue_news_items(sb, attach_tg_summaries(urgent_items), trigger=False)
         except Exception as e:
             print(f'[구독자 큐 적재 실패(무시)] {e}')
     else:

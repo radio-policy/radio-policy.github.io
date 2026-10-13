@@ -7933,6 +7933,20 @@ async function summarizeNews(newsId) {
   var box = document.getElementById('summary-box-' + newsId);
   if (!box) return;
 
+  // ⓪ 텔레그램 주요 뉴스로 나간 기사의 2문장 AI 요약(#298, news_feed.ai_summary — 크롤러가 원문 전문으로 만든 것)이 있으면 먼저.
+  //    목록(NEWS_LIST_COLS)·상세 본문 조회에 칸을 더하지 않고 이 한 건만 따로 묻는다 — 사내 콘솔이 이 함수를 감싸 쓰는데 그쪽
+  //    데이터엔 이 칸이 없을 수 있다(오류·빈 값 = 종전 흐름 그대로). summary(네이버 요약)는 목록·검색·피드백이 읽는 칸이라 덮지 않는다.
+  if (n.ai_summary === undefined && sb) {
+    try {
+      var aResp = await sb.from('news_feed').select('ai_summary').eq('id', n.id).maybeSingle();
+      n.ai_summary = (aResp && !aResp.error && aResp.data && aResp.data.ai_summary) || '';
+    } catch(e) { n.ai_summary = ''; }
+  }
+  if (n.ai_summary && String(n.ai_summary).trim()) {
+    box.innerHTML = renderSummaryHtml(String(n.ai_summary).trim());
+    return;
+  }
+
   // ① DB에 저장된 요약 있으면 즉시 표시 (API 호출 없음)
   if (n.summary && n.summary.trim().length > 20) {
     box.innerHTML = renderSummaryHtml(n.summary.trim());

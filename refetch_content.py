@@ -348,6 +348,7 @@ def main():
                     body = None
             if not body:
                 body, actual_date = crawler.fetch_article_body(resolved, source)
+                body = (body or '')[:crawler.BODY_STORE_MAX]     # 전문을 돌려준다(#298) — 저장 길이는 종전 1,500자 그대로
             # 제목만 고치러 온 기사(본문은 이미 있음)는 본문 추출이 실패해도 제목은 고친다.
             if not body:
                 fixed = _fix_title_only(sb, article, resolved)

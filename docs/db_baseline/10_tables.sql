@@ -591,6 +591,7 @@ create table if not exists public.news_feed (
   urgency_check_basis text,
   urgency_check_capped boolean,
   urgency_check_restored_at timestamp with time zone,
+  ai_summary text,
   constraint news_feed_pkey PRIMARY KEY (id),
   constraint news_feed_urgency_check CHECK ((urgency = ANY (ARRAY['긴급'::text, '보통'::text, '참고'::text])))
 );

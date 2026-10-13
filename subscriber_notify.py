@@ -333,6 +333,8 @@ def format_news_item(item) -> str:
     발송 측(Edge)이 붙인다.
     선택 키 `_label`(#252 — 받는 단위에서만 중요한 기사의 표시, 예: '우리 팀 기준' / '기술정책팀·AI정책팀')이 있으면
     출처 줄 끝에 ` · 🏷 {label}`을 붙인다. 키가 없거나 비면 종전과 바이트 단위로 같다(공통 경로 불변).
+    선택 키 `_summary`(#298 — 크롤러 attach_tg_summaries가 붙인 2문장 AI 요약)가 있으면 출처 줄 아래에 인용구 한 줄로 붙인다.
+    한 줄 안에서 태그가 열리고 닫혀 발송 측 줄 단위 분할(splitByLines)이 태그를 자르지 않는다. 키가 없거나 비면 종전과 바이트 단위로 같다.
     """
     rel = item.get('_related', 0)
     rel_txt = f' <i>(관련 보도 {rel}건)</i>' if rel else ''
@@ -343,7 +345,9 @@ def format_news_item(item) -> str:
     label = str(item.get('_label') or '').strip()
     if label:
         src = f'{src} · 🏷 {esc(label)}' if src else f'🏷 {esc(label)}'
-    return f'{head}{rel_txt}\n   <i>{src}</i>'
+    summ = re.sub(r'\s+', ' ', str(item.get('_summary') or '')).strip()
+    tail = f'\n<blockquote>{esc(summ)}</blockquote>' if summ else ''
+    return f'{head}{rel_txt}\n   <i>{src}</i>{tail}'
 
 
 def queue_news_items(sb, items: list, trigger: bool = True) -> bool:
