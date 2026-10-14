@@ -3489,6 +3489,110 @@ function chDate(iso) {
 // 열람 범위는 **RLS가 정한다** (2026-08-20, #104): 본인 / 팀장=자기 팀 / 관리자=전체.
 // 텔레그램 행은 user_id가 없어 관리자에게만 보인다. 화면에서 거르는 게 아니라 DB가 안 내주므로
 // 여기서 별도 필터를 두지 않는다. 조문 직조회(기계적 원문 출력)만 성격이 달라 목록에서 뺀다.
+//
+// 누가 물었나(#305, 2026-10-14, 운영자 요청 「사내판처럼」 — 사내 콘솔은 10-13부터 운영자가 전체 이력을 사람별로 본다):
+// 팀장·관리자에게는 카드마다 질문자 칩(「이름 · 팀」 / 「텔레그램 · 이름」 / 「계정 도입 전」)을 붙이고, 목록 위에
+// 「전체 / 내 것」 토글 + 사람 고르기(건수 많은 순, 「N건 중 최근 M건」)를 둔다. 이름의 출처는 둘뿐이다 — RLS가 이미
+// 보여 주는 profiles(본인 / 팀장=자기 팀 / 관리자=전체)와 관리자 RPC admin_list_subscribers(텔레그램 구독자 이름).
+// 새 권한·새 RPC·새 칸 없음: 팀장은 팀원 이름까지(profiles_sel_team), 관리자는 전부, 팀원은 본인 행만 보므로 칩·토글이 없다.
+// chat_id·uuid는 화면·DOM에 싣지 않는다(구독자 카드와 같은 규칙) — 고르기 값은 _chPeople의 색인이고 실제 id는 JS 메모리에만 있다.
+var _chScope = 'all';                       // 'all' | 'mine' — 팀장·관리자만 뜻이 있다(팀원은 늘 본인 행)
+var _chWho = '';                            // 사람 고르기: '' | '<kind>:<id>' — 모달을 닫아도 남아 다시 열면 같은 사람
+var _chPeople = [];                         // [{kind:'u'|'t'|'legacy', id, label, n, last}] 건수 많은 순(같으면 최근 순)
+var _chNames = { users: {}, subs: {} };     // user_id → {name, team_id} / chat_id(문자열) → {name, user_id}
+/** 남의 이력을 볼 수 있는 역할인가 — 관리자(전체)·팀장(자기 팀). RLS와 같은 조건이고 화면 안내용이다 */
+function chCanSeeOthers() {
+  return !!(currentProfile && currentProfile.approved && currentProfile.active &&
+            (currentProfile.role === 'admin' || currentProfile.role === 'leader'));
+}
+/** 질문자 이름표 — 이름을 못 찾아도 빈 문자열이 아니라 「(이름 없음)」(칩이 사라지면 왜 없는지 알 수 없다) */
+function chWhoLabel(row) {
+  if (!row) return '';
+  if ((row.channel || '').indexOf('telegram') === 0 || row.chat_id != null) {
+    var s = _chNames.subs[String(row.chat_id)];
+    var acct = s && s.user_id ? _chNames.users[s.user_id] : null;
+    return '텔레그램 · ' + (s && s.name ? s.name : '구독자 아님') + (acct && acct.name ? ' (' + acct.name + ')' : '');
+  }
+  if (row.user_id) {
+    var me = !!(currentUser && row.user_id === currentUser.id);
+    var p = _chNames.users[row.user_id];
+    if (!p) return me ? ((currentProfile && currentProfile.name) || '나') : '(이름 없음)';
+    var team = p.team_id != null ? _teamName(p.team_id) : '';
+    return (p.name || '(이름 없음)') + (team ? ' · ' + team : '') + (me ? ' (나)' : '');
+  }
+  return '계정 도입 전';   // 2026-08-20 계정 도입(#104) 전 대시보드 기록 — user_id가 없다
+}
+/** 이름표 재료 — profiles(RLS 범위)·팀 목록·(관리자만) 텔레그램 구독자. 실패해도 목록은 그대로 나온다(이름만 비는 쪽이 낫다) */
+async function _chLoadNames() {
+  _chNames = { users: {}, subs: {} };
+  if (!chCanSeeOthers()) return;
+  var jobs = [
+    sb.from('profiles').select('user_id,name,team_id').then(function(r) {
+      if (r.error) { console.warn('자문 이력: 이름 조회 실패(목록은 그대로):', r.error.message); return; }
+      (r.data || []).forEach(function(p) { _chNames.users[p.user_id] = { name: p.name || '', team_id: p.team_id }; });
+    }),
+    loadTeamsList()
+  ];
+  if (isAdminUser()) {
+    jobs.push(sb.rpc('admin_list_subscribers').then(function(r) {
+      if (r.error) { console.warn('자문 이력: 구독자 이름 조회 실패(목록은 그대로):', r.error.message); return; }
+      (r.data || []).forEach(function(s) {
+        _chNames.subs[String(s.chat_id)] = { name: s.first_name || s.username || '', user_id: s.dashboard_user_id || null };
+      });
+    }));
+  }
+  try { await Promise.all(jobs); } catch (e) { console.warn('자문 이력: 이름 조회 실패(목록은 그대로):', e); }
+}
+/** 가벼운 행(user_id·channel·chat_id·created_at)들로 사람별 건수·최근 시각 — 건수 많은 순, 같으면 최근 순 */
+function _chBuildPeople(rows) {
+  var acc = {}, order = [];
+  rows.forEach(function(r) {
+    var kind, id;
+    if ((r.channel || '').indexOf('telegram') === 0 || r.chat_id != null) { kind = 't'; id = r.chat_id; }
+    else if (r.user_id) { kind = 'u'; id = r.user_id; }
+    else { kind = 'legacy'; id = ''; }
+    var key = kind + ':' + id;
+    if (!acc[key]) { acc[key] = { kind: kind, id: id, label: chWhoLabel(r), n: 0, last: r.created_at || '' }; order.push(key); }
+    acc[key].n++;
+    if ((r.created_at || '') > acc[key].last) acc[key].last = r.created_at;
+  });
+  _chPeople = order.map(function(k) { return acc[k]; }).sort(function(a, b) {
+    return b.n - a.n || (b.last > a.last ? 1 : (a.last > b.last ? -1 : 0));
+  });
+}
+function _chPerson() {
+  if (!_chWho) return null;
+  for (var i = 0; i < _chPeople.length; i++) if (_chPeople[i].kind + ':' + _chPeople[i].id === _chWho) return _chPeople[i];
+  _chWho = '';   // 고른 사람이 더는 목록에 없다(이력 삭제 등) → 모두
+  return null;
+}
+function _chApplyWho(q) {
+  var p = _chPerson();
+  if (!p) return q;
+  if (p.kind === 'u') return q.eq('user_id', p.id);
+  if (p.kind === 't') return q.eq('chat_id', p.id);
+  return q.is('user_id', null).is('chat_id', null);   // 계정 도입 전
+}
+function chSetScope(s) { _chScope = s === 'mine' ? 'mine' : 'all'; if (_chScope === 'mine') _chWho = ''; openChatHistory(); }
+function chSetWho(v) { var p = v === '' ? null : _chPeople[Number(v)]; _chWho = p ? p.kind + ':' + p.id : ''; openChatHistory(); }
+/** 목록 위 칸(팀장·관리자) — 「전체 / 내 것」 + 사람 고르기(option 값은 색인) + 건수 */
+function _chBarHtml(total, shown) {
+  var on = 'color:var(--accent);border-color:var(--accent);font-weight:600';
+  var h = '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:10px;font-size:12px">' +
+    '<button class="btn" style="' + (_chScope === 'all' ? on : '') + '" onclick="chSetScope(\'all\')">' + (isAdminUser() ? '전체' : '팀 전체') + '</button>' +
+    '<button class="btn" style="' + (_chScope === 'mine' ? on : '') + '" onclick="chSetScope(\'mine\')">내 것</button>';
+  if (_chScope === 'all') {
+    var cur = _chPerson();
+    h += '<select onchange="chSetWho(this.value)" title="사람을 고르면 그 사람의 자문만 보입니다" style="font-size:12px;max-width:280px">' +
+      '<option value="">모든 사람 (' + _chPeople.length + '명)</option>' +
+      _chPeople.map(function(p, i) {
+        return '<option value="' + i + '"' + (cur === p ? ' selected' : '') + '>' + chEsc(p.label) + ' · ' + p.n + '건</option>';
+      }).join('') + '</select>';
+    h += '<span style="color:var(--text-tertiary);margin-left:auto">' + (total > shown ? total + '건 중 최근 ' + shown + '건' : shown + '건') + '</span>';
+  }
+  return h + '</div>';
+}
+
 async function openChatHistory() {
   var modal = document.getElementById('chat-history-modal');
   var body = document.getElementById('chat-history-body');
@@ -3499,24 +3603,48 @@ async function openChatHistory() {
     body.innerHTML = '<div style="color:var(--text-tertiary);font-size:12px">자문 이력은 로그인 후 볼 수 있습니다. 우측 상단에서 로그인해 주세요.</div>';
     return;
   }
+  var others = chCanSeeOthers();
+  var title = document.getElementById('chat-history-title');
+  if (title) title.textContent = !others ? '자문 이력' : (isAdminUser() ? '자문 이력 — 전체(관리자)' : '자문 이력 — ' + myTeamName() + '(팀장)');
+  if (!others) { _chScope = 'all'; _chWho = ''; }
+  var all = others && _chScope === 'all';
   try {
-    var resp = await sb.from('chat_logs')
-      .select('id, question, category, created_at, user_id')
-      .neq('category', '텔레그램-조문조회')
-      .order('created_at', { ascending: false })
-      .limit(100);
+    // 이름표 재료와 (전체 보기일 때) 사람별 건수용 가벼운 행을 목록과 나란히 읽는다 — 건수는 RLS가 보여 주는 행 전부(상한 2,000)
+    var jobs = [_chLoadNames()];
+    if (all) {
+      jobs.push(sb.from('chat_logs').select('user_id, channel, chat_id, created_at')
+        .neq('category', '텔레그램-조문조회').order('created_at', { ascending: false }).limit(2000));
+    }
+    var pre = await Promise.all(jobs);
+    var total = 0;
+    if (all) {
+      if (pre[1].error) throw pre[1].error;
+      _chBuildPeople(pre[1].data || []);
+      var who = _chPerson();
+      total = who ? who.n : (pre[1].data || []).length;
+    }
+    var q = sb.from('chat_logs')
+      .select('id, question, category, created_at, user_id, channel, chat_id')
+      .neq('category', '텔레그램-조문조회');
+    if (others && _chScope === 'mine') q = q.eq('user_id', currentUser.id);
+    else if (all) q = _chApplyWho(q);
+    var resp = await q.order('created_at', { ascending: false }).limit(100);
     if (resp.error) { body.innerHTML = '<div style="color:var(--text-tertiary);font-size:12px">조회 실패: ' + chEsc(resp.error.message) + '</div>'; return; }
     var data = resp.data || [];
+    var html = others ? _chBarHtml(total, data.length) : '';
     if (data.length === 0) {
-      body.innerHTML = '<div style="color:var(--text-tertiary);font-size:12px">저장된 자문 이력이 없습니다.</div>';
+      body.innerHTML = html + '<div style="color:var(--text-tertiary);font-size:12px">' +
+        (all && _chWho ? '이 사람의 자문 이력이 없습니다.' : '저장된 자문 이력이 없습니다.') + '</div>';
       return;
     }
-    body.innerHTML = data.map(function(item) {
+    body.innerHTML = html + data.map(function(item) {
       return '<div class="card" style="cursor:pointer;margin-bottom:8px;padding:12px 14px;display:flex;align-items:flex-start;gap:8px" onclick="viewChatHistoryItem(\'' + item.id + '\')">' +
         '<div style="flex:1;min-width:0">' +
           '<div style="font-size:13px;font-weight:500;color:var(--text-primary);line-height:1.5">' + chEsc(item.question) + '</div>' +
-          '<div style="font-size:11px;color:var(--text-tertiary);margin-top:5px;display:flex;align-items:center;gap:8px">' +
-            '<span class="rag-tag">' + chEsc(item.category || '일반') + '</span>' + chDate(item.created_at) +
+          '<div style="font-size:11px;color:var(--text-tertiary);margin-top:5px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">' +
+            '<span class="rag-tag">' + chEsc(item.category || '일반') + '</span>' +
+            (others ? '<span class="rag-tag" style="background:var(--bg-secondary);color:var(--text-secondary);border:0.5px solid var(--border-mid)"><i class="ti ti-user"></i> ' + chEsc(chWhoLabel(item)) + '</span>' : '') +
+            chDate(item.created_at) +
           '</div>' +
         '</div>' +
         (isAdminUser()
@@ -3663,7 +3791,7 @@ async function viewChatHistoryItem(id) {
   try {
     // RLS가 역할별로 걸러 준다 — 볼 권한이 없으면 행이 아예 오지 않는다
     var resp = await sb.from('chat_logs')
-      .select('question, answer, category, created_at, sources')
+      .select('question, answer, category, created_at, sources, user_id, channel, chat_id')
       .eq('id', id).maybeSingle();
     if (resp.error) { body.innerHTML = '<div style="color:var(--text-tertiary);font-size:12px">조회 실패: ' + chEsc(resp.error.message) + '</div>'; return; }
     var row = resp.data;
@@ -3697,6 +3825,12 @@ async function viewChatHistoryItem(id) {
         newsTagsHtml(sp.news) + '</div>';
     }
     _chatDetail = { question: row.question || '', answer: row.answer || '', category: row.category || '일반', created_at: row.created_at, sources: sp.web.concat(sp.laws, sp.annex, sp.kb, sp.news) };
+    // 질문자(#305) — 팀장·관리자에게만. 목록을 거치지 않고 왔으면(이름표 재료가 비어 있으면) 그때 읽는다
+    var whoHtml = '';
+    if (chCanSeeOthers()) {
+      if (!Object.keys(_chNames.users).length) await _chLoadNames();
+      whoHtml = ' <span class="rag-tag" style="background:var(--bg-secondary);color:var(--text-secondary);border:0.5px solid var(--border-mid)"><i class="ti ti-user"></i> ' + chEsc(chWhoLabel(row)) + '</span>';
+    }
     body.innerHTML =
       '<button class="btn" onclick="openChatHistory()" style="margin-bottom:12px"><i class="ti ti-arrow-left"></i>목록으로</button>' +
       '<button class="btn" onclick="deleteChatHistoryItem(\'' + id + '\', null)" style="margin-bottom:12px;margin-left:8px;color:#d04545"><i class="ti ti-trash"></i>삭제</button>' +
@@ -3704,7 +3838,7 @@ async function viewChatHistoryItem(id) {
       '<button class="btn" onclick="exportChatDocx()" title="Word(.docx)로 저장" style="margin-bottom:12px;margin-left:8px"><i class="ti ti-download"></i>Word</button>' +
       '<button class="btn" onclick="exportChatPdf()" title="PDF로 인쇄/저장 (전체 내용)" style="margin-bottom:12px;margin-left:8px"><i class="ti ti-download"></i>PDF</button>' +
       '<div style="font-size:13px;font-weight:600;color:var(--text-primary);line-height:1.5">' + chEsc(row.question) + '</div>' +
-      '<div style="font-size:11px;color:var(--text-tertiary);margin:5px 0 12px"><span class="rag-tag">' + chEsc(row.category || '일반') + '</span> ' + chDate(row.created_at) + '</div>' +
+      '<div style="font-size:11px;color:var(--text-tertiary);margin:5px 0 12px"><span class="rag-tag">' + chEsc(row.category || '일반') + '</span>' + whoHtml + ' ' + chDate(row.created_at) + '</div>' +
       '<div class="msg msg-ai" style="max-width:100%">' + renderMd(row.answer || '') + '</div>' + srcHtml;
     body.scrollTop = 0;
   } catch(e) {
@@ -10515,7 +10649,7 @@ function renderGroupTabs(page) {
   + (page === 'chat'
       ? '<div style="margin-left:auto;display:flex;gap:6px;align-items:center;padding-bottom:4px;flex-shrink:0">'
         + '<button class="btn" onclick="newChat()" title="대화를 비우고 새 주제로 시작 (앞선 질문·답은 자문 이력에 남음)"><i class="ti ti-plus"></i>새 대화</button>'
-        + '<button class="btn" onclick="openChatHistory()"><i class="ti ti-history"></i>자문 이력</button>'
+        + '<button class="btn" onclick="openChatHistory()" title="지난 질문·답변 다시 보기 — 본인 / 팀장은 팀 전체 / 관리자는 모든 사람(#305)"><i class="ti ti-history"></i>자문 이력</button>'
         + '<button class="btn fs-btn" onclick="toggleFullscreen(\'chat-wrap\')" title="이 화면만 전체화면 (Esc로 종료)"><i class="ti ti-maximize"></i>전체화면</button>'
         + '</div>'
       : '');
