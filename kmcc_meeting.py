@@ -96,6 +96,13 @@ HTML_BUDGET = 2500         # queue_for_subscribers 3500 절단에 닿지 않게 
 MAX_AI_PER_RUN = 6         # 실행당 Haiku 상한 (자연 발생 ≤2/시간; --allow-api 로 해제)
 RESULT_MAX_LINES = 10
 RESULT_LINE_CHARS = 120
+# 의사일정 PDF 를 못 읽으면(내려받기가 PDF 가 아니거나 pdftotext 가 없거나) 제목만 바로 보내지 않고 이 시간 동안
+# 매 실행 다시 읽는다 — 그동안 큐에 싣지 않는다. 지나면 종전대로 제목·링크만 보낸다(#307, 2026-10-14:
+# 제42차 의사일정이 Actions 실행에서만 비어 제목 한 줄로 나갔고 같은 PDF 가 PC 에서는 811자로 읽혔다).
+PDF_RETRY_MIN = 120
+PDF_FAIL_MARK = '(PDF 텍스트를 읽지 못했습니다 — 원문·PDF 링크 참조)'
+PDF_WAIT_MARK = '(PDF 텍스트를 아직 읽지 못했습니다 — 다음 실행에 다시 읽습니다)'
+PDF_WAIT_REVISED = ' [수정본]'     # 대기 표시 끝에 붙여 '(수정)' 여부를 다음 실행에 넘긴다
 
 AGENDA_RE = re.compile(r'^(\d{4})년\s*제(\d+)차\s*방송미디어통신위원회\s*(서면회의|회의)'
                        r'(?:\s*\((\d{2})(\d{2})\))?\s*의사일정')
@@ -243,6 +250,35 @@ def parse_result_lines(txt: str) -> list:
     return lines[:RESULT_MAX_LINES]
 
 
+def pdf_wait_content(content: str, revised: bool) -> str:
+    """PDF 를 못 읽은 의사일정의 저장 본문 → 대기 표시 본문(큐에 싣지 않고 다음 실행에 다시 읽는다, #307)."""
+    return (content or '').replace(PDF_FAIL_MARK, PDF_WAIT_MARK + (PDF_WAIT_REVISED if revised else ''), 1)
+
+
+def pdf_wait_state(content: str) -> tuple:
+    """저장 본문이 대기 중이면 (True, 수정본 여부), 아니면 (False, False)."""
+    c = content or ''
+    if PDF_WAIT_MARK not in c:
+        return False, False
+    return True, (PDF_WAIT_MARK + PDF_WAIT_REVISED) in c
+
+
+def pdf_hold(since, now, minutes: int = PDF_RETRY_MIN) -> bool:
+    """대기 시작 시각부터 아직 기다릴 때면 True. 시각을 모르면 False — 기다리지 않고 보낸다(무한 보류 방지)."""
+    return bool(since) and (now - since) < timedelta(minutes=minutes)
+
+
+def _parse_ts(v):
+    """PostgREST timestamptz 문자열 → aware datetime. 소수 초 자릿수가 들쭉날쭉해도(.34091) 읽는다. 실패 None."""
+    try:
+        s = str(v or '').replace('Z', '+00:00')
+        s = re.sub(r'\.(\d+)', lambda m: '.' + (m.group(1) + '000000')[:6], s, count=1)
+        d = datetime.fromisoformat(s)
+        return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
+
+
 def should_queue(post_date, now=None) -> bool:
     if not post_date:
         return False
@@ -379,11 +415,13 @@ def format_agenda_html(meta: dict, head: dict, sections: list, url: str, pdf_url
 
 
 def format_agenda_fallback_html(meta: dict, raw_text: str, url: str, pdf_url: str = '',
-                                revised: bool = False, budget: int = HTML_BUDGET) -> str:
-    """Haiku 실패 시 — 원문 텍스트 앞부분 + 'PDF 원문 확인' 안내."""
+                                revised: bool = False, budget: int = HTML_BUDGET, unread: bool = False) -> str:
+    """Haiku 실패 시 — 원문 텍스트 앞부분 + 'PDF 원문 확인' 안내.
+    unread=True 는 PDF 글자를 아예 못 읽은 경우(raw_text 는 글 제목) — '표 복원 실패'라고 쓰면 틀린 안내다(#307)."""
     head = _agenda_header(meta, {}, revised)
     foot = _footer(0, url, pdf_url)
-    note = '<i>표 복원에 실패해 원문 텍스트를 그대로 싣습니다 — PDF 원문을 확인하세요.</i>'
+    note = ('<i>PDF 글자를 읽지 못해 안건 표를 싣지 못했습니다 — PDF 원문을 확인하세요.</i>' if unread else
+            '<i>표 복원에 실패해 원문 텍스트를 그대로 싣습니다 — PDF 원문을 확인하세요.</i>')
     room = budget - len(head) - len(foot) - len(note) - 8
     body = esc(re.sub(r'\n{2,}', '\n', (raw_text or '').strip()))[:max(200, room)].rstrip()
     return '\n'.join([head, note, '', body, '', foot])
@@ -496,7 +534,12 @@ def fetch_agenda_text(item: dict) -> str:
     txt = pdf_layout_text(data)
     if len((txt or '').strip()) < 50:
         txt = pi._sniff_and_extract(data, ag.get('filename', ''))
-    return (txt or '').strip()
+    txt = (txt or '').strip()
+    if not txt:
+        # 원인을 로그에 남긴다 — Actions 잡 로그만 남으므로 받은 것이 PDF 였는지·pdftotext 가 있었는지 구별되게(#307)
+        print('  [의사일정 PDF 못 읽음] %d바이트 · 머리 %r · pdftotext %s'
+              % (len(data or b''), (data or b'')[:8], pi.PDFTOTEXT or '없음'))
+    return txt
 
 
 def fetch_press_body(item: dict) -> str:
@@ -554,8 +597,9 @@ def build_agenda(item: dict, use_ai: bool, revised: bool = False) -> tuple:
     first = '의사일정 PDF: %s (fileSeq %s)' % (ag.get('filename', '-'), ag.get('file_seq', '-'))
     pdf_url = ag.get('url', '')
     if not raw:
-        content = first + '\n' + item['title'] + '\n(PDF 텍스트를 읽지 못했습니다 — 원문·PDF 링크 참조)\n' + item['url']
-        return content, '', format_agenda_fallback_html(item['meta'], item['title'], item['url'], pdf_url, revised)
+        content = first + '\n' + item['title'] + '\n' + PDF_FAIL_MARK + '\n' + item['url']
+        return content, '', format_agenda_fallback_html(item['meta'], item['title'], item['url'], pdf_url, revised,
+                                                        unread=True)
     content = first + '\n\n' + pi._clean_body(raw)
     parsed = parse_agenda_out(haiku(AGENDA_SYS, AGENDA_USER.format(text=raw[:12000]), 3000)) if use_ai else {}
     if not parsed:
@@ -604,7 +648,7 @@ def load_existing(sb) -> dict:
     out = {}
     for src in (SRC_AGENDA, SRC_PRESS):
         try:
-            rows = (sb.table('news_feed').select('id,url,content').eq('source', src)
+            rows = (sb.table('news_feed').select('id,url,content,content_fetched_at').eq('source', src)
                     .order('created_at', desc=True).limit(200).execute().data) or []
         except Exception as e:
             print('[기존 행 조회 실패] %s: %s' % (src, str(e)[:80]))
@@ -661,10 +705,14 @@ def save_row(sb, row: dict) -> bool:
     return bool(res.data)
 
 
-def update_row(sb, row_id, content: str, summary: str, now: datetime) -> bool:
-    sb.table('news_feed').update({'content': content, 'summary': summary or None,
-                                  'content_fetched_at': now.isoformat(),
-                                  'published_at': now.isoformat()}).eq('id', row_id).execute()
+def update_row(sb, row_id, content: str, summary: str, now: datetime, expect_fetched_at=None) -> bool:
+    """expect_fetched_at 이 있으면 그 값일 때만 고친다 — PDF 대기 행을 두 실행이 함께 집어 두 번 큐에 싣지 않게(#307)."""
+    q = sb.table('news_feed').update({'content': content, 'summary': summary or None,
+                                      'content_fetched_at': now.isoformat(),
+                                      'published_at': now.isoformat()}).eq('id', row_id)
+    if expect_fetched_at:
+        return bool(q.eq('content_fetched_at', expect_fetched_at).execute().data)
+    q.execute()
     return True
 
 
@@ -720,10 +768,13 @@ def run(sb, pages: int = 1, dry: bool = False, notify_q: bool = True, since=None
                 continue
             old = existing.get(it['url'])
             revised = False
+            waiting = False              # 앞 실행이 PDF 를 못 읽어 큐 보류 중인 행(#307) — 다시 읽는다
             if old and kind == 'agenda' and it.get('agenda'):
                 m = FILESEQ_LINE_RE.search(old.get('content') or '')
                 revised = bool(m and it['agenda']['file_seq'] and m.group(1) != it['agenda']['file_seq'])
-            if old and not revised:
+                if not revised:
+                    waiting, revised = pdf_wait_state(old.get('content'))
+            if old and not revised and not waiting:
                 continue
             if kind == 'press' and verdicts.get(it['url']) is False:
                 st['skip'] += 1          # 이미 무관 판정된 글 — 재판정하지 않는다(뒤집힘 방지)
@@ -760,8 +811,22 @@ def run(sb, pages: int = 1, dry: bool = False, notify_q: bool = True, since=None
                 if ai_preview:
                     print('  ---- 메시지 미리보기 (%d자) ----\n%s\n  ----' % (len(html), html))
                 continue
+            # 의사일정 PDF 를 못 읽었으면 제목 한 줄을 바로 보내지 않는다 — 대기 표시로 저장만 하고 PDF_RETRY_MIN 동안
+            # 매 실행 다시 읽는다. 기한이 지나면 종전대로 제목·링크 폴백을 보낸다(#307).
+            hold = False
+            if kind == 'agenda' and PDF_FAIL_MARK in content:
+                since = _parse_ts(old.get('content_fetched_at')) if waiting else now
+                if pdf_hold(since, now):
+                    if waiting:
+                        print('  [의사일정 PDF 아직 못 읽음 — 다음 실행에 다시] %s' % it['title'][:50])
+                        continue
+                    hold = True
+                    content, summary = pdf_wait_content(content, revised), ''
             try:
-                if revised:
+                if waiting:
+                    inserted = update_row(sb, old['id'], content, summary, now,
+                                          expect_fetched_at=old.get('content_fetched_at'))
+                elif revised:
                     inserted = update_row(sb, old['id'], content, summary, now)
                 else:
                     inserted = save_row(sb, make_row(it, content, summary, now))
@@ -774,6 +839,9 @@ def run(sb, pages: int = 1, dry: bool = False, notify_q: bool = True, since=None
                 continue
             st['new'] += 1
             print('  + %s (%s%s)' % (it['title'][:60], '요약 O' if summary else '요약 X', ', 수정본' if revised else ''))
+            if hold:
+                print('  [의사일정 PDF 못 읽음 → 큐 보류, %d분 동안 매 실행 다시 읽음]' % PDF_RETRY_MIN)
+                continue
             if notify_q and q and html:
                 try:
                     if queue_for_subscribers(sb, TOPIC, html):

@@ -1495,6 +1495,101 @@ class TestMinutesViewerVerify(unittest.TestCase):
         self.assertIs(ok, False, why)
 
 
+class TestKmccPdfWait(unittest.TestCase):
+    """#307: 의사일정 PDF 를 못 읽으면 제목 한 줄을 바로 보내지 않고 2시간 동안 매 실행 다시 읽는다."""
+
+    URL = 'https://www.kmcc.go.kr/user.do?mode=view&boardId=1003&boardSeq=69580'
+    RAW = ('방송미디어통신위원회 의사일정\n□ 회 의 명 : 년 2026 제42차 회의\n□일  시 목 : 2026. 10. 15.( ) 15:30\n'
+           '□ 의결사항(2건)\n구분 의안명 주요내용 담당과 공개\n가 이사 임명에 관한 건 …')
+    OUT = ('회의명: 2026년 제42차 회의\n일시: 2026. 10. 15.(목) 15:30\n장소: 4층 전체회의장\n'
+           '[의결사항 1건]\n가|이사 임명에 관한 건|임명 심의·의결|행정법무담당관|비공개')
+
+    def setUp(self):
+        import kmcc_meeting as km
+        self.km = km
+
+    def _item(self, now):
+        return {'kind': 'agenda', 'title': '2026년 제42차 방송미디어통신위원회 회의(1015) 의사일정', 'url': self.URL,
+                'board_seq': '69580', 'post_date': now,
+                'meta': {'year': 2026, 'nth': 42, 'kind': '회의', 'meeting_date': date(2026, 10, 15)},
+                'agenda': {'file_seq': '72407', 'filename': 'a.pdf', 'url': 'https://www.kmcc.go.kr/download.do?fileSeq=72407'}}
+
+    def _run(self, old, raw):
+        """run() 한 번 — 네트워크·DB·Haiku 는 가짜. 반환 (save_row 호출, update_row 호출, 큐 적재 html 목록)."""
+        km = self.km
+        now = datetime.now(km.KST)
+        saves, updates, queued = [], [], []
+        with mock.patch.object(km, 'list_items', side_effect=lambda b, p: [self._item(now)] if b == 'agenda' else []), \
+             mock.patch.object(km, 'load_existing', return_value=({self.URL: old} if old else {})), \
+             mock.patch.object(km, 'load_verdicts', return_value={}), \
+             mock.patch.object(km.pi, 'load_press_keywords', return_value=[]), \
+             mock.patch.object(km.pi, 'make_ai_judge', return_value=None), \
+             mock.patch.object(km, 'fetch_agenda_text', return_value=raw), \
+             mock.patch.object(km, 'haiku', return_value=self.OUT), \
+             mock.patch.object(km, 'save_row', side_effect=lambda sb, row: saves.append(row) or True), \
+             mock.patch.object(km, 'update_row', side_effect=lambda *a, **k: updates.append((a, k)) or True), \
+             mock.patch.object(km.time, 'sleep'), \
+             mock.patch('subscriber_notify.queue_for_subscribers', side_effect=lambda sb, t, h: queued.append(h) or True):
+            km.run(mock.Mock())
+        return saves, updates, queued
+
+    def _old(self, minutes_ago, revised=False):
+        km = self.km
+        body = km.pdf_wait_content('의사일정 PDF: a.pdf (fileSeq 72407)\n제목\n%s\nurl' % km.PDF_FAIL_MARK, revised)
+        ts = (datetime.now(km.KST) - timedelta(minutes=minutes_ago)).astimezone(km.timezone.utc).isoformat()
+        return {'id': 'r1', 'url': self.URL, 'content': body, 'content_fetched_at': ts}
+
+    def test_helpers(self):
+        km = self.km
+        c = km.pdf_wait_content('x\n%s\ny' % km.PDF_FAIL_MARK, True)
+        self.assertNotIn(km.PDF_FAIL_MARK, c)
+        self.assertEqual(km.pdf_wait_state(c), (True, True))
+        self.assertEqual(km.pdf_wait_state(km.pdf_wait_content(km.PDF_FAIL_MARK, False)), (True, False))
+        self.assertEqual(km.pdf_wait_state('표 복원 본문'), (False, False))
+        now = datetime(2026, 10, 14, 18, 0, tzinfo=km.KST)
+        self.assertTrue(km.pdf_hold(now - timedelta(minutes=119), now))
+        self.assertFalse(km.pdf_hold(now - timedelta(minutes=121), now))
+        self.assertFalse(km.pdf_hold(None, now))                       # 시각을 모르면 보낸다(무한 보류 금지)
+        self.assertEqual(km._parse_ts('2026-10-14T08:51:47.34091+00:00'),
+                         datetime(2026, 10, 14, 8, 51, 47, 340910, tzinfo=km.timezone.utc))
+        self.assertIsNone(km._parse_ts(None))
+
+    def test_unread_note(self):
+        km = self.km
+        meta = {'nth': 42, 'kind': '회의'}
+        h = km.format_agenda_fallback_html(meta, '제목', 'https://u', 'https://p', unread=True)
+        self.assertIn('PDF 글자를 읽지 못해', h)
+        self.assertNotIn('표 복원에 실패', h)
+        self.assertIn('표 복원에 실패', km.format_agenda_fallback_html(meta, '원문', 'https://u'))
+
+    def test_first_failure_holds(self):
+        saves, updates, queued = self._run(None, '')
+        self.assertEqual(len(saves), 1)
+        self.assertIn(self.km.PDF_WAIT_MARK, saves[0]['content'])
+        self.assertEqual((updates, queued), ([], []))
+
+    def test_still_unread_within_window_does_nothing(self):
+        self.assertEqual(self._run(self._old(30), ''), ([], [], []))
+
+    def test_read_later_sends_table_once(self):
+        old = self._old(30)
+        saves, updates, queued = self._run(old, self.RAW)
+        self.assertEqual(saves, [])
+        self.assertEqual(len(updates), 1)
+        self.assertEqual(updates[0][1].get('expect_fetched_at'), old['content_fetched_at'])   # 두 실행이 함께 못 보내게
+        self.assertEqual(len(queued), 1)
+        self.assertIn('의결사항', queued[0])
+        self.assertNotIn('(수정)', queued[0])
+        self.assertIn('(수정)', self._run(self._old(30, revised=True), self.RAW)[2][0])
+
+    def test_window_passed_sends_fallback(self):
+        saves, updates, queued = self._run(self._old(150), '')
+        self.assertEqual(len(updates), 1)
+        self.assertIn(self.km.PDF_FAIL_MARK, updates[0][0][2])
+        self.assertEqual(len(queued), 1)
+        self.assertIn('PDF 글자를 읽지 못해', queued[0])
+
+
 class TestKmccSubjectSplit(unittest.TestCase):
     """안건명 ' - 대상 -' 꼬리 분리 — 제목 안의 붙은 하이픈(2026-2027, SK-브로드밴드)은 자르지 않는다."""
 

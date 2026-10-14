@@ -33,9 +33,16 @@ jobs:
 
       # 방미통위 의사일정 PDF(kmcc_meeting.py) — press_ingest 가 Poppler pdftotext 바이너리에 의존한다.
       # 없으면 PDF 텍스트가 조용히 '' 가 되어 제목·링크만 저장된다. 실패해도 뉴스 크롤러는 돌아야 한다.
+      # continue-on-error 라 설치 실패도 단계 결과는 '성공'으로 남는다 — 설치 뒤 pdftotext 가 없으면 패키지 목록을
+      # 새로 받아 한 번 더 깔고, 그래도 없으면 경고를 남긴다(#307, 2026-10-14 제42차 의사일정이 제목만 나간 뒤).
       - name: Poppler(pdftotext) 설치 — 방미통위 의사일정 PDF
         continue-on-error: true
-        run: sudo apt-get install -y -qq --no-install-recommends poppler-utils
+        run: |
+          sudo apt-get install -y -qq --no-install-recommends poppler-utils || true
+          if ! command -v pdftotext >/dev/null; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends poppler-utils || true
+          fi
+          command -v pdftotext || echo "::warning title=pdftotext 없음::방미통위 의사일정 PDF를 읽지 못합니다(kmcc_meeting.py는 2시간 동안 다음 실행에 다시 읽음)"
 
       - name: 크롤러 실행
         env:
