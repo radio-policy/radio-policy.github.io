@@ -3278,6 +3278,9 @@ class TestTelegramCmdPrompt(unittest.TestCase):
         fn = self.src[self.src.index('async function sendCmdPrompt'):self.src.index('function promptCommand')]
         self.assertIn('force_reply: true', fn)
         self.assertIn('input_field_placeholder', fn)
+        self.assertIn("' — <b>'", fn)                      # 「 — 」 뒤 지시만 굵게(운영자 10-14)
+        for cmd in ('assem', 'law', 'ask'):                 # 굵게 할 지시가 세 head 모두에 있어야 한다
+            self.assertRegex(self.src, rf"{cmd}: \{{\n\s*head: '[^']* — [^']*답장으로 보내 주세요'")
         self.assertNotIn("'사용법: <code>/ask 질문 내용</code>'", self.src)   # 옛 한 줄 답으로 되돌리지 않음
 
     def test_reply_to_prompt_routes_as_command(self):

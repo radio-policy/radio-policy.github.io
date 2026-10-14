@@ -332,8 +332,13 @@ const CMD_PROMPTS: Record<'ask' | 'law' | 'assem', { head: string; body: string;
 type CmdKey = keyof typeof CMD_PROMPTS;
 async function sendCmdPrompt(chatId: number, cmd: CmdKey): Promise<void> {
   const p = CMD_PROMPTS[cmd];
+  // head의 「 — 」 뒤 지시("…이 답장으로 보내 주세요")만 굵게 — 예시와 같은 굵기면 지시가 묻힌다(운영자 10-14). 굵게 해도
+  // 텔레그램은 reply_to_message.text를 서식 없는 평문으로 돌려주므로 promptCommand의 head 비교는 그대로 맞는다.
+  const dash = p.head.indexOf(' — ');
+  const headHtml = dash < 0 ? escapeHtml(p.head)
+    : escapeHtml(p.head.slice(0, dash)) + ' — <b>' + escapeHtml(p.head.slice(dash + 3)) + '</b>';
   // input_field_placeholder는 64자 상한. selective는 개인 대화에서 무의미하지만 그룹에 들어가도 그 사람에게만 열리게.
-  await sendTelegramHtml(BOT_TOKEN, chatId, escapeHtml(p.head) + '\n' + p.body,
+  await sendTelegramHtml(BOT_TOKEN, chatId, headHtml + '\n' + p.body,
     { reply_markup: { force_reply: true, input_field_placeholder: p.placeholder, selective: true } });
 }
 // 답장이 가리키는 메시지가 위 안내문이면 그 명령, 아니면 null.
