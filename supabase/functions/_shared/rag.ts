@@ -602,12 +602,15 @@ export async function searchLawArticles(sb: SupabaseClient, query: string, limit
 // 별개로 자연어 질의를 받는다. /ask와의 경계: **법령 내용만** — 뉴스·국회동향·웹검색·시사점을
 // 넣지 않는다(그건 /ask의 몫). 그래서 answerAdvisory를 재사용하지 않고 조문 검색 + 요약층만
 // 모아 Haiku(법령 나열·관련 이유 설명은 좁은 일이라 Sonnet 불필요, 건당 ~$0.01)로 답한다.
+// 2026-10-14(#304-보론): Haiku 4.5 → Haiku 5.5(아래 LAW_MODEL) — 세 모델 눈가림 실측에서 Sonnet 5와 비슷한 품질에 비용 1/16(answerLawQuery 주석).
 // 반환에 chunkIds를 함께 실어 보낸다 — 호출자(telegram-webhook)가 chat_logs에 근거를 남겨
 // 만족도 👎 분석 때 "어느 조문을 집었길래 틀렸나"를 되짚을 수 있게 한다(2026-08-20).
 // 검색·조립(buildLawQueryContext)과 Haiku 호출(answerLawQuery)을 나눈다(#247) — 확인 스크립트가 testHooks로
 // 확장어·임베딩을 고정하고 buildLawQueryContext만 불러 Anthropic API 0회로 전후를 대조한다(자문의 #201과 같은 방식).
 type LawQueryContext = { merged: LawHit[]; kb: KbRow[]; system: string; addOns: AddOns; searchMeta: SearchMeta };
 const NAMED_LAW_CHARS = 3000;   // /law 지목 조문 한 항목 상한(#247) — 현행 조문 7,969개 중 99%가 3,070자 이하, 그 밖 항목은 800자
+// /law 답변 모델(#304-보론, 2026-10-14) — 바꾸려면 tests/law_model_probe_deno.ts로 세 모델을 다시 재고(≈$2, 운영자 고지 뒤) 눈가림 채점을 거친다
+const LAW_MODEL = 'claude-haiku-5-5';
 export async function buildLawQueryContext(sb: SupabaseClient, query: string): Promise<LawQueryContext | null> {
   // 조문 검색을 **세 갈래**로 돌린다 (2026-08-03 사고에서 도달한 구조).
   //  ① 키워드(searchLawArticles) — 질문 어휘가 조문에 그대로 있을 때 정확하다.
@@ -819,10 +822,15 @@ export async function answerLawQuery(sb: SupabaseClient, query: string): Promise
     method: 'POST',
     headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
     body: JSON.stringify({
-      model: 'claude-haiku-4-5-20251001',
-      // 1,500 → 3,000(#303, 2026-10-14): Haiku의 한국어 출력은 글자 수 ≈ 토큰 수(api_usage 실측 — 1,500토큰 = 1,620자)라 1,500이면 지침의
-      // 1,800자에도 못 미쳐, 최근 4건 중 3건이 문장 중간에서 끊겼고 잘림 표시도 없었다. 답 길이는 지침(2,500자)이 정한다 — 한도는 여유분.
-      max_tokens: 3000,
+      // Haiku 4.5 → Haiku 5.5(#304-보론, 2026-10-14 운영자 결정 「Haiku 5.5로 바꿔줘」) — 실제 /law 질문 18개에 같은 참조 자료·같은 지시문으로
+      // Haiku 4.5·Sonnet 5(추론 끔)·Haiku 5.5를 돌려 눈가림 채점(tests/law_model_probe_deno.ts, 기록 local_docs/law_probe_261014/model_ab/):
+      // 1순위 Haiku 5.5 10·Sonnet 5 6·Haiku 4.5 2, 틀린 내용 4.5 5건·5.5 1건(고시 조 번호)·Sonnet 0건, 1건 비용 $0.031·$0.068·$0.004, 응답 12·18·15초.
+      // 적응형 추론 기본(effort medium)이 측정한 꼴이다 — 추론을 끄거나 노력을 바꾸면 다시 재야 한다. 단가($0.10/$0.50 per MTok)는 프롬프트 10만 토큰까지.
+      model: LAW_MODEL,
+      // max_tokens는 추론 토큰까지 센다(#281 교훈) — 측정에서 출력(추론 포함) 최대 6,397토큰이라 12,000으로. 답 길이는 지침(2,500자)이 정한다.
+      // (Haiku 4.5 때는 3,000 — 1,500이 지침보다 먼저 끊어 최근 4건 중 3건이 문장 중간에서 잘렸던 것을 #304에서 고쳤다.)
+      max_tokens: 12000,
+      output_config: { effort: 'medium' },
       system,
       messages: [{ role: 'user', content: query }],
     }),
@@ -832,9 +840,9 @@ export async function answerLawQuery(sb: SupabaseClient, query: string): Promise
     throw new Error((err as { error?: { message?: string } }).error?.message || `Anthropic HTTP ${res.status}`);
   }
   const data = await res.json() as { content?: { type: string; text?: string }[]; usage?: ApiUsage; stop_reason?: string | null };
-  await recordApiUsage(sb, 'rag.ts:answerLawQuery', 'claude-haiku-4-5-20251001', data.usage);
-  // content[0]이 text가 아닐 수 있으므로 find로 고른다 (Sonnet5 적응형 추론에서 실제로 겪은 함정 — Haiku도 같은 방어)
-  let text = (data.content || []).find((b) => b.type === 'text')?.text || '';
+  await recordApiUsage(sb, 'rag.ts:answerLawQuery', LAW_MODEL, data.usage);
+  // 적응형 추론이라 content 앞에 thinking 블록이 온다 — text 블록만 이어 붙인다(Sonnet5 적응형 추론에서 실제로 겪은 함정)
+  let text = (data.content || []).filter((b) => b.type === 'text').map((b) => b.text || '').join('\n').trim();
   if (!text.trim()) return null;
   // 잘린 답이 정상인 척하지 않게 표시(#303 — /ask의 #205·#281과 같은 문구)
   if (data.stop_reason === 'max_tokens') text = text.trimEnd() + '\n\n…(길이 제한으로 잘림 — 질문을 좁혀 다시 물어보세요)';
