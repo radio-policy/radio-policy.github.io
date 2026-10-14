@@ -11954,7 +11954,8 @@ function _issueNotePublic(txt) {
 }
 
 var _issueCache = null;        // [{...issue, _links:[...]}]
-var _issueFilter = { stage: null, category: null };
+var _issueFilter = { stage: null, category: null, q: '' };   // q = 검색어(목록 ↔ 상세를 오가도 유지)
+var _issueSearchTimer = null;
 var selectedIssueId = null;
 var _issueView = 'list';   // list | detail — 새로고침 후 화면 복원용
 var _issueTab = null, _issueTabFor = null;   // 상세 탭(impact|timeline|laws|stake|cases)과 그 탭을 고른 이슈 id
@@ -12021,15 +12022,23 @@ function renderIssueMapList() {
   var el = document.getElementById('issuemap-body');
   if (!el) return;
   _issueView = 'list';
-  var all = _issueCache || [];
-  var proposed = all.filter(function(i) { return i.state === 'proposed'; });
-  var actives  = all.filter(function(i) { return i.state === 'active' && !i.dormant && i.stage !== '해소'; });
-  var closed   = all.filter(function(i) { return i.state === 'active' && (i.dormant || i.stage === '해소'); });
-
-  if (_issueFilter.stage)    actives = actives.filter(function(i) { return i.stage === _issueFilter.stage; });
-  if (_issueFilter.category) actives = actives.filter(function(i) { return i.category === _issueFilter.category; });
-
+  var q = _issueFilter.q || '';
   var h = '';
+
+  // ── 검색 (2026-10-14 운영자 요청 — 이슈가 쌓여 칩만으로는 못 찾는다) ──
+  // 글자를 칠 때마다 #issuemap-results만 다시 그린다(입력창까지 다시 그리면 초점이 빠진다).
+  // 핸들러는 문자열 oninput이 아니라 아래서 코드로 묶는다 — 사내 콘솔 port_console_js.py는 식별자 참조만 따라가므로
+  // 문자열 속 이름은 사내에서 빠진다(setIssueFilter가 그래서 DEFAULT_ENTRIES에 손으로 들어가 있다).
+  h += '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">' +
+    '<div style="position:relative;flex:1;min-width:200px;max-width:420px">' +
+      '<input type="text" id="issuemap-search" value="' + escHtml(q) + '" aria-label="이슈 검색" ' +
+        'placeholder="이슈 검색 — 제목·정의·연결된 법령·기사·이해관계자 (공백으로 여러 단어)" ' +
+        'style="width:100%;box-sizing:border-box;padding:8px 30px 8px 12px;font-size:12px;border:0.5px solid var(--border-mid);border-radius:var(--radius-md);background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;outline:none"/>' +
+      '<span id="issuemap-search-clear" role="button" tabindex="0" aria-label="검색 지우기" title="지우기" ' +
+        'style="position:absolute;right:9px;top:50%;transform:translateY(-50%);cursor:pointer;color:var(--text-tertiary);font-size:13px;line-height:1;' + (q ? '' : 'display:none') + '">&#x2715;</span>' +
+    '</div>' +
+    '<span id="issuemap-search-count" style="font-size:11px;color:var(--text-secondary);white-space:nowrap"></span>' +
+  '</div>';
 
   // ── 필터 칩 + 수동 등록 ──
   var counts = {};
@@ -12046,6 +12055,76 @@ function renderIssueMapList() {
   });
   if (_issueIsAdmin()) h += '<button class="btn" onclick="createIssueManual()" style="margin-left:auto;font-size:11px;padding:4px 10px;white-space:nowrap"><i class="ti ti-plus"></i> 수동 등록</button>';
   h += '</div>';
+
+  h += '<div id="issuemap-results">' + _issueMapResultsHtml() + '</div>';
+  el.innerHTML = h;
+
+  var inp = el.querySelector('#issuemap-search');
+  if (inp) {
+    inp.oninput = function() { _issueSearchInput(this.value); };
+    inp.onkeydown = function(ev) { if (ev.key === 'Escape' && this.value) { _issueSearchSet(''); } };
+  }
+  var clr = el.querySelector('#issuemap-search-clear');
+  if (clr) {
+    clr.onclick = function() { _issueSearchSet(''); if (inp) inp.focus(); };
+    clr.onkeydown = function(ev) { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); this.click(); } };
+  }
+  _issueSearchCount();
+}
+
+// 검색어 → 소문자 낱말 배열(공백 구분, 모두 있어야 일치 — 지식베이스 문서 검색과 같은 규칙)
+function _issueSearchWords(q) {
+  return String(q || '').toLowerCase().split(/\s+/).filter(Boolean);
+}
+
+// 이슈 하나가 검색 낱말에 맞는가. 제목·정의·분야·「#번호」에서 먼저 찾고, 거기 없는 낱말은 연결 항목 제목(법령·기사·
+// 이해관계자·사례…)에서 찾는다. 돌려주는 값: null = 불일치, {hint:null} = 이슈 자체에서 일치,
+// {hint:'언론기사 「…」'} = 연결 항목으로만 일치(카드에 왜 걸렸는지 한 줄로 보인다).
+function _issueSearchHit(i, words) {
+  var own = ('#' + i.id + ' ' + (i.title || '') + ' ' + (i.definition || '') + ' ' + (i.category || '')).toLowerCase();
+  var left = words.filter(function(w) { return own.indexOf(w) < 0; });
+  if (!left.length) return { hint: null };
+  var links = i._links || [], picked = [], seen = {};
+  for (var k = 0; k < left.length; k++) {
+    var w = left[k], found = null;
+    for (var j = 0; j < links.length; j++) {
+      if (String(links[j].title || '').toLowerCase().indexOf(w) >= 0) { found = links[j]; break; }
+    }
+    if (!found) return null;
+    if (!seen[found.id]) { seen[found.id] = 1; picked.push(found); }
+  }
+  var txt = picked.slice(0, 2).map(function(l) {
+    var ty = ISSUE_ITEM_TYPES[l.item_type];
+    var t = _issueLabelPublic(l.title).trim();
+    if (t.length > 40) t = t.slice(0, 39) + '…';
+    return (ty ? ty.label + ' ' : '') + '「' + t + '」';
+  }).join(', ');
+  return { hint: txt };
+}
+
+var _issueSearchStat = { active: 0, closed: 0 };   // 마지막으로 그린 결과 수(검색 중 건수 표시용)
+
+// 목록 본문(제안 대기 · 활성 카드 · 휴면·해소) — 검색어·칩 필터를 적용해 HTML만 돌려준다
+function _issueMapResultsHtml() {
+  var all = _issueCache || [];
+  var words = _issueSearchWords(_issueFilter.q);
+  var hits = {};
+  var pass = function(i) {
+    if (!words.length) return true;
+    var r = _issueSearchHit(i, words);
+    if (!r) return false;
+    if (r.hint) hits[i.id] = r.hint;
+    return true;
+  };
+  var proposed = all.filter(function(i) { return i.state === 'proposed' && pass(i); });
+  var actives  = all.filter(function(i) { return i.state === 'active' && !i.dormant && i.stage !== '해소' && pass(i); });
+  var closed   = all.filter(function(i) { return i.state === 'active' && (i.dormant || i.stage === '해소') && pass(i); });
+
+  if (_issueFilter.stage)    actives = actives.filter(function(i) { return i.stage === _issueFilter.stage; });
+  if (_issueFilter.category) actives = actives.filter(function(i) { return i.category === _issueFilter.category; });
+  _issueSearchStat = { active: actives.length, closed: closed.length };
+
+  var h = '';
 
   // ── 제안 대기 (관리자 전용) ──
   if (isAdminUser() && proposed.length) {
@@ -12070,23 +12149,53 @@ function renderIssueMapList() {
   // ── 활성 이슈 카드 ──
   if (!actives.length) {
     h += '<div style="color:var(--text-secondary);padding:28px 20px;text-align:center;font-size:12px;line-height:1.8">' +
-      (all.length ? '조건에 맞는 이슈가 없습니다.' :
+      (words.length ? '「' + escHtml(String(_issueFilter.q).trim()) + '」에 맞는 활성 이슈가 없습니다.' +
+          (closed.length ? '<br>아래 휴면·해소 ' + closed.length + '건에는 있습니다.' : '') :
+        all.length ? '조건에 맞는 이슈가 없습니다.' :
         '등록된 이슈가 없습니다.<br>뉴스 상세에서 <b>이슈에 연결</b>하거나 <b>수동 등록</b>으로 첫 이슈를 만들어 보세요.') + '</div>';
   } else {
     h += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px">';
-    actives.forEach(function(i) { h += _issueCardHtml(i); });
+    actives.forEach(function(i) { h += _issueCardHtml(i, hits[i.id]); });
     h += '</div>';
   }
 
-  // ── 휴면·해소 (접힘) ──
+  // ── 휴면·해소 (접힘 — 검색 중이면 펼친다) ──
   if (closed.length) {
-    h += '<details style="margin-top:16px;border-top:1px solid var(--border);padding-top:12px">' +
-      '<summary style="font-size:12px;color:var(--text-secondary);cursor:pointer">휴면·해소 ' + closed.length + '건 보기</summary>' +
+    h += '<details' + (words.length ? ' open' : '') + ' style="margin-top:16px;border-top:1px solid var(--border);padding-top:12px">' +
+      '<summary style="font-size:12px;color:var(--text-secondary);cursor:pointer">휴면·해소 ' + closed.length + '건' + (words.length ? ' 일치' : ' 보기') + '</summary>' +
       '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;margin-top:10px">' +
-      closed.map(_issueCardHtml).join('') + '</div></details>';
+      closed.map(function(i) { return _issueCardHtml(i, hits[i.id]); }).join('') + '</div></details>';
   }
 
-  el.innerHTML = h;
+  return h;
+}
+
+// 입력창 글자 → 150ms 뒤 결과만 다시 그림(뉴스 검색 onNewsSearchInput과 같은 디바운스)
+function _issueSearchInput(value) {
+  clearTimeout(_issueSearchTimer);
+  _issueSearchTimer = setTimeout(function() { _issueSearchSet(value, true); }, 150);
+}
+
+// 검색어를 정하고 결과·건수·✕를 갱신한다. fromInput = 입력창에서 온 값(입력창 value는 건드리지 않는다)
+function _issueSearchSet(q, fromInput) {
+  clearTimeout(_issueSearchTimer);
+  _issueFilter.q = String(q || '');
+  var el = document.getElementById('issuemap-body');
+  if (!el) return;
+  var inp = el.querySelector('#issuemap-search');
+  if (inp && !fromInput && inp.value !== _issueFilter.q) inp.value = _issueFilter.q;
+  var clr = el.querySelector('#issuemap-search-clear');
+  if (clr) clr.style.display = _issueFilter.q ? '' : 'none';
+  var res = el.querySelector('#issuemap-results');
+  if (res) { res.innerHTML = _issueMapResultsHtml(); _issueSearchCount(); }
+  else renderIssueMapList();
+}
+
+function _issueSearchCount() {
+  var c = document.getElementById('issuemap-search-count');
+  if (!c) return;
+  if (!_issueSearchWords(_issueFilter.q).length) { c.textContent = ''; return; }
+  c.textContent = '일치 ' + _issueSearchStat.active + '건' + (_issueSearchStat.closed ? ' · 휴면·해소 ' + _issueSearchStat.closed + '건' : '');
 }
 
 function _issueChip(label, on, onclick) {
@@ -12101,7 +12210,8 @@ function setIssueFilter(stage, category) {
   renderIssueMapList();
 }
 
-function _issueCardHtml(i) {
+// hint: 검색이 연결 항목 제목으로만 걸렸을 때 그 항목(_issueSearchHit) — 왜 이 카드가 나왔는지 한 줄
+function _issueCardHtml(i, hint) {
   var links = i._links || [];
   var hot   = _issueHotCount(i);
   var last  = (i.last_activity_at || '').slice(5, 10).replace('-', '/');
@@ -12115,6 +12225,7 @@ function _issueCardHtml(i) {
     '<div style="font-size:13px;font-weight:600;color:var(--text-primary);line-height:1.5;margin-bottom:2px">' + escHtml(i.title) + '</div>' +
     _issueCardTree(links) +
     (desc ? '<div class="iss-desc">' + escHtml(desc) + '</div>' : '') +
+    (hint ? '<div title="' + escHtml(hint) + '" style="font-size:11px;color:var(--accent);margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><i class="ti ti-search"></i> 연결 항목 일치: ' + escHtml(hint) + '</div>' : '') +
     '<div style="font-size:11px;color:var(--text-tertiary);margin-top:6px">연결 ' + links.length + '건' +
       (last ? ' · 최근 ' + last : '') + '</div>' +
   '</div>';
