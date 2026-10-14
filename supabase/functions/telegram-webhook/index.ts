@@ -7,6 +7,7 @@
 //   - /ask <질문> : AI 자문 — 승인자는 일일 상한, 승인 안 된 사람은 무료 3회(#259), 건당 API 과금
 //     (명령어 없는 평문은 자문으로 보내지 않고 명령어 안내를 돌려준다 — #259)
 //   - /admin : 운영자 전용 (승인자 관리)
+//   ※ 영문 명령어는 대소문자 구분 없음(/ASK·/Law — #302). 명령 낱말만 소문자로 맞추고 본문은 그대로.
 //
 //  보안: verify_jwt OFF 대신 X-Telegram-Bot-Api-Secret-Token == TELEGRAM_WEBHOOK_SECRET 검증.
 //  푸시/풀 독립 원칙: 토픽 토글은 푸시 발송만 제어. /law·/ask는 누구나(승인 안 된 사람은 무료 3회씩)
@@ -1328,7 +1329,9 @@ Deno.serve(async (req: Request) => {
     if (!msg?.text) return new Response('ok');
     const chatId = msg.chat.id;
     const from = msg.from || {};
-    const text = msg.text.trim();
+    // 명령어는 대소문자를 가리지 않는다(/ASK·/Law·/ASSEM — 휴대폰 자판이 문장 첫 글자를 대문자로 바꾼다, #302, 2026-10-14 운영자 요청).
+    // 앞머리의 영문 명령 낱말만 소문자로 바꾸고 뒤 본문은 그대로 둔다 — 질문·법령명 속 대문자(3G·LTE·SKT)는 뜻이 있다.
+    const text = msg.text.trim().replace(/^\/[A-Za-z]+/, (cmd) => cmd.toLowerCase());
 
     if (text === '/start' || text.startsWith('/start ')) {
       // #252: 봇을 차단했다가(active=false) /start로 돌아온 「중요+보통」 구독자는 보통 기준 시각을 지금으로 — 차단된 동안

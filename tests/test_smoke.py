@@ -3152,3 +3152,17 @@ class TestEmbeddingBackfillPath(unittest.TestCase):
         self.assertIn('embedding=is.null', block)
         self.assertIn('status=neq.superseded', block)     # 백필 대상과 같은 조건 — superseded는 일부러 비운다
         self.assertIn('problems.append', block)
+
+
+class TestTelegramCommandCase(unittest.TestCase):
+    """#302 — 구독자 봇 영문 명령어는 대소문자를 가리지 않는다(/ASK·/Law·/ASSEM). 웹훅 진입에서 앞머리 명령 낱말만
+    소문자로 맞추고 본문(3G·LTE·SKT)은 그대로 — 분기마다 /i를 따로 붙이는 꼴로 되돌리면 하나가 빠진다. 네트워크 0."""
+
+    def test_command_token_lowercased_once(self):
+        with open(os.path.join(_ROOT, 'supabase', 'functions', 'telegram-webhook', 'index.ts'), encoding='utf-8') as f:
+            src = f.read()
+        body = src[src.index('Deno.serve(async (req: Request)'):]
+        self.assertIn("const text = msg.text.trim().replace(/^", body)
+        self.assertIn("[A-Za-z]+/, (cmd) => cmd.toLowerCase());", body)   # 명령 낱말만 — 본문 통째 소문자 금지
+        self.assertNotIn('msg.text.trim().toLowerCase()', body)
+        self.assertNotIn('text.toLowerCase()', body)
