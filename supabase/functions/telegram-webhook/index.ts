@@ -619,6 +619,7 @@ async function handleLawQuery(chatId: number, q: string): Promise<Promise<void> 
       const logId = await logAnswer({
         question: query, answer: result.answer, category: '텔레그램-법령검색', sources: '',
         channel: 'telegram_law', chat_id: chatId, chunk_ids: result.chunkIds,
+        search_meta: result.searchMeta,   // 검색 갈래·덧붙이기 기록(#303) — /ask와 같은 꼴, 10-21 집계의 재료
       });
       await sendAnswerWithFeedback(chatId, html, logId);
     } catch (e) {

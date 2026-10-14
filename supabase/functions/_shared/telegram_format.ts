@@ -88,6 +88,8 @@ export function briefingToTelegramHtml(text: string): string {
 export function mdToTelegramHtml(md: string): string {
   const out: string[] = [];
   for (const raw of (md || '').split('\n')) {
+    // 마크다운 가로줄(---·***·___)은 뺀다(#303, 2026-10-14) — /law의 Haiku가 항목 사이에 「---」를 넣어 텔레그램에 글자 그대로 찍혔다(10-14 실측 3건)
+    if (/^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/.test(raw)) continue;
     let line = escapeHtml(raw);
     const h = line.match(/^\s*#{1,6}\s+(.*)$/);
     if (h) { out.push('<b>' + h[1] + '</b>'); continue; }
@@ -96,7 +98,7 @@ export function mdToTelegramHtml(md: string): string {
     line = line.replace(/^(\s*)[-*]\s+/, '$1• ');
     out.push(line);
   }
-  return out.join('\n');
+  return out.join('\n').replace(/\n{3,}/g, '\n\n');   // 가로줄을 뺀 자리의 빈 줄 겹침은 한 줄로
 }
 
 // ── 발송: HTML 시도 → 400이면 plain 폴백 ──
