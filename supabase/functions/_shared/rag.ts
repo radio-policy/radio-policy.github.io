@@ -58,7 +58,7 @@ async function expandQueryKeywords(apiKey: string, query: string, sb?: SupabaseC
     });
     if (!res.ok) return [];
     const data = await res.json();
-    if (sb) await recordApiUsage(sb, 'rag.ts:expandQueryKeywords', 'claude-haiku-4-5-20251001', data.usage);
+    if (sb) await recordApiUsage(sb, 'rag.ts:expandQueryKeywords', (typeof data.model === 'string' && data.model) || 'claude-haiku-4-5-20251001', data.usage);
     const text = (data.content?.find((b: { type: string }) => b.type === 'text')?.text) || '';
     return text.split(',')
       .map((w: string) => w.trim().replace(/^["'\d.)\s]+|["'\s]+$/g, ''))
@@ -328,12 +328,15 @@ type SystemBlock = { type: 'text'; text: string; cache_control?: { type: 'epheme
 export interface WebRef { url: string; title: string }
 // 스트림 절단 보호(#205, B-7): 무수신 3분이면 끊고, 끊겨도 받은 부분은 돌려준다(cut에 사유). stopReason·sawStop은 호출측이 경고를 붙이는 재료.
 const STREAM_IDLE_MS: number = RagCore.STREAM_IDLE_MS;   // 3분 — rag_core.js
-async function callSonnet(apiKey: string, system: string | SystemBlock[], question: string): Promise<{ text: string; webRefs: WebRef[]; usage: ApiUsage; stopReason: string | null; sawStop: boolean; cut: string | null }> {
+// 요청 모델. api_usage에는 응답 message_start의 model을 적고(실제로 답한 모델 — 10-14 자문 A/B 스크립트가 요청 본문의 model만 바꿔 보낸 호출 56건이
+// 종전 고정 문자열대로 Sonnet 5로 기록됐다), 응답에 없을 때만 이 값으로 적는다. 전환 때 요청 모델만 바꾸고 기록을 잊는 함정도 함께 막는다.
+const ADVISORY_MODEL = 'claude-sonnet-5';
+async function callSonnet(apiKey: string, system: string | SystemBlock[], question: string): Promise<{ text: string; webRefs: WebRef[]; usage: ApiUsage; model: string | null; stopReason: string | null; sawStop: boolean; cut: string | null }> {
   const res = await fetch(ANTHROPIC_URL, {
     method: 'POST',
     headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
     body: JSON.stringify({
-      model: 'claude-sonnet-5',
+      model: ADVISORY_MODEL,
       // Sonnet 5는 thinking 미지정 = 적응형 추론이고 max_tokens는 추론+본문 합계 — 5000이면 추론이 한도를 먹어
       // 20문항 중 7개가 잘렸다(10-05, 본문 0자 포함). 노력 medium + 12000: 잘림 0·빠뜨림은 추론 끔/high와 같음,
       // 출력 최대 5,260·중앙 42초(#281). 답 길이는 아래 텔레그램 지침(3,000자)이 정한다 — 한도는 추론 여유분.
@@ -356,6 +359,7 @@ async function callSonnet(apiKey: string, system: string | SystemBlock[], questi
   const reader = res.body!.getReader();
   const decoder = new TextDecoder();
   let buf = '';
+  let model: string | null = null;   // 응답이 밝힌 모델(message_start.model) — api_usage 기록용
   let stopReason: string | null = null;
   let sawStop = false;
   let cut: string | null = null;
@@ -397,7 +401,10 @@ async function callSonnet(apiKey: string, system: string | SystemBlock[], questi
               afterNonText = false;
             } else afterNonText = true;
           }
-          else if (d.type === 'message_start' && d.message?.usage) usage = mergeUsage(usage, d.message.usage);
+          else if (d.type === 'message_start') {
+            if (d.message?.usage) usage = mergeUsage(usage, d.message.usage);
+            if (typeof d.message?.model === 'string' && d.message.model) model = d.message.model;
+          }
           else if (d.type === 'message_delta') {
             if (d.usage) usage = mergeUsage(usage, d.usage);
             if (d.delta?.stop_reason) stopReason = d.delta.stop_reason;   // max_tokens 잘림 표시 재료(#205)
@@ -416,7 +423,7 @@ async function callSonnet(apiKey: string, system: string | SystemBlock[], questi
       : `수신 중 연결이 끊김 (${String((e as Error)?.message ?? e).slice(0, 80)})`;
     console.warn('[callSonnet] 스트림 절단 — 받은 부분 보존:', cut);
   }
-  return { text, webRefs, usage, stopReason, sawStop, cut };
+  return { text, webRefs, usage, model, stopReason, sawStop, cut };
 }
 
 // ── 인용 조문 통째 보강(#155-1안)에 쓰는 조각 조회 — verify-citations·app.js fetchArticleChunks와 동일 조건 ──
@@ -839,8 +846,8 @@ export async function answerLawQuery(sb: SupabaseClient, query: string): Promise
     const err = await res.json().catch(() => ({}));
     throw new Error((err as { error?: { message?: string } }).error?.message || `Anthropic HTTP ${res.status}`);
   }
-  const data = await res.json() as { content?: { type: string; text?: string }[]; usage?: ApiUsage; stop_reason?: string | null };
-  await recordApiUsage(sb, 'rag.ts:answerLawQuery', LAW_MODEL, data.usage);
+  const data = await res.json() as { content?: { type: string; text?: string }[]; usage?: ApiUsage; stop_reason?: string | null; model?: string };
+  await recordApiUsage(sb, 'rag.ts:answerLawQuery', data.model || LAW_MODEL, data.usage);
   // 적응형 추론이라 content 앞에 thinking 블록이 온다 — text 블록만 이어 붙인다(Sonnet5 적응형 추론에서 실제로 겪은 함정)
   let text = (data.content || []).filter((b) => b.type === 'text').map((b) => b.text || '').join('\n').trim();
   if (!text.trim()) return null;
@@ -1334,7 +1341,7 @@ export async function answerAdvisory(sb: SupabaseClient, systemPrompt: string, q
   const sonnet = await callSonnet(apiKey, system, question);
   const { webRefs, usage } = sonnet;
   let rawAnswer = sonnet.text;
-  await recordApiUsage(sb, 'rag.ts:callSonnet', 'claude-sonnet-5', usage);
+  await recordApiUsage(sb, 'rag.ts:callSonnet', sonnet.model || ADVISORY_MODEL, usage);
   // 잘린 답이 정상인 척하지 않게 표시(#205, B-7). 세 경우: 연결 절단 / 길이 상한(max_tokens 12000, #281) / 끝 신호 없이 멈춤.
   if (sonnet.cut) rawAnswer += `\n\n⚠️ 답변이 도중에 끊겼습니다 — ${sonnet.cut}. 위 내용은 받은 부분까지입니다.`;
   else if (sonnet.stopReason === 'max_tokens') rawAnswer += '\n\n…(길이 제한으로 잘림 — 질문을 좁혀 다시 물어보세요)';
