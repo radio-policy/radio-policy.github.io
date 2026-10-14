@@ -952,6 +952,26 @@
     return parseSegment(s + ' ', { addendumUnit: true });   // 조 없는 「부칙 제N호」 표시도 대상(#290 ⑥)
   }
 
+  // 「…준용)」으로 끝나는 괄호 안의 조 언급인가(#300-보론6 E, 2026-10-14) — 그 괄호의 여는 자리, 아니면 -1.
+  // 괄호는 짝을 맞춰 찾고(「(제17조(재할당)에 따라 준용)」의 제목 괄호는 건너뜀) 줄을 넘지 않는다. 괄호 안 글이 「준용」으로 끝나야 한다.
+  function junyongParenOpen(s, idx, end) {
+    let open = -1;
+    for (let i = idx - 1, d = 0; i >= 0; i--) {
+      const ch = s.charAt(i);
+      if (ch === '\n') return -1;
+      if (ch === ')' || ch === '）') d++;
+      else if (ch === '(' || ch === '（') { if (d === 0) { open = i; break; } d--; }
+    }
+    if (open < 0) return -1;
+    for (let j = end, d = 0; j < s.length; j++) {
+      const ch = s.charAt(j);
+      if (ch === '\n') return -1;
+      if (ch === '(' || ch === '（') d++;
+      else if (ch === ')' || ch === '）') { if (d === 0) return /준용\s*$/.test(s.slice(open + 1, j)) ? open : -1; d--; }
+    }
+    return -1;
+  }
+
   // 표시 하나의 앞 문단에서 인용 대상을 읽는다.
   // 반환 mentions = 등장 순서의 조 언급 목록(조마다 항·호·앞 법령명). key/paras/items/lawInfo는 첫 언급(primary) —
   // 실제 대상 선택은 checkCitation이 "컨텍스트에 있고 인용문과 가장 많이 겹치는 후보"로 한다(#155-보론3: 조문을 통째로
@@ -981,6 +1001,7 @@
     }
     const byKey = new Map();
     const mentions = [];
+    const keys = [];        // raw 순서의 열쇠(부칙 열쇠 포함) — 「…준용)」 괄호 밖 조를 가리킬 때 쓴다
     let lastNamed = null;   // 이 글에서 앞서 이름이 나온 법령 — 이름 없는 '제N조'·'동법'·'시행령'이 이어받는다(#240)
     for (let i = 0; i < raw.length; i++) {
       const m = raw[i];
@@ -988,10 +1009,21 @@
       // (「동법 부칙 제2조」·「같은 법 부칙 제2조」·「영 부칙 제2조」가 이어받기를 탄다)
       const ad = addendumBefore(s.slice(0, m.idx));
       const key = ad ? addKey(ad.no, m.key) : m.key;
+      keys[i] = key;
       let rec = byKey.get(key);
       if (!rec) {
         rec = { key: key, idx: m.idx, paras: [], items: [], lawInfo: lawNameBefore(ad ? ad.rest : s.slice(0, m.idx)), ctxLaw: lastNamed };
         if (ad) rec.addendum = { no: ad.no, art: m.key };
+        // 「…준용)」 괄호 안의 조(#300-보론6 E): 괄호 밖 바로 앞 조(같은 줄)의 열쇠를 단다 — 같은 문서로 묶을지는 checkCitation이 괄호 안 이름 머리를 보고 정한다.
+        // 「같은 고시 제12조제1항 (제17조에 따라 준용)」·「제41조·제45조(제104조 준용)」·거꾸로 쓴 「제17조(제12조①을 준용)」. 괄호 밖에 조가 없으면(「같은 고시 (제17조 준용)」) 달지 않는다.
+        const open = junyongParenOpen(s, m.idx, m.end);
+        if (open !== -1) {
+          for (let j = i - 1; j >= 0; j--) {
+            if (raw[j].idx >= open) continue;
+            if (s.slice(raw[j].end, open).indexOf('\n') === -1) rec.junyong = keys[j];
+            break;
+          }
+        }
         byKey.set(key, rec); mentions.push(rec);
         if (rec.lawInfo && rec.lawInfo.candidates && !rec.lawInfo.weak) lastNamed = rec.lawInfo;
       }
@@ -1578,10 +1610,19 @@
     //       봤는지 적음). 38abd528(10-06): 3절 끝 「전파법 제92조제3호」를 이어받은 5절 표의 「법 제19조①」(폐업 60일 전 서류 제출)·「법 제19조③3호」가
     //    전파법 제19조(무선국 개설허가)와 대조돼 거짓 '원문과 다름' 3개, 「영 제24조①」·「법 제96조②」는 전파법 시행령·전파법에서 찾아 거짓 '원문 없음'
     //    2개 — 전기통신사업법 제19조·시행령 제24조·제96조는 자료에 있었다. 이름을 적은 법령은 종전대로 그 법령만(#240 ① — 못 맞춘 이름도 원문 없음).
-    let chosen = null, chosenRatio = -1, chosenDoc = null, chosenText = '', chosenLaw = null, chosenGuess = null, chosenRel = null, missGuess = null, chosenKey = null;
+    let chosen = null, chosenRatio = -1, chosenDoc = null, chosenText = '', chosenLaw = null, chosenRel = null, missGuess = null, chosenKey = null, chosenTie = false;
     const misses = [], missLabels = [];
     const found = [];   // 자료에 있는 후보(후보 순서) — 다중 원문(#288 ⓓ′)·후보별 구조 검사에 쓴다
     let numAmbig = 0, addAmbig = 0;
+    // 「…준용)」 괄호 안 조(#300-보론6 E, 2026-10-14 — Fable 판정 local_docs/준용따라가기_재검토_판정_261014.md §11-2, 운영자 결정 E): 괄호 안에 법령 이름·「법/영」 머리가
+    // 없으면(못 맞춘 약한 이름도 이름 없음과 같다) 괄호 밖 조가 **실제로 고른 문서**에서만 찾고 스스로 법령을 추측하지 않는다(이어받기·낱말 바꿔 고르기 없음).
+    // 다중 원문(#288 ⓓ′)은 그대로 — 두 조문을 한 원문으로 보내 어느 쪽 글을 옮겼든 맞으면 초록. 10-14 사내 실물: 표 칸 「같은 고시 제12조제1항 (제17조에 따라 준용)」의
+    // 제17조가 앞 표시의 전파법 시행령을 이어받아 그 제17조(주파수이용권 양수 승인신청)로 다중 원문에 섞여 회색이 됐다. 괄호 안 조를 빼면 거꾸로 쓴 「제17조(제12조①을 준용)」
+    // 꼴에서 제12조① 글을 옮긴 인용이 제17조만과 대조돼 거짓 「다르다고 봄」이 되므로 빼지 않고 묶는다. 괄호 안 조는 추측 기록(lawGuess)을 지지 않는다 — 괄호 밖 조가
+    // 추측으로 고른 문서면 그 기록은 괄호 밖 조의 것으로 남고(대표면 그대로, 아니면 다중 원문의 추측 조문 회색 규칙), 괄호 안 조가 그 근거 없음을 물려받지 않는다
+    // (거꾸로 쓴 꼴에서 제12조①로 대조하고도 「인용문 낱말이 그 조문에 없음」이 되던 것).
+    // outerOf: 열쇠 → {fam(고른 문서군, 못 찾았으면 null), scope(못 찾았을 때 찾아본 문서군 — 이것도 null이면 묶지 않음), guessed(동률 고르기 등급)}
+    const outerOf = new Map();
     const longestOf = function (rows, fam, keyOf) {
       let t = '';
       const docs = new Set(rows.filter(function (c) { return docFamily(c.doc_name) === fam; }).map(function (c) { return c.doc_name; }));
@@ -1589,9 +1630,12 @@
       return t;
     };
     for (let ci = 0; ci < candidates.length; ci++) {
-      const cand = candidates[ci], scope = scopes[ci];
-      const gk = guessKind(cand.lawInfo, families);              // 'none' 이름으로 못 박음 / 'inherit' 이어받기 추측 / 'weak' 못 맞춘 약한 이름
+      const cand = candidates[ci];
+      const outer = cand.junyong && (!cand.lawInfo || guessKind(cand.lawInfo, families) === 'weak') ? outerOf.get(cand.junyong) || null : null;
+      const scope = outer ? (outer.fam ? [outer.fam] : outer.scope) : scopes[ci];
+      const gk = outer ? 'none' : guessKind(cand.lawInfo, families);   // 'none' 이름으로 못 박음 / 'inherit' 이어받기 추측 / 'weak' 못 맞춘 약한 이름
       const guessed = gk !== 'none', maySwitch = gk === 'inherit';
+      const tieGuessed = outer ? outer.guessed : guessed;              // 동률 고르기에서는 괄호 밖 조와 같은 등급(괄호 안 조가 대표를 빼앗지 않게)
       // 부칙 열쇠(#290)는 자료의 부칙 단위에서 찾는다 — 조각 대신 {doc_name, _rk(번호를 푼 열쇠)}. 번호 없이 적은 「부칙 제M조」는 문서마다 푼 열쇠가 다르다
       const isAdd = isAddendumKey(cand.key);
       const addHits = isAdd ? addendumHits(cand.key) : null;
@@ -1645,6 +1689,7 @@
         // 고시 번호 이름(#288 ⓑ)인데 그 번호의 문서가 자료에 둘 이상 — 「없음」이 아니라 고르지 않은 것임을 적는다(c19c247f: 제2026-11호 고시 2개)
         if (cand.lawInfo && cand.lawInfo.numbered && !numAmbig) { const k = (numIndex.get(cand.lawInfo.number) || []).length; if (k >= 2) numAmbig = k; }
         if (guessed && scope && scope.length && !missGuess) missGuess = { how: gk, label: scope[0] + ' ' + keyText(cand.key) };
+        if (scope && !outerOf.has(cand.key)) outerOf.set(cand.key, { fam: null, scope: scope, guessed: tieGuessed });
         continue;
       }
       let best = null, bestText = '';
@@ -1661,12 +1706,13 @@
       // 작은 차이로 모델이 이름 적은 쪽을 버리면 안 된다.
       const rel = claimRelevance(claim, bestText);
       found.push({ cand: cand, doc: best, text: bestText, lawDoc: lawDoc, guess: guess, rkey: rkOf(best), ver: vinfo });
+      if (!outerOf.has(cand.key)) outerOf.set(cand.key, { fam: docFamily(best), scope: null, guessed: tieGuessed });
       let better = r > chosenRatio;
       if (!better && chosen && r === chosenRatio) {
         if (Math.abs(rel.hits - chosenRel.hits) >= 3) better = rel.hits > chosenRel.hits;
-        else if (guessed !== !!chosenGuess) better = !guessed;
+        else if (tieGuessed !== chosenTie) better = !tieGuessed;
       }
-      if (better) { chosen = cand; chosenRatio = r; chosenDoc = best; chosenText = bestText; chosenLaw = lawDoc; chosenGuess = guess; chosenRel = rel; chosenKey = rkOf(best); }
+      if (better) { chosen = cand; chosenRatio = r; chosenDoc = best; chosenText = bestText; chosenLaw = lawDoc; chosenRel = rel; chosenKey = rkOf(best); chosenTie = tieGuessed; }
     }
     if (!chosen) return Object.assign({ status: 'missing', reason: misses.map(function (s) { return s.trim(); }).join('·') + ' 원문 없음', lawDoc: null, lookFor: missLabels.join('·') },
       missGuess ? { lawGuess: missGuess.how, guessLabel: missGuess.label } : {}, numAmbig ? { numAmbig: numAmbig } : {}, addAmbig ? { addAmbig: addAmbig } : {});
