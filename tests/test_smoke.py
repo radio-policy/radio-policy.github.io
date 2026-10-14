@@ -3257,7 +3257,38 @@ class TestTelegramCommandCase(unittest.TestCase):
         with open(os.path.join(_ROOT, 'supabase', 'functions', 'telegram-webhook', 'index.ts'), encoding='utf-8') as f:
             src = f.read()
         body = src[src.index('Deno.serve(async (req: Request)'):]
-        self.assertIn("const text = msg.text.trim().replace(/^", body)
+        # #308부터 소문자화 결과는 raw, 답장 명령을 붙인 뒤가 text — 소문자화는 여전히 진입부 한 곳뿐.
+        self.assertIn("const raw = msg.text.trim().replace(/^", body)
         self.assertIn("[A-Za-z]+/, (cmd) => cmd.toLowerCase());", body)   # 명령 낱말만 — 본문 통째 소문자 금지
         self.assertNotIn('msg.text.trim().toLowerCase()', body)
         self.assertNotIn('text.toLowerCase()', body)
+
+
+class TestTelegramCmdPrompt(unittest.TestCase):
+    """#308 — 명령 메뉴에서 /ask·/law·/assem만 누르면(텔레그램은 즉시 전송, 입력창에 남길 방법 없음) 안내문을 force_reply로
+    보내고 그 답장을 명령 인수로 받는다. 「사용법: …」 한 줄 답으로 되돌리거나 세 갈래 중 하나만 빠지면 잡는다. 네트워크 0."""
+
+    def setUp(self):
+        with open(os.path.join(_ROOT, 'supabase', 'functions', 'telegram-webhook', 'index.ts'), encoding='utf-8') as f:
+            self.src = f.read()
+
+    def test_empty_commands_send_force_reply_prompt(self):
+        for cmd in ('assem', 'law', 'ask'):
+            self.assertIn(f"await sendCmdPrompt(chatId, '{cmd}'); return;", self.src, cmd)
+        fn = self.src[self.src.index('async function sendCmdPrompt'):self.src.index('function promptCommand')]
+        self.assertIn('force_reply: true', fn)
+        self.assertIn('input_field_placeholder', fn)
+        self.assertNotIn("'사용법: <code>/ask 질문 내용</code>'", self.src)   # 옛 한 줄 답으로 되돌리지 않음
+
+    def test_reply_to_prompt_routes_as_command(self):
+        body = self.src[self.src.index('Deno.serve(async (req: Request)'):]
+        self.assertIn('reply_to_message', body)
+        self.assertIn('promptCommand(reply.text)', body)
+        self.assertIn("replyCmd && !raw.startsWith('/') ? `/${replyCmd} ${raw}` : raw", body)   # 이미 명령어면 그대로
+        # head는 평문 비교 — HTML 태그가 들어가면 텔레그램이 돌려주는 답장 원문과 안 맞는다
+        block = self.src[self.src.index('const CMD_PROMPTS'):self.src.index('type CmdKey')]
+        for line in block.splitlines():
+            if 'head:' in line:
+                self.assertNotRegex(line, r'<[a-z]+>', line)
+        for ph in re.findall(r"placeholder: '([^']*)'", block):
+            self.assertLessEqual(len(ph), 64, ph)   # 텔레그램 상한

@@ -301,6 +301,48 @@ const FEATURES_GUIDE =
   COMMANDS_HELP + '\n\n' +
   '이 안내는 /help 로 다시 볼 수 있습니다.';
 
+// ── 명령 메뉴에서 명령만 눌렀을 때(#308, 2026-10-14 운영자 요청 「/ask·/law·/assem을 고르면 뒤에 문장을 이어 쓸 수 있게」) ──
+// 텔레그램은 명령 메뉴 항목을 누르면 그 명령을 **즉시 전송**한다 — 입력창에 「/ask 」만 남겨 두는 옵션이 봇 API에 없다(어느 앱도 안 됨).
+// 그래서 인수 없는 명령에는 안내문을 force_reply로 보내 앱이 그 메시지에 답장하는 입력 상태로 열리게 하고(명령어를 다시 칠 필요 없음),
+// 그 안내문에 대한 답장을 그 명령의 인수로 받는다. DB 상태는 두지 않는다 — 답장이 가리키는 안내문의 첫 줄(head)로 명령을 알아낸다.
+// head는 평문으로 두고 그대로 비교한다(텔레그램이 reply_to_message.text를 서식 없는 평문으로 돌려준다). head를 바꾸면 그 전에
+// 보낸 안내문에 대한 답장은 더 이상 인식되지 않는다(명령어 안내로 떨어짐) — 바꿀 일이면 옛 head도 한동안 같이 받을 것.
+// 운영자 결정(10-14): 답장 상태를 끄고 보낸 평문은 지금처럼 명령어 안내(#259)로 — 「대기 명령」 DB 상태는 두지 않음.
+const CMD_PROMPTS: Record<'ask' | 'law' | 'assem', { head: string; body: string; placeholder: string }> = {
+  assem: {
+    head: '🏛 국회 발언 검색 — 무엇을 찾을지 이 답장으로 보내 주세요',
+    body: '예: <code>2019년 국정감사에서 무선국 관련 발언</code> · <code>공공와이파이</code>\n' +
+      '평소 말하듯 쓰시면 의원명·연도·회의 구분을 알아서 골라냅니다.\n' +
+      '<i>범위: 20대 국회(2016)~현재, 과방위(20대 전반기 미방위 포함)의 상임위·국정감사 회의록.</i>',
+    placeholder: '예: 2023년 공공와이파이 관련 발언',
+  },
+  law: {
+    head: '📖 법령 검색 — 궁금한 주제나 조문 번호를 이 답장으로 보내 주세요',
+    body: '예: <code>3G 종료 관련 법령</code> → 관련 법령·조항과 왜 관련 있는지\n' +
+      '예: <code>전기통신사업법 19조</code> → 조문 원문이 바로',
+    placeholder: '예: 3G 종료 관련 법령',
+  },
+  ask: {
+    head: '🤖 AI 자문 — 질문을 이 답장으로 보내 주세요',
+    body: '예: <code>주파수 재할당 대가 산정 제도 개편 논의와 사업자에 주는 시사점은?</code>\n' +
+      '<i>앞의 질문은 기억하지 않으니 필요한 내용을 한 번에 다 담아 주세요.</i>',
+    placeholder: '질문을 입력하세요',
+  },
+};
+type CmdKey = keyof typeof CMD_PROMPTS;
+async function sendCmdPrompt(chatId: number, cmd: CmdKey): Promise<void> {
+  const p = CMD_PROMPTS[cmd];
+  // input_field_placeholder는 64자 상한. selective는 개인 대화에서 무의미하지만 그룹에 들어가도 그 사람에게만 열리게.
+  await sendTelegramHtml(BOT_TOKEN, chatId, escapeHtml(p.head) + '\n' + p.body,
+    { reply_markup: { force_reply: true, input_field_placeholder: p.placeholder, selective: true } });
+}
+// 답장이 가리키는 메시지가 위 안내문이면 그 명령, 아니면 null.
+function promptCommand(replyText: string): CmdKey | null {
+  const first = replyText.split('\n')[0].trim();
+  for (const k of Object.keys(CMD_PROMPTS) as CmdKey[]) if (first === CMD_PROMPTS[k].head) return k;
+  return null;
+}
+
 // ── 조문 원문 조회 (비용 0) ──
 const ARTICLE_RE = /^(.{2,40}?)\s*제?\s*(\d+)\s*조(?:\s*의\s*(\d+))?\s*$/;
 // /law 안에서만 쓰는 넓은 꼴(#247): 항·호 표기(「…제5조제3항」)와 '원문 보여줘'류 요청 꼬리(「…제3조를 찾아줘」)까지 즉답으로.
@@ -394,14 +436,7 @@ function parseAssemCallback(data: string): { q: AssemQuery; offset: number } | n
 
 async function handleAssemSearch(chatId: number, arg: string): Promise<void> {
   const text = arg.trim();
-  if (!text) {
-    await sendTelegramHtml(BOT_TOKEN, chatId,
-      '사용법: <code>/assem 2019년 국정감사에서 무선국 관련해서 발언한 내용을 찾아줘</code>\n' +
-      '평소 말하듯 쓰시면 의원명·연도·회의 구분을 알아서 골라냅니다. ' +
-      '<code>/assem 공공와이파이</code> 처럼 짧게 써도 됩니다.\n' +
-      '<i>범위: 20대 국회(2016)~현재, 과방위(20대 전반기 미방위 포함)의 상임위·국정감사 회의록.</i>');
-    return;
-  }
+  if (!text) { await sendCmdPrompt(chatId, 'assem'); return; }   // 메뉴에서 명령만 누른 경우 — 답장으로 이어 받음(#308)
 
   let parsed: AssemQuery;
   try {
@@ -570,12 +605,7 @@ const LAW_DAILY_LIMIT = 10;  // 자연어 /law 일일 상한 — 승인 불필�
 
 async function handleLawQuery(chatId: number, q: string): Promise<Promise<void> | void> {
   const query = q.trim();
-  if (!query) {
-    await sendTelegramHtml(BOT_TOKEN, chatId,
-      '사용법: <code>/law 3G 종료 관련 법령</code> — 궁금한 주제를 그대로 쓰면 관련 법령·조항과 이유를 찾아 드립니다.\n' +
-      '조문 번호를 알 때는 <code>/law 전기통신사업법 19조</code> 처럼 쓰면 원문이 바로 나옵니다.');
-    return;
-  }
+  if (!query) { await sendCmdPrompt(chatId, 'law'); return; }   // 메뉴에서 명령만 누른 경우 — 답장으로 이어 받음(#308)
   const ref = parseArticleRef(query, true);
   if (ref) {
     // 넓은 꼴로만 맞았는데 DB에 없으면 자연어 모드로 넘긴다 — 「무선국 준공 관련 전파법 제24조를 찾아줘」처럼 앞 낱말까지
@@ -827,7 +857,7 @@ async function refundTrial(usageId: number | null): Promise<void> {
 
 async function handleAsk(chatId: number, from: { username?: string; first_name?: string }, question: string): Promise<Promise<void> | void> {
   const q = question.trim();
-  if (!q) { await sendTelegramHtml(BOT_TOKEN, chatId, '사용법: <code>/ask 질문 내용</code>'); return; }
+  if (!q) { await sendCmdPrompt(chatId, 'ask'); return; }   // 메뉴에서 명령만 누른 경우 — 답장으로 이어 받음(#308)
   const sub = await getSub(chatId);
   const today = todayKst();
   let trialId: number | null = null;
@@ -1345,13 +1375,18 @@ Deno.serve(async (req: Request) => {
       await handleCallback(update.callback_query as Parameters<typeof handleCallback>[0]);
       return new Response('ok');
     }
-    const msg = update.message as { chat: { id: number }; from?: { username?: string; first_name?: string }; text?: string } | undefined;
+    const msg = update.message as { chat: { id: number }; from?: { username?: string; first_name?: string }; text?: string;
+      reply_to_message?: { text?: string; from?: { is_bot?: boolean } } } | undefined;
     if (!msg?.text) return new Response('ok');
     const chatId = msg.chat.id;
     const from = msg.from || {};
     // 명령어는 대소문자를 가리지 않는다(/ASK·/Law·/ASSEM — 휴대폰 자판이 문장 첫 글자를 대문자로 바꾼다, #302, 2026-10-14 운영자 요청).
     // 앞머리의 영문 명령 낱말만 소문자로 바꾸고 뒤 본문은 그대로 둔다 — 질문·법령명 속 대문자(3G·LTE·SKT)는 뜻이 있다.
-    const text = msg.text.trim().replace(/^\/[A-Za-z]+/, (cmd) => cmd.toLowerCase());
+    const raw = msg.text.trim().replace(/^\/[A-Za-z]+/, (cmd) => cmd.toLowerCase());
+    // 빈 명령 안내문(CMD_PROMPTS)에 대한 답장은 그 명령의 인수로 받는다(#308). 답장 본문이 이미 명령어로 시작하면 그대로 둔다.
+    const reply = msg.reply_to_message;
+    const replyCmd = reply?.from?.is_bot && reply.text ? promptCommand(reply.text) : null;
+    const text = replyCmd && !raw.startsWith('/') ? `/${replyCmd} ${raw}` : raw;
 
     if (text === '/start' || text.startsWith('/start ')) {
       // #252: 봇을 차단했다가(active=false) /start로 돌아온 「중요+보통」 구독자는 보통 기준 시각을 지금으로 — 차단된 동안
