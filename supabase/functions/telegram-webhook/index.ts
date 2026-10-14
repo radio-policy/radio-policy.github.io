@@ -3,6 +3,7 @@
 //
 //  역할: 구독자 봇(SUBSCRIBER_BOT_TOKEN)의 Telegram webhook 수신부.
 //   - /start /settings /stop : 수신 설정 (인라인 키보드로 토픽·요일·수신시각 토글)
+//     (/start는 설정 메시지 뒤에 기능 안내 한 통을 따로 보낸다 — #306. 같은 안내 = /help)
 //   - /law "OO법 N조" : 조문 원문 즉답 (LLM 없음, 비용 0)
 //   - /ask <질문> : AI 자문 — 승인자는 일일 상한, 승인 안 된 사람은 무료 3회(#259), 건당 API 과금
 //     (명령어 없는 평문은 자문으로 보내지 않고 명령어 안내를 돌려준다 — #259)
@@ -263,24 +264,40 @@ const START_TEXT =
   '📡 <b>받을 뉴스</b> — 주요 뉴스 아래 버튼에서 <b>중요만</b>(기본) 또는 <b>중요+보통</b>을 고르세요. ' +
   '보통 뉴스는 받는 시간대 안에서 한 시간치를 묶어 매시 한 통으로 보내 드립니다.\n' +
   '아래 버튼으로 콘텐츠·요일·수신 시각을 바로 바꿀 수 있어요. (언제든 /settings)\n' +
-  '항목을 모두 끄면 알림이 오지 않습니다.\n\n';
+  '항목을 모두 끄면 알림이 오지 않습니다.';
 
-// 명령어 안내 — /start 끝과, 명령어 없이 보낸 평문의 답(#259)에 같이 쓴다.
+// 명령어 안내 — /start 뒤 기능 안내(FEATURES_GUIDE)와, 명령어 없이 보낸 평문·알 수 없는 명령의 답(#259)에 같이 쓴다.
+// #306(2026-10-14, 운영자 요청 「텔레그램 기능을 잘 모르겠다는 반응」): 기능마다 「무엇을 알려 주나」 한 줄 + 예시 + 「무엇이 돌아오나」.
+// 법령 검색과 AI 자문을 같은 주제(3G 종료)로 보여 둘의 차이(어느 조문인가 / 그래서 무엇을 봐야 하나)가 드러나게 했다.
 const COMMANDS_HELP =
-  // 순서 = 실사용 순(60일: assem 45 · law 30+6 · ask 13, 2026-09-14 실측).
+  // 순서 = 실사용 순(60일: assem 62 · law 31+6 · ask 19, 2026-10-14 실측 — 09-14와 같은 순서).
   // 승인 없이 바로 쓰는 /assem 을 먼저 보여 준다 — 첫 화면에서 바로 해 볼 수 있는 것이 위에 와야 한다.
   // 예시에 의원 실명을 쓰지 않는다(2026-09-13, #158) — 사내 공유 대상이 넓어졌고, 이름을 넣으면 그 사람 발언만
   // 걸러져 결과가 1~3건으로 줄어 기능이 약해 보인다(실측: 주제어 71~183건 vs 이름+주제어 1~3건).
-  '🏛 <b>국회 발언 검색</b> — <code>/assem 2023년 공공와이파이 관련 발언 찾아줘</code>\n' +
-  '   <i>과방위 상임위·국정감사 회의록 원문에서 찾습니다(20대 국회~현재).</i>\n' +
+  '🏛 <b>국회 발언 검색</b> — 국회에서 누가 무슨 말을 했나\n' +
+  '<code>/assem 2023년 공공와이파이 관련 발언 찾아줘</code>\n' +
+  '→ 과방위 상임위·국정감사 회의록(20대 국회~현재)에서 날짜·발언자·요지와 원문 링크\n\n' +
   // 승인·횟수 안내는 적지 않는다(#259) — 무료 3회를 넘겼을 때만 그 자리에서 알린다.
-  '📖 <b>법령 검색</b> — <code>/law 3G 종료 관련 법령</code> (궁금한 주제 → 관련 법령·조항과 이유)\n' +
-  '   <i>조문 번호를 알면 원문이 바로 — <code>/law 전기통신사업법 19조</code></i>\n' +
-  '🤖 <b>AI 자문</b> — <code>/ask 질문</code> (동향·시사점까지 종합)\n' +
+  '📖 <b>법령 검색</b> — 어느 법 몇 조에 있나\n' +
+  '<code>/law 3G 종료 관련 법령</code>\n' +
+  '→ 관련 법령·조항과 왜 관련 있는지\n' +
+  '   <i>조문 번호를 알면 원문이 바로:</i> <code>/law 전기통신사업법 19조</code>\n\n' +
+  '🤖 <b>AI 자문</b> — 그래서 무엇을 봐야 하나\n' +
+  '<code>/ask 3G 서비스를 종료하려면 사업자가 거쳐야 할 절차와 쟁점은?</code>\n' +
+  '→ 법령 근거에 최근 동향·시사점까지 묶은 답\n' +
   // 대시보드 자문은 chatHistory를 누적해 대화가 이어지지만 봇은 질문 1건만 보낸다(rag.ts).
   // 웹을 써 본 사람일수록 "그건 언제 시행되나?" 식 후속 질문을 던지므로 가입 시점에 미리 알린다.
   // (답변 하단에도 같은 취지의 한 줄이 붙는다 — 첫 질문 전/후 양쪽에서 닿게)
   '   <i>질문마다 필요한 내용을 다 담아 주세요 — 앞의 질문은 기억하지 않습니다.</i>';
+
+// /start의 두 번째 메시지이자 /help의 답(#306). 종전엔 COMMANDS_HELP가 START_TEXT 끝에 붙어 설정 버튼 바로 위에 있어
+// 「설정 화면의 일부」로 읽히고 12줄짜리 버튼에 묻혔다 — 한 통으로 떼면 대화창 맨 아래(받자마자 보이는 자리)에 온다.
+// 순서는 설정 메시지 → 이 안내(운영자 결정 10-14). /start를 메뉴처럼 다시 누르는 사람이 많아(60일 10명 37번) 매번 같이 간다.
+const FEATURES_GUIDE =
+  '💡 <b>뉴스 알림 말고도 이렇게 쓸 수 있어요</b>\n' +
+  '메시지 앞에 명령어를 붙여 보내면 됩니다. <i>(예시를 누르면 복사돼요)</i>\n\n' +
+  COMMANDS_HELP + '\n\n' +
+  '이 안내는 /help 로 다시 볼 수 있습니다.';
 
 // ── 조문 원문 조회 (비용 0) ──
 const ARTICLE_RE = /^(.{2,40}?)\s*제?\s*(\d+)\s*조(?:\s*의\s*(\d+))?\s*$/;
@@ -1343,7 +1360,12 @@ Deno.serve(async (req: Request) => {
       await upsertSub(chatId, { username: from.username || null, first_name: from.first_name || null, active: true, ...revive });
       await logUsage(chatId, 'start', from.username || from.first_name || '');
       const sub = (await getSub(chatId))!;
-      await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: START_TEXT + COMMANDS_HELP + await basisLine(sub), disable_web_page_preview: true, reply_markup: settingsKeyboard(sub) });
+      await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: START_TEXT + await basisLine(sub), disable_web_page_preview: true, reply_markup: settingsKeyboard(sub) });
+      // 기능 안내는 설정 메시지 **뒤에** 따로(#306) — await로 순서를 지킨다(설정 → 안내).
+      await sendTelegramHtml(BOT_TOKEN, chatId, FEATURES_GUIDE);
+    } else if (text === '/help' || text.startsWith('/help ') || text === '/도움말') {
+      await logUsage(chatId, 'help', '');
+      await sendTelegramHtml(BOT_TOKEN, chatId, FEATURES_GUIDE);
     } else if (text === '/settings' || text === '/설정') {
       let sub = await getSub(chatId);
       if (!sub) { await upsertSub(chatId, { username: from.username || null, first_name: from.first_name || null }); sub = (await getSub(chatId))!; }

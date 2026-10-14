@@ -59,6 +59,8 @@ COMMANDS = [
     {'command': 'law',      'description': '법령 검색 (예: /law 3G 종료 관련 법령)'},
     {'command': 'ask',      'description': 'AI 자문 (동향·시사점까지)'},
     {'command': 'settings', 'description': '수신 설정 변경'},
+    # /help 는 /start 두 번째 메시지(기능 안내)를 다시 보여 준다(#306, 2026-10-14).
+    {'command': 'help',     'description': '기능 안내 · 사용 예시'},
     # /stop 은 메뉴에서 뺐다 — /settings 에서 항목 3개를 끄면 같은 결과라 중복이고,
     # "해지 vs 항목 끄기" 두 상태가 있는 것처럼 보여 혼동을 준다. 명령 자체는 살려둔다(하위호환).
 ]
