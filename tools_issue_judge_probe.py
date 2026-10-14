@@ -38,6 +38,14 @@ except Exception:
 ROOT = os.path.dirname(os.path.abspath(__file__))
 FIXTURE = os.path.join(ROOT, 'tests', 'fixtures', 'issue_judge_cases.json')
 MODEL = 'claude-sonnet-5'
+
+
+def _think_kw() -> dict:
+    """운영과 같은 추론 끔: Sonnet 5는 thinking disabled, Sonnet 5.5는 disabled가 400이라 between_tools(effort high 이하만),
+    Haiku 5.5는 disabled(effort high 이하). --model 비교 실측용 — 운영 요청(issue_suggest)은 안 바꾼다."""
+    if MODEL.startswith('claude-sonnet-5-5'):
+        return {'thinking': {'type': 'between_tools'}}
+    return {'thinking': {'type': 'disabled'}}
 PRICE_IN, PRICE_OUT = 2.0, 10.0          # Sonnet 5 $ / 100만 토큰
 CONTROL = (46, 119, 2, 13)
 
@@ -89,7 +97,7 @@ def build_request(variant, call, issues):
                          + (f' (같은 묶음: {extra})' if extra else '')
                          + f'\n   {_issue_line(iss_of(g["issue"]))}')
             slots.append([(g['issue'], r['id']) for r in m if r['fresh']])
-        return ({'model': MODEL, 'max_tokens': 400, 'thinking': {'type': 'disabled'},
+        return ({'model': MODEL, 'max_tokens': 400, **_think_kw(),
                  'system': SYS_V0 if variant == 'V0' else SYS_A1,
                  'messages': [{'role': 'user', 'content': '\n'.join(lines)}]}, slots)
     # B / B2 — 이슈 단위(나온 순서), 기사 번호는 호출 전체에 하나
@@ -112,7 +120,7 @@ def build_request(variant, call, issues):
                 slots.append([(i, r['id'])])
                 rows.append(f'  {len(slots)}. 기사: "{r["title"]}"')
         blocks.append('\n'.join(rows))
-    return ({'model': MODEL, 'max_tokens': 1000, 'thinking': {'type': 'disabled'},
+    return ({'model': MODEL, 'max_tokens': 1000, **_think_kw(),
              'system': SYS_B if variant == 'B' else SYS_B2,
              'messages': [{'role': 'user', 'content': '\n\n'.join(blocks)}]}, slots)
 
@@ -283,7 +291,12 @@ def main() -> int:
     ap.add_argument('--repeat', type=int, default=2)
     ap.add_argument('--save', default='', help='호출별 답을 jsonl로')
     ap.add_argument('--report', default='', help='저장한 jsonl로 다시 채점(API 0회)')
+    ap.add_argument('--model', default='', help='비교 실측용 모델(기본 운영 Sonnet 5) — 5.5 계열은 추론 끔 꼴만 바꾼다(_think_kw)')
     a = ap.parse_args()
+    global MODEL
+    MODEL = a.model or MODEL
+    if a.model:
+        print(f'[모델] {MODEL} (비교 실측 — 운영 요청은 안 바뀜)')
     fx = _load()
     variants = [v for v in a.variants.split(',') if v]
     for v in variants:

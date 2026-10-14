@@ -77,6 +77,8 @@ def main() -> int:
     ap.add_argument('--only', default='', help='쉼표로 구분한 기사 번호(no) — 그 기사가 든 실행만')
     ap.add_argument('--after', default='', help='이 시각(ISO)부터의 실행만')
     ap.add_argument('--save', default='', help='실행별 답·계기를 jsonl로 저장')
+    ap.add_argument('--model', default='', help='비교 실측용 모델(기본 운영 MATCH_MODEL). 5.5 계열은 temperature가 400이라 호출 직전에 '
+                                               'temperature만 벗긴다(도구 강제라 추론은 건너뜀) — 운영 함수는 안 바꾼다')
     a = ap.parse_args()
     with open(FIXTURE, encoding='utf-8') as f:
         fx = json.load(f)
@@ -95,6 +97,17 @@ def main() -> int:
     except Exception:
         pass
     import news_dedup                                   # api_usage.install() — 운영과 같은 지시문·도구·모델·온도
+    model = a.model or news_dedup.MATCH_MODEL
+    if 'haiku-4-5' not in model:                        # 실측 전용: 운영 함수의 temperature 0을 5.5 계열 호출에서만 벗긴다
+        import anthropic
+        _orig_create = anthropic.resources.messages.Messages.create
+
+        def _create_no_temp(self, *args, **kw):
+            if 'haiku-4-5' not in str(kw.get('model', '')):
+                kw.pop('temperature', None)
+            return _orig_create(self, *args, **kw)
+        anthropic.resources.messages.Messages.create = _create_no_temp
+    print(f'[모델] {model}')
 
     def art(i):
         return {'title': arts[i]['title'], 'event': arts[i]['event'], 'snip': arts[i]['snip']}
@@ -124,7 +137,7 @@ def main() -> int:
         for r in runs:
             new, cand = [art(n['id']) for n in r['new']], [art(c) for c in r['cand']]
             trace = []
-            got = news_dedup.match_prior_reports(new, cand, key, trace=trace)
+            got = news_dedup.match_prior_reports(new, cand, key, model=model, trace=trace)
             if got is None:
                 failed += 1
             for k, n in enumerate(r['new']):
@@ -141,7 +154,7 @@ def main() -> int:
                     for x in rows:
                         if isinstance(x, dict) and isinstance(x.get('id'), int):
                             pegs[lo + x['id']] = x
-                saved.append({'rep': rep, 't': r['t'], 'new': [n['no'] for n in r['new']],
+                saved.append({'rep': rep, 'model': model, 't': r['t'], 'new': [n['no'] for n in r['new']],
                               'ans': None if got is None else [None if j is None else r['cand'][j] for j in got],
                               'rows': [pegs.get(k + 1) for k in range(len(r['new']))]})
         print(f'\n── 반복 {rep} — 호출 실패 {failed}회 ──')

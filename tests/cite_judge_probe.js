@@ -73,6 +73,7 @@ const VARIANTS = {
   o48pg: { model: 'claude-opus-4-8', extra: { thinking: { type: 'disabled' } }, max: 8000, inline: true },
   // 같은 꼴 + 추론 켬(사내 설계 D 「다시(10/12)」 ① 후보 — Opus 4.8의 켜는 꼴은 adaptive뿐, 노력은 기본(high)). 추론도 max_tokens에 들어가 16000
   o48pg_think: { model: 'claude-opus-4-8', extra: { thinking: { type: 'adaptive' } }, max: 16000, inline: true, out: 600 },   // out = 어림용 출력(10-12 실측: 추론 켬 호출당 H7 ≈200 · 고정 사례 전체 평균 ≈380)
+  o55pg_think: { model: 'claude-opus-5-5', extra: { output_config: { effort: 'medium' } }, max: 16000, inline: true, out: 400 },   // 사내 Playground 꼴(통과형 inline·사고 늘 켬·노력 기본 중간) — 외부↔사내 동등성 확인용(2026-10-14)
   s5pg: { model: 'claude-sonnet-5', extra: { thinking: { type: 'disabled' } }, max: 8000, inline: true },
   // 지시문 후보 시험용 — system을 바꿔 보낸다(운영 JUDGE2_SYSTEM은 그대로). 후보 글은 아래 CAND_SYSTEM
   s55m_cand: { model: 'claude-sonnet-5-5', extra: { output_config: { effort: 'medium' } }, max: 8000, cand: true },

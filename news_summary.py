@@ -66,8 +66,10 @@ def request_kwargs(title, source, body, model: str = '') -> dict:
     m = model or SUMMARY_MODEL
     kw = {'model': m, 'max_tokens': SUMMARY_MAX_TOKENS, 'system': SUMMARY_SYSTEM,
           'messages': [{'role': 'user', 'content': build_user(title, source, body)}]}
-    if m.startswith('claude-sonnet-5') and not m.startswith('claude-sonnet-5-5'):
-        kw['thinking'] = {'type': 'disabled'}
+    if m.startswith('claude-sonnet-5-5'):
+        kw['thinking'] = {'type': 'between_tools'}   # 비교 실측용(2026-10-14): 5.5는 disabled가 400 — 추론 끔은 between_tools(effort high 이하)
+    elif m.startswith('claude-sonnet-5') or m.startswith('claude-haiku-5-5'):
+        kw['thinking'] = {'type': 'disabled'}        # Haiku 5.5도 추론 기본 켬 — 300토큰 상한을 추론이 먹어 10건 중 6건이 빈 답(10-14 실측)
     return kw
 
 

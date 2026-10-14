@@ -59,6 +59,33 @@ FIXTURE = os.path.join(ROOT, 'tests', 'fixtures', 'urgency_probe_cases.json')
 OUT_DEFAULT = os.path.join(ROOT, 'local_docs', 'urgency_probe')
 MODEL = 'claude-haiku-4-5-20251001'
 PRICE = {'in': 1.00, 'out': 5.00, 'cache_read': 0.10, 'cache_write_1h': 2.00}   # $/백만 토큰
+# 모델 비교(--model, 2026-10-14): Haiku 5.5는 temperature를 받지 않고(비기본값 400) 추론이 기본 켜져 있다 → 낱말 출력 변형은
+# thinking disabled(--think off, 기본) 또는 adaptive(--think adaptive, max_tokens 1024, --effort). 도구 강제 호출은 추론을 건너뛴다.
+# 단가는 프롬프트 10만 토큰 이하 요금표. 결과 key에 모델·max_tokens는 들어가지만 추론 설정은 안 들어가므로 조건마다 --out을 따로
+# 두고 inputs.json을 복사해 같은 입력으로 잰다(비교는 세션이 두 results.jsonl을 읽는다).
+MODEL_PRICES = {'claude-haiku-4-5-20251001': PRICE,
+                'claude-haiku-5-5': {'in': 0.10, 'out': 0.50, 'cache_read': 0.01, 'cache_write_1h': 0.20},
+                'claude-sonnet-5-5': {'in': 2.00, 'out': 10.00, 'cache_read': 0.20, 'cache_write_1h': 4.00}}
+THINK, EFFORT = 'off', ''
+
+
+def set_model(model: str, think: str = 'off', effort: str = ''):
+    global MODEL, PRICE, THINK, EFFORT
+    MODEL, THINK, EFFORT = model, think, effort
+    PRICE = MODEL_PRICES.get(model, MODEL_PRICES['claude-haiku-5-5'])
+
+
+def _sampling_kw() -> dict:
+    """운영과 같은 값: Haiku 4.5는 temperature 0(#256-보론3). 5.5 계열은 temperature가 400이라 추론 설정만 준다
+    (Haiku 5.5: disabled는 effort high 이하에서만 · Sonnet 5.5: disabled가 400이라 between_tools)."""
+    if 'haiku-4-5' in MODEL:
+        return {'temperature': 0}
+    if THINK == 'adaptive':
+        kw = {'thinking': {'type': 'adaptive'}}
+        if EFFORT:
+            kw['output_config'] = {'effort': EFFORT}
+        return kw
+    return {'thinking': {'type': 'between_tools' if 'sonnet' in MODEL else 'disabled'}}
 CHARS_PER_TOKEN = 1.03          # 한국어 기준문 실측(#264 도구와 같은 어림)
 TOOL_OVERHEAD_TOK = 350         # 도구 강제 때 API가 덧붙이는 시스템 글 어림
 GRADE_MAP = {'즉시대응': '긴급', '금주검토': '보통', '동향파악': '참고'}
@@ -728,6 +755,8 @@ class Builder:
         tool = urgency_tool(v['tool']) if v['tool'] else None
         um = user_msg(art, v.get('in', ''))
         mt = 150 if tool else (20 if v.get('out') == 'w2' else 10)
+        if THINK == 'adaptive' and 'haiku-4-5' not in MODEL:
+            mt = max(mt, 1024)                       # 추론 토큰이 max_tokens에 포함된다(이전 안내) — 낱말 답이 잘리지 않게
         key = hashlib.sha1('\x00'.join([MODEL, str(mt), json.dumps(tool, ensure_ascii=False, sort_keys=False) if tool else '',
                                         sys_text, sim, um]).encode('utf-8')).hexdigest()
         prefix = hashlib.sha1(((json.dumps(tool, ensure_ascii=False) if tool else '') + '\x00' + sys_text).encode('utf-8')).hexdigest()[:12]
@@ -792,7 +821,7 @@ def judge(client, item: dict) -> dict:
     last = None
     for attempt in range(4):
         try:
-            resp = client.messages.create(model=MODEL, max_tokens=item['max_tokens'], temperature=0, system=blocks,
+            resp = client.messages.create(model=MODEL, max_tokens=item['max_tokens'], system=blocks, **_sampling_kw(),
                                           messages=[{'role': 'user', 'content': item['user']}], **kw)
             out = parse_response(resp, item['tool'], item.get('out', ''))
             u = resp.usage
@@ -860,6 +889,7 @@ def run_variants(a, fx, snap):
         it['cache'] = pcount[it['prefix']] > 1
     cost = est_cost(plan)
     per = Counter(it['var'] for it in plan)
+    print(f'[모델] {MODEL}' + ('' if 'haiku-4-5' in MODEL else f' · 추론 {THINK}' + (f'/{EFFORT}' if EFFORT else '')))
     print(f'[계획] 변형 {a.variants} · rep {a.rep} → 새 호출 {len(plan)}회 ({dict(per)}) · 같은 프롬프트 재사용 {len(reuse)} · '
           f'이미 끝남 {len(done)} · 어림 ${cost:.2f}')
     print(f'        캐시 접두 {sum(1 for v in pcount.values() if v > 1)}종 + 한 번만 쓰는 접두 {sum(1 for v in pcount.values() if v == 1)}건'
@@ -881,6 +911,7 @@ def run_variants(a, fx, snap):
     def work(it):
         out = judge(client, it)
         row = {'var': it['var'], 'rep': it['rep'], 'id': it['id'], 'key': it['key'], 'prefix': it['prefix'],
+               'model': MODEL, 'think': THINK, 'effort': EFFORT,
                'sim': it['sim'].count('\n- ') if it['sim'] else 0, **out}
         with lock:
             fout.write(json.dumps(row, ensure_ascii=False) + '\n'); fout.flush()
@@ -925,7 +956,7 @@ def privacy_judge(client, pv: str, user: str) -> dict:
     last = None
     for attempt in range(4):
         try:
-            resp = client.messages.create(model=MODEL, max_tokens=spec['max_tokens'], temperature=0, system=spec['system'],
+            resp = client.messages.create(model=MODEL, max_tokens=spec['max_tokens'], system=spec['system'], **_sampling_kw(),
                                           tools=[spec['tool']], tool_choice={'type': 'tool', 'name': 'record_privacy_check'},
                                           messages=[{'role': 'user', 'content': user}])
             u = resp.usage
@@ -1976,8 +2007,12 @@ def main() -> int:
     ap.add_argument('--refresh', action='store_true', help='스냅숏을 DB에서 다시 읽는다(결과 key가 바뀔 수 있다)')
     ap.add_argument('--workers', type=int, default=4)
     ap.add_argument('--cap', type=float, default=5.0, help='한 번 실행의 어림 비용 상한($, 설계 D7)')
+    ap.add_argument('--model', default=MODEL, help='비교 실측용 모델(기본 운영 Haiku 4.5) — 다른 모델은 --out을 따로 두고 inputs.json을 복사해 같은 입력으로')
+    ap.add_argument('--think', default='off', choices=['off', 'adaptive'], help='5.5 계열의 추론(기본 off = thinking disabled; 4.5에는 무시)')
+    ap.add_argument('--effort', default='', choices=['', 'low', 'medium', 'high'], help='--think adaptive일 때 output_config.effort')
     ap.add_argument('--extra', default='', help='임시 세트 X — 기사 id를 쉼표·줄바꿈으로 적은 파일(스냅숏에 더해 읽는다)')
     a = ap.parse_args()
+    set_model(a.model, a.think, a.effort)
     up = os.path.dirname(os.path.abspath(a.out))
     a.gold_x = a.gold_x or os.path.join(up, 'gold.json')
     a.gold_w = a.gold_w or os.path.join(up, 'gold_w2.json')
