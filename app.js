@@ -3509,6 +3509,7 @@ function chCanSeeOthers() {
 function chWhoLabel(row) {
   if (!row) return '';
   if ((row.channel || '').indexOf('telegram') === 0 || row.chat_id != null) {
+    if (row.chat_id == null) return '텔레그램 · 질문자 기록 전';   // 2026-08-01~08-18 텔레그램 행은 chat_id를 적기 전이다
     var s = _chNames.subs[String(row.chat_id)];
     var acct = s && s.user_id ? _chNames.users[s.user_id] : null;
     return '텔레그램 · ' + (s && s.name ? s.name : '구독자 아님') + (acct && acct.name ? ' (' + acct.name + ')' : '');
@@ -3548,7 +3549,8 @@ function _chBuildPeople(rows) {
   var acc = {}, order = [];
   rows.forEach(function(r) {
     var kind, id;
-    if ((r.channel || '').indexOf('telegram') === 0 || r.chat_id != null) { kind = 't'; id = r.chat_id; }
+    if (r.chat_id != null) { kind = 't'; id = r.chat_id; }
+    else if ((r.channel || '').indexOf('telegram') === 0) { kind = 'tx'; id = ''; }   // 텔레그램인데 chat_id 기록 전
     else if (r.user_id) { kind = 'u'; id = r.user_id; }
     else { kind = 'legacy'; id = ''; }
     var key = kind + ':' + id;
@@ -3571,7 +3573,10 @@ function _chApplyWho(q) {
   if (!p) return q;
   if (p.kind === 'u') return q.eq('user_id', p.id);
   if (p.kind === 't') return q.eq('chat_id', p.id);
-  return q.is('user_id', null).is('chat_id', null);   // 계정 도입 전
+  // chat_id 없는 텔레그램 행 — eq('chat_id', null)은 「chat_id=eq.null」이 되어 bigint 오류가 난다(10-15)
+  if (p.kind === 'tx') return q.is('chat_id', null).like('channel', 'telegram%');
+  // 계정 도입 전 대시보드 기록 — 위 텔레그램 행(user_id·chat_id 둘 다 비어 있음)이 섞이지 않게 채널로 가른다
+  return q.is('user_id', null).is('chat_id', null).or('channel.is.null,channel.not.like.telegram*');
 }
 function chSetScope(s) { _chScope = s === 'mine' ? 'mine' : 'all'; if (_chScope === 'mine') _chWho = ''; openChatHistory(); }
 function chSetWho(v) { var p = v === '' ? null : _chPeople[Number(v)]; _chWho = p ? p.kind + ':' + p.id : ''; openChatHistory(); }
@@ -3588,7 +3593,8 @@ function _chBarHtml(total, shown) {
       _chPeople.map(function(p, i) {
         return '<option value="' + i + '"' + (cur === p ? ' selected' : '') + '>' + chEsc(p.label) + ' · ' + p.n + '건</option>';
       }).join('') + '</select>';
-    h += '<span style="color:var(--text-tertiary);margin-left:auto">' + (total > shown ? total + '건 중 최근 ' + shown + '건' : shown + '건') + '</span>';
+    if (shown != null)   // 조회 실패 화면에선 건수를 싣지 않는다
+      h += '<span style="color:var(--text-tertiary);margin-left:auto">' + (total > shown ? total + '건 중 최근 ' + shown + '건' : shown + '건') + '</span>';
   }
   return h + '</div>';
 }
@@ -3629,7 +3635,15 @@ async function openChatHistory() {
     if (others && _chScope === 'mine') q = q.eq('user_id', currentUser.id);
     else if (all) q = _chApplyWho(q);
     var resp = await q.order('created_at', { ascending: false }).limit(100);
-    if (resp.error) { body.innerHTML = '<div style="color:var(--text-tertiary);font-size:12px">조회 실패: ' + chEsc(resp.error.message) + '</div>'; return; }
+    if (resp.error) {
+      // 고른 사람이 남아 있으면 다시 열어도 같은 오류만 난다 — 고르기를 풀고 목록 위 칸을 그대로 보여 다시 고를 수 있게 한다
+      var hadWho = !!_chWho;
+      _chWho = '';
+      body.innerHTML = (others ? _chBarHtml(0, null) : '') +
+        '<div style="color:var(--text-tertiary);font-size:12px">조회 실패: ' + chEsc(resp.error.message) +
+        (hadWho ? ' — 사람 고르기를 「모든 사람」으로 되돌렸습니다. 다시 골라 보세요.' : '') + '</div>';
+      return;
+    }
     var data = resp.data || [];
     var html = others ? _chBarHtml(total, data.length) : '';
     if (data.length === 0) {
@@ -3654,6 +3668,7 @@ async function openChatHistory() {
     }).join('');
     body.scrollTop = 0;
   } catch(e) {
+    _chWho = '';   // 위와 같은 이유 — 다음에 열 때 같은 조건으로 다시 실패하지 않게
     body.innerHTML = '<div style="color:var(--text-tertiary);font-size:12px">이력 조회 실패: ' + chEsc(e.message) + '</div>';
   }
 }
