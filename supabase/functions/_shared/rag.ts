@@ -944,7 +944,9 @@ async function fetchLawTrackContext(sb: SupabaseClient, meta?: SearchMeta): Prom
 // 저변별력 단어가 살아남아 엉뚱한 기사를 끌어온다(app.js와 동일 원칙).
 const extractNewsKeywords: (text: string) => string[] = RagCore.extractNewsKeywords;   // 뉴스 전용 키워드(법령용과 분리) — rag_core.js
 
-interface NewsRow { title: string; source?: string; published_at?: string; content?: string }
+interface NewsRow { title: string; source?: string; published_at?: string; content?: string; event?: string | null }
+// 채점·같은 사건 빼기·최소 관련도(#309) — app.js fetchRecentNewsContext와 같은 함수(rag_core.js 한 곳)
+const rankNewsCandidates: (kws: string[], rows: NewsRow[]) => { picked: NewsRow[]; words: string[]; rare: string | null } = RagCore.rankNewsCandidates;
 
 async function buildNewsContext(sb: SupabaseClient, query: string, meta?: SearchMeta): Promise<{ text: string; sources: string[] }> {
   try {
@@ -955,40 +957,28 @@ async function buildNewsContext(sb: SupabaseClient, query: string, meta?: Search
       .order('published_at', { ascending: false }).limit(30)
       .then((r) => (r.data || []) as NewsRow[]).catch(() => [] as NewsRow[]);
 
-    // 질문 키워드로 관련 기사 선별 — 제목 일치(가중 3) + 본문 일치(가중 1).
+    // 질문 키워드로 관련 기사 선별 — 조회는 낱말별 제목·본문 최신 10건, 고르기는 rankNewsCandidates(#309).
     // 최신순 상위 N건으로 뽑으면 특정 이슈가 폭주한 날 무관한 기사가 자리를 다 차지한다(배경역사 #35).
+    // 「낱말별 최신 10건 목록에 들었나」로 점수를 매기지도 말 것 — 흔한 낱말이 그 주 폭주 기사의 가산점이 된다(#309).
     const kws = extractNewsKeywords(query);
-    const qs: Promise<{ w: number; rows: NewsRow[] }>[] = [];
+    const qs: Promise<NewsRow[]>[] = [];
     for (const kw of kws) {
       const esc = kw.replace(/[%_,]/g, ' ').trim();
       if (esc.length < 2) continue;
       const t0n = performance.now();
       const note = (fn: string, r: RpcResult) => { if (meta) meta.push({ fn, ms: Math.round(performance.now() - t0n), rows: Array.isArray(r?.data) ? (r!.data as unknown[]).length : null, error: r?.error ? (r.error.code || r.error.message || 'error') : null }); };
-      qs.push(sb.from('news_feed').select('title, source, published_at, content')
+      qs.push(sb.from('news_feed').select('title, source, published_at, content, event')
         .or('published_at.gte.' + cutoff + ',locked.eq.true')
         .ilike('title', '%' + esc + '%').order('published_at', { ascending: false }).limit(10)
-        .then((r) => { note('news_title_ilike', r); return { w: 3, rows: (r.data || []) as NewsRow[] }; }).catch(() => ({ w: 3, rows: [] as NewsRow[] })));
-      qs.push(sb.from('news_feed').select('title, source, published_at, content')
+        .then((r) => { note('news_title_ilike', r); return (r.data || []) as NewsRow[]; }).catch(() => [] as NewsRow[]));
+      qs.push(sb.from('news_feed').select('title, source, published_at, content, event')
         .or('published_at.gte.' + cutoff + ',locked.eq.true')
         .ilike('content', '%' + esc + '%').not('content', 'is', null)
         .order('published_at', { ascending: false }).limit(10)
-        .then((r) => { note('news_content_ilike', r); return { w: 1, rows: (r.data || []) as NewsRow[] }; }).catch(() => ({ w: 1, rows: [] as NewsRow[] })));
+        .then((r) => { note('news_content_ilike', r); return (r.data || []) as NewsRow[]; }).catch(() => [] as NewsRow[]));
     }
-    const cand = new Map<string, { row: NewsRow; score: number }>();
-    for (const p of await Promise.all(qs)) {
-      for (const n of p.rows) {
-        if (!n?.content) continue;                     // 본문 없으면 발췌 불가
-        const c = cand.get(n.title) || { row: n, score: 0 };
-        c.score += p.w;
-        cand.set(n.title, c);
-      }
-    }
-    const ranked = [...cand.values()].sort((a, b) =>
-      b.score !== a.score ? b.score - a.score
-        : String(b.row.published_at || '').localeCompare(String(a.row.published_at || '')));
-    // 2점 미만(키워드 하나만 스친 기사)은 '질문 관련'으로 보기 어렵다 → 강한 후보가 없을 때만 완화
-    const strong = ranked.filter((c) => c.score >= 2);
-    const body = (strong.length ? strong.slice(0, 3) : ranked.slice(0, 2)).map((c) => c.row);
+    // 관련 기사가 없으면 비운다(아무 기사나 채우지 않음) — 최근 제목 30건 목록은 그대로
+    const body = rankNewsCandidates(kws, (await Promise.all(qs)).flat()).picked;
 
     const titles = await listP;
     const lines: string[] = [];

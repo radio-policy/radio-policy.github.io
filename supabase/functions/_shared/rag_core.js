@@ -224,6 +224,138 @@
     return pri.concat(rest).slice(0, 6);
   }
 
+  // ── 자문 뉴스 구역 채점(#309) — 낱말별 조회 결과(rows)에서 「질문 관련 최신 기사」 최대 3건을 고른다 ──
+  // 종전(#35)엔 기사가 「낱말별 최신 10건 목록」에 몇 번 들었나로 점수를 매겨, 창(60일+잠금 ≈16천 건)에서 흔한 낱말
+  // (사업자·주파수·이동통신)의 최신 10건을 그 주 폭주 이슈가 다 차지했다 — 10-14 「주파수 재할당 조건」 질문에 스페이스X
+  // 주파수 인수 기사가 6점, 제목에 「주파수」가 있는 재할당 기사는 3점. 9/14 이후 실제 자문 41건 + 2건 눈가림 채점에서
+  // 고른 기사 63%가 무관이었다. 이제는 받아 온 후보 안에서 ⓐ 실제 포함 여부로 다시 센다(제목 3·본문 1) ⓑ 낱말마다 후보 안
+  // 희소도로 가중(0.5~2.5) ⓒ 말투 낱말(서술·의문 어미, 의문사)은 채점에서 뺀다 — extractNewsKeywords는 국회 동향 구역도
+  // 쓰므로 그대로 두고 여기서만 ⓓ 영문 낱말은 경계로(「3G」가 「3GPP」에 걸리지 않게), 영문+한글 붙여 쓴 낱말은 갈라서 셈
+  // ⓔ 같은 사건(event 같음·제목 두 글자 묶음 겹침 ≥0.35)은 하나만 ⓕ 최소 관련도 — 제목에 낱말 1개 이상 그리고
+  // (낱말 2개 이상 또는 제목에 가장 희귀한 낱말); 못 넘으면 비운다(관련 기사가 없는데 아무 기사나 3건 채우지 않는다).
+  // 조회(낱말별 제목·본문 최신 10건)는 호출측 그대로 — 추가 조회 0. 「최신순 상위 N건」으로 되돌리지 말 것(#35).
+  // titleLimit = 호출측 낱말별 제목 조회의 limit(10)과 같아야 한다 — 낱말 하나뿐인 질문에서 「제목 조회가 꽉 찼나」를 본다
+  const NEWS_RANK_OPTS = { top: 3, titleW: 3, bodyW: 1, idfMin: 0.5, idfMax: 2.5, idfScale: 2, dupJaccard: 0.35, titleLimit: 10 };
+  // 말투 낱말 — 낱말 목록이 아니라 어미 모양으로(질문 문장에 맞춰 낱말을 늘리지 말 것 — 과적합)
+  const NEWS_FILLER_WORDS = ['누가', '누구', '무슨', '뭐', '뭐야', '뭐지', '뭔지', '뭔가', '어떠한', '어떤지', '어때', '얼마', '얼마나',
+    '이를', '이게', '그게', '이것', '그것', '이런', '그런', '저런', '이렇게', '그렇게', '다음', '이번', '질문', '답변',
+    // 지시어·접속 부사·말버릇 부사(#309-보론 — 닫힌 목록)
+    '이거', '그거', '저거', '이건', '그건', '저건', '그럼', '그러면', '그런데', '그래서', '그때', '이때', '여기', '거기', '저기',
+    '맞아', '맞나', '맞지', '맞죠', '그래', '아니야', '아니면', '아니라', '아니고', '됐어', '했어', '없어', '다시', '혹시', '정말', '진짜', '그냥', '먼저', '이미', '아직', '계속', '바로'];
+  const NEWS_FILLER_RE = new RegExp('(' + [
+    // 하다·되다·있다·없다 활용
+    '하는|하고|하여|해서|해야|하지|하기|하게|하려|하면|하며|한다|하나|한지|할까|할수|할지|하려면|하려고|해줘|하세요|합니다|했으나|하였으나|했는데|하는데|한데|했나|한거',
+    '되는|되면|되어|되고|되나|되지|되기|될까|될수|될지|된다|된지|됐나|되었으나|되었|되려고',
+    '있는|있을까|있나|있고|있어|있으면|있다|있을|있는지|없는|없을까|없나|없고|없다|없을|없는지',
+    // 연결·의문·종결 어미
+    '려면|려고|으면|으며|이며|으나|지만|는데|은데|인데|던데|는지|은지|운지|인지|을지|는가|은가|한가|던가|지나|이다|니다|니까',
+    '나요|가요|까요|세요|해요|돼요|어요|아요|군요|네요|지요|죠|줘|주세요|줄래',
+    '어서|아서|여서|워서|쳐서|와서|져서|려서|켜서|적인|위한|위하여|관한|대한|의한|인한|통한|따른|향한|는거|인거|된거|할거|은거',
+    // 양보 「-어도」(#309-보론 — 「해도」가 「탈퇴해도」·「신고해도」 제목에 걸렸다)
+    '해도|어도|아도|여도|워도|져도|와도|봐도|돼도|되도',   // 「라도」는 「전라도」가 걸려 뺀다
+    '기면|보면|오면|주면|두면|르면|리면|키면|치면',          // 「어기면」·「따르면」
+  ].join('|') + ')$');
+  // 「-면」(조건)은 동사 어간 + 면 꼴만 — 「면」으로 끝나는 낱말 전체로 넓히면 「감면」·「사면」·「측면」 같은 명사가 빠진다
+  // 단어 안에 활용형이 끼어 붙여 쓴 구(「해당하는경우」·「종료하기위한」)
+  const NEWS_FILLER_INNER_RE = /(하는|되는|있는|없는|하기위한|하려는)/;
+  // 「한·게·야」로 끝나는 명사 — 어미 규칙의 예외(일반 한국어 낱말)
+  const NEWS_NOUN_HAN_RE = /(기한|권한|제한|상한|하한|시한|최대한|최소한|무한|유한)$/;
+  function isNewsFillerWord(w) {
+    const s = String(w || '');
+    if (/^[A-Za-z0-9]+$/.test(s)) return false;
+    if (NEWS_FILLER_WORDS.indexOf(s) >= 0) return true;
+    if (/^\d+번(째)?$/.test(s)) return true;                                     // 「3번」 — 앞 답 항목 가리키기
+    if (/^[가-힣](을|를|은|는)$/.test(s) && !/^(마을|가을|고을)$/.test(s)) return true;   // 「이를」·「법을」 — 한 글자 + 조사
+    if (NEWS_FILLER_RE.test(s)) return true;
+    if (s.length >= 4 && NEWS_FILLER_INNER_RE.test(s.slice(1, -1))) return true;
+    if (/까$/.test(s)) return true;
+    if (/[은는]$/.test(s)) return true;                                          // 조사 한 번만 떼어 남은 「괜찮은」·「되는」
+    if (s.length >= 3 && /하$/.test(s) && !/(저하|이하|산하|영하)$/.test(s)) return true;   // 「지원하(는)」 — 조사 떼고 남은 어간
+    if (s.length >= 3 && /된$/.test(s)) return true;                              // 「철회된」
+    if (s.length >= 3 && /한$/.test(s) && !NEWS_NOUN_HAN_RE.test(s)) return true; // 「필요한」·「동일한」
+    if (/야$/.test(s) && !/분야$/.test(s)) return true;                           // 「거쳐야」·「뭐야」
+    if (s.length >= 3 && /게$/.test(s) && !/(무게|가게)$/.test(s)) return true;   // 「다르게」·「관한게」
+    if (/며$/.test(s)) return true;
+    if (/져$/.test(s)) return true;                                               // 「정해져」(-어져, #309-보론)
+    return false;
+  }
+  // 채점 낱말: 말투 낱말 빼고, 영문+한글 붙여 쓴 낱말(「3G서비스」)은 글자 종류 경계로 갈라 각각 2자 이상만
+  function newsScoreWords(kws) {
+    const out = [];
+    (kws || []).forEach(function (k) {
+      const s = String(k || '').trim();
+      if (!s || isNewsFillerWord(s)) return;
+      const parts = /[A-Za-z0-9]/.test(s) && /[가-힣]/.test(s) ? (s.match(/[A-Za-z0-9]+|[가-힣]+/g) || []) : [s];
+      parts.forEach(function (p) {
+        if (p.length < 2 || (parts.length > 1 && isNewsFillerWord(p))) return;
+        if (out.indexOf(p) === -1) out.push(p);
+      });
+    });
+    return out;
+  }
+  function newsHas(text, k) {
+    const s = String(text || '');
+    if (/^[A-Za-z0-9]+$/.test(k)) return new RegExp('(^|[^A-Za-z0-9])' + k + '(?![A-Za-z0-9])', 'i').test(s);   // 영문·숫자만이라 특수문자 없음
+    return s.toLowerCase().indexOf(k.toLowerCase()) >= 0;
+  }
+  function newsBigrams(t) {
+    const s = String(t || '').replace(/[^가-힣A-Za-z0-9]/g, ''), g = new Set();
+    for (let i = 0; i < s.length - 1; i++) g.add(s.slice(i, i + 2));
+    return g;
+  }
+  function newsJaccard(a, b) {
+    let x = 0; a.forEach(function (v) { if (b.has(v)) x++; });
+    return x / ((a.size + b.size - x) || 1);
+  }
+  // kws = 조회에 쓴 낱말(extractNewsKeywords 출력 그대로), rows = 모든 조회 결과를 이어 붙인 것(중복 가능 — 제목으로 합침).
+  // 반환 { picked: 고른 행(순위순, 0~top개), words: 채점 낱말, rare: 후보 안 가장 희귀한 낱말 }
+  function rankNewsCandidates(kws, rows, opts) {
+    const o = Object.assign({}, NEWS_RANK_OPTS, opts || {});
+    const words = newsScoreWords(kws);
+    const byTitle = new Map();
+    (rows || []).forEach(function (n) {
+      if (!n || !n.content || !n.title) return;                                 // 본문 없으면 발췌 불가(종전과 같음)
+      if (!byTitle.has(n.title)) byTitle.set(n.title, n);
+    });
+    const pool = Array.from(byTitle.values());
+    if (!words.length || !pool.length) return { picked: [], words: words, rare: null };
+    // 채점 낱말이 하나뿐이면 그 낱말이 전문어일 때만(#309-보론) — 창 전체에서 제목에 titleLimit번 미만(= 그 낱말의 제목 조회가
+    // 꽉 차지 않음, 본문 없는 행도 셈). 「그럼 그거 어기면 과태료는 얼마야?」(과태료 = 흔한 말)는 비우고, 서술어가 6칸을 다 차지해
+    // 「사전승낙」 하나만 남은 긴 질문은 그 기사를 받는다(D43 Q27).
+    if (words.length === 1) {
+      const titles = new Set();
+      (rows || []).forEach(function (n) { if (n && n.title && newsHas(n.title, words[0])) titles.add(n.title); });
+      if (titles.size >= o.titleLimit) return { picked: [], words: words, rare: null };
+    }
+    const P = pool.length;
+    const cnt = {};
+    words.forEach(function (k) { cnt[k] = pool.filter(function (n) { return newsHas(n.title, k) || newsHas(n.content, k); }).length; });
+    const idf = function (k) { return Math.min(o.idfMax, Math.max(o.idfMin, Math.log10((P + 1) / (cnt[k] + 1)) * o.idfScale)); };
+    const rare = words.slice().sort(function (a, b) { return cnt[a] - cnt[b]; })[0];   // 같으면 앞 낱말(분야어 먼저)
+    const scored = pool.map(function (n) {
+      let s = 0, tHits = 0, hits = 0;
+      words.forEach(function (k) {
+        const w = idf(k), ti = newsHas(n.title, k), ci = newsHas(n.content, k);
+        if (ti) { s += o.titleW * w; tHits++; }
+        if (ci) s += o.bodyW * w;
+        if (ti || ci) hits++;
+      });
+      return { row: n, score: s, tHits: tHits, hits: hits };
+    });
+    const ranked = scored
+      .filter(function (c) { return c.tHits >= 1 && (c.hits >= 2 || newsHas(c.row.title, rare)); })
+      .sort(function (a, b) { return b.score !== a.score ? b.score - a.score : String(b.row.published_at || '').localeCompare(String(a.row.published_at || '')); });
+    const picked = [];
+    for (let i = 0; i < ranked.length && picked.length < o.top; i++) {
+      const c = ranked[i], g = newsBigrams(c.row.title);
+      const dup = picked.some(function (p) {
+        return (c.row.event && p.event && c.row.event === p.event) || newsJaccard(g, newsBigrams(p.title)) >= o.dupJaccard;
+      });
+      if (!dup) picked.push(c.row);
+    }
+    return { picked: picked, words: words, rare: rare };
+  }
+
   // ── 상한 상수 ───────────────────────────────────────────────────────────
   // 문서당 청크 상한 (doc_category별 차등): '추가지식' = 운영자가 일부러 넣은 논문·근거메모 → 8청크까지 깊게 참고
   // (일괄 3에서는 표지·방법론만 잡히고 핵심 결론이 컷 밖으로 밀리는 실측). 그 외 = 3 (한 문서 독식 방지).
@@ -1457,6 +1589,7 @@
     GENERIC_QUERY_WORDS: GENERIC_QUERY_WORDS, QUERY_TITLE_STOP: QUERY_TITLE_STOP, isTitleStop: isTitleStop,
     lawRank: lawRank, DOMAIN_DOC_RE: DOMAIN_DOC_RE,
     extractNewsKeywords: extractNewsKeywords,
+    NEWS_RANK_OPTS: NEWS_RANK_OPTS, isNewsFillerWord: isNewsFillerWord, newsScoreWords: newsScoreWords, rankNewsCandidates: rankNewsCandidates,   // #309
     PERDOC_LIMIT: PERDOC_LIMIT, TOTAL_CHUNK_CUT: TOTAL_CHUNK_CUT, STREAM_IDLE_MS: STREAM_IDLE_MS,
     EXPAND_OPTS: EXPAND_OPTS, CITING_OPTS: CITING_OPTS, ANNEX_MAX_UNITS: ANNEX_MAX_UNITS, ANNEX_MAX_CHUNKS: ANNEX_MAX_CHUNKS,
     ASM_RARE_MAX: ASM_RARE_MAX,

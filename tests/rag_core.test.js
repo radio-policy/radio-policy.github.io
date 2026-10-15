@@ -25,7 +25,7 @@ function ok(name, cond, extra) {
 // ── 내보내기 목록 ──
 var NAMES = ['PRIORITY_KW_RE', 'VERB_TAIL', 'extractKeywords', 'LAW_SYNONYMS', 'PRACTICE_TERMS', 'lawSynonymKeywords',
   'expandQueryForSemantic', 'GENERIC_QUERY_WORDS', 'QUERY_TITLE_STOP', 'isTitleStop', 'lawRank', 'DOMAIN_DOC_RE',
-  'extractNewsKeywords', 'PERDOC_LIMIT', 'TOTAL_CHUNK_CUT', 'STREAM_IDLE_MS', 'EXPAND_OPTS', 'CITING_OPTS',
+  'extractNewsKeywords', 'NEWS_RANK_OPTS', 'isNewsFillerWord', 'newsScoreWords', 'rankNewsCandidates', 'PERDOC_LIMIT', 'TOTAL_CHUNK_CUT', 'STREAM_IDLE_MS', 'EXPAND_OPTS', 'CITING_OPTS',
   'ANNEX_MAX_UNITS', 'ANNEX_MAX_CHUNKS', 'ASM_RARE_MAX', 'RRF_K', 'articleBonus', 'rankChunks', 'titleActWeights',
   'rankLawHits', 'NAMED_ARTICLE_MAX', 'namedArticleRefs', 'pickNamedArticles', 'fetchNamedArticles', 'buildRagContext', 'buildKbContext',
   // 자문 빠뜨림 1차 덧붙이기(#283)
@@ -63,6 +63,73 @@ eq('extractNewsKeywords 대시보드에만 있던 분야어(해킹·유출)', RC
 eq('extractNewsKeywords 봇에만 있던 분야어(3G·종료·IoT)', RC.extractNewsKeywords('3G 종료 이후 IoT 회선은 처리'), ['3G', '종료', 'IoT', '이후', '회선', '처리']);
 eq('extractNewsKeywords 분야어 밖은 긴 단어 먼저', RC.extractNewsKeywords('가나 가나다라 가나다 전망'), ['가나다라', '가나다', '가나']);
 eq('extractNewsKeywords 조사 나는', RC.extractNewsKeywords('경쟁사는 어떻게'), ['경쟁사']);
+
+// ── 자문 뉴스 구역 채점(#309) — 합성 기사(실제 기사 본문은 저장소에 두지 않는다) ──
+(function () {
+  var art = function (title, content, d, event) { return { title: title, source: 's', published_at: d || '2026-10-01', content: content, event: event || null }; };
+  var titles = function (r) { return r.picked.map(function (n) { return n.title; }); };
+  // 10-14 사건(07615ed2) 꼴: 흔한 낱말(주파수·이동통신·사업자·조건)의 최신 10건을 스페이스X·속도 순위 기사가 차지 —
+  // 종전엔 스페이스X 6점(제목 목록 둘), 재할당 기사 3점이었다. 이제는 후보 안 희소도 가중 + 실제 포함 여부로 센다.
+  var fill = [1, 2, 3, 4, 5, 6].map(function (i) { return art('통신 사업자 ' + i + '분기 실적 발표', '사업자 실적 조건 공개', '2026-10-1' + (i % 4)); });
+  var rows = [
+    art('머스크, 美 이동통신 도전장…스페이스X 주파수 인수', '스페이스X가 이동통신 주파수를 인수했다.', '2026-10-11', '스페이스X 주파수 인수'),
+    art('스페이스X, 80억 달러 규모 주파수 인수…이동통신 진출', '스페이스X 주파수 이동통신 사업자', '2026-10-11', '스페이스X 주파수 인수'),
+    art('韓 인터넷 속도 전세계 22위?…"측정조건 밝혀야"', '측정조건이 다르다. 사업자들은 반발.', '2026-10-14'),
+    art('주파수 재할당 셈법 손본다', '과기정통부가 주파수 재할당 대가 산정을 개편한다. 이동통신 사업자 부담.', '2026-09-14', '재할당 대가 개편'),
+    art('투자한 만큼 주파수 값 낮춰야…재할당 제도 개편 필요', '재할당 대가 약 3조 원. 이동통신 사업자.', '2026-09-11'),
+    art('AI 시대 주파수 재할당 대가 산정 개선 착수', '주파수 재할당 대가 연구반. 이동통신 사업자', '2026-08-13', '재할당 연구반'),
+  ].concat(fill);
+  var kws = ['주파수', '재할당', '이동통신', '사업자', '시사점', '조건'];
+  var r = RC.rankNewsCandidates(kws, rows.concat(rows.slice(0, 3)));   // 같은 기사가 여러 조회에 걸려도 한 번
+  eq('뉴스 채점 재할당 질문 — 재할당 기사 3건, 스페이스X·속도 순위 없음', titles(r),
+    ['주파수 재할당 셈법 손본다', 'AI 시대 주파수 재할당 대가 산정 개선 착수', '투자한 만큼 주파수 값 낮춰야…재할당 제도 개편 필요']);
+  eq('뉴스 채점 가장 희귀한 낱말 = 후보 안 건수가 가장 적은 낱말', r.rare, '시사점');
+  // 같은 사건 하나만: event가 같거나 제목 두 글자 묶음 겹침 ≥ 0.35
+  var dupRows = [
+    art('주파수 재할당 연구반 발족', '재할당 연구반 주파수', '2026-08-13', '재할당 연구반 발족'),
+    art('정부, 주파수 재할당 대가 연구반 첫 회의', '재할당 연구반 주파수', '2026-08-13', '재할당 연구반 발족'),
+    art('주파수 재할당 연구반 발족했다', '재할당 연구반 주파수', '2026-08-12'),
+    art('주파수 재할당 대가 산식 공개 임박', '재할당 대가 주파수', '2026-08-01'),
+  ].concat(fill);
+  eq('뉴스 채점 같은 사건(event 같음·제목 겹침) 빼기', titles(RC.rankNewsCandidates(['주파수', '재할당', '연구반'], dupRows)),
+    ['주파수 재할당 연구반 발족', '주파수 재할당 대가 산식 공개 임박']);
+  // 영문 낱말 경계 — 「3G」는 「3GPP」에 걸리지 않는다(10-08~ 「3G 서비스 종료 절차」 3회 질문이 모두 3GPP 회의 기사였다)
+  var g = RC.rankNewsCandidates(['3G', '서비스', '절차', '기한'], [
+    art('3GPP 표준화 회의 국내 개최', '3GPP 회의 서비스 표준', '2026-10-10'),
+    art('SKT, 3G 서비스 종료 추진', '3G 서비스 종료 절차를 밟는다', '2026-08-20'),
+  ].concat(fill));
+  eq('뉴스 채점 3G ≠ 3GPP', titles(g), ['SKT, 3G 서비스 종료 추진']);
+  eq('newsScoreWords 영문+한글 붙여 쓴 낱말은 갈라 셈·말투 낱말 빼기', RC.newsScoreWords(['3G서비스', '종료하기위한', '절차', '기한']), ['3G', '서비스', '절차', '기한']);
+  // 말투 낱말 — 어미 모양으로 가린다(낱말 목록을 질문에 맞춰 늘리지 말 것)
+  var filler = ['뭐지', '있을까', '응해야', '요구하', '해당하는경우', '종료하기위한', '가능한지', '가능하나', '정해지나', '다르게', '이를', '법을', '3번', '필요한', '철회된',
+    '받으려면', '거쳐야', '어떠한', '부분이다', '괜찮은', '무관하며', '추가적인', '확인해줘', '로밍해서', '실태점검했으나', '누가'];
+  eq('isNewsFillerWord 말투 낱말', filler.filter(function (w) { return !RC.isNewsFillerWord(w); }), []);
+  var content = ['기한', '권한', '제한', '신고기한', '품질저하', '분야', '재할당', '대가', '전파사용료', '마을', '3G', 'AI', '이용자보호법', '정부', '신고', '광고', '영업정지',
+    '금지', '안테나', '하나금융', '재난로밍', '사전승낙', '보조금', '과징금', '산정'];
+  eq('isNewsFillerWord 내용 낱말은 남김', content.filter(function (w) { return RC.isNewsFillerWord(w); }), []);
+  eq('뉴스 채점 말투 낱말이 걸린 제목은 안 고름(「이게 뭐지」)', titles(RC.rankNewsCandidates(['재난로밍', '이동통신', '있는', '조건', '뭐지'],
+    [art('이게 뭐지? 신기한 접는 폰', '이동통신 조건 없이 쓴다', '2026-10-12')].concat(fill))), []);
+  // 최소 관련도 — 제목에 낱말 1개 이상 + (낱말 2개 이상 또는 제목에 가장 희귀한 낱말)
+  // (낱말마다 본문 조회가 그 낱말을 담은 기사를 가져오므로 후보 안 건수는 보통 1 이상 — 「3개월」은 본문에만 든 기사들로)
+  var m = RC.rankNewsCandidates(['사전승낙', '판매점', '3개월'], [
+    art('사전승낙 제도 손질 착수', '방송통신위원회 제도 개편', '2026-09-01'),
+    art('판매점 매출 급감', '휴대폰 판매점 매출', '2026-10-02'),
+    art('판매점 협회 성명', '판매점 협회', '2026-10-03'),
+  ].concat([1, 2, 3].map(function (i) { return art('요금 할인 ' + i + '탄', '최대 3개월 할인', '2026-10-0' + i); })).concat(fill));
+  eq('뉴스 채점 강한 낱말 하나만 제목에 있어도 받음, 흔한 낱말 하나뿐인 제목은 버림', titles(m), ['사전승낙 제도 손질 착수']);
+  eq('뉴스 채점 관련 기사 없으면 비움(아무 기사나 채우지 않음)', titles(RC.rankNewsCandidates(['무선국', '개설', '신고'], fill)), []);
+  eq('뉴스 채점 채점 낱말이 모두 말투면 비움', titles(RC.rankNewsCandidates(['그럼', '어기면', '얼마야'], fill)), []);
+  // #309-보론(NV1·회귀 세트에서 본 빈틈 — 원칙으로 보완, 표본 밖 NV2로 확인)
+  eq('isNewsFillerWord 양보·조건·-어져·지시어·부정 서술어', ['해도', '신고해도', '어기면', '따르면', '정해져', '그거', '그럼', '아니라', '혹시'].filter(function (w) { return !RC.isNewsFillerWord(w); }), []);
+  eq('isNewsFillerWord 「면」으로 끝나는 명사·질문 속 동사형은 남김', ['감면', '사면', '측면', '서면', '개설할', '전라도'].filter(function (w) { return RC.isNewsFillerWord(w); }), []);
+  // 채점 낱말이 하나뿐이면 전문어(제목 조회가 꽉 차지 않은 낱말 — 창 전체 제목 10건 미만)일 때만
+  var fineRows = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(function (i) { return art('과태료 ' + i + '건 부과', '과태료 부과', '2026-10-0' + (i % 9 + 1)); });
+  eq('뉴스 채점 낱말 하나 + 흔한 말(제목 10건 이상)이면 비움(「그럼 그거 어기면 과태료는 얼마야?」)', titles(RC.rankNewsCandidates(['어기면', '과태료', '얼마야', '그럼', '그거'], fineRows.concat(fill))), []);
+  eq('뉴스 채점 낱말 하나 + 전문어(제목 10건 미만)면 받음(서술어가 6칸을 차지한 긴 질문, D43 Q27 꼴)',
+    titles(RC.rankNewsCandidates(['반영하려고', '사전승낙', '가능하나', '신청하여', '발생하여', '방지하기'],
+      [art('판매점 첫 사전승낙 철회 중징계', '사전승낙 철회', '2026-09-20'), { title: '사전승낙 제도 설명회', content: null, published_at: '2026-09-01' }].concat(fill))), ['판매점 첫 사전승낙 철회 중징계']);
+  eq('뉴스 채점 본문 없는 기사는 후보 아님', titles(RC.rankNewsCandidates(['재할당', '주파수'], [{ title: '주파수 재할당 대가 확정', content: null, published_at: '2026-10-01' }].concat(fill))), []);
+})();
 
 // ── 어휘 대응 ──
 eq('lawSynonymKeywords 3G 종료', RC.lawSynonymKeywords('3G 서비스 종료 절차'), ['휴업', '폐업', '폐지', '휴지', '운용휴지', '주파수회수', '주파수할당의 취소', '이용기간']);

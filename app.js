@@ -2586,10 +2586,12 @@ async function fetchRecentNewsContext(query) {
       .limit(30);
     var allTitles = listResp.data || [];
 
-    // [2] 질문 키워드로 관련 기사 선별 (최대 3건) — 제목 일치 가중 + 관련도 순 정렬
+    // [2] 질문 키워드로 관련 기사 선별 (최대 3건) — 조회는 낱말별 제목·본문 최신 10건, 고르기는 RagCore.rankNewsCandidates(#309)
     //     ★ 최신순(order published_at desc, limit 2)으로 뽑으면 특정 이슈가 폭주한 날
     //       질문과 무관한 기사가 발췌 3칸을 다 차지한다. 실제로 그렇게 누락 사고가 났으므로
     //       "최신순 상위 N건" 방식으로 되돌리지 말 것. (배경역사 #35)
+    //     ★ 「낱말별 최신 10건 목록에 들었나」로 점수를 매기지도 말 것 — 흔한 낱말이 그 주 폭주 기사의 가산점이 된다(#309).
+    //       채점·같은 사건 빼기·최소 관련도는 rag_core.js 한 곳(rag.ts buildNewsContext와 같은 함수), 관련 기사가 없으면 비운다.
     var bodyResults = [];
     if (query) {
       var keywords = extractNewsKeywords(query);
@@ -2598,39 +2600,22 @@ async function fetchRecentNewsContext(query) {
         var esc = String(kw).replace(/[%_,]/g, ' ').trim();
         if (esc.length < 2) return;
         var t0n = performance.now();
-        // 제목 일치(가중 3) — 질문이 특정 기사를 가리킬 때 가장 강한 신호
-        qs.push(sb.from('news_feed').select('title, source, published_at, content')
+        qs.push(sb.from('news_feed').select('title, source, published_at, content, event')
           .or('published_at.gte.' + cutoffStr + ',locked.eq.true')
           .ilike('title', '%' + esc + '%')
           .order('published_at', { ascending: false }).limit(10)
-          .then(function(r) { metaNote('news_title_ilike', t0n, r); return { w: 3, rows: r.data || [] }; })
-          .catch(function() { return { w: 3, rows: [] }; }));
-        // 본문 일치(가중 1)
-        qs.push(sb.from('news_feed').select('title, source, published_at, content')
+          .then(function(r) { metaNote('news_title_ilike', t0n, r); return r.data || []; })
+          .catch(function() { return []; }));
+        qs.push(sb.from('news_feed').select('title, source, published_at, content, event')
           .or('published_at.gte.' + cutoffStr + ',locked.eq.true')
           .ilike('content', '%' + esc + '%').not('content', 'is', null)
           .order('published_at', { ascending: false }).limit(10)
-          .then(function(r) { metaNote('news_content_ilike', t0n, r); return { w: 1, rows: r.data || [] }; })
-          .catch(function() { return { w: 1, rows: [] }; }));
+          .then(function(r) { metaNote('news_content_ilike', t0n, r); return r.data || []; })
+          .catch(function() { return []; }));
       });
-      var cand = {};
-      (await Promise.all(qs)).forEach(function(p) {
-        p.rows.forEach(function(n) {
-          if (!n || !n.content) return;                    // 본문 없으면 발췌 불가
-          if (!cand[n.title]) cand[n.title] = { row: n, score: 0 };
-          cand[n.title].score += p.w;
-        });
-      });
-      var ranked = Object.keys(cand).map(function(k) { return cand[k]; })
-        .sort(function(a, b) {
-          if (b.score !== a.score) return b.score - a.score;
-          return String(b.row.published_at || '').localeCompare(String(a.row.published_at || ''));
-        });
-      // 관련도 2점 미만(키워드 1개만 스친 기사)은 "질문 관련"으로 보기 어렵다 →
-      // 2점 이상이 하나도 없을 때만 상위 2건으로 완화
-      var strong = ranked.filter(function(c) { return c.score >= 2; });
-      bodyResults = (strong.length ? strong.slice(0, 3) : ranked.slice(0, 2))
-        .map(function(c) { return c.row; });
+      var newsRows = [];
+      (await Promise.all(qs)).forEach(function(rows) { newsRows = newsRows.concat(rows); });
+      bodyResults = RagCore.rankNewsCandidates(keywords, newsRows).picked;
       if (bodyResults.length) {
         console.log('[뉴스 컨텍스트] 키워드(' + keywords.join(', ') + ') → 발췌 ' +
           bodyResults.length + '건: ' + bodyResults.map(function(n) { return n.title; }).join(' / '));
