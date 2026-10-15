@@ -1581,6 +1581,130 @@
       items.join('\n\n---\n\n');
   }
 
+  // ── 시행 전 제정 법령(#311, 2026-10-15) — 현행판 없이 시행예정판만 있는 새 법령의 원문을 자문 문맥에 넣는다 ──
+  // 검색 RPC 5개(match_chunks_semantic·match_law_articles_semantic·search_chunks_trgm·search_chunks_keywords·search_law_articles_kw)는
+  // status='current'만 보고, 시행예정 구역(app.js buildPendingContext·rag.ts fetchPendingContext)은 검색에 걸린 **현행** 문서의 다음 판만 찾는다
+  // → 현행판이 없는 새 제정법(law_pending.watch_doc_name 없음)은 원문이 KB에 있어도 어떤 질문으로도 문맥에 들어올 길이 없었다. 10-14 「AI DC 구축
+  // 절차·인허가」(chat_logs cbff082c): 인공지능 데이터센터 특별법 38조각이 있었는데 요약 문서만으로 답하며 「원문 확인 권장」을 5번 달았다.
+  // 상위 15·조문 정밀검색·확장어·덧붙이기(#283)는 그대로 두고 시행예정 구역 바로 뒤에 따로 싣는다(검색 순위 변경 없음). 관련 판정은 둘 중 하나:
+  //  G1 같은 요청의 법령요약 검색 상위 5에 그 법령의 요약 문서(제목이 법령명으로 시작)가 있다 — 「AI DC」처럼 약칭이라 조문 임베딩이 못 잡는
+  //     질문을 요약 검색이 잡는다(cbff082c: 법 안 최고 유사도 0.431 < 무관한 「무선국 준공신고」 0.459, 요약 검색은 1위). 158문항 거짓 양성 0.
+  //  G2 법 안 조각 최고 유사도(voyage-4-lite, 질문 그대로 — match_chunks_semantic과 같은 임베딩) ≥ minSim — 요약 문서가 없는 새 법령의 예비 길.
+  //     무관 153문항 최고 0.459(짧은 제17조 「전자파 영향 측정 장비」가 무선국 질문을 끈다), AIDC 질문 5개 0.547~0.648.
+  // 고르기: 조 단위로 묶어(겹친 조각은 CiteVerify.mergeChunkTexts로 한 번만, 부칙 제외 — 장 제목 조각은 같은 조 열쇠라 그 조 앞에 붙는다)
+  // 합이 남은 예산(maxChars) 이하면 전문, 넘으면 조의 최고 유사도 순으로 예산까지 — 싣는 순서는 조 번호 순. 법 안 유사도는 평탄해(cbff082c에서
+  // 제19조 전력계통영향평가 특례가 15위) 몇 개만 고르면 핵심 조가 빠지므로 예산은 짧은 새 법령이 통째 들어갈 만큼(특별법 본칙 ≈11.1K자).
+  // 이 구역은 전체 상한(trimAddOns)의 「나머지 길이」에 넣지 않는다(두 채널 — 덧붙이기가 이 구역 때문에 먼저 덜리지 않게, #303과 같은 취지)
+  // 역참조·별표·덧붙이기의 입력에도 넣지 않는다. 조각 id는 인용 대조 목록 맨 뒤에 붙인다. 끄려면 on=false.
+  const PENDING_NEW_OPTS = { on: true, minSim: 0.50, maxChars: 12000, maxLaws: 2, maxDocs: 6, matchCount: 80 };
+  function pnNorm(s) { return String(s || '').replace(/[\s·ㆍ‧•]/g, ''); }
+  function pnDate(d) {
+    const s = String(d || '').replace(/\D/g, '');
+    return s.length === 8 ? Number(s.slice(0, 4)) + '.' + Number(s.slice(4, 6)) + '.' + Number(s.slice(6, 8)) + '.' : String(d || '');
+  }
+  // 문서명 「법령명(종류)(제N호)(시행일)」의 종류 — 「법률」·「대통령령」·「과학기술정보통신부고시」
+  function pnType(docName) { const m = String(docName || '').match(/^[^(]+\(([^()]+)\)/); return m ? m[1] : ''; }
+  // laws = [{ doc_name, law_name, law_no, enf_date, rows: [{ id, doc_name, chunk_index, article_no, content, similarity }] }] — rows는 그 문서의
+  // 조각(유사도 내림차순, 최대 matchCount개). kbRows = 같은 요청의 법령요약 검색 결과(상위 5). today = 오늘(YYYYMMDD, KST) — 시행일이 지난 행은
+  // 현행으로 승격 대기라(11:00 law_sync --promote) 「시행 예정」이라 적으면 틀리므로 뺀다.
+  function pickPendingNew(laws, kbRows, today, opts) {
+    const o = Object.assign({}, PENDING_NEW_OPTS, opts || {});
+    const CV = root.CiteVerify;
+    const merge = CV ? CV.mergeChunkTexts : function (p) { return p.join('\n'); };
+    const kbTitles = (kbRows || []).map(function (r) { return pnNorm(String((r && r.title) || '').split('[')[0]); });
+    const td = Number(String(today || '').replace(/\D/g, '')) || 0;
+    const scored = (laws || []).filter(function (L) {
+      return L && L.doc_name && !(td && Number(String(L.enf_date || '').replace(/\D/g, '')) <= td);
+    }).map(function (L) {
+      const nm = pnNorm(L.law_name || famOf(L.doc_name));
+      const rows = (L.rows || []).filter(function (r) { return r && r.content && !/^부칙/.test(String(r.article_no || '')); });
+      const top = rows.reduce(function (a, r) { return Math.max(a, Number(r.similarity) || 0); }, 0);
+      const kb = nm.length >= 2 && kbTitles.some(function (t) { return t && t.indexOf(nm) === 0; });
+      return { L: L, rows: rows, full: (L.rows || []).length < o.matchCount, top: top, gate: kb ? 'kb' : (top >= o.minSim ? 'sim' : null) };
+    }).filter(function (x) { return x.gate && x.rows.length; })
+      .sort(function (a, b) { return (a.gate === 'kb' ? 0 : 1) - (b.gate === 'kb' ? 0 : 1) || b.top - a.top; })
+      .slice(0, o.maxLaws);
+    let left = o.maxChars;
+    const out = [];
+    scored.forEach(function (x) {
+      const groups = {}, order = [];
+      x.rows.slice().sort(function (a, b) { return (a.chunk_index || 0) - (b.chunk_index || 0); }).forEach(function (r) {
+        const m = String(r.article_no || '').match(/^(\d+조(?:의\d+)?)/);
+        if (!m) return;
+        if (!groups[m[1]]) { groups[m[1]] = { key: m[1], rows: [], sim: 0, label: '' }; order.push(m[1]); }
+        const g = groups[m[1]];
+        g.rows.push(r);
+        g.sim = Math.max(g.sim, Number(r.similarity) || 0);
+        if (!g.label && /\(/.test(String(r.article_no || ''))) g.label = r.article_no;
+      });
+      const arts = order.map(function (k) {
+        const g = groups[k];
+        return { key: k, label: g.label || k, sim: g.sim, rows: g.rows, content: merge(g.rows.map(function (r) { return r.content || ''; })) };
+      });
+      const total = arts.reduce(function (a, t) { return a + t.content.length; }, 0);
+      let picked = [];
+      if (x.full && total <= left) picked = arts;
+      else {
+        let used = 0;
+        arts.slice().sort(function (a, b) { return b.sim - a.sim || cmpArt(a.key, b.key); }).forEach(function (t) {
+          if (used + t.content.length > left) return;
+          used += t.content.length; picked.push(t);
+        });
+        picked.sort(function (a, b) { return cmpArt(a.key, b.key); });
+      }
+      if (!picked.length) return;
+      left -= picked.reduce(function (a, t) { return a + t.content.length; }, 0);
+      out.push({ doc_name: x.L.doc_name, law_name: x.L.law_name || famOf(x.L.doc_name), law_no: x.L.law_no, enf_date: x.L.enf_date,
+        type: pnType(x.L.doc_name), gate: x.gate, top: x.top, whole: x.full && picked.length === arts.length, count: arts.length, articles: picked });
+    });
+    return out;
+  }
+  function buildPendingNewContext(picked) {
+    if (!picked || !picked.length) return '';
+    const partial = picked.some(function (p) { return !p.whole; });
+    const blocks = picked.map(function (p) {
+      const no = /^\d/.test(String(p.law_no || '')) ? '제' + p.law_no + '호' : String(p.law_no || '');
+      return '■ 「' + p.law_name + '」(' + [p.type, no].filter(Boolean).join(' ') + ') — ' + pnDate(p.enf_date) + ' 시행 예정, 지금은 효력 없음 · '
+        + (p.whole ? '본칙 전문' : '질문과 가까운 조문 ' + p.articles.length + '개(본칙 ' + p.count + '개 조 중)') + '\n\n'
+        + p.articles.map(function (a) { return a.content; }).join('\n\n');
+    });
+    return '\n\n---\n\n[시행 전 제정 법령 — 공포됐으나 아직 시행되지 않은 새 법령(현행판 없음)]\n'
+      + '아래는 공포되었지만 시행일이 오지 않은 **새로 제정된 법령**의 원문입니다. 현행판이 없어 위 검색 결과(현행 조문)에는 들어오지 않으므로 여기 따로 싣습니다.\n\n'
+      + blocks.join('\n\n---\n\n') + '\n\n'
+      + '[사용 지침]\n'
+      + '- 이 법령은 시행일 전까지 효력이 없습니다. 지금 적용되는 절차·의무는 현행 법령으로 답하고, 이 법령의 내용은 「YYYY.M.D.부터 시행 예정」임을 밝혀 따로 서술하세요.\n'
+      + '- 이 법령의 조문을 인용할 때는 법령명·조문 번호 뒤에 「(YYYY.M.D. 시행 예정)」을 붙이세요. 위 원문에 있는 문구는 그대로 인용할 수 있습니다.\n'
+      + '- 「대통령령으로 정한다」처럼 하위법령에 맡긴 사항은, 그 하위법령이 위 참조 자료에 없으면 아직 정해지지 않은 것으로 보고 추측해 채우지 마세요.'
+      + (partial ? '\n- 위에 싣지 않은 조문의 내용은 알 수 없습니다 — 추측하지 마세요.' : '');
+  }
+  // 두 판 공통 흐름 — 각 파일은 f.pendingNewDocs()(law_pending에서 현행판 없는 loaded 행, 최대 maxDocs)와 f.docRows(doc, n)(그 문서 조각 + 유사도 —
+  // match_chunks_semantic_in_doc, 임베딩이 없으면 유사도 0의 일반 조회)만 댄다. kbP = 같은 요청의 법령요약 검색(Promise). 실패는 호출측이 빈 구역으로.
+  async function fetchPendingNew(f, kbP, today, opts) {
+    const o = Object.assign({}, PENDING_NEW_OPTS, opts || {});
+    const empty = { text: '', chunks: [], ids: [], laws: [], docs: 0, gate: null };
+    if (o.on === false) return empty;
+    const docs = ((await f.pendingNewDocs()) || []).slice(0, o.maxDocs);
+    if (!docs.length) return empty;
+    const laws = await Promise.all(docs.map(function (d) {
+      return Promise.resolve(f.docRows(d.doc_name, o.matchCount)).then(function (rows) { return Object.assign({}, d, { rows: rows || [] }); });
+    }));
+    const picked = pickPendingNew(laws, await kbP, today, o);
+    const chunks = [], ids = [];
+    picked.forEach(function (p) {
+      p.articles.forEach(function (a) {
+        a.rows.forEach(function (r) {
+          if (typeof r.id === 'number' && ids.indexOf(r.id) === -1) {
+            ids.push(r.id);
+            chunks.push({ id: r.id, doc_name: r.doc_name || p.doc_name, chunk_index: r.chunk_index, article_no: r.article_no, content: r.content });
+          }
+        });
+      });
+    });
+    return { text: buildPendingNewContext(picked), chunks: chunks, ids: ids, docs: docs.length,
+      laws: picked.map(function (p) { return { doc_name: p.doc_name, law_name: p.law_name, enf_date: p.enf_date, gate: p.gate, articles: p.articles.length, whole: p.whole }; }),
+      gate: picked.length ? picked.map(function (p) { return p.gate; }).join(',') : null };
+  }
+
   const RagCore = {
     PRIORITY_KW_RE: PRIORITY_KW_RE, VERB_TAIL: VERB_TAIL, extractKeywords: extractKeywords,
     LAW_SYNONYMS: LAW_SYNONYMS, PRACTICE_TERMS: PRACTICE_TERMS,
@@ -1612,6 +1736,8 @@
     // L9 준용 따라가기(#300)
     APPLY_OPTS: APPLY_OPTS, APPLY_DIRECTIVE_RE: APPLY_DIRECTIVE_RE, refLawOf: refLawOf, applyRefs: applyRefs, applyTargets: applyTargets, applyKeywords: applyKeywords, pickApply: pickApply,
     buildRagContext: buildRagContext, buildKbContext: buildKbContext,
+    // 시행 전 제정 법령(#311)
+    PENDING_NEW_OPTS: PENDING_NEW_OPTS, pickPendingNew: pickPendingNew, buildPendingNewContext: buildPendingNewContext, fetchPendingNew: fetchPendingNew,
   };
   root.RagCore = RagCore;
   if (typeof module !== 'undefined' && module.exports) module.exports = RagCore;

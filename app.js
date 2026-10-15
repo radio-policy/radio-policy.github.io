@@ -1416,7 +1416,19 @@ async function _expandQueryKeywordsRaw(query) {
   } catch(e) { console.warn('쿼리 확장 실패 (기본 키워드로 진행):', e); return []; }
 }
 
-async function getQueryEmbedding(query, model) {
+// 같은 (모델, 글) 요청은 한 번만 보낸다(#311 — 시행 전 제정 법령 구역이 match_chunks_semantic과 같은 질문 임베딩을 쓴다). 실패(null)는 기억하지 않는다. rag.ts와 같음.
+var _embMemo = new Map();
+function getQueryEmbedding(query, model) {
+  var mk = (model || 'voyage-4-lite') + '|' + query;
+  var hit = _embMemo.get(mk);
+  if (hit) return hit;
+  var p = voyageEmbedViaEdge(query, model);
+  _embMemo.set(mk, p);
+  if (_embMemo.size > 16) _embMemo.delete(_embMemo.keys().next().value);
+  p.then(function(v) { if (!v) _embMemo.delete(mk); });
+  return p;
+}
+async function voyageEmbedViaEdge(query, model) {
   // Supabase Edge Function(voyage-embed)으로 질의 임베딩 생성 (키 노출 없음)
   // model 미지정=voyage-4-lite(document_chunks 조문) / 'voyage-law-2'(kb_chunks 법령요약).
   // 저장·질의 모델은 반드시 일치해야 함(모델별 임베딩 공간이 달라 혼용 시 검색 무의미).
@@ -2021,6 +2033,27 @@ async function buildPendingContext(chunks) {
     return '';   // 페일소프트 — 시행예정 조회가 실패해도 자문은 현행 기준으로 정상 동작
   }
 }
+
+// ── 시행 전 제정 법령(#311) — 현행판 없이 시행예정판만 있는 새 법령(law_pending.watch_doc_name 없음)의 원문. 관련 판정·조 고르기·문구는
+// rag_core.js fetchPendingNew 한 곳이고 여기는 DB 조회 둘만 댄다(rag.ts fetchPendingNewDocs·fetchPendingNewRows와 같은 입력 — 한쪽만 고치지 말 것).
+var PENDING_NEW_EMPTY = { text: '', chunks: [], ids: [], laws: [], docs: 0, gate: null };
+function fetchNewLawDocs() {
+  return sb.from('law_pending').select('doc_name, law_name, law_no, enf_date')
+    .is('watch_doc_name', null).eq('sync_state', 'loaded').order('enf_date', { ascending: true }).limit(RagCore.PENDING_NEW_OPTS.maxDocs)
+    .then(function(r) { if (r.error) throw new Error('law_pending: ' + (r.error.code || r.error.message)); return r.data || []; });
+}
+// 그 문서 조각 + 질문 유사도(match_chunks_semantic_in_doc — 질문 그대로의 voyage-4-lite, searchKeywords와 같은 임베딩이라 추가 호출 없음).
+// 임베딩·RPC가 실패하면 유사도 0의 일반 조회 — 요약 검색 판정(G1)만으로도 짧은 법령은 전문이 들어간다.
+async function fetchNewLawRows(userText, doc, n) {
+  var emb = await getQueryEmbedding(userText);
+  if (emb) {
+    var r = await sb.rpc('match_chunks_semantic_in_doc', { query_embedding: emb, p_doc_name: doc, match_count: n });
+    if (!r.error && Array.isArray(r.data)) return r.data;
+  }
+  var r2 = await sb.from('document_chunks').select('id, doc_name, chunk_index, article_no, content').eq('doc_name', doc).order('chunk_index', { ascending: true }).limit(n);
+  return (r2.data || []).map(function(c) { return Object.assign({}, c, { similarity: 0 }); });
+}
+function kstTodayYmd() { return new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10).replace(/-/g, ''); }
 
 // ── 법령·규제 요약 지식베이스(regulatory-kb / kb_chunks) ──
 // document_chunks(조문 원문)와 별개 레이어. 조문 원문 인용은 RAG 우선, 여기는 요약·적용범위·실무 맥락.
@@ -2905,6 +2938,20 @@ async function buildAdvisoryContext(userText) {
   // 국회 동향(과방위 발언 + 법안) — 근거가 아니라 참고 배경이므로 컨텍스트 맨 뒤에 붙인다
   const assemblyP   = fetchAssemblyTrendContext(userText).catch(function(e) { console.warn('국회 동향 실패(건너뜀):', e); return ''; });
   const kbP         = searchKbSummaries(userText).catch(function(e) { console.warn('법령요약 검색 실패(건너뜀):', e); return []; });
+  // 시행 전 제정 법령(#311) — 현행판 없는 새 법령은 검색 RPC가 못 본다. 관련 판정에 위 법령요약 검색(kbP)을 쓰고 다른 갈래와 독립이라 기다리지 않는다.
+  // search_meta에는 그런 법령이 있을 때만 남긴다(rows = 실은 조 수, gate = kb·sim, docs = 후보 문서 수). rag.ts buildAdvisoryContext와 동일 유지.
+  var pnT0 = performance.now();
+  const pendingNewP = (sb ? RagCore.fetchPendingNew({ pendingNewDocs: fetchNewLawDocs, docRows: function(d, n) { return fetchNewLawRows(userText, d, n); } }, kbP, kstTodayYmd())
+      : Promise.resolve(PENDING_NEW_EMPTY))
+    .then(function(r) {
+      if (r.docs && lastAdvSearchMeta) lastAdvSearchMeta.push({ fn: 'pending_new', ms: Math.round(performance.now() - pnT0), rows: r.laws.reduce(function(a, x) { return a + x.articles; }, 0), error: null, gate: r.gate, docs: r.docs });
+      return r;
+    })
+    .catch(function(e) {
+      console.warn('시행 전 제정 법령 조회 실패(건너뜀):', e);
+      if (lastAdvSearchMeta) lastAdvSearchMeta.push({ fn: 'pending_new', ms: Math.round(performance.now() - pnT0), rows: null, error: String(e && e.message || e) });
+      return PENDING_NEW_EMPTY;
+    });
   // 조문 정밀검색 (rag.ts answerAdvisory와 동일 계층) — RAG가 논문·보도자료에 밀려 놓친 근거 조문 보강
   const lawArtP     = searchLawArticles(userText, 5).catch(function(e) { console.warn('조문 정밀검색 실패(건너뜀):', e); return []; });
   // 조문 **의미** 검색 (#89) — 봇 /law에는 있는데 자문(봇·대시보드 양쪽)에만 없던 갈래.
@@ -3069,6 +3116,8 @@ async function buildAdvisoryContext(userText) {
   const kbContext     = buildKbContext(kbRows);                   // 법령·규제 요약 지식베이스(regulatory-kb, 현행본)
   if (lastKbSources.length) lastRagSources = lastRagSources.concat(lastKbSources);
   const pendingContext = await pendingP;                          // 위에서 동시에 시작한 시행예정 개정본
+  // 시행 전 제정 법령(#311) — 시행예정 개정본 바로 뒤에 싣는다. 아래 restLen에는 넣지 않는다(덧붙이기가 이 구역 때문에 먼저 덜리지 않게 — rag.ts와 같음).
+  const pendingNew = await pendingNewP;
   const annexContext  = await annexP;                             // 위에서 동시에 시작한 별표 원문
   if (lastAnnexSources.length) lastRagSources = lastRagSources.concat(lastAnnexSources.map(function(s) { return ANNEX_SRC_PREFIX + s; }));
   // 참조 자료 전체가 상한(ADDON_OPTS.maxTotalChars ≈ 48K 토큰)을 넘으면 덧붙인 것만 덜어 낸다(#283, rag.ts와 같은 함수).
@@ -3092,17 +3141,21 @@ async function buildAdvisoryContext(userText) {
   spillChunks.concat(addOns.chunks || []).forEach(function(c) {
     if (c.doc_name && lastRagSources.indexOf(c.doc_name) === -1) lastRagSources.push(c.doc_name);
   });
+  // 시행 전 제정 법령(#311)의 조각 id·문서는 그 뒤 맨 끝 — verify-citations가 그 법령 조문 인용을 그 원문과 대조한다(rag.ts와 같은 순서)
+  pendingNew.ids.forEach(function(id) { if (typeof id === 'number' && lastAdvChunkIds.indexOf(id) === -1) lastAdvChunkIds.push(id); });
+  pendingNew.chunks.forEach(function(c) { if (c.doc_name && lastRagSources.indexOf(c.doc_name) === -1) lastRagSources.push(c.doc_name); });
   // 배지용 스냅샷 — lastPendingNotice는 보고서 초안 경로와 공유하는 전역이라,
   // 자문 스트리밍(수 분) 중 보고서를 생성하면 답변 완료 시점엔 다른 값이 들어 있다.
-  window._advPendingNotice = lastPendingNotice;
+  // 시행 전 제정 법령(#311)도 같은 「시행 예정 반영」 배지에 — 현행판이 없어 위 시행예정 구역에는 없는 법령이다
+  window._advPendingNotice = (lastPendingNotice || []).concat(pendingNew.laws.map(function(x) { return { law_name: x.law_name, enf_date: x.enf_date }; }));
   return {
     ragContext: ragContext, lawArticleContext: lawArticleContext, citingContext: citingContext, annexContext: annexContext,
     addonContext: addOns.text || '',
-    pendingContext: pendingContext, kbContext: kbContext, customContext: customContext, newsContext: newsContext,
+    pendingContext: pendingContext, pendingNewContext: pendingNew.text || '', kbContext: kbContext, customContext: customContext, newsContext: newsContext,
     lawTrackContext: lawTrackContext, assemblyContext: assemblyContext, lawTopics: await lawTopicsP,
     // 회귀 하네스용 단계별 재료 — 프롬프트 조립에는 쓰지 않는다
     ragChunks: ragChunks, lawExtra: lawExtra, addedIds: _advAddedIds, citingIds: _advCitingIds, kbRows: kbRows,
-    spillChunks: spillChunks, addOns: addOns,
+    spillChunks: spillChunks, addOns: addOns, pendingNew: pendingNew,
     searchMeta: lastAdvSearchMeta
   };
 }
@@ -3128,7 +3181,8 @@ async function callClaude(userText, onDelta) {
   // 캐시 블록 '뒤'에 둬야 적중한다 — 가변 요소를 고정부 앞·중간에 끼우지 말 것.
   const systemStable   = SYSTEM_PROMPT + webSearchGuide;
   // 위임·같은 고시 구역(#283)은 조문 정밀검색 바로 뒤 — rag.ts와 같은 자리
-  const systemVariable = lawmapGuide + ctx.ragContext + ctx.lawArticleContext + ctx.addonContext + ctx.citingContext + ctx.annexContext + ctx.pendingContext + ctx.kbContext + ctx.customContext + ctx.newsContext + ctx.lawTrackContext + ctx.assemblyContext;
+  // 시행 전 제정 법령(#311)은 시행예정 개정본 바로 뒤 — rag.ts와 같은 자리
+  const systemVariable = lawmapGuide + ctx.ragContext + ctx.lawArticleContext + ctx.addonContext + ctx.citingContext + ctx.annexContext + ctx.pendingContext + ctx.pendingNewContext + ctx.kbContext + ctx.customContext + ctx.newsContext + ctx.lawTrackContext + ctx.assemblyContext;
   const systemWithRag = [
     { type: 'text', text: systemStable, cache_control: { type: 'ephemeral' } },
     { type: 'text', text: systemVariable }

@@ -41,7 +41,9 @@ var NAMES = ['PRIORITY_KW_RE', 'VERB_TAIL', 'extractKeywords', 'LAW_SYNONYMS', '
   // #290-보론(Fable 재검토 D2·D4)
   'ADDENDUM_GENERIC_RE', 'addendumKeywords', 'addendumForeign',
   // L9 준용 따라가기(#300)
-  'APPLY_OPTS', 'APPLY_DIRECTIVE_RE', 'refLawOf', 'applyRefs', 'applyTargets', 'applyKeywords', 'pickApply', 'neighborWhole'];
+  'APPLY_OPTS', 'APPLY_DIRECTIVE_RE', 'refLawOf', 'applyRefs', 'applyTargets', 'applyKeywords', 'pickApply', 'neighborWhole',
+  // 시행 전 제정 법령(#311)
+  'PENDING_NEW_OPTS', 'pickPendingNew', 'buildPendingNewContext', 'fetchPendingNew'];
 NAMES.forEach(function (n) { ok('export ' + n, RC[n] !== undefined); });
 
 // ── 법령 키워드 추출 ──
@@ -802,7 +804,47 @@ var applyTests = (async function () {
   eq('fillOrder 기본값 — 공통 인용이 준용 앞, 같은 고시가 맨 뒤(#300-보론3)', RC.ADDON_OPTS.fillOrder, ['down', 'up', 'annex', 'xref', 'apply', 'neighbor']);
 })();
 
-Promise.all([asyncTests, addOnTests, addOnTests2, addendumTests, applyTests]).catch(function (e) { fails++; total++; console.log('FAIL  비동기 검사 예외 ' + (e && e.message)); }).then(function () {
+// ── 시행 전 제정 법령(#311) — 현행판 없는 law_pending(인공지능 데이터센터 특별법 꼴) ──
+var pendingNewTests = (async function () {
+  var D = '인공지능 데이터센터 산업 진흥에 관한 특별법(법률)(제21759호)(20270310)';
+  var row = function (id, ci, art, content, sim) { return { id: id, doc_name: D, chunk_index: ci, article_no: art, content: content, similarity: sim }; };
+  var rows = [
+    row(1, 4, '5조', '제2장 추진체계', 0.30), row(2, 5, '5조(기본계획의 수립)', '제5조(기본계획의 수립) 국가는 기본계획을 세운다.', 0.40),
+    row(3, 19, '18조', '제4장 특례 등', 0.31),
+    row(4, 20, '18조(인허가등의 일괄처리)', '제18조(인허가등의 일괄처리)\n① 사업자등은 일괄처리를 신청할 수 있다. 일괄처리 신청서등에는 제10조에 따른 신고 내용을 포함하여야 한다.', 0.43),
+    row(5, 21, '18조(인허가등의 일괄처리)', '일괄처리 신청서등에는 제10조에 따른 신고 내용을 포함하여야 한다.\n② 장관은 150일 안에 처리한다.', 0.42),
+    row(6, 23, '19조(「분산에너지 활성화 특별법」에 관한 특례)', '제19조(「분산에너지 활성화 특별법」에 관한 특례) 전력계통영향평가를 면제한다.', 0.34),
+    row(7, 10, '10조(인공지능 데이터센터의 신고)', '제10조(인공지능 데이터센터의 신고) 사업자등은 신고하여야 한다.', 0.41),
+    row(8, 37, '부칙 제21759호(20260609)', '부칙 <제21759호,2026.6.9>\n제1조(시행일) 공포 후 9개월', 0.26)];
+  var law = { doc_name: D, law_name: '인공지능 데이터센터 산업 진흥에 관한 특별법', law_no: '21759', enf_date: '20270310', rows: rows };
+  var kb = [{ title: '인공지능 데이터센터 산업 진흥에 관한 특별법 [시행예정 2027.3.10.]' }];
+  var p1 = RC.pickPendingNew([law], kb, '20261015');
+  eq('pickPendingNew 요약 검색 적중(G1) → 본칙 전문, 조 번호 순, 부칙 빠짐', [p1.length, p1[0].gate, p1[0].whole, p1[0].articles.map(function (a) { return a.key; })], [1, 'kb', true, ['5조', '10조', '18조', '19조']]);
+  eq('pickPendingNew 장 제목 조각은 그 조 앞에 붙음', p1[0].articles[0].content, '제2장 추진체계\n제5조(기본계획의 수립) 국가는 기본계획을 세운다.');
+  var c18 = p1[0].articles[2].content;
+  ok('pickPendingNew 겹친 조각은 한 번만(mergeChunkTexts)', (c18.match(/일괄처리 신청서등에는/g) || []).length === 1 && c18.indexOf('150일') > 0, c18);
+  eq('pickPendingNew 요약 없고 법 안 유사도 < 0.50 → 안 실음', RC.pickPendingNew([law], [], '20261015').length, 0);
+  var hi = Object.assign({}, law, { rows: rows.map(function (r) { return Object.assign({}, r, { similarity: r.id === 7 ? 0.55 : r.similarity }); }) });
+  eq('pickPendingNew 요약 없어도 법 안 유사도 ≥ 0.50(G2) → sim', RC.pickPendingNew([hi], [], '20261015').map(function (p) { return p.gate; }), ['sim']);
+  eq('pickPendingNew 다른 법 요약은 G1 아님', RC.pickPendingNew([law], [{ title: '인공지능 발전과 신뢰 기반 조성 등에 관한 기본법' }], '20261015').length, 0);
+  eq('pickPendingNew 시행일이 지났으면(승격 대기) 안 실음', RC.pickPendingNew([law], kb, '20270310').length, 0);
+  var part = RC.pickPendingNew([law], kb, '20261015', { maxChars: 200 });
+  eq('pickPendingNew 예산 넘으면 조의 최고 유사도 순으로 담고 조 번호 순으로 싣는다', [part[0].whole, part[0].articles.map(function (a) { return a.key; })], [false, ['5조', '10조', '18조']]);   // 유사도 18→10→5조로 200자 안, 19조는 넘침
+  var t1 = RC.buildPendingNewContext(p1);
+  ok('buildPendingNewContext 머리·시행일·종류 번호·전문 표시', t1.indexOf('[시행 전 제정 법령') > 0 && t1.indexOf('「인공지능 데이터센터 산업 진흥에 관한 특별법」(법률 제21759호) — 2027.3.10. 시행 예정, 지금은 효력 없음 · 본칙 전문') > 0 && t1.indexOf('추측하지 마세요.') < 0, t1.slice(0, 400));
+  var t2 = RC.buildPendingNewContext(part);
+  ok('buildPendingNewContext 일부만 실으면 그 사실과 「싣지 않은 조문」 줄', t2.indexOf('질문과 가까운 조문 3개(본칙 4개 조 중)') > 0 && /위에 싣지 않은 조문의 내용은 알 수 없습니다/.test(t2));
+  eq('buildPendingNewContext 빈 입력 → 빈 문자열', RC.buildPendingNewContext([]), '');
+  var f = { pendingNewDocs: function () { return Promise.resolve([{ doc_name: D, law_name: law.law_name, law_no: '21759', enf_date: '20270310' }]); },
+    docRows: function () { return Promise.resolve(rows); } };
+  var r = await RC.fetchPendingNew(f, Promise.resolve(kb), '20261015');
+  eq('fetchPendingNew 조각 id는 조 번호 순·조 안 조각 순(부칙 빠짐)', [r.ids, r.gate, r.docs, r.laws[0].articles], [[1, 2, 7, 3, 4, 5, 6], 'kb', 1, 4]);
+  eq('fetchPendingNew on:false → 빈 구역(조회 안 함)', (await RC.fetchPendingNew({ pendingNewDocs: function () { throw new Error('불리면 안 됨'); } }, Promise.resolve(kb), '20261015', { on: false })).text, '');
+  var r0 = await RC.fetchPendingNew({ pendingNewDocs: function () { return Promise.resolve([]); }, docRows: function () { throw new Error('불리면 안 됨'); } }, Promise.resolve(kb), '20261015');
+  eq('fetchPendingNew 현행판 없는 법령이 없으면 docs 0', [r0.docs, r0.text], [0, '']);
+})();
+
+Promise.all([asyncTests, addOnTests, addOnTests2, addendumTests, applyTests, pendingNewTests]).catch(function (e) { fails++; total++; console.log('FAIL  비동기 검사 예외 ' + (e && e.message)); }).then(function () {
   console.log('\n' + (fails ? 'FAIL ' + fails + '/' + total : 'ALL OK ' + total + '/' + total));
   process.exit(fails ? 1 : 0);
 });

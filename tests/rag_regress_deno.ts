@@ -172,9 +172,10 @@ for (const q of set.questions) {
   const citing = ctx.citing as { text: string; ids: number[] } | undefined;
   const news = ctx.news as { text: string; sources: string[] } | undefined;
   const addOns = ctx.addOns as { text: string; chunks: unknown[]; ids: number[]; items: unknown[] } | undefined;
+  const pnew = ctx.pendingNew as { text: string; chunks: unknown[]; ids: number[]; laws: unknown[] } | undefined;   // 시행 전 제정 법령(#311)
   const lab: Record<string, string> = {};
   for (const c of ([] as { id?: unknown; doc_name?: string; article_no?: string }[])
-    .concat((ctx.chunks as []) || [], (ctx.extra as []) || [], (citing?.chunks as []) || [], (ctx.spill as []) || [], (addOns?.chunks as []) || [])) {
+    .concat((ctx.chunks as []) || [], (ctx.extra as []) || [], (citing?.chunks as []) || [], (ctx.spill as []) || [], (addOns?.chunks as []) || [], (pnew?.chunks as []) || [])) {
     if (c && c.id != null) lab[String(c.id)] = String(c.doc_name || '').split('(')[0].slice(0, 30) + ' ' + String(c.article_no || '').split('(')[0];
   }
   out.results.push({
@@ -183,11 +184,12 @@ for (const q of set.questions) {
     annex: annex?.sources || [], kb: ((ctx.kb as { doc_id: string; chunk_idx: number }[]) || []).map((r) => r.doc_id + ':' + r.chunk_idx),
     news: news?.sources || [],
     spill: ids((ctx.spill as []) || []), addon: addOns?.ids || [], addItems: addOns?.items || [],
+    pnew: pnew?.ids || [], pnewLaws: pnew?.laws || [],
     lens: { law: String(ctx.lawContext || '').length, citing: (citing?.text || '').length, annex: (annex?.text || '').length,
-            news: (news?.text || '').length, asm: String(ctx.asm || '').length, addon: (addOns?.text || '').length,
+            news: (news?.text || '').length, asm: String(ctx.asm || '').length, addon: (addOns?.text || '').length, pnew: (pnew?.text || '').length,
             systemVariable: String(ctx.systemVariable || '').length },
     log: logLines.slice(), rpc: rpcLog.slice(), lab,
-    meta: ((ctx.searchMeta as { fn: string }[]) || []).filter((m) => m.fn === 'addons' || m.fn === 'law_delegations'),
+    meta: ((ctx.searchMeta as { fn: string }[]) || []).filter((m) => m.fn === 'addons' || m.fn === 'law_delegations' || m.fn === 'pending_new'),
     ...(withText ? { sv: String(ctx.systemVariable || '') } : {}),
   });
   origLog('[ragRegress]', q.id, ms + 'ms', err || '');
