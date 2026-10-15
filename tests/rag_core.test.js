@@ -1002,8 +1002,8 @@ var pendingNewTests = (async function () {
   var app = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8');
   var ragTs = fs.readFileSync(path.join(ROOT, 'supabase', 'functions', '_shared', 'rag.ts'), 'utf8');
   var n = function (s, re) { return (s.match(re) || []).length; };
-  eq('app.js 약관 게이트 — 입구 ⓐⓑⓒ(yakDropRows 3)·ⓓ(별표 인용 isYakDoc)', [n(app, /yakDropRows\(/g) - n(app, /function yakDropRows\(/g), n(app, /yakIsDoc\(c\.doc_name\)/g)], [3, 1]);
-  eq('rag.ts 약관 게이트 — 입구 ⓐⓑⓒ + /law 의미·요약층 다리(yakDropRows 5)·ⓓ', [n(ragTs, /yakDropRows\(/g) - n(ragTs, /function yakDropRows\(/g), n(ragTs, /RagCore\.isYakDoc\(c\.doc_name\)/g)], [5, 1]);
+  eq('app.js 약관 게이트 — 입구 ⓐⓑⓒ(yakDropRows 3)·ⓓ(별표 인용 isYakDoc)', [n(app, /(?<!function )yakDropRows\(/g), n(app, /yakIsDoc\(c\.doc_name\)/g)], [3, 1]);
+  eq('rag.ts 약관 게이트 — 입구 ⓐⓑⓒ + /law 의미·요약층 다리(yakDropRows 5)·ⓓ', [n(ragTs, /(?<!function )yakDropRows(?:<\w+>)?\(/g), n(ragTs, /RagCore\.isYakDoc\(c\.doc_name\)/g)], [5, 1]);
 })();
 
 Promise.all([asyncTests, addOnTests, addOnTests2, addendumTests, applyTests, pendingNewTests]).catch(function (e) { fails++; total++; console.log('FAIL  비동기 검사 예외 ' + (e && e.message)); }).then(function () {

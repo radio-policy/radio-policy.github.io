@@ -759,7 +759,7 @@ export async function buildLawQueryContext(sb: SupabaseClient, query: string): P
         .then((r) => (r.data || []) as LawHit[]).catch(() => [] as LawHit[])));
     const BRIDGE_TOTAL_CAP = 14;   // 전체 상한 — 프롬프트 폭주 방지 (조문당 800자 → 최대 ~11K자)
     for (const rows of perTitle) {
-      const fresh = yakDropRows(rows, query, meta).filter((r) => !haveIds.has(r.id) && !/^(부칙|별표|서식)/.test(r.article_no || ''));   // 약관 게이트(#312-보론)
+      const fresh = yakDropRows<LawHit>(rows as LawHit[], query, meta).filter((r) => !haveIds.has(r.id) && !/^(부칙|별표|서식)/.test(r.article_no || ''));   // 약관 게이트(#312-보론)
       // 조문이 적은 고시·훈령이면 **통째로** 넣는다. 점수로 4개만 고르다가 정작 핵심인
       // 제6조(지도 형태로 홈페이지 게시)가 5순위로 잘렸다 — '목적'·'정의' 같은 상투 조문이
       // 전기통신·정보·제공 같은 흔한 단어로 점수를 먼저 가져가기 때문이다(실측).
