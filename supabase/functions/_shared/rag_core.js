@@ -239,7 +239,9 @@
   // ⓔ 같은 사건(event 같음·제목 두 글자 묶음 겹침 ≥0.35)은 하나만 ⓕ 최소 관련도 — 제목에 낱말 1개 이상 그리고
   // (낱말 2개 이상 또는 제목에 가장 희귀한 낱말); 못 넘으면 비운다(관련 기사가 없는데 아무 기사나 3건 채우지 않는다).
   // 조회(낱말별 제목·본문 최신 10건)는 호출측 그대로 — 추가 조회 0. 「최신순 상위 N건」으로 되돌리지 말 것(#35).
-  // titleLimit = 호출측 낱말별 제목 조회의 limit(10)과 같아야 한다 — 낱말 하나뿐인 질문에서 「제목 조회가 꽉 찼나」를 본다
+  // #309-보론2(NV1·NV2에서 본 빈틈, 표본 밖 NV3로 검증): 말투 꼴(ㅆ 받침 활용·관형 「-어진·-던」·인용 「-다고」·「-히」·조사 「이랑」),
+  // 두 글자 낱말이 한글 덩어리 한가운데 걸린 것(「현장애로」의 「장애」), 흔한 낱말 둘만 맞은 기사, 질문 낱말 하나만 든 기사를 거른다.
+  // titleLimit = 호출측 낱말별 제목 조회의 limit(10)과 같아야 한다 — 「흔한 낱말」(제목 조회가 꽉 찬 낱말)을 이것으로 가린다
   const NEWS_RANK_OPTS = { top: 3, titleW: 3, bodyW: 1, idfMin: 0.5, idfMax: 2.5, idfScale: 2, dupJaccard: 0.35, titleLimit: 10 };
   // 말투 낱말 — 낱말 목록이 아니라 어미 모양으로(질문 문장에 맞춰 낱말을 늘리지 말 것 — 과적합)
   const NEWS_FILLER_WORDS = ['누가', '누구', '무슨', '뭐', '뭐야', '뭐지', '뭔지', '뭔가', '어떠한', '어떤지', '어때', '얼마', '얼마나',
@@ -248,13 +250,15 @@
     '이거', '그거', '저거', '이건', '그건', '저건', '그럼', '그러면', '그런데', '그래서', '그때', '이때', '여기', '거기', '저기',
     '맞아', '맞나', '맞지', '맞죠', '그래', '아니야', '아니면', '아니라', '아니고', '됐어', '했어', '없어', '다시', '혹시', '정말', '진짜', '그냥', '먼저', '이미', '아직', '계속', '바로'];
   const NEWS_FILLER_RE = new RegExp('(' + [
-    // 하다·되다·있다·없다 활용
-    '하는|하고|하여|해서|해야|하지|하기|하게|하려|하면|하며|한다|하나|한지|할까|할수|할지|하려면|하려고|해줘|하세요|합니다|했으나|하였으나|했는데|하는데|한데|했나|한거',
-    '되는|되면|되어|되고|되나|되지|되기|될까|될수|될지|된다|된지|됐나|되었으나|되었|되려고',
-    '있는|있을까|있나|있고|있어|있으면|있다|있을|있는지|없는|없을까|없나|없고|없다|없을|없는지',
+    // 하다·되다·있다·없다 활용(「하신·되신」 높임 관형, 「없이」 부사형 — #309-보론2)
+    '하는|하고|하여|해서|해야|하지|하기|하게|하려|하면|하며|한다|하나|한지|할까|할수|할지|하려면|하려고|해줘|하세요|합니다|했으나|하였으나|했는데|하는데|한데|했나|한거|하신',
+    '되는|되면|되어|되고|되나|되지|되기|될까|될수|될지|된다|된지|됐나|되었으나|되었|되려고|되신',
+    '있는|있을까|있나|있고|있어|있으면|있다|있을|있는지|없는|없을까|없나|없고|없다|없을|없는지|없이',
+    // 인용 「-다고·-라고·-냐고·-자고」(#309-보론2)
+    '다고|라고|냐고|자고',
     // 연결·의문·종결 어미
     '려면|려고|으면|으며|이며|으나|지만|는데|은데|인데|던데|는지|은지|운지|인지|을지|는가|은가|한가|던가|지나|이다|니다|니까',
-    '나요|가요|까요|세요|해요|돼요|어요|아요|군요|네요|지요|죠|줘|주세요|줄래',
+    '나요|가요|까요|세요|해요|돼요|어요|아요|군요|네요|지요|죠|줘|주세요|줄래|예요|에요|고요',   // 「거예요」·「언제부터고요」(#309-보론2)
     '어서|아서|여서|워서|쳐서|와서|져서|려서|켜서|적인|위한|위하여|관한|대한|의한|인한|통한|따른|향한|는거|인거|된거|할거|은거',
     // 양보 「-어도」(#309-보론 — 「해도」가 「탈퇴해도」·「신고해도」 제목에 걸렸다)
     '해도|어도|아도|여도|워도|져도|와도|봐도|돼도|되도',   // 「라도」는 「전라도」가 걸려 뺀다
@@ -265,10 +269,19 @@
   const NEWS_FILLER_INNER_RE = /(하는|되는|있는|없는|하기위한|하려는)/;
   // 「한·게·야」로 끝나는 명사 — 어미 규칙의 예외(일반 한국어 낱말)
   const NEWS_NOUN_HAN_RE = /(기한|권한|제한|상한|하한|시한|최대한|최소한|무한|유한)$/;
+  // 「할·될」로 끝나는 명사 — 미래 관형 「-할·-될」 규칙의 예외(#309-보론2)
+  const NEWS_NOUN_HAL_RE = /(역할|분할|관할|직할|통할)$/;
+  // ㅆ 받침 음절(있·었·았·였·했·됐·겠·왔·봤 …)은 「있다」와 시제 선어말어미(-았/었/겠-)가 붙은 활용에만 나온다 — 한자어엔 없고
+  // 고유어 명사에도 사실상 없다(#309-보론2: 「나왔지」·「접겠다고」·「손봤다고」). 어미를 하나씩 늘리는 대신 이 한 모양으로 본다.
+  function newsHasSsFinal(s) {
+    for (let i = 0; i < s.length; i++) { const c = s.charCodeAt(i) - 0xAC00; if (c >= 0 && c < 11172 && c % 28 === 20) return true; }
+    return false;
+  }
   function isNewsFillerWord(w) {
     const s = String(w || '');
     if (/^[A-Za-z0-9]+$/.test(s)) return false;
     if (NEWS_FILLER_WORDS.indexOf(s) >= 0) return true;
+    if (newsHasSsFinal(s)) return true;                                               // 「나왔지」·「했던」·「있었는데」(#309-보론2)
     if (/^\d+번(째)?$/.test(s)) return true;                                     // 「3번」 — 앞 답 항목 가리키기
     if (/^[가-힣](을|를|은|는)$/.test(s) && !/^(마을|가을|고을)$/.test(s)) return true;   // 「이를」·「법을」 — 한 글자 + 조사
     if (NEWS_FILLER_RE.test(s)) return true;
@@ -282,13 +295,28 @@
     if (s.length >= 3 && /게$/.test(s) && !/(무게|가게)$/.test(s)) return true;   // 「다르게」·「관한게」
     if (/며$/.test(s)) return true;
     if (/져$/.test(s)) return true;                                               // 「정해져」(-어져, #309-보론)
+    // 관형 어미 모양(#309-보론2) — 피동 「-어진」(「없어진」·「정해진」·「알려진」), 회상 「-던」
+    if (s.length >= 3 && /[어아여해워려쳐혀춰뤄겨]진$/.test(s)) return true;       // 「추진·촉진」은 앞 글자가 달라 안 걸린다
+    if (s.length >= 3 && /던$/.test(s)) return true;
+    if (s.length >= 3 && /히$/.test(s)) return true;                              // 부사 「-히」(「정확히」·「철저히」)
     return false;
+  }
+  // 채점 낱말에서만 떼는 꼬리(#309-보론2) — 조회 낱말 추출(NEWS_TAIL)이 한 번만 떼거나 목록에 없어 남는 것. 뗀 줄기가 2자 이상일 때만.
+  // ① 두 글자 이상 조사(「핵심이랑」·「사업자에게」) — 「로」 하나는 「도로·회로·선로」 같은 명사가 많아 떼지 않는다
+  // ② 하다·되다 동사의 미래 관형 「-할·-될」은 줄기 명사로(「개설할」 → 「개설」 — 통째로 빼면 「신고하지 아니하고 개설할 수 있는
+  //    무선국」 공고를 잃는다). 「역할·관할」 같은 명사는 그대로.
+  const NEWS_SCORE_JOSA_RE = /(이랑|랑|에게|한테|께서)$/;
+  function newsScoreStem(s) {
+    const a = s.replace(NEWS_SCORE_JOSA_RE, '');
+    if (a !== s && a.length >= 2) return a;
+    if (s.length >= 3 && /[할될]$/.test(s) && !NEWS_NOUN_HAL_RE.test(s)) return s.slice(0, -1);
+    return s;
   }
   // 채점 낱말: 말투 낱말 빼고, 영문+한글 붙여 쓴 낱말(「3G서비스」)은 글자 종류 경계로 갈라 각각 2자 이상만
   function newsScoreWords(kws) {
     const out = [];
     (kws || []).forEach(function (k) {
-      const s = String(k || '').trim();
+      const s = newsScoreStem(String(k || '').trim());
       if (!s || isNewsFillerWord(s)) return;
       const parts = /[A-Za-z0-9]/.test(s) && /[가-힣]/.test(s) ? (s.match(/[A-Za-z0-9]+|[가-힣]+/g) || []) : [s];
       parts.forEach(function (p) {
@@ -301,7 +329,14 @@
   function newsHas(text, k) {
     const s = String(text || '');
     if (/^[A-Za-z0-9]+$/.test(k)) return new RegExp('(^|[^A-Za-z0-9])' + k + '(?![A-Za-z0-9])', 'i').test(s);   // 영문·숫자만이라 특수문자 없음
-    return s.toLowerCase().indexOf(k.toLowerCase()) >= 0;
+    const t = s.toLowerCase(), q = k.toLowerCase();
+    if (!/^[가-힣]{2}$/.test(q)) return t.indexOf(q) >= 0;
+    // 두 글자 한글 낱말은 한글 덩어리 한가운데(앞뒤 글자가 모두 한글)에 걸린 것은 세지 않는다(#309-보론2) — 「현장애로」(현장+애로)의
+    // 「장애」, 「하위법령」의 「위법」처럼 음절이 우연히 겹친 것이다. 덩어리 처음(「장애로」)·끝(「통신장애」·「인허가」)은 센다.
+    for (let i = t.indexOf(q); i >= 0; i = t.indexOf(q, i + 1)) {
+      if (!(i > 0 && /[가-힣]/.test(t[i - 1]) && i + 2 < t.length && /[가-힣]/.test(t[i + 2]))) return true;
+    }
+    return false;
   }
   function newsBigrams(t) {
     const s = String(t || '').replace(/[^가-힣A-Za-z0-9]/g, ''), g = new Set();
@@ -324,31 +359,50 @@
     });
     const pool = Array.from(byTitle.values());
     if (!words.length || !pool.length) return { picked: [], words: words, rare: null };
-    // 채점 낱말이 하나뿐이면 그 낱말이 전문어일 때만(#309-보론) — 창 전체에서 제목에 titleLimit번 미만(= 그 낱말의 제목 조회가
-    // 꽉 차지 않음, 본문 없는 행도 셈). 「그럼 그거 어기면 과태료는 얼마야?」(과태료 = 흔한 말)는 비우고, 서술어가 6칸을 다 차지해
-    // 「사전승낙」 하나만 남은 긴 질문은 그 기사를 받는다(D43 Q27).
-    if (words.length === 1) {
+    // 흔한 낱말 = 받아 온 행(본문 없는 행도) 중 제목에 그 낱말이 든 기사가 titleLimit건 이상 — 그 낱말의 제목 조회가 꽉 찼다는 뜻,
+    // 곧 창 전체에서 제목 10건 이상(#309-보론 F3과 같은 잣대).
+    const tSeen = {};
+    words.forEach(function (k) {
       const titles = new Set();
-      (rows || []).forEach(function (n) { if (n && n.title && newsHas(n.title, words[0])) titles.add(n.title); });
-      if (titles.size >= o.titleLimit) return { picked: [], words: words, rare: null };
-    }
+      (rows || []).forEach(function (n) { if (n && n.title && newsHas(n.title, k)) titles.add(n.title); });
+      tSeen[k] = titles.size;
+    });
+    // 채점 낱말이 하나뿐이면 그 낱말이 전문어일 때만(#309-보론) — 「그럼 그거 어기면 과태료는 얼마야?」(과태료 = 흔한 말)는 비우고,
+    // 서술어가 6칸을 다 차지해 「사전승낙」 하나만 남은 긴 질문은 그 기사를 받는다(D43 Q27).
+    if (words.length === 1 && tSeen[words[0]] >= o.titleLimit) return { picked: [], words: words, rare: null };
     const P = pool.length;
     const cnt = {};
     words.forEach(function (k) { cnt[k] = pool.filter(function (n) { return newsHas(n.title, k) || newsHas(n.content, k); }).length; });
     const idf = function (k) { return Math.min(o.idfMax, Math.max(o.idfMin, Math.log10((P + 1) / (cnt[k] + 1)) * o.idfScale)); };
     const rare = words.slice().sort(function (a, b) { return cnt[a] - cnt[b]; })[0];   // 같으면 앞 낱말(분야어 먼저)
+    // 드문 낱말 = 조회한 낱말(kws 그대로)이고 흔하지 않은 것. 조회하지 않은 낱말(조사를 뗀 줄기, 영문·한글 가른 조각)은 받아 온 행만으로는
+    // 흔한지 알 수 없어(제목 건수가 실제보다 적게 보인다) 드문 낱말로 치지 않는다.
+    const kwSet = {};
+    (kws || []).forEach(function (k) { kwSet[String(k || '').trim()] = true; });
     const scored = pool.map(function (n) {
-      let s = 0, tHits = 0, hits = 0;
+      let s = 0, tHits = 0, hits = 0, rareHit = false;
       words.forEach(function (k) {
         const w = idf(k), ti = newsHas(n.title, k), ci = newsHas(n.content, k);
         if (ti) { s += o.titleW * w; tHits++; }
         if (ci) s += o.bodyW * w;
-        if (ti || ci) hits++;
+        if (ti || ci) { hits++; if (kwSet[k] === true && tSeen[k] < o.titleLimit) rareHit = true; }
       });
-      return { row: n, score: s, tHits: tHits, hits: hits };
+      return { row: n, score: s, tHits: tHits, hits: hits, rareHit: rareHit };
     });
+    // 최소 관련도(#309-보론2): 제목에 낱말 1개 이상 + 질문 낱말 2개 이상(채점 낱말이 하나뿐인 질문만 하나 — 위 전문어 잣대) +
+    // (제목에 후보 안 가장 희귀한 낱말 / 제목에 낱말 2개 이상 / 맞은 낱말 중 드문 낱말 하나 이상).
+    // ⓐ 가장 희귀한 낱말 하나만 제목에 있고 질문의 다른 낱말은 어디에도 없는 기사(「다음 단계 제안 중 3번」 → 「고객 제안 1만4000건」,
+    //    「재난문자 시스템 개선 의무」 → 「재난문자 전광판 협약」)는 받지 않는다 — #309가 낱말 하나를 허용한 이유(「사전승낙」 하나만 남은
+    //    질문, 「3G서비스」)는 이제 낱말 하나뿐인 질문의 전문어 잣대와 영문·한글 가르기가 맡는다.
+    // ⓑ 제목 하나 + 본문 일치만으로 넘을 때는 맞은 낱말 중 하나는 드문 낱말이거나, 흔한 낱말뿐이면 셋 이상이어야 한다 — 「통신사업자」 제목 +
+    //    「기준」 본문, 「조건」 제목 + 「이동통신」 본문처럼 흔한 낱말 둘만 맞은 기사는 질문의 전문어(「상호접속」·「재난로밍」)가 든 기사가
+    //    없다는 뜻이다(흔한 낱말 둘은 우연히 함께 나오지만 셋이면 증거다 — 「유료방송」 제목 + 「방미통위·IPTV」 본문).
+    //    제목에 둘(「주파수」+「재할당」)은 둘 다 흔해도 그대로 받는다 — 주제어도 60일에 제목 10건은 넘는다.
     const ranked = scored
-      .filter(function (c) { return c.tHits >= 1 && (c.hits >= 2 || newsHas(c.row.title, rare)); })
+      .filter(function (c) {
+        return c.tHits >= 1 && (words.length === 1 || c.hits >= 2) &&
+          (newsHas(c.row.title, rare) || c.tHits >= 2 || c.rareHit || c.hits >= 3);
+      })
       .sort(function (a, b) { return b.score !== a.score ? b.score - a.score : String(b.row.published_at || '').localeCompare(String(a.row.published_at || '')); });
     const picked = [];
     for (let i = 0; i < ranked.length && picked.length < o.top; i++) {
