@@ -195,7 +195,7 @@ for (const q of set.questions) {
             news: (news?.text || '').length, asm: String(ctx.asm || '').length, addon: (addOns?.text || '').length, pnew: (pnew?.text || '').length,
             systemVariable: String(ctx.systemVariable || '').length },
     log: logLines.slice(), rpc: rpcLog.slice(), lab,
-    meta: ((ctx.searchMeta as { fn: string }[]) || []).filter((m) => m.fn === 'addons' || m.fn === 'law_delegations' || m.fn === 'pending_new'),
+    meta: ((ctx.searchMeta as { fn: string }[]) || []).filter((m) => m.fn === 'addons' || m.fn === 'law_delegations' || m.fn === 'pending_new' || m.fn === 'yak_gate'),   // yak_gate = 약관 게이트(#312-보론)
     ...(withText ? { sv: String(ctx.systemVariable || '') } : {}),
   });
   origLog('[ragRegress]', q.id, ms + 'ms', err || '');

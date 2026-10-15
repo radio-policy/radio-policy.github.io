@@ -168,6 +168,13 @@ def main():
         print(f"오류: 지원하지 않는 카테고리입니다 (입력값: {doc_category})")
         print(f"  허용값: {', '.join(VALID_CATEGORIES)}")
         sys.exit(1)
+    # 약관 게이트(#312-보론): 자문 검색은 doc_category가 없는 행(정밀검색·/law·가족 조회)이 있어 **문서명 첫 괄호 「(약관)」**으로 약관을 가린다
+    # (rag_core.js YAK_DOC_RE). 분류와 이름이 어긋나면 게이트가 새거나(분류 '약관'인데 괄호 없음 → 무관 질문에도 들어감) 엉뚱한 문서를 막는다.
+    yak_name = re.match(r'^[^(]+\(약관\)', doc_name) is not None
+    if (doc_category == "약관") != yak_name:
+        print(f"오류: 분류 '약관'과 문서명 첫 괄호 「(약관)」은 함께 써야 합니다 (분류 {doc_category} · 문서명 {doc_name})")
+        print("  예: \"SK텔레콤 5G 이용약관(약관)(2026.8)(20260826)\" 약관 --unapproved")
+        sys.exit(1)
 
     suffix = Path(pdf_path).suffix.lower()
     print(f"\n[1/4] 텍스트 추출: {pdf_path}")

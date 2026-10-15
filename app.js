@@ -1305,6 +1305,23 @@ function metaNote(fn, t0, r) {   // RPC가 아닌 조회(news_feed ilike)용 —
     rows: (r && Array.isArray(r.data)) ? r.data.length : null,
     error: (r && r.error) ? (r.error.code || r.error.message || 'error') : null });
 }
+// ── 사업자 이용약관 게이트(#312-보론, 2026-10-16 — 설계 local_docs/약관등록_261015/게이트_설계.md) ──
+// 규칙(낱말 목록·판정·행 거르기·search_meta 한 행)은 rag_core.js yakGateWanted·dropYakRows·yakGateNote 한 곳. 여기는 입구에 거는 일만 —
+// ⓐ searchKeywords results(rankChunks·capSpill 앞) ⓑ searchLawArticles lawRows(rankLawHits 앞) ⓒ buildAdvisoryContext 조문 의미검색 행
+// ⓓ buildAnnexContext 별표 인용 수집(통과 여부와 무관하게 약관 문서 건너뜀). rag.ts와 같은 자리 — 한쪽만 고치지 말 것.
+// 옛 rag_core.js가 브라우저 캐시에 남아 함수가 없으면(#309 10-15 사례) 예외 대신 약관 문서를 막는다(fail-closed).
+function yakGate(query) {
+  return typeof RagCore.yakGateWanted === 'function' ? RagCore.yakGateWanted(query) : { pass: false, words: [], mode: 'stale' };
+}
+function yakIsDoc(docName) {
+  return typeof RagCore.isYakDoc === 'function' ? RagCore.isYakDoc(docName) : /^[^(]+\(약관\)/.test(String(docName || ''));
+}
+function yakDropRows(rows, gate) {   // 막히면 약관 행을 뺀 새 배열 + search_meta 한 행(세 입구 합산)
+  rows = rows || [];
+  var out = gate.pass ? rows : rows.filter(function(r) { return !(r && yakIsDoc(r.doc_name)); });
+  if (typeof RagCore.yakGateNote === 'function') RagCore.yakGateNote(lastAdvSearchMeta, gate, rows.length - out.length);
+  return out;
+}
 
 // ── 자문 검색의 순수 규칙은 supabase/functions/_shared/rag_core.js 한 파일 (#215, 2026-09-25, 개선안 §4-2-12 단계 A) ──
 // 키워드 추출(법령용·뉴스용)·법령 어휘 대응표(LAW_SYNONYMS·PRACTICE_TERMS)·제외어·법령 위계·도메인 사전확률·RRF 융합·
@@ -1579,6 +1596,8 @@ async function searchKeywords(query) {
 
   // ── RRF 융합·조문 종류별 가점·문서당 상한 — rag_core.js rankChunks (#215) ──
   // results의 _score(키워드)·_hybrid_score(융합)를 채우고 채택분(순위순, 문서당 상한·전체 15)을 돌려준다. 규칙 설명도 그 파일에.
+  // 약관 게이트 ⓐ(#312-보론) — 질문 원문에 약관 낱말이 없으면 약관 행을 순위 매기기 전에 뺀다(상위 15·상한 구제 둘 다 약관 없이)
+  results = yakDropRows(results, yakGate(query));
   var picked = RagCore.rankChunks(results, keywords, baseKeywords, query);
   // 문서당 상한 때문에만 빠진 조문·별표 후보(L1′ 상한 구제, #283)는 spill에 따로 붙인다 — 채택분(배열 자체)은 그대로라
   // 자문 밖의 호출측(용어·관계도 등)은 영향이 없다. 자문(buildAdvisoryContext)만 읽는다. rag.ts searchChunks와 동일 유지.
@@ -1644,6 +1663,7 @@ async function searchLawArticles(query, limit) {
         .then(function(r) { return r.data || []; })
         .catch(function(e) { console.warn('조문 정밀검색 오류:', e); return []; })
     : [];
+  lawRows = yakDropRows(lawRows, yakGate(query));   // 약관 게이트 ⓑ(#312-보론) — rankLawHits 앞
   // 반환 순서(키워드 → 제목 적중 → 본문 적중 → 순위)대로 넣는다 — 같은 조문의 대표 청크가 실행마다 같아진다
   lawRows.forEach(function(r) {
     putHit({ id: r.id, doc_name: r.doc_name, article_no: r.article_no, content: r.content },
@@ -1887,6 +1907,7 @@ async function buildAnnexContext(chunks, question) {
     var reCite = /(「[^」]{2,40}」[^\n]{0,20}?)?별표\s*제?\s*(\d+(?:의\d+)?)/g;
     chunks.forEach(function(c) {
       if (/^(별표|별지)/.test(c.article_no || '')) return;
+      if (yakIsDoc(c.doc_name)) return;           // 약관 게이트 ⓓ(#312-보론) — 약관 별표는 미등록이라 두 칸을 빈 채로 먹는다(rag_core annexWanted와 같은 규칙)
       var m; reCite.lastIndex = 0;
       while ((m = reCite.exec(String(c.content || '')))) {
         if (m[1]) continue;                       // 타 법령 인용 — 건너뜀
@@ -3029,7 +3050,7 @@ async function buildAdvisoryContext(userText) {
   var lawExtra = namedHits.concat(lawHits.filter(function(h) { return !haveIds.has(h.id); }));
   // 의미검색분을 뒤에 잇는다. 필터는 /law의 semExtra와 같게 유지 — **조문만**(별표·부칙·서식은
   // 이미 위 RAG가 훑는 대상이고, 별표는 통째로 길어 컨텍스트를 잡아먹는다), 파일 문서 제외.
-  var lawSem = await lawSemP;
+  var lawSem = yakDropRows(await lawSemP, yakGate(userText));   // 약관 게이트 ⓒ(#312-보론) — 정밀검색 칸 약관 진입 7문항 중 6이 이 갈래(문턱 0)
   var seenArt = new Set(lawExtra.map(function(h) { return h.doc_name + '|' + (h.article_no || ''); }));
   lawExtra.forEach(function(h) { haveIds.add(h.id); });
   for (var li = 0; li < lawSem.length && lawExtra.length < 10 + namedHits.length; li++) {   // 키워드 5 + 의미 5 상한(지목 조문은 별도)
@@ -8385,6 +8406,9 @@ function clearGuideSearch() {
 }
 
 var _KB_GROUPS = [
+  // 사업자 이용약관(#312, 문서명 첫 괄호 「(약관)」 — 게이트와 같은 판별). 맨 앞에 둔다 — 아래 '공정거래·표시광고·약관'의 /약관/이나
+  // 이름에 든 '번호이동'·'요금' 낱말 그룹에 먼저 묶이지 않게(운영자 결정 D3-보, 2026-10-15). 법령이 아니라 사업자 계약 조건이다.
+  ['사업자 이용약관', /^[^(]+\(약관\)/],
   ['전파법 기본 법령', /^전파법/],
   ['주파수 행정규칙', /주파수|할당|공동사용/],
   ['전자파 행정규칙', /전자파/],

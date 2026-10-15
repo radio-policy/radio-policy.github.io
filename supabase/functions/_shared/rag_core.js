@@ -432,6 +432,72 @@
   // 국회 발언 희소어 상한 — assembly_speeches 약 1,100건 기준(≈4%)
   const ASM_RARE_MAX = 40;
 
+  // ── 사업자 이용약관 게이트(#312-보론, 2026-10-16 — Fable 설계 10-15 `local_docs/약관등록_261015/게이트_설계.md`, 운영자 결정 D1~D7 권고안) ──
+  // 약관(문서 분류 '약관', 문서명 첫 괄호 「(약관)」 — 10-16 기준 「SK텔레콤 5G 이용약관(약관)(2026.8)(20260826)」 하나)은 **질문 원문**에 약관 낱말이
+  // 있을 때만 검색에 들인다. 공개(is_approved) 전 켬 실측에서 무관 질문 6/53에 약관이 끼었고(전파사용료 감면 → 약관 「위약금 면제」, 3G 종료 →
+  // 일시정지·해지 조가 전파법 제16·72조를 밀어냄), 그 6문항 모두 질문 원문에는 약관 낱말이 없었다(확장어에는 5문항이 있다 — 그래서 확장어·사전
+  // 번역어·임베딩 유사도·질문자 팀은 보지 않는다, 설계 §2-2).
+  //  · 거는 자리(두 판 같게): ⓐ 3중 하이브리드 results(rankChunks·capSpill 앞) ⓑ 조문 정밀검색 lawRows(rankLawHits 앞) ⓒ 조문 의미검색 행
+  //    (자문 lawSem, /law semExtra·요약층 다리) — 막히면 약관 행을 지운다(완전 제외, 별도 구역 없음 — 설계 §4). 상한 구제·덧붙이기·역참조·통째 보강은
+  //    이 셋의 출력만 먹으므로 따로 안 건다. ⓓ 별표 동반·덧붙이기 별표 칸의 인용 수집은 **통과 여부와 무관하게** 약관 문서의 「별표 N」 인용을
+  //    건너뛴다(annexWanted·각 파일 buildAnnexContext) — 약관 별표는 미등록이라 두 칸을 빈 채로 먹고 법령 별표를 밀어냈다(켬 실측 y08·i27·q14·i17).
+  //    약관 별표를 등록하면 이 건너뛰기를 뺀다.
+  //  · 약관 판별은 doc_category가 아니라 문서명(정밀검색·/law·가족 조회 행에는 doc_category가 없다, 설계 F6) — 업로드 이름 규칙(upload_law_pdf.py)이 맞춘다.
+  //  · list(낱말 정규식 원본, 사내판도 이 문자열 하나를 읽는다): 세 글자 이상 낱말은 맨 일치, 두 글자 낱말은 뒤 글자 제한(조사·띄어쓰기·끝·허용 접미),
+  //    「환불·해지·보상」은 앞 글자 제한 — 「요약정리(약정)·피해지역(해지)·분배상황(배상)·주요금지(요금)·반환불가(환불)·손실보상」을 막는다.
+  //    룩비하인드는 쓰지 않는다(옛 Safari가 파일째 못 읽는다) — 앞 글자 제한은 한 글자를 먹는 **잡는 괄호**로 쓰고, 이 문자열의 잡는 괄호는 그
+  //    셋뿐이다(나머지는 (?:…)·(?=…)): 기록할 낱말은 처음으로 잡힌 괄호의 길이만큼 앞을 뗀다.
+  //  · mode: 'gate'(운영) / 'allow'(늘 통과 — 켬 실측과 같은 조건) / 'block'(늘 막음) — 회귀 하네스 --core-opts로만 바꾼다. on=false = allow.
+  //  · 막힌 요청·통과한 요청은 search_meta에 {fn:'yak_gate', pass, words, dropped} 한 행(약관 행을 지웠거나 낱말이 걸린 요청만) — 2주 집계(D7)의 재료.
+  const YAK_DOC_RE = /^[^(]+\(약관\)/;
+  const YAK_E = '(?=[ \\t,.?!·、)」』을를이가은는의과와에도만]|으로|에서|부터|까지|$)';
+  const YAK_GATE_OPTS = { on: true, mode: 'gate',
+    list: '약관|위약금|이용정지|일시정지|손해배상|통화품질|청소년|법정대리인|트래픽|스팸|부가서비스|국제로밍|일할계산|번호이동'
+      + '|요금(?=제|' + YAK_E.slice(3) + '|약정(?=기간|만료|보조금|' + YAK_E.slice(3)
+      + '|(^|[^반])환불(?=받|하|규정|기준|' + YAK_E.slice(3)
+      + '|(^|[^가-힣])해지(?=하|되|된|될|돼|시|통보|사유|' + YAK_E.slice(3) + '|(?:계약|직권|사전|약정|강제|임의|중도|자동)해지'
+      + '|(^|[^실])보상(?=받|하|기준|범위|규정|' + YAK_E.slice(3) };
+  function isYakDoc(docName) { return YAK_DOC_RE.test(String(docName || '')); }
+  let yakReSrc = null, yakRe = null;
+  // 질문 원문 → { pass, words, mode }. words = 걸린 낱말(앞 글자 제한이 먹은 글자는 뗌, 중복 없이 나온 순).
+  function yakGateWanted(question) {
+    const o = YAK_GATE_OPTS;
+    const mode = o.on === false ? 'allow' : (o.mode || 'gate');
+    const src = String(o.list || '');
+    if (src !== yakReSrc) { yakReSrc = src; yakRe = src ? new RegExp(src, 'g') : null; }
+    const words = [];
+    if (yakRe) {
+      const re = new RegExp(yakRe.source, 'g');   // 공유 g 객체의 lastIndex를 쓰지 않는다
+      const q = String(question || '');
+      let m;
+      while ((m = re.exec(q))) {
+        let pre = 0;
+        for (let i = 1; i < m.length; i++) if (m[i] !== undefined) { pre = m[i].length; break; }
+        const w = m[0].slice(pre);
+        if (w && words.indexOf(w) === -1) words.push(w);
+        if (!m[0].length) re.lastIndex++;
+      }
+    }
+    return { pass: mode === 'allow' ? true : mode === 'block' ? false : words.length > 0, words: words, mode: mode };
+  }
+  // 막혔으면 약관 문서 행을 뺀 새 배열, 통과면 받은 배열 그대로(바꾸지 않는다). 행은 doc_name만 본다.
+  function dropYakRows(rows, pass) {
+    if (pass || !rows) return rows || [];
+    return rows.filter(function (r) { return !(r && isYakDoc(r.doc_name)); });
+  }
+  // search_meta 기록 — 같은 요청의 세 입구가 한 행에 dropped를 더한다. 낱말이 걸렸거나 지운 행이 있을 때만 남긴다. meta가 없으면 아무것도 안 함.
+  function yakGateNote(meta, gate, dropped) {
+    if (!meta || !gate) return;
+    const n = dropped || 0;
+    let row = null;
+    for (let i = 0; i < meta.length; i++) if (meta[i] && meta[i].fn === 'yak_gate') { row = meta[i]; break; }
+    if (row) { row.dropped += n; return; }
+    if (!gate.words.length && !n) return;
+    row = { fn: 'yak_gate', pass: gate.pass, words: gate.words.slice(), dropped: n };
+    if (gate.mode !== 'gate') row.mode = gate.mode;
+    meta.push(row);
+  }
+
   // ── 3중 하이브리드 융합 순위 (RRF) ────────────────────────────────────────
   // 종전(배경역사 #23)에는 키워드 정규화(0~1)+trgm(0.12~0.5)+시맨틱×2(0.9~1.5)를 그대로 합산해 척도가 다른 점수끼리
   // 싸웠다(시맨틱 상위=논문이어도 합산 우승). 각 검색을 '순위'로 환산해 1/(K+순위) 합으로 융합하면 척도 문제가
@@ -1000,10 +1066,11 @@
   // ── 덧붙인 조문이 가리킨 별표 따로 1칸(2차, 10-06 — Fable 재검토 §4③) ──
   // 조문이 「별표 N에 따른다」고 가리킨 같은 문서의 별표 — 별표 동반(#90, 각 파일의 buildAnnexContext 1단계)과 같은 규칙: 별표·별지 조각은
   // 빼고, 「다른 법령」 별표 N은 건너뛰고, 문서|번호 첫 자리만. 반환 [{doc_name, no}] 입력 순.
+  // 사업자 이용약관(#312-보론 ⓓ)의 인용은 건너뛴다 — 약관 별표는 미등록이라 칸만 먹는다(각 파일 buildAnnexContext와 같은 규칙).
   function annexWanted(chunks) {
     const out = [], seen = {};
     (chunks || []).forEach(function (c) {
-      if (!c || /^(별표|별지)/.test(c.article_no || '')) return;
+      if (!c || /^(별표|별지)/.test(c.article_no || '') || isYakDoc(c.doc_name)) return;
       const re = new RegExp(ANNEX_IN_TEXT_RE.source, 'g');
       let m;
       while ((m = re.exec(String(c.content || '')))) {
@@ -1871,6 +1938,8 @@
     buildRagContext: buildRagContext, buildKbContext: buildKbContext,
     // 시행 전 제정 법령(#311)
     PENDING_NEW_OPTS: PENDING_NEW_OPTS, pickPendingNew: pickPendingNew, buildPendingNewContext: buildPendingNewContext, fetchPendingNew: fetchPendingNew,
+    // 사업자 이용약관 게이트(#312-보론)
+    YAK_DOC_RE: YAK_DOC_RE, YAK_GATE_OPTS: YAK_GATE_OPTS, isYakDoc: isYakDoc, yakGateWanted: yakGateWanted, dropYakRows: dropYakRows, yakGateNote: yakGateNote,
   };
   root.RagCore = RagCore;
   if (typeof module !== 'undefined' && module.exports) module.exports = RagCore;

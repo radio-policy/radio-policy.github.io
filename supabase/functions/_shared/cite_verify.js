@@ -144,7 +144,7 @@
   // 낱말 상한 12·줄표(— –) 구분(2026-09-28 PC 과거 답 75건 대조, Fable 재검토 대상): 7낱말 상한은 「주파수할당 신청 절차 및 방법 등 세부사항
   // 고시(…) 제14조」(8낱말) 이름 칸을 인용문으로 남겨 옛 코드가 판정기로 보내던 뒤 칸 조문 내용을 버렸고, 「… — 통신시설 등급 지정·관리 기준 제8조」
   // 소제목 줄도 줄표 뒤 이름을 못 지워 소제목이 인용문이 됐다.
-  const LAW_NAME_BEFORE_REF_RE = /(^|[|\-*•:;,.(「『\[>—–])(\s*(?:\*\*)?)((?:[가-힣A-Za-z0-9·ㆍ]+\s+){0,11}?[가-힣A-Za-z0-9·ㆍ]*(?:법률|법|시행령|시행규칙|규칙|고시|규정|기준|세칙|지침)[」』\]]?(?:\*\*)?\s*(?:\([^)]*\))?)(?=\s*\|?\s*(?:제\s?\d+\s?조|\[?별표|\[?별지))/g;
+  const LAW_NAME_BEFORE_REF_RE = /(^|[|\-*•:;,.(「『\[>—–])(\s*(?:\*\*)?)((?:[가-힣A-Za-z0-9·ㆍ]+\s+){0,11}?[가-힣A-Za-z0-9·ㆍ]*(?:법률|법|시행령|시행규칙|규칙|고시|규정|기준|세칙|지침|약관)[」』\]]?(?:\*\*)?\s*(?:\([^)]*\))?)(?=\s*\|?\s*(?:제\s?\d+\s?조|\[?별표|\[?별지))/g;
   // 이름 범위만 지운다(S3, 2026-10-10 — 2단계 Fable 판정 §4-7, #294-보론): 위 정규식은 줄 머리·마지막 구분 기호부터 법령명 끝까지(최대 12낱말)를 통째로
   // 이름으로 잡아, 「…요건을 포함하여야 한다고 법 제32조의14제3항이 명시하고 있습니다」·「…알려야 한다고 전기통신사업법 제19조제1항이 정하고 있습니다」처럼
   // **내용이 앞·법령명이 뒤**인 문장(한국어의 흔한 어순)은 내용까지 지웠다(남은 몸통 12자·11자, claimRelevance 낱말 근거 0 → #286 낱말 고르기가 못 돌고
@@ -173,7 +173,9 @@
   function stripRefBody(s) {
     return normQ(String(s || '').replace(/제\s?\d+\s?조(?:\s?의\s?\d+)?(?:\s?\([^)]*\))?/g, ''));
   }
-  const LAW_SUFFIX_RE = /(법|법률|시행령|시행규칙|규칙|고시|규정|기준|세칙|지침|요령|훈령|예규|협정)$/;
+  // 「약관」(#312, 2026-10-15): 사업자 이용약관(문서 분류 '약관', 문서명 「SK텔레콤 5G 이용약관(약관)(…)」)도 이름 끝 낱말로 친다 — 없으면 「이용약관 제32조」(한 낱말)는
+  // 약한 후보도 못 되어 앞 법령(전기통신사업법)을 이어받아 그 법 제32조와 대조됐다. 「약관 제N조」·「동 약관」은 고시·규정처럼 앞에 이름이 나온 약관을 이어받는다.
+  const LAW_SUFFIX_RE = /(법|법률|시행령|시행규칙|규칙|고시|규정|기준|세칙|지침|요령|훈령|예규|협정|약관)$/;
   // 약칭 → 정식 문서명에 들어 있는 문자열 (family가 이 문자열을 포함하면 같은 법령으로 본다)
   const LAW_ALIASES = {
     '정보통신망법': '정보통신망 이용촉진', '망법': '정보통신망 이용촉진',
@@ -716,7 +718,7 @@
     // 「법」·「시행령」 단독은 이 규칙이 아니다(위 inherit 법 단계·아래 subord 그대로).
     if (TYPE_TAIL_RE.test(nl) && (words.length === 1 || nl2 !== nl || NOT_NAME_WORD_RE.test(norm(words[words.length - 2]))))
       return { inherit: true, suffix: nl, text: nl2 !== nl ? words.slice(-2).join(' ') : last };
-    if (/^(동|같은|이)(규정|고시|기준|지침|세칙|요령|훈령|예규)$/.test(nl2)) return { inherit: true };
+    if (/^(동|같은|이)(규정|고시|기준|지침|세칙|요령|훈령|예규|약관)$/.test(nl2)) return { inherit: true };
     // 낫표로 감싼 이름(「이동통신용 무선설비 예비전원설비 설치 가이드라인」 제1조)은 법령 종류 낱말로 끝나지 않아도 **문서 제목**이다
     // (2026-10-04 사내 인계) → 약한 후보에 quoted 표지: 못 맞추면 이어받지 않고 원문 없음(lawScope). 낫표 없는 약한 이름은
     // 「이와 관련하여 제50조」 같은 산문과 구별할 수 없어 종전대로 이어받는다.
@@ -779,12 +781,12 @@
   }
   // 낱말 하나짜리 일반어는 법령 이름으로 치지 않는다(#240) — 이름 끝 일치로 검색 자료의 아무 '…고시'·'…규정'에 붙었다.
   // 시행령·시행규칙만 적은 것은 lawNameBefore가 {subord}로 따로 돌려준다(앞에 나온 법령의 것, lawScope).
-  const GENERIC_LAW_RE = /^(시행령|시행규칙|고시|규정|규칙|기준|지침|세칙|요령|훈령|예규|법률|협정|법령)$/;
+  const GENERIC_LAW_RE = /^(시행령|시행규칙|고시|규정|규칙|기준|지침|세칙|요령|훈령|예규|법률|협정|법령|약관)$/;
   // 후보 목록을 문서군(family 목록)과 맞춰 하나로 확정. 못 맞추면 null — 그 뜻은 lawScope가 정한다.
   // #240에서 '이름을 못 맞추면 원문 없음'이 되었으므로 모델이 이름을 조금 달리 쓴 경우까지 맞춘다:
   //  1) 이름 그대로(끝 일치·약칭)  2) 끝에 덧붙인 종류 낱말을 뗀 이름 — 「…세부사항 고시」 → 문서명 「…세부사항」(dd26eb98 실측)
   //  3) 줄여 쓴 이름 — 낱말 2개 이상이 문서명에 순서대로 다 있고 그런 문서가 하나뿐일 때만(둘 이상이면 못 맞춘 것으로)
-  const TYPE_TAIL_RE = /^(고시|규정|규칙|기준|지침|세칙|요령|훈령|예규|협정)$/;   // 시행령·시행규칙은 떼지 않는다(다른 문서다)
+  const TYPE_TAIL_RE = /^(고시|규정|규칙|기준|지침|세칙|요령|훈령|예규|협정|약관)$/;   // 시행령·시행규칙은 떼지 않는다(다른 문서다)
   function stripTypeTail(cand) {
     const w = String(cand || '').trim().split(/\s+/);
     return (w.length >= 2 && TYPE_TAIL_RE.test(norm(w[w.length - 1]))) ? w.slice(0, -1).join(' ') : null;
@@ -792,7 +794,29 @@
   const isSubDoc = function (s) { return /(시행령|시행규칙)$/.test(norm(s)); };
   // strict(#288 ⓒ): 2) 종류 낱말을 뗀 이름도 맞는 문서가 하나일 때만 — DB 문서명 전체에서 고를 때(자료 안에서는 종전대로 첫 문서)
   // 고시 번호 이름(numbered, #288 ⓑ)은 families.numIndex(번호 → 그 번호를 문서명에 단 문서군, checkCitation이 조각의 doc_name으로 만든다)에서 하나일 때만
+  // 약관 이름의 세대·사업자 낱말(#312, 2026-10-15): 이름 끝 일치는 「LTE 이용약관」·「KT 5G 이용약관」도 등록된 「SK텔레콤 5G 이용약관」에 붙인다
+  // (후보 「이용약관」) — 등록 안 된 세대·사업자의 약관을 5G 약관과 대조해 「원문 확인됨」이 되지 않게, 이름 끝 세 낱말에 적힌 세대·사업자 낱말은
+  // 문서명에도 있어야 한다(SKT = SK텔레콤 = 에스케이텔레콤). 앞쪽 낱말은 보지 않는다 — 「KT와 달리 SK텔레콤 5G 이용약관」의 KT는 이름이 아니다.
+  const YAK_QUAL_RE = /(?:^|[^A-Za-z0-9+])(3G|4G|5G|LTE|WCDMA|SKT|SK텔레콤|에스케이텔레콤|KT|LG유플러스|LGU\+|엘지유플러스)(?![A-Za-z0-9])/gi;
+  function yakQualOk(name, family) {
+    const w = String(name || '').trim().split(/\s+/);
+    if (!/약관$/.test(norm(w[w.length - 1] || ''))) return true;
+    const canon = function (t) {
+      t = t.toUpperCase();
+      return /^(SKT|SK텔레콤|에스케이텔레콤)$/.test(t) ? 'SK텔레콤' : /^(LG유플러스|LGU\+|엘지유플러스)$/.test(t) ? 'LG유플러스' : t;
+    };
+    const fam = String(family || '').toUpperCase().replace(/SKT|에스케이텔레콤/g, 'SK텔레콤').replace(/LGU\+|엘지유플러스/g, 'LG유플러스');
+    const tail = w.slice(-3).join(' ');
+    let m;
+    YAK_QUAL_RE.lastIndex = 0;
+    while ((m = YAK_QUAL_RE.exec(tail))) if (fam.indexOf(canon(m[1])) < 0) return false;
+    return true;
+  }
   function resolveLaw(nameInfo, families, strict) {
+    const r = resolveLawBase(nameInfo, families, strict);
+    return (r && nameInfo && nameInfo.candidates && !yakQualOk(nameInfo.candidates[0], r)) ? null : r;
+  }
+  function resolveLawBase(nameInfo, families, strict) {
     if (!nameInfo || !nameInfo.candidates) return null;
     if (nameInfo.numbered) {
       const hits = (families && families.numIndex && families.numIndex.get(nameInfo.number)) || [];
@@ -2518,7 +2542,7 @@
           const law = r.lawDoc || (r.doc ? docFamily(r.doc) : '');
           // 약한 이름을 맞춘 표시(「…가이드라인」 제1조)는 낫표를 떼고, 문서 이름이 이미 적혀 있으면 두 번 붙이지 않는다
           const tg = tgt.replace(/^「([^」]+)」\s*/, '$1 ');
-          const named = (!!law && tg.indexOf(law + ' ') === 0) || (/(법|법률|령|규칙|고시|규정|기준|세칙|지침)\s/.test(tg + ' ') && !/^동법\s/.test(tg));
+          const named = (!!law && tg.indexOf(law + ' ') === 0) || (/(법|법률|령|규칙|고시|규정|기준|세칙|지침|약관)\s/.test(tg + ' ') && !/^동법\s/.test(tg));
           const label = law && !named ? law + ' ' + tg.replace(/^동법\s*/, '') : tg;
           out = out.slice(0, r.tagStart) + okHead + (verTail ? cmpPlain + verTail : label) + ']' + out.slice(r.tagEnd);
           continue;

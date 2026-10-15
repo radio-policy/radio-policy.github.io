@@ -23,6 +23,20 @@ const CiteVerify = (globalThis as any).CiteVerify;
 // deno-lint-ignore no-explicit-any
 const RagCore = (globalThis as any).RagCore;
 
+// ── 사업자 이용약관 게이트(#312-보론, 2026-10-16 — 설계 local_docs/약관등록_261015/게이트_설계.md) ──
+// 규칙(낱말 목록·판정·행 거르기·search_meta 한 행)은 rag_core.js yakGateWanted·dropYakRows·yakGateNote 한 곳. 여기는 입구에 거는 일만 —
+// ⓐ searchChunks results(rankChunks·capSpill 앞) ⓑ searchLawArticles lawRows(rankLawHits 앞) ⓒ buildAdvisoryContext 조문 의미검색 행,
+// /law 의미검색(semExtra)·요약층 다리 ⓓ buildAnnexContext 별표 인용 수집(통과 여부와 무관하게 약관 문서 건너뜀). app.js와 같은 자리 — 한쪽만 고치지 말 것.
+// 질문 원문으로 입구마다 다시 판정한다(정규식 한 번, 비용 0 — 함수 서명을 안 바꾼다). rag_core.js가 함께 묶이지만 app.js와 같은 가드(함수 없으면 막음).
+function yakDropRows<T extends { doc_name?: string }>(rows: T[] | null | undefined, query: string, meta?: SearchMeta): T[] {
+  const src = rows || [];
+  if (typeof RagCore.yakGateWanted !== 'function') return src.filter((r) => !/^[^(]+\(약관\)/.test(String(r?.doc_name || '')));
+  const gate = RagCore.yakGateWanted(query);
+  const out = RagCore.dropYakRows(src, gate.pass) as T[];
+  RagCore.yakGateNote(meta, gate, src.length - out.length);
+  return out;
+}
+
 const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
 const VOYAGE_URL = 'https://api.voyageai.com/v1/embeddings';
 
@@ -109,6 +123,7 @@ interface Chunk {
 // 함수에 넘기고 answerAdvisory가 chat_logs.search_meta에 남긴다. 모듈 전역이 아니라 인자로 넘기는 이유:
 // Edge isolate는 요청을 동시에 처리하므로 전역이면 두 자문의 기록이 섞인다. app.js metaRpc와 같은 형식.
 export type SearchMeta = { fn: string; ms: number; rows: number | null; error: string | null; trimmed?: number; capped?: boolean; addendum?: number; apply?: number; gate?: string | null; docs?: number; pending?: number }[];
+// 약관 게이트 행(#312-보론)은 RagCore.yakGateNote가 넣는 { fn: 'yak_gate', pass, words, dropped[, mode] } — ms·rows·error 없음(app.js와 같은 꼴)
 type RpcResult = { data?: unknown; error?: { code?: string; message?: string } | null } | null;
 function metaRpc(sb: SupabaseClient, meta: SearchMeta | undefined, fn: string, params: Record<string, unknown>) {
   const t0 = performance.now();
@@ -180,8 +195,10 @@ async function searchChunks(sb: SupabaseClient, apiKey: string, query: string, m
 
   // ── RRF 융합·조문 종류별 가점·문서당 상한 — rag_core.js rankChunks (#215, app.js와 같은 함수) ──
   // 문서당 상한 때문에만 빠진 조문·별표 후보(L1′ 상한 구제, #283)는 spill에 따로 붙여 돌려준다 — 채택분(배열 자체)은 그대로.
-  const picked = RagCore.rankChunks(results, keywords, baseKeywords, query) as Chunk[] & { spill?: Chunk[] };
-  picked.spill = RagCore.capSpill(results) as Chunk[];
+  // 약관 게이트 ⓐ(#312-보론) — 질문 원문에 약관 낱말이 없으면 약관 행을 순위 매기기 전에 뺀다(상위 15·상한 구제 둘 다 약관 없이)
+  const gated = yakDropRows(results, query, meta);
+  const picked = RagCore.rankChunks(gated, keywords, baseKeywords, query) as Chunk[] & { spill?: Chunk[] };
+  picked.spill = RagCore.capSpill(gated) as Chunk[];
   return picked;
 }
 
@@ -239,6 +256,7 @@ async function buildAnnexContext(sb: SupabaseClient, chunks: Chunk[], question: 
     const reCite = /(「[^」]{2,40}」[^\n]{0,20}?)?별표\s*제?\s*(\d+(?:의\d+)?)/g;
     for (const c of chunks) {
       if (/^(별표|별지)/.test(c.article_no || '')) continue;
+      if (RagCore.isYakDoc(c.doc_name)) continue;   // 약관 게이트 ⓓ(#312-보론) — 약관 별표는 미등록이라 두 칸을 빈 채로 먹는다(rag_core annexWanted와 같은 규칙)
       reCite.lastIndex = 0;
       let m: RegExpExecArray | null;
       while ((m = reCite.exec(String(c.content || '')))) {
@@ -618,7 +636,7 @@ export async function searchLawArticles(sb: SupabaseClient, query: string, limit
         .then((r) => (r?.data || []) as LawRow[]).catch(() => [] as LawRow[])
     : [];
   // 반환 순서(키워드 → 제목 적중 → 본문 적중 → 순위)대로 넣는다 — 같은 조문의 대표 청크가 실행마다 같아진다
-  for (const r of lawRows) {
+  for (const r of yakDropRows(lawRows, query, meta)) {   // 약관 게이트 ⓑ(#312-보론) — rankLawHits 앞
     put({ id: r.id, doc_name: r.doc_name, article_no: r.article_no, content: r.content, _hits: 0 }, r.hit_col === 'title' ? actOf[r.kw_ord - 1] : 0);
   }
 
@@ -714,7 +732,7 @@ export async function buildLawQueryContext(sb: SupabaseClient, query: string): P
   // 의미 검색분에서 **조문만** 남긴다 — article_no가 없는 것(보도자료 등)과 파일 문서(논문·계획서)는
   // /law의 답이 아니다. 그 필터는 searchLawArticles가 쓰는 기준과 같게 유지한다.
   const haveIds = new Set([...hits.map((h) => h.id), ...namedIds]);
-  const semExtra: LawHit[] = (semantic || [])
+  const semExtra: LawHit[] = yakDropRows(semantic, query, meta)   // 약관 게이트 ⓒ(#312-보론) — /law 의미검색
     .filter((c) => c.article_no && !haveIds.has(c.id) && !/\.(pdf|md|docx|hwp)$/i.test(c.doc_name || ''))
     .slice(0, 6)
     .map((c) => ({ id: c.id, doc_name: c.doc_name, article_no: c.article_no, content: c.content, _hits: 0 }));
@@ -741,7 +759,7 @@ export async function buildLawQueryContext(sb: SupabaseClient, query: string): P
         .then((r) => (r.data || []) as LawHit[]).catch(() => [] as LawHit[])));
     const BRIDGE_TOTAL_CAP = 14;   // 전체 상한 — 프롬프트 폭주 방지 (조문당 800자 → 최대 ~11K자)
     for (const rows of perTitle) {
-      const fresh = rows.filter((r) => !haveIds.has(r.id) && !/^(부칙|별표|서식)/.test(r.article_no || ''));
+      const fresh = yakDropRows(rows, query, meta).filter((r) => !haveIds.has(r.id) && !/^(부칙|별표|서식)/.test(r.article_no || ''));   // 약관 게이트(#312-보론)
       // 조문이 적은 고시·훈령이면 **통째로** 넣는다. 점수로 4개만 고르다가 정작 핵심인
       // 제6조(지도 형태로 홈페이지 게시)가 5순위로 잘렸다 — '목적'·'정의' 같은 상투 조문이
       // 전기통신·정보·제공 같은 흔한 단어로 점수를 먼저 가져가기 때문이다(실측).
@@ -1335,7 +1353,7 @@ export async function buildAdvisoryContext(sb: SupabaseClient, question: string)
   // 이미 위 RAG가 훑는 대상이고, 별표는 통째로 길어 컨텍스트를 잡아먹는다), 파일 문서 제외.
   const seenArt = new Set(extra.map((h) => h.doc_name + '|' + (h.article_no || '')));
   extra.forEach((h) => have.add(h.id));
-  for (const c of lawSem) {
+  for (const c of yakDropRows(lawSem, question, meta)) {   // 약관 게이트 ⓒ(#312-보론) — 정밀검색 칸 약관 진입 7문항 중 6이 이 갈래(문턱 0)
     if (extra.length >= 10 + namedHits.length) break;     // 키워드 5 + 의미 5 상한(지목 조문은 별도)
     const key = c.doc_name + '|' + (c.article_no || '');
     if (!/^\d+조/.test(c.article_no || '')) continue;      // 조문만

@@ -43,7 +43,9 @@ var NAMES = ['PRIORITY_KW_RE', 'VERB_TAIL', 'extractKeywords', 'LAW_SYNONYMS', '
   // L9 준용 따라가기(#300)
   'APPLY_OPTS', 'APPLY_DIRECTIVE_RE', 'refLawOf', 'applyRefs', 'applyTargets', 'applyKeywords', 'pickApply', 'neighborWhole',
   // 시행 전 제정 법령(#311)
-  'PENDING_NEW_OPTS', 'pickPendingNew', 'buildPendingNewContext', 'fetchPendingNew'];
+  'PENDING_NEW_OPTS', 'pickPendingNew', 'buildPendingNewContext', 'fetchPendingNew',
+  // 사업자 이용약관 게이트(#312-보론)
+  'YAK_DOC_RE', 'YAK_GATE_OPTS', 'isYakDoc', 'yakGateWanted', 'dropYakRows', 'yakGateNote'];
 NAMES.forEach(function (n) { ok('export ' + n, RC[n] !== undefined); });
 
 // ── 법령 키워드 추출 ──
@@ -947,6 +949,61 @@ var pendingNewTests = (async function () {
   eq('fetchPendingNew f.named(pendingNamed) → G0', [fpn.gate, fpn.laws[0].named, fpn.ids.length], ['named', ['18조'], 7]);
   var fpnErr = await RC.fetchPendingNew(Object.assign({}, f, { named: function () { return Promise.reject(new Error('x')); } }), Promise.resolve(kb), '20261015');
   eq('fetchPendingNew f.named 실패는 지목 없음(G1 그대로)', [fpnErr.gate, fpnErr.laws[0].named], ['kb', []]);
+})();
+
+// ── 사업자 이용약관 게이트(#312-보론, 설계 local_docs/약관등록_261015/게이트_설계.md §2-3·§3·§5-4) ──
+(function () {
+  var C = JSON.parse(fs.readFileSync(path.join(ROOT, 'tests', 'fixtures', 'yak_gate_cases.json'), 'utf8'));
+  eq('약관 게이트 list = 공유 사례 파일 list(사내 이식본과 같은 원본)', RC.YAK_GATE_OPTS.list, C.list);
+  eq('약관 게이트 기본 on·mode gate', [RC.YAK_GATE_OPTS.on, RC.YAK_GATE_OPTS.mode], [true, 'gate']);
+  var bad = C.cases.filter(function (c) { var g = RC.yakGateWanted(c.q); return g.pass !== c.pass || JSON.stringify(g.words) !== JSON.stringify(c.words); });
+  eq('약관 게이트 공유 사례 ' + C.cases.length + '개(검산 꼴 35·약관 20·dev 21·사내 33)', bad.map(function (c) { return c.id; }), []);
+  var cnt = function (set) { return C.cases.filter(function (c) { return c.set === set && c.pass; }).length; };
+  eq('약관 게이트 통과 수 — 검산 꼴 18/35·약관 19/20(눈가림 y11만 막힘)·dev 0/21·사내 1/33(i27 번호이동)', [cnt('form'), cnt('yak'), cnt('dev'), cnt('i33')], [18, 19, 0, 1]);
+  eq('약관 문서 판별(문서명 첫 괄호 (약관))', C.docs.map(function (d) { return RC.isYakDoc(d.doc_name); }), C.docs.map(function (d) { return d.yak; }));
+  eq('앞 글자 제한이 먹은 글자는 기록에서 뗌', [RC.yakGateWanted('즉시환불받나').words, RC.yakGateWanted('통화 품질 문제로 해지하면').words, RC.yakGateWanted('품질 저하 시 보상').words], [['환불'], ['해지'], ['보상']]);
+  // mode·on·list 바꾸기(회귀 하네스 --core-opts가 하는 것) — 끝나면 되돌린다
+  var keep = Object.assign({}, RC.YAK_GATE_OPTS);
+  try {
+    RC.YAK_GATE_OPTS.mode = 'allow';
+    var a = RC.yakGateWanted('전파사용료 감면 대상');
+    RC.YAK_GATE_OPTS.mode = 'block';
+    var b = RC.yakGateWanted('이용약관 제32조 손해배상');
+    RC.YAK_GATE_OPTS.mode = 'gate'; RC.YAK_GATE_OPTS.on = false;
+    var c = RC.yakGateWanted('전파사용료 감면 대상');
+    RC.YAK_GATE_OPTS.on = true; RC.YAK_GATE_OPTS.list = keep.list + '|커버리지';
+    var d = RC.yakGateWanted('5G 커버리지 맵 공개 항목');
+    RC.YAK_GATE_OPTS.list = '';
+    var e = RC.yakGateWanted('이용약관 제32조');
+    eq('약관 게이트 mode allow·block·on=false·list 덮어쓰기(G1 꼴)·빈 list는 막음', [a.pass, a.mode, b.pass, b.words, c.pass, c.mode, d.pass, d.words, e.pass],
+       [true, 'allow', false, ['약관', '손해배상'], true, 'allow', true, ['커버리지'], false]);
+  } finally { Object.assign(RC.YAK_GATE_OPTS, keep); }
+  eq('약관 게이트 되돌림 뒤 다시 gate', RC.yakGateWanted('5G 커버리지 맵 공개 항목').pass, false);
+  // 행 거르기 — 막히면 약관 행만 빼고 새 배열, 통과면 그대로, 입력은 안 바꿈
+  var Y = 'SK텔레콤 5G 이용약관(약관)(2026.8)(20260826)', L = '전파법(법률)(제1호)(20260101)';
+  var rows = [{ id: 1, doc_name: L }, { id: 2, doc_name: Y }, { id: 3, doc_name: L }];
+  var blocked = RC.dropYakRows(rows, false), passed = RC.dropYakRows(rows, true);
+  eq('dropYakRows 막힘 → 약관 행 제외(새 배열)·통과 → 그대로·입력 불변', [blocked.map(function (r) { return r.id; }), passed === rows, rows.length, RC.dropYakRows(null, false)], [[1, 3], true, 3, []]);
+  // search_meta 한 행 — 세 입구가 dropped를 더하고, 낱말도 지운 행도 없으면 안 남긴다
+  var meta = [{ fn: 'search_chunks_trgm', ms: 1, rows: 0, error: null }];
+  var gB = RC.yakGateWanted('전파사용료 감면'), gP = RC.yakGateWanted('위약금 면제 사유');
+  RC.yakGateNote(meta, gB, 0);
+  var m0 = meta.length;
+  RC.yakGateNote(meta, gB, 2); RC.yakGateNote(meta, gB, 1); RC.yakGateNote(null, gB, 5);
+  var meta2 = []; RC.yakGateNote(meta2, gP, 0);
+  RC.YAK_GATE_OPTS.mode = 'block'; var gK = RC.yakGateWanted('x'); RC.YAK_GATE_OPTS.mode = 'gate';
+  var meta3 = []; RC.yakGateNote(meta3, gK, 4);
+  eq('yakGateNote — 아무것도 없으면 안 남김·dropped 합산·통과 낱말 기록·측정 mode 표시', [m0, meta[1], meta2[0], meta3[0]],
+     [1, { fn: 'yak_gate', pass: false, words: [], dropped: 3 }, { fn: 'yak_gate', pass: true, words: ['위약금'], dropped: 0 }, { fn: 'yak_gate', pass: false, words: [], dropped: 4, mode: 'block' }]);
+  // ⓓ 별표 인용 수집 — 약관 문서의 「별표 N」 인용은 건너뜀(통과 여부와 무관)
+  eq('annexWanted — 약관 조의 별표 인용은 건너뜀(ⓓ)', RC.annexWanted([{ doc_name: Y, article_no: '43조(위약금 면제)', content: '[별표2]에 따른 위약금' },
+    { doc_name: L, article_no: '14조(x)', content: '별표 3에 따라 산정한다' }]), [{ doc_name: L, no: '3' }]);
+  // 두 판 네 입구(ⓐⓑⓒⓓ) — 한쪽만 고치지 말 것(구조 확인)
+  var app = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8');
+  var ragTs = fs.readFileSync(path.join(ROOT, 'supabase', 'functions', '_shared', 'rag.ts'), 'utf8');
+  var n = function (s, re) { return (s.match(re) || []).length; };
+  eq('app.js 약관 게이트 — 입구 ⓐⓑⓒ(yakDropRows 3)·ⓓ(별표 인용 isYakDoc)', [n(app, /yakDropRows\(/g) - n(app, /function yakDropRows\(/g), n(app, /yakIsDoc\(c\.doc_name\)/g)], [3, 1]);
+  eq('rag.ts 약관 게이트 — 입구 ⓐⓑⓒ + /law 의미·요약층 다리(yakDropRows 5)·ⓓ', [n(ragTs, /yakDropRows\(/g) - n(ragTs, /function yakDropRows\(/g), n(ragTs, /RagCore\.isYakDoc\(c\.doc_name\)/g)], [5, 1]);
 })();
 
 Promise.all([asyncTests, addOnTests, addOnTests2, addendumTests, applyTests, pendingNewTests]).catch(function (e) { fails++; total++; console.log('FAIL  비동기 검사 예외 ' + (e && e.message)); }).then(function () {
