@@ -122,7 +122,8 @@ function metaRpc(sb: SupabaseClient, meta: SearchMeta | undefined, fn: string, p
 }
 
 // ── 3중 하이브리드 조문 검색 (app.js searchKeywords 이식, 상위 15개) ──
-async function searchChunks(sb: SupabaseClient, apiKey: string, query: string, meta?: SearchMeta): Promise<Chunk[]> {
+// expandP = 이미 띄운 Haiku 확장(buildAdvisoryContext가 질문당 한 번 띄워 searchLawArticles와 나눈다 — 장동선 판정 §4-3 C2-a). 없으면 여기서 부른다.
+async function searchChunks(sb: SupabaseClient, apiKey: string, query: string, meta?: SearchMeta, expandP?: Promise<string[]>): Promise<Chunk[]> {
   const baseKeywords = extractKeywords(query);
   // trgm·시맨틱은 확장어를 쓰지 않으므로 Haiku 확장을 **기다리지 않고 먼저** 시작한다(B-2, #201, 2026-09-24).
   // trgm 5~6초(#185, SQL로는 못 줄임)와 임베딩 왕복이 확장 1~2초와 겹친다. 병합 순서는 아래에서 고정하므로 결과 동일.
@@ -134,7 +135,7 @@ async function searchChunks(sb: SupabaseClient, apiKey: string, query: string, m
     return metaRpc(sb, meta, 'match_chunks_semantic', { query_embedding: emb, match_threshold: 0.45, match_count: 8, only_current: true })
       .then((r) => r?.data || []).catch(() => []);
   });
-  const expanded = await expandQueryKeywords(apiKey, query, sb);
+  const expanded = await (expandP || expandQueryKeywords(apiKey, query, sb));
   // 기본 → 법령 표제어(LAW_SYNONYMS) → LLM 확장 순 (app.js searchKeywords와 동일 유지)
   const keywords: string[] = [];
   const seenKw = new Set<string>();
@@ -223,9 +224,12 @@ const ANNEX_MAX_CHUNKS: number = RagCore.ANNEX_MAX_CHUNKS;   // 별표당 청크
 
 interface AnnexRow { chunk_index: number; article_no?: string; content?: string }
 
-async function buildAnnexContext(sb: SupabaseClient, chunks: Chunk[], question: string): Promise<{ text: string; sources: string[] }> {
+// qEmbP = 질문 임베딩(별표 조각 동점 가르기 — 없으면 여기서 getQueryEmbedding(question), 같은 (모델, 글)이라 기억에서 나온다), meta = search_meta(annex_chunks_semantic 행)
+async function buildAnnexContext(sb: SupabaseClient, chunks: Chunk[], question: string, qEmbP?: Promise<number[] | null>, meta?: SearchMeta): Promise<{ text: string; sources: string[]; ids: string[] }> {
   const sources: string[] = [];
-  if (!chunks || !chunks.length) return { text: '', sources };
+  // 실은 별표 조각 「법령명|별표 N|chunk_index」 — 회귀 하네스 annexIds 칸(별표 이름만으로는 머리 조각만 들어와도 같아 보인다, 장동선 판정 §4-7)
+  const ids: string[] = [];
+  if (!chunks || !chunks.length) return { text: '', sources, ids };
   try {
     // 1) 검색된 '조문' 청크에서 별표 인용을 뽑는다. 별표·별지 청크 자신은 제외(자기 참조 방지).
     //    「다른 법령」 별표 N 형태는 건너뛴다 — 같은 문서의 같은 번호 별표를 붙이면
@@ -249,25 +253,16 @@ async function buildAnnexContext(sb: SupabaseClient, chunks: Chunk[], question: 
     // 바로 이 경우다(별표 조각만 검색되고 조문은 안 잡힌 질문).
     const units = wanted.slice(0, ANNEX_MAX_UNITS);   // chunks가 순위순이라 앞쪽이 상위 조문
 
-    const qWords = extractKeywords(question || '');
+    const embP = units.length ? (qEmbP || getQueryEmbedding(question)) : undefined;
     const blocks: string[] = [];
     for (const w of units) {
-      const r = await sb.from('document_chunks')
-        .select('chunk_index,article_no,content')
-        .eq('doc_name', w.doc_name).eq('status', 'current')
-        .like('article_no', '별표 ' + w.no + '(%')
-        .order('chunk_index', { ascending: true });
-      const all = (r.data || []) as AnnexRow[];
-      if (r.error || !all.length) continue;
+      const all = (await fetchAnnexUnit(sb, w.doc_name, '별표 ' + w.no + '(', embP, meta)) as unknown as AnnexRow[];
+      if (!all.length) continue;
 
       // 첫 청크는 무조건 넣는다 — 표의 열 이름이 여기에만 있어서,
       // 가운데 청크만 넣으면 '1만원 │― │―'처럼 무슨 숫자인지 알 수 없다.
-      const picked: AnnexRow[] = [all[0]];
-      const rest = all.slice(1)
-        .map((c) => ({ c, hit: qWords.reduce((a, kw) => a + (String(c.content || '').includes(kw) ? 1 : 0), 0) }))
-        .sort((a, b) => (b.hit !== a.hit ? b.hit - a.hit : a.c.chunk_index - b.c.chunk_index));
-      for (const x of rest.slice(0, ANNEX_MAX_CHUNKS - 1)) picked.push(x.c);
-      picked.sort((a, b) => a.chunk_index - b.chunk_index);
+      // 나머지는 질문 키워드 적중 수 → 질문 유사도(annex_chunks_semantic) → 번호 순(장동선 판정 §4-7) — 규칙은 rag_core.js pickAnnexChunks 한 곳.
+      const picked: AnnexRow[] = RagCore.pickAnnexChunks(all, question);
 
       const title = all[0].article_no || ('별표 ' + w.no);
       const omitted = all.length - picked.length;
@@ -275,6 +270,7 @@ async function buildAnnexContext(sb: SupabaseClient, chunks: Chunk[], question: 
         + (omitted > 0 ? `\n※ 이 별표는 전체 ${all.length}개 조각 중 질문과 가까운 ${picked.length}개만 실었습니다. 표의 일부만 보이면 그렇게 밝히세요.` : '')
         + '\n' + picked.map((c) => c.content || '').join('\n'));
       sources.push(w.doc_name.split('(')[0].trim() + ' ' + title.split('(')[0].trim());
+      for (const c of picked) ids.push(w.doc_name.split('(')[0].trim() + '|별표 ' + w.no + '|' + c.chunk_index);
     }
 
     // 2) 별표 청크가 검색으로 직접 잡혔는데 '첫 조각'이 빠진 경우 그것만 보충한다.
@@ -307,23 +303,25 @@ async function buildAnnexContext(sb: SupabaseClient, chunks: Chunk[], question: 
       if (sources.includes(hc.doc_name.split('(')[0].trim() + ' ' + prefix)) continue;
       headBlocks.push('[' + hc.doc_name + ' ' + (first.article_no || prefix) + ' — 표 머리(열 이름)]\n' + (first.content || ''));
       sources.push(hc.doc_name.split('(')[0].trim() + ' ' + prefix + ' 머리');
+      ids.push(hc.doc_name.split('(')[0].trim() + '|' + prefix + '|' + first.chunk_index);
     }
     if (headBlocks.length) {
       blocks.push('※ 아래는 위 검색 결과에 열 이름 없이 일부만 실린 표의 머리 부분입니다. 숫자가 어느 항목인지 여기서 확인하세요.\n\n'
         + headBlocks.join('\n\n'));
     }
 
-    if (!blocks.length) return { text: '', sources: [] };
+    if (!blocks.length) return { text: '', sources: [], ids: [] };
     return {
       text: '\n\n---\n\n[인용 조문이 가리키는 별표 원문]\n'
         + '위 조문이 "별표 N에 따른다"고 한 그 별표를 함께 싣습니다. **금액·기준·요율은 조문이 아니라 이 별표가 정본**이므로 여기서 인용하세요. '
         + '단, 질문이 묻는 항목이 이 별표에 없으면 없다고 답하고 임의로 유추하지 마세요.\n\n'
         + blocks.join('\n\n---\n\n'),
       sources,
+      ids,
     };
   } catch (e) {
     console.warn('별표 동반 인출 실패(건너뜀):', e);
-    return { text: '', sources: [] };
+    return { text: '', sources: [], ids: [] };
   }
 }
 
@@ -515,12 +513,23 @@ async function fetchFamilyArticle(sb: SupabaseClient, fam: string, key: string, 
     .like('article_no', key + '%').order('chunk_index', { ascending: true }).limit(40);
   return (r.data || []) as Chunk[];
 }
-// 덧붙인 조문이 가리킨 별표 한 개의 조각 — 별표 동반(buildAnnexContext)과 같은 조건 + id(인용 대조·chat_logs 조각 id용)
-async function fetchAnnexRows(sb: SupabaseClient, docName: string, no: string): Promise<Chunk[]> {
+// 별표 한 개의 조각 전부(chunk_index 순) — 별표 동반(buildAnnexContext 1단계)과 덧붙이기 별표 칸이 같이 쓴다. prefix = '별표 N('.
+// 질문 임베딩이 있으면 DB 함수 annex_chunks_semantic(같은 행 + 질문 유사도 칸 — 장동선 판정 §4-7), 임베딩이 없거나 그 함수가 실패·0행이면
+// 종전 조회(유사도 칸 없음 → RagCore.pickAnnexChunks가 종전 순서로 고른다). app.js fetchAnnexUnit과 같음.
+async function fetchAnnexUnit(sb: SupabaseClient, docName: string, prefix: string, embP?: Promise<number[] | null>, meta?: SearchMeta): Promise<Chunk[]> {
+  const emb = embP ? await embP.catch(() => null) : null;
+  if (emb) {
+    const r = await metaRpc(sb, meta, 'annex_chunks_semantic', { query_embedding: emb, p_doc_name: docName, p_article_prefix: prefix }).catch(() => null);
+    if (r && !r.error && Array.isArray(r.data) && r.data.length) return r.data as Chunk[];
+  }
   const r = await sb.from('document_chunks').select('id, chunk_index, article_no, content')
     .eq('doc_name', docName).eq('status', 'current')
-    .like('article_no', '별표 ' + no + '(%').order('chunk_index', { ascending: true });
+    .like('article_no', prefix + '%').order('chunk_index', { ascending: true });
   return (r.data || []) as Chunk[];
+}
+// 덧붙인 조문이 가리킨 별표 한 개의 조각 — 별표 동반(buildAnnexContext)과 같은 조회 + id(인용 대조·chat_logs 조각 id용)
+function fetchAnnexRows(sb: SupabaseClient, docName: string, no: string, embP?: Promise<number[] | null>, meta?: SearchMeta): Promise<Chunk[]> {
+  return fetchAnnexUnit(sb, docName, '별표 ' + no + '(', embP, meta);
 }
 // 한 문서(고시)의 조문 조각 전부 — L4 같은 고시 이웃 조
 async function fetchDocArticles(sb: SupabaseClient, docName: string): Promise<Chunk[]> {
@@ -558,10 +567,11 @@ export const expandQueryForSemantic: (query: string) => string = RagCore.expandQ
 const isTitleStop: (kw: string, query: string) => boolean = RagCore.isTitleStop;
 const lawRank: (docName: string | undefined) => number = RagCore.lawRank;
 
-export async function searchLawArticles(sb: SupabaseClient, query: string, limit = 5, meta?: SearchMeta): Promise<LawHit[]> {
+// expandP = 자문(buildAdvisoryContext)이 searchChunks와 나누는 확장 — /law(buildLawQueryContext)는 넘기지 않아 여기서 부른다
+export async function searchLawArticles(sb: SupabaseClient, query: string, limit = 5, meta?: SearchMeta, expandP?: Promise<string[]>): Promise<LawHit[]> {
   const apiKey = env('ANTHROPIC_API_KEY');
   const base = extractKeywords(query);
-  const expanded = apiKey ? await expandQueryKeywords(apiKey, query, sb) : [];   // 키 없으면 기본 키워드만(페일소프트)
+  const expanded = expandP ? await expandP : apiKey ? await expandQueryKeywords(apiKey, query, sb) : [];   // 키 없으면 기본 키워드만(페일소프트)
 
   const seen = new Map<string, boolean>();
   const keywords: string[] = [];
@@ -1190,7 +1200,7 @@ export interface AdvisoryResult { answer: string; sources: string[]; webSources:
 // 자문 컨텍스트(검색·보강 단계)의 산출물 — answerAdvisory가 이걸로 프롬프트를 조립한다.
 export interface AdvisoryContext {
   chunks: Chunk[]; extra: LawHit[]; addedIds: number[];
-  annex: { text: string; sources: string[] }; citing: { text: string; chunks: Chunk[]; ids: number[] };
+  annex: { text: string; sources: string[]; ids?: string[] }; citing: { text: string; chunks: Chunk[]; ids: number[] };
   kb: KbRow[]; news: { text: string; sources: string[] }; asm: string; lawContext: string; systemVariable: string;
   pending: string; lawTrack: string;   // 시행예정 개정본·법령 개정 동향(#303) — 대시보드에만 있던 두 구역의 이식
   pendingNew: PendingNew;   // 시행 전 제정 법령(#311) — 현행판 없는 새 법령의 원문
@@ -1209,7 +1219,10 @@ export async function buildAdvisoryContext(sb: SupabaseClient, question: string)
   // 6갈래를 동시에: 조문 RAG / 법령요약 / 조문 정밀검색(키워드) / 조문 의미검색 / 뉴스 동향 / 국회 동향(참고 배경)
   const kbP = searchKbSummaries(sb, question, meta);
   const newsP = buildNewsContext(sb, question, meta);
-  const lawP = searchLawArticles(sb, question, 5, meta);
+  // Haiku 확장은 질문당 한 번 — 조문 RAG(searchChunks)와 조문 정밀검색(searchLawArticles)이 같은 확장어를 쓴다(장동선 판정 §4-3 C2-a, 2026-10-15).
+  // 종전엔 두 갈래가 각자 불러 같은 질문에 다른 확장어를 받았다(대시보드 _expandCache·회귀 하네스는 이미 1회). 키 없으면 확장 없이(페일소프트).
+  const expandP: Promise<string[]> = apiKey ? expandQueryKeywords(apiKey, question, sb) : Promise.resolve([]);
+  const lawP = searchLawArticles(sb, question, 5, meta, expandP);
   // 조문 **의미** 검색 (#89) — /law에는 있는데 자문에만 없던 갈래. 어휘가 어긋나면 키워드는 못 넘는다.
   // 실측(자문 경로): 「기지국 개설 허가 절차」의 키워드 5개는 해상무선통신망 제12조·전파관리 세칙
   // 제27조(민원)로 새고 정답인 전파법 21조(무선국 개설허가 등의 절차)를 못 찾았다. 「주파수 재할당
@@ -1240,7 +1253,9 @@ export async function buildAdvisoryContext(sb: SupabaseClient, question: string)
   const namedP: Promise<Chunk[]> = RagCore.fetchNamedArticles(question, (k: string) => fetchArticleKeyRows(sb, k), (d: string, k: string) => fetchArticleChunks(sb, d, k))
     .then((rows: Chunk[]) => { if (namedRefs) meta.push({ fn: 'named_articles', ms: Math.round(performance.now() - namedT0), rows: rows.length, error: null }); return rows; })
     .catch((e: unknown) => { meta.push({ fn: 'named_articles', ms: Math.round(performance.now() - namedT0), rows: null, error: String((e as Error)?.message || e) }); return [] as Chunk[]; });
-  const chunks = await searchChunks(sb, apiKey, question, meta);
+  const chunks = await searchChunks(sb, apiKey, question, meta, expandP);
+  // 질문 임베딩 — 별표 조각 동점 가르기(별표 동반·덧붙이기 별표 칸, 장동선 판정 §4-7)에 넘긴다. searchChunks와 같은 (모델, 글)이라 기억에서 나온다(Voyage 추가 0).
+  const qEmbP = getQueryEmbedding(question);
   const [kb, news, lawHits, lawSem, asm, named] = [await kbP, await newsP, await lawP, await lawSemP, await asmP, await namedP];
 
   // 조문 보강 — searchLawArticles(키워드 확장 + 조문 단위 필터)가 찾은 조문 중
@@ -1305,7 +1320,7 @@ export async function buildAdvisoryContext(sb: SupabaseClient, question: string)
     familyDocs: (f: string[]) => fetchFamilyDocs(sb, f),
     familyArticle: (f: string, k: string, d?: string | null) => fetchFamilyArticle(sb, f, k, d),
     docArticles: (d: string) => fetchDocArticles(sb, d),
-    annexRows: (d: string, no: string) => fetchAnnexRows(sb, d, no),
+    annexRows: (d: string, no: string) => fetchAnnexRows(sb, d, no, qEmbP, meta),
     addendaRows: (docs: string[]) => fetchAddendaRows(sb, docs),   // L8 경과조치(#290) — 질문에 시점·전환 낱말이 있을 때만 불린다
   }, { question }).then((r: AddOns) => { addMs = Math.round(performance.now() - addT0); return r; })
     .catch((e: unknown) => { console.warn('위임·같은 고시 덧붙이기 실패(건너뜀):', e); addMs = Math.round(performance.now() - addT0); addErr = String((e as Error)?.message || e); return EMPTY_ADDONS; });
@@ -1318,7 +1333,7 @@ export async function buildAdvisoryContext(sb: SupabaseClient, question: string)
   // 종전에는 한 건씩 await라 각각의 DB 왕복이 줄줄이 더해졌다. 프롬프트 조립 순서는 아래에서 그대로 고정. app.js와 동일 유지.
   // 덧붙인 조문(상한 구제·위임·공통 인용)의 별표는 여기 넣지 않는다 — 덧붙이기 구역의 따로 1칸(예산 안, rag_core.js fetchAddOns)이다(#283-보론2).
   // 1차(#283)는 이 입력 끝에 이어 종전 2칸의 빈자리를 예산 밖으로 채웠고(문항별 최대 +9.8K자), 위임 조회가 끝나야 별표가 시작됐다.
-  const annexP = buildAnnexContext(sb, chunks2.concat(extra2 as unknown as Chunk[]), question);
+  const annexP = buildAnnexContext(sb, chunks2.concat(extra2 as unknown as Chunk[]), question, qEmbP, meta);
   // 인용 조문의 시행예정 개정본(#303) — 대시보드 buildPendingContext(ragChunks)와 같은 입력(RAG 상위 15)·같은 규칙. 별표·역참조와 독립이라 함께 시작
   const pendingP = fetchPendingContext(sb, chunks2, meta);
 

@@ -26,7 +26,8 @@
   const PRIORITY_KW_RE = /제\d+조|주파수|할당|재할당|전자파|ITU|5G|6G|EMC|SAR|고시|시행령|시행규칙|적합성|기술기준|무선국|면허|허가|신청|승인|폐업|폐지|이용기간|지원금|장려금|차별|이용자|대리점|판매점|유통점|약관|요금|금지행위|과징금|과태료|벌칙|벌금|사업자|기지국|검사|등록|신고|취소|회수|위탁|도매|접속|설비|번호이동|결합|계약|고지|공시|재난|손해배상|개인정보|위치정보|단말|보조금|할인|선택약정|전기통신|전파|무선|공동이용|역무|커버리지|경매/;
   // 2026-09-26 사내 권고 반영(#244): '변경하려면'·'산정하나요'·'해야' 같은 어미가 통째 키워드로 남아 5칸을 먹었다.
   // 앞 13개 추가, 낱말 전체가 어미면 버린다.
-  const VERB_TAIL = /(하려면|하려고|하려는|하는데|하는지|해야|한다|해서|하기|하나요|하나|했나|할까|하고|하는|하며|하여|되는|되어|하면|합니다|입니까|인지)$/;
+  // 「거나」(2026-10-15, 장동선 판정 §4-5): '면제받거나'가 조사 '나'만 떨어져 '면제받거'로 반쪽 남지 않게 어미로 뗀다.
+  const VERB_TAIL = /(하려면|하려고|하려는|하는데|하는지|해야|한다|해서|하기|하나요|하나|했나|할까|하고|하는|하며|하여|되는|되어|하면|합니다|입니까|인지|거나)$/;
   // 끝줄(알려줘·찾아줘·보여줘·설명해줘·다른가·무엇인가) = 요청·질문 말투(#244). 조사를 떼기 전 원래 낱말로도 검사한다 —
   // '다른가'·'무엇인가'는 조사 '가'가 먼저 떨어져 '다른'·'무엇인'이 되므로 뗀 뒤에만 보면 걸리지 않는다.
   const KW_STOPWORDS = ['이','가','은','는','을','를','의','에','에서','으로','로','과','와','도',
@@ -36,7 +37,11 @@
     '이고','이며','하고','이나','또는','그리고','하지만','그러나','따라서',
     '알려줘','찾아줘','보여줘','설명해줘','다른가','무엇인가'];
   // 조사 어미 제거 (예: "면허세에" → "면허세") — 잘린 어간도 ilike 부분일치로 검색됨
-  const KW_JOSA = /(에서는|으로는|에서의|이라는|에서도|에서|에는|으로|로는|보다|부터|까지|처럼|마다|조차|밖에|은|는|이|가|을|를|의|에|와|과|도|만)$/;
+  // 「이나·나」(2026-10-15, 장동선 판정 §4-5): 「A나 B」의 '금지나'가 그대로 키워드가 돼 아무것도 못 찾았다(떼면 '금지'가 금지행위 조 제목에 걸린다).
+  const KW_JOSA = /(에서는|으로는|에서의|이라는|에서도|에서|에는|으로|로는|보다|부터|까지|처럼|마다|조차|밖에|이나|은|는|이|가|을|를|의|에|와|과|도|만|나)$/;
+  // 「나」를 조사로 떼지 않는 낱말 — 「나」로 끝나는 도메인 명사(안테나·코로나), 「나」까지 한 낱말인 부사·대명사(아무나·얼마나 …),
+  // 용언의 「-으나·-거나」(뗀 자리에 '했으'·'받거' 같은 반쪽이 남는다). 이 낱말들은 종전처럼 통째로 둔다(아무나 → '아무'면 「아무런」에 걸린다).
+  const KW_NA_KEEP = /(안테나|코로나|아무나|누구나|언제나|어디나|얼마나|으나|거나)$/;
   // 순서: ① 원래 낱말이 제외어면 버림 ② 용언 어미가 붙어 있으면 어미부터 뗀다(#244) — 조사를 먼저 떼면 '운영하는'이 '는'만
   // 떨어진 '운영하', '취소하는'이 '취소하'로 남아 「자율심의기구등을 운영하는 자」 같은 무관 조문을 끌어왔다(A/B 실측)
   // ③ 어미가 없으면 조사를 뗀다 ④ 남은 어미를 한 번 더 떼고, 낱말 전체가 어미였으면('해야'·'한다') 버린다.
@@ -49,7 +54,7 @@
       .map(function (w) {
         const t = w.replace(VERB_TAIL, '');
         if (t !== w && t.length >= 2) return t;
-        const s = w.replace(KW_JOSA, ''); return s.length >= 2 ? s : w;
+        const s = KW_NA_KEEP.test(w) ? w : w.replace(KW_JOSA, ''); return s.length >= 2 ? s : w;
       })
       .map(function (w) { const s = w.replace(VERB_TAIL, ''); if (s.length === 0) return ''; return s.length >= 2 ? s : w; })
       .filter(function (w) { return w.length >= 2 && !KW_STOPWORDS.includes(w); });
@@ -922,23 +927,40 @@
     });
     return out;
   }
-  // 별표 한 개의 블록 — 별표 동반(#90)과 같은 꼴: 첫 조각(열 이름)은 무조건, 나머지는 질문 낱말이 많이 든 조각 ANNEX_MAX_CHUNKS-1개, 문서 순.
-  function annexBlock(docName, no, rows, question) {
+  // 별표 조각 고르기 — 별표 동반(#90, 각 파일의 buildAnnexContext 1단계)과 덧붙이기 별표 칸(annexBlock)이 같이 쓴다(장동선 판정 §4-7, 2026-10-15).
+  // 첫 조각(열 이름)은 무조건, 나머지는 질문 키워드(extractKeywords 5개) 적중 수 ↓ → 질문 임베딩 유사도 ↓ → chunk_index ↑ 로 ANNEX_MAX_CHUNKS-1개,
+  // 돌려줄 때는 문서 순. 유사도는 행의 similarity 칸(DB 함수 annex_chunks_semantic)이 있을 때만 — 임베딩 실패·RPC 실패로 종전 조회 행이 오면
+  // 종전 순서(적중 수 → 번호) 그대로다. 적중 수를 앞에 두는 이유: 숫자 표(대가 산식 등)에선 「재할당」 같은 낱말 적중이 임베딩보다 정확하다.
+  // 동점만 뜻으로 가른다 — 종전엔 동점이면 앞 번호라 장동선 /ask(10-14)의 「거짓·과장 모집」 행(시행령 별표 4 조각 274)이 동점 9개 중 7번째로 빠졌다.
+  // ⚠️ 조각 수(ANNEX_MAX_CHUNKS)·첫 조각 무조건은 그대로(#283-보론2 ③), 확장어로 세지 않는다(구 꼴이라 274에 든 것 0 — 판정 §4-7).
+  function pickAnnexChunks(rows, question) {
     const all = (rows || []).slice().sort(function (a, b) { return (a.chunk_index || 0) - (b.chunk_index || 0); });
-    if (!all.length) return null;
+    if (!all.length) return [];
     const qWords = extractKeywords(question || '');
+    const simOf = function (c) { return typeof c.similarity === 'number' && isFinite(c.similarity) ? c.similarity : -Infinity; };
     const picked = [all[0]];
     all.slice(1).map(function (c) {
       const t = String(c.content || '');
-      return { c: c, hit: qWords.reduce(function (a, kw) { return a + (t.indexOf(kw) >= 0 ? 1 : 0); }, 0) };
-    }).sort(function (a, b) { return b.hit !== a.hit ? b.hit - a.hit : (a.c.chunk_index || 0) - (b.c.chunk_index || 0); })
-      .slice(0, ANNEX_MAX_CHUNKS - 1).forEach(function (x) { picked.push(x.c); });
+      return { c: c, hit: qWords.reduce(function (a, kw) { return a + (t.indexOf(kw) >= 0 ? 1 : 0); }, 0), sim: simOf(c) };
+    }).sort(function (a, b) {
+      if (b.hit !== a.hit) return b.hit - a.hit;
+      if (b.sim !== a.sim) return b.sim > a.sim ? 1 : -1;
+      return (a.c.chunk_index || 0) - (b.c.chunk_index || 0);
+    }).slice(0, ANNEX_MAX_CHUNKS - 1).forEach(function (x) { picked.push(x.c); });
     picked.sort(function (a, b) { return (a.chunk_index || 0) - (b.chunk_index || 0); });
+    return picked;
+  }
+  // 별표 한 개의 블록 — 별표 동반(#90)과 같은 꼴: 조각 고르기는 pickAnnexChunks, 문서 순.
+  function annexBlock(docName, no, rows, question) {
+    const all = (rows || []).slice().sort(function (a, b) { return (a.chunk_index || 0) - (b.chunk_index || 0); });
+    if (!all.length) return null;
+    const picked = pickAnnexChunks(all, question);
     const title = all[0].article_no || ('별표 ' + no);
     const omitted = all.length - picked.length;
     const content = picked.map(function (c) { return c.content || ''; }).join('\n');
     return { doc_name: docName, no: no, key: '별표' + no, article_no: title, content: content,
-      ids: picked.map(function (c) { return c.id; }), source: famOf(docName) + ' ' + title.split('(')[0].trim(),
+      ids: picked.map(function (c) { return c.id; }), cis: picked.map(function (c) { return c.chunk_index; }),   // cis = 회귀 하네스 annexIds용
+      source: famOf(docName) + ' ' + title.split('(')[0].trim(),
       text: '[' + docName + ' ' + title + ']' +
         (omitted > 0 ? '\n※ 이 별표는 전체 ' + all.length + '개 조각 중 질문과 가까운 ' + picked.length + '개만 실었습니다. 표의 일부만 보이면 그렇게 밝히세요.' : '') +
         '\n' + content };
@@ -1727,7 +1749,7 @@
     buildAddOnContext: buildAddOnContext, fetchAddOns: fetchAddOns, trimAddOns: trimAddOns,
     // 자문 빠뜨림 2차(#283-보론2) — 형제 순서·공통 인용·덧붙인 조문의 별표 1칸
     XREF_OPTS: XREF_OPTS, pickXrefs: pickXrefs, xrefTargets: xrefTargets,
-    annexWanted: annexWanted, annexBlock: annexBlock, docDate: docDate,
+    annexWanted: annexWanted, annexBlock: annexBlock, pickAnnexChunks: pickAnnexChunks, docDate: docDate,
     // L8 경과조치 따라가기(#290)
     ADDENDUM_TRIGGER_RE: ADDENDUM_TRIGGER_RE, ADDENDUM_OPTS: ADDENDUM_OPTS, ADDENDUM_TITLE_RE: ADDENDUM_TITLE_RE,
     ADDENDUM_GENERIC_RE: ADDENDUM_GENERIC_RE, addendumKeywords: addendumKeywords, addendumForeign: addendumForeign,   // #290-보론 D2·D4

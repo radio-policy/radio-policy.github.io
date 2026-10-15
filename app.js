@@ -1176,13 +1176,27 @@ async function fetchFamilyArticle(fam, key, docName) {
     .like('article_no', key + '%').order('chunk_index', { ascending: true }).limit(40);
   return r.data || [];
 }
-// 덧붙인 조문이 가리킨 별표 한 개의 조각 — 별표 동반(buildAnnexContext)과 같은 조건 + id(#283-보론2, rag.ts fetchAnnexRows와 같음)
-async function fetchAnnexRows(docName, no) {
+// 별표 한 개의 조각 전부(chunk_index 순) — 별표 동반(buildAnnexContext 1단계)과 덧붙이기 별표 칸이 같이 쓴다. prefix = '별표 N('. rag.ts fetchAnnexUnit과 같음.
+// 질문 임베딩이 있으면 DB 함수 annex_chunks_semantic(같은 행 + 질문 유사도 칸 — 장동선 판정 §4-7), 임베딩이 없거나 그 함수가 실패·0행이면
+// 종전 조회(유사도 칸 없음 → RagCore.pickAnnexChunks가 종전 순서로 고른다). 임베딩은 searchKeywords와 같은 (모델, 글)이라 기억에서 나온다(Voyage 추가 0).
+async function fetchAnnexUnit(docName, prefix, question) {
   if (!sb) return [];
+  var emb = null;
+  if (question && question.length >= 3) { try { emb = await getQueryEmbedding(question); } catch (e) { emb = null; } }
+  if (emb) {
+    try {
+      var r1 = await metaRpc('annex_chunks_semantic', { query_embedding: emb, p_doc_name: docName, p_article_prefix: prefix });
+      if (!r1.error && Array.isArray(r1.data) && r1.data.length) return r1.data;
+    } catch (e) { /* 종전 조회로 */ }
+  }
   var r = await sb.from('document_chunks').select('id, chunk_index, article_no, content')
     .eq('doc_name', docName).eq('status', 'current')
-    .like('article_no', '별표 ' + no + '(%').order('chunk_index', { ascending: true });
+    .like('article_no', prefix + '%').order('chunk_index', { ascending: true });
   return r.data || [];
+}
+// 덧붙인 조문이 가리킨 별표 한 개의 조각 — 별표 동반(buildAnnexContext)과 같은 조회 + id(#283-보론2, rag.ts fetchAnnexRows와 같음)
+function fetchAnnexRows(docName, no, question) {
+  return fetchAnnexUnit(docName, '별표 ' + no + '(', question);
 }
 // L8 경과조치 따라가기(#290) — 근거 문서들의 현행 부칙 조각 전부를 한 번에(본문 낱말로 거르지 않는다 — 이어진 조각에는 낱말이 없을 수 있다). rag.ts fetchAddendaRows와 같은 조건.
 async function fetchAddendaRows(docNames) {
@@ -1857,11 +1871,13 @@ var lastPendingNotice = null;   // 답변 하단 배지용 [{law_name, enf_date}
 // 어휘를 손봐도 좁혀지지 않는다. 반면 둘을 잇는 다리인 제95조는 이미 잡혔다.
 // 그래서 검색 확률을 올리는 대신 **인용 관계를 규칙으로 따라간다**.
 var lastAnnexSources = [];       // 답변 하단 '참조 별표' 배지용
+var lastAnnexIds = [];           // 실은 별표 조각 「법령명|별표 N|chunk_index」(덧붙이기 별표 칸은 앞에 +) — 회귀 하네스 annexIds 칸(장동선 판정 §4-7, rag.ts와 같은 꼴)
 var ANNEX_MAX_UNITS  = RagCore.ANNEX_MAX_UNITS;    // 질문당 별표 개수 — rag_core.js
 var ANNEX_MAX_CHUNKS = RagCore.ANNEX_MAX_CHUNKS;   // 별표당 청크 — rag_core.js
 
 async function buildAnnexContext(chunks, question) {
   lastAnnexSources = [];
+  lastAnnexIds = [];
   if (!sb || !chunks || !chunks.length) return '';
   try {
     // 1) 검색된 '조문' 청크에서 별표 인용을 뽑는다. 별표·별지 청크 자신은 제외(자기 참조 방지).
@@ -1884,30 +1900,16 @@ async function buildAnnexContext(chunks, question) {
     // 바로 이 경우다(별표 조각만 검색되고 조문은 안 잡힌 질문). 실측에서 놓칠 뻔했다.
     wanted = wanted.slice(0, ANNEX_MAX_UNITS);    // chunks가 순위순이라 앞쪽이 상위 조문
 
-    var qWords = extractKeywords(question || '');
     var blocks = [];
     for (var i = 0; i < wanted.length; i++) {
       var w = wanted[i];
-      var r = await sb.from('document_chunks')
-        .select('chunk_index,article_no,content')
-        .eq('doc_name', w.doc_name).eq('status', 'current')
-        .like('article_no', '별표 ' + w.no + '(%')
-        .order('chunk_index', { ascending: true });
-      if (r.error || !r.data || !r.data.length) continue;
+      var all = await fetchAnnexUnit(w.doc_name, '별표 ' + w.no + '(', question);
+      if (!all.length) continue;
 
       // 첫 청크는 무조건 넣는다 — 표의 열 이름이 여기에만 있어서,
       // 가운데 청크만 넣으면 '1만원 │― │―'처럼 무슨 숫자인지 알 수 없다.
-      var all = r.data;
-      var picked = [all[0]];
-      var rest = all.slice(1).map(function(c) {
-        var t = String(c.content || '');
-        var hit = qWords.reduce(function(a, kw) { return a + (t.indexOf(kw) >= 0 ? 1 : 0); }, 0);
-        return { c: c, hit: hit };
-      }).sort(function(a, b) {
-        return b.hit !== a.hit ? b.hit - a.hit : a.c.chunk_index - b.c.chunk_index;
-      });
-      rest.slice(0, ANNEX_MAX_CHUNKS - 1).forEach(function(x) { picked.push(x.c); });
-      picked.sort(function(a, b) { return a.chunk_index - b.chunk_index; });
+      // 나머지는 질문 키워드 적중 수 → 질문 유사도(annex_chunks_semantic) → 번호 순(장동선 판정 §4-7) — 규칙은 rag_core.js pickAnnexChunks 한 곳.
+      var picked = RagCore.pickAnnexChunks(all, question);
 
       var title = (all[0].article_no || ('별표 ' + w.no));
       var omitted = all.length - picked.length;
@@ -1915,6 +1917,7 @@ async function buildAnnexContext(chunks, question) {
         + (omitted > 0 ? '\n※ 이 별표는 전체 ' + all.length + '개 조각 중 질문과 가까운 ' + picked.length + '개만 실었습니다. 표의 일부만 보이면 그렇게 밝히세요.' : '')
         + '\n' + picked.map(function(c) { return c.content; }).join('\n'));
       lastAnnexSources.push(w.doc_name.split('(')[0].trim() + ' ' + title.split('(')[0].trim());
+      picked.forEach(function(c) { lastAnnexIds.push(w.doc_name.split('(')[0].trim() + '|별표 ' + w.no + '|' + c.chunk_index); });
     }
     // 2) 별표 청크가 검색으로 직접 잡혔는데 '첫 조각'이 빠진 경우 그것만 보충한다.
     //    표의 열 이름은 첫 조각에만 있어서, 가운데 조각만 들어가면 모델은
@@ -1947,6 +1950,7 @@ async function buildAnnexContext(chunks, question) {
       if (lastAnnexSources.indexOf(hc.doc_name.split('(')[0].trim() + ' ' + prefix) >= 0) continue;
       headBlocks.push('[' + hc.doc_name + ' ' + (first.article_no || prefix) + ' — 표 머리(열 이름)]\n' + first.content);
       lastAnnexSources.push(hc.doc_name.split('(')[0].trim() + ' ' + prefix + ' 머리');
+      lastAnnexIds.push(hc.doc_name.split('(')[0].trim() + '|' + prefix + '|' + first.chunk_index);
     }
     if (headBlocks.length) {
       blocks.push('※ 아래는 위 검색 결과에 열 이름 없이 일부만 실린 표의 머리 부분입니다. 숫자가 어느 항목인지 여기서 확인하세요.\n\n'
@@ -3068,7 +3072,8 @@ async function buildAdvisoryContext(userText) {
   var addT0 = performance.now(), addMs = 0, addErr = null;
   var addOnsEmpty = { text: '', chunks: [], ids: [], deleg: [], items: [], chars: 0, annexSources: [], addendum: 0, apply: 0 };
   var addOnsP = (sb ? RagCore.fetchAddOns({ extra: lawExtra, spill: spillChunks, rag: ragChunks },
-      { delegations: fetchDelegations, familyDocs: fetchFamilyDocs, familyArticle: fetchFamilyArticle, docArticles: fetchDocArticles, annexRows: fetchAnnexRows, addendaRows: fetchAddendaRows },
+      { delegations: fetchDelegations, familyDocs: fetchFamilyDocs, familyArticle: fetchFamilyArticle, docArticles: fetchDocArticles,
+        annexRows: function(d, no) { return fetchAnnexRows(d, no, userText); }, addendaRows: fetchAddendaRows },
       { question: userText })
       .then(function(r) { addMs = Math.round(performance.now() - addT0); return r; })
     : Promise.resolve(addOnsEmpty))
@@ -3133,6 +3138,8 @@ async function buildAdvisoryContext(userText) {
     if (lastAnnexSources.indexOf(s) === -1) lastAnnexSources.push(s);
     if (lastRagSources.indexOf(ANNEX_SRC_PREFIX + s) === -1) lastRagSources.push(ANNEX_SRC_PREFIX + s);
   });
+  var _addAnnex = addOns.parts && addOns.parts.annex;
+  if (_addAnnex) (_addAnnex.cis || []).forEach(function(ci) { lastAnnexIds.push('+' + _addAnnex.doc_name.split('(')[0].trim() + '|별표 ' + _addAnnex.no + '|' + ci); });
   if (addOns.items.length) console.log('덧붙이기:', addOns.items.map(function(x) { return x.sec + (x.dir ? '/' + x.dir : '') + ' ' + x.fam + ' ' + x.key; }).join(', ') + (addOns.trimmed ? ' (전체 상한으로 ' + addOns.trimmed + '개 덜어 냄)' : ''));
   // 덧붙인 조문(#283)의 조각 id·문서는 맨 뒤에 — verify-citations가 그 조문으로도 대조한다. 앞쪽 순서는 종전 그대로.
   spillChunks.map(function(c) { return c.id; }).concat(addOns.ids || []).forEach(function(id) {

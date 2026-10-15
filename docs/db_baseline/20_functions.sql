@@ -297,6 +297,23 @@ END;
 $function$
 ;
 
+CREATE OR REPLACE FUNCTION public.annex_chunks_semantic(query_embedding vector, p_doc_name text, p_article_prefix text)
+ RETURNS TABLE(id bigint, chunk_index integer, article_no text, content text, similarity double precision)
+ LANGUAGE sql
+ STABLE
+ SET search_path TO ''
+AS $function$
+  select c.id, c.chunk_index, c.article_no, c.content,
+         case when c.embedding is null or query_embedding is null then null
+              else (1 - (c.embedding operator(public.<=>) query_embedding))::double precision end as similarity
+  from public.document_chunks c
+  where c.doc_name = p_doc_name
+    and c.status = 'current'
+    and starts_with(c.article_no, p_article_prefix)
+  order by c.chunk_index;
+$function$
+;
+
 CREATE OR REPLACE FUNCTION public.batch_update_embeddings(p_ids bigint[], p_embeddings text[])
  RETURNS void
  LANGUAGE plpgsql

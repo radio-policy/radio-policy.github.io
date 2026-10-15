@@ -1,6 +1,6 @@
 """자문 검색 회귀 스냅샷 비교 (#201, 2026-09-24 B-2)
 
-사용: python tests/rag_regress_diff.py A.json B.json [--fields rag,extra,added,citing,annex,pending,kb,news]
+사용: python tests/rag_regress_diff.py A.json B.json [--fields rag,extra,added,citing,annex,annexIds,pending,kb,news]
 
 두 스냅샷(브라우저 하네스 window.ragRegress.last를 저장한 파일 / Deno 하네스 출력)을 질문 id로 맞춰
 단계별 id 목록이 **순서까지** 같은지 대조하고, 다르면 집합 차이(양쪽에만 있는 것)와 순서만 다른지를 적는다.
@@ -24,7 +24,7 @@ def load(path):
 
 def main():
     argv = sys.argv[1:]
-    fields = 'rag,extra,added,citing,annex,pending,kb,news'
+    fields = 'rag,extra,added,citing,annex,annexIds,pending,kb,news'   # annexIds = 실은 별표 조각(장동선 판정 §4-7)
     if '--fields' in argv:
         # 값까지 떼어 낸 뒤 파일 인자를 센다 — 종전엔 값('a,b')이 세 번째 파일로 잡혀 사용법만 출력됐다
         i = argv.index('--fields')

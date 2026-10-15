@@ -477,6 +477,11 @@ revoke all on function public.admin_upsert_kb_document(p_dedup_key text, p_title
 grant EXECUTE on function public.admin_upsert_kb_document(p_dedup_key text, p_title text, p_concept_type text, p_family text, p_law_type text, p_law_number text, p_enforcement_date text, p_competent_authority text, p_path text, p_description text, p_body_md text) to authenticated;
 grant EXECUTE on function public.admin_upsert_kb_document(p_dedup_key text, p_title text, p_concept_type text, p_family text, p_law_type text, p_law_number text, p_enforcement_date text, p_competent_authority text, p_path text, p_description text, p_body_md text) to service_role;
 
+revoke all on function public.annex_chunks_semantic(query_embedding vector, p_doc_name text, p_article_prefix text) from public, anon, authenticated, service_role;
+grant EXECUTE on function public.annex_chunks_semantic(query_embedding vector, p_doc_name text, p_article_prefix text) to anon;
+grant EXECUTE on function public.annex_chunks_semantic(query_embedding vector, p_doc_name text, p_article_prefix text) to authenticated;
+grant EXECUTE on function public.annex_chunks_semantic(query_embedding vector, p_doc_name text, p_article_prefix text) to service_role;
+
 revoke all on function public.batch_update_embeddings(p_ids bigint[], p_embeddings text[]) from public, anon, authenticated, service_role;
 grant EXECUTE on function public.batch_update_embeddings(p_ids bigint[], p_embeddings text[]) to service_role;
 

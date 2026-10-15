@@ -32,7 +32,7 @@ var NAMES = ['PRIORITY_KW_RE', 'VERB_TAIL', 'extractKeywords', 'LAW_SYNONYMS', '
   'ADDON_OPTS', 'DELEG_OPTS', 'NEIGHBOR_OPTS', 'NOTICE_DOC_RE', 'unitKey', 'capSpill', 'pickSpill', 'delegationBases', 'pickDelegations',
   'neighborTarget', 'pickNeighbors', 'buildAddOnContext', 'fetchAddOns', 'trimAddOns',
   // 2차(#283-보론2)
-  'XREF_OPTS', 'pickXrefs', 'xrefTargets', 'annexWanted', 'annexBlock', 'docDate',
+  'XREF_OPTS', 'pickXrefs', 'xrefTargets', 'annexWanted', 'annexBlock', 'pickAnnexChunks', 'docDate',
   // 법령 용어 동의어(L5′, #289)
   'LAW_TERM_SYNONYMS', 'LAW_TERM_MAX', 'lawTermKeywords',
   // L8 경과조치 따라가기(#290)
@@ -58,6 +58,14 @@ eq('extractKeywords 요청 말투 제외(#244, 알려줘)', RC.extractKeywords('
 eq('extractKeywords 요청 말투는 조사 떼기 전 낱말로도(#244, 다른가·무엇인가)', RC.extractKeywords('전파법 제16조와 시행령 제18조는 무엇인가 다른가'), ['전파법', '제16조', '시행령', '제18조']);
 // 기각 가드(#244): 상투어를 추출에서 버리면 대응표·확장어가 10칸 안으로 들어와 조문 정밀검색 순위를 흔든다(전파법 제25조의2 탈락 실측)
 eq('extractKeywords 상투어는 추출에서 버리지 않음(#244 기각안)', RC.extractKeywords('3G 종료 관련 조항은?'), ['3G', '종료', '관련', '조항']);
+// 조사 「이나·나」·어미 「거나」(장동선 판정 §4-5, 2026-10-15) — 「금지나」가 그대로 키워드라 아무것도 못 찾았다
+eq('extractKeywords 조사 나: 금지나→금지(q21)', RC.extractKeywords('이통사 신규모집 금지나 영업정지 처분'), ['이통사', '신규모집', '금지', '영업정지', '처분']);
+eq('extractKeywords 조사 이나: 처분이나→처분', RC.extractKeywords('시정명령이나 처분이나 과징금'), ['과징금', '시정명령', '처분']);
+eq('extractKeywords 어미 거나: 면제받거나→면제받(반쪽 「면제받거」 아님)', RC.extractKeywords('전파사용료를 면제받거나 감면받는 무선국'), ['전파사용료', '무선국', '면제받', '감면받']);
+eq('extractKeywords 하나·되나·드나·있나는 그대로(뗀 뒤 1글자)', RC.extractKeywords('하나 되나 드나 있나'), ['되나', '드나', '있나']);
+eq('extractKeywords 「나」로 끝나는 명사 보호 — 안테나·코로나(조사는 뗌)', [RC.extractKeywords('기지국안테나 코로나'), RC.extractKeywords('안테나를 교체')], [['기지국안테나', '코로나'], ['안테나', '교체']]);
+eq('extractKeywords 「나」까지 한 낱말(아무나·얼마나)·용언 「-으나·-거나」 반쪽은 종전처럼 통째로',
+  [RC.extractKeywords('아무나 얼마나'), RC.extractKeywords('실태점검했으나 조치'), RC.extractKeywords('받거나 내지')], [['아무나', '얼마나'], ['실태점검했으나', '조치'], ['받거나', '내지']]);
 
 // ── 뉴스 키워드 추출 (2026-09-25 합집합) ──
 eq('extractNewsKeywords 조사 절단·분야어 우선', RC.extractNewsKeywords('같은 지하철인데 통신사 와이파이 속도 차이 분석해줘'), ['지하철', '와이파이', '속도']);
@@ -471,6 +479,36 @@ var addOnTests = (async function () {
   ok('annexBlock 첫 조각·질문 낱말 조각·생략 표시·출처', blk.ids[0] === 900 && blk.ids.indexOf(907) >= 0 && blk.ids.length === RC.ANNEX_MAX_CHUNKS
     && blk.text.indexOf('[' + R + ' 별표 13(검사수수료(제96조제1항 관련))]\n※ 이 별표는 전체 9개 조각 중') === 0 && blk.source === '전파법 시행령 별표 13', blk);
   eq('annexBlock 빈 입력', RC.annexBlock(R, '13', [], 'x'), null);
+
+  // pickAnnexChunks — 별표 조각 동점을 질문 유사도로(장동선 판정 §4-7, 2026-10-15). 조각 9개, 상한 ANNEX_MAX_CHUNKS(6) = 첫 조각 + 5
+  var mk = function (sims, hitAt) {
+    var out = [];
+    for (var i = 0; i < 9; i++) out.push({ id: 700 + i, chunk_index: 268 + i, content: i === 0 ? '표 머리' : (hitAt.indexOf(i) >= 0 ? '이용자 금지' : '칸' + i),
+      similarity: sims ? sims[i] : undefined });
+    return out;
+  };
+  var cis = function (rows) { return rows.map(function (c) { return c.chunk_index; }); };
+  var S = [0.468, 0.5105, 0.47, 0.542, 0.48, 0.513, 0.511, 0.491, 0.40];   // 268~276 — 판정 §1-② 실측 순위(271 > 273 > 274 > 269 > 275 > 272 > 270)
+  eq('pickAnnexChunks 첫 조각은 유사도가 꼴찌여도 무조건, 문서 순으로 돌려줌', cis(RC.pickAnnexChunks(mk(S, []).reverse(), 'x')).slice(0, 1), [268]);
+  eq('pickAnnexChunks 적중 수가 유사도보다 앞(숫자 표는 낱말 적중이 더 정확)', cis(RC.pickAnnexChunks(mk(S, [8]), '이용자 금지')).indexOf(276) >= 0, true);
+  eq('pickAnnexChunks 적중 동점이면 유사도 ↓ — 274(0.511)가 앞 번호 272·270보다 먼저(장동선 사례)', cis(RC.pickAnnexChunks(mk(S, []), '거짓 과장 모집')), [268, 269, 271, 273, 274, 275]);
+  eq('pickAnnexChunks 유사도도 같으면 번호 ↑', cis(RC.pickAnnexChunks(mk([0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5], []), 'x')), [268, 269, 270, 271, 272, 273]);
+  eq('pickAnnexChunks 유사도 칸 없으면(임베딩·RPC 실패 → 종전 조회) 종전 순서: 적중 수 → 번호', cis(RC.pickAnnexChunks(mk(null, [6, 7]), '이용자 금지')), [268, 269, 270, 271, 274, 275]);
+  ok('pickAnnexChunks 유사도 없는 조각은 같은 적중 안에서 유사도 있는 조각 뒤', cis(RC.pickAnnexChunks(mk([0.5, null, null, null, null, 0.3, 0.3, 0.3, 0.3], []), 'x')).join() === '268,269,273,274,275,276');
+  eq('annexBlock도 pickAnnexChunks로 고르고 cis(chunk_index)를 함께 돌려줌', RC.annexBlock(R, '4', mk(S, []), '거짓 과장 모집').cis, [268, 269, 271, 273, 274, 275]);
+})();
+
+// 확장 지시문은 두 파일(rag.ts expandQueryKeywords · app.js _expandQueryKeywordsRaw)에 같은 글로 — rag_core.js 헌장상 상수로 올리지 않고 글자 동일성으로 묶는다(장동선 판정 §4-3)
+(function () {
+  var pick = function (src, fnName) {
+    var i = src.indexOf(fnName); if (i < 0) return null;
+    var body = src.slice(i, i + 3000);
+    var g = function (re) { var m = body.match(re); return m ? m[1] : null; };
+    return { model: g(/model: '([^']+)'/), max: g(/max_tokens: (\d+)/), system: g(/system: '([^']+)'/), user: g(/content: '([^']+)' \+ query/) };
+  };
+  var ts = pick(fs.readFileSync(path.join(ROOT, 'supabase', 'functions', '_shared', 'rag.ts'), 'utf8'), 'async function expandQueryKeywords(');
+  var js = pick(fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8'), 'async function _expandQueryKeywordsRaw(');
+  ok('확장 지시문 두 파일 동일(모델·max_tokens·system·user)', ts && js && ts.model && ts.system && ts.user && JSON.stringify(ts) === JSON.stringify(js), [ts, js]);
 })();
 
 var addOnTests2 = (async function () {

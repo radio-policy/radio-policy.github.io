@@ -132,7 +132,7 @@
         out.results.push({
           id: q.id, ms: Math.round(t1 - t0), error: err,
           rag: ids(ctx.ragChunks), extra: ids(ctx.lawExtra), added: ctx.addedIds || [], citing: ctx.citingIds || [],
-          annex: (window.lastAnnexSources || []).slice(), pending: pendingSummary(),
+          annex: (window.lastAnnexSources || []).slice(), annexIds: (window.lastAnnexIds || []).slice(), pending: pendingSummary(),
           kb: (ctx.kbRows || []).map(function (r) { return r.doc_id + ':' + r.chunk_idx; }),
           news: (window.lastNewsSources || []).slice(),
           lens: { rag: (ctx.ragContext || '').length, law: (ctx.lawArticleContext || '').length, citing: (ctx.citingContext || '').length,

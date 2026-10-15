@@ -16,6 +16,8 @@
 //                     규칙 변경이 인자를 바꾸지 않는 갈래(trgm·의미검색·요약)는 A/B 양쪽이 같은 결과를 받아 잡음이 0이 되고,
 //                     키워드가 바뀐 갈래(search_chunks_keywords 등)만 새로 조회된다. 파일이 커지므로 git 제외 폴더에 둘 것.
 // 출력의 lab = 청크 id → '문서명 앞부분 조문' 이름표(rag_regress_diff.py가 있으면 이름으로 보여 준다).
+// annexIds = 실은 별표 조각 「법령명|별표 N|chunk_index」(별표 동반 2칸 + 머리 보충, 덧붙이기 별표 칸은 앞에 +) — 별표 이름(annex)만으로는
+//   머리 조각만 들어와도 같아 보여 행 단위 변화를 못 본다(장동선 판정 §4-7). 필수 행은 tests/fixtures/annex_rows_cases.json.
 // 자문 빠뜨림 1차(#283, 2026-10-06): 덧붙이기 구역(상한 구제 spill · 위임/같은 고시 addon)의 조각 id·항목도 따로 남긴다 —
 //   기존 갈래(rag·extra·added·citing)는 그대로 비교하고, 덧붙인 것만 새 칸에서 본다.
 //   --with-text      질문마다 Sonnet에 들어갈 참조 자료 전문(systemVariable)을 sv 칸에 저장(필수 조문 재현율 측정용, 파일이 커진다)
@@ -168,10 +170,14 @@ for (const q of set.questions) {
   let ctx: Record<string, unknown> = {}, err: string | null = null;
   try { ctx = await rag.buildAdvisoryContext(sb, q.question); } catch (e) { err = String((e as Error)?.message || e); }
   const ms = Math.round(performance.now() - t0);
-  const annex = ctx.annex as { text: string; sources: string[] } | undefined;
+  const annex = ctx.annex as { text: string; sources: string[]; ids?: string[] } | undefined;
   const citing = ctx.citing as { text: string; ids: number[] } | undefined;
   const news = ctx.news as { text: string; sources: string[] } | undefined;
-  const addOns = ctx.addOns as { text: string; chunks: unknown[]; ids: number[]; items: unknown[] } | undefined;
+  const addOns = ctx.addOns as { text: string; chunks: unknown[]; ids: number[]; items: unknown[];
+    parts?: { annex?: { doc_name: string; no: string; cis?: number[] } | null } } | undefined;
+  // 실은 별표 조각(장동선 판정 §4-7·§8-B) — 별표 동반 「법령명|별표 N|chunk_index」 + 덧붙이기 별표 칸 「+법령명|별표 N|chunk_index」
+  const addAnnex = addOns?.parts?.annex;
+  const annexIds = (annex?.ids || []).concat(addAnnex ? (addAnnex.cis || []).map((ci) => '+' + addAnnex.doc_name.split('(')[0].trim() + '|별표 ' + addAnnex.no + '|' + ci) : []);
   const pnew = ctx.pendingNew as { text: string; chunks: unknown[]; ids: number[]; laws: unknown[] } | undefined;   // 시행 전 제정 법령(#311)
   const lab: Record<string, string> = {};
   for (const c of ([] as { id?: unknown; doc_name?: string; article_no?: string }[])
@@ -181,7 +187,7 @@ for (const q of set.questions) {
   out.results.push({
     id: q.id, ms, error: err,
     rag: ids(ctx.chunks as []), extra: ids(ctx.extra as []), added: ctx.addedIds || [], citing: citing?.ids || [],
-    annex: annex?.sources || [], kb: ((ctx.kb as { doc_id: string; chunk_idx: number }[]) || []).map((r) => r.doc_id + ':' + r.chunk_idx),
+    annex: annex?.sources || [], annexIds, kb: ((ctx.kb as { doc_id: string; chunk_idx: number }[]) || []).map((r) => r.doc_id + ':' + r.chunk_idx),
     news: news?.sources || [],
     spill: ids((ctx.spill as []) || []), addon: addOns?.ids || [], addItems: addOns?.items || [],
     pnew: pnew?.ids || [], pnewLaws: pnew?.laws || [],
