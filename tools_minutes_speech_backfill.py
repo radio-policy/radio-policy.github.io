@@ -212,6 +212,8 @@ def export(res, keywords, path, related):
             if not targets:
                 continue
             base = x['rows'][0]                  # 회의 공통 메타는 기존 행을 따른다(화면 조인 키 source_url 일치)
+            # 안건은 블록마다(#310) — 원문에 안건 목록이 없거나 못 가르면 기존 행의 꼬리표
+            labels = am.agenda_labels(x['meta'], x['blocks']) if (x['meta'] or {}).get('agenda') else None
             title = (x['meta'] or {}).get('title') or ''
             if title == x['cn']:
                 title = ''
@@ -222,7 +224,8 @@ def export(res, keywords, path, related):
                     kws.append(am.SKT_CHIP)
                 f.write(json.dumps({
                     'confer_num': x['cn'], 'chunk_seq': i, 'meeting_title': title,
-                    'meeting_date': base['meeting_date'], 'agenda': base['agenda'],
+                    'meeting_date': base['meeting_date'],
+                    'agenda': labels[i] if labels else base['agenda'],
                     'speaker': am.normalize_speaker(b['name']), 'speaker_raw': b['name'],
                     'position': b['pos'] or None, 'topic': ', '.join(kws), 'judge': bool(related),
                     'source_url': base['source_url'], 'raw_text': (b['text'] or '')[:2000],

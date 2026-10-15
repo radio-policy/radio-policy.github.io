@@ -71,7 +71,8 @@ def dump(api_key, years, out_path, kw, limit=0):
                 _include, confirmed = am.select_relevant(
                     blocks, kw, None, m['title'],
                     max_judge=am.AUDIT_MAX_JUDGE_BLOCKS if is_audit else am.MAX_JUDGE_BLOCKS)
-                agenda = am._primary_agenda(m)
+                labels = am.agenda_labels(m, blocks)      # 블록별 안건(#310) — 못 가르면 회의 전체 꼬리표
+                meeting_label = am.meeting_agenda_label(m)
                 confer_num = (am.AUDIT_CONFER_PREFIX + str(viewer_id)) if is_audit else str(m['confer_num'])
                 src = am.VIEWER_URL % viewer_id
                 seen_meetings += 1
@@ -89,7 +90,7 @@ def dump(api_key, years, out_path, kw, limit=0):
                         'confer_num': confer_num, 'viewer_id': str(viewer_id),
                         'is_audit': is_audit, 'meeting_title': m['title'],
                         'meeting_date': (m['conf_date'] or '').strip() or None,
-                        'agenda': agenda or None, 'chunk_seq': i,
+                        'agenda': (labels[i] if labels else meeting_label) or None, 'chunk_seq': i,
                         'speaker': am.normalize_speaker(b['name']), 'speaker_raw': b['name'],
                         'position': b['pos'] or None, 'topic': topic or None,
                         'raw_text': (b['text'] or '')[:RAW_LIMIT], 'source_url': src,

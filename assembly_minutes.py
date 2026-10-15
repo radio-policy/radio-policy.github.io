@@ -1313,6 +1313,275 @@ def _primary_agenda(meeting: dict) -> str:
     return ''
 
 
+# ── 발언 블록별 안건 (#310, 2026-10-15) ─────────────────────────────────
+# 종전에는 회의의 첫 안건(열린국회정보 목록 순서 — 진행 순서도 번호 순서도 아님) 하나를 그 회의 모든 발언 행에 적었다.
+# 2025-12-09 회의는 의사일정 제1~8항(인사청문·청문회 절차 안건) 뒤 제9항 AI 입법 공청회가 열렸는데 발언 98행이 전부
+# 「…인사청문회 자료제출 요구의 건」으로 적혀, 자문 답변이 공청회 질의를 「방미통위 인사청문회에서」라고 소개했다.
+# 이제 위원장의 상정·진행 발언으로 블록마다 안건을 정한다(AI 0회, 원문 블록만 본다):
+#   ① 위원장 「의사일정 (제)N항 … 상정합니다」 — 번호(범위 「부터…까지」·나열 「․ , 과」)나 안건 제목으로 묶음을 연다
+#   ② 연 묶음 안에서 위원장 「다음 의사일정 제N항 … 보고·심사」와 전문위원 검토보고의 번호로 넘어간다(법안 심사 소위)
+#   ③ 절차 안건(…요구·채택·고발·선임의 건, 인사청문요청안)은 의결·회부 문장 뒤 직전 본안건으로 되돌린다 —
+#      현안질의 도중 「증인 고발의 건」을 처리하고 말없이 질의로 돌아가는 날이 있다(2024-06-25)
+#   ④ 공청회 안건에 「- 1부(…)」 하위 항목이 있으면 위원장 「N부에 참석하신 진술인」으로 부를 가른다
+# 첫 상정 앞 블록은 처음 연 묶음을 따른다. 상정을 하나도 못 찾으면 None(호출부가 회의 대표 안건으로 적는다).
+AGENDA_NUM_RE = re.compile(r'^\s*(\d+)\.\s*(.+?)\s*$')
+AGENDA_SUBPART_RE = re.compile(r'^\s*-\s*(\d+)부\s*(.*)$')
+AGENDA_OPEN_RE = re.compile(r'상정(?:합니다|하겠습니다|하도록\s*하겠습니다|하고자\s*합니다|토록\s*하겠습니다)')
+AGENDA_MOVE_RE = re.compile(
+    r'심사(?:하|를|토록)|심의(?:하|를)|보고(?:해|하여|를\s*해|드리|하겠|합니다)|계속(?:하|해)|넘어가|보도록|'
+    r'논의(?:하|를)|진행(?:하|을)|들어가|시작(?:하|합)|설명(?:해|하여|을)|가겠습니다|가도록|돌아가')
+AGENDA_VOTE_RE = re.compile(r'의결|가결|부의하지|선포')
+# 보류 문장 — 「제18항부터 제24항까지는 소위원회에서 계속 심사하도록」·「34항은 계속 논의하되」·「뒤로 넘겨서」는 그 안건을 닫는 말이라
+# 넘어가기가 아니다(「제11항에 대해서 계속 심사하겠습니다」처럼 다시 여는 말은 넘어가기)
+AGENDA_DEFER_RE = re.compile(r'항(?:까지)?(?:은|는)\s.*계속\s*(?:심사|논의)|계속\s*(?:심사|논의)하기로|소위원회에서\s*계속|보류|'
+                             r'뒤로\s*넘겨')
+# 처리 끝 문장 — 위원장의 표결·회부·보류 선언만(「증인으로 채택됐는데」 같은 해설 속 「채택됐」은 아니다, 2024-06-25)
+AGENDA_DONE_RE = re.compile(r'(?:가결|의결|부결)(?:되었|됐)|(?:채택|선임|선출)(?:되었|됐)음을\s*선포|'
+                            r'회부(?:하겠|하도록|합니다|하기로)|보류(?:하겠|하도록|합니다)')
+AGENDA_REFER_SUB_RE = re.compile(r'소위원회(?:로|에)\s*회부')
+AGENDA_REF_RE = re.compile(r'의사\s*일정\s*(?:제\s*)?(\d+)\s*항')
+AGENDA_BARE_RE = re.compile(r'(?:제\s*)?(\d+)\s*항|(\d+)\s*번(?=[^.?!]{0,30}?(?:법률안|법안|결의안|청원))')
+AGENDA_REPORT_POS_RE = re.compile(r'전문위원|입법조사관')
+AGENDA_PROC_ITEM_RE = re.compile(
+    r'(?:요구|채택|선임|선출|고발|변경|개선|구성|발부|추천|실시|개최|추가|연장|철회|동의|위촉|회부|검토)의\s*건$|인사청문요청안$')
+# 짧은 정정 — 「의사일정 제11항 … 보고해 주시기 바랍니다. 아, 제13항입니다.」(2026-03-17 소위)
+AGENDA_FIX_RE = re.compile(r'^\W*(?:아\W*)?(?:의사\s*일정\s*)?(?:제\s*)?\d+\s*항(?:입니다|이에요)\W*$')
+# 개의 블록의 순서 예고 — 「…개의하겠습니다. … 이어서 … 결산 … 을 상정하도록 하겠습니다」는 아직 상정이 아니다(2025-08-20)
+AGENDA_CONVENE_RE = re.compile(r'(?:개의|개회)(?:하겠습니다|합니다)|(?:개의|개회)를\s*선포')
+# 제목 낱말로 다시 여는 말 — 「청문회를 계속하도록 하겠습니다」(2019-04-17)·「다시 현안질의로 돌아가도록」(2024-06-25)
+AGENDA_RESUME_RE = re.compile(r'(청문회|공청회|현안\s*질의|업무\s*보고|현안\s*보고|국정\s*감사)(?:를|을|로|으로|는|은)?\s*'
+                              r'(?:계속|속개|다시|이어|돌아가)')
+AGENDA_SUBPART_SAY_RE = re.compile(r'(\d+)부(?:에|의)?\s*(?:참석|출석)|(\d+)부(?:를|의)?\s*(?:시작|속개)(?:하겠|합니다|하도록)')
+_SENT_SPLIT_RE = re.compile(r'(?<=[.?!])\s+')
+_TRAIL_PAREN_RE = re.compile(r'\s*\([^()]*\)\s*$')
+
+
+def agenda_items(agenda: list) -> tuple:
+    """안건 목록 → ({번호: 제목}, {번호: [(부 번호, '1부(…)')…]}). 「o …」(번호 없는 진행 항목)는 뺀다.
+    「- 1부`$`(데이터센터법)`$`」 같은 하위 항목은 목록에서 바로 앞 번호 항목에 붙는다."""
+    items, parts, last = {}, {}, None
+    for a in agenda or []:
+        m = AGENDA_NUM_RE.match(a)
+        if m:
+            last = int(m.group(1))
+            items.setdefault(last, m.group(2).strip())
+            continue
+        sp = AGENDA_SUBPART_RE.match(a)
+        if sp and last is not None:
+            tail = re.sub(r'`\$`', '', sp.group(2)).strip()
+            parts.setdefault(last, []).append((int(sp.group(1)), ('%s부%s' % (sp.group(1), tail)).strip()))
+    return items, parts
+
+
+def _agenda_short(title: str) -> str:
+    """묶음 꼬리표용 — 끝의 괄호(「(○○○ 의원 대표발의)(의안번호 …)」)를 걷어 낸다."""
+    s = title
+    while True:
+        s2 = _TRAIL_PAREN_RE.sub('', s)
+        if s2 == s or len(s2) < 6:
+            return s
+        s = s2
+
+
+def agenda_label(group, items: dict, part: str = '') -> str:
+    """안건 번호 묶음 → 저장할 꼬리표. 하나면 제목 그대로(종전과 같은 120자), 여럿이면 「첫 안건 외 N건」."""
+    g = sorted(group)
+    if len(g) == 1:
+        return _ellipsis(items[g[0]] + (' ' + part if part else ''), 120)
+    return '%s 외 %d건' % (_ellipsis(_agenda_short(items[g[0]]), 100), len(g) - 1)
+
+
+def meeting_agenda_label(meeting: dict) -> str:
+    """블록별로 못 가를 때 회의 전체 꼬리표 — 번호 안건이 둘 이상이면 「첫 안건 외 N건」, 아니면 종전 대표 안건."""
+    items, _ = agenda_items(meeting.get('agenda'))
+    if len(items) >= 2:
+        return agenda_label(list(items), items)
+    return _primary_agenda(meeting)
+
+
+def _agenda_bare_hits(span: str) -> list:
+    out = []
+    for m in AGENDA_BARE_RE.finditer(span):
+        pre = span[max(0, m.start() - 60):m.start()]
+        # 「제57조 7항」·「제27조(청렴 및 비밀유지의무) 1항」 같은 조문의 항
+        if re.search(r'조(?:의\s*\d+)?\s*(?:\([^()]{0,40}\))?\s*$', pre) or re.search(r'\d\s*$', pre):
+            continue
+        if m.group(1) and span[m.end():m.end() + 1] == '목':      # 「항목」
+            continue
+        lead = re.search(r'((?:\d+\s*[․·ㆍ・,、]\s*)+)$', pre)      # 「15․16항」·「29․30․31항」의 앞 번호
+        if lead:
+            out += [(m.start(), m.start(), int(x)) for x in re.findall(r'\d+', lead.group(1))]
+        out.append((m.start(), m.end(), int(m.group(1) or m.group(2))))
+    return out
+
+
+def _agenda_refs(sent: str, items: dict, need_ref: bool = True) -> list:
+    """문장 속 의사일정 번호(범위 펼침). need_ref면 「의사일정 (제)N항」이 하나는 있어야 하고 그 뒤만 본다
+    (20대 소위는 「1항 …부터 46항 …까지 일괄해서 상정」처럼 「의사일정」 없이 말해 상정 문장에서만 need_ref=False로 다시 본다)."""
+    m0 = AGENDA_REF_RE.search(sent)
+    if m0:
+        span = sent[m0.start():]
+    elif need_ref:
+        return []
+    else:
+        span = sent
+    hits = _agenda_bare_hits(span)
+    out = []
+    # 「박대출 의원이 대표발의한 방송법 일부개정법률안부터 … 42항 …까지 42건을 일괄해서 상정」 — 앞 번호를 말하지 않은 범위는
+    # 첫 안건부터로 본다(2017-11-29 소위: 42항 하나로 잡혀 「1항부터 4항까지 계속 심사」를 따라가지 못했다)
+    if len(hits) == 1 and '부터' in span[:hits[0][0]] and '까지' in span[hits[0][1]:]:
+        st = re.search(r'(\d+)\s*(?:에서\s*)?부터', span[:hits[0][0]])      # 「18부터 26항까지」 — 「항」 없이 말한 시작 번호
+        lo = int(st.group(1)) if st else min(items)
+        out = [x for x in sorted(items) if lo <= x < hits[0][2]]
+    for k, (s, _e, n) in enumerate(hits):
+        if k > 0:
+            prev = hits[k - 1][2]
+            if re.search(r'부터|내지|~|∼|～', span[hits[k - 1][1]:s]) and n > prev:
+                out += [x for x in range(prev + 1, n) if x in items and x not in out]
+        if n in items and n not in out:
+            out.append(n)
+    return out
+
+
+def _agenda_title_hits(sent: str, items: dict) -> list:
+    ns = re.sub(r'\s+', '', sent)
+    out = []
+    for n, t in sorted(items.items()):
+        for cand in (t, _agenda_short(t)):
+            c = re.sub(r'\s+', '', cand)
+            if len(c) >= 6 and c in ns:
+                out.append(n)
+                break
+    return out
+
+
+def agenda_labels(meeting: dict, blocks: list, trace: list = None) -> list:
+    """블록별 안건 꼬리표 목록(len == len(blocks)) 또는 None(번호 안건이 둘 미만이거나 상정 발언을 못 찾음).
+    trace(list)를 주면 (블록, 종류 open/move/move-bare/report/resume/done/revert/close/part, 묶음, 근거 문장 앞 80자)를 사건마다 덧붙인다
+    (점검 도구용 — 한 블록의 마지막 사건이 그 블록의 안건)."""
+    items, parts = agenda_items(meeting.get('agenda'))
+    if len(items) < 2:
+        return None
+    proc = {n for n, t in items.items() if AGENDA_PROC_ITEM_RE.search(t)}
+    groups = [None] * len(blocks)
+    subpart = [''] * len(blocks)
+    cur, last_sub, first_open = None, None, None
+    sub_closed = False      # 마지막 본안건 묶음이 의결·회부로 닫혔나(닫혔으면 절차 안건 뒤 되돌리지 않는다)
+    opened = set()
+    pending_revert = False
+    cur_part = ''
+    for i, b in enumerate(blocks):
+        if pending_revert:
+            if last_sub is not None and not sub_closed:
+                cur, cur_part = last_sub, ''
+                if trace is not None:
+                    trace.append((i, 'revert', cur, ''))
+            pending_revert = False
+        pos = (b.get('pos') or '').strip()
+        is_chair = pos in speech_fields.CHAIR_POS
+        if is_chair or AGENDA_REPORT_POS_RE.search(pos):
+            sents = _SENT_SPLIT_RE.split(re.sub(r'\s+', ' ', b.get('text') or ''))
+            ev, ev_at = None, -1
+            if is_chair:
+                convene = bool(AGENDA_CONVENE_RE.search(' '.join(sents)))
+                for k, sent in enumerate(sents):
+                    if AGENDA_OPEN_RE.search(sent) and not (convene and '이어서' in sent and '상정합니다' not in sent):
+                        # 범위가 두 문장에 걸치면 잇는다 — 「의사일정 제1항 …부터 시작하겠습니다. 의사일정 제57항 …까지
+                        # 57건을 일괄하여 상정합니다」(2024-09-03 소위: 57항 하나로 잡혔다)
+                        rs = sent
+                        if k > 0 and '부터' in sents[k - 1] and '부터' not in sent and '까지' in sent:
+                            rs = sents[k - 1] + ' ' + sent
+                        ns = (_agenda_refs(rs, items) or _agenda_refs(rs, items, need_ref=False)
+                              or _agenda_title_hits(sent, items))
+                        if ns:
+                            opened.update(ns)
+                            ev, ev_at = tuple(sorted(ns)), k
+                            if first_open is None:
+                                first_open = ev
+                            if not set(ev) <= proc:
+                                # 되돌아갈 곳은 마지막으로 **상정한** 본안건 묶음 — 넘어가기·검토보고로 좁혀진 묶음이 아니다
+                                # (대체토론·이어진 질의는 상정 묶음 전체를 다룬다, 2017-11-20 눈가림 대조). 같은 블록에서
+                                # 바로 넘어가기가 이어져도(「…일괄 상정합니다. 장관 나오셔서 제5항 제안설명」) 상정 묶음을 남긴다
+                                last_sub, sub_closed = ev, False
+                            if trace is not None:
+                                trace.append((i, 'open', ev, sent[:80]))
+                            continue
+                    rm = AGENDA_RESUME_RE.search(sent) if opened else None
+                    if rm and not AGENDA_DEFER_RE.search(sent):
+                        kw = re.sub(r'\s+', '', rm.group(1))
+                        cands = [n for n in sorted(opened) if kw in re.sub(r'\s+', '', items[n]) and n not in proc]
+                        if len(cands) == 1:
+                            ev, ev_at = (cands[0],), k
+                            if trace is not None:
+                                trace.append((i, 'resume', ev, sent[:80]))
+                            continue
+                    # 물음(「…논의하는 게 적절하지는 않은 거지요?」)과 보류 문장은 넘어가기가 아니다
+                    if opened and (AGENDA_MOVE_RE.search(sent) or AGENDA_FIX_RE.match(sent)) \
+                            and not AGENDA_DEFER_RE.search(sent) and not re.search(r'\?[\s」’"]*$', sent):
+                        ns = [n for n in _agenda_refs(sent, items) if n in opened]
+                        kind = 'move'
+                        if not ns:
+                            ns = [n for n in _agenda_refs(sent, items, need_ref=False) if n in opened]
+                            kind = 'move-bare'
+                        # 의결 문장은 그 뒤에 「다음 …」이 붙었을 때만 넘어가기로 본다(「제18항을 의결하도록 하겠습니다」는 아님)
+                        if ns and not (AGENDA_VOTE_RE.search(sent) and '다음' not in sent):
+                            ev, ev_at = tuple(sorted(ns)), k
+                            if trace is not None:
+                                trace.append((i, kind, ev, sent[:80]))
+            elif opened:
+                # 전문위원 검토보고: 블록 전체 번호의 합(여러 법안을 한 번에 보고하면 묶음 그대로)
+                ns = []
+                for sent in sents:
+                    ns += [n for n in _agenda_refs(sent, items) if n in opened and n not in ns]
+                if not ns:
+                    # 「의사일정」 없이 번호만 말한 보고 — 첫 두 문장 가운데 「10항입니다.」 같은 정정(2019-07-25)이나
+                    # 「법안 소위자료 4항～9항」처럼 자료 번호를 가리키는 문장만(2026-04-14). 「맞습니다. 2항·3항·4항은 …」의
+                    # 조문 항을 안건 번호로 읽은 적이 있어(2019-12-04) 그 밖의 번호는 보지 않는다
+                    for sent in sents[:2]:
+                        if AGENDA_FIX_RE.match(sent) or re.search(r'(?:소위|심사)\s*자료\s*\d', sent):
+                            ns += [n for n in _agenda_refs(sent, items, need_ref=False) if n in opened and n not in ns]
+                if ns:
+                    ev = tuple(sorted(ns))
+                    if trace is not None:
+                        trace.append((i, 'report', ev, sents[0][:80]))
+            if ev:
+                if ev != cur:
+                    cur_part = ''
+                cur = ev
+                if not set(cur) <= proc:
+                    sub_closed = False
+            # 마지막(상정·넘어가기) 문장 뒤의 표결·회부: 절차 안건이면 다음 블록부터 본안건으로 되돌린다.
+            # 본안건 묶음은 그 묶음 번호를 가리키는 처리 문장이나 「소위원회로 회부」일 때만 닫는다 — 「18건의 법안은 …
+            # 소위원회로 회부」 뒤의 절차 안건은 되돌릴 곳이 없다(2026-03-24). 청문회 도중 목록 밖 동의안(동행명령 등)
+            # 표결로는 닫지 않는다(2024-07-25 이진숙 인사청문회).
+            done = [x for x in sents[ev_at + 1:] if AGENDA_DONE_RE.search(x)] if is_chair and cur is not None else []
+            if done:
+                if set(cur) <= proc:
+                    pending_revert = True
+                    if trace is not None:
+                        trace.append((i, 'done', cur, done[-1][:80]))
+                elif any(AGENDA_REFER_SUB_RE.search(x) or set(_agenda_refs(x, items)) & set(cur) for x in done):
+                    sub_closed = True
+                    if trace is not None:
+                        trace.append((i, 'close', cur, done[-1][:80]))
+            # 공청회 1부·2부
+            if is_chair and cur is not None and len(cur) == 1 and parts.get(cur[0]):
+                said = [int(m.group(1) or m.group(2)) for m in AGENDA_SUBPART_SAY_RE.finditer(' '.join(sents))]
+                names = dict(parts[cur[0]])
+                if said and said[-1] in names and names[said[-1]] != cur_part:
+                    cur_part = names[said[-1]]
+                    if trace is not None:
+                        trace.append((i, 'part', cur, cur_part))
+        groups[i] = cur
+        subpart[i] = cur_part
+    if first_open is None:
+        return None
+    # 첫 상정 앞 블록은 처음 연 묶음을 따른다 — 단 그 묶음에 가장 작은 번호 안건이 없으면 앞 안건들의 상정 발언이
+    # 원문에서 빠진 것이라(2017-11-21 공청회: PDF 원문이 제1·2항 공청회 중간부터 시작) 회의 전체 꼬리표로 둔다
+    head = agenda_label(first_open, items) if min(items) in first_open else meeting_agenda_label(meeting)
+    return [agenda_label(g, items, p) if g is not None else head for g, p in zip(groups, subpart)]
+
+
 # 발언 이력용 잡음 배제 (2026-09-01, 운영자 지적) — "잠깐만 기다려 주십시오, ○○○ 위원님"
 # 같은 사회·호명 발언이 인물 프로필에 "무슨 내용인지 알 수 없는" 행으로 남았다. 원문(raw)을
 # 저장하지 않아 사후 재요약이 불가능하므로(#99) 적재 시점에 거른다. 길이만으로는 못 거른다 —
@@ -1348,7 +1617,9 @@ def build_speech_rows(meeting: dict, blocks: list, confirmed: list,
             and not os.environ.get('ANTHROPIC_API_KEY', '').strip():
         print('  [발언 적재 건너뜀] ANTHROPIC_API_KEY 없음 — 폴백 요지를 저장하지 않는다(#113)')
         return []
-    agenda = _primary_agenda(meeting)
+    # 안건은 블록마다(#310) — 못 가르면 회의 전체 꼬리표(번호 안건이 여럿이면 「첫 안건 외 N건」)
+    labels = agenda_labels(meeting, blocks)
+    meeting_label = meeting_agenda_label(meeting)
     mdate = (meeting['conf_date'] or '').strip() or None
     rows = []
     seen = set()                    # (speaker, chunk_seq) 중복 방어
@@ -1369,6 +1640,7 @@ def build_speech_rows(meeting: dict, blocks: list, confirmed: list,
         if is_always_keep(b['text']) and SKT_CHIP not in kws:
             kws.append(SKT_CHIP)
         topic = ', '.join(kws)
+        agenda = labels[i] if labels else meeting_label
         if presummarized is not None:
             s = (presummarized.get(i) or presummarized.get(str(i)) or '').strip()
             if not is_valid_summary(s):
