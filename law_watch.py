@@ -64,7 +64,8 @@ NO_PAREN_RE = re.compile(r'\((제[^()]*?호)\)')
 DATE_PAREN_RE = re.compile(r'\((\d{8})\)')
 
 # 법제처에 없는(감시 불가) 카테고리 — 애초에 스캔 대상에서 제외
-SKIP_CATEGORIES = {"ITU-R", "보도자료", "추가지식"}
+# 약관 = 사업자 이용약관(#312, 2026-10-15) — 법령이 아니라 법제처에 없다(넣으면 unmatched 알림만 난다)
+SKIP_CATEGORIES = {"ITU-R", "보도자료", "추가지식", "약관"}
 
 
 def norm_name(name: str) -> str:

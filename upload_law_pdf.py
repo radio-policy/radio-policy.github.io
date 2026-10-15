@@ -1,6 +1,6 @@
 """
 PDF/TXT 법령·고시 업로드 스크립트
-사용법: python upload_law_pdf.py <파일경로> [문서명] [카테고리]
+사용법: python upload_law_pdf.py <파일경로> [문서명] [카테고리] [--unapproved]
 
 입력 파일: .pdf 또는 .txt (법령 본문 텍스트)
 카테고리 선택: 법령 / 고시 / ITU-R / 전파법 / 전파법_시행령 / 전파법_시행규칙 등
@@ -9,6 +9,9 @@ PDF/TXT 법령·고시 업로드 스크립트
   python upload_law_pdf.py 전파법.pdf "전파법(법률)(제21065호)(20260102)" 전파법
   python upload_law_pdf.py 전파법_텍스트.txt "전파법(법률)(제21065호)(20260102)" 전파법
   python upload_law_pdf.py 고시2024-10.pdf "전파연구원 고시 2024-10호" 고시
+
+--unapproved: is_approved=false로 올린다(자문 검색에서 안 보임 → 측정 뒤 설정 화면 승인(RPC admin_set_kb_approval)으로 공개).
+  사업자 이용약관(카테고리 '약관', #312)은 이 옵션으로 올려 끔/켬 측정 뒤 공개한다. 약관 TXT는 tools_yakgwan_txt.py로 만든다.
 """
 
 import sys
@@ -95,7 +98,7 @@ def parse_chunk_metadata(content: str, doc_name: str) -> dict:
     return meta
 
 
-def upload_to_supabase(doc_name: str, doc_category: str, chunks: list) -> bool:
+def upload_to_supabase(doc_name: str, doc_category: str, chunks: list, approved: bool = True) -> bool:
     try:
         from supabase import create_client
     except ImportError:
@@ -118,6 +121,8 @@ def upload_to_supabase(doc_name: str, doc_category: str, chunks: list) -> bool:
     rows = []
     for i, chunk in enumerate(chunks):
         row = {"doc_name": doc_name, "doc_category": doc_category, "chunk_index": i, "content": chunk['content']}
+        if not approved:
+            row['is_approved'] = False
         if chunk.get('article_no'):
             row['article_no'] = chunk['article_no']
         row.update(parse_chunk_metadata(chunk['content'], doc_name))
@@ -136,6 +141,8 @@ def upload_to_supabase(doc_name: str, doc_category: str, chunks: list) -> bool:
 
 
 def main():
+    approved = '--unapproved' not in sys.argv
+    sys.argv = [a for a in sys.argv if a != '--unapproved']
     if len(sys.argv) < 2:
         print(__doc__)
         sys.exit(1)
@@ -155,6 +162,7 @@ def main():
         "방송통신발전기본법", "방송통신발전기본법_시행령",
         "기술기준", "적합성평가", "주파수할당", "주파수분배표",
         "전자파", "정보통신망법", "정보통신기반시설", "방송통신설비",
+        "약관",   # 사업자 이용약관(#312) — law_watch SKIP·law_terms 제외, 문서명 「사업자 세대 이용약관(약관)(판)(YYYYMMDD)」
     )
     if doc_category not in VALID_CATEGORIES:
         print(f"오류: 지원하지 않는 카테고리입니다 (입력값: {doc_category})")
@@ -184,12 +192,14 @@ def main():
     chunks = chunk_text(text)
     print(f"  생성된 청크: {len(chunks)}개 (평균 {sum(len(c['content']) for c in chunks)//len(chunks)}자)")
 
-    print(f"[3/4] Supabase 업로드: doc_name='{doc_name}', category='{doc_category}'")
-    success = upload_to_supabase(doc_name, doc_category, chunks)
+    print(f"[3/4] Supabase 업로드: doc_name='{doc_name}', category='{doc_category}'"
+          + ("" if approved else " (is_approved=false — 자문 검색에 안 보임)"))
+    success = upload_to_supabase(doc_name, doc_category, chunks, approved)
 
     if success:
         print(f"\n✅ 완료! '{doc_name}' → document_chunks {len(chunks)}개 저장됨")
-        print(f"   대시보드 AI 자문에서 바로 검색 가능합니다.")
+        print(f"   대시보드 AI 자문에서 바로 검색 가능합니다." if approved else
+              f"   승인 대기(is_approved=false) — 공개는 설정 화면 승인(RPC admin_set_kb_approval)")
         print(f"\n[4/4] 임베딩 백필 실행 중...")
         import subprocess
         backfill_script = Path(__file__).parent / "backfill_embeddings.py"

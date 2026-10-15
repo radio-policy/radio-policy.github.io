@@ -48,6 +48,7 @@ BATCH = 200
 # 정의 조문 제목 — 정확 일치만 (부분일치 금지, 모듈 docstring 참조)
 DEF_TITLE_RE = re.compile(r'^\d+조(?:의\d+)?\((정의|용어의\s?정의|용어정의|용어의\s?뜻)\)$')
 DEF_TITLE_PG = r'^[0-9]+조(의[0-9]+)?\((정의|용어의 ?정의|용어정의|용어의 ?뜻)\)$'   # PostgREST match(~)용
+TERM_SKIP_CATEGORIES = {'약관'}
 # law_diff_gen.py:72 ART_KEY_RE 와 동일 — 변경 시 함께 (law_diff_gen은 anthropic을 import하므로 여기서 안 끌어옴)
 ART_KEY_RE = re.compile(r'^제?\s*([0-9]+조(?:의[0-9]+)?)')
 HEADER_RE = re.compile(r'^\s*제\s*\d+조(?:의\d+)?\s*\([^)]*\)\s*')            # 첫 청크 머리 '제2조(정의)'
@@ -223,7 +224,9 @@ def fetch_def_chunks(sb, doc_filter=None):
         if len(batch) < page:
             break
         start += page
-    return [r for r in rows if DEF_TITLE_RE.match(r.get('article_no') or '')]   # 파이썬 재검사
+    # 파이썬 재검사. 약관(사업자 이용약관, #312)의 「용어의 정의」는 법적 용어가 아니다 — 5G 약관 제57조가 걸린다
+    return [r for r in rows if DEF_TITLE_RE.match(r.get('article_no') or '')
+            and r.get('doc_category') not in TERM_SKIP_CATEGORIES]
 
 
 def build_rows(chunks, run_ts):
