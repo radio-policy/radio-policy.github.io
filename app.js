@@ -2058,6 +2058,16 @@ async function fetchNewLawRows(userText, doc, n) {
   return (r2.data || []).map(function(c) { return Object.assign({}, c, { similarity: 0 }); });
 }
 function kstTodayYmd() { return new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10).replace(/-/g, ''); }
+// 번호 지목(#311-보론) — RagCore.fetchNamedArticles의 pend 재료: 시행 전 제정 법령 문서들의 조 목록(현행판이 없어 status는 pending — 상태로 거르지 않는다).
+// rag.ts fetchPendingNewKeyRows·pendingNamedOpts와 같은 조건(한쪽만 고치지 말 것). docsP = 같은 요청이 fetchPendingNew와 나눠 쓰는 law_pending 조회.
+function fetchNewLawKeyRows(docNames) {
+  return sb.from('document_chunks').select('doc_name, article_no').in('doc_name', docNames).eq('is_approved', true)
+    .not('article_no', 'is', null).order('id', { ascending: true }).limit(2000)
+    .then(function(r) { if (r.error) throw new Error('document_chunks: ' + (r.error.code || r.error.message)); return r.data || []; });
+}
+function pendingNamedOpts(docsP) {
+  return { docs: function() { return docsP; }, keyRows: fetchNewLawKeyRows, today: kstTodayYmd() };
+}
 
 // ── 법령·규제 요약 지식베이스(regulatory-kb / kb_chunks) ──
 // document_chunks(조문 원문)와 별개 레이어. 조문 원문 인용은 RAG 우선, 여기는 요약·적용범위·실무 맥락.
@@ -2942,20 +2952,9 @@ async function buildAdvisoryContext(userText) {
   // 국회 동향(과방위 발언 + 법안) — 근거가 아니라 참고 배경이므로 컨텍스트 맨 뒤에 붙인다
   const assemblyP   = fetchAssemblyTrendContext(userText).catch(function(e) { console.warn('국회 동향 실패(건너뜀):', e); return ''; });
   const kbP         = searchKbSummaries(userText).catch(function(e) { console.warn('법령요약 검색 실패(건너뜀):', e); return []; });
-  // 시행 전 제정 법령(#311) — 현행판 없는 새 법령은 검색 RPC가 못 본다. 관련 판정에 위 법령요약 검색(kbP)을 쓰고 다른 갈래와 독립이라 기다리지 않는다.
-  // search_meta에는 그런 법령이 있을 때만 남긴다(rows = 실은 조 수, gate = kb·sim, docs = 후보 문서 수). rag.ts buildAdvisoryContext와 동일 유지.
-  var pnT0 = performance.now();
-  const pendingNewP = (sb ? RagCore.fetchPendingNew({ pendingNewDocs: fetchNewLawDocs, docRows: function(d, n) { return fetchNewLawRows(userText, d, n); } }, kbP, kstTodayYmd())
-      : Promise.resolve(PENDING_NEW_EMPTY))
-    .then(function(r) {
-      if (r.docs && lastAdvSearchMeta) lastAdvSearchMeta.push({ fn: 'pending_new', ms: Math.round(performance.now() - pnT0), rows: r.laws.reduce(function(a, x) { return a + x.articles; }, 0), error: null, gate: r.gate, docs: r.docs });
-      return r;
-    })
-    .catch(function(e) {
-      console.warn('시행 전 제정 법령 조회 실패(건너뜀):', e);
-      if (lastAdvSearchMeta) lastAdvSearchMeta.push({ fn: 'pending_new', ms: Math.round(performance.now() - pnT0), rows: null, error: String(e && e.message || e) });
-      return PENDING_NEW_EMPTY;
-    });
+  // 현행판 없는 시행 전 제정 법령 목록(#311) — 지목 조문 이름 맞추기(#311-보론)와 시행 전 제정 법령 구역(아래 pendingNewP)이 나눠 쓴다(조회 1번).
+  const pnDocsP     = sb ? fetchNewLawDocs() : Promise.resolve([]);
+  pnDocsP.catch(function() {});   // 거부는 두 소비자가 각자 처리 — 처리기 없는 거부로 남지 않게
   // 조문 정밀검색 (rag.ts answerAdvisory와 동일 계층) — RAG가 논문·보도자료에 밀려 놓친 근거 조문 보강
   const lawArtP     = searchLawArticles(userText, 5).catch(function(e) { console.warn('조문 정밀검색 실패(건너뜀):', e); return []; });
   // 조문 **의미** 검색 (#89) — 봇 /law에는 있는데 자문(봇·대시보드 양쪽)에만 없던 갈래.
@@ -2971,11 +2970,34 @@ async function buildAdvisoryContext(userText) {
     })
     .catch(function(e) { console.warn('조문 의미검색 실패(건너뜀):', e); return []; });
   // 번호로 지목한 조문 직접 인출(#245) — 「전파법 제16조」를 이름과 번호로 바로 가져온다(검색 순위와 무관). 규칙은 rag_core.js.
-  // search_meta에는 질문에 조 언급이 있을 때만 남긴다(rows 0 = 이름을 못 맞췄거나 그 조문이 KB에 없음). rag.ts와 동일 유지.
+  // search_meta에는 질문에 조 언급이 있을 때만 남긴다(rows 0 = 이름을 못 맞췄거나 그 조문이 KB에 없음, pending = 시행 전 제정 법령으로 맞춘 언급 수). rag.ts와 동일 유지.
+  // 시행 전 제정 법령으로 맞춘 언급(#311-보론)은 여기서 조문을 가져오지 않는다 — 조문 정밀검색(현행 조문)에 섞이지 않게 아래 구역이 싣는다.
   var namedT0 = performance.now(), namedRefs = RagCore.namedArticleRefs(userText).length;
-  const namedP      = RagCore.fetchNamedArticles(userText, fetchArticleKeyRows, fetchArticleChunks)
-    .then(function(rows) { if (namedRefs) metaNote('named_articles', namedT0, { data: rows }); return rows; })
+  const namedP      = RagCore.fetchNamedArticles(userText, fetchArticleKeyRows, fetchArticleChunks, sb ? pendingNamedOpts(pnDocsP) : undefined)
+    .then(function(rows) {
+      if (namedRefs) {
+        metaNote('named_articles', namedT0, { data: rows });
+        var pn = (rows.pendingNamed || []).length, last = lastAdvSearchMeta && lastAdvSearchMeta[lastAdvSearchMeta.length - 1];
+        if (pn && last && last.fn === 'named_articles') last.pending = pn;
+      }
+      return rows;
+    })
     .catch(function(e) { console.warn('지목 조문 조회 실패(건너뜀):', e); metaNote('named_articles', namedT0, { error: { message: String(e && e.message || e) } }); return []; });
+  // 시행 전 제정 법령(#311) — 현행판 없는 새 법령은 검색 RPC가 못 본다. 관련 판정에 위 법령요약 검색(kbP)과 지목 조문(namedP의 pendingNamed, #311-보론 G0)을 쓰고
+  // 다른 갈래와 독립이라 기다리지 않는다. search_meta에는 그런 법령이 있을 때만 남긴다(rows = 실은 조 수, gate = named·kb·sim, docs = 후보 문서 수). rag.ts buildAdvisoryContext와 동일 유지.
+  var pnT0 = performance.now();
+  const pendingNewP = (sb ? RagCore.fetchPendingNew({ pendingNewDocs: function() { return pnDocsP; }, docRows: function(d, n) { return fetchNewLawRows(userText, d, n); },
+        named: function() { return namedP; } }, kbP, kstTodayYmd())
+      : Promise.resolve(PENDING_NEW_EMPTY))
+    .then(function(r) {
+      if (r.docs && lastAdvSearchMeta) lastAdvSearchMeta.push({ fn: 'pending_new', ms: Math.round(performance.now() - pnT0), rows: r.laws.reduce(function(a, x) { return a + x.articles; }, 0), error: null, gate: r.gate, docs: r.docs });
+      return r;
+    })
+    .catch(function(e) {
+      console.warn('시행 전 제정 법령 조회 실패(건너뜀):', e);
+      if (lastAdvSearchMeta) lastAdvSearchMeta.push({ fn: 'pending_new', ms: Math.round(performance.now() - pnT0), rows: null, error: String(e && e.message || e) });
+      return PENDING_NEW_EMPTY;
+    });
   // 법령 관계도: 기존 주제명 목록(주제명 분열 방지용) — 실패해도 자문은 정상 진행
   const lawTopicsP  = sb
     ? sb.from('law_graph_nodes').select('name').eq('node_type', 'topic').limit(120)

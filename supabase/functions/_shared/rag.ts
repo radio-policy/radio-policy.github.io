@@ -108,7 +108,7 @@ interface Chunk {
 // 검색 갈래별 기록(#203, 2026-09-24) — [{fn, ms, rows, error}]. buildAdvisoryContext가 배열을 만들어 각 검색
 // 함수에 넘기고 answerAdvisory가 chat_logs.search_meta에 남긴다. 모듈 전역이 아니라 인자로 넘기는 이유:
 // Edge isolate는 요청을 동시에 처리하므로 전역이면 두 자문의 기록이 섞인다. app.js metaRpc와 같은 형식.
-export type SearchMeta = { fn: string; ms: number; rows: number | null; error: string | null; trimmed?: number; capped?: boolean; addendum?: number; apply?: number; gate?: string | null; docs?: number }[];
+export type SearchMeta = { fn: string; ms: number; rows: number | null; error: string | null; trimmed?: number; capped?: boolean; addendum?: number; apply?: number; gate?: string | null; docs?: number; pending?: number }[];
 type RpcResult = { data?: unknown; error?: { code?: string; message?: string } | null } | null;
 function metaRpc(sb: SupabaseClient, meta: SearchMeta | undefined, fn: string, params: Record<string, unknown>) {
   const t0 = performance.now();
@@ -636,7 +636,7 @@ export async function searchLawArticles(sb: SupabaseClient, query: string, limit
 // 만족도 👎 분석 때 "어느 조문을 집었길래 틀렸나"를 되짚을 수 있게 한다(2026-08-20).
 // 검색·조립(buildLawQueryContext)과 Haiku 호출(answerLawQuery)을 나눈다(#247) — 확인 스크립트가 testHooks로
 // 확장어·임베딩을 고정하고 buildLawQueryContext만 불러 Anthropic API 0회로 전후를 대조한다(자문의 #201과 같은 방식).
-type LawQueryContext = { merged: LawHit[]; kb: KbRow[]; system: string; addOns: AddOns; searchMeta: SearchMeta };
+type LawQueryContext = { merged: LawHit[]; kb: KbRow[]; system: string; addOns: AddOns; pendingNew: PendingNew; searchMeta: SearchMeta };
 const NAMED_LAW_CHARS = 3000;   // /law 지목 조문 한 항목 상한(#247) — 현행 조문 7,969개 중 99%가 3,070자 이하, 그 밖 항목은 800자
 // /law 답변 모델(#304-보론, 2026-10-14) — 바꾸려면 tests/law_model_probe_deno.ts로 세 모델을 다시 재고(≈$2, 운영자 고지 뒤) 눈가림 채점을 거친다
 const LAW_MODEL = 'claude-haiku-5-5';
@@ -658,9 +658,27 @@ export async function buildLawQueryContext(sb: SupabaseClient, query: string): P
   //    (expandArticles)이 없으므로 조회해 둔 같은 조의 조각을 전부 이어 붙인다 — 조회 함수를 감싸 결과를 받아 두므로 DB 왕복은 늘지 않는다.
   const meta: SearchMeta = [];   // 검색 갈래 기록(#203과 같은 꼴) — /law도 chat_logs.search_meta에 남긴다(#303, 2026-10-14)
   const namedArt = new Map<string, Promise<Chunk[]>>();
+  // ⑤ 시행 전 제정 법령(#311-보론, 2026-10-15) — 자문의 #311 구역을 같은 함수(rag_core.js fetchPendingNew)·같은 판정으로 붙인다. G1 재료는 아래
+  //    요약층 검색(kb — 자문과 달리 expandQueryForSemantic을 거친 질문), G2는 질문 그대로의 임베딩. 지목 조문(④)이 그 법령으로 맞춰지면
+  //    현행 조문 목록에 넣지 않고 이 구역이 싣는다(G0). 바탕 세 갈래·덧붙이기 입력·전체 상한의 「나머지 길이」에는 넣지 않는다.
+  const pnDocsP = fetchPendingNewDocs(sb);
+  pnDocsP.catch(() => {});   // 거부는 아래 두 소비자가 각자 처리 — 처리기 없는 거부로 남지 않게
   const namedP: Promise<Chunk[]> = RagCore.fetchNamedArticles(query, (k: string) => fetchArticleKeyRows(sb, k),
-    (d: string, k: string) => { const p = fetchArticleChunks(sb, d, k); namedArt.set(d + '|' + k, p); return p; })
+    (d: string, k: string) => { const p = fetchArticleChunks(sb, d, k); namedArt.set(d + '|' + k, p); return p; }, pendingNamedOpts(sb, pnDocsP))
     .catch(() => [] as Chunk[]);
+  const kbP: Promise<KbRow[]> = searchKbSummaries(sb, expandQueryForSemantic(query)).catch(() => [] as KbRow[]);
+  const pnT0 = performance.now();
+  const pendingNewP: Promise<PendingNew> = RagCore.fetchPendingNew({
+    pendingNewDocs: () => pnDocsP,
+    docRows: (d: string, n: number) => fetchPendingNewRows(sb, query, d, n),
+    named: () => namedP,
+  }, kbP, kstToday()).then((r: PendingNew) => {
+    if (r.docs) meta.push({ fn: 'pending_new', ms: Math.round(performance.now() - pnT0), rows: r.laws.reduce((a, x) => a + x.articles, 0), error: null, gate: r.gate, docs: r.docs });
+    return r;
+  }).catch((e: unknown) => {
+    meta.push({ fn: 'pending_new', ms: Math.round(performance.now() - pnT0), rows: null, error: String((e as Error)?.message || e) });
+    return EMPTY_PENDING_NEW;
+  });
   const [hitsAll, semantic, kb, namedFirst] = await Promise.all([
     // 8→12 (2026-08-07): "3G 종료"처럼 한 질문이 여러 제도(사업 폐업·무선국 폐지·주파수 회수)에
     // 걸치면 8자리를 계열끼리 다퉈 시행령 조문이 밀려났다(실측 — 시행령 24조·51조 누락).
@@ -675,7 +693,7 @@ export async function buildLawQueryContext(sb: SupabaseClient, query: string): P
       ? sb.rpc('match_law_articles_semantic', { query_embedding: emb, match_threshold: 0.0, match_count: 8, only_current: true })
           .then((r) => (r.data || []) as Chunk[])
       : [] as Chunk[]).catch(() => [] as Chunk[]),
-    searchKbSummaries(sb, expandQueryForSemantic(query)).catch(() => [] as KbRow[]),
+    kbP,
     namedP,
   ]);
 
@@ -744,7 +762,8 @@ export async function buildLawQueryContext(sb: SupabaseClient, query: string): P
   }
 
   const searched = hits.concat(semExtra, bridged);
-  if (!named.length && !searched.length && !kb.length) return null;   // 검색 0건 — 호출자가 미등재 안내
+  const pendingNew = await pendingNewP;
+  if (!named.length && !searched.length && !kb.length && !pendingNew.text) return null;   // 검색 0건 — 호출자가 미등재 안내
 
   // 프롬프트에 넣는 순서를 **법 위계 순**(법률>대통령령>부령>고시)으로 맞춘다. 검색 점수 순으로
   // 넣으면 시행령이 앞서고 상위 법률이 뒤로 밀려, 모델이 시행령만 인용하고 근거 법률을 빠뜨린다
@@ -801,6 +820,8 @@ export async function buildLawQueryContext(sb: SupabaseClient, query: string): P
   meta.push({ fn: 'addons', ms: addMs, rows: addErr ? null : addOns.items.length, error: addErr, trimmed: addOns.trimmed || 0, addendum: addOns.addendum || 0, apply: addOns.apply || 0 });
   if (addOns.items.length) console.log(`[/law 덧붙이기] ${addOns.items.map((x) => x.sec + (x.dir ? '/' + x.dir : '') + ' ' + x.fam + ' ' + x.key).join(', ')}`);
   if (addOns.text) ctxParts.push(addOns.text.replace(/^\n\n---\n\n/, ''));   // 구역 글은 '\n\n---\n\n'로 시작한다 — join 구분자와 겹치지 않게
+  // 시행 전 제정 법령(⑤, #311-보론)은 덧붙이기 뒤·요약층 앞(자문에서 시행예정 구역 뒤·요약 앞인 것과 같은 차례). 위 trimAddOns의 나머지 길이에 넣지 않는다.
+  if (pendingNew.text) ctxParts.push(pendingNew.text.replace(/^\n\n---\n\n/, ''));
   if (kb.length) {
     ctxParts.push('[법령 요약(실무 맥락 보강용 — 조문 인용은 위 원문 우선)]\n' + kb.slice(0, 3).map((r) =>
       `· ${(r.title || '').trim()}\n${(r.content || '').slice(0, 500)}`
@@ -833,11 +854,13 @@ export async function buildLawQueryContext(sb: SupabaseClient, query: string): P
     '- 시사점·전략 제언·최신 동향·뉴스·해외 사례는 쓰지 마세요 — 법령 내용만 다룹니다(그런 질문은 /ask 몫).\n' +
     // 덧붙이기 구역이 있을 때만 붙는다(#303) — 없는 질문의 프롬프트는 길이 지침 한 줄 말고는 종전과 같다
     (addOns.text ? '- 「위임 관계로 이어진 조문」·「같은 고시의 다른 조문」처럼 머리말이 붙은 구역의 조문도 검색 결과입니다. 질문과 관련되면 위 조문과 함께(상위 법률 ↔ 하위법령 관계를 밝혀) 제시하고, 관련 없으면 쓰지 마세요.\n' : '') +
+    // 시행 전 제정 법령 구역이 있을 때만 붙는다(#311-보론) — 없는 질문의 프롬프트는 종전과 같다
+    (pendingNew.text ? '- 「시행 전 제정 법령」 구역은 공포됐으나 아직 시행되지 않은 새 법령의 원문입니다(지금은 효력 없음). 질문과 관련되면 법령명·조문 번호 뒤에 「(YYYY.M.D. 시행 예정)」을 붙여 현행 조문과 구분해 제시하고, 현행 조문처럼 서술하지 마세요.\n' : '') +
     // 1,800 → 2,500자(#303): 종전 한도 1,500토큰이 이 지침보다 먼저 끊어 최근 4건 중 3건이 문장 중간에서 잘렸다(아래 answerLawQuery) — 항목 3~8개에
     // 2~3문장씩이면 2,000자대가 자연스러운 길이. 텔레그램 한 메시지(splitByLines 3,900자)에 들어간다.
     '- 텔레그램 전송용: 표·코드블록 금지, 굵게(**)와 불릿(-)만, 전체 2,500자 이내.\n\n' +
     '---\n\n' + ctxParts.join('\n\n---\n\n');
-  return { merged, kb, system, addOns, searchMeta: meta };
+  return { merged, kb, system, addOns, pendingNew, searchMeta: meta };
 }
 
 export async function answerLawQuery(sb: SupabaseClient, query: string): Promise<{ answer: string; chunkIds: number[]; searchMeta: SearchMeta } | null> {
@@ -845,7 +868,7 @@ export async function answerLawQuery(sb: SupabaseClient, query: string): Promise
   if (!apiKey) return null;
   const ctx = await buildLawQueryContext(sb, query);
   if (!ctx) return null;   // 검색 0건 — 호출자가 미등재 안내
-  const { merged, system, addOns, searchMeta } = ctx;
+  const { merged, system, addOns, pendingNew, searchMeta } = ctx;
 
   const res = await fetch(ANTHROPIC_URL, {
     method: 'POST',
@@ -878,6 +901,7 @@ export async function answerLawQuery(sb: SupabaseClient, query: string): Promise
   const chunkIds: number[] = [];
   for (const h of merged) for (const id of (h._ids || [h.id])) if (typeof id === 'number' && !chunkIds.includes(id)) chunkIds.push(id);
   for (const id of addOns.ids) if (typeof id === 'number' && !chunkIds.includes(id)) chunkIds.push(id);   // 덧붙인 조문(#303)의 조각 id는 맨 뒤
+  for (const id of pendingNew.ids) if (typeof id === 'number' && !chunkIds.includes(id)) chunkIds.push(id);   // 시행 전 제정 법령(#311-보론)은 그 뒤
   return { answer: text.trim(), chunkIds, searchMeta };
 }
 
@@ -941,7 +965,7 @@ async function fetchPendingContext(sb: SupabaseClient, chunks: Chunk[], meta?: S
 // ── 시행 전 제정 법령(#311) — 현행판 없이 시행예정판만 있는 새 법령(law_pending.watch_doc_name 없음)의 원문. 관련 판정·조 고르기·문구는
 // rag_core.js fetchPendingNew 한 곳이고 여기는 DB 조회 둘만 댄다(app.js buildPendingNewContext와 같은 입력·같은 자리 — 한쪽만 고치지 말 것).
 type PendingNewDoc = { doc_name: string; law_name: string; law_no: string; enf_date: string };
-type PendingNew = { text: string; chunks: Chunk[]; ids: number[]; laws: { doc_name: string; law_name: string; enf_date: string; gate: string; articles: number; whole: boolean }[]; docs: number; gate: string | null };
+type PendingNew = { text: string; chunks: Chunk[]; ids: number[]; laws: { doc_name: string; law_name: string; enf_date: string; gate: string; articles: number; whole: boolean; named?: string[] }[]; docs: number; gate: string | null };
 const EMPTY_PENDING_NEW: PendingNew = { text: '', chunks: [], ids: [], laws: [], docs: 0, gate: null };
 async function fetchPendingNewDocs(sb: SupabaseClient): Promise<PendingNewDoc[]> {
   const r = await sb.from('law_pending').select('doc_name, law_name, law_no, enf_date')
@@ -961,6 +985,38 @@ async function fetchPendingNewRows(sb: SupabaseClient, question: string, doc: st
   return ((r2.data || []) as Chunk[]).map((c) => ({ ...c, similarity: 0 }));
 }
 const kstToday = () => new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10).replace(/-/g, '');
+// 번호 지목(#311-보론) — fetchNamedArticles의 pend 재료: 시행 전 제정 법령 문서들의 조 목록(현행판이 없어 status는 pending — 상태로 거르지 않는다).
+// app.js fetchNewLawKeyRows와 같은 조건(한쪽만 고치지 말 것). docsP = 같은 요청이 fetchPendingNew와 나눠 쓰는 law_pending 조회.
+async function fetchPendingNewKeyRows(sb: SupabaseClient, docNames: string[]): Promise<{ doc_name: string; article_no: string }[]> {
+  const r = await sb.from('document_chunks').select('doc_name, article_no').in('doc_name', docNames).eq('is_approved', true)
+    .not('article_no', 'is', null).order('id', { ascending: true }).limit(2000);
+  if (r.error) throw new Error('document_chunks: ' + (r.error.code || r.error.message));
+  return (r.data || []) as { doc_name: string; article_no: string }[];
+}
+function pendingNamedOpts(sb: SupabaseClient, docsP: Promise<PendingNewDoc[]>) {
+  return { docs: () => docsP, keyRows: (d: string[]) => fetchPendingNewKeyRows(sb, d), today: kstToday() };
+}
+// /law 조문 즉답(telegram-webhook handleArticleLookup)의 시행 전 제정 법령 갈래(#311-보론) — 현행 조회가 비었을 때만 부른다. 이름 맞추기는 자문·/law
+// 자연어와 같은 fetchNamedArticles(현행 문서군 + 시행 전 제정 법령 문서군 — 그 법령으로 맞춘 언급만 pendingNamed)라 「특별법 제18조」처럼 이름이
+// 모자라면 고르지 않는다. 찾으면 그 조의 조각을 겹침 없이 이은 글(CiteVerify.mergeChunkTexts)과 「2027.3.10. 시행 예정 · 법률 제21759호」 표지.
+export async function lookupPendingNewArticle(sb: SupabaseClient, name: string, key: string): Promise<{ doc_name: string; article_no: string; ids: number[]; text: string; label: string } | null> {
+  const docsP = fetchPendingNewDocs(sb);
+  docsP.catch(() => {});
+  const r = await RagCore.fetchNamedArticles(`${name} 제${key}`, (k: string) => fetchArticleKeyRows(sb, k), () => [], pendingNamedOpts(sb, docsP));
+  const p = ((r as { pendingNamed?: { doc_name: string; key: string }[] }).pendingNamed || [])[0];
+  if (!p) return null;
+  const doc = (await docsP).find((d) => d.doc_name === p.doc_name);
+  const q = await sb.from('document_chunks').select('id, doc_name, article_no, chunk_index, content')
+    .eq('doc_name', p.doc_name).eq('is_approved', true).like('article_no', p.key + '%').order('chunk_index', { ascending: true }).limit(40);
+  const rows = ((q.data || []) as Chunk[]).filter((c) => CiteVerify.articleKey(c.article_no) === p.key);
+  if (!doc || !rows.length) return null;
+  const type = (/^[^(]+\(([^()]+)\)/.exec(p.doc_name) || [])[1] || '';
+  const d8 = String(doc.enf_date || '').replace(/\D/g, '');
+  const date = d8.length === 8 ? `${Number(d8.slice(0, 4))}.${Number(d8.slice(4, 6))}.${Number(d8.slice(6, 8))}.` : String(doc.enf_date || '');
+  const label = `${date} 시행 예정 · ${[type, /^\d/.test(String(doc.law_no || '')) ? '제' + doc.law_no + '호' : String(doc.law_no || '')].filter(Boolean).join(' ')}`;
+  const named = rows.find((c) => /\(/.test(c.article_no || '')) || rows[0];
+  return { doc_name: p.doc_name, article_no: named.article_no || p.key, ids: rows.map((c) => c.id), text: CiteVerify.mergeChunkTexts(rows.map((c) => c.content || '')), label };
+}
 // 최근 법령·고시 개정·입법예고 동향(RPC law_track_recent, 법령별 최신 1건 → 입법예고 전부 + 시행예정 + 최근 180일, 25행) — 대시보드와 같은 문구.
 // 질문과 무관한 일반 목록이라 참조 자료 뒤쪽(뉴스 뒤·국회 동향 앞)에 둔다. 조문 인용은 지식베이스 원문 우선(문구 안에 적혀 있다).
 type LawTrackRow = { law_type?: string; ann_type?: string; law_nm?: string; enf_dt?: string; public_dt?: string; summary?: string };
@@ -1234,12 +1290,27 @@ export async function buildAdvisoryContext(sb: SupabaseClient, question: string)
     : [] as Chunk[]).catch(() => [] as Chunk[]);
   const asmP = buildAssemblyTrendContext(sb, question);
   const lawTrackP = fetchLawTrackContext(sb, meta);   // 최근 법령 개정·입법예고 동향(#303 — 대시보드에만 있던 구역, 질문과 무관해 맨 먼저 띄운다)
-  // 시행 전 제정 법령(#311) — 현행판 없는 새 법령은 검색 RPC가 못 본다. 관련 판정에 같은 요청의 법령요약 검색(kbP)을 쓰므로 그 뒤에 시작하고,
-  // 다른 갈래와 독립이라 기다리지 않는다. search_meta에는 그런 법령이 있을 때만 남긴다(rows = 실은 조 수, gate = kb·sim, docs = 후보 문서 수).
+  // 현행판 없는 시행 전 제정 법령 목록(#311) — 지목 조문 이름 맞추기(#311-보론)와 시행 전 제정 법령 구역이 나눠 쓴다(조회 1번).
+  const pnDocsP = fetchPendingNewDocs(sb);
+  pnDocsP.catch(() => {});   // 거부는 아래 두 소비자가 각자 처리 — 처리기 없는 거부로 남지 않게
+  // 번호로 지목한 조문 직접 인출(#245) — 「전파법 제16조」를 이름과 번호로 바로 가져온다(검색 순위와 무관). 규칙은 rag_core.js.
+  // search_meta에는 질문에 조 언급이 있을 때만 남긴다(rows 0 = 이름을 못 맞췄거나 그 조문이 KB에 없음, pending = 시행 전 제정 법령으로 맞춘 언급 수 — 아래 구역 몫).
+  // 시행 전 제정 법령으로 맞춘 언급(#311-보론)은 여기서 조문을 가져오지 않는다 — 현행 조문 구역(조문 정밀검색)에 섞이지 않게 아래 구역이 싣는다.
+  const namedT0 = performance.now(), namedRefs = RagCore.namedArticleRefs(question).length;
+  const namedP: Promise<Chunk[]> = RagCore.fetchNamedArticles(question, (k: string) => fetchArticleKeyRows(sb, k), (d: string, k: string) => fetchArticleChunks(sb, d, k), pendingNamedOpts(sb, pnDocsP))
+    .then((rows: Chunk[] & { pendingNamed?: unknown[] }) => {
+      const pn = (rows.pendingNamed || []).length;
+      if (namedRefs) meta.push({ fn: 'named_articles', ms: Math.round(performance.now() - namedT0), rows: rows.length, error: null, ...(pn ? { pending: pn } : {}) });
+      return rows;
+    })
+    .catch((e: unknown) => { meta.push({ fn: 'named_articles', ms: Math.round(performance.now() - namedT0), rows: null, error: String((e as Error)?.message || e) }); return [] as Chunk[]; });
+  // 시행 전 제정 법령(#311) — 현행판 없는 새 법령은 검색 RPC가 못 본다. 관련 판정에 같은 요청의 법령요약 검색(kbP)과 지목 조문(namedP의 pendingNamed,
+  // #311-보론 G0)을 쓰고, 다른 갈래와 독립이라 기다리지 않는다. search_meta에는 그런 법령이 있을 때만 남긴다(rows = 실은 조 수, gate = named·kb·sim, docs = 후보 문서 수).
   const pnT0 = performance.now();
   const pendingNewP: Promise<PendingNew> = RagCore.fetchPendingNew({
-    pendingNewDocs: () => fetchPendingNewDocs(sb),
+    pendingNewDocs: () => pnDocsP,
     docRows: (d: string, n: number) => fetchPendingNewRows(sb, question, d, n),
+    named: () => namedP,
   }, kbP, kstToday()).then((r: PendingNew) => {
     if (r.docs) meta.push({ fn: 'pending_new', ms: Math.round(performance.now() - pnT0), rows: r.laws.reduce((a, x) => a + x.articles, 0), error: null, gate: r.gate, docs: r.docs });
     return r;
@@ -1247,12 +1318,6 @@ export async function buildAdvisoryContext(sb: SupabaseClient, question: string)
     meta.push({ fn: 'pending_new', ms: Math.round(performance.now() - pnT0), rows: null, error: String((e as Error)?.message || e) });
     return EMPTY_PENDING_NEW;
   });
-  // 번호로 지목한 조문 직접 인출(#245) — 「전파법 제16조」를 이름과 번호로 바로 가져온다(검색 순위와 무관). 규칙은 rag_core.js.
-  // search_meta에는 질문에 조 언급이 있을 때만 남긴다(rows 0 = 이름을 못 맞췄거나 그 조문이 KB에 없음).
-  const namedT0 = performance.now(), namedRefs = RagCore.namedArticleRefs(question).length;
-  const namedP: Promise<Chunk[]> = RagCore.fetchNamedArticles(question, (k: string) => fetchArticleKeyRows(sb, k), (d: string, k: string) => fetchArticleChunks(sb, d, k))
-    .then((rows: Chunk[]) => { if (namedRefs) meta.push({ fn: 'named_articles', ms: Math.round(performance.now() - namedT0), rows: rows.length, error: null }); return rows; })
-    .catch((e: unknown) => { meta.push({ fn: 'named_articles', ms: Math.round(performance.now() - namedT0), rows: null, error: String((e as Error)?.message || e) }); return [] as Chunk[]; });
   const chunks = await searchChunks(sb, apiKey, question, meta, expandP);
   // 질문 임베딩 — 별표 조각 동점 가르기(별표 동반·덧붙이기 별표 칸, 장동선 판정 §4-7)에 넘긴다. searchChunks와 같은 (모델, 글)이라 기억에서 나온다(Voyage 추가 0).
   const qEmbP = getQueryEmbedding(question);

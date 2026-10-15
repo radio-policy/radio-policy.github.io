@@ -24,7 +24,7 @@
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
 import { createClient, type SupabaseClient } from 'jsr:@supabase/supabase-js@2';
 import { escapeHtml, splitByLines, mdToTelegramHtml, sendTelegramHtml } from '../_shared/telegram_format.ts';
-import { answerAdvisory, answerLawQuery } from '../_shared/rag.ts';
+import { answerAdvisory, answerLawQuery, lookupPendingNewArticle } from '../_shared/rag.ts';
 import { NEWS_TAGS, TAG_SLUGS, matchTags } from '../_shared/news_tags.ts';
 import { groupBySameEvent } from '../_shared/news_group.ts';
 import { parseMoreCallback, encodeMoreCallback, formatRange, MORE_PAGE_SIZE } from '../_shared/news_more.ts';
@@ -738,6 +738,31 @@ async function handleArticleLookup(chatId: number, ref: ArticleRef): Promise<boo
       const a = (r.article_no || '').split('(')[0].replace(/\s/g, '').replace(/^제/, '');
       return subNo ? a.startsWith(wantedDb) : (a === wantedDb || a.startsWith(wantedDb + '('));
     });
+  // 현행에 없으면 공포됐으나 시행 전인 새 제정 법령(현행판 없음 — law_pending.watch_doc_name 없음)에서 찾는다(#311-보론, 2026-10-15).
+  // 종전엔 「인공지능 데이터센터 특별법 제18조」가 원문이 DB에 있는데도 「등재되지 않았습니다」로 끝났다(현행만 조회 + 문서명 부분 일치는 줄인 이름을
+  // 못 잡는다). 이름 맞추기는 자문·/law 자연어의 지목 조문과 같은 규칙(rag.ts lookupPendingNewArticle → rag_core.js fetchNamedArticles) — 「특별법 제18조」처럼
+  // 이름이 모자라면 고르지 않는다. 찾으면 원문 머리에 시행 예정·효력 없음을 적는다. 조회 실패는 종전 안내(미등재·자연어 모드로).
+  if (!rows.length) {
+    const pn = await lookupPendingNewArticle(sb, rawDocName, wantedDb).catch((e) => { console.warn('[시행 전 제정 법령 조문 조회 실패]', e); return null; });
+    if (pn) {
+      let pbody = `📖 <b>${escapeHtml(pn.doc_name)} ${escapeHtml(pn.article_no || wanted)}</b>\n`;
+      pbody += `<i>${escapeHtml(pn.label)} — 공포됐으나 아직 시행되지 않아 지금은 효력이 없습니다(현행판 없음)</i>\n`;
+      if (hang) {
+        const n = Number(hang);
+        const mark = n >= 1 && n <= 20 ? '①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳'[n - 1] : `제${n}항`;
+        pbody += `<i>요청하신 제${n}항${ho ? ` 제${ho}호는` : '은'} 아래 조문의 ${mark} 부분입니다.</i>\n`;
+      }
+      const pplain = plainifyArticle(pn.text);
+      pbody += '\n' + escapeHtml(pplain);
+      const plogId = await logAnswer({
+        question: `${docName} ${wanted}`, answer: pplain,
+        category: '텔레그램-조문조회', sources: pn.doc_name,
+        channel: 'telegram_law', chat_id: chatId, chunk_ids: pn.ids,
+      });
+      await sendAnswerWithFeedback(chatId, pbody, plogId);
+      return true;
+    }
+  }
   if (!rows.length) {
     if (ref.loose) return false;   // 넓은 꼴 — 안내 없이 자연어 모드로(호출측)
     await sendTelegramHtml(BOT_TOKEN, chatId,

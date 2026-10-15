@@ -597,10 +597,14 @@
   // 언급마다 문서 하나를 고른다. rowsByKey = {key: [{doc_name, article_no}]} — 그 번호의 조문을 가진 현행 문서(호출측 조회).
   // 이름 맞추기 대상(문서군)은 '요청한 번호의 조문을 가진 문서'로 한정한다 — 조문이 없는 법령에 붙을 일이 없다.
   // '시행령 제18조'·'동법 제17조'는 앞서 이름이 나온 법령이 있을 때만(없으면 아무 시행령에나 붙는다).
-  function pickNamedArticles(refs, rowsByKey) {
+  // extraFams(#311-보론, 선택) = 현행판 없는 시행 전 제정 법령의 문서군 — 그 번호의 조문이 없어도 이름 맞추기 대상에 넣고 맨 뒤에 둔다.
+  // 넣지 않으면 「인공지능 데이터센터 특별법 제19조」의 끝 낱말 「특별법」이 현행 문서 중 제19조를 가진 유일한 …특별법(정보통신융합법)에
+  // 붙었다(10-15 실측) — 넣으면 끝 일치가 둘이 되어 순서대로 든 낱말 규칙이 그 법령으로 맞추고, 그 번호가 없으면 아무것도 고르지 않는다.
+  function pickNamedArticles(refs, rowsByKey, extraFams) {
     const CV = root.CiteVerify;
     if (!CV) return [];
-    const famsOf = {}, docOf = {}, all = [];
+    const famsOf = {}, docOf = {};
+    let all = [];
     Object.keys(rowsByKey || {}).forEach(function (key) {
       const fams = famsOf[key] = [];
       (rowsByKey[key] || []).forEach(function (r) {
@@ -612,6 +616,7 @@
         if (!docOf[f] || r.doc_name > docOf[f]) docOf[f] = r.doc_name;   // 같은 이름이 여럿이면 문서명 끝 시행일이 늦은 쪽
       });
     });
+    if (extraFams && extraFams.length) all = all.filter(function (f) { return extraFams.indexOf(f) === -1; }).concat(extraFams);
     const out = [], seen = {};
     (refs || []).forEach(function (ref) {
       if (out.length >= NAMED_ARTICLE_MAX || !famsOf[ref.key] || !famsOf[ref.key].length) return;
@@ -632,24 +637,54 @@
   // 반환: 고른 조문마다 **첫 조각 하나**(조문 머리 '제16조(재할당) ①…'), 질문의 언급 순. 나머지 조각은 호출측의 통째 보강
   // (CiteVerify.expandArticles)이 이 조각에 합친다 — 조각을 전부 넣으면 보강이 '이미 다 있다'며 건너뛰어 한 조문이 여러 칸으로
   // 갈라진다(첫 A/B 실측: [조문 1]·[조문 2]가 같은 제16조). 조회 실패는 빈 배열(검색은 그대로 진행).
-  async function fetchNamedArticles(query, fetchKeyRows, fetchArticle) {
+  // pend(#311-보론, 2026-10-15, 선택) = 시행 전 제정 법령(현행판 없는 law_pending — fetchPendingNew와 같은 목록)도 이름 맞추기에 넣는다:
+  //   { docs: () => [{doc_name, law_name, law_no, enf_date}], keyRows: (docNames) => [{doc_name, article_no}](그 문서들의 조 목록), today: 'YYYYMMDD' }.
+  //   그 법령으로 맞춘 언급은 조문을 가져오지 않고 반환 배열의 pendingNamed([{doc_name, key}])로만 알린다 — 원문은 「시행 전 제정 법령」 구역
+  //   (fetchPendingNew의 f.named)이 시행 예정 표시와 함께 싣는다(현행 조문 구역에 섞으면 시행 전 조문이 현행처럼 읽힌다).
+  //   시행일이 지난 행(승격 대기)·현행 조문이 있는 문서군은 넣지 않는다(fetchPendingNew·시행예정 개정본 구역 몫). pend가 없거나 그런 법령이
+  //   없으면 종전과 같다(pendingNamed는 빈 배열).
+  async function fetchNamedArticles(query, fetchKeyRows, fetchArticle, pend) {
     const CV = root.CiteVerify;
     const refs = namedArticleRefs(query);
     if (!CV || !refs.length) return [];
     const keys = [];
     refs.forEach(function (r) { if (keys.indexOf(r.key) === -1 && keys.length < NAMED_ARTICLE_MAX) keys.push(r.key); });
     const soft = function (fn) { return Promise.resolve().then(fn).then(function (r) { return r || []; }, function () { return []; }); };
+    const pendP = pend ? soft(function () {
+      const td = Number(String(pend.today || '').replace(/\D/g, '')) || 0;
+      return Promise.resolve(pend.docs()).then(function (ds) {
+        const docs = (ds || []).filter(function (d) {
+          return d && d.doc_name && !FILE_DOC_RE.test(d.doc_name) && !(td && Number(String(d.enf_date || '').replace(/\D/g, '')) <= td);
+        });
+        if (!docs.length) return [];
+        return Promise.resolve(pend.keyRows(docs.map(function (d) { return d.doc_name; }))).then(function (rs) {
+          return docs.map(function (d) { return { doc_name: d.doc_name, rows: (rs || []).filter(function (r) { return r && r.doc_name === d.doc_name; }) }; });
+        });
+      });
+    }) : Promise.resolve([]);
     const rows = await Promise.all(keys.map(function (k) { return soft(function () { return fetchKeyRows(k); }); }));
     const rowsByKey = {};
     keys.forEach(function (k, i) { rowsByKey[k] = rows[i]; });
-    const picks = pickNamedArticles(refs, rowsByKey);
-    const got = await Promise.all(picks.map(function (p) { return soft(function () { return fetchArticle(p.doc_name, p.key); }); }));
+    const curFams = {};
+    rows.forEach(function (rs) { rs.forEach(function (r) { if (r && r.doc_name) curFams[CV.docFamily(r.doc_name)] = 1; }); });
+    const pdocs = (await pendP).filter(function (d) { return !curFams[CV.docFamily(d.doc_name)]; });
+    const pFams = [], pDoc = {};
+    pdocs.forEach(function (d) {
+      const f = CV.docFamily(d.doc_name);
+      if (f && pFams.indexOf(f) === -1) pFams.push(f);
+      pDoc[d.doc_name] = 1;
+      keys.forEach(function (k) { rowsByKey[k] = rowsByKey[k].concat(d.rows.filter(function (r) { return CV.articleKey(r.article_no) === k; })); });
+    });
+    const picks = pickNamedArticles(refs, rowsByKey, pFams.length ? pFams : undefined);
+    const cur = picks.filter(function (p) { return !pDoc[p.doc_name]; });
+    const got = await Promise.all(cur.map(function (p) { return soft(function () { return fetchArticle(p.doc_name, p.key); }); }));
     const out = [];
-    picks.forEach(function (p, i) {
+    cur.forEach(function (p, i) {
       const rows = got[i].filter(function (r) { return r && r.doc_name === p.doc_name && CV.articleKey(r.article_no) === p.key; })
         .sort(function (a, b) { return (a.chunk_index || 0) - (b.chunk_index || 0); });
       if (rows.length) out.push(Object.assign({}, rows[0], { _named: true }));
     });
+    if (pend) out.pendingNamed = picks.filter(function (p) { return pDoc[p.doc_name]; });
     return out;
   }
 
@@ -1672,6 +1707,9 @@
   // 제19조 전력계통영향평가 특례가 15위) 몇 개만 고르면 핵심 조가 빠지므로 예산은 짧은 새 법령이 통째 들어갈 만큼(특별법 본칙 ≈11.1K자).
   // 이 구역은 전체 상한(trimAddOns)의 「나머지 길이」에 넣지 않는다(두 채널 — 덧붙이기가 이 구역 때문에 먼저 덜리지 않게, #303과 같은 취지)
   // 역참조·별표·덧붙이기의 입력에도 넣지 않는다. 조각 id는 인용 대조 목록 맨 뒤에 붙인다. 끄려면 on=false.
+  //  G0 번호 지목(#311-보론, 2026-10-15) — 질문이 「인공지능 데이터센터 특별법 제18조」처럼 그 법령의 조를 이름과 번호로 지목했다(fetchNamedArticles의
+  //     pendingNamed, 호출측이 f.named로 넘김). 요약·유사도 판정과 상관없이 싣고, 예산을 넘으면 지목한 조를 먼저 담는다. 머리 줄에 「질문이 지목한
+  //     조문」을 적는다(지목이 없으면 구역 글자는 종전과 같다). 같은 날 텔레그램 /law도 이 구역을 같은 함수로 붙인다(rag.ts buildLawQueryContext).
   const PENDING_NEW_OPTS = { on: true, minSim: 0.50, maxChars: 12000, maxLaws: 2, maxDocs: 6, matchCount: 80 };
   function pnNorm(s) { return String(s || '').replace(/[\s·ㆍ‧•]/g, ''); }
   function pnDate(d) {
@@ -1680,9 +1718,12 @@
   }
   // 문서명 「법령명(종류)(제N호)(시행일)」의 종류 — 「법률」·「대통령령」·「과학기술정보통신부고시」
   function pnType(docName) { const m = String(docName || '').match(/^[^(]+\(([^()]+)\)/); return m ? m[1] : ''; }
+  // 조 열쇠 — '18조(인허가등의 일괄처리)' → '18조', '16조의2(…)' → '16조의2', 부칙·별표 → null (조 묶기와 지목 조 대조가 같은 규칙)
+  function pnKey(articleNo) { const m = String(articleNo || '').match(/^(\d+조(?:의\d+)?)/); return m ? m[1] : null; }
   // laws = [{ doc_name, law_name, law_no, enf_date, rows: [{ id, doc_name, chunk_index, article_no, content, similarity }] }] — rows는 그 문서의
   // 조각(유사도 내림차순, 최대 matchCount개). kbRows = 같은 요청의 법령요약 검색 결과(상위 5). today = 오늘(YYYYMMDD, KST) — 시행일이 지난 행은
-  // 현행으로 승격 대기라(11:00 law_sync --promote) 「시행 예정」이라 적으면 틀리므로 뺀다.
+  // 현행으로 승격 대기라(11:00 law_sync --promote) 「시행 예정」이라 적으면 틀리므로 뺀다. L.named = 질문이 지목한 그 법령의 조(['18조'], G0 — 선택).
+  const PN_GATE_RANK = { named: 0, kb: 1, sim: 2 };
   function pickPendingNew(laws, kbRows, today, opts) {
     const o = Object.assign({}, PENDING_NEW_OPTS, opts || {});
     const CV = root.CiteVerify;
@@ -1696,19 +1737,21 @@
       const rows = (L.rows || []).filter(function (r) { return r && r.content && !/^부칙/.test(String(r.article_no || '')); });
       const top = rows.reduce(function (a, r) { return Math.max(a, Number(r.similarity) || 0); }, 0);
       const kb = nm.length >= 2 && kbTitles.some(function (t) { return t && t.indexOf(nm) === 0; });
-      return { L: L, rows: rows, full: (L.rows || []).length < o.matchCount, top: top, gate: kb ? 'kb' : (top >= o.minSim ? 'sim' : null) };
+      const named = (L.named || []).filter(function (k) { return rows.some(function (r) { return pnKey(r.article_no) === k; }); });
+      return { L: L, rows: rows, full: (L.rows || []).length < o.matchCount, top: top, named: named,
+        gate: named.length ? 'named' : (kb ? 'kb' : (top >= o.minSim ? 'sim' : null)) };
     }).filter(function (x) { return x.gate && x.rows.length; })
-      .sort(function (a, b) { return (a.gate === 'kb' ? 0 : 1) - (b.gate === 'kb' ? 0 : 1) || b.top - a.top; })
+      .sort(function (a, b) { return PN_GATE_RANK[a.gate] - PN_GATE_RANK[b.gate] || b.top - a.top; })
       .slice(0, o.maxLaws);
     let left = o.maxChars;
     const out = [];
     scored.forEach(function (x) {
       const groups = {}, order = [];
       x.rows.slice().sort(function (a, b) { return (a.chunk_index || 0) - (b.chunk_index || 0); }).forEach(function (r) {
-        const m = String(r.article_no || '').match(/^(\d+조(?:의\d+)?)/);
-        if (!m) return;
-        if (!groups[m[1]]) { groups[m[1]] = { key: m[1], rows: [], sim: 0, label: '' }; order.push(m[1]); }
-        const g = groups[m[1]];
+        const k = pnKey(r.article_no);
+        if (!k) return;
+        if (!groups[k]) { groups[k] = { key: k, rows: [], sim: 0, label: '' }; order.push(k); }
+        const g = groups[k];
         g.rows.push(r);
         g.sim = Math.max(g.sim, Number(r.similarity) || 0);
         if (!g.label && /\(/.test(String(r.article_no || ''))) g.label = r.article_no;
@@ -1722,7 +1765,8 @@
       if (x.full && total <= left) picked = arts;
       else {
         let used = 0;
-        arts.slice().sort(function (a, b) { return b.sim - a.sim || cmpArt(a.key, b.key); }).forEach(function (t) {
+        const isNamed = function (t) { return x.named.indexOf(t.key) !== -1 ? 0 : 1; };   // 지목한 조 먼저(G0), 그다음 유사도 순
+        arts.slice().sort(function (a, b) { return isNamed(a) - isNamed(b) || b.sim - a.sim || cmpArt(a.key, b.key); }).forEach(function (t) {
           if (used + t.content.length > left) return;
           used += t.content.length; picked.push(t);
         });
@@ -1730,18 +1774,23 @@
       }
       if (!picked.length) return;
       left -= picked.reduce(function (a, t) { return a + t.content.length; }, 0);
-      out.push({ doc_name: x.L.doc_name, law_name: x.L.law_name || famOf(x.L.doc_name), law_no: x.L.law_no, enf_date: x.L.enf_date,
-        type: pnType(x.L.doc_name), gate: x.gate, top: x.top, whole: x.full && picked.length === arts.length, count: arts.length, articles: picked });
+      const p = { doc_name: x.L.doc_name, law_name: x.L.law_name || famOf(x.L.doc_name), law_no: x.L.law_no, enf_date: x.L.enf_date,
+        type: pnType(x.L.doc_name), gate: x.gate, top: x.top, whole: x.full && picked.length === arts.length, count: arts.length, articles: picked };
+      const named = x.named.filter(function (k) { return picked.some(function (t) { return t.key === k; }); });
+      if (named.length) p.named = named;
+      out.push(p);
     });
     return out;
   }
   function buildPendingNewContext(picked) {
     if (!picked || !picked.length) return '';
     const partial = picked.some(function (p) { return !p.whole; });
+    const named = picked.some(function (p) { return p.named && p.named.length; });
     const blocks = picked.map(function (p) {
       const no = /^\d/.test(String(p.law_no || '')) ? '제' + p.law_no + '호' : String(p.law_no || '');
       return '■ 「' + p.law_name + '」(' + [p.type, no].filter(Boolean).join(' ') + ') — ' + pnDate(p.enf_date) + ' 시행 예정, 지금은 효력 없음 · '
-        + (p.whole ? '본칙 전문' : '질문과 가까운 조문 ' + p.articles.length + '개(본칙 ' + p.count + '개 조 중)') + '\n\n'
+        + (p.whole ? '본칙 전문' : '질문과 가까운 조문 ' + p.articles.length + '개(본칙 ' + p.count + '개 조 중)')
+        + (p.named && p.named.length ? ' · 질문이 지목한 조문: ' + p.named.map(function (k) { return '제' + k; }).join('·') : '') + '\n\n'
         + p.articles.map(function (a) { return a.content; }).join('\n\n');
     });
     return '\n\n---\n\n[시행 전 제정 법령 — 공포됐으나 아직 시행되지 않은 새 법령(현행판 없음)]\n'
@@ -1751,19 +1800,27 @@
       + '- 이 법령은 시행일 전까지 효력이 없습니다. 지금 적용되는 절차·의무는 현행 법령으로 답하고, 이 법령의 내용은 「YYYY.M.D.부터 시행 예정」임을 밝혀 따로 서술하세요.\n'
       + '- 이 법령의 조문을 인용할 때는 법령명·조문 번호 뒤에 「(YYYY.M.D. 시행 예정)」을 붙이세요. 위 원문에 있는 문구는 그대로 인용할 수 있습니다.\n'
       + '- 「대통령령으로 정한다」처럼 하위법령에 맡긴 사항은, 그 하위법령이 위 참조 자료에 없으면 아직 정해지지 않은 것으로 보고 추측해 채우지 마세요.'
-      + (partial ? '\n- 위에 싣지 않은 조문의 내용은 알 수 없습니다 — 추측하지 마세요.' : '');
+      + (partial ? '\n- 위에 싣지 않은 조문의 내용은 알 수 없습니다 — 추측하지 마세요.' : '')
+      + (named ? '\n- 질문이 이 법령의 조문을 번호로 지목했습니다(위 머리 줄의 「질문이 지목한 조문」). 그 조문을 먼저 다루되, 현행 조문처럼 서술하지 말고 「(YYYY.M.D. 시행 예정)」을 붙이세요.' : '');
   }
   // 두 판 공통 흐름 — 각 파일은 f.pendingNewDocs()(law_pending에서 현행판 없는 loaded 행, 최대 maxDocs)와 f.docRows(doc, n)(그 문서 조각 + 유사도 —
   // match_chunks_semantic_in_doc, 임베딩이 없으면 유사도 0의 일반 조회)만 댄다. kbP = 같은 요청의 법령요약 검색(Promise). 실패는 호출측이 빈 구역으로.
+  // f.named(선택, #311-보론) = 같은 요청의 지목 조문 인출(fetchNamedArticles에 pend를 넘긴 Promise) — 그 결과의 pendingNamed가 G0. 실패·없음은 지목 없음.
   async function fetchPendingNew(f, kbP, today, opts) {
     const o = Object.assign({}, PENDING_NEW_OPTS, opts || {});
     const empty = { text: '', chunks: [], ids: [], laws: [], docs: 0, gate: null };
     if (o.on === false) return empty;
     const docs = ((await f.pendingNewDocs()) || []).slice(0, o.maxDocs);
     if (!docs.length) return empty;
+    const namedP = f.named ? Promise.resolve().then(f.named).then(function (r) { return (r && r.pendingNamed) || []; }, function () { return []; }) : Promise.resolve([]);
     const laws = await Promise.all(docs.map(function (d) {
       return Promise.resolve(f.docRows(d.doc_name, o.matchCount)).then(function (rows) { return Object.assign({}, d, { rows: rows || [] }); });
     }));
+    const pn = await namedP;
+    if (pn.length) laws.forEach(function (L) {
+      const ks = pn.filter(function (p) { return p.doc_name === L.doc_name; }).map(function (p) { return p.key; });
+      if (ks.length) L.named = ks;
+    });
     const picked = pickPendingNew(laws, await kbP, today, o);
     const chunks = [], ids = [];
     picked.forEach(function (p) {
@@ -1777,7 +1834,7 @@
       });
     });
     return { text: buildPendingNewContext(picked), chunks: chunks, ids: ids, docs: docs.length,
-      laws: picked.map(function (p) { return { doc_name: p.doc_name, law_name: p.law_name, enf_date: p.enf_date, gate: p.gate, articles: p.articles.length, whole: p.whole }; }),
+      laws: picked.map(function (p) { return { doc_name: p.doc_name, law_name: p.law_name, enf_date: p.enf_date, gate: p.gate, articles: p.articles.length, whole: p.whole, named: p.named || [] }; }),
       gate: picked.length ? picked.map(function (p) { return p.gate; }).join(',') : null };
   }
 

@@ -124,7 +124,9 @@ for (const q of set.questions) {
     kb: ((ctx?.kb as { title?: string }[]) || []).slice(0, 3).map((r) => String(r.title || '').trim()),
     addItems: addOns?.items || [], addon: addOns?.ids || [], addonChunks: ((addOns?.chunks as Hit[]) || []).map(label),
     lens: { system: sys.length, law: lawSec >= 0 ? ((addSec >= 0 ? addSec : (kbSec >= 0 ? kbSec : sys.length)) - lawSec) : 0, addon: (addOns?.text || '').length, trimmed: addOns?.trimmed || 0 },
-    meta: ((ctx?.searchMeta as { fn: string }[]) || []).filter((m) => m.fn === 'addons' || m.fn === 'law_delegations' || m.fn === 'search_law_articles_kw'),
+    meta: ((ctx?.searchMeta as { fn: string }[]) || []).filter((m) => m.fn === 'addons' || m.fn === 'law_delegations' || m.fn === 'search_law_articles_kw' || m.fn === 'pending_new'),
+    // 시행 전 제정 법령 구역(#311-보론) — 붙은 법령·판정(named·kb·sim)·실은 조 수·지목 조·글자 수·조각 id
+    pendingNew: (() => { const pn = ctx?.pendingNew as { text: string; ids: number[]; laws: unknown[]; gate: string | null } | undefined; return pn ? { gate: pn.gate, laws: pn.laws, len: (pn.text || '').length, ids: pn.ids } : null; })(),
     log: logLines.slice(), lab,
     ...(withText ? { sys } : {}),
   });

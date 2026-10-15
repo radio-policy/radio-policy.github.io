@@ -905,6 +905,48 @@ var pendingNewTests = (async function () {
   eq('fetchPendingNew on:false → 빈 구역(조회 안 함)', (await RC.fetchPendingNew({ pendingNewDocs: function () { throw new Error('불리면 안 됨'); } }, Promise.resolve(kb), '20261015', { on: false })).text, '');
   var r0 = await RC.fetchPendingNew({ pendingNewDocs: function () { return Promise.resolve([]); }, docRows: function () { throw new Error('불리면 안 됨'); } }, Promise.resolve(kb), '20261015');
   eq('fetchPendingNew 현행판 없는 법령이 없으면 docs 0', [r0.docs, r0.text], [0, '']);
+
+  // ── 번호 지목(#311-보론) — 지목 조문 이름 맞추기에 시행 전 제정 법령 문서군을 넣고, 그 법령으로 맞춘 언급은 이 구역(G0)이 싣는다 ──
+  var FAM = '인공지능 데이터센터 산업 진흥에 관한 특별법';
+  var ICT = '정보통신 진흥 및 융합 활성화 등에 관한 특별법(법률)(제20000호)(20250101)', RAD = '전파법(법률)(제21065호)(20260102)';
+  var pk = function (q, rbk, ex) { return RC.pickNamedArticles(RC.namedArticleRefs(q), rbk, ex).map(function (p) { return p.doc_name.split('(')[0] + ' ' + p.key; }); };
+  eq('pickNamedArticles 종전엔 줄인 이름의 끝 낱말 「특별법」이 제19조를 가진 유일한 …특별법에 붙음(10-15 실측 버그)',
+    pk('인공지능 데이터센터 특별법 제19조', { '19조': [{ doc_name: ICT, article_no: '19조(x)' }] }), ['정보통신 진흥 및 융합 활성화 등에 관한 특별법 19조']);
+  eq('pickNamedArticles extraFams + 그 법령 행 → 시행 전 제정 법령으로 맞춤',
+    pk('인공지능 데이터센터 특별법 제19조', { '19조': [{ doc_name: ICT, article_no: '19조(x)' }, { doc_name: D, article_no: '19조(「분산에너지 활성화 특별법」에 관한 특례)' }] }, [FAM]), [FAM + ' 19조']);
+  eq('pickNamedArticles extraFams — 그 번호가 없는 법령이면 다른 법 조도 안 고름(정식 이름으로도 종전엔 오선택)',
+    pk(FAM + ' 제37조', { '37조': [{ doc_name: ICT, article_no: '37조(x)' }] }, [FAM]), []);
+  eq('pickNamedArticles extraFams — 다른 법령 이름은 그대로', pk('전파법 제16조', { '16조': [{ doc_name: RAD, article_no: '16조(재할당)' }] }, [FAM]), ['전파법 16조']);
+  var pdocs = [{ doc_name: D, law_name: FAM, law_no: '21759', enf_date: '20270310' }];
+  var pkeys = rows.map(function (r) { return { doc_name: D, article_no: r.article_no }; });
+  var mkPend = function (docs) { return { docs: function () { return Promise.resolve(docs); }, keyRows: function () { return Promise.resolve(pkeys); }, today: '20261015' }; };
+  var artCalls = [];
+  var art = function (d, k) { artCalls.push(d.split('(')[0] + ' ' + k); return Promise.resolve([{ id: 99, doc_name: d, article_no: k + '(x)', chunk_index: 1, content: 'x' }]); };
+  var krows = function (k) { return Promise.resolve(k === '16조' ? [{ doc_name: RAD, article_no: '16조(재할당)' }] : [{ doc_name: ICT, article_no: k + '(x)' }]); };
+  var fn = await RC.fetchNamedArticles('전파법 제16조와 인공지능 데이터센터 특별법 제18조', krows, art, mkPend(pdocs));
+  eq('fetchNamedArticles pend — 현행은 조문을 가져오고 시행 전 제정 법령은 pendingNamed로만(조문 조회 안 함)',
+    [fn.map(function (r) { return r.doc_name.split('(')[0]; }), fn.pendingNamed, artCalls], [['전파법'], [{ doc_name: D, key: '18조' }], ['전파법 16조']]);
+  var fn0 = await RC.fetchNamedArticles('전파법 제16조', krows, art, mkPend([]));
+  eq('fetchNamedArticles pend — 그런 법령이 없으면 종전과 같고 pendingNamed 빈 배열', [fn0.length, fn0.pendingNamed], [1, []]);
+  var fnPast = await RC.fetchNamedArticles('인공지능 데이터센터 특별법 제18조', krows, art, Object.assign(mkPend(pdocs), { today: '20270310' }));
+  eq('fetchNamedArticles pend — 시행일이 지난 행(승격 대기)은 넣지 않음', fnPast.pendingNamed, []);
+  var fnFail = await RC.fetchNamedArticles('인공지능 데이터센터 특별법 제18조', krows, art, { docs: function () { return Promise.reject(new Error('x')); }, keyRows: function () { return []; }, today: '20261015' });
+  eq('fetchNamedArticles pend — 목록 조회 실패는 지목 없음(종전 고르기 그대로 — 종전의 오선택까지)', [fnFail.pendingNamed, fnFail.map(function (r) { return r.doc_name.split('(')[0]; })], [[], ['정보통신 진흥 및 융합 활성화 등에 관한 특별법']]);
+  var curSame = await RC.fetchNamedArticles('인공지능 데이터센터 특별법 제18조', function () { return Promise.resolve([{ doc_name: '인공지능 데이터센터 산업 진흥에 관한 특별법(법률)(제1호)(20200101)', article_no: '18조(옛)' }]); }, art, mkPend(pdocs));
+  eq('fetchNamedArticles pend — 같은 문서군의 현행 조문이 있으면 시행 전 제정 법령으로 보지 않음', curSame.pendingNamed, []);
+
+  var nm = RC.pickPendingNew([Object.assign({}, law, { named: ['18조'] })], [], '20261015');
+  eq('pickPendingNew 지목(G0) — 요약·유사도 없이도 싣고 gate named, 지목 조 기록', [nm.length, nm[0].gate, nm[0].whole, nm[0].named], [1, 'named', true, ['18조']]);
+  eq('pickPendingNew 지목한 조가 그 법령에 없으면 G0 아님', RC.pickPendingNew([Object.assign({}, law, { named: ['40조'] })], [], '20261015').length, 0);
+  var nmPart = RC.pickPendingNew([Object.assign({}, law, { named: ['19조'] })], kb, '20261015', { maxChars: 200 });
+  eq('pickPendingNew 예산 넘으면 지목한 조 먼저(유사도 낮아도 — 지목 없으면 5조, 있으면 19조)', [nmPart[0].gate, nmPart[0].articles.map(function (a) { return a.key; }), nmPart[0].named], ['named', ['10조', '18조', '19조'], ['19조']]);
+  var tn = RC.buildPendingNewContext(nm);
+  ok('buildPendingNewContext 지목 — 머리 줄·사용 지침 한 줄', tn.indexOf('· 본칙 전문 · 질문이 지목한 조문: 제18조\n') > 0 && /번호로 지목했습니다/.test(tn), tn.slice(0, 300));
+  ok('buildPendingNewContext 지목 없으면 지목 문구 없음(종전 글자)', t1.indexOf('지목') < 0);
+  var fpn = await RC.fetchPendingNew(Object.assign({}, f, { named: function () { return Promise.resolve(Object.assign([], { pendingNamed: [{ doc_name: D, key: '18조' }] })); } }), Promise.resolve([]), '20261015');
+  eq('fetchPendingNew f.named(pendingNamed) → G0', [fpn.gate, fpn.laws[0].named, fpn.ids.length], ['named', ['18조'], 7]);
+  var fpnErr = await RC.fetchPendingNew(Object.assign({}, f, { named: function () { return Promise.reject(new Error('x')); } }), Promise.resolve(kb), '20261015');
+  eq('fetchPendingNew f.named 실패는 지목 없음(G1 그대로)', [fpnErr.gate, fpnErr.laws[0].named], ['kb', []]);
 })();
 
 Promise.all([asyncTests, addOnTests, addOnTests2, addendumTests, applyTests, pendingNewTests]).catch(function (e) { fails++; total++; console.log('FAIL  비동기 검사 예외 ' + (e && e.message)); }).then(function () {
