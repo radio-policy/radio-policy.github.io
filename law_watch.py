@@ -593,8 +593,9 @@ def main():
                 lines.append(f"  … 외 {len(upcoming) - 5}개 법령")
         notify(lines)
 
-    # 워치독 감시용 하트비트 (#169-보론2). outdated>0 은 'KB가 구버전을 current 로 제공 중'이라
-    # 워치독이 '돌았지만 결과가 나쁘다'로 잡는다 — 실측으로 고시 하나가 4개월째 지연돼 있었다.
+    # 워치독 감시용 하트비트 (#169-보론2). outdated=N 은 이 점검 시점의 기록일 뿐 — 바로 뒤
+    # law_sync --all-outdated가 교체하므로 워치독은 이 글자가 아니라 law_watch 표에서 '현행화
+    # 뒤에도 남은 구버전'을 센다(#316). 실측으로 고시 하나가 4개월째 지연돼 있었던 것이 이 감시의 계기.
     if not a.dry_run:
         sb_client.heartbeat(
             sb, 'last_law_watch_run',

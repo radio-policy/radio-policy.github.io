@@ -2481,6 +2481,9 @@ declare
   msg       text;
   now_kst   text;
   i         int;
+  out_n     int;
+  out_names text[];
+  sync_at   timestamptz;
 begin
   now_kst := to_char(now() at time zone 'Asia/Seoul', 'MM-DD HH24:MI');
 
@@ -2512,11 +2515,28 @@ begin
       keys  := keys  || (r.key || ':fail');
     end if;
 
-    if r.note ~ 'outdated=[1-9]' then
-      fail_n := substring(r.note from 'outdated=([0-9]+)');
-      probs := probs || (r.label || ' — 지식베이스가 구버전인 법령 ' || fail_n ||
-                         '건 (law_sync.py 로 현행화 필요)');
-      keys  := keys  || (r.key || ':outdated');
+    -- #316: 구버전은 note 의 'outdated=N'(아침 점검 시점 값)이 아니라 law_watch 표의 지금 상태로 센다.
+    if r.key = 'last_law_watch_run' then
+      select updated_at into sync_at from system_health where key = 'last_law_sync_run';
+      select count(*), (array_agg(w.law_name order by w.law_name))[1:3]
+        into out_n, out_names
+      from law_watch w
+      where w.sync_status = 'outdated'
+        and (w.updated_at < coalesce(sync_at, '-infinity'::timestamptz)   -- 표시 뒤 현행화가 돌았는데 남음
+             or w.updated_at < now() - interval '3 hours')                -- 현행화가 안 돎
+        and (exists (select 1 from document_chunks c
+                     where c.doc_name = w.doc_name and c.status = 'current')
+             or w.law_id is null
+             or not exists (select 1 from document_chunks c                -- 유령 행(#183)은 law_sync가 지운다
+                            where c.law_id = w.law_id and c.status = 'current'
+                              and c.doc_name <> w.doc_name));
+      if out_n > 0 then
+        probs := probs || (r.label || ' — 자동 현행화 뒤에도 구버전인 법령 ' || out_n || '건: ' ||
+                           array_to_string(out_names, ', ') ||
+                           (case when out_n > 3 then ' 외 ' || (out_n - 3) || '건' else '' end) ||
+                           ' (law_sync.py 로 현행화 필요)');
+        keys  := keys  || (r.key || ':outdated');
+      end if;
     end if;
   end loop;
 

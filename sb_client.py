@@ -20,7 +20,8 @@ def heartbeat(sb: Client, key: str, note: str) -> None:
     watchdog_scan 은 watchdog_targets 에 등록된 키의 이 값을 읽어 지연·무음실패를 잡는다.
     하트비트를 남기지 않는 스크립트는 구조적으로 감시 대상이 될 수 없다 — 실제로 법령
     현행화 3종이 그래서 감시 밖이었고, 고시 하나가 4개월째 구버전인 것을 아무도 몰랐다(#169-보론2).
-    note 에는 건수를 남긴다(`fail=N`·`outdated=N` 이 N>0면 워치독이 '돌았지만 실패'로 본다).
+    note 에는 건수를 남긴다(`fail=N` 이 N>0면 워치독이 '돌았지만 실패'로 본다. 구버전 법령은
+    #316부터 note 의 `outdated=N` 이 아니라 law_watch 표에서 센다 — 그 글자는 기록용).
     """
     import datetime as _dt
     try:
