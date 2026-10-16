@@ -39,6 +39,10 @@
 //  2026-10-12(≈ $0.27): 사내 실재연에서 사례 2가 이름표 뒤에도 주황(사내 2차가 조문 안 「<신설 2026.4.21>」을 시행일로 읽음, 4/4)이라 같은 꼴 H5·H6
 //  (표 칸 「원문과 부합, 단 제24조제2항(자기적합확인, 2026.10.22 시행)과는 별개 제도」)을 더해 재현 시도 — prod 0/8·o48pg 0/8 주황(재현 안 됨) →
 //  외부 지시문 그대로, 사내 2차 모델(사내 플랫폼 Opus 4.8 inline) 문제로 넘김(운영자 결정).
+//  2026-10-16(≈ $0.29, 운영자 승인 10-16 밤 — Fable 재검토 18-2 §4 ⑤) #314 R·P·S가 바꾼 판정기 입력 모양(범위 다섯 조 다중 원문 · 조 전체 대상 + 인용문 속
+//  「(제N조제M항)」 · 홀로 선 출처 줄의 앞 덩어리)을 고정 사례 C1~C4(공개 법령 AIDC 특별법 시행예정 조각)로 prod × 4: C1(다섯 조 모두 맞음) 0/4 · C2(제21조 「할 수 있다」 →
+//  「하여야」) 4/4 · C3(② 글에 「(제10조제1항)」 라벨, 정답 불일치 — 운영자 결정) 4/4 「신고 간주 규정은 제1항이 아닌 제2항」 · C4(표 5행 = 제18조① 1~5호) 0/4.
+//  미리 박은 기준 「C3 불일치 ≥ 3/4 → P 유지」 통과(--report P7).
 //  2026-10-12(≈ $2.90, 운영자 승인 — 사내 설계 D 「다시」 ⓪) 사내가 가짜 판정기로 다시 만든 사례 2의 정확한 2차 입력 = H7(표시가 「원문과 부합」 바로 뒤,
 //  인용문은 표시 뒤 토막 「, 단 제24조제2항(…)과는 별개 제도 |」 — H5·H6는 인용문에 「원문과 부합」이 들어 있어 달랐다). H7 × 4: prod 0/4 · o48pg **4/4**
 //  (「제2항 신설일은 2026.4.21」, 사내와 같은 이유 — 바깥 흉내로 재현됨) · o48pg_think(Opus 4.8 inline + adaptive, 노력 기본) 0/4. 고정 사례 28개 × o48pg_think × 4
@@ -194,6 +198,7 @@ const keyRe = function (k) { return new RegExp('\\s' + k.replace(/[.*+?^${}()|[\
 const P_FALSE_OLD = ['F1', 'F5', 'F6', 'F7'], P_TRUE_OLD = ['T1', 'T1b', 'T2', 'S1', 'S2', 'S3', 'S4'];
 const P_FALSE_NEW = ['N1', 'N2', 'N3', 'N4', 'N5a', 'N5b'], P_TRUE_NEW = ['N6', 'N7', 'N8'];
 const P_VER = ['H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'H7'];   // 판 이름표(#294-보론2) 사례 — 이름표 있음/없음은 결과 파일을 따로 --report
+const P_C314 = ['C1', 'C2', 'C3', 'C4'];   // #314 R·P·S 입력 모양(18-2 재검토 §4 ⑤, 2026-10-16) — 기준은 C3만 미리 박음(P7)
 function passReport(files) {
   const merged = new Map();   // key → {case, gold, target, claim, s2:{variant:[...]}}
   for (const f of files) {
@@ -217,7 +222,7 @@ function passReport(files) {
   const orange = function (k, v) { const m = merged.get(k); const a = (m && m.s2[v]) || []; return { o: a.filter(function (x) { return x.grounded; }).length, n: a.length, err: a.filter(function (x) { return x.verdict === 'ERR' || x.verdict === '없음'; }).length }; };
   const cell = function (r) { return r.n ? r.o + '/' + r.n + (r.err ? '(오류 ' + r.err + ')' : '') : '-'; };
   console.log('\n사례별 주황(2차 불일치 ∧ 근거 실재) — ' + vars.join(' | '));
-  for (const k of P_FALSE_OLD.concat(['F3'], P_TRUE_OLD, P_FALSE_NEW, P_TRUE_NEW, P_VER)) if (merged.has(k)) console.log(k + ' (' + merged.get(k).gold + ') | ' + vars.map(function (v) { return cell(orange(k, v)); }).join(' | '));
+  for (const k of P_FALSE_OLD.concat(['F3'], P_TRUE_OLD, P_FALSE_NEW, P_TRUE_NEW, P_VER, P_C314)) if (merged.has(k)) console.log(k + ' (' + merged.get(k).gold + ') | ' + vars.map(function (v) { return cell(orange(k, v)); }).join(' | '));
   console.log('\n기준 | ' + vars.join(' | '));
   const row = function (name, f) { console.log(name + ' | ' + vars.map(function (v) { return f(v); }).join(' | ')); };
   const sum = function (keys, v) { return keys.reduce(function (a, k) { const r = orange(k, v); return { o: a.o + r.o, n: a.n + r.n, miss: a.miss + (r.n ? 0 : 1) }; }, { o: 0, n: 0, miss: 0 }); };
@@ -242,6 +247,11 @@ function passReport(files) {
     return (ok ? '통과 ' : '실패 ') + Object.keys(t).map(function (g) { return g + ' ' + t[g][0] + '/' + t[g][1]; }).join(' · ') + (nog ? ' · 정답 없음 ' + nog : '');
   });
   row('P6(참고) N1~N4 중 주황이 한 번이라도 난 사례 수(기준선이면 ≥2)', function (v) { return P_FALSE_NEW.slice(0, 4).filter(function (k) { return orange(k, v).o > 0; }).length + '/4'; });
+  // P7(18-2 재검토 §4 ⑤ — 미리 박은 기준): P(조 전체 대상) 뒤 항 라벨 오류를 잡는 자리는 2차뿐 — C3 주황 ≥ 3/4면 P 유지, 미만이면 고치지 않고 기록(후속은 Fable 판정)
+  row('P7 C3(항 라벨 틀림 + 조 전체 출처) 주황 ≥ 3/4 · 참고 C1·C4(정답 일치)·C2(불일치)', function (v) {
+    const r = orange('C3', v); if (!r.n) return '-';
+    return (r.o * 4 >= r.n * 3 ? '통과 ' : '실패 ') + 'C3 ' + cell(r) + ' · C1 ' + cell(orange('C1', v)) + ' · C2 ' + cell(orange('C2', v)) + ' · C4 ' + cell(orange('C4', v));
+  });
 }
 if (arg('--report', '')) { passReport(arg('--report', '').split(',')); process.exit(0); }
 

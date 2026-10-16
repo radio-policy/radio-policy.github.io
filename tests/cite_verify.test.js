@@ -1584,9 +1584,14 @@ function ok(name, cond, extra) {
   var pp1 = fcOne('일괄처리를 받은 사업자등은 신고를 한 것으로 봅니다(제10조제2항). 「' + ADF + ' 제10조」 [원문 확인됨: ' + ADF + ' 제10조제2항]');
   var pA14 = fcOne('중요 사항 변경도 신고합니다(제10조제3항). 「' + ADF + ' 제10조」 [원문 확인됨: ' + ADF + ' 제10조제2항]');
   var pA4 = fcOne('사업자는 이를 이용자에게 알려야 합니다(전기통신사업법 제10조제2항). 「전파법 제10조」 [원문 확인됨]');
-  eq('#314 P-1·P-3 — 표시에 항을 적었으면 넓히지 않음(제2항 유지) · 앞 언급이 다른 법(전기통신사업법 제10조②)이면 「전파법 제10조」로 넓히지 않음(법은 종전대로)',
-     [pp1.wholeRef || null, CV.checkCitation(pp1, adChunks, []).paras, pA14.wholeRef || null, CV.checkCitation(pA14, adChunks, []).paras, pA4.wholeRef || null, pA4.paras, pA4.lawInfo.text],
-     [null, [2], null, [2], null, [2], '전기통신사업법']);
+  // P-3″(18-2 재검토 §5): findCitations는 wholeRef를 잠정으로 달고(앞 언급 이름 wholeRefLis·끝 언급 이름 wholeRefLast), 넓힐지는 checkCitation이 문서군으로 가른다
+  var a4Chunks = [{ id: 7211, doc_name: '전기통신사업법(법률)(제20000호)(20250101)', article_no: '10조(사업의 신고)', chunk_index: 10, content: '제10조(사업의 신고) ① 사업자는 장관에게 신고하여야 한다.\n② 사업자는 신고 사항을 이용자에게 알려야 한다.' },
+    { id: 7212, doc_name: JUL, article_no: '10조(무선국 개설)', chunk_index: 10, content: '제10조(무선국 개설) ① 무선국을 개설하려는 자는 허가를 받아야 한다.\n② 신고로 개설할 수 있는 무선국은 대통령령으로 정한다.' }];
+  var pA4r = CV.checkCitation(pA4, a4Chunks, []);
+  eq('#314 P-1·P-3 — 표시에 항을 적었으면 넓히지 않음(제2항 유지) · 앞 언급이 다른 법(전기통신사업법 제10조②)이면 「전파법 제10조」로 넓히지 않음(잠정 wholeRef는 달리되 대상은 전기통신사업법 제10조제2항)',
+     [pp1.wholeRef || null, CV.checkCitation(pp1, adChunks, []).paras, pA14.wholeRef || null, CV.checkCitation(pA14, adChunks, []).paras, pA4.wholeRef || null, pA4.paras, pA4.lawInfo.text,
+      [CV.docFamily(pA4r.doc), pA4r.paras, pA4r.paraWide || null]],
+     [null, [2], null, [2], '10조', [2], '전기통신사업법', ['전기통신사업법', [2], null]]);
   // N-1: 이름 덮기는 이름 없음·급 맞는 이어받기만 — 시행령·영·규정 조는 뒤 「전파법 제10조」로 덮지 않는다, 덮지 않아도 뒤 맨 「제11조」는 전파법을 이어받는다(A12)
   var n1 = CV.parseSegment('시행령 제10조는 신고 절차를 정하는데 전파법 제10조와 달리 제11조는 따로 둡니다 ');
   var n2 = CV.parseSegment('영 제10조는 신고 절차를 정하는데 전파법 제10조와 달리 ');
@@ -1608,8 +1613,145 @@ function ok(name, cond, extra) {
   // 기록 칸: 폭 7↑ 범위(rangeWide), 다중 원문 꼬리 잘림(multiCut)
   var rw = await CV.verifyCitations({ answer: '- 특례 조문을 모두 정리한 내용입니다 길게 적었습니다.\n\n「' + ADF + ' 제1조부터 제30조까지」 [원문 확인됨]\n\n### 다음 절', chunks: adChunks, callHaiku: okJudge });
   var mc = await CV.verifyCitations({ answer: '- 일괄처리와 특례 다섯 가지를 정한다는 내용입니다 길게 적은 내용입니다.\n\n「' + ADF + ' 제18조~제23조」 [원문 확인됨: ' + ADF + ' 제18조~제23조]\n\n### 다음 절', chunks: adChunks, callHaiku: okJudge });
-  eq('#314 기록 칸 — 「제1조부터 제30조까지」 rangeWide · 여섯 조 다중 원문에서 제18조(2,021자)가 조당 2,000자로 잘림 multiCut 1',
-     [rw.verdicts[0].rangeWide || null, mc.verdicts[0].multi && mc.verdicts[0].multi.length, mc.verdicts[0].multiCut || null], [true, 6, 1]);
+  // 물채우기(18-2 재검토 §4 ①) 뒤로는 여섯 조 합(≈7,600자)이 예산 12,000자 안이라 아무 조도 자르지 않는다(종전: 제18조 2,021자가 조당 2,000자로 잘림 multiCut 1)
+  eq('#314 기록 칸 — 「제1조부터 제30조까지」 rangeWide · 여섯 조 다중 원문은 합이 예산 안이라 잘림 없음(물채우기 — 종전 multiCut 1)',
+     [rw.verdicts[0].rangeWide || null, mc.verdicts[0].multi && mc.verdicts[0].multi.length, mc.verdicts[0].multiCut || null], [true, 6, null]);
+
+  // ── #314-보론5·#315-보론4(2026-10-16, Fable 재검토 18-2 묶음 보완 — local_docs/인용판정기_18-2_재검토_261016.md §5) ──
+  var CL = '일괄처리를 받은 사업자는 관계 법령에 따른 신고를 별도로 하지 않아도 신고를 한 것으로 보아 절차가 끝납니다';
+  var art10 = function (fam, id, typ) { return { id: id, doc_name: fam + '(' + (typ || '법률') + ')(제1호)(20250101)', article_no: '10조(신고)', chunk_index: 10,
+    content: '제10조(신고) ① 사업자는 대통령령으로 정하는 바에 따라 장관에게 신고하여야 한다.\n② 제1항에 따라 일괄처리를 받은 사업자는 신고를 한 것으로 본다.' }; };
+  var wide = function (s, chunks, univ) { var r = CV.checkCitation(fcOne(s), chunks, [], univ ? { universe: UNIV_T } : undefined); return [CV.docFamily(r.doc || ''), r.paras, !!r.paraWide]; };
+  var BIZF = '전기통신사업법', DSE = '분산에너지 활성화 특별법';
+  // P-3″ 탐침 A 여섯 꼴 — 같은 법(산문 머리말이 한쪽·양쪽에 붙어도)은 조 전체로 넓히고, 다른 법(A4)·같은 꼬리 다른 특별법은 항 그대로. 목록 있음·없음 같다
+  var p3A = [
+    [CL + '(전기통신사업법 제10조제2항). 「전기통신사업법 제10조」 [원문 확인됨]', [art10(BIZF, 1)]],
+    ['사업자는 신고해야 하며 전기통신사업법 제10조제2항에 따라 ' + CL + '. 「전기통신사업법 제10조」 [원문 확인됨]', [art10(BIZF, 1)]],
+    ['사업자는 신고해야 하며 전기통신사업법 제10조제2항에 따라 ' + CL + ' 이는 전기통신사업법 제10조 [원문 확인됨]', [art10(BIZF, 1)]],
+    ['앞서 살펴본 전기통신사업법 제10조제2항에 따라 ' + CL + ' 방금 확인한 전기통신사업법 제10조 [원문 확인됨]', [art10(BIZF, 1)]],
+    [CL + '(전기통신사업법 제10조제2항). 「전파법 제10조」 [원문 확인됨]', [art10(BIZF, 1), art10('전파법', 2)]],
+    [DSE + ' 제10조제2항에 따라 ' + CL + '. 「' + ADF + ' 제10조」 [원문 확인됨]', [art10(DSE, 1), art10(ADF, 2)]],
+  ];
+  eq('#314-보론5 P-3″ 탐침 A 여섯 꼴 — 깨끗한 낫표·첫 언급 산문·양쪽 산문(멈춤 낱말·아닌 낱말)은 조 전체(종전 P-3는 양쪽 산문을 「다른 법」으로 읽어 항으로 좁혔다) · 다른 법(A4)·같은 꼬리 다른 특별법은 제2항 그대로',
+     p3A.map(function (x) { return [wide(x[0], x[1]), wide(x[0], x[1], true)]; }),
+     [[[BIZF, [], true], [BIZF, [], true]], [[BIZF, [], true], [BIZF, [], true]], [[BIZF, [], true], [BIZF, [], true]], [[BIZF, [], true], [BIZF, [], true]],
+      [[BIZF, [2], false], [BIZF, [2], false]], [[DSE, [2], false], [DSE, [2], false]]]);
+  // 최대 점검 3: 끝 언급이 이어받기(「같은 법 시행령」·「법」·「영」)면 급이 맞을 때만 — 종전엔 후보 없음이면 무조건 같음이라 급이 달라도 넓혔다
+  var j10s = [art10('전파법', 1), art10('전파법 시행령', 2, '대통령령')];
+  eq('#314-보론5 P-3″ 최대 점검 3 — 「전파법 제10조제2항 … 「같은 법 시행령 제10조」」·「전파법 시행령 제10조제2항 … 「법 제10조」」·「전파법 제10조제2항 … 「영 제10조」」는 급이 달라 넓히지 않음',
+     [wide('전파법 제10조제2항에 따라 ' + CL + '. 「같은 법 시행령 제10조」 [원문 확인됨]', j10s), wide('전파법 시행령 제10조제2항에 따라 ' + CL + '. 「법 제10조」 [원문 확인됨]', j10s),
+      wide('전파법 제10조제2항에 따라 ' + CL + '. 「영 제10조」 [원문 확인됨]', j10s), wide('전파법 시행령 제10조제2항에 따라 ' + CL + '. 「영 제10조」 [원문 확인됨]', j10s)],
+     [['전파법', [2], false], ['전파법 시행령', [2], false], ['전파법', [2], false], ['전파법 시행령', [], true]]);
+  // 최대 점검 4: 약한 이름(가이드라인)이 자료 안 문서면 끝 언급(전파법)과 다른 문서 → 항 그대로 / 자료에 없으면 이름 없음과 같아 조 전체
+  var GLF = '이동통신용 무선설비 예비전원설비 설치 가이드라인';
+  var glC = [{ id: 7221, doc_name: GLF + '(과학기술정보통신부가이드라인)(제1호)(20230101)', article_no: '5조(예비전원 용량)', chunk_index: 5, content: '제5조(예비전원 용량) ① 예비전원설비는 상용전원이 정전된 때 최대 부하전류를 공급할 수 있어야 한다. ② 예비전원의 공급시간은 3시간 이상이어야 한다.' },
+    { id: 7222, doc_name: JUL, article_no: '5조(전파자원의 이용촉진)', chunk_index: 5, content: '제5조(전파자원의 이용촉진) ① 과학기술정보통신부장관은 전파자원의 이용을 촉진하기 위한 시책을 마련하여야 한다. ② 정부는 전파기술 연구개발을 지원할 수 있다.' }];
+  var glS = GLF + ' 제5조제2항에 따라 예비전원의 공급시간은 3시간 이상이어야 하고 정전 때 부하전류를 공급해야 합니다. 「전파법 제5조」 [원문 확인됨]';
+  eq('#314-보론5 P-3″ 최대 점검 4 — 가이드라인 자료 안 → 가이드라인 제5조제2항 그대로 · 자료 없음 → 조 전체',
+     [wide(glS, glC), wide(glS, glC.slice(1))], [[GLF, [2], false], ['전파법', [], true]]);
+  eq('#314-보론5 P-3″ — 「개인정보 보호법 제10조제2항 … 「청소년 보호법 제10조」」는 넓히지 않음(청소년 보호법은 못 풀고 글자 폴백도 공통 꼬리가 종류 낱말뿐)',
+     [wide('개인정보 보호법 제10조제2항에 따라 ' + CL + '. 「청소년 보호법 제10조」 [원문 확인됨]', [art10(PIP, 1)]), wide('개인정보 보호법 제10조제2항에 따라 ' + CL + '. 「청소년 보호법 제10조」 [원문 확인됨]', [art10(PIP, 1)], true)],
+     [[PIP, [2], false], [PIP, [2], false]]);
+  // sameLawDoc 글자 폴백(이름 하나라도 못 풀 때) — 공통 꼬리에 종류 낱말 아닌 것이 있고 한쪽이 꼬리뿐일 때만 같음
+  var LB = function (n) { return CV.lawNameBefore(n + ' '); };
+  eq('#314-보론5 sameLawDoc 글자 폴백 — 「전기통신사업용/항공업무용 무선설비의 기술기준」 다름 · 「무선설비의 기술기준」 ⊂ 긴 이름 같음 · 「가상법」 같은 글자도 종류 낱말뿐이라 다름 · 급 다름(법 ↔ 영) 다름',
+     [CV.sameLawDoc(LB('전기통신사업용 무선설비의 기술기준'), LB('항공업무용 무선설비의 기술기준'), []), CV.sameLawDoc(LB('항공업무용 무선설비의 기술기준'), LB('무선설비의 기술기준'), []),
+      CV.sameLawDoc(LB('가상법'), LB('가상법'), []), CV.sameLawDoc(LB('전파법'), LB('영'), ['전파법']), CV.sameLawDoc(null, LB('법'), []), CV.sameLawDoc(LB('동 특별법'), LB(ADF), [ADF]), CV.sameLawDoc(LB('동 특별법'), LB('전파법'), ['전파법'])],
+     [false, true, false, false, true, true, false]);
+
+  // P-2′ 탐침 B — 약한 산문 이름 뒤 같은 조를 강한 이름으로 다시 적은 꼴이 ⓒ로(뒤 이름 법령이 자료 밖): 괄호 꼴과 같은 결과 · 조 행 없음 norows · ⓒ 4건 뒤 cap
+  var p2Jul = [{ id: 7231, doc_name: JUL, article_no: '10조(무선국 개설)', chunk_index: 10, content: '제10조(무선국 개설) ① 무선국을 개설하려는 자는 허가를 받아야 한다. ② 신고로 개설할 수 있는 무선국은 대통령령으로 정한다.' }];
+  var adRow = function (k, content) { return { id: 7300 + parseInt(k, 10), doc_name: AD, article_no: k + '(조문)', chunk_index: parseInt(k, 10), content: content, status: 'pending' }; };
+  var p2Fetch = function (fam, key) {
+    if (fam !== ADF) return Promise.resolve([]);
+    if (key === '10조') return Promise.resolve([adRow('10조', '제10조(인ㆍ허가등의 일괄처리) ① 사업자등은 일괄처리를 신청할 수 있다. ② 제1항에 따라 일괄처리를 받은 사업자등은 관계 법령에 따른 신고를 한 것으로 본다.')]);
+    return Promise.resolve(['11조', '12조', '13조', '14조'].indexOf(key) !== -1 ? [adRow(key, '제' + key + '(조문) 사업자등은 데이터센터를 구축할 때 장관이 정하는 기준에 따라 시설을 갖추어야 한다.')] : []);
+  };
+  var p2Prose = '사업자등은 신고해야 하며, 일괄처리를 받은 사업자등은 제10조제2항에 따라 관계 법령에 따른 신고를 한 것으로 봅니다. 「' + ADF + ' 제10조」 [원문 확인됨]';
+  var p2Paren = '사업자등은 신고해야 하며, 일괄처리를 받은 사업자등은 관계 법령에 따른 신고를 한 것으로 봅니다(제10조제2항). 「' + ADF + ' 제10조」 [원문 확인됨]';
+  var p2v = async function (ans, fetch) {
+    var v = await CV.verifyCitations({ answer: ans, chunks: p2Jul, callHaiku: okJudge, fetchLawArticle: fetch, listLawDocs: function () { return Promise.resolve(e2eNames); } });
+    return v.verdicts.map(function (x) { return [x.status, x.srcFetched || null, x.lateName || null, x.lawGuess || null]; }).concat([(v.answer.match(/\[원문[^\]]*\]$/) || [''])[0]]);
+  };
+  var p2Pre = ['11', '12', '13', '14'].map(function (n) { return ADF + ' 제' + n + '조는 "사업자등은 데이터센터를 구축할 때 장관이 정하는 기준에 따라 시설을 갖추어야 한다"고 정합니다 [원문 확인됨: ' + ADF + ' 제' + n + '조]'; }).join('\n\n') + '\n\n';
+  var outsideTag = '[원문 확인됨(검색 자료 밖 조문과 대조): ' + ADF + ' 제10조]';
+  eq('#315-보론4 P-2′ 탐침 B — 산문 꼴도 ⓒ(srcFetched db, lateName) 초록 「검색 자료 밖 조문과 대조 … 제10조」(조 전체) = 괄호 꼴과 같음 · 조 행 없음 → norows · ⓒ 4건 뒤 → cap',
+     [await p2v(p2Prose, p2Fetch), await p2v(p2Paren, p2Fetch), (await p2v(p2Prose, function () { return Promise.resolve([]); })).slice(0, 1), (await p2v(p2Pre + p2Prose, p2Fetch)).slice(4, 5)],
+     [[['ok', 'db', true, null], outsideTag], [['ok', 'db', null, null], outsideTag], [['missing', 'norows', true, null]], [['missing', 'cap', true, null]]]);
+  // P-2″ 산문 가림 — 약한 제목(DB 둘·없음)은 lateName 없이 종전 이어받기 추측(회색 규칙), 산문 꼴만 P-2
+  var p2T = [{ id: 7241, doc_name: JUL, article_no: '9조(전파자원 이용효율의 개선)', chunk_index: 9, content: '제9조(전파자원 이용효율의 개선) 과학기술정보통신부장관은 전파자원의 이용효율을 개선하기 위하여 필요한 조치를 할 수 있다.' }];
+  var p2Two = function (pre) {
+    var r = CV.checkCitation(fcOne(pre + ' 제9조제2항에 따라 과학기술정보통신부장관은 전파자원의 이용효율 개선 조치를 할 수 있다고 정하는데, 이는 전파법 제9조와 같습니다 [원문 확인됨]'), p2T, []);
+    return [!!CV.parseSegment(pre + ' 제9조제2항에 따라 조치를 정하는데, 이는 전파법 제9조와 같습니다 ').mentions[0].lateName, r.lateName || null, r.lawGuess || null];
+  };
+  eq('#315-보론4 P-2″ — 「…봅니다 제9조제2항」·「이 경우 장관이 제9조제2항」은 P-2(뒤 이름, 추측 없음) · 제목 「부과에 관한 세부사항 제9조」(DB 둘)·「무선국 운용 안내서 제9조」(DB 없음)는 lateName 없이 추측 등급',
+     [p2Two('일괄처리를 받은 것으로 봅니다'), p2Two('이 경우 장관이'), p2Two('부과에 관한 세부사항'), p2Two('무선국 운용 안내서')],
+     [[true, true, null], [true, true, null], [false, null, 'any'], [false, null, 'any']]);
+  eq('#315-보론4 isProseWeak — 서술어·조사 낱말·끝 낱말 이·가·은·는·을·를·도·다', ['일괄처리를 받은 사업자등은', '이 경우 장관이', '부과에 관한 세부사항', '주파수할당 신청 절차 및 방법 등 세부사항', '무선국 운용 안내서'].map(function (n) { return CV.isProseWeak(LB(n)); }),
+     [true, true, false, false, false]);
+
+  // V8′ 탐침 E 다섯 꼴 + 실제 꼴 셋 — 고시류 좁은 일반 꼬리(「…에 관한 고시·규정·기준」)는 이름 그대로일 때만
+  var v8E = [['청소년 유해매체물 표시에 관한 고시', ['방송통신기자재등의 적합성평가에 관한 고시', '전파법']], ['전파감시 업무에 관한 규정', ['무선국의 운용 등에 관한 규정']],
+    ['재난방송 실시에 관한 기준', ['본인확인기관 지정 등에 관한 기준', '전기통신사업법']], ['개인정보 처리 위탁에 관한 고시', ['거짓으로 표시된 전화번호로 인한 이용자의 피해 예방 등에 관한 고시']],
+    ['전기통신사업 회계분리기준', ['주요통신사업자의 통신시설 등급 지정 및 관리 기준']]];
+  eq('#315-보론4 V8′ 탐침 E — 자료 안 유일 「…에 관한 고시·규정·기준」에 붙지 않음(목록 없음 null) · 목록 있으면 DB 읽기(재난방송 기준·회계분리기준은 그 문서)',
+     v8E.map(function (x) { return [rl(x[0], x[1]), rl(x[0], x[1], UNIV_T)]; }),
+     [[null, null], [null, null], [null, '재난방송 및 민방위경보방송의 실시에 관한 기준'], [null, null], [null, '전기통신사업 회계분리기준']]);
+  var v8R = [['무선국의 운용 등에 관한 규정', ['무선국의 운용 등에 관한 규정', '전파법']], ['방송통신설비의 기술기준에 관한 규정', ['방송통신설비의 기술기준에 관한 규정']],
+    ['공동이용 범위 및 절차에 대한 고시', ['재난 시 무선통신시설 공동이용 범위 및 절차에 대한 고시']]];
+  eq('#315-보론4 V8′ 실제 꼴 셋 — 자료 안 정식·줄인 이름은 그대로(목록 없음·있음)', v8R.map(function (x) { return [rl(x[0], x[1]), rl(x[0], x[1], UNIV_T)]; }), v8R.map(function (x) { return [x[1][0], x[1][0]]; }));
+
+  // 약칭 셋(사내 제안 4) — 자료 안이면 그 문서군, 자료 밖이면 DB 읽기(→ ⓒ) · 「융합법」은 다른 「…법」에 붙지 않음
+  var BBF = '방송통신발전 기본법', CONVF = '정보통신 진흥 및 융합 활성화 등에 관한 특별법';
+  eq('#315-보론4 약칭 — 방발법·방송통신발전법 → 방송통신발전 기본법, 정보통신융합법 → 정보통신융합법(특별법) · 자료 밖이면 목록으로 · 「융합법」 null',
+     [rl('방발법', [BBF, '전파법']), rl('방송통신발전법', [BBF]), rl('정보통신융합법', [CONVF, '전파법']), rl('방발법', ['전파법'], UNIV_T), rl('정보통신융합법', ['전파법'], UNIV_T),
+      rl('융합법', [CONVF, '정보통신공사업법']), rl('융합법', ['전파법'], UNIV_T), rl('방발법 시행령', [BBF, BBF + ' 시행령'])],
+     [BBF, BBF, CONVF, BBF, CONVF, null, null, BBF + ' 시행령']);
+
+  // ① 물채우기 — pD 여섯 꼴의 보낸 글자·잘림 수(예산 12,000자) + 사내 실물 [1,611·4,359]
+  var wf = function (lens) { var c = CV.multiCaps(lens); return [c.reduce(function (a, b) { return a + b; }, 0), lens.filter(function (x, i) { return x > c[i]; }).length]; };
+  eq('#314-보론5 물채우기 — 합 9,000·12,006·12,300·14,000·4,813·11,500 → 보냄/잘림 · 사내 제76조 두 조(합 5,970) 잘림 0',
+     [[5000, 1000, 1000, 1000, 1000], [2001, 2001, 2001, 2001, 2001, 2001], [200, 200, 200, 200, 11500], [3500, 3500, 3500, 3500], [2021, 1242, 300, 400, 350, 500], [4000, 4000, 2000, 1000, 500], [1611, 4359]].map(wf),
+     [[9000, 0], [12000, 6], [12000, 1], [12000, 4], [4813, 0], [11500, 0], [5970, 0]]);
+  eq('#314-보론5 물채우기 — 짧은 조는 통째, 긴 조만 남은 몫(조별 상한 [200,200,200,200,11200] · 같은 길이는 고르게 2,000)', [CV.multiCaps([200, 200, 200, 11500, 200]), CV.multiCaps([2001, 2001, 2001, 2001, 2001, 2001])],
+     [[200, 200, 200, 11200, 200], [2000, 2000, 2000, 2000, 2000, 2000]]);
+
+  // S-c × S-f(사내 제안 1) — 안내문으로 S를 껐어도 다음 줄이 주의 각주면 인용문 아님
+  var scsf = fcOne('전파법은 무선국 검사에 관하여 준공검사와 정기검사를 두고 있으며 그 내용은 다음과 같이 규정합니다.\n\n「전파법 제24조」 [원문 확인됨: 전파법 제24조]' + note);
+  eq('#314-보론5 S-c×S-f — 「…다음과 같이 규정합니다.」 + 출처 줄 + 「> **주의**」 → srcLine 없음·skipped guide·after 비움·noclaim',
+     [scsf.srcLine || null, scsf.srcLineSkipped, scsf.after, CV.checkCitation(scsf, [j24], []).status], [null, 'guide', '', 'noclaim']);
+
+  // 기록 칸 넷(10-21 집계용 — 상태·대상은 그대로)
+  var cmBiz = { id: 7251, doc_name: '전기통신사업법(법률)(제20000호)(20250101)', article_no: '37조(정보제공)', chunk_index: 37, content: '제37조(정보제공) ① 기간통신사업자는 이용자에게 요금 정보를 제공하여야 한다. ② 그 밖의 사항은 대통령령으로 정한다.' };
+  var cmBb = { id: 7252, doc_name: BBF + '(법률)(제20000호)(20250101)', article_no: '37조의2(재난방송)', chunk_index: 38, content: '제37조의2(재난방송) ① 방송사업자는 재난방송을 하여야 한다. ② 재난방송의 범위는 대통령령으로 정한다. ③ 방송사업자는 재난 정보를 이용자에게 신속히 알려야 한다.' };
+  var cmAns = '방송사업자는 재난 정보를 신속히 알리고 기간통신사업자는 이용자에게 요금 정보를 제공해야 합니다 [원문 확인됨: 방발법 제37조의2제3항, 사업법 제37조제1항]';
+  var unclearJudge = function (sys, user) { return Promise.resolve(JSON.stringify((user.match(/### 항목 \d+/g) || []).map(function (_, i) { return { id: i + 1, verdict: '판단불가', reason: 'x' }; }))); };
+  var cmV = async function (chunks, names) {
+    var v = await CV.verifyCitations({ answer: cmAns, chunks: chunks, callHaiku: unclearJudge, listLawDocs: names ? function () { return Promise.resolve(names); } : undefined });
+    return [v.verdicts[0].status, v.verdicts[0].candsMissing || null, v.verdicts[0].multi || null, /원문 없음\)\]$/.test(v.answer)];
+  };
+  // 표시 꼬리는 법령을 알아본 것만(목록 없이 자료 밖 「방발법」은 기록만) — 못 알아본 이름(오타·「제50조제1항제5호의2·전기통신사업법」 한 낱말)은 자료에 그 조가 있어도
+  // 「원문 없음」으로 읽혀 거짓이 됐다(저장 답 재연 257550b8·60f0153b)
+  eq('#315-보론4 기록 candsMissing(사내 제안 3) — 방발법 자료 밖: 목록 없으면 기록만(꼬리 없음), 목록 있으면 정식 이름 + 회색 표시 꼬리 「…은 원문 없음」, 상태 그대로 · 방발법 자료 안이면 두 조 다중 원문',
+     [await cmV([cmBiz]), await cmV([cmBiz], e2eNames), await cmV([cmBiz, cmBb])],
+     [['unclear', ['방발법 제37조의2제3항'], null, false], ['unclear', [BBF + ' 제37조의2제3항'], null, true], ['unclear', null, [BBF + ' 제37조의2제3항', '전기통신사업법 제37조제1항'], false]]);
+  var cmTypo = await CV.verifyCitations({ answer: '기간통신사업자는 이용자에게 요금 정보를 제공해야 하는 대상입니다법 제38조제2항과 함께 보면 그 밖의 사항은 대통령령으로 정한다고 합니다 [원문 확인됨: 전기통신사업법 제37조제1항, 대상입니다법 제38조제2항]',
+    chunks: [cmBiz], callHaiku: unclearJudge, listLawDocs: function () { return Promise.resolve(e2eNames); } });
+  eq('#315-보론4 candsMissing — 못 알아본 이름(「대상입니다법」 — 모델이 띄어쓰기를 빠뜨린 꼴)은 기록만, 회색 표시 꼬리에 안 적음',
+     [cmTypo.verdicts[0].candsMissing, /원문 없음\)\]$/.test(cmTypo.answer)], [['대상입니다법 제38조제2항'], false]);
+  var mdS = function (claim) { var r = CV.checkCitation(fcOne(claim + ' 「' + ADF + ' 제19조~제24조 및 제10조」 [원문 확인됨]'), adChunks, []); return [r.key, r.multi ? r.multi.length : null, r.multiDropped || null, r.multiAbandoned || null]; };
+  eq('#314-보론5 기록 multiDropped·multiAbandoned(사내 제안 ②) — 「제19조~제24조 및 제10조」 + 특례 인용문 → 여섯 조·밀림 1 · + 신고(제10조) 인용문 → 대표가 밀려 단일 원문·밀림 6',
+     [mdS('특례와 신고 의무를 함께 정리하면 비수도권 데이터센터는 전력계통영향평가 대상이 아니고 재생에너지 직접 공급이 가능하며 항만배후단지 입주와 특구 지정도 가능합니다.'),
+      mdS('사업자등은 구축장소와 운영목적 등을 대통령령으로 정하는 바에 따라 과학기술정보통신부장관에게 신고하여야 하고 중요한 사항을 변경할 때도 신고합니다.')],
+     [['19조', 6, 1, null], ['10조', null, 6, true]]);
+  var rdS = '- 특례 다섯 가지를 정한다는 내용입니다 길게 적은 내용입니다.\n\n「' + ADF + ' 제19조~제23조」 [원문 확인됨: ' + ADF + ' 제19조~제23조]\n\n### 다음 절';
+  eq('#314-보론5 기록 rangeDropped(사내 제안 ③) — 머리 못 찾음 → 가운데 셋 guessed · 머리 이름 확정·가운데(제21조) 자료 없음 → named 1 · 다 있으면 없음',
+     [noHead, noMid, adChunks].map(function (ch) { return CV.checkCitation(fcOne(rdS), ch, []).rangeDropped || null; }),
+     [{ named: 0, guessed: 3 }, { named: 1, guessed: 0 }, null]);
+  var lnV = await CV.verifyCitations({ answer: p2Prose, chunks: p2Jul, callHaiku: okJudge, fetchLawArticle: p2Fetch, listLawDocs: function () { return Promise.resolve(e2eNames); } });
+  var lnV2 = await CV.verifyCitations({ answer: cmAns, chunks: [cmBiz, cmBb], callHaiku: unclearJudge });
+  eq('#315-보론4 기록 lateName·rangeDropped·multiDropped verdict 칸 — 탐침 B lateName true · 넷 다 없는 표시엔 칸 없음',
+     [lnV.verdicts[0].lateName || null, ['lateName', 'candsMissing', 'multiDropped', 'multiAbandoned', 'rangeDropped'].filter(function (k) { return k in lnV2.verdicts[0]; })], [true, []]);
 
   // 지시문 지문 잠금 — 1차는 2차 보정의 바탕이라 글자 그대로, 2차는 실측(tests/cite_judge_probe.js) 뒤에만 고친다
   var sha = function (s) { return require('crypto').createHash('sha256').update(s, 'utf8').digest('hex').slice(0, 16); };
