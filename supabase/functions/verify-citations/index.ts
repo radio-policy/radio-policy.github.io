@@ -64,6 +64,17 @@ Deno.serve(async (req) => {
   const c = (charge ?? {}) as Record<string, unknown>;
   if (!c.ok) return json(c.reason === 'not_approved' ? 403 : 429, { error: { type: String(c.reason || 'quota'), message: '검증을 건너뜁니다(한도).' } }, cors);
 
+  // DB 문서명(현행·시행예정) — 이름 맞추기의 DB 읽기(#315 D1, 표시가 있으면 늘)와 검색 자료 밖 조문 대조(#288 ⓒ)의 재료(≈0.9초, service_role 전용 RPC).
+  // 요청 처리 첫머리에 띄워 조각 재조회·조문 보강·지침서 조회와 겹친다 — cite_verify.js가 3초까지만 기다리고 넘거나 실패하면 목록 없이(종전 동작).
+  // rag.ts listLawDocNames와 같은 조회 — 법령·고시 꼴만 고르는 것은 cite_verify.js
+  let lawDocsP: Promise<string[]> | null = null;
+  const listLawDocs = (): Promise<string[]> => lawDocsP ||= (async () => {
+    const [a, b] = await Promise.all([sb.rpc('kb_doc_names', { p_status: 'current' }), sb.rpc('kb_doc_names', { p_status: 'pending' })]);
+    if (a.error || b.error) throw new Error((a.error || b.error)!.message);
+    return ([] as { doc_name: string }[]).concat(a.data || [], b.data || []).map((x) => x.doc_name);
+  })();
+  listLawDocs().catch(() => {});   // 미리 띄움(실패는 cite_verify.js가 목록 없음으로 다룬다)
+
   // 근거 청크 재조회 (브라우저가 본 것과 같은 id) + 조문 통째 보강
   let chunks: Row[] = [];
   if (ids.length) {
@@ -85,14 +96,6 @@ Deno.serve(async (req) => {
     if (r.error) throw new Error(r.error.message);
     return (r.data || []) as (Row & { status?: string })[];
   };
-  // 검색 자료 밖 조문 대조(#288 ⓒ)의 이름 맞추기 재료 — DB 문서명(현행·시행예정). 이름 적은 조문이 자료에 없을 때만 부른다(≈0.9초, service_role 전용 RPC).
-  // rag.ts listLawDocNames와 같은 조회 — 법령·고시 꼴만 고르는 것은 cite_verify.js
-  let lawDocsP: Promise<string[]> | null = null;
-  const listLawDocs = (): Promise<string[]> => lawDocsP ||= (async () => {
-    const [a, b] = await Promise.all([sb.rpc('kb_doc_names', { p_status: 'current' }), sb.rpc('kb_doc_names', { p_status: 'pending' })]);
-    if (a.error || b.error) throw new Error((a.error || b.error)!.message);
-    return ([] as { doc_name: string }[]).concat(a.data || [], b.data || []).map((x) => x.doc_name);
-  })();
   try {
     const ex = await CiteVerify.expandArticles(chunks, fetchArticle, EXPAND_OPTS);
     chunks = ex.chunks;

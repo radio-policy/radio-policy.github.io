@@ -471,8 +471,8 @@ async function fetchLawArticleByFamily(sb: SupabaseClient, family: string, key: 
   if (r.error) throw new Error(r.error.message);
   return (r.data || []) as (Chunk & { status?: string })[];
 }
-// ── 검색 자료 밖 조문 대조(#288 ⓒ)의 이름 맞추기 재료 — DB 문서명(현행·시행예정, RPC kb_doc_names는 service_role 전용).
-//    이름 적은 조문이 자료에 없을 때만 cite_verify.js가 부른다(≈0.9초). verify-citations/index.ts listLawDocs와 같은 조회.
+// ── 이름 맞추기 DB 읽기(#315 D1)·검색 자료 밖 조문 대조(#288 ⓒ)의 재료 — DB 문서명(현행·시행예정, RPC kb_doc_names는 service_role 전용, ≈0.9초).
+//    answerAdvisory가 시작할 때 띄우고 cite_verify.js가 3초까지만 기다린다(넘거나 실패하면 목록 없이 — 종전 동작). verify-citations/index.ts listLawDocs와 같은 조회.
 async function listLawDocNames(sb: SupabaseClient): Promise<string[]> {
   const [a, b] = await Promise.all([sb.rpc('kb_doc_names', { p_status: 'current' }), sb.rpc('kb_doc_names', { p_status: 'pending' })]);
   if (a.error || b.error) throw new Error((a.error || b.error)!.message);
@@ -1499,6 +1499,9 @@ export async function buildAdvisoryContext(sb: SupabaseClient, question: string)
 export async function answerAdvisory(sb: SupabaseClient, systemPrompt: string, question: string): Promise<AdvisoryResult> {
   const apiKey = env('ANTHROPIC_API_KEY');
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY 미설정');
+  // DB 문서명 목록(#315 D1 ①) — 인용 검증의 이름 맞추기·ⓒ가 쓴다. 검색·답변 생성과 겹치게 지금 띄운다(실패는 cite_verify.js가 목록 없음으로)
+  const lawDocsP = listLawDocNames(sb);
+  lawDocsP.catch(() => {});
   const { chunks: chunks2, extra: extra2, addedIds, annex, citing, kb, news, systemVariable, searchMeta, spill: spill2, addOns, pendingNew, yak } = await buildAdvisoryContext(sb, question);
 
   const telegramGuide = '\n\n---\n\n[텔레그램 답변 형식 지침]\n' +
@@ -1549,7 +1552,7 @@ export async function answerAdvisory(sb: SupabaseClient, systemPrompt: string, q
       callJudge2: (sys: string, u: string) => callCiteJudge2(sb, apiKey, sys, u, 'rag.ts:citeJudge2'),
       // 판정 원문이 지침서 핵심 조문뿐이면 실DB 조문으로(#284) · 항 구분 확인·검색 자료 밖 조문 대조(#288)
       fetchLawArticle: (fam: string, key: string) => fetchLawArticleByFamily(sb, fam, key),
-      listLawDocs: () => listLawDocNames(sb),
+      listLawDocs: () => lawDocsP,
     });
     answer = vr.answer;
     verdicts = vr.verdicts || [];

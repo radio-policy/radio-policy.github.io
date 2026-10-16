@@ -914,8 +914,10 @@ var pendingNewTests = (async function () {
   var FAM = '인공지능 데이터센터 산업 진흥에 관한 특별법';
   var ICT = '정보통신 진흥 및 융합 활성화 등에 관한 특별법(법률)(제20000호)(20250101)', RAD = '전파법(법률)(제21065호)(20260102)';
   var pk = function (q, rbk, ex) { return RC.pickNamedArticles(RC.namedArticleRefs(q), rbk, ex).map(function (p) { return p.doc_name.split('(')[0] + ' ' + p.key; }); };
-  eq('pickNamedArticles 종전엔 줄인 이름의 끝 낱말 「특별법」이 제19조를 가진 유일한 …특별법에 붙음(10-15 실측 버그)',
-    pk('인공지능 데이터센터 특별법 제19조', { '19조': [{ doc_name: ICT, article_no: '19조(x)' }] }), ['정보통신 진흥 및 융합 활성화 등에 관한 특별법 19조']);
+  // 10-15 실측 버그: 종전엔 줄인 이름의 끝 낱말 「특별법」이 제19조를 가진 유일한 …특별법(정보통신융합법)에 붙었다 — #315 D4(2026-10-16)부터 「인공지능 데이터센터 특별법」은
+  // 약칭 열쇠라 약칭으로만 맞고(그 법령 문서군이 없으면 못 맞춤), 한 낱말 꼬리 「특별법」도 앞 낱말이 이름 낱말이면 끝 일치하지 않는다(D3)
+  eq('pickNamedArticles 줄인 이름 「인공지능 데이터센터 특별법」이 다른 …특별법 제19조에 붙지 않음(10-15 실측 버그, #315 D4·D3)',
+    pk('인공지능 데이터센터 특별법 제19조', { '19조': [{ doc_name: ICT, article_no: '19조(x)' }] }), []);
   eq('pickNamedArticles extraFams + 그 법령 행 → 시행 전 제정 법령으로 맞춤',
     pk('인공지능 데이터센터 특별법 제19조', { '19조': [{ doc_name: ICT, article_no: '19조(x)' }, { doc_name: D, article_no: '19조(「분산에너지 활성화 특별법」에 관한 특례)' }] }, [FAM]), [FAM + ' 19조']);
   eq('pickNamedArticles extraFams — 그 번호가 없는 법령이면 다른 법 조도 안 고름(정식 이름으로도 종전엔 오선택)',
@@ -935,7 +937,7 @@ var pendingNewTests = (async function () {
   var fnPast = await RC.fetchNamedArticles('인공지능 데이터센터 특별법 제18조', krows, art, Object.assign(mkPend(pdocs), { today: '20270310' }));
   eq('fetchNamedArticles pend — 시행일이 지난 행(승격 대기)은 넣지 않음', fnPast.pendingNamed, []);
   var fnFail = await RC.fetchNamedArticles('인공지능 데이터센터 특별법 제18조', krows, art, { docs: function () { return Promise.reject(new Error('x')); }, keyRows: function () { return []; }, today: '20261015' });
-  eq('fetchNamedArticles pend — 목록 조회 실패는 지목 없음(종전 고르기 그대로 — 종전의 오선택까지)', [fnFail.pendingNamed, fnFail.map(function (r) { return r.doc_name.split('(')[0]; })], [[], ['정보통신 진흥 및 융합 활성화 등에 관한 특별법']]);
+  eq('fetchNamedArticles pend — 목록 조회 실패는 지목 없음(종전 고르기 그대로 — #315 D4 뒤엔 다른 …특별법에 붙던 오선택도 없음)', [fnFail.pendingNamed, fnFail.map(function (r) { return r.doc_name.split('(')[0]; })], [[], []]);
   var curSame = await RC.fetchNamedArticles('인공지능 데이터센터 특별법 제18조', function () { return Promise.resolve([{ doc_name: '인공지능 데이터센터 산업 진흥에 관한 특별법(법률)(제1호)(20200101)', article_no: '18조(옛)' }]); }, art, mkPend(pdocs));
   eq('fetchNamedArticles pend — 같은 문서군의 현행 조문이 있으면 시행 전 제정 법령으로 보지 않음', curSame.pendingNamed, []);
 
