@@ -689,6 +689,10 @@
   // 시행령·시행규칙은 subord(그대로). 꼬리 낱말은 법령 종류 낱말(법률·특별법·기본법·특례법·조치법)이거나 두 글자 이상 + 법(보호법·전파법)
   const DEM_WORD_RE = /^(?:동|같은|이|해당|위|본|당해|그)$/;
   const LAW_TAIL_WORD_RE = /^(?:법률|특별법|기본법|특례법|조치법|[가-힣]{2,}법)$/;
+  // 지시어 뒤 문서 종류 낱말(#315-보론3, 2026-10-16 사내 이식 재연) — 「동 가이드라인 제3조」·「이 안내서 제9조」도 같은 이어받기. 법령 종류 낱말이 아니라 약한 이름이
+  // 됐고, 한 글자 「동」이 「이동통신용」에서 찾혀 우연히 맞던 것을 nameWords가 막아 이어받을 법령(전파법 등)으로 떨어졌다. 아무 낱말이나 넣지 않는다 —
+  // 「이 경우 제104조」·「해당 시설자가 제11조」(외부 저장 답 실물, 산문)는 종전 약한 이름 길(앞 법령 이어받기) 그대로
+  const DOC_TAIL_WORD_RE = /^[가-힣A-Za-z0-9]*(?:가이드라인|안내서|해설서|매뉴얼|지침서|편람)$/;
   // 발령 기관 + 고시·훈령·예규·공고 + 제YYYY-N호 (끝에 붙은 것만) — 기관 낱말은 위원회·부·청·처·원·소로 끝나야(「따라 고시」의 「따라」는 아니다)
   const NUMBERED_NOTICE_RE = /((?:[가-힣·ㆍ]*(?:위원회|부|청|처|원|소)\s?)?(?:고시|훈령|예규|공고))\s*제\s?(\d{4})\s?[-‐–－]\s?(\d{1,4})\s?호$/;
   // 인용 직전의 법령명 후보 — "실제로 판례에서 전기통신사업법 제32조의14"에서 뒤에서부터
@@ -717,7 +721,7 @@
     if (/^(동령|같은영|이영|영)$/.test(nl)) return { inherit: true, level: '시행령' };
     // 「같은 고시 제33조⑤」·「동 기준」·「이 규정」 — 띄어 쓴 꼴도 붙여 쓴 꼴(동고시·이고시)과 같이 이어받기(#288-보론, 사내 관찰 ④, 2026-10-07).
     // 종전엔 마지막 낱말(고시)만 봐서 이름 「같은 고시」로 읽혀 #240 ① 원문 없음이 됐다 — 「같은 법」(마지막 낱말 「법」)은 이어받는데 어긋났다.
-    // 가이드라인 등 법령 종류 낱말이 아닌 이름은 넣지 않는다(「동 가이드라인」은 약한 이름 규칙이 맞춘다 — #286-보론2 ④)
+    // 가이드라인 등 법령 종류 낱말이 아닌 이름은 넣지 않는다(「동 가이드라인」·「이 안내서」는 아래 지시어 + 문서 종류 낱말 이어받기 — #315-보론3, 종전 #286-보론2 ④의 약한 이름 맞추기는 한 글자 「동」의 우연이었다)
     const nl2 = words.length >= 2 && /^(동|같은|이)$/.test(norm(words[words.length - 2])) ? norm(words[words.length - 2]) + nl : nl;
     if (/^(동|같은|이)법률$/.test(nl2)) return { inherit: true, level: '법' };
     // 「동 특별법 제10조」·「이 기본법 제7조」·「해당 보호법 제10조」 — 지시어 + 한 낱말 법령 종류 꼬리도 이름이 아니라 이어받기(H-1, #315-보론2, 2026-10-16 —
@@ -725,7 +729,7 @@
     // #315 뒤엔 이름 「이 특별법」으로 읽혀 D3 한 낱말 꼬리 거부(이·동이 NOT_NAME_WORD_RE에 없었다)가 자료 안 그 법령을 버리고, DB 읽기 낱말 순서가 한 글자
     // 「이」를 「이용촉진」에서 찾아 「이 기본법 제7조」를 데이터산업법 제7조와 ⓒ로 대조했다(#315 이전 판은 끝 일치로 맞았다).
     // exact: 지시어 뒤 낱말이 문서군 이름 그대로면(「이 전파법 제9조」) 그 법령이 먼저(사내 확인 ㄱ — exactFamOf: 자료 안 → DB 목록, 이어받기는 그다음)
-    if (words.length >= 2 && DEM_WORD_RE.test(norm(words[words.length - 2])) && LAW_TAIL_WORD_RE.test(nl))
+    if (words.length >= 2 && DEM_WORD_RE.test(norm(words[words.length - 2])) && (LAW_TAIL_WORD_RE.test(nl) || DOC_TAIL_WORD_RE.test(nl)))
       return { inherit: true, suffix: nl, text: words.slice(-2).join(' '), exact: last };
     // 종류 낱말 하나뿐인 이름(「규정 제10조제2항」·「동 규정 제10조제2항」·「납부방식은 고시 제7조」 — 2026-10-09 사내 선행 이식, 사내 8c8c373c)은 이름이
     // 아니라 이어받기 — 앞에서 이름이 나온 법령 중 문서군 끝 또는 문서명 종류 괄호 끝이 그 낱말인 가장 가까운 것(lawScope·suffixPick, prior는
@@ -936,8 +940,8 @@
   //   weak 약한 이름 순서 규칙 / number 고시 번호 / db DB 읽기가 자료 안 결과를 바꿈(또는 자료 안 결과 없음) / reject 거부 규칙(②③④·약관)으로 못 맞춤 / none 못 맞춤
   function resolveLawHow(nameInfo, families, strict) {
     if (!nameInfo || !nameInfo.candidates) {
-      const ex = exactFamOf(nameInfo, families);   // 「이 전파법 제9조」(H-1 ㄱ) — 이름 그대로면 그 법령(ⓒ의 DB 문서명 읽기도)
-      return ex ? { fam: ex, how: 'exact' } : { fam: null, how: 'inherit' };
+      const dn = demNameOf(nameInfo, families);   // 「이 전파법 제9조」(H-1 ㄱ)·「동 사업법 제5조」(약칭) — 이름 그대로·약칭이면 그 법령(ⓒ의 DB 문서명 읽기도)
+      return dn ? dn : { fam: null, how: 'inherit' };
     }
     const rej = { n: 0 };
     let r = resolveIn(nameInfo, families, strict, !!(families && families.isUniverse), rej);
@@ -987,12 +991,20 @@
   }
   // 지시어 + 문서군 이름 그대로(「이 전파법 제9조」 — lawNameBefore exact, H-1 사내 확인 ㄱ): 자료 안 문서군 → DB 목록(families.universe) 순으로 이름이
   // 글자 그대로인 문서군, 없으면 null(→ suffixPick 이어받기). 맞으면 이름을 적은 참조다(guessKind 'none' — 자료에 없으면 원문 없음 → ⓒ)
-  function exactFamOf(info, families) {
+  // 약칭(#315-보론3, 2026-10-16 사내 이식 재연·운영자 지시): 지시어 뒤 낱말이 약칭 열쇠면(「동 사업법 제5조」) 그 약칭이 가리키는 문서군 — 이름 그대로 > 약칭 > 이어받기.
+  // 종전(a353523) 「사업법」은 `[가-힣]{2,}법` 꼬리로 이어받기가 되어 앞 이름 중 끝이 「사업법」인 정보통신공사업법에 붙었다(#315 D4 ③ 「약칭 열쇠와 같은 글자는 약칭으로만」과 어긋남)
+  function demNameOf(info, families) {
     if (!info || !info.exact || !families) return null;
     const n = norm(info.exact);
     const pick = function (list) { return (list || []).find(function (f) { return norm(f) === n; }) || null; };
-    return pick(families) || pick(families.universe);
+    const ex = pick(families) || pick(families.universe);
+    if (ex) return { fam: ex, how: 'exact' };
+    if (!isAliasKey(info.exact)) return null;
+    const al = function (list) { const h = (list || []).filter(function (f) { return familyMatches(f, info.exact); }); return h.length === 1 ? h[0] : null; };
+    const a = al(families) || al(families.universe);
+    return a ? { fam: a, how: 'alias' } : null;
   }
+  function exactFamOf(info, families) { const d = demNameOf(info, families); return d ? d.fam : null; }
   function suffixPick(info, families) {
     const sfx = info.suffix || '';
     for (const p of info.prior || []) {
