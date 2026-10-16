@@ -23,6 +23,8 @@
 //   --with-text      질문마다 Sonnet에 들어갈 참조 자료 전문(systemVariable)을 sv 칸에 저장(필수 조문 재현율 측정용, 파일이 커진다)
 //   --core-opts JSON 덧붙이기 상한을 이번 실행에만 바꾼다(무료 측정으로 상한 고르기) — 예: '{"DELEG_OPTS":{"up":2},"ADDON_OPTS":{"spillMax":1}}'
 //                    rag_core.js의 DELEG_OPTS·NEIGHBOR_OPTS·ADDON_OPTS 객체에 합친다(운영 코드는 그대로). 2차(10-06)부터 XREF_OPTS도.
+// 사업자 이용약관 구역(#312-보론2, 2026-10-16): 결과 행 yak = { ids, keys, chars, top, words, error, approved, textLen }(옛 rag.ts면 null),
+//   --with-text면 yakText(구역 글 — sv에서 이 글을 떼면 구역 밖 바이트 비교가 된다).
 //   --rest-pad N     대시보드 조건 흉내(2차, 10-06) — 전체 상한(trimAddOns)의 「나머지 길이」에 N자를 더한다(대시보드에만 있는
 //                    시행예정·팀 추가 지식·법령 개정 동향 구역 몫). 결과의 meta(search_meta의 addons·law_delegations 행)에 덜어 낸 개수가 남는다.
 import { createClient } from 'jsr:@supabase/supabase-js@2';
@@ -179,9 +181,11 @@ for (const q of set.questions) {
   const addAnnex = addOns?.parts?.annex;
   const annexIds = (annex?.ids || []).concat(addAnnex ? (addAnnex.cis || []).map((ci) => '+' + addAnnex.doc_name.split('(')[0].trim() + '|별표 ' + addAnnex.no + '|' + ci) : []);
   const pnew = ctx.pendingNew as { text: string; chunks: unknown[]; ids: number[]; laws: unknown[] } | undefined;   // 시행 전 제정 법령(#311)
+  // 사업자 이용약관 구역(#312-보론2) — 옛 rag.ts(--rag 옛 HEAD 사본)엔 없다
+  const yak = ctx.yak as { text: string; chunks: unknown[]; ids: number[]; keys: string[]; chars: number; top: number | null; words: string[]; error: string | null; approved: unknown } | undefined;
   const lab: Record<string, string> = {};
   for (const c of ([] as { id?: unknown; doc_name?: string; article_no?: string }[])
-    .concat((ctx.chunks as []) || [], (ctx.extra as []) || [], (citing?.chunks as []) || [], (ctx.spill as []) || [], (addOns?.chunks as []) || [], (pnew?.chunks as []) || [])) {
+    .concat((ctx.chunks as []) || [], (ctx.extra as []) || [], (citing?.chunks as []) || [], (ctx.spill as []) || [], (addOns?.chunks as []) || [], (pnew?.chunks as []) || [], (yak?.chunks as []) || [])) {
     if (c && c.id != null) lab[String(c.id)] = String(c.doc_name || '').split('(')[0].slice(0, 30) + ' ' + String(c.article_no || '').split('(')[0];
   }
   out.results.push({
@@ -191,12 +195,13 @@ for (const q of set.questions) {
     news: news?.sources || [],
     spill: ids((ctx.spill as []) || []), addon: addOns?.ids || [], addItems: addOns?.items || [],
     pnew: pnew?.ids || [], pnewLaws: pnew?.laws || [],
+    yak: yak ? { ids: yak.ids, keys: yak.keys, chars: yak.chars, top: yak.top, words: yak.words, error: yak.error, approved: yak.approved, textLen: yak.text.length } : null,
     lens: { law: String(ctx.lawContext || '').length, citing: (citing?.text || '').length, annex: (annex?.text || '').length,
-            news: (news?.text || '').length, asm: String(ctx.asm || '').length, addon: (addOns?.text || '').length, pnew: (pnew?.text || '').length,
+            news: (news?.text || '').length, asm: String(ctx.asm || '').length, addon: (addOns?.text || '').length, pnew: (pnew?.text || '').length, yak: (yak?.text || '').length,
             systemVariable: String(ctx.systemVariable || '').length },
     log: logLines.slice(), rpc: rpcLog.slice(), lab,
-    meta: ((ctx.searchMeta as { fn: string }[]) || []).filter((m) => m.fn === 'addons' || m.fn === 'law_delegations' || m.fn === 'pending_new' || m.fn === 'yak_gate'),   // yak_gate = 약관 게이트(#312-보론)
-    ...(withText ? { sv: String(ctx.systemVariable || '') } : {}),
+    meta: ((ctx.searchMeta as { fn: string }[]) || []).filter((m) => m.fn === 'addons' || m.fn === 'law_delegations' || m.fn === 'pending_new' || m.fn === 'yak_gate' || m.fn === 'yak_section'),   // yak_gate = 약관 게이트(#312-보론), yak_section = 약관 구역(#312-보론2)
+    ...(withText ? { sv: String(ctx.systemVariable || ''), ...(yak?.text ? { yakText: yak.text } : {}) } : {}),
   });
   origLog('[ragRegress]', q.id, ms + 'ms', err || '');
 }

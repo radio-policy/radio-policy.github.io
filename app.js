@@ -1347,20 +1347,27 @@ var extractNewsKeywords = RagCore.extractNewsKeywords;
 var NEWS_SRC_PREFIX = '[뉴스] ';
 var KB_SRC_PREFIX = '[요약] ';
 var ANNEX_SRC_PREFIX = '[별표] ';
+var YAK_SRC_PREFIX = '약관: ';   // 사업자 이용약관 구역(#312-보론2) — 법령이 아니라 따로 묶는다
 // 웹 검색 인용 — 형식은 '[웹] 제목 (https://...)'. 접두사가 없으면 laws로 떨어져
 // "참조 법령·문서" 배지에 웹 제목이 섞이므로, 반드시 이 분기를 타야 한다. (2026-08-03)
 var WEB_SRC_PREFIX = '[웹] ';
+// 사업자 이용약관 구역(#312-보론2)의 문서는 '약관: ' 접두(YAK_SRC_PREFIX) — 「참조 약관」 배지로 따로(법령 아님).
 function splitSources(arr) {
-  var laws = [], news = [], kb = [], annex = [], web = [];
+  var laws = [], news = [], kb = [], annex = [], web = [], yak = [];
   (arr || []).forEach(function(s) {
     if (typeof s !== 'string' || !s) return;
     if (s.indexOf(WEB_SRC_PREFIX) === 0) { if (web.indexOf(s) === -1) web.push(s); }
     else if (s.indexOf(NEWS_SRC_PREFIX) === 0) { if (news.indexOf(s) === -1) news.push(s); }
     else if (s.indexOf(KB_SRC_PREFIX) === 0) { if (kb.indexOf(s) === -1) kb.push(s); }
     else if (s.indexOf(ANNEX_SRC_PREFIX) === 0) { if (annex.indexOf(s) === -1) annex.push(s); }
+    else if (s.indexOf(YAK_SRC_PREFIX) === 0) { if (yak.indexOf(s) === -1) yak.push(s); }
     else if (laws.indexOf(s) === -1) laws.push(s);
   });
-  return { laws: laws, news: news, kb: kb, annex: annex, web: web };
+  return { laws: laws, news: news, kb: kb, annex: annex, web: web, yak: yak };
+}
+function stripYakPrefix(s) { return s.indexOf(YAK_SRC_PREFIX) === 0 ? s.slice(YAK_SRC_PREFIX.length) : s; }
+function yakTagsHtml(list) {
+  return list.map(function(s) { return '<span class="rag-tag">' + chEsc(stripYakPrefix(s).split('(')[0].trim()) + '</span>'; }).join(' ');
 }
 function stripNewsPrefix(s) { return s.indexOf(NEWS_SRC_PREFIX) === 0 ? s.slice(NEWS_SRC_PREFIX.length) : s; }
 function stripKbPrefix(s) { return s.indexOf(KB_SRC_PREFIX) === 0 ? s.slice(KB_SRC_PREFIX.length) : s; }
@@ -2079,6 +2086,23 @@ async function fetchNewLawRows(userText, doc, n) {
   return (r2.data || []).map(function(c) { return Object.assign({}, c, { similarity: 0 }); });
 }
 function kstTodayYmd() { return new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10).replace(/-/g, ''); }
+// ── 사업자 이용약관 구역(#312-보론2, (D)) — 비공개 약관 문서를 질문 원문에 약관 낱말이 있을 때만 그 문서 안 의미검색으로 고른 조로 따로 싣는다.
+// 발동·고르기·문구는 rag_core.js fetchYakSection 한 곳이고 여기는 조회 둘만 댄다(rag.ts fetchYakRows·fetchYakApproved와 같은 입력 — 한쪽만 고치지 말 것).
+var YAK_SECTION_EMPTY = { text: '', chunks: [], ids: [], words: [], keys: [], top: null, chars: 0, docs: 0, approved: null, error: null };
+var VERIFY_IDS_MAX = 120;   // verify-citations가 받는 조각 id 상한(index.ts) — 넘친 수를 yak_section 행 ids_cut에 남긴다
+// 문서 조각 + 질문 유사도 — 일반 조회 폴백은 두지 않는다(유사도 없이는 조를 못 고른다 → 빈 구역). 질문 그대로의 임베딩(메모화 — Voyage 추가 0).
+async function fetchYakRows(userText, doc, n) {
+  var emb = await getQueryEmbedding(userText);
+  if (!emb) throw new Error('임베딩 없음');
+  var r = await sb.rpc('match_chunks_semantic_in_doc', { query_embedding: emb, p_doc_name: doc, match_count: n });
+  if (r.error) throw new Error('match_chunks_semantic_in_doc: ' + (r.error.code || r.error.message));
+  return r.data || [];
+}
+// 그 문서 첫 조각의 is_approved — 승인돼 있으면 구역을 비운다(검색에 이미 들어온다). 실패는 fail-open(rag_core가 'unknown'으로).
+function fetchYakApproved(doc) {
+  return sb.from('document_chunks').select('is_approved').eq('doc_name', doc).eq('chunk_index', 0).limit(1)
+    .then(function(r) { if (r.error) throw new Error('document_chunks: ' + (r.error.code || r.error.message)); return r.data && r.data[0] ? r.data[0].is_approved === true : null; });
+}
 // 번호 지목(#311-보론) — RagCore.fetchNamedArticles의 pend 재료: 시행 전 제정 법령 문서들의 조 목록(현행판이 없어 status는 pending — 상태로 거르지 않는다).
 // rag.ts fetchPendingNewKeyRows·pendingNamedOpts와 같은 조건(한쪽만 고치지 말 것). docsP = 같은 요청이 fetchPendingNew와 나눠 쓰는 law_pending 조회.
 function fetchNewLawKeyRows(docNames) {
@@ -3019,6 +3043,25 @@ async function buildAdvisoryContext(userText) {
       if (lastAdvSearchMeta) lastAdvSearchMeta.push({ fn: 'pending_new', ms: Math.round(performance.now() - pnT0), rows: null, error: String(e && e.message || e) });
       return PENDING_NEW_EMPTY;
     });
+  // 사업자 이용약관 구역(#312-보론2, (D)) — 질문 원문에 약관 낱말이 있을 때만(yakGate의 mode와 무관) 비공개 약관 문서 안에서 조를 골라 시행 전 제정 법령
+  // 구역 바로 뒤에 싣는다. 옛 rag_core.js 캐시면 함수가 없다 — 빈 구역(가드 필수: 자문 전체가 TypeError로 거부되던 #309 10-15 사례).
+  // search_meta에는 발동한 요청만 한 행(rows = 실은 조 수, top = 1위 조 유사도, chars, docs, approved, ids_cut = 대조 목록 120 초과로 잘린 id 수). rag.ts와 동일 유지.
+  var yakT0 = performance.now(), yakMetaRow = null;
+  const yakSectionP = ((sb && typeof RagCore.fetchYakSection === 'function')
+      ? RagCore.fetchYakSection({ docRows: function(d, n) { return fetchYakRows(userText, d, n); }, approved: fetchYakApproved }, userText)
+      : Promise.resolve(YAK_SECTION_EMPTY))
+    .then(function(r) {
+      if (r.docs && lastAdvSearchMeta) {
+        yakMetaRow = { fn: 'yak_section', ms: Math.round(performance.now() - yakT0), rows: r.keys.length, error: r.error, top: r.top, chars: r.chars, docs: r.docs, approved: r.approved, ids_cut: 0 };
+        lastAdvSearchMeta.push(yakMetaRow);
+      }
+      return r;
+    })
+    .catch(function(e) {
+      console.warn('약관 구역 조회 실패(건너뜀):', e);
+      if (lastAdvSearchMeta) lastAdvSearchMeta.push({ fn: 'yak_section', ms: Math.round(performance.now() - yakT0), rows: null, error: String(e && e.message || e) });
+      return YAK_SECTION_EMPTY;
+    });
   // 법령 관계도: 기존 주제명 목록(주제명 분열 방지용) — 실패해도 자문은 정상 진행
   const lawTopicsP  = sb
     ? sb.from('law_graph_nodes').select('name').eq('node_type', 'topic').limit(120)
@@ -3194,6 +3237,12 @@ async function buildAdvisoryContext(userText) {
   // 시행 전 제정 법령(#311)의 조각 id·문서는 그 뒤 맨 끝 — verify-citations가 그 법령 조문 인용을 그 원문과 대조한다(rag.ts와 같은 순서)
   pendingNew.ids.forEach(function(id) { if (typeof id === 'number' && lastAdvChunkIds.indexOf(id) === -1) lastAdvChunkIds.push(id); });
   pendingNew.chunks.forEach(function(c) { if (c.doc_name && lastRagSources.indexOf(c.doc_name) === -1) lastRagSources.push(c.doc_name); });
+  // 사업자 이용약관 구역(#312-보론2)의 조각 id는 그 뒤 맨 끝, 출처는 접두 「약관: 」(「참조 약관」 배지 — 법령·문서 배지에 섞지 않는다). rag.ts와 같은 순서.
+  // 다른 구역의 입력(ragChunks·lawExtra·덧붙이기·역참조·별표·_advAddedIds·_advCitingIds)에는 넣지 않는다.
+  const yak = await yakSectionP;
+  yak.ids.forEach(function(id) { if (typeof id === 'number' && lastAdvChunkIds.indexOf(id) === -1) lastAdvChunkIds.push(id); });
+  yak.chunks.forEach(function(c) { if (c.doc_name && lastRagSources.indexOf(YAK_SRC_PREFIX + c.doc_name) === -1) lastRagSources.push(YAK_SRC_PREFIX + c.doc_name); });
+  if (yakMetaRow && yak.ids.length) yakMetaRow.ids_cut = Math.max(0, lastAdvChunkIds.length - VERIFY_IDS_MAX);   // 시행 전 제정 법령과 함께 발동하면 맨 뒤 약관 id가 잘릴 수 있다(알고 둠)
   // 배지용 스냅샷 — lastPendingNotice는 보고서 초안 경로와 공유하는 전역이라,
   // 자문 스트리밍(수 분) 중 보고서를 생성하면 답변 완료 시점엔 다른 값이 들어 있다.
   // 시행 전 제정 법령(#311)도 같은 「시행 예정 반영」 배지에 — 현행판이 없어 위 시행예정 구역에는 없는 법령이다
@@ -3201,11 +3250,11 @@ async function buildAdvisoryContext(userText) {
   return {
     ragContext: ragContext, lawArticleContext: lawArticleContext, citingContext: citingContext, annexContext: annexContext,
     addonContext: addOns.text || '',
-    pendingContext: pendingContext, pendingNewContext: pendingNew.text || '', kbContext: kbContext, customContext: customContext, newsContext: newsContext,
+    pendingContext: pendingContext, pendingNewContext: pendingNew.text || '', yakContext: yak.text || '', kbContext: kbContext, customContext: customContext, newsContext: newsContext,
     lawTrackContext: lawTrackContext, assemblyContext: assemblyContext, lawTopics: await lawTopicsP,
     // 회귀 하네스용 단계별 재료 — 프롬프트 조립에는 쓰지 않는다
     ragChunks: ragChunks, lawExtra: lawExtra, addedIds: _advAddedIds, citingIds: _advCitingIds, kbRows: kbRows,
-    spillChunks: spillChunks, addOns: addOns, pendingNew: pendingNew,
+    spillChunks: spillChunks, addOns: addOns, pendingNew: pendingNew, yak: yak,
     searchMeta: lastAdvSearchMeta
   };
 }
@@ -3231,8 +3280,8 @@ async function callClaude(userText, onDelta) {
   // 캐시 블록 '뒤'에 둬야 적중한다 — 가변 요소를 고정부 앞·중간에 끼우지 말 것.
   const systemStable   = SYSTEM_PROMPT + webSearchGuide;
   // 위임·같은 고시 구역(#283)은 조문 정밀검색 바로 뒤 — rag.ts와 같은 자리
-  // 시행 전 제정 법령(#311)은 시행예정 개정본 바로 뒤 — rag.ts와 같은 자리
-  const systemVariable = lawmapGuide + ctx.ragContext + ctx.lawArticleContext + ctx.addonContext + ctx.citingContext + ctx.annexContext + ctx.pendingContext + ctx.pendingNewContext + ctx.kbContext + ctx.customContext + ctx.newsContext + ctx.lawTrackContext + ctx.assemblyContext;
+  // 시행 전 제정 법령(#311)은 시행예정 개정본 바로 뒤, 사업자 이용약관(#312-보론2)은 그 바로 뒤 — rag.ts와 같은 자리
+  const systemVariable = lawmapGuide + ctx.ragContext + ctx.lawArticleContext + ctx.addonContext + ctx.citingContext + ctx.annexContext + ctx.pendingContext + ctx.pendingNewContext + ctx.yakContext + ctx.kbContext + ctx.customContext + ctx.newsContext + ctx.lawTrackContext + ctx.assemblyContext;
   const systemWithRag = [
     { type: 'text', text: systemStable, cache_control: { type: 'ephemeral' } },
     { type: 'text', text: systemVariable }
@@ -3809,6 +3858,7 @@ function _chatContentHtml() {
     }).join(', ') + '</p>' : '') +
     (xs.laws.length ? '<p class="ex-src"><b>' + chEsc(INTERNAL_SRC_LABEL) + ' — 법령·문서:</b> ' + xs.laws.map(chEsc).join(', ') + '</p>' : '') +
     (xs.annex.length ? '<p class="ex-src"><b>참조 별표:</b> ' + xs.annex.map(function(s) { return chEsc(stripAnnexPrefix(s)); }).join(', ') + '</p>' : '') +
+    (xs.yak.length ? '<p class="ex-src"><b>참조 약관(법령 아님):</b> ' + xs.yak.map(function(s) { return chEsc(stripYakPrefix(s)); }).join(', ') + '</p>' : '') +
     (xs.kb.length ? '<p class="ex-src"><b>참조 요약·실무:</b> ' + xs.kb.map(function(s) { return chEsc(stripKbPrefix(s)); }).join(', ') + '</p>' : '') +
     (xs.news.length ? '<p class="ex-src"><b>참조 뉴스:</b> ' + xs.news.map(function(s) { return chEsc(stripNewsPrefix(s)); }).join(', ') + '</p>' : '');
   return '<h1 class="ex-q">' + chEsc(d.question || '') + '</h1>' +
@@ -3832,6 +3882,7 @@ function exportChatMd() {
   }
   if (ms.laws.length) md += '\n---\n\n**' + INTERNAL_SRC_LABEL + ' — 법령·문서:** ' + ms.laws.join(', ') + '\n';
   if (ms.annex.length) md += '\n**참조 별표:** ' + ms.annex.map(stripAnnexPrefix).join(', ') + '\n';
+  if (ms.yak.length) md += '\n**참조 약관(법령 아님):** ' + ms.yak.map(stripYakPrefix).join(', ') + '\n';
   if (ms.kb.length) md += '\n**참조 요약·실무:** ' + ms.kb.map(stripKbPrefix).join(', ') + '\n';
   if (ms.news.length) md += '\n**참조 뉴스:** ' + ms.news.map(stripNewsPrefix).join(', ') + '\n';
   _chatDownload(new Blob([md], { type: 'text/markdown;charset=utf-8' }), _chatExportName('md'));
@@ -3908,7 +3959,7 @@ async function viewChatHistoryItem(id) {
     var srcHtml = '';
     // 🌐 실제 인용한 웹 문서가 먼저 — 📚 내부 자료는 "검색된" 목록임을 라벨로 밝힌다
     srcHtml += webSourcesRowHtml(sp.web, 'margin-top:12px');
-    if (sp.laws.length + sp.annex.length + sp.kb.length + sp.news.length > 0) {
+    if (sp.laws.length + sp.annex.length + sp.yak.length + sp.kb.length + sp.news.length > 0) {
       srcHtml += '<div class="rag-sources" style="margin-top:8px;font-size:10px;opacity:.75">' +
         chEsc(INTERNAL_SRC_LABEL) + '</div>';
     }
@@ -3920,6 +3971,10 @@ async function viewChatHistoryItem(id) {
       srcHtml += '<div class="rag-sources" style="margin-top:6px"><i class="ti ti-table"></i> 참조 별표: ' +
         annexTagsHtml(sp.annex) + '</div>';
     }
+    if (sp.yak.length > 0) {
+      srcHtml += '<div class="rag-sources" style="margin-top:6px"><i class="ti ti-file-text"></i> 참조 약관(법령 아님): ' +
+        yakTagsHtml(sp.yak) + '</div>';
+    }
     if (sp.kb.length > 0) {
       srcHtml += '<div class="rag-sources" style="margin-top:6px"><i class="ti ti-clipboard-text"></i> 참조 요약·실무: ' +
         kbTagsHtml(sp.kb) + '</div>';
@@ -3928,7 +3983,7 @@ async function viewChatHistoryItem(id) {
       srcHtml += '<div class="rag-sources" style="margin-top:6px"><i class="ti ti-news"></i> 참조 뉴스: ' +
         newsTagsHtml(sp.news) + '</div>';
     }
-    _chatDetail = { question: row.question || '', answer: row.answer || '', category: row.category || '일반', created_at: row.created_at, sources: sp.web.concat(sp.laws, sp.annex, sp.kb, sp.news) };
+    _chatDetail = { question: row.question || '', answer: row.answer || '', category: row.category || '일반', created_at: row.created_at, sources: sp.web.concat(sp.laws, sp.annex, sp.yak, sp.kb, sp.news) };
     // 질문자(#305) — 팀장·관리자에게만. 목록을 거치지 않고 왔으면(이름표 재료가 비어 있으면) 그때 읽는다
     var whoHtml = '';
     if (chCanSeeOthers()) {
@@ -4034,7 +4089,7 @@ async function sendChat() {
       var _isCited = function(s) { return _cited.some(function(d) { return s === d || d.indexOf(s) === 0 || s.indexOf(d) === 0; }); };
       _advSrc.laws = _advSrc.laws.filter(_isCited).concat(_advSrc.laws.filter(function(s) { return !_isCited(s); }));
     }
-    if (_advSrc.laws.length + _advSrc.annex.length + _advSrc.kb.length + _advSrc.news.length > 0) {
+    if (_advSrc.laws.length + _advSrc.annex.length + _advSrc.yak.length + _advSrc.kb.length + _advSrc.news.length > 0) {
       const inDiv = document.createElement('div');
       inDiv.className = 'rag-sources';
       inDiv.style.cssText = 'font-size:10px;opacity:.75';
@@ -4053,6 +4108,13 @@ async function sendChat() {
       anDiv.className = 'rag-sources';
       anDiv.innerHTML = '<i class="ti ti-table"></i>참조 별표: ' + annexTagsHtml(_advSrc.annex);
       msgEl.appendChild(anDiv);
+    }
+    // 사업자 이용약관(#312-보론2) — 법령이 아니라 「참조 문서」와 따로 보여 준다(구역 머리 「법령 아님」과 맞춤)
+    if (_advSrc.yak.length > 0) {
+      const ykDiv = document.createElement('div');
+      ykDiv.className = 'rag-sources';
+      ykDiv.innerHTML = '<i class="ti ti-file-text"></i>참조 약관(법령 아님): ' + yakTagsHtml(_advSrc.yak);
+      msgEl.appendChild(ykDiv);
     }
     if (_advSrc.kb.length > 0) {
       const kbDiv = document.createElement('div');
@@ -8511,7 +8573,10 @@ async function loadKbDocs(force) {
         var badge = it.embedded
           ? ''
           : '<span class="badge" style="background:rgba(245,158,11,.12);color:#b45309" title="backfill_embeddings.py 실행 전 — 키워드 검색만 가능">임베딩 대기</span>';
-        if (!it.approved) {
+        if (!it.approved && RagCore.isYakDoc && RagCore.isYakDoc(it.docName)) {
+          // 사업자 이용약관(#312-보론2, (D)) — 비공개가 정상 상태다. 승인하면 검색 칸 먹기가 돌아오고 약관 구역은 비워진다(health_watchdog이 본다)
+          badge += '<span class="badge" style="background:rgba(59,130,246,.12);color:#1d4ed8" title="자문엔 질문에 약관 낱말이 있을 때만 별도 구역으로 실림 — 승인하지 말 것">약관 질문에만 참조</span>';
+        } else if (!it.approved) {
           badge += '<span class="badge" style="background:rgba(220,38,38,.12);color:#b91c1c" title="설정에서 승인 전 — AI 자문 미반영">승인 대기</span>';
         }
         var nameHtml = kbHighlight(it.p.clean, kbTerms);

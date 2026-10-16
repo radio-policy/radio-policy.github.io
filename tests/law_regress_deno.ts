@@ -124,9 +124,11 @@ for (const q of set.questions) {
     kb: ((ctx?.kb as { title?: string }[]) || []).slice(0, 3).map((r) => String(r.title || '').trim()),
     addItems: addOns?.items || [], addon: addOns?.ids || [], addonChunks: ((addOns?.chunks as Hit[]) || []).map(label),
     lens: { system: sys.length, law: lawSec >= 0 ? ((addSec >= 0 ? addSec : (kbSec >= 0 ? kbSec : sys.length)) - lawSec) : 0, addon: (addOns?.text || '').length, trimmed: addOns?.trimmed || 0 },
-    meta: ((ctx?.searchMeta as { fn: string }[]) || []).filter((m) => m.fn === 'addons' || m.fn === 'law_delegations' || m.fn === 'search_law_articles_kw' || m.fn === 'pending_new'),
+    meta: ((ctx?.searchMeta as { fn: string }[]) || []).filter((m) => m.fn === 'addons' || m.fn === 'law_delegations' || m.fn === 'search_law_articles_kw' || m.fn === 'pending_new' || m.fn === 'yak_section'),
     // 시행 전 제정 법령 구역(#311-보론) — 붙은 법령·판정(named·kb·sim)·실은 조 수·지목 조·글자 수·조각 id
     pendingNew: (() => { const pn = ctx?.pendingNew as { text: string; ids: number[]; laws: unknown[]; gate: string | null } | undefined; return pn ? { gate: pn.gate, laws: pn.laws, len: (pn.text || '').length, ids: pn.ids } : null; })(),
+    // 사업자 이용약관 구역(#312-보론2) — 실은 조·글자·1위 유사도·걸린 낱말·조각 id(옛 rag.ts면 null)
+    yak: (() => { const y = ctx?.yak as { text: string; ids: number[]; keys: string[]; chars: number; top: number | null; words: string[]; error: string | null } | undefined; return y ? { keys: y.keys, ids: y.ids, chars: y.chars, top: y.top, words: y.words, error: y.error, len: (y.text || '').length } : null; })(),
     log: logLines.slice(), lab,
     ...(withText ? { sys } : {}),
   });

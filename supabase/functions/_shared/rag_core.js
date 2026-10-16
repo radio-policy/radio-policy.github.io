@@ -1791,6 +1791,25 @@
   // 조각(유사도 내림차순, 최대 matchCount개). kbRows = 같은 요청의 법령요약 검색 결과(상위 5). today = 오늘(YYYYMMDD, KST) — 시행일이 지난 행은
   // 현행으로 승격 대기라(11:00 law_sync --promote) 「시행 예정」이라 적으면 틀리므로 뺀다. L.named = 질문이 지목한 그 법령의 조(['18조'], G0 — 선택).
   const PN_GATE_RANK = { named: 0, kb: 1, sim: 2 };
+  // 조 단위 묶기(시행 전 제정 법령 #311·사업자 이용약관 구역 #312-보론2 공유) — 조각을 chunk_index 순으로 놓고 조 열쇠(pnKey)가 같은 것끼리 모아
+  // 조 유사도 = 조각 최고, 본문 = 조각 전부를 merge(CiteVerify.mergeChunkTexts — 겹친 글은 한 번만)로. 열쇠 없는 행(부칙·별표)은 버린다.
+  // 나오는 순서 = 그 문서에서 조가 처음 나온 순서. label = 괄호가 있는 첫 article_no(없으면 열쇠).
+  function groupArticles(rows, merge) {
+    const groups = {}, order = [];
+    (rows || []).slice().sort(function (a, b) { return (a.chunk_index || 0) - (b.chunk_index || 0); }).forEach(function (r) {
+      const k = pnKey(r.article_no);
+      if (!k) return;
+      if (!groups[k]) { groups[k] = { key: k, rows: [], sim: 0, label: '' }; order.push(k); }
+      const g = groups[k];
+      g.rows.push(r);
+      g.sim = Math.max(g.sim, Number(r.similarity) || 0);
+      if (!g.label && /\(/.test(String(r.article_no || ''))) g.label = r.article_no;
+    });
+    return order.map(function (k) {
+      const g = groups[k];
+      return { key: k, label: g.label || k, sim: g.sim, rows: g.rows, content: merge(g.rows.map(function (r) { return r.content || ''; })) };
+    });
+  }
   function pickPendingNew(laws, kbRows, today, opts) {
     const o = Object.assign({}, PENDING_NEW_OPTS, opts || {});
     const CV = root.CiteVerify;
@@ -1813,20 +1832,7 @@
     let left = o.maxChars;
     const out = [];
     scored.forEach(function (x) {
-      const groups = {}, order = [];
-      x.rows.slice().sort(function (a, b) { return (a.chunk_index || 0) - (b.chunk_index || 0); }).forEach(function (r) {
-        const k = pnKey(r.article_no);
-        if (!k) return;
-        if (!groups[k]) { groups[k] = { key: k, rows: [], sim: 0, label: '' }; order.push(k); }
-        const g = groups[k];
-        g.rows.push(r);
-        g.sim = Math.max(g.sim, Number(r.similarity) || 0);
-        if (!g.label && /\(/.test(String(r.article_no || ''))) g.label = r.article_no;
-      });
-      const arts = order.map(function (k) {
-        const g = groups[k];
-        return { key: k, label: g.label || k, sim: g.sim, rows: g.rows, content: merge(g.rows.map(function (r) { return r.content || ''; })) };
-      });
+      const arts = groupArticles(x.rows, merge);
       const total = arts.reduce(function (a, t) { return a + t.content.length; }, 0);
       let picked = [];
       if (x.full && total <= left) picked = arts;
@@ -1905,6 +1911,120 @@
       gate: picked.length ? picked.map(function (p) { return p.gate; }).join(',') : null };
   }
 
+  // ── 사업자 이용약관 구역(#312-보론2, 운영자 결정 (D) 10-15 밤 · Fable 판정 10-16 `local_docs/약관등록_261015/D안_판정_261016.md`) ──
+  // 약관 문서(YAK_DOC_RE)는 비공개(is_approved=false)라 검색 RPC 5개·덧붙이기·별표 어디에도 안 들어온다. 공개하면 고정 개수 RPC가 약관 행에 칸을
+  // 먹혀 법령 행이 밀렸다(10-15 밤 재측정 기준 2·3 미달). 그래서 질문 원문에 약관 낱말(yakGateWanted의 words — YAK_GATE_OPTS.mode와 무관)이
+  // 있을 때만, 그 문서 안 의미검색(match_chunks_semantic_in_doc, 질문 그대로의 voyage-4-lite)으로 고른 조를 시행 전 제정 법령 구역 바로 뒤에 따로 싣는다.
+  //  · 발동 = 낱말만. 문서 안 최고 유사도는 발동 신호가 아니다 — 실제 기록 122행에서 ≥0.50인 9행이 전부 무관, 약관이 답인 질문은 0.316(판정 J-F1).
+  //  · 고르기 = 조 통째(groupArticles) · 문서별 유사도 상위 maxArticles에서 minSim 미만과 「1위 − simGap」 미만을 빼고 · 첫 문서의 1위는 예산과 무관하게,
+  //    나머지는 누적 ≤ maxChars(넘는 조는 건너뛰고 다음 후보) · 싣는 순서는 조 번호. 동점은 조 번호 순.
+  //  · 문서 조각 수가 docs[].chunks와 다르면 그 문서는 비운다(HNSW 후필터 절삭·재적재 뒤 백필 전 — 반쪽 조를 조용히 싣지 않는다, #185 전례).
+  //  · 승인 확인: f.approved(doc)가 true면 그 문서는 비운다(검색에 이미 들어오므로 중복 방지), 실패는 fail-open(approved 'unknown').
+  //  · 이 구역은 trimAddOns의 나머지 길이·덧붙이기·역참조·별표·통째 보강·확장어·뉴스 입력에 넣지 않는다. 조각 id는 인용 대조 목록 맨 뒤(시행 전 제정 법령 뒤).
+  //  · 끄려면 on=false. 상수·문안·채움 순서를 바꾸기 전 사내판에 먼저 알린다(1:1 이식).
+  const YAK_SECTION_OPTS = { on: true, maxArticles: 3, simGap: 0.12, minSim: 0.25, maxChars: 10000, maxDocs: 2, matchCount: 120,
+    docs: [{ name: 'SK텔레콤 5G 이용약관(약관)(2026.8)(20260826)', chunks: 98, articles: 63, title: 'SK텔레콤 5G 이용약관',
+      label: 'SK텔레콤 5G 이용약관(2026년 8월 판 본문 · 별표·요금표·부칙은 미등록)', desc: 'SK텔레콤이 정한 5G 서비스 이용계약 조건' }],
+    registeredNote: '등록된 약관은 이 5G 이용약관뿐입니다. 3G·LTE나 다른 사업자의 약관을 물으면 5G 약관 기준임을 밝히고 「[3G·LTE 약관 미등록 — 확인 필요]」로 표시하세요.' };
+  // docsRows = [{ doc: YAK_SECTION_OPTS.docs의 한 항목, rows: [{ id, doc_name, chunk_index, article_no, content, similarity }] }] — 조각 수 확인은 호출측(fetchYakSection).
+  // → [{ doc, top, count, articles: [{ key, label, sim, rows, content }] }] (1위 유사도 높은 문서부터, 조는 조 번호 순)
+  function pickYakArticles(docsRows, opts) {
+    const o = Object.assign({}, YAK_SECTION_OPTS, opts || {});
+    const CV = root.CiteVerify;
+    const merge = CV ? CV.mergeChunkTexts : function (p) { return p.join('\n'); };
+    const ranked = (docsRows || []).filter(function (d) { return d && d.doc && (d.rows || []).length; }).map(function (d) {
+      const arts = groupArticles(d.rows, merge).sort(function (a, b) { return b.sim - a.sim || cmpArt(a.key, b.key); });
+      return { doc: d.doc, arts: arts, top: arts.length ? arts[0].sim : 0 };
+    }).filter(function (d) { return d.arts.length; })
+      .sort(function (a, b) { return b.top - a.top; }).slice(0, o.maxDocs);
+    let used = 0;
+    const out = [];
+    ranked.forEach(function (d, di) {
+      const floor = Math.max(o.minSim, d.top - o.simGap);
+      const picked = [];
+      d.arts.slice(0, o.maxArticles).forEach(function (t, i) {
+        if (t.sim < floor) return;
+        const free = di === 0 && i === 0;   // 첫 문서의 1위 조 — 바닥만 넘으면 예산과 무관하게
+        if (!free && used + t.content.length > o.maxChars) return;
+        used += t.content.length; picked.push(t);
+      });
+      if (!picked.length) return;
+      picked.sort(function (a, b) { return cmpArt(a.key, b.key); });
+      out.push({ doc: d.doc, top: d.top, count: d.arts.length, articles: picked });
+    });
+    return out;
+  }
+  // 구역 글(시행 전 제정 법령 구역과 같은 꼴 — '\n\n---\n\n'로 시작). 고른 조가 없으면 빈 문자열(구역 없는 요청의 프롬프트는 바이트 같다).
+  function buildYakContext(picked, words, opts) {
+    if (!picked || !picked.length) return '';
+    const o = Object.assign({}, YAK_SECTION_OPTS, opts || {});
+    const w = (words || []).join('·');
+    const blocks = picked.map(function (p) {
+      const n = p.doc.articles || p.count;
+      return '[사업자 이용약관 — 법령 아님] ' + (p.doc.label || p.doc.title || p.doc.name) + '\n'
+        + '질문에 약관 관련 낱말(' + w + ')이 있어 따로 실은, ' + (p.doc.desc || '사업자가 정한 이용계약 조건') + '입니다. '
+        + '법령·고시가 아니므로 위 검색 결과(법령 조문)와 구분됩니다. 질문과 가까운 조문 ' + p.articles.length + '개(본문 ' + n + '개 조 중).\n\n'
+        + p.articles.map(function (a) {
+          const c = String(a.content || '');
+          return '■ ' + (/^제\d/.test(c) ? c : '제' + a.label + '\n' + c);
+        }).join('\n\n');
+    });
+    const t0 = picked[0].doc.title || picked[0].doc.name;
+    return '\n\n---\n\n' + blocks.join('\n\n---\n\n') + '\n\n'
+      + '[사용 지침]\n'
+      + '- 이 약관은 법령이 아닙니다. 법령상 의무·제재의 근거로는 쓰지 말고, 계약상 기준은 「약관 기준」이라고 구분해 서술하세요. 법령 조문이 같은 사항을 정하면 법령을 먼저 쓰고, 약관은 사업자가 정한 계약 조건으로 덧붙이세요.\n'
+      + '- 약관을 인용할 때 표시는 「[원문 확인됨: ' + t0 + ' 제32조제1항]」처럼 약관 이름을 적습니다.\n'
+      + '- ' + o.registeredNote + '\n'
+      + '- 본문이 가리키는 「[별표 N]」·요금표·부칙은 등록돼 있지 않습니다 — 그 내용을 추측하지 마세요.\n'
+      + '- 위에 실린 조문이 질문과 관련 없으면 쓰지 마세요. 싣지 않은 조문의 내용은 알 수 없습니다.';
+  }
+  // 두 판 공통 흐름 — 각 파일은 f.docRows(doc, n)(match_chunks_semantic_in_doc — 일반 조회 폴백 없음: 유사도 없이는 못 고른다)와
+  // f.approved(doc)(document_chunks 그 문서 chunk_index 0의 is_approved, 선택)만 댄다. 낱말이 없으면 아무 조회도 안 한다.
+  // → { text, chunks, ids, words, keys, top, chars, docs, approved, error } — docs = 조회한 문서 수(0이면 발동 안 함 = search_meta에 안 남김)
+  async function fetchYakSection(f, question, opts) {
+    const o = Object.assign({}, YAK_SECTION_OPTS, opts || {});
+    const empty = { text: '', chunks: [], ids: [], words: [], keys: [], top: null, chars: 0, docs: 0, approved: null, error: null };
+    if (o.on === false) return empty;
+    const words = yakGateWanted(question).words;
+    if (!words.length) return empty;
+    const docs = (o.docs || []).slice(0, o.maxDocs);
+    if (!docs.length) return Object.assign({}, empty, { words: words });
+    const errs = [], appr = [];
+    const got = await Promise.all(docs.map(function (d) {
+      const aP = f.approved ? Promise.resolve().then(function () { return f.approved(d.name); })
+        .then(function (v) { return v === true ? true : v === false ? false : 'unknown'; }, function () { return 'unknown'; }) : Promise.resolve('unknown');
+      const rP = Promise.resolve().then(function () { return f.docRows(d.name, o.matchCount); })
+        .then(function (rows) { return { rows: rows }; }, function (e) { return { err: String((e && e.message) || e) }; });
+      return Promise.all([aP, rP]).then(function (x) {
+        appr.push(x[0]);
+        if (x[0] === true) return null;   // 승인돼 있으면 검색에 이미 들어온다 — 중복 방지
+        if (x[1].err) { errs.push(d.title + ': ' + x[1].err); return null; }
+        const rows = Array.isArray(x[1].rows) ? x[1].rows : [];
+        if (d.chunks && rows.length !== d.chunks) { errs.push(d.title + ': 조각 ' + rows.length + '≠' + d.chunks); return null; }
+        return { doc: d, rows: rows };
+      });
+    }));
+    const picked = pickYakArticles(got.filter(Boolean), o);
+    const chunks = [], ids = [], keys = [];
+    picked.forEach(function (p) {
+      p.articles.forEach(function (a) {
+        keys.push(a.key);
+        a.rows.forEach(function (r) {
+          if (typeof r.id === 'number' && ids.indexOf(r.id) === -1) {
+            ids.push(r.id);
+            chunks.push({ id: r.id, doc_name: r.doc_name || p.doc.name, chunk_index: r.chunk_index, article_no: r.article_no, content: r.content });
+          }
+        });
+      });
+    });
+    const text = buildYakContext(picked, words, o);
+    const approved = appr.indexOf('unknown') !== -1 ? 'unknown' : appr.indexOf(true) !== -1;
+    const top = picked.length ? Math.round(picked[0].top * 1000) / 1000 : null;
+    return { text: text, chunks: chunks, ids: ids, words: words, keys: keys, top: top,
+      chars: picked.reduce(function (a, p) { return a + p.articles.reduce(function (b, t) { return b + t.content.length; }, 0); }, 0),
+      docs: docs.length, approved: approved, error: errs.length ? errs.join('; ') : null };
+  }
+
   const RagCore = {
     PRIORITY_KW_RE: PRIORITY_KW_RE, VERB_TAIL: VERB_TAIL, extractKeywords: extractKeywords,
     LAW_SYNONYMS: LAW_SYNONYMS, PRACTICE_TERMS: PRACTICE_TERMS,
@@ -1940,6 +2060,8 @@
     PENDING_NEW_OPTS: PENDING_NEW_OPTS, pickPendingNew: pickPendingNew, buildPendingNewContext: buildPendingNewContext, fetchPendingNew: fetchPendingNew,
     // 사업자 이용약관 게이트(#312-보론)
     YAK_DOC_RE: YAK_DOC_RE, YAK_GATE_OPTS: YAK_GATE_OPTS, isYakDoc: isYakDoc, yakGateWanted: yakGateWanted, dropYakRows: dropYakRows, yakGateNote: yakGateNote,
+    // 사업자 이용약관 구역(#312-보론2, (D))
+    YAK_SECTION_OPTS: YAK_SECTION_OPTS, pickYakArticles: pickYakArticles, buildYakContext: buildYakContext, fetchYakSection: fetchYakSection,
   };
   root.RagCore = RagCore;
   if (typeof module !== 'undefined' && module.exports) module.exports = RagCore;

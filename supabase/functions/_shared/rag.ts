@@ -122,7 +122,7 @@ interface Chunk {
 // 검색 갈래별 기록(#203, 2026-09-24) — [{fn, ms, rows, error}]. buildAdvisoryContext가 배열을 만들어 각 검색
 // 함수에 넘기고 answerAdvisory가 chat_logs.search_meta에 남긴다. 모듈 전역이 아니라 인자로 넘기는 이유:
 // Edge isolate는 요청을 동시에 처리하므로 전역이면 두 자문의 기록이 섞인다. app.js metaRpc와 같은 형식.
-export type SearchMeta = { fn: string; ms: number; rows: number | null; error: string | null; trimmed?: number; capped?: boolean; addendum?: number; apply?: number; gate?: string | null; docs?: number; pending?: number }[];
+export type SearchMeta = { fn: string; ms: number; rows: number | null; error: string | null; trimmed?: number; capped?: boolean; addendum?: number; apply?: number; gate?: string | null; docs?: number; pending?: number; top?: number | null; chars?: number; approved?: boolean | string | null; ids_cut?: number }[];
 // 약관 게이트 행(#312-보론)은 RagCore.yakGateNote가 넣는 { fn: 'yak_gate', pass, words, dropped[, mode] } — ms·rows·error 없음(app.js와 같은 꼴)
 type RpcResult = { data?: unknown; error?: { code?: string; message?: string } | null } | null;
 function metaRpc(sb: SupabaseClient, meta: SearchMeta | undefined, fn: string, params: Record<string, unknown>) {
@@ -654,7 +654,7 @@ export async function searchLawArticles(sb: SupabaseClient, query: string, limit
 // 만족도 👎 분석 때 "어느 조문을 집었길래 틀렸나"를 되짚을 수 있게 한다(2026-08-20).
 // 검색·조립(buildLawQueryContext)과 Haiku 호출(answerLawQuery)을 나눈다(#247) — 확인 스크립트가 testHooks로
 // 확장어·임베딩을 고정하고 buildLawQueryContext만 불러 Anthropic API 0회로 전후를 대조한다(자문의 #201과 같은 방식).
-type LawQueryContext = { merged: LawHit[]; kb: KbRow[]; system: string; addOns: AddOns; pendingNew: PendingNew; searchMeta: SearchMeta };
+type LawQueryContext = { merged: LawHit[]; kb: KbRow[]; system: string; addOns: AddOns; pendingNew: PendingNew; yak: YakSection; searchMeta: SearchMeta };
 const NAMED_LAW_CHARS = 3000;   // /law 지목 조문 한 항목 상한(#247) — 현행 조문 7,969개 중 99%가 3,070자 이하, 그 밖 항목은 800자
 // /law 답변 모델(#304-보론, 2026-10-14) — 바꾸려면 tests/law_model_probe_deno.ts로 세 모델을 다시 재고(≈$2, 운영자 고지 뒤) 눈가림 채점을 거친다
 const LAW_MODEL = 'claude-haiku-5-5';
@@ -697,6 +697,8 @@ export async function buildLawQueryContext(sb: SupabaseClient, query: string): P
     meta.push({ fn: 'pending_new', ms: Math.round(performance.now() - pnT0), rows: null, error: String((e as Error)?.message || e) });
     return EMPTY_PENDING_NEW;
   });
+  // ⑥ 사업자 이용약관(#312-보론2, D-3) — 자문과 같은 함수·같은 발동(질문 원문 약관 낱말). 시행 전 제정 법령 구역 뒤·요약층 앞, 나머지 길이·덧붙이기 입력 밖.
+  const yakP = startYakSection(sb, query, meta);
   const [hitsAll, semantic, kb, namedFirst] = await Promise.all([
     // 8→12 (2026-08-07): "3G 종료"처럼 한 질문이 여러 제도(사업 폐업·무선국 폐지·주파수 회수)에
     // 걸치면 8자리를 계열끼리 다퉈 시행령 조문이 밀려났다(실측 — 시행령 24조·51조 누락).
@@ -781,7 +783,8 @@ export async function buildLawQueryContext(sb: SupabaseClient, query: string): P
 
   const searched = hits.concat(semExtra, bridged);
   const pendingNew = await pendingNewP;
-  if (!named.length && !searched.length && !kb.length && !pendingNew.text) return null;   // 검색 0건 — 호출자가 미등재 안내
+  const yak = await yakP;
+  if (!named.length && !searched.length && !kb.length && !pendingNew.text && !yak.text) return null;   // 검색 0건 — 호출자가 미등재 안내
 
   // 프롬프트에 넣는 순서를 **법 위계 순**(법률>대통령령>부령>고시)으로 맞춘다. 검색 점수 순으로
   // 넣으면 시행령이 앞서고 상위 법률이 뒤로 밀려, 모델이 시행령만 인용하고 근거 법률을 빠뜨린다
@@ -840,6 +843,8 @@ export async function buildLawQueryContext(sb: SupabaseClient, query: string): P
   if (addOns.text) ctxParts.push(addOns.text.replace(/^\n\n---\n\n/, ''));   // 구역 글은 '\n\n---\n\n'로 시작한다 — join 구분자와 겹치지 않게
   // 시행 전 제정 법령(⑤, #311-보론)은 덧붙이기 뒤·요약층 앞(자문에서 시행예정 구역 뒤·요약 앞인 것과 같은 차례). 위 trimAddOns의 나머지 길이에 넣지 않는다.
   if (pendingNew.text) ctxParts.push(pendingNew.text.replace(/^\n\n---\n\n/, ''));
+  // 사업자 이용약관(⑥, #312-보론2)은 그 바로 뒤 — 자문과 같은 차례
+  if (yak.text) ctxParts.push(yak.text.replace(/^\n\n---\n\n/, ''));
   if (kb.length) {
     ctxParts.push('[법령 요약(실무 맥락 보강용 — 조문 인용은 위 원문 우선)]\n' + kb.slice(0, 3).map((r) =>
       `· ${(r.title || '').trim()}\n${(r.content || '').slice(0, 500)}`
@@ -874,11 +879,13 @@ export async function buildLawQueryContext(sb: SupabaseClient, query: string): P
     (addOns.text ? '- 「위임 관계로 이어진 조문」·「같은 고시의 다른 조문」처럼 머리말이 붙은 구역의 조문도 검색 결과입니다. 질문과 관련되면 위 조문과 함께(상위 법률 ↔ 하위법령 관계를 밝혀) 제시하고, 관련 없으면 쓰지 마세요.\n' : '') +
     // 시행 전 제정 법령 구역이 있을 때만 붙는다(#311-보론) — 없는 질문의 프롬프트는 종전과 같다
     (pendingNew.text ? '- 「시행 전 제정 법령」 구역은 공포됐으나 아직 시행되지 않은 새 법령의 원문입니다(지금은 효력 없음). 질문과 관련되면 법령명·조문 번호 뒤에 「(YYYY.M.D. 시행 예정)」을 붙여 현행 조문과 구분해 제시하고, 현행 조문처럼 서술하지 마세요.\n' : '') +
+    // 사업자 이용약관 구역이 있을 때만 붙는다(#312-보론2) — 없는 질문의 프롬프트는 종전과 같다
+    (yak.text ? '- 「사업자 이용약관」 구역은 SK텔레콤이 정한 5G 이용계약 조건이지 법령이 아닙니다. 질문과 관련되면 「약관 기준」이라고 구분해 법령 조문 뒤에 제시하고, 법령 조문처럼 서술하지 마세요.\n' : '') +
     // 1,800 → 2,500자(#303): 종전 한도 1,500토큰이 이 지침보다 먼저 끊어 최근 4건 중 3건이 문장 중간에서 잘렸다(아래 answerLawQuery) — 항목 3~8개에
     // 2~3문장씩이면 2,000자대가 자연스러운 길이. 텔레그램 한 메시지(splitByLines 3,900자)에 들어간다.
     '- 텔레그램 전송용: 표·코드블록 금지, 굵게(**)와 불릿(-)만, 전체 2,500자 이내.\n\n' +
     '---\n\n' + ctxParts.join('\n\n---\n\n');
-  return { merged, kb, system, addOns, pendingNew, searchMeta: meta };
+  return { merged, kb, system, addOns, pendingNew, yak, searchMeta: meta };
 }
 
 export async function answerLawQuery(sb: SupabaseClient, query: string): Promise<{ answer: string; chunkIds: number[]; searchMeta: SearchMeta } | null> {
@@ -886,7 +893,7 @@ export async function answerLawQuery(sb: SupabaseClient, query: string): Promise
   if (!apiKey) return null;
   const ctx = await buildLawQueryContext(sb, query);
   if (!ctx) return null;   // 검색 0건 — 호출자가 미등재 안내
-  const { merged, system, addOns, pendingNew, searchMeta } = ctx;
+  const { merged, system, addOns, pendingNew, yak, searchMeta } = ctx;
 
   const res = await fetch(ANTHROPIC_URL, {
     method: 'POST',
@@ -920,6 +927,7 @@ export async function answerLawQuery(sb: SupabaseClient, query: string): Promise
   for (const h of merged) for (const id of (h._ids || [h.id])) if (typeof id === 'number' && !chunkIds.includes(id)) chunkIds.push(id);
   for (const id of addOns.ids) if (typeof id === 'number' && !chunkIds.includes(id)) chunkIds.push(id);   // 덧붙인 조문(#303)의 조각 id는 맨 뒤
   for (const id of pendingNew.ids) if (typeof id === 'number' && !chunkIds.includes(id)) chunkIds.push(id);   // 시행 전 제정 법령(#311-보론)은 그 뒤
+  for (const id of yak.ids) if (typeof id === 'number' && !chunkIds.includes(id)) chunkIds.push(id);   // 사업자 이용약관(#312-보론2)은 맨 뒤
   return { answer: text.trim(), chunkIds, searchMeta };
 }
 
@@ -1003,6 +1011,38 @@ async function fetchPendingNewRows(sb: SupabaseClient, question: string, doc: st
   return ((r2.data || []) as Chunk[]).map((c) => ({ ...c, similarity: 0 }));
 }
 const kstToday = () => new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10).replace(/-/g, '');
+// ── 사업자 이용약관 구역(#312-보론2, (D)) — 비공개 약관 문서를 질문 원문에 약관 낱말이 있을 때만 그 문서 안 의미검색으로 고른 조로 따로 싣는다.
+// 발동·고르기·문구는 rag_core.js fetchYakSection 한 곳이고 여기는 조회 둘만 댄다(app.js fetchYakRows·fetchYakApproved와 같은 입력 — 한쪽만 고치지 말 것).
+type YakSection = { text: string; chunks: Chunk[]; ids: number[]; words: string[]; keys: string[]; top: number | null; chars: number; docs: number; approved: boolean | string | null; error: string | null };
+const EMPTY_YAK: YakSection = { text: '', chunks: [], ids: [], words: [], keys: [], top: null, chars: 0, docs: 0, approved: null, error: null };
+const YAK_SRC_PREFIX = '약관: ';   // 출처 목록에서 법령과 따로 묶는 접두(app.js와 같음)
+// 문서 조각 + 질문 유사도 — 일반 조회 폴백은 두지 않는다(유사도 없이는 조를 못 고른다 → 빈 구역). 질문 그대로의 임베딩(메모화 — Voyage 추가 0).
+async function fetchYakRows(sb: SupabaseClient, question: string, doc: string, n: number): Promise<Chunk[]> {
+  const emb = await getQueryEmbedding(question);
+  if (!emb) throw new Error('임베딩 없음');
+  const r = await sb.rpc('match_chunks_semantic_in_doc', { query_embedding: emb, p_doc_name: doc, match_count: n });
+  if (r.error) throw new Error('match_chunks_semantic_in_doc: ' + (r.error.code || r.error.message));
+  return (r.data || []) as Chunk[];
+}
+// 그 문서 첫 조각의 is_approved — 승인돼 있으면 구역을 비운다(검색에 이미 들어온다). 실패는 fail-open(rag_core가 'unknown'으로).
+async function fetchYakApproved(sb: SupabaseClient, doc: string): Promise<boolean | null> {
+  const r = await sb.from('document_chunks').select('is_approved').eq('doc_name', doc).eq('chunk_index', 0).limit(1);
+  if (r.error) throw new Error('document_chunks: ' + (r.error.code || r.error.message));
+  const row = ((r.data || []) as { is_approved: boolean }[])[0];
+  return row ? row.is_approved === true : null;
+}
+// 두 경로(자문·/law) 공통 — search_meta에는 발동한 요청만 한 행(rows = 실은 조 수, top, chars, docs, approved; ids_cut은 텔레그램엔 대조 목록 상한이 없어 0).
+function startYakSection(sb: SupabaseClient, question: string, meta: SearchMeta): Promise<YakSection> {
+  const t0 = performance.now();
+  return RagCore.fetchYakSection({ docRows: (d: string, n: number) => fetchYakRows(sb, question, d, n), approved: (d: string) => fetchYakApproved(sb, d) }, question)
+    .then((r: YakSection) => {
+      if (r.docs) meta.push({ fn: 'yak_section', ms: Math.round(performance.now() - t0), rows: r.keys.length, error: r.error, top: r.top, chars: r.chars, docs: r.docs, approved: r.approved, ids_cut: 0 });
+      return r;
+    }).catch((e: unknown) => {
+      meta.push({ fn: 'yak_section', ms: Math.round(performance.now() - t0), rows: null, error: String((e as Error)?.message || e) });
+      return EMPTY_YAK;
+    });
+}
 // 번호 지목(#311-보론) — fetchNamedArticles의 pend 재료: 시행 전 제정 법령 문서들의 조 목록(현행판이 없어 status는 pending — 상태로 거르지 않는다).
 // app.js fetchNewLawKeyRows와 같은 조건(한쪽만 고치지 말 것). docsP = 같은 요청이 fetchPendingNew와 나눠 쓰는 law_pending 조회.
 async function fetchPendingNewKeyRows(sb: SupabaseClient, docNames: string[]): Promise<{ doc_name: string; article_no: string }[]> {
@@ -1278,6 +1318,7 @@ export interface AdvisoryContext {
   kb: KbRow[]; news: { text: string; sources: string[] }; asm: string; lawContext: string; systemVariable: string;
   pending: string; lawTrack: string;   // 시행예정 개정본·법령 개정 동향(#303) — 대시보드에만 있던 두 구역의 이식
   pendingNew: PendingNew;   // 시행 전 제정 법령(#311) — 현행판 없는 새 법령의 원문
+  yak: YakSection;   // 사업자 이용약관 구역(#312-보론2, (D)) — 질문 원문에 약관 낱말이 있을 때만
   searchMeta: SearchMeta;   // 검색 갈래별 기록(#203)
   spill: Chunk[]; addOns: AddOns;   // 자문 빠뜨림 1차 덧붙이기(#283) — 상한 구제분(조문 정밀검색 구역 끝)·위임/같은 고시 구역
 }
@@ -1336,6 +1377,9 @@ export async function buildAdvisoryContext(sb: SupabaseClient, question: string)
     meta.push({ fn: 'pending_new', ms: Math.round(performance.now() - pnT0), rows: null, error: String((e as Error)?.message || e) });
     return EMPTY_PENDING_NEW;
   });
+  // 사업자 이용약관 구역(#312-보론2, (D)) — 질문 원문에 약관 낱말이 있을 때만(게이트 mode와 무관) 비공개 약관 문서 안에서 조를 골라 시행 전 제정 법령 구역 바로 뒤에.
+  // 다른 갈래와 독립 — 기다리지 않는다. 다른 구역의 입력·restLen에는 넣지 않는다. app.js buildAdvisoryContext와 동일 유지.
+  const yakP = startYakSection(sb, question, meta);
   const chunks = await searchChunks(sb, apiKey, question, meta, expandP);
   // 질문 임베딩 — 별표 조각 동점 가르기(별표 동반·덧붙이기 별표 칸, 장동선 판정 §4-7)에 넘긴다. searchChunks와 같은 (모델, 글)이라 기억에서 나온다(Voyage 추가 0).
   const qEmbP = getQueryEmbedding(question);
@@ -1446,15 +1490,16 @@ export async function buildAdvisoryContext(sb: SupabaseClient, question: string)
   // 시행 전 제정 법령(#311)은 시행예정 개정본 바로 뒤(대시보드와 같은 자리) — 이것도 restLen에 넣지 않는다(위 rag_core.js fetchPendingNew 설명).
   const pending = await pendingP;
   const pendingNew = await pendingNewP;
+  const yak = await yakP;   // 사업자 이용약관(#312-보론2)은 시행 전 제정 법령 바로 뒤(대시보드와 같은 자리) — restLen 밖
   const lawTrack = await lawTrackP;
-  const systemVariable = buildRagContext(chunks2) + lawContext + addOns.text + citing.text + annex.text + pending + pendingNew.text + buildKbContext(kb) + news.text + lawTrack + asm;
-  return { chunks: chunks2, extra: extra2, addedIds, annex, citing, kb, news, asm, lawContext, pending, pendingNew, lawTrack, systemVariable, searchMeta: meta, spill: spill2, addOns };
+  const systemVariable = buildRagContext(chunks2) + lawContext + addOns.text + citing.text + annex.text + pending + pendingNew.text + yak.text + buildKbContext(kb) + news.text + lawTrack + asm;
+  return { chunks: chunks2, extra: extra2, addedIds, annex, citing, kb, news, asm, lawContext, pending, pendingNew, yak, lawTrack, systemVariable, searchMeta: meta, spill: spill2, addOns };
 }
 
 export async function answerAdvisory(sb: SupabaseClient, systemPrompt: string, question: string): Promise<AdvisoryResult> {
   const apiKey = env('ANTHROPIC_API_KEY');
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY 미설정');
-  const { chunks: chunks2, extra: extra2, addedIds, annex, citing, kb, news, systemVariable, searchMeta, spill: spill2, addOns, pendingNew } = await buildAdvisoryContext(sb, question);
+  const { chunks: chunks2, extra: extra2, addedIds, annex, citing, kb, news, systemVariable, searchMeta, spill: spill2, addOns, pendingNew, yak } = await buildAdvisoryContext(sb, question);
 
   const telegramGuide = '\n\n---\n\n[텔레그램 답변 형식 지침]\n' +
     '이 답변은 텔레그램 메시지로 전송됩니다. 다음을 지키세요:\n' +
@@ -1498,7 +1543,7 @@ export async function answerAdvisory(sb: SupabaseClient, systemPrompt: string, q
     const vr = await CiteVerify.verifyCitations({
       // 덧붙인 조문(#283 상한 구제·위임·같은 고시)도 대조 대상 — 판정 규칙(cite_verify.js)은 그대로, 근거 조각이 늘 뿐
       // 시행 전 제정 법령(#311)의 조각도 — 그 법령 조문 인용이 그 원문과 대조되게(맨 뒤)
-      answer: rawAnswer, chunks: (extra2 as unknown as Chunk[]).concat(chunks2).concat(citing.chunks).concat(spill2).concat(addOns.chunks).concat(pendingNew.chunks), annexSources: annex.sources.concat(addOns.annexSources || []), systemPrompt,
+      answer: rawAnswer, chunks: (extra2 as unknown as Chunk[]).concat(chunks2).concat(citing.chunks).concat(spill2).concat(addOns.chunks).concat(pendingNew.chunks).concat(yak.chunks), annexSources: annex.sources.concat(addOns.annexSources || []), systemPrompt,
       callHaiku: (sys: string, u: string) => callHaikuText(sb, apiKey, sys, u, 'rag.ts:citeJudge', 3000),   // 900은 24건 판정 JSON에 빠듯(#205)
       // 2차 판정(Opus 5.5) — #284부터 판정 대상 전부를 항목 하나씩 보내고 2차가 표시를 정한다(1차는 기록·예비)
       callJudge2: (sys: string, u: string) => callCiteJudge2(sb, apiKey, sys, u, 'rag.ts:citeJudge2'),
@@ -1523,12 +1568,13 @@ export async function answerAdvisory(sb: SupabaseClient, systemPrompt: string, q
   for (const c of chunks2) if (c.doc_name && !sources.includes(c.doc_name)) sources.push(c.doc_name);
   for (const c of spill2.concat(addOns.chunks)) if (c.doc_name && !sources.includes(c.doc_name)) sources.push(c.doc_name);   // 덧붙인 조문(#283)
   for (const c of pendingNew.chunks) if (c.doc_name && !sources.includes(c.doc_name)) sources.push(c.doc_name);   // 시행 전 제정 법령(#311)
+  for (const c of yak.chunks) { const t = YAK_SRC_PREFIX + c.doc_name; if (c.doc_name && !sources.includes(t)) sources.push(t); }   // 사업자 이용약관(#312-보론2) — 법령과 따로 묶는 접두
   for (const r of kb) { const t = '[요약] ' + (r.title || '').trim(); if (r.title && !sources.includes(t)) sources.push(t); }
   for (const s of news.sources) if (!sources.includes(s)) sources.push(s);
   // 답변이 실제로 인용해 확인된 문서를 맨 앞으로(#176) — 텔레그램 footer는 앞 6개만 보여주는데, 9/17 실측에서
   // 6칸 중 5칸이 답변에 안 쓰인 검색 잡음이었다. 나머지 순서(정밀검색→별표→RAG→요약→뉴스)는 그대로.
   if (citedDocs.length) {
-    const isCited = (s: string) => citedDocs.some((d) => s === d || d.startsWith(s) || s.startsWith(d));
+    const isCited = (s0: string) => { const s = s0.startsWith(YAK_SRC_PREFIX) ? s0.slice(YAK_SRC_PREFIX.length) : s0; return citedDocs.some((d) => s === d || d.startsWith(s) || s.startsWith(d)); };   // 약관 접두는 떼고 대조(#312-보론2)
     const front = sources.filter(isCited), rest = sources.filter((s) => !isCited(s));
     sources.length = 0; sources.push(...front, ...rest);
   }
@@ -1536,7 +1582,7 @@ export async function answerAdvisory(sb: SupabaseClient, systemPrompt: string, q
   const chunkIds: number[] = [];
   // 덧붙인 조문(#283)의 조각 id는 맨 뒤에 — 앞쪽 순서는 종전 그대로
   for (const h of (extra2 as unknown as Chunk[]).concat(chunks2 as Chunk[]).concat(addedIds.concat(citing.ids).map((id) => ({ id } as Chunk)))
-    .concat(spill2).concat(addOns.ids.map((id) => ({ id } as Chunk))).concat(pendingNew.ids.map((id) => ({ id } as Chunk)))) {   // 시행 전 제정 법령(#311)은 맨 뒤
+    .concat(spill2).concat(addOns.ids.map((id) => ({ id } as Chunk))).concat(pendingNew.ids.map((id) => ({ id } as Chunk))).concat(yak.ids.map((id) => ({ id } as Chunk)))) {   // 시행 전 제정 법령(#311) 뒤에 사업자 이용약관(#312-보론2)이 맨 뒤
     if (typeof h.id === 'number' && !chunkIds.includes(h.id)) chunkIds.push(h.id);
   }
   return { answer, sources, webSources: webRefs, chunkIds, verdicts, searchMeta };

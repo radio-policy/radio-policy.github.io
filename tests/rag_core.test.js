@@ -45,7 +45,9 @@ var NAMES = ['PRIORITY_KW_RE', 'VERB_TAIL', 'extractKeywords', 'LAW_SYNONYMS', '
   // 시행 전 제정 법령(#311)
   'PENDING_NEW_OPTS', 'pickPendingNew', 'buildPendingNewContext', 'fetchPendingNew',
   // 사업자 이용약관 게이트(#312-보론)
-  'YAK_DOC_RE', 'YAK_GATE_OPTS', 'isYakDoc', 'yakGateWanted', 'dropYakRows', 'yakGateNote'];
+  'YAK_DOC_RE', 'YAK_GATE_OPTS', 'isYakDoc', 'yakGateWanted', 'dropYakRows', 'yakGateNote',
+  // 사업자 이용약관 구역(#312-보론2, (D))
+  'YAK_SECTION_OPTS', 'pickYakArticles', 'buildYakContext', 'fetchYakSection'];
 NAMES.forEach(function (n) { ok('export ' + n, RC[n] !== undefined); });
 
 // ── 법령 키워드 추출 ──
@@ -1006,7 +1008,90 @@ var pendingNewTests = (async function () {
   eq('rag.ts 약관 게이트 — 입구 ⓐⓑⓒ + /law 의미·요약층 다리(yakDropRows 5)·ⓓ', [n(ragTs, /(?<!function )yakDropRows(?:<\w+>)?\(/g), n(ragTs, /RagCore\.isYakDoc\(c\.doc_name\)/g)], [5, 1]);
 })();
 
-Promise.all([asyncTests, addOnTests, addOnTests2, addendumTests, applyTests, pendingNewTests]).catch(function (e) { fails++; total++; console.log('FAIL  비동기 검사 예외 ' + (e && e.message)); }).then(function () {
+// ── 사업자 이용약관 구역(#312-보론2, (D) — 판정 local_docs/약관등록_261015/D안_판정_261016.md §3·§5·§7) ──
+var yakSectionTests = (async function () {
+  var C = JSON.parse(fs.readFileSync(path.join(ROOT, 'tests', 'fixtures', 'yak_section_cases.json'), 'utf8'));
+  var O = RC.YAK_SECTION_OPTS, DOC = O.docs[0];
+  eq('약관 구역 기본값(판정 §3-1)', [O.on, O.maxArticles, O.simGap, O.minSim, O.maxChars, O.maxDocs, O.matchCount, O.docs.length, DOC.name, DOC.chunks],
+    [true, 3, 0.12, 0.25, 10000, 2, 120, 1, 'SK텔레콤 5G 이용약관(약관)(2026.8)(20260826)', 98]);
+  // 조별 유사도 표로 조각을 합성 — 한 조 = 머리 조각 + (글자가 길면) 이어지는 조각 하나
+  var nextId = 1;
+  var synth = function (arts) {
+    var rows = [], ci = 0;
+    arts.slice().sort(function (a, b) { return Number(a.key.replace(/\D.*/, '')) - Number(b.key.replace(/\D.*/, '')); }).forEach(function (a) {
+      var head = '제' + a.key + '(제목)\n', n = Math.max(a.chars - head.length, 1);
+      var first = Math.min(n, 400);
+      rows.push({ id: nextId++, doc_name: DOC.name, chunk_index: ci++, article_no: a.key + '(제목)', content: head + 'ㄱ'.repeat(first), similarity: a.sim });
+      if (n > first) rows.push({ id: nextId++, doc_name: DOC.name, chunk_index: ci++, article_no: a.key + '(제목)', content: 'ㄴ'.repeat(n - first), similarity: a.sim - 0.01 });
+    });
+    return rows;
+  };
+  var bad = C.cases.filter(function (c) {
+    var p = RC.pickYakArticles([{ doc: DOC, rows: synth(c.arts) }]);
+    return JSON.stringify(p.length ? p[0].articles.map(function (a) { return a.key; }) : []) !== JSON.stringify(c.expect);
+  });
+  eq('pickYakArticles y01~y20 고정 사례(' + C.cases.length + '개) — 고른 조가 같음', bad.map(function (c) { return c.id; }), []);
+  eq('pickYakArticles y01~y20 목표 조가 전부 구역 안(규칙을 정한 표본 — 구현 검사)', C.cases.filter(function (c) { return c.targetIn.length !== (c.target || []).length; }).map(function (c) { return c.id; }), []);
+  var A = function (key, sim, chars) { return { key: key, sim: sim, chars: chars }; };
+  var keys = function (p) { return p.length ? p[0].articles.map(function (a) { return a.key; }) : []; };
+  eq('pickYakArticles 바닥 — 1위가 0.25 미만이면 안 실음(사례형 0.152 꼴)', keys(RC.pickYakArticles([{ doc: DOC, rows: synth([A('9조', 0.152, 3500), A('5조', 0.125, 2000)]) }])), []);
+  eq('pickYakArticles 바닥 — 1위만 넘고 2·3위가 gap 안이어도 0.25 미만이면 뺌', keys(RC.pickYakArticles([{ doc: DOC, rows: synth([A('32조', 0.316, 950), A('24조', 0.261, 500), A('31조', 0.246, 900)]) }])), ['24조', '32조']);
+  eq('pickYakArticles gap — 1위 − 0.12 미만은 뺌(경계 바로 안은 남김)', keys(RC.pickYakArticles([{ doc: DOC, rows: synth([A('32조', 0.60, 900), A('38조', 0.4801, 600), A('20조', 0.4799, 600)]) }])), ['32조', '38조']);
+  eq('pickYakArticles 예산 — 1위는 예산 무관, 넘는 조는 건너뛰고 다음 후보(상위 3 안)', keys(RC.pickYakArticles([{ doc: DOC, rows: synth([A('9조', 0.60, 9000), A('19조', 0.59, 3000), A('15조', 0.58, 900), A('62조', 0.57, 100)]) }])), ['9조', '15조']);
+  eq('pickYakArticles 1위 하나가 예산보다 길어도 실음', keys(RC.pickYakArticles([{ doc: DOC, rows: synth([A('9조', 0.60, 12000)]) }])), ['9조']);
+  eq('pickYakArticles 동점은 조 번호 순으로 순위', keys(RC.pickYakArticles([{ doc: DOC, rows: synth([A('40조', 0.5, 100), A('4조', 0.5, 100), A('14조', 0.5, 100), A('3조', 0.5, 100)]) }], { maxArticles: 2 })), ['3조', '4조']);
+  var DOC2 = { name: 'KT 5G 이용약관(약관)(2026.9)(20260901)', chunks: 4, articles: 4, title: 'KT 5G 이용약관', label: 'KT 5G 이용약관', desc: 'KT가 정한 5G 서비스 이용계약 조건' };
+  var two = RC.pickYakArticles([{ doc: DOC2, rows: synth([A('1조', 0.40, 6000), A('2조', 0.39, 100)]).map(function (r) { return Object.assign(r, { doc_name: DOC2.name }); }) },
+    { doc: DOC, rows: synth([A('32조', 0.60, 5000), A('38조', 0.59, 100)]) }]);
+  eq('pickYakArticles 문서 둘 — 1위 높은 문서부터·예산은 합계(둘째 문서 1위도 예산 안에서만)', two.map(function (p) { return [p.doc.title, p.articles.map(function (a) { return a.key; })]; }),
+    [['SK텔레콤 5G 이용약관', ['32조', '38조']], ['KT 5G 이용약관', ['2조']]]);
+  // 구역 글
+  var p1 = RC.pickYakArticles([{ doc: DOC, rows: synth([A('32조', 0.316, 950), A('24조', 0.261, 500)]) }]);
+  var t1 = RC.buildYakContext(p1, ['손해배상', '통화품질']);
+  ok('buildYakContext 머리 줄·낱말·조 수·「■ 제N조」·사용 지침 5줄', t1.indexOf('\n\n---\n\n[사업자 이용약관 — 법령 아님] SK텔레콤 5G 이용약관(2026년 8월 판 본문 · 별표·요금표·부칙은 미등록)\n질문에 약관 관련 낱말(손해배상·통화품질)이 있어 따로 실은, SK텔레콤이 정한 5G 서비스 이용계약 조건입니다.') === 0
+    && t1.indexOf('질문과 가까운 조문 2개(본문 63개 조 중).\n\n■ 제24조(제목)\n') > 0 && t1.indexOf('\n\n■ 제32조(제목)\n') > 0
+    && (t1.split('[사용 지침]\n')[1] || '').split('\n').filter(function (l) { return /^- /.test(l); }).length === 5
+    && t1.indexOf('[원문 확인됨: SK텔레콤 5G 이용약관 제32조제1항]') > 0 && t1.indexOf('[3G·LTE 약관 미등록 — 확인 필요]') > 0 && t1.indexOf('「[별표 N]」') > 0, t1.slice(0, 500));
+  eq('buildYakContext 빈 입력 → 빈 문자열(구역 없는 프롬프트는 바이트 같음)', [RC.buildYakContext([], ['약관']), RC.buildYakContext(null)], ['', '']);
+  // fetchYakSection 흐름
+  var full = synth(C.cases[0].arts);   // y01 표 — 8조
+  while (full.length < 98) full.push({ id: nextId++, doc_name: DOC.name, chunk_index: 100 + full.length, article_no: (100 + full.length) + '조(채움)', content: '제' + (100 + full.length) + '조(채움)\nx', similarity: 0.1 });
+  var calls = [];
+  var f = { docRows: function (d, n) { calls.push(['rows', d, n]); return Promise.resolve(full); }, approved: function (d) { calls.push(['appr', d]); return Promise.resolve(false); } };
+  var r1 = await RC.fetchYakSection(f, '5G 통화품질 장애로 손해배상은 어떻게 받나요');
+  eq('fetchYakSection 낱말 통과 → 조회 둘·조 고름·approved false·오류 없음', [calls.map(function (c) { return c[0]; }).sort(), calls.filter(function (c) { return c[0] === 'rows'; })[0][2], r1.keys, r1.words, r1.approved, r1.error, r1.docs, r1.top],
+    [['appr', 'rows'], 120, ['32조'], ['통화품질', '손해배상'], false, null, 1, 0.598]);
+  eq('fetchYakSection 조각 id·chunks는 조 번호 순·조 안 조각 순, chars = 실은 본문 글자', [r1.ids.length, r1.chunks.length, r1.chunks[0].doc_name, r1.chars], [r1.chunks.length, r1.ids.length, DOC.name, 955]);   // 합성 두 조각이 줄바꿈 하나로 이어진다(954 + 1)
+  calls = [];
+  var r0 = await RC.fetchYakSection(f, '전파사용료 감면 대상은?');
+  eq('fetchYakSection 낱말 없음 → 조회 0·빈 구역·docs 0', [calls.length, r0.text, r0.docs, r0.ids], [0, '', 0, []]);
+  var keepO = Object.assign({}, RC.YAK_GATE_OPTS);
+  try {
+    RC.YAK_GATE_OPTS.mode = 'allow';
+    calls = [];
+    var ra = await RC.fetchYakSection(f, '전파사용료 감면 대상은?');
+    RC.YAK_GATE_OPTS.mode = 'block';
+    var rb = await RC.fetchYakSection(f, '위약금 면제 사유');
+    eq('fetchYakSection 게이트 mode와 무관 — allow라도 낱말 없으면 빈 구역, block이라도 낱말 있으면 실음', [calls.filter(function (c) { return c[0] === 'rows'; }).length, ra.text, rb.docs, rb.words], [1, '', 1, ['위약금']]);
+  } finally { Object.assign(RC.YAK_GATE_OPTS, keepO); }
+  var rn = await RC.fetchYakSection({ docRows: function () { return Promise.resolve(full.slice(0, 97)); }, approved: function () { return Promise.resolve(false); } }, '위약금 얼마');
+  eq('fetchYakSection 조각 수 불일치(97≠98) → 구역 비움 + error', [rn.text, rn.ids, /조각 97≠98/.test(rn.error || '')], ['', [], true]);
+  var rt = await RC.fetchYakSection({ docRows: function () { return Promise.reject(new Error('57014')); }, approved: function () { return Promise.resolve(false); } }, '위약금 얼마');
+  eq('fetchYakSection 조각 조회 실패 → 빈 구역 + error', [rt.text, /57014/.test(rt.error || '')], ['', true]);
+  var rp = await RC.fetchYakSection({ docRows: function () { return Promise.resolve(full); }, approved: function () { return Promise.resolve(true); } }, '통화품질 손해배상');
+  eq('fetchYakSection 문서가 승인돼 있으면 비움(approved true — 검색에 이미 들어온다)', [rp.text, rp.approved, rp.docs], ['', true, 1]);
+  var ru = await RC.fetchYakSection({ docRows: function () { return Promise.resolve(full); }, approved: function () { return Promise.reject(new Error('x')); } }, '통화품질 손해배상');
+  eq('fetchYakSection 승인 확인 실패 → fail-open(싣고 approved unknown)', [ru.keys, ru.approved], [['32조'], 'unknown']);
+  eq('fetchYakSection on:false → 빈 구역(조회 안 함)', (await RC.fetchYakSection({ docRows: function () { throw new Error('불리면 안 됨'); } }, '위약금', { on: false })).docs, 0);
+  // 두 판 조립 구조 — 한쪽만 고치지 말 것
+  var app = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8');
+  var ragTs = fs.readFileSync(path.join(ROOT, 'supabase', 'functions', '_shared', 'rag.ts'), 'utf8');
+  var n = function (s, re) { return (s.match(re) || []).length; };
+  eq('app.js 약관 구역 — 가드·조립 자리(시행 전 제정 법령 뒤)·restLen 밖', [n(app, /typeof RagCore\.fetchYakSection === 'function'/g), n(app, /ctx\.pendingNewContext \+ ctx\.yakContext \+ ctx\.kbContext/g), /restLen = \[[^\]]*yak/.test(app)], [1, 1, false]);
+  eq('rag.ts 약관 구역 — 공통 함수 한 곳(startYakSection)을 자문·/law 두 곳에서, 자리는 pendingNew 뒤', [n(ragTs, /RagCore\.fetchYakSection\(/g), n(ragTs, /= startYakSection\(sb, /g), n(ragTs, /pendingNew\.text \+ yak\.text \+ buildKbContext\(kb\)/g), n(ragTs, /if \(yak\.text\) ctxParts\.push/g)], [1, 2, 1, 1]);
+})();
+
+Promise.all([asyncTests, addOnTests, addOnTests2, addendumTests, applyTests, pendingNewTests, yakSectionTests]).catch(function (e) { fails++; total++; console.log('FAIL  비동기 검사 예외 ' + (e && e.message)); }).then(function () {
   console.log('\n' + (fails ? 'FAIL ' + fails + '/' + total : 'ALL OK ' + total + '/' + total));
   process.exit(fails ? 1 : 0);
 });

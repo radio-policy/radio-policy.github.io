@@ -395,6 +395,23 @@ if not any(p.startswith("⛔") for p in problems):
     except Exception as e:
         problems.append("임베딩 누락 감시 확인 실패: %s" % e)
 
+# ── ③-7 사업자 이용약관 승인 감시 (#312-보론2, 2026-10-16) ──
+# 약관 문서(문서명 첫 괄호 「(약관)」)는 비공개(is_approved=false)로 두고, 질문에 약관 낱말이 있을 때만 별도 구역으로 싣는다((D) 구조).
+# 승인하면 고정 개수 검색 RPC가 약관 행에 칸을 먹혀 법령 행이 밀리고(10-15 재측정 기준 2·3 미달) 구역은 중복을 피해 비워진다 —
+# 공개 탭의 승인 버튼 한 번으로 되돌아가는데 알림이 없어서 여기서 본다. 조회 실패는 경고 대신 넘어간다(다음 날 다시 봄).
+if not any(p.startswith("⛔") for p in problems):
+    try:
+        yak = http_get_json(
+            SUPABASE_URL + "/rest/v1/document_chunks?select=doc_name&doc_name=like.*%28%EC%95%BD%EA%B4%80%29*"
+            "&is_approved=is.true&limit=1", sb_headers)
+        if yak:
+            problems.append("사업자 이용약관 문서가 승인돼 있음(%s) — (D) 구조에서는 비공개로 둔다: 공개 탭에서 승인 해제 "
+                            "(승인하면 검색 칸 먹기가 돌아오고 약관 구역은 비워진다, #312-보론2)" % (yak[0].get("doc_name") or "?"))
+        else:
+            print("[워치독] 약관 문서 승인 0 (비공개 유지)")
+    except Exception as e:
+        print("[워치독] 약관 승인 감시 조회 실패(건너뜀):", e)
+
 # ── ④ 결과 → 텔레그램(이상 있을 때만, 정상이면 무음) ──
 if problems:
     msg = "⚠️ [전파정책 헬스 워치독] 이상 감지 (%s KST):\n- %s" % (
