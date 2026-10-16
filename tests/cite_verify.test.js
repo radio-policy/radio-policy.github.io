@@ -1457,6 +1457,63 @@ function ok(name, cond, extra) {
       await hw(e2eAns('AIDC 특별법'), convChunk)],
      [['exact'], ['alias'], ['inherit'], ['db']]);
 
+  // ── #315-보론2 H-1(2026-10-16 Fable 재검토 18-2 §3 H-1 — 운영 회귀 핫픽스): 지시어(이·동·같은·해당·위·본·당해·그) + 한 낱말 법령 종류 꼬리는 이어받기 ──
+  // #315 뒤 「동 특별법」·「이 보호법」은 D3 꼬리 거부로 원문 없음, 「이 기본법 제7조」는 DB 읽기 낱말 순서가 한 글자 「이」를 「이용촉진」에서 찾아 데이터산업법 제7조와 ⓒ 대조했다
+  var AIB = '인공지능 발전과 신뢰 기반 조성 등에 관한 기본법', DAT = '데이터 산업진흥 및 이용촉진에 관한 기본법', PIP = '개인정보 보호법';
+  var hch = function (id, fam, no, content) { return { id: id, doc_name: fam + '(법률)(제1호)(20250101)', article_no: no, chunk_index: id, content: content }; };
+  var h1Adf = [hch(9101, ADF, '3조(다른 법률과의 관계)', '제3조(다른 법률과의 관계) 인공지능 데이터센터에 관하여는 다른 법률에 우선하여 이 법을 적용한다.'),
+    hch(9102, ADF, '10조(인허가의 일괄처리)', '제10조(인허가의 일괄처리) ① 사업자등은 인공지능 데이터센터 시설을 구축하려는 경우 관계 행정기관의 장과 협의하여 인허가를 일괄처리 받을 수 있다.')];
+  var h1Aib = [hch(9103, AIB, '2조(정의)', '제2조(정의) 이 법에서 사용하는 용어의 뜻은 다음과 같다.'),
+    hch(9104, AIB, '7조(인공지능 기본계획의 수립)', '제7조(인공지능 기본계획의 수립) ① 과학기술정보통신부장관은 3년마다 인공지능 기본계획을 수립하여야 한다.')];
+  var h1Pip = [hch(9105, PIP, '3조(개인정보 보호 원칙)', '제3조(개인정보 보호 원칙) ① 개인정보처리자는 개인정보의 처리 목적을 명확하게 하여야 한다.'),
+    hch(9106, PIP, '10조(개인정보 보호위원회의 구성)', '제10조(개인정보 보호위원회의 구성) ① 보호위원회는 위원장 1명, 부위원장 1명을 포함한 9명의 위원으로 구성한다.')];
+  var h1Jul = [hch(9107, '전파법', '9조(주파수할당의 신청)', '제9조(주파수할당의 신청) ① 주파수할당을 받으려는 자는 과학기술정보통신부장관에게 신청하여야 한다.')];
+  var h1Biz = [hch(9108, '전기통신사업법', '19조(사업의 폐업)', '제19조(사업의 폐업) ① 기간통신사업자는 사업을 폐업하려면 이용자에게 60일 전까지 알려야 한다.')];
+  // ⓒ 받기 모의 — 데이터산업법 제7조(#315 뒤 「이 기본법 제7조」가 받아 대조하던 것)·전파법 제9조(자료 밖 「이 전파법 제9조」)
+  var h1Fetch = function (fam, key) {
+    if (fam === DAT && key === '7조') return Promise.resolve([{ id: 9201, doc_name: DAT + '(법률)(제1호)(20250101)', article_no: '7조(데이터 산업 진흥 기본계획)', chunk_index: 1, content: '제7조(데이터 산업 진흥 기본계획) ① 정부는 데이터 산업 진흥을 위하여 기본계획을 수립하여야 한다.', status: 'current' }]);
+    if (fam === '전파법' && key === '9조') return Promise.resolve([Object.assign({ status: 'current' }, h1Jul[0])]);
+    return Promise.resolve([]);
+  };
+  var h1v = async function (ans, chunks, names) {
+    var v = await CV.verifyCitations({ answer: ans, chunks: chunks, callHaiku: okJudge, fetchLawArticle: h1Fetch, listLawDocs: function () { return Promise.resolve(names || e2eNames); } });
+    var r = v.verdicts[0] || {};
+    return [r.status, CV.docFamily(r.doc || ''), r.nameHow || null, r.srcFetched || null];
+  };
+  var q10 = '"사업자등은 인공지능 데이터센터 시설을 구축하려는 경우 관계 행정기관의 장과 협의하여 인허가를 일괄처리 받을 수 있다"고 정합니다';
+  var q7 = '"과학기술정보통신부장관은 3년마다 인공지능 기본계획을 수립하여야 한다"고 정합니다';
+  var qp = '"보호위원회는 위원장 1명, 부위원장 1명을 포함한 9명의 위원으로 구성한다"고 정합니다';
+  var adfIntro = ADF + ' 제3조는 다른 법률에 우선하여 이 법을 적용한다고 정합니다.\n\n', aibIntro = AIB + ' 제2조는 용어의 뜻을 정합니다.\n\n', pipIntro = PIP + ' 제3조는 처리 목적을 명확하게 하도록 정합니다.\n\n';
+  eq('#315-보론2 H-1 — 「동 특별법 제10조」 ADF · 「이 기본법 제7조」 AI 기본법(데이터산업법 제7조 ⓒ 아님) · 「이 보호법」·「동 보호법 제10조」 개인정보 보호법 · 「같은 기본법」 · 「이 법 제10조」 그대로 inherit',
+     [await h1v(adfIntro + '동 특별법 제10조는 ' + q10 + ' [원문 확인됨: 동 특별법 제10조]\n', h1Adf),
+      await h1v(aibIntro + '이 기본법 제7조는 ' + q7 + ' [원문 확인됨: 이 기본법 제7조]\n', h1Aib),
+      await h1v(pipIntro + '이 보호법 제10조는 ' + qp + ' [원문 확인됨: 이 보호법 제10조]\n', h1Pip),
+      await h1v(pipIntro + '동 보호법 제10조는 ' + qp + ' [원문 확인됨: 동 보호법 제10조]\n', h1Pip),
+      await h1v(aibIntro + '같은 기본법 제7조는 ' + q7 + ' [원문 확인됨: 같은 기본법 제7조]\n', h1Aib),
+      await h1v(adfIntro + '이 법 제10조는 ' + q10 + ' [원문 확인됨: 이 법 제10조]\n', h1Adf)],
+     [['ok', ADF, 'inherit', null], ['ok', AIB, 'inherit', null], ['ok', PIP, 'inherit', null], ['ok', PIP, 'inherit', null], ['ok', AIB, 'inherit', null], ['ok', ADF, 'inherit', null]]);
+  // 앞에 이름 없는 「이 특별법 제10조」 — 「데이터」에 든 「이」로 ADF에 붙지 않는다(이어받을 특별법이 없으면 원문 없음; 인용문 낱말이 그 조문에 있으면 #286 낱말 근거 고르기는 ④와 같이 탄다)
+  // 「이 전파법 제9조」(앞에 전파법 없음, 사내 확인 ㄱ) — 지시어 뒤가 문서군 이름 그대로면 이름이 먼저: 자료 안이면 그 조문, 자료 밖이면 이름 적은 참조로 ⓒ
+  eq('#315-보론2 H-1 — 앞 이름 없는 「이 특별법 제10조」 원문 없음 · 「이 전파법 제9조」 자료 안 exact · 자료 밖이면 ⓒ로 전파법 제9조',
+     [await h1v('일괄처리 특례를 봅니다.\n\n이 특별법 제10조는 관련 절차를 따로 둔다고 정합니다 [원문 확인됨: 이 특별법 제10조]\n', h1Adf),
+      await h1v('주파수할당 신청을 봅니다.\n\n이 전파법 제9조는 "주파수할당을 받으려는 자는 과학기술정보통신부장관에게 신청하여야 한다"고 정합니다 [원문 확인됨: 이 전파법 제9조]\n', h1Jul),
+      await h1v('주파수할당 신청을 봅니다.\n\n이 전파법 제9조는 "주파수할당을 받으려는 자는 과학기술정보통신부장관에게 신청하여야 한다"고 정합니다 [원문 확인됨: 이 전파법 제9조]\n', h1Biz)],
+     [['missing', '', 'inherit', null], ['ok', '전파법', 'exact', null], ['ok', '전파법', 'exact', 'db']]);
+  var aibL = fu([AIB], UNIV_T);
+  eq('#315-보론2 H-1 — lawNameBefore: 지시어 + 종류 꼬리는 suffix 이어받기(「이 법」·「동 법률」은 법 단계, 「동 시행령」은 subord 그대로) · resolveLaw(「이 기본법」, [AI 기본법], 우주) null',
+     [CV.lawNameBefore('동 특별법 '), CV.lawNameBefore('해당 보호법 '), CV.lawNameBefore('이 법 '), CV.lawNameBefore('동 법률 '), CV.lawNameBefore('동 시행령 '), CV.resolveLaw(CV.lawNameBefore('이 기본법 '), aibL)],
+     [{ inherit: true, suffix: '특별법', text: '동 특별법', exact: '특별법' }, { inherit: true, suffix: '보호법', text: '해당 보호법', exact: '보호법' }, { inherit: true, level: '법' }, { inherit: true, level: '법' }, { subord: '시행령' }, null]);
+  // 2글자 미만 낱말은 낱말 순서 맞추기(약한 이름·③단계·V7)에 넣지 않는다 — 「이 안내서」(사내 확인 ㄴ)·「및 절차」가 「이용」·「및」 한 글자로 맞던 것
+  var guideF = ['무선국 이용 안내서', '전파법'], procF = ['기간통신사업의 양수ㆍ합병 인가 등의 심사기준 및 절차', '전기통신사업법'];
+  eq('#315-보론2 H-1 — 약한 이름 「이 안내서」·「및 절차」는 한 글자 낱말로 맞추지 않음(남는 낱말 1개) · 두 글자 이상 낱말이 둘이면 그대로(「이용 안내서」·「심사기준 및 절차」)',
+     [CV.resolveLaw(CV.lawNameBefore('이 안내서 '), guideF), CV.resolveLaw(CV.lawNameBefore('및 절차 '), procF),
+      CV.resolveLaw(CV.lawNameBefore('이용 안내서 '), guideF), CV.resolveLaw(CV.lawNameBefore('심사기준 및 절차 '), procF)],
+     [null, null, '무선국 이용 안내서', procF[0]]);
+  // 빈 목록(RPC가 빈 결과) = 목록 없음(18-2 사내 제안 6) — nameHow nolist, ⓒ는 대상 문서 없음
+  var ev0 = await CV.verifyCitations({ answer: e2eAns('AIDC 특별법'), chunks: convChunk, callHaiku: okJudge, fetchLawArticle: e2eFetch, listLawDocs: function () { return Promise.resolve([]); } });
+  eq('#315-보론2 — 빈 문서명 목록이면 nameHow nolist(종전 none·reject) · 목록 없을 때처럼 원문 없음',
+     [ev0.verdicts[0].status, ev0.verdicts[0].nameHow], ['missing', 'nolist']);
+
   // ── #314 재검토 보완 10건(2026-10-16, local_docs/인용판정기_314_재검토_261016.md §3) ──
   var JUL = '전파법(법률)(제20000호)(20250101)';
   var j24 = { id: 7201, doc_name: JUL, article_no: '24조(검사)', chunk_index: 24, content: '제24조(검사) ① 과학기술정보통신부장관은 무선국의 준공검사를 실시하여야 한다.\n② 과학기술정보통신부장관은 무선국에 대하여 5년의 범위에서 정기검사를 실시하여야 한다.' };

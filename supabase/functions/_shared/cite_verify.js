@@ -682,8 +682,13 @@
     return { chunks: out, swapped: swapped, failed: failed };
   }
 
-  // 법령 이름의 일부가 아닌 앞 낱말 — 「규정·고시·기준…」 앞에 오면 이름 칸은 그 종류 낱말뿐(④, 사내 _NOT_NAME_WORD_RE와 같다)
-  const NOT_NAME_WORD_RE = /^(?:관련|해당|위|상기|본|당해|그|및|또는|각|따라)$|(?:은|는|을|를|며|에서|으로)$/;
+  // 법령 이름의 일부가 아닌 앞 낱말 — 「규정·고시·기준…」 앞에 오면 이름 칸은 그 종류 낱말뿐(④, 사내 _NOT_NAME_WORD_RE와 같다).
+  // 지시어 이·동·같은(H-1, #315-보론2 2026-10-16): 빠져 있어 D3 한 낱말 꼬리 거부가 「동 특별법」·「이 보호법」의 꼬리를 막았다
+  const NOT_NAME_WORD_RE = /^(?:관련|해당|위|상기|본|당해|그|및|또는|각|따라|이|동|같은)$|(?:은|는|을|를|며|에서|으로)$/;
+  // 지시어 + 한 낱말 법령 종류 꼬리(H-1) — 「동 특별법 제10조」·「이 기본법 제7조」·「이 보호법 제10조」. 「법」 단독·「(동|같은|이) 법률」은 inherit 법 단계,
+  // 시행령·시행규칙은 subord(그대로). 꼬리 낱말은 법령 종류 낱말(법률·특별법·기본법·특례법·조치법)이거나 두 글자 이상 + 법(보호법·전파법)
+  const DEM_WORD_RE = /^(?:동|같은|이|해당|위|본|당해|그)$/;
+  const LAW_TAIL_WORD_RE = /^(?:법률|특별법|기본법|특례법|조치법|[가-힣]{2,}법)$/;
   // 발령 기관 + 고시·훈령·예규·공고 + 제YYYY-N호 (끝에 붙은 것만) — 기관 낱말은 위원회·부·청·처·원·소로 끝나야(「따라 고시」의 「따라」는 아니다)
   const NUMBERED_NOTICE_RE = /((?:[가-힣·ㆍ]*(?:위원회|부|청|처|원|소)\s?)?(?:고시|훈령|예규|공고))\s*제\s?(\d{4})\s?[-‐–－]\s?(\d{1,4})\s?호$/;
   // 인용 직전의 법령명 후보 — "실제로 판례에서 전기통신사업법 제32조의14"에서 뒤에서부터
@@ -715,6 +720,13 @@
     // 가이드라인 등 법령 종류 낱말이 아닌 이름은 넣지 않는다(「동 가이드라인」은 약한 이름 규칙이 맞춘다 — #286-보론2 ④)
     const nl2 = words.length >= 2 && /^(동|같은|이)$/.test(norm(words[words.length - 2])) ? norm(words[words.length - 2]) + nl : nl;
     if (/^(동|같은|이)법률$/.test(nl2)) return { inherit: true, level: '법' };
+    // 「동 특별법 제10조」·「이 기본법 제7조」·「해당 보호법 제10조」 — 지시어 + 한 낱말 법령 종류 꼬리도 이름이 아니라 이어받기(H-1, #315-보론2, 2026-10-16 —
+    // Fable 재검토 18-2 §3 H-1): 앞에서 이름이 나온 법령 중 문서군 끝이 그 낱말인 가장 가까운 것(아래 ④와 같은 길 — lawScope·suffixPick, 없으면 원문 없음).
+    // #315 뒤엔 이름 「이 특별법」으로 읽혀 D3 한 낱말 꼬리 거부(이·동이 NOT_NAME_WORD_RE에 없었다)가 자료 안 그 법령을 버리고, DB 읽기 낱말 순서가 한 글자
+    // 「이」를 「이용촉진」에서 찾아 「이 기본법 제7조」를 데이터산업법 제7조와 ⓒ로 대조했다(#315 이전 판은 끝 일치로 맞았다).
+    // exact: 지시어 뒤 낱말이 문서군 이름 그대로면(「이 전파법 제9조」) 그 법령이 먼저(사내 확인 ㄱ — exactFamOf: 자료 안 → DB 목록, 이어받기는 그다음)
+    if (words.length >= 2 && DEM_WORD_RE.test(norm(words[words.length - 2])) && LAW_TAIL_WORD_RE.test(nl))
+      return { inherit: true, suffix: nl, text: words.slice(-2).join(' '), exact: last };
     // 종류 낱말 하나뿐인 이름(「규정 제10조제2항」·「동 규정 제10조제2항」·「납부방식은 고시 제7조」 — 2026-10-09 사내 선행 이식, 사내 8c8c373c)은 이름이
     // 아니라 이어받기 — 앞에서 이름이 나온 법령 중 문서군 끝 또는 문서명 종류 괄호 끝이 그 낱말인 가장 가까운 것(lawScope·suffixPick, prior는
     // findCitations가 붙인다). 종전엔 「규정」이 이름 후보가 되어 못 맞춰 원문 없음, 「동 규정」은 #288-보론대로 직전 법령(전파법)을 이어받아 원문 없음이었다.
@@ -840,6 +852,9 @@
   // families.isUniverse = 목록 자체가 DB 문서명(ⓒ의 이름 맞추기) — 그 읽기도 DB 읽기 규칙(창 12낱말·낱말 순서 끝 낱말 조건)으로 한다.
   const GEN_TAIL_NARROW_RE = /^(?:등에|등|에|및|의)?(?:관한|대한|위한)(?:특별법|기본법|특례법|조치법|법률)$/;
   function wordsOf(s) { return String(s || '').trim().split(/\s+/).filter(Boolean); }
+  // 낱말 순서 규칙(orderedIn — 약한 이름·③단계·V7 확인)에 넘기는 낱말: 가운뎃점도 경계, **2글자 미만은 뺀다**(H-1, #315-보론2) — 한 글자 「이·동·본·위」가
+  // 문서명 글자(이용촉진·데이터·행동)에서 찾혔다(우주 277 중 「이」를 품은 문서명 43). 부르는 쪽은 남은 낱말이 2개 미만이면 맞추지 않는다(약한 이름의 「2개 이상」 셈도 — 사내 확인 ㄴ)
+  function nameWords(s) { return String(s || '').split(/[\s·ㆍ‧•]+/).map(norm).filter(function (w) { return w.length >= 2; }); }
   function orderedIn(f, words) {
     const nf = norm(f);
     let pos = 0;
@@ -871,7 +886,7 @@
       // 약한 이름(법령 종류 낱말로 끝나지 않음): 순서대로 든 낱말 규칙 + 문서명이 후보의 끝 낱말로 끝나야 + 그런 문서가 하나
       const lastW = norm(nameInfo.text);
       for (const cand of cands) {
-        const words = cand.split(/[\s·ㆍ‧•]+/).map(norm).filter(Boolean);
+        const words = nameWords(cand);
         if (words.length < 2) continue;
         const hits = fams.filter(function (f) { const nf = norm(f); return nf.endsWith(lastW) && !LAW_SUFFIX_RE.test(nf) && orderedIn(f, words); });
         if (hits.length === 1) return { fam: hits[0], how: 'weak', cand: cand, loop: 'w' };
@@ -904,7 +919,7 @@
     for (const cand of cands) {
       // 가운뎃점도 낱말 경계 — 「통신시설 등급 지정·관리 기준」 ↔ 문서명 「주요통신사업자의 통신시설 등급 지정 및 관리 기준」(992c7fb8)
       const base = stripTypeTail(cand) || cand;
-      const words = base.split(/[\s·ㆍ‧•]+/).map(norm).filter(Boolean);
+      const words = nameWords(base);
       if (words.length < 2) continue;
       // D2 (가): DB 읽기는 문서명 끝이 후보 끝 낱말(종류 낱말)과 같을 때만 — 문서군 이름 끝 또는 종류 괄호 끝(suffixFits, fams.typeIndex). 고시는 문서군이
       // 「…세부사항」으로 끝나고 「고시」는 종류 괄호(「(과학기술정보통신부고시)」)에만 있어, 이름 끝만 보면 「주파수할당대가 산정·부과 세부사항 고시」 같은 줄인
@@ -920,7 +935,10 @@
   // → {fam, how}. how(기록 nameHow, D6): exact 이름 그대로·낫표 그대로 / alias 약칭 / tail 끝 일치 줄임 / strip 종류 낱말 뗌 / ordered 낱말 순서 /
   //   weak 약한 이름 순서 규칙 / number 고시 번호 / db DB 읽기가 자료 안 결과를 바꿈(또는 자료 안 결과 없음) / reject 거부 규칙(②③④·약관)으로 못 맞춤 / none 못 맞춤
   function resolveLawHow(nameInfo, families, strict) {
-    if (!nameInfo || !nameInfo.candidates) return { fam: null, how: 'inherit' };
+    if (!nameInfo || !nameInfo.candidates) {
+      const ex = exactFamOf(nameInfo, families);   // 「이 전파법 제9조」(H-1 ㄱ) — 이름 그대로면 그 법령(ⓒ의 DB 문서명 읽기도)
+      return ex ? { fam: ex, how: 'exact' } : { fam: null, how: 'inherit' };
+    }
     const rej = { n: 0 };
     let r = resolveIn(nameInfo, families, strict, !!(families && families.isUniverse), rej);
     let how = r ? r.how : 'none';
@@ -938,7 +956,7 @@
         const wr = wordsOf(r.cand).length;
         for (const c of (nameInfo.longCands || nameInfo.candidates)) {
           if (wordsOf(c).length <= wr) continue;
-          const words = (stripTypeTail(c) || c).split(/[\s·ㆍ‧•]+/).map(norm).filter(Boolean);
+          const words = nameWords(stripTypeTail(c) || c);
           if (words.length < 2) continue;
           const hits = U.filter(function (f) { return familyMatches(f, c) || (!(isSubDoc(f) && !isSubDoc(c)) && orderedIn(f, words)); });
           if (hits.length && hits.indexOf(r.fam) === -1) { r = null; how = 'reject'; break; }
@@ -955,7 +973,7 @@
   }
   // 인용 하나의 이름 맞추기 기록(D6) — 이름 없음·이어받기는 inherit, DB 목록이 없으면 이름 적은 참조는 nolist(고시 번호는 목록과 무관)
   function nameHowOf(info, families) {
-    if (!info || !info.candidates) return 'inherit';
+    if (!info || (!info.candidates && !exactFamOf(info, families))) return 'inherit';   // 지시어 + 이름 그대로(H-1 ㄱ)는 이름 적은 참조와 같이
     const h = resolveLawHow(info, families).how;
     return (info.numbered || (families && families.universe)) ? h : 'nolist';
   }
@@ -966,6 +984,14 @@
     if (norm(fam).endsWith(sfx)) return true;
     const ts = families && families.typeIndex ? families.typeIndex.get(fam) : null;
     return !!ts && Array.from(ts).some(function (t) { return norm(t).endsWith(sfx); });
+  }
+  // 지시어 + 문서군 이름 그대로(「이 전파법 제9조」 — lawNameBefore exact, H-1 사내 확인 ㄱ): 자료 안 문서군 → DB 목록(families.universe) 순으로 이름이
+  // 글자 그대로인 문서군, 없으면 null(→ suffixPick 이어받기). 맞으면 이름을 적은 참조다(guessKind 'none' — 자료에 없으면 원문 없음 → ⓒ)
+  function exactFamOf(info, families) {
+    if (!info || !info.exact || !families) return null;
+    const n = norm(info.exact);
+    const pick = function (list) { return (list || []).find(function (f) { return norm(f) === n; }) || null; };
+    return pick(families) || pick(families.universe);
   }
   function suffixPick(info, families) {
     const sfx = info.suffix || '';
@@ -1004,7 +1030,9 @@
   //  ② '동법·같은 법·법'은 이어받은 법령(ctx), '시행령·시행규칙'만 적었으면 이어받은 법령 계열의 시행령·시행규칙
   //  ③ 이름 없이 '제N조'만 있으면 이어받은 법령 → 같은 계열 순. 이어받을 법령이 없을 때만 어느 문서든
   function lawScope(info, ctx, families) {
-    if (info && info.suffix) {   // 「규정 제N조」·「동 규정 제N조」 — 앞에서 이름 나온 그 종류의 법령, 없으면 원문 없음(④)
+    if (info && info.suffix) {   // 「규정 제N조」·「동 규정 제N조」·「동 특별법 제N조」 — 앞에서 이름 나온 그 종류의 법령, 없으면 원문 없음(④, H-1)
+      const ex = exactFamOf(info, families);   // 「이 전파법 제9조」 — 이름 그대로가 먼저(H-1 ㄱ)
+      if (ex) return [ex];
       const f = suffixPick(info, families);
       return f ? [f] : [];
     }
@@ -1256,6 +1284,7 @@
   //   낱말 겹치는 다른 고시의 목적 조문에 붙는다), 추측이라 「불일치」 회색 규칙(ⓒ)만 받는다.
   //   'number' 고시 번호로 고른 문서(#288 ⓑ) — 같은 번호의 다른 일괄개정 고시(자료 밖)를 뜻했을 수 있어 「불일치」는 늘 회색, 바꿔 고르지도 않는다.
   function guessKind(info, families) {
+    if (exactFamOf(info, families)) return 'none';   // 「이 전파법 제9조」 — 지시어 + 이름 그대로는 이름을 적은 것(H-1 ㄱ)
     if (!info || !info.candidates) return 'inherit';
     if (info.inherit || info.subord) return 'inherit';
     if (info.numbered) return 'number';
@@ -2556,7 +2585,8 @@
     }
     dbFams.typeIndex = dbTypes;
     dbFams.isUniverse = true;   // ⓒ의 이름 맞추기도 DB 읽기 규칙(창 12낱말·낱말 순서 끝 낱말 조건, D2 가)
-    const ckOpts = { universe: names ? dbFams : null };   // checkCitation 세 호출 모두(D1 ②)
+    // checkCitation 세 호출 모두(D1 ②). 빈 목록(RPC가 빈 결과)도 목록 없음 — nameHow nolist(18-2 사내 제안 6; 종전엔 빈 우주로 none·reject가 됐다)
+    const ckOpts = { universe: names && names.length ? dbFams : null };
     const results = cites.map(function (c) {
       const auto = String(c.tag).indexOf(QUOTE_MARK) !== -1;
       // 직전 인용 문단에 같은 조의 표시가 이미 있는 토막 표시는 중복 — 판정하지 않고 지운다(#176)
