@@ -1026,7 +1026,10 @@
     const byKey = new Map();
     const mentions = [];
     const keys = [];        // raw 순서의 열쇠(부칙 열쇠 포함) — 「…준용)」 괄호 밖 조를 가리킬 때 쓴다
+    const refs = [];        // 언급 하나하나(합치기 전) — {key, end, paras, items, tail}: 그 언급 뒤에 붙은 항·호만(#314 P — 표시 바로 앞 출처가 조 전체인가)
     let lastNamed = null;   // 이 글에서 앞서 이름이 나온 법령 — 이름 없는 '제N조'·'동법'·'시행령'이 이어받는다(#240)
+    let rangeFrom = null;   // 직전 언급이 범위 머리면(「제19조~제23조」·「제19조부터 제23조까지」) 그 rec — 범위 끝 조가 이름을 이어받는다(#314 R)
+    const strong = function (li) { return !!(li && li.candidates && !li.weak); };
     for (let i = 0; i < raw.length; i++) {
       const m = raw[i];
       // 조 참조 바로 앞이 「부칙」(+번호)이면 부칙 조(#290, §13-3 ①⑤) — 열쇠 「부칙제N호제M조」, 법령 이름은 「부칙」 앞 글에서 읽는다
@@ -1035,9 +1038,20 @@
       const key = ad ? addKey(ad.no, m.key) : m.key;
       keys[i] = key;
       let rec = byKey.get(key);
+      const fromRange = rangeFrom;
+      rangeFrom = null;
+      if (rec && !(rec.lawInfo && rec.lawInfo.candidates)) {
+        // 같은 조를 뒤에서 이름과 함께 다시 적으면(「…간주합니다(제10조제2항). 「○○특별법 제10조」」) 그 이름을 쓴다(#314 P) — 종전엔 먼저 나온
+        // 이름 없는 언급만 남아 표시 바로 앞 출처의 법령 이름이 버려지고 「법령 이름 없음 → …」 추측이 됐다(10-16 사내 실물). 앞 언급에 이름이 있으면
+        // (못 맞춘 약한 이름 「…가이드라인 제5조」 포함) 그대로 — 뒤의 「전파법 제5조와 달리」 같은 다른 법령으로 덮지 않는다.
+        const li2 = lawNameBefore(ad ? ad.rest : s.slice(0, m.idx));
+        if (strong(li2)) { rec.lawInfo = li2; lastNamed = li2; }
+      }
       if (!rec) {
         rec = { key: key, idx: m.idx, paras: [], items: [], lawInfo: lawNameBefore(ad ? ad.rest : s.slice(0, m.idx)), ctxLaw: lastNamed };
         if (ad) rec.addendum = { no: ad.no, art: m.key };
+        // 범위 끝 조(「○○법 제19조~제23조」의 제23조)는 제 이름이 없으면 범위 머리의 법령이다 — 이어받기 추측이 아니다(#314 R)
+        if (fromRange && !strong(rec.lawInfo)) { rec.lawInfo = fromRange.lawInfo; rec.ctxLaw = fromRange.ctxLaw; }
         // 「…준용)」 괄호 안의 조(#300-보론6 E): 괄호 밖 바로 앞 조(같은 줄)의 열쇠를 단다 — 같은 문서로 묶을지는 checkCitation이 괄호 안 이름 머리를 보고 정한다.
         // 「같은 고시 제12조제1항 (제17조에 따라 준용)」·「제41조·제45조(제104조 준용)」·거꾸로 쓴 「제17조(제12조①을 준용)」. 괄호 밖에 조가 없으면(「같은 고시 (제17조 준용)」) 달지 않는다.
         const open = junyongParenOpen(s, m.idx, m.end);
@@ -1056,12 +1070,21 @@
       // 다음 참조가 부칙 조면 그 「부칙 제N호」 번호를 이 조의 호로 읽지 않는다(#290 — 「제22조의11·부칙 제97호 제2조」)
       const bi = tail.search(/(^|[^가-힣])부칙/);
       if (bi !== -1 && i + 1 < raw.length && addendumBefore(s.slice(0, raw[i + 1].idx))) tail = tail.slice(0, bi);
+      // 범위(#314 R): 이 조와 다음 조 사이가 「~」뿐이거나 「부터」(+ 다음 조 뒤 「까지」)면 범위다 — 정수 조끼리, 머리 < 끝, 폭 RANGE_MAX 이하만.
+      // 가운데 조는 여기서 만들지 않고 범위 머리 rec에 끝 번호만 단다(rangeTo) — 다중 원문 후보로 펼치는 것은 findCitations(withRanges)
+      if (i + 1 < raw.length && !ad && /^\d+조$/.test(key) && /^\d+조$/.test(raw[i + 1].key) && !addendumBefore(s.slice(0, raw[i + 1].idx)) &&
+          (RANGE_SEP_RE.test(tail) || (/^\s*부터\s*$/.test(tail) && /^\s*까지/.test(s.slice(raw[i + 1].end))))) {
+        const a = parseInt(key, 10), b = parseInt(raw[i + 1].key, 10);
+        if (b > a && b - a + 1 <= RANGE_MAX) { rec.rangeTo = b; rangeFrom = rec; }
+      }
+      const own = { key: key, end: m.end, paras: [], items: [], tail: tail };   // 이 언급 뒤에 붙은 항·호만(합치지 않은 것)
+      refs.push(own);
       let pm;
       const pRe = /제\s?(\d+)\s?항/g;
-      while ((pm = pRe.exec(tail))) if (rec.paras.indexOf(+pm[1]) === -1) rec.paras.push(+pm[1]);
+      while ((pm = pRe.exec(tail))) { if (rec.paras.indexOf(+pm[1]) === -1) rec.paras.push(+pm[1]); if (own.paras.indexOf(+pm[1]) === -1) own.paras.push(+pm[1]); }
       // 원문자 항 표기(제5조①)는 조 바로 뒤에 붙은 것만 — 답변 본문의 ①②③ 나열과 섞이지 않게
       const cm = tail.match(/^\s*(?:\([^)]*\))?\s*([①-⑳])/);
-      if (cm) { const n = CIRCLED.indexOf(cm[1]) + 1; if (rec.paras.indexOf(n) === -1) rec.paras.push(n); }
+      if (cm) { const n = CIRCLED.indexOf(cm[1]) + 1; if (rec.paras.indexOf(n) === -1) rec.paras.push(n); if (own.paras.indexOf(n) === -1) own.paras.push(n); }
       const iRe = /(?:제\s?)?(\d+)\s?호(?:\s?의\s?(\d+))?/g;
       while ((pm = iRe.exec(tail))) {
         // 법령 번호는 호가 아니다(사내 관찰 ②, #286-보론2): 「(법률 제21553호)」·「고시 제2026-11호」 — 종류 낱말 뒤의 「제N호」, 「-」 뒤의 숫자, 4자리 이상 번호는 건너뛴다.
@@ -1070,10 +1093,31 @@
         if (pm[1].length >= 4 || /\d-\s*$/.test(head) || /(법률|대통령령|총리령|부령|[가-힣]+령|고시|훈령|예규|규칙|공고|지침)\s*$/.test(head)) continue;
         const it = pm[1] + (pm[2] ? '의' + pm[2] : '');
         if (rec.items.indexOf(it) === -1) rec.items.push(it);
+        if (own.items.indexOf(it) === -1) own.items.push(it);
       }
     }
     const p = mentions[0];
-    return { kind: 'article', key: p.key, paras: p.paras, items: p.items, lawInfo: p.lawInfo, mentions: mentions };
+    return { kind: 'article', key: p.key, paras: p.paras, items: p.items, lawInfo: p.lawInfo, mentions: mentions, refs: refs };
+  }
+  // 범위 잇는 말(#314 R) — 「제19조~제23조」(물결 네 꼴). 「-」·「ㆍ」는 범위가 아니다(「제2026-11호」·나열)
+  const RANGE_SEP_RE = /^\s*[~∼〜～]\s*$/;
+  // 범위를 펼칠 폭 상한 — 이보다 넓은 범위(「제1조부터 제30조까지」)는 종전대로 양 끝 두 조만. 다중 원문 후보 상한도 범위가 있으면 이 값(checkCitation)
+  const RANGE_MAX = 6;
+  // 범위 머리(rangeTo)가 있는 언급 목록 → 가운데 조를 머리 바로 뒤에 끼운 목록(#314 R). 가운데 조는 머리의 법령·이어받기를 따른다(이름 추측 아님).
+  // 「인공지능 데이터센터 산업 진흥에 관한 특별법 제19조~제23조」가 종전엔 제19조·제23조 두 조문만 원문이 돼 제20~22조 내용(전기사업법·건축법·산업단지 특례)을
+  // 판정기가 「원문에 없는 내용」으로 볼 수 있었다(10-16 사내 실물 — 그때는 인용문부터 엉뚱했다).
+  function withRanges(mentions) {
+    const out = [];
+    for (const x of mentions || []) {
+      out.push(x);
+      if (!x.rangeTo) continue;
+      for (let n = parseInt(x.key, 10) + 1; n < x.rangeTo; n++) {
+        const k = n + '조';
+        if ((mentions || []).some(function (y) { return y.key === k; }) || out.some(function (y) { return y.key === k; })) continue;
+        out.push({ key: k, idx: x.idx, paras: [], items: [], lawInfo: x.lawInfo, ctxLaw: x.ctxLaw, inRange: true });
+      }
+    }
+    return out;
   }
 
   // 인용문(답변 문장)이 원문 텍스트와 얼마나 그대로 겹치는가 — 0~1. 공백·가운뎃점·따옴표·괄호를 뗀 뒤
@@ -1183,6 +1227,27 @@
   // closed-before(③): 「…를 준용합니다. [표시]」 — 표시 앞이 문장 끝(마침표 필수)이고 안내문이 아니면 그 줄이 인용문의 전부
   const SENT_END_RE = /(?:다|요|음|됨)\.$/;
   const GUIDE_END_RE = /(?:다음과\s*같|아래와\s*같|다음\s*각\s*호|정리하면|살펴보면|이하\s*참조)[^.\n]{0,16}\.$/;
+  // 절 경계 줄(#314) — 마크다운 소제목(「### (3) …」)·구분선(---·***·___)
+  const SECTION_BREAK_RE = /^\s*(?:#{1,6}\s|(?:-{3,}|\*{3,}|_{3,})\s*$)/;
+  // 낫표 출처 줄(#314 S) — 표시 앞 글이 「…제N조…」 하나뿐(앞에 「근거:」·「출처:」 이름표, 굵게 표시 허용). 낫표 안이 이름·번호뿐인지는 따로 잰다(findCitations)
+  const SRC_LINE_RE = /^[\s*]*(?:(?:근거|출처|관련\s*조문)\s*[:：]\s*)?「[^」\n]*제\s?\d+\s?조[^」\n]*」[\s*]*$/;
+  // 문서명 괄호(#314 S) — 검색 자료 문서명 「…특별법(법률)(제21759호)(20270310)」의 종류·번호·시행일 괄호
+  const DOC_META_RE = /\((?:법률|대통령령|총리령|[가-힣]*부령|[가-힣]*고시|[가-힣]*훈령|[가-힣]*예규|제\d+(?:-\d+)?호|\d{8})\)/g;
+  // 출처 줄 앞 덩어리(#314 S) — floor(직전 표시 끝) ~ end(출처 줄 머리) 사이를 아래에서 위로: 소제목·구분선 줄에서 멈추고(그 줄은 뺌) 문단 3개·1,200자까지.
+  // 빈 줄(별표·밑줄만 남은 줄 포함)은 문단 경계로만 세고 넣지 않는다. 표·목록 줄은 그대로 넣는다.
+  function precedingBlock(text, floor, end) {
+    const lines = text.slice(floor, end).split('\n');
+    const out = [];
+    let paras = 0, chars = 0, inText = false;
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const l = lines[i];
+      if (!l.replace(/[\s*_]/g, '')) { if (inText) { inText = false; if (++paras >= 3) break; } continue; }
+      if (SECTION_BREAK_RE.test(l)) break;
+      if (out.length && chars + l.length > 1200) break;
+      out.push(l); chars += l.length + 1; inText = true;
+    }
+    return out.reverse().join('\n').trim();
+  }
 
   function findCitations(answer) {
     const text = String(answer || '');
@@ -1257,6 +1322,16 @@
           if (SENT_END_RE.test(pre) && !GUIDE_END_RE.test(pre) && stripRefBody(own).length >= MIN_CLAIM_SIBLING) { after = ''; closed = true; closedBefore = true; }
         }
       }
+      // 제목 줄 규칙이 다음 절로 넘어가지 않게(#314 ⓐ, 2026-10-16): 표시 줄의 나머지가 비었고 뒤 문단 첫 줄이 마크다운 소제목(「### (3) …」)·구분선(---)이면
+      // 그 뒤는 다음 절이지 이 표시의 인용문이 아니다(사내 실물 — 「### (3) 전력·건축 등 추가 특례 (제19~23조 …)」가 제18조 표시의 인용문이 됐다).
+      // 표시 줄 자체가 소제목이면(「## 1. 상위법 — 전파법 제24조 [표시]」) 그 아래 하위 절이 내용일 수 있어 종전대로.
+      if (!sibling && !closed && after && !/^\s*#/.test(text.slice(lineStart, tagStart))) {
+        const eolH = after.indexOf('\n');
+        if (eolH !== -1 && !after.slice(0, eolH).replace(/[\s*_]/g, '')) {
+          const nx = after.slice(eolH + 1).split('\n').find(function (l) { return l.trim(); });
+          if (nx !== undefined && SECTION_BREAK_RE.test(nx)) after = '';
+        }
+      }
       // line = 표시가 있는 줄만(조 번호가 없어 segment가 앞 문단으로 넓어졌어도 겹침 판정은 이 줄로도 본다)
       // sibling = 표 행·형제 목록 항목(#240-보론2): 그 줄이 인용문의 전부다 — 토막 문단 규칙(#176)으로 앞 문단을 가져오지 않고(표 앞 안내
       // 문장이 인용문이 되던 구멍, Fable 재검토 2026-09-27) 짧아도 12자부터 판정기로 보낸다(checkCitation MIN_CLAIM_SIBLING).
@@ -1265,7 +1340,8 @@
       if (closedBefore) c.closedBefore = true;
       // 표시가 있는 줄 자체에 적힌 조(#288 ⓓ′ 다중 원문의 후보 — 「| … | 법 제19조①, 영 제24조① [표시]」)
       const lineParsed = parseSegment(c.line);
-      c.lineKeys = lineParsed.kind === 'article' ? lineParsed.mentions.map(function (x) { return x.key; }) : [];
+      // 범위(「제19조~제23조」, #314 R)는 가운데 조까지 — 다중 원문이 양 끝 두 조만 보내던 것
+      c.lineKeys = lineParsed.kind === 'article' ? withRanges(lineParsed.mentions).map(function (x) { return x.key; }) : [];
       // 꼬리표 안에 대상이 적힌 형식(#155-보론6, 2026-09-11 운영자 결정): 「[원문 확인됨: 전기통신사업법 제32조의14제1항]」
       // 「[원문 확인됨: 전파법 시행령 별표 3]」 — 있으면 앞뒤 문장 추측 없이 이것이 1순위 후보. 옛 형식(「[원문 확인됨]」,
       // 「[원문 확인됨, 참조4]」)은 종전대로 앞뒤에서 추측한다.
@@ -1282,7 +1358,7 @@
         c.ctxLaw = segLaw || lastLaw;
       } else if (tp && tp.kind === 'article') {
         c.tagTarget = Object.assign({}, tp.mentions[0], { fromTag: true });
-        c.tagTargets = tp.mentions.map(function (x) { return Object.assign({}, x, { fromTag: true }); });
+        c.tagTargets = withRanges(tp.mentions).map(function (x) { return Object.assign({}, x, { fromTag: true }); });   // 범위 표시는 가운데 조까지(#314 R)
         if (c.kind !== 'article') Object.assign(c, { kind: 'article', key: tp.key, paras: tp.paras, items: tp.items, lawInfo: tp.lawInfo, mentions: [] });
       } else if (c.kind === 'annex') {
         c.ctxLaw = lastLaw;
@@ -1290,9 +1366,10 @@
       if (c.kind === 'article') {
         if (c.lawInfo && c.lawInfo.candidates && !c.lawInfo.weak) c.lawText = c.lawInfo.text;
         // 후보 = 인용문 안의 조 + 앞 줄에만 있는 조(뒤에 붙임 — 겹침이 같으면 인용문 안의 조가 우선)
-        const inSeg = new Set(c.mentions.map(function (x) { return x.key; }));
         const ext = extStart < segStart ? parseSegment(text.slice(extStart, tagStart)) : null;
-        c.candidates = c.mentions.slice();
+        // 범위의 가운데 조는 표시 줄에 적힌 범위일 때만 후보로(다중 원문 #288 ⓓ′에 들게 — #314 R). 앞 문단 서술 속 범위는 종전대로 양 끝만
+        c.candidates = withRanges(c.mentions).filter(function (x) { return !x.inRange || c.lineKeys.indexOf(x.key) !== -1; });
+        const inSeg = new Set(c.candidates.map(function (x) { return x.key; }));
         if (ext && ext.kind === 'article') {
           for (const x of ext.mentions) if (!inSeg.has(x.key)) c.candidates.push(Object.assign({}, x, { extOnly: true }));
         }
@@ -1326,6 +1403,41 @@
           c.candidates = ext.mentions.map(function (x) { return Object.assign({}, x, { extOnly: true }); });
           for (const x of c.candidates) x.ctxLaw = x.ctxLaw || lastLaw;
         }
+      }
+      // 홀로 선 출처 줄(#314 S, 2026-10-16 — 사내 실물 「AI DC를 구축하려면…」 답): 내용(표·목록·문단)을 먼저 쓰고 그 **아래** 줄에 출처만
+      // 「「○○법 제18조제1항」 [표시]」로 단 꼴. 표시 줄이 이름·번호뿐이라 제목 줄 규칙(#155-보론5)이 표시 **뒤** 문단(「> **주의**」·다음 절 「### (3) …」)을
+      // 인용문으로 잡아 특별법 인용 넷 중 셋이 엉뚱한 글과 대조됐다(「번호만 있음」·「제19~23조 내용을 서술」·「제24조 내용을 인용」 — 답은 원문과 맞았다).
+      // 규칙: 표시 줄이 이름·번호뿐(24자 미만)이고 덩어리의 **끝**(다음 줄이 빈 줄·소제목·구분선·글 끝)이며, 뒤 덩어리가 소제목·구분선·글 끝이거나
+      // 그 줄이 「…제N조…」 낫표 출처뿐이면 → 앞 덩어리(직전 표시·소제목·구분선 뒤부터, 문단 3개·1,200자까지, 표 포함, precedingBlock)가 인용문이다.
+      // 표시 줄이 소제목(#)·표 행·목록 항목이면 종전대로 — 외부 저장 답의 빈 줄 사이 짧은 표시 줄 30개는 모두 「## … 전파법 제24조 [표시]」 + 아래 내용(제목 줄 정상 꼴)이었다.
+      // 대상 없는 표시의 후보는 이 줄의 조만(위 줄 표 칸의 다른 법령 조 — 「분산에너지 활성화 특별법 제23조」 — 는 출처가 아니다).
+      if (c.kind === 'article' && !c.sibling && !c.closed && !c.closedBefore && !c.claimOverride && prevEnd <= lineStart && lineParsed.kind === 'article' && m[0].indexOf(QUOTE_MARK) === -1) {
+        const lineTxt = text.slice(lineStart, tagStart);
+        const eolS = text.indexOf('\n', tagEnd);
+        // 이름·번호뿐 = 문서명 괄호(「(법률)(제21759호)(20270310)」 — 검색 자료 문서명을 그대로 옮긴 꼴)를 떼고 법령명·조 번호를 뺀 나머지가 12자 미만.
+        // 낫표 안이 조문 문장(「제18조에 따라 … 신고를 한 것으로 본다」)이면 걸리지 않는다
+        if (/^[\s*_」』)）]*$/.test(text.slice(tagEnd, eolS === -1 ? text.length : eolS)) && !/^\s*(?:#|\||[-*•]\s|\d+[.)]\s)/.test(lineTxt) &&
+            stripCiteBody(lineTxt.replace(DOC_META_RE, '')).length < MIN_CLAIM_SIBLING) {
+          const restTxt = eolS === -1 ? '' : text.slice(eolS + 1);
+          const nextLn = eolS === -1 ? null : restTxt.split('\n')[0];
+          const nx = restTxt.split('\n').find(function (l) { return l.trim(); });
+          if ((nextLn === null || !nextLn.trim() || SECTION_BREAK_RE.test(nextLn)) && (nx === undefined || SECTION_BREAK_RE.test(nx) || SRC_LINE_RE.test(lineTxt))) {
+            const block = precedingBlock(text, prevEnd, lineStart);
+            if (block && stripCiteBody(block).length >= MIN_CLAIM) {
+              c.claimOverride = block; c.after = ''; c.srcLine = true;
+              if (!c.tagTarget) c.candidates = c.candidates.filter(function (x) { return !x.extOnly; });
+            }
+          }
+        }
+      }
+      // 표시 바로 앞 출처가 조 전체(#314 P, 사내 실물 넷째): 「…신고해야 하며 … 이 신고를 한 것으로 간주합니다(제10조제2항). 「○○특별법 제10조」 [표시]」 —
+      // 한 문단이 제1항(신고 의무)과 제2항(간주)을 따로 적고 끝 출처는 조 전체인데, 앞 언급의 항(제2항)이 합쳐져 대조 대상이 제2항으로 좁혀졌고 판정기가
+      // 「제1항 신고 의무와 제2항 간주를 뒤섞음」이라 했다(답은 맞음). 표시 바로 앞 언급(사이에 닫는 낫표·괄호·공백만)이 항·호 없이 조만 적었고 같은 인용문의
+      // 앞 언급이 그 조의 항·호를 따로 적었으면 → 판정기 대상은 조 전체(checkCitation paraWide). 구조 검사(그 항·호가 원문에 있나)는 그대로 한다.
+      if (c.kind === 'article' && !c.srcLine && parsed.refs && parsed.refs.length >= 2) {
+        const last = parsed.refs[parsed.refs.length - 1];
+        if (!last.paras.length && !last.items.length && /^[\s」』)）*"'”]*$/.test(last.tail) &&
+            parsed.refs.slice(0, -1).some(function (r) { return r.key === last.key && (r.paras.length || r.items.length); })) c.wholeRef = last.key;
       }
       // 토막 문단 표시(#176, 2026-09-20): 모델이 인용문을 한 문단에 쓰고 표시는 다음 문단의 토막("고 하면서,"·
       // "을 열거하고 있습니다.")에 붙이는 습관이 있다. 9/17 대시보드 답변의 '확인 안 됨' 5건이 전부 이 오탐이었다 —
@@ -1757,8 +1869,12 @@
     // 제96조만 보내 과태료 반쪽(1천만원)을 아무도 대조하지 않았다 — 단일 원문은 거짓 회색이자 거짓 초록의 구멍이었다. 위 동률 규칙(#286-보론2)은
     // 대표 조문(구조 검사 순서가 아닌 표시 이름표·기록의 key)을 고를 때만 남는다. 문턱 측정은 하지 않는다(둘 다 이름 없는 동률은 저장 자료에 1건).
     const multiKeys = (cite.tagTargets && cite.tagTargets.length) ? cite.tagTargets.map(function (t) { return t.key; }) : (cite.lineKeys || []);
-    let members = found.filter(function (f) { return !f.cand.extOnly && multiKeys.indexOf(f.cand.key) !== -1; }).slice(0, MULTI_MAX);
+    let members = found.filter(function (f) { return !f.cand.extOnly && multiKeys.indexOf(f.cand.key) !== -1; });
+    // 범위(「제19조~제23조」, #314 R)를 펼친 후보가 있으면 상한은 RANGE_MAX(6), 아니면 종전 MULTI_MAX(4). 원문 글자 합은 종전 상한(4 × 3,000자)을 넘지 않게
+    // 조당 글자를 나눈다(아래 multiSrcCap) — 범위 다섯 조(특별법 제19~23조 1,242자)는 자르지 않는다.
+    members = members.slice(0, members.some(function (f) { return f.cand.inRange; }) ? RANGE_MAX : MULTI_MAX);
     if (members.length < 2 || members.indexOf(chosenF) === -1) members = null;
+    const multiSrcCap = members && members.length > MULTI_MAX ? Math.floor(MULTI_MAX * MULTI_SRC_MAX / members.length) : MULTI_SRC_MAX;
     // 항·호는 원문에 그 구조가 있을 때만 검사 (단항 조문에 "제1항"이라고 쓴 것까지 잡지 않는다) — 다중 원문이면 후보마다, 하나라도 걸리면 그 상태
     const paraChecks = [];
     const structFail = function (f) {
@@ -1838,13 +1954,20 @@
     if (members) {
       extra.multi = members.map(function (f) { return { lawDoc: f.lawDoc, doc: f.doc, key: f.rkey || f.cand.key, paras: f.cand.paras || [], items: f.cand.items || [] }; });
       extra.text = members.map(function (f) {
-        const t = f.text.length > MULTI_SRC_MAX ? f.text.slice(0, MULTI_SRC_MAX) + '\n…(이하 생략)' : f.text;
+        const t = f.text.length > multiSrcCap ? f.text.slice(0, multiSrcCap) + '\n…(이하 생략)' : f.text;
         return '■ ' + articleLabel(docFamily(f.doc), f.rkey || f.cand.key) + '\n' + t;   // 혼합 표시의 부칙 조는 부칙 조문으로(#290 ⑦)
       }).join('\n\n');
       // 추측 기록은 대표 조문의 것 그대로. 다른 후보가 낱말 근거 없이 추측한 조문이면(#286 ⓒ) 「불일치」를 주황으로 내지 않는다 — 그 조문을 대조 원문에
       // 넣은 것 자체가 틀렸을 수 있다(verifyCitations setMismatch). 무엇 때문인지 적으려고 그 후보 이름표를 남긴다.
       const weakG = members.find(function (f) { return f !== chosenF && f.guess && (f.guess.how === 'number' || !relEvidence(f.guess)); });
       if (weakG) extra.multiWeakGuess = guessFieldsOf(weakG).guessLabel;
+    }
+    // 표시 바로 앞 출처가 조 전체이고 항·호는 인용문 앞쪽 언급에만 있으면(#314 P — findCitations wholeRef) 판정기 대상·이름표는 조 전체. 구조 검사는 위에서 항·호로 했다
+    if (!members && cite.wholeRef && cite.wholeRef === chosen.key && (paras.length || items.length)) {
+      extra.paraWide = { paras: paras, items: items };
+      const gw = Object.assign({}, guessFields);
+      if (gw.guessLabel) gw.guessLabel = gw.guessLabel.replace(/제\d+항$/, '');   // 추측 이름표도 조 전체로(「법령 이름 없음 → X 제10조」)
+      return Object.assign({ status: 'ok', kind: 'article', lawDoc: chosenLaw, doc: chosenDoc, key: chosenKey, paras: [], items: [], text: chosenText, overlap: chosenRatio, claim: claim }, gw, extra, vx);
     }
     return Object.assign({ status: 'ok', kind: 'article', lawDoc: chosenLaw, doc: chosenDoc, key: chosenKey, paras: paras, items: items, text: chosenText, overlap: chosenRatio, claim: claim }, guessFields, extra, vx);
   }
@@ -2601,6 +2724,8 @@
         }
         if (r.altJudged) v.altJudged = r.altJudged;            // ② 다른 판 재판정(규칙 B, 2026-10-10): doc·status·1차·2차 verdict·메모 — 사내 alt_judged와 같은 칸
         if (r.closedBefore) v.closedBefore = true;              // ③ closed-before 줄(S6, 10-21 집계용 — 회색 「자동 대조 못 함」 + 다음 문단 낫표 인용 꼴을 셀 근거)
+        if (r.srcLine) v.srcLine = true;                        // #314 S 홀로 선 출처 줄 — 인용문은 앞 덩어리(집계용)
+        if (r.paraWide) v.paraWide = r.paraWide;                // #314 P 표시 바로 앞 출처가 조 전체 — 판정기 대상에서 뺀 항·호({paras, items})
         return v;
       }),
     };
