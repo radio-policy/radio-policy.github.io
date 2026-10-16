@@ -721,7 +721,13 @@
     }
     const m = b.match(/([가-힣A-Za-z0-9·ㆍ‧\s]{1,80})$/);
     if (!m) return null;
-    const words = m[1].trim().split(/\s+/).filter(Boolean);
+    // 「…제50조제1항제5호의2·전기통신사업법 제53조」 — 가운뎃점 앞이 조·항·호 참조 꼬리(…조·…항·…호·…조의N·…호의N)이고 뒤에 이름이 이어지면 그 자리에서 끊는다
+    // (#315-보론5, 2026-10-17). 종전엔 「제50조제1항제5호의2·전기통신사업법」이 한 낱말로 읽혀 둘째 법령을 못 맞췄다(저장 답 257550b8 — 제53조가 다중 원문에서 빠짐).
+    // 이름 안의 가운뎃점(「통신시설 등급 지정·관리 기준」·「간이무선국·우주국·지구국의 …」)은 앞이 참조 꼬리가 아니라 그대로, 뒤가 또 참조(「제1호·제2호」)여도 그대로
+    let w = m[1];
+    const rc = w.match(/^[\s\S]*제\s?\d+\s?(?:조|항|호)(?:\s?의\s?\d+)?\s?[·ㆍ‧]\s?(?=[가-힣A-Za-z])(?!제\s?\d)/);
+    if (rc) w = w.slice(rc[0].length);
+    const words = w.trim().split(/\s+/).filter(Boolean);
     if (!words.length) return null;
     const last = words[words.length - 1];
     const nl = norm(last);
