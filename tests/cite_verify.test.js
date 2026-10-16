@@ -1346,6 +1346,25 @@ function ok(name, cond, extra) {
   var rg = function (s) { return CV.findCitations(s + ' [원문 확인됨]')[0].lineKeys; };
   eq('#314 R 범위 꼴·상한', [rg('「' + ADF + ' 제1조부터 제30조까지」'), rg('「' + ADF + ' 제19조부터 제21조까지」'), rg('「' + ADF + ' 제19조-제23조」'), rg('「' + ADF + ' 제19조∼제20조」')],
      [['1조', '30조'], ['19조', '20조', '21조'], ['19조', '23조'], ['19조', '20조']]);
+  // #314-보론(사내 회신 10-16 · 운영자 결정): 범위 가운데 조는 머리 조가 고른 문서에서만 찾고, 머리를 못 찾았거나 그 문서에 없으면 뺀다(추측 안 함)
+  var GJ = '집적정보 통신시설 보호지침(과학기술정보통신부고시)(제2024-1호)(20240101)', OJ = '재난방송 및 민방위경보방송의 실시에 관한 기준(방송통신위원회고시)(제2023-2호)(20230101)';
+  var gjChunks = [
+    { id: 9101, doc_name: GJ, article_no: '3조(보호조치)', chunk_index: 3, content: '제3조(보호조치) 사업자는 출입통제 등 물리적 보호조치를 하여야 한다.' },
+    { id: 9102, doc_name: GJ, article_no: '6조(점검)', chunk_index: 6, content: '제6조(점검) 사업자는 보호조치를 매년 점검하여야 한다.' },
+    { id: 9103, doc_name: GJ, article_no: '8조(세부기준)', chunk_index: 8, content: '제8조(세부기준) 제3조부터 제6조까지에 따른 보호조치의 세부 기준은 별표와 같다. 사업자는 별표에 따른 출입통제·전원·소방 설비를 갖추어야 한다.' },
+    { id: 9104, doc_name: OJ, article_no: '4조(재난방송의 실시)', chunk_index: 4, content: '제4조(재난방송의 실시) 방송사업자는 재난이 발생하면 재난방송을 실시하여야 한다.' },
+  ];
+  var gjAns = '세부 기준은 다음과 같습니다.\n\n> "제3조부터 제6조까지에 따른 보호조치의 세부 기준은 별표와 같고, 사업자는 별표에 따른 출입통제·전원·소방 설비를 갖추어야 한다." (집적정보 통신시설 보호지침 제8조) [원문 확인됨]';
+  var gjR = CV.checkCitation(CV.findCitations(gjAns)[0], gjChunks, []);
+  eq('#314-보론 사내 실물 꼴: 따옴표 속 「제3조부터 제6조까지」의 가운데 제4조를 다른 고시(재난방송 기준) 제4조로 추측하지 않는다 — 다중 원문은 지침 제3·6·8조',
+     [(gjR.multi || []).map(function (m) { return CV.docFamily(m.doc) + ' ' + m.key; }), (gjR.text || '').indexOf('재난방송') === -1],
+     [['집적정보 통신시설 보호지침 3조', '집적정보 통신시설 보호지침 6조', '집적정보 통신시설 보호지침 8조'], true]);
+  var noHead = adChunks.filter(function (c) { return !/^19조/.test(c.article_no); });
+  var nhR = CV.checkCitation(CV.findCitations('- 특례 다섯 가지를 정한다는 내용입니다 길게 적은 내용입니다.\n\n「' + ADF + ' 제19조~제23조」 [원문 확인됨: ' + ADF + ' 제19조~제23조]\n\n### 다음 절')[0], noHead, []);
+  eq('#314-보론 범위 머리(제19조)가 자료에 없으면 가운데 제20~22조는 빼고 끝(제23조)만', [nhR.status, nhR.key, nhR.multi || null, /제20조/.test(nhR.text || '')], ['ok', '23조', null, false]);
+  var noMid = adChunks.filter(function (c) { return !/^21조/.test(c.article_no); });
+  var nmR = CV.checkCitation(CV.findCitations('- 특례 다섯 가지를 정한다는 내용입니다 길게 적은 내용입니다.\n\n「' + ADF + ' 제19조~제23조」 [원문 확인됨: ' + ADF + ' 제19조~제23조]\n\n### 다음 절')[0], noMid, []);
+  eq('#314-보론 가운데 조(제21조)가 머리 문서에 없으면 그 조만 빠진다(원문 없음으로 세지 않음)', [nmR.status, (nmR.multi || []).map(function (m) { return m.key; })], ['ok', ['19조', '20조', '22조', '23조']]);
   var rgEnd = CV.parseSegment('「' + ADF + ' 제19조~제23조」 ').mentions[1];
   ok('#314 R 범위 끝 조(제23조)는 범위 머리의 법령 이름', !!(rgEnd.lawInfo && rgEnd.lawInfo.candidates && !rgEnd.lawInfo.weak));
   // P 반례: 표시 앞 출처가 항까지 적었거나(「…제10조제2항」), 앞 언급 없이 항이 표시 안에만 있으면 종전대로 그 항

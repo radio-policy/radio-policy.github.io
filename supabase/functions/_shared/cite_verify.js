@@ -1103,7 +1103,7 @@
   const RANGE_SEP_RE = /^\s*[~∼〜～]\s*$/;
   // 범위를 펼칠 폭 상한 — 이보다 넓은 범위(「제1조부터 제30조까지」)는 종전대로 양 끝 두 조만. 다중 원문 후보 상한도 범위가 있으면 이 값(checkCitation)
   const RANGE_MAX = 6;
-  // 범위 머리(rangeTo)가 있는 언급 목록 → 가운데 조를 머리 바로 뒤에 끼운 목록(#314 R). 가운데 조는 머리의 법령·이어받기를 따른다(이름 추측 아님).
+  // 범위 머리(rangeTo)가 있는 언급 목록 → 가운데 조를 머리 바로 뒤에 끼운 목록(#314 R). 가운데 조는 머리 조가 고른 문서에서만 찾고 없으면 빠진다(checkCitation, #314-보론).
   // 「인공지능 데이터센터 산업 진흥에 관한 특별법 제19조~제23조」가 종전엔 제19조·제23조 두 조문만 원문이 돼 제20~22조 내용(전기사업법·건축법·산업단지 특례)을
   // 판정기가 「원문에 없는 내용」으로 볼 수 있었다(10-16 사내 실물 — 그때는 인용문부터 엉뚱했다).
   function withRanges(mentions) {
@@ -1114,7 +1114,7 @@
       for (let n = parseInt(x.key, 10) + 1; n < x.rangeTo; n++) {
         const k = n + '조';
         if ((mentions || []).some(function (y) { return y.key === k; }) || out.some(function (y) { return y.key === k; })) continue;
-        out.push({ key: k, idx: x.idx, paras: [], items: [], lawInfo: x.lawInfo, ctxLaw: x.ctxLaw, inRange: true });
+        out.push({ key: k, idx: x.idx, paras: [], items: [], lawInfo: x.lawInfo, ctxLaw: x.ctxLaw, inRange: true, rangeHead: x.key });   // rangeHead: checkCitation이 머리 조가 고른 문서에서만 찾는다(#314-보론)
       }
     }
     return out;
@@ -1767,7 +1767,13 @@
     };
     for (let ci = 0; ci < candidates.length; ci++) {
       const cand = candidates[ci];
-      const outer = cand.junyong && (!cand.lawInfo || guessKind(cand.lawInfo, families) === 'weak') ? outerOf.get(cand.junyong) || null : null;
+      // 범위 가운데 조(#314-보론, 2026-10-16 사내 회신 · 운영자 결정): 범위 머리 조가 **실제로 고른 문서**에서만 찾고, 머리를 못 찾았거나 그 문서에
+      // 그 조가 없으면 뺀다(원문 없음으로도 세지 않는다) — 스스로 법령을 추측하지 않는다. 사내 실물: 표시 줄이 조문 글을 따옴표로 옮긴 「> "제3조부터 제6조까지에
+      // 따라 … 별표와 같다." (집적정보 통신시설 보호지침 제8조) [표시]」에서 펼친 제4조가 자료에 없는 그 지침 대신 번호만 같은 다른 고시(재난방송 기준) 제4조로
+      // 추측돼 다중 원문에 끼었다(원문 817 → 2,221자). 머리는 위에서 먼저 처리돼 outerOf에 있다(withRanges가 머리 바로 뒤에 끼운다).
+      const rangeOuter = cand.inRange ? (outerOf.get(cand.rangeHead) || null) : null;
+      if (cand.inRange && !(rangeOuter && rangeOuter.fam)) continue;
+      const outer = rangeOuter || (cand.junyong && (!cand.lawInfo || guessKind(cand.lawInfo, families) === 'weak') ? outerOf.get(cand.junyong) || null : null);
       const scope = outer ? (outer.fam ? [outer.fam] : outer.scope) : scopes[ci];
       const gk = outer ? 'none' : guessKind(cand.lawInfo, families);   // 'none' 이름으로 못 박음 / 'inherit' 이어받기 추측 / 'weak' 못 맞춘 약한 이름
       const guessed = gk !== 'none', maySwitch = gk === 'inherit';
@@ -1814,6 +1820,7 @@
         }
       }
       if (!cands.length) {
+        if (cand.inRange) continue;   // 범위 가운데 조가 머리 문서에 없다 — 뺀다(#314-보론)
         const ctxText = cand.ctxLaw && cand.ctxLaw.text;
         const lawLab = (scope && scope[0]) || (cand.lawInfo && (cand.lawInfo.title || cand.lawInfo.text)) || ctxText || '';
         misses.push(lawLab + ' ' + (isAdd ? keyText(cand.key) : cand.key));
