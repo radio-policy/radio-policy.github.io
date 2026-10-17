@@ -607,6 +607,35 @@ create table if not exists public.news_screen_cache (
 );
 alter table public.news_screen_cache enable row level security;
 
+create table if not exists public.news_screen_shadow (
+  id bigint generated always as identity not null,
+  created_at timestamp with time zone default now() not null,
+  batch_key text not null,
+  kind text not null,
+  model text not null,
+  criteria_hash text,
+  host text,
+  status text,
+  prod_ok boolean,
+  ms integer,
+  detail text,
+  n_items integer,
+  n_prod integer,
+  n_shadow integer,
+  n_diff integer,
+  n_tag_diff integer,
+  url text,
+  title text,
+  summary text,
+  prod_relevant boolean,
+  shadow_relevant boolean,
+  prod_tags text[],
+  shadow_tags text[],
+  constraint news_screen_shadow_pkey PRIMARY KEY (id),
+  constraint news_screen_shadow_kind_check CHECK ((kind = ANY (ARRAY['batch'::text, 'relevance'::text, 'tags'::text])))
+);
+alter table public.news_screen_shadow enable row level security;
+
 create table if not exists public.people (
   id bigint default nextval('people_id_seq'::regclass) not null,
   speaker_key text not null,

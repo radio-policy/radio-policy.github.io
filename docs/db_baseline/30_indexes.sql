@@ -96,6 +96,10 @@ CREATE INDEX news_feed_created_at_idx ON public.news_feed USING btree (created_a
 
 CREATE INDEX news_screen_cache_judged_at_idx ON public.news_screen_cache USING btree (judged_at);
 
+CREATE INDEX news_screen_shadow_created_at_idx ON public.news_screen_shadow USING btree (created_at);
+
+CREATE INDEX news_screen_shadow_kind_idx ON public.news_screen_shadow USING btree (kind, id);
+
 CREATE INDEX idx_profiles_team ON public.profiles USING btree (team_id);
 
 CREATE INDEX security_audit_log_at_idx ON public.security_audit_log USING btree (at);

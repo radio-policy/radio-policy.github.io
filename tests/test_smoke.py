@@ -258,6 +258,7 @@ class TestExcludeKeywordsFallbackOnly(unittest.TestCase):
                 mock.patch.object(crawler, '_load_screen_cache', lambda h, urls: {}), \
                 mock.patch.object(crawler, '_save_screen_cache', lambda rows: None), \
                 mock.patch.object(crawler, '_screen_batch_haiku', fake_batch), \
+                mock.patch.object(crawler, '_screen_shadow_until', lambda: None), \
                 contextlib.redirect_stdout(buf):
             passed = crawler.screen_news_items([dict(i) for i in items])
         self.assertEqual(seen, [i['title'] for i in items])            # 둘 다 AI가 봤다
@@ -270,6 +271,7 @@ class TestExcludeKeywordsFallbackOnly(unittest.TestCase):
                 mock.patch.object(crawler, '_load_screen_cache', lambda h, urls: {}), \
                 mock.patch.object(crawler, '_save_screen_cache', lambda rows: None), \
                 mock.patch.object(crawler, '_screen_batch_haiku', lambda c, cr, b: None), \
+                mock.patch.object(crawler, '_screen_shadow_until', lambda: None), \
                 contextlib.redirect_stdout(io.StringIO()):
             passed = crawler.screen_news_items([dict(i) for i in items])
         self.assertEqual(passed, [])

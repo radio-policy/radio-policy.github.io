@@ -266,6 +266,12 @@ revoke all on public.news_screen_cache from public, anon, authenticated, service
 grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE on public.news_screen_cache to authenticated;
 grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE on public.news_screen_cache to service_role;
 
+revoke all on public.news_screen_shadow from public, anon, authenticated, service_role;
+grant DELETE, INSERT, SELECT on public.news_screen_shadow to service_role;
+
+revoke all on sequence public.news_screen_shadow_id_seq from public, anon, authenticated, service_role;
+grant SELECT, USAGE on sequence public.news_screen_shadow_id_seq to service_role;
+
 revoke all on public.people from public, anon, authenticated, service_role;
 grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE on public.people to authenticated;
 grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE on public.people to service_role;

@@ -1523,18 +1523,10 @@ def _screen_system(criteria: str) -> str:
     return _screen_system_cache[criteria]
 
 
-def _screen_batch_haiku(client, criteria: str, batch: list):
-    """배치 1개(≤SCREEN_BATCH_SIZE건)를 Haiku 1콜로 판정.
-    반환: {관련 id(1-based): {'tags': list, 'event': str, 'urgency': str}}. 실패 시 None.
-    None은 '판정 실패' 신호이고 호출부의 키워드 폴백이 여기 물려 있다 — 의미를 바꾸지 말 것.
-    (반환값이 dict로 넓어져도 이 None 규약은 그대로다. 값이 빈 dict인 것과 None은 다르다 —
-     빈 dict는 '관련이지만 태그·사건 미판정', None은 '이 배치 판정 실패'.)
-    태그는 NEWS_TAGS 화이트리스트 교집합·최대 MAX_TAGS_PER_ITEM개로 자른다
-    (모델이 없는 slug를 지어내도 DB·Edge로 새어 나가지 않게).
-    사건 라벨(event)은 대시보드 뉴스 그룹핑용이다 — 같은 사건을 다룬 기사끼리 표현이 수렴하도록
-    쓰게 하고, 공백 정규화·MAX_EVENT_LEN 절단만 적용한다. 판정에는 관여하지 않는다.
-    결정성: tool_choice로 도구 호출 강제 + 기준문 문자 적용·건별 독립 판정 지시.
-    (temperature류 파라미터 사용 금지 — 지침 do-not)"""
+def _screen_request(criteria: str, batch: list) -> dict:
+    """선별 콜 요청 인자(model 칸 뺀 나머지) — 운영 _screen_batch_haiku와 그림자 _screen_shadow_batch(#318)가
+    이 dict를 그대로 받아 model만 붙인다. 둘이 갈라지면 그림자가 모델이 아니라 요청 차이를 재게 되므로
+    요청은 여기 한 곳에서만 조립할 것(tests/test_screen_shadow.py가 두 요청을 model 칸 빼고 대조한다)."""
     payload = []
     for idx, it in enumerate(batch, 1):
         row = {'id': idx, 'title': (it.get('title') or '').strip()}
@@ -1547,66 +1539,265 @@ def _screen_batch_haiku(client, criteria: str, batch: list):
         '아래는 방금 수집한 뉴스 기사 목록이다. 시스템 지시의 기준문과 판정 규칙을 적용해 판정하라.\n\n'
         + json.dumps(payload, ensure_ascii=False)
     )
+    return dict(
+        # 5000: 35건 전건 태그 시 출력 ≈1,000토큰이었고, 여기에 사건 라벨(event)이 붙어
+        # 건당 한글 25자 ≈ 35토큰 + 키/따옴표 ≈ 5토큰 → 35건이면 +1,400토큰. 합계 ≈2,400.
+        # 3000이면 여유가 1.25배뿐이라 라벨이 길어진 배치에서 잘릴 수 있어 5000으로 올렸다.
+        # 초과하면 tool_use가 미완성으로 잘려 None(판정 실패) → 배치 전체 키워드 폴백,
+        # 즉 조용한 리콜 손실이 된다. 입력이 아니라 출력 한도라 비용 영향도 없다.
+        max_tokens=5000,
+        # 프롬프트 캐시(W7, #174): system 전체(기준문+피드백+규칙 ≈ 수천 토큰)를 1시간 캐시에 싣는다.
+        # 캐시 접두는 tools → system → messages 순이라 NEWS_SCREEN_TOOL도 함께 캐시된다.
+        # 같은 실행의 2번째 배치부터, 그리고 다음 실행(30분 뒤)까지 0.1배 요금으로 읽힌다.
+        # 검증: api_usage.cache_read가 0이 아니어야 한다 — 0이면 system이 매번 달라지고 있는 것.
+        # Haiku 4.5의 최소 캐시 길이는 **4,096토큰**(지침 #152 정정) — tools+system 접두가 그보다 짧으면 에러 없이
+        # 조용히 캐시되지 않는다. ⚠️ count_tokens는 도구 스키마를 캐시 회계보다 크게 센다(1,100 vs 776) — 첫 배포는
+        # count_tokens 4,245로 보였지만 실제 회계 3,921이라 03:52 첫 실행에서 cache_write=0이었다(#175-보론).
+        # 등급당 피드백 사례 4→12(FEEDBACK_PER_CLASS)로 system을 ≈4,250(캐시 회계 ≈5,030)으로 키워 해결.
+        # 기준문·피드백이 줄면 다시 미달할 수 있으니 배포 뒤 api_usage.cache_write/cache_read로 반드시 확인할 것.
+        system=[{'type': 'text', 'text': _screen_system(criteria),
+                 'cache_control': {'type': 'ephemeral', 'ttl': '1h'}}],
+        tools=[NEWS_SCREEN_TOOL],
+        tool_choice={'type': 'tool', 'name': 'record_relevant_news'},
+        messages=[{'role': 'user', 'content': prompt}],
+    )
+
+
+def _parse_screen_resp(resp):
+    """선별 응답 → {관련 id(1-based): {'tags','event','urgency'}}, 도구 호출이 없으면 None.
+    운영·그림자(#318) 공용 — 태그 화이트리스트·사건 라벨 자르기가 두 모델에 똑같이 걸려야 비교가 된다."""
+    for blk in resp.content:      # 적응형 추론 대비 — tool_use 블록만 취함
+        if getattr(blk, 'type', '') == 'tool_use':
+            rows = (blk.input or {}).get('relevant') or []
+            out = {}
+            for row in rows:
+                # 모델이 {id, tags, event} 대신 정수만 뱉어도 관련성 판정은 살린다
+                # (태그·사건 라벨만 비움).
+                if isinstance(row, dict):
+                    raw_id = row.get('id')
+                    raw_tags, raw_event = row.get('tags'), row.get('event')
+                    raw_urgency = row.get('urgency')
+                else:
+                    raw_id, raw_tags, raw_event, raw_urgency = row, None, None, None
+                try:
+                    rid = int(raw_id)
+                except (TypeError, ValueError):
+                    continue
+                tags = []
+                for t in (raw_tags or []):
+                    if t in NEWS_TAGS and t not in tags:
+                        tags.append(t)
+                    if len(tags) >= MAX_TAGS_PER_ITEM:
+                        break
+                event = ''
+                if isinstance(raw_event, str):
+                    event = re.sub(r'\s+', ' ', raw_event).strip()[:MAX_EVENT_LEN]
+                # 등급 어휘(즉시대응 등) → DB 값(긴급/보통/참고). 모르는 값은 빈 문자열 =
+                # 미판정으로 두고 save_new_items가 개별 판정한다(임의 등급을 만들지 않는다).
+                urgency = _AI_PRIORITY_MAP.get((raw_urgency or '').strip(), '') \
+                    if isinstance(raw_urgency, str) else ''
+                out[rid] = {'tags': tags, 'event': event, 'urgency': urgency}
+            return out
+    return None                   # 도구 호출 없음 → 실패 취급(호출부가 키워드 폴백)
+
+
+def _screen_batch_haiku(client, criteria: str, batch: list):
+    """배치 1개(≤SCREEN_BATCH_SIZE건)를 Haiku 1콜로 판정.
+    반환: {관련 id(1-based): {'tags': list, 'event': str, 'urgency': str}}. 실패 시 None.
+    None은 '판정 실패' 신호이고 호출부의 키워드 폴백이 여기 물려 있다 — 의미를 바꾸지 말 것.
+    (반환값이 dict로 넓어져도 이 None 규약은 그대로다. 값이 빈 dict인 것과 None은 다르다 —
+     빈 dict는 '관련이지만 태그·사건 미판정', None은 '이 배치 판정 실패'.)
+    태그는 NEWS_TAGS 화이트리스트 교집합·최대 MAX_TAGS_PER_ITEM개로 자른다
+    (모델이 없는 slug를 지어내도 DB·Edge로 새어 나가지 않게).
+    사건 라벨(event)은 대시보드 뉴스 그룹핑용이다 — 같은 사건을 다룬 기사끼리 표현이 수렴하도록
+    쓰게 하고, 공백 정규화·MAX_EVENT_LEN 절단만 적용한다. 판정에는 관여하지 않는다.
+    결정성: tool_choice로 도구 호출 강제 + 기준문 문자 적용·건별 독립 판정 지시.
+    (temperature류 파라미터 사용 금지 — 지침 do-not)
+    요청 조립은 _screen_request, 응답 읽기는 _parse_screen_resp — 그림자(#318)와 공용이다."""
     try:
-        resp = client.messages.create(
-            model=SCREEN_MODEL,
-            # 5000: 35건 전건 태그 시 출력 ≈1,000토큰이었고, 여기에 사건 라벨(event)이 붙어
-            # 건당 한글 25자 ≈ 35토큰 + 키/따옴표 ≈ 5토큰 → 35건이면 +1,400토큰. 합계 ≈2,400.
-            # 3000이면 여유가 1.25배뿐이라 라벨이 길어진 배치에서 잘릴 수 있어 5000으로 올렸다.
-            # 초과하면 tool_use가 미완성으로 잘려 None(판정 실패) → 배치 전체 키워드 폴백,
-            # 즉 조용한 리콜 손실이 된다. 입력이 아니라 출력 한도라 비용 영향도 없다.
-            max_tokens=5000,
-            # 프롬프트 캐시(W7, #174): system 전체(기준문+피드백+규칙 ≈ 수천 토큰)를 1시간 캐시에 싣는다.
-            # 캐시 접두는 tools → system → messages 순이라 NEWS_SCREEN_TOOL도 함께 캐시된다.
-            # 같은 실행의 2번째 배치부터, 그리고 다음 실행(30분 뒤)까지 0.1배 요금으로 읽힌다.
-            # 검증: api_usage.cache_read가 0이 아니어야 한다 — 0이면 system이 매번 달라지고 있는 것.
-            # Haiku 4.5의 최소 캐시 길이는 **4,096토큰**(지침 #152 정정) — tools+system 접두가 그보다 짧으면 에러 없이
-            # 조용히 캐시되지 않는다. ⚠️ count_tokens는 도구 스키마를 캐시 회계보다 크게 센다(1,100 vs 776) — 첫 배포는
-            # count_tokens 4,245로 보였지만 실제 회계 3,921이라 03:52 첫 실행에서 cache_write=0이었다(#175-보론).
-            # 등급당 피드백 사례 4→12(FEEDBACK_PER_CLASS)로 system을 ≈4,250(캐시 회계 ≈5,030)으로 키워 해결.
-            # 기준문·피드백이 줄면 다시 미달할 수 있으니 배포 뒤 api_usage.cache_write/cache_read로 반드시 확인할 것.
-            system=[{'type': 'text', 'text': _screen_system(criteria),
-                     'cache_control': {'type': 'ephemeral', 'ttl': '1h'}}],
-            tools=[NEWS_SCREEN_TOOL],
-            tool_choice={'type': 'tool', 'name': 'record_relevant_news'},
-            messages=[{'role': 'user', 'content': prompt}],
-        )
-        for blk in resp.content:      # 적응형 추론 대비 — tool_use 블록만 취함
-            if getattr(blk, 'type', '') == 'tool_use':
-                rows = (blk.input or {}).get('relevant') or []
-                out = {}
-                for row in rows:
-                    # 모델이 {id, tags, event} 대신 정수만 뱉어도 관련성 판정은 살린다
-                    # (태그·사건 라벨만 비움).
-                    if isinstance(row, dict):
-                        raw_id = row.get('id')
-                        raw_tags, raw_event = row.get('tags'), row.get('event')
-                        raw_urgency = row.get('urgency')
-                    else:
-                        raw_id, raw_tags, raw_event, raw_urgency = row, None, None, None
-                    try:
-                        rid = int(raw_id)
-                    except (TypeError, ValueError):
-                        continue
-                    tags = []
-                    for t in (raw_tags or []):
-                        if t in NEWS_TAGS and t not in tags:
-                            tags.append(t)
-                        if len(tags) >= MAX_TAGS_PER_ITEM:
-                            break
-                    event = ''
-                    if isinstance(raw_event, str):
-                        event = re.sub(r'\s+', ' ', raw_event).strip()[:MAX_EVENT_LEN]
-                    # 등급 어휘(즉시대응 등) → DB 값(긴급/보통/참고). 모르는 값은 빈 문자열 =
-                    # 미판정으로 두고 save_new_items가 개별 판정한다(임의 등급을 만들지 않는다).
-                    urgency = _AI_PRIORITY_MAP.get((raw_urgency or '').strip(), '') \
-                        if isinstance(raw_urgency, str) else ''
-                    out[rid] = {'tags': tags, 'event': event, 'urgency': urgency}
-                return out
-        return None                   # 도구 호출 없음 → 실패 취급(호출부가 키워드 폴백)
+        resp = client.messages.create(model=SCREEN_MODEL, **_screen_request(criteria, batch))
+        return _parse_screen_resp(resp)
     except Exception as e:
         print(f'  [선별 판정 오류] {str(e)[:120]}')
         return None
+
+
+# ── 선별 그림자: Haiku 5.5 1주 (#318, 2026-10-17 ~ app_config.screen_shadow until) ─────────────────────
+#  모델 전환 판정(local_docs/모델비교_261014/판정_Haiku45_전환검토_261014.md §6 #3): 선별은 정답 세트가 없고
+#  무관 판정 기사는 news_feed에 저장되지 않아(news_screen_cache는 해시만) 소급 측정이 안 된다 → 같은 배치를
+#  5.5로도 판정해 갈린 기사만 news_screen_shadow(service_role 전용)에 남기고, 기한 뒤 tools_screen_shadow.py로
+#  눈가림 판정해 결정한다(설계·통과 기준 local_docs/선별그림자_설계_261017.md).
+#  · 운영 판정·알림·저장은 4.5 결과 그대로 — 그림자 결과는 표 한 곳 말고 어디에도 쓰지 않는다.
+#  · 요청은 _screen_request 한 곳에서 — model 칸만 다르다(도구 강제라 thinking 인자 없음, 온도 인자 없음 — 5.5는 400).
+#  · 별도 클라이언트(60초·재시도 1회)·스레드 2개로 운영 호출과 나란히 돌고, 배치 루프 뒤 최대 60초만 기다린다.
+#  · 거부(refusal)·잘림·도구 없음·오류·시간 초과는 그림자만 건너뛰고 batch 행에 상태를 남긴다. 기록 실패도 삼킨다.
+#  · 스위치 app_config.screen_shadow = {"until": "<시각대 있는 ISO>"} — 없음·형식 오류·지난 시각·조회 실패 = 꺼짐.
+SCREEN_SHADOW_MODEL = 'claude-haiku-5-5'
+SCREEN_SHADOW_KEY = 'screen_shadow'
+SCREEN_SHADOW_TIMEOUT_S = 60
+SCREEN_SHADOW_WAIT_S = 60       # 배치 루프가 끝난 뒤 남은 그림자를 기다리는 최대 시간(운영 지연 상한)
+SCREEN_SHADOW_WORKERS = 2
+# ★ 모든 행의 키 집합 동일 ★ (PostgREST 벌크 insert 요건) — id·created_at은 DB 기본값이라 넣지 않는다.
+_SHADOW_COLS = ('batch_key', 'kind', 'model', 'criteria_hash', 'host', 'status', 'prod_ok', 'ms', 'detail',
+                'n_items', 'n_prod', 'n_shadow', 'n_diff', 'n_tag_diff',
+                'url', 'title', 'summary', 'prod_relevant', 'shadow_relevant', 'prod_tags', 'shadow_tags')
+
+
+def _screen_shadow_until():
+    """그림자 기한(시각대 있는 datetime) — 꺼짐이면 None. 그림자는 덤이라 읽기 실패는 꺼짐이다(fail-closed)."""
+    try:
+        rows = sb.table('app_config').select('value').eq('key', SCREEN_SHADOW_KEY).limit(1).execute().data
+        if not rows:
+            return None
+        until = datetime.fromisoformat(str(json.loads(rows[0].get('value') or '{}').get('until') or ''))
+        if until.tzinfo is None:          # 시각대 없는 값은 KST/UTC가 모호 — 형식 오류로 본다
+            print('[선별 그림자] until에 시각대가 없음 — 꺼짐')
+            return None
+        return until if until > datetime.now(timezone.utc) else None
+    except Exception as e:
+        print(f'[선별 그림자] 설정 읽기 실패 — 꺼짐: {str(e)[:80]}')
+        return None
+
+
+def _screen_shadow_batch(client, req: dict) -> dict:
+    """그림자 1배치 → {'status', 'verdict', 'ms', 'detail'}. 던지지 않는다.
+    status: ok / refusal(5.5 안전 분류기 — 도구 블록 없음) / max_tokens / no_tool / error.
+    ⚠️ client.messages.create는 이 함수 안에서 직접 부를 것 — api_usage.install()이 부른 함수 이름으로 라벨을 붙인다
+    (crawler.py:_screen_shadow_batch). 운영 라벨과 섞이면 감시견의 선별 캐시 적중률·비용 집계가 흐려진다."""
+    t0 = time.monotonic()
+    out = {'status': 'error', 'verdict': None, 'ms': None, 'detail': ''}
+    try:
+        resp = client.messages.create(model=SCREEN_SHADOW_MODEL, **req)
+        stop = getattr(resp, 'stop_reason', None)
+        if stop in ('refusal', 'max_tokens'):
+            out['status'] = stop
+        else:
+            verdict = _parse_screen_resp(resp)
+            out['status'] = 'ok' if verdict is not None else 'no_tool'
+            out['verdict'] = verdict
+    except Exception as e:
+        out['detail'] = f'{type(e).__name__}: {e}'[:200]
+    out['ms'] = int((time.monotonic() - t0) * 1000)
+    return out
+
+
+def _screen_shadow_rows(view: list, prod, res: dict, criteria_hash: str) -> list:
+    """배치 하나의 기록 행 — batch 1행 + 관련/무관 갈림(relevance) + 둘 다 관련인데 태그 묶음이 다름(tags).
+    view: 모델이 본 그대로의 [{url, title, summary}](배치 순서 = id-1). prod: 운영 4.5 판정(None = 실패·키워드 폴백
+    → 비교 안 함). 태그는 화이트리스트를 거친 값(저장될 값)으로, 순서 없이 묶음으로 비교한다(안전망 보정 전)."""
+    import uuid
+    n = len(view)
+    base = dict.fromkeys(_SHADOW_COLS)
+    base.update(batch_key=uuid.uuid4().hex, model=SCREEN_SHADOW_MODEL, criteria_hash=criteria_hash or None,
+                host=api_usage.HOST)
+    shadow = res.get('verdict') if res.get('status') == 'ok' else None
+    p_ids = {i for i in (prod or {}) if isinstance(i, int) and 1 <= i <= n}
+    s_ids = {i for i in (shadow or {}) if isinstance(i, int) and 1 <= i <= n}
+    head = dict(base, kind='batch', status=res.get('status') or 'error', prod_ok=prod is not None,
+                ms=res.get('ms'), detail=(res.get('detail') or None), n_items=n,
+                n_prod=len(p_ids) if prod is not None else None,
+                n_shadow=len(s_ids) if shadow is not None else None)
+    rows = [head]
+    if prod is None or shadow is None:
+        return rows
+
+    def _tags(v, i):
+        return list((v.get(i) or {}).get('tags') or []) if i in v else None
+    diff = sorted(p_ids ^ s_ids)
+    tag_diff = sorted(i for i in p_ids & s_ids
+                      if set(_tags(prod, i) or []) != set(_tags(shadow, i) or []))
+    head.update(n_diff=len(diff), n_tag_diff=len(tag_diff))
+    for kind, ids in (('relevance', diff), ('tags', tag_diff)):
+        for i in ids:
+            v = view[i - 1]
+            rows.append(dict(base, kind=kind, url=v.get('url') or None, title=v.get('title') or '',
+                             summary=v.get('summary') or None,
+                             prod_relevant=i in p_ids, shadow_relevant=i in s_ids,
+                             prod_tags=_tags(prod, i), shadow_tags=_tags(shadow, i)))
+    return rows
+
+
+def _screen_shadow_start(criteria_hash: str):
+    """켜져 있으면 그림자 상태 dict, 꺼졌거나 준비 실패면 None(운영은 그대로)."""
+    if not ANTHROPIC_API_KEY or _screen_shadow_until() is None:
+        return None
+    try:
+        from concurrent.futures import ThreadPoolExecutor
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY, timeout=SCREEN_SHADOW_TIMEOUT_S, max_retries=1)
+        pool = ThreadPoolExecutor(max_workers=SCREEN_SHADOW_WORKERS)
+    except Exception as e:
+        print(f'[선별 그림자] 준비 실패 — 이번 실행 건너뜀: {str(e)[:80]}')
+        return None
+    return {'client': client, 'pool': pool, 'criteria_hash': criteria_hash, 'jobs': []}
+
+
+def _screen_shadow_submit(sh, criteria: str, batch: list):
+    """배치 하나를 그림자에 건다 — 운영 호출보다 **먼저** 불러 둘이 나란히 돌게 한다.
+    반환한 job의 'prod'에 운영 판정을 넣는다. 실패는 삼킨다(그 배치만 그림자에서 빠짐)."""
+    if sh is None:
+        return None
+    try:
+        view = [{'url': (it.get('url') or '').strip(), 'title': (it.get('title') or '').strip(),
+                 'summary': _screen_text_of(it)} for it in batch]
+        fut = sh['pool'].submit(_screen_shadow_batch, sh['client'], _screen_request(criteria, batch))
+    except Exception as e:
+        print(f'  [선별 그림자] 배치 걸기 실패(무시): {str(e)[:80]}')
+        return None
+    job = {'view': view, 'fut': fut, 'prod': None}
+    sh['jobs'].append(job)
+    return job
+
+
+def _screen_shadow_finish(sh) -> None:
+    """남은 그림자를 최대 SCREEN_SHADOW_WAIT_S초 기다려 비교·기록한다. 무엇이 실패해도 던지지 않는다."""
+    if sh is None:
+        return
+    try:
+        from concurrent.futures import wait
+        jobs = sh['jobs']
+        late = set()
+        if jobs:
+            _done, late = wait([j['fut'] for j in jobs], timeout=SCREEN_SHADOW_WAIT_S)
+        sh['pool'].shutdown(wait=False, cancel_futures=True)
+        rows = []
+        for j in jobs:
+            if j['fut'] in late:
+                res = {'status': 'timeout', 'verdict': None, 'ms': None, 'detail': ''}
+            else:
+                try:
+                    res = j['fut'].result()
+                except Exception as e:      # _screen_shadow_batch는 던지지 않지만 — 그래도 그 배치만 오류로
+                    res = {'status': 'error', 'verdict': None, 'ms': None, 'detail': str(e)[:200]}
+            rows.extend(_screen_shadow_rows(j['view'], j['prod'], res, sh['criteria_hash']))
+        heads = [r for r in rows if r['kind'] == 'batch']
+        if not heads:
+            return
+        st = {}
+        for r in heads:
+            st[r['status']] = st.get(r['status'], 0) + 1
+        rel = [r for r in rows if r['kind'] == 'relevance']
+        n_tag = sum(1 for r in rows if r['kind'] == 'tags')
+        only_prod = sum(1 for r in rel if r['prod_relevant'])
+        saved = _save_shadow_rows(rows)
+        print(f'[선별 그림자] {SCREEN_SHADOW_MODEL} 배치 {len(heads)}개('
+              + ', '.join(f'{k} {v}' for k, v in sorted(st.items()))
+              + f') · 관련 갈림 {len(rel)}건(4.5만 관련 {only_prod} / 5.5만 관련 {len(rel) - only_prod})'
+              f' · 태그 갈림 {n_tag}건 · 기록 {saved}/{len(rows)}행')
+    except Exception as e:
+        print(f'[선별 그림자] 마무리 실패(무시): {str(e)[:120]}')
+
+
+def _save_shadow_rows(rows: list) -> int:
+    """news_screen_shadow에 넣는다(500행씩). 넣은 행 수를 돌려준다 — 실패는 삼킨다(운영 영향 0)."""
+    saved = 0
+    for i in range(0, len(rows), 500):
+        part = rows[i:i + 500]
+        try:
+            sb.table('news_screen_shadow').insert(part).execute()
+            saved += len(part)
+        except Exception as e:
+            print(f'[선별 그림자] 기록 실패(무시): {str(e)[:120]}')
+    return saved
 
 
 # 주파수 안전망 — 이 네 단어가 제목·요약에 있으면 spectrum을 '추가'한다.
@@ -1691,11 +1882,16 @@ def screen_news_items(items: list) -> list:
 
     judged = len(cand_idx)
     rejected_rows = []                    # 이번에 AI가 무관 판정한 기사 → 캐시에 기록
+    # 그림자(#318) — 켜져 있을 때만, 운영 판정과 나란히. 결과는 news_screen_shadow에만 쓴다.
+    shadow = _screen_shadow_start(criteria_hash) if (cand_idx and client) else None
     n_batches = (len(cand_idx) + SCREEN_BATCH_SIZE - 1) // SCREEN_BATCH_SIZE
     for i in range(0, len(cand_idx), SCREEN_BATCH_SIZE):
         chunk = cand_idx[i:i + SCREEN_BATCH_SIZE]
         batch = [items[n] for n in chunk]
+        shadow_job = _screen_shadow_submit(shadow, criteria, batch)   # 운영 호출보다 먼저 건다(나란히 돌게)
         verdict = _screen_batch_haiku(client, criteria, batch) if client else None
+        if shadow_job is not None:
+            shadow_job['prod'] = verdict      # None = 운영 실패·키워드 폴백 → 그 배치는 비교하지 않는다
         if verdict is None:
             if client:
                 print(f'  [선별 배치 {i // SCREEN_BATCH_SIZE + 1}/{n_batches} 실패] '
@@ -1728,6 +1924,7 @@ def screen_news_items(items: list) -> list:
 
     if client:
         _save_screen_cache(rejected_rows)
+    _screen_shadow_finish(shadow)         # 남은 그림자 ≤ SCREEN_SHADOW_WAIT_S초 대기 → 비교·기록(던지지 않음)
 
     passed  = [it for n, it in enumerate(items) if keep[n]]
     dropped = [it for n, it in enumerate(items) if not keep[n]]
