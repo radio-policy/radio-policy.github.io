@@ -101,7 +101,10 @@ API_BASE = 'https://open.assembly.go.kr/portal/openapi/nzmimeepazxkubdpn'
 NOTICE_API   = 'https://open.assembly.go.kr/portal/openapi/nknalejkafmvgzmpt'
 # 제안이유·주요내용 보조 API (BILL_NO로 조회)
 SUMMARY_API  = 'https://open.assembly.go.kr/portal/openapi/BPMBILLSUMMARY'
-HAIKU_MODEL  = 'claude-haiku-4-5-20251001'  # crawler.py와 동일 모델
+HAIKU_MODEL  = 'claude-haiku-4-5-20251001'  # 입법예고 관련성 판정(+ 과방위 방송법 스윕) — 4.5 유지
+# 5.5로 바꾸지 말 것(#317-보론, 2026-10-17 운영자 결정): 같은 함수·배치로 77건×2회 눈가림 대조에서 5.5는 놓침이 없었지만
+# 정답 무관 14표 중 12표를 관련으로 올렸다(4.5는 1표) — 기준문의 무관 예시(디지털 헬스케어)까지. #171 규칙 3이 4.5 읽기에 보정돼 있다.
+# 옮기려면 기준문·규칙 3 재보정 + local_docs/입법예고판정_대조_261017/의 세트로 재측정이 한 묶음.
 # (미사용) 과거 의견등록 마감 D-3 재알림 임계값.
 # 운영자 지시(2026-08-03)로 입법예고 알림은 최초 감지 1회만 — 재알림 경로 삭제. 이력용으로만 남김.
 NOTICE_DEADLINE_DAYS = 3
