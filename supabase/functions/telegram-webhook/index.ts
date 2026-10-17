@@ -836,7 +836,7 @@ async function trialGate(
   const mine = await usageCount({ chatId, commands: [command], note: TRIAL_NOTE, sinceIso: dayStart });   // 오늘 쓴 무료 횟수(#319)
   if (mine === null) { await retry(); return null; }
   if (mine >= TRIAL_PER_COMMAND) {
-    await sendTelegramHtml(BOT_TOKEN, chatId, '🔒 추가 한도는 관리자에게 문의해 주세요.');
+    await sendTelegramHtml(BOT_TOKEN, chatId, '🔒 오늘 무료 이용을 모두 쓰셨습니다. 내일 다시 쓸 수 있고, 추가 한도는 관리자에게 문의해 주세요.');
     // 운영자 버튼은 사람·명령마다 하루 한 번 — 같은 사람이 여러 번 보내도 요청이 쌓이지 않게
     const asked = await usageCount({ chatId, commands: [command], note: TRIAL_OUT_NOTE, sinceIso: dayStart });
     await logUsage(chatId, command, query, false, TRIAL_OUT_NOTE);
