@@ -5997,7 +5997,8 @@ async function urgencyRuleFromText(btn) {
       site: 'urgency_rule_nl',
       method: 'POST',
       body: JSON.stringify({
-        model: 'claude-haiku-4-5-20251001', max_tokens: 800,
+        // Haiku 5.5(2026-10-17, 모델 전환 판정 §6 #21) — 도구 강제라 추론은 건너뛴다. 거부면 도구 블록이 없어 아래 오류로 간다
+        model: 'claude-haiku-5-5', max_tokens: 800,
         system: UR_NL_SYSTEM +
           (team ? ('\n\n[이번 규칙은 「' + myTeamName() + '」 팀 규칙이다 — 그 팀이 보는 등급에만 적용된다. 그 팀의 관점으로 옮긴다]\n' + UR_NL_TEAM_SENTENCE) : '') +
           '\n\n[지금 저장된 규칙 — 본보기]\n' + JSON.stringify(examples),
@@ -8300,15 +8301,18 @@ async function summarizeNews(newsId) {
     var res = await claudeFetch({
       site: 'news_summary',
       method: 'POST',
+      // Haiku 5.5(2026-10-17, 모델 전환 판정 §6 #20): 추론 끔, 상한 500 → 700(토큰 ≈ +30 %), 글은 type으로 읽는다
       body: JSON.stringify({
-        model: 'claude-haiku-4-5-20251001',
-        max_tokens: 500,
+        model: 'claude-haiku-5-5',
+        max_tokens: 700,
+        thinking: { type: 'disabled' },
         system: '당신은 전파·통신 정책 뉴스를 간결하게 요약하는 전문가입니다. 사실만 기반으로 핵심 포인트를 줄바꿈으로 구분하여 작성하세요. 불릿 기호 없이 텍스트만 출력하세요.',
         messages: [{ role: 'user', content: userMsg }]
       })
     });
     var data = await res.json();
-    var summaryText = (data.content && data.content[0] && data.content[0].text || '').trim();
+    var summaryText = (data.content || []).filter(function(b) { return b.type === 'text'; })
+      .map(function(b) { return b.text || ''; }).join('').trim();
 
     if (summaryText) {
       box.innerHTML = renderSummaryHtml(summaryText);
@@ -8385,7 +8389,8 @@ async function analyzeNewsImpact(newsId, force) {
     var res = await claudeFetch({
       site: 'news_impact',
       method: 'POST',
-      body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 800, system: sysMsg, messages: [{ role: 'user', content: userMsg }] })
+      // Haiku 5.5(2026-10-17, 모델 전환 판정 §6 #20): 추론 끔, 상한 800 → 1000, 글은 type으로 읽는다
+      body: JSON.stringify({ model: 'claude-haiku-5-5', max_tokens: 1000, thinking: { type: 'disabled' }, system: sysMsg, messages: [{ role: 'user', content: userMsg }] })
     });
     var data = await res.json();
 
@@ -8394,7 +8399,8 @@ async function analyzeNewsImpact(newsId, force) {
       throw new Error(data.error.message || 'API 오류');
     }
 
-    var text = (data.content && data.content[0] && data.content[0].text) || '';
+    var text = (data.content || []).filter(function(b) { return b.type === 'text'; })
+      .map(function(b) { return b.text || ''; }).join('');
 
     _renderImpactBox(box, n, text, false);
 
@@ -9780,15 +9786,17 @@ async function analyzeBriefingItemEl(el, titleText) {
     var res = await claudeFetch({
       site: 'briefing_item',
       method: 'POST',
+      // Haiku 5.5(2026-10-17, 모델 전환 판정 §6 #20): 추론 끔, 상한 800 → 1000, 글은 type으로 읽는다
       body: JSON.stringify({
-        model: 'claude-haiku-4-5-20251001', max_tokens: 800,
+        model: 'claude-haiku-5-5', max_tokens: 1000, thinking: { type: 'disabled' },
         system: sysMsg,
         messages: [{ role: 'user', content: userContent }]
       })
     });
     if (!res.ok) throw new Error('API ' + res.status);
     var json = await res.json();
-    var txt = json.content && json.content[0] ? json.content[0].text : '';
+    var txt = (json.content || []).filter(function(b) { return b.type === 'text'; })
+      .map(function(b) { return b.text || ''; }).join('');
     var impactMatch = txt.match(/<impact>([\s\S]*?)<\/impact>/);
     var priorityMatch = txt.match(/<priority>([\s\S]*?)<\/priority>/);
     var impactText = impactMatch ? impactMatch[1].trim() : '';
@@ -10212,7 +10220,8 @@ async function generateOkfForDoc(docName, category) {
   var res = await claudeFetch({
     site: 'okf_generate',
     method: 'POST',
-    body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 4096, system: sysPrompt,
+    // Haiku 5.5(2026-10-17, 모델 전환 판정 §6 #22): 적응형 추론 그대로 — 추론도 상한을 쓰고 토큰이 ≈ +30 %라 4096 → 8000
+    body: JSON.stringify({ model: 'claude-haiku-5-5', max_tokens: 8000, system: sysPrompt,
       messages: [{ role: 'user', content: userMsg }] })
   });
   var data = await res.json();
@@ -10349,7 +10358,8 @@ async function testConnection() {
         site: 'conn_test',
         method: 'POST',
         // Haiku로(#153) — Sonnet이면 프록시가 자문 한도 1회를 차감한다(#141 모델명 기준). 연결 확인에 Sonnet은 불필요.
-        body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 10, messages: [{ role: 'user', content: 'ping' }] })
+        // Haiku 5.5(2026-10-17, 판정 §6 #23): 추론 끔(상한 10이라 켜 두면 추론이 다 먹는다)
+        body: JSON.stringify({ model: 'claude-haiku-5-5', max_tokens: 10, thinking: { type: 'disabled' }, messages: [{ role: 'user', content: 'ping' }] })
       });
       results.push(res.ok ? 'Claude API 연결 성공' : 'Claude API X (HTTP ' + res.status + ')');
     } catch(e) { results.push('Claude API X (' + e.message + ')'); }

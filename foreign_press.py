@@ -92,7 +92,9 @@ JUDGE_EXCERPT = 3000      # Haiku 판정 입력 발췌 상한
 CONTENT_EXCERPT = 2000    # news_feed.content 원문 발췌 상한
 BODY_ENOUGH = 300         # description이 이보다 짧으면 상세 페이지 추출 시도
 
-HAIKU_MODEL = 'claude-haiku-4-5-20251001'
+# 2026-10-17 Haiku 4.5 → 5.5(모델 전환 판정 §6 #10). 도구 강제 호출이라 추론은 건너뛰고 temperature·thinking 인자는 없다.
+# 거부(stop_reason 'refusal')는 도구 블록이 없어 None = 호출 실패(그 건은 저장 안 함)로 간다. 상한 1000 → 1500(토큰 ≈ +30 %).
+HAIKU_MODEL = 'claude-haiku-5-5'
 
 # app_config key='foreign_relevance_criteria' 조회 실패 시 폴백
 FOREIGN_CRITERIA_FALLBACK = (
@@ -342,7 +344,7 @@ def make_judge(criteria: str):
         try:
             resp = client.messages.create(
                 model=HAIKU_MODEL,
-                max_tokens=1000,
+                max_tokens=1500,
                 tools=[JUDGE_TOOL],
                 tool_choice={'type': 'tool', 'name': 'record_judgement'},
                 messages=[{'role': 'user', 'content': prompt}],

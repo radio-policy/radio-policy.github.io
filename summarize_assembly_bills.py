@@ -76,9 +76,11 @@ def summarize(bill_name: str, text: str) -> str:
         return ''
     try:
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        # Haiku 5.5(2026-10-17, 모델 전환 판정 §6 #15): 추론 끔, 상한 200 → 300(토큰 ≈ +30 %), 글은 type으로 읽는다
         resp = client.messages.create(
-            model='claude-haiku-4-5-20251001',
-            max_tokens=200,
+            model='claude-haiku-5-5',
+            max_tokens=300,
+            thinking={'type': 'disabled'},
             messages=[{
                 'role': 'user',
                 'content': (
@@ -89,7 +91,7 @@ def summarize(bill_name: str, text: str) -> str:
                 ),
             }],
         )
-        out = _clean(resp.content[0].text)
+        out = _clean(''.join(b.text for b in resp.content if getattr(b, 'type', '') == 'text'))   # 거부면 '' → 요약 없음
         return out if len(out) >= 6 else ''
     except Exception as e:
         print(f'  [요약 오류] {e}')

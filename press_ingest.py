@@ -119,12 +119,19 @@ def load_press_criteria(sb) -> str:
     return RELEVANCE_CRITERIA_FALLBACK
 
 
-def make_ai_judge(sb, keywords: list, model: str = 'claude-haiku-4-5-20251001',
-                  thinking: dict = None):
-    """제목+본문 기반 관련성 판정기(기본 Haiku). API 불가 시 None(호출자가 키워드 방식 유지).
-    개별 호출 실패 시엔 키워드 매칭으로 폴백(fail-open) — 무음 누락 방지(#39).
+# 보도자료·방미통위 보도자료 관련성 판정 기본 모델 — 2026-10-17 Haiku 4.5 → 5.5(모델 전환 판정 §6 #11).
+# 출력이 「관련|사유」 60토큰이라 추론을 꼭 끈다(켜 두면 상한을 추론이 먹어 빈 답 → 키워드 폴백만 남는다).
+JUDGE_MODEL = 'claude-haiku-5-5'
+JUDGE_THINKING = {'type': 'disabled'}
+
+
+def make_ai_judge(sb, keywords: list, model: str = JUDGE_MODEL,
+                  thinking: dict = JUDGE_THINKING):
+    """제목+본문 기반 관련성 판정기(기본 Haiku 5.5). API 불가 시 None(호출자가 키워드 방식 유지).
+    개별 호출 실패 시엔 키워드 매칭으로 폴백(fail-open) — 무음 누락 방지(#39). 거부(stop_reason 'refusal')도
+    글이 없어 형식이탈-키워드폴백으로 간다.
     model/thinking 은 호출자별 선택 — 회의록(assembly_minutes)만 Sonnet 5 + thinking off 를 넘긴다
-    (2026-09-03). 보도자료 경로는 인자를 안 넘기므로 종전과 동일하다."""
+    (2026-09-03). 보도자료·방미통위 경로는 인자를 안 넘긴다(기본값)."""
     api_key = os.environ.get('ANTHROPIC_API_KEY', '')
     if not api_key or anthropic is None:
         return None
@@ -197,8 +204,9 @@ def batch_judge_all(sb, items_bodies: list, keywords: list, wait_sec: int = 900)
     reqs = [{
         'custom_id': str(key),
         'params': {
-            'model': 'claude-haiku-4-5-20251001',
+            'model': JUDGE_MODEL,              # 개별 판정과 같은 모델·설정(두 경로가 갈리면 같은 글이 다르게 판정된다)
             'max_tokens': 60,
+            'thinking': JUDGE_THINKING,
             'messages': [{'role': 'user', 'content': _judge_prompt(criteria, title, body)}],
         },
     } for key, title, body in items_bodies]

@@ -87,7 +87,7 @@ SRC_BY_KIND = {'agenda': SRC_AGENDA, 'result': SRC_PRESS, 'press': SRC_PRESS}
 PRESS_SNIPPET = 600        # 일반 보도자료 텔레그램 본문 앞부분 길이 (400 → 600, 2026-09-23:
                            # 400자면 첫 문단에서 끊겨 요지가 안 들어왔다. 예산 2500자에 여유 충분)
 TOPIC = 'kmcc'
-HAIKU = 'claude-haiku-4-5-20251001'
+HAIKU = 'claude-haiku-5-5'   # 2026-10-17 Haiku 4.5 → 5.5(모델 전환 판정 §6 #13). 5.5는 temperature 비기본값이 400 → 뺐다, 추론 끔
 HB_KEY = 'last_kmcc_meeting_run'
 
 QUEUE_WINDOW_DAYS = 2      # 게시 후 이틀 안 건만 큐 적재 (백필은 자동 제외)
@@ -579,8 +579,11 @@ def haiku(system: str, user: str, max_tokens: int) -> str:
         return ''
     try:
         r = anthropic.Anthropic().messages.create(
-            model=HAIKU, max_tokens=max_tokens, temperature=0,
+            model=HAIKU, max_tokens=max_tokens, thinking={'type': 'disabled'},
             system=system, messages=[{'role': 'user', 'content': user}])
+        if getattr(r, 'stop_reason', None) == 'refusal':     # 5.5 안전 분류기 거부 — 원문 폴백(종전 실패와 같은 처리)
+            print('  [Haiku 거부 → 원문 폴백]')
+            return ''
         return next((b.text for b in r.content if getattr(b, 'type', '') == 'text'), '').strip()
     except Exception as e:
         print('  [Haiku 실패 → 원문 폴백] %s' % str(e)[:100])
@@ -601,7 +604,8 @@ def build_agenda(item: dict, use_ai: bool, revised: bool = False) -> tuple:
         return content, '', format_agenda_fallback_html(item['meta'], item['title'], item['url'], pdf_url, revised,
                                                         unread=True)
     content = first + '\n\n' + pi._clean_body(raw)
-    parsed = parse_agenda_out(haiku(AGENDA_SYS, AGENDA_USER.format(text=raw[:12000]), 3000)) if use_ai else {}
+    # 상한 3000 → 4000: Haiku 5.5는 같은 글이 토큰 ≈ +30 %(2026-10-17)
+    parsed = parse_agenda_out(haiku(AGENDA_SYS, AGENDA_USER.format(text=raw[:12000]), 4000)) if use_ai else {}
     if not parsed:
         if use_ai:
             print('  [표 복원 실패 → 원문] %s' % item['title'][:50])
@@ -633,7 +637,7 @@ def build_result(item: dict, use_ai: bool) -> tuple:
     body = fetch_press_body(item)
     if len(body) < pi.BODY_MIN:
         raise RuntimeError('본문 추출 실패 (%d자)' % len(body))
-    lines = parse_result_lines(haiku(RESULT_SYS, RESULT_USER.format(title=item['title'], body=body[:6000]), 700)) \
+    lines = parse_result_lines(haiku(RESULT_SYS, RESULT_USER.format(title=item['title'], body=body[:6000]), 900)) \
         if use_ai else []
     if not lines:
         return body, '', format_result_fallback_html(item['meta'], item['post_date'], body, item['url'])

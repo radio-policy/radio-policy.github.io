@@ -292,8 +292,10 @@ def _get_distilled_rules() -> str:
             for r in rows[:200]
         )
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        # 모델 Haiku 5.5(2026-10-17, 모델 전환 판정 §6 #8): 추론 끔(짧은 글 출력 — 켜 두면 상한을 추론이 먹는다),
+        # 같은 글이 토큰 ≈ +30 %라 상한 600 → 900. 글은 type으로 읽는다(응답 앞에 thinking 블록이 올 수 있다).
         resp = client.messages.create(
-            model='claude-haiku-4-5-20251001', max_tokens=600,
+            model='claude-haiku-5-5', max_tokens=900, thinking={'type': 'disabled'},
             # ⚠️ "규칙을 요약하라"만 시키면 **등급이 빠진 목록**이 나온다(#109 실패 사례).
             #    규칙은 판정 프롬프트에 최우선 기준으로 들어가므로 방향이 없으면 해롭다.
             system='다음은 뉴스 긴급도 분류(즉시대응/금주검토/동향파악)에 대한 담당자 수정 사례입니다.\n'
@@ -304,7 +306,10 @@ def _get_distilled_rules() -> str:
                    '사례에서 확인되지 않는 일반론은 쓰지 마세요. 규칙 외 다른 말 금지.',
             messages=[{'role': 'user', 'content': sample}],
         )
-        rules = resp.content[0].text.strip()
+        rules = ''.join(b.text for b in resp.content if getattr(b, 'type', '') == 'text').strip()
+        if not rules or getattr(resp, 'stop_reason', None) in ('refusal', 'max_tokens'):
+            # 거부(5.5 안전 분류기)·잘림·빈 답을 저장하면 저장된 규칙이 지워진다 — 실패로 보고 저장본을 쓴다
+            raise RuntimeError(f'응답 없음·잘림(stop_reason={getattr(resp, "stop_reason", None)})')
         sb.table('feedback_rules').upsert({
             'id': 1, 'rules': rules, 'feedback_count': len(rows),
             'updated_at': datetime.now(KST).isoformat(),
@@ -2302,8 +2307,12 @@ SENTENCE_REV_CATCHUP_DAYS = 3    # 판 올림 재요청(Fable 재검토 #251): �
                                  # 옛 판 판정 행 기사 중 지금 판 행이 없고 지금 낱말이 걸리는 기사에 지금 판 대기 행을 넣는다
 SENTENCE_REQUEUE_BY = '00000000-0000-0000-0000-000000000000'   # 그 재요청 행의 requested_by 표식 — 수집 경로(null)가 아니므로 늦은 팀
                                  # 알림(#252 B2 '규칙 저장·재판정으로 생긴 등급은 화면에만') 후보에서 빠진다. null로 바꾸지 말 것
-_SENTENCE_PRICE_IN = 1.0 / 1_000_000     # Haiku 4.5 입력 $1/M 토큰
-_SENTENCE_PRICE_OUT = 5.0 / 1_000_000    # 출력 $5/M 토큰
+# 문장 조건 판정 모델 — 선별(SCREEN_MODEL, Haiku 4.5 유지)과 떼어 Haiku 5.5로(2026-10-17, 모델 전환 판정 §5·§6 #4: 합성 20사례
+# × 2회 불일치 0·흔들림 0). 도구 강제 호출이라 추론은 건너뛰고 temperature·thinking 인자는 없다. 지시문(SENTENCE_RUBRIC·
+# SENTENCE_TOOL)은 그대로 — 사내판 개인 채점이 글자로 대조한다. 팀 채점 시험 판정도 이 모델(_judge_jobs 공용).
+SENTENCE_MODEL = 'claude-haiku-5-5'
+_SENTENCE_PRICE_IN = 0.10 / 1_000_000    # Haiku 5.5 입력 $0.10/M 토큰(프롬프트 10만 토큰 이하 요금표)
+_SENTENCE_PRICE_OUT = 0.50 / 1_000_000   # 출력 $0.50/M 토큰
 _BUDGET_KEY = 'sentence_rule_budget_usd'           # app_config — 팀당 월 비용 알림 기준(글자 → 실수)
 _BUDGET_MARK_KEY = 'sentence_rule_budget_alerted'  # app_config — 알림을 보낸 달 {"<team_id>": "YYYY-MM"}(JSON)
 
@@ -2384,7 +2393,7 @@ def _parse_ts(s):
 
 
 def _sentence_cost(usage) -> float:
-    """호출 한 번의 요금(USD) = 입력 토큰 × $1/M + 출력 토큰 × $5/M(캐시를 쓰지 않는다). usage가 없으면 0."""
+    """호출 한 번의 요금(USD) = 입력 토큰 × $0.10/M + 출력 토큰 × $0.50/M(Haiku 5.5, 캐시를 쓰지 않는다). usage가 없으면 0."""
     if usage is None:
         return 0.0
 
@@ -2436,7 +2445,7 @@ def _judge_sentence_batch(client, sentence: str, rows: list):
     cost = 0.0
     try:
         resp = client.messages.create(
-            model=SCREEN_MODEL,
+            model=SENTENCE_MODEL,
             max_tokens=4000,
             system=SENTENCE_RUBRIC,
             tools=[SENTENCE_TOOL],
@@ -2511,7 +2520,7 @@ def _result_row(rule_id, rev, team_id, res, input_kind: str, attempts: int, now_
         n = attempts + 1
         return _verdict_row(rule_id, rev, team_id, 'failed' if n >= SENTENCE_MAX_ATTEMPTS else 'pending', attempts=n)
     return _verdict_row(rule_id, rev, team_id, 'done', verdict=match, reason=why, input_kind=input_kind,
-                        model=SCREEN_MODEL, cost=share, attempts=attempts + 1, judged_at=now_iso)
+                        model=SENTENCE_MODEL, cost=share, attempts=attempts + 1, judged_at=now_iso)
 
 
 def _add_run_cost(rows) -> None:
@@ -3492,7 +3501,7 @@ def judge_grading_trials(trials: list) -> dict:
                     missing += 1
                     continue
                 rows.append({'trial_id': t['id'], 'cand_idx': idx, 'news_id': j['news_id'], 'verdict': match,
-                             'reason': why, 'input_kind': j['kind'], 'model': SCREEN_MODEL, 'cost_usd': share,
+                             'reason': why, 'input_kind': j['kind'], 'model': SENTENCE_MODEL, 'cost_usd': share,
                              'reused': False})
             saved, e2 = _upsert_rows('team_grading_trial_verdicts', rows, SENTENCE_CHUNK,
                                      on_conflict='trial_id,cand_idx,news_id')
@@ -3629,13 +3638,16 @@ def generate_summary(title: str, source: str, published_at: str, content: str) -
     )
     try:
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        # Haiku 5.5(2026-10-17, 모델 전환 판정 §6 #7): 추론 끔 + 상한 500 → 700(토큰 ≈ +30 %), 글은 type으로 읽는다
         resp = client.messages.create(
-            model='claude-haiku-4-5-20251001',
-            max_tokens=500,
+            model='claude-haiku-5-5',
+            max_tokens=700,
+            thinking={'type': 'disabled'},
             system='당신은 전파·통신 정책 뉴스를 간결하게 요약하는 전문가입니다. 사실만 기반으로 핵심 포인트를 줄바꿈으로 구분하여 작성하세요. 불릿 기호 없이 텍스트만 출력하세요.',
             messages=[{'role': 'user', 'content': user_msg}]
         )
-        return (resp.content[0].text or '').strip() if resp.content else ''
+        # 거부(stop_reason 'refusal')는 text 블록이 없어 ''(종전 실패와 같은 처리)
+        return ''.join(b.text for b in resp.content if getattr(b, 'type', '') == 'text').strip()
     except Exception as e:
         print(f'[요약 오류] {title[:30]}: {e}')
         return ''

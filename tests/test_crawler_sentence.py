@@ -1202,11 +1202,14 @@ class TestJudgeBatchCall(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()):
             out, cost = _REAL_JUDGE(client, '조건 문장 예', rows)
         self.assertEqual(out, {1: (True, '끊김 문제 제기')})
-        self.assertAlmostEqual(cost, 1000 * 1e-6 + 200 * 5e-6)
+        self.assertAlmostEqual(cost, 1000 * 0.1e-6 + 200 * 0.5e-6)     # Haiku 5.5 단가(2026-10-17)
         kw = client.messages.kw
         self.assertEqual(set(kw), {'model', 'max_tokens', 'system', 'tools', 'tool_choice', 'messages'},
                          'temperature류·캐시 없음(지침 do-not)')
-        self.assertEqual((kw['model'], kw['max_tokens'], kw['system']), (crawler.SCREEN_MODEL, 4000, crawler.SENTENCE_RUBRIC))
+        self.assertEqual((kw['model'], kw['max_tokens'], kw['system']), (crawler.SENTENCE_MODEL, 4000, crawler.SENTENCE_RUBRIC))
+        # 문장 조건 판정만 Haiku 5.5(모델 전환 판정 §5·§6 #4, 2026-10-17) — 관련성 선별(SCREEN_MODEL)은 4.5 그대로
+        self.assertEqual(crawler.SENTENCE_MODEL, 'claude-haiku-5-5')
+        self.assertEqual(crawler.SCREEN_MODEL, 'claude-haiku-4-5-20251001')
         self.assertEqual(kw['tools'], [crawler.SENTENCE_TOOL])
         self.assertEqual(kw['tool_choice'], {'type': 'tool', 'name': 'record_condition_verdicts'})
         content = kw['messages'][0]['content']

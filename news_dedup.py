@@ -122,7 +122,11 @@ _GROUP_SYSTEM = (
 )
 
 
-def group_same_event(titles: list, api_key: str, model: str = 'claude-haiku-4-5-20251001',
+GROUP_MODEL = 'claude-haiku-5-5'   # 2026-10-17 Haiku 4.5 → 5.5(모델 전환 판정 §6 #6 — 오묶음은 「관련 보도 N건」으로만 보인다).
+                                   # 재보도 대조 MATCH_MODEL(아래)은 4.5 그대로 — 5.5는 재보도 묶음 26 → 13~15/29(판정 §4)
+
+
+def group_same_event(titles: list, api_key: str, model: str = GROUP_MODEL,
                      timeout=None, max_retries=None) -> list | None:
     """제목 목록 → 같은 사건끼리의 인덱스 그룹. 실패하면 None(호출부는 원본 유지 = fail-open).
 
@@ -141,9 +145,12 @@ def group_same_event(titles: list, api_key: str, model: str = 'claude-haiku-4-5-
             client_kw['timeout'] = timeout
         if max_retries is not None:
             client_kw['max_retries'] = max_retries
+        # Haiku 5.5는 추론이 기본 켜짐 — 짧은 JSON 출력이라 끈다(켜 두면 상한 400을 추론이 먹어 빈 답, 판정 §7)
+        think = {'thinking': {'type': 'disabled'}} if model.startswith('claude-haiku-5') else {}
         resp = anthropic.Anthropic(api_key=api_key, **client_kw).messages.create(
             model=model, max_tokens=400, system=_GROUP_SYSTEM,
             messages=[{'role': 'user', 'content': f'[기사 {len(titles)}건]\n{listing}'}],
+            **think,
         )
         # Sonnet5 적응형 추론 함정 회피와 같은 이유로 text 블록만 골라 잇는다
         raw = ''.join(b.text for b in resp.content if getattr(b, 'type', '') == 'text').strip()

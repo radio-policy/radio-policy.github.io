@@ -448,8 +448,9 @@ class TestTrialJudging(_Base):
         self.assertEqual((st['calls'], st['judged'], len(self.create_calls)), (1, 1, 1))
         self.assertIn('기사 5건', self.create_calls[0]['messages'][0]['content'])
         self.assertEqual(self.tstate()['status'], 'judged')
-        self.assertAlmostEqual(self.tstate()['cost_usd'], 0.0015, places=4)
-        self.assertAlmostEqual(crawler._SENTENCE_RUN_COST[7], 0.0015, places=4)
+        # 입력 1000 × $0.10/M + 출력 100 × $0.50/M(Haiku 5.5, 2026-10-17 — 그 전 4.5 단가로는 0.0015)
+        self.assertAlmostEqual(self.tstate()['cost_usd'], 0.00015, places=6)
+        self.assertAlmostEqual(crawler._SENTENCE_RUN_COST[7], 0.00015, places=6)
 
     def test_same_sentence_reuses_operational_verdicts(self):
         self.db.tables['urgency_rule_verdicts'] = [

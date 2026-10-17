@@ -42,7 +42,7 @@ SUPABASE_URL      = os.environ['SUPABASE_URL']
 SUPABASE_KEY      = os.environ['SUPABASE_SERVICE_KEY']
 ANTHROPIC_API_KEY = os.environ['ANTHROPIC_API_KEY']
 
-MODEL = 'claude-haiku-4-5-20251001'   # 종전 app.js autoExtractTermsIfNeeded와 동일
+MODEL = 'claude-haiku-5-5'   # 2026-10-17 Haiku 4.5 → 5.5(모델 전환 판정 §6 #16) — JSON 출력이라 추론 끔, 상한 1000 → 1500(토큰 ≈ +30 %)
 NEWS_DAYS = 7
 NEWS_LIMIT = 30
 
@@ -73,7 +73,7 @@ def extract(news_list: str) -> list:
                 '뉴스 목록:\n' + news_list + '\n\n'
                 'JSON 배열로만 출력 (신규 용어만, 없으면 []): '
                 '[{"term":"...","term_en":"...","category":"...","definition":"...","source":"..."}]')
-    resp = ai.messages.create(model=MODEL, max_tokens=1000,
+    resp = ai.messages.create(model=MODEL, max_tokens=1500, thinking={'type': 'disabled'},
                               messages=[{'role': 'user', 'content': user_msg}])
     text = ''.join(b.text for b in resp.content if b.type == 'text')
     a, b = text.find('['), text.rfind(']')

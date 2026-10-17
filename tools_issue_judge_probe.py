@@ -37,16 +37,16 @@ except Exception:
     pass
 ROOT = os.path.dirname(os.path.abspath(__file__))
 FIXTURE = os.path.join(ROOT, 'tests', 'fixtures', 'issue_judge_cases.json')
-MODEL = 'claude-sonnet-5'
+MODEL = 'claude-sonnet-5-5'   # 운영 issue_suggest._haiku_relate_batch와 같은 값 — 2026-10-17 Sonnet 5 → 5.5(모델 전환 판정 §8)
 
 
 def _think_kw() -> dict:
     """운영과 같은 추론 끔: Sonnet 5는 thinking disabled, Sonnet 5.5는 disabled가 400이라 between_tools(effort high 이하만),
-    Haiku 5.5는 disabled(effort high 이하). --model 비교 실측용 — 운영 요청(issue_suggest)은 안 바꾼다."""
+    Haiku 5.5는 disabled(effort high 이하). 기본 MODEL(Sonnet 5.5)은 운영 요청과 같은 꼴, --model은 비교 실측용."""
     if MODEL.startswith('claude-sonnet-5-5'):
         return {'thinking': {'type': 'between_tools'}}
     return {'thinking': {'type': 'disabled'}}
-PRICE_IN, PRICE_OUT = 2.0, 10.0          # Sonnet 5 $ / 100만 토큰
+PRICE_IN, PRICE_OUT = 2.0, 10.0          # Sonnet 5·5.5 $ / 100만 토큰(같은 값)
 CONTROL = (46, 119, 2, 13)
 
 _TAIL = ('JSON 하나만 출력한다: {"belong": [속하는 항목 번호]} — 없으면 {"belong": []}. '

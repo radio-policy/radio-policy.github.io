@@ -236,8 +236,9 @@ def _haiku_profile(rep_title: str, member_titles: list) -> dict | None:
     try:
         import anthropic
         listing = '\n'.join('- ' + t for t in ([rep_title] + member_titles)[:12])
+        # Haiku 5.5(2026-10-17, 모델 전환 판정 §6 #12): 짧은 JSON이라 추론 끔(켜 두면 상한을 추론이 먹는다)
         resp = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY).messages.create(
-            model='claude-haiku-4-5-20251001', max_tokens=300,
+            model='claude-haiku-5-5', max_tokens=300, thinking={'type': 'disabled'},
             system=('통신·전파 정책 이슈 관리 보조자다. 같은 사건의 기사 제목들을 보고 '
                     'JSON 하나만 출력한다: {"title": "이슈 제목(25자 이내, 사업자명 포함)", '
                     '"definition": "무엇이 쟁점인지 한 문장", "category": "' + '|'.join(CATEGORIES) + ' 중 하나"}. '
@@ -556,10 +557,12 @@ def _haiku_relate_batch(pairs, groups, kind='news'):
                       '다른 말 금지.')
         # 관련 판정은 Sonnet(운영자 승인 2026-08-26) — 결과가 영구 잠금·이슈 오염으로 이어지는
         # 고부담 판정이고 시간당 1콜이라 비용 미미. 대량 1차 선별(크롤러)과 다른 비용 구조.
-        # Sonnet 5는 temperature를 거부하고 적응형 추론이 기본 ON — thinking을 명시적으로 끈다
-        # (판정은 짧은 결정이라 추론 불필요, 켜두면 지연·비용만 늘고 content 파싱이 꼬인다)
+        # Sonnet 5 → Sonnet 5.5(2026-10-17, 모델 전환 판정 §8, 운영자 결정): 10-12 세트 391쌍에서 잘림 12/28 → 0,
+        # 같은 입력 흔들림 10~13 % → 2.6 %, 대조군 해당 유지 77 → 96 %. 지시문·max_tokens 400·잘림 보류는 그대로.
+        # 5.5는 thinking disabled가 400이라 가장 낮은 설정 between_tools(effort high 이하 — 기본 high, 다른 칸 없이)로 끈다.
+        # 거부(stop_reason 'refusal')는 JSON이 없어 아래 '응답 불가(보류)'로 간다. tools_issue_judge_probe.MODEL과 같은 값.
         resp = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY).messages.create(
-            model='claude-sonnet-5', max_tokens=400, thinking={'type': 'disabled'},
+            model='claude-sonnet-5-5', max_tokens=400, thinking={'type': 'between_tools'},
             system=system,
             messages=[{'role': 'user', 'content': '\n'.join(lines)}])
         text = ''.join(b.text for b in resp.content if getattr(b, 'text', None))
@@ -570,7 +573,7 @@ def _haiku_relate_batch(pairs, groups, kind='news'):
             print(f'  [관련 판정 응답 잘림(보류)] 항목 {len(pairs)}개 — 이 호출 전부 연결도 제안도 안 함, 다음 실행에서 다시 판정 :: {text[:60]!r}')
             return None
         if not m or getattr(resp, 'stop_reason', None) == 'max_tokens':
-            print(f'  [관련 판정 응답 불가(보류)] {text[:80]!r}')
+            print(f'  [관련 판정 응답 불가(보류)] stop={getattr(resp, "stop_reason", None)} {text[:80]!r}')
             return None
         nums = (json.loads(m.group(0)).get('belong') or []) if m else []
         keep = set()
@@ -861,7 +864,7 @@ def _reg_title(law_name: str, summary: str):
     try:
         import anthropic
         resp = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY).messages.create(
-            model='claude-haiku-4-5-20251001', max_tokens=200,
+            model='claude-haiku-5-5', max_tokens=200, thinking={'type': 'disabled'},   # 판정 §6 #12(2026-10-17)
             system=('통신·전파 정책 이슈 관리 보조자다. 법령 개정안·입법예고 한 건의 요지를 보고 이슈 제목을 짓는다. '
                     'JSON 하나만 출력한다: {"title": "무엇이 바뀌는지 드러나는 주제형 제목(25자 이내)"}. '
                     '법령 이름·"개정"·"일부개정법률안"만으로 된 제목은 금지 — 바뀌는 의무·금지·권한·대상을 제목에 쓴다. '

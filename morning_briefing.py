@@ -675,12 +675,16 @@ def add_urgent_analyses(items: list, briefing_text: str) -> str:
             # 1,500자로 자르면 본문 후반의 수치·조치가 모델 눈에 닿지 않는다 —
             # '본문에 없다'는 서술과 환각이 동시에 늘어난 원인이다(#161-보론14).
             body = (it.get('content') or '').replace('\n', ' ').strip()[:3000]
+            # Haiku 4.5 → Sonnet 5(2026-10-17, 모델 전환 판정 §6 #14, 운영자 결정) — 사람이 읽는 분석이라 #298 요약과 같은 결.
+            # Sonnet 5 비스트리밍은 적응형 추론이 기본 켜짐 → 끈다(안 끄면 상한을 추론이 먹고 content[0]이 글이 아니다).
             resp = client.messages.create(
-                model='claude-haiku-4-5-20251001', max_tokens=400,
+                model='claude-sonnet-5', max_tokens=600, thinking={'type': 'disabled'},   # 250자 지시 + 새 토큰화 여유
                 system=_IMPACT_SYSTEM,
                 messages=[{'role': 'user', 'content': f"제목: {it['title']}\n본문: {body}"}],
             )
-            analysis = resp.content[0].text.strip().replace('\n', ' ')
+            analysis = ''.join(b.text for b in resp.content if getattr(b, 'type', '') == 'text').strip().replace('\n', ' ')
+            if not analysis:      # 거부·빈 답 — 분석 줄을 넣지 않는다(종전 실패와 같은 처리)
+                raise RuntimeError(f'빈 응답(stop_reason={getattr(resp, "stop_reason", None)})')
             # 생성된 분석의 수치가 본문에 있는지 대조해 경고를 남긴다(#161-보론14).
             # 지우지는 않는다 — 한 숫자를 들어내면 문장이 무너지고, 판단은 운영자가 한다.
             _warn_unbacked_numbers(str(it.get('title', '')), analysis, body)

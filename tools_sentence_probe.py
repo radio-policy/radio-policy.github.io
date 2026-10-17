@@ -30,7 +30,7 @@ def main() -> int:
     ap.add_argument('--allow-api', action='store_true', help='실제 Haiku 판정(비용 발생, 운영자 고지 뒤)')
     ap.add_argument('--repeat', type=int, default=1, help='같은 입력을 몇 번 판정할지(흔들림 확인, 기본 1)')
     ap.add_argument('--set', default='', help='한 조건 묶음만(id: P·N·A·T·G)')
-    ap.add_argument('--model', default='', help='비교 실측용 모델(기본 운영 crawler.SCREEN_MODEL) — 도구 강제 호출이라 temperature·추론 설정이 없다')
+    ap.add_argument('--model', default='', help='비교 실측용 모델(기본 운영 crawler.SENTENCE_MODEL — 2026-10-17부터 Haiku 5.5) — 도구 강제 호출이라 temperature·추론 설정이 없다')
     a = ap.parse_args()
     with open(FIXTURE, encoding='utf-8') as f:
         probe = json.load(f)
@@ -49,8 +49,8 @@ def main() -> int:
 
     import crawler                                    # .env·api_usage.install() — 운영과 같은 지시문·도구·모델
     if a.model:
-        crawler.SCREEN_MODEL = a.model                # _judge_sentence_batch가 호출 때 읽는 모듈 전역 — 실측 전용
-        print(f'[모델] {a.model} (비용 표시는 Haiku 4.5 단가 그대로)')
+        crawler.SENTENCE_MODEL = a.model              # _judge_sentence_batch가 호출 때 읽는 모듈 전역 — 실측 전용
+        print(f'[모델] {a.model} (비용 표시는 운영 Haiku 5.5 단가 그대로)')
     client = crawler._sentence_client()
     if client is None:
         print('오류: ANTHROPIC_API_KEY 없음(.env)')

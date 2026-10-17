@@ -37,7 +37,10 @@ const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
 
 // CORS 허용 출처 목록은 _shared/http.ts 한 곳(#217) — 이 함수만 'x-site' 헤더를 더 받는다.
 // 모델 화이트리스트 — 임의 모델·초장문 요청으로 비용이 튀는 것을 막는다
-const ALLOWED_MODELS = ['claude-sonnet-5', 'claude-haiku-4-5-20251001'];
+// claude-haiku-5-5(2026-10-17, 모델 전환 판정 §6 #20~#23 — 요약·영향·브리핑 항목·규칙 NL·OKF 초안·연결 확인).
+// claude-haiku-4-5는 검색어 확장(query_expand, 판정 #17 — 회귀 측정 뒤)이 아직 쓴다. 모델명에 'sonnet'이 없으면 한도는 백스톱만.
+// 이 함수를 먼저 재배포한 뒤 app.js를 push한다(반대면 Pages가 먼저 새 모델을 보내 400으로 막힌다).
+const ALLOWED_MODELS = ['claude-sonnet-5', 'claude-haiku-4-5-20251001', 'claude-haiku-5-5'];
 const MAX_TOKENS_CAP = 32000;
 
 /** 대시보드는 Anthropic 오류 형식(err.error.message)을 그대로 화면에 띄운다 — 같은 모양으로 돌려준다. */

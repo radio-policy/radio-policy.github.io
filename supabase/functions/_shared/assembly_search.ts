@@ -225,6 +225,8 @@ export function parseAssemQueryRule(text: string): AssemQuery {
 /** Haiku에 넘기는 질의 길이 상한(#229, §4-4-12). 대시보드 창구는 이보다 긴 문장을 400으로 거절하고,
  *  텔레그램 /assem 은 여기서 잘라 보낸다 — 불용어로 채운 긴 글이 통째로 Haiku 입력이 되던 비용 구멍. */
 export const ASSEM_PARSE_MAX_CHARS = 300;
+/** 보조 파싱 모델 — 2026-10-17 Haiku 4.5 → 5.5(모델 전환 판정 §6 #19). api_usage 라벨도 이 값. */
+export const ASSEM_PARSE_MODEL = 'claude-haiku-5-5';
 
 /** Haiku 보조 파싱 — 규칙 파서가 핵심어를 못 뽑았을 때만. 실패 시 규칙 결과를 그대로 쓴다(fail-open).
  *  sb를 주면 토큰 사용량을 api_usage(host=edge, site)에 남긴다(#229 — 종전엔 기록이 없어 #211 비용 감시에 안 잡혔다). */
@@ -241,9 +243,12 @@ export async function parseAssemQuery(text: string, apiKey?: string, sb?: Supaba
       headers: {
         'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json',
       },
+      // Haiku 5.5(2026-10-17, 모델 전환 판정 §6 #19): 짧은 JSON이라 추론 끔(켜 두면 상한을 추론이 먹는다).
+      // 거부(stop_reason 'refusal')는 text 블록이 없어 규칙 결과로 돌아간다(종전 실패와 같은 처리).
       body: JSON.stringify({
-        model: 'claude-haiku-4-5-20251001',
+        model: ASSEM_PARSE_MODEL,
         max_tokens: 200,
+        thinking: { type: 'disabled' },
         messages: [{
           role: 'user',
           content: '아래 문장에서 국회 회의록 검색 조건을 뽑아 JSON만 출력하라.\n'
@@ -256,7 +261,7 @@ export async function parseAssemQuery(text: string, apiKey?: string, sb?: Supaba
       signal: AbortSignal.timeout(15_000),
     });
     const j = await res.json();
-    if (sb) await recordApiUsage(sb, site, 'claude-haiku-4-5-20251001', j?.usage);   // 실패는 삼킨다(usage.ts)
+    if (sb) await recordApiUsage(sb, site, ASSEM_PARSE_MODEL, j?.usage);   // 실패는 삼킨다(usage.ts)
     let txt = '';
     for (const b of (j?.content || [])) if (b?.type === 'text') { txt = b.text || ''; break; }
     const m = txt.match(/\{[\s\S]*\}/);
