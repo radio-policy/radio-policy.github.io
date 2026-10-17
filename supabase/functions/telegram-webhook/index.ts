@@ -5,13 +5,13 @@
 //   - /start /settings /stop : 수신 설정 (인라인 키보드로 토픽·요일·수신시각 토글)
 //     (/start는 설정 메시지 뒤에 기능 안내 한 통을 따로 보낸다 — #306. 같은 안내 = /help)
 //   - /law "OO법 N조" : 조문 원문 즉답 (LLM 없음, 비용 0)
-//   - /ask <질문> : AI 자문 — 승인자는 일일 상한, 승인 안 된 사람은 무료 3회(#259), 건당 API 과금
+//   - /ask <질문> : AI 자문 — 승인자는 일일 상한, 승인 안 된 사람은 하루 무료 3회(#259), 건당 API 과금
 //     (명령어 없는 평문은 자문으로 보내지 않고 명령어 안내를 돌려준다 — #259)
 //   - /admin : 운영자 전용 (승인자 관리)
 //   ※ 영문 명령어는 대소문자 구분 없음(/ASK·/Law — #302). 명령 낱말만 소문자로 맞추고 본문은 그대로.
 //
 //  보안: verify_jwt OFF 대신 X-Telegram-Bot-Api-Secret-Token == TELEGRAM_WEBHOOK_SECRET 검증.
-//  푸시/풀 독립 원칙: 토픽 토글은 푸시 발송만 제어. /law·/ask는 누구나(승인 안 된 사람은 무료 3회씩)
+//  푸시/풀 독립 원칙: 토픽 토글은 푸시 발송만 제어. /law·/ask는 누구나(승인 안 된 사람은 하루 무료 3회씩)
 //  — 토픽을 전부 꺼도 질의 기능은 동작한다("뉴스는 안 받고 자문만" 케이스).
 //
 //  발송 시점: 브리핑·긴급·법안 모두 구독자가 고른 시각(briefing_hour)에 send-subscriber-briefing이
@@ -40,9 +40,10 @@ const OPERATOR_CHAT_ID = Number(env('OPERATOR_CHAT_ID') || '0');
 const AI_DAILY_LIMIT = 10;   // 승인자 1인당 자문 일일 상한 (과금 폭주 방지) — 20 → 10(#297, 2026-10-13 운영자 결정, /law와 같은 10회)
 // 대시보드 계정과 연결된 구독자(dashboard_user_id, #297)는 이 상한·ai_allowed·law_allowed·unlimited를 쓰지 않는다 — /ask는
 // 대시보드 자문 한도(charge_ai_usage: 개인 daily_limit + 팀 합산)에서 함께 세고, 승인·무제한은 profiles를 따른다(linkedProfile).
-// 무료 이용(#259, 2026-09-29 운영자 결정, Fable 재검토 대상) — 승인 안 된 사람도 자연어 /law·/ask를 **명령마다 통틀어** 3회
-// (하루가 아니라 합계) 쓴다. 넘으면 「추가 한도는 관리자에게 문의」 + 운영자에게 ✅ 승인 버튼(사람·명령마다 하루 한 번),
-// 승인되면 종전 승인자 한도(/ask 하루 20회, /law 하루 10회). 한 사람 한도와 별개로, 승인 안 된 사람 **모두를 합친** 무료 사용은 하루 50회(/law·/ask 합계) —
+// 무료 이용(#259, 2026-09-29 운영자 결정, Fable 재검토 대상) — 승인 안 된 사람도 자연어 /law·/ask를 **명령마다 하루** 3회
+// (KST 0시 기준 — #319, 2026-10-17 운영자 결정 「일 3회로」, 그 전엔 하루가 아니라 통틀어 3회) 쓴다. 넘으면 「추가 한도는 관리자에게 문의」
+// + 운영자에게 ✅ 승인 버튼(사람·명령마다 하루 한 번), 승인되면 종전 승인자 한도(/ask 하루 10회 — #297, /law 하루 10회).
+// 한 사람 한도와 별개로, 승인 안 된 사람 **모두를 합친** 무료 사용은 하루 50회(/law·/ask 합계) —
 // 승인제가 하던 '공개 봇 비용 방어'를 대신한다. 조문 번호 조회·/assem은 세지 않는다(AI 비용 없음).
 // 셈은 telegram_usage의 result_note 표시 줄로 한다(새 칸 없음, 색인 chat_id·created_at). 안내 문구(/start)에는 승인·횟수를
 // 적지 않는다 — 한도를 넘었을 때만 알린다(운영자 결정).
@@ -146,7 +147,7 @@ async function logUsage(
 
 // ── 대시보드 계정 연결(#297, 2026-10-13 운영자 결정) ──
 // 연결된 사람의 /ask·/law 승인·무제한은 대시보드 계정(profiles)을 따른다: 승인·활성이면 승인자, unlimited면 무제한.
-// 계정이 승인 대기·비활성이거나 지워졌으면(연결만 남음) 막는다 — 무료 3회로 넘기지 않는다(fail-closed). 조회 실패도 막는다.
+// 계정이 승인 대기·비활성이거나 지워졌으면(연결만 남음) 막는다 — 하루 무료 3회로 넘기지 않는다(fail-closed). 조회 실패도 막는다.
 interface LinkedProfile { approved: boolean; active: boolean; unlimited: boolean }
 async function linkedProfile(userId: string): Promise<LinkedProfile | null | 'error'> {
   const { data, error } = await sb.from('profiles').select('approved, active, unlimited').eq('user_id', userId).maybeSingle();
@@ -279,7 +280,7 @@ const COMMANDS_HELP =
   '🏛 <b>국회 발언 검색</b> — 국회에서 누가 무슨 말을 했나\n' +
   '<code>/assem 2023년 공공와이파이 관련 발언 찾아줘</code>\n' +
   '→ 과방위 상임위·국정감사 회의록(20대 국회~현재)에서 날짜·발언자·요지와 원문 링크\n\n' +
-  // 승인·횟수 안내는 적지 않는다(#259) — 무료 3회를 넘겼을 때만 그 자리에서 알린다.
+  // 승인·횟수 안내는 적지 않는다(#259) — 하루 무료 3회를 넘겼을 때만 그 자리에서 알린다.
   '📖 <b>법령 검색</b> — 어느 법 몇 조에 있나\n' +
   '<code>/law 3G 종료 관련 법령</code>\n' +
   '→ 주제와 관련된 법령·조항과 그 이유\n' +
@@ -622,7 +623,7 @@ async function handleLawQuery(chatId: number, q: string): Promise<Promise<void> 
   // 궁금한 사항이 어떤 법과 관련돼 있는지 알고 싶은 게 대부분").
   // /ask와의 경계: 법령 내용만 — 뉴스·동향·시사점은 /ask 몫.
   // 승인자 + 일일 상한 (2026-08-14): Haiku 건당 ~25원이라 인원이 늘면 비용이 선형으로 늘어난다.
-  // 그 전 가입자는 마이그레이션에서 law_allowed=true 로 소급 허용했다. 승인 안 된 사람은 무료 3회(#259, trialGate).
+  // 그 전 가입자는 마이그레이션에서 law_allowed=true 로 소급 허용했다. 승인 안 된 사람은 하루 무료 3회(#259, trialGate).
   // 조문번호 직답(위 ARTICLE_RE 분기)은 DB 조회뿐이라 이 게이트를 타지 않는다.
   const sub = await getSub(chatId);
   // fail-closed. `sub && !sub.law_allowed`로 두면 **구독 행이 없는 계정**(=/start를 거치지 않고 곧장
@@ -800,7 +801,7 @@ async function handleArticleLookup(chatId: number, ref: ArticleRef): Promise<boo
   return true;
 }
 
-// ── AI 자문 (승인자 일일 상한 / 무료 3회 + 백그라운드 실행) ──
+// ── AI 자문 (승인자 일일 상한 / 하루 무료 3회 + 백그라운드 실행) ──
 function todayKst(): string {
   return new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10);
 }
@@ -819,7 +820,7 @@ async function usageCount(
 }
 
 /**
- * 승인 안 된 사람의 무료 이용 문(#259). 한 사람이 명령(law/ask)마다 따로 TRIAL_PER_COMMAND회.
+ * 승인 안 된 사람의 무료 이용 문(#259). 한 사람이 명령(law/ask)마다 따로 하루 TRIAL_PER_COMMAND회(KST 0시 기준, #319).
  * 통과하면 이번 이용을 '무료' 줄로 기록하고 그 id를 돌려준다(실패 시 refundTrial용).
  * 막히면 안내(한도를 넘었을 때만 나가는 유일한 안내)와 운영자 알림을 보내고 null.
  * 셈 조회가 실패하면 막는다(fail-closed — 공개 봇의 비용 방어). 승인자 경로는 이 함수를 타지 않는다.
@@ -832,7 +833,7 @@ async function trialGate(
   const dayStart = todayKst() + 'T00:00:00+09:00';
   const retry = () => sendTelegramHtml(BOT_TOKEN, chatId, '⚠️ 잠시 후 다시 시도해 주세요.');
 
-  const mine = await usageCount({ chatId, commands: [command], note: TRIAL_NOTE });
+  const mine = await usageCount({ chatId, commands: [command], note: TRIAL_NOTE, sinceIso: dayStart });   // 오늘 쓴 무료 횟수(#319)
   if (mine === null) { await retry(); return null; }
   if (mine >= TRIAL_PER_COMMAND) {
     await sendTelegramHtml(BOT_TOKEN, chatId, '🔒 추가 한도는 관리자에게 문의해 주세요.');
@@ -843,7 +844,7 @@ async function trialGate(
       const cb = command === 'ask' ? 'ai' : 'law';
       await tg('sendMessage', {
         chat_id: OPERATOR_CHAT_ID, parse_mode: 'HTML',
-        text: `${command === 'ask' ? '👤' : '📖'} <b>${label} 추가 한도 요청</b> — 무료 ${TRIAL_PER_COMMAND}회 사용 뒤\n` +
+        text: `${command === 'ask' ? '👤' : '📖'} <b>${label} 추가 한도 요청</b> — 오늘 무료 ${TRIAL_PER_COMMAND}회 사용 뒤\n` +
           `${escapeHtml(who.first_name || '')} (@${escapeHtml(who.username || '없음')}, <code>${chatId}</code>)\n` +
           `이번 질문: ${escapeHtml(query.slice(0, 200))}`,
         reply_markup: { inline_keyboard: [[
@@ -916,7 +917,7 @@ async function handleAsk(chatId: number, from: { username?: string; first_name?:
     await upsertSub(chatId, { ai_count_date: today, ai_count: used + 1 });
     await logUsage(chatId, 'ask', q);
   } else if (!sub?.ai_allowed) {
-    // 승인 안 된 사람 → 무료 3회(#259). 막히면 안내·운영자 버튼은 trialGate가 보냈다.
+    // 승인 안 된 사람 → 하루 무료 3회(#259). 막히면 안내·운영자 버튼은 trialGate가 보냈다.
     trialId = await trialGate(chatId, 'ask', q, from);
     if (!trialId) return;
   } else {
@@ -1459,7 +1460,7 @@ Deno.serve(async (req: Request) => {
       if (bg) (globalThis as { EdgeRuntime?: { waitUntil: (p: Promise<void>) => void } }).EdgeRuntime?.waitUntil(bg);
     } else if (!text.startsWith('/')) {
       // 명령어 없는 평문은 자문으로 보내지 않는다 — 승인자도 실수로 보낼 수 있고, 인사·잡담이 Sonnet 자문(건당 ≈280원)이나
-      // 무료 3회를 써 버린다(#259, 운영자 결정). 전체 명령어를 보여 준다. (위 두 갈래 — 슬래시 없는 'assem …'과
+      // 하루 무료 3회를 써 버린다(#259, 운영자 결정). 전체 명령어를 보여 준다. (위 두 갈래 — 슬래시 없는 'assem …'과
       // 「전기통신사업법 19조」 같은 조문 번호 — 는 AI를 안 쓰는 조회라 그대로 받는다.)
       await sendTelegramHtml(BOT_TOKEN, chatId,
         '💬 질문은 아래 명령어를 앞에 붙여 보내 주세요.\n\n' + COMMANDS_HELP + '\n\n⚙️ <b>수신 설정</b> — /settings');
