@@ -64,6 +64,27 @@ class TestNamesAndPaths(unittest.TestCase):
             self.assertNotIn('"%s' % flag, code)
 
 
+class TestRestoreGuide(unittest.TestCase):
+    """#320-보론 — 복구 안내가 백업 맨 위에 복사되고, 안내 자체에 비밀값 꼴이 없다(공개 저장소 문서)."""
+
+    def test_copy_then_unchanged(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertTrue(pb.copy_restore_guide(d))
+            self.assertFalse(pb.copy_restore_guide(d))      # 같으면 다시 안 씀(드라이브 재업로드 없음)
+            with open(os.path.join(d, pb.RESTORE_GUIDE_NAME), "rb") as f, open(pb.RESTORE_GUIDE, "rb") as g:
+                self.assertEqual(f.read(), g.read())
+
+    def test_guide_is_claude_runbook_without_secrets(self):
+        with open(pb.RESTORE_GUIDE, "rb") as f:
+            data = f.read()
+        text = data.decode("utf-8")
+        self.assertIn("이 파일을 받은 Claude에게", text)
+        self.assertIn("/XC /XN /XO", text)                 # 복구는 없는 파일만 채운다
+        for flag in ("/MIR", "/PURGE"):
+            self.assertNotIn("robocopy \"<원본>\" \"<대상>\" %s" % flag, text)
+        self.assertEqual(pb.find_labels(data, {}), set())
+
+
 class TestPrepassFlow(unittest.TestCase):
     """비밀값이 든 파일: 가린 사본이 원본과 같은 크기·시각으로 먼저 놓인다(robocopy가 건너뛰는 조건)."""
 

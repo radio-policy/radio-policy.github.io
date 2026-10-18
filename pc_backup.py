@@ -16,6 +16,7 @@
   과방위_발언원문\\                    이 저장소의 상위 폴더\\과방위_발언원문 (SPEECH_RAW_DIR)
   예약작업\\                          전파정책_*·RadioPolicy-*·radio_TEMP_* 작업 XML + _tasks.csv(상태표)
   _log\\ · _state\\ · 마지막_백업.txt  월별 실행 로그 · 비밀값 훑기 캐시(경로·항목 이름만) · 마지막 실행 요약
+  00_복구_시작하기.md                docs/PC백업_복구절차.md 사본(#320-보론) — 새 PC에서 Claude에게 주면 순서대로 복구한다
 
 <프로젝트 폴더> = 이 저장소 경로에서 영숫자가 아닌 글자를 모두 '-'로 바꾼 이름(Claude Code 규칙 —
 C:\\Users\\SKTelecom\\Desktop\\frequence\\radio-policy-ai → C--Users-SKTelecom-Desktop-frequence-radio-policy-ai).
@@ -34,7 +35,7 @@ C:\\Users\\SKTelecom\\Desktop\\frequence\\radio-policy-ai → C--Users-SKTelecom
   사내판 전사본(C--claude-rp-internal-*)·사내판 폴더·frequence\\confluence·docs\\사내공유_* — 개인 드라이브에
   사내 자료를 두지 않는다(뒤의 넷은 원본 목록에 아예 없다).
 - 끝에 원본과 백업의 파일 수·용량을 대조한다(실행 중 바뀐 파일은 빠짐으로 세지 않는다). 빠짐·robocopy 실패(코드 8 이상)·
-  원본 없음·예약 작업 내보내기 실패면 종료 코드 1 + 운영자 텔레그램 한 줄.
+  원본 없음·예약 작업 내보내기·복구 안내 복사 실패면 종료 코드 1 + 운영자 텔레그램 한 줄.
 
 사용:
   작업 스케줄러(setup_pc_backup.ps1 — RadioPolicy-PCBackup, 매일 23:30, 창 없음):
@@ -92,6 +93,10 @@ ITEMS = [
     ("과방위_발언원문", os.path.join(os.path.dirname(HERE), "과방위_발언원문"), None),
 ]
 TASK_PATTERNS = ["전파정책_*", "RadioPolicy-*", "radio_TEMP_*"]
+# 복구 안내(Claude가 순서대로 진행하는 꼴)를 백업 맨 위에 둔다 — 새 PC에는 저장소·메모리·전역 CLAUDE.md가 아직 없어서
+# 백업 옆에 있는 이 파일 하나로 시작해야 한다(#320-보론). 원본은 저장소 문서 하나, 사본은 매 실행 새로 맞춘다.
+RESTORE_GUIDE = os.path.join(HERE, "docs", "PC백업_복구절차.md")
+RESTORE_GUIDE_NAME = "00_복구_시작하기.md"
 EXCLUDE_FILES = [".env", ".env.*", "*.env", ".credentials.json", ".gitlab-credentials", ".git-credentials",
                  ".confluence_pat", "*.pem"]
 EXCLUDE_DIRS = ["__pycache__", ".git", "node_modules"]
@@ -421,6 +426,24 @@ def export_tasks(out_dir):
     return int(m.group(1)), int(m.group(2)), []
 
 
+def copy_restore_guide(dest=None):
+    """복구 안내를 백업 폴더 맨 위에 복사한다. 내용이 같으면 그대로 둔다(드라이브가 다시 올리지 않게). 바꿨으면 True."""
+    dst = os.path.join(dest or DEST, RESTORE_GUIDE_NAME)
+    with open(RESTORE_GUIDE, "rb") as f:
+        data = f.read()
+    try:
+        with open(dst, "rb") as f:
+            if f.read() == data:
+                return False
+    except OSError:
+        pass
+    tmp = dst + ".tmp"
+    with open(tmp, "wb") as f:
+        f.write(data)
+    os.replace(tmp, dst)
+    return True
+
+
 def tally(src, dst, names, run_start_ns):
     s_files = {}
     for rel, full in iter_files(src, names):
@@ -510,6 +533,11 @@ def main(argv):
             log("예약 작업 내보내기 실패 %s/%s %s" % (n_ok, n_all, " | ".join(err)))
         else:
             log("예약 작업 %d개 내보냄" % n_all)
+        try:
+            log("복구 안내 %s: %s" % ("새로 씀" if copy_restore_guide() else "같음", RESTORE_GUIDE_NAME))
+        except OSError as e:
+            problems.append("복구 안내 복사 실패")
+            log("복구 안내 복사 실패: %s" % e)
 
     summary = ["PC 백업 %s — %s (%.0f초)" % ("대조" if verify_only else "실행",
                                           datetime.datetime.now().strftime("%Y-%m-%d %H:%M"), time.time() - t0),
