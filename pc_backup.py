@@ -17,6 +17,8 @@
   예약작업\\                          전파정책_*·RadioPolicy-*·radio_TEMP_* 작업 XML + _tasks.csv(상태표)
   _log\\ · _state\\ · 마지막_백업.txt  월별 실행 로그 · 비밀값 훑기 캐시(경로·항목 이름만) · 마지막 실행 요약
   00_복구_시작하기.md                docs/PC백업_복구절차.md 사본(#320-보론) — 새 PC에서 Claude에게 주면 순서대로 복구한다
+  비밀파일\\                          이 저장소\\.env · %USERPROFILE%\\.gitlab-credentials 원본 그대로(#320-보론2, 암호 없음 —
+                                      운영자 결정 「드라이브가 해킹 당하지 않는다는 가정하에」). .confluence_pat은 넣지 않는다
 
 <프로젝트 폴더> = 이 저장소 경로에서 영숫자가 아닌 글자를 모두 '-'로 바꾼 이름(Claude Code 규칙 —
 C:\\Users\\SKTelecom\\Desktop\\frequence\\radio-policy-ai → C--Users-SKTelecom-Desktop-frequence-radio-policy-ai).
@@ -31,11 +33,14 @@ C:\\Users\\SKTelecom\\Desktop\\frequence\\radio-policy-ai → C--Users-SKTelecom
   비밀값은 실행 때마다 .env(이름에 KEY·TOKEN·SECRET·PASSWORD·CLIENT_ID)·~/.gitlab-credentials·~/.git-credentials·
   ~/.confluence_pat·~/.claude/.credentials.json에서 읽어 메모리에만 두고(공개 문서에 이미 실린 값은 뺀다), 토큰 꼴
   (sk-ant-·github_pat_·ghp_ 등·glpat-·sbp_·sb_secret_·service_role JWT)도 가린다. 로그·캐시에는 항목 이름만 남는다.
-- **안 가져가는 것**: 비밀 파일(.env*·.credentials.json·.gitlab-credentials·.confluence_pat·*.pem)·__pycache__·.git·
-  사내판 전사본(C--claude-rp-internal-*)·사내판 폴더·frequence\\confluence·docs\\사내공유_* — 개인 드라이브에
-  사내 자료를 두지 않는다(뒤의 넷은 원본 목록에 아예 없다).
+- **안 가져가는 것**: 위 항목 폴더들 안의 비밀 파일(.env*·.credentials.json·.gitlab-credentials·.confluence_pat·*.pem —
+  .env·.gitlab-credentials 원본 둘만 비밀파일\\로 따로)·__pycache__·.git·사내판 전사본(C--claude-rp-internal-*)·
+  사내판 폴더·frequence\\confluence·docs\\사내공유_*·사내 컨플루언스 열쇠 — 개인 드라이브에 사내 자료를 두지 않는다
+  (사내 넷은 원본 목록에 아예 없다).
+- 비밀 파일을 그대로 올리더라도 **전사본 속 비밀값 가림은 그대로 둔다** — .env에 없는 토큰(GitHub PAT 등)도 섞여 있고,
+  대화 기록은 비밀 파일보다 넓게 읽힌다(공유·검색).
 - 끝에 원본과 백업의 파일 수·용량을 대조한다(실행 중 바뀐 파일은 빠짐으로 세지 않는다). 빠짐·robocopy 실패(코드 8 이상)·
-  원본 없음·예약 작업 내보내기·복구 안내 복사 실패면 종료 코드 1 + 운영자 텔레그램 한 줄.
+  원본 없음·예약 작업 내보내기·복구 안내·비밀 파일 복사 실패면 종료 코드 1 + 운영자 텔레그램 한 줄.
 
 사용:
   작업 스케줄러(setup_pc_backup.ps1 — RadioPolicy-PCBackup, 매일 23:30, 창 없음):
@@ -97,6 +102,15 @@ TASK_PATTERNS = ["전파정책_*", "RadioPolicy-*", "radio_TEMP_*"]
 # 백업 옆에 있는 이 파일 하나로 시작해야 한다(#320-보론). 원본은 저장소 문서 하나, 사본은 매 실행 새로 맞춘다.
 RESTORE_GUIDE = os.path.join(HERE, "docs", "PC백업_복구절차.md")
 RESTORE_GUIDE_NAME = "00_복구_시작하기.md"
+# 비밀 파일 — 운영자 결정 10-18 밤 「구글 드라이브가 해킹 당하지 않는다는 가정하에, 암호화 없이 쉽게」(#320-보론2):
+# PC백업\비밀파일\에 원본 그대로 두고 복구 때 제자리로 되돌린다. 사내 컨플루언스 열쇠(.confluence_pat)는 사내 시스템
+# 자격이라 넣지 않는다(재발급 몇 분). robocopy 항목이 아니라 여기서만 복사한다 — 다른 항목의 /XF(.env* 등)는 그대로
+# 둬서 local_docs 같은 곳에 섞인 사본은 따라가지 않는다.
+SECRET_DIR = "비밀파일"
+SECRET_FILES = [
+    (".env", os.path.join(HERE, ".env")),
+    (".gitlab-credentials", os.path.join(HOME, ".gitlab-credentials")),
+]
 EXCLUDE_FILES = [".env", ".env.*", "*.env", ".credentials.json", ".gitlab-credentials", ".git-credentials",
                  ".confluence_pat", "*.pem"]
 EXCLUDE_DIRS = ["__pycache__", ".git", "node_modules"]
@@ -444,6 +458,34 @@ def copy_restore_guide(dest=None):
     return True
 
 
+def copy_secret_files(dest=None, files=None):
+    """비밀 파일을 PC백업\\비밀파일\\로 복사(내용이 같으면 그대로). (있는 수, 새로 쓴 수, 없는 이름들) — 값은 기록하지 않는다."""
+    out = os.path.join(dest or DEST, SECRET_DIR)
+    os.makedirs(out, exist_ok=True)
+    present, changed, missing = 0, 0, []
+    for name, src in (files or SECRET_FILES):
+        try:
+            with open(src, "rb") as f:
+                data = f.read()
+        except OSError:
+            missing.append(name)
+            continue
+        present += 1
+        dst = os.path.join(out, name)
+        try:
+            with open(dst, "rb") as f:
+                if f.read() == data:
+                    continue
+        except OSError:
+            pass
+        tmp = dst + ".tmp"
+        with open(tmp, "wb") as f:
+            f.write(data)
+        os.replace(tmp, dst)
+        changed += 1
+    return present, changed, missing
+
+
 def tally(src, dst, names, run_start_ns):
     s_files = {}
     for rel, full in iter_files(src, names):
@@ -538,6 +580,15 @@ def main(argv):
         except OSError as e:
             problems.append("복구 안내 복사 실패")
             log("복구 안내 복사 실패: %s" % e)
+        try:
+            n_sec, n_new, miss = copy_secret_files()
+            log("비밀 파일 %d개 → %s\\ (새로 씀 %d)%s" % (n_sec, SECRET_DIR, n_new,
+                                                     "; 원본 없음: " + ", ".join(miss) if miss else ""))
+            if miss:
+                problems.append("비밀 파일 원본 없음: " + ", ".join(miss))
+        except OSError as e:
+            problems.append("비밀 파일 복사 실패")
+            log("비밀 파일 복사 실패: %s" % type(e).__name__)
 
     summary = ["PC 백업 %s — %s (%.0f초)" % ("대조" if verify_only else "실행",
                                           datetime.datetime.now().strftime("%Y-%m-%d %H:%M"), time.time() - t0),

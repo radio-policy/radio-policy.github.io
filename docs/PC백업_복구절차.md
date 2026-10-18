@@ -12,8 +12,8 @@
 - 각 단계는 **확인 → (안 돼 있을 때만) 실행 → 확인 문구** 순서다. 이미 돼 있으면 건너뛰고 그렇다고 말한다(같은 PC의
   일부 복구도 이 문서로 한다).
 - **「운영자에게 부탁」** 표시가 붙은 일은 직접 하지 않는다 — 무엇을 해 달라고 말하고 끝났다는 답을 기다린다.
-  로그인, 관리자 권한이 필요한 설치·등록, 비밀값(.env·토큰) 입력이 여기 해당한다. **비밀값을 대신 입력하거나 화면에 출력하지
-  않는다** — `.env`는 키 이름만 본다.
+  로그인, 관리자 권한이 필요한 설치·등록, 백업에 없는 비밀값(토큰) 새로 넣기가 여기 해당한다. 백업의 `비밀파일\`을 제자리로
+  복사하는 것(5단계)은 세션이 한다. **비밀값을 대신 입력하거나 화면에 출력하지 않는다** — `.env`는 키 이름만 본다.
 - **지우지 않는다.** `robocopy /MIR`·`/PURGE`·`Remove-Item`을 쓰지 않는다. 복사는 아래 꼴만 쓴다 — 대상에 **없는 파일만**
   채운다(`/XC /XN /XO`: 이미 있는 파일은 크기·시각이 달라도 건드리지 않는다). robocopy 종료 코드 0~7은 정상, 8 이상은 멈추고 보고.
   ```
@@ -49,7 +49,8 @@
     — `Get-ChildItem G:\`로 찾는다) → 옛 노트북 이름 → `PC백업`. 거기서 바로 복사하면 파일을 받으면서 복사한다(4GB 넘음 —
     시간이 걸린다).
   - 웹에서 내려받았다면: 압축을 푼 폴더 경로(여러 zip으로 나뉘면 모두 같은 폴더에 푼다).
-- **확인 문구:** `$B` 안에 `마지막_백업.txt`·`claude-projects`·`local_docs`·`claude`·`예약작업`이 있다.
+- **확인 문구:** `$B` 안에 `마지막_백업.txt`·`claude-projects`·`local_docs`·`claude`·`예약작업`·`비밀파일`이 있다
+  (`비밀파일`이 없으면 10-18 밤 이전 백업이다 — 5단계에서 운영자에게 부탁).
   `마지막_백업.txt`를 보여 주고 그 날짜가 맞는지 운영자에게 확인받는다.
 
 ## 4. 저장소 받기 — 같은 경로에
@@ -73,10 +74,21 @@
   읽으므로 **사내판에 먼저 알려야 한다**.
 - **확인 문구:** `git -C $R status -sb` → `## main...gitlab/main`, `git -C $R remote -v`에 gitlab push 주소 두 줄.
 
-## 5. 비밀 파일 — 운영자에게 부탁 (백업에 없다)
+## 5. 비밀 파일 되살리기
 
-백업은 비밀 파일을 일부러 넣지 않는다. **운영자에게 부탁:** 보관처나 각 발급처(토큰 소재는 저장소 `HANDOFF.md`)에서 받아
-넣어 달라고 한다.
+운영자 결정(10-18 밤): 구글 드라이브가 털리지 않는다는 가정에서 `.env`와 `.gitlab-credentials`는 **암호 없이 원본 그대로**
+매일 `PC백업\비밀파일\`에 복사된다. 그대로 제자리에 되돌리면 된다.
+
+- **확인:** `Test-Path "$R\.env"`, `Test-Path "$env:USERPROFILE\.gitlab-credentials"` — 이미 있는 파일은 건너뛴다(덮지 않는다).
+- **실행(없는 것만, 값은 출력하지 않는다 — 4단계로 `$R`이 있어야 한다):**
+  ```powershell
+  if (-not (Test-Path "$R\.env")) { Copy-Item -LiteralPath "$B\비밀파일\.env" -Destination "$R\.env" }
+  if (-not (Test-Path "$env:USERPROFILE\.gitlab-credentials")) { Copy-Item -LiteralPath "$B\비밀파일\.gitlab-credentials" -Destination "$env:USERPROFILE\.gitlab-credentials" }
+  ```
+- `$B\비밀파일\`이 없거나 그 안에 파일이 없으면 **운영자에게 부탁:** 각 발급처에서 다시 받아 아래 표 형식으로 넣는다
+  (토큰 소재는 저장소 `HANDOFF.md`).
+- **백업에 없는 것 — 운영자에게 부탁:** `.confluence_pat`(사내 컨플루언스 열쇠라 개인 드라이브에 두지 않는다 — 컨플루언스
+  프로필의 개인 액세스 토큰에서 다시 발급해 아래 형식으로), GitHub 로그인(첫 `git push` 때 뜨는 창).
 
 | 파일 | 위치 | 형식 |
 |---|---|---|
@@ -156,7 +168,7 @@ SYSTEM 작업은 같은 세 줄을 운영자가 관리자 PowerShell에서 실�
 ## 9. 구글 드라이브 다시 연결 — 운영자에게 부탁
 
 부록 B 순서대로 새 PC의 `%USERPROFILE%\PC백업`을 「내 컴퓨터」에 지정한다(드라이브에는 새 컴퓨터로 따로 쌓인다).
-**바탕화면·문서·다운로드는 켜지 않는다** — 바탕화면 아래 `frequence`에 `.env`가 있다.
+**바탕화면·문서·다운로드는 켜지 않는다** — 바탕화면 아래 `frequence`에 저장소(git과 충돌)와 사내 자료(`frequence\confluence`)가 있다.
 
 ## 10. 마지막 확인
 
@@ -189,6 +201,7 @@ SYSTEM 작업은 같은 세 줄을 운영자가 관리자 PowerShell에서 실�
 | `claude-code-sessions\` | Claude 앱 세션 목록(아래 주) | 앱 사이드바 목록 |
 | `과방위_발언원문\` | `<저장소 상위 폴더>\과방위_발언원문\` | 회의록 발언 원문(`SPEECH_RAW_DIR`) |
 | `예약작업\` | 작업 스케줄러 | `전파정책_*`·`RadioPolicy-*`·`radio_TEMP_*` 작업 XML + `_tasks.csv` |
+| `비밀파일\` | `<저장소>\.env`·`%USERPROFILE%\.gitlab-credentials` | 원본 그대로(암호 없음 — 운영자 결정 10-18 밤) |
 | `_log\`·`_state\`·`마지막_백업.txt` | — | 월별 실행 로그·비밀값 훑기 캐시(경로·항목 이름만)·마지막 실행 요약 |
 
 - **프로젝트 폴더 이름**: 저장소 경로에서 영숫자가 아닌 글자를 모두 `-`로 바꾼 것.
@@ -196,8 +209,11 @@ SYSTEM 작업은 같은 세 줄을 운영자가 관리자 PowerShell에서 실�
 - **앱 세션 목록 위치**: Claude 앱이 Microsoft Store(MSIX) 앱이면 실제 파일은
   `%LOCALAPPDATA%\Packages\Claude_<id>\LocalCache\Roaming\Claude\claude-code-sessions\`다. 앱 안(세션 셸)에서는
   `%APPDATA%\Claude\...`로 보이지만 작업 스케줄러에서는 그 경로가 없다(10-18 실측). 스토어 앱이 아니면 `%APPDATA%\Claude\`.
-- **안 가져가는 것**: 비밀 파일(`.env*`·`.credentials.json`·`.gitlab-credentials`·`.confluence_pat`·`*.pem`)·`__pycache__`·
-  `.git`·사내판 전사본·사내판 폴더·`frequence\confluence`·`docs\사내공유_*` — 사내 자료는 개인 드라이브에 두지 않는다.
+- **안 가져가는 것**: 위 폴더들 안의 비밀 파일 사본(`.env*`·`.credentials.json`·`.gitlab-credentials`·`.confluence_pat`·`*.pem`
+  — `.env`·`.gitlab-credentials` 원본 둘만 `비밀파일\`로 따로)·`__pycache__`·`.git`·사내판 전사본·사내판 폴더·
+  `frequence\confluence`·`docs\사내공유_*`·사내 컨플루언스 열쇠(`.confluence_pat`) — 사내 자료는 개인 드라이브에 두지 않는다.
+- **드라이브 계정 보호**: `비밀파일\`에 키가 그대로 있으므로 구글 계정에 2단계 인증을 켜 두고, `PC백업` 폴더를 다른 사람과
+  공유하지 않는다. 계정이 털렸다고 의심되면 `.env`의 키와 GitLab 토큰을 모두 다시 발급한다(HANDOFF.md 토큰 소재).
 - **비밀값 가림**: 세션 전사본에는 세션이 읽은 토큰이 섞여 있다(10-18 실측 21개 파일). 백업 사본에서는 그 값이 **같은 길이의
   `*`**로 바뀌어 있다. 가리는 값은 실행 때마다 `.env`(이름에 KEY·TOKEN·SECRET·PASSWORD·CLIENT_ID)·`~/.gitlab-credentials`·
   `~/.git-credentials`·`~/.confluence_pat`·`~/.claude/.credentials.json`에서 읽고, 흔한 토큰 꼴(`sk-ant-`·`github_pat_`·
@@ -213,14 +229,14 @@ SYSTEM 작업은 같은 세 줄을 운영자가 관리자 PowerShell에서 실�
 3. 첫 화면(또는 작업 표시줄 드라이브 아이콘 → 톱니 → **환경설정** → **내 컴퓨터**)에서 **폴더 추가** →
    `C:\Users\<사용자>\PC백업` → **Google Drive와 동기화**(「Google 포토에 백업」 아님) → 다음/저장.
    추천 폴더(Documents·Desktop·Downloads)는 **체크하지 않는다**. 저장소 폴더나 `frequence` 통째도 넣지 않는다 — git과
-   충돌하고 `.env`가 평문으로 올라간다. 「File Explorer에서 Drive 파일 보기」는 스트리밍(기본값) 그대로.
+   충돌하고 사내 자료(`frequence\confluence`)까지 올라간다. 「File Explorer에서 Drive 파일 보기」는 스트리밍(기본값) 그대로.
 4. 확인: https://drive.google.com → 왼쪽 **컴퓨터** → 이 PC 이름 → `PC백업` → `마지막_백업.txt`의 시각.
 5. 용량: 10-18 기준 약 4.2GB, 전사본이 한 달에 약 1.5GB씩 는다(삭제 없는 복사라 줄지 않는다). 무료 15GB(지메일·포토와
    공유)는 반년 남짓이면 찬다.
 
 ## 부록 C. 평소 확인
 
-- 실패하면(빠진 파일·robocopy 오류·원본 없음·작업 내보내기·복구 안내 복사 실패) 운영자 봇으로 「⚠️ PC 백업(…) 이상: …」 한 줄이 온다.
+- 실패하면(빠진 파일·robocopy 오류·원본 없음·작업 내보내기·복구 안내·비밀 파일 복사 실패) 운영자 봇으로 「⚠️ PC 백업(…) 이상: …」 한 줄이 온다.
 - `PC백업\마지막_백업.txt` — 항목별 원본·백업 파일 수와 용량, 빠짐 0이면 「결과: 이상 없음」.
 - 로그: `PC백업\_log\pc_backup_YYYY-MM.log`, 저장소의 `pc_backup_sched.log`(git 무시).
 - 손 실행: `py -3.12 pc_backup.py` · 복사 없이 대조만: `py -3.12 pc_backup.py --verify` ·

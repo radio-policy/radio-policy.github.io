@@ -85,6 +85,29 @@ class TestRestoreGuide(unittest.TestCase):
         self.assertEqual(pb.find_labels(data, {}), set())
 
 
+class TestSecretFiles(unittest.TestCase):
+    """#320-보론2 — .env·.gitlab-credentials만 비밀파일\\로 원본 그대로, 같으면 다시 안 씀, 없으면 이름만 알림."""
+
+    def test_list_is_env_and_gitlab_only(self):
+        self.assertEqual([n for n, _ in pb.SECRET_FILES], [".env", ".gitlab-credentials"])
+        self.assertNotIn(".confluence_pat", " ".join(p for _, p in pb.SECRET_FILES))
+
+    def test_copy_unchanged_missing(self):
+        with tempfile.TemporaryDirectory() as d:
+            a = os.path.join(d, "a.env")
+            with open(a, "wb") as f:
+                f.write(b"FAKE_KEY=fake-value-123\n")
+            files = [(".env", a), (".gitlab-credentials", os.path.join(d, "none"))]
+            dest = os.path.join(d, "bak")
+            self.assertEqual(pb.copy_secret_files(dest, files), (1, 1, [".gitlab-credentials"]))
+            with open(os.path.join(dest, pb.SECRET_DIR, ".env"), "rb") as f:
+                self.assertEqual(f.read(), b"FAKE_KEY=fake-value-123\n")
+            self.assertEqual(pb.copy_secret_files(dest, files), (1, 0, [".gitlab-credentials"]))   # 같으면 다시 안 씀
+            with open(a, "wb") as f:
+                f.write(b"FAKE_KEY=changed\n")
+            self.assertEqual(pb.copy_secret_files(dest, files)[1], 1)
+
+
 class TestPrepassFlow(unittest.TestCase):
     """비밀값이 든 파일: 가린 사본이 원본과 같은 크기·시각으로 먼저 놓인다(robocopy가 건너뛰는 조건)."""
 
