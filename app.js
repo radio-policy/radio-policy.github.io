@@ -3281,7 +3281,10 @@ async function callClaude(userText, onDelta) {
   const systemStable   = SYSTEM_PROMPT + webSearchGuide;
   // 위임·같은 고시 구역(#283)은 조문 정밀검색 바로 뒤 — rag.ts와 같은 자리
   // 시행 전 제정 법령(#311)은 시행예정 개정본 바로 뒤, 사업자 이용약관(#312-보론2)은 그 바로 뒤 — rag.ts와 같은 자리
-  const systemVariable = lawmapGuide + ctx.ragContext + ctx.lawArticleContext + ctx.addonContext + ctx.citingContext + ctx.annexContext + ctx.pendingContext + ctx.pendingNewContext + ctx.yakContext + ctx.kbContext + ctx.customContext + ctx.newsContext + ctx.lawTrackContext + ctx.assemblyContext;
+  // 오늘 날짜(#321, 2026-10-19): 모델은 학습 시점을 오늘로 알아 「2025년 10월 현재」처럼 묵은 시점을 썼다(지시문의 시제 검증 규칙이
+  // 「오늘 날짜」를 전제하는데 어디에도 넣지 않았음). 가변부 맨 앞 — 고정부(systemStable)에 넣으면 날마다 캐시가 깨진다. rag.ts와 같은 문장.
+  const todayLine = '\n\n[오늘 날짜: ' + new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10) + ' (KST)] 「현재」·「최근」·「예정」·「N년 N월 현재」 같은 시점 서술과 지시문의 「오늘 날짜」는 이 날짜를 기준으로 합니다.';
+  const systemVariable = todayLine + lawmapGuide + ctx.ragContext + ctx.lawArticleContext + ctx.addonContext + ctx.citingContext + ctx.annexContext + ctx.pendingContext + ctx.pendingNewContext + ctx.yakContext + ctx.kbContext + ctx.customContext + ctx.newsContext + ctx.lawTrackContext + ctx.assemblyContext;
   const systemWithRag = [
     { type: 'text', text: systemStable, cache_control: { type: 'ephemeral' } },
     { type: 'text', text: systemVariable }

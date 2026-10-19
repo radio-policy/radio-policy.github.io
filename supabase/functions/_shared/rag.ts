@@ -1523,7 +1523,9 @@ export async function answerAdvisory(sb: SupabaseClient, systemPrompt: string, q
   const system: SystemBlock[] = [
     { type: 'text', text: systemStable, cache_control: { type: 'ephemeral' } },
   ];
-  if (systemVariable) system.push({ type: 'text', text: systemVariable }); // 빈 text 블록은 API가 거부
+  // 오늘 날짜(#321): 가변부 맨 앞, 고정부 밖 — app.js callClaude와 같은 문장(모델이 학습 시점을 오늘로 알고 묵은 시점을 쓰는 것을 막는다)
+  const todayLine = '\n\n[오늘 날짜: ' + new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10) + ' (KST)] 「현재」·「최근」·「예정」·「N년 N월 현재」 같은 시점 서술과 지시문의 「오늘 날짜」는 이 날짜를 기준으로 합니다.';
+  system.push({ type: 'text', text: todayLine + systemVariable });
 
   const sonnet = await callSonnet(apiKey, system, question);
   const { webRefs, usage } = sonnet;
