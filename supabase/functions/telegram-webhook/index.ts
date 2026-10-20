@@ -8,6 +8,7 @@
 //   - /ask <질문> : AI 자문 — 승인자는 일일 상한, 승인 안 된 사람은 하루 무료 3회(#259), 건당 API 과금
 //     (명령어 없는 평문은 자문으로 보내지 않고 명령어 안내를 돌려준다 — #259)
 //   - /admin : 운영자 전용 (승인자 관리)
+//   - 그룹방 → 슈퍼그룹 전환 서비스 메시지 : 구독자 행의 방 번호를 새 번호로 옮긴다(#322, _shared/subscriber_migrate.ts)
 //   ※ 영문 명령어는 대소문자 구분 없음(/ASK·/Law — #302). 명령 낱말만 소문자로 맞추고 본문은 그대로.
 //
 //  보안: verify_jwt OFF 대신 X-Telegram-Bot-Api-Secret-Token == TELEGRAM_WEBHOOK_SECRET 검증.
@@ -17,13 +18,14 @@
 //  발송 시점: 브리핑·긴급·법안 모두 구독자가 고른 시각(briefing_hour)에 send-subscriber-briefing이
 //  모아 보낸다. 즉시 발송이 없으므로 '야간 무음'·'구독 해지' 같은 토글은 두지 않는다.
 //
-//  Secrets: SUBSCRIBER_BOT_TOKEN / TELEGRAM_WEBHOOK_SECRET / OPERATOR_CHAT_ID
+//  Secrets: SUBSCRIBER_BOT_TOKEN / TELEGRAM_WEBHOOK_SECRET / OPERATOR_CHAT_ID / TELEGRAM_BOT_TOKEN(운영자봇, #322 알림만)
 //           / ANTHROPIC_API_KEY / VOYAGE_API_KEY  (Project Settings → Edge Functions → Secrets)
 // ============================================================================
 
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
 import { createClient, type SupabaseClient } from 'jsr:@supabase/supabase-js@2';
 import { escapeHtml, splitByLines, mdToTelegramHtml, sendTelegramHtml } from '../_shared/telegram_format.ts';
+import { migrateSubscriberChat, migrateNotice, migrationPair } from '../_shared/subscriber_migrate.ts';
 import { answerAdvisory, answerLawQuery, lookupPendingNewArticle } from '../_shared/rag.ts';
 import { NEWS_TAGS, TAG_SLUGS, matchTags } from '../_shared/news_tags.ts';
 import { groupBySameEvent } from '../_shared/news_group.ts';
@@ -37,6 +39,8 @@ const env = (k: string) => (Deno.env.get(k) || '').trim();
 const BOT_TOKEN = env('SUBSCRIBER_BOT_TOKEN');
 const WEBHOOK_SECRET = env('TELEGRAM_WEBHOOK_SECRET');
 const OPERATOR_CHAT_ID = Number(env('OPERATOR_CHAT_ID') || '0');
+// 방 번호 옮김 알림(#322)만 운영자 봇으로 — 승인 버튼 같은 운영자 알림은 콜백이 이 봇으로 와야 해서 종전대로 구독자 봇
+const OP_BOT_TOKEN = env('TELEGRAM_BOT_TOKEN') || BOT_TOKEN;
 const AI_DAILY_LIMIT = 10;   // 승인자 1인당 자문 일일 상한 (과금 폭주 방지) — 20 → 10(#297, 2026-10-13 운영자 결정, /law와 같은 10회)
 // 대시보드 계정과 연결된 구독자(dashboard_user_id, #297)는 이 상한·ai_allowed·law_allowed·unlimited를 쓰지 않는다 — /ask는
 // 대시보드 자문 한도(charge_ai_usage: 개인 daily_limit + 팀 합산)에서 함께 세고, 승인·무제한은 profiles를 따른다(linkedProfile).
@@ -1408,6 +1412,16 @@ Deno.serve(async (req: Request) => {
     }
     const msg = update.message as { chat: { id: number }; from?: { username?: string; first_name?: string }; text?: string;
       reply_to_message?: { text?: string; from?: { is_bot?: boolean } } } | undefined;
+    // 그룹방 → 슈퍼그룹 전환(#322): 옛 방엔 migrate_to_chat_id, 새 방엔 migrate_from_chat_id 서비스 메시지(글자 없음)가 온다.
+    // 먼저 온 쪽이 구독자 행 번호를 옮기고, 나중 쪽은 'already'로 조용히 끝난다. 종전엔 글자가 없어 아래에서 버려졌다.
+    const mig = migrationPair(msg);
+    if (mig) {
+      const mr = await migrateSubscriberChat(sb, mig.oldId, mig.newId);
+      if (mr.status === 'error') console.error('[구독자 방 번호 옮기기 실패 — 다음 정시 발송이 다시 시도]', mig, mr.error);
+      const t = migrateNotice(mr, '전환 알림');
+      if (t && OPERATOR_CHAT_ID) await sendTelegramHtml(OP_BOT_TOKEN, OPERATOR_CHAT_ID, t);
+      return new Response('ok');
+    }
     if (!msg?.text) return new Response('ok');
     const chatId = msg.chat.id;
     const from = msg.from || {};

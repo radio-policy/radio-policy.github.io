@@ -101,12 +101,26 @@ export function mdToTelegramHtml(md: string): string {
   return out.join('\n').replace(/\n{3,}/g, '\n\n');   // 가로줄을 뺀 자리의 빈 줄 겹침은 한 줄로
 }
 
+// 그룹방이 슈퍼그룹으로 바뀌면(#322) 옛 방 번호로 보낸 sendMessage는 영원히
+// 400 「group chat was upgraded to a supergroup chat」 + parameters.migrate_to_chat_id(새 번호)를 돌려준다.
+// 400 본문에서 그 새 번호만 꺼낸다(본문이 JSON이 아니거나 칸이 없으면 null).
+export function migrateToChatId(body: string): number | null {
+  try {
+    const v = (JSON.parse(body) as { parameters?: { migrate_to_chat_id?: unknown } })?.parameters?.migrate_to_chat_id;
+    return typeof v === 'number' && Number.isFinite(v) && v !== 0 ? v : null;
+  } catch { return null; }
+}
+
+// 반환: true=성공, false=실패, 'blocked'=사용자가 봇 차단(403 — 호출측에서 active=false 처리),
+// { migrateTo }=방이 슈퍼그룹으로 바뀌어 새 번호로 보내야 함(#322 — 호출측이 번호를 옮기고 다시 보낸다).
+// ⚠ { migrateTo }는 객체라 참(truthy)이다 — 반환값을 쓰는 곳은 `=== true`로 성공을 가린다(`if (r)` 금지).
+export type SendResult = true | false | 'blocked' | { migrateTo: number };
+
 // ── 발송: HTML 시도 → 400이면 plain 폴백 ──
-// 반환: true=성공, false=실패, 'blocked'=사용자가 봇 차단(403 — 호출측에서 active=false 처리)
 export async function sendTelegramHtml(
   token: string, chatId: number | string, html: string,
   extra: Record<string, unknown> = {},
-): Promise<true | false | 'blocked'> {
+): Promise<SendResult> {
   const url = `https://api.telegram.org/bot${token}/sendMessage`;
   const base = { chat_id: chatId, disable_web_page_preview: true, ...extra };
   let res = await fetch(url, {
@@ -116,6 +130,10 @@ export async function sendTelegramHtml(
   if (res.ok) return true;
   if (res.status === 403) return 'blocked';
   if (res.status === 400) {
+    // 슈퍼그룹 전환이면 plain으로 다시 보내도 같은 400이다 — 재시도 없이 새 번호를 돌려준다(#322)
+    const body = await res.text();
+    const to = migrateToChatId(body);
+    if (to !== null) return { migrateTo: to };
     // HTML 파싱 실패 가능성 — plain으로 재시도 (전체 발송 실패 방지, fail-open 원칙)
     res = await fetch(url, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },

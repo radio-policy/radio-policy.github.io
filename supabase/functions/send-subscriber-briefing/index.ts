@@ -24,6 +24,9 @@
 //     고르는 규칙은 _shared/subscriber_queue.ts(순수 함수, tests/subscriber_queue.test.ts).
 //   - 팀 채점 알림(#277 S3, 2026-10-04): 크롤러가 세트를 열면 topic 'team'·audience 't:<팀>' 한 행 — 그 팀이 지정된
 //     구독자에게 창 안에서(즉시 호출 없음) 맨 뒤에 붙여 보낸다. 워터마크 last_team_sent_at.
+//   - 방 번호 옮기기(#322, 2026-10-20): 그룹방이 슈퍼그룹으로 바뀌어 400 + migrate_to_chat_id가 오면 같은 실행 안에서
+//     telegram_subscribers.chat_id를 새 번호로 바꾸고 새 번호로 다시 보낸다(_shared/subscriber_migrate.ts). 웹훅도 전환
+//     서비스 메시지를 받아 같은 함수로 옮기므로 보통은 웹훅이 먼저 옮기고, 여기는 놓친 경우의 그물이다.
 //
 //  보안: x-cron-secret == CRON_SECRET (Vault `subscriber_cron_secret`와 동일값).
 // ============================================================================
@@ -41,12 +44,16 @@ import {
 import {
   type HoldLookup, type HoldTeamRow, holdRecheckRows, holdKey, holdTeamsNeeded, holdDropKeys,
 } from '../_shared/subscriber_hold.ts';
+import { deliverToSubscriber, migrateNotice } from '../_shared/subscriber_migrate.ts';
 
 // env는 반드시 trim — 콘솔 붙여넣기 시 줄바꿈이 섞이면 시크릿 비교가 조용히 어긋난다(401)
 const env = (k: string) => (Deno.env.get(k) || '').trim();
 
 const BOT_TOKEN = env('SUBSCRIBER_BOT_TOKEN');
 const CRON_SECRET = env('CRON_SECRET');
+// 방 번호 옮김 알림(#322)만 운영자 봇으로 — 없으면 구독자 봇으로 운영자에게(admin-daily-report와 같은 폴백)
+const OP_BOT_TOKEN = env('TELEGRAM_BOT_TOKEN') || BOT_TOKEN;
+const OPERATOR_CHAT_ID = Number(env('OPERATOR_CHAT_ID') || '0');
 const NONEWS_PREFIX = '🕊️ (신규 뉴스 없음';   // morning_briefing.py _NONEWS_PREFIX 와 일치
 const QUEUE_LOOKBACK_H = 72;                  // 큐 조회 범위(시간) — 그 이전 건은 오래돼서 보내지 않음. 72h: '평일만' 구독자 금요일 밤 큐(금 23시→월 06:25 ≈ 55h) 이월 소실 방지
 
@@ -290,7 +297,7 @@ Deno.serve(async (req: Request) => {
   // 크롤러의 즉시 배달 호출(subscriber_notify._trigger_delivery)은 이 헤더를 싣는다(#252) — 보통 묶음은 매시 :25
   // 정기 발송 몫이라 이 호출에서는 보통을 평가하지도 워터마크를 옮기지도 않는다. 헤더가 없으면 정기 발송으로 본다.
   const immediate = (req.headers.get('x-delivery') || '').trim().toLowerCase() === 'immediate';
-  let sent = 0, failed = 0;
+  let sent = 0, failed = 0, moved = 0;
 
   try {
     // ── 수신 시각이 도래한 구독자 ──
@@ -468,16 +475,16 @@ Deno.serve(async (req: Request) => {
       // ⚠ 여기서 `if (!msgs.length) continue`를 하면 안 된다.
       //   태그 필터로 발송이 0건이어도 워터마크는 전진해야 하므로 아래 patch 경로를 반드시 지난다.
       //   (보낼 게 없으면 아래 루프가 0회 돌 뿐이고, 텔레그램 호출도 발생하지 않는다.)
-      let ok = true;
-      for (const m of msgs) {
-        const r = await sendTelegramHtml(BOT_TOKEN, s.chat_id, m.text, m.extra ?? {});
-        if (r === 'blocked') {
-          await sb.from('telegram_subscribers').update({ active: false }).eq('chat_id', s.chat_id);
-          ok = false; break;
-        }
-        if (r === false) { ok = false; break; }
-        await new Promise((r) => setTimeout(r, 50));   // 텔레그램 레이트리밋 여유
-      }
+      // 보내기 = _shared/subscriber_migrate.ts deliverToSubscriber — 하나라도 실패하면 멈춤·403 차단은 active=false(종전 그대로)
+      // + 슈퍼그룹 전환 응답이면 이 실행 안에서 번호를 옮겨 새 번호로 보낸다(#322). 아래 워터마크는 돌려준 번호(d.chatId)에 쓴다.
+      const d = await deliverToSubscriber(sb, BOT_TOKEN, s.chat_id, msgs, {
+        onMigrate: async (mr) => {
+          if (mr.status === 'moved') moved++;
+          const t = migrateNotice(mr, '정시 발송');
+          if (t && OPERATOR_CHAT_ID) await sendTelegramHtml(OP_BOT_TOKEN, OPERATOR_CHAT_ID, t);
+        },
+      });
+      const ok = d.ok;
 
       if (ok) {
         // 발송에 성공했을 때만 기록 — 실패 시 patch를 건너뛰어 다음 정각에 다시 시도된다(현행 유지).
@@ -486,7 +493,7 @@ Deno.serve(async (req: Request) => {
         // 워터마크는 delivered가 아니라 **eligible** 기준, nowIso가 아니라 **max(created_at)** — 칸 순서도 종전과 같다
         // (urgent → assembly → kmcc, 보통은 평가했을 때만 맨 뒤 last_normal_sent_at). 본문은 watermarkPatch.
         Object.assign(patch, watermarkPatch(plan));
-        if (Object.keys(patch).length) await sb.from('telegram_subscribers').update(patch).eq('chat_id', s.chat_id);
+        if (Object.keys(patch).length) await sb.from('telegram_subscribers').update(patch).eq('chat_id', d.chatId);
         if (msgs.length) sent++;   // 실제로 보낸 사람만 집계 (워터마크만 전진한 경우는 제외)
       } else failed++;
     }
@@ -495,7 +502,7 @@ Deno.serve(async (req: Request) => {
       key: 'last_subscriber_briefing_run',
       updated_at: new Date().toISOString(),
       // 큐 조회 실패는 note에 남긴다(리뷰 #252-6) — 종전엔 '큐 0'으로 정상처럼 보였다
-      note: `${date} ${hour}시 · 발송 ${sent} · 실패 ${failed} · 대상후보 ${subs.length} · 큐 ${qerr ? '조회 실패' : queue.length}${holdNote}`,
+      note: `${date} ${hour}시 · 발송 ${sent} · 실패 ${failed} · 대상후보 ${subs.length} · 큐 ${qerr ? '조회 실패' : queue.length}${holdNote}${moved ? ` · 방 번호 옮김 ${moved}` : ''}`,
     }, { onConflict: 'key' });
 
     return new Response(JSON.stringify({ ok: true, date, hour, sent, failed, queued: queue.length }), { headers: { 'Content-Type': 'application/json' } });
