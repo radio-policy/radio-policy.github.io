@@ -61,6 +61,8 @@
   // 색은 초록 그대로이고, 다시 읽을 때(재검증·재연)는 괄호를 떼고 대상만 읽는다.
   const OUTSIDE_TAG_HEAD = '[원문 확인됨(검색 자료 밖 조문과 대조): ';
   const OUTSIDE_HEAD_RE = /^\s*\(검색 자료 밖[^)]*\)/;
+  // 표시 안이 근거 묶음 번호뿐인 것(「[원문 확인됨, 참조1]」 — 프롬프트 머리 「[참조 N]」를 가리킴, #323). 화면에는 번호표가 없어 읽는 사람이 못 따라간다
+  const REF_NO_ONLY_RE = /^참조\s*\d+$/;
   const TAG_UNVERIFIED = TAG_MISSING;    // 옛 이름 유지(외부 참조 호환)
   const TAG_MISMATCH = TAG_MISMATCH_HEAD + '…]';
   function buildTag(status, reason, cmp, notes) {
@@ -1847,7 +1849,11 @@
         (!cite.annex && cite.annexRel ? pool.find(function (p) { return p.rel === cite.annexRel && p.key.indexOf(label) === 0 && inScope(p); }) : null);
       const lawLabel = (scope && scope[0]) || (cite.lawInfo && (cite.lawInfo.title || cite.lawInfo.text)) || '';
       const annexHow = nameHowOf(cite.lawInfo, fams);
-      return hit ? { status: 'ok', kind: 'annex', lawDoc: hit.fam || null, nameHow: annexHow }
+      // 같은 번호 별표가 범위 안 여러 법령에 있으면(법령 이름 없는 「별표 1」) hit는 그중 첫 것일 뿐 — 확인됨은 그대로 두고, 표시를 법령 이름으로
+      // 채우는 것(#323)만 하지 않는다(어느 법령 것인지 모르는데 이름을 적으면 추측이 확인된 사실처럼 보인다)
+      const hitFams = [];
+      if (hit) for (const p of pool) if (p.key === hit.key && inScope(p) && p.fam && hitFams.indexOf(p.fam) === -1) hitFams.push(p.fam);
+      return hit ? Object.assign({ status: 'ok', kind: 'annex', lawDoc: hit.fam || null, nameHow: annexHow }, hitFams.length > 1 ? { annexAmbig: hitFams.length } : {})
         : { status: 'missing', reason: (lawLabel ? lawLabel + ' ' : '') + label + (cite.annex ? ' ' + cite.annex : '') + ' 원문 없음', lawDoc: (scope && scope[0]) || null,
             lookFor: ((lawLabel ? lawLabel + ' ' : '') + label + (cite.annex ? ' ' + cite.annex : '')).trim(), nameHow: annexHow };
     }
@@ -3061,6 +3067,9 @@
         if (r.srcFetched === 'db') { out = out.slice(0, r.tagStart) + okHead + (verTail ? cmpPlain + verTail : tagNamesLaw(inner) ? inner : cmpPlain) + ']' + out.slice(r.tagEnd); filled++; }
         else if (verTail) { out = out.slice(0, r.tagStart) + '[원문 확인됨: ' + cmpPlain + verTail + ']' + out.slice(r.tagEnd); filled++; }
         else if (r.kind === 'article' && cmpPlain && !tagNamesLaw(inner)) { out = out.slice(0, r.tagStart) + '[원문 확인됨: ' + cmpPlain + ']' + out.slice(r.tagEnd); filled++; }
+        // 별표 대조인데 표시 안이 「참조N」뿐(#323, 사내 요청·범위 합의): 대조한 별표에 법령 이름이 있고 그 법령이 하나로 정해질 때만 그 별표로 채운다.
+        // 이름 적힌 별표 표시와 맨 「[원문 확인됨]」은 종전대로 손대지 않는다(#286-보론).
+        else if (r.kind === 'annex' && REF_NO_ONLY_RE.test(inner) && fam && !r.annexAmbig && cmpPlain) { out = out.slice(0, r.tagStart) + '[원문 확인됨: ' + cmpPlain + ']' + out.slice(r.tagEnd); filled++; }
         continue;
       }
       // 나머지는 회색 「원문 미확인 — <이유>」 표시(#292, 종전 세 상태 #176)로 바꾸고, 중복(dup)은 지운다.
@@ -3089,6 +3098,7 @@
         if (r.lawGuess) { v.lawGuess = r.lawGuess; v.guessEvidence = !!r.guessEvidence; v.guessLabel = r.guessLabel || null; }   // 이름 없는 참조의 법령 추측(#286, number #288)
         if (r.multi) v.multi = r.multi.map(function (x) { return articleLabel(x.lawDoc || docFamily(x.doc), x.key, x.paras, x.items); });   // 다중 원문(#288 ⓓ′)
         if (r.nopara) v.nopara = r.nopara.n;                  // 항 구분 없는 조문에 제N항(#288 §5)
+        if (r.annexAmbig) v.annexAmbig = r.annexAmbig;        // 같은 번호 별표가 있는 법령 수 — 표시 채우기(#323)를 하지 않은 까닭
         // 검색 자료 밖 조문 대조(#288 ⓒ, 10-12 집계용): db 받아 대조함 · nodoc DB 문서명 유일 일치 없음 · norows 그 조문·판 없음 · cap 상한 · partial 받은 조문에도 항·호 없음 · error 조회 실패
         if (r.srcFetched) v.srcFetched = r.srcFetched;
         // ② 판(2026-10-09, 사내와 같은 열쇠 + 외부 want): mark 표지 종류 · default 표지 없을 때의 판 · alt 다른 판 · both 두 판 다중 원문 ·

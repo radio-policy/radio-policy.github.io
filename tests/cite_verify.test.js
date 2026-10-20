@@ -1776,6 +1776,28 @@ function ok(name, cond, extra) {
   eq('#315-보론4 기록 lateName·rangeDropped·multiDropped verdict 칸 — 탐침 B lateName true · 넷 다 없는 표시엔 칸 없음',
      [lnV.verdicts[0].lateName || null, ['lateName', 'candsMissing', 'multiDropped', 'multiAbandoned', 'rangeDropped'].filter(function (k) { return k in lnV2.verdicts[0]; })], [true, []]);
 
+  // ── #323(2026-10-20, 사내 요청·범위 합의): 표시 안이 근거 묶음 번호 「참조N」뿐인 초록 ──
+  var refV = async function (answer, srcs) { return CV.verifyCitations({ answer: answer, chunks: [], annexSources: srcs, callHaiku: async function () { return '[]'; } }); };
+  var refS = '전파법 시행령 별표 1의 산식에 따라 사용료를 계산합니다. ';
+  var r1 = await refV(refS + '[원문 확인됨, 참조1]', ['전파법 시행령 별표 1']);
+  var r2 = await refV(refS + '[원문 확인됨: 참조 12]', ['전파법 시행령 별표 1']);
+  var r3 = await refV(refS + '[원문 확인됨]', ['전파법 시행령 별표 1']);
+  var r4 = await refV(refS + '[원문 확인됨: 전파법 시행령 별표 1]', ['전파법 시행령 별표 1']);
+  eq('#323 별표 대조 + 「참조N」뿐 → 대조한 별표로 채움(쉼표·쌍점 꼴 모두) · 맨 표시와 이름 적힌 표시는 그대로',
+     [r1.answer.slice(refS.length), r1.filled, r2.answer.slice(refS.length), r3.answer.slice(refS.length), r3.filled, r4.answer.slice(refS.length), r4.filled],
+     ['[원문 확인됨: 전파법 시행령 별표 1]', 1, '[원문 확인됨: 전파법 시행령 별표 1]', '[원문 확인됨]', 0, '[원문 확인됨: 전파법 시행령 별표 1]', 0]);
+  var r5 = await refV('별표 1의 산식에 따라 사용료를 계산합니다. [원문 확인됨, 참조1]', ['전파법 시행령 별표 1', '전기통신사업법 시행령 별표 1']);
+  var r6 = await refV('별표 1의 산식에 따라 사용료를 계산합니다. [원문 확인됨, 참조1]', ['별표 1']);
+  eq('#323 법령이 하나로 안 정해진 별표(같은 번호가 두 법령에) · 법령 이름 없는 별표 출처 → 확인됨은 그대로, 「참조N」도 그대로 + annexAmbig 기록',
+     [r5.verdicts[0].status, r5.verdicts[0].annexAmbig, /\[원문 확인됨, 참조1\]$/.test(r5.answer), r5.filled, r6.verdicts[0].status, /\[원문 확인됨, 참조1\]$/.test(r6.answer), 'annexAmbig' in r6.verdicts[0]],
+     ['ok', 2, true, 0, 'ok', true, false]);
+  var r5b = await refV(refS + '[원문 확인됨, 참조1]', ['전파법 시행령 별표 1', '전기통신사업법 시행령 별표 1']);
+  eq('#323 같은 번호 별표가 두 법령에 있어도 인용문이 법령을 적었으면 하나로 정해져 채움', [r5b.answer.slice(refS.length), 'annexAmbig' in r5b.verdicts[0]], ['[원문 확인됨: 전파법 시행령 별표 1]', false]);
+  var r7 = await refV(refS + '[원문 확인됨, 참조1·2]', ['전파법 시행령 별표 1']);
+  var r8 = await CV.verifyCitations({ answer: '업무처리규정 제11조에 따르면 "' + q11a + '" [원문 확인됨, 참조1]', chunks: [C.c11], annexSources: [], callHaiku: async function () { return '[]'; } });
+  eq('#323 「참조1·2」처럼 번호 여럿은 범위 밖(그대로) · 조 대조 + 「참조1」은 종전대로(#286-보론) 대조한 조문으로 채움',
+     [/\[원문 확인됨, 참조1·2\]$/.test(r7.answer), /\[원문 확인됨: 방송통신사업 금지행위 등에 대한 업무처리규정 제11조\]$/.test(r8.answer), r8.filled], [true, true, 1]);
+
   // 지시문 지문 잠금 — 1차는 2차 보정의 바탕이라 글자 그대로, 2차는 실측(tests/cite_judge_probe.js) 뒤에만 고친다
   var sha = function (s) { return require('crypto').createHash('sha256').update(s, 'utf8').digest('hex').slice(0, 16); };
   eq('지문: 1차 판정 지시문(JUDGE_SYSTEM)', sha(CV.JUDGE_SYSTEM), '89a3482f020ae02d');
