@@ -4373,7 +4373,7 @@ def suppress_repeat_alerts(urgent_items: list) -> list:
 #  병렬, 전체 SUMMARY_BUDGET_S를 넘긴 기사도 요약 없이 — 큐 적재·즉시 배달을 그 이상 늦추지 않는다.
 # ═══════════════════════════════════════════════════════
 SUMMARY_WORKERS = 4
-SUMMARY_BUDGET_S = 30
+SUMMARY_BUDGET_S = 45                   # 10-20 #324: SK텔레콤 언급 기사는 줄 호출이 하나 더(순차) — 30 → 45(예산을 넘긴 기사도 요약은 partial로 나간다)
 SUMMARY_FAIL_STOP = 2                   # 한 실행에서 호출 실패(예외)가 이만큼이면 남은 기사는 부르지 않는다(#268 2차 확인과 같은 꼴)
 SUMMARY_URL_CHUNK = 20                  # 저장된 요약 조회 in_ 묶음(url은 uuid보다 길다)
 _FULL_BODIES: dict = {}                 # url → 수집 때 받은 전문 앞 SUMMARY_INPUT_MAX자 — save_new_items가 이번 실행분만 채운다
@@ -4443,32 +4443,38 @@ def _generate_summaries(todo: list) -> None:
     from concurrent.futures import ThreadPoolExecutor, wait
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY, timeout=news_summary.SUMMARY_TIMEOUT_S, max_retries=1)
 
-    def job(it, body):
+    partial = {}                             # url → 요약만(두 문장) — SK텔레콤 줄 호출(#324)이 예산을 넘겨도 요약은 나간다
+
+    def job(it, body, url):
         if _SUMMARY_FAILS[0] >= SUMMARY_FAIL_STOP:
             return {'summary': '', 'why': '실패 누적 중단'}
-        res = news_summary.news_tg_summary(client, it.get('title'), it.get('source'), body)
+        res = news_summary.news_tg_summary(client, it.get('title'), it.get('source'), body,
+                                           on_summary=lambda t: partial.__setitem__(url, t))
         if str(res.get('why') or '').startswith('실패'):
             with _SUMMARY_LOCK:
                 _SUMMARY_FAILS[0] += 1
         return res
     pool = ThreadPoolExecutor(max_workers=SUMMARY_WORKERS)
-    futs = {pool.submit(job, it, _FULL_BODIES.get(url)): url for url, it in todo}
+    futs = {pool.submit(job, it, _FULL_BODIES.get(url), url): url for url, it in todo}
     done, late = wait(futs, timeout=SUMMARY_BUDGET_S)
     pool.shutdown(wait=False, cancel_futures=True)
-    why, made = {}, {}
+    why, made, skt = {}, {}, {}
     for f in futs:
         url = futs[f]
         if f in late:
-            res = {'summary': '', 'why': '시간 초과'}
+            res = {'summary': '', 'text': partial.get(url, ''), 'why': '시간 초과', 'skt': '시간 초과' if url in partial else ''}
         else:
             try:
                 res = f.result()
             except Exception as e:                  # news_tg_summary는 던지지 않지만 — 그래도 제목만
                 res = {'summary': '', 'why': f'실패: {str(e)[:60]}'}
-        s = res.get('summary') or ''
+        s = res.get('text') or res.get('summary') or ''
         _SUMMARY_MEMO[url] = s
         if s:
             made[url] = s
+            if res.get('skt'):
+                k = 'ok' if res['skt'] == 'ok' else str(res['skt']).split(':')[0]
+                skt[k] = skt.get(k, 0) + 1
         else:
             k = str(res.get('why') or '버림').split(':')[0]
             why[k] = why.get(k, 0) + 1
@@ -4480,7 +4486,8 @@ def _generate_summaries(todo: list) -> None:
         except Exception as e:
             print(f'[요약] 저장 실패(무시 — 이번 알림엔 붙음): {str(e)[:80]}')
     print(f'[요약] 주요 뉴스 {len(todo)}건 — 요약 {len(made)}건(저장 {saved})'
-          + (' · 제목만 ' + ' · '.join(f'{k} {v}' for k, v in sorted(why.items())) if why else ''))
+          + (' · 제목만 ' + ' · '.join(f'{k} {v}' for k, v in sorted(why.items())) if why else '')
+          + (' · SKT 줄 ' + ' · '.join(f'{k} {v}' for k, v in sorted(skt.items())) if skt else ''))
 
 
 def send_telegram(urgent_items: list):

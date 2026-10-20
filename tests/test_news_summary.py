@@ -3,6 +3,10 @@
 
   · 지시문·요청 모양은 지문으로 잠근다 — 고칠 때는 tools_news_summary_probe.py로 실제 기사 10건을 다시 재고 운영자 대조 뒤에.
     실측 도구는 운영과 같은 요청(news_summary.request_kwargs)을 보낸다(잰 것 = 돌리는 것). 샘플링 인자는 없다(지침 do-not).
+  · SK텔레콤 언급 줄(규칙 7, #324, 2026-10-20 운영자 제안 → 실측 D′): 두 문장 요약 요청은 **모든 기사가** 10-13 고정본과 바이트 단위로
+    같다(LOCK_1013). 제목+입력 글에 SK텔레콤·SKT·에스케이텔레콤이 있는 기사만 요약 뒤 **두 번째 호출**(news_skt_line — 요약을 보여 주고
+    「거기 없는 SK텔레콤만의 내용 한 문장, 없으면 「없음」」)로 줄을 받아 tg_text가 「요약\nSKT 언급: …」으로 잇는다. 줄 호출의
+    실패·잘림·「없음」은 줄만 빠지고 요약은 그대로(fail-open, 결과 skt 칸). format_news_item은 줄바꿈마다 인용구 한 줄, 둘째 줄부터 「— 」.
   · 받는 응답: 끝까지 씀(end_turn) + 「다.」로 끝남 + 메타 응답·「없음」·한글 적은 응답 아님 — 아니면 제목만(fail-open).
   · format_news_item: _summary가 없으면 종전과 바이트 단위로 같고, 있으면 출처 줄 아래 인용구 한 줄(이스케이프).
   · fetch_article_body는 전문을 돌려주고 저장(content)은 호출부가 1,500자로 자른다 — 전문 앞 8,000자는 메모리(_FULL_BODIES)만.
@@ -29,12 +33,22 @@ import subscriber_notify as sn          # noqa: E402
 import tools_news_summary_probe as P    # noqa: E402
 
 # 지시문·길이 재확인 줄·모델·상한의 지문 — 10-13 실측 2차(10건 모두 붙음, 114~183자)로 정한 값. 운영자 대조 뒤 고정.
-LOCK = 'b8cd9d90ae65904c4cee7377c3799ade81e50dcb5272fa86468ad9d7344c817d'
+# LOCK_1013 = 두 문장 요약 요청의 구성(10-13 값 그대로 — 모든 기사가 이 요청을 받는다), LOCK = SK텔레콤 줄 호출까지(#324, 10-20 실측 D′ 뒤 고정).
+LOCK_1013 = 'b8cd9d90ae65904c4cee7377c3799ade81e50dcb5272fa86468ad9d7344c817d'
+LOCK = 'ecc11c59456f18a19e205d42f81d17faf745a7361cfb5c8757940c152ea6e8f7'
 BODY = '과학기술정보통신부는 13일 주파수 재할당 대가 산정 방안을 발표했다. ' * 40       # 1,500자를 넘는 본문
+SKT_BODY = '과학기술정보통신부는 13일 SK텔레콤과 KT에 시정명령을 내렸다고 밝혔다. ' * 30    # SK텔레콤 언급 본문
+TWO = '가는 이렇다. 나는 저렇다.'
+LINE = 'SK텔레콤은 시정명령을 받았다.'
 
 
 def _lock() -> str:
     blob = '\x1f'.join([ns.SUMMARY_MODEL, str(ns.SUMMARY_MAX_TOKENS), ns.SUMMARY_SYSTEM, ns.SUMMARY_TAIL])
+    return hashlib.sha256(blob.encode('utf-8')).hexdigest()
+
+
+def _lock_skt() -> str:
+    blob = '\x1f'.join([_lock(), ns.SKT_RE.pattern, str(ns.SKT_LINE_MAX_TOKENS), ns.SKT_LINE_SYSTEM, ns.SKT_LINE_TAIL, ns.SKT_LINE_LABEL])
     return hashlib.sha256(blob.encode('utf-8')).hexdigest()
 
 
@@ -43,6 +57,7 @@ def _resp(text, stop='end_turn'):
 
 
 class _Client:
+    """resp = 응답 하나(모든 호출에 같은 것) 또는 호출 순서대로의 목록(응답 대신 예외 객체를 넣으면 그 호출이 던진다)."""
     def __init__(self, resp=None, exc=None):
         self.calls, self._resp, self._exc = [], resp, exc
         self.messages = SimpleNamespace(create=self._create)
@@ -51,7 +66,10 @@ class _Client:
         self.calls.append(kw)
         if self._exc:
             raise self._exc
-        return self._resp
+        r = self._resp[len(self.calls) - 1] if isinstance(self._resp, list) else self._resp
+        if isinstance(r, Exception):
+            raise r
+        return r
 
 
 class _Q:
@@ -93,7 +111,8 @@ def _quiet(fn, *a, **k):
 
 class TestPromptLocked(unittest.TestCase):
     def test_fingerprint(self):
-        self.assertEqual(_lock(), LOCK, '지시문·상한을 고쳤으면 tools_news_summary_probe.py로 다시 재고 운영자 대조 뒤 지문을 바꾼다')
+        self.assertEqual(_lock(), LOCK_1013, '두 문장 요약의 지시문·상한은 10-13 고정본 그대로 — 고치려면 10건 재실측·운영자 대조')
+        self.assertEqual(_lock_skt(), LOCK, 'SK텔레콤 줄 지시문을 고쳤으면 tools_news_summary_probe.py --grep로 언급 기사를 다시 재고 운영자 대조 뒤 지문을 바꾼다')
 
     def test_request_shape(self):
         kw = ns.request_kwargs('제목', '전자신문', BODY * 6)
@@ -115,11 +134,88 @@ class TestPromptLocked(unittest.TestCase):
         self.assertEqual(open(crawler.__file__, encoding='utf-8').read().count('temperature='), 1, '크롤러는 긴급도 콜 한 곳 그대로')
 
     def test_probe_sends_production_request(self):
-        c1, c2 = _Client(_resp('가는 이렇다. 나는 저렇다.')), _Client(_resp('가는 이렇다. 나는 저렇다.'))
-        a = {'title': '제목', 'source': '출처', 'full': BODY}
-        ns.news_tg_summary(c1, a['title'], a['source'], a['full'])
-        P.probe_summary_call(c2, a)
-        self.assertEqual(c1.calls, c2.calls, '실측 도구 = 운영 요청')
+        for body in (BODY, SKT_BODY):
+            c1, c2 = _Client([_resp(TWO), _resp(LINE)]), _Client([_resp(TWO), _resp(LINE)])
+            a = {'title': '제목', 'source': '출처', 'full': body}
+            r1 = ns.news_tg_summary(c1, a['title'], a['source'], a['full'])
+            r2 = P.probe_summary_call(c2, a)
+            self.assertEqual(c1.calls, c2.calls, '실측 도구 = 운영 요청(언급 기사는 줄 호출까지)')
+            self.assertEqual(len(c1.calls), 2 if body is SKT_BODY else 1)
+            self.assertEqual((r1['text'], r1['skt']), (r2['text'], r2['skt']))
+
+
+class TestSktLine(unittest.TestCase):
+    """규칙 7(#324, 실측 D′) — 요약 요청은 모든 기사가 같고, 언급 기사만 요약 뒤 줄 호출 하나 더."""
+
+    def test_summary_request_same_for_all(self):
+        a, b = ns.request_kwargs('제목', '전자신문', BODY), ns.request_kwargs('SK텔레콤, 5G SA', '전자신문', SKT_BODY)
+        self.assertEqual((a['system'], a['max_tokens']), (b['system'], b['max_tokens']))
+        self.assertEqual(a['system'], ns.SUMMARY_SYSTEM)
+        for kw in (a, b):
+            self.assertTrue(kw['messages'][0]['content'].endswith('\n\n' + ns.SUMMARY_TAIL))
+        self.assertNotIn('SK텔레콤', a['system'] + ns.SUMMARY_TAIL)
+
+    def test_mentioned(self):
+        for title, body in (('제목', SKT_BODY), ('SK텔레콤, 5G SA 상용화', BODY), ('SKT·KT 3G 종료', BODY),
+                            ('제목', BODY + ' SK 텔레콤은 반대했다.'), ('제목', BODY + ' 에스케이텔레콤은 반대했다.'),
+                            ('제목', BODY + ' SK Telecom said.')):
+            self.assertTrue(ns.skt_mentioned(title, ns.input_text(body)), (title, body[-30:]))
+        for body in (BODY + ' SK브로드밴드가 참여했다.', BODY + ' SK하이닉스·SK텔링크가 참여했다.', BODY + ' SK그룹 최태원 회장'):
+            self.assertFalse(ns.skt_mentioned('제목', ns.input_text(body)), body[-30:])
+        far = BODY * 6 + ' SK텔레콤도 참여했다.'                        # 8,000자 밖의 언급 — 모델이 못 보는 글
+        self.assertGreater(len(far), ns.SUMMARY_INPUT_MAX)
+        self.assertFalse(ns.skt_mentioned('제목', ns.input_text(far)), '언급 검사는 입력 앞 8,000자(모델이 보는 글)로만')
+
+    def test_line_request_shape(self):
+        kw = ns.skt_line_kwargs('제목', '전자신문', SKT_BODY, TWO)
+        self.assertEqual(set(kw), {'model', 'max_tokens', 'system', 'messages', 'thinking'}, '샘플링 인자·도구·캐시 없음')
+        self.assertEqual((kw['model'], kw['max_tokens'], kw['system'], kw['thinking']),
+                         ('claude-sonnet-5', ns.SKT_LINE_MAX_TOKENS, ns.SKT_LINE_SYSTEM, {'type': 'disabled'}))
+        user = kw['messages'][0]['content']
+        self.assertTrue(user.startswith('제목: 제목\n출처: 전자신문\n\n이미 보낸 요약:\n' + TWO + '\n\n기사 원문:\n'))
+        self.assertTrue(user.endswith('\n\n' + ns.SKT_LINE_TAIL))
+        self.assertEqual(user.split('기사 원문:\n', 1)[1][:-len('\n\n' + ns.SKT_LINE_TAIL)], ns.input_text(SKT_BODY), '원문은 요약과 같은 입력 글')
+
+    def test_accept_line(self):
+        self.assertEqual(ns.accept_line(' SK텔레콤은  시정명령을\n받았다. ', 'end_turn'), ('SK텔레콤은 시정명령을 받았다.', ''))
+        self.assertEqual(ns.accept_line('없음', 'end_turn'), ('', '없음'))
+        self.assertEqual(ns.accept_line('없음.', 'end_turn'), ('', '없음'))
+        self.assertEqual(ns.accept_line('SK텔레콤은 시정명령을', 'max_tokens'), ('', '잘림'))
+        self.assertEqual(ns.accept_line('SK텔레콤은 시정명령을', 'end_turn'), ('', '버림'))
+        self.assertEqual(ns.accept_line('제공된 원문에는 SK텔레콤 내용이 없습니다.', 'end_turn'), ('', '버림'))
+        self.assertEqual(ns.accept_line('SKT received an order 다.', 'end_turn'), ('', '버림'))
+
+    def test_tg_text_and_format(self):
+        self.assertEqual(ns.tg_text(TWO, ''), TWO)
+        self.assertEqual(ns.tg_text(TWO, LINE), TWO + '\nSKT 언급: ' + LINE)
+        self.assertEqual(ns.tg_text('', LINE), '', '요약이 없으면 줄도 없다')
+        item = {'title': 'SKT <단독> 주파수', 'url': 'https://n/1', 'source': '전자신문'}
+        base = sn.format_news_item(item)
+        got = sn.format_news_item(dict(item, _summary=ns.tg_text(TWO, LINE)))
+        self.assertEqual(got, base + f'\n<blockquote>{TWO}</blockquote>\n<blockquote>— SKT 언급: {LINE}</blockquote>')
+        self.assertTrue(all(l.count('<blockquote>') == l.count('</blockquote>') for l in got.split('\n')))
+
+    def test_two_calls_and_text(self):
+        seen = []
+        c = _Client([_resp(TWO), _resp(LINE)])
+        r = ns.news_tg_summary(c, '제목', '출처', SKT_BODY, on_summary=seen.append)
+        self.assertEqual((r['summary'], r['skt_line'], r['skt'], r['why']), (TWO, LINE, 'ok', ''))
+        self.assertEqual(r['text'], TWO + '\nSKT 언급: ' + LINE)
+        self.assertEqual(len(c.calls), 2)
+        self.assertEqual(c.calls[1], ns.skt_line_kwargs('제목', '출처', SKT_BODY, TWO), '줄 요청은 방금 만든 요약을 담는다')
+        self.assertEqual(seen, [TWO], '줄 호출 전에 요약만 먼저 넘긴다(예산 초과 대비)')
+        c = _Client(_resp(TWO))
+        r = ns.news_tg_summary(c, '제목', '출처', BODY)
+        self.assertEqual((len(c.calls), r['text'], r['skt'], r['skt_line']), (1, TWO, '', ''), '언급 없는 기사는 호출 하나')
+
+    def test_line_fail_open(self):
+        for second, skt in ((_resp('없음'), '없음'), (_resp('SK텔레콤은 시정명령을', 'max_tokens'), '잘림'),
+                            (_resp('통신사가 받았다'), '버림'), (RuntimeError('overloaded'), '실패: overloaded')):
+            r = ns.news_tg_summary(_Client([_resp(TWO), second]), '제목', '출처', SKT_BODY)
+            self.assertEqual((r['summary'], r['text'], r['skt_line'], r['why']), (TWO, TWO, '', ''), skt)
+            self.assertEqual(r['skt'], skt)
+        r = ns.news_tg_summary(_Client([_resp('없음'), _resp(LINE)]), '제목', '출처', SKT_BODY)
+        self.assertEqual((r['summary'], r['text'], r['skt'], r['why']), ('', '', '', '본문 아님'), '요약이 없으면 줄 호출도 없다')
 
 
 class TestAccept(unittest.TestCase):
@@ -170,7 +266,7 @@ class TestFormat(unittest.TestCase):
 
     def test_with_summary_blockquote_line(self):
         base = sn.format_news_item(self.ITEM)
-        got = sn.format_news_item(dict(self.ITEM, _summary='A&B는 <발표>했다.\n 다음 달 시행한다.'))
+        got = sn.format_news_item(dict(self.ITEM, _summary='A&B는 <발표>했다.   다음 달 시행한다.'))
         self.assertEqual(got, base + '\n<blockquote>A&amp;B는 &lt;발표&gt;했다. 다음 달 시행한다.</blockquote>')
         self.assertTrue(all(l.count('<blockquote>') == l.count('</blockquote>') for l in got.split('\n')),
                         '줄 단위 분할(splitByLines)이 태그를 자르지 않게 한 줄 안에서 열고 닫는다')
@@ -252,7 +348,7 @@ class TestAttach(unittest.TestCase):
         crawler._FULL_BODIES['ua'] = BODY
         calls = []
 
-        def fake(client, title, source, body):
+        def fake(client, title, source, body, on_summary=None):
             calls.append(title)
             return {'summary': '가는 이렇다. 나는 저렇다.', 'why': ''}
         with mock.patch.object(crawler, 'sb', db), mock.patch.object(crawler, 'ANTHROPIC_API_KEY', 'k'), \
@@ -269,6 +365,41 @@ class TestAttach(unittest.TestCase):
         self.assertIn(('update', ({'ai_summary': '가는 이렇다. 나는 저렇다.'},), {}), upd[0])
         self.assertIn(('eq', ('url', 'ua'), {}), upd[0])
         self.assertIn('[요약] 주요 뉴스 1건 — 요약 1건(저장 1)', log)
+
+    def test_generate_stores_text_with_skt_line(self):
+        items, db = self._items(), _Db()
+        crawler._FULL_BODIES['ua'] = SKT_BODY
+
+        def fake(client, title, source, body, on_summary=None):
+            on_summary(TWO)
+            return {'summary': TWO, 'text': ns.tg_text(TWO, LINE), 'why': '', 'skt': 'ok', 'skt_line': LINE}
+        with mock.patch.object(crawler, 'sb', db), mock.patch.object(crawler, 'ANTHROPIC_API_KEY', 'k'), \
+                mock.patch.object(ns, 'news_tg_summary', fake):
+            out, log = _quiet(crawler.attach_tg_summaries, items)
+        self.assertEqual(out[0]['_summary'], TWO + '\nSKT 언급: ' + LINE, '큐 글 = 요약 + 줄')
+        upd = db.ops('news_feed', 'update')[0]
+        self.assertIn(('update', ({'ai_summary': TWO + '\nSKT 언급: ' + LINE},), {}), upd, 'ai_summary도 줄까지(대시보드 둘째 글머리)')
+        self.assertIn('SKT 줄 ok 1', log)
+
+    def test_late_job_keeps_summary_only(self):
+        """줄 호출이 예산을 넘겨도 on_summary로 먼저 넘긴 요약은 나간다(#324 partial)."""
+        items = self._items()
+        crawler._FULL_BODIES['ua'] = SKT_BODY
+        import threading
+        gate = threading.Event()
+
+        def fake(client, title, source, body, on_summary=None):
+            on_summary(TWO)
+            gate.wait(5)                                   # 줄 호출이 오래 걸리는 꼴
+            return {'summary': TWO, 'text': ns.tg_text(TWO, LINE), 'why': ''}
+        try:
+            with mock.patch.object(crawler, 'sb', _Db()), mock.patch.object(crawler, 'ANTHROPIC_API_KEY', 'k'), \
+                    mock.patch.object(crawler, 'SUMMARY_BUDGET_S', 0.2), mock.patch.object(ns, 'news_tg_summary', fake):
+                out, log = _quiet(crawler.attach_tg_summaries, items)
+        finally:
+            gate.set()
+        self.assertEqual(out[0]['_summary'], TWO, '시간 초과여도 요약 두 문장은 붙는다')
+        self.assertIn('요약 1건(저장 1) · SKT 줄 시간 초과 1', log)
 
     def test_reuse_db_for_rows_without_full_body(self):
         db = _Db({'news_feed': [{'url': 'ua', 'ai_summary': '저장된 요약이다. 둘째 문장이다.'}, {'url': 'ub', 'ai_summary': None}]})
@@ -298,7 +429,7 @@ class TestAttach(unittest.TestCase):
             crawler._FULL_BODIES[it['url']] = BODY
         calls = []
 
-        def fake(client, title, source, body):
+        def fake(client, title, source, body, on_summary=None):
             calls.append(title)
             return {'summary': '', 'why': '실패: overloaded'}
         with mock.patch.object(crawler, 'sb', _Db()), mock.patch.object(crawler, 'ANTHROPIC_API_KEY', 'k'), \

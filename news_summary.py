@@ -13,6 +13,13 @@
   4. 구독자 봇만(운영자 봇 긴급 알림은 그대로).
   5. 지시문은 실제 알림이 나간 기사 10건의 전문으로 실측한 뒤 고정(tools_news_summary_probe.py).
   6. 입력은 수집 때 받은 전문 앞 SUMMARY_INPUT_MAX자 — 같은 실행 안 메모리에서만. DB content는 1,500자 그대로.
+  7. (#324, 2026-10-20 운영자 요청·제안) 원문에 SK텔레콤이 나오면 그 내용이 받는 사람에게 닿아야 한다 — 두 문장 요약은 **그대로 두고**
+     (모든 기사의 요약 요청이 10-13 고정본과 바이트 단위로 같다, 테스트 LOCK_1013), 언급 기사(제목 + 요약 입력 글에 SKT_RE)에만 **두 번째
+     짧은 호출**(news_skt_line — 이미 만든 요약을 보여 주고 「거기 없는 SK텔레콤만의 내용 한 문장, 없으면 「없음」」)로 줄 하나를 받아
+     요약 아래 「SKT 언급: …」으로 붙인다(tg_text — 텔레그램은 둘째 인용구 줄, 대시보드 ai_summary는 줄바꿈 뒤 둘째 글머리).
+     10-20 실측(같은 36건, Opus 점검): 두 문장 안에 넣는 세 문안(반드시/셋째 문장/구절로)은 모두 기사의 둘째 축을 2/3에서 밀어냈고
+     억지 서술 1~9건; 별도 줄은 밀어냄 0, 조인 문안(D′) 줄 21/36·실질 0·오류 0·억지 1·되풀이 0 → 채택. 줄 호출의 실패·잘림·「없음」은
+     줄만 빠지고 요약은 그대로(fail-open) — 결과 skt 칸('ok'|'없음'|'버림'|'실패: …'). 첫 주 실측: 언급 34건 중 21건에 SK텔레콤이 없었다.
 지시문 방어 2가지: ① 원문에 없는 범위·확정 표현 금지, 추진·검토는 그대로, 발언엔 주체 ② 토큰 상한 + 「다.」로 안 끝나면
     버림(잘림 방어) — 실패·거절·잘림은 모두 요약 없이 제목만(fail-open, 발송을 막지 않는다).
 샘플링 인자(온도류)는 넣지 않는다 — 지침 do-not(그 인자는 긴급도 콜·재보도 대조 콜 두 곳뿐, 테스트가 센다).
@@ -53,24 +60,91 @@ _MIN_HANGUL = 0.3              # 공백 뺀 글자 중 한글 비율 — 영문 
 
 SUMMARY_TAIL = '(두 문장, 합쳐 120자 이내)'   # 원문 뒤 길이 재확인 — 10-13 1차 실측: 지시문만으로는 10건 중 4건이 200자를 넘겨 잘렸다
 
+# ── SK텔레콤 언급 줄(규칙 7, #324) ────────────────────────────────────────────────────────────────────────────────────
+# 언급 검사: 제목 + 요약 입력(앞 SUMMARY_INPUT_MAX자, 모델이 보는 글 그대로). SK브로드밴드·SK텔링크·SK하이닉스 같은 다른 SK 계열은 해당
+# 없음(운영자 요청은 SK텔레콤). 줄 문안은 10-20 실측 D′(같은 36건: 줄 21/36, 실질 0·오류 0·억지 1·되풀이 0, 평균 57자) — 운영자 대조표
+# local_docs/텔레그램요약_SKT_261020/. 두 문장 요약 요청(SUMMARY_SYSTEM·SUMMARY_TAIL)은 손대지 않는다.
+SKT_RE = re.compile(r'SK\s?텔레콤|에스케이\s?텔레콤|SKT|SK\s?[Tt]elecom')
+SKT_LINE_MAX_TOKENS = 200      # 한 문장 70자 상한(실측 최대 83자·출력 ≤ 90토큰) — 넘기면 「다.」로 안 끝나 버린다
+SKT_LINE_SYSTEM = (
+    '너는 통신·전파 정책 뉴스를 받아 보는 SK텔레콤 사람에게, 기사에서 SK텔레콤에 관한 내용을 한 줄 덧붙여 준다. '
+    '기사 전체 요약(두 문장)은 이미 보냈고 그 아래에 붙는 줄이다.\n\n'
+    '규칙:\n'
+    '1. 기사 원문에 적힌 SK텔레콤만의 내용 — SK텔레콤이 한 일·밝힌 것, SK텔레콤에 내려진 조치·요구·판단, SK텔레콤 몫의 수치(금액·순위·비율) — '
+    '가운데 **이미 보낸 요약에 없는 것**만 쓴다. 요약에 이미 있는 내용을 되풀이하지 않는다.\n'
+    '2. 다음은 SK텔레콤만의 내용이 아니다 — 있어도 「없음」: 여러 사업자의 합산·공통 사실(「통신 3사 합산 투자」「3사 보안 책임자 출석」「공동 선정」), '
+    '사업자 이름 나열, 시점·계기 표지(「SK텔레콤 사고 이후」「…를 계기로」), 관련기사 목록·광고·기자 소개.\n'
+    '3. 원문에 없는 사실·배경·평가를 보태지 않는다. 한정어·조건·숫자·날짜는 원문 그대로 두고, 수치에는 원문의 기간(분기·상반기·최근 1년 등)을 붙인다. '
+    '집계·추산·전망·보도는 「집계됐다」「전망했다」처럼 그 말 그대로 쓰고, 「밝혔다」는 SK텔레콤(또는 그 관계자)이 직접 밝힌 것에만 쓴다. '
+    '다른 사업자의 것을 SK텔레콤 것으로, 양사·3사 공통 사실을 SK텔레콤만의 일처럼 쓰지 않는다.\n'
+    '4. 쓸 내용이 없으면 「없음」 한 낱말만 출력한다.\n'
+    '5. 쓸 내용이 있으면 「SK텔레콤은/SK텔레콤의 …」로 시작하는 한 문장, 70자 이내, 「다.」로 끝낸다. 머리말·따옴표·글머리 기호·줄바꿈 없이 그 문장만 출력한다.'
+)
+SKT_LINE_TAIL = '(이미 보낸 요약에 없는 SK텔레콤만의 내용 한 문장, 70자 이내 — 없으면 「없음」)'
+SKT_LINE_LABEL = 'SKT 언급: '    # 저장(ai_summary)·텔레그램 둘째 줄의 머리 — 텔레그램은 앞에 작대기(subscriber_notify)
+
+
+def input_text(body) -> str:
+    """요약 입력 = 공백 정리 뒤 앞 SUMMARY_INPUT_MAX자 — 언급 검사도 이 글로 한다(모델이 보는 것과 같게)."""
+    return re.sub(r'\s+', ' ', str(body or '')).strip()[:SUMMARY_INPUT_MAX]
+
+
+def skt_mentioned(title, text) -> bool:
+    return bool(SKT_RE.search(f'{str(title or "")} {str(text or "")}'))
+
 
 def build_user(title, source, body) -> str:
     """요청 본문 — 제목·출처·원문(앞 SUMMARY_INPUT_MAX자)·길이 재확인 한 줄."""
-    text = re.sub(r'\s+', ' ', str(body or '')).strip()[:SUMMARY_INPUT_MAX]
-    return f'제목: {str(title or "").strip()}\n출처: {str(source or "").strip()}\n\n기사 원문:\n{text}\n\n{SUMMARY_TAIL}'
+    return f'제목: {str(title or "").strip()}\n출처: {str(source or "").strip()}\n\n기사 원문:\n{input_text(body)}\n\n{SUMMARY_TAIL}'
 
 
-def request_kwargs(title, source, body, model: str = '') -> dict:
-    """Messages.create 인자 — 운영 호출·실측 도구가 같은 것을 쓴다(테스트가 모양을 잠근다). model = 실측 도구의 비교용(기본 운영 모델).
-    Sonnet 5는 적응형 추론이 기본이라 비스트리밍에서 꺼야 content가 글이고 추론 토큰이 청구되지 않는다(지침 #120)."""
-    m = model or SUMMARY_MODEL
-    kw = {'model': m, 'max_tokens': SUMMARY_MAX_TOKENS, 'system': SUMMARY_SYSTEM,
-          'messages': [{'role': 'user', 'content': build_user(title, source, body)}]}
+def _thinking(kw: dict, m: str) -> dict:
     if m.startswith('claude-sonnet-5-5'):
         kw['thinking'] = {'type': 'between_tools'}   # 비교 실측용(2026-10-14): 5.5는 disabled가 400 — 추론 끔은 between_tools(effort high 이하)
     elif m.startswith('claude-sonnet-5') or m.startswith('claude-haiku-5-5'):
         kw['thinking'] = {'type': 'disabled'}        # Haiku 5.5도 추론 기본 켬 — 300토큰 상한을 추론이 먹어 10건 중 6건이 빈 답(10-14 실측)
     return kw
+
+
+def request_kwargs(title, source, body, model: str = '') -> dict:
+    """Messages.create 인자 — 운영 호출·실측 도구가 같은 것을 쓴다(테스트가 모양을 잠근다). model = 실측 도구의 비교용(기본 운영 모델).
+    모든 기사가 같은 요청(10-13 고정본) — SK텔레콤 언급 줄은 따로 skt_line_kwargs.
+    Sonnet 5는 적응형 추론이 기본이라 비스트리밍에서 꺼야 content가 글이고 추론 토큰이 청구되지 않는다(지침 #120)."""
+    m = model or SUMMARY_MODEL
+    return _thinking({'model': m, 'max_tokens': SUMMARY_MAX_TOKENS, 'system': SUMMARY_SYSTEM,
+                      'messages': [{'role': 'user', 'content': build_user(title, source, body)}]}, m)
+
+
+def skt_line_kwargs(title, source, body, summary, model: str = '') -> dict:
+    """SK텔레콤 언급 줄 요청 — 제목·출처·**이미 만든 두 문장 요약**·원문(같은 입력 글)·꼬리. 모델·추론 인자는 요약 호출과 같다."""
+    m = model or SUMMARY_MODEL
+    user = (f'제목: {str(title or "").strip()}\n출처: {str(source or "").strip()}\n\n이미 보낸 요약:\n{str(summary or "").strip()}\n\n'
+            f'기사 원문:\n{input_text(body)}\n\n{SKT_LINE_TAIL}')
+    return _thinking({'model': m, 'max_tokens': SKT_LINE_MAX_TOKENS, 'system': SKT_LINE_SYSTEM,
+                      'messages': [{'role': 'user', 'content': user}]}, m)
+
+
+def accept_line(text, stop_reason) -> tuple:
+    """줄 응답 → (붙일 문장, why) — ('', '없음') = 줄 없이 나감(정상), ('', '버림'|'잘림') = 줄만 빠짐. 받는 조건은 accept()와 같다."""
+    if stop_reason != 'end_turn':
+        return '', '잘림'
+    s = re.sub(r'\s+', ' ', str(text or '')).strip()
+    if s.rstrip('.') == '없음':
+        return '', '없음'
+    if not s.endswith('다.') or any(w in s for w in _META_WORDS):
+        return '', '버림'
+    chars = re.sub(r'\s', '', s)
+    if len(re.findall(r'[가-힣]', chars)) < _MIN_HANGUL * len(chars):
+        return '', '버림'
+    return s, ''
+
+
+def tg_text(summary, line) -> str:
+    """저장·발송 글 = 두 문장 요약 + (줄이 있으면) 줄바꿈 뒤 「SKT 언급: …」. 줄바꿈이 둘을 가르는 유일한 표지다(accept()가 요약 안 공백을 다 접는다)."""
+    s = str(summary or '').strip()
+    if not s:
+        return ''
+    return s + ('\n' + SKT_LINE_LABEL + line if line else '')
 
 
 def accept(text, stop_reason) -> str:
@@ -91,11 +165,31 @@ def usable_body(body) -> bool:
     return len(str(body or '').strip()) >= SUMMARY_MIN_BODY
 
 
-def news_tg_summary(client, title, source, body) -> dict:
-    """기사 1건 요약 — {'summary': 붙일 글('' = 없음), 'why': ''|'본문 없음'|'버림'|'실패: …', 'raw', 'stop', 'usage'}.
+def news_skt_line(client, title, source, body, summary) -> dict:
+    """SK텔레콤 언급 줄 1건 — {'line': 붙일 문장('' = 없음), 'why': ''|'없음'|'버림'|'잘림'|'실패: …', 'raw', 'stop', 'usage'}.
+    ⚠️ client.messages.create는 **이 함수 안에서 직접** 부른다 — api_usage 라벨 'news_summary.py:news_skt_line'(요약 호출과 따로 센다).
+    어떤 예외도 밖으로 던지지 않는다 — 줄이 빠질 뿐 요약은 그대로 나간다(fail-open)."""
+    out = {'line': '', 'why': '', 'raw': '', 'stop': '', 'usage': None}
+    try:
+        resp = client.messages.create(**skt_line_kwargs(title, source, body, summary))
+        out['raw'] = ''.join(getattr(b, 'text', '') or '' for b in (resp.content or [])
+                             if getattr(b, 'type', '') == 'text')
+        out['stop'] = str(getattr(resp, 'stop_reason', '') or '')
+        out['usage'] = getattr(resp, 'usage', None)
+        out['line'], out['why'] = accept_line(out['raw'], out['stop'])
+    except Exception as e:                      # noqa: BLE001
+        out['why'] = f'실패: {str(e)[:80]}'
+    return out
+
+
+def news_tg_summary(client, title, source, body, on_summary=None) -> dict:
+    """기사 1건 요약 — {'summary': 두 문장('' = 없음), 'text': 저장·발송 글(요약 + 줄, tg_text), 'why': ''|'본문 없음'|'버림'|'실패: …',
+    'raw', 'stop', 'usage', 'skt': ''(언급 없음)|'ok'(줄 붙음)|'없음'(SK텔레콤만의 내용 없음)|'버림'|'잘림'|'실패: …', 'skt_line'}.
+    언급 기사(규칙 7)는 요약이 된 뒤 news_skt_line을 한 번 더 부른다 — on_summary(summary)는 그 사이에 불려 호출부가 요약만이라도 먼저
+    잡아 둘 수 있게 한다(줄 호출이 늦어 실행 예산을 넘겨도 요약은 나간다).
     ⚠️ client.messages.create는 **이 함수 안에서 직접** 부른다 — api_usage가 부른 함수 이름으로 비용 라벨을 단다.
     어떤 예외도 밖으로 던지지 않는다(fail-open)."""
-    out = {'summary': '', 'why': '', 'raw': '', 'stop': '', 'usage': None}
+    out = {'summary': '', 'text': '', 'why': '', 'raw': '', 'stop': '', 'usage': None, 'skt': '', 'skt_line': ''}
     if not usable_body(body):
         out['why'] = '본문 없음'
         return out
@@ -112,6 +206,17 @@ def news_tg_summary(client, title, source, body) -> dict:
         out['summary'] = accept(out['raw'], out['stop'])
         if not out['summary']:
             out['why'] = '본문 아님' if out['raw'].strip().rstrip('.') == '없음' else '버림'
+            return out
+        out['text'] = tg_text(out['summary'], '')
+        if on_summary:
+            try:
+                on_summary(out['text'])
+            except Exception:                   # noqa: BLE001
+                pass
+        if skt_mentioned(title, input_text(body)):
+            ln = news_skt_line(client, title, source, body, out['summary'])
+            out['skt_line'], out['skt'] = ln['line'], ('ok' if ln['line'] else ln['why'])
+            out['text'] = tg_text(out['summary'], out['skt_line'])
     except Exception as e:                      # noqa: BLE001
         out['why'] = f'실패: {str(e)[:80]}'
     return out

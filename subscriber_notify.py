@@ -335,6 +335,8 @@ def format_news_item(item) -> str:
     출처 줄 끝에 ` · 🏷 {label}`을 붙인다. 키가 없거나 비면 종전과 바이트 단위로 같다(공통 경로 불변).
     선택 키 `_summary`(#298 — 크롤러 attach_tg_summaries가 붙인 2문장 AI 요약)가 있으면 출처 줄 아래에 인용구 한 줄로 붙인다.
     한 줄 안에서 태그가 열리고 닫혀 발송 측 줄 단위 분할(splitByLines)이 태그를 자르지 않는다. 키가 없거나 비면 종전과 바이트 단위로 같다.
+    `_summary` 안의 줄바꿈(#324 — news_summary.tg_text가 두 문장 뒤에 「SKT 언급: …」을 줄바꿈으로 잇는다)은 인용구 줄을 가른다:
+    둘째 줄부터는 앞에 작대기 「— 」를 달아 따로 인용구 한 줄씩(운영자 제안 10-20 「기존 요약 밑에 작대기 치고 SKT 언급: …」).
     """
     rel = item.get('_related', 0)
     rel_txt = f' <i>(관련 보도 {rel}건)</i>' if rel else ''
@@ -345,8 +347,9 @@ def format_news_item(item) -> str:
     label = str(item.get('_label') or '').strip()
     if label:
         src = f'{src} · 🏷 {esc(label)}' if src else f'🏷 {esc(label)}'
-    summ = re.sub(r'\s+', ' ', str(item.get('_summary') or '')).strip()
-    tail = f'\n<blockquote>{esc(summ)}</blockquote>' if summ else ''
+    lines = [re.sub(r'[ \t\r\f\v]+', ' ', ln).strip() for ln in str(item.get('_summary') or '').split('\n')]
+    lines = [ln for ln in lines if ln]
+    tail = ''.join(f'\n<blockquote>{"— " if i else ""}{esc(ln)}</blockquote>' for i, ln in enumerate(lines))
     return f'{head}{rel_txt}\n   <i>{src}</i>{tail}'
 
 

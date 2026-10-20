@@ -11,6 +11,8 @@
   py -3.12 tools_news_summary_probe.py --allow-api [--n 10]      # 실제 요약(Sonnet 5 ≈$0.007/건) → local_docs/텔레그램요약_시험_261013/
   py -3.12 tools_news_summary_probe.py --allow-api --from-snapshot <json>   # 같은 본문으로 다시(지시문을 고친 뒤 비교)
   py -3.12 tools_news_summary_probe.py --report <json>           # 저장한 결과로 보고서만 다시(API 0회)
+  py -3.12 tools_news_summary_probe.py --allow-api --grep 'SK ?텔레콤|SKT' --n 30 --days 8 --tag skt   # 제목·본문이 맞는 기사만(#324)
+    — 고른 기사에 저장된 운영 요약(news_feed.ai_summary, 종전 지시문의 실제 출력)이 있으면 보고서에 「종전」으로 같이 보인다.
 세션에서 돌릴 때는 HTTP(S)_PROXY를 비운다(도구가 비운다). api_usage에는 이 도구의 함수 이름(probe_summary_call)으로 기록된다
 — 운영 라벨(news_summary.py:news_tg_summary)과 섞이지 않게. 요청 모양은 운영과 같다(tests/test_news_summary.py가 대조).
 """
@@ -45,8 +47,9 @@ def _env():
         pass
 
 
-def pick_articles(sb, n: int, days: int = 14) -> list:
-    """최근 나간 긴급(공통 urgent 큐 행) 기사 — 최신순, 기사당 한 번. news_feed에서 제목·출처·저장 본문을 붙인다."""
+def pick_articles(sb, n: int, days: int = 14, grep: str = '') -> list:
+    """최근 나간 긴급(공통 urgent 큐 행) 기사 — 최신순, 기사당 한 번. news_feed에서 제목·출처·저장 본문·저장된 운영 요약(ai_summary)을 붙인다.
+    grep = 제목+저장 본문(1,500자)에 맞는 기사만(#324 — 본문을 받은 뒤 fetch_bodies가 전문으로 한 번 더 거른다)."""
     since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     q = (sb.table('subscriber_queue').select('news_url,created_at').eq('topic', 'urgent')
          .gte('created_at', since).order('created_at', desc=True).limit(400).execute().data or [])
@@ -59,26 +62,30 @@ def pick_articles(sb, n: int, days: int = 14) -> list:
     rows = {}
     for i in range(0, len(urls), 20):
         part = [u for u, _ in urls[i:i + 20]]
-        for r in sb.table('news_feed').select('id,url,title,source,content,urgency,published_at').in_('url', part) \
+        for r in sb.table('news_feed').select('id,url,title,source,content,urgency,published_at,ai_summary').in_('url', part) \
                 .execute().data or []:
             rows[r['url']] = r
+    rx = re.compile(grep) if grep else None
     out = []
     for u, at in urls:
-        if u in rows:
+        if u in rows and (not rx or rx.search(f"{rows[u].get('title') or ''} {rows[u].get('content') or ''}")):
             out.append(dict(rows[u], queued_at=at))
         if len(out) >= n * 3:                    # 본문을 못 받는 기사가 있어 넉넉히
             break
     return out
 
 
-def fetch_bodies(cands: list, n: int) -> list:
+def fetch_bodies(cands: list, n: int, grep: str = '') -> list:
     import crawler
     import news_summary as ns
+    rx = re.compile(grep) if grep else None
     got = []
     for a in cands:
         full, _d = crawler.fetch_article_body(a['url'], a.get('source') or '')
         full = full or ''
         ok = ns.usable_body(full)
+        if ok and rx and not rx.search(f"{a.get('title') or ''} {ns.input_text(full)}"):
+            ok = False                           # 전문(모델이 보는 앞 8,000자)엔 없음 — 저장 본문에만 있었던 것
         print(f"  {'○' if ok else '×'} {len(full):>6}자 저장 {len(a.get('content') or ''):>5}자  {a['title'][:50]}")
         if ok:
             got.append(dict(a, full=full[:ns.SUMMARY_INPUT_MAX], full_len=len(full)))
@@ -94,23 +101,49 @@ def probe_kwargs(a: dict, model: str = '') -> dict:
 
 
 def probe_summary_call(client, a: dict, model: str = '') -> dict:
-    """운영과 같은 요청 한 번 — 결과 판정도 운영 함수(news_summary.accept). 이 함수 이름이 api_usage 라벨이다."""
+    """운영과 같은 요청 — 요약 한 번 + (SK텔레콤 언급 기사면, #324) 줄 한 번. 결과 판정도 운영 함수(news_summary.accept·accept_line).
+    이 함수 이름이 api_usage 라벨이다. 반환의 in/out은 두 호출 합."""
     import news_summary as ns
     try:
         resp = client.messages.create(**probe_kwargs(a, model))
     except Exception as e:
-        return {'summary': '', 'why': f'실패: {str(e)[:80]}', 'raw': '', 'stop': '', 'in': 0, 'out': 0}
+        return {'summary': '', 'why': f'실패: {str(e)[:80]}', 'raw': '', 'stop': '', 'in': 0, 'out': 0, 'skt': '', 'skt_line': ''}
     raw = ''.join(getattr(b, 'text', '') or '' for b in resp.content if getattr(b, 'type', '') == 'text')
     stop = str(resp.stop_reason or '')
     s = ns.accept(raw, stop)
     u = resp.usage
-    return {'summary': s, 'why': '' if s else '버림', 'raw': raw, 'stop': stop,
-            'in': int(getattr(u, 'input_tokens', 0) or 0), 'out': int(getattr(u, 'output_tokens', 0) or 0)}
+    out = {'summary': s, 'why': '' if s else '버림', 'raw': raw, 'stop': stop, 'skt': '', 'skt_line': '', 'skt_raw': '',
+           'in': int(getattr(u, 'input_tokens', 0) or 0), 'out': int(getattr(u, 'output_tokens', 0) or 0)}
+    if s and ns.skt_mentioned(a.get('title'), ns.input_text(a.get('full'))):
+        try:
+            r2 = client.messages.create(**ns.skt_line_kwargs(a['title'], a.get('source'), a['full'], s, model=model))
+            raw2 = ''.join(getattr(b, 'text', '') or '' for b in r2.content if getattr(b, 'type', '') == 'text')
+            line, why2 = ns.accept_line(raw2, str(r2.stop_reason or ''))
+            u2 = r2.usage
+            out.update(skt_line=line, skt=('ok' if line else why2), skt_raw=raw2,
+                       **{'in': out['in'] + int(getattr(u2, 'input_tokens', 0) or 0), 'out': out['out'] + int(getattr(u2, 'output_tokens', 0) or 0)})
+        except Exception as e:
+            out['skt'] = f'실패: {str(e)[:80]}'
+    out['text'] = ns.tg_text(s, out['skt_line'])
+    return out
+
+
+def skt_state(a: dict, summary: str) -> str:
+    """''(원문에 언급 없음) | 'ok'(글에 SK텔레콤이 들어 있음) | '누락' — 저장된 종전 요약·줄 글의 참고 표시(#324)."""
+    import news_summary as ns
+    if not summary or not ns.skt_mentioned(a.get('title'), ns.input_text(a.get('full'))):
+        return ''
+    return 'ok' if ns.SKT_RE.search(summary) else '누락'
 
 
 def flags(a: dict) -> list:
     s, body = a.get('summary') or a.get('raw') or '', re.sub(r'\s+', ' ', a.get('full') or '')
     out = []
+    for num in re.findall(r'\d[\d,.]*\d|\d', a.get('skt_line') or ''):
+        if num not in body and num.replace(',', '') not in body.replace(',', ''):
+            out.append(f'줄에 원문에 없는 숫자 「{num}」')
+    if a.get('skt') and a['skt'] not in ('ok', '없음'):
+        out.append(f"SKT 줄 없음({a['skt']})")
     for w in RISK_WORDS:
         if w in s and w not in body:
             out.append(f'원문에 없는 「{w}」')
@@ -131,24 +164,39 @@ def report(res: list, path_md: str) -> None:
     n_ok = sum(1 for a in res if a.get('summary'))
     tin, tout = sum(a.get('in', 0) for a in res), sum(a.get('out', 0) for a in res)
     lens = [len(a['summary']) for a in res if a.get('summary')]
+    skt = [a for a in res if skt_state(a, a.get('summary') or '')]
+    skt_old = [a for a in res if skt_state(a, a.get('ai_summary') or '')]
     lines = [f'# 텔레그램 주요 뉴스 2문장 요약 — 지시문 실측 ({datetime.now(KST):%Y-%m-%d %H:%M} KST)', '',
              f'- 기사 {len(res)}건(최근 구독자 긴급 알림으로 나간 기사, 최신순) · 요약 붙음 {n_ok}건',
              f'- 토큰 입력 {tin:,} · 출력 {tout:,} → 실비 ${tin * PRICE_IN / 1e6 + tout * PRICE_OUT / 1e6:.4f}'
              f' (출력 최대 {max([a.get("out", 0) for a in res] or [0])} / 상한 {__import__("news_summary").SUMMARY_MAX_TOKENS})',
-             f'- 요약 길이(자) {min(lens or [0])}~{max(lens or [0])}, 평균 {sum(lens) / max(1, len(lens)):.0f}', '',
-             '대조할 것(운영자): ① 부풀림(원문에 없는 범위·정도) ② 단정(추진·검토를 확정처럼) ③ 주체(누가 말했나·누가 하나). '
-             '자동 표시는 참고용이다.', '']
+             f'- 요약 길이(자) {min(lens or [0])}~{max(lens or [0])}, 평균 {sum(lens) / max(1, len(lens)):.0f}']
+    if skt:
+        n_line = sum(1 for a in skt if a.get('skt_line'))
+        lines.append(f'- SK텔레콤 언급 기사 {len(skt)}건 — SKT 줄 붙음 {n_line}건'
+                     f'(없음 {sum(1 for a in skt if a.get("skt") == "없음")} · 그 밖 {len(skt) - n_line - sum(1 for a in skt if a.get("skt") == "없음")})'
+                     f' · 두 문장 안에 SK텔레콤 {sum(1 for a in skt if skt_state(a, a["summary"]) == "ok")}건'
+                     + (f' · 종전(저장된 운영 요약) {sum(1 for a in skt_old if skt_state(a, a["ai_summary"]) == "ok")}'
+                        f'/{len(skt_old)}건' if skt_old else ''))
+    lines += ['', '대조할 것(운영자): ① 부풀림(원문에 없는 범위·정도) ② 단정(추진·검토를 확정처럼) ③ 주체(누가 말했나·누가 하나). '
+              '자동 표시는 참고용이다.', '']
     for i, a in enumerate(res, 1):
         fl = flags(a)
         lines += [f'## {i}. {a["title"]}', '',
                   f'- 출처 {a.get("source")} · 원문 {a.get("full_len")}자(요약 입력 {len(a.get("full") or "")}자) · '
-                  f'출력 {a.get("out", 0)}토큰 · stop={a.get("stop")}',
+                  f'출력 {a.get("out", 0)}토큰 · stop={a.get("stop")}'
+                  + (f' · SKT 줄 {a.get("skt")}' if a.get('skt') else ''),
                   f'- {a["url"]}', '',
                   f'**요약**: {a.get("summary") or "(없음 — 제목만)"}', '']
+        if a.get('skt_line'):
+            lines += [f'**SKT 줄**: {a["skt_line"]}', '']
+        if a.get('ai_summary'):
+            lines += [f'**종전(저장된 운영 요약{", SK텔레콤 " + skt_state(a, a["ai_summary"]) if skt_state(a, a["ai_summary"]) else ""})**: '
+                      f'{a["ai_summary"]}', '']
         if not a.get('summary') and a.get('raw'):
             lines += [f'(버린 응답: {a["raw"]})', '']
         lines += [f'자동 표시: {", ".join(fl) if fl else "없음"}', '',
-                  '텔레그램 모양:', '```', sn.format_news_item(dict(a, _summary=a.get('summary') or '')), '```', '',
+                  '텔레그램 모양:', '```', sn.format_news_item(dict(a, _summary=a.get('text') or a.get('summary') or '')), '```', '',
                   '<details><summary>요약에 넣은 원문</summary>', '', a.get('full') or '', '', '</details>', '']
     os.makedirs(os.path.dirname(path_md), exist_ok=True)
     with open(path_md, 'w', encoding='utf-8') as f:
@@ -165,6 +213,9 @@ def main():
     ap.add_argument('--from-snapshot')
     ap.add_argument('--report')
     ap.add_argument('--model', default='', help='비교 실측용 — 운영 모델 대신(예: claude-sonnet-5). 지시문·입력은 운영 그대로')
+    ap.add_argument('--grep', default='', help='제목·본문이 이 정규식에 맞는 기사만(#324 — 예: SK ?텔레콤|SKT)')
+    ap.add_argument('--days', type=int, default=14, help='후보 기간(일, 기본 14)')
+    ap.add_argument('--tag', default='', help='저장 파일 이름 꼬리')
     args = ap.parse_args()
     _env()
     global PRICE_IN, PRICE_OUT
@@ -181,14 +232,14 @@ def main():
     if args.from_snapshot:
         arts = json.load(open(args.from_snapshot, encoding='utf-8'))
         arts = [{k: a[k] for k in ('id', 'url', 'title', 'source', 'content', 'urgency', 'published_at', 'queued_at',
-                                   'full', 'full_len') if k in a} for a in arts]
+                                   'full', 'full_len', 'ai_summary') if k in a} for a in arts]
         print(f'[스냅샷] {len(arts)}건 — 같은 본문으로')
     else:
         from sb_client import make_client
         sb = make_client(os.environ['SUPABASE_URL'], os.environ['SUPABASE_SERVICE_KEY'])
-        cands = pick_articles(sb, args.n)
-        print(f'[후보] 최근 구독자 긴급 기사 {len(cands)}건 — 본문을 다시 받는다')
-        arts = fetch_bodies(cands, args.n)
+        cands = pick_articles(sb, args.n, days=args.days, grep=args.grep)
+        print(f'[후보] 최근 {args.days}일 구독자 긴급 기사 {len(cands)}건' + (f'(grep {args.grep!r})' if args.grep else '') + ' — 본문을 다시 받는다')
+        arts = fetch_bodies(cands, args.n, grep=args.grep)
     chars = sum(len(a['full']) for a in arts)
     print(f'[세트] {len(arts)}건 · 입력 본문 {chars:,}자 · 어림 비용 ≈ ${chars * 0.9 * PRICE_IN / 1e6 + len(arts) * 150 * PRICE_OUT / 1e6:.3f}'
           ' (한글 1자 ≈ 0.9토큰 어림)')
@@ -212,9 +263,10 @@ def main():
     for i, a in enumerate(arts, 1):
         r = probe_summary_call(client, a, args.model)
         res.append(dict(a, **r))
-        print(f'  {i:>2}. {r["out"]:>3}토큰 {len(r["summary"]):>3}자 {r["summary"] or "(없음: " + r["why"] + ")"}')
+        print(f'  {i:>2}. {r["out"]:>3}토큰 {len(r["summary"]):>3}자 {r["summary"] or "(없음: " + r["why"] + ")"}'
+              + (f'\n      ┗ SKT 줄[{r["skt"]}] {r["skt_line"]}' if r.get('skt') else ''))
     os.makedirs(OUT_DIR, exist_ok=True)
-    stamp = datetime.now(KST).strftime('%m%d_%H%M') + (('_' + args.model) if args.model else '')
+    stamp = datetime.now(KST).strftime('%m%d_%H%M') + (('_' + args.model) if args.model else '') + (('_' + args.tag) if args.tag else '')
     path = os.path.join(OUT_DIR, f'probe_{stamp}.json')
     with open(path, 'w', encoding='utf-8') as f:
         json.dump(res, f, ensure_ascii=False, indent=1)
