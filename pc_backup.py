@@ -42,11 +42,16 @@ C:\\Users\\SKTelecom\\Desktop\\frequence\\radio-policy-ai → C--Users-SKTelecom
   대화 기록은 비밀 파일보다 넓게 읽힌다(공유·검색).
 - 끝에 원본과 백업의 파일 수·용량을 대조한다(실행 중 바뀐 파일은 빠짐으로 세지 않는다). 빠짐·robocopy 실패(코드 8 이상)·
   원본 없음·예약 작업 내보내기·복구 안내·비밀 파일 복사 실패면 종료 코드 1 + 운영자 텔레그램 한 줄.
+- **드라이브 올리기(#320-보론4)**: 운영자는 메모리 때문에 드라이브 앱을 평소 꺼 둔다. 백업이 끝나면 앱이 꺼져 있을 때
+  켜서(탐색기로 시작 메뉴 바로가기) PC백업 전체가 올라갈 때까지 기다렸다가(앱 기록과 경로·크기·시각·체크섬 대조,
+  남은 것 0이 연달아 두 번) 다시 끈다. 45분 안에 안 끝나거나 켜지·판단하지·끄지 못하면 켜 둔 채 운영자 봇에 한 줄.
+  이미 켜져 있던 앱은 끄지 않는다. 성공은 로그에만 남긴다.
 
 사용:
   작업 스케줄러(setup_pc_backup.ps1 — RadioPolicy-PCBackup, 매일 23:30, 창 없음):
       pythonw.exe run_hidden.py pc_backup.py pc_backup_sched.log
   손 실행:  py -3.12 pc_backup.py          대조만(복사 없음):  py -3.12 pc_backup.py --verify
+  드라이브 단계 빼고:  py -3.12 pc_backup.py --no-drive
 """
 import base64
 import datetime
@@ -55,8 +60,11 @@ import hashlib
 import json
 import os
 import re
+import shutil
+import sqlite3
 import subprocess
 import sys
+import tempfile
 import time
 
 try:
@@ -120,6 +128,17 @@ SECRET_FILES = [
     (".env", os.path.join(HERE, ".env")),
     (".gitlab-credentials", os.path.join(HOME, ".gitlab-credentials")),
 ]
+# 구글 드라이브 앱 — 운영자는 메모리 때문에 평소 꺼 둔다(10-21, Claude 앱이 메모리 부족으로 자꾸 꺼져서). 백업 끝에
+# 꺼져 있으면 켜서 PC백업이 다 올라갈 때까지 기다렸다가 다시 끄고, 시간 안에 안 끝나면 켜 둔 채 운영자 봇에 알린다
+# (#320-보론4, 운영자 결정 「①로 해줘」). 백업이 켜지 않은 앱(운영자가 켜 둔 것)은 끄지 않는다.
+DRIVE_PROC = "GoogleDriveFS.exe"
+DRIVE_SHORTCUT = os.path.join(os.environ.get("ProgramData", r"C:\ProgramData"),
+                              "Microsoft", "Windows", "Start Menu", "Programs", "Google Drive.lnk")
+DRIVE_WAIT_S = 45 * 60      # 이 안에 다 안 올라가면 켜 둔 채 알림(하루 바뀌는 양은 보통 수십 MB — 몇 분)
+DRIVE_POLL_S = 30
+DRIVE_SETTLE_S = 60         # 켠 뒤 폴더를 훑을 시간 — 그 전의 「남은 것 0」은 믿지 않는다
+DRIVE_STABLE_POLLS = 2      # 남은 것 0이 연달아 이만큼 나와야 다 올라간 것으로 본다
+DRIVE_IGNORE = ["desktop.ini", "*.tmp", "*.pcbak~"]   # 잠깐 생겼다 사라지는 파일(10-21 대조 중 1개 실측)
 EXCLUDE_FILES = [".env", ".env.*", "*.env", ".credentials.json", ".gitlab-credentials", ".git-credentials",
                  ".confluence_pat", "*.pem"]
 EXCLUDE_DIRS = ["__pycache__", ".git", "node_modules"]
@@ -524,6 +543,169 @@ def tally(src, dst, names, run_start_ns):
     }
 
 
+def drive_running():
+    """구글 드라이브 앱이 떠 있나 — True/False, 확인 자체가 실패하면 None."""
+    try:
+        r = subprocess.run(["tasklist", "/FI", "IMAGENAME eq " + DRIVE_PROC, "/FO", "CSV", "/NH"],
+                           capture_output=True, creationflags=CREATE_NO_WINDOW, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if r.returncode != 0:
+        return None
+    return DRIVE_PROC.lower() in (r.stdout or b"").decode("oem", errors="replace").lower()
+
+
+def _drive_exe():
+    root = os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "Google", "Drive File Stream")
+    try:
+        vers = [d for d in os.listdir(root) if os.path.isfile(os.path.join(root, d, DRIVE_PROC))]
+    except OSError:
+        return None
+    if not vers:
+        return None
+    best = max(vers, key=lambda v: [int(x) if x.isdigit() else 0 for x in v.split(".")])
+    return os.path.join(root, best, DRIVE_PROC)
+
+
+def launch_drive():
+    """탐색기를 거쳐 띄운다 — 운영자가 시작 메뉴에서 누른 것과 같다(10-21: Claude 앱 안의 세션 셸에서 exe를 바로
+    띄우면 곧바로 꺼졌고, 탐색기에 바로가기를 넘기면 떴다). 띄울 대상이 없으면 False."""
+    target = DRIVE_SHORTCUT if os.path.isfile(DRIVE_SHORTCUT) else _drive_exe()
+    if not target:
+        return False
+    subprocess.Popen(["explorer.exe", target], creationflags=CREATE_NO_WINDOW)
+    return True
+
+
+def quit_drive():
+    """드라이브 앱 끄기 — 정상 종료 요청(taskkill)은 창만 닫고 본체가 남아(10-21 실측) 강제 종료한다.
+    다 올라간 것을 확인한 뒤에만 부른다. 꺼졌으면 True."""
+    try:
+        subprocess.run(["taskkill", "/F", "/IM", DRIVE_PROC], capture_output=True,
+                       creationflags=CREATE_NO_WINDOW, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    for _ in range(15):
+        if drive_running() is False:
+            return True
+        time.sleep(1)
+    return False
+
+
+def drive_pending(base=None, drivefs=None):
+    """PC백업 안 파일 중 드라이브에 아직 안 올라간 수. 판단을 못 하면 None.
+    드라이브 앱의 내부 기록(계정 폴더의 mirror_sqlite.db)을 임시 폴더로 복사해 읽기만 하고, 파일마다 경로·크기·
+    수정 시각(밀리초)이 앱 기록과 같고 로컬·클라우드 체크섬이 같아야 올라간 것으로 센다(10-21 실측: 9,422개 시각 모두 일치).
+    앱 판이 바뀌어 기록 꼴이 달라지거나 PC백업이 동기화 폴더로 지정돼 있지 않으면 None."""
+    base = base or DEST
+    drivefs = drivefs or os.path.join(LOCALAPPDATA, "Google", "DriveFS")
+    rootname = os.path.basename(os.path.normpath(base))
+    try:
+        accts = [os.path.join(drivefs, d) for d in os.listdir(drivefs)
+                 if d.isdigit() and os.path.isfile(os.path.join(drivefs, d, "mirror_sqlite.db"))]
+    except OSError:
+        return None
+    cloud = {}
+    with tempfile.TemporaryDirectory() as tmp:
+        for a in accts:
+            src, dst = os.path.join(a, "mirror_sqlite.db"), os.path.join(tmp, os.path.basename(a) + ".db")
+            try:
+                for ext in ("", "-wal", "-shm"):
+                    if os.path.exists(src + ext):
+                        shutil.copy2(src + ext, dst + ext)
+                con = sqlite3.connect(dst)
+                try:
+                    rows = con.execute("select local_stable_id, parent_local_stable_id, local_filename, local_size, "
+                                       "local_mtime_ms, local_md5_checksum, cloud_md5_checksum from mirror_item").fetchall()
+                finally:
+                    con.close()
+            except (OSError, sqlite3.Error):
+                return None
+            byid = {r[0]: r for r in rows}
+            roots = {r[0] for r in rows if r[1] == -1 and r[2] == rootname}
+            for r in rows:
+                parts, i = [], r[0]
+                for _ in range(64):
+                    if i in roots:
+                        break
+                    row = byid.get(i)
+                    if row is None:
+                        parts = None
+                        break
+                    parts.append(row[2])
+                    i = row[1]
+                else:
+                    parts = None
+                if parts:
+                    cloud[os.path.join(*reversed(parts)).lower()] = r
+    if not cloud:
+        return None
+    left = 0
+    for dirpath, _dirnames, filenames in os.walk(base):   # 백업 폴더 전체(비밀파일\ 포함) — iter_files의 제외 이름은 안 씀
+        for fn in filenames:
+            if _matches(fn, DRIVE_IGNORE):
+                continue
+            full = os.path.join(dirpath, fn)
+            try:
+                s = os.stat(full)
+            except OSError:
+                continue
+            r = cloud.get(os.path.relpath(full, base).lower())
+            if (r is None or r[3] != s.st_size or r[4] != s.st_mtime_ns // 1_000_000
+                    or not r[6] or r[5] != r[6]):
+                left += 1
+    return left
+
+
+def sync_to_drive(is_running=drive_running, launch=launch_drive, quit_=quit_drive, pending=drive_pending,
+                  sleep=time.sleep, clock=time.monotonic, wait_s=None, poll_s=None, settle_s=None, stable=None):
+    """백업 끝 드라이브 올리기. (상태, 남은 수, 걸린 초) — 상태:
+    synced_closed(켜서 다 올리고 끔) · synced_open(이미 켜져 있었고 다 올라감 — 끄지 않음) · timeout(시간 안에 안 끝남, 켜 둠) ·
+    launch_failed(못 켬) · no_judge(다 올라갔는지 판단 못 함, 켜 둠) · quit_failed(다 올라갔는데 못 끔) · unknown(앱 상태 확인 실패)."""
+    wait_s = DRIVE_WAIT_S if wait_s is None else wait_s
+    poll_s = DRIVE_POLL_S if poll_s is None else poll_s
+    settle_s = DRIVE_SETTLE_S if settle_s is None else settle_s
+    stable = DRIVE_STABLE_POLLS if stable is None else stable
+    t0 = clock()
+    was = is_running()
+    if was is None:
+        return "unknown", None, 0
+    started = False
+    if not was:
+        if not launch():
+            return "launch_failed", None, 0
+        started = True
+        for _ in range(30):
+            sleep(2)
+            if is_running():
+                break
+        else:
+            return "launch_failed", None, clock() - t0
+        sleep(settle_s)
+    zeros = 0
+    while True:
+        left = pending()
+        if left is None:
+            return "no_judge", None, clock() - t0
+        zeros = zeros + 1 if left == 0 else 0
+        if zeros >= stable:
+            if not started:
+                return "synced_open", 0, clock() - t0
+            return ("synced_closed" if quit_() else "quit_failed"), 0, clock() - t0
+        if clock() - t0 >= wait_s:
+            return "timeout", left, clock() - t0
+        sleep(poll_s)
+
+
+DRIVE_PROBLEM = {
+    "timeout": "드라이브 업로드가 %d분 안에 안 끝남(남은 %s개) — 드라이브 앱을 켜 둠",
+    "launch_failed": "드라이브 앱을 켜지 못함 — 오늘 백업은 드라이브에 안 올라감(시작 메뉴에서 Google Drive 실행)",
+    "no_judge": "드라이브에 다 올라갔는지 확인 못 함(앱 기록 읽기 실패 또는 PC백업 미지정) — 드라이브 앱을 켜 둠",
+    "quit_failed": "드라이브에 다 올라갔지만 드라이브 앱을 끄지 못함(메모리 확보하려면 직접 끌 것)",
+    "unknown": "드라이브 앱 상태 확인 실패 — 오늘 백업이 드라이브에 올라갔는지 모름",
+}
+
+
 def alert(text):
     try:
         from dotenv import load_dotenv
@@ -624,7 +806,27 @@ def main(argv):
     if problems and not verify_only:
         alert("⚠️ PC 백업(%s) 이상: %s — %s\\_log 확인" % (os.environ.get("COMPUTERNAME", "?"),
                                                     " / ".join(problems)[:600], DEST))
-    return 1 if problems else 0
+    drive_problem = None
+    if not verify_only and "--no-drive" not in argv:
+        # 백업 결과(마지막_백업.txt·월별 로그)를 다 쓴 뒤에 올린다 — 기다리는 동안 PC백업 안을 바꾸면 끝을 못 낸다.
+        # 이 단계의 기록은 끝난 뒤 월별 로그에 덧붙이고, 그 변경은 다음 날 올라간다.
+        n0 = len(_LINES)
+        state, left, secs = sync_to_drive()
+        log("드라이브: %s%s (%.0f초)" % (state, "" if left is None else " — 남은 %d개" % left, secs))
+        if state in DRIVE_PROBLEM:
+            drive_problem = DRIVE_PROBLEM[state]
+            if state == "timeout":
+                drive_problem = drive_problem % (DRIVE_WAIT_S // 60, left)
+            log("드라이브 이상: " + drive_problem)
+        try:
+            month = datetime.date.today().strftime("%Y-%m")
+            with open(os.path.join(DEST, "_log", "pc_backup_%s.log" % month), "a", encoding="utf-8") as f:
+                f.write("\n".join(_LINES[n0:]) + "\n\n")
+        except OSError as e:
+            log("로그 못 씀: %s" % e)
+        if drive_problem:
+            alert("⚠️ PC 백업(%s) 드라이브: %s" % (os.environ.get("COMPUTERNAME", "?"), drive_problem))
+    return 1 if (problems or drive_problem) else 0
 
 
 if __name__ == "__main__":

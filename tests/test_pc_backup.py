@@ -3,6 +3,7 @@
 import base64
 import json
 import os
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -119,6 +120,136 @@ class TestSecretFiles(unittest.TestCase):
             with open(a, "wb") as f:
                 f.write(b"FAKE_KEY=changed\n")
             self.assertEqual(pb.copy_secret_files(dest, files)[1], 1)
+
+
+class _Clock:
+    def __init__(self):
+        self.t = 0.0
+
+    def now(self):
+        return self.t
+
+    def sleep(self, s):
+        self.t += s
+
+
+class TestDriveSync(unittest.TestCase):
+    """#320-보론4 — 꺼져 있으면 켜서 다 올라가면 끄고, 안 끝나면 켜 둔다. 운영자가 켜 둔 앱은 끄지 않는다."""
+
+    def run_sync(self, running, pend_seq, launch_ok=True, quit_ok=True, wait_s=600):
+        c, calls = _Clock(), {"launch": 0, "quit": 0}
+        state = {"on": running}
+        seq = list(pend_seq)
+
+        def launch():
+            calls["launch"] += 1
+            if launch_ok:
+                state["on"] = True
+            return True
+
+        def quit_():
+            calls["quit"] += 1
+            return quit_ok
+
+        def pending():
+            return seq.pop(0) if len(seq) > 1 else seq[0]
+
+        res = pb.sync_to_drive(is_running=lambda: state["on"], launch=launch, quit_=quit_, pending=pending,
+                               sleep=c.sleep, clock=c.now, wait_s=wait_s, poll_s=30, settle_s=60, stable=2)
+        return res, calls
+
+    def test_off_then_synced_closes(self):
+        (st, left, _), calls = self.run_sync(False, [5, 0, 0])
+        self.assertEqual((st, left, calls["launch"], calls["quit"]), ("synced_closed", 0, 1, 1))
+
+    def test_already_on_is_left_on(self):
+        (st, _, _), calls = self.run_sync(True, [0, 0])
+        self.assertEqual((st, calls["launch"], calls["quit"]), ("synced_open", 0, 0))
+
+    def test_single_zero_is_not_enough(self):
+        (st, _, _), calls = self.run_sync(False, [0, 3, 0, 0])
+        self.assertEqual((st, calls["quit"]), ("synced_closed", 1))
+
+    def test_timeout_keeps_it_on(self):
+        (st, left, _), calls = self.run_sync(False, [7], wait_s=200)
+        self.assertEqual((st, left, calls["quit"]), ("timeout", 7, 0))
+
+    def test_launch_fails(self):
+        (st, _, _), calls = self.run_sync(False, [0], launch_ok=False)
+        self.assertEqual((st, calls["quit"]), ("launch_failed", 0))
+
+    def test_no_judge_keeps_it_on(self):
+        (st, _, _), calls = self.run_sync(False, [None])
+        self.assertEqual((st, calls["quit"]), ("no_judge", 0))
+
+    def test_unknown_state(self):
+        res = pb.sync_to_drive(is_running=lambda: None, launch=lambda: self.fail("no launch"),
+                               quit_=lambda: self.fail("no quit"), pending=lambda: 0)
+        self.assertEqual(res[0], "unknown")
+
+    def test_problem_texts_cover_failure_states(self):
+        for s in ("timeout", "launch_failed", "no_judge", "quit_failed", "unknown"):
+            self.assertIn(s, pb.DRIVE_PROBLEM)
+        self.assertNotIn("synced_closed", pb.DRIVE_PROBLEM)
+        self.assertNotIn("synced_open", pb.DRIVE_PROBLEM)
+
+
+class TestDrivePending(unittest.TestCase):
+    """가짜 드라이브 기록(mirror_item)으로 경로·크기·시각·체크섬 대조 — 비밀파일\\의 .env도 센다."""
+
+    def make(self, d, entries):
+        base = os.path.join(d, "PC백업")
+        acct = os.path.join(d, "DriveFS", "1234567890")
+        os.makedirs(acct)
+        con = sqlite3.connect(os.path.join(acct, "mirror_sqlite.db"))
+        con.execute("create table mirror_item (local_stable_id, parent_local_stable_id, local_filename, local_size, "
+                    "local_mtime_ms, local_md5_checksum, cloud_md5_checksum)")
+        con.execute("insert into mirror_item values (1, -1, 'PC백업', null, null, null, null)")
+        ids = {"": 1}
+        nid = 2
+        for rel, data, synced in entries:
+            p = os.path.join(base, rel)
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, "wb") as f:
+                f.write(data)
+            parent = ""
+            for part in os.path.dirname(rel).split(os.sep) if os.path.dirname(rel) else []:
+                key = os.path.join(parent, part) if parent else part
+                if key not in ids:
+                    con.execute("insert into mirror_item values (?, ?, ?, null, null, null, null)",
+                                (nid, ids[parent], part))
+                    ids[key] = nid
+                    nid += 1
+                parent = key
+            if synced is not None:
+                s = os.stat(p)
+                md5 = "a" * 32
+                con.execute("insert into mirror_item values (?, ?, ?, ?, ?, ?, ?)",
+                            (nid, ids[parent], os.path.basename(rel), s.st_size, s.st_mtime_ns // 1_000_000,
+                             md5, md5 if synced else ""))
+                nid += 1
+        con.commit()
+        con.close()
+        return base, os.path.join(d, "DriveFS")
+
+    def test_counts(self):
+        with tempfile.TemporaryDirectory() as d:
+            base, drivefs = self.make(d, [
+                ("a.txt", b"x", True),
+                (os.path.join("비밀파일", ".env"), b"FAKE=1\n", True),
+                (os.path.join("sub", "b.jsonl"), b"y", False),     # 등록됐지만 아직 안 올라감
+                (os.path.join("sub", "c.jsonl"), b"z", None),      # 아직 등록 안 됨
+                ("desktop.ini", b"i", None),                        # 무시
+            ])
+            self.assertEqual(pb.drive_pending(base, drivefs), 2)
+            with open(os.path.join(base, "a.txt"), "ab") as f:       # 올라간 뒤 바뀜
+                f.write(b"more")
+            self.assertEqual(pb.drive_pending(base, drivefs), 3)
+
+    def test_unknown_when_no_record(self):
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "PC백업"))
+            self.assertIsNone(pb.drive_pending(os.path.join(d, "PC백업"), os.path.join(d, "none")))
 
 
 class TestPrepassFlow(unittest.TestCase):
