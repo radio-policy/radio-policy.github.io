@@ -13894,6 +13894,25 @@ function renderIssueMiniMap(iss, links) {
 
 // ── SKT 영향 요약 ───────────────────────────────────────────
 // 근거 밖 서술을 막기 위해 연결 항목을 [n] 번호 목록으로 주고, 문장마다 [n] 인용을 강제한다.
+
+// 한 칸을 문장 단위로 나눈다 — 저장 형식은 그대로 두고 화면에서만 한 줄씩 그린다(#325).
+// 문장 끝 = 마침표(?!) 뒤가 공백·끝이고 앞이 인용 번호 ']' 또는 숫자·공백 아닌 글자:
+// 「다[1][5].」·「다(…)[23].」·「다.」는 끊고 3.5㎓ 같은 소수점은 안 끊는다. 줄바꿈·「·」로 이미 나뉜 글도 받는다.
+// 세션 저장 도구(issuemap_tools/ihelp.py impact_sentences)의 문장 수 한도도 같은 규칙으로 센다.
+function _impactSentences(txt) {
+  var out = [];
+  String(txt || '').split(/\n+/).forEach(function(line) {
+    line = line.replace(/^\s*[·•\-–]\s*/, '').trim();
+    var re = /(?:[^\d\s]|\])[.!?](?=\s|$)/g, start = 0, m;
+    while ((m = re.exec(line))) {
+      out.push(line.slice(start, m.index + m[0].length).trim());
+      start = m.index + m[0].length;
+    }
+    if (line.slice(start).trim()) out.push(line.slice(start).trim());
+  });
+  return out.filter(function(x) { return x; });
+}
+
 function _issueImpactHtml(iss, links) {
   var s = iss.impact_summary;
   if (!s || !s.what) {
@@ -13916,11 +13935,16 @@ function _issueImpactHtml(iss, links) {
         '" style="color:var(--accent);cursor:pointer;font-size:11px">' + m + '</span>';
     });
   }
+  // 칸마다 제목 줄 + 문장마다 「·」 한 줄
+  function part(label, txt, last) {
+    return '<div' + (last ? '' : ' style="margin-bottom:8px"') + '><b>' + label + '</b>' +
+      _impactSentences(txt).map(function(x) {
+        return '<div style="display:flex;gap:6px"><span style="color:var(--text-tertiary)">·</span><span>' + withCites(x) + '</span></div>';
+      }).join('') + '</div>';
+  }
   return (stale && _issueIsAdmin() ? '<div style="font-size:11px;color:#b8791a;margin-bottom:6px">⚠ 요약 생성 이후 새 항목이 연결됐습니다 — 다시 생성하면 반영됩니다.</div>' : '') +
     '<div style="font-size:12px;color:var(--text-primary);padding:12px 14px;background:var(--bg-secondary);border-radius:var(--radius-md);line-height:1.8">' +
-      '<div style="margin-bottom:6px"><b>무슨 일</b> — ' + withCites(s.what) + '</div>' +
-      '<div style="margin-bottom:6px"><b>왜 중요</b> — ' + withCites(s.why) + '</div>' +
-      '<div><b>무엇을 해야</b> — ' + withCites(s.action) + '</div>' +
+      part('무슨 일', s.what) + part('왜 중요', s.why) + part('무엇을 해야', s.action, true) +
     '</div>';
 }
 
