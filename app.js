@@ -12261,6 +12261,75 @@ function _issueDefHead(def) {
   return head.trim().replace(/[,·\s]+$/, '');
 }
 
+// ── 정의문 표시(#325-보론) ── 저장된 글(자동 연결 AI의 판정 기준문·임베딩 원문)은 그대로 두고 화면에서만 나눈다.
+// 개요는 문장마다 한 줄, 관리자에게만 보이는 「해당:」·「해당 없음:」은 제목 줄 + 항목마다 한 줄.
+
+// 괄호(()「」[] 등) 밖에서 isCut이 참인 자리를 끊는다 — 끊은 글자는 앞 조각에 남긴다.
+function _issueSplitTop(s, isCut) {
+  var out = [], depth = 0, cur = '';
+  for (var k = 0; k < s.length; k++) {
+    var ch = s.charAt(k);
+    if ('(（「『[{'.indexOf(ch) >= 0) depth++;
+    else if (')）」』]}'.indexOf(ch) >= 0) depth = Math.max(0, depth - 1);
+    cur += ch;
+    if (depth === 0 && isCut(s, k)) { if (cur.trim()) out.push(cur.trim()); cur = ''; }
+  }
+  if (cur.trim()) out.push(cur.trim());
+  return out;
+}
+
+// 정의문 = 개요 + 「해당:」 목록 + 「해당 없음:」 목록(10-21 활성 37건 중 35건이 이 꼴). 표지가 없으면 전부 개요.
+function _issueDefParts(def) {
+  var t = String(def || '').trim();
+  var a = t.search(/해당\s*:/), b = t.search(/해당\s*없음\s*:/);
+  if (a < 0 && b < 0) return { head: t, inc: '', exc: '' };
+  var cut = Math.min(a < 0 ? t.length : a, b < 0 ? t.length : b);
+  return {
+    head: t.slice(0, cut).trim(),
+    inc: a < 0 ? '' : t.slice(a, b > a ? b : t.length).replace(/^해당\s*:\s*/, '').trim(),
+    exc: b < 0 ? '' : t.slice(b, a > b ? a : t.length).replace(/^해당\s*없음\s*:\s*/, '').trim()
+  };
+}
+
+// 목록 글을 항목으로 — 괄호 밖 문장 끝에서 먼저 나누고, 문장 안은 괄호 밖 「, 」·「; 」에서 나눈다(2,321만 같은 숫자 쉼표는 뒤가 공백이 아니라 안 끊긴다).
+// 조각이 「…며·…하고·…지만」 같은 이어지는 어미로 끝나면 목록이 아니라 설명 문장이라 그 문장은 한 줄로 둔다
+// — 「사고·시정권고」처럼 「고」로 끝나는 명사가 많아 맨 「고」는 어미로 보지 않는다.
+var _ISSUE_DEF_CONNECTIVE = /(며|하고|되고|있고|없고|다루고|이고|지만|으나|는데|하여|해서|되어|면서)$/;
+function _issueDefItems(txt) {
+  var out = [];
+  _issueSplitTop(String(txt || '').trim(), function(s, k) {
+    return /[.!?]/.test(s.charAt(k)) && /\s/.test(s.charAt(k + 1)) && !/[\d\s]/.test(s.charAt(k - 1) || ' ');
+  }).forEach(function(sent) {
+    var pieces = _issueSplitTop(sent, function(s, k) {
+      return (s.charAt(k) === ',' || s.charAt(k) === ';') && /\s/.test(s.charAt(k + 1));
+    }).map(function(x) { return x.replace(/[,;]$/, '').trim(); });
+    var prose = pieces.slice(0, -1).some(function(x) { return _ISSUE_DEF_CONNECTIVE.test(x.replace(/\s*\([^()]*\)\s*$/, '')); });
+    (pieces.length < 2 || prose ? [sent] : pieces).forEach(function(x) {
+      x = x.replace(/\.$/, '').trim();
+      if (x) out.push(x);
+    });
+  });
+  return out;
+}
+
+function _issueDefHtml(def) {
+  var t = _issueDefPublic(def);
+  if (!t) return '';
+  var p = _issueDefParts(t);
+  function rows(arr) {
+    if (arr.length < 2) return arr.map(function(x) { return '<div>' + escHtml(x) + '</div>'; }).join('');
+    return arr.map(function(x) {
+      return '<div style="display:flex;gap:6px"><span style="color:var(--text-tertiary)">·</span><span>' + escHtml(x) + '</span></div>';
+    }).join('');
+  }
+  function list(label, txt) {
+    var it = _issueDefItems(txt);
+    return it.length ? '<div style="margin-top:6px"><b style="color:var(--text-primary);font-weight:600">' + label + '</b>' + rows(it) + '</div>' : '';
+  }
+  return '<div style="font-size:12px;color:var(--text-secondary);line-height:1.7">' +
+    rows(_impactSentences(p.head)) + list('해당', p.inc) + list('해당 없음', p.exc) + '</div>';
+}
+
 function _issueLabelPublic(txt) {
   var t = String(txt || '');
   return _issueIsAdmin() ? t : t.replace(/\s*\((?:proposed|pending|promoted|replaced)\)\s*$/i, '');
@@ -12788,7 +12857,7 @@ async function showIssueDetail(issueId, fresh) {
         escHtml((i.last_activity_at || '').slice(5, 10).replace('-', '/')) + ' · 연결 ' + all.length + '건</span>' +
     '</div>' +
     '<div style="font-size:17px;font-weight:700;color:var(--text-primary);line-height:1.45;margin-bottom:5px">' + escHtml(i.title) + '</div>' +
-    (_issueDefPublic(i.definition) ? '<div style="font-size:12px;color:var(--text-secondary);line-height:1.7">' + escHtml(_issueDefPublic(i.definition)) + '</div>' : '') +
+    _issueDefHtml(i.definition) +
     (admin ? '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">' +
       '<span style="font-size:11px;color:var(--text-tertiary)">단계 변경</span>' +
       Object.keys(ISSUE_STAGES).map(function(s) {
