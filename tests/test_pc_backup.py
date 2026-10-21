@@ -56,6 +56,19 @@ class TestNamesAndPaths(unittest.TestCase):
         for n in ("a.jsonl", "MEMORY.md", "environment.md", "settings.json"):
             self.assertFalse(pb._matches(n, pb.EXCLUDE_FILES), n)
 
+    def test_app_sessions_dir_order(self):
+        with tempfile.TemporaryDirectory() as t:
+            local, roaming = os.path.join(t, "Local"), os.path.join(t, "Roaming")
+            self.assertEqual(pb.app_sessions_dir(local, roaming),
+                             os.path.join(roaming, "Claude", "claude-code-sessions"))
+            old = os.path.join(local, "Packages", "Claude_x1", "LocalCache", "Roaming", "Claude", "claude-code-sessions")
+            os.makedirs(old)
+            self.assertEqual(pb.app_sessions_dir(local, roaming), old)
+            # 10-20 앱 업데이트 뒤 위치가 옛 패키지 폴더보다 먼저
+            new = os.path.join(local, "Claude-Data", "claude_x1", "claude-code-sessions")
+            os.makedirs(new)
+            self.assertEqual(pb.app_sessions_dir(local, roaming), new)
+
     def test_no_mirror_flags(self):
         with open(pb.__file__, encoding="utf-8") as f:
             src = f.read()

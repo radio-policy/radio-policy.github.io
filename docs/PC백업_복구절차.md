@@ -121,10 +121,11 @@
    `$B\claude\settings.json`은 대상에 파일이 없으면 넣고, **이미 있으면 덮지 말고** 옆에 `settings.백업본.json`으로 넣은 뒤
    운영자에게 두 파일이 다르다고 알린다.
 5. **앱 세션 목록 — 운영자에게 부탁(선택, 실측 안 됨).** Claude 앱이 켜진 동안에는 앱이 이 폴더를 다시 쓰므로 세션이 할 수 없다.
-   아래 한 줄에 `$B` 값을 채워 건네고, 운영자가 **Claude 앱을 완전히 끈 뒤** PowerShell에서 실행하게 한다(스토어 앱 기준 —
-   스토어 앱이 아니면 대상은 `%APPDATA%\Claude\claude-code-sessions`):
+   아래 한 줄에 `$B` 값을 채워 건네고, 운영자가 **Claude 앱을 한 번 켜서 로그인한 다음 완전히 끈 뒤** PowerShell에서 실행하게 한다.
+   대상은 지금 앱이 쓰는 폴더다 — `%LOCALAPPDATA%\Claude-Data\claude_<id>\`(2026-10-20 이후 앱) → 없으면 스토어 앱의
+   `%LOCALAPPDATA%\Packages\Claude_<id>\LocalCache\Roaming\Claude\` → 없으면 `%APPDATA%\Claude\` 순으로 처음 있는 것(한 줄이 고른다):
    ```powershell
-   $s = (Get-ChildItem "$env:LOCALAPPDATA\Packages" -Directory -Filter 'Claude_*' | Select-Object -First 1).FullName; robocopy "<B>\claude-code-sessions" "$s\LocalCache\Roaming\Claude\claude-code-sessions" /E /XC /XN /XO
+   $d = Get-ChildItem "$env:LOCALAPPDATA\Claude-Data" -Directory -Filter 'claude_*' -ErrorAction SilentlyContinue | Select-Object -First 1; $p = Get-ChildItem "$env:LOCALAPPDATA\Packages" -Directory -Filter 'Claude_*' -ErrorAction SilentlyContinue | Select-Object -First 1; if ($d) { $t = "$($d.FullName)\claude-code-sessions" } elseif ($p) { $t = "$($p.FullName)\LocalCache\Roaming\Claude\claude-code-sessions" } else { $t = "$env:APPDATA\Claude\claude-code-sessions" }; $t; robocopy "<B>\claude-code-sessions" $t /E /XC /XN /XO
    ```
    앱이 이상해지면 그 대상 폴더만 비우고 앱을 다시 켜면 된다 — 전사본은 3번에 이미 있어 기록 검색은 된다.
 
@@ -206,9 +207,11 @@ SYSTEM 작업은 같은 세 줄을 운영자가 관리자 PowerShell에서 실�
 
 - **프로젝트 폴더 이름**: 저장소 경로에서 영숫자가 아닌 글자를 모두 `-`로 바꾼 것.
   `C:\Users\<사용자>\Desktop\frequence\radio-policy-ai` → `C--Users-<사용자>-Desktop-frequence-radio-policy-ai`.
-- **앱 세션 목록 위치**: Claude 앱이 Microsoft Store(MSIX) 앱이면 실제 파일은
-  `%LOCALAPPDATA%\Packages\Claude_<id>\LocalCache\Roaming\Claude\claude-code-sessions\`다. 앱 안(세션 셸)에서는
-  `%APPDATA%\Claude\...`로 보이지만 작업 스케줄러에서는 그 경로가 없다(10-18 실측). 스토어 앱이 아니면 `%APPDATA%\Claude\`.
+- **앱 세션 목록 위치**: 2026-10-20 18:15 앱 업데이트 뒤 실제 파일은
+  `%LOCALAPPDATA%\Claude-Data\claude_<id>\claude-code-sessions\`다(같은 폴더에 계정별 앱 예약 등록 `scheduled-tasks.json`도 있다).
+  그 전 Microsoft Store(MSIX) 앱은 `%LOCALAPPDATA%\Packages\Claude_<id>\LocalCache\Roaming\Claude\claude-code-sessions\`에
+  두었다 — 앱 안(세션 셸)에서는 `%APPDATA%\Claude\...`로 보였지만 작업 스케줄러에서는 그 경로가 없었고(10-18 실측), 업데이트 뒤
+  옛 폴더에는 표지 파일(`.user-data-left.*`)만 남는다. 백업은 새 위치 → 옛 패키지 위치 → `%APPDATA%\Claude\` 순으로 처음 있는 것을 쓴다.
 - **안 가져가는 것**: 위 폴더들 안의 비밀 파일 사본(`.env*`·`.credentials.json`·`.gitlab-credentials`·`.confluence_pat`·`*.pem`
   — `.env`·`.gitlab-credentials` 원본 둘만 `비밀파일\`로 따로)·`__pycache__`·`.git`·사내판 전사본·사내판 폴더·
   `frequence\confluence`·`docs\사내공유_*`·사내 컨플루언스 열쇠(`.confluence_pat`) — 사내 자료는 개인 드라이브에 두지 않는다.

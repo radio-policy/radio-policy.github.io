@@ -11,7 +11,8 @@
   claude-projects\\<프로젝트 폴더>    %USERPROFILE%\\.claude\\projects\\<프로젝트 폴더> (전사본·하위 폴더·memory)
   claude\\                            %USERPROFILE%\\.claude\\CLAUDE.md·settings.json
   local_docs\\                        이 저장소\\local_docs
-  claude-code-sessions\\              Claude 앱 세션 목록 — 스토어 앱이면 %LOCALAPPDATA%\\Packages\\Claude_<id>\\LocalCache\\
+  claude-code-sessions\\              Claude 앱 세션 목록 — 10-20 앱 업데이트 뒤 %LOCALAPPDATA%\\Claude-Data\\claude_<id>\\
+                                      claude-code-sessions, 그 전 스토어 앱은 %LOCALAPPDATA%\\Packages\\Claude_<id>\\LocalCache\\
                                       Roaming\\Claude\\claude-code-sessions(앱 안에서는 %APPDATA%\\Claude로 보임), 아니면 %APPDATA%
   과방위_발언원문\\                    이 저장소의 상위 폴더\\과방위_발언원문 (SPEECH_RAW_DIR)
   예약작업\\                          전파정책_*·RadioPolicy-*·radio_TEMP_* 작업 XML + _tasks.csv(상태표)
@@ -73,20 +74,28 @@ PROJECT_DIR = re.sub(r"[^A-Za-z0-9]", "-", HERE)
 CREATE_NO_WINDOW = 0x08000000
 
 
-def app_sessions_dir():
-    """Claude 앱 세션 목록 폴더. 앱이 Microsoft Store(MSIX) 패키지면 %APPDATA%\\Claude는 앱 안에서만 보이는 가상 경로이고
-    실제 파일은 %LOCALAPPDATA%\\Packages\\Claude_<id>\\LocalCache\\Roaming\\Claude\\ 에 있다 — 작업 스케줄러에서는
-    %APPDATA%\\Claude가 없다(10-18 실측: 세션 안 실행 749개, 예약 작업 실행 「원본 없음」). 패키지 쪽을 먼저 본다."""
-    pk = os.path.join(LOCALAPPDATA, "Packages")
+def _sub_dirs(parent, prefix, *tail):
     try:
-        cands = sorted(os.path.join(pk, d, "LocalCache", "Roaming", "Claude", "claude-code-sessions")
-                       for d in os.listdir(pk) if d.startswith("Claude_"))
+        return sorted(os.path.join(parent, d, *tail) for d in os.listdir(parent) if d.startswith(prefix))
     except OSError:
-        cands = []
+        return []
+
+
+def app_sessions_dir(local=None, roaming=None):
+    """Claude 앱 세션 목록 폴더. 앱이 Microsoft Store(MSIX) 패키지면 %APPDATA%\\Claude는 앱 안에서만 보이는 가상 경로이고
+    실제 파일은 %LOCALAPPDATA%\\Packages\\Claude_<id>\\LocalCache\\Roaming\\Claude\\ 에 있었다 — 작업 스케줄러에서는
+    %APPDATA%\\Claude가 없다(10-18 실측: 세션 안 실행 749개, 예약 작업 실행 「원본 없음」).
+    2026-10-20 18:15 앱 업데이트가 데이터를 %LOCALAPPDATA%\\Claude-Data\\claude_<id>\\ 로 옮겼다 — 옛 패키지 폴더에는
+    표지 파일(.user-data-left.*)만 남아 그날 23:30 백업이 「원본 없음」이었다. 새 위치 → 패키지 → %APPDATA% 순으로 본다."""
+    local = local or LOCALAPPDATA
+    roaming = roaming or APPDATA
+    cands = (_sub_dirs(os.path.join(local, "Claude-Data"), "claude_", "claude-code-sessions")
+             + _sub_dirs(os.path.join(local, "Packages"), "Claude_", "LocalCache", "Roaming", "Claude",
+                         "claude-code-sessions"))
     for c in cands:
         if os.path.isdir(c):
             return c
-    return os.path.join(APPDATA, "Claude", "claude-code-sessions")
+    return os.path.join(roaming, "Claude", "claude-code-sessions")
 
 
 # (백업 폴더, 원본 폴더, 파일 이름 목록 — None이면 폴더 통째)
