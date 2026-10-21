@@ -12326,8 +12326,12 @@ function _issueDefHtml(def) {
     var it = _issueDefItems(txt);
     return it.length ? '<div style="margin-top:6px"><b style="color:var(--text-primary);font-weight:600">' + label + '</b>' + rows(it) + '</div>' : '';
   }
-  return '<div style="font-size:12px;color:var(--text-secondary);line-height:1.7">' +
-    rows(_impactSentences(p.head)) + list('해당', p.inc) + list('해당 없음', p.exc) + '</div>';
+  // 「해당/해당 없음」은 이슈 내용이 아니라 자동 연결 AI의 기준이라 제목은 그 뜻대로 달고 접어 둔다
+  // (운영자 결정 10-21 — 펼쳐 두니 「해당 없음」이 이슈와 무관한 사실처럼 읽혔다; 잘못 붙은 기사를 가릴 때만 연다)
+  var crit = list('연결하는 기사', p.inc) + list('연결하지 않는 기사', p.exc);
+  return '<div style="font-size:12px;color:var(--text-secondary);line-height:1.7">' + rows(_impactSentences(p.head)) +
+    (crit ? '<details style="margin-top:6px"><summary style="font-size:11px;color:var(--text-tertiary);cursor:pointer">자동 연결 기준 보기</summary>' + crit + '</details>' : '') +
+  '</div>';
 }
 
 function _issueLabelPublic(txt) {
