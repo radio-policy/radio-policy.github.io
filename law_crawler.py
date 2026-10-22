@@ -12,6 +12,7 @@ GitHub Actions에서 매일 11:00 KST 실행 (law_crawl.yml)
 """
 
 import os
+import re
 import sys
 import time
 import requests
@@ -81,6 +82,24 @@ KEYWORDS = [
     # law_watch는 KB에 없는 새 법령을 못 잡는다 — 공포되면 이 키워드로 운영자 알림 → add_laws_batch로 적재.
     '인공지능 데이터센터',
 ]
+
+
+# eflaw(시행일 법령)는 현행·시행예정에 연혁판까지 섞어 돌려준다 — 「전파관리」는 78건 중 76건이 1980~90년대
+# 전파관리법 연혁. 키워드마다 상위 20건만 보므로 위쪽 판이 하나 빠지면(시행예정 → 현행 전환일) 아래 연혁판이
+# 밀려 들어와 「신규」로 알려졌다(2026-10-22 1984년 전파관리법시행규칙, #326). 연혁판은 버리되 공포 30일 안의
+# 것은 남긴다 — 하루 만에 대체된 판(정보통신망법 시행령 290811: 10-01 시행 → 10-02 연혁)을 수집이 빠진 날 놓치지 않게.
+HISTORY_GRACE_DAYS = 30
+
+
+def is_stale_history(item: dict) -> bool:
+    """현행연혁코드 '연혁'이고 공포일이 HISTORY_GRACE_DAYS보다 오래된 판인지 (공포일을 못 읽으면 오래된 것으로 본다)"""
+    if str(item.get('현행연혁코드') or '').strip() != '연혁':
+        return False
+    pub = re.sub(r'\D', '', str(item.get('공포일자') or ''))
+    if len(pub) != 8:
+        return True
+    cutoff = (datetime.now(KST) - timedelta(days=HISTORY_GRACE_DAYS)).strftime('%Y%m%d')
+    return pub < cutoff
 
 
 def law_type_from_gubun(gubun: str) -> str:
@@ -293,8 +312,9 @@ def main():
     print(f'  기존 추적 법령: {len(existing)}건' + ('  (첫 실행 — 알림 생략, 베이스라인 저장)' if is_baseline else ''))
 
     collected = {}   # law_id → [item, law_type, keywords]
+    skipped_history = 0
 
-    # ① 법령 (현행 law + 시행예정 eflaw) — law_type은 법령구분명으로 판정
+    # ① 법령 (현행 law + 시행예정 eflaw) — law_type은 법령구분명으로 판정, 오래된 연혁판은 버림(#326)
     for target in LAW_SEARCH_TARGETS:
         print(f'\n  [법령:{target}] 검색 중...')
         for kw in KEYWORDS:
@@ -302,6 +322,9 @@ def main():
                 lt = law_type_from_gubun(item.get('법령구분명'))
                 lid = make_law_id(item, lt)
                 if not item_mst(item):
+                    continue
+                if is_stale_history(item):
+                    skipped_history += 1
                     continue
                 if lid in collected:
                     if kw not in collected[lid][2]:
@@ -324,7 +347,7 @@ def main():
                 collected[lid] = [item, 'admrul', [kw]]
         time.sleep(0.15)
 
-    print(f'\n  총 고유 법령·고시: {len(collected)}건')
+    print(f'\n  총 고유 법령·고시: {len(collected)}건 (연혁판 제외 {skipped_history}건)')
 
     new_count = 0
     updated_count = 0
