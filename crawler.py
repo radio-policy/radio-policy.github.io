@@ -587,6 +587,142 @@ def urgency_second_check(title: str, content: str = '', summary: str = ''):
 
 
 # ═══════════════════════════════════════════════════════
+#  긴급도 내림 전파 — 그림자 (#327, 2026-10-28, 판정 local_docs/긴급도_재보정_준비_261028/판정_재보정_261028.md §4,
+#  측정 결과_재보정_261030.md §4)
+#
+#  운영자가 대시보드에서 긴급 → 보통·참고로 내린 기사(importance_feedback 공통 행)와 **같은 계기**의 재보도가 다음 실행에서
+#  다시 긴급이 되는 것(국감 26일에 37건)을 잡으려는 단계. 판정기는 ①-2 재보도 대조 news_dedup.match_prior_reports를 **바이트
+#  그대로** 빌려 쓰고(지시문·도구·모델·온도 0 — tests/test_dedup_match.py가 잠금), 「이미 알린 기사」 자리에 72시간 안 운영자 내림
+#  기사를 ①-2 배치 규칙 그대로 ≤10건 넣는다(propagate_pick_prior). 판정 대상 = 2차 확인 뒤에도 긴급인 AI 판정 기사 — set 규칙·
+#  낱말 하한 긴급·유사 블록의 사람 즉시대응 사례는 건너뛴다(2차 확인과 같은 건너뜀). 실행 후보를 모아 MATCH_MAX_NEW씩 부른다.
+#  측정(116회 재연): 같은 계기 37건 중 30건을 잡았지만 같은 계기가 아닌 것을 같다고 본 것 15건(기준 ≤3) — 그중 9건이 운영자가
+#  내린 합본 기사 한 건에서 나왔다. 판정 §4-1 규칙대로 **그림자**: 등급·큐·알림·브리핑·사내 다리 값은 그대로, 결과는 두 칸
+#  (urgency_propagate_shadow_from = 같은 계기로 본 운영자 내림 기사 id · _at = 판정 시각, 같음·다름 모두)과 운영자 봇
+#  「🔽(그림자)」 한 묶음(send_propagate_shadow_notice)뿐. 한 주 기록으로 다시 판정한다 — 지시문은 고치지 않는다.
+#  ⚠️ importance_feedback에 아무것도 쓰지 않는다(1차 판정기가 기계 결정을 배우지 않게 — 지침 금지 항목). 전파로 걸린 기사·
+#     복원된 기사는 prior가 되지 않는다(연쇄 금지), 운영자가 다시 긴급으로 올린 기사는 풀에서 빠진다(propagate_pool_entries).
+#  ⚠️ 그림자 동안 복원 경로(restore_raised_checks)·전날 복원 경보를 타지 않는다 — urgency_check_capped·_restored_at 뜻 불변.
+#  api_usage 라벨은 'crawler.py:propagate_shadow'(api_usage.site_label) — ①-2 억제의 'news_dedup.py:match_prior_reports'와 가른다.
+# ═══════════════════════════════════════════════════════
+
+PROPAGATE_MODE = 'shadow'          # 'off' = 부르지 않음 / 'shadow' = 두 칸·운영자 줄만(등급 불변). 보통으로 저장하는 꼴은 없다 — 한 주 뒤 재판정
+PROPAGATE_WINDOW_H = 72            # 운영자가 내린 시각(importance_feedback.created_at)부터 — 측정 창과 같은 값(그 밖은 미측정)
+PROPAGATE_POOL_LIMIT = 300         # 72시간 안 내림 조회 상한(30일 공통 내림 107건 — 넘칠 일 없음)
+PROPAGATE_TIMEOUT_S = 30           # 알림 경로(grade_urgency) 안 — 2차 확인과 같은 제한, 재시도 1회
+PROPAGATE_MAX_FAIL = 2             # 한 실행에 호출(묶음)이 이만큼 실패하면 나머지는 부르지 않는다(2차 확인과 같은 상한)
+PROPAGATE_SITE = 'crawler.py:propagate_shadow'
+_PROPAGATE_NEWS_COLS = 'id,title,event,screen_text,content,urgency,urgency_check_restored_at,urgency_propagate_shadow_from'
+_PROPAGATE_RUN = {}                # 한 실행의 집계(grade_urgency가 비운다) — 로그 줄
+_PROPAGATE_HITS = {}               # url → 같은 계기로 본 운영자 내림 기사 제목 — 운영자 줄. item dict(= upsert 행)에는 넣지 않는다
+
+
+def propagate_pool_entries(fb_rows, news_rows) -> list:
+    """운영자 내림 행(importance_feedback — news_id·created_at, 내린 시각 최신순) + 그 뉴스 행 → prior 후보
+    [{'id', 'title', 'event', 'snip', 'at'}](내린 시각 최신순). 빼는 것: 뉴스 행 없음 · 지금 등급이 보통·참고가 아님(운영자가 다시
+    올림) · 전파로 걸린 기사(urgency_propagate_shadow_from — 연쇄 금지) · 복원된 기사(urgency_check_restored_at) · 같은 기사 둘째 행.
+    snip = 요약(screen_text), 없으면 본문 — 측정 재연과 같은 재료(MATCH_SNIP자로 잘린다)."""
+    byid = {r.get('id'): r for r in news_rows or [] if r.get('id')}
+    out, seen = [], set()
+    for f in fb_rows or []:
+        nid = f.get('news_id')
+        n = byid.get(nid)
+        if not n or nid in seen:
+            continue
+        seen.add(nid)
+        if n.get('urgency') not in ('보통', '참고'):
+            continue
+        if n.get('urgency_propagate_shadow_from') or n.get('urgency_check_restored_at'):
+            continue
+        out.append({'id': nid, 'title': n.get('title') or '', 'event': n.get('event') or '',
+                    'snip': n.get('screen_text') or n.get('content') or '', 'at': f.get('created_at')})
+    return out
+
+
+def _propagate_pool() -> list:
+    """72시간 안 운영자 내림(공통 행, AI 긴급 → 사람 보통·참고, 뉴스와 이어진 것) → propagate_pool_entries. 실패는 예외(부르는 쪽 fail-open)."""
+    since = (datetime.now(timezone.utc) - timedelta(hours=PROPAGATE_WINDOW_H)).isoformat()
+    fb = sb.table('importance_feedback').select('news_id,created_at').is_('team_id', 'null') \
+        .eq('ai_importance', '긴급').in_('user_importance', ['보통', '참고']).not_.is_('news_id', 'null') \
+        .gte('created_at', since).order('created_at', desc=True).order('id', desc=True) \
+        .limit(PROPAGATE_POOL_LIMIT).execute().data or []
+    ids = list(dict.fromkeys(r['news_id'] for r in fb if r.get('news_id')))
+    news = []
+    for i in range(0, len(ids), 100):
+        news += sb.table('news_feed').select(_PROPAGATE_NEWS_COLS).in_('id', ids[i:i + 100]).execute().data or []
+    return propagate_pool_entries(fb, news)
+
+
+def propagate_pick_prior(new_items: list, pool: list) -> list:
+    """①-2(_suppress_core)의 「이미 알린 기사」 고르기 그대로 — 제목이 같은 것은 처음 하나, 새 기사들과 (제목 + 요지) 낱말 공유
+    **최대값** 내림차순 → pool 순서(내린 시각 최신순), 상위 MATCH_MAX_PRIOR, 최소 공유 없음. ①-2의 「넘긴 기사 대표 맨 앞」 상대는
+    없다. tests/test_propagate_shadow.py가 _suppress_core가 고른 목록과 대조한다."""
+    from news_dedup import extract_keywords, MATCH_MAX_PRIOR
+    reps, seen = [], set()
+    for order, pv in enumerate(pool or []):
+        t = pv.get('title') or ''
+        if t and t not in seen:
+            seen.add(t)
+            reps.append((order, pv))
+    if not reps or not new_items:
+        return []
+    new_kw = [extract_keywords(it.get('title') or '') | extract_keywords(it.get('event') or '') for it in new_items]
+
+    def _near(pv):
+        pk = extract_keywords(pv.get('title') or '') | extract_keywords(pv.get('event') or '')
+        return max(len(k & pk) for k in new_kw)
+    return [pv for _o, pv in sorted(reps, key=lambda x: (-_near(x[1]), x[0]))[:MATCH_MAX_PRIOR]]
+
+
+def _propagate_match(new_items: list, prior_items: list):
+    """재보도 대조(news_dedup.match_prior_reports, 바이트 그대로) 한 묶음 — api_usage 라벨만 PROPAGATE_SITE로 가른다."""
+    import news_dedup
+    with api_usage.site_label(PROPAGATE_SITE):
+        return news_dedup.match_prior_reports(new_items, prior_items, ANTHROPIC_API_KEY,
+                                              timeout=PROPAGATE_TIMEOUT_S, max_retries=1)
+
+
+def propagate_shadow_judge(cands: list, pool_fn=None, match_fn=None) -> list:
+    """이번 실행의 전파 후보(긴급 기사 dict — grade_urgency가 모은다) → cands와 같은 길이의 목록:
+    prior dict(같은 계기로 본 운영자 내림 기사) / False(대조했고 다름) / None(대조 안 함 — 사람 즉시대응 사례·내림 없음·실패·상한).
+    호출은 MATCH_MAX_NEW씩 묶음마다 한 번(같은 prior 목록), 묶음이 PROPAGATE_MAX_FAIL번 실패하면 나머지는 부르지 않는다.
+    어떤 예외도 밖으로 내지 않는다(fail-open — 그림자라 등급은 어느 쪽이든 그대로). 집계는 _PROPAGATE_RUN."""
+    from news_dedup import MATCH_MAX_NEW
+    out = [None] * len(cands)
+    run = _PROPAGATE_RUN
+    try:
+        todo = [i for i, it in enumerate(cands)
+                if not _similar_has_human_urgent(_feedback_similar_block(it.get('title') or ''))]
+        run['skip_human'] = len(cands) - len(todo)
+        if not todo:
+            return out
+        pool = (pool_fn or _propagate_pool)()
+        run['pool'] = len(pool)
+        if not pool:
+            return out
+        news = [{'title': cands[i].get('title') or '', 'event': cands[i].get('event') or '',
+                 'snip': cands[i].get('screen_text') or cands[i].get('content') or ''} for i in todo]
+        prior = propagate_pick_prior(news, pool)
+        run['prior'] = len(prior)
+        mf = match_fn or _propagate_match
+        for lo in range(0, len(todo), MATCH_MAX_NEW):
+            part = news[lo:lo + MATCH_MAX_NEW]
+            if run.get('fail', 0) >= PROPAGATE_MAX_FAIL:
+                run['capped'] = run.get('capped', 0) + len(part)
+                continue
+            run['calls'] = run.get('calls', 0) + 1
+            got = mf(part, [{'title': p['title'], 'event': p['event'], 'snip': p['snip']} for p in prior])
+            if not isinstance(got, list):
+                run['fail'] = run.get('fail', 0) + 1
+                continue
+            for k, j in enumerate(got[:len(part)]):
+                out[todo[lo + k]] = prior[j] if isinstance(j, int) and 0 <= j < len(prior) else False
+    except Exception as e:
+        run['error'] = run.get('error', 0) + 1
+        print(f'[내림 전파·그림자] 오류(무시 — 등급 그대로): {str(e)[:100]}')
+    return out
+
+
+# ═══════════════════════════════════════════════════════
 #  유틸 함수
 # ═══════════════════════════════════════════════════════
 
@@ -1999,7 +2135,7 @@ _INSERTED_IDS: dict = {}
 #  Supabase 저장
 # ═══════════════════════════════════════════════════════
 
-def grade_urgency(valid: list, rules: list, classify=None, team_rules=None, check=None) -> dict:
+def grade_urgency(valid: list, rules: list, classify=None, team_rules=None, check=None, propagate=None) -> dict:
     """⑤ 긴급도 — 공통 낱말 규칙(#216) + Haiku 판정을 합쳐 item['urgency'/'importance'/'urgency_rule']을 채운다.
     규칙은 AI보다 먼저 맞춰 본다(제목 + 네이버 요약만, 본문 금지). set 적중 = 그 값, AI 콜 생략 /
     min 적중 = AI를 돌린 뒤 하한만(max) / 적중 id는 값이 안 바뀌어도 urgency_rule에 남긴다(출처 표시·사내 정본).
@@ -2013,9 +2149,15 @@ def grade_urgency(valid: list, rules: list, classify=None, team_rules=None, chec
     item['screen_text'] = 판정에 쓴 네이버 요약(없으면 None)을 **모든 행에** 채운다(#82·#222). 반환 = 로그용 집계.
     2차 확인(#268): 1차 AI가 긴급이면 check(제목, 본문, 요약)를 부른다 — 순서는 1차 → 2차(on이면 타영역 → 보통) → 낱말 min 하한.
     결과 네 칸 urgency_check_scope·_grade·_basis·_capped를 **모든 행에** 채운다(안 불렀거나 건너뜀·실패면 None).
-    check 기본값은 urgency_second_check(URGENCY_CHECK_MODE 'off'면 없음) — classify를 넘긴 호출(시험)은 check도 넘겨야 2차가 돈다."""
+    check 기본값은 urgency_second_check(URGENCY_CHECK_MODE 'off'면 없음) — classify를 넘긴 호출(시험)은 check도 넘겨야 2차가 돈다.
+    내림 전파 그림자(#327): 기사 루프가 끝난 뒤 최종 긴급인 AI 판정 기사(set 규칙·낱말 하한 긴급 제외)를 모아 propagate(후보들)를
+    **한 번** 부르고 두 칸 urgency_propagate_shadow_from·_at만 채운다(모든 행에 키, 안 불렀으면 None) — 등급은 건드리지 않는다.
+    shadow라 min 하한 뒤에 불러도 같다(낱말 하한이 긴급인 기사는 건너뛰고, 보통·참고 하한은 긴급을 바꾸지 않는다). propagate 기본값은
+    propagate_shadow_judge(PROPAGATE_MODE 'off'면 없음) — classify를 넘긴 호출(시험)은 propagate도 넘겨야 돈다."""
     if check is None and classify is None and URGENCY_CHECK_MODE in ('shadow', 'on'):
         check = urgency_second_check
+    if propagate is None and classify is None and PROPAGATE_MODE == 'shadow':
+        propagate = propagate_shadow_judge
     apply_cap = URGENCY_CHECK_MODE == 'on'
     classify = classify or classify_urgency
     team_rules = team_rules or {}
@@ -2023,6 +2165,9 @@ def grade_urgency(valid: list, rules: list, classify=None, team_rules=None, chec
     team_hits, team_err = {}, 0
     ck = _URGENCY_CHECK_RUN
     ck.clear()                                              # 실행당 한 번 부른다 — 집계는 이번 호출 것만
+    _PROPAGATE_RUN.clear()
+    _PROPAGATE_HITS.clear()
+    prop_cands = []                                         # 내림 전파 그림자 후보(#327) — 루프 뒤 한 번에
     for item in valid:
         url = item.get('url', '')
         summary = _URGENCY_SUMMARY.get(url, '')
@@ -2069,6 +2214,16 @@ def grade_urgency(valid: list, rules: list, classify=None, team_rules=None, chec
         item['urgency_check_grade'] = res.get('grade') if res else None
         item['urgency_check_basis'] = res.get('basis') if res else None
         item['urgency_check_capped'] = capped
+        # 내림 전파 그림자 두 칸(#327) — 모든 행에 키, 루프 뒤 propagate가 판정한 행만 채운다. 후보 = 최종 긴급인 AI 판정 기사
+        # (set 규칙은 AI 없음, 낱말 하한 긴급은 어차피 긴급 — 2차 확인과 같은 건너뜀; 사람 즉시대응 사례는 propagate가 건너뛴다)
+        item['urgency_propagate_shadow_from'] = None
+        item['urgency_propagate_shadow_at'] = None
+        if propagate and val == '긴급' and not hit:
+            prop_cands.append(item)
+        elif propagate and val == '긴급' and hit['mode'] == 'min' and hit['level'] == '긴급':
+            _PROPAGATE_RUN['skip_rule'] = _PROPAGATE_RUN.get('skip_rule', 0) + 1
+        elif propagate and val == '긴급' and hit['mode'] == 'min':
+            prop_cands.append(item)
         # 수집 때 본 검색 요약 — 모든 행에 키(없으면 None: postgrest 벌크 upsert는 빠진 칸을 NULL로 채운다, #222)
         item['screen_text'] = summary or None
         # ── 팀 층(#250) — 공통값은 위에서 끝났다. 여기서는 팀별 적중만 옆 dict에 모은다(item 키 금지) ──
@@ -2098,6 +2253,8 @@ def grade_urgency(valid: list, rules: list, classify=None, team_rules=None, chec
                 team_err += 1
                 if team_err == 1:
                     print(f'[팀 규칙] 판정 오류(그 기사는 모든 팀이 공통값): {str(e)[:80]}')
+    if prop_cands:
+        _grade_propagate_shadow(prop_cands, propagate)
     if hits:
         print(f'[규칙] 적중 {sum(hits.values())}건 (' + ', '.join(f'{k}×{v}' for k, v in hits.items()) +
               f', 값 변경 {changed_n}건, AI 생략 {skipped_ai}건)')
@@ -2111,6 +2268,43 @@ def grade_urgency(valid: list, rules: list, classify=None, team_rules=None, chec
         print(f'[팀 규칙] 적중 {sum(team_hits.values())}건({len(team_hits)}팀)'
               + (f' · 판정 오류 {team_err}건' if team_err else ''))
     return {'hits': hits, 'changed': changed_n, 'skipped_ai': skipped_ai, 'team_hits': team_hits}
+
+
+def _grade_propagate_shadow(cands: list, propagate) -> None:
+    """grade_urgency의 내림 전파 그림자 단계(#327) — propagate(후보들) 결과를 두 칸에만 쓴다. **등급 칸(urgency·importance)은
+    읽지도 쓰지도 않는다**(그림자 — 시험이 이 함수의 글에서 두 칸 접근을 찾는다). 같은 계기면 _from = 운영자 내림 기사 id, 대조한 기사는 _at = 지금(같음·다름 모두). 어떤 실패도 삼킨다."""
+    run = _PROPAGATE_RUN
+    t0 = time.time()
+    try:
+        got = propagate(cands)
+    except Exception as e:
+        got = None
+        run['error'] = run.get('error', 0) + 1
+        print(f'[내림 전파·그림자] 오류(무시 — 등급 그대로): {str(e)[:100]}')
+    now_iso = datetime.now(timezone.utc).isoformat()
+    same = diff = 0
+    for it, g in zip(cands, got if isinstance(got, list) else []):
+        if g is None:
+            continue
+        it['urgency_propagate_shadow_at'] = now_iso
+        if isinstance(g, dict) and g.get('id'):
+            it['urgency_propagate_shadow_from'] = g['id']
+            if it.get('url'):
+                _PROPAGATE_HITS[it['url']] = g.get('title') or ''
+            same += 1
+            print(f"  🔽(그림자) {(it.get('title') or '')[:50]} ← 운영자 내림 {(g.get('title') or '')[:50]}")
+        else:
+            diff += 1
+    run['same'], run['diff'] = same, diff
+    if 'pool' in run and not run['pool']:
+        tail = '72시간 안 운영자 내림 없음 — 호출 안 함'
+    else:
+        tail = (f"내림 풀 {run.get('pool', 0)} → prior {run.get('prior', 0)} · 호출 {run.get('calls', 0)} · "
+                f"같은 계기 {same} · 다름 {diff} · 실패 {run.get('fail', 0)}"
+                + (f" · 상한으로 안 부름 {run['capped']}" if run.get('capped') else '')
+                + (f" · 오류 {run['error']}" if run.get('error') else ''))
+    print(f"[내림 전파·그림자] 후보 {len(cands)}건(사람 사례 건너뜀 {run.get('skip_human', 0)}, 낱말 하한 긴급 건너뜀 "
+          f"{run.get('skip_rule', 0)}) · {tail} · {time.time() - t0:.1f}s — 등급·알림 불변")
 
 
 def save_new_items(items: list, existing_data: tuple) -> list:
@@ -2272,6 +2466,7 @@ def save_new_items(items: list, existing_data: tuple) -> list:
     #    ⑤-3 팀 규칙의 문장 조건(#251)은 여기서 **판정하지 않는다** — 낱말이 걸린 기사의 판정 대기 행(본문 있으면 pending,
     #        없으면 wait_body)만 만들고(저장은 아래 save_sentence_verdict_rows), Haiku 판정과 팀 행 고침은 같은 실행의
     #        main() 끝 process_open_sentence_verdicts(긴급 알림·구독자 큐 뒤)가 한다 — 알림 경로에 AI 지연을 넣지 않는다.
+    #    ⑤-4 내림 전파 그림자(#327) — 운영자가 72시간 안에 내린 기사와 같은 계기인지 재보도 대조로 보고 두 칸만 채운다(등급 불변).
     grade_urgency(valid, load_urgency_rules(), team_rules=load_team_urgency_rules())
     queue_new_sentence_candidates(valid, load_team_urgency_rules())
 
@@ -4957,6 +5152,36 @@ def send_check_capped_notice(items: list) -> bool:
         return False
 
 
+def send_propagate_shadow_notice(items: list) -> bool:
+    """내림 전파 그림자(#327) — 이번 실행에 같은 계기로 본 기사(urgency_propagate_shadow_from) → 운영자 봇 한 메시지, 기사마다
+    「제목」 ← 운영자 내림 「제목」 한 줄. 없으면 안 보낸다. 그림자라 등급·알림은 그대로라는 것을 머리에 적는다(「내렸다」로 읽히지
+    않게). 실패는 로그만(fail-open). 한 주 뒤 재판정의 눈 확인용 — 운영자가 할 일은 없다."""
+    hits = [i for i in items or [] if i.get('urgency_propagate_shadow_from')]
+    if not hits or not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        return False
+    import html as _html
+    head = f'🔽(그림자) 내림 전파 후보 {len(hits)}건 — 등급·알림은 그대로입니다(한 주 기록용)'
+    lines, plain = [head], [head]
+    for it in hits:
+        t = str(it.get('title', ''))
+        p = _PROPAGATE_HITS.get(it.get('url') or '', '')
+        url = str(it.get('url') or '')
+        te = _html.escape(t, quote=False)
+        link = f'<a href="{_html.escape(url, quote=True)}">{te}</a>' if url else te
+        lines.append(f'「{link}」 ← 운영자 내림 「{_html.escape(p, quote=False)}」')
+        plain.append(f'「{t}」 ← 운영자 내림 「{p}」')
+    try:
+        ok = notify.send_telegram('\n'.join(lines), chat_id=TELEGRAM_CHAT_ID, parse_mode='HTML',
+                                  disable_web_page_preview=True)
+        if not ok:
+            ok = notify.send_telegram('\n'.join(plain), chat_id=TELEGRAM_CHAT_ID, disable_web_page_preview=True)
+        print(f'[내림 전파·그림자] 후보 {len(hits)}건 운영자 알림 ' + ('발송' if ok else '실패'))
+        return bool(ok)
+    except Exception as e:
+        print(f'[내림 전파·그림자] 운영자 알림 실패(무시): {str(e)[:80]}')
+        return False
+
+
 def _restore_unit_rows(items: list) -> tuple:
     """② 팀·실 단위 — 단위마다 알림 등급(공통 = 긴급)이 긴급인 기사만 subscriber_alert_log('sent', '[복원]')에 쓰고 **새로 들어간
     것만** topic news 긴급 행으로 넣는다(같은 단위·기사 두 번 방지 = 표 unique). 반환 (넣은 행 수, 오류 글)."""
@@ -5530,6 +5755,7 @@ def main():
     # ── 2차 확인 안전장치 (#268) — ① 내린 기사 운영자 봇 한 줄씩 ② 관리자가 다시 긴급으로 올린 기사 → 구독자 큐 ──
     #    운영자 긴급 알림·공통 큐 **뒤**, 즉시 배달 호출(아래 한 번) **앞** — ②의 행도 그 한 번에 실린다. 둘 다 fail-open.
     send_check_capped_notice(new_items)
+    send_propagate_shadow_notice(new_items)   # 내림 전파 그림자(#327) — 운영자 봇만, 등급·큐·복원과 무관
     restored = 0
     try:
         restored = restore_raised_checks()

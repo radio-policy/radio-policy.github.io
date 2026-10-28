@@ -246,6 +246,7 @@ class TestGradeUrgencyCheck(unittest.TestCase):
         items = [{'title': '드론', 'url': 'u1'}]
         seen = []
         with mock.patch.object(crawler, 'classify_urgency', lambda t, c='', s='': '긴급'), \
+                mock.patch.object(crawler, 'propagate_shadow_judge', lambda cands: [None] * len(cands)), \
                 mock.patch.object(crawler, 'urgency_second_check', lambda t, c='', s='': seen.append(t) or None):
             _quiet(crawler.grade_urgency, items, [])
             self.assertEqual(seen, ['드론'])

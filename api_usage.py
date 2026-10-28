@@ -16,6 +16,8 @@ Anthropic API 토큰 사용량 기록 (배경역사 #152, 2026-09-10).
 import os
 import sys
 import inspect
+import threading
+import contextlib
 from datetime import datetime, timezone
 
 HOST = 'actions' if os.environ.get('GITHUB_ACTIONS', '').lower() == 'true' else 'pc'
@@ -77,8 +79,27 @@ def record(site: str, resp, model=None):
     return resp
 
 
+_label = threading.local()
+
+
+@contextlib.contextmanager
+def site_label(label: str):
+    """이 블록 안의 호출을 label로 기록한다(스레드별). 한 함수를 두 용도로 부를 때 라벨을 가르려는 것 — 예: 긴급도 내림 전파
+    그림자(#327)가 재보도 대조 news_dedup.match_prior_reports를 글자 그대로 빌려 쓰면 함수 이름 라벨이 ①-2 억제와 섞인다.
+    블록을 나가면 앞 라벨로 돌아간다(겹쳐 써도 된다). 호출부의 함수 이름으로 뽑는 기본 규칙은 블록 밖에서 그대로다."""
+    prev = getattr(_label, 'site', None)
+    _label.site = label
+    try:
+        yield
+    finally:
+        _label.site = prev
+
+
 def _caller_site(depth: int = 2) -> str:
-    """래퍼를 부른 스크립트 파일명:함수명 — 'crawler.py:classify_urgency'."""
+    """래퍼를 부른 스크립트 파일명:함수명 — 'crawler.py:classify_urgency'. site_label 블록 안이면 그 라벨."""
+    over = getattr(_label, 'site', None)
+    if over:
+        return over
     try:
         fr = inspect.currentframe()
         for _ in range(depth):
