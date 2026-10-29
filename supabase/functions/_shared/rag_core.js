@@ -2025,6 +2025,150 @@
       docs: docs.length, approved: approved, error: errs.length ? errs.join('; ') : null };
   }
 
+  // ── 관련 법령 체계(관계도 주제) 구역(#329, 2026-10-29 — 사내판 Fable 설계 D1~D9를 외부판이 먼저 구현, 사내는 이 파일을 1:1 이식) ──
+  // 「금지행위 관련 고시가 무엇인가」 자문이 고시 대부분을 빠뜨렸다. 근거 조문(법 제50조·시행령 제42조)에서 그 조를 구체화하는 고시 목록으로 가는 길이
+  // 없다 — 위임 따라가기(pickDelegations)는 자식 「전체」 행을 버리고(D7, 그대로 둔다), 같은 고시 갈래는 고시 조가 근거에 2개 이상 있어야 돈다. 관계도
+  // (law_graph)의 주제에는 그 고시들이 역할 설명과 함께 묶여 있으므로, 근거 조문과 이어진 주제의 문서 목록을 「조문 원문 아님」으로 따로 싣는다.
+  //  D1 주제 고르기(M3): 근거 목록 조문(extra+spill+rag — 덧붙인 조문·역참조·별표 제외)의 (법령군, 제N조) 집합으로, 주제 엣지마다 끝 노드 법령군
+  //     (doc_name 첫 괄호 앞, 없으면 노드 이름 — 견줄 때 빈칸·가운뎃점은 뺀다)이 같고 엣지 description에 그 「제N조(의M)」가 글자로 있으면 1
+  //     (근거 조마다·엣지마다). 뒤 글자가 숫자거나 「의+숫자」면 안 센다(「제5조」가 「제5조의2」에 걸리지 않게 — 「제5조의 규정」은 센다). 합이 need 이상.
+  //     주제 이름 낱말(M1)·핵심 낱말(M2)·Haiku·임베딩은 쓰지 않는다.
+  //  D2 상위 max(2) — 2위부터는 1위 점수의 절반 이상(halfRule), 같은 점수면 주제 이름 코드 포인트 순.
+  //  D3 꼴은 buildTopicContext 한 곳. 줄 = 「끝 노드 doc_name 그대로(없으면 이름) — 엣지 description 그대로 〔있음/미수록〕」. 있음 = 끝 노드 법령군이
+  //     모델이 보는 조각(근거·덧붙인 조문·역참조·별표·시행 전 제정·약관)의 법령군에 있다. 주제↔주제 엣지는 건너뛰고(방향 무관 — 주제가 끝인 엣지도 그 주제의
+  //     엣지), 같은 이름 끝 노드는 한 줄, 줄 순서 = weight 큰 순 → 종류(법·시행령·규칙·고시) → 이름 코드 포인트 순.
+  //  D4 자리 = 덧붙이기 구역 바로 뒤·역참조 앞. trimAddOns의 나머지 길이에 넣지 않고 자기 상한 maxChars(■ 주제 묶음 글자 합 — 머리·지침 제외):
+  //     1위는 늘, 2위는 합이 상한 안일 때만(넘치면 2위를 통째로 뺀다, 줄을 자르지 않는다). 시행 전 제정 법령 구역과 같은 논리.
+  //  D5 이 구역 글은 인용 대조 원문(chunk id 목록)·출처 문서 목록에 넣지 않는다 — 역할 설명이 원문으로 대조되면 거짓 초록, 목록 문서명을 출처에 넣으면
+  //     미수록 문서가 「자료 안」으로 잡혀 #288 ⓒ(검색 자료 밖 조문 대조)가 막힌다. 출처 칸은 배지용 「관계도 주제: X」만. 지시문은 구역 안 [사용 지침]뿐.
+  //  각 파일은 f.graph()(주제 노드·주제에 닿는 엣지·그 끝 노드 원본 행, 페이지·isolate당 1회 캐시)만 댄다. 끄려면 on=false.
+  //  상수·문안·고르기·줄 순서를 바꾸기 전 사내판에 먼저 알린다(파이썬 1:1 이식·parity 시험).
+  const TOPIC_OPTS = { on: false, need: 2, max: 2, halfRule: true, maxChars: 3000 };
+  const TOPIC_TYPE_RANK = { law: 0, decree: 1, rules: 2, notice: 3 };
+  function topicFam(node) { return pnNorm(node && node.doc_name ? famOf(node.doc_name) : String((node && node.name) || '').trim()); }
+  function topicLine(node) { return String((node && (node.doc_name || node.name)) || '').trim(); }
+  // 근거 조 열쇠('50조'·'5조의2') → 엣지 설명에서 찾는 글자. 열쇠에는 숫자·조·의만 있어 이스케이프가 필요 없다.
+  function topicArtRe(key) { return new RegExp('제' + key + '(?!\\d|의\\d)'); }
+  // lists = { extra, spill, rag } (통째 보강이 끝난 조각) → [{ fam, key }] — 조 단위만(별표·부칙·서식·보도자료 제외), (법령군, 조) 중복 없이
+  function topicBases(lists) {
+    const out = [], seen = {};
+    ['extra', 'spill', 'rag'].forEach(function (k) {
+      ((lists && lists[k]) || []).forEach(function (c) {
+        const key = unitKey(c && c.article_no);
+        if (!key || !/^\d+조/.test(key)) return;
+        const fam = pnNorm(famOf(c.doc_name));
+        if (!fam || seen[fam + '|' + key]) return;
+        seen[fam + '|' + key] = 1;
+        out.push({ fam: fam, key: key });
+      });
+    });
+    return out;
+  }
+  // 원본 행 → 주제별 엣지. raw = { topics: [{ id, name, description }], edges: [{ id, source_id, target_id, description, weight }],
+  // nodes: [{ id, name, node_type, doc_name }] }. 엣지는 한쪽이 주제·다른 쪽이 주제 아닌 노드인 것만(끝 노드 = 주제 아닌 쪽, 끝 노드 행이 없으면 버림).
+  function topicGraph(raw) {
+    const r = raw || {};
+    const topics = (r.topics || []).filter(function (t) { return t && t.id != null && t.name; });
+    const isTopic = {}, nodes = {};
+    topics.forEach(function (t) { isTopic[t.id] = 1; });
+    (r.nodes || []).forEach(function (n) { if (n && n.id != null) nodes[n.id] = n; });
+    const edges = [], seen = {};
+    (r.edges || []).forEach(function (e) {
+      if (!e || (e.id != null && seen[e.id])) return;
+      if (e.id != null) seen[e.id] = 1;
+      const sT = !!isTopic[e.source_id], tT = !!isTopic[e.target_id];
+      if (sT === tT) return;   // 주제↔주제·주제 없는 엣지
+      const end = nodes[sT ? e.target_id : e.source_id];
+      if (!end || end.node_type === 'topic') return;
+      edges.push({ topic_id: sT ? e.source_id : e.target_id, name: end.name, node_type: end.node_type, doc_name: end.doc_name || null,
+        description: e.description || '', weight: Number(e.weight) || 0 });
+    });
+    return { topics: topics, edges: edges };
+  }
+  // → { picked: [{ id, name, description, score, edges }], best, cands } — best = 문턱 전 최고 점수(기록용), cands = 문턱 넘은 주제 수
+  function pickTopics(bases, topics, edges, opts) {
+    const o = Object.assign({}, TOPIC_OPTS, opts || {});
+    const byTopic = {};
+    (edges || []).forEach(function (e) { (byTopic[e.topic_id] = byTopic[e.topic_id] || []).push(e); });
+    const res = (bases || []).map(function (b) { return { fam: b.fam, re: topicArtRe(b.key) }; });
+    const scored = (topics || []).map(function (t) {
+      const es = byTopic[t.id] || [];
+      let s = 0;
+      res.forEach(function (b) {
+        es.forEach(function (e) { if (topicFam(e) === b.fam && b.re.test(e.description || '')) s++; });
+      });
+      return { id: t.id, name: t.name, description: t.description || '', score: s, edges: es };
+    });
+    const best = scored.reduce(function (a, x) { return Math.max(a, x.score); }, 0);
+    const cands = scored.filter(function (x) { return x.score >= o.need; })
+      .sort(function (a, b) { return b.score - a.score || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0); });
+    const picked = [];
+    cands.forEach(function (x) {
+      if (picked.length >= o.max) return;
+      if (picked.length && o.halfRule && x.score * 2 < picked[0].score) return;
+      picked.push(x);
+    });
+    return { picked: picked, best: best, cands: cands.length };
+  }
+  // 모델이 보는 조각의 법령군(빈칸·가운뎃점 뺀 꼴) — chunks = 근거·덧붙인 조문·역참조·시행 전 제정·약관 조각, annexSources = 별표 출처('전파법 시행령 별표 3')
+  function topicPresentFams(chunks, annexSources) {
+    const s = {};
+    (chunks || []).forEach(function (c) { const f = c && c.doc_name ? pnNorm(famOf(c.doc_name)) : ''; if (f) s[f] = 1; });
+    (annexSources || []).forEach(function (a) { const f = pnNorm(String(a || '').replace(/\s*별표.*$/, '')); if (f) s[f] = 1; });
+    return s;
+  }
+  const TOPIC_HEAD = '[관련 법령 체계 — 근거 조문이 속한 제도의 법령·고시 목록(관계도 자료, 조문 원문 아님)]\n'
+    + '아래는 위 근거 조문과 이어진 제도(관계도 주제)에 어떤 법령·고시·훈령이 있고 각각 무슨 역할인지의 목록입니다. 설명은 관계도 자료(자동 생성 포함)이며 조문 원문이 아닙니다.';
+  const TOPIC_GUIDE = '[사용 지침]\n'
+    + '- 질문이 관련 고시·규정이 무엇인지, 제도의 체계·목록을 물으면 이 목록의 문서를 이름과 역할로 빠짐없이 답하세요. 그런 질문이 아니면 답에 이 목록을 나열하지 말고 필요한 것만 쓰세요.\n'
+    + '- 「원문 미수록」 문서는 이름과 역할만 쓰고, 조 번호를 붙여 인용하거나 「[원문 확인됨]」을 붙이지 마세요 — 그 문서의 조문 원문은 위 참조 자료에 없습니다. 내용이 더 필요하면 「(해당 고시 원문 확인 필요)」로 적으세요.\n'
+    + '- 「원문: 위 참조 자료에 있음」 문서는 위 원문을 평소처럼 인용하고 표시를 붙이세요.';
+  // picked = pickTopics(...).picked, present = topicPresentFams(...) → { text, names, scores, chars, present: ['있음 수/줄 수', …] }.
+  // 고른 주제가 없으면 빈 글(구역 없는 요청의 프롬프트는 바이트 같다).
+  function buildTopicContext(picked, present, opts) {
+    const o = Object.assign({}, TOPIC_OPTS, opts || {});
+    const pres = present || {};
+    const blocks = [], names = [], scores = [], counts = [];
+    let used = 0;
+    (picked || []).forEach(function (t, i) {
+      const lines = [], seen = {};
+      let has = 0;
+      (t.edges || []).slice().sort(function (a, b) {
+        const ra = TOPIC_TYPE_RANK[a.node_type] != null ? TOPIC_TYPE_RANK[a.node_type] : 9, rb = TOPIC_TYPE_RANK[b.node_type] != null ? TOPIC_TYPE_RANK[b.node_type] : 9;
+        const la = topicLine(a), lb = topicLine(b);
+        return (b.weight || 0) - (a.weight || 0) || ra - rb || (la < lb ? -1 : la > lb ? 1 : 0);
+      }).forEach(function (e) {
+        const ln = topicLine(e);
+        if (!ln || seen[ln]) return;
+        seen[ln] = 1;
+        const here = !!pres[topicFam(e)];
+        if (here) has++;
+        const d = String(e.description || '').trim();
+        lines.push('- ' + ln + (d ? ' — ' + d : '') + (here ? ' 〔원문: 위 참조 자료에 있음〕' : ' 〔원문 미수록 — 이름·역할만〕'));
+      });
+      if (!lines.length) return;
+      const td = String(t.description || '').trim();
+      const block = '■ 주제 「' + t.name + '」' + (td ? ' — ' + td : '') + '\n' + lines.join('\n');
+      if (blocks.length && used + block.length > o.maxChars) return;   // 1위는 늘, 그 뒤는 합이 상한 안일 때만(통째로)
+      used += block.length;
+      blocks.push(block); names.push(t.name); scores.push(t.score); counts.push(has + '/' + lines.length);
+    });
+    if (!blocks.length) return { text: '', names: [], scores: [], chars: 0, present: [] };
+    const text = '\n\n---\n\n' + TOPIC_HEAD + '\n\n' + blocks.join('\n\n') + '\n\n' + TOPIC_GUIDE;
+    return { text: text, names: names, scores: scores, chars: text.length, present: counts };
+  }
+  // 두 판 공통 흐름 — f.graph() = Promise<{ topics, edges, nodes }>(topicGraph 설명). lists = { extra, spill, rag }(통째 보강 뒤).
+  // → { picked, best, cands, bases } — 글은 다른 구역이 다 모인 뒤(있음/미수록 판정에 필요) buildTopicContext로 만든다. 꺼져 있으면 조회하지 않는다.
+  async function fetchTopics(f, lists, opts) {
+    const o = Object.assign({}, TOPIC_OPTS, opts || {});
+    const empty = { picked: [], best: 0, cands: 0, bases: 0 };
+    if (o.on === false || !f || !f.graph) return empty;
+    const g = topicGraph(await f.graph());
+    const bases = topicBases(lists);
+    if (!bases.length) return empty;
+    return Object.assign(pickTopics(bases, g.topics, g.edges, o), { bases: bases.length });
+  }
+
   const RagCore = {
     PRIORITY_KW_RE: PRIORITY_KW_RE, VERB_TAIL: VERB_TAIL, extractKeywords: extractKeywords,
     LAW_SYNONYMS: LAW_SYNONYMS, PRACTICE_TERMS: PRACTICE_TERMS,
@@ -2062,6 +2206,9 @@
     YAK_DOC_RE: YAK_DOC_RE, YAK_GATE_OPTS: YAK_GATE_OPTS, isYakDoc: isYakDoc, yakGateWanted: yakGateWanted, dropYakRows: dropYakRows, yakGateNote: yakGateNote,
     // 사업자 이용약관 구역(#312-보론2, (D))
     YAK_SECTION_OPTS: YAK_SECTION_OPTS, pickYakArticles: pickYakArticles, buildYakContext: buildYakContext, fetchYakSection: fetchYakSection,
+    // 관련 법령 체계(관계도 주제) 구역(#329)
+    TOPIC_OPTS: TOPIC_OPTS, topicArtRe: topicArtRe, topicBases: topicBases, topicGraph: topicGraph, pickTopics: pickTopics,
+    topicPresentFams: topicPresentFams, buildTopicContext: buildTopicContext, fetchTopics: fetchTopics,
   };
   root.RagCore = RagCore;
   if (typeof module !== 'undefined' && module.exports) module.exports = RagCore;

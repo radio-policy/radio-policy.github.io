@@ -47,7 +47,9 @@ var NAMES = ['PRIORITY_KW_RE', 'VERB_TAIL', 'extractKeywords', 'LAW_SYNONYMS', '
   // 사업자 이용약관 게이트(#312-보론)
   'YAK_DOC_RE', 'YAK_GATE_OPTS', 'isYakDoc', 'yakGateWanted', 'dropYakRows', 'yakGateNote',
   // 사업자 이용약관 구역(#312-보론2, (D))
-  'YAK_SECTION_OPTS', 'pickYakArticles', 'buildYakContext', 'fetchYakSection'];
+  'YAK_SECTION_OPTS', 'pickYakArticles', 'buildYakContext', 'fetchYakSection',
+  // 관련 법령 체계(관계도 주제, #329)
+  'TOPIC_OPTS', 'topicArtRe', 'topicBases', 'topicGraph', 'pickTopics', 'topicPresentFams', 'buildTopicContext', 'fetchTopics'];
 NAMES.forEach(function (n) { ok('export ' + n, RC[n] !== undefined); });
 
 // ── 법령 키워드 추출 ──
@@ -1093,7 +1095,110 @@ var yakSectionTests = (async function () {
   eq('rag.ts 약관 구역 — 공통 함수 한 곳(startYakSection)을 자문·/law 두 곳에서, 자리는 pendingNew 뒤', [n(ragTs, /RagCore\.fetchYakSection\(/g), n(ragTs, /= startYakSection\(sb, /g), n(ragTs, /pendingNew\.text \+ yak\.text \+ buildKbContext\(kb\)/g), n(ragTs, /if \(yak\.text\) ctxParts\.push/g)], [1, 2, 1, 1]);
 })();
 
-Promise.all([asyncTests, addOnTests, addOnTests2, addendumTests, applyTests, pendingNewTests, yakSectionTests]).catch(function (e) { fails++; total++; console.log('FAIL  비동기 검사 예외 ' + (e && e.message)); }).then(function () {
+// ── 관련 법령 체계(관계도 주제) 구역(#329) ──
+var topicTests = (async function () {
+  // 조 글자 찾기 — 「제5조」가 「제5조의2」·「제50조」에 걸리지 않고, 「제5조의 규정」·「제5조①」·「제5조제3항」에는 걸린다
+  var r5 = RC.topicArtRe('5조'), r52 = RC.topicArtRe('5조의2');
+  eq('topicArtRe 경계', [r5.test('제5조①'), r5.test('(제5조)'), r5.test('제5조제3항'), r5.test('제5조의 규정'), r5.test('제5조의2'), r5.test('제50조'), r5.test('제15조'),
+    r52.test('제5조의2제1항'), r52.test('제5조의20'), r52.test('제5조')], [true, true, true, true, false, false, false, true, false, false]);
+  // 근거 = 조 단위만(별표·부칙·보도자료 제외), (법령군, 조) 중복 없이, extra → spill → rag 순
+  var bases = RC.topicBases({
+    extra: [{ doc_name: '전기통신사업법(법률)(제21503호)(20261001)', article_no: '50조(금지행위)' }, { doc_name: '전기통신사업법(법률)(제21503호)(20261001)', article_no: '50조(금지행위)' }],
+    spill: [{ doc_name: '전기통신사업법 시행령(대통령령)(제36735호)(20261001)', article_no: '별표 4' }],
+    rag: [{ doc_name: '전기통신사업법 시행령(대통령령)(제36735호)(20261001)', article_no: '42조(금지행위의 유형 및 기준)' }, { doc_name: '보도자료_2026.md', article_no: null },
+      { doc_name: '전기통신사업법(법률)(제21503호)(20261001)', article_no: '부칙 제1조' }]
+  });
+  eq('topicBases 조만·중복 없이', bases, [{ fam: '전기통신사업법', key: '50조' }, { fam: '전기통신사업법시행령', key: '42조' }]);
+  // 원본 행 → 주제별 엣지: 방향 무관(주제가 끝인 엣지도), 주제↔주제·끝 노드 행 없음은 버림, 같은 엣지 id는 한 번
+  var raw = {
+    topics: [{ id: 1, name: '금지행위 규제', description: '사업법 제50조 금지행위 체계' }, { id: 2, name: '결합판매', description: '' }, { id: 3, name: '요금 인가', description: '' }],
+    edges: [
+      { id: 10, source_id: 1, target_id: 100, description: '금지행위(제50조①)·시정조치(제52조)', weight: 3 },
+      { id: 11, source_id: 1, target_id: 101, description: '금지행위의 유형·기준(제42조①·별표 4)', weight: 1 },
+      { id: 12, source_id: 1, target_id: 102, description: '법 제53조 위임 — 과징금 산정 세부기준(제1조)', weight: 2 },
+      { id: 13, source_id: 1, target_id: 103, description: '결합판매 세부 유형(제1조)', weight: 2 },
+      { id: 14, source_id: 104, target_id: 1, description: '[인접 제도] 제3조 위탁', weight: 1 },
+      { id: 15, source_id: 1, target_id: 2, description: '주제끼리', weight: 1 },
+      { id: 16, source_id: 1, target_id: 999, description: '끝 노드 행 없음', weight: 1 },
+      { id: 10, source_id: 1, target_id: 100, description: '금지행위(제50조①)·시정조치(제52조)', weight: 3 },
+      { id: 20, source_id: 2, target_id: 100, description: '결합판매 금지(제50조①5호)', weight: 1 },
+      { id: 21, source_id: 2, target_id: 103, description: '심사기준', weight: 1 },
+      { id: 30, source_id: 3, target_id: 100, description: '요금 인가(제28조)', weight: 1 }
+    ],
+    nodes: [
+      { id: 100, name: '전기통신사업법', node_type: 'law', doc_name: '전기통신사업법(법률)(제21503호)(20261001)' },
+      { id: 101, name: '전기통신사업법 시행령', node_type: 'decree', doc_name: '전기통신사업법 시행령(대통령령)(제36735호)(20261001)' },
+      { id: 102, name: '금지행위 위반에 대한 과징금 부과 세부기준', node_type: 'notice', doc_name: '금지행위 위반에 대한 과징금 부과 세부기준(방송미디어통신위원회고시)(제2026-11호)(20260518)' },
+      { id: 103, name: '결합판매의 금지행위 세부 유형 및 심사기준', node_type: 'notice', doc_name: null },
+      { id: 104, name: '개인정보 보호법', node_type: 'law', doc_name: null }
+    ]
+  };
+  var g = RC.topicGraph(raw);
+  eq('topicGraph 방향 무관·주제끼리/끝 노드 없음/중복 id 버림', g.edges.map(function (e) { return e.topic_id + ':' + e.name; }),
+    ['1:전기통신사업법', '1:전기통신사업법 시행령', '1:금지행위 위반에 대한 과징금 부과 세부기준', '1:결합판매의 금지행위 세부 유형 및 심사기준', '1:개인정보 보호법',
+      '2:전기통신사업법', '2:결합판매의 금지행위 세부 유형 및 심사기준', '3:전기통신사업법']);
+  // 고르기 — 금지행위 2점(사업법 제50조 + 시행령 제42조), 결합판매 1점(문턱 미달), 요금 인가 0점. 고시 엣지의 「법 제53조」는 끝 노드가 고시라 안 센다
+  var pk = RC.pickTopics(bases, g.topics, g.edges);
+  eq('pickTopics 금지행위만(2점) — 결합판매 1점은 문턱 미달', [pk.picked.map(function (t) { return t.name + ':' + t.score; }), pk.best, pk.cands], [['금지행위 규제:2'], 2, 1]);
+  // 상위 2·절반 규칙·같은 점수 이름순(코드 포인트)
+  var T = function (id, name) { return { id: id, name: name, description: '' }; };
+  var E = function (tid, n) { var out = []; for (var i = 0; i < n; i++) out.push({ topic_id: tid, name: '법' + i, node_type: 'law', doc_name: '가법(법률)', description: '제' + (i + 1) + '조', weight: 1 }); return out; };
+  var B = [1, 2, 3, 4, 5].map(function (i) { return { fam: '가법', key: i + '조' }; });
+  var p1 = RC.pickTopics(B, [T(1, '다'), T(2, '나'), T(3, '가')], E(1, 5).concat(E(2, 2), E(3, 3)));
+  eq('pickTopics 2위 = 1위의 절반 이상만(5·3 → 둘, 2는 셋째라 빠짐)', p1.picked.map(function (t) { return t.name + ':' + t.score; }), ['다:5', '가:3']);
+  var p2 = RC.pickTopics(B, [T(1, '다'), T(2, '나')], E(1, 5).concat(E(2, 2)));
+  eq('pickTopics 2위가 절반 미만(5·2)이면 1위만', p2.picked.map(function (t) { return t.name; }), ['다']);
+  var p3 = RC.pickTopics(B, [T(1, '나'), T(2, '가'), T(3, '다')], E(1, 2).concat(E(2, 2), E(3, 2)));
+  eq('pickTopics 같은 점수는 이름 코드 포인트 순, 상위 2', p3.picked.map(function (t) { return t.name; }), ['가', '나']);
+  eq('pickTopics halfRule false면 절반 미만도', RC.pickTopics(B, [T(1, '다'), T(2, '나')], E(1, 5).concat(E(2, 2)), { halfRule: false }).picked.length, 2);
+  // 글 — 줄 순서(weight → 종류 → 이름), 같은 이름 한 줄, 있음/미수록, 머리·지침 글자 고정
+  var present = RC.topicPresentFams([{ doc_name: '전기통신사업법(법률)(제21503호)(20261001)' }], ['전기통신사업법 시행령 별표 4']);
+  eq('topicPresentFams 조각·별표 출처의 법령군(빈칸 뺀 꼴)', Object.keys(present).sort(), ['전기통신사업법', '전기통신사업법시행령']);
+  var ctx = RC.buildTopicContext(pk.picked, present);
+  var want = '\n\n---\n\n[관련 법령 체계 — 근거 조문이 속한 제도의 법령·고시 목록(관계도 자료, 조문 원문 아님)]\n'
+    + '아래는 위 근거 조문과 이어진 제도(관계도 주제)에 어떤 법령·고시·훈령이 있고 각각 무슨 역할인지의 목록입니다. 설명은 관계도 자료(자동 생성 포함)이며 조문 원문이 아닙니다.\n\n'
+    + '■ 주제 「금지행위 규제」 — 사업법 제50조 금지행위 체계\n'
+    + '- 전기통신사업법(법률)(제21503호)(20261001) — 금지행위(제50조①)·시정조치(제52조) 〔원문: 위 참조 자료에 있음〕\n'
+    + '- 결합판매의 금지행위 세부 유형 및 심사기준 — 결합판매 세부 유형(제1조) 〔원문 미수록 — 이름·역할만〕\n'
+    + '- 금지행위 위반에 대한 과징금 부과 세부기준(방송미디어통신위원회고시)(제2026-11호)(20260518) — 법 제53조 위임 — 과징금 산정 세부기준(제1조) 〔원문 미수록 — 이름·역할만〕\n'
+    + '- 개인정보 보호법 — [인접 제도] 제3조 위탁 〔원문 미수록 — 이름·역할만〕\n'
+    + '- 전기통신사업법 시행령(대통령령)(제36735호)(20261001) — 금지행위의 유형·기준(제42조①·별표 4) 〔원문: 위 참조 자료에 있음〕\n\n'
+    + '[사용 지침]\n'
+    + '- 질문이 관련 고시·규정이 무엇인지, 제도의 체계·목록을 물으면 이 목록의 문서를 이름과 역할로 빠짐없이 답하세요. 그런 질문이 아니면 답에 이 목록을 나열하지 말고 필요한 것만 쓰세요.\n'
+    + '- 「원문 미수록」 문서는 이름과 역할만 쓰고, 조 번호를 붙여 인용하거나 「[원문 확인됨]」을 붙이지 마세요 — 그 문서의 조문 원문은 위 참조 자료에 없습니다. 내용이 더 필요하면 「(해당 고시 원문 확인 필요)」로 적으세요.\n'
+    + '- 「원문: 위 참조 자료에 있음」 문서는 위 원문을 평소처럼 인용하고 표시를 붙이세요.';
+  eq('buildTopicContext 글자 그대로(설계 D3)', ctx.text, want);
+  eq('buildTopicContext 기록 칸', [ctx.names, ctx.scores, ctx.present, ctx.chars], [['금지행위 규제'], [2], ['2/5'], want.length]);
+  var dup = RC.buildTopicContext([{ name: 'X', description: '', score: 2, edges: [
+    { name: 'A', node_type: 'notice', doc_name: 'A고시(고시)', description: '하나', weight: 1 }, { name: 'A2', node_type: 'notice', doc_name: 'A고시(고시)', description: '둘', weight: 1 }] }], {});
+  ok('buildTopicContext 같은 이름 끝 노드는 한 줄', (dup.text.match(/- A고시\(고시\)/g) || []).length === 1);
+  // 상한 — 1위는 늘(상한을 넘어도), 2위는 합이 상한 안일 때만(통째로)
+  var big = function (name, n) { return { name: name, description: '', score: 2, edges: [{ name: name + '법', node_type: 'law', doc_name: null, description: 'ㄱ'.repeat(n), weight: 1 }] }; };
+  var c1 = RC.buildTopicContext([big('가', 2000), big('나', 900)], {});
+  var c2 = RC.buildTopicContext([big('가', 2000), big('나', 1100)], {});
+  var c3 = RC.buildTopicContext([big('가', 3500), big('나', 10)], {});
+  eq('buildTopicContext 상한 — 합이 안이면 둘, 넘치면 2위 통째로 뺌, 1위는 상한을 넘어도', [c1.names, c2.names, c3.names], [['가', '나'], ['가'], ['가']]);
+  eq('buildTopicContext 고른 주제 없음 → 빈 글', RC.buildTopicContext([], {}).text, '');
+  // 흐름 — 꺼져 있으면 조회 안 함, 근거 없으면 빈 결과, 켜면 고름
+  var calls = 0, f = { graph: function () { calls++; return Promise.resolve(raw); } };
+  var off = await RC.fetchTopics(f, { extra: [{ doc_name: '전기통신사업법(법률)', article_no: '50조(금지행위)' }] }, { on: false });
+  eq('fetchTopics on:false → 조회 0·빈 결과', [calls, off.picked.length], [0, 0]);
+  var on = await RC.fetchTopics(f, { extra: [{ doc_name: '전기통신사업법(법률)(제21503호)(20261001)', article_no: '50조(금지행위)' }],
+    rag: [{ doc_name: '전기통신사업법 시행령(대통령령)(제36735호)(20261001)', article_no: '42조(금지행위의 유형 및 기준)' }] }, { on: true });
+  eq('fetchTopics on → 금지행위 규제 2점', [calls, on.picked.map(function (t) { return t.name; }), on.best, on.bases], [1, ['금지행위 규제'], 2, 2]);
+  var none = await RC.fetchTopics(f, { rag: [{ doc_name: '보도자료.md', article_no: null }] }, { on: true });
+  eq('fetchTopics 조 근거 없음 → 빈 결과', none.picked.length, 0);
+  // 두 판 조립 구조 — 자리(덧붙이기 뒤·역참조 앞)·restLen 밖·인용 대조 id에 안 넣음. 한쪽만 고치지 말 것
+  var app = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8');
+  var ragTs = fs.readFileSync(path.join(ROOT, 'supabase', 'functions', '_shared', 'rag.ts'), 'utf8');
+  var n = function (s, re) { return (s.match(re) || []).length; };
+  eq('app.js 관계도 주제 구역 — 가드·자리·restLen 밖·id 목록에 없음', [n(app, /typeof RagCore\.fetchTopics === 'function'/g), n(app, /ctx\.addonContext \+ ctx\.topicContext \+ ctx\.citingContext/g),
+    /restLen = \[[^\]]*topic/.test(app), /lastAdvChunkIds\.push\([^)]*topic/.test(app)], [1, 1, false, false]);
+  eq('rag.ts 관계도 주제 구역 — 자리·restLen 밖·대조 조각에 없음', [n(ragTs, /RagCore\.fetchTopics\(/g), n(ragTs, /addOns\.text \+ topic\.text \+ citing\.text/g),
+    /const restLen = [^;]*topic/.test(ragTs), /concat\(yak\.chunks\)[^\n]*topic/.test(ragTs)], [1, 1, false, false]);
+})();
+
+Promise.all([asyncTests, addOnTests, addOnTests2, addendumTests, applyTests, pendingNewTests, yakSectionTests, topicTests]).catch(function (e) { fails++; total++; console.log('FAIL  비동기 검사 예외 ' + (e && e.message)); }).then(function () {
   console.log('\n' + (fails ? 'FAIL ' + fails + '/' + total : 'ALL OK ' + total + '/' + total));
   process.exit(fails ? 1 : 0);
 });

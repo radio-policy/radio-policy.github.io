@@ -1352,8 +1352,9 @@ var YAK_SRC_PREFIX = '약관: ';   // 사업자 이용약관 구역(#312-보론2
 // "참조 법령·문서" 배지에 웹 제목이 섞이므로, 반드시 이 분기를 타야 한다. (2026-08-03)
 var WEB_SRC_PREFIX = '[웹] ';
 // 사업자 이용약관 구역(#312-보론2)의 문서는 '약관: ' 접두(YAK_SRC_PREFIX) — 「참조 약관」 배지로 따로(법령 아님).
+// 관련 법령 체계 구역(#329)의 주제는 '관계도 주제: ' 접두(TOPIC_SRC_PREFIX) — 「관계도 주제(목록 자료)」 배지로 따로(조문 원문 아님, 목록 문서명은 출처에 없다).
 function splitSources(arr) {
-  var laws = [], news = [], kb = [], annex = [], web = [], yak = [];
+  var laws = [], news = [], kb = [], annex = [], web = [], yak = [], topic = [];
   (arr || []).forEach(function(s) {
     if (typeof s !== 'string' || !s) return;
     if (s.indexOf(WEB_SRC_PREFIX) === 0) { if (web.indexOf(s) === -1) web.push(s); }
@@ -1361,9 +1362,14 @@ function splitSources(arr) {
     else if (s.indexOf(KB_SRC_PREFIX) === 0) { if (kb.indexOf(s) === -1) kb.push(s); }
     else if (s.indexOf(ANNEX_SRC_PREFIX) === 0) { if (annex.indexOf(s) === -1) annex.push(s); }
     else if (s.indexOf(YAK_SRC_PREFIX) === 0) { if (yak.indexOf(s) === -1) yak.push(s); }
+    else if (s.indexOf(TOPIC_SRC_PREFIX) === 0) { if (topic.indexOf(s) === -1) topic.push(s); }
     else if (laws.indexOf(s) === -1) laws.push(s);
   });
-  return { laws: laws, news: news, kb: kb, annex: annex, web: web, yak: yak };
+  return { laws: laws, news: news, kb: kb, annex: annex, web: web, yak: yak, topic: topic };
+}
+function stripTopicPrefix(s) { return s.indexOf(TOPIC_SRC_PREFIX) === 0 ? s.slice(TOPIC_SRC_PREFIX.length) : s; }
+function topicTagsHtml(list) {
+  return list.map(function(s) { return '<span class="rag-tag">' + chEsc(stripTopicPrefix(s)) + '</span>'; }).join(' ');
 }
 function stripYakPrefix(s) { return s.indexOf(YAK_SRC_PREFIX) === 0 ? s.slice(YAK_SRC_PREFIX.length) : s; }
 function yakTagsHtml(list) {
@@ -2112,6 +2118,49 @@ function fetchNewLawKeyRows(docNames) {
 }
 function pendingNamedOpts(docsP) {
   return { docs: function() { return docsP; }, keyRows: fetchNewLawKeyRows, today: kstTodayYmd() };
+}
+
+// ── 관련 법령 체계(관계도 주제) 구역(#329) — 고르기·문구·줄 순서는 rag_core.js(fetchTopics·buildTopicContext) 한 곳이고 여기는 관계도 원본 행만 댄다
+// (rag.ts loadTopicGraph와 같은 조회 — 한쪽만 고치지 말 것). law_graph는 매일 17시 재구축되는 산출물이라 페이지당 한 번(1시간 지나면 다시) 읽는다.
+// full=false(구역이 꺼짐)면 주제 노드만 — <lawmap> 지침의 기존 주제명 목록(종전 lawTopicsP)만 쓴다. 1000행 페이지네이션은 빼지 말 것(PostgREST max-rows 1000, #28).
+var TOPIC_SRC_PREFIX = '관계도 주제: ';   // 출처 칸 배지 — 목록 문서명은 출처에 넣지 않는다(설계 D5)
+var TOPICS_EMPTY = { picked: [], best: 0, cands: 0, bases: 0 };
+var TOPIC_CTX_EMPTY = { text: '', names: [], scores: [], chars: 0, present: [] };
+var _topicGraphCache = {};
+async function topicGraphPaged(build) {
+  var all = [];
+  for (var from = 0; from < 20000; from += 1000) {
+    var r = await build().order('id').range(from, from + 999);
+    if (r.error) throw new Error('law_graph: ' + (r.error.code || r.error.message));
+    all = all.concat(r.data || []);
+    if ((r.data || []).length < 1000) break;
+  }
+  return all;
+}
+function loadTopicGraph(full) {
+  var k = full ? 'full' : 'topics', c = _topicGraphCache[k];
+  if (c && Date.now() - c.at < 3600e3) return c.p;
+  var p = (async function() {
+    var topics = await topicGraphPaged(function() { return sb.from('law_graph_nodes').select('id,name,description').eq('node_type', 'topic'); });
+    if (!full || !topics.length) return { topics: topics, edges: [], nodes: [] };
+    var ids = topics.map(function(t) { return t.id; }), isT = {};
+    ids.forEach(function(i) { isT[i] = 1; });
+    var both = await Promise.all(['source_id', 'target_id'].map(function(col) {
+      return topicGraphPaged(function() { return sb.from('law_graph_edges').select('id,source_id,target_id,description,weight').in(col, ids); });
+    }));
+    var edges = both[0].concat(both[1]), endIds = [];
+    edges.forEach(function(e) { [e.source_id, e.target_id].forEach(function(i) { if (!isT[i] && endIds.indexOf(i) === -1) endIds.push(i); }); });
+    var batches = [];
+    for (var i = 0; i < endIds.length; i += 150) batches.push(endIds.slice(i, i + 150));
+    var got = await Promise.all(batches.map(function(b) {
+      return sb.from('law_graph_nodes').select('id,name,node_type,doc_name').in('id', b)
+        .then(function(r) { if (r.error) throw new Error('law_graph_nodes: ' + (r.error.code || r.error.message)); return r.data || []; });
+    }));
+    return { topics: topics, edges: edges, nodes: [].concat.apply([], got) };
+  })();
+  _topicGraphCache[k] = { at: Date.now(), p: p };
+  p.catch(function() { if (_topicGraphCache[k] && _topicGraphCache[k].p === p) delete _topicGraphCache[k]; });   // 실패는 다음 요청에서 다시
+  return p;
 }
 
 // ── 법령·규제 요약 지식베이스(regulatory-kb / kb_chunks) ──
@@ -3062,10 +3111,12 @@ async function buildAdvisoryContext(userText) {
       if (lastAdvSearchMeta) lastAdvSearchMeta.push({ fn: 'yak_section', ms: Math.round(performance.now() - yakT0), rows: null, error: String(e && e.message || e) });
       return YAK_SECTION_EMPTY;
     });
-  // 법령 관계도: 기존 주제명 목록(주제명 분열 방지용) — 실패해도 자문은 정상 진행
+  // 법령 관계도: 기존 주제명 목록(주제명 분열 방지용) — 실패해도 자문은 정상 진행.
+  // 관련 법령 체계 구역(#329)이 켜져 있으면 같은 조회가 엣지·끝 노드까지 읽는다(페이지당 1회 캐시 — 아래 topicsP와 나눠 쓴다). 옛 rag_core.js 캐시면 함수가 없다(구역 없음).
+  const topicOn = !!(RagCore.TOPIC_OPTS && RagCore.TOPIC_OPTS.on && typeof RagCore.fetchTopics === 'function');
   const lawTopicsP  = sb
-    ? sb.from('law_graph_nodes').select('name').eq('node_type', 'topic').limit(120)
-        .then(function(r) { return (r.data || []).map(function(x) { return x.name; }); })
+    ? loadTopicGraph(topicOn)
+        .then(function(g) { return g.topics.slice(0, 120).map(function(x) { return x.name; }); })
         .catch(function(e) { console.warn('관계도 주제 목록 조회 실패(건너뜀):', e); return []; })
     : Promise.resolve([]);
 
@@ -3151,6 +3202,14 @@ async function buildAdvisoryContext(userText) {
         return '[조문 ' + (i + 1) + '] ' + h.doc_name + (h.article_no ? ' ' + h.article_no : '') + '\n' + h.content;
       }).join('\n\n---\n\n')
     : '';
+  // 관련 법령 체계(관계도 주제, #329) — 근거 목록 조문(정밀검색·상한 구제·RAG, 통째 보강 뒤)의 (법령군, 제N조)가 엣지 설명에 글자로 든 주제를 고른다.
+  // 덧붙이기·역참조·별표와 독립이라 함께 시작하고, 글(있음/미수록 판정)은 다른 구역이 다 모인 뒤 아래에서 만든다. rag.ts buildAdvisoryContext와 동일 유지.
+  var topicT0 = performance.now(), topicMs = 0, topicErr = null;
+  var topicsP = (sb && topicOn)
+    ? RagCore.fetchTopics({ graph: function() { return loadTopicGraph(true); } }, { extra: lawExtra, spill: spillChunks, rag: ragChunks })
+        .then(function(r) { topicMs = Math.round(performance.now() - topicT0); return r; })
+        .catch(function(e) { console.warn('관계도 주제 구역 실패(건너뜀):', e); topicMs = Math.round(performance.now() - topicT0); topicErr = String(e && e.message || e); return TOPICS_EMPTY; })
+    : Promise.resolve(TOPICS_EMPTY);
   // L7 위임 따라가기 + L3′ 공통 인용 + L4 같은 고시 이웃 조 + 덧붙인 조문의 별표 1칸(#283, 2차 #283-보론2) — 위 조문과 위임 표로 한 걸음
   // 이어진 하위·상위 조문, 위 조문 둘 이상이 번호로 가리킨 같은 법령의 조, 같은 고시에 조가 2개 이상 실렸으면 그 고시의 나머지 조, 그 조문들이
   // 가리킨 별표. 규칙·문구·상한은 rag_core.js fetchAddOns 한 곳. 역참조·별표와 독립이라 동시에 시작하고, 역참조·제재 칸의 입력에는 넣지
@@ -3243,18 +3302,28 @@ async function buildAdvisoryContext(userText) {
   yak.ids.forEach(function(id) { if (typeof id === 'number' && lastAdvChunkIds.indexOf(id) === -1) lastAdvChunkIds.push(id); });
   yak.chunks.forEach(function(c) { if (c.doc_name && lastRagSources.indexOf(YAK_SRC_PREFIX + c.doc_name) === -1) lastRagSources.push(YAK_SRC_PREFIX + c.doc_name); });
   if (yakMetaRow && yak.ids.length) yakMetaRow.ids_cut = Math.max(0, lastAdvChunkIds.length - VERIFY_IDS_MAX);   // 시행 전 제정 법령과 함께 발동하면 맨 뒤 약관 id가 잘릴 수 있다(알고 둠)
+  // 관련 법령 체계(#329) — 있음/미수록은 모델이 보는 조각(근거·덧붙인 조문·역참조·별표·시행 전 제정·약관)의 법령군으로 가른다. 이 구역의 글은
+  // lastAdvChunkIds(인용 대조 원문)에 넣지 않고 목록 문서명도 출처에 넣지 않는다 — 출처 칸은 「관계도 주제: X」 배지만(설계 D5). rag.ts와 같은 순서.
+  // search_meta에는 구역이 켜진 요청마다 한 행(rows = 실은 주제 수, best = 문턱 전 최고 점수, cands = 문턱 넘은 주제 수, present = 주제별 「있음 줄/전체 줄」).
+  const topicSel = await topicsP;
+  const topic = topicSel.picked.length
+    ? RagCore.buildTopicContext(topicSel.picked, RagCore.topicPresentFams((lawExtra || []).concat(ragChunks, spillChunks, addOns.chunks || [], ce.chunks || [], pendingNew.chunks, yak.chunks), lastAnnexSources))
+    : TOPIC_CTX_EMPTY;
+  if (topicOn && lastAdvSearchMeta) lastAdvSearchMeta.push({ fn: 'topics', ms: topicMs, rows: topicErr ? null : topic.names.length, error: topicErr,
+    names: topic.names, scores: topic.scores, chars: topic.chars, present: topic.present, best: topicSel.best, cands: topicSel.cands });
+  topic.names.forEach(function(n) { if (lastRagSources.indexOf(TOPIC_SRC_PREFIX + n) === -1) lastRagSources.push(TOPIC_SRC_PREFIX + n); });
   // 배지용 스냅샷 — lastPendingNotice는 보고서 초안 경로와 공유하는 전역이라,
   // 자문 스트리밍(수 분) 중 보고서를 생성하면 답변 완료 시점엔 다른 값이 들어 있다.
   // 시행 전 제정 법령(#311)도 같은 「시행 예정 반영」 배지에 — 현행판이 없어 위 시행예정 구역에는 없는 법령이다
   window._advPendingNotice = (lastPendingNotice || []).concat(pendingNew.laws.map(function(x) { return { law_name: x.law_name, enf_date: x.enf_date }; }));
   return {
     ragContext: ragContext, lawArticleContext: lawArticleContext, citingContext: citingContext, annexContext: annexContext,
-    addonContext: addOns.text || '',
+    addonContext: addOns.text || '', topicContext: topic.text || '',
     pendingContext: pendingContext, pendingNewContext: pendingNew.text || '', yakContext: yak.text || '', kbContext: kbContext, customContext: customContext, newsContext: newsContext,
     lawTrackContext: lawTrackContext, assemblyContext: assemblyContext, lawTopics: await lawTopicsP,
     // 회귀 하네스용 단계별 재료 — 프롬프트 조립에는 쓰지 않는다
     ragChunks: ragChunks, lawExtra: lawExtra, addedIds: _advAddedIds, citingIds: _advCitingIds, kbRows: kbRows,
-    spillChunks: spillChunks, addOns: addOns, pendingNew: pendingNew, yak: yak,
+    spillChunks: spillChunks, addOns: addOns, pendingNew: pendingNew, yak: yak, topic: topic, topicSel: topicSel,
     searchMeta: lastAdvSearchMeta
   };
 }
@@ -3279,12 +3348,12 @@ async function callClaude(userText, onDelta) {
   // 가변부(lawmapGuide는 lawTopics 목록이 변함 + RAG·뉴스 등 질문마다 다른 컨텍스트)는
   // 캐시 블록 '뒤'에 둬야 적중한다 — 가변 요소를 고정부 앞·중간에 끼우지 말 것.
   const systemStable   = SYSTEM_PROMPT + webSearchGuide;
-  // 위임·같은 고시 구역(#283)은 조문 정밀검색 바로 뒤 — rag.ts와 같은 자리
+  // 위임·같은 고시 구역(#283)은 조문 정밀검색 바로 뒤, 관련 법령 체계(#329)는 그 바로 뒤·역참조 앞 — rag.ts와 같은 자리
   // 시행 전 제정 법령(#311)은 시행예정 개정본 바로 뒤, 사업자 이용약관(#312-보론2)은 그 바로 뒤 — rag.ts와 같은 자리
   // 오늘 날짜(#321, 2026-10-19): 모델은 학습 시점을 오늘로 알아 「2025년 10월 현재」처럼 묵은 시점을 썼다(지시문의 시제 검증 규칙이
   // 「오늘 날짜」를 전제하는데 어디에도 넣지 않았음). 가변부 맨 앞 — 고정부(systemStable)에 넣으면 날마다 캐시가 깨진다. rag.ts와 같은 문장.
   const todayLine = '\n\n[오늘 날짜: ' + new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10) + ' (KST)] 「현재」·「최근」·「예정」·「N년 N월 현재」 같은 시점 서술과 지시문의 「오늘 날짜」는 이 날짜를 기준으로 합니다.';
-  const systemVariable = todayLine + lawmapGuide + ctx.ragContext + ctx.lawArticleContext + ctx.addonContext + ctx.citingContext + ctx.annexContext + ctx.pendingContext + ctx.pendingNewContext + ctx.yakContext + ctx.kbContext + ctx.customContext + ctx.newsContext + ctx.lawTrackContext + ctx.assemblyContext;
+  const systemVariable = todayLine + lawmapGuide + ctx.ragContext + ctx.lawArticleContext + ctx.addonContext + ctx.topicContext + ctx.citingContext + ctx.annexContext + ctx.pendingContext + ctx.pendingNewContext + ctx.yakContext + ctx.kbContext + ctx.customContext + ctx.newsContext + ctx.lawTrackContext + ctx.assemblyContext;
   const systemWithRag = [
     { type: 'text', text: systemStable, cache_control: { type: 'ephemeral' } },
     { type: 'text', text: systemVariable }
@@ -3862,6 +3931,7 @@ function _chatContentHtml() {
     (xs.laws.length ? '<p class="ex-src"><b>' + chEsc(INTERNAL_SRC_LABEL) + ' — 법령·문서:</b> ' + xs.laws.map(chEsc).join(', ') + '</p>' : '') +
     (xs.annex.length ? '<p class="ex-src"><b>참조 별표:</b> ' + xs.annex.map(function(s) { return chEsc(stripAnnexPrefix(s)); }).join(', ') + '</p>' : '') +
     (xs.yak.length ? '<p class="ex-src"><b>참조 약관(법령 아님):</b> ' + xs.yak.map(function(s) { return chEsc(stripYakPrefix(s)); }).join(', ') + '</p>' : '') +
+    (xs.topic.length ? '<p class="ex-src"><b>관계도 주제(목록 자료):</b> ' + xs.topic.map(function(s) { return chEsc(stripTopicPrefix(s)); }).join(', ') + '</p>' : '') +
     (xs.kb.length ? '<p class="ex-src"><b>참조 요약·실무:</b> ' + xs.kb.map(function(s) { return chEsc(stripKbPrefix(s)); }).join(', ') + '</p>' : '') +
     (xs.news.length ? '<p class="ex-src"><b>참조 뉴스:</b> ' + xs.news.map(function(s) { return chEsc(stripNewsPrefix(s)); }).join(', ') + '</p>' : '');
   return '<h1 class="ex-q">' + chEsc(d.question || '') + '</h1>' +
@@ -3886,6 +3956,7 @@ function exportChatMd() {
   if (ms.laws.length) md += '\n---\n\n**' + INTERNAL_SRC_LABEL + ' — 법령·문서:** ' + ms.laws.join(', ') + '\n';
   if (ms.annex.length) md += '\n**참조 별표:** ' + ms.annex.map(stripAnnexPrefix).join(', ') + '\n';
   if (ms.yak.length) md += '\n**참조 약관(법령 아님):** ' + ms.yak.map(stripYakPrefix).join(', ') + '\n';
+  if (ms.topic.length) md += '\n**관계도 주제(목록 자료):** ' + ms.topic.map(stripTopicPrefix).join(', ') + '\n';
   if (ms.kb.length) md += '\n**참조 요약·실무:** ' + ms.kb.map(stripKbPrefix).join(', ') + '\n';
   if (ms.news.length) md += '\n**참조 뉴스:** ' + ms.news.map(stripNewsPrefix).join(', ') + '\n';
   _chatDownload(new Blob([md], { type: 'text/markdown;charset=utf-8' }), _chatExportName('md'));
@@ -3962,7 +4033,7 @@ async function viewChatHistoryItem(id) {
     var srcHtml = '';
     // 🌐 실제 인용한 웹 문서가 먼저 — 📚 내부 자료는 "검색된" 목록임을 라벨로 밝힌다
     srcHtml += webSourcesRowHtml(sp.web, 'margin-top:12px');
-    if (sp.laws.length + sp.annex.length + sp.yak.length + sp.kb.length + sp.news.length > 0) {
+    if (sp.laws.length + sp.annex.length + sp.yak.length + sp.topic.length + sp.kb.length + sp.news.length > 0) {
       srcHtml += '<div class="rag-sources" style="margin-top:8px;font-size:10px;opacity:.75">' +
         chEsc(INTERNAL_SRC_LABEL) + '</div>';
     }
@@ -3978,6 +4049,10 @@ async function viewChatHistoryItem(id) {
       srcHtml += '<div class="rag-sources" style="margin-top:6px"><i class="ti ti-file-text"></i> 참조 약관(법령 아님): ' +
         yakTagsHtml(sp.yak) + '</div>';
     }
+    if (sp.topic.length > 0) {
+      srcHtml += '<div class="rag-sources" style="margin-top:6px"><i class="ti ti-sitemap"></i> 관계도 주제(목록 자료): ' +
+        topicTagsHtml(sp.topic) + '</div>';
+    }
     if (sp.kb.length > 0) {
       srcHtml += '<div class="rag-sources" style="margin-top:6px"><i class="ti ti-clipboard-text"></i> 참조 요약·실무: ' +
         kbTagsHtml(sp.kb) + '</div>';
@@ -3986,7 +4061,7 @@ async function viewChatHistoryItem(id) {
       srcHtml += '<div class="rag-sources" style="margin-top:6px"><i class="ti ti-news"></i> 참조 뉴스: ' +
         newsTagsHtml(sp.news) + '</div>';
     }
-    _chatDetail = { question: row.question || '', answer: row.answer || '', category: row.category || '일반', created_at: row.created_at, sources: sp.web.concat(sp.laws, sp.annex, sp.yak, sp.kb, sp.news) };
+    _chatDetail = { question: row.question || '', answer: row.answer || '', category: row.category || '일반', created_at: row.created_at, sources: sp.web.concat(sp.laws, sp.annex, sp.yak, sp.topic, sp.kb, sp.news) };
     // 질문자(#305) — 팀장·관리자에게만. 목록을 거치지 않고 왔으면(이름표 재료가 비어 있으면) 그때 읽는다
     var whoHtml = '';
     if (chCanSeeOthers()) {
@@ -4092,7 +4167,7 @@ async function sendChat() {
       var _isCited = function(s) { return _cited.some(function(d) { return s === d || d.indexOf(s) === 0 || s.indexOf(d) === 0; }); };
       _advSrc.laws = _advSrc.laws.filter(_isCited).concat(_advSrc.laws.filter(function(s) { return !_isCited(s); }));
     }
-    if (_advSrc.laws.length + _advSrc.annex.length + _advSrc.yak.length + _advSrc.kb.length + _advSrc.news.length > 0) {
+    if (_advSrc.laws.length + _advSrc.annex.length + _advSrc.yak.length + _advSrc.topic.length + _advSrc.kb.length + _advSrc.news.length > 0) {
       const inDiv = document.createElement('div');
       inDiv.className = 'rag-sources';
       inDiv.style.cssText = 'font-size:10px;opacity:.75';
@@ -4118,6 +4193,13 @@ async function sendChat() {
       ykDiv.className = 'rag-sources';
       ykDiv.innerHTML = '<i class="ti ti-file-text"></i>참조 약관(법령 아님): ' + yakTagsHtml(_advSrc.yak);
       msgEl.appendChild(ykDiv);
+    }
+    // 관련 법령 체계(#329) — 관계도 주제의 문서 목록(조문 원문 아님)을 실었다는 표시. 목록 속 문서명은 배지로 늘어놓지 않는다(설계 D5)
+    if (_advSrc.topic.length > 0) {
+      const tpDiv = document.createElement('div');
+      tpDiv.className = 'rag-sources';
+      tpDiv.innerHTML = '<i class="ti ti-sitemap"></i>관계도 주제(목록 자료): ' + topicTagsHtml(_advSrc.topic);
+      msgEl.appendChild(tpDiv);
     }
     if (_advSrc.kb.length > 0) {
       const kbDiv = document.createElement('div');

@@ -122,7 +122,8 @@ interface Chunk {
 // 검색 갈래별 기록(#203, 2026-09-24) — [{fn, ms, rows, error}]. buildAdvisoryContext가 배열을 만들어 각 검색
 // 함수에 넘기고 answerAdvisory가 chat_logs.search_meta에 남긴다. 모듈 전역이 아니라 인자로 넘기는 이유:
 // Edge isolate는 요청을 동시에 처리하므로 전역이면 두 자문의 기록이 섞인다. app.js metaRpc와 같은 형식.
-export type SearchMeta = { fn: string; ms: number; rows: number | null; error: string | null; trimmed?: number; capped?: boolean; addendum?: number; apply?: number; gate?: string | null; docs?: number; pending?: number; top?: number | null; chars?: number; approved?: boolean | string | null; ids_cut?: number }[];
+export type SearchMeta = { fn: string; ms: number; rows: number | null; error: string | null; trimmed?: number; capped?: boolean; addendum?: number; apply?: number; gate?: string | null; docs?: number; pending?: number; top?: number | null; chars?: number; approved?: boolean | string | null; ids_cut?: number;
+  names?: string[]; scores?: number[]; present?: string[]; best?: number; cands?: number }[];   // names…cands = 관련 법령 체계(#329)
 // 약관 게이트 행(#312-보론)은 RagCore.yakGateNote가 넣는 { fn: 'yak_gate', pass, words, dropped[, mode] } — ms·rows·error 없음(app.js와 같은 꼴)
 type RpcResult = { data?: unknown; error?: { code?: string; message?: string } | null } | null;
 function metaRpc(sb: SupabaseClient, meta: SearchMeta | undefined, fn: string, params: Record<string, unknown>) {
@@ -1024,6 +1025,52 @@ async function fetchYakRows(sb: SupabaseClient, question: string, doc: string, n
   if (r.error) throw new Error('match_chunks_semantic_in_doc: ' + (r.error.code || r.error.message));
   return (r.data || []) as Chunk[];
 }
+// ── 관련 법령 체계(관계도 주제) 구역(#329) — 고르기·문구·줄 순서는 rag_core.js(fetchTopics·buildTopicContext) 한 곳이고 여기는 관계도 원본 행만 댄다
+// (app.js loadTopicGraph와 같은 조회 — 한쪽만 고치지 말 것). law_graph는 매일 17시 재구축되는 산출물이라 isolate당 한 번(1시간 지나면 다시) 읽는다.
+// 1000행 페이지네이션은 빼지 말 것(PostgREST max-rows 1000, #28).
+type TopicSel = { picked: unknown[]; best: number; cands: number; bases: number };
+type TopicCtx = { text: string; names: string[]; scores: number[]; chars: number; present: string[] };
+const EMPTY_TOPIC_SEL: TopicSel = { picked: [], best: 0, cands: 0, bases: 0 };
+const EMPTY_TOPIC_CTX: TopicCtx = { text: '', names: [], scores: [], chars: 0, present: [] };
+const TOPIC_SRC_PREFIX = '관계도 주제: ';   // 출처 칸 배지(app.js와 같음) — 목록 문서명은 출처에 넣지 않는다(설계 D5)
+type GraphRow = Record<string, unknown> & { id: number };
+let topicGraphCache: { at: number; p: Promise<{ topics: GraphRow[]; edges: GraphRow[]; nodes: GraphRow[] }> } | null = null;
+// deno-lint-ignore no-explicit-any
+async function topicGraphPaged(build: () => any): Promise<GraphRow[]> {
+  let all: GraphRow[] = [];
+  for (let from = 0; from < 20000; from += 1000) {
+    const r = await build().order('id').range(from, from + 999);
+    if (r.error) throw new Error('law_graph: ' + (r.error.code || r.error.message));
+    all = all.concat((r.data || []) as GraphRow[]);
+    if ((r.data || []).length < 1000) break;
+  }
+  return all;
+}
+export function loadTopicGraph(sb: SupabaseClient) {   // export는 회귀 하네스(주제 전체 순위 기록)용
+  if (topicGraphCache && Date.now() - topicGraphCache.at < 3600e3) return topicGraphCache.p;
+  const p = (async () => {
+    const topics = await topicGraphPaged(() => sb.from('law_graph_nodes').select('id,name,description').eq('node_type', 'topic'));
+    if (!topics.length) return { topics, edges: [] as GraphRow[], nodes: [] as GraphRow[] };
+    const ids = topics.map((t) => t.id), isT = new Set(ids);
+    const both = await Promise.all(['source_id', 'target_id'].map((col) =>
+      topicGraphPaged(() => sb.from('law_graph_edges').select('id,source_id,target_id,description,weight').in(col, ids))));
+    const edges = both[0].concat(both[1]), endIds: number[] = [];
+    for (const e of edges) for (const i of [e.source_id as number, e.target_id as number]) if (!isT.has(i) && !endIds.includes(i)) endIds.push(i);
+    const batches: number[][] = [];
+    for (let i = 0; i < endIds.length; i += 150) batches.push(endIds.slice(i, i + 150));
+    const got = await Promise.all(batches.map(async (b) => {
+      const r = await sb.from('law_graph_nodes').select('id,name,node_type,doc_name').in('id', b);
+      if (r.error) throw new Error('law_graph_nodes: ' + (r.error.code || r.error.message));
+      return (r.data || []) as GraphRow[];
+    }));
+    return { topics, edges, nodes: got.flat() };
+  })();
+  const entry = { at: Date.now(), p };
+  topicGraphCache = entry;
+  p.catch(() => { if (topicGraphCache === entry) topicGraphCache = null; });   // 실패는 다음 요청에서 다시
+  return p;
+}
+
 // 그 문서 첫 조각의 is_approved — 승인돼 있으면 구역을 비운다(검색에 이미 들어온다). 실패는 fail-open(rag_core가 'unknown'으로).
 async function fetchYakApproved(sb: SupabaseClient, doc: string): Promise<boolean | null> {
   const r = await sb.from('document_chunks').select('is_approved').eq('doc_name', doc).eq('chunk_index', 0).limit(1);
@@ -1319,6 +1366,7 @@ export interface AdvisoryContext {
   pending: string; lawTrack: string;   // 시행예정 개정본·법령 개정 동향(#303) — 대시보드에만 있던 두 구역의 이식
   pendingNew: PendingNew;   // 시행 전 제정 법령(#311) — 현행판 없는 새 법령의 원문
   yak: YakSection;   // 사업자 이용약관 구역(#312-보론2, (D)) — 질문 원문에 약관 낱말이 있을 때만
+  topic: TopicCtx; topicSel: TopicSel;   // 관련 법령 체계(관계도 주제, #329) — 구역 글·고른 주제
   searchMeta: SearchMeta;   // 검색 갈래별 기록(#203)
   spill: Chunk[]; addOns: AddOns;   // 자문 빠뜨림 1차 덧붙이기(#283) — 상한 구제분(조문 정밀검색 구역 끝)·위임/같은 고시 구역
 }
@@ -1434,6 +1482,16 @@ export async function buildAdvisoryContext(sb: SupabaseClient, question: string)
       '위 RAG 결과에 없더라도 아래 조문이 질문의 핵심 근거일 가능성이 높습니다. 우선 확인하세요:\n\n' +
       lawItems.map((h, i) => `[조문 ${i + 1}] ${h.doc_name}${h.article_no ? ' ' + h.article_no : ''}\n${h.content}`).join('\n\n---\n\n')
     : '';
+  // 관련 법령 체계(관계도 주제, #329) — 근거 목록 조문(정밀검색·상한 구제·RAG, 통째 보강 뒤)의 (법령군, 제N조)가 엣지 설명에 글자로 든 주제를 고른다.
+  // 덧붙이기·역참조·별표와 독립이라 함께 시작하고, 글(있음/미수록 판정)은 다른 구역이 다 모인 뒤 아래에서 만든다. app.js buildAdvisoryContext와 동일 유지.
+  const topicOn = !!(RagCore.TOPIC_OPTS && RagCore.TOPIC_OPTS.on);
+  const topicT0 = performance.now();
+  let topicMs = 0, topicErr: string | null = null;
+  const topicsP: Promise<TopicSel> = topicOn
+    ? RagCore.fetchTopics({ graph: () => loadTopicGraph(sb) }, { extra: extra2, spill: spill2, rag: chunks2 })
+        .then((r: TopicSel) => { topicMs = Math.round(performance.now() - topicT0); return r; })
+        .catch((e: unknown) => { console.warn('관계도 주제 구역 실패(건너뜀):', e); topicMs = Math.round(performance.now() - topicT0); topicErr = String((e as Error)?.message || e); return EMPTY_TOPIC_SEL; })
+    : Promise.resolve(EMPTY_TOPIC_SEL);
 
   // L7 위임 따라가기 + L3′ 공통 인용 + L4 같은 고시 이웃 조 + 덧붙인 조문의 별표 1칸(#283, 2차 #283-보론2 — 설계 local_docs/자문누락_설계_261005.md,
   // 재검토 local_docs/자문누락_1차_재검토_261006.md) — 위 조문과 위임 표로 한 걸음 이어진 하위·상위 조문, 위 조문 둘 이상이 번호로 가리킨
@@ -1492,8 +1550,17 @@ export async function buildAdvisoryContext(sb: SupabaseClient, question: string)
   const pendingNew = await pendingNewP;
   const yak = await yakP;   // 사업자 이용약관(#312-보론2)은 시행 전 제정 법령 바로 뒤(대시보드와 같은 자리) — restLen 밖
   const lawTrack = await lawTrackP;
-  const systemVariable = buildRagContext(chunks2) + lawContext + addOns.text + citing.text + annex.text + pending + pendingNew.text + yak.text + buildKbContext(kb) + news.text + lawTrack + asm;
-  return { chunks: chunks2, extra: extra2, addedIds, annex, citing, kb, news, asm, lawContext, pending, pendingNew, yak, lawTrack, systemVariable, searchMeta: meta, spill: spill2, addOns };
+  // 관련 법령 체계(#329)는 덧붙이기 구역 바로 뒤·역참조 앞(대시보드와 같은 자리) — restLen 밖, 자기 상한(TOPIC_OPTS.maxChars). 있음/미수록은 모델이 보는
+  // 조각(근거·덧붙인 조문·역참조·별표·시행 전 제정·약관)의 법령군으로 가른다. 이 구역의 글은 인용 대조 원문·출처 문서 목록에 넣지 않는다(설계 D5).
+  // search_meta에는 구역이 켜진 요청마다 한 행(rows = 실은 주제 수, best = 문턱 전 최고 점수, cands = 문턱 넘은 주제 수, present = 주제별 「있음 줄/전체 줄」).
+  const topicSel = await topicsP;
+  const topic: TopicCtx = topicSel.picked.length
+    ? RagCore.buildTopicContext(topicSel.picked, RagCore.topicPresentFams((extra2 as unknown as Chunk[]).concat(chunks2, spill2, addOns.chunks, citing.chunks, pendingNew.chunks, yak.chunks), annex.sources.concat(addOns.annexSources || [])))
+    : EMPTY_TOPIC_CTX;
+  if (topicOn) meta.push({ fn: 'topics', ms: topicMs, rows: topicErr ? null : topic.names.length, error: topicErr,
+    names: topic.names, scores: topic.scores, chars: topic.chars, present: topic.present, best: topicSel.best, cands: topicSel.cands });
+  const systemVariable = buildRagContext(chunks2) + lawContext + addOns.text + topic.text + citing.text + annex.text + pending + pendingNew.text + yak.text + buildKbContext(kb) + news.text + lawTrack + asm;
+  return { chunks: chunks2, extra: extra2, addedIds, annex, citing, kb, news, asm, lawContext, pending, pendingNew, yak, topic, topicSel, lawTrack, systemVariable, searchMeta: meta, spill: spill2, addOns };
 }
 
 export async function answerAdvisory(sb: SupabaseClient, systemPrompt: string, question: string): Promise<AdvisoryResult> {
@@ -1502,7 +1569,7 @@ export async function answerAdvisory(sb: SupabaseClient, systemPrompt: string, q
   // DB 문서명 목록(#315 D1 ①) — 인용 검증의 이름 맞추기·ⓒ가 쓴다. 검색·답변 생성과 겹치게 지금 띄운다(실패는 cite_verify.js가 목록 없음으로)
   const lawDocsP = listLawDocNames(sb);
   lawDocsP.catch(() => {});
-  const { chunks: chunks2, extra: extra2, addedIds, annex, citing, kb, news, systemVariable, searchMeta, spill: spill2, addOns, pendingNew, yak } = await buildAdvisoryContext(sb, question);
+  const { chunks: chunks2, extra: extra2, addedIds, annex, citing, kb, news, systemVariable, searchMeta, spill: spill2, addOns, pendingNew, yak, topic } = await buildAdvisoryContext(sb, question);
 
   const telegramGuide = '\n\n---\n\n[텔레그램 답변 형식 지침]\n' +
     '이 답변은 텔레그램 메시지로 전송됩니다. 다음을 지키세요:\n' +
@@ -1574,6 +1641,7 @@ export async function answerAdvisory(sb: SupabaseClient, systemPrompt: string, q
   for (const c of spill2.concat(addOns.chunks)) if (c.doc_name && !sources.includes(c.doc_name)) sources.push(c.doc_name);   // 덧붙인 조문(#283)
   for (const c of pendingNew.chunks) if (c.doc_name && !sources.includes(c.doc_name)) sources.push(c.doc_name);   // 시행 전 제정 법령(#311)
   for (const c of yak.chunks) { const t = YAK_SRC_PREFIX + c.doc_name; if (c.doc_name && !sources.includes(t)) sources.push(t); }   // 사업자 이용약관(#312-보론2) — 법령과 따로 묶는 접두
+  for (const n of topic.names) { const t = TOPIC_SRC_PREFIX + n; if (!sources.includes(t)) sources.push(t); }   // 관련 법령 체계(#329) — 주제 배지만(목록 문서명은 넣지 않는다, 설계 D5)
   for (const r of kb) { const t = '[요약] ' + (r.title || '').trim(); if (r.title && !sources.includes(t)) sources.push(t); }
   for (const s of news.sources) if (!sources.includes(s)) sources.push(s);
   // 답변이 실제로 인용해 확인된 문서를 맨 앞으로(#176) — 텔레그램 footer는 앞 6개만 보여주는데, 9/17 실측에서

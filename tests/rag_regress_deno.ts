@@ -25,6 +25,7 @@
 //                    rag_core.js의 DELEG_OPTS·NEIGHBOR_OPTS·ADDON_OPTS 객체에 합친다(운영 코드는 그대로). 2차(10-06)부터 XREF_OPTS도.
 // 사업자 이용약관 구역(#312-보론2, 2026-10-16): 결과 행 yak = { ids, keys, chars, top, words, error, approved, textLen }(옛 rag.ts면 null),
 //   --with-text면 yakText(구역 글 — sv에서 이 글을 떼면 구역 밖 바이트 비교가 된다).
+//   --topic-rank     관련 법령 체계(#329) — 구역이 꺼져 있어도 질문마다 근거 조문으로 모든 주제의 M3 점수를 매겨 상위 5(문턱 1)를 topicRank 칸에 남긴다(문턱·개수 고르기용)
 //   --rest-pad N     대시보드 조건 흉내(2차, 10-06) — 전체 상한(trimAddOns)의 「나머지 길이」에 N자를 더한다(대시보드에만 있는
 //                    시행예정·팀 추가 지식·법령 개정 동향 구역 몫). 결과의 meta(search_meta의 addons·law_delegations 행)에 덜어 낸 개수가 남는다.
 import { createClient } from 'jsr:@supabase/supabase-js@2';
@@ -60,6 +61,7 @@ const ragPath = argv('--rag') ? new URL(argv('--rag'), ROOT) : new URL('supabase
 const rag = await import(ragPath.href);
 const coreOpts = argv('--core-opts') ? JSON.parse(argv('--core-opts')) as Record<string, Record<string, unknown>> : null;
 const restPad = Number(argv('--rest-pad') || 0);
+const topicRank = args.includes('--topic-rank');
 if (restPad) rag.testHooks.restPad = restPad;
 if (coreOpts) {
   // deno-lint-ignore no-explicit-any
@@ -183,6 +185,18 @@ for (const q of set.questions) {
   const pnew = ctx.pendingNew as { text: string; chunks: unknown[]; ids: number[]; laws: unknown[] } | undefined;   // 시행 전 제정 법령(#311)
   // 사업자 이용약관 구역(#312-보론2) — 옛 rag.ts(--rag 옛 HEAD 사본)엔 없다
   const yak = ctx.yak as { text: string; chunks: unknown[]; ids: number[]; keys: string[]; chars: number; top: number | null; words: string[]; error: string | null; approved: unknown } | undefined;
+  // 관련 법령 체계(#329) — 옛 rag.ts엔 없다
+  const topic = ctx.topic as { text: string; names: string[]; scores: number[]; chars: number; present: string[] } | undefined;
+  const topicSel = ctx.topicSel as { best: number; cands: number; bases: number } | undefined;
+  let topicRankRow: unknown = null;
+  if (topicRank && !err) {
+    // deno-lint-ignore no-explicit-any
+    const RC = (globalThis as any).RagCore;
+    const g = RC.topicGraph(await rag.loadTopicGraph(sb));
+    const bases = RC.topicBases({ extra: ctx.extra, spill: ctx.spill, rag: ctx.chunks });
+    const r = RC.pickTopics(bases, g.topics, g.edges, { need: 1, max: 5, halfRule: false });
+    topicRankRow = { bases: bases.map((b: { fam: string; key: string }) => b.fam + ' ' + b.key), top: r.picked.map((t: { name: string; score: number }) => [t.name, t.score]) };
+  }
   const lab: Record<string, string> = {};
   for (const c of ([] as { id?: unknown; doc_name?: string; article_no?: string }[])
     .concat((ctx.chunks as []) || [], (ctx.extra as []) || [], (citing?.chunks as []) || [], (ctx.spill as []) || [], (addOns?.chunks as []) || [], (pnew?.chunks as []) || [], (yak?.chunks as []) || [])) {
@@ -195,13 +209,15 @@ for (const q of set.questions) {
     news: news?.sources || [],
     spill: ids((ctx.spill as []) || []), addon: addOns?.ids || [], addItems: addOns?.items || [],
     pnew: pnew?.ids || [], pnewLaws: pnew?.laws || [],
+    topic: topic ? { names: topic.names, scores: topic.scores, present: topic.present, chars: topic.chars, best: topicSel?.best, cands: topicSel?.cands, bases: topicSel?.bases } : null,
+    ...(topicRank ? { topicRank: topicRankRow } : {}),
     yak: yak ? { ids: yak.ids, keys: yak.keys, chars: yak.chars, top: yak.top, words: yak.words, error: yak.error, approved: yak.approved, textLen: yak.text.length } : null,
     lens: { law: String(ctx.lawContext || '').length, citing: (citing?.text || '').length, annex: (annex?.text || '').length,
-            news: (news?.text || '').length, asm: String(ctx.asm || '').length, addon: (addOns?.text || '').length, pnew: (pnew?.text || '').length, yak: (yak?.text || '').length,
+            news: (news?.text || '').length, asm: String(ctx.asm || '').length, addon: (addOns?.text || '').length, pnew: (pnew?.text || '').length, yak: (yak?.text || '').length, topic: (topic?.text || '').length,
             systemVariable: String(ctx.systemVariable || '').length },
     log: logLines.slice(), rpc: rpcLog.slice(), lab,
-    meta: ((ctx.searchMeta as { fn: string }[]) || []).filter((m) => m.fn === 'addons' || m.fn === 'law_delegations' || m.fn === 'pending_new' || m.fn === 'yak_gate' || m.fn === 'yak_section'),   // yak_gate = 약관 게이트(#312-보론), yak_section = 약관 구역(#312-보론2)
-    ...(withText ? { sv: String(ctx.systemVariable || ''), ...(yak?.text ? { yakText: yak.text } : {}) } : {}),
+    meta: ((ctx.searchMeta as { fn: string }[]) || []).filter((m) => m.fn === 'addons' || m.fn === 'law_delegations' || m.fn === 'pending_new' || m.fn === 'yak_gate' || m.fn === 'yak_section' || m.fn === 'topics'),   // yak_gate = 약관 게이트(#312-보론), yak_section = 약관 구역(#312-보론2)
+    ...(withText ? { sv: String(ctx.systemVariable || ''), ...(yak?.text ? { yakText: yak.text } : {}), ...(topic?.text ? { topicText: topic.text } : {}) } : {}),
   });
   origLog('[ragRegress]', q.id, ms + 'ms', err || '');
 }
