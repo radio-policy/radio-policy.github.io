@@ -123,7 +123,7 @@ interface Chunk {
 // 함수에 넘기고 answerAdvisory가 chat_logs.search_meta에 남긴다. 모듈 전역이 아니라 인자로 넘기는 이유:
 // Edge isolate는 요청을 동시에 처리하므로 전역이면 두 자문의 기록이 섞인다. app.js metaRpc와 같은 형식.
 export type SearchMeta = { fn: string; ms: number; rows: number | null; error: string | null; trimmed?: number; capped?: boolean; addendum?: number; apply?: number; gate?: string | null; docs?: number; pending?: number; top?: number | null; chars?: number; approved?: boolean | string | null; ids_cut?: number;
-  names?: string[]; scores?: number[]; present?: string[]; best?: number; cands?: number }[];   // names…cands = 관련 법령 체계(#329)
+  names?: string[]; scores?: number[]; raw?: number[]; present?: string[]; best?: number; bestRaw?: number; cands?: number; blocked?: boolean }[];   // names…blocked = 관련 법령 체계(#329)
 // 약관 게이트 행(#312-보론)은 RagCore.yakGateNote가 넣는 { fn: 'yak_gate', pass, words, dropped[, mode] } — ms·rows·error 없음(app.js와 같은 꼴)
 type RpcResult = { data?: unknown; error?: { code?: string; message?: string } | null } | null;
 function metaRpc(sb: SupabaseClient, meta: SearchMeta | undefined, fn: string, params: Record<string, unknown>) {
@@ -1028,10 +1028,10 @@ async function fetchYakRows(sb: SupabaseClient, question: string, doc: string, n
 // ── 관련 법령 체계(관계도 주제) 구역(#329) — 고르기·문구·줄 순서는 rag_core.js(fetchTopics·buildTopicContext) 한 곳이고 여기는 관계도 원본 행만 댄다
 // (app.js loadTopicGraph와 같은 조회 — 한쪽만 고치지 말 것). law_graph는 매일 17시 재구축되는 산출물이라 isolate당 한 번(1시간 지나면 다시) 읽는다.
 // 1000행 페이지네이션은 빼지 말 것(PostgREST max-rows 1000, #28).
-type TopicSel = { picked: unknown[]; best: number; cands: number; bases: number };
-type TopicCtx = { text: string; names: string[]; scores: number[]; chars: number; present: string[] };
-const EMPTY_TOPIC_SEL: TopicSel = { picked: [], best: 0, cands: 0, bases: 0 };
-const EMPTY_TOPIC_CTX: TopicCtx = { text: '', names: [], scores: [], chars: 0, present: [] };
+type TopicSel = { picked: unknown[]; best: number; bestRaw: number; cands: number; blocked: boolean; bases: number };
+type TopicCtx = { text: string; names: string[]; scores: number[]; raws: number[]; chars: number; present: string[] };
+const EMPTY_TOPIC_SEL: TopicSel = { picked: [], best: 0, bestRaw: 0, cands: 0, blocked: false, bases: 0 };
+const EMPTY_TOPIC_CTX: TopicCtx = { text: '', names: [], scores: [], raws: [], chars: 0, present: [] };
 const TOPIC_SRC_PREFIX = '관계도 주제: ';   // 출처 칸 배지(app.js와 같음) — 목록 문서명은 출처에 넣지 않는다(설계 D5)
 type GraphRow = Record<string, unknown> & { id: number };
 let topicGraphCache: { at: number; p: Promise<{ topics: GraphRow[]; edges: GraphRow[]; nodes: GraphRow[] }> } | null = null;
@@ -1552,13 +1552,15 @@ export async function buildAdvisoryContext(sb: SupabaseClient, question: string)
   const lawTrack = await lawTrackP;
   // 관련 법령 체계(#329)는 덧붙이기 구역 바로 뒤·역참조 앞(대시보드와 같은 자리) — restLen 밖, 자기 상한(TOPIC_OPTS.maxChars). 있음/미수록은 모델이 보는
   // 조각(근거·덧붙인 조문·역참조·별표·시행 전 제정·약관)의 법령군으로 가른다. 이 구역의 글은 인용 대조 원문·출처 문서 목록에 넣지 않는다(설계 D5).
-  // search_meta에는 구역이 켜진 요청마다 한 행(rows = 실은 주제 수, best = 문턱 전 최고 점수, cands = 문턱 넘은 주제 수, present = 주제별 「있음 줄/전체 줄」).
+  // search_meta에는 구역이 켜진 요청마다 한 행(rows = 실은 주제 수, scores = 가중 점수·raw = 센 횟수, best·bestRaw = 문턱 전 1위, cands = 문턱 넘은 주제 수,
+  // blocked = 1위 우위(D1′ b)로 비움, present = 주제별 「있음 줄/전체 줄」).
   const topicSel = await topicsP;
   const topic: TopicCtx = topicSel.picked.length
     ? RagCore.buildTopicContext(topicSel.picked, RagCore.topicPresentFams((extra2 as unknown as Chunk[]).concat(chunks2, spill2, addOns.chunks, citing.chunks, pendingNew.chunks, yak.chunks), annex.sources.concat(addOns.annexSources || [])))
     : EMPTY_TOPIC_CTX;
   if (topicOn) meta.push({ fn: 'topics', ms: topicMs, rows: topicErr ? null : topic.names.length, error: topicErr,
-    names: topic.names, scores: topic.scores, chars: topic.chars, present: topic.present, best: topicSel.best, cands: topicSel.cands });
+    names: topic.names, scores: topic.scores, raw: topic.raws, chars: topic.chars, present: topic.present,
+    best: Math.round((topicSel.best || 0) * 1000) / 1000, bestRaw: topicSel.bestRaw || 0, cands: topicSel.cands, blocked: !!topicSel.blocked });
   const systemVariable = buildRagContext(chunks2) + lawContext + addOns.text + topic.text + citing.text + annex.text + pending + pendingNew.text + yak.text + buildKbContext(kb) + news.text + lawTrack + asm;
   return { chunks: chunks2, extra: extra2, addedIds, annex, citing, kb, news, asm, lawContext, pending, pendingNew, yak, topic, topicSel, lawTrack, systemVariable, searchMeta: meta, spill: spill2, addOns };
 }

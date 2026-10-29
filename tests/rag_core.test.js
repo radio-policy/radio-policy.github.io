@@ -49,7 +49,8 @@ var NAMES = ['PRIORITY_KW_RE', 'VERB_TAIL', 'extractKeywords', 'LAW_SYNONYMS', '
   // 사업자 이용약관 구역(#312-보론2, (D))
   'YAK_SECTION_OPTS', 'pickYakArticles', 'buildYakContext', 'fetchYakSection',
   // 관련 법령 체계(관계도 주제, #329)
-  'TOPIC_OPTS', 'topicArtRe', 'topicBases', 'topicGraph', 'pickTopics', 'topicPresentFams', 'buildTopicContext', 'fetchTopics'];
+  'TOPIC_OPTS', 'topicArtRe', 'topicBases', 'topicGraph', 'pickTopics', 'topicPresentFams', 'buildTopicContext', 'fetchTopics',
+  'topicDf', 'scoreTopics', 'topicSibling'];
 NAMES.forEach(function (n) { ok('export ' + n, RC[n] !== undefined); });
 
 // ── 법령 키워드 추출 ──
@@ -1106,9 +1107,10 @@ var topicTests = (async function () {
     extra: [{ doc_name: '전기통신사업법(법률)(제21503호)(20261001)', article_no: '50조(금지행위)' }, { doc_name: '전기통신사업법(법률)(제21503호)(20261001)', article_no: '50조(금지행위)' }],
     spill: [{ doc_name: '전기통신사업법 시행령(대통령령)(제36735호)(20261001)', article_no: '별표 4' }],
     rag: [{ doc_name: '전기통신사업법 시행령(대통령령)(제36735호)(20261001)', article_no: '42조(금지행위의 유형 및 기준)' }, { doc_name: '보도자료_2026.md', article_no: null },
-      { doc_name: '전기통신사업법(법률)(제21503호)(20261001)', article_no: '부칙 제1조' }]
+      { doc_name: '전기통신사업법(법률)(제21503호)(20261001)', article_no: '부칙 제1조' },
+      { doc_name: '결합판매의 금지행위 세부 유형 및 심사기준(방송미디어통신위원회고시)(제2026-11호)(20260518)', article_no: '1조(목적)' }]
   });
-  eq('topicBases 조만·중복 없이', bases, [{ fam: '전기통신사업법', key: '50조' }, { fam: '전기통신사업법시행령', key: '42조' }]);
+  eq('topicBases 조만·중복 없이', bases, [{ fam: '전기통신사업법', key: '50조' }, { fam: '전기통신사업법시행령', key: '42조' }, { fam: '결합판매의금지행위세부유형및심사기준', key: '1조' }]);
   // 원본 행 → 주제별 엣지: 방향 무관(주제가 끝인 엣지도), 주제↔주제·끝 노드 행 없음은 버림, 같은 엣지 id는 한 번
   var raw = {
     topics: [{ id: 1, name: '금지행위 규제', description: '사업법 제50조 금지행위 체계' }, { id: 2, name: '결합판매', description: '' }, { id: 3, name: '요금 인가', description: '' }],
@@ -1137,20 +1139,40 @@ var topicTests = (async function () {
   eq('topicGraph 방향 무관·주제끼리/끝 노드 없음/중복 id 버림', g.edges.map(function (e) { return e.topic_id + ':' + e.name; }),
     ['1:전기통신사업법', '1:전기통신사업법 시행령', '1:금지행위 위반에 대한 과징금 부과 세부기준', '1:결합판매의 금지행위 세부 유형 및 심사기준', '1:개인정보 보호법',
       '2:전기통신사업법', '2:결합판매의 금지행위 세부 유형 및 심사기준', '3:전기통신사업법']);
-  // 고르기 — 금지행위 2점(사업법 제50조 + 시행령 제42조), 결합판매 1점(문턱 미달), 요금 인가 0점. 고시 엣지의 「법 제53조」는 끝 노드가 고시라 안 센다
+  // 고르기(D1′) — df: 사업법 제50조는 주제 1·2에 적혀 df 2(값 0.5), 시행령 제42조·결합판매 고시 제1조는 df 1. 금지행위 = 0.5 + 1 + 1 = 2.5(raw 3),
+  // 결합판매 = 0.5(raw 1 — raw 문턱 미달), 요금 인가 0. 고시 엣지의 「법 제53조」는 끝 노드가 고시라 안 센다
+  eq('topicDf 주제 수(관계도 전체)', [RC.topicDf(g.edges, '전기통신사업법', '50조'), RC.topicDf(g.edges, '전기통신사업법시행령', '42조'), RC.topicDf(g.edges, '결합판매의금지행위세부유형및심사기준', '1조')], [2, 1, 1]);
   var pk = RC.pickTopics(bases, g.topics, g.edges);
-  eq('pickTopics 금지행위만(2점) — 결합판매 1점은 문턱 미달', [pk.picked.map(function (t) { return t.name + ':' + t.score; }), pk.best, pk.cands], [['금지행위 규제:2'], 2, 1]);
-  // 상위 2·절반 규칙·같은 점수 이름순(코드 포인트)
+  eq('pickTopics 금지행위 2.5(raw 3) — 결합판매는 raw 1', [pk.picked.map(function (t) { return t.name + ':' + t.score + '/' + t.raw; }), pk.best, pk.bestRaw, pk.cands, pk.blocked], [['금지행위 규제:2.5/3'], 2.5, 3, 1, false]);
+  // D1′ 축 — 희소 가중·raw 문턱·1e-9 여유·1위 우위 2배·형제(부분집합/Jaccard)·같은 점수 이름순·1개
   var T = function (id, name) { return { id: id, name: name, description: '' }; };
-  var E = function (tid, n) { var out = []; for (var i = 0; i < n; i++) out.push({ topic_id: tid, name: '법' + i, node_type: 'law', doc_name: '가법(법률)', description: '제' + (i + 1) + '조', weight: 1 }); return out; };
-  var B = [1, 2, 3, 4, 5].map(function (i) { return { fam: '가법', key: i + '조' }; });
-  var p1 = RC.pickTopics(B, [T(1, '다'), T(2, '나'), T(3, '가')], E(1, 5).concat(E(2, 2), E(3, 3)));
-  eq('pickTopics 2위 = 1위의 절반 이상만(5·3 → 둘, 2는 셋째라 빠짐)', p1.picked.map(function (t) { return t.name + ':' + t.score; }), ['다:5', '가:3']);
-  var p2 = RC.pickTopics(B, [T(1, '다'), T(2, '나')], E(1, 5).concat(E(2, 2)));
-  eq('pickTopics 2위가 절반 미만(5·2)이면 1위만', p2.picked.map(function (t) { return t.name; }), ['다']);
-  var p3 = RC.pickTopics(B, [T(1, '나'), T(2, '가'), T(3, '다')], E(1, 2).concat(E(2, 2), E(3, 2)));
-  eq('pickTopics 같은 점수는 이름 코드 포인트 순, 상위 2', p3.picked.map(function (t) { return t.name; }), ['가', '나']);
-  eq('pickTopics halfRule false면 절반 미만도', RC.pickTopics(B, [T(1, '다'), T(2, '나')], E(1, 5).concat(E(2, 2)), { halfRule: false }).picked.length, 2);
+  var FAM = { 201: '가법', 202: '나법', 203: '다법', 204: '라법', 205: '마법', 206: '바법' };
+  var mk = function (tid, end, desc) { var f = FAM[end] || ('법' + end); return { topic_id: tid, end_id: end, name: f, node_type: 'law', doc_name: f + '(법률)', description: desc, weight: 1 }; };
+  var BB = function (list) { return list.map(function (x) { return { fam: x[0], key: x[1] }; }); };
+  var lo = RC.pickTopics(BB([['가법', '1조'], ['가법', '2조']]), [T(1, '하나'), T(2, '둘')], [mk(1, 201, '제1조'), mk(1, 201, '제2조'), mk(2, 201, '제1조')]);
+  eq('pickTopics 희소 가중 — 제1조 df 2(0.5)+제2조 df 1(1) = 1.5 < 2.0 → 없음', [lo.picked.length, lo.best, lo.bestRaw, lo.cands], [0, 1.5, 2, 0]);
+  var six = [1, 2, 3, 4, 5, 6].map(function (i) { return mk(1, 200 + i, '제1조'); }).concat([mk(2, 301, '제1조'), mk(3, 302, '제1조')]);
+  six.forEach(function (e) { e.doc_name = '가법(법률)'; });
+  var ep = RC.pickTopics(BB([['가법', '1조']]), [T(1, '여섯'), T(2, '둘'), T(3, '셋')], six);
+  eq('pickTopics 1e-9 여유 — 1/3 여섯 번(1.999…)도 2.0 통과', [ep.picked.map(function (t) { return t.name; }), ep.picked[0].score < 2], [['여섯'], true]);
+  eq('pickTopics raw ≥ 2 먼저 — need를 낮춰도 raw 1은 안 됨', RC.pickTopics(BB([['가법', '7조']]), [T(1, '하나')], [mk(1, 201, '제7조')], { need: 0.5 }).cands, 0);
+  var dom = function (t2edges) {
+    return RC.pickTopics(BB([['가법', '1조'], ['나법', '1조'], ['다법', '1조'], ['가법', '2조'], ['나법', '2조'], ['마법', '2조'], ['바법', '2조']]), [T(1, '일'), T(2, '이')],
+      [mk(1, 201, '제1조'), mk(1, 202, '제1조'), mk(1, 203, '제1조')].concat(t2edges));
+  };
+  var dB = dom([mk(2, 205, '제2조'), mk(2, 206, '제2조')]);
+  eq('pickTopics 1위 우위 — 3 < 2×2, 형제 아님 → 구역 없음', [dB.picked.length, dB.blocked, dB.cands], [0, true, 2]);
+  var dJ = dom([mk(2, 201, '제2조'), mk(2, 202, '제2조'), mk(2, 204, '제9조')]);
+  eq('pickTopics 형제(끝 노드 Jaccard 2/4 = 0.5) → 1위만', [dJ.picked.map(function (t) { return t.name; }), dJ.blocked], [['일'], false]);
+  var dS = RC.pickTopics(BB([['가법', '1조'], ['다법', '3조'], ['라법', '4조']]), [T(1, '일'), T(2, '이')],
+    [mk(1, 201, '제1조'), mk(1, 203, '제3조'), mk(1, 204, '제4조'), mk(2, 211, '제1조'), mk(2, 212, '제1조'), mk(2, 213, '제1조'), mk(2, 214, '제1조')].map(function (e) { if (e.end_id > 210) e.doc_name = '가법(법률)'; return e; }));
+  eq('pickTopics 형제(2위 적중 근거 ⊆ 1위) → 1위만(2.5 대 2.0)', [dS.picked.map(function (t) { return t.name + ':' + t.score; }), dS.blocked], [['일:2.5'], false]);
+  var d2 = RC.pickTopics(BB([['가법', '1조'], ['나법', '1조'], ['다법', '1조'], ['라법', '1조'], ['마법', '2조'], ['바법', '2조']]), [T(1, '일'), T(2, '이')],
+    [mk(1, 201, '제1조'), mk(1, 202, '제1조'), mk(1, 203, '제1조'), mk(1, 204, '제1조'), mk(2, 205, '제2조'), mk(2, 206, '제2조')]);
+  eq('pickTopics 정확히 2배(4 대 2)는 통과 · 1개만', [d2.picked.map(function (t) { return t.name; }), d2.blocked], [['일'], false]);
+  var tie = RC.pickTopics(BB([['가법', '1조'], ['나법', '1조'], ['가법', '2조'], ['나법', '2조']]), [T(1, '나'), T(2, '가')],
+    [mk(1, 201, '제1조'), mk(1, 202, '제1조'), mk(2, 201, '제2조'), mk(2, 202, '제2조')]);
+  eq('pickTopics 같은 점수(형제)는 이름 코드 포인트 순', tie.picked.map(function (t) { return t.name; }), ['가']);
   // 글 — 줄 순서(weight → 종류 → 이름), 같은 이름 한 줄, 있음/미수록, 머리·지침 글자 고정
   var present = RC.topicPresentFams([{ doc_name: '전기통신사업법(법률)(제21503호)(20261001)' }], ['전기통신사업법 시행령 별표 4']);
   eq('topicPresentFams 조각·별표 출처의 법령군(빈칸 뺀 꼴)', Object.keys(present).sort(), ['전기통신사업법', '전기통신사업법시행령']);
@@ -1168,7 +1190,7 @@ var topicTests = (async function () {
     + '- 「원문 미수록」 문서는 이름과 역할만 쓰고, 조 번호를 붙여 인용하거나 「[원문 확인됨]」을 붙이지 마세요 — 그 문서의 조문 원문은 위 참조 자료에 없습니다. 내용이 더 필요하면 「(해당 고시 원문 확인 필요)」로 적으세요.\n'
     + '- 「원문: 위 참조 자료에 있음」 문서는 위 원문을 평소처럼 인용하고 표시를 붙이세요.';
   eq('buildTopicContext 글자 그대로(설계 D3)', ctx.text, want);
-  eq('buildTopicContext 기록 칸', [ctx.names, ctx.scores, ctx.present, ctx.chars], [['금지행위 규제'], [2], ['2/5'], want.length]);
+  eq('buildTopicContext 기록 칸', [ctx.names, ctx.scores, ctx.raws, ctx.present, ctx.chars], [['금지행위 규제'], [2.5], [3], ['2/5'], want.length]);
   var dup = RC.buildTopicContext([{ name: 'X', description: '', score: 2, edges: [
     { name: 'A', node_type: 'notice', doc_name: 'A고시(고시)', description: '하나', weight: 1 }, { name: 'A2', node_type: 'notice', doc_name: 'A고시(고시)', description: '둘', weight: 1 }] }], {});
   ok('buildTopicContext 같은 이름 끝 노드는 한 줄', (dup.text.match(/- A고시\(고시\)/g) || []).length === 1);
@@ -1184,8 +1206,9 @@ var topicTests = (async function () {
   var off = await RC.fetchTopics(f, { extra: [{ doc_name: '전기통신사업법(법률)', article_no: '50조(금지행위)' }] }, { on: false });
   eq('fetchTopics on:false → 조회 0·빈 결과', [calls, off.picked.length], [0, 0]);
   var on = await RC.fetchTopics(f, { extra: [{ doc_name: '전기통신사업법(법률)(제21503호)(20261001)', article_no: '50조(금지행위)' }],
-    rag: [{ doc_name: '전기통신사업법 시행령(대통령령)(제36735호)(20261001)', article_no: '42조(금지행위의 유형 및 기준)' }] }, { on: true });
-  eq('fetchTopics on → 금지행위 규제 2점', [calls, on.picked.map(function (t) { return t.name; }), on.best, on.bases], [1, ['금지행위 규제'], 2, 2]);
+    rag: [{ doc_name: '전기통신사업법 시행령(대통령령)(제36735호)(20261001)', article_no: '42조(금지행위의 유형 및 기준)' },
+      { doc_name: '결합판매의 금지행위 세부 유형 및 심사기준(방송미디어통신위원회고시)(제2026-11호)(20260518)', article_no: '1조(목적)' }] }, { on: true });
+  eq('fetchTopics on → 금지행위 규제 2.5', [calls, on.picked.map(function (t) { return t.name; }), on.best, on.bases], [1, ['금지행위 규제'], 2.5, 3]);
   var none = await RC.fetchTopics(f, { rag: [{ doc_name: '보도자료.md', article_no: null }] }, { on: true });
   eq('fetchTopics 조 근거 없음 → 빈 결과', none.picked.length, 0);
   // 두 판 조립 구조 — 자리(덧붙이기 뒤·역참조 앞)·restLen 밖·인용 대조 id에 안 넣음. 한쪽만 고치지 말 것

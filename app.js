@@ -2124,8 +2124,8 @@ function pendingNamedOpts(docsP) {
 // (rag.ts loadTopicGraph와 같은 조회 — 한쪽만 고치지 말 것). law_graph는 매일 17시 재구축되는 산출물이라 페이지당 한 번(1시간 지나면 다시) 읽는다.
 // full=false(구역이 꺼짐)면 주제 노드만 — <lawmap> 지침의 기존 주제명 목록(종전 lawTopicsP)만 쓴다. 1000행 페이지네이션은 빼지 말 것(PostgREST max-rows 1000, #28).
 var TOPIC_SRC_PREFIX = '관계도 주제: ';   // 출처 칸 배지 — 목록 문서명은 출처에 넣지 않는다(설계 D5)
-var TOPICS_EMPTY = { picked: [], best: 0, cands: 0, bases: 0 };
-var TOPIC_CTX_EMPTY = { text: '', names: [], scores: [], chars: 0, present: [] };
+var TOPICS_EMPTY = { picked: [], best: 0, bestRaw: 0, cands: 0, blocked: false, bases: 0 };
+var TOPIC_CTX_EMPTY = { text: '', names: [], scores: [], raws: [], chars: 0, present: [] };
 var _topicGraphCache = {};
 async function topicGraphPaged(build) {
   var all = [];
@@ -3304,13 +3304,15 @@ async function buildAdvisoryContext(userText) {
   if (yakMetaRow && yak.ids.length) yakMetaRow.ids_cut = Math.max(0, lastAdvChunkIds.length - VERIFY_IDS_MAX);   // 시행 전 제정 법령과 함께 발동하면 맨 뒤 약관 id가 잘릴 수 있다(알고 둠)
   // 관련 법령 체계(#329) — 있음/미수록은 모델이 보는 조각(근거·덧붙인 조문·역참조·별표·시행 전 제정·약관)의 법령군으로 가른다. 이 구역의 글은
   // lastAdvChunkIds(인용 대조 원문)에 넣지 않고 목록 문서명도 출처에 넣지 않는다 — 출처 칸은 「관계도 주제: X」 배지만(설계 D5). rag.ts와 같은 순서.
-  // search_meta에는 구역이 켜진 요청마다 한 행(rows = 실은 주제 수, best = 문턱 전 최고 점수, cands = 문턱 넘은 주제 수, present = 주제별 「있음 줄/전체 줄」).
+  // search_meta에는 구역이 켜진 요청마다 한 행(rows = 실은 주제 수, scores = 가중 점수·raw = 센 횟수, best·bestRaw = 문턱 전 1위, cands = 문턱 넘은 주제 수,
+  // blocked = 1위 우위(D1′ b)로 비움, present = 주제별 「있음 줄/전체 줄」).
   const topicSel = await topicsP;
   const topic = topicSel.picked.length
     ? RagCore.buildTopicContext(topicSel.picked, RagCore.topicPresentFams((lawExtra || []).concat(ragChunks, spillChunks, addOns.chunks || [], ce.chunks || [], pendingNew.chunks, yak.chunks), lastAnnexSources))
     : TOPIC_CTX_EMPTY;
   if (topicOn && lastAdvSearchMeta) lastAdvSearchMeta.push({ fn: 'topics', ms: topicMs, rows: topicErr ? null : topic.names.length, error: topicErr,
-    names: topic.names, scores: topic.scores, chars: topic.chars, present: topic.present, best: topicSel.best, cands: topicSel.cands });
+    names: topic.names, scores: topic.scores, raw: topic.raws, chars: topic.chars, present: topic.present,
+    best: Math.round((topicSel.best || 0) * 1000) / 1000, bestRaw: topicSel.bestRaw || 0, cands: topicSel.cands, blocked: !!topicSel.blocked });
   topic.names.forEach(function(n) { if (lastRagSources.indexOf(TOPIC_SRC_PREFIX + n) === -1) lastRagSources.push(TOPIC_SRC_PREFIX + n); });
   // 배지용 스냅샷 — lastPendingNotice는 보고서 초안 경로와 공유하는 전역이라,
   // 자문 스트리밍(수 분) 중 보고서를 생성하면 답변 완료 시점엔 다른 값이 들어 있다.
