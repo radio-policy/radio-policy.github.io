@@ -1741,7 +1741,7 @@ class TestMainDelivery(unittest.TestCase):
     def test_common_and_team_urgent_then_trigger_then_normal(self):
         ev, _, db = self.run_main([_item('a1', '기지국 전력 절감')], collect=2)
         self.assertEqual([e[:2] if e[0] == 'heartbeat' else e for e in ev],
-                         [('op_telegram', 1), ('op_email', 1), ('queue_common', False), ('run', 'collect', ('긴급',)),
+                         [('op_telegram', 1), ('queue_common', False), ('run', 'collect', ('긴급',)),
                           ('trigger',), ('run', 'collect', ('보통',)), ('verdicts',), ('run', 'late', None),
                           ('heartbeat', 'last_crawl_run')])
         self.assertEqual(len(db.calls('subscriber_queue', 'insert')), 1)

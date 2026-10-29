@@ -5734,7 +5734,7 @@ def main():
     if urgent_items:
         print(f'[긴급] {len(urgent_items)}건 — 알림 발송')
         send_telegram(urgent_items)
-        send_urgent_email(urgent_items)
+        # 긴급 메일(send_urgent_email → you.jinwoong@gmail.com)은 2026-10-29 운영자 요청으로 끊음 — 함수는 남겨 두되 부르지 않는다.
         # 구독자 봇: 즉시 발송이 아니라 큐에 적재 → 각자 고른 수신 시각에 모아서 발송된다.
         # 반드시 억제·클러스터링을 거친 urgent_items로만 호출할 것(#44).
         # 기사당 1행으로 적재한다(2026-08-03) — 태그를 데이터로 넘겨야 구독자 관심분야 필터가
