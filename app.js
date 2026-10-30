@@ -1491,9 +1491,12 @@ var PERDOC_LIMIT = RagCore.PERDOC_LIMIT;
 var TOTAL_CHUNK_CUT = RagCore.TOTAL_CHUNK_CUT;
 var STREAM_IDLE_MS = RagCore.STREAM_IDLE_MS;
 
-async function searchKeywords(query) {
+// kwQuery = 낱말 자리에만 쓸 글(자문의 끝 요청어 뗀 질문, #330 rag_core.js stripRequestTail) — 없으면 query.
+// 확장(_expandCache 열쇠)·trgm·의미검색·약관 게이트는 query. rag.ts searchChunks와 동일 유지.
+async function searchKeywords(query, kwQuery) {
   if (!sb) return [];
-  var baseKeywords = extractKeywords(query);
+  var kq = kwQuery || query;
+  var baseKeywords = extractKeywords(kq);
   // trgm·시맨틱은 확장어를 쓰지 않으므로 Haiku 확장을 **기다리지 않고 먼저** 시작한다(B-2, #201, 2026-09-24).
   // trgm 5~6초(#185, SQL로는 못 줄임)와 임베딩 왕복이 확장 1~2초와 겹친다. 병합 순서는 아래에서 고정하므로 결과 동일.
   // only_current를 명시적으로 넘긴다 — 기본값에 기대면 인자 개수가 다른 오버로드가
@@ -1528,7 +1531,7 @@ async function searchKeywords(query) {
   // '휴업·폐업' 같은 결정적 법령 어휘가 잘리면 안 되기 때문(어휘 간극은 LLM이 못 메운다).
   var keywords = [];
   var seenKw = new Set();
-  baseKeywords.concat(lawSynonymKeywords(query)).concat(expanded).forEach(function(w) {
+  baseKeywords.concat(lawSynonymKeywords(kq)).concat(expanded).forEach(function(w) {
     var norm = w.replace(/\s+/g, '').toLowerCase();
     if (norm.length >= 2 && !seenKw.has(norm)) { seenKw.add(norm); keywords.push(w); }
   });
@@ -1546,7 +1549,7 @@ async function searchKeywords(query) {
   var kwList = [];
   for (var ki = 0; ki < Math.min(keywords.length, 10); ki++) {
     // 제외어(#173)는 조회하지 않는다 — 흔한 말은 임의 청크를 데려온다. 점수 계산에서는 그대로 센다.
-    if (keywords[ki].length >= 2 && !isTitleStop(keywords[ki], query)) kwList.push(keywords[ki]);
+    if (keywords[ki].length >= 2 && !isTitleStop(keywords[ki], kq)) kwList.push(keywords[ki]);
   }
   var kwRows = kwList.length
     ? await metaRpc('search_chunks_keywords', { p_keywords: kwList, p_per_kw: 4 })
@@ -1611,7 +1614,7 @@ async function searchKeywords(query) {
   // results의 _score(키워드)·_hybrid_score(융합)를 채우고 채택분(순위순, 문서당 상한·전체 15)을 돌려준다. 규칙 설명도 그 파일에.
   // 약관 게이트 ⓐ(#312-보론) — 질문 원문에 약관 낱말이 없으면 약관 행을 순위 매기기 전에 뺀다(상위 15·상한 구제 둘 다 약관 없이)
   results = yakDropRows(results, yakGate(query));
-  var picked = RagCore.rankChunks(results, keywords, baseKeywords, query);
+  var picked = RagCore.rankChunks(results, keywords, baseKeywords, kq);
   // 문서당 상한 때문에만 빠진 조문·별표 후보(L1′ 상한 구제, #283)는 spill에 따로 붙인다 — 채택분(배열 자체)은 그대로라
   // 자문 밖의 호출측(용어·관계도 등)은 영향이 없다. 자문(buildAdvisoryContext)만 읽는다. rag.ts searchChunks와 동일 유지.
   picked.spill = RagCore.capSpill(results);
@@ -1633,10 +1636,12 @@ async function searchKeywords(query) {
 // ② 조문번호(article_no) 있는 청크만 보고 ③ .pdf/.md 등 파일 문서를 제외한 뒤
 // ④ 행위(조문 표제어)와 주제(문서명)를 분리해 점수를 매긴다.
 // 점수 규칙은 rag.ts와 동일하게 유지할 것 — 한쪽만 고치면 봇과 대시보드 답이 갈라진다.
-async function searchLawArticles(query, limit) {
+// kwQuery = 낱말 자리에만 쓸 글(자문의 끝 요청어 뗀 질문, #330) — 없으면 query. 확장·약관 게이트는 query.
+async function searchLawArticles(query, limit, kwQuery) {
   if (!sb) return [];
   limit = limit || 5;
-  var base = extractKeywords(query);
+  var kq = kwQuery || query;
+  var base = extractKeywords(kq);
   var expanded = await expandQueryKeywords(query);
 
   var seenNorm = new Set();
@@ -1647,7 +1652,7 @@ async function searchLawArticles(query, limit) {
   };
   // 표제어(LAW_SYNONYMS)를 확장어보다 앞에 — 아래 slice(0,10) 상한에서 잘리면 안 된다
   base.forEach(push);
-  lawSynonymKeywords(query).forEach(push);
+  lawSynonymKeywords(kq).forEach(push);
   expanded.forEach(push);
   if (!keywords.length) return [];
 
@@ -1669,7 +1674,7 @@ async function searchLawArticles(query, limit) {
   // 행위 가중은 어휘의 출처로 차등한다: LAW_SYNONYMS 출신(정책어→법령표제어로 '번역'된 말,
   // 예: 종료→휴업·폐업)은 7, 그 외(질문 원어·LLM 확장)는 5. 원어가 조문 제목에 우연히
   // 있는 경우('조난통신 종료 통보')는 대개 다른 제도라, 번역된 표제어보다 낮게 본다.
-  var tw = RagCore.titleActWeights(keywords, query);   // 제외어(#173) 뺀 조회 키워드 + 행위 가중(사전 출신 7·그 외 5) — rag_core.js
+  var tw = RagCore.titleActWeights(keywords, kq);   // 제외어(#173) 뺀 조회 키워드 + 행위 가중(사전 출신 7·그 외 5) — rag_core.js
   var kwActive = tw.kwActive, actOf = tw.actOf;
   var lawRows = kwActive.length
     ? await metaRpc('search_law_articles_kw', { p_keywords: kwActive, p_title_limit: 40, p_content_limit: 10 })
@@ -1684,7 +1689,7 @@ async function searchLawArticles(query, limit) {
   });
 
   // 주제 점수(부분문자열)·정렬(점수→법령 위계→문서명·조문번호)·같은 조문 대표 1건·상한 — rag_core.js rankLawHits (#215)
-  return RagCore.rankLawHits(acc.values(), query, limit);
+  return RagCore.rankLawHits(acc.values(), kq, limit);
 }
 
 async function fetchLawTrackContext() {
@@ -3050,7 +3055,11 @@ async function buildAdvisoryContext(userText) {
   const pnDocsP     = sb ? fetchNewLawDocs() : Promise.resolve([]);
   pnDocsP.catch(function() {});   // 거부는 두 소비자가 각자 처리 — 처리기 없는 거부로 남지 않게
   // 조문 정밀검색 (rag.ts answerAdvisory와 동일 계층) — RAG가 논문·보도자료에 밀려 놓친 근거 조문 보강
-  const lawArtP     = searchLawArticles(userText, 5).catch(function(e) { console.warn('조문 정밀검색 실패(건너뜀):', e); return []; });
+  // 질문 끝 요청어(「…가이드라인 확인」의 「확인」)는 두 검색(조문 정밀검색·조문 RAG)의 낱말 자리에서만 뗀다(#330, rag_core.js stripRequestTail) —
+  // 확장·trgm·의미검색·약관 게이트·지목 조문·뉴스·주제 구역은 질문 원문. search_meta에는 뗀 때만 한 줄. rag.ts buildAdvisoryContext와 동일 유지.
+  const reqCut      = RagCore.stripRequestTail(userText);
+  if (reqCut.tail && lastAdvSearchMeta) lastAdvSearchMeta.push({ fn: 'req_tail', ms: 0, rows: null, error: null, tail: reqCut.tail });
+  const lawArtP     = searchLawArticles(userText, 5, reqCut.text).catch(function(e) { console.warn('조문 정밀검색 실패(건너뜀):', e); return []; });
   // 조문 **의미** 검색 (#89) — 봇 /law에는 있는데 자문(봇·대시보드 양쪽)에만 없던 갈래.
   // 어휘가 어긋나면 키워드로는 못 넘는다. 실측: 「기지국 개설 허가 절차」의 키워드 5개는
   // 해상무선통신망 제12조·전파관리 세칙 제27조(민원)로 새고 정답인 전파법 21조를 못 찾았고,
@@ -3127,7 +3136,7 @@ async function buildAdvisoryContext(userText) {
   lastRagSources = [];
   lastWebSources = [];
   lastAdvChunkIds = [];
-  var ragChunks = await searchKeywords(userText);
+  var ragChunks = await searchKeywords(userText, reqCut.text);
   if (ragChunks.length > 0) {
     lastRagSources = ragChunks.map(function(c) { return c.doc_name; });
     console.log('RAG 검색 결과:', ragChunks.length + '개 청크 (' + lastRagSources.join(', ') + ')');

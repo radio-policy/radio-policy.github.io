@@ -123,7 +123,8 @@ interface Chunk {
 // 함수에 넘기고 answerAdvisory가 chat_logs.search_meta에 남긴다. 모듈 전역이 아니라 인자로 넘기는 이유:
 // Edge isolate는 요청을 동시에 처리하므로 전역이면 두 자문의 기록이 섞인다. app.js metaRpc와 같은 형식.
 export type SearchMeta = { fn: string; ms: number; rows: number | null; error: string | null; trimmed?: number; capped?: boolean; addendum?: number; apply?: number; gate?: string | null; docs?: number; pending?: number; top?: number | null; chars?: number; approved?: boolean | string | null; ids_cut?: number;
-  names?: string[]; scores?: number[]; raw?: number[]; present?: string[]; best?: number; bestRaw?: number; cands?: number; blocked?: boolean }[];   // names…blocked = 관련 법령 체계(#329)
+  names?: string[]; scores?: number[]; raw?: number[]; present?: string[]; best?: number; bestRaw?: number; cands?: number; blocked?: boolean;   // names…blocked = 관련 법령 체계(#329)
+  tail?: string }[];   // tail = 질문 끝에서 뗀 요청어(#330, fn 'req_tail')
 // 약관 게이트 행(#312-보론)은 RagCore.yakGateNote가 넣는 { fn: 'yak_gate', pass, words, dropped[, mode] } — ms·rows·error 없음(app.js와 같은 꼴)
 type RpcResult = { data?: unknown; error?: { code?: string; message?: string } | null } | null;
 function metaRpc(sb: SupabaseClient, meta: SearchMeta | undefined, fn: string, params: Record<string, unknown>) {
@@ -139,8 +140,10 @@ function metaRpc(sb: SupabaseClient, meta: SearchMeta | undefined, fn: string, p
 
 // ── 3중 하이브리드 조문 검색 (app.js searchKeywords 이식, 상위 15개) ──
 // expandP = 이미 띄운 Haiku 확장(buildAdvisoryContext가 질문당 한 번 띄워 searchLawArticles와 나눈다 — 장동선 판정 §4-3 C2-a). 없으면 여기서 부른다.
-async function searchChunks(sb: SupabaseClient, apiKey: string, query: string, meta?: SearchMeta, expandP?: Promise<string[]>): Promise<Chunk[]> {
-  const baseKeywords = extractKeywords(query);
+// kwQuery = 낱말 자리에만 쓸 글(자문의 끝 요청어 뗀 질문, #330 rag_core.js stripRequestTail) — 없으면 query. 확장·trgm·의미검색·약관 게이트는 query.
+async function searchChunks(sb: SupabaseClient, apiKey: string, query: string, meta?: SearchMeta, expandP?: Promise<string[]>, kwQuery?: string): Promise<Chunk[]> {
+  const kq = kwQuery || query;
+  const baseKeywords = extractKeywords(kq);
   // trgm·시맨틱은 확장어를 쓰지 않으므로 Haiku 확장을 **기다리지 않고 먼저** 시작한다(B-2, #201, 2026-09-24).
   // trgm 5~6초(#185, SQL로는 못 줄임)와 임베딩 왕복이 확장 1~2초와 겹친다. 병합 순서는 아래에서 고정하므로 결과 동일.
   // only_current 명시 — 기본값에 기대면 status 필터 없는 오버로드로 조용히 해석될 수 있음(배경역사 #31 후속)
@@ -155,7 +158,7 @@ async function searchChunks(sb: SupabaseClient, apiKey: string, query: string, m
   // 기본 → 법령 표제어(LAW_SYNONYMS) → LLM 확장 순 (app.js searchKeywords와 동일 유지)
   const keywords: string[] = [];
   const seenKw = new Set<string>();
-  for (const w of baseKeywords.concat(lawSynonymKeywords(query)).concat(expanded)) {
+  for (const w of baseKeywords.concat(lawSynonymKeywords(kq)).concat(expanded)) {
     const norm = w.replace(/\s+/g, '').toLowerCase();
     if (norm.length >= 2 && !seenKw.has(norm)) { seenKw.add(norm); keywords.push(w); }
   }
@@ -166,7 +169,7 @@ async function searchChunks(sb: SupabaseClient, apiKey: string, query: string, m
   // 질문 키워드를 많이 담은 청크 → 그 키워드가 조문 제목에 있는 청크 → 조문(제N조) → id, 앞 키워드가 집은 청크는 뒤 키워드가 다시
   // 집지 않는다(키워드당 새 청크 4건). 승인·current 필터는 RPC 안. 제외어(#173)는 조회하지 않는다('직접'은 1,470청크에 있어
   // 임의 청크를 데려온다) — 점수 계산에서는 그대로 센다. app.js searchKeywords와 동일 유지.
-  const kwList = keywords.slice(0, 10).filter((kw) => !isTitleStop(kw, query));
+  const kwList = keywords.slice(0, 10).filter((kw) => !isTitleStop(kw, kq));
   type KwRow = Chunk & { kw_ord?: number };
   const kwRows: KwRow[] = kwList.length
     ? await metaRpc(sb, meta, 'search_chunks_keywords', { p_keywords: kwList, p_per_kw: 4 })
@@ -198,7 +201,7 @@ async function searchChunks(sb: SupabaseClient, apiKey: string, query: string, m
   // 문서당 상한 때문에만 빠진 조문·별표 후보(L1′ 상한 구제, #283)는 spill에 따로 붙여 돌려준다 — 채택분(배열 자체)은 그대로.
   // 약관 게이트 ⓐ(#312-보론) — 질문 원문에 약관 낱말이 없으면 약관 행을 순위 매기기 전에 뺀다(상위 15·상한 구제 둘 다 약관 없이)
   const gated = yakDropRows(results, query, meta);
-  const picked = RagCore.rankChunks(gated, keywords, baseKeywords, query) as Chunk[] & { spill?: Chunk[] };
+  const picked = RagCore.rankChunks(gated, keywords, baseKeywords, kq) as Chunk[] & { spill?: Chunk[] };
   picked.spill = RagCore.capSpill(gated) as Chunk[];
   return picked;
 }
@@ -587,9 +590,11 @@ const isTitleStop: (kw: string, query: string) => boolean = RagCore.isTitleStop;
 const lawRank: (docName: string | undefined) => number = RagCore.lawRank;
 
 // expandP = 자문(buildAdvisoryContext)이 searchChunks와 나누는 확장 — /law(buildLawQueryContext)는 넘기지 않아 여기서 부른다
-export async function searchLawArticles(sb: SupabaseClient, query: string, limit = 5, meta?: SearchMeta, expandP?: Promise<string[]>): Promise<LawHit[]> {
+// kwQuery = 낱말 자리에만 쓸 글(자문의 끝 요청어 뗀 질문, #330) — 없으면 query. 확장·약관 게이트는 query.
+export async function searchLawArticles(sb: SupabaseClient, query: string, limit = 5, meta?: SearchMeta, expandP?: Promise<string[]>, kwQuery?: string): Promise<LawHit[]> {
   const apiKey = env('ANTHROPIC_API_KEY');
-  const base = extractKeywords(query);
+  const kq = kwQuery || query;
+  const base = extractKeywords(kq);
   const expanded = expandP ? await expandP : apiKey ? await expandQueryKeywords(apiKey, query, sb) : [];   // 키 없으면 기본 키워드만(페일소프트)
 
   const seen = new Map<string, boolean>();
@@ -601,7 +606,7 @@ export async function searchLawArticles(sb: SupabaseClient, query: string, limit
   // 기본 → 법령 표제어(LAW_SYNONYMS) → LLM 확장 순 — 표제어가 아래 slice(0,10) 상한에서
   // 확장어에 밀려 잘리면 안 된다(어휘 간극은 LLM이 못 메운다). app.js searchLawArticles와 동일 순서.
   base.forEach(push);
-  lawSynonymKeywords(query).forEach(push);
+  lawSynonymKeywords(kq).forEach(push);
   expanded.forEach(push);
   if (!keywords.length) return [];
 
@@ -630,7 +635,7 @@ export async function searchLawArticles(sb: SupabaseClient, query: string, limit
   // (실측: 이 차등이 없으면 "3G 종료"에서 선박국 운용종료·조난통신 조문이
   //  전기통신사업법 19조(사업의 휴업·폐업)·전파법 25조의2를 밀어낸다)
   // 제외어(#173) 뺀 조회 키워드 + 행위 가중(사전 출신 7·그 외 5) — rag_core.js titleActWeights
-  const { kwActive, actOf }: { kwActive: string[]; actOf: number[] } = RagCore.titleActWeights(keywords, query);
+  const { kwActive, actOf }: { kwActive: string[]; actOf: number[] } = RagCore.titleActWeights(keywords, kq);
   type LawRow = { kw_ord: number; hit_col: string; id: number; doc_name: string; article_no?: string; content: string };
   const lawRows: LawRow[] = kwActive.length
     ? await metaRpc(sb, meta, 'search_law_articles_kw', { p_keywords: kwActive, p_title_limit: 40, p_content_limit: 10 })
@@ -642,7 +647,7 @@ export async function searchLawArticles(sb: SupabaseClient, query: string, limit
   }
 
   // 주제 점수(부분문자열)·정렬(점수→법령 위계→문서명·조문번호)·같은 조문 대표 1건·상한 — rag_core.js rankLawHits (#215)
-  return RagCore.rankLawHits(acc.values(), query, limit) as LawHit[];
+  return RagCore.rankLawHits(acc.values(), kq, limit) as LawHit[];
 }
 
 // ── /law 자연어 모드 — 법령 한정 답변 (2026-08-03) ──
@@ -1385,7 +1390,11 @@ export async function buildAdvisoryContext(sb: SupabaseClient, question: string)
   // Haiku 확장은 질문당 한 번 — 조문 RAG(searchChunks)와 조문 정밀검색(searchLawArticles)이 같은 확장어를 쓴다(장동선 판정 §4-3 C2-a, 2026-10-15).
   // 종전엔 두 갈래가 각자 불러 같은 질문에 다른 확장어를 받았다(대시보드 _expandCache·회귀 하네스는 이미 1회). 키 없으면 확장 없이(페일소프트).
   const expandP: Promise<string[]> = apiKey ? expandQueryKeywords(apiKey, question, sb) : Promise.resolve([]);
-  const lawP = searchLawArticles(sb, question, 5, meta, expandP);
+  // 질문 끝 요청어(「…가이드라인 확인」의 「확인」)는 두 검색의 낱말 자리에서만 뗀다(#330, rag_core.js stripRequestTail) — 그 밖은 질문 원문.
+  // search_meta에는 뗀 때만 한 줄(tail). app.js buildAdvisoryContext와 동일 유지.
+  const reqCut: { text: string; tail: string } = RagCore.stripRequestTail(question);
+  if (reqCut.tail) meta.push({ fn: 'req_tail', ms: 0, rows: null, error: null, tail: reqCut.tail });
+  const lawP = searchLawArticles(sb, question, 5, meta, expandP, reqCut.text);
   // 조문 **의미** 검색 (#89) — /law에는 있는데 자문에만 없던 갈래. 어휘가 어긋나면 키워드는 못 넘는다.
   // 실측(자문 경로): 「기지국 개설 허가 절차」의 키워드 5개는 해상무선통신망 제12조·전파관리 세칙
   // 제27조(민원)로 새고 정답인 전파법 21조(무선국 개설허가 등의 절차)를 못 찾았다. 「주파수 재할당
@@ -1428,7 +1437,7 @@ export async function buildAdvisoryContext(sb: SupabaseClient, question: string)
   // 사업자 이용약관 구역(#312-보론2, (D)) — 질문 원문에 약관 낱말이 있을 때만(게이트 mode와 무관) 비공개 약관 문서 안에서 조를 골라 시행 전 제정 법령 구역 바로 뒤에.
   // 다른 갈래와 독립 — 기다리지 않는다. 다른 구역의 입력·restLen에는 넣지 않는다. app.js buildAdvisoryContext와 동일 유지.
   const yakP = startYakSection(sb, question, meta);
-  const chunks = await searchChunks(sb, apiKey, question, meta, expandP);
+  const chunks = await searchChunks(sb, apiKey, question, meta, expandP, reqCut.text);
   // 질문 임베딩 — 별표 조각 동점 가르기(별표 동반·덧붙이기 별표 칸, 장동선 판정 §4-7)에 넘긴다. searchChunks와 같은 (모델, 글)이라 기억에서 나온다(Voyage 추가 0).
   const qEmbP = getQueryEmbedding(question);
   const [kb, news, lawHits, lawSem, asm, named] = [await kbP, await newsP, await lawP, await lawSemP, await asmP, await namedP];

@@ -50,7 +50,9 @@ var NAMES = ['PRIORITY_KW_RE', 'VERB_TAIL', 'extractKeywords', 'LAW_SYNONYMS', '
   'YAK_SECTION_OPTS', 'pickYakArticles', 'buildYakContext', 'fetchYakSection',
   // 관련 법령 체계(관계도 주제, #329)
   'TOPIC_OPTS', 'topicArtRe', 'topicBases', 'topicGraph', 'pickTopics', 'topicPresentFams', 'buildTopicContext', 'fetchTopics',
-  'topicDf', 'scoreTopics', 'topicSibling'];
+  'topicDf', 'scoreTopics', 'topicSibling',
+  // 질문 끝 요청어 떼기(#330)
+  'REQ_TAIL_OPTS', 'REQ_CORE', 'stripRequestTail'];
 NAMES.forEach(function (n) { ok('export ' + n, RC[n] !== undefined); });
 
 // ── 법령 키워드 추출 ──
@@ -528,6 +530,40 @@ var addOnTests = (async function () {
   eq('pickAnnexChunks 유사도 칸 없으면(임베딩·RPC 실패 → 종전 조회) 종전 순서: 적중 수 → 번호', cis(RC.pickAnnexChunks(mk(null, [6, 7]), '이용자 금지')), [268, 269, 270, 271, 274, 275]);
   ok('pickAnnexChunks 유사도 없는 조각은 같은 적중 안에서 유사도 있는 조각 뒤', cis(RC.pickAnnexChunks(mk([0.5, null, null, null, null, 0.3, 0.3, 0.3, 0.3], []), 'x')).join() === '268,269,273,274,275,276');
   eq('annexBlock도 pickAnnexChunks로 고르고 cis(chunk_index)를 함께 돌려줌', RC.annexBlock(R, '4', mk(S, []), '거짓 과장 모집').cis, [268, 269, 271, 273, 274, 275]);
+})();
+
+// ── 질문 끝 요청어 떼기(#330, 사내 bafffd75 (a) 글자 그대로) ──
+(function () {
+  var S = function (q) { var r = RC.stripRequestTail(q); return [r.text, r.tail]; };
+  eq('stripRequestTail 끝 「확인」(사내 사례 꼴)', S('방송통신 결합판매 관련 고시 및 가이드라인 확인'), ['방송통신 결합판매 관련 고시 및 가이드라인', '확인']);
+  eq('stripRequestTail 「알려줘」·「확인해줘」', [S('전파법 제16조 알려줘'), S('이 검토안의 근거 조문이 맞는지 확인해줘')],
+    [['전파법 제16조', '알려줘'], ['이 검토안의 근거 조문이 맞는지', '확인해줘']]);
+  // 「필요함」처럼 꼬리말 둘이 이어지면 사내 정규식도 떼지 않는다(꼬리말은 하나만) — 글자 그대로 옮긴 동작이라 같게 둔다
+  eq('stripRequestTail 꼬리말(부탁드립니다·해 주세요·요청·필요·바랍니다), 「필요함」은 안 뗌', [S('금지행위 관련 규정 검토 부탁드립니다.'), S('이용약관 정리해 주세요'), S('요금 인가 및 신고 확인 요청'),
+    S('기술기준 확인 필요'), S('결합판매 고시 확인해 주시기 바랍니다'), S('기술기준 확인 필요함')],
+    [['금지행위 관련 규정', '검토 부탁드립니다'], ['이용약관', '정리해 주세요'], ['요금 인가 및 신고', '확인 요청'], ['기술기준', '확인 필요'], ['결합판매 고시', '확인해 주시기 바랍니다'], ['기술기준 확인 필요함', '']]);
+  eq('stripRequestTail 되풀이(「검토 확인」·「정리, 요약해줘」)', [S('약관 검토 확인'), S('과징금 내역 정리, 요약해줘')], [['약관', '검토 확인'], ['과징금 내역', '정리, 요약해줘']]);
+  eq('stripRequestTail 안 뗌 — 가운데·합성어·남는 글 없음', [S('사실 확인 절차는?'), S('본인확인 기관 지정'), S('확인'), S('검토 확인'), S('확인서 발급 확인서')],
+    [['사실 확인 절차는?', ''], ['본인확인 기관 지정', ''], ['확인', ''], ['검토', '확인'], ['확인서 발급 확인서', '']]);
+  eq('stripRequestTail 뗀 것 없으면 원문 그대로(끝 공백까지 — 종전과 바이트 같음)', S('전파법 제16조 '), ['전파법 제16조 ', '']);
+  RC.REQ_TAIL_OPTS.on = false;
+  eq('stripRequestTail REQ_TAIL_OPTS.on = false → 원문 그대로', S('가이드라인 확인'), ['가이드라인 확인', '']);
+  RC.REQ_TAIL_OPTS.on = true;
+  ok('stripRequestTail 뒤보기(?<=) 안 씀 — 옛 Safari(#290)', !/\(\?<[=!]/.test(fs.readFileSync(path.join(ROOT, 'supabase', 'functions', '_shared', 'rag_core.js'), 'utf8').split('const REQ_TAIL_OPTS')[1].split('function stripRequestTail')[0]));
+  // 두 판 조립 — 뗀 글은 두 검색(정밀검색·조문 RAG)의 낱말 자리에만. 확장·trgm·의미검색·약관 게이트는 원문. 한쪽만 고치지 말 것
+  var app = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8');
+  var ragTs = fs.readFileSync(path.join(ROOT, 'supabase', 'functions', '_shared', 'rag.ts'), 'utf8');
+  var n = function (s, re) { return (s.match(re) || []).length; };
+  var body = function (s, head) { var i = s.indexOf(head); var j = s.indexOf('\n}\n', i); return i < 0 ? '' : s.slice(i, j); };
+  eq('app.js 요청어 — 한 번 떼어 두 검색에만', [n(app, /RagCore\.stripRequestTail\(/g), n(app, /searchLawArticles\(userText, 5, reqCut\.text\)/g), n(app, /searchKeywords\(userText, reqCut\.text\)/g)], [1, 1, 1]);
+  eq('rag.ts 요청어 — 한 번 떼어 두 검색에만', [n(ragTs, /RagCore\.stripRequestTail\(/g), n(ragTs, /searchLawArticles\(sb, question, 5, meta, expandP, reqCut\.text\)/g), n(ragTs, /searchChunks\(sb, apiKey, question, meta, expandP, reqCut\.text\)/g)], [1, 1, 1]);
+  var aK = body(app, 'async function searchKeywords('), aL = body(app, 'async function searchLawArticles('), tC = body(ragTs, 'async function searchChunks('), tL = body(ragTs, 'export async function searchLawArticles(');
+  eq('app.js 두 검색 — 확장·trgm·의미검색·약관 게이트는 query, 낱말 자리는 kq', [/expandQueryKeywords\(query\)/.test(aK), /query_text: query,/.test(aK), /getQueryEmbedding\(query\)/.test(aK), /yakGate\(query\)/.test(aK),
+    /extractKeywords\(kq\)/.test(aK), /rankChunks\(results, keywords, baseKeywords, kq\)/.test(aK), /expandQueryKeywords\(query\)/.test(aL), /yakGate\(query\)/.test(aL), /titleActWeights\(keywords, kq\)/.test(aL), /rankLawHits\(acc\.values\(\), kq, limit\)/.test(aL)],
+    [true, true, true, true, true, true, true, true, true, true]);
+  eq('rag.ts 두 검색 — 확장·trgm·의미검색·약관 게이트는 query, 낱말 자리는 kq', [/query_text: query,/.test(tC), /getQueryEmbedding\(query\)/.test(tC), /yakDropRows\(results, query, meta\)/.test(tC),
+    /extractKeywords\(kq\)/.test(tC), /rankChunks\(gated, keywords, baseKeywords, kq\)/.test(tC), /expandQueryKeywords\(apiKey, query, sb\)/.test(tL), /yakDropRows\(lawRows, query, meta\)/.test(tL), /titleActWeights\(keywords, kq\)/.test(tL), /rankLawHits\(acc\.values\(\), kq, limit\)/.test(tL)],
+    [true, true, true, true, true, true, true, true, true]);
 })();
 
 // 확장 지시문은 두 파일(rag.ts expandQueryKeywords · app.js _expandQueryKeywordsRaw)에 같은 글로 — rag_core.js 헌장상 상수로 올리지 않고 글자 동일성으로 묶는다(장동선 판정 §4-3)

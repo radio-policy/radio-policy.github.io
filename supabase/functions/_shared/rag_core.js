@@ -63,6 +63,40 @@
     return all.filter(function (v, i, a) { return a.indexOf(v) === i; }).slice(0, 5);
   }
 
+  // ── 질문 끝 요청어 떼기 (#330, 2026-10-30 — 사내 bafffd75 (a)를 글자 그대로 옮김) ─────────────────
+  // 사내 실서비스 「…고시 및 가이드라인 확인」에서 끝의 「확인」이 검색 낱말 5칸에 들어, 제목에 「확인」이 든 무관 조문(사실 확인·
+  // 자기적합확인·현장확인)이 하이브리드 15칸 중 12를 차지했다. 질문 **맨 끝**의 요청어 꼴(REQ_CORE + 「좀」·조사·「해/하여/해서/하고」·
+  // 「줘/주세요/…」·「바람/요망/부탁/요청/필요/요/함/가능」, 「알려 줘」류)만 되풀이해 떼고(「및」·「등」에서 멈춤), 남는 글이 없으면
+  // 떼지 않는다. 가운데·합성어(사실 확인 절차·본인확인·확인서)는 그대로. 뗀 글은 **두 검색의 낱말 자리에만** 쓴다 — 조문 정밀검색
+  // (searchLawArticles)과 조문 RAG(searchChunks/searchKeywords)의 extractKeywords·대응표·제외어·순위(rankChunks·titleActWeights·
+  // rankLawHits). 확장어·trgm·의미검색·약관 게이트·지목 조문·뉴스·주제 구역·지시문은 질문 원문.
+  // 외부 측정(10-30): extractKeywords가 앞 5낱말만 쓰므로 꼬리가 낱말에 드는 건 짧은 질문뿐 — 실제 질문 120 중 0, 측정 세트 71 중 1(i13).
+  // rankLawHits는 질문 원문의 2~3글자 낱말을 제목 가점에 쓰므로 맨몸 「확인」이 끝에 오면(r01) 그 길로도 바뀐다.
+  // 기각: QUERY_TITLE_STOP에 「확인」(사내 d) — 정확히 같은 낱말만 막아 「확인해줘」를 못 잡고(외부 120·71 변화 0), isTitleStop을 쓰는
+  // 덧붙이기 낱말 문(L8·L9)까지 넓어진다. 뒤보기(?<=)는 쓰지 않는다(옛 Safari에서 파일 전체가 안 읽힌다, #290) — 앞 구분자를 잡고
+  // 시작 위치를 그만큼 옮긴다(사내 정규식과 같은 위치). 끄기 = REQ_TAIL_OPTS.on = false(원문 그대로 = 종전과 바이트 같음).
+  const REQ_TAIL_OPTS = { on: true };
+  const REQ_CORE = ['확인', '검토', '정리', '요약', '안내', '문의', '질문'];
+  const REQ_TAIL_SRC = /(?:\s*(?:을|를)?\s*(?:해|하여|해서|하고)?\s*(?:줘요|줘|주세요|주십시오|주실래요|줄래|주시기\s*바랍니다|주시기\s*바람|주기\s*바람|주면\s*좋겠어|싶어요|싶어|싶습니다|싶음)?)?(?:\s*(?:바람|바랍니다|요망|부탁(?:드립니다|드려요|해요|합니다|함)?|요청(?:드립니다|함)?|필요|요|함|가능))?/.source;
+  const REQ_END_RE = new RegExp('(^|[\\s,·])((?:좀\\s*)?(?:' + REQ_CORE.join('|') + ')' + REQ_TAIL_SRC + '[\\s.?!~]*)$');
+  const REQ_TELL_RE = /(^|[\s,·])((?:좀\s*)?알려\s*(?:줘요|줘|주세요|주십시오|줄래|주시기\s*바랍니다)[\s.?!~]*)$/;
+  // 돌려줌 { text, tail } — 뗀 것이 없거나 꺼져 있으면 text = 질문 원문 그대로(끝 공백 포함), tail = ''.
+  function stripRequestTail(question) {
+    const q = String(question || '');
+    if (!REQ_TAIL_OPTS.on) return { text: q, tail: '' };
+    let s = q.replace(/\s+$/, '');
+    const orig = s;
+    for (;;) {
+      const m = REQ_END_RE.exec(s) || REQ_TELL_RE.exec(s);
+      if (!m) break;
+      const at = m.index + m[1].length;
+      if (!s.slice(0, at).trim()) break;
+      s = s.slice(0, at).replace(/[ ,·]+$/, '');
+    }
+    if (s.length === orig.length) return { text: q, tail: '' };
+    return { text: s, tail: orig.slice(s.length).replace(/^[ ,·]+|[ ,·]+$/g, '').replace(/[ .?!~]+$/, '') };
+  }
+
   // ── 정책 어휘 → 법령 조문 표제어 대응표 ─────────────────────────────────
   // LLM 확장만으로는 이 간극을 못 넘는다(실측: Haiku·Sonnet 모두 "3G 종료"에서 '휴업·폐업'을 못 냄).
   // 법은 '서비스 종료'라 쓰지 않는다 — 전기통신사업법은 '휴업·폐업', 전파법은 '폐지·운용휴지'다.
@@ -2223,6 +2257,7 @@
 
   const RagCore = {
     PRIORITY_KW_RE: PRIORITY_KW_RE, VERB_TAIL: VERB_TAIL, extractKeywords: extractKeywords,
+    REQ_TAIL_OPTS: REQ_TAIL_OPTS, REQ_CORE: REQ_CORE, stripRequestTail: stripRequestTail,
     LAW_SYNONYMS: LAW_SYNONYMS, PRACTICE_TERMS: PRACTICE_TERMS,
     lawSynonymKeywords: lawSynonymKeywords, expandQueryForSemantic: expandQueryForSemantic,
     LAW_TERM_SYNONYMS: LAW_TERM_SYNONYMS, LAW_TERM_MAX: LAW_TERM_MAX, lawTermKeywords: lawTermKeywords,   // L5′(#289)
