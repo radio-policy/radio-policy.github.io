@@ -2050,7 +2050,8 @@
   //     미수록 문서가 「자료 안」으로 잡혀 #288 ⓒ(검색 자료 밖 조문 대조)가 막힌다. 출처 칸은 배지용 「관계도 주제: X」만. 지시문은 구역 안 [사용 지침]뿐.
   //  각 파일은 f.graph()(주제 노드·주제에 닿는 엣지·그 끝 노드 원본 행, 페이지·isolate당 1회 캐시)만 댄다. 끄려면 on=false.
   //  상수·문안·고르기·줄 순서를 바꾸기 전 사내판에 먼저 알린다(파이썬 1:1 이식·parity 시험).
-  const TOPIC_OPTS = { on: false, rawNeed: 2, need: 2.0, margin: 2.0, siblingJaccard: 0.5, max: 1, halfRule: true, maxChars: 3000 };
+  //  켬: 2026-10-30 운영자 결정(#329-보론2 — 사내는 10-29 켬). 1주 뒤 실제 답 훑기·4주 집계(search_meta topics) 뒤 다시 본다.
+  const TOPIC_OPTS = { on: true, rawNeed: 2, need: 2.0, margin: 2.0, siblingJaccard: 0.5, max: 1, halfRule: true, maxChars: 3000 };
   const TOPIC_EPS = 1e-9;
   const TOPIC_TYPE_RANK = { law: 0, decree: 1, rules: 2, notice: 3 };
   function topicFam(node) { return pnNorm(node && node.doc_name ? famOf(node.doc_name) : String((node && node.name) || '').trim()); }
