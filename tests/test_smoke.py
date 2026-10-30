@@ -3297,3 +3297,40 @@ class TestTelegramCmdPrompt(unittest.TestCase):
                 self.assertNotRegex(line, r'<[a-z]+>', line)
         for ph in re.findall(r"placeholder: '([^']*)'", block):
             self.assertLessEqual(len(ph), 64, ph)   # 텔레그램 상한
+
+
+class TestLawSyncInheritsApproval(unittest.TestCase):
+    """새 판·시행예정본·재적재본은 등재본의 검색 공개 여부를 물려받는다(#331, 2026-10-31) — 네트워크 없음"""
+
+    class _Q:
+        def __init__(self, rows):
+            self.rows, self.calls = rows, []
+
+        def table(self, name):
+            self.calls.append(('table', name)); return self
+
+        def select(self, *a):
+            return self
+
+        def eq(self, col, val):
+            self.calls.append(('eq', col, val)); return self
+
+        def limit(self, n):
+            return self
+
+        def execute(self):
+            return mock.Mock(data=self.rows)
+
+    def test_doc_approved(self):
+        import law_sync as L
+        hidden = self._Q([{'id': 1}])
+        self.assertFalse(L._doc_approved(hidden, '인터넷 멀티미디어 방송사업법(법률)(제21677호)(20260519)'))
+        self.assertIn(('eq', 'is_approved', False), hidden.calls)
+        self.assertTrue(L._doc_approved(self._Q([]), '전파법(법률)(제21553호)(20261022)'))
+        self.assertTrue(L._doc_approved(self._Q([{'id': 1}]), None))   # 신규 제정법(기준본 없음)은 공개
+
+    def test_no_hardcoded_approval(self):
+        src = open(os.path.join(_ROOT, 'law_sync.py'), encoding='utf-8').read()
+        code = '\n'.join(l for l in src.splitlines() if not l.lstrip().startswith('#'))
+        self.assertNotRegex(code, r"'is_approved':\s*True")   # 세 삽입 경로 모두 _doc_approved 값으로
+        self.assertEqual(len(re.findall(r"'is_approved':\s*approved", code)), 3)

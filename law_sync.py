@@ -434,6 +434,20 @@ def fetch_existing(sb, law_name, prev_doc_name=None):
     return agg
 
 
+def _doc_approved(sb, doc_name):
+    """그 문서의 검색 공개 여부 — 조각 하나라도 is_approved=false면 비공개(False). 문서가 없으면 True.
+
+    새 판·시행예정본·재적재본은 이 값을 물려받는다(#331, 2026-10-31). 종전엔 세 경로가 공개(is_approved 참)로
+    고정해, 운영자가 검색에서 뺀 법령(IPTV법·소방시설법 — 일반 통신 질문의 검색 자리를 빼앗아 비공개로 둠)이
+    다음 개정 때 저절로 다시 검색에 들어갔다.
+    """
+    if not doc_name:
+        return True
+    r = (sb.table('document_chunks').select('id').eq('doc_name', doc_name)
+         .eq('is_approved', False).limit(1).execute())
+    return not (r.data or [])
+
+
 def sync_one(sb, watch_row, args):
     doc_name = watch_row['doc_name']
     meta = parse_doc_name(doc_name)
@@ -532,14 +546,17 @@ def sync_one(sb, watch_row, args):
         print("  [dry-run] DB 변경 없음")
         return True
 
-    # ① 신규 버전 삽입
+    # ① 신규 버전 삽입 — 공개 여부는 등재본에서 물려받는다(#331)
+    approved = _doc_approved(sb, doc_name)
+    if not approved:
+        print("  · 등재본이 비공개(is_approved=false) — 새 판도 비공개로 넣음")
     now = datetime.now(timezone.utc).isoformat()
     payload = [{
         'doc_name': new_doc, 'doc_category': category, 'chunk_index': i,
         'content': c['content'], 'article_no': c['article_no'],
         'effective_date': enf, 'notice_no': (law_no if target != 'law' else None),
         'law_id': law_id, 'law_mst': mst, 'status': 'current',
-        'is_approved': True,
+        'is_approved': approved,
     } for i, c in enumerate(chunks)]
     # 삽입 검증 포함 — 부분 삽입이 '완료'로 위장되는 것을 막는다(어긋나면 RuntimeError)
     kb_store.insert_chunks(sb, payload)
@@ -712,12 +729,13 @@ def load_pending_one(sb, row, args):
         return True
 
     category = '법령' if target == 'law' else '고시'
+    approved = _doc_approved(sb, row.get('watch_doc_name'))   # 현행 등재본의 공개 여부를 물려받는다(#331)
     payload = [{
         'doc_name': new_doc, 'doc_category': category, 'chunk_index': i,
         'content': c['content'], 'article_no': c['article_no'],
         'effective_date': enf, 'notice_no': (law_no if target != 'law' else None),
         'law_id': law_id, 'law_mst': mst, 'status': 'pending',
-        'is_approved': True,
+        'is_approved': approved,
     } for i, c in enumerate(chunks)]
     kb_store.insert_chunks(sb, payload)   # 삽입 검증 포함(#218 — 종전엔 이 경로만 검증이 없었다)
     print(f"  ✓ 시행예정본 등재 {len(payload)}청크 (status=pending — 자문 검색 제외, 검증 완료)")
@@ -957,6 +975,7 @@ def reingest_one(sb, doc_name, args):
              .eq('doc_name', doc_name).limit(1).execute().data) or [{}])[0]
     category = prev.get('doc_category') or ('법령' if target == 'law' else '고시')
     already_api = bool(prev.get('law_id'))
+    approved = _doc_approved(sb, doc_name)   # 개명 전에 읽는다 — 재적재본도 공개 여부를 물려받는다(#331)
 
     # ⚠ 순서가 중요하다. 구본을 먼저 내리고 신본을 넣으면, 삽입이 중간에 실패했을 때
     # (statement timeout 등) 그 법령의 현행 청크가 0이 되어 자문에서 통째로 사라진다.
@@ -994,7 +1013,7 @@ def reingest_one(sb, doc_name, args):
         'doc_name': new_doc, 'doc_category': category, 'chunk_index': i,
         'content': c['content'], 'article_no': c['article_no'],
         'effective_date': enf, 'notice_no': (law_no if target != 'law' else None),
-        'law_id': law_id, 'law_mst': mst, 'status': 'current', 'is_approved': True,
+        'law_id': law_id, 'law_mst': mst, 'status': 'current', 'is_approved': approved,
     } for i, c in enumerate(chunks)]
     # 삽입 검증 포함 — 배치 중간에 statement timeout이 나면 앞부분만 들어가고 예외가 나는데,
     # 예외를 삼키는 상위 루프가 있으면 "부분 삽재"가 완료로 위장된다. 실제로 대한민국

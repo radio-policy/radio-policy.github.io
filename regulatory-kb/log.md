@@ -8,3 +8,5 @@
 - 2026-07-02: 확장 4차. 전파법 하위 행정규칙 55건 추가 — wireless-notices 25(무선국·종사자·해상/항공/재난), conformity-assessment 15(적합성평가·시험기관·MRA), emf-notices 10(전자파 인체보호·EMC·SAR), radio-admin-notices 5(전파관리·감시·응용설비). 중복 45건(방발법·정보통신망법·주파수·추가법령·단말장치 등)은 dedup으로 스킵. manifest 103개 법령.
 - 2026-07-02: 용어집 동기화. 재정·조직·산업 / 주파수·무선 행정 / 적합성평가·전자파 3개 섹션(19개 용어) 추가 — 2~4차 확장 법령군 반영.
 - 2026-07-02: KB 명칭 변경 "전파법 KB" → "법령 Knowledge Base" (오입력 정정). index.md·upload-plan.md·kb_scaffold_and_templates.md·app/regulatory-kb/index.md 반영. 앱 제품명("전파정책 AI")은 유지.
+- 2026-10-30: 신규 3법 5건 추가 — 대리점거래의 공정화에 관한 법률·시행령(agency-fair-trade-act), 인터넷 멀티미디어 방송사업법·시행령(iptv-act), 소방시설 설치 및 관리에 관한 법률(fire-facilities-act). 조문 원문은 add_laws_batch.py L절로 document_chunks에 적재. manifest 337개.
+- 2026-10-31: IPTV법·시행령·소방시설법 요약 3건 status hidden — 적재 뒤 회귀 측정에서 일반 통신 질문의 검색 자리를 빼앗아(차별 세부기준·전파법 제24조·번호이동성 기준 등) 운영자 결정으로 자문 검색에서 뺌(조문도 is_approved=false). 대리점법·시행령은 current.

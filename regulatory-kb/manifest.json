@@ -1,7 +1,7 @@
 {
   "schema": "regulatory-kb-manifest/v1",
-  "updated": "2026-10-04",
-  "entry_count": 332,
+  "updated": "2026-10-31",
+  "entry_count": 337,
   "dedup_key_rule": "정규화 제목(버전 수식어 '(구버전)' 등 제거) + '|' + law_type. 같은 dedup_key = 같은 법령(버전만 다를 수 있음).",
   "on_readd_rule": {
     "same_law_number": "동일 법령번호 재추가 → 기존 path에 덮어쓰기(idempotent). 신규 파일 생성 금지.",
@@ -3340,6 +3340,56 @@
       "concept_type": "Law",
       "path": "laws/ai-datacenter-act/ai_datacenter_act.md",
       "status": "current"
+    },
+    {
+      "dedup_key": "대리점거래의 공정화에 관한 법률|법률",
+      "title": "대리점거래의 공정화에 관한 법률",
+      "law_type": "법률",
+      "law_number": "제21857호",
+      "enforcement_date": "2026-10-02",
+      "concept_type": "Law",
+      "path": "laws/agency-fair-trade-act/agency_fair_trade_act.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "대리점거래의 공정화에 관한 법률 시행령|대통령령",
+      "title": "대리점거래의 공정화에 관한 법률 시행령",
+      "law_type": "대통령령",
+      "law_number": "제34205호",
+      "enforcement_date": "2024-02-06",
+      "concept_type": "Regulation",
+      "path": "laws/agency-fair-trade-act/enforcement_decree.md",
+      "status": "current"
+    },
+    {
+      "dedup_key": "인터넷 멀티미디어 방송사업법|법률",
+      "title": "인터넷 멀티미디어 방송사업법",
+      "law_type": "법률",
+      "law_number": "제21677호",
+      "enforcement_date": "2026-05-19",
+      "concept_type": "Law",
+      "path": "laws/iptv-act/iptv_act.md",
+      "status": "hidden"
+    },
+    {
+      "dedup_key": "인터넷 멀티미디어 방송사업법 시행령|대통령령",
+      "title": "인터넷 멀티미디어 방송사업법 시행령",
+      "law_type": "대통령령",
+      "law_number": "제35810호",
+      "enforcement_date": "2025-10-01",
+      "concept_type": "Regulation",
+      "path": "laws/iptv-act/enforcement_decree.md",
+      "status": "hidden"
+    },
+    {
+      "dedup_key": "소방시설 설치 및 관리에 관한 법률|법률",
+      "title": "소방시설 설치 및 관리에 관한 법률",
+      "law_type": "법률",
+      "law_number": "제18522호",
+      "enforcement_date": "2024-12-01",
+      "concept_type": "Law",
+      "path": "laws/fire-facilities-act/fire_facilities_act.md",
+      "status": "hidden"
     }
   ]
 }
