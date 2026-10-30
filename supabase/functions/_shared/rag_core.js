@@ -2255,6 +2255,36 @@
     return Object.assign(pickTopics(bases, g.topics, g.edges, o), { bases: bases.length });
   }
 
+  // ── 지시문 「보유 지식 베이스」 절의 현행 법률 목록 (#332, 2026-10-31 — 사내 cccd85e7 요청을 외부에 맞춤) ─────────
+  // 손으로 쓴 절이 낡았다: 판 번호 9개가 모두 옛 판(전기통신사업법 「제21652호 2026.05.19」 → 현행 제21503호), 현행 법률 48개 중
+  // 6개만 적혀 있었다. 사내판에서는 검색이 못 건진 조문을 「지식 베이스에 반입되어 있지 않다」고 단정한 답이 맞은 답보다 많았다
+  // (외부 저장 답 149건 중 그런 단정은 1건 — 실제로 법률이 아닌 「AI 이용자보호법」). system_prompt.js 절에는 KB_LAW_LIST_TOKEN 한 자리만
+  // 두고, 자문 때 두 판이 법령 감시 표(law_watch)의 법률 행과 그중 검색에서 숨긴 현행 문서(첫 조각이 is_approved=false — IPTV법·소방시설법,
+  // #331)를 받아 이 함수로 채운다. 조회 조건은 app.js·rag.ts fetchKbLawLists 두 곳이 같다(tests/rag_core.test.js가 대조).
+  // 판 번호는 넣지 않는다 — 개정마다 낡고, 판은 참조 자료의 문서명이 정본이다. 목록이 고정부(캐시 블록) 안에 들어가므로 법률이 늘거나
+  // 숨겨질 때만 캐시를 다시 쓴다. 둘 중 하나라도 조회에 실패하면(null) 목록 대신 KB_LAW_LIST_FALLBACK — 숨긴 법률을 「있다」고 안내하지
+  // 않게 닫힌 쪽으로. 이 절에는 「■」를 쓰지 않는다 — 인용 검증기 pseudoChunksFromPrompt가 ■ 머리를 지침서 조문으로 읽는다(cite_verify.js).
+  const KB_LAW_LIST_TOKEN = '{{KB_LAW_LIST}}';
+  const KB_LAW_LIST_FALLBACK = '(목록을 불러오지 못함 — 지식 베이스→국내 법령·고시 탭 참조)';
+  // watchDocs = law_watch.doc_name 목록, hiddenDocs = 검색에서 숨긴 현행 문서명 목록 → 법률 이름(「(법률)」 앞) 가나다순, 중복 없음
+  function kbLawNames(watchDocs, hiddenDocs) {
+    const hidden = new Set((hiddenDocs || []).map(String));
+    const names = new Set();
+    for (const d of watchDocs || []) {
+      const s = String(d || ''), i = s.indexOf('(법률)');
+      if (i <= 0 || hidden.has(s)) continue;
+      names.add(s.slice(0, i).trim());
+    }
+    return Array.from(names).sort();   // 코드 단위 순 = 한글 가나다순 — 브라우저·Deno가 같은 글을 만들어 캐시가 갈리지 않는다
+  }
+  function fillKbLawList(prompt, watchDocs, hiddenDocs) {
+    const p = String(prompt || '');
+    if (p.indexOf(KB_LAW_LIST_TOKEN) < 0) return p;
+    const names = (watchDocs && hiddenDocs) ? kbLawNames(watchDocs, hiddenDocs) : [];
+    const text = names.length ? '현행 법률 ' + names.length + '개: ' + names.join(', ') : KB_LAW_LIST_FALLBACK;
+    return p.split(KB_LAW_LIST_TOKEN).join(text);
+  }
+
   const RagCore = {
     PRIORITY_KW_RE: PRIORITY_KW_RE, VERB_TAIL: VERB_TAIL, extractKeywords: extractKeywords,
     REQ_TAIL_OPTS: REQ_TAIL_OPTS, REQ_CORE: REQ_CORE, stripRequestTail: stripRequestTail,
@@ -2297,6 +2327,8 @@
     TOPIC_OPTS: TOPIC_OPTS, topicArtRe: topicArtRe, topicBases: topicBases, topicGraph: topicGraph, pickTopics: pickTopics,
     topicDf: topicDf, scoreTopics: scoreTopics, topicSibling: topicSibling,   // D1′(#329-보론)
     topicPresentFams: topicPresentFams, buildTopicContext: buildTopicContext, fetchTopics: fetchTopics,
+    // 지시문 보유 지식 베이스 절의 현행 법률 목록(#332)
+    KB_LAW_LIST_TOKEN: KB_LAW_LIST_TOKEN, KB_LAW_LIST_FALLBACK: KB_LAW_LIST_FALLBACK, kbLawNames: kbLawNames, fillKbLawList: fillKbLawList,
   };
   root.RagCore = RagCore;
   if (typeof module !== 'undefined' && module.exports) module.exports = RagCore;

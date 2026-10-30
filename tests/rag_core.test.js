@@ -52,7 +52,9 @@ var NAMES = ['PRIORITY_KW_RE', 'VERB_TAIL', 'extractKeywords', 'LAW_SYNONYMS', '
   'TOPIC_OPTS', 'topicArtRe', 'topicBases', 'topicGraph', 'pickTopics', 'topicPresentFams', 'buildTopicContext', 'fetchTopics',
   'topicDf', 'scoreTopics', 'topicSibling',
   // 질문 끝 요청어 떼기(#330)
-  'REQ_TAIL_OPTS', 'REQ_CORE', 'stripRequestTail'];
+  'REQ_TAIL_OPTS', 'REQ_CORE', 'stripRequestTail',
+  // 지시문 보유 지식 베이스 절의 현행 법률 목록(#332)
+  'KB_LAW_LIST_TOKEN', 'KB_LAW_LIST_FALLBACK', 'kbLawNames', 'fillKbLawList'];
 NAMES.forEach(function (n) { ok('export ' + n, RC[n] !== undefined); });
 
 // ── 법령 키워드 추출 ──
@@ -1255,6 +1257,36 @@ var topicTests = (async function () {
     /restLen = \[[^\]]*topic/.test(app), /lastAdvChunkIds\.push\([^)]*topic/.test(app)], [1, 1, false, false]);
   eq('rag.ts 관계도 주제 구역 — 자리·restLen 밖·대조 조각에 없음', [n(ragTs, /RagCore\.fetchTopics\(/g), n(ragTs, /addOns\.text \+ topic\.text \+ citing\.text/g),
     /const restLen = [^;]*topic/.test(ragTs), /concat\(yak\.chunks\)[^\n]*topic/.test(ragTs)], [1, 1, false, false]);
+})();
+
+// ── 지시문 「보유 지식 베이스」 절의 현행 법률 목록(#332) — 이름만·숨김 제외·실패 시 닫힘, 지시문 자리, 두 판 같은 조회 ──
+(function () {
+  var W = ['전파법(법률)(제21553호)(20261022)', '개인정보 보호법(법률)(제21445호)(20260911)', '전파법 시행령(대통령령)(제36763호)(20261022)',
+    '인터넷 멀티미디어 방송사업법(법률)(제21677호)(20260519)', '개인정보 보호법(법률)(제21445호)(20260911)'];
+  var H = ['인터넷 멀티미디어 방송사업법(법률)(제21677호)(20260519)'];
+  eq('kbLawNames 법률만·판 번호 뗌·숨김 제외·중복 없음·가나다순', RC.kbLawNames(W, H), ['개인정보 보호법', '전파법']);
+  var P = '앞\n' + RC.KB_LAW_LIST_TOKEN + '\n뒤';
+  eq('fillKbLawList 자리 채움', RC.fillKbLawList(P, W, H), '앞\n현행 법률 2개: 개인정보 보호법, 전파법\n뒤');
+  eq('fillKbLawList 조회 실패(감시 표 null·숨김 null)·빈 목록 → 안내 한 줄', [RC.fillKbLawList(P, null, H), RC.fillKbLawList(P, W, null), RC.fillKbLawList(P, [], [])],
+    ['앞\n' + RC.KB_LAW_LIST_FALLBACK + '\n뒤', '앞\n' + RC.KB_LAW_LIST_FALLBACK + '\n뒤', '앞\n' + RC.KB_LAW_LIST_FALLBACK + '\n뒤']);
+  eq('fillKbLawList 자리 없는 글은 그대로', RC.fillKbLawList('그대로', W, H), '그대로');
+  // 지시문 — 자리 한 번, 핵심 조문(■ 블록) 앞, 채운 뒤에도 인용 검증기가 읽는 지침서 조문(■)은 같은 5개·같은 글
+  var js = fs.readFileSync(path.join(ROOT, 'system_prompt.js'), 'utf8');
+  var sp = JSON.parse(js.slice(js.indexOf('"'), js.lastIndexOf('"') + 1));
+  var at = sp.indexOf(RC.KB_LAW_LIST_TOKEN), core = sp.indexOf('[핵심 조문 직접 참조');
+  eq('system_prompt.js 목록 자리 1개·핵심 조문 앞', [sp.split(RC.KB_LAW_LIST_TOKEN).length - 1, at > 0 && at < core], [1, true]);
+  var sec = sp.slice(sp.indexOf('[보유 지식 베이스'), sp.indexOf('[세부 지침]'));
+  ok('보유 지식 베이스 절에 ■·판 번호(제N호) 없음', sec.indexOf('■') < 0 && !/제\d{4,}호/.test(sec), sec.match(/제\d{4,}호/));
+  var CVr = globalThis.CiteVerify;
+  var p0 = CVr.pseudoChunksFromPrompt(sp), p1 = CVr.pseudoChunksFromPrompt(RC.fillKbLawList(sp, W, H));
+  eq('채운 지시문의 지침서 조문(■) 5개·글 같음', [p1.length, JSON.stringify(p1) === JSON.stringify(p0)], [5, true]);
+  // 두 판 조회 조건 — 한쪽만 고치지 말 것
+  var app = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8');
+  var ragTs = fs.readFileSync(path.join(ROOT, 'supabase', 'functions', '_shared', 'rag.ts'), 'utf8');
+  var Q1 = ".from('law_watch').select('doc_name').like('doc_name', '%(법률)%').limit(1000)";
+  var Q2 = ".from('document_chunks').select('doc_name').eq('status', 'current').eq('is_approved', false).eq('chunk_index', 0).like('doc_name', '%(법률)%').limit(1000)";
+  eq('app.js 법률 목록 조회·채움', [app.indexOf(Q1) >= 0, app.indexOf(Q2) >= 0, app.indexOf('RagCore.fillKbLawList(SYSTEM_PROMPT, kbLaws && kbLaws.watch, kbLaws && kbLaws.hidden) + webSearchGuide') >= 0], [true, true, true]);
+  eq('rag.ts 법률 목록 조회·채움', [ragTs.indexOf(Q1) >= 0, ragTs.indexOf(Q2) >= 0, ragTs.indexOf('RagCore.fillKbLawList(systemPrompt, kbLaws && kbLaws.watch, kbLaws && kbLaws.hidden) + telegramGuide') >= 0], [true, true, true]);
 })();
 
 Promise.all([asyncTests, addOnTests, addOnTests2, addendumTests, applyTests, pendingNewTests, yakSectionTests, topicTests]).catch(function (e) { fails++; total++; console.log('FAIL  비동기 검사 예외 ' + (e && e.message)); }).then(function () {

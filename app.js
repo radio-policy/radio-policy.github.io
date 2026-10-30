@@ -3339,8 +3339,27 @@ async function buildAdvisoryContext(userText) {
   };
 }
 
+// 지시문 「보유 지식 베이스」 절의 현행 법률 목록 재료(#332) — 법령 감시 표의 법률 행 + 그중 검색에서 숨긴 현행 문서(첫 조각이
+// is_approved=false). 글은 rag_core.js fillKbLawList, 여기는 조회만(rag.ts fetchKbLawLists와 같은 조건). 숨긴 문서 조회는 status 색인을
+// 훑어 0.2초쯤 걸리므로 페이지당 한 번 받아 둔다. 실패하면 null(목록 대신 안내 한 줄)이고 다음 자문에서 다시 받는다.
+var _kbLawListsP = null;
+function fetchKbLawLists() {
+  if (!sb) return Promise.resolve(null);
+  if (!_kbLawListsP) {
+    _kbLawListsP = Promise.all([
+      sb.from('law_watch').select('doc_name').like('doc_name', '%(법률)%').limit(1000),
+      sb.from('document_chunks').select('doc_name').eq('status', 'current').eq('is_approved', false).eq('chunk_index', 0).like('doc_name', '%(법률)%').limit(1000)
+    ]).then(function (r) {
+      if (r[0].error || r[1].error) throw new Error((r[0].error || r[1].error).message);
+      return { watch: (r[0].data || []).map(function (x) { return x.doc_name; }), hidden: (r[1].data || []).map(function (x) { return x.doc_name; }) };
+    }).catch(function () { _kbLawListsP = null; return null; });
+  }
+  return _kbLawListsP;
+}
+
 async function callClaude(userText, onDelta) {
   if (!aiReady()) throw new Error(aiGateMsg());
+  const kbLawsP = fetchKbLawLists();   // 검색과 겹치게 지금 띄운다(#332)
   const ctx = await buildAdvisoryContext(userText);
   const webSearchGuide = '\n\n---\n\n[웹 검색 도구 사용 지침]\n해외 규제·제도 비교, 최신 정책 동향 등 위 참조 자료(법령 RAG·추가 지식·뉴스)에 없는 사실 정보가 필요하면 web_search 도구로 확인 후 답변하세요. 특히 "한국 고유", "유일한", "주요국 중 한국만" 등 국가 간 비교 단정 표현은 검색으로 확인하기 전에는 사용하지 마세요. 국내 법령 해석은 RAG 원문을 최우선으로 하고 웹 검색은 보조로만 사용하세요.\n국내 최신 동향(속도·요금·투자·품질평가 수치, 사업 추진 단계 등)은 위 [질문 관련 최신 기사]·[최근 수집 뉴스 동향]을 최우선 근거로 삼고, 웹 검색 결과가 수집 뉴스와 상충하면(수치가 다르거나 시점이 더 과거이면) 수집 뉴스를 따르세요.';
   // 법령 관계도 자동 축적: 답변 말미에 기계용 <lawmap> 블록을 덧붙이게 함 (별도 API 호출 없음 — 출력 몇 줄 추가뿐)
@@ -3358,7 +3377,10 @@ async function callClaude(userText, onDelta) {
   // web_search 도구 정의 + 고정 지침을 함께 캐시한다(후속 질문 입력비용 ~90% 절감).
   // 가변부(lawmapGuide는 lawTopics 목록이 변함 + RAG·뉴스 등 질문마다 다른 컨텍스트)는
   // 캐시 블록 '뒤'에 둬야 적중한다 — 가변 요소를 고정부 앞·중간에 끼우지 말 것.
-  const systemStable   = SYSTEM_PROMPT + webSearchGuide;
+  // 보유 지식 베이스 절의 현행 법률 목록(#332)은 고정부 안 — 법률이 늘거나 숨겨질 때만 바뀐다. 조회 실패는 search_meta에 한 줄(목록 대신 안내 글)
+  const kbLaws = await kbLawsP;
+  if (!kbLaws && lastAdvSearchMeta) lastAdvSearchMeta.push({ fn: 'kb_law_list', ms: 0, rows: 0, error: 'law_watch·숨김 문서 조회 실패' });
+  const systemStable   = RagCore.fillKbLawList(SYSTEM_PROMPT, kbLaws && kbLaws.watch, kbLaws && kbLaws.hidden) + webSearchGuide;
   // 위임·같은 고시 구역(#283)은 조문 정밀검색 바로 뒤, 관련 법령 체계(#329)는 그 바로 뒤·역참조 앞 — rag.ts와 같은 자리
   // 시행 전 제정 법령(#311)은 시행예정 개정본 바로 뒤, 사업자 이용약관(#312-보론2)은 그 바로 뒤 — rag.ts와 같은 자리
   // 오늘 날짜(#321, 2026-10-19): 모델은 학습 시점을 오늘로 알아 「2025년 10월 현재」처럼 묵은 시점을 썼다(지시문의 시제 검증 규칙이

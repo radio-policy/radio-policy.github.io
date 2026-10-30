@@ -482,6 +482,21 @@ async function listLawDocNames(sb: SupabaseClient): Promise<string[]> {
   if (a.error || b.error) throw new Error((a.error || b.error)!.message);
   return ([] as { doc_name: string }[]).concat(a.data || [], b.data || []).map((x) => x.doc_name);
 }
+// ── 지시문 「보유 지식 베이스」 절의 현행 법률 목록 재료(#332) — 법령 감시 표의 법률 행 + 그중 검색에서 숨긴 현행 문서(첫 조각이
+//    is_approved=false). 글은 rag_core.js fillKbLawList, app.js fetchKbLawLists와 같은 조건. 실패 → null(목록 대신 안내 한 줄)
+async function fetchKbLawLists(sb: SupabaseClient): Promise<{ watch: string[]; hidden: string[] } | null> {
+  try {
+    const [w, h] = await Promise.all([
+      sb.from('law_watch').select('doc_name').like('doc_name', '%(법률)%').limit(1000),
+      sb.from('document_chunks').select('doc_name').eq('status', 'current').eq('is_approved', false).eq('chunk_index', 0).like('doc_name', '%(법률)%').limit(1000),
+    ]);
+    if (w.error || h.error) return null;
+    const names = (rows: { doc_name: string }[] | null) => (rows || []).map((x) => x.doc_name);
+    return { watch: names(w.data), hidden: names(h.data) };
+  } catch {
+    return null;
+  }
+}
 // ── 번호로 지목한 조문(#245)의 이름 맞추기 재료 — 그 번호의 조문을 가진 현행 문서(조문 제목은 'N조(제목)', #92).
 //    '16조%'면 16조의2 등도 오지만 rag_core.js pickNamedArticles가 번호를 다시 대조한다. app.js fetchArticleKeyRows와 동일 조건.
 async function fetchArticleKeyRows(sb: SupabaseClient, key: string): Promise<{ doc_name: string; article_no: string }[]> {
@@ -1580,6 +1595,7 @@ export async function answerAdvisory(sb: SupabaseClient, systemPrompt: string, q
   // DB 문서명 목록(#315 D1 ①) — 인용 검증의 이름 맞추기·ⓒ가 쓴다. 검색·답변 생성과 겹치게 지금 띄운다(실패는 cite_verify.js가 목록 없음으로)
   const lawDocsP = listLawDocNames(sb);
   lawDocsP.catch(() => {});
+  const kbLawsP = fetchKbLawLists(sb);   // 보유 지식 베이스 절의 현행 법률 목록(#332) — 검색과 겹치게 지금 띄운다
   const { chunks: chunks2, extra: extra2, addedIds, annex, citing, kb, news, systemVariable, searchMeta, spill: spill2, addOns, pendingNew, yak, topic } = await buildAdvisoryContext(sb, question);
 
   const telegramGuide = '\n\n---\n\n[텔레그램 답변 형식 지침]\n' +
@@ -1597,7 +1613,10 @@ export async function answerAdvisory(sb: SupabaseClient, systemPrompt: string, q
   // 고정부(app_config.system_prompt + telegramGuide — 프롬프트 편집 전까지 불변)를 별도 블록으로
   // 분리해 cache_control:{type:'ephemeral'} 부착 → tools(web_search)+고정 지침이 함께 캐시된다.
   // 가변부(질문마다 바뀌는 RAG·조문·요약·뉴스)는 캐시 블록 '뒤'에 둬야 적중한다.
-  const systemStable = systemPrompt + telegramGuide;
+  // 보유 지식 베이스 절의 현행 법률 목록(#332)은 고정부 안 — 법률이 늘거나 숨겨질 때만 바뀐다. 조회 실패는 search_meta에 한 줄(app.js와 같은 행)
+  const kbLaws = await kbLawsP;
+  if (!kbLaws) searchMeta.push({ fn: 'kb_law_list', ms: 0, rows: 0, error: 'law_watch·숨김 문서 조회 실패' });
+  const systemStable = RagCore.fillKbLawList(systemPrompt, kbLaws && kbLaws.watch, kbLaws && kbLaws.hidden) + telegramGuide;
   const system: SystemBlock[] = [
     { type: 'text', text: systemStable, cache_control: { type: 'ephemeral' } },
   ];
