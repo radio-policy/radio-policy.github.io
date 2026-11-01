@@ -10,8 +10,9 @@
      2026.9.11 / 2026.10.1 / 2027.4.1 세 시점이 걸린 경우도 3건 모두 남는다).
      조문 취득·적재는 law_sync.py --pending 이 담당한다(감시는 발견만).
 
-법제처에 없는 문서(ITU-R·보도자료·사내자료)는 watch_status='unmatched'로 1회만 알리고,
-운영자가 'excluded'로 표시하면 이후 조용히 건너뛴다(알림 노이즈 방지).
+법제처에 없는 문서(ITU-R·보도자료·사내자료)는 watch_status='unmatched'로 새로 미매칭이 된 날 1회만
+알리고(#333 전엔 콘솔에만 찍혔다), 운영자가 'excluded'로 표시하면 이후 조용히 건너뛴다(알림 노이즈 방지).
+이름으로 못 찾으면 등재 때 받은 법령ID로 한 번 더 찾는다 — 법제처가 이름만 바꾼 경우(#333).
 
 사용법:
   python law_watch.py                 # 전체 점검 + 알림
@@ -208,7 +209,11 @@ def pick_exact(rows, law_name: str, full_name: str = None, today: str = None):
       ① 시행일 ≤ 오늘 인 것 중 시행일이 가장 늦은 행
       ② 그런 행이 없으면(전부 미래) 시행일이 가장 이른 행
     """
-    cands = match_rows(rows, law_name, full_name)
+    return _pick_in_force(match_rows(rows, law_name, full_name), today)
+
+
+def _pick_in_force(cands, today: str = None):
+    """같은 법령 행들 중 현행본 — pick_exact의 시행일 규칙(① 시행일 ≤ 오늘 중 가장 늦은 행 ② 전부 미래면 가장 이른 행)."""
     if not cands:
         return None
     today = today or datetime.now(KST).strftime('%Y%m%d')
@@ -223,6 +228,28 @@ def pick_exact(rows, law_name: str, full_name: str = None, today: str = None):
     if dated:
         return sorted(dated, key=enf)[0]
     return cands[0]
+
+
+def _id_key(v) -> str:
+    """법령ID 비교키 — '011359'와 '11359'를 같게(앞자리 0 무시)."""
+    return str(v or '').strip().lstrip('0')
+
+
+def pick_by_id(rows, law_id, today: str = None):
+    """이름으로 못 찾았을 때 등재 때 받은 법령ID(행정규칙ID)가 같은 행의 현행본 (#333).
+
+    법제처가 법령 이름만 바꾸면(번호·ID는 그대로) 이름 대조가 실패한다. 2026-10 실측:
+    「…피해금 환급에 관한 특별법」→「…피해자산 환급에 관한 특별법」(법률·시행령, ID 011359·011448),
+    「방송통신위원회 재정 및 알선 등에 관한 규정」→「방송미디어통신위원회 … 고시」(ID 2067305) —
+    옛 이름 검색에도 새 이름 행이 돌아왔지만 이름이 달라 '미매칭'으로 한 달 넘게 멈춰 있었다.
+    ID는 개정·개명에도 그대로다(행정규칙ID도 2024-5호 → 2026-26호에서 같음).
+    """
+    key = _id_key(law_id)
+    if not key:
+        return None
+    cands = [r for r in (rows or [])
+             if _id_key(r.get('법령ID') or r.get('행정규칙ID')) == key]
+    return _pick_in_force(cands, today)
 
 
 def row_fields(row, target: str):
@@ -420,6 +447,8 @@ def main():
           f"(제외 카테고리·excluded 제외)\n")
 
     outdated, unmatched, upcoming, auto_excluded, ok = [], [], [], [], 0
+    renamed = []             # (옛 이름, 새 이름) — 법령ID로 찾은 명칭 변경(#333)
+    new_unmatched = []       # 이번에 새로 미매칭이 된 문서 — 알림은 이것만(매일 반복하지 않음)
     api_failed = []          # 법제처 API 무응답 — 판정 불가라 행을 건드리지 않고 넘긴 문서
     consec_fail = 0          # 연속 무응답 수 — 응답을 받은 문서가 나오면 0으로(API_FAIL_ABORT)
     aborted, skipped = False, 0   # 연속 무응답으로 멈췄는지 · 멈춰서 점검하지 못한 남은 문서 수
@@ -458,6 +487,7 @@ def main():
                     break
                 continue
             hit = pick_exact(rows, meta['law_name'], meta.get('full_name'))
+            seen_rows = list(rows)
             # 1차 실패 시 기관명 별칭으로 재검색 (정부조직 개편으로 규칙명이 바뀐 경우)
             alt_api_failed = False
             if not hit:
@@ -466,12 +496,23 @@ def main():
                     if rows is None:                     # 별칭 조회 중 API가 죽어도 마찬가지
                         alt_api_failed = True
                         break
+                    seen_rows += rows
                     hit = pick_exact(rows, alt)
                     if hit:
                         meta['law_name'] = alt          # 이후 단계(현행화)도 새 명칭 기준
                         meta['full_name'] = None
                         print(f"      (기관명 변경 반영 → {alt})")
                         break
+            # 2차 실패 시 등재 때 받은 법령ID로 — 법제처가 이름만 바꾼 경우(#333). 새 이름을 law_name으로
+            # 넘기면 law_sync가 새 이름으로 받아 새 문서로 넣고, 옛 문서는 prev_doc_name으로 찾아 내린다.
+            renamed_from = None
+            if not hit and not alt_api_failed:
+                hit = pick_by_id(seen_rows, (prev.get(doc_name) or {}).get('law_id'))
+                if hit:
+                    renamed_from = meta['law_name']
+                    meta['law_name'] = _strip_org(name_of(hit))
+                    meta['full_name'] = None
+                    print(f"      (법제처 명칭 변경 — 법령ID 같음 → {meta['law_name']})")
             if not hit and alt_api_failed:
                 api_failed.append(doc_name)
                 consec_fail += 1
@@ -495,6 +536,8 @@ def main():
 
             if not hit:
                 unmatched.append((doc_name, f"법제처 미검색({meta['law_name']})"))
+                if (prev.get(doc_name) or {}).get('watch_status') != 'unmatched':
+                    new_unmatched.append((doc_name, meta['law_name']))
                 rec.update({'watch_status': 'unmatched', 'sync_status': 'unknown',
                             'note': '법제처에서 동일 명칭 법령을 찾지 못함'})
             else:
@@ -504,6 +547,10 @@ def main():
                     'law_id': str(hit.get('법령ID') or hit.get('행정규칙ID') or ''),
                     'latest_mst': mst, 'latest_law_no': law_no, 'latest_enf': enf,
                 })
+                if renamed_from:
+                    # 행은 부분 갱신(upsert)이라 note를 안 넣으면 「동일 명칭 … 못 찾음」이 그대로 남는다
+                    rec['note'] = f'법제처 명칭 변경: {renamed_from} → {meta["law_name"]} (법령ID 같음)'
+                    renamed.append((renamed_from, meta['law_name']))
                 same = norm_law_no(meta['law_no']) and norm_law_no(meta['law_no']) == norm_law_no(law_no)
                 if same:
                     rec['sync_status'] = 'current'
@@ -567,13 +614,29 @@ def main():
         for nm, futs in upcoming:
             steps = ", ".join(f"{f['fields'][1]}({f['enf']})" for f in futs)
             print(f"  - {nm}: {len(futs)}단계 → {steps}")
+    if renamed:
+        print("\n[법제처 명칭 변경 — 법령ID로 찾음]")
+        for old, new in renamed:
+            print(f"  - {old} → {new}")
     if unmatched:
         print("\n[미매칭 — 수동 확인 필요]")
         for d, why in unmatched:
             print(f"  - {d[:60]} ({why})")
 
-    if not a.dry_run and not a.no_notify and (outdated or upcoming):
+    if not a.dry_run and not a.no_notify and (outdated or upcoming or new_unmatched):
         lines = [f"📋 <b>법령 현행화 점검</b> ({datetime.now(KST):%m/%d %H:%M})", ""]
+        if renamed:
+            lines.append(f"✏️ <b>법제처 명칭 변경 {len(renamed)}건</b> — 법령ID로 찾아 새 이름으로 현행화")
+            for old, new in renamed[:5]:
+                lines.append(f"· {old} → <b>{new}</b>")
+            lines.append("")
+        if new_unmatched:
+            # 종전엔 미매칭을 콘솔에만 찍어 아무도 몰랐다(#333 — 명칭 변경 3건이 한 달 넘게 멈춤).
+            # 새로 미매칭이 된 날 한 번만 알린다 — 이어지는 날은 대시보드 「법령 개정 추적」에 남는다.
+            lines.append(f"❓ <b>법제처에서 못 찾음 {len(new_unmatched)}건</b> — 개정 추적이 멈춤, 확인 필요")
+            for _d, nm in new_unmatched[:5]:
+                lines.append(f"· {nm}")
+            lines.append("")
         if outdated:
             # 2026-09-01: 「대시보드에서 승인 필요」에서 바꿨다. 대시보드에는 승인 버튼이 없었고
             # (app.js는 목록 표시 전용), 이제 같은 실행 체인의 뒤 스텝이 자동 교체·DIFF까지 한다.

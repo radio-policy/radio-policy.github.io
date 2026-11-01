@@ -305,8 +305,11 @@ def call_model(client, user_prompt, dry_run=False):
 
 
 def write_kb(sb, kb_row, fm, body, meta, path):
+    dk = kb_row.get('dedup_key') or ''
+    if meta.get('renamed'):
+        dk = dk.replace(*meta['renamed'])                      # 법제처 명칭 변경(#333)
     entry = {
-        'dedup_key': retitle(kb_row.get('dedup_key') or '', kb_row.get('law_number') or '', meta['new_no']) or None,
+        'dedup_key': retitle(dk, kb_row.get('law_number') or '', meta['new_no']) or None,
         'title': meta['title'], 'concept_type': kb_row.get('concept_type'),
         'law_type': kb_row.get('law_type'), 'law_number': meta['new_no'],
         'enforcement_date': meta['new_enf'], 'status': 'current', 'path': path,
@@ -333,11 +336,16 @@ def refresh_one(sb, client, d, args):
     kb_row = load_kb_row(sb, d['path'])
     if not kb_row:
         raise ValueError('구판 kb_documents 행을 못 찾음(이미 처리됨?)')
+    title = kb_row['title']
+    if d.get('renamed_to') and d.get('renamed_from') and d['renamed_from'] in title:
+        title = title.replace(d['renamed_from'], d['renamed_to'])   # 법제처 명칭 변경(#333) — 제목도 새 이름
     meta = {
-        'title': retitle(kb_row['title'], kb_row.get('law_number') or '', kb_law_number(d['cur_no'])),
+        'title': retitle(title, kb_row.get('law_number') or '', kb_law_number(d['cur_no'])),
         'new_no': kb_law_number(d['cur_no']), 'new_enf': ymd_dash(d['cur_enf']),
         'doc_name': d['doc_name'], 'today': datetime.now(KST).strftime('%Y-%m-%d'),
     }
+    if title != kb_row['title']:
+        meta['renamed'] = (d['renamed_from'], d['renamed_to'])
     new_chunks = fetch_chunks(sb, d['doc_name'], status='current')
     if not new_chunks:
         raise ValueError('새 판 조문이 비어 있음')

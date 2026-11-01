@@ -105,6 +105,82 @@ class TestLawWatchAbort(unittest.TestCase):
         self.assertIn('"aborted=" in', guard)
 
 
+class TestLawWatchRenameById(unittest.TestCase):
+    """#333 법제처가 법령 이름만 바꾸면(ID 그대로) 이름 대조가 실패해 '미매칭'으로 멈췄다(2026-10, 3건 한 달 넘게).
+    이름으로 못 찾으면 등재 때 받은 법령ID로 찾고, 새 이름을 law_name으로 넘긴다. 새로 미매칭이 된 날은 알린다."""
+
+    OLD = '전기통신금융사기 피해 방지 및 피해금 환급에 관한 특별법'
+    NEW = '전기통신금융사기 피해 방지 및 피해자산 환급에 관한 특별법'
+
+    def _row(self, name, law_id, no, enf):
+        return {'법령명한글': name, '법령ID': law_id, '공포번호': no, '시행일자': enf, '법령일련번호': no + '0'}
+
+    def test_pick_by_id(self):
+        import law_watch
+        rows = [self._row(self.NEW, '011359', '22047', '20261002'),
+                self._row(self.NEW + ' 시행령', '011448', '36729', '20261001'),
+                self._row(self.NEW, '011359', '22100', '20270101')]      # 시행예정본 — 현행이 아님
+        self.assertIsNone(law_watch.pick_exact(rows, self.OLD))               # 이름으로는 못 찾는다
+        hit = law_watch.pick_by_id(rows, '11359', today='20261101')           # 앞자리 0 무시
+        self.assertEqual(hit['공포번호'], '22047')
+        self.assertEqual(law_watch.pick_by_id(rows, '011448', today='20261101')['공포번호'], '36729')
+        self.assertIsNone(law_watch.pick_by_id(rows, None))
+        self.assertIsNone(law_watch.pick_by_id(rows, '999'))
+        adm = [{'행정규칙명': '방송미디어통신위원회 재정 및 알선 등에 관한 고시', '행정규칙ID': '2067305',
+                '발령번호': '2026-26', '시행일자': '20260910'}]
+        self.assertEqual(law_watch.pick_by_id(adm, '2067305')['발령번호'], '2026-26')
+
+    def _run(self, prev_row, responder):
+        import contextlib, io
+        import law_watch
+        doc = prev_row['doc_name']
+        written, sent = [], []
+
+        class _Q:
+            def __init__(self, data):
+                self.data = data
+
+            def __getattr__(self, _):
+                return lambda *a, **k: self
+
+        fake_sb = mock.Mock()
+        fake_sb.table.side_effect = lambda name: _Q([prev_row] if name == 'law_watch' else [])
+        with mock.patch.object(law_watch, 'SB_URL', 'x'), mock.patch.object(law_watch, 'SB_KEY', 'x'), \
+                mock.patch.object(law_watch, 'OC_KEY', 'x'), \
+                mock.patch.object(law_watch.sb_client, 'make_client', lambda *a: fake_sb), \
+                mock.patch.object(law_watch.sb_client, 'heartbeat', lambda *a: None), \
+                mock.patch.object(law_watch, 'fetch_all_doc_rows', lambda sb: {doc: '법령'}), \
+                mock.patch.object(law_watch, 'load_detected_pending', lambda sb: {}), \
+                mock.patch.object(law_watch, 'find_pending_rows', lambda *a, **k: []), \
+                mock.patch.object(law_watch, 'retire_pending', lambda *a, **k: None), \
+                mock.patch.object(law_watch, 'flush_watch', lambda sb, buf: (written.extend(buf), buf.clear())), \
+                mock.patch.object(law_watch, 'drf_law_search', lambda q, t, ef=False: responder(q)), \
+                mock.patch.object(law_watch, 'notify', lambda lines: sent.append('\n'.join(lines))), \
+                mock.patch.object(law_watch.time, 'sleep', lambda s: None), \
+                mock.patch.object(sys, 'argv', ['law_watch.py']), \
+                contextlib.redirect_stdout(io.StringIO()):
+            law_watch.main()
+        return written, sent
+
+    def test_main_renamed_goes_outdated_with_new_name(self):
+        doc = f'{self.OLD}(법률)(제21909호)(20260908)'
+        prev = {'doc_name': doc, 'law_id': '011359', 'watch_status': 'unmatched'}
+        written, sent = self._run(prev, lambda q: [self._row(self.NEW, '011359', '22047', '20261002')])
+        rec = [r for r in written if r['doc_name'] == doc][0]
+        self.assertEqual(rec['law_name'], self.NEW)              # law_sync가 이 이름으로 새 판을 받는다
+        self.assertEqual((rec['watch_status'], rec['sync_status']), ('watching', 'outdated'))
+        self.assertIn('명칭 변경', rec['note'])                  # 옛 「못 찾음」 note를 덮어쓴다
+        self.assertIn('법제처 명칭 변경 1건', sent[0])
+
+    def test_main_new_unmatched_alerts_once(self):
+        doc = '없는법(법률)(제1호)(20260101)'
+        w1, s1 = self._run({'doc_name': doc, 'law_id': '1', 'watch_status': 'watching'}, lambda q: [])
+        self.assertEqual(w1[0]['watch_status'], 'unmatched')
+        self.assertIn('법제처에서 못 찾음 1건', s1[0])
+        w2, s2 = self._run({'doc_name': doc, 'law_id': '1', 'watch_status': 'unmatched'}, lambda q: [])
+        self.assertEqual(s2, [])                                  # 이미 미매칭이던 문서는 다시 알리지 않는다
+
+
 class TestLawDiffArticles(unittest.TestCase):
     """② law_diff_gen.diff_articles — 조문 3분류(modified/added/deleted)"""
 
@@ -2445,6 +2521,23 @@ class TestOkfDriftCheck(unittest.TestCase):
         self.assertIn('제36671호', msg)
         self.assertIn('세션에서', msg)
         self.assertIn('해소', od.format_message([]))
+
+    def test_renamed_law_pairs_through_replaced_history(self):
+        """#333 법제처 명칭 변경 — 요약 제목은 옛 이름이라 이름 대조로는 짝이 없다. 교체 이력(law_pending
+        replaced)의 구본→새 판 이름 짝으로 한 번 더 찾고, renamed_from/to를 달아 okf_refresh가 제목을 바꾼다."""
+        import okf_drift_check as od
+        old, new = '전기통신금융사기 피해 방지 및 피해금 환급에 관한 특별법', '전기통신금융사기 피해 방지 및 피해자산 환급에 관한 특별법'
+        kb = [{'title': old, 'law_type': '법률', 'law_number': '제21909호', 'enforcement_date': '2026-09-08',
+               'path': 'laws/telecom-fraud-act/x_21909.md'}]
+        watch = [{'doc_name': f'{new}(법률)(제22047호)(20261002)'}]
+        replaced = [{'watch_doc_name': f'{old}(법률)(제21909호)(20260908)', 'doc_name': watch[0]['doc_name']},
+                    {'watch_doc_name': '전파법(법률)(제1호)(20260101)', 'doc_name': '전파법(법률)(제2호)(20260201)'}]
+        ren = od.renames_from_replaced(replaced)
+        self.assertEqual(list(ren.values()), [(old, new)])                    # 이름이 같은 교체는 짝에 안 넣는다
+        self.assertEqual(od.find_drift(kb, watch, today='20261101'), [])       # 종전: 짝 없음 → 조용히 빠짐
+        d = od.find_drift(kb, watch, today='20261101', renames=ren)
+        self.assertEqual(len(d), 1)
+        self.assertEqual((d[0]['cur_no'], d[0]['renamed_from'], d[0]['renamed_to']), ('제22047호', old, new))
 
 
 class TestLawSyncReport(unittest.TestCase):

@@ -83,9 +83,27 @@ def parse_watch_doc(doc_name: str):
             'no': m.group('no'), 'enf': m.group('enf')}
 
 
-def find_drift(kb_rows, watch_rows, today: str = None):
+def renames_from_replaced(rows):
+    """law_pending 교체 이력(sync_state='replaced': watch_doc_name=구본, doc_name=새 판) → 이름이 바뀐 짝.
+    {구 이름 대조키: (구 이름, 새 이름)}. 법제처가 법령 이름만 바꾸면(#333) 요약 제목은 옛 이름이라
+    이름 대조로는 새 판과 짝을 못 지어 어긋남에서 빠지고, 요약이 옛 판·옛 이름으로 영영 남는다."""
+    out = {}
+    for r in rows or []:
+        old = _DOC_RE.match(r.get('watch_doc_name') or '')
+        new = _DOC_RE.match(r.get('doc_name') or '')
+        if not (old and new):
+            continue
+        o, n = old.group('name').strip(), new.group('name').strip()
+        if norm_title(o) != norm_title(n):
+            out[norm_title(o)] = (o, n)
+    return out
+
+
+def find_drift(kb_rows, watch_rows, today: str = None, renames=None):
     """kb_rows: [{title, law_type, law_number, enforcement_date, path}], watch_rows: [{doc_name, law_name}]
-    → 어긋남 목록(제목 순). 짝을 못 찾은 kb 문서는 결과에 넣지 않는다(대조 불가 ≠ 어긋남)."""
+    → 어긋남 목록(제목 순). 짝을 못 찾은 kb 문서는 결과에 넣지 않는다(대조 불가 ≠ 어긋남).
+    renames(renames_from_replaced): 이름으로 짝이 없을 때만 새 이름으로 한 번 더 찾는다 —
+    그렇게 찾은 행은 renamed_from·renamed_to를 달아 okf_refresh가 제목도 새 이름으로 바꾸게 한다(#333)."""
     today = today or datetime.now(KST).strftime('%Y%m%d')
     by_name = {}
     for w in watch_rows or []:
@@ -103,6 +121,10 @@ def find_drift(kb_rows, watch_rows, today: str = None):
         if not kb_enf or kb_enf > today:
             continue                       # 시행예정본 요약 — 구본과 나란히 두는 관례
         cands = by_name.get(norm_title(k.get('title')))
+        ren = None
+        if not cands and renames:
+            ren = renames.get(norm_title(k.get('title')))
+            cands = by_name.get(norm_title(ren[1])) if ren else None
         if not cands:
             continue
         ag = norm_agency(k.get('law_type') or '')
@@ -112,12 +134,15 @@ def find_drift(kb_rows, watch_rows, today: str = None):
         cur = max(same, key=lambda c: c['enf'])
         if cur['enf'] == kb_enf and norm_no(cur['no']) == norm_no(k['law_number']):
             continue
-        out.append({
+        row = {
             'title': re.sub(r'\s*\[시행예정[^\]]*\]\s*$', '', k.get('title') or ''),
             'kb_no': k['law_number'], 'kb_enf': kb_enf,
             'cur_no': cur['no'], 'cur_enf': cur['enf'],
             'path': k.get('path'), 'doc_name': cur['doc_name'],
-        })
+        }
+        if ren:
+            row['renamed_from'], row['renamed_to'] = ren
+        out.append(row)
     out.sort(key=lambda r: (r['cur_enf'], r['title']), reverse=True)
     return out
 
@@ -163,10 +188,21 @@ def fetch_rows(sb):
     return kb, watch
 
 
+def fetch_renames(sb):
+    """교체 이력에서 이름이 바뀐 짝(#333). 조회 실패는 빈 값 — 이름 대조만으로 돌던 종전 동작."""
+    try:
+        rows = (sb.table('law_pending').select('watch_doc_name, doc_name')
+                .eq('sync_state', 'replaced').execute().data) or []
+        return renames_from_replaced(rows)
+    except Exception as e:
+        print(f"  (교체 이력 조회 실패 — 명칭 변경 짝짓기 생략) {str(e)[:80]}")
+        return {}
+
+
 def run_check(sb):
     """(drift, kb_count, watch_count) — law_sync 완료 알림이 같은 결과를 붙여 쓴다. 조회 실패는 예외 그대로."""
     kb, watch = fetch_rows(sb)
-    return find_drift(kb, watch), len(kb), len(watch)
+    return find_drift(kb, watch, renames=fetch_renames(sb)), len(kb), len(watch)
 
 
 def _last_signature(sb):
