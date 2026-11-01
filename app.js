@@ -3059,6 +3059,9 @@ async function buildAdvisoryContext(userText) {
   // 확장·trgm·의미검색·약관 게이트·지목 조문·뉴스·주제 구역은 질문 원문. search_meta에는 뗀 때만 한 줄. rag.ts buildAdvisoryContext와 동일 유지.
   const reqCut      = RagCore.stripRequestTail(userText);
   if (reqCut.tail && lastAdvSearchMeta) lastAdvSearchMeta.push({ fn: 'req_tail', ms: 0, rows: null, error: null, tail: reqCut.tail });
+  // 요금·할인 대응(#334)이 발동한 때만 한 줄 — 낱말 자리 글(reqCut.text)로 계산, 집계용(검색 결과 무영향). rag.ts와 동일 유지.
+  const tariffRow   = RagCore.tariffMeta(reqCut.text);
+  if (tariffRow && lastAdvSearchMeta) lastAdvSearchMeta.push(tariffRow);
   const lawArtP     = searchLawArticles(userText, 5, reqCut.text).catch(function(e) { console.warn('조문 정밀검색 실패(건너뜀):', e); return []; });
   // 조문 **의미** 검색 (#89) — 봇 /law에는 있는데 자문(봇·대시보드 양쪽)에만 없던 갈래.
   // 어휘가 어긋나면 키워드로는 못 넘는다. 실측: 「기지국 개설 허가 절차」의 키워드 5개는

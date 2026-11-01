@@ -124,7 +124,8 @@ interface Chunk {
 // Edge isolate는 요청을 동시에 처리하므로 전역이면 두 자문의 기록이 섞인다. app.js metaRpc와 같은 형식.
 export type SearchMeta = { fn: string; ms: number; rows: number | null; error: string | null; trimmed?: number; capped?: boolean; addendum?: number; apply?: number; gate?: string | null; docs?: number; pending?: number; top?: number | null; chars?: number; approved?: boolean | string | null; ids_cut?: number;
   names?: string[]; scores?: number[]; raw?: number[]; present?: string[]; best?: number; bestRaw?: number; cands?: number; blocked?: boolean;   // names…blocked = 관련 법령 체계(#329)
-  tail?: string }[];   // tail = 질문 끝에서 뗀 요청어(#330, fn 'req_tail')
+  tail?: string;   // tail = 질문 끝에서 뗀 요청어(#330, fn 'req_tail')
+  syn?: boolean; off?: string[] }[];   // syn·off = 요금·할인 대응 발동(#334, fn 'tariff' — RagCore.tariffMeta)
 // 약관 게이트 행(#312-보론)은 RagCore.yakGateNote가 넣는 { fn: 'yak_gate', pass, words, dropped[, mode] } — ms·rows·error 없음(app.js와 같은 꼴)
 type RpcResult = { data?: unknown; error?: { code?: string; message?: string } | null } | null;
 function metaRpc(sb: SupabaseClient, meta: SearchMeta | undefined, fn: string, params: Record<string, unknown>) {
@@ -1409,6 +1410,9 @@ export async function buildAdvisoryContext(sb: SupabaseClient, question: string)
   // search_meta에는 뗀 때만 한 줄(tail). app.js buildAdvisoryContext와 동일 유지.
   const reqCut: { text: string; tail: string } = RagCore.stripRequestTail(question);
   if (reqCut.tail) meta.push({ fn: 'req_tail', ms: 0, rows: null, error: null, tail: reqCut.tail });
+  // 요금·할인 대응(#334)이 발동한 때만 한 줄 — 낱말 자리 글(reqCut.text)로 계산, 집계용(검색 결과 무영향). app.js와 동일 유지.
+  const tariffRow = RagCore.tariffMeta(reqCut.text);
+  if (tariffRow) meta.push(tariffRow);
   const lawP = searchLawArticles(sb, question, 5, meta, expandP, reqCut.text);
   // 조문 **의미** 검색 (#89) — /law에는 있는데 자문에만 없던 갈래. 어휘가 어긋나면 키워드는 못 넘는다.
   // 실측(자문 경로): 「기지국 개설 허가 절차」의 키워드 5개는 해상무선통신망 제12조·전파관리 세칙

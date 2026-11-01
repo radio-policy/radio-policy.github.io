@@ -53,6 +53,8 @@ var NAMES = ['PRIORITY_KW_RE', 'VERB_TAIL', 'extractKeywords', 'LAW_SYNONYMS', '
   'topicDf', 'scoreTopics', 'topicSibling',
   // 질문 끝 요청어 떼기(#330)
   'REQ_TAIL_OPTS', 'REQ_CORE', 'stripRequestTail',
+  // 요금·할인 대응(#334)
+  'TARIFF_OPTS', 'TARIFF_SYN_RE', 'TARIFF_OFF_KEYS', 'TARIFF_OFF_GUARD', 'tariffSynOff', 'tariffMeta',
   // 지시문 보유 지식 베이스 절의 현행 법률 목록(#332)
   'KB_LAW_LIST_TOKEN', 'KB_LAW_LIST_FALLBACK', 'kbLawNames', 'fillKbLawList'];
 NAMES.forEach(function (n) { ok('export ' + n, RC[n] !== undefined); });
@@ -198,6 +200,54 @@ eq('L5′ 기존 표 출력 뒤에 붙음(3G 종료 8개는 그대로 + 1)', RC.
 eq('L5′ 기존 표가 이미 낸 말은 이 표 몫에서 뺀다', RC.lawTermKeywords('IDC', ['집적정보통신시설']), []);
 eq('L5′ 질문 글귀만 있는 쌍은 없음(장비 세금)', RC.lawSynonymKeywords('이동통신회사가 장비관련해서 내는 세금은 무엇이 있나?'), []);
 eq('L5′ 질문 글귀만 있는 쌍은 없음(보관)', RC.lawSynonymKeywords('개인정보 보관 기관에 대한 내용'), []);
+// 요금·할인 대응(#334, 판정 local_docs/이용약관대응_검색표_261031/판정_261101.md §7-2 ⑥) — 합성 문장만(실제 질문 원문은 넣지 않는다)
+(function () {
+  var kw = function (q) { return RC.lawSynonymKeywords(q); };
+  var synIn = function (q) { var k = kw(q), i = k.indexOf('이용약관의 신고'); return i >= 0 && k[i + 1] === '이용약관'; };
+  ['신규 결합할인 상품을 중단하려고 함', '요금 인상 시 신고', '선택약정 할인 폐지', '요금제를 변경하려면'].forEach(function (q) {
+    ok('#334 쌍 발동 「' + q + '」(이용약관의 신고 → 이용약관 순)', RC.TARIFF_SYN_RE.test(q) && synIn(q), kw(q));
+  });
+  ['3G 서비스 종료', '도매제공을 중단', '무선국 운용을 중단', '가족결합 할인율을 낮추'].forEach(function (q) {
+    ok('#334 비발동 「' + q + '」(쌍 없음·끔 없음)', !RC.TARIFF_SYN_RE.test(q) && kw(q).indexOf('이용약관') < 0 && RC.tariffSynOff(q).length === 0, kw(q));
+  });
+  eq('#334 의미 질의에도 쌍이 붙음(expandQueryForSemantic — PRACTICE_TERMS 순회)', RC.expandQueryForSemantic('선택약정 할인 폐지'), '선택약정 할인 폐지 이용약관의 신고 이용약관');
+  eq('#334 키별 끔 — 「할인 중단」은 중단 대응어만 빠짐', kw('신규 결합할인 상품을 중단하려고 함'), ['이용약관의 신고', '이용약관']);
+  var mixed = '할인 혜택 중단과 함께 인터넷 서비스를 종료';
+  eq('#334 섞인 문장은 중단 키만 끔', RC.tariffSynOff(mixed), ['중단']);
+  ok('#334 섞인 문장 — 종료 쪽 휴업·폐업·폐지·휴지·운용휴지는 남음', ['휴업', '폐업', '폐지', '휴지', '운용휴지'].every(function (w) { return kw(mixed).indexOf(w) >= 0; }), kw(mixed));
+  ok('#334 섞인 문장 — 중단 쪽 정지·중지는 없음', kw(mixed).indexOf('정지') < 0 && kw(mixed).indexOf('중지') < 0, kw(mixed));
+  eq('#334 보호어 — 「3G 요금제 종료 절차」는 끄지 않음', RC.tariffSynOff('3G 요금제 종료 절차'), []);
+  ok('#334 보호어 — 「3G 요금제 종료 절차」에 휴업·폐업 있음', kw('3G 요금제 종료 절차').indexOf('휴업') >= 0 && kw('3G 요금제 종료 절차').indexOf('폐업') >= 0, kw('3G 요금제 종료 절차'));
+  eq('#334 보호어 — 「할인 중단이 휴업 승인 대상인가」도 끄지 않음', RC.tariffSynOff('할인 중단이 휴업 승인 대상인가'), []);
+  eq('#334 보호어 — 와이브로·역무·LTE(대소문자 무시)', ['와이브로 요금제 종료', '역무 상품 폐지', 'lte 요금제 중단'].map(RC.tariffSynOff), [[], [], []]);
+  eq('#334 집계 행 — 발동 없으면 null', RC.tariffMeta('무선국 검사 주기'), null);
+  eq('#334 집계 행 — 할인 중단', RC.tariffMeta('결합할인 상품 중단'), { fn: 'tariff', ms: 0, rows: null, error: null, syn: true, off: ['중단'] });
+  eq('#334 집계 행 — 끔만(혜택을 종료 — 쌍 명사 아님)', RC.tariffMeta('데이터 혜택을 종료'), { fn: 'tariff', ms: 0, rows: null, error: null, syn: false, off: ['종료'] });
+  var last = RC.PRACTICE_TERMS[RC.PRACTICE_TERMS.length - 1];
+  ok('#334 구조 — 켬일 때 이 정규식이 PRACTICE_TERMS의 마지막 항목', last[0] === RC.TARIFF_SYN_RE, String(last[0]));
+  eq('#334 구조 — 대응어 순서 고정(이용약관의 신고가 앞)', last[1], ['이용약관의 신고', '이용약관']);
+  RC.TARIFF_OPTS.off = false;
+  try {
+    eq('#334 off = false — 「할인 중단」에서 휴업 있음(종전 그대로)', kw('결합할인 상품 중단').slice(0, 4), ['휴업', '휴지', '정지', '중지']);
+    eq('#334 off = false — tariffSynOff는 []', RC.tariffSynOff('결합할인 상품 중단'), []);
+  } finally { RC.TARIFF_OPTS.off = true; }
+  // syn은 싣는 때 push하므로 글자를 바꿔 새 맥락에 다시 싣는다
+  var vm = require('vm');
+  var src = fs.readFileSync(path.join(ROOT, 'supabase', 'functions', '_shared', 'rag_core.js'), 'utf8');
+  var lit = 'const TARIFF_OPTS = { syn: true, off: true };';
+  ok('#334 TARIFF_OPTS 리터럴(플래그 시험이 이 글자를 바꿔 싣는다)', src.indexOf(lit) >= 0);
+  var box = { module: { exports: {} } };
+  vm.runInNewContext(src.replace(lit, 'const TARIFF_OPTS = { syn: false, off: false };'), box);
+  var R0 = box.module.exports;
+  var last0 = R0.PRACTICE_TERMS[R0.PRACTICE_TERMS.length - 1];
+  ok('#334 syn = false — PRACTICE_TERMS 마지막 항목이 종전 「보조금」 쌍', String(last0[0]).indexOf('보조금') >= 0 && JSON.stringify(last0[1]) === JSON.stringify(['지원금', '지원금의 차별 지급 금지']), String(last0[0]));
+  eq('#334 둘 다 끔 — 종전 출력(할인 중단 → 중단 대응어, 쌍 없음)', JSON.parse(JSON.stringify(R0.lawSynonymKeywords('결합할인 상품 중단'))), ['휴업', '휴지', '정지', '중지']);
+  eq('#334 둘 다 끔 — 집계 행 null', R0.tariffMeta('결합할인 상품 중단'), null);
+  ok('#334 새 정규식에 뒤보기(?<=) 없음 — 옛 Safari(#290)', !/\(\?<[=!]/.test(src.split('const TARIFF_OPTS')[1].split('function tariffMeta')[0]));
+  var app = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8');
+  var ragTs = fs.readFileSync(path.join(ROOT, 'supabase', 'functions', '_shared', 'rag.ts'), 'utf8');
+  ok('#334 두 판 집계 행 — 낱말 자리 글(reqCut.text)로 계산', app.indexOf('RagCore.tariffMeta(reqCut.text)') >= 0 && ragTs.indexOf('RagCore.tariffMeta(reqCut.text)') >= 0);
+})();
 (function () {   // 상한·두 글자 표제어 규칙 — 시험용 표로 바꿔 끼워 본다(운영 표엔 두 글자 표제어가 아직 없다)
   var T = RC.LAW_TERM_SYNONYMS, saved = T.splice(0, T.length);
   T.push(['보관', ['보관기간']], ['가나다', ['ㄱ1', 'ㄱ2', 'ㄱ3']], ['라마바', ['ㄴ1', 'ㄴ2']]);

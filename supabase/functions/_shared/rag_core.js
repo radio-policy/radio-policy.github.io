@@ -137,6 +137,16 @@
     [/대리점|판매점|유통점|직영/, ['대리점', '판매점', '판매점 선임에 대한 승낙', '공정한 유통 환경 조성']],
     [/추가지원금|공시지원금|공통지원금|보조금/, ['지원금', '지원금의 차별 지급 금지']],
   ];
+  // 요금·할인 상품의 중단·축소·인상 대응(#334, 2026-11-01 Fable 판정 local_docs/이용약관대응_검색표_261031/판정_261101.md).
+  // syn = PRACTICE_TERMS 쌍(V2r), off = 중단·종료·폐지 대응어 키별 끔(V3 per-key + 보호어). 둘은 독립 — 한쪽만 끌 수 있다.
+  // 끄면 그 규칙은 종전과 바이트 같음(쌍은 push하지 않고, 끔 표는 보지 않는다).
+  const TARIFF_OPTS = { syn: true, off: true };
+  // 법은 '할인 중단'이라 쓰지 않고 「이용약관(요금 및 이용조건)의 변경신고」(법 28조·영 34·35조)라 쓴다. 「이용약관의 신고」가
+  // 앞 — 「중단」 질문은 10칸 중 9칸이 차서 첫째만 들어가고, 그 하나가 세 조문 제목에 정확히 걸려야 한다(D1: 핵심 칸 5 → 8;
+  // 현행 KB에서 그 제목은 법 28조·영 34조·영 35조뿐). 앞 키워드가 집은 조각은 뒤 키워드가 못 집으므로(search_chunks_keywords)
+  // 둘 다 10칸에 들어도 순서가 15칸을 바꾼다 — 순서를 바꾸지 말 것.
+  const TARIFF_SYN_RE = /(할인|요금제|결합상품|요금).{0,12}(중단|종료|폐지|축소|변경|인상|없애)|(중단|종료|폐지|축소).{0,12}(할인|요금제|결합상품)/;
+  if (TARIFF_OPTS.syn) PRACTICE_TERMS.push([TARIFF_SYN_RE, ['이용약관의 신고', '이용약관']]);
   // ── 법령 용어 동의어 (L5′, #289, 2026-10-07) ──────────────────────────────
   //  질문의 통용어 → 법령 원문 용어. 「재난대비 IDC 관련 규정은?」에서 Haiku 확장도 「집적정보통신시설」을 내지 못해
   //  집적정보 통신시설 보호지침·정보통신망법 제46조가 참조 자료에 하나도 안 들어왔다(자문 세 문제 준비자료 §2).
@@ -184,11 +194,34 @@
     });
     return out;
   }
+  // 할인·요금제·혜택·상품의 중단·종료·폐지는 사업의 휴업·폐업(법 19·26조)이 아니라 이용약관 변경이다(#334 D3) — 그 키의 대응어
+  // (휴업·휴지·정지·중지 …)만 끈다. 세 키를 한꺼번에 끄지 않는다(「할인 중단과 함께 … 서비스를 종료」는 종료 쪽이 살아야 한다).
+  // 보호어: 「3G 요금제 종료」·「와이브로 요금제 종료」는 상품이 역무 그 자체라 19조가 근거 — 세대·역무·휴업·폐업이 질문에 있으면 끄지 않는다
+  // (3G 대응 쌍은 「3G (서비스)? 종료」 꼴만 잡아 이 질문들을 못 받는다). 낱말 '폐지'는 질문 낱말로 남고 사전 가중만 내려간다.
+  const TARIFF_OFF_NOUN = '(할인|요금|혜택|결합|상품|요금제|프로모션)\\S{0,8}\\s*';
+  const TARIFF_OFF_KEYS = { '중단': new RegExp(TARIFF_OFF_NOUN + '중단'), '종료': new RegExp(TARIFF_OFF_NOUN + '종료'), '폐지': new RegExp(TARIFF_OFF_NOUN + '폐지') };
+  const TARIFF_OFF_GUARD = /(2G|3G|4G|5G|LTE|WCDMA|CDMA|와이브로|역무|휴업|폐업)/i;
+  function tariffSynOff(query) {   // 끈 키 목록(집계 표식·시험용) — off가 꺼져 있거나 보호어가 있으면 []
+    if (!TARIFF_OPTS.off) return [];
+    const q = String(query || '');
+    if (TARIFF_OFF_GUARD.test(q)) return [];
+    return Object.keys(TARIFF_OFF_KEYS).filter(function (k) { return TARIFF_OFF_KEYS[k].test(q); });
+  }
+  // search_meta 집계 행(#334) — 두 buildAdvisoryContext가 낱말 자리에 쓰는 글(꼬리 뗀 kwQuery)로 부른다. 발동이 없으면 null(행을 안 남김).
+  // 검색 결과엔 영향 0. syn = 쌍이 실제로 붙었는지(TARIFF_OPTS.syn까지), off = 끈 키.
+  function tariffMeta(query) {
+    const q = String(query || '');
+    const syn = !!TARIFF_OPTS.syn && TARIFF_SYN_RE.test(q);
+    const off = tariffSynOff(q);
+    return (syn || off.length) ? { fn: 'tariff', ms: 0, rows: null, error: null, syn: syn, off: off } : null;
+  }
   // 질문에 정책 동사·실무 용어가 있으면 대응하는 법령 표제어를 돌려준다 (검색 키워드에 추가 투입용)
   function lawSynonymKeywords(query) {
     const q = String(query || '');
+    const off = tariffSynOff(q);
     const out = [];
     Object.keys(LAW_SYNONYMS).forEach(function (k) {
+      if (off.indexOf(k) >= 0) return;
       if (q.indexOf(k) >= 0) LAW_SYNONYMS[k].forEach(function (s) { if (out.indexOf(s) === -1) out.push(s); });
     });
     PRACTICE_TERMS.forEach(function (pair) {
@@ -2290,6 +2323,8 @@
     REQ_TAIL_OPTS: REQ_TAIL_OPTS, REQ_CORE: REQ_CORE, stripRequestTail: stripRequestTail,
     LAW_SYNONYMS: LAW_SYNONYMS, PRACTICE_TERMS: PRACTICE_TERMS,
     lawSynonymKeywords: lawSynonymKeywords, expandQueryForSemantic: expandQueryForSemantic,
+    TARIFF_OPTS: TARIFF_OPTS, TARIFF_SYN_RE: TARIFF_SYN_RE, TARIFF_OFF_KEYS: TARIFF_OFF_KEYS, TARIFF_OFF_GUARD: TARIFF_OFF_GUARD,   // #334
+    tariffSynOff: tariffSynOff, tariffMeta: tariffMeta,
     LAW_TERM_SYNONYMS: LAW_TERM_SYNONYMS, LAW_TERM_MAX: LAW_TERM_MAX, lawTermKeywords: lawTermKeywords,   // L5′(#289)
     GENERIC_QUERY_WORDS: GENERIC_QUERY_WORDS, QUERY_TITLE_STOP: QUERY_TITLE_STOP, isTitleStop: isTitleStop,
     lawRank: lawRank, DOMAIN_DOC_RE: DOMAIN_DOC_RE,
