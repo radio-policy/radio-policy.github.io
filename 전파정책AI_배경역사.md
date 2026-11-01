@@ -9804,7 +9804,7 @@ v4도 85·75에는 못 미친다(전체 수치는 절반을 보고 고쳤으므�
 
 **사내 권고 ⓐⓑ 반영 (10-11 17:2x, 사내 04467e9c — 다음 17:00 회차부터).** 판정 §6의 권고(ⓐ `select=*` → 명시 칸, ⓑ 빈 목록 가드 확대)를 사내가 받아들여 스냅샷이 15표(위 13표 + `document_chunks`·`app_config`)를 칸을 적어 읽고, 0행·절반 넘게 줄면 덮지 않고 지난 파일 유지(정말 지운 것이면 사내가 한 줄로 받아들임), `document_chunks`가 0행·절반 미만이면 스냅샷 전체를 멈춘다. 칸을 빼거나 이름을 바꾸면 그 표만 400/401로 건너뜀, 칸을 더하면 사내로 안 들어오지만 사내가 매 회차 `docs/db_baseline/10_tables.sql`과 대조해 알린다. 그래서 지침의 #295 금지 조항을 「칸 추가·삭제·이름 변경과 anon 좁히기·정책 삭제 전 사내 통보 + 설계도 재생성」으로 고쳤다. 사내 dry-run(외부 ab7da35 뒤): 15표 행 수가 10-11 17:00 manifest와 같고 칸 대조 새 칸 0·없어짐 0.
 
-**10-30 플랫폼 변경 관찰 자리.** (10-31 첫 창이 `select defaclrole::regrole, defaclnamespace, defaclobjtype, defaclacl from pg_default_acl` 한 번 읽어 여기 적는다 — 전역 행 포함.)
+**10-30 플랫폼 변경 관찰 (2026-11-01 읽음, `pg_default_acl` 29행 — 전역 행 포함).** ① **postgres 소유(우리 마이그레이션이 만드는 객체)는 #295 적용 직후와 같다**: 전역 f `{postgres=X}`, public r `{postgres·authenticated·service_role=arwdDxtm}`·S `{postgres·authenticated·service_role=rwU}`(anon 없음), public f `{postgres=X, service_role=X}`, extensions f `{=X}`(storage 스키마 r/S/f는 세 역할 그대로). ② **supabase_admin 소유 public r/S/f는 여전히 anon·authenticated·service_role에 `arwdDxtm`·`rwU`·`X`**(graphql·graphql_public도 같음) — #214가 적은 「10-30에 테이블·시퀀스분이 걷힌다」는 이 프로젝트의 기본 권한 행에서는 11-01 현재 보이지 않는다. 운영 영향은 없다: supabase_admin 소유 객체는 플랫폼(확장·내부 기능)만 만들고 우리 마이그레이션은 postgres로 돌므로, 새 표·시퀀스·함수의 권한은 #295의 postgres 기본값 + 마이그레이션 속 명시 GRANT(#214)로 정해진다. 플랫폼이 나중에 걷어도 우리 쪽 할 일은 없다(`docs/db_baseline/62_default_privileges.sql`은 postgres 행만 담는다).
 
 ---
 
