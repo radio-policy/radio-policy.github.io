@@ -28,6 +28,8 @@ var NAMES = ['PRIORITY_KW_RE', 'VERB_TAIL', 'extractKeywords', 'LAW_SYNONYMS', '
   'extractNewsKeywords', 'NEWS_RANK_OPTS', 'isNewsFillerWord', 'newsScoreWords', 'rankNewsCandidates', 'PERDOC_LIMIT', 'TOTAL_CHUNK_CUT', 'STREAM_IDLE_MS', 'EXPAND_OPTS', 'CITING_OPTS',
   'ANNEX_MAX_UNITS', 'ANNEX_MAX_CHUNKS', 'ASM_RARE_MAX', 'RRF_K', 'articleBonus', 'rankChunks', 'titleActWeights',
   'rankLawHits', 'NAMED_ARTICLE_MAX', 'namedArticleRefs', 'pickNamedArticles', 'fetchNamedArticles', 'buildRagContext', 'buildKbContext',
+  // 질문이 지목한 별표(#335)
+  'namedAnnexRefs', 'pickNamedAnnexes', 'fetchNamedAnnexes',
   // 자문 빠뜨림 1차 덧붙이기(#283)
   'ADDON_OPTS', 'DELEG_OPTS', 'NEIGHBOR_OPTS', 'NOTICE_DOC_RE', 'unitKey', 'capSpill', 'pickSpill', 'delegationBases', 'pickDelegations',
   'neighborTarget', 'pickNeighbors', 'buildAddOnContext', 'fetchAddOns', 'trimAddOns',
@@ -392,6 +394,55 @@ eq('titleActWeights', RC.titleActWeights(['종료', '휴업', '직접', '3G'], '
   eq('pickNamedArticles 약한 이름을 못 맞추고 앞 법령도 없으면 안 고름', pick2('산정 방식 제9조', { '9조': [{ doc_name: D.law, article_no: '9조(주파수분배)' }, { doc_name: gosiSD, article_no: '9조(실제매출액)' }] }), []);
   // 약칭은 법률에만(#240·#246): 단통법은 폐지돼 현행 문서가 없다 — 그 법률 이름을 담은 고시의 제4조에 붙지 않는다(사내 회신)
   eq('pickNamedArticles 약칭(단통법)이 고시에 붙지 않음', pick2('단통법 제4조 과징금', { '4조': [{ doc_name: '이동통신단말장치 유통구조 개선에 관한 법률 위반 과징금 부과 세부기준(방송미디어통신위원회고시)(제2026-1호)(20260101)', article_no: '4조(과징금 산정)' }] }), []);
+})();
+
+// ── 질문이 지목한 별표(#335 — 사내 e17c1a62 이식, 사내 tests/test_named_annex.py ①과 같은 사례) ──
+// 조회 흉내는 호출측 조건(현행·공개, article_no like '별표 N(%')을 따른다 — 옛 판·비공개 문서는 조회에서 이미 빠진다.
+var namedAnnexTests = (async function () {
+  var DEC = '전기통신사업법 시행령(대통령령)(제36735호)(20261001)', DEC_OLD = '전기통신사업법 시행령(대통령령)(제36281호)(20260428)',
+    RAD = '전파법 시행령(대통령령)(제36763호)(20261022)';
+  var ROWS = [
+    { doc_name: DEC, article_no: '별표 5(시정조치명령의 이행기간(제45조 관련))' },
+    { doc_name: DEC, article_no: '별표 5(시정조치명령의 이행기간(제45조 관련))' },
+    { doc_name: DEC, article_no: '별표 5의2(전기통신사업자 사업의 일부 정지 명령의 기준(제45조의2제1항 관련))' },
+    { doc_name: DEC, article_no: '별표 4(금지행위의 유형 및 기준(제42조제1항 관련))' },
+    { doc_name: RAD, article_no: '별표 5(무선국 검사 수수료(제97조 관련))' },
+    { doc_name: '개정 전파법 시행령(안).pdf', article_no: '별표 7(가)' },
+  ];
+  var calls = [];
+  var fetchRows = function (no) { calls.push(no); return Promise.resolve(ROWS.filter(function (r) { return r.article_no.indexOf('별표 ' + no + '(') === 0; })); };
+  var pick = async function (q, f) { return (await RC.fetchNamedAnnexes(q, f || fetchRows)).map(function (p) { return [p.doc_name.split('(')[0], p.no]; }); };
+  eq('지목 별표: 법령명 별표N(붙여 씀, 사내 11-02 질문 그대로)', await pick('전기통신사업법 시행령 별표5 알려줘'), [['전기통신사업법 시행령', '5']]);
+  eq('지목 별표: 법령명 별표 N(띄어 씀)', await pick('전기통신사업법 시행령 별표 5 알려줘'), [['전기통신사업법 시행령', '5']]);
+  eq('지목 별표: 「제」 붙은 꼴·낫표', await pick('「전기통신사업법 시행령」 별표 제5 의 내용'), [['전기통신사업법 시행령', '5']]);
+  eq('지목 별표: 별표 N의M', await pick('전기통신사업법 시행령 별표 5의2 기준'), [['전기통신사업법 시행령', '5의2']]);
+  eq('지목 별표: 두 법령 두 별표(등장 순)', await pick('전파법 시행령 별표 5와 전기통신사업법 시행령 별표 5의2를 비교'),
+    [['전파법 시행령', '5'], ['전기통신사업법 시행령', '5의2']]);
+  eq('지목 별표: 이어받기 「같은 법 시행령 별표 5」(앞 조 언급이 법령을 세움)', await pick('전기통신사업법 제52조와 같은 법 시행령 별표 5'), [['전기통신사업법 시행령', '5']]);
+  eq('지목 별표: 같은 법령 같은 번호 두 번은 한 번', await pick('전기통신사업법 시행령 별표 5, 또 별표 5'), [['전기통신사업법 시행령', '5']]);
+  eq('지목 별표: 상한 ANNEX_MAX_UNITS', (await pick('전기통신사업법 시행령 별표 4, 별표 5, 별표 5의2')).length, RC.ANNEX_MAX_UNITS);
+  eq('지목 별표: 같은 이름 두 판이면 끝 시행일이 늦은 쪽', (await RC.fetchNamedAnnexes('전기통신사업법 시행령 별표 5', function () {
+    return [{ doc_name: DEC_OLD, article_no: '별표 5(가)' }, { doc_name: DEC, article_no: '별표 5(가)' }]; })).map(function (p) { return p.doc_name; }), [DEC]);
+  calls = [];
+  eq('지목 별표 음성: 이름 없는 「별표 5」 — 조회도 안 함', [await pick('별표 5 알려줘'), calls], [[], []]);
+  eq('지목 별표 음성: 앞 법령 없는 「시행령 별표 5」', await pick('시행령 별표 5 알려줘'), []);
+  eq('지목 별표 음성: 그 번호 별표가 없는 법령(법률엔 별표 없음)', await pick('전기통신사업법 별표 5'), []);
+  eq('지목 별표 음성: 없는 번호', await pick('전기통신사업법 시행령 별표 99'), []);
+  eq('지목 별표 음성: 「별표 5」 뒤 숫자 이어짐(별표 50)', await pick('전기통신사업법 시행령 별표 50'), []);
+  eq('지목 별표 음성: 파일 문서(…(안).pdf)의 별표', await pick('전파법 시행령 별표 7'), []);
+  calls = [];
+  eq('지목 별표 음성: 별표 없는 질문 — 조회도 안 함', [await pick('전기통신사업법 시행령 제45조'), calls], [[], []]);
+  eq('지목 별표: 빈 질문', await pick(''), []);
+  eq('지목 별표: 조회 실패는 빈 배열', await pick('전기통신사업법 시행령 별표 5', function () { return Promise.reject(new Error('x')); }), []);
+  eq('namedAnnexRefs 꼴(no·이어받기)', RC.namedAnnexRefs('전기통신사업법 제52조와 같은 법 시행령 별표 5의 2').map(function (r) {
+    return [r.no, !!(r.info && r.info.subord), r.ctx ? r.ctx.candidates[r.ctx.candidates.length - 1] : null]; }), [['5의2', true, '전기통신사업법']]);
+  // 두 판 같은 자리 — 지목 별표가 별표 동반 첫 자리·표지 한 줄·조회 조건(현행·공개·「별표 N(」, 1,000행씩 끝까지)
+  var app = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8');
+  var ragTs = fs.readFileSync(path.join(ROOT, 'supabase', 'functions', '_shared', 'rag.ts'), 'utf8');
+  var MARK = "'\\n※ 질문이 지목한 별표입니다.'";
+  var QA = ".select('doc_name, article_no').eq('status', 'current').eq('is_approved', true)\n      .like('article_no', '별표 ' + no + '(%').order('id', { ascending: true }).range(p * 1000, p * 1000 + 999)";
+  eq('app.js 지목 별표 조회·표지', [app.indexOf('RagCore.fetchNamedAnnexes(userText, fetchAnnexNoRows)') >= 0, app.indexOf(MARK) >= 0, app.indexOf(QA) >= 0], [true, true, true]);
+  eq('rag.ts 지목 별표 조회·표지', [ragTs.indexOf('RagCore.fetchNamedAnnexes(question, (no: string) => fetchAnnexNoRows(sb, no))') >= 0, ragTs.indexOf(MARK) >= 0, ragTs.indexOf(QA) >= 0], [true, true, true]);
 })();
 
 // 조회 순서·첫 조각만(통째 보강이 나머지를 합친다)·실패 시 빈 배열 — 비동기라 끝에서 기다린다
@@ -1339,7 +1390,7 @@ var topicTests = (async function () {
   eq('rag.ts 법률 목록 조회·채움', [ragTs.indexOf(Q1) >= 0, ragTs.indexOf(Q2) >= 0, ragTs.indexOf('RagCore.fillKbLawList(systemPrompt, kbLaws && kbLaws.watch, kbLaws && kbLaws.hidden) + telegramGuide') >= 0], [true, true, true]);
 })();
 
-Promise.all([asyncTests, addOnTests, addOnTests2, addendumTests, applyTests, pendingNewTests, yakSectionTests, topicTests]).catch(function (e) { fails++; total++; console.log('FAIL  비동기 검사 예외 ' + (e && e.message)); }).then(function () {
+Promise.all([asyncTests, namedAnnexTests, addOnTests, addOnTests2, addendumTests, applyTests, pendingNewTests, yakSectionTests, topicTests]).catch(function (e) { fails++; total++; console.log('FAIL  비동기 검사 예외 ' + (e && e.message)); }).then(function () {
   console.log('\n' + (fails ? 'FAIL ' + fails + '/' + total : 'ALL OK ' + total + '/' + total));
   process.exit(fails ? 1 : 0);
 });

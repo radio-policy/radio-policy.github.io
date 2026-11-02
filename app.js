@@ -1132,6 +1132,21 @@ async function fetchArticleKeyRows(key) {
     .like('article_no', key + '%').order('id', { ascending: true }).limit(1000);
   return r.data || [];
 }
+// 질문이 지목한 별표(#335)의 이름 맞추기 재료 — 그 번호 별표(「별표 N(…)」 조각)를 가진 현행·공개 문서. 별표 1·2는 문서 90여 개·조각 1~2천 행이라
+// (11-02 실DB: 별표 1 98개 문서 2,283행) 1,000행씩 끝까지 넘긴다(5쪽 상한). 한 쪽이라도 실패하면 통째로 실패 — 일부 문서군만으로 이름을 맞추면
+// 끝 일치가 엉뚱한 법령에 붙을 수 있다(호출측 fetchNamedAnnexes가 빈 목록으로 받아 고르지 않는다). rag.ts fetchAnnexNoRows와 동일 조건.
+async function fetchAnnexNoRows(no) {
+  if (!sb) return [];
+  var out = [];
+  for (var p = 0; p < 5; p++) {
+    var r = await sb.from('document_chunks').select('doc_name, article_no').eq('status', 'current').eq('is_approved', true)
+      .like('article_no', '별표 ' + no + '(%').order('id', { ascending: true }).range(p * 1000, p * 1000 + 999);
+    if (r.error) throw r.error;
+    out = out.concat(r.data || []);
+    if (!r.data || r.data.length < 1000) break;
+  }
+  return out;
+}
 // 역참조 발췌(#155-보론4)에 쓰는 조회 — rag.ts fetchCitingChunks와 동일 조건
 var CITING_OPTS = RagCore.CITING_OPTS;
 async function fetchCitingChunks(docName, key) {
@@ -1913,15 +1928,26 @@ var lastAnnexIds = [];           // 실은 별표 조각 「법령명|별표 N|c
 var ANNEX_MAX_UNITS  = RagCore.ANNEX_MAX_UNITS;    // 질문당 별표 개수 — rag_core.js
 var ANNEX_MAX_CHUNKS = RagCore.ANNEX_MAX_CHUNKS;   // 별표당 청크 — rag_core.js
 
-async function buildAnnexContext(chunks, question) {
+// askedP(#335) = 질문이 지목한 별표 [{doc_name, no}](RagCore.fetchNamedAnnexes) — 있으면 상한 ANNEX_MAX_UNITS 안에서 조문 인용보다 먼저, 근거 조문이 없어도 싣는다.
+// 별표를 적지 않은 질문은 빈 배열이라 종전과 바이트 같다. rag.ts buildAnnexContext와 동일 유지.
+async function buildAnnexContext(chunks, question, askedP) {
   lastAnnexSources = [];
   lastAnnexIds = [];
-  if (!sb || !chunks || !chunks.length) return '';
+  var asked = [];
+  try { asked = (askedP ? await askedP : []) || []; } catch (e) { asked = []; }
+  chunks = chunks || [];
+  if (!sb || (!chunks.length && !asked.length)) return '';
   try {
     // 1) 검색된 '조문' 청크에서 별표 인용을 뽑는다. 별표·별지 청크 자신은 제외(자기 참조 방지).
     //    「다른 법령」 별표 N 형태는 건너뛴다 — 같은 문서의 같은 번호 별표를 붙이면
     //    엉뚱한 표가 들어간다(전체 인용 978건 중 90건이 타 법령 인용).
     var wanted = [], seen = {};
+    asked.forEach(function(w) {                   // 질문이 지목한 별표(#335) — 첫 자리
+      var key = w.doc_name + '|' + w.no;
+      if (seen[key]) return;
+      seen[key] = 1;
+      wanted.push({ doc_name: w.doc_name, no: w.no, from: '질문', asked: true });
+    });
     var reCite = /(「[^」]{2,40}」[^\n]{0,20}?)?별표\s*제?\s*(\d+(?:의\d+)?)/g;
     chunks.forEach(function(c) {
       if (/^(별표|별지)/.test(c.article_no || '')) return;
@@ -1953,6 +1979,7 @@ async function buildAnnexContext(chunks, question) {
       var title = (all[0].article_no || ('별표 ' + w.no));
       var omitted = all.length - picked.length;
       blocks.push('[' + w.doc_name + ' ' + title + ']'
+        + (w.asked ? '\n※ 질문이 지목한 별표입니다.' : '')     // #335 — 조문 인용 별표는 종전 바이트 그대로
         + (omitted > 0 ? '\n※ 이 별표는 전체 ' + all.length + '개 조각 중 질문과 가까운 ' + picked.length + '개만 실었습니다. 표의 일부만 보이면 그렇게 밝히세요.' : '')
         + '\n' + picked.map(function(c) { return c.content; }).join('\n'));
       lastAnnexSources.push(w.doc_name.split('(')[0].trim() + ' ' + title.split('(')[0].trim());
@@ -3089,6 +3116,12 @@ async function buildAdvisoryContext(userText) {
       return rows;
     })
     .catch(function(e) { console.warn('지목 조문 조회 실패(건너뜀):', e); metaNote('named_articles', namedT0, { error: { message: String(e && e.message || e) } }); return []; });
+  // 질문이 지목한 별표(#335) — 「전기통신사업법 시행령 별표 5」를 별표 동반(buildAnnexContext) 첫 자리에. 별표 언급이 없으면 DB 왕복 0·search_meta 행 없음
+  // (rows = 고른 별표 수 — 0이면 이름을 못 맞췄거나 그 번호 별표가 없음). 규칙은 rag_core.js, rag.ts와 동일 유지.
+  var annexAskT0 = performance.now(), annexAskRefs = RagCore.namedAnnexRefs(userText).length;
+  const annexAskedP = RagCore.fetchNamedAnnexes(userText, fetchAnnexNoRows)
+    .then(function(rows) { if (annexAskRefs) metaNote('named_annex', annexAskT0, { data: rows }); return rows; })
+    .catch(function(e) { console.warn('지목 별표 조회 실패(건너뜀):', e); return []; });
   // 시행 전 제정 법령(#311) — 현행판 없는 새 법령은 검색 RPC가 못 본다. 관련 판정에 위 법령요약 검색(kbP)과 지목 조문(namedP의 pendingNamed, #311-보론 G0)을 쓰고
   // 다른 갈래와 독립이라 기다리지 않는다. search_meta에는 그런 법령이 있을 때만 남긴다(rows = 실은 조 수, gate = named·kb·sim, docs = 후보 문서 수). rag.ts buildAdvisoryContext와 동일 유지.
   var pnT0 = performance.now();
@@ -3251,7 +3284,8 @@ async function buildAdvisoryContext(userText) {
   // 산정한다」)의 인용을 놓친다. ragChunks를 앞에 둬야 상한 2개가 상위 RAG 조문에 먼저 간다.
   // rag.ts buildAdvisoryContext 호출부와 동일 유지 — 한쪽만 고치지 말 것.
   // 덧붙인 조문(상한 구제·위임·공통 인용)의 별표는 여기 넣지 않는다 — 덧붙이기 구역의 따로 1칸(예산 안, rag_core.js fetchAddOns)이다(#283-보론2).
-  var annexP = buildAnnexContext(ragChunks.concat(lawExtra || []), userText);
+  // 질문이 지목한 별표(#335, annexAskedP)는 상한 2칸의 첫 자리에 — 근거 조문이 그 별표를 인용하지 않아도 싣는다.
+  var annexP = buildAnnexContext(ragChunks.concat(lawExtra || []), userText, annexAskedP);
   var citingContext = '', _advCitingIds = [];
   var ce = await citingP;
   citingContext = ce.text || '';

@@ -821,6 +821,81 @@
     return out;
   }
 
+  // ── 질문이 지목한 별표 (#335, 2026-11-02 — 사내판 선행 e17c1a62 이식, 규칙 같음) ──────────────
+  // 「전기통신사업법 시행령 별표5 알려줘」(사내 11-02 동료 자문): 위 조문 지정은 「제N조」만 읽고, 낱말 검색은 「별표5」(한 낱말)·「5」(한 글자라
+  // 버림)를 못 쓰며, 별표 동반(#90, 각 파일의 buildAnnexContext)은 근거 조문이 「별표 N」을 인용해야만 싣는다 → 제45조가 검색에 안 잡히면
+  // 별표 5는 KB에 있어도 안 실려 모델이 「반입되어 있지 않다」고 답했다. 질문의 「법령명 별표 N」을 읽어 별표 동반 칸(ANNEX_MAX_UNITS) **첫 자리**에 싣는다.
+  // 법령 이름 읽기·맞추기는 조문 지정과 같은 함수(CiteVerify.lawNameBefore·lawScope) — 이름이 앞에 없는 「별표 5」, 앞 법령 없는 「시행령 별표 5」,
+  // 그 번호 별표가 없는 법령(「전기통신사업법 별표 5」 — 별표는 시행령에 있다)은 고르지 않는다. 별지는 대상이 아니다. 출처 문자열은 별표 동반과 같은
+  // 「<법령> 별표 N」 꼴이라 인용 대조(checkCitation)는 그대로다. 별표를 적지 않은 질문은 빈 배열(DB 왕복 0) → 자문 입력이 바이트 같다.
+  const NAMED_ANNEX_RE = /별표\s*제?\s*(\d+(?:\s*의\s*\d+)?)(?!\d)/g;
+  // 질문의 별표 언급을 등장 순서대로 — {no:'5'|'5의2', info: 바로 앞 법령명(lawNameBefore), ctx: 앞서 이름이 나온 법령}.
+  // 조 언급(「전기통신사업법 제52조와 같은 법 시행령 별표 5」의 제52조)도 이어받을 법령을 세운다(읽기만 — 조문은 fetchNamedArticles 몫).
+  // 이름도 앞선 법령도 없는 언급은 뺀다. CiteVerify가 없는 환경에서는 빈 배열.
+  function namedAnnexRefs(query) {
+    const CV = root.CiteVerify;
+    if (!CV) return [];
+    const s = String(query || '');
+    const ev = [];
+    let m;
+    const reA = new RegExp(NAMED_ART_RE.source, 'g'), reX = new RegExp(NAMED_ANNEX_RE.source, 'g');
+    while ((m = reA.exec(s))) ev.push({ pos: m.index, no: null });
+    while ((m = reX.exec(s))) ev.push({ pos: m.index, no: m[1].replace(/\s+/g, '') });
+    ev.sort(function (a, b) { return a.pos - b.pos; });   // 같은 자리면 조 언급이 앞(안정 정렬)
+    const refs = [];
+    let lastNamed = null;
+    ev.forEach(function (e) {
+      const info = CV.lawNameBefore(s.slice(0, e.pos));
+      const namedNow = info && info.candidates && !info.weak ? info : null;   // 약한 이름은 이어받을 법령로 치지 않는다(namedArticleRefs와 같음)
+      if (e.no && (info || lastNamed)) refs.push({ no: e.no, info: info, ctx: lastNamed });
+      if (namedNow) lastNamed = namedNow;
+    });
+    return refs;
+  }
+  // 언급마다 문서 하나를 고른다. rowsByNo = {no: [{doc_name, article_no}]} — 그 번호 별표(「별표 N(…)」 조각)를 가진 현행·공개 문서(호출측 조회).
+  // 이름 맞추기 대상은 **그 번호 별표를 가진 문서군만**(번호마다 따로 — 별표가 없는 법령에 붙을 일이 없다). 같은 이름이 여럿이면 문서명 끝 시행일이 늦은 쪽.
+  // '시행령 별표 5'·'같은 법 별표 5'는 앞서 이름이 나온 법령이 있을 때만(pickNamedArticles와 같음). 반환 [{doc_name, no}] 언급 순, 최대 ANNEX_MAX_UNITS.
+  function pickNamedAnnexes(refs, rowsByNo) {
+    const CV = root.CiteVerify;
+    if (!CV) return [];
+    const out = [], seen = {};
+    (refs || []).forEach(function (ref) {
+      if (out.length >= ANNEX_MAX_UNITS) return;
+      if (ref.info && (ref.info.subord || ref.info.inherit) && !(ref.ctx && ref.ctx.candidates)) return;
+      const fams = [], docOf = {}, prefix = '별표 ' + ref.no + '(';
+      ((rowsByNo || {})[ref.no] || []).forEach(function (r) {
+        if (!r || FILE_DOC_RE.test(r.doc_name || '') || String(r.article_no || '').indexOf(prefix) !== 0) return;
+        const f = CV.docFamily(r.doc_name);
+        if (!f) return;
+        if (fams.indexOf(f) === -1) fams.push(f);
+        if (!docOf[f] || r.doc_name > docOf[f]) docOf[f] = r.doc_name;
+      });
+      if (!fams.length) return;
+      const scope = CV.lawScope(ref.info, ref.ctx, fams);   // null = 법령 미상 — 번호만으로는 고르지 않는다
+      const fam = (scope || []).find(function (f) { return fams.indexOf(f) !== -1; });
+      if (!fam) return;
+      const k = docOf[fam] + '|' + ref.no;
+      if (seen[k]) return;
+      seen[k] = 1;
+      out.push({ doc_name: docOf[fam], no: ref.no });
+    });
+    return out;
+  }
+  // 조회까지 — fetchAnnexNoRows(no) → [{doc_name, article_no}](그 번호 별표를 가진 현행·공개 문서의 조각 행). 별표 언급이 없으면 DB 왕복 0.
+  // 번호는 언급 순 NAMED_ARTICLE_MAX개까지 조회한다. 조회 실패는 그 번호만 빈 목록(→ 고르지 않음).
+  async function fetchNamedAnnexes(query, fetchAnnexNoRows) {
+    const refs = namedAnnexRefs(query);
+    if (!refs.length) return [];
+    const nos = [];
+    refs.forEach(function (r) { if (nos.indexOf(r.no) === -1 && nos.length < NAMED_ARTICLE_MAX) nos.push(r.no); });
+    const rows = await Promise.all(nos.map(function (no) {
+      return Promise.resolve().then(function () { return fetchAnnexNoRows(no); }).then(function (r) { return r || []; }, function () { return []; });
+    }));
+    const rowsByNo = {};
+    nos.forEach(function (no, i) { rowsByNo[no] = rows[i]; });
+    return pickNamedAnnexes(refs, rowsByNo);
+  }
+
   // ── 자문 빠뜨림 1차: 덧붙이기 세 갈래 (#283, 2026-10-06 — 설계 local_docs/자문누락_설계_261005.md, Fable 재검토 대상) ──
   // 10-05 측정: 회귀 20문항의 필수 조문 68개 중 원문이 참조 자료에 든 것 34개(50%). 든 조문은 14%만 빠뜨리고 안 든 조문은 65%를
   // 빠뜨렸다 — 빠뜨림의 주원인은 검색이다. 빠진 조문의 꼴은 ① 위임 사슬 아래(시행령·고시)와 그 위 근거 ② 같은 고시의 이웃 조
@@ -2339,6 +2414,7 @@
     titleActWeights: titleActWeights, rankLawHits: rankLawHits,
     NAMED_ARTICLE_MAX: NAMED_ARTICLE_MAX, namedArticleRefs: namedArticleRefs, pickNamedArticles: pickNamedArticles,
     fetchNamedArticles: fetchNamedArticles,
+    namedAnnexRefs: namedAnnexRefs, pickNamedAnnexes: pickNamedAnnexes, fetchNamedAnnexes: fetchNamedAnnexes,   // 질문이 지목한 별표(#335)
     ADDON_OPTS: ADDON_OPTS, DELEG_OPTS: DELEG_OPTS, NEIGHBOR_OPTS: NEIGHBOR_OPTS,
     NOTICE_DOC_RE: NOTICE_DOC_RE, unitKey: unitKey, capSpill: capSpill, pickSpill: pickSpill,
     delegationBases: delegationBases, pickDelegations: pickDelegations, neighborTarget: neighborTarget, pickNeighbors: pickNeighbors, neighborWhole: neighborWhole,
