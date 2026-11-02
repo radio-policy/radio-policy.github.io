@@ -242,13 +242,26 @@ eq('L5′ 질문 글귀만 있는 쌍은 없음(보관)', RC.lawSynonymKeywords(
   vm.runInNewContext(src.replace(lit, 'const TARIFF_OPTS = { syn: false, off: false };'), box);
   var R0 = box.module.exports;
   var last0 = R0.PRACTICE_TERMS[R0.PRACTICE_TERMS.length - 1];
-  ok('#334 syn = false — PRACTICE_TERMS 마지막 항목이 종전 「보조금」 쌍', String(last0[0]).indexOf('보조금') >= 0 && JSON.stringify(last0[1]) === JSON.stringify(['지원금', '지원금의 차별 지급 금지']), String(last0[0]));
+  ok('#334 syn = false — PRACTICE_TERMS 마지막 항목이 표 리터럴의 끝(#336 회계분리 쌍)', String(last0[0]).indexOf('회계') >= 0 && JSON.stringify(last0[1]) === JSON.stringify(['회계 정리']), String(last0[0]));
   eq('#334 둘 다 끔 — 종전 출력(할인 중단 → 중단 대응어, 쌍 없음)', JSON.parse(JSON.stringify(R0.lawSynonymKeywords('결합할인 상품 중단'))), ['휴업', '휴지', '정지', '중지']);
   eq('#334 둘 다 끔 — 집계 행 null', R0.tariffMeta('결합할인 상품 중단'), null);
   ok('#334 새 정규식에 뒤보기(?<=) 없음 — 옛 Safari(#290)', !/\(\?<[=!]/.test(src.split('const TARIFF_OPTS')[1].split('function tariffMeta')[0]));
   var app = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8');
   var ragTs = fs.readFileSync(path.join(ROOT, 'supabase', 'functions', '_shared', 'rag.ts'), 'utf8');
   ok('#334 두 판 집계 행 — 낱말 자리 글(reqCut.text)로 계산', app.indexOf('RagCore.tariffMeta(reqCut.text)') >= 0 && ragTs.indexOf('RagCore.tariffMeta(reqCut.text)') >= 0);
+})();
+// 회계분리 → 회계 정리(#336, 사내 인계 쌍 글자 그대로, 측정 local_docs/시정조치대응_261102/결과_261102.md) — 합성 문장만
+(function () {
+  var kw = function (q) { return RC.lawSynonymKeywords(q); };
+  ['통신사 회계분리 의무', '회계 분리 기준 위반', '회계분리해서 영업보고서'].forEach(function (q) {
+    ok('#336 회계분리 → 「회계 정리」 「' + q + '」', kw(q).indexOf('회계 정리') >= 0, kw(q));
+  });
+  ok('#336 「회계정리단위」(분리 없음)엔 안 붙음', kw('회계정리단위 정의').indexOf('회계 정리') < 0, kw('회계정리단위 정의'));
+  eq('#336 의미 질의에도 붙음(PRACTICE_TERMS — 측정 「켬」 꼴)', RC.expandQueryForSemantic('회계분리 의무'), '회계분리 의무 회계 정리');
+  // 같은 인계의 시정조치 쌍은 받지 않았다 — 같은 제목 전기사업법 23조 끼어듦·다른 법 질문 밀어내기(결과 §1). 좁힌 꼴은 Fable 판정 항목.
+  ['방미통위 시정조치 시 과기정통부 협의 조항', '개인정보보호위원회가 통신사에 시정명령을 내리는 근거'].forEach(function (q) {
+    ok('#336 시정조치 질문에 「금지행위에 대한 조치」를 붙이지 않음 「' + q + '」', kw(q).indexOf('금지행위에 대한 조치') < 0, kw(q));
+  });
 })();
 (function () {   // 상한·두 글자 표제어 규칙 — 시험용 표로 바꿔 끼워 본다(운영 표엔 두 글자 표제어가 아직 없다)
   var T = RC.LAW_TERM_SYNONYMS, saved = T.splice(0, T.length);
