@@ -58,7 +58,9 @@ var NAMES = ['PRIORITY_KW_RE', 'VERB_TAIL', 'extractKeywords', 'LAW_SYNONYMS', '
   // 요금·할인 대응(#334)
   'TARIFF_OPTS', 'TARIFF_SYN_RE', 'TARIFF_OFF_KEYS', 'TARIFF_OFF_GUARD', 'tariffSynOff', 'tariffMeta',
   // 지시문 보유 지식 베이스 절의 현행 법률 목록(#332)
-  'KB_LAW_LIST_TOKEN', 'KB_LAW_LIST_FALLBACK', 'kbLawNames', 'fillKbLawList'];
+  'KB_LAW_LIST_TOKEN', 'KB_LAW_LIST_FALLBACK', 'kbLawNames', 'fillKbLawList',
+  // 집행 조문 따라가기(#337)
+  'ENFORCE_OPTS', 'ENFORCE_ROWS', 'enforceTargets', 'lawsNamedIn', 'enforceRowTargets'];
 NAMES.forEach(function (n) { ok('export ' + n, RC[n] !== undefined); });
 
 // ── 법령 키워드 추출 ──
@@ -859,7 +861,119 @@ var addendumTests = (async function () {
   eq('L8 끄기 — ADDENDUM_OPTS.on=false면 발동 없음', (function () { RC.ADDENDUM_OPTS.on = false; var w = RC.addendumWanted(Q); RC.ADDENDUM_OPTS.on = true; return w; })(), false);
   // trimAddOns — 경과조치를 가장 먼저 덜어 냄
   var t = RC.trimAddOns(r, 0, r.text.length - 10);
-  eq('trimAddOns 경과조치부터 덜어 냄', [t.items.filter(function (x) { return x.sec === 'addendum'; }).length, t.trimmed, t.addendum], [1, 1, 1]);
+  eq('trimAddOns 경과조치부터 덜어 냄(집행 칸이 없을 때)', [t.items.filter(function (x) { return x.sec === 'addendum'; }).length, t.trimmed, t.addendum], [1, 1, 1]);
+  // 집행 조문 칸(#337)이 있으면 그것이 경과조치보다 먼저 덜린다(운영자 결정 ① 11-03 — 지침 #290 줄 단서)
+  var enf = { sec: 'enforce', via: 'c1', fam: '전기통신사업법', key: '52조', seed: { fam: '전기통신사업법', key: '50조' }, doc_name: TEL, article_no: '52조(금지행위에 대한 조치)', content: '다'.repeat(300), ids: [31497] };
+  var P = Object.assign({}, r.parts, { enforce: [enf] });
+  var withE = RC.buildAddOnContext(P.deleg, P.neighbor, P.xref, P.annex, P.addendum, P.apply, P.enforce);
+  var noE = RC.buildAddOnContext(P.deleg, P.neighbor, P.xref, P.annex, P.addendum, P.apply);
+  var te1 = RC.trimAddOns({ text: withE, parts: P }, 0, withE.length - 10);
+  var te2 = RC.trimAddOns({ text: withE, parts: P }, 0, noE.length - 10);
+  eq('trimAddOns 집행 → 경과조치 순으로 덜어 냄(#337)', [[te1.enforce, te1.addendum, te1.trimmed], [te2.enforce, te2.addendum, te2.trimmed]], [[0, 2, 1], [0, 1, 2]]);
+  ok('집행 칸은 덧붙이기 글 맨 뒤 — 앞 글 바이트 그대로', withE.indexOf(noE) === 0 && withE.length > noE.length);
+})();
+
+// ── 집행 조문 따라가기(#337) — 판정 local_docs/시정조치대응_261102/판정_52조빈틈.md D2~D7 ──
+var enforceTests = (async function () {
+  var fx = JSON.parse(fs.readFileSync(path.join(ROOT, 'tests', 'fixtures', 'enforce_rule_cases.json'), 'utf8'));
+  fx.cases.forEach(function (c) { eq('enforceTargets R″ — ' + c.label, RC.enforceTargets(c.content), c.want); });
+  eq('ENFORCE_OPTS 고정값(D6)', RC.ENFORCE_OPTS, { on: true, c1: false, rowFallback: true, max: 3, maxSeeds: 20, chunksPerArticle: 2, maxChars: 5000, maxRefs: 8 });
+  eq('ENFORCE_ROWS 고정 행 하나(D4) — 업무처리규정 → 52조·51조의3', RC.ENFORCE_ROWS.map(function (r) { return [r.notice, r.law, r.targets.map(function (t) { return t.to + '<' + t.from.join(','); })]; }),
+    [['방송통신사업 금지행위 등에 대한 업무처리규정', '전기통신사업법', ['52조<50조', '51조의3<32조의12,32조의13,32조의14,32조의15']]]);
+  var c51 = fx.cases.filter(function (c) { return /51조의3/.test(c.label); })[0].content;
+  eq('enforceTargets 인용 상한 — maxRefs 3이면 51조의3②(인용 4개)를 버림(되돌리지 말 것)', RC.enforceTargets(c51, { maxRefs: 3 }), ['32조의11', '32조의15']);
+  // lawsNamedIn — 근거 문서군 + 약칭 표 + 「…법」 어간(판정 §4-3의 6사례)
+  var MANG = '정보통신망 이용촉진 및 정보보호 등에 관한 법률', CLOUD = '클라우드컴퓨팅 발전 및 이용자 보호에 관한 법률', TELF = '전기통신사업법';
+  var NOT = '방송통신사업 금지행위 등에 대한 업무처리규정';
+  var fams = [TELF, TELF + ' 시행령', NOT, MANG, CLOUD, '전기사업법', '전기통신사업 회계분리기준'];
+  eq('lawsNamedIn — 망법·클라우드법·사례 질문·행 법령 자신·전기사업법·기관명만',
+    [RC.lawsNamedIn('정보통신망법 위반에 대한 방통위 시정명령', fams), RC.lawsNamedIn('클라우드컴퓨팅법에서 이용자 보호 의무 위반 시 시정 조치', fams),
+     RC.lawsNamedIn('방미통위 시정조치 시 과기정통부 협의 조항', fams), RC.lawsNamedIn('전기통신사업법 시행령 금지행위', fams),
+     RC.lawsNamedIn('전기사업법 금지행위 시정명령 절차', fams), RC.lawsNamedIn('공정위가 이통사에 시정조치', fams)],
+    [[MANG], [CLOUD], [], [TELF, TELF + ' 시행령'], ['전기사업법'], []]);
+  eq('lawsNamedIn 약칭은 낱말 머리에서만(「재난안전통신망법」의 「망법」은 아님)·근거에 없는 약칭은 대상 글', [RC.lawsNamedIn('재난안전통신망법 시정명령', [TELF]), RC.lawsNamedIn('위치정보법 위반 시정명령', [TELF])],
+    [[], ['위치정보의 보호']]);
+  // enforceRowTargets — (a) / (b) 폴백 / 지목 차단 / 이미 있음 / rowFallback 끔 / 발동 칸
+  var TEL = '전기통신사업법(법률)(제21503호)(20261001)', NOTD = NOT + '(방송미디어통신위원회고시)(제2026-26호)(20260910)';
+  var ch = function (doc, art) { return { id: 1, doc_name: doc, article_no: art, content: 'x' }; };
+  var rowKeys = function (xs) { return xs.map(function (x) { return x.key + ':' + (x.fallback ? 'b' : 'a') + ':' + x.seed.key; }); };
+  var Lb = { extra: [ch(NOTD, '2조(적용범위)'), ch(TEL, '28조(이용약관의 신고 등)')], rag: [ch(TEL, '51조의3(이동통신사업자 등에 대한 시정명령)')] };
+  eq('enforceRowTargets (b) 폴백 — from 없음 → 52조(51조의3은 근거에 있어 뺌)', rowKeys(RC.enforceRowTargets(Lb, '방미통위 시정조치 시 과기정통부 협의 조항')), ['52조:b:2조']);
+  eq('enforceRowTargets (b) 폴백 — 질문이 다른 법령(망법)을 지목하면 끔', RC.enforceRowTargets({ extra: Lb.extra, rag: Lb.rag.concat([ch(MANG + '(법률)(제1호)(20260101)', '64조(자료의 제출 등)')]) }, '정보통신망법 위반에 대한 방통위 시정명령').length, 0);
+  eq('enforceRowTargets (b) 폴백 — 행 법령 자신(시행령)을 지목하면 그대로', rowKeys(RC.enforceRowTargets(Lb, '전기통신사업법 시행령 금지행위 시정조치 절차')), ['52조:b:2조']);
+  eq('enforceRowTargets (b) 폴백 끄기 — rowFallback:false', RC.enforceRowTargets(Lb, '방미통위 시정조치 시 과기정통부 협의 조항', { rowFallback: false }).length, 0);
+  var La = { extra: [ch(NOTD, '12조(시정조치안의 작성)'), ch(TEL, '45조(방송미디어통신위원회의 사실조사)')], rag: [ch(TEL, '50조(금지행위)'), ch(TEL, '32조의14(판매점 선임에 관한 사항)')] };
+  eq('enforceRowTargets (a) — from이 근거(rag 포함)에 있으면 그 to만(지목과 무관)', rowKeys(RC.enforceRowTargets(La, '정보통신망법과 비교해 금지행위 조치 절차')), ['52조:a:50조', '51조의3:a:32조의14']);
+  eq('enforceRowTargets 발동은 extra·spill — 고시 조가 RAG에만 있으면 없음', RC.enforceRowTargets({ extra: [ch(TEL, '28조(x)')], rag: [ch(NOTD, '2조(적용범위)')] }, '시정조치').length, 0);
+  eq('enforceRowTargets 발동은 extra·spill — 같은 칸에 그 법령 조가 없으면 없음', RC.enforceRowTargets({ extra: [ch(NOTD, '2조(적용범위)')], rag: [ch(TEL, '28조(x)')] }, '시정조치').length, 0);
+  eq('enforceRowTargets 이미 근거에 있는 to는 뺌', RC.enforceRowTargets({ extra: Lb.extra.concat([ch(TEL, '52조(금지행위에 대한 조치)')]), rag: Lb.rag }, '시정조치').length, 0);
+
+  // fetchAddOns 연동 — C1(상한 구제 50조 씨앗, VP07 꼴)·고정 행 폴백(S08 꼴)·/law(citers 없음)·끄기
+  var byKey = {};
+  fx.cases.forEach(function (c) { if (c.chunk_id) byKey[c.chunk_id] = c; });
+  var art52 = [31497, 31498].map(function (id, i) { return { id: id, doc_name: TEL, article_no: '52조(금지행위에 대한 조치)', chunk_index: 200 + i, content: byKey[id].content }; })
+    .concat([{ id: 31499, doc_name: TEL, article_no: '52조(금지행위에 대한 조치)', chunk_index: 202, content: '⑧ …' }]);
+  var art54 = [{ id: 31507, doc_name: TEL, article_no: '54조(다른 법률과의 관계)', chunk_index: 210, content: byKey[31507].content }];
+  var calls = [];
+  var fetchers = {
+    delegations: function () { return Promise.resolve([]); },
+    familyDocs: function (f) { calls.push('docs:' + f.join(',')); return Promise.resolve(f.indexOf(TELF) >= 0 ? [{ law_name: TELF, doc_name: TEL }] : []); },
+    familyArticle: function (fam, key, doc) { calls.push('art:' + key + ':' + (doc ? 'doc' : 'nodoc')); return Promise.resolve(key === '52조' ? art52 : key === '54조' ? art54 : []); },
+    docArticles: function () { return Promise.resolve([]); },
+    citers: function (doc, key) { calls.push('cit:' + key); return Promise.resolve(key === '50조' ? art52.slice(0, 1).concat(art54) : []); },
+  };
+  var Lc = { extra: [ch('대리점거래의 공정화에 관한 법률(법률)(제1호)(20250101)', '5조(대리점거래 계약서의 작성의무)')], spill: [ch(TEL, '50조(금지행위)')], rag: [] };
+  var rc0 = await RC.fetchAddOns(Lc, fetchers, { question: '판매점 차별 지원금 신고 처리' });
+  eq('fetchAddOns C1 기본 끔(§8 E1) — citers 호출 0회·집행 항목 없음', [calls.filter(function (c) { return /^cit:/.test(c); }).length, rc0.enforce, rc0.text], [0, 0, '']);
+  calls.length = 0;
+  // 아래 C1 검사는 c1: true로 켜서 잰다(다음 측정의 발판 — 운영 기본값은 끔)
+  var rc = await RC.fetchAddOns(Lc, fetchers, { question: '판매점 차별 지원금 신고 처리', enforce: { c1: true } });
+  eq('fetchAddOns C1 — 씨앗 50조(상한 구제) → 52조만(54조는 R″가 거름), 2조각·안내문, ids 맨 뒤',
+    [rc.items.filter(function (x) { return x.sec === 'enforce'; }), rc.enforce, rc.enforceRow, rc.ids],
+    [[{ sec: 'enforce', fam: TELF, key: '52조', seed: { fam: TELF, key: '50조' }, via: 'c1' }], 1, 0, [31497, 31498]]);
+  ok('fetchAddOns C1 구역 머리글·항목 꼬리·2조각 안내', rc.text.indexOf('[위 조문을 위반한 행위에 대한 조치 조문 — 같은 법령에서 위 조문 위반을 이유로 조치·시정을 명하는 조문]') >= 0 &&
+    rc.text.indexOf('[조치 1] ' + TEL + ' 52조(금지행위에 대한 조치) — 위 전기통신사업법 제50조을(를) 위반한 행위에 대한 조치 조문\n제52조(금지행위에 대한 조치)') >= 0 &&
+    rc.text.indexOf('전체 3조각 중 앞 2조각만') >= 0 && rc.text.indexOf('과학기술정보통신부장관의 의견을 들어야 한다') >= 0, rc.text);
+  eq('fetchAddOns C1 인용 대조 조각 — _addon enforce', rc.chunks.map(function (c) { return [c.id, c._addon]; }), [[31497, 'enforce']]);
+  eq('fetchAddOns C1 씨앗은 extra·spill만(대리점법 5조·전기통신사업법 50조) — RAG 단독 조는 씨앗 아님', calls.filter(function (c) { return /^cit:/.test(c); }), ['cit:5조', 'cit:50조']);
+  calls.length = 0;
+  var Ls = { extra: [ch(NOTD, '2조(적용범위)'), ch(TEL, '28조(이용약관의 신고 등)')], spill: [], rag: [ch(TEL, '51조의3(이동통신사업자 등에 대한 시정명령)')] };
+  var rs = await RC.fetchAddOns(Ls, fetchers, { question: '방미통위 시정조치 시 과기정통부 협의 조항' });
+  eq('fetchAddOns 고정 행 폴백(S08 꼴) — 52조, 문서명은 familyDocs로', [rs.items.filter(function (x) { return x.sec === 'enforce'; }).map(function (x) { return x.key + ':' + x.via + ':' + x.seed.key; }), rs.enforceRow, calls.filter(function (c) { return /^(docs|art):/.test(c); })],
+    [['52조:row:2조'], 1, ['docs:전기통신사업법', 'art:52조:doc']]);
+  ok('fetchAddOns 폴백 항목 꼬리 — 「위반 조문(제50조) 원문은 이 자료에 없음 — 그 각 호 내용을 서술하지 말 것」(허점 점검 22)',
+    rs.text.indexOf('[조치 1] ' + TEL + ' 52조(금지행위에 대한 조치) — ' + NOT + ' 적용범위(제2조)가 가리키는 전기통신사업법의 조치 조문. 위반 조문(제50조) 원문은 이 자료에 없음 — 그 각 호 내용을 서술하지 말 것\n') >= 0, rs.text);
+  var noC = Object.assign({}, fetchers); delete noC.citers;
+  var rl = await RC.fetchAddOns(Ls, noC, { question: '방미통위 시정조치 시 과기정통부 협의 조항' });
+  var roff = await RC.fetchAddOns(Ls, fetchers, { question: '방미통위 시정조치 시 과기정통부 협의 조항', enforce: { on: false } });
+  var rnf = await RC.fetchAddOns(Lc, fetchers, { question: 'x', fillOrder: ['down', 'up', 'annex', 'xref', 'apply', 'neighbor'] });
+  eq('fetchAddOns citers 없음(/law, D7)·on:false·fillOrder에 enforce 없음 → 칸 없음', [rl.enforce, roff.enforce, rnf.enforce, rl.text, roff.text], [0, 0, 0, '', '']);
+  var cmax = await RC.fetchAddOns(Lc, fetchers, { question: 'x', enforce: { c1: true, maxChars: 500 } });
+  eq('fetchAddOns 따로 몫 maxChars — 넘치면 싣지 않음', cmax.enforce, 0);
+  // fail-open(§8 E4) — 집행 조회(familyDocs·familyArticle, 켜면 citers)가 실패해도 다른 덧 항목(위임)은 그대로
+  var DEC = '전기통신사업법 시행령(대통령령)(제1호)(20260101)';
+  var fo = function (failEnf) {
+    return {
+      delegations: function () { return Promise.resolve([{ parent_law: TELF, parent_article: '28조', child_law: '전기통신사업법 시행령', child_article: '34조', child_title: '이용약관의 신고', child_kind: '시행령' }]); },
+      familyArticle: function (fam, key) {
+        if (key === '34조') return Promise.resolve([{ id: 801, doc_name: DEC, article_no: '34조(이용약관의 신고)', chunk_index: 1, content: '제34조(이용약관의 신고) ①' }]);
+        if (failEnf) throw new Error('집행 조회 실패');
+        return Promise.resolve(key === '52조' ? art52 : []);
+      },
+      familyDocs: function () { return failEnf ? Promise.reject(new Error('x')) : Promise.resolve([{ law_name: TELF, doc_name: TEL }]); },
+      docArticles: function () { return Promise.resolve([]); },
+      citers: function () { if (failEnf) throw new Error('x'); return Promise.resolve([]); },
+    };
+  };
+  var Lf = { extra: [ch(NOTD, '2조(적용범위)'), ch(TEL, '28조(이용약관의 신고 등)')], spill: [], rag: [] };
+  var qf = '방미통위 시정조치 시 과기정통부 협의 조항';
+  var fOk = await RC.fetchAddOns(Lf, fo(false), { question: qf, enforce: { c1: true } });
+  var fBad = await RC.fetchAddOns(Lf, fo(true), { question: qf, enforce: { c1: true } });
+  var fOff = await RC.fetchAddOns(Lf, fo(false), { question: qf, enforce: { on: false } });
+  var nonEnf = function (r) { return r.items.filter(function (x) { return x.sec !== 'enforce'; }); };
+  eq('fetchAddOns 집행 조회 실패 fail-open(§8 E4) — 위임 항목 그대로, 집행만 0',
+    [fOk.enforce, fBad.enforce, nonEnf(fBad), nonEnf(fBad).length > 0, fBad.text === fOff.text],
+    [1, 0, nonEnf(fOff), true, true]);
 })();
 
 // ── 컨텍스트 문구 ──
@@ -883,6 +997,12 @@ var addendumTests = (async function () {
   var ragTs = fs.readFileSync(path.join(ROOT, 'supabase', 'functions', '_shared', 'rag.ts'), 'utf8');
   ok('app.js trimAddOns에 대시보드 몫', app.indexOf('RagCore.trimAddOns(await addOnsP, restLen, RagCore.ADDON_OPTS.maxTotalChars + RagCore.ADDON_OPTS.dashboardExtraChars)') >= 0);
   ok('rag.ts trimAddOns는 기본 상한(봇)', /RagCore\.trimAddOns\(await addOnsP, restLen\);/.test(ragTs));
+  // 집행 조문 칸(#337) — 자문 경로 두 판은 citers(역참조 발췌와 같은 조회)를 넘기고, /law(buildLawQueryContext)는 넘기지 않는다(D7)
+  var lawFn = ragTs.slice(ragTs.indexOf('async function buildLawQueryContext'), ragTs.indexOf('async function buildLawQueryContext') + 20000);
+  var lawCall = lawFn.slice(lawFn.indexOf('RagCore.fetchAddOns('), lawFn.indexOf('RagCore.fetchAddOns(') + 1500);
+  eq('집행 칸 연결 — app.js·rag.ts 자문은 citers, /law는 없음',
+    [app.indexOf('citers: fetchCitingChunks }') >= 0, ragTs.indexOf('citers: (d: string, k: string) => fetchCitingChunks(sb, d, k),') >= 0, lawCall.length > 0 && lawCall.indexOf('citers') < 0],
+    [true, true, true]);
   eq('ADDON_OPTS 대시보드 몫 8,000자', RC.ADDON_OPTS.dashboardExtraChars, 8000);
 })();
 
@@ -1023,7 +1143,7 @@ var applyTests = (async function () {
   eq('trimAddOns 같은 고시 → 준용 → 공통 인용 → 위 순(#300-보론3)', [t1.items.map(function (x) { return x.sec + (x.dir ? '/' + x.dir : ''); }), t1.trimmed], [['deleg/down', 'deleg/up'], 3]);
   var t2 = RC.trimAddOns(full, 0, 1000);
   eq('trimAddOns 준용은 공통 인용보다 먼저 덜림(채우기 순서와 거꾸로)', t2.items.map(function (x) { return x.sec + (x.dir ? '/' + x.dir : ''); }), ['deleg/down', 'deleg/up', 'xref']);
-  eq('fillOrder 기본값 — 공통 인용이 준용 앞, 같은 고시가 맨 뒤(#300-보론3)', RC.ADDON_OPTS.fillOrder, ['down', 'up', 'annex', 'xref', 'apply', 'neighbor']);
+  eq('fillOrder 기본값 — 공통 인용이 준용 앞, 같은 고시 뒤(#300-보론3), 집행 조문이 맨 뒤(#337 따로 몫)', RC.ADDON_OPTS.fillOrder, ['down', 'up', 'annex', 'xref', 'apply', 'neighbor', 'enforce']);
 })();
 
 // ── 시행 전 제정 법령(#311) — 현행판 없는 law_pending(인공지능 데이터센터 특별법 꼴) ──
@@ -1403,7 +1523,7 @@ var topicTests = (async function () {
   eq('rag.ts 법률 목록 조회·채움', [ragTs.indexOf(Q1) >= 0, ragTs.indexOf(Q2) >= 0, ragTs.indexOf('RagCore.fillKbLawList(systemPrompt, kbLaws && kbLaws.watch, kbLaws && kbLaws.hidden) + telegramGuide') >= 0], [true, true, true]);
 })();
 
-Promise.all([asyncTests, namedAnnexTests, addOnTests, addOnTests2, addendumTests, applyTests, pendingNewTests, yakSectionTests, topicTests]).catch(function (e) { fails++; total++; console.log('FAIL  비동기 검사 예외 ' + (e && e.message)); }).then(function () {
+Promise.all([asyncTests, namedAnnexTests, addOnTests, addOnTests2, addendumTests, enforceTests, applyTests, pendingNewTests, yakSectionTests, topicTests]).catch(function (e) { fails++; total++; console.log('FAIL  비동기 검사 예외 ' + (e && e.message)); }).then(function () {
   console.log('\n' + (fails ? 'FAIL ' + fails + '/' + total : 'ALL OK ' + total + '/' + total));
   process.exit(fails ? 1 : 0);
 });

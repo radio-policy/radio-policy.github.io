@@ -3162,6 +3162,8 @@
     OUTSIDE_MAX: OUTSIDE_MAX, MULTI_MAX: MULTI_MAX, MULTI_SRC_MAX: MULTI_SRC_MAX,
     // 18-2 재검토 보완(2026-10-16) — P-3″ 문서군 비교·P-2″ 산문 가림·다중 원문 물채우기(시험·우주 쌍 하네스가 직접 부른다)
     sameLawDoc: sameLawDoc, isProseWeak: isProseWeak, multiCaps: multiCaps,
+    // 약칭 표(읽기 전용) — rag_core.js 집행 조문 칸(#337)의 법령명 판별 lawsNamedIn이 같은 열쇠를 쓴다(두 벌로 갈리지 않게)
+    LAW_ALIASES: LAW_ALIASES,
   };
   root.CiteVerify = CiteVerify;
   if (typeof module !== 'undefined' && module.exports) module.exports = CiteVerify;
