@@ -974,6 +974,28 @@ var enforceTests = (async function () {
   eq('fetchAddOns 집행 조회 실패 fail-open(§8 E4) — 위임 항목 그대로, 집행만 0',
     [fOk.enforce, fBad.enforce, nonEnf(fBad), nonEnf(fBad).length > 0, fBad.text === fOff.text],
     [1, 0, nonEnf(fOff), true, true]);
+  // #337-보론 — 폴백 (b)의 위반 조문(50조)이 위임 위 따라가기 칸에 실렸으면 (a) 꼴 꼬리(「원문 없음」은 거짓)
+  var fu = {
+    delegations: function () { return Promise.resolve([{ parent_law: TELF, parent_article: '50조', child_law: '전기통신사업법 시행령', child_article: '42조', child_title: '금지행위의 유형 및 기준', child_kind: '시행령' }]); },
+    familyArticle: function (fam, key) {
+      if (key === '50조') return Promise.resolve([{ id: 802, doc_name: TEL, article_no: '50조(금지행위)', chunk_index: 190, content: '제50조(금지행위) ① 전기통신사업자는 …' }]);
+      return Promise.resolve(key === '52조' ? art52 : []);
+    },
+    familyDocs: function () { return Promise.resolve([{ law_name: TELF, doc_name: TEL }]); },
+    docArticles: function () { return Promise.resolve([]); },
+    citers: function () { return Promise.resolve([]); },
+  };
+  var Lu = { extra: [ch(NOTD, '2조(적용범위)'), ch(TEL, '28조(이용약관의 신고 등)'), ch(DEC, '42조(금지행위의 유형 및 기준)')], spill: [], rag: [] };
+  var ru = await RC.fetchAddOns(Lu, fu, { question: qf });
+  var ruNo = await RC.fetchAddOns(Lu, fu, { question: qf, fillOrder: ['down', 'annex', 'xref', 'apply', 'neighbor', 'enforce'] });
+  eq('fetchAddOns 폴백 꼬리 재판정(#337-보론) — 50조가 위임 위 칸에 있으면 fallback 아님·씨앗 50조, 위 칸이 없으면 폴백 그대로',
+    [ru.items.filter(function (x) { return x.sec === 'deleg' || x.sec === 'enforce'; }).map(function (x) { return x.sec + ':' + x.key + (x.seed ? ':' + x.seed.fam + ':' + x.seed.key : ''); }),
+      ruNo.items.filter(function (x) { return x.sec === 'enforce'; }).map(function (x) { return x.key + ':' + x.seed.key; })],
+    [['deleg:50조', 'enforce:52조:' + TELF + ':50조'], ['52조:2조']]);
+  ok('fetchAddOns 폴백 꼬리 재판정 — 「위 전기통신사업법 제50조을(를) 위반한 …」, 「원문은 이 자료에 없음」 없음',
+    ru.text.indexOf('[조치 1] ' + TEL + ' 52조(금지행위에 대한 조치) — 위 전기통신사업법 제50조을(를) 위반한 행위에 대한 조치 조문\n') >= 0 && ru.text.indexOf('원문은 이 자료에 없음') < 0, ru.text);
+  var ruT = RC.trimAddOns(ru, 52500 - ru.text.length + 10);
+  ok('trimAddOns — 상한에서 집행이 먼저 빠지고 남은 칸은 위임 50조', ruT.enforce === 0 && ruT.items.some(function (x) { return x.sec === 'deleg' && x.key === '50조'; }), JSON.stringify(ruT.items));
 })();
 
 // ── 컨텍스트 문구 ──

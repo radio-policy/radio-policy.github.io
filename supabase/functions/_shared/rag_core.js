@@ -1984,7 +1984,15 @@
     const enforce = [];
     if (enfOn) {
       let enfUsed = 0;
-      (await enfP).forEach(function (x) {
+      // 행 폴백 (b)의 위반 조문(from)이 위임·공통 인용 등 다른 칸에 이미 실렸으면 「원문 없음」 꼬리는 거짓 — 그 조를 씨앗으로 (a) 꼴로 바꾼다(#337-보론).
+      // chosen은 채운 항목만 담고, 덜 때 집행이 맨 먼저 빠지므로 집행이 남으면 그 조도 남는다.
+      const chosenFam = new Set();
+      chosen.forEach(function (k) { const i = k.lastIndexOf('|'); chosenFam.add(famOf(k.slice(0, i)) + '|' + k.slice(i + 1)); });
+      (await enfP).map(function (x) {
+        if (x.via !== 'row' || !x.fallback) return x;
+        const hit = x.from.filter(function (k) { return chosenFam.has(x.fam + '|' + k); });
+        return hit.length ? Object.assign({}, x, { fallback: false, seed: { fam: x.fam, key: hit[0] } }) : x;
+      }).forEach(function (x) {
         const len = x.doc_name.length + x.article_no.length + enforceTail(x).length + x.content.length + 20;
         if (enforce.length >= eOpts.max || chosen.has(x.doc_name + '|' + x.key) || enfUsed + len > eOpts.maxChars) return;
         enfUsed += len; chosen.add(x.doc_name + '|' + x.key);
