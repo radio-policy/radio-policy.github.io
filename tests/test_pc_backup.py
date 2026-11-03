@@ -57,6 +57,18 @@ class TestNamesAndPaths(unittest.TestCase):
         for n in ("a.jsonl", "MEMORY.md", "environment.md", "settings.json"):
             self.assertFalse(pb._matches(n, pb.EXCLUDE_FILES), n)
 
+    def test_internal_read_sessions_skipped(self):
+        # 사내 문서 본문을 읽은 세션은 전사본·하위 폴더째 빠지고, 다른 세션은 그대로 간다
+        with tempfile.TemporaryDirectory() as t:
+            sid = pb.INTERNAL_READ_SESSIONS[0]
+            for rel in (sid + ".jsonl", os.path.join(sid, "subagents", "agent-x.jsonl"),
+                        "other.jsonl", os.path.join("other", "subagents", "agent-y.jsonl")):
+                p = os.path.join(t, rel)
+                os.makedirs(os.path.dirname(p), exist_ok=True)
+                open(p, "w").close()
+            got = sorted(r.replace(os.sep, "/") for r, _ in pb.iter_files(t))
+            self.assertEqual(got, ["other.jsonl", "other/subagents/agent-y.jsonl"])
+
     def test_app_sessions_dir_order(self):
         with tempfile.TemporaryDirectory() as t:
             local, roaming = os.path.join(t, "Local"), os.path.join(t, "Roaming")

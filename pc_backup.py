@@ -36,6 +36,7 @@ C:\\Users\\SKTelecom\\Desktop\\frequence\\radio-policy-ai → C--Users-SKTelecom
   (sk-ant-·github_pat_·ghp_ 등·glpat-·sbp_·sb_secret_·service_role JWT)도 가린다. 로그·캐시에는 항목 이름만 남는다.
 - **안 가져가는 것**: 위 항목 폴더들 안의 비밀 파일(.env*·.credentials.json·.gitlab-credentials·.confluence_pat·*.pem —
   .env·.gitlab-credentials 원본 둘만 비밀파일\\로 따로)·__pycache__·.git·사내판 전사본(C--claude-rp-internal-*)·
+  사내 문서 본문을 읽은 외부판 세션의 전사본(INTERNAL_READ_SESSIONS — 세션 id를 넣으면 jsonl·하위 폴더째 빠진다)·
   사내판 폴더·frequence\\confluence·docs\\사내공유_*·사내 컨플루언스 열쇠 — 개인 드라이브에 사내 자료를 두지 않는다
   (사내 넷은 원본 목록에 아예 없다).
 - 비밀 파일을 그대로 올리더라도 **전사본 속 비밀값 가림은 그대로 둔다** — .env에 없는 토큰(GitHub PAT 등)도 섞여 있고,
@@ -139,9 +140,15 @@ DRIVE_POLL_S = 30
 DRIVE_SETTLE_S = 60         # 켠 뒤 폴더를 훑을 시간 — 그 전의 「남은 것 0」은 믿지 않는다
 DRIVE_STABLE_POLLS = 2      # 남은 것 0이 연달아 이만큼 나와야 다 올라간 것으로 본다
 DRIVE_IGNORE = ["desktop.ini", "*.tmp", "*.pcbak~"]   # 잠깐 생겼다 사라지는 파일(10-21 대조 중 1개 실측)
+# 사내 문서 본문을 읽은 외부판 세션 — 전사본(<id>.jsonl)과 하위 폴더(<id>\: 하위 에이전트·도구 결과)를 백업에 넣지 않는다.
+# 개인 드라이브에 사내 자료를 두지 않는다는 위 원칙을 세션 단위로 지키는 목록(11-03 운영자 결정 「권고대로」). PC의 원본은 그대로 둔다.
+INTERNAL_READ_SESSIONS = [
+    "25ec97c6-234e-484f-97c1-4ea7862ffe00",   # 11-03 히스토리 리포트 계획 — 사내 정답지(28㎓ 히스토리 HWPX) 본문 읽음
+    "37c4a135-987d-4b9f-9cb6-3ece776ed343",   # 11-03 히스토리 리포트 준비 — 같은 정답지 본문 출력·독립 채점
+]
 EXCLUDE_FILES = [".env", ".env.*", "*.env", ".credentials.json", ".gitlab-credentials", ".git-credentials",
-                 ".confluence_pat", "*.pem"]
-EXCLUDE_DIRS = ["__pycache__", ".git", "node_modules"]
+                 ".confluence_pat", "*.pem"] + [s + ".jsonl" for s in INTERNAL_READ_SESSIONS]
+EXCLUDE_DIRS = ["__pycache__", ".git", "node_modules"] + INTERNAL_READ_SESSIONS
 
 SECRET_ENV_KEY = re.compile(r"KEY|TOKEN|SECRET|PASSWORD|CLIENT_ID")
 SECRET_MIN_LEN = 8
