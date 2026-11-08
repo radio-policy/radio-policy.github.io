@@ -477,7 +477,7 @@ async function fetchArticleChunks(sb: SupabaseClient, docName: string, key: stri
   const r = await sb.from('document_chunks').select('id, doc_name, article_no, chunk_index, content')
     .eq('doc_name', docName).eq('status', 'current').eq('is_approved', true)
     .like('article_no', key + '%').order('chunk_index', { ascending: true }).limit(40);
-  return (r.data || []) as Chunk[];
+  return CiteVerify.dropHeadingChunks(r.data || []) as Chunk[];   // 장·절 제목 조각은 건너뜀(#338) — app.js와 같음
 }
 // ── 인용 판정 원문이 지침서 핵심 조문뿐일 때 받을 실DB 조문(#284) — 법령군(문서명 '(' 앞)·조로 현행·시행예정 판을 함께 받는다.
 //    판 고르기·조 번호 대조(16조%에 16조의2도 온다)는 cite_verify.js swapPromptArticles. verify-citations/index.ts와 같은 조건.
@@ -575,7 +575,7 @@ async function fetchFamilyArticle(sb: SupabaseClient, fam: string, key: string, 
   const q = sb.from('document_chunks').select('id, doc_name, article_no, chunk_index, content');
   const r = await (docName ? q.eq('doc_name', docName) : q.like('doc_name', fam + '(%')).eq('status', 'current').eq('is_approved', true)
     .like('article_no', key + '%').order('chunk_index', { ascending: true }).limit(40);
-  return (r.data || []) as Chunk[];
+  return CiteVerify.dropHeadingChunks(r.data || []) as Chunk[];   // #338
 }
 // 별표 한 개의 조각 전부(chunk_index 순) — 별표 동반(buildAnnexContext 1단계)과 덧붙이기 별표 칸이 같이 쓴다. prefix = '별표 N('.
 // 질문 임베딩이 있으면 DB 함수 annex_chunks_semantic(같은 행 + 질문 유사도 칸 — 장동선 판정 §4-7), 임베딩이 없거나 그 함수가 실패·0행이면
@@ -600,7 +600,7 @@ async function fetchDocArticles(sb: SupabaseClient, docName: string): Promise<Ch
   const r = await sb.from('document_chunks').select('id, doc_name, article_no, chunk_index, content')
     .eq('doc_name', docName).eq('status', 'current').eq('is_approved', true)
     .not('article_no', 'is', null).order('chunk_index', { ascending: true }).limit(300);
-  return (r.data || []) as Chunk[];
+  return CiteVerify.dropHeadingChunks(r.data || []) as Chunk[];   // #338
 }
 // L8 경과조치 따라가기(#290) — 근거 문서들의 현행 부칙 조각 전부를 한 번에. 부칙 한 단위가 여러 조각(100자 겹침)이라 본문 낱말로 거르지 않는다
 // (이어진 조각에는 「경과조치」 낱말이 없을 수 있다). 고르기·자르기는 rag_core.js(addendumCandidates·pickAddenda). app.js fetchAddendaRows와 같은 조건.

@@ -86,7 +86,7 @@ Deno.serve(async (req) => {
     const r = await sb.from('document_chunks').select('id, doc_name, article_no, chunk_index, content')
       .eq('doc_name', docName).eq('status', 'current').eq('is_approved', true)
       .like('article_no', key + '%').order('chunk_index', { ascending: true }).limit(40);
-    return (r.data || []) as Row[];
+    return CiteVerify.dropHeadingChunks(r.data || []) as Row[];   // 장·절 제목 조각은 건너뜀(#338) — rag.ts·app.js와 같음
   };
   // 인용 판정 원문이 지침서 핵심 조문뿐일 때 받을 실DB 조문(#284) — rag.ts fetchLawArticleByFamily와 같은 조건, 판 고르기는 cite_verify.js
   const fetchLawArticle = async (family: string, key: string): Promise<(Row & { status?: string })[]> => {

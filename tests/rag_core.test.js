@@ -60,7 +60,9 @@ var NAMES = ['PRIORITY_KW_RE', 'VERB_TAIL', 'extractKeywords', 'LAW_SYNONYMS', '
   // 지시문 보유 지식 베이스 절의 현행 법률 목록(#332)
   'KB_LAW_LIST_TOKEN', 'KB_LAW_LIST_FALLBACK', 'kbLawNames', 'fillKbLawList',
   // 집행 조문 따라가기(#337)
-  'ENFORCE_OPTS', 'ENFORCE_ROWS', 'enforceTargets', 'lawsNamedIn', 'enforceRowTargets'];
+  'ENFORCE_OPTS', 'ENFORCE_ROWS', 'enforceTargets', 'lawsNamedIn', 'enforceRowTargets',
+  // 자문 품질 1차 순수 규칙(#338 — 사내 설계 발췌 1-ⓐ~ⓒ)
+  'KW_JE_KEEP', 'KW_DO_KEEP', 'stripJosaWord', 'ARTICLE_CHARS_CANDIDATE', 'addonUse'];
 NAMES.forEach(function (n) { ok('export ' + n, RC[n] !== undefined); });
 
 // ── 법령 키워드 추출 ──
@@ -83,6 +85,16 @@ eq('extractKeywords 하나·되나·드나·있나는 그대로(뗀 뒤 1글자)
 eq('extractKeywords 「나」로 끝나는 명사 보호 — 안테나·코로나(조사는 뗌)', [RC.extractKeywords('기지국안테나 코로나'), RC.extractKeywords('안테나를 교체')], [['기지국안테나', '코로나'], ['안테나', '교체']]);
 eq('extractKeywords 「나」까지 한 낱말(아무나·얼마나)·용언 「-으나·-거나」 반쪽은 종전처럼 통째로',
   [RC.extractKeywords('아무나 얼마나'), RC.extractKeywords('실태점검했으나 조치'), RC.extractKeywords('받거나 내지')], [['아무나', '얼마나'], ['실태점검했으나', '조치'], ['받거나', '내지']]);
+// 「제도」·「-도」(#338, 사내 설계 1-ⓐ) — 합성어 「X제도」는 X, 「-제」+조사 도는 조사만, 「도」로 끝나는 명사는 그대로
+eq('extractKeywords 「X제도」 → X(제도 조각 없음)', [RC.extractKeywords('자기적합확인제도 대상은'), RC.extractKeywords('허가제도와 등록제도'), RC.extractKeywords('자기적합확인제도를 알려줘')],
+  [['자기적합확인', '대상'], ['허가', '등록'], ['자기적합확인']]);
+eq('extractKeywords 「-제」 보호(규제·문제 …)+조사 도 → 조사만', [RC.extractKeywords('사전규제도 폐지'), RC.extractKeywords('경제도 고려')], [['폐지', '사전규제'], ['경제', '고려']]);
+eq('extractKeywords 앞말 1글자 이하(법제도·제도·제도를)는 종전 그대로', [RC.extractKeywords('법제도 정비'), RC.extractKeywords('제도를 바꾸려면')], [['법제', '정비'], ['제도', '바꾸려면']]);
+eq('extractKeywords 「도」로 끝나는 명사 보호(이용한도·전계강도·주파수용도), 「한도를」은 를만', [RC.extractKeywords('이용한도 초과'), RC.extractKeywords('전계강도 측정'), RC.extractKeywords('주파수용도 변경'), RC.extractKeywords('한도를 넘으면')],
+  [['이용한도', '초과'], ['전계강도', '측정'], ['주파수용도', '변경'], ['한도', '넘으면']]);
+// 아는 한계(#338 — 사내 목록 1:1): 보호 목록은 끝 일치라 「변경+도」·「개정+도」처럼 명사+조사 도가 「-경도」·「-정도」에 걸리면 조사가 안 떨어진다.
+// 외부 실제 자문 153문항에서는 0건(바뀐 낱말은 「전자파강도」 1건뿐, 11-08). 목록을 바꾸려면 사내판과 같이.
+eq('extractKeywords 끝 일치 한계 — 변경도·개정도는 그대로(아는 한계, 되돌리면 이 줄을 고칠 것)', [RC.extractKeywords('변경도 신고'), RC.extractKeywords('개정도 필요')], [['신고', '변경도'], ['개정도', '필요']]);
 
 // ── 뉴스 키워드 추출 (2026-09-25 합집합) ──
 eq('extractNewsKeywords 조사 절단·분야어 우선', RC.extractNewsKeywords('같은 지하철인데 통신사 와이파이 속도 차이 분석해줘'), ['지하철', '와이파이', '속도']);
@@ -298,7 +310,7 @@ ok('isTitleStop 다른(#244 — 「다른 법령과의 관계」 제목 가점 �
 // ── 상한 상수 ──
 eq('PERDOC_LIMIT', RC.PERDOC_LIMIT, { '추가지식': 8, 'default': 3 });
 eq('상한 상수', [RC.TOTAL_CHUNK_CUT, RC.STREAM_IDLE_MS, RC.ANNEX_MAX_UNITS, RC.ANNEX_MAX_CHUNKS, RC.ASM_RARE_MAX, RC.RRF_K], [15, 180000, 2, 6, 40, 60]);
-eq('EXPAND_OPTS', RC.EXPAND_OPTS, { maxArticles: 10, maxChunksPerArticle: 4, maxAddedChunks: 14 });
+eq('EXPAND_OPTS', RC.EXPAND_OPTS, { maxArticles: 10, maxChunksPerArticle: 4, maxAddedChunks: 14, charsPerArticle: 0 });   // charsPerArticle 0 = 조 통째 꺼짐(#338)
 eq('CITING_OPTS', RC.CITING_OPTS, { maxPerArticle: 4, maxTotal: 8, maxLen: 300 });
 
 // ── RRF 융합 ──
@@ -877,7 +889,7 @@ var addendumTests = (async function () {
 var enforceTests = (async function () {
   var fx = JSON.parse(fs.readFileSync(path.join(ROOT, 'tests', 'fixtures', 'enforce_rule_cases.json'), 'utf8'));
   fx.cases.forEach(function (c) { eq('enforceTargets R″ — ' + c.label, RC.enforceTargets(c.content), c.want); });
-  eq('ENFORCE_OPTS 고정값(D6)', RC.ENFORCE_OPTS, { on: true, c1: false, rowFallback: true, max: 3, maxSeeds: 20, chunksPerArticle: 2, maxChars: 5000, maxRefs: 8 });
+  eq('ENFORCE_OPTS 고정값(D6)', RC.ENFORCE_OPTS, { on: true, c1: false, rowFallback: true, max: 3, maxSeeds: 20, chunksPerArticle: 2, charsPerArticle: 0, maxChars: 5000, maxRefs: 8 });
   eq('ENFORCE_ROWS 고정 행 하나(D4) — 업무처리규정 → 52조·51조의3', RC.ENFORCE_ROWS.map(function (r) { return [r.notice, r.law, r.targets.map(function (t) { return t.to + '<' + t.from.join(','); })]; }),
     [['방송통신사업 금지행위 등에 대한 업무처리규정', '전기통신사업법', ['52조<50조', '51조의3<32조의12,32조의13,32조의14,32조의15']]]);
   var c51 = fx.cases.filter(function (c) { return /51조의3/.test(c.label); })[0].content;
@@ -1545,7 +1557,40 @@ var topicTests = (async function () {
   eq('rag.ts 법률 목록 조회·채움', [ragTs.indexOf(Q1) >= 0, ragTs.indexOf(Q2) >= 0, ragTs.indexOf('RagCore.fillKbLawList(systemPrompt, kbLaws && kbLaws.watch, kbLaws && kbLaws.hidden) + telegramGuide') >= 0], [true, true, true]);
 })();
 
-Promise.all([asyncTests, namedAnnexTests, addOnTests, addOnTests2, addendumTests, enforceTests, applyTests, pendingNewTests, yakSectionTests, topicTests]).catch(function (e) { fails++; total++; console.log('FAIL  비동기 검사 예외 ' + (e && e.message)); }).then(function () {
+// ── 장·절 제목 조각·조 통째 글자 상한(#338, 사내 설계 1-ⓑ·ⓒ) ──
+var wholeArticleTests = (async function () {
+  var CVw = globalThis.CiteVerify;
+  eq('isHeadingChunk(cite_verify.js) — 괄호 없는 article_no + 「제N장/절」 120자 이하만', [
+    CVw.isHeadingChunk({ article_no: '58조의2', content: '제5장의2 전파자원 이용 효율화' }),
+    CVw.isHeadingChunk({ article_no: '5조', content: '제1절 정보통신산업 진흥계획의 수립ㆍ시행 등' }),
+    CVw.isHeadingChunk({ article_no: '58조의2(공동사용)', content: '제5장' }),
+    CVw.isHeadingChunk({ article_no: '8조', content: '제8조 삭제 <2023.7.18>' }),
+    CVw.isHeadingChunk({ article_no: '11조', content: '제2장 ' + 'ㄱ'.repeat(130) }),
+    CVw.isHeadingChunk({ article_no: '', content: '제2장 회계' })], [true, true, false, false, false, false]);
+  eq('dropHeadingChunks — 제목 조각만 빼고 순서 그대로', CVw.dropHeadingChunks([{ id: 1, article_no: '5조', content: '제2장 진흥' }, { id: 2, article_no: '5조(계획)', content: '① 본문' }, { id: 3, article_no: '5조(계획)', content: '② 본문' }]).map(function (r) { return r.id; }), [2, 3]);
+  var dropN = function (rel) { return (fs.readFileSync(path.join(ROOT, rel), 'utf8').match(/CiteVerify\.dropHeadingChunks\(r\.data \|\| \[\]\)/g) || []).length; };
+  eq('조 조회가 제목 조각을 뺌 — rag.ts·app.js 각 3곳(조·법령군 조·문서 조 목록), verify-citations 1곳(통째 보강)', [
+    dropN('supabase/functions/_shared/rag.ts'), dropN('app.js'), dropN('supabase/functions/verify-citations/index.ts')], [3, 3, 1]);
+  // charPrefix — 이어붙인 글이 상한을 넘지 않는 데까지(조각 경계), 첫 조각은 늘
+  var rows = [0, 1, 2, 3, 4, 5].map(function (i) { return { id: 10 + i, chunk_index: i, content: String.fromCharCode(0xAC00 + i).repeat(800) }; });
+  eq('charPrefix 3,500자 → 4조각(800×4=3,200, 5조각은 4,000), 상한 100자여도 첫 조각 하나', [CVw.charPrefix(rows, 3500).length, CVw.charPrefix(rows, 100).length, CVw.charPrefix(rows, 1e9).length], [4, 1, 6]);
+  eq('addonUse — charsPerArticle 0이면 종전 앞 chunksPerArticle조각(바이트 같음), 켜면 글자 상한', [
+    RC.addonUse(rows, { chunksPerArticle: 2, charsPerArticle: 0 }).length, RC.addonUse(rows, { chunksPerArticle: 2, charsPerArticle: 3500 }).length], [2, 4]);
+  eq('조 통째 후보는 꺼 둠 — 다섯 상수의 charsPerArticle 0, 예산·상한 종전 값', [RC.EXPAND_OPTS.charsPerArticle, RC.DELEG_OPTS.charsPerArticle, RC.XREF_OPTS.charsPerArticle, RC.APPLY_OPTS.charsPerArticle, RC.ENFORCE_OPTS.charsPerArticle,
+    RC.ADDON_OPTS.budgetChars, RC.ADDON_OPTS.maxTotalChars, RC.DELEG_OPTS.maxChars, RC.APPLY_OPTS.maxChars, RC.ENFORCE_OPTS.maxChars], [0, 0, 0, 0, 0, 12000, 52500, 9000, 6000, 5000]);
+  eq('ARTICLE_CHARS_CANDIDATE — 사내 설계 1-ⓒ 값(3,500·1.5배·20,000·70,000)', RC.ARTICLE_CHARS_CANDIDATE, {
+    EXPAND_OPTS: { charsPerArticle: 3500 }, DELEG_OPTS: { charsPerArticle: 3500, maxChars: 13500 }, XREF_OPTS: { charsPerArticle: 3500 },
+    APPLY_OPTS: { charsPerArticle: 3500, maxChars: 9000 }, ENFORCE_OPTS: { charsPerArticle: 3500, maxChars: 7500 }, ADDON_OPTS: { budgetChars: 20000, maxTotalChars: 70000 } });
+  // expandArticles — charsPerArticle를 주면 앞 조각을 글자 상한까지, 검색이 집은 조각은 상한과 무관하게
+  var fetchA = function () { return Promise.resolve(rows.map(function (r) { return Object.assign({ doc_name: 'D(법률)', article_no: '3조(목적)' }, r); })); };
+  var hit = [{ id: 15, doc_name: 'D(법률)', article_no: '3조(목적)', chunk_index: 5, content: rows[5].content }];
+  var e0 = await CVw.expandArticles(hit, fetchA, { maxChunksPerArticle: 4, maxAddedChunks: 14 });
+  var e1 = await CVw.expandArticles(hit, fetchA, { maxChunksPerArticle: 4, maxAddedChunks: 14, charsPerArticle: 2500 });
+  // 겹침 없는 조각은 줄바꿈으로 이어(800+1+800+1+800 = 2,402자) 2,500자면 앞 3조각. addedIds = 새로 들어온 조각(집은 15는 빼고 셈)
+  eq('expandArticles 글자 상한 — 끔이면 앞 4조각, 2,500자면 앞 3조각(+집은 조각은 늘)', [e0.addedIds, e1.addedIds, /전체 6조각 중 4조각/.test(e1.chunks[0].content)], [[10, 11, 12, 13], [10, 11, 12], true]);
+})();
+
+Promise.all([asyncTests, namedAnnexTests, addOnTests, addOnTests2, addendumTests, enforceTests, applyTests, pendingNewTests, yakSectionTests, topicTests, wholeArticleTests]).catch(function (e) { fails++; total++; console.log('FAIL  비동기 검사 예외 ' + (e && e.message)); }).then(function () {
   console.log('\n' + (fails ? 'FAIL ' + fails + '/' + total : 'ALL OK ' + total + '/' + total));
   process.exit(fails ? 1 : 0);
 });

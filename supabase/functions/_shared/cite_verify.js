@@ -223,6 +223,31 @@
     }
     return out;
   }
+  // 장·절 제목 조각(#338, 2026-11-08 — 사내 설계 발췌 1-ⓑ): 법제처 응답의 장·절 제목 행이 다음 조의 번호를 달고 따로 조각이 된다(law_sync.law_articles가
+  // 조문여부를 거르지 않음). 그 조각은 article_no에 괄호가 없고(「58조의2」 — 본문 조각은 「58조의2(제목)」) 내용이 「제N장 …」뿐이다.
+  // 11-06 실DB: 조 8,600개 중 421개에 453조각(전부 이 술어로 잡힘, 본문 조각은 0), 그중 32개 조는 덧붙이기 2조각 칸에 본문이 0자 실렸다(전파법 58조의2 —
+  // 앞 2조각이 제5장의2·제1절 제목). 조 조회 결과에서만 건너뛴다 — 세 곳: rag.ts·app.js의 fetchArticleChunks·fetchFamilyArticle·fetchDocArticles,
+  // verify-citations의 fetchArticle(통째 보강을 다시 하므로 같은 조건). 검색 RPC가 고른 조각(상위 15·정밀검색)은 그대로, 청커 수정은 재적재·사내 스냅샷이
+  // 걸려 뒤로 미룸. 술어는 사내판과 1:1.
+  const HEADING_CHUNK_RE = /^\s*제\s?\d+\s?(?:편|장|절|관)/;
+  function isHeadingChunk(row) {
+    if (!row) return false;
+    const an = String(row.article_no || ''), ct = String(row.content || '');
+    return !!an && an.indexOf('(') < 0 && ct.length <= 120 && HEADING_CHUNK_RE.test(ct);
+  }
+  function dropHeadingChunks(rows) { return (rows || []).filter(function (r) { return !isHeadingChunk(r); }); }
+  // 조당 글자 상한(#338, 2026-11-08 — 사내 설계 발췌 1-ⓒ): chunk_index 순 조각 rows의 앞에서부터, 이어붙인(mergeChunkTexts) 글이 cap자를 넘지 않는
+  // 데까지. 첫 조각 하나로도 넘으면 첫 조각 하나(부르는 쪽이 글을 cap자에서 자른다). 조각 경계에서 끊어 「전체 N조각 중 앞 M조각」 표지와 조각 id가 맞는다.
+  // 두 곳이 쓴다 — expandArticles(opts.charsPerArticle)와 rag_core.js 덧붙이기 칸(위임·공통 인용·준용·집행의 charsPerArticle). 사내판 1:1.
+  function charPrefix(rows, cap) {
+    const out = [], texts = [];
+    for (const r of rows || []) {
+      texts.push(String((r && r.content) || ''));
+      if (out.length && mergeChunkTexts(texts).length > cap) break;
+      out.push(r);
+    }
+    return out;
+  }
 
   // ── 부칙 열쇠(#290, 2026-10-07 — Fable 판정 local_docs/자문세문제_판정_261007.md §13-3, Fable 재검토 대상) ──
   // 부칙 조각은 article_no가 「부칙 제20792호(20250318)」·「부칙 제2024-20호(20240523)」(번호가 없으면 「부칙(20240101)」·「부칙 #3」 — law_sync.py)라
@@ -338,7 +363,8 @@
         .sort(function (a, b) { return (a.chunk_index || 0) - (b.chunk_index || 0); });
       if (rows.length <= 1) continue;                     // 한 조각짜리 조문 — 보강할 것이 없다
       const memberIds = new Set(g.members.map(function (m) { return m.id; }));
-      let picked = rows.slice(0, maxPer);
+      // charsPerArticle(#338, 기본 없음 = 종전 maxPer조각): 앞 조각을 글자 상한까지 — 검색이 집은 조각은 아래에서 상한과 무관하게 더한다
+      let picked = opts.charsPerArticle > 0 ? charPrefix(rows, opts.charsPerArticle) : rows.slice(0, maxPer);
       const have = new Set(picked.map(function (r) { return r.id; }));
       // 검색이 실제로 집은 조각은 상한과 무관하게 반드시 포함 (그 조각을 빼면 검색 결과가 사라진다)
       for (const m of g.members) {
@@ -3137,7 +3163,8 @@
 
   const CiteVerify = {
     TAG_UNVERIFIED: TAG_UNVERIFIED, TAG_MISSING: TAG_MISSING, TAG_MISMATCH: TAG_MISMATCH, TAG_UNCHECKED: TAG_UNCHECKED, buildTag: buildTag,
-    articleKey: articleKey, docFamily: docFamily, mergeChunkTexts: mergeChunkTexts,
+    articleKey: articleKey, docFamily: docFamily, mergeChunkTexts: mergeChunkTexts, charPrefix: charPrefix,
+    isHeadingChunk: isHeadingChunk, dropHeadingChunks: dropHeadingChunks,   // #338
     // 부칙 열쇠(#290) — rag_core.js 경과조치 덧붙이기(L8)도 같은 단위 읽기·조 머리 자르기를 쓴다
     isAddendumKey: isAddendumKey, addendumUnitOf: addendumUnitOf, parseAddKey: parseAddKey, keyText: keyText,
     addendumArticles: addendumArticles, addendumSlice: addendumSlice, addendumBefore: addendumBefore,

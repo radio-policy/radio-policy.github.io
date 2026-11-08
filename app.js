@@ -1122,7 +1122,7 @@ async function fetchArticleChunks(docName, key) {
   var r = await sb.from('document_chunks').select('id, doc_name, article_no, chunk_index, content')
     .eq('doc_name', docName).eq('status', 'current').eq('is_approved', true)
     .like('article_no', key + '%').order('chunk_index', { ascending: true }).limit(40);
-  return r.data || [];
+  return CiteVerify.dropHeadingChunks(r.data || []);   // 장·절 제목 조각은 건너뜀(#338) — rag.ts와 같음
 }
 // 번호로 지목한 조문(#245)의 이름 맞추기 재료 — 그 번호의 조문을 가진 현행 문서(조문 제목은 'N조(제목)', #92). rag.ts와 동일 조건
 async function fetchArticleKeyRows(key) {
@@ -1189,7 +1189,7 @@ async function fetchFamilyArticle(fam, key, docName) {
   var q = sb.from('document_chunks').select('id, doc_name, article_no, chunk_index, content');
   var r = await (docName ? q.eq('doc_name', docName) : q.like('doc_name', fam + '(%')).eq('status', 'current').eq('is_approved', true)
     .like('article_no', key + '%').order('chunk_index', { ascending: true }).limit(40);
-  return r.data || [];
+  return CiteVerify.dropHeadingChunks(r.data || []);   // #338
 }
 // 별표 한 개의 조각 전부(chunk_index 순) — 별표 동반(buildAnnexContext 1단계)과 덧붙이기 별표 칸이 같이 쓴다. prefix = '별표 N('. rag.ts fetchAnnexUnit과 같음.
 // 질문 임베딩이 있으면 DB 함수 annex_chunks_semantic(같은 행 + 질문 유사도 칸 — 장동선 판정 §4-7), 임베딩이 없거나 그 함수가 실패·0행이면
@@ -1227,7 +1227,7 @@ async function fetchDocArticles(docName) {
   var r = await sb.from('document_chunks').select('id, doc_name, article_no, chunk_index, content')
     .eq('doc_name', docName).eq('status', 'current').eq('is_approved', true)
     .not('article_no', 'is', null).order('chunk_index', { ascending: true }).limit(300);
-  return r.data || [];
+  return CiteVerify.dropHeadingChunks(r.data || []);   // #338
 }
 async function verifyCitationsRemote(answer, chunkIds, annexSources) {
   if (!sb) return null;

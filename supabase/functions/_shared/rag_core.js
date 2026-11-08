@@ -42,6 +42,27 @@
   // 「나」를 조사로 떼지 않는 낱말 — 「나」로 끝나는 도메인 명사(안테나·코로나), 「나」까지 한 낱말인 부사·대명사(아무나·얼마나 …),
   // 용언의 「-으나·-거나」(뗀 자리에 '했으'·'받거' 같은 반쪽이 남는다). 이 낱말들은 종전처럼 통째로 둔다(아무나 → '아무'면 「아무런」에 걸린다).
   const KW_NA_KEEP = /(안테나|코로나|아무나|누구나|언제나|어디나|얼마나|으나|거나)$/;
+  // 「제도」·「-도」 낱말(#338, 2026-11-08 — 사내 설계 발췌 1-ⓐ, 두 판 공통 상시 규칙): 조사 「도」를 떼면 「자기적합확인제도」가 「자기적합확인제」,
+  // 「전계강도」가 「전계강」으로 반쪽이 남아 조문 글에 안 걸렸다.
+  //  · 낱말(또는 조사 하나를 뗀 낱말 — 「…제도를」)이 「제도」로 끝나면: 「제도」 앞말 + 「제」가 KW_JE_KEEP(규제·문제 …)로 끝나면 「-제」 + 조사 「도」라
+  //    조사만 뗀다(「사전규제도」 → 「사전규제」). 아니면 「제도」를 뗀 앞말(2글자 이상)을 낱말로 쓴다(「자기적합확인제도」 → 「자기적합확인」 — 합성어
+  //    나누기이지 제외어가 아니라 「제도」 조각은 내지 않는다). 앞말이 1글자 이하(「법제도」·「제도」)면 지금 규칙 그대로.
+  //  · 「도」로 끝나는 명사 KW_DO_KEEP(한도·용도·속도 …)은 조사 「도」를 떼지 않는다(「이용한도」·「주파수용도」·「전계강도」 그대로, 「한도를」은 「를」만 뗀다).
+  //  목록은 사내판과 1:1이다 — 낱말을 더하거나 빼려면 사내판에 먼저 알리고 하네스 A/B로 잰다.
+  const KW_JE_KEEP = /(규제|문제|과제|체제|경제|통제|공제|해제|삭제|전제|의제|복제|억제|강제|기제|명제)$/;
+  const KW_DO_KEEP = /(한도|용도|속도|밀도|정도|온도|각도|강도|빈도|농도|고도|연도|난도|감도|순도|궤도|반도|채도|심도|조도|경도|위도)$/;
+  // 조사 떼기 한 번(extractKeywords ③). 돌려준 글이 1글자면 부르는 쪽이 원래 낱말을 쓴다(종전과 같음).
+  function stripJosaWord(w) {
+    if (KW_NA_KEEP.test(w)) return w;
+    const je = /제도$/.test(w) ? w : (/제도$/.test(w.replace(KW_JOSA, '')) ? w.replace(KW_JOSA, '') : null);
+    if (je) {
+      const pre = je.slice(0, -2);
+      if (KW_JE_KEEP.test(pre + '제')) return pre + '제';
+      if (pre.length >= 2) return pre;
+    }
+    if (KW_DO_KEEP.test(w)) return w;
+    return w.replace(KW_JOSA, '');
+  }
   // 순서: ① 원래 낱말이 제외어면 버림 ② 용언 어미가 붙어 있으면 어미부터 뗀다(#244) — 조사를 먼저 떼면 '운영하는'이 '는'만
   // 떨어진 '운영하', '취소하는'이 '취소하'로 남아 「자율심의기구등을 운영하는 자」 같은 무관 조문을 끌어왔다(A/B 실측)
   // ③ 어미가 없으면 조사를 뗀다 ④ 남은 어미를 한 번 더 떼고, 낱말 전체가 어미였으면('해야'·'한다') 버린다.
@@ -54,7 +75,7 @@
       .map(function (w) {
         const t = w.replace(VERB_TAIL, '');
         if (t !== w && t.length >= 2) return t;
-        const s = KW_NA_KEEP.test(w) ? w : w.replace(KW_JOSA, ''); return s.length >= 2 ? s : w;
+        const s = stripJosaWord(w); return s.length >= 2 ? s : w;
       })
       .map(function (w) { const s = w.replace(VERB_TAIL, ''); if (s.length === 0) return ''; return s.length >= 2 ? s : w; })
       .filter(function (w) { return w.length >= 2 && !KW_STOPWORDS.includes(w); });
@@ -497,7 +518,8 @@
   // 자문 스트림 무수신 한도(ms) — '전체 시간'이 아니라 '한 조각도 안 오는 시간'. 3분(#205, B-7).
   const STREAM_IDLE_MS = 180000;
   // 인용 조문 통째 보강(#155) / 역참조 발췌(#155-보론4) 상한 — cite_verify.js expandArticles·buildCitingExcerpts에 넘긴다
-  const EXPAND_OPTS = { maxArticles: 10, maxChunksPerArticle: 4, maxAddedChunks: 14 };
+  // charsPerArticle(#338, 0 = 끔 — 종전 maxChunksPerArticle조각): 조 통째 보강을 조당 글자 상한으로(사내 설계 1-ⓒ 후보 3,500 — 아래 ARTICLE_CHARS_CANDIDATE)
+  const EXPAND_OPTS = { maxArticles: 10, maxChunksPerArticle: 4, maxAddedChunks: 14, charsPerArticle: 0 };
   const CITING_OPTS = { maxPerArticle: 4, maxTotal: 8, maxLen: 300 };
   // 별표 동반 인출(#90): 질문당 별표 개수 / 별표당 청크 (별표 하나가 최대 812청크라 상한 필수)
   const ANNEX_MAX_UNITS = 2;
@@ -915,13 +937,14 @@
   // up 4→2는 41→37(위 근거 조문이 정답 6개를 데려온다), down·up 5·5(+perBase 3)는 재현율이 같고 최대 참조 자료가 48K 토큰을 넘었다.
   // 같은 근거의 형제 순서(2차 후보 — 융합 전체 후보에 든 조 먼저)는 무료 측정에서 개발 합의 필수 +0(켜든 끄든 같은 결과)이라 미리 정한
   // 채택 조건(+1 이상)을 못 채워 버렸다(10-06). q12 전파법 시행령 제45조는 융합 후보에도 없어 순서로는 닿지 않는다.
-  const DELEG_OPTS = { perBase: 1, down: 4, up: 4, chunksPerArticle: 2, maxChars: 9000, spare: 2 };
+  // charsPerArticle(#338) — 아래 ARTICLE_CHARS_CANDIDATE 설명. 0 = 끔(조당 앞 chunksPerArticle조각, 종전과 바이트 같음). 공통 인용·준용·집행 칸도 같다.
+  const DELEG_OPTS = { perBase: 1, down: 4, up: 4, chunksPerArticle: 2, charsPerArticle: 0, maxChars: 9000, spare: 2 };
   // L4 같은 고시 이웃 조: 남은 조문 합이 wholeChars자 이하면 전부, 넘으면 이미 든 조의 앞뒤 조와 준용 조만 max개
   // (같은 측정: 4,000이면 정답 1개를 잃고 8,000은 얻는 것 없이 글만 는다)
   const NEIGHBOR_OPTS = { wholeChars: 6000, max: 4 };
   // L3′ 공통 인용(2차, 10-06 — Fable 재검토 §4①): 본래 근거 조문(정밀검색·상한 구제·RAG) 가운데 서로 다른 minBases곳 이상이 번호로
   // 가리킨 같은 법령의 조. 질문당 max개(+spare 예비 조회), 조마다 앞 chunksPerArticle조각.
-  const XREF_OPTS = { max: 3, minBases: 2, chunksPerArticle: 2, spare: 2 };
+  const XREF_OPTS = { max: 3, minBases: 2, chunksPerArticle: 2, charsPerArticle: 0, spare: 2 };
   // spillMax = L1′ 상한 구제 칸, budgetChars = 상한 구제분을 먼저 세고 fillOrder 순(down = L7 아래, up = L7 위, xref = L3′, neighbor = L4,
   // annex = 덧붙인 조문이 가리킨 별표 따로 1칸)으로 채워 이 글자 수에서 끊는다(≈ +11K 토큰), maxTotalChars = 참조 자료 전체 상한(설계 §6
   // 「최대 48K 토큰」 × 실측 1.094자/토큰 ≈ 52,500자) — 넘으면 trimAddOns가 덧붙인 것만 덜어 낸다. annex = 별표 칸을 쓰나(2차 — 1차는
@@ -939,6 +962,29 @@
   // enforce = 집행 조문(#337, 아래 ENFORCE_* 설명): 따로 몫이라 맨 뒤 — 앞 칸들의 바이트가 그대로다.
   const ADDON_OPTS = { spillMax: 2, budgetChars: 12000, maxTotalChars: 52500, dashboardExtraChars: 8000, annex: true,
     fillOrder: ['down', 'up', 'annex', 'xref', 'apply', 'neighbor', 'enforce'] };
+  // 조 통째(#338, 2026-11-08 — 사내 설계 발췌 1-ⓒ, 꺼 둠): 덧붙이기 칸 넷(위임·공통 인용·준용·집행)과 통째 보강(EXPAND_OPTS)을 「조당 앞 2조각(통째 보강 4조각)」에서
+  // 「조당 3,500자」로 바꾸고, 늘어난 글만큼 칸별 상한 1.5배·덧붙이기 예산 20,000·전체 상한 70,000(대시보드 +8,000 그대로)으로 올리는 후보 조합. wholeChars 6,000은 그대로.
+  // 켜는 법 = 아래 값을 각 상수에 옮겨 적고(사내판과 같은 값) **verify-citations/index.ts의 EXPAND_OPTS 사본에도 charsPerArticle을 같은 값으로**(대시보드 판정기가
+  // 통째 보강을 다시 한다 — 빠뜨리면 판정 원문이 모델이 본 것보다 짧아진다) + index.html 버스터 + telegram-webhook·verify-citations 재배포. 하네스로는 --core-opts에 이 JSON을 그대로 준다.
+  // 켤지는 외부 dev 눈가림 A/B(사내 설계 3절 기준)로 운영자가 정한다 — 그 전에는 0(끔)이라 종전과 바이트 같다.
+  const ARTICLE_CHARS_CANDIDATE = {
+    EXPAND_OPTS: { charsPerArticle: 3500 },
+    DELEG_OPTS: { charsPerArticle: 3500, maxChars: 13500 },
+    XREF_OPTS: { charsPerArticle: 3500 },
+    APPLY_OPTS: { charsPerArticle: 3500, maxChars: 9000 },
+    ENFORCE_OPTS: { charsPerArticle: 3500, maxChars: 7500 },
+    ADDON_OPTS: { budgetChars: 20000, maxTotalChars: 70000 },
+  };
+  // 덧붙이기 칸 한 조의 조각 고르기 — o = 칸 상수(chunksPerArticle·charsPerArticle). 글자 상한이 켜져 있으면 CiteVerify.charPrefix(조각 경계에서 끊음),
+  // 아니면 종전 앞 chunksPerArticle조각. clipArticle: 첫 조각 하나로도 글자 상한을 넘으면 글을 상한에서 자른다(드묾 — 조각은 800자).
+  function addonUse(mine, o) {
+    const CV = root.CiteVerify;
+    if (o && o.charsPerArticle > 0 && CV && CV.charPrefix) return CV.charPrefix(mine, o.charsPerArticle);
+    return mine.slice(0, o.chunksPerArticle);
+  }
+  function clipArticle(content, o) {
+    return o && o.charsPerArticle > 0 && content.length > o.charsPerArticle ? content.slice(0, o.charsPerArticle) : content;
+  }
   // L8 경과조치 따라가기(#290, 2026-10-07 — Fable 판정 local_docs/자문세문제_판정_261007.md §13-2, Fable 재검토 대상): 부칙은 검색으로 열지 않고
   // (상위 15·정밀검색·감점·문턱은 그대로) 덧붙이기 한 칸으로만 연다. 발동 = A ∧ B.
   //  A(조회 전에 본다 — 안 걸리면 DB 왕복 0): 질문에 시점·전환 낱말. 「시행령·시행규칙·변경신고·변경허가·기한」은 뺐고(실제 기록에서 경과와 무관한 적중),
@@ -976,6 +1022,8 @@
     m = a.match(/^별표\s*(\d+(?:의\d+)?)/);
     return m ? '별표' + m[1] : null;
   }
+  // 장·절 제목 조각 건너뛰기(#338, 사내 설계 발췌 1-ⓑ)는 cite_verify.js `isHeadingChunk`·`dropHeadingChunks` — 조 조회를 하는 세 곳(rag.ts·app.js·verify-citations)이
+  // 모두 읽는 파일이라 그쪽에 둔다.
   function famOf(docName) { return String(docName || '').split('(')[0].trim(); }   // CiteVerify.docFamily와 같은 규칙
   function artNum(key) {
     const m = String(key || '').match(/^(\d+)조(?:의(\d+))?/);
@@ -1284,7 +1332,7 @@
   // minHits(#300-보론3, 운영자 결정 10-13): 지시문 문장에 질문 키워드가 min(minHits, 키워드 수)개 이상 — 사내 검증 36문항 중 13개가 붙고 절반이
   // 무관했는데 전부 「신고·승인·요건·보호」 같은 넓은 낱말 하나로 통과한 것(검색이 표류한 근거). 외부 자료에서 걸린 15건 중 1개 적중은 3건뿐이고
   // 그중 하나가 유일한 무관 부착(q08 공사업법 시행령 17조), 사내 사례·q01·n14는 2~3개 적중이라 그대로다. 낱말 목록으로 거르지 않는다(유지 부담).
-  const APPLY_OPTS = { on: true, perDirective: 10, max: 10, chunksPerArticle: 2, maxChars: 6000, spare: 2, minHits: 2 };
+  const APPLY_OPTS = { on: true, perDirective: 10, max: 10, chunksPerArticle: 2, charsPerArticle: 0, maxChars: 6000, spare: 2, minHits: 2 };
   // 지시문 어미 — 「준용하는/되는 경우를 포함한다」(104건)·「준용하지 아니한다」·「준용되는 「X」 제N조」는 어미가 달라 안 걸린다. 「준용할 수 없다/있다」(3건)만 따로 뺀다.
   const APPLY_DIRECTIVE_RE = /준용(?:한다|하되|하여|할(?!\s*수\s*(?:없|있))|된다|하고|하며|함)/g;
   // 목적어 선행형의 꼬리 — 「…에 관하여는 <조·항·호·이음말·괄호 하나>을/를 준용」. isOtherLawRef의 나열 꼬리와 같은 발상에 「같은 조」·「의 규정」·조사·괄호를 더했다.
@@ -1634,7 +1682,7 @@
   //  C1(근거 조를 씨앗으로 R″ 집행 조문 찾기)은 꺼 둔다(c1: false, 판정 §8 E1): 측정에서 개발 양성 7/7에 C1 기여 0, 눈가림 오도 7(가중 12)/58 발동이
   //    전부 C1 — 정밀검색 칸에 표류한 다른 법의 조(클라우드법 27조·대리점법 12조…)가 그 법의 집행 조문을 끌고 왔다. 씨앗 법령군 규칙 + 같은 시각
   //    끔/켬 재측정 + 눈가림 없이 켜지 말 것. 꺼져 있으면 씨앗도 citers 조회도 하지 않는다(DB 왕복 0). R″·maxSeeds·maxRefs는 다음 측정의 발판으로 남긴다.
-  const ENFORCE_OPTS = { on: true, c1: false, rowFallback: true, max: 3, maxSeeds: 20, chunksPerArticle: 2, maxChars: 5000, maxRefs: 8 };
+  const ENFORCE_OPTS = { on: true, c1: false, rowFallback: true, max: 3, maxSeeds: 20, chunksPerArticle: 2, charsPerArticle: 0, maxChars: 5000, maxRefs: 8 };
   const ENFORCE_ROWS = [{
     // 2조(적용범위) 1호 — 「전기통신사업법」 제32조의12·13·14·15, 제50조 위반행위의 사실조사·시정조치·과징금 절차(실DB 2026-11-03).
     // to 증명: 52조① 「제50조제1항을 위반한 행위가 있다고 인정하면 … 조치를 명할 수 있다」 · 51조의3② 「제32조의12제1항, … 제32조의15제2항ㆍ제3항을
@@ -1906,8 +1954,9 @@
       const mine = rs.filter(function (r) { return r.doc_name === doc; }).sort(function (a, b) { return (a.chunk_index || 0) - (b.chunk_index || 0); });
       if (ADDON_SKIP_ARTNO_RE.test(mine[0].article_no || '')) return;
       const isX = it.sec === 'xref', isA = it.sec === 'apply';
-      const use = mine.slice(0, isA ? aOpts.chunksPerArticle : isX ? xOpts.chunksPerArticle : dOpts.chunksPerArticle);
-      let content = merge(use.map(function (r) { return r.content || ''; }));
+      const per = isA ? aOpts : isX ? xOpts : dOpts;
+      const use = addonUse(mine, per);
+      let content = clipArticle(merge(use.map(function (r) { return r.content || ''; })), per);
       if (mine.length > use.length) content += '\n(※ 이 조문은 전체 ' + mine.length + '조각 중 앞 ' + use.length + '조각만 실었습니다. 보이지 않는 항·호가 있을 수 있습니다.)';
       const slot = isA ? 'apply' : isX ? 'xref' : it.dir;
       const lim = isA ? aOpts.max : isX ? xOpts.max : it.dir === 'down' ? dOpts.down : dOpts.up;
@@ -2053,8 +2102,8 @@
       rs.forEach(function (r) { doc = laterDoc(doc, r.doc_name); });
       const mine = rs.filter(function (r) { return r.doc_name === doc; }).sort(function (a, b) { return (a.chunk_index || 0) - (b.chunk_index || 0); });
       if (ADDON_SKIP_ARTNO_RE.test(mine[0].article_no || '')) return;
-      const use = mine.slice(0, eOpts.chunksPerArticle);
-      let content = merge(use.map(function (r) { return r.content || ''; }));
+      const use = addonUse(mine, eOpts);
+      let content = clipArticle(merge(use.map(function (r) { return r.content || ''; })), eOpts);
       if (mine.length > use.length) content += '\n(※ 이 조문은 전체 ' + mine.length + '조각 중 앞 ' + use.length + '조각만 실었습니다. 보이지 않는 항·호가 있을 수 있습니다.)';
       out.push(Object.assign({}, it, { sec: 'enforce', doc_name: doc, article_no: mine[0].article_no, content: content, ids: use.map(function (r) { return r.id; }) }));
     });
@@ -2650,6 +2699,7 @@
 
   const RagCore = {
     PRIORITY_KW_RE: PRIORITY_KW_RE, VERB_TAIL: VERB_TAIL, extractKeywords: extractKeywords,
+    KW_JE_KEEP: KW_JE_KEEP, KW_DO_KEEP: KW_DO_KEEP, stripJosaWord: stripJosaWord,   // 「제도」·「-도」(#338)
     REQ_TAIL_OPTS: REQ_TAIL_OPTS, REQ_CORE: REQ_CORE, stripRequestTail: stripRequestTail,
     LAW_SYNONYMS: LAW_SYNONYMS, PRACTICE_TERMS: PRACTICE_TERMS,
     lawSynonymKeywords: lawSynonymKeywords, expandQueryForSemantic: expandQueryForSemantic,
@@ -2669,6 +2719,7 @@
     fetchNamedArticles: fetchNamedArticles,
     namedAnnexRefs: namedAnnexRefs, pickNamedAnnexes: pickNamedAnnexes, fetchNamedAnnexes: fetchNamedAnnexes,   // 질문이 지목한 별표(#335)
     ADDON_OPTS: ADDON_OPTS, DELEG_OPTS: DELEG_OPTS, NEIGHBOR_OPTS: NEIGHBOR_OPTS,
+    ARTICLE_CHARS_CANDIDATE: ARTICLE_CHARS_CANDIDATE, addonUse: addonUse,   // 조 통째(#338, 꺼 둠)
     NOTICE_DOC_RE: NOTICE_DOC_RE, unitKey: unitKey, capSpill: capSpill, pickSpill: pickSpill,
     delegationBases: delegationBases, pickDelegations: pickDelegations, neighborTarget: neighborTarget, pickNeighbors: pickNeighbors, neighborWhole: neighborWhole,
     buildAddOnContext: buildAddOnContext, fetchAddOns: fetchAddOns, trimAddOns: trimAddOns,
