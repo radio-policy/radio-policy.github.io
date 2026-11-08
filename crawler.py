@@ -587,6 +587,436 @@ def urgency_second_check(title: str, content: str = '', summary: str = ''):
 
 
 # ═══════════════════════════════════════════════════════
+#  긴급도 1차 판정 v2 (2026-11-09 재설계 — 설계 local_docs/긴급도_내림원인_261109/설계_1차판정_재설계_261109.md §2·§4,
+#  판정 판정_근본원인_261109.md §7 B·C)
+#
+#  원인(판정 §3): 범주 목록 기준문 + 문턱 없음 + 느슨한 독자 + 고정 12칸 균등 예시. v2는 네 요소를 함께 바꾼다 — 기준문 v2(「세 조건이
+#  모두 참일 때만 즉시대응」, 운영자 결정을 본문에, 예시 20줄) · 구조화 출력 JSON(scope → grade → basis → reason, 칸 순서 = 생성 순서) ·
+#  독자 Haiku 5.5(팔 H1~H3, 조건부 S1·O1) · 피드백은 고정 12칸 대신 기사별 검색 예시 + 최근 7일 운영자 내림 목록(+ #264 유사 블록).
+#  ⚠️ v1(classify_urgency·2차 확인·_URGENCY_CRITERIA·지시 줄·도구)은 글자 하나 안 바뀐다 — v2는 새 함수·새 글이고 스위치·폴백으로 쓴다.
+#  스위치 app_config urgency_grader = {"mode": "v1"|"shadow"|"v2"} — 읽기 실패는 이 프로세스의 마지막 값, 없으면 URGENCY_GRADER_DEFAULT.
+#   · v1     = 지금 그대로(v2 호출 없음).
+#   · shadow = 운영 등급은 v1 그대로, v2를 나란히 불러 urgency_v2_*·urgency_reason에만 남긴다(설계 §6-3 3일 그림자).
+#   · v2     = v2 등급으로 저장. 실패(호출 예외·refusal·max_tokens·JSON 해석 실패·schema 밖 값·모순 출력·예산 초과·차단기·기준문 없음)는
+#              그 기사만 v1 경로(classify_urgency + 2차 확인) — urgency_grader 'v1-fallback', 폴백 1차 호출의 api_usage 라벨은
+#              crawler.py:classify_urgency_fallback(워치독 캐시 적중률 경보 #211이 드문 폴백에 오발하지 않게).
+#  모델 인자에 샘플링 온도류를 넣지 않는다(5.5 계열은 비기본값 400 — 크롤러에 그 인자는 _urgency_call_kw 한 곳뿐, 시험이 센다).
+#  기준문 v2는 측정 재료라 지금은 저장소 밖 파일(URGENCY_V2_CRITERIA_FILE)에서 읽고 지문(URGENCY_V2_CRITERIA_SHA256)이 맞을 때만 쓴다 —
+#  Actions에는 local_docs가 없으므로 배포 창이 **같은 글자**를 URGENCY_V2_CRITERIA_TEXT로 옮기기 전까지 Actions에서는 언제나 v1이다.
+# ═══════════════════════════════════════════════════════
+
+URGENCY_GRADER_KEY = 'urgency_grader'          # app_config — {"mode": "v1"|"shadow"|"v2"}
+URGENCY_GRADER_DEFAULT = 'v1'                  # 켤 때(on) 배포 창이 'v2'로 올리고 스위치는 비상 복귀용으로 남긴다(설계 §6-1)
+URGENCY_GRADER_MODES = ('v1', 'shadow', 'v2')
+_URGENCY_GRADER_LAST = [None]                  # 이 프로세스에서 마지막으로 읽은 값(읽기 실패 때 쓴다)
+
+URGENCY_V2_ARM = 'H1'                          # 측정 창(설계 §5-3 선택 규칙)이 dev에서 고른 팔로 바꾼다
+# 팔(설계 §2-2). max_tokens: 추론을 끈 팔 400 / adaptive 팔 2,048(10-14 실측: adaptive medium 1,024에서도 잘림 3건).
+# Haiku 5.5 thinking disabled는 effort high 이하에서만(기본 medium). Sonnet 5.5는 disabled가 400 → between_tools(다른 칸 금지, effort는
+# 기본 high). Opus 5.5는 추론을 끌 수 없어 adaptive + effort low. 11-09 첫 실호출(합성 기사 1건 × 팔 5 × 2회): 다섯 팔 모두
+# output_config.format·maxLength 수락, 키는 schema 순서대로, 블록 ① 5,564토큰 캐시 쓰기 → 둘째 호출 읽기(구현 기록 참조).
+URGENCY_V2_ARMS = {
+    'H1': {'model': 'claude-haiku-5-5', 'thinking': {'type': 'disabled'}, 'effort': None, 'max_tokens': 400},
+    'H2': {'model': 'claude-haiku-5-5', 'thinking': {'type': 'adaptive'}, 'effort': 'low', 'max_tokens': 2048},
+    'H3': {'model': 'claude-haiku-5-5', 'thinking': {'type': 'adaptive'}, 'effort': 'medium', 'max_tokens': 2048},
+    'S1': {'model': 'claude-sonnet-5-5', 'thinking': {'type': 'between_tools'}, 'effort': None, 'max_tokens': 400},
+    'O1': {'model': 'claude-opus-5-5', 'thinking': {'type': 'adaptive'}, 'effort': 'low', 'max_tokens': 2048},
+}
+URGENCY_V2_VOTES = 1                           # 3 = 다수결(팔 ×1 흔들림 > 5 %일 때 — 측정 창이 정함, 설계 §2-1)
+URGENCY_V2_TIMEOUT_S = 30                      # 호출 하나(재시도 1회) — 2차 확인과 같은 값
+URGENCY_V2_BUDGET_S = 120                      # 실행당 v2 시간 예산 — 넘긴 기사는 v1(예산 초과 건수 집계, 설계 §2-1)
+URGENCY_V2_WORKERS = 4                         # 기사 병렬(표는 기사 안에서 따로 병렬)
+URGENCY_V2_MAX_FAIL = URGENCY_CHECK_MAX_FAIL   # 차단기: 기사 단위 2건(다수결의 표 3개는 1건) — 같은 값·같은 뜻
+URGENCY_V2_REASON_MAX = 40
+URGENCY_V2_CONTRADICT = 'fallback'             # 모순 출력(즉시대응 ∧ 없음, 또는 그 반대): 'fallback' = v1 / 'normal' = 금주검토 이하로(실측 > 1 %면)
+URGENCY_V2_SITE = 'crawler.py:classify_urgency_v2'          # 함수 이름 그대로(api_usage.install) — 워치독 CACHED_SITES
+URGENCY_V2_FALLBACK_SITE = 'crawler.py:classify_urgency_fallback'
+URGENCY_V2_CRITERIA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'local_docs', '긴급도_내림원인_261109',
+                                        'criteria_v2.txt')
+URGENCY_V2_CRITERIA_SHA256 = 'aee350b9aa216e9959810367b268e2f1d3ffbb44c1e5c1972422df50f01fcce3'   # 부록 A 초안(11-09) — 손질마다 측정 창이 고친다
+URGENCY_V2_CRITERIA_TEXT = None                # 배포 창이 측정 통과 글을 **글자 그대로** 여기에(지문은 위 상수와 같아야 한다)
+_URGENCY_V2_CRIT_CACHE = [None]                # None = 아직 안 읽음, '' = 못 씀(파일 없음·지문 다름)
+
+_URGENCY_V2_SCOPES = ('통신', '언저리', '타영역')
+_URGENCY_V2_BASES = ('통신사·통신망 사고', '대규모 유출', '국감 증인', '제도', '주파수', '정부·통신3사 공동', 'SKT 당사자',
+                     '플랫폼 개인정보', '경쟁사 공통 규제', '기관장 발언', '없음')
+# 구조화 출력 스키마(설계 부록 B) — 칸 순서 = 생성 순서(11-09 첫 실호출로 확인). reason을 등급 앞에 두지 말 것(분포가 바뀌는 별도 팔).
+URGENCY_V2_SCHEMA = {
+    'type': 'object', 'additionalProperties': False,
+    'properties': {
+        'scope': {'type': 'string', 'enum': list(_URGENCY_V2_SCOPES)},
+        'grade': {'type': 'string', 'enum': ['즉시대응', '금주검토', '동향파악']},
+        'basis': {'type': 'string', 'enum': list(_URGENCY_V2_BASES)},
+        'reason': {'type': 'string', 'maxLength': URGENCY_V2_REASON_MAX},
+    },
+    'required': ['scope', 'grade', 'basis', 'reason'],
+}
+_URGENCY_V2_RANK = {'참고': 0, '보통': 1, '긴급': 2}
+_URGENCY_V2_BREAKER_KINDS = ('error', 'max_tokens', 'parse', 'schema')   # 호출 장치가 깨진 꼴만 차단기에 센다(거부·모순은 기사 탓 — 따로 집계)
+
+# 피드백 블록 ②(설계 §4) — 기사마다 달라 캐시 밖. 줄 꼴 `- "제목[:70]" → 등급 (MM-DD, 사유)`.
+URGENCY_V2_SEARCH_MAX = 6
+URGENCY_V2_SEARCH_MIN = FB_SIMILAR_MIN         # 최소 겹침 3(#264 눈금 그대로 — 머리말이 「참고」라도 2개 겹침은 안 쓴다)
+URGENCY_V2_LOWERED_MAX = 15
+URGENCY_V2_LOWERED_DAYS = 7
+_URGENCY_V2_SEARCH_HEAD = '\n\n[담당자가 비슷한 기사에 매긴 등급 — 같은 사건이면 따르고, 다른 사건이면 참고만 한다]\n'
+_URGENCY_V2_LOWERED_HEAD = '\n\n[최근 7일 담당자가 긴급에서 내린 기사 — 같은 사건의 다른 각도 기사도 같은 등급이다]\n'
+_URGENCY_V2_SIMILAR_HEAD = '\n\n[이 기사와 제목이 거의 같은 담당자 수정 사례 — 같은 사건의 기사면 이 등급을 따른다]\n'   # #264와 같은 글자
+_URGENCY_V2_FB_COLS = 'id,news_id,title,user_importance,ai_importance,created_at,updated_at,reason'
+_urgency_v2_rows_cache = None
+_URGENCY_V2_RUN = {}                           # 한 실행의 v2 집계(grade_urgency가 채운다) — 로그·하루 기록
+URGENCY_V2_STATS_KEY = 'urgency_v2_stats'      # app_config — {"YYYY-MM-DD"(KST): {집계}}, 최근 8일
+URGENCY_V2_NOTICE_MARK = 'urgency_v2_notice_alerted'
+
+
+def urgency_grader_mode() -> str:
+    """app_config urgency_grader의 mode. 읽기 실패·값 이상 → 이 프로세스의 마지막 값, 없으면 URGENCY_GRADER_DEFAULT(설계 §6-1)."""
+    try:
+        rows = sb.table('app_config').select('value').eq('key', URGENCY_GRADER_KEY).limit(1).execute().data
+        if not rows:
+            mode = URGENCY_GRADER_DEFAULT
+        else:
+            raw = rows[0].get('value')
+            obj = json.loads(raw) if isinstance(raw, str) else (raw or {})
+            mode = obj.get('mode') if isinstance(obj, dict) else None
+            if mode not in URGENCY_GRADER_MODES:
+                raise ValueError(f'mode 값 이상: {str(raw)[:60]}')
+        _URGENCY_GRADER_LAST[0] = mode
+        return mode
+    except Exception as e:
+        mode = _URGENCY_GRADER_LAST[0] or URGENCY_GRADER_DEFAULT
+        print(f'[긴급도 판정기] 설정 읽기 실패 — {mode}(마지막 값/기본값): {str(e)[:80]}')
+        return mode
+
+
+def urgency_v2_criteria():
+    """기준문 v2(= 시스템 블록 ① 전체 — 역할·기준·예시·출력 규칙) 또는 None(파일 없음·지문 다름 → v2를 쓰지 않는다).
+    URGENCY_V2_CRITERIA_TEXT가 있으면 그것, 없으면 URGENCY_V2_CRITERIA_FILE. 실행(프로세스)당 한 번 읽는다."""
+    import hashlib
+    if _URGENCY_V2_CRIT_CACHE[0] is not None:
+        return _URGENCY_V2_CRIT_CACHE[0] or None
+    txt, src = URGENCY_V2_CRITERIA_TEXT, '상수'
+    if txt is None:
+        src = '파일'
+        try:
+            with open(URGENCY_V2_CRITERIA_FILE, encoding='utf-8') as f:
+                txt = f.read()
+        except OSError:
+            txt = None
+    if not txt:
+        print('[v2] 기준문 v2가 없다(배포 전 — 상수 비어 있고 파일 없음) — v2 대신 v1')
+        _URGENCY_V2_CRIT_CACHE[0] = ''
+        return None
+    h = hashlib.sha256(txt.encode('utf-8')).hexdigest()
+    if h != URGENCY_V2_CRITERIA_SHA256:
+        print(f'[v2] 기준문 v2({src}) 지문 {h[:12]}가 잠금 {URGENCY_V2_CRITERIA_SHA256[:12]}과 다르다 — v2 대신 v1')
+        _URGENCY_V2_CRIT_CACHE[0] = ''
+        return None
+    _URGENCY_V2_CRIT_CACHE[0] = txt
+    return txt
+
+
+def _load_feedback_rows_v2() -> list:
+    """v2 피드백 블록 재료 — 공통 행(team_id null), updated_at 내림차순 500(v1 _load_feedback_rows와 같은 범위)에 날짜·사유·AI 등급 칸.
+    v1 조회와 따로 둔다(v1 글자·캐시 불변). reason 칸 조회가 실패하면 그 칸 없이 한 번 더. 실행당 1회, 실패는 빈 목록."""
+    global _urgency_v2_rows_cache
+    if _urgency_v2_rows_cache is not None:
+        return _urgency_v2_rows_cache
+    rows = []
+    for cols in (_URGENCY_V2_FB_COLS, _URGENCY_V2_FB_COLS.replace(',reason', '')):
+        try:
+            rows = sb.table('importance_feedback').select(cols).is_('team_id', 'null') \
+                .order('updated_at', desc=True).limit(500).execute().data or []
+            break
+        except Exception as e:
+            print(f'[v2 피드백] 조회 실패({cols.count(",") + 1}칸, 무시): {str(e)[:80]}')
+            rows = []
+    _urgency_v2_rows_cache = [r for r in rows if r.get('title') and r.get('user_importance')]
+    return _urgency_v2_rows_cache
+
+
+def _v2_ts(v):
+    """ISO 문자열·datetime → 시각대 있는 datetime(못 읽으면 None)."""
+    if isinstance(v, datetime):
+        return v if v.tzinfo else v.replace(tzinfo=timezone.utc)
+    try:
+        t = datetime.fromisoformat(str(v).replace('Z', '+00:00'))
+        return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
+
+
+def _v2_fb_line(r: dict) -> str:
+    """검색 예시·내림 목록 줄 — `- "제목[:70]" → 등급 (MM-DD, 사유)`(사유 없으면 `(MM-DD)`, 날짜 없으면 날짜 칸 생략)."""
+    t = _v2_ts(r.get('created_at'))
+    tail = [t.astimezone(KST).strftime('%m-%d')] if t else []
+    reason = re.sub(r'\s+', ' ', str(r.get('reason') or '')).strip()[:URGENCY_V2_REASON_MAX]
+    if reason:
+        tail.append(reason)
+    return _fb_line(r) + (f" ({', '.join(tail)})" if tail else '')
+
+
+def urgency_v2_block2(title: str, summary: str, rows: list, now=None, exclude_news_id=None) -> str:
+    """v2 시스템 블록 ②(캐시 밖, 설계 §4) = 검색 예시 → 최근 7일 운영자 내림 목록 → 유사 제목 블록(#264). 없으면 ''.
+    rows = _load_feedback_rows_v2 꼴(updated_at 내림차순). now = 그 시각 기준(운영 = 지금 / 측정 --fb-asof = 기사 created_at — 부르는
+    쪽이 rows를 그 시각 이전으로 걸러 넘긴다). exclude_news_id = 그 기사 자신의 행(측정에서만).
+      · 유사 = #264 규칙 그대로(제목 낱말 − _FB_COMMON 겹침 ≥ FB_SIMILAR_MIN ∧ 짧은 쪽의 절반 이상, 최대 FB_SIMILAR_MAX) — v2에는 고정 블록이
+        없으므로 「고정 블록에 실린 줄 빼기」는 없다.
+      · 검색 = (제목 + 요약) 낱말 − _FB_COMMON 과 행 제목 낱말의 겹침 ≥ URGENCY_V2_SEARCH_MIN, 겹침 많은 순(같으면 최신 수정순) 상위
+        URGENCY_V2_SEARCH_MAX — 유사 블록에 실린 행은 유사 블록에만.
+      · 내림 = AI 긴급 → 사람 보통·참고, created_at이 now 전 URGENCY_V2_LOWERED_DAYS일 안, 최신순 URGENCY_V2_LOWERED_MAX.
+    시각·난수를 넣지 않는다(같은 입력 = 같은 글자)."""
+    now = _v2_ts(now) if now is not None else datetime.now(timezone.utc)
+    rows = [r for r in rows or [] if not (exclude_news_id and r.get('news_id') == exclude_news_id)]
+    if not rows:
+        return ''
+    tt = _fb_tokens(title) - _FB_COMMON
+    sim = []
+    if len(tt) >= FB_SIMILAR_MIN:
+        scored = []
+        for r in rows:
+            ft = _fb_tokens(r['title']) - _FB_COMMON
+            ov = len(tt & ft)
+            if ov >= FB_SIMILAR_MIN and ov / min(len(tt), len(ft)) >= FB_SIMILAR_RATIO:
+                scored.append((ov, r))
+        sim = [r for _ov, r in sorted(scored, key=lambda x: -x[0])][:FB_SIMILAR_MAX]
+    sim_ids = {id(r) for r in sim}
+    qt = _fb_tokens(f'{title} {summary or ""}') - _FB_COMMON
+    found = []
+    for r in rows:
+        if id(r) in sim_ids:
+            continue
+        ov = len(qt & (_fb_tokens(r['title']) - _FB_COMMON))
+        if ov >= URGENCY_V2_SEARCH_MIN:
+            found.append((ov, r))
+    search = [r for _ov, r in sorted(found, key=lambda x: -x[0])][:URGENCY_V2_SEARCH_MAX]
+    since = now - timedelta(days=URGENCY_V2_LOWERED_DAYS)
+
+    def _lowered_in_window(r):
+        t = _v2_ts(r.get('created_at'))
+        return (r.get('ai_importance') == '긴급' and r.get('user_importance') in ('보통', '참고')
+                and t is not None and since <= t < now)
+    low = sorted((r for r in rows if _lowered_in_window(r)), key=lambda r: _v2_ts(r.get('created_at')),
+                 reverse=True)[:URGENCY_V2_LOWERED_MAX]
+    out = ''
+    if search:
+        out += _URGENCY_V2_SEARCH_HEAD + '\n'.join(_v2_fb_line(r) for r in search)
+    if low:
+        out += _URGENCY_V2_LOWERED_HEAD + '\n'.join(_v2_fb_line(r) for r in low)
+    if sim:
+        out += _URGENCY_V2_SIMILAR_HEAD + '\n'.join(_fb_line(r) for r in sim)
+    return out
+
+
+def urgency_v2_request(user_msg: str, criteria: str, block2: str, arm: str = None) -> dict:
+    """v2 호출 인자(messages.create **kw) — 운영(classify_urgency_v2)과 측정(tools_urgency_probe V2)이 같은 함수를 쓴다(잰 것 = 돌리는 것).
+    블록 ① = 기준문 v2 전체(캐시 1h), 블록 ② = urgency_v2_block2(캐시 밖, 비면 없음). 사용자 메시지는 _urgency_user_msg 그대로.
+    arm = URGENCY_V2_ARMS의 이름 또는 같은 꼴의 dict(측정 도구가 --model/--think/--effort로 만든 팔)."""
+    a = arm if isinstance(arm, dict) else URGENCY_V2_ARMS[arm or URGENCY_V2_ARM]
+    system = [{'type': 'text', 'text': criteria, 'cache_control': {'type': 'ephemeral', 'ttl': '1h'}}]
+    if block2:
+        system.append({'type': 'text', 'text': block2})
+    oc = {'format': {'type': 'json_schema', 'schema': URGENCY_V2_SCHEMA}}
+    if a['effort']:
+        oc['effort'] = a['effort']
+    return dict(model=a['model'], max_tokens=a['max_tokens'], thinking=dict(a['thinking']), output_config=oc,
+                system=system, messages=[{'role': 'user', 'content': user_msg}])
+
+
+def parse_urgency_v2(resp) -> dict:
+    """v2 응답 → 표 하나. 성공 {'ok': True, 'scope', 'grade'(긴급·보통·참고), 'basis', 'reason'} /
+    실패 {'ok': False, 'why': refusal|max_tokens|parse|schema|contradict, …}. 모순(즉시대응 ∧ basis 없음, 또는 즉시대응 아님 ∧ basis 있음)은
+    칸 값을 함께 돌려준다(URGENCY_V2_CONTRADICT 'normal'용·집계용). reason은 40자로 자른다(maxLength를 받아도 코드에서 한 번 더)."""
+    stop = getattr(resp, 'stop_reason', None)
+    if stop in ('refusal', 'max_tokens'):
+        return {'ok': False, 'why': stop}
+    text = ''.join(getattr(b, 'text', '') or '' for b in getattr(resp, 'content', None) or []
+                   if getattr(b, 'type', '') == 'text').strip()
+    try:
+        obj = json.loads(text)
+    except Exception:
+        return {'ok': False, 'why': 'parse', 'raw': text[:120]}
+    if not isinstance(obj, dict):
+        return {'ok': False, 'why': 'parse', 'raw': text[:120]}
+    s, g, ba, r = obj.get('scope'), obj.get('grade'), obj.get('basis'), obj.get('reason')
+    if s not in _URGENCY_V2_SCOPES or g not in _AI_PRIORITY_MAP or ba not in _URGENCY_V2_BASES or not isinstance(r, str):
+        return {'ok': False, 'why': 'schema', 'raw': text[:120]}
+    out = {'scope': s, 'grade': _AI_PRIORITY_MAP[g], 'basis': ba,
+           'reason': re.sub(r'\s+', ' ', r).strip()[:URGENCY_V2_REASON_MAX]}
+    if (g == '즉시대응') != (ba != '없음'):
+        return dict(out, ok=False, why='contradict')
+    return dict(out, ok=True)
+
+
+def classify_urgency_v2(title: str, content: str = '', summary: str = '', arm: str = None) -> dict:
+    """v2 표 하나(설계 §2-1). 반환은 parse_urgency_v2 꼴 + 'ms'. 키 없음 → why 'nokey', 기준문 없음 → 'unavailable', 예외 → 'error'.
+    ⚠️ client.messages.create는 이 함수 안에서 직접 부른다 — api_usage 라벨 'crawler.py:classify_urgency_v2'(워치독 CACHED_SITES)."""
+    t0 = time.monotonic()
+    if not ANTHROPIC_API_KEY:
+        return {'ok': False, 'why': 'nokey', 'ms': 0}
+    crit = urgency_v2_criteria()
+    if not crit:
+        return {'ok': False, 'why': 'unavailable', 'ms': 0}
+    try:
+        block2 = urgency_v2_block2(title, summary, _load_feedback_rows_v2())
+        req = urgency_v2_request(_urgency_user_msg(title, content, summary), crit, block2, arm)
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY, timeout=URGENCY_V2_TIMEOUT_S, max_retries=1)
+        resp = client.messages.create(**req)
+        out = parse_urgency_v2(resp)
+    except Exception as e:
+        out = {'ok': False, 'why': 'error', 'detail': f'{type(e).__name__}: {str(e)[:100]}'}
+    out['ms'] = int((time.monotonic() - t0) * 1000)
+    return out
+
+
+def _v2_vote_value(v):
+    """표 하나 → 셈에 쓸 표(dict) 또는 None(무효). 모순 표는 URGENCY_V2_CONTRADICT 'normal'일 때만 금주검토 이하 표로 센다."""
+    if not isinstance(v, dict):
+        return None
+    if v.get('ok'):
+        return v
+    if v.get('why') == 'contradict' and URGENCY_V2_CONTRADICT == 'normal' and v.get('grade') in _URGENCY_V2_RANK:
+        g = v['grade'] if _URGENCY_V2_RANK[v['grade']] <= 1 else '보통'
+        return dict(v, ok=True, grade=g, basis='없음', contradict=True)
+    return None
+
+
+def combine_v2_votes(votes: list) -> dict:
+    """표 묶음 → 기사 하나의 v2 결과(설계 §2-1 다수결). 표 1개면 그 표(무효면 실패).
+    표 여럿: 유효 표(실패·모순 표 제외) 2개 이상일 때만 — 유효 2개는 등급이 같아야 채택, 3개면 중앙값(참고 < 보통 < 긴급; 1:1:1 = 보통).
+    scope = 최종 등급과 같은 표들 중 다수(동점이면 그중 첫 표), basis·reason = 최종 등급을 낸 첫 표. 실패면 {'ok': False, 'why', 'breaker'}
+    — breaker = 무효 표 중 호출 장치가 깨진 꼴(_URGENCY_V2_BREAKER_KINDS)이 있었나(차단기는 기사 단위로 센다)."""
+    votes = list(votes or [])
+    valid = [x for x in (_v2_vote_value(v) for v in votes) if x]
+    bad = [v for v in votes if not (isinstance(v, dict) and v.get('ok'))]
+    breaker = any((v or {}).get('why') in _URGENCY_V2_BREAKER_KINDS for v in bad if isinstance(v, dict)) or \
+        any(not isinstance(v, dict) for v in bad)
+
+    def fail(why):
+        first = next((v for v in bad if isinstance(v, dict)), {})
+        return {'ok': False, 'why': why or first.get('why') or 'error', 'breaker': breaker,
+                'contradict': any(isinstance(v, dict) and v.get('why') == 'contradict' for v in votes)}
+    if len(votes) <= 1:
+        if valid:
+            return dict(valid[0], votes=[valid[0]['grade']])
+        return fail(None)
+    if len(valid) < 2:
+        return fail(None)
+    grades = sorted((v['grade'] for v in valid), key=lambda g: _URGENCY_V2_RANK[g])
+    if len(valid) == 2:
+        if grades[0] != grades[1]:
+            return fail('split')
+        final = grades[0]
+    else:
+        final = grades[len(grades) // 2] if len(valid) == 3 else max(set(grades), key=grades.count)
+    same = [v for v in valid if v['grade'] == final]
+    scopes = [v['scope'] for v in same]
+    best = max(scopes, key=lambda s: (scopes.count(s), -scopes.index(s)))
+    first = same[0]
+    return {'ok': True, 'scope': best, 'grade': final, 'basis': first['basis'], 'reason': first['reason'],
+            'votes': [v.get('grade') if isinstance(v, dict) else None for v in votes],
+            'contradict': any(v.get('contradict') for v in valid)}
+
+
+def urgency_v2_judge(title: str, content: str = '', summary: str = '') -> dict:
+    """기사 하나의 v2 판정 = 표 URGENCY_V2_VOTES개(2개 이상이면 병렬) → combine_v2_votes. 던지지 않는다."""
+    n = max(1, int(URGENCY_V2_VOTES))
+    if n == 1:
+        v = classify_urgency_v2(title, content, summary)
+        out = combine_v2_votes([v])
+        out['ms'] = (v or {}).get('ms', 0) if isinstance(v, dict) else 0
+        return out
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=n) as ex:
+        votes = list(ex.map(lambda _i: classify_urgency_v2(title, content, summary), range(n)))
+    out = combine_v2_votes(votes)
+    out['ms'] = max((v.get('ms') or 0) for v in votes if isinstance(v, dict)) if votes else 0
+    return out
+
+
+def _v2_run_start(jobs: list, judge) -> dict:
+    """v2 판정을 기사 병렬(URGENCY_V2_WORKERS)로 건다 — jobs = [(열쇠, 제목, 본문, 요약)]. 반환 = _v2_run_collect에 넘길 손잡이.
+    차단기: 장치 실패(combine 결과 breaker) 기사가 URGENCY_V2_MAX_FAIL에 이르면 아직 시작 안 한 기사는 'breaker'. 예산을 넘겨 시작하는
+    기사는 'budget'. 운영(그림자)에서는 v1 기사 루프와 나란히 돌도록 루프 **앞에** 건다."""
+    h = {'t0': time.monotonic(), 'futs': {}, 'pool': None, 'fails': [0], 'lock': threading.Lock()}
+    if not jobs:
+        return h
+    from concurrent.futures import ThreadPoolExecutor
+
+    def work(job):
+        _key, title, content, summary = job
+        if time.monotonic() - h['t0'] > URGENCY_V2_BUDGET_S:
+            return {'ok': False, 'why': 'budget'}
+        with h['lock']:
+            if h['fails'][0] >= URGENCY_V2_MAX_FAIL:
+                return {'ok': False, 'why': 'breaker'}
+        try:
+            r = judge(title, content, summary)
+        except Exception as e:
+            r = {'ok': False, 'why': 'error', 'breaker': True, 'detail': str(e)[:100]}
+        if not isinstance(r, dict):
+            r = {'ok': False, 'why': 'error', 'breaker': True}
+        if not r.get('ok') and r.get('breaker'):
+            with h['lock']:
+                h['fails'][0] += 1
+        return r
+    if judge is urgency_v2_judge:               # 기준문·피드백 행은 실행당 한 번 — 병렬 첫 호출들이 같은 조회를 겹쳐 하지 않게 미리
+        try:
+            urgency_v2_criteria()
+            _load_feedback_rows_v2()
+        except Exception:
+            pass
+    try:
+        h['pool'] = ThreadPoolExecutor(max_workers=URGENCY_V2_WORKERS)
+        for job in jobs:
+            h['futs'][job[0]] = h['pool'].submit(work, job)
+    except Exception as e:                       # 스레드를 못 띄우면 그 기사들은 v1(그림자면 기록 없음)
+        print(f'[v2] 병렬 준비 실패(그 기사들은 v1): {str(e)[:80]}')
+    return h
+
+
+def _v2_run_collect(h: dict) -> dict:
+    """손잡이 → {열쇠: 결과}. 실행 예산(URGENCY_V2_BUDGET_S, 시작부터)이 지나도 안 끝난 기사는 'budget'(결과를 기다리지 않고 버린다)."""
+    from concurrent.futures import TimeoutError as _FutTimeout
+    out = {}
+    if not h:
+        return out
+    deadline = h['t0'] + URGENCY_V2_BUDGET_S
+    for key, f in (h.get('futs') or {}).items():
+        try:
+            out[key] = f.result(timeout=max(0.0, deadline - time.monotonic()))
+        except _FutTimeout:
+            out[key] = {'ok': False, 'why': 'budget'}
+        except Exception as e:
+            out[key] = {'ok': False, 'why': 'error', 'breaker': True, 'detail': str(e)[:100]}
+    if h.get('pool'):
+        try:
+            h['pool'].shutdown(wait=False, cancel_futures=True)
+        except Exception:
+            pass
+    return out
+
+
+def _v2_tally(results: dict, run: dict) -> None:
+    """v2 결과 묶음 → 실행 집계(_URGENCY_V2_RUN): 대상·성공·실패 종류별·모순·예산 초과·차단기·평균 ms·v2 긴급."""
+    for r in (results or {}).values():
+        run['target'] = run.get('target', 0) + 1
+        if r.get('ok'):
+            run['ok'] = run.get('ok', 0) + 1
+            run['v2_urgent'] = run.get('v2_urgent', 0) + int(r.get('grade') == '긴급')
+        else:
+            k = 'fail_' + str(r.get('why') or 'error')
+            run[k] = run.get(k, 0) + 1
+        if r.get('contradict'):
+            run['contradict'] = run.get('contradict', 0) + 1
+        if r.get('ms'):
+            run['ms_sum'] = run.get('ms_sum', 0) + int(r['ms'])
+            run['ms_n'] = run.get('ms_n', 0) + 1
+    if run.get('fail_breaker'):
+        run['breaker_runs'] = 1
+
+
+# ═══════════════════════════════════════════════════════
 #  긴급도 내림 전파 — 그림자 (#327, 2026-10-28, 판정 local_docs/긴급도_재보정_준비_261028/판정_재보정_261028.md §4,
 #  측정 결과_재보정_261030.md §4)
 #
@@ -605,23 +1035,49 @@ def urgency_second_check(title: str, content: str = '', summary: str = ''):
 #  api_usage 라벨은 'crawler.py:propagate_shadow'(api_usage.site_label) — ①-2 억제의 'news_dedup.py:match_prior_reports'와 가른다.
 # ═══════════════════════════════════════════════════════
 
-PROPAGATE_MODE = 'shadow'          # 'off' = 부르지 않음 / 'shadow' = 두 칸·운영자 줄만(등급 불변). 보통으로 저장하는 꼴은 없다 — 한 주 뒤 재판정
+PROPAGATE_MODE = 'shadow'          # 'off' = 부르지 않음 / 'shadow' = 두 칸·운영자 줄만(등급 불변) / 'on' = 같은 계기면 prior의 지금 등급으로
+                                   # 저장(v2 재설계 §3-1 on 후보 — 116회 재연(합본 제외)을 통과할 때만, 운영자 결정 뒤 배포 창이 바꾼다)
 PROPAGATE_WINDOW_H = 72            # 운영자가 내린 시각(importance_feedback.created_at)부터 — 측정 창과 같은 값(그 밖은 미측정)
 PROPAGATE_POOL_LIMIT = 300         # 72시간 안 내림 조회 상한(30일 공통 내림 107건 — 넘칠 일 없음)
 PROPAGATE_TIMEOUT_S = 30           # 알림 경로(grade_urgency) 안 — 2차 확인과 같은 제한, 재시도 1회
 PROPAGATE_MAX_FAIL = 2             # 한 실행에 호출(묶음)이 이만큼 실패하면 나머지는 부르지 않는다(2차 확인과 같은 상한)
 PROPAGATE_SITE = 'crawler.py:propagate_shadow'
+PROPAGATE_SITE_ON = 'crawler.py:propagate'          # on이면 이 라벨(그림자 기록과 가른다, 설계 §3-1)
+# 합본 제외(설계 §3-1 ⓐⓑ — 10-28 재연의 잘못 내림 15건 중 9건이 운영자가 내린 합본 기사 prior에서 나왔다). 괄호 「(종합)」「(종합2보)」는
+# 같은 사건의 갱신판 표지라 넣지 않는다. 「최종감사」의 「종감」·「주간사(주관사)」·「1주간」 꼴은 뺀다. 잘못 걸리면 전파를 안 할 뿐(지금과 같음).
+_PROPAGATE_OMNIBUS_RE = re.compile(r'종합감사|(?<!최)종감|총정리|이모저모|한눈에|(?<![0-9일두세네])주간(?!사)|이번\s?주|결산|부터.{1,20}?까지')
+PROPAGATE_OMNIBUS_IN_SHADOW = False   # 그림자 기록은 10-28 측정과 같은 규칙(제외 없음)으로 이어 간다 — on에서만 ⓐⓑ를 건다
 _PROPAGATE_NEWS_COLS = 'id,title,event,screen_text,content,urgency,urgency_check_restored_at,urgency_propagate_shadow_from'
 _PROPAGATE_RUN = {}                # 한 실행의 집계(grade_urgency가 비운다) — 로그 줄
 _PROPAGATE_HITS = {}               # url → 같은 계기로 본 운영자 내림 기사 제목 — 운영자 줄. item dict(= upsert 행)에는 넣지 않는다
+_PROPAGATE_PRIOR_GRADE = {}        # prior id → 지금 등급(보통·참고) — on에서 내릴 값(_propagate_pool이 채운다, 없으면 보통)
+PROPAGATE_RESTORE_ALERT_MIN = 10   # 전날 전파 이만큼 이상이고
+PROPAGATE_RESTORE_ALERT_RATIO = 0.3   # 그중 복원(운영자가 다시 긴급) 비율이 이 이상이면 운영자 봇 한 줄(하루 한 번, 10-28 판정 §4)
+_PROPAGATE_RESTORE_MARK = 'propagate_restore_alerted'   # app_config — 알린 날(KST)
 
 
-def propagate_pool_entries(fb_rows, news_rows) -> list:
+def _propagate_omnibus_active() -> bool:
+    return PROPAGATE_MODE == 'on' or PROPAGATE_OMNIBUS_IN_SHADOW
+
+
+def is_omnibus_title(title: str) -> bool:
+    """합본 기사 제목인가(설계 §3-1 ⓐⓑ) — 종합감사·종감·총정리·이모저모·한눈에·주간·이번 주·결산·「…부터 …까지」."""
+    return bool(_PROPAGATE_OMNIBUS_RE.search(title or ''))
+
+
+def _propagate_site() -> str:
+    return PROPAGATE_SITE_ON if PROPAGATE_MODE == 'on' else PROPAGATE_SITE
+
+
+def propagate_pool_entries(fb_rows, news_rows, exclude_omnibus: bool = False, banned=()) -> list:
     """운영자 내림 행(importance_feedback — news_id·created_at, 내린 시각 최신순) + 그 뉴스 행 → prior 후보
     [{'id', 'title', 'event', 'snip', 'at'}](내린 시각 최신순). 빼는 것: 뉴스 행 없음 · 지금 등급이 보통·참고가 아님(운영자가 다시
     올림) · 전파로 걸린 기사(urgency_propagate_shadow_from — 연쇄 금지) · 복원된 기사(urgency_check_restored_at) · 같은 기사 둘째 행.
-    snip = 요약(screen_text), 없으면 본문 — 측정 재연과 같은 재료(MATCH_SNIP자로 잘린다)."""
+    snip = 요약(screen_text), 없으면 본문 — 측정 재연과 같은 재료(MATCH_SNIP자로 잘린다).
+    exclude_omnibus(on에서만) = 합본 제목 prior도 뺀다(ⓐ) · banned = 전파로 내린 기사가 복원된 그 원인 prior id(on 안전장치, 10-28 §4).
+    둘 다 prior 풀 단계라 prior 고르기(propagate_pick_prior = ①-2 고르기) 대조는 그대로다."""
     byid = {r.get('id'): r for r in news_rows or [] if r.get('id')}
+    banned = set(banned or ())
     out, seen = [], set()
     for f in fb_rows or []:
         nid = f.get('news_id')
@@ -633,13 +1089,16 @@ def propagate_pool_entries(fb_rows, news_rows) -> list:
             continue
         if n.get('urgency_propagate_shadow_from') or n.get('urgency_check_restored_at'):
             continue
+        if nid in banned or (exclude_omnibus and is_omnibus_title(n.get('title') or '')):
+            continue
         out.append({'id': nid, 'title': n.get('title') or '', 'event': n.get('event') or '',
                     'snip': n.get('screen_text') or n.get('content') or '', 'at': f.get('created_at')})
     return out
 
 
 def _propagate_pool() -> list:
-    """72시간 안 운영자 내림(공통 행, AI 긴급 → 사람 보통·참고, 뉴스와 이어진 것) → propagate_pool_entries. 실패는 예외(부르는 쪽 fail-open)."""
+    """72시간 안 운영자 내림(공통 행, AI 긴급 → 사람 보통·참고, 뉴스와 이어진 것) → propagate_pool_entries. 실패는 예외(부르는 쪽 fail-open).
+    on이면 합본 prior를 빼고(ⓐ), 같은 창에서 「전파로 내렸는데 운영자가 다시 긴급으로 올린」 기사의 원인 prior도 뺀다."""
     since = (datetime.now(timezone.utc) - timedelta(hours=PROPAGATE_WINDOW_H)).isoformat()
     fb = sb.table('importance_feedback').select('news_id,created_at').is_('team_id', 'null') \
         .eq('ai_importance', '긴급').in_('user_importance', ['보통', '참고']).not_.is_('news_id', 'null') \
@@ -649,7 +1108,15 @@ def _propagate_pool() -> list:
     news = []
     for i in range(0, len(ids), 100):
         news += sb.table('news_feed').select(_PROPAGATE_NEWS_COLS).in_('id', ids[i:i + 100]).execute().data or []
-    return propagate_pool_entries(fb, news)
+    _PROPAGATE_PRIOR_GRADE.clear()
+    _PROPAGATE_PRIOR_GRADE.update({r['id']: r.get('urgency') for r in news if r.get('id')})
+    banned = ()
+    if PROPAGATE_MODE == 'on':
+        back = sb.table('news_feed').select('urgency_propagate_shadow_from').eq('urgency_lowered_by', 'propagate') \
+            .not_.is_('urgency_check_restored_at', 'null').gte('created_at', since).limit(PROPAGATE_POOL_LIMIT).execute().data or []
+        banned = {r['urgency_propagate_shadow_from'] for r in back if r.get('urgency_propagate_shadow_from')}
+        _PROPAGATE_RUN['banned'] = len(banned)
+    return propagate_pool_entries(fb, news, exclude_omnibus=_propagate_omnibus_active(), banned=banned)
 
 
 def propagate_pick_prior(new_items: list, pool: list) -> list:
@@ -674,9 +1141,9 @@ def propagate_pick_prior(new_items: list, pool: list) -> list:
 
 
 def _propagate_match(new_items: list, prior_items: list):
-    """재보도 대조(news_dedup.match_prior_reports, 바이트 그대로) 한 묶음 — api_usage 라벨만 PROPAGATE_SITE로 가른다."""
+    """재보도 대조(news_dedup.match_prior_reports, 바이트 그대로) 한 묶음 — api_usage 라벨만 가른다(그림자 PROPAGATE_SITE / on PROPAGATE_SITE_ON)."""
     import news_dedup
-    with api_usage.site_label(PROPAGATE_SITE):
+    with api_usage.site_label(_propagate_site()):
         return news_dedup.match_prior_reports(new_items, prior_items, ANTHROPIC_API_KEY,
                                               timeout=PROPAGATE_TIMEOUT_S, max_retries=1)
 
@@ -2135,7 +2602,8 @@ _INSERTED_IDS: dict = {}
 #  Supabase 저장
 # ═══════════════════════════════════════════════════════
 
-def grade_urgency(valid: list, rules: list, classify=None, team_rules=None, check=None, propagate=None) -> dict:
+def grade_urgency(valid: list, rules: list, classify=None, team_rules=None, check=None, propagate=None,
+                  v2=None, grader=None) -> dict:
     """⑤ 긴급도 — 공통 낱말 규칙(#216) + Haiku 판정을 합쳐 item['urgency'/'importance'/'urgency_rule']을 채운다.
     규칙은 AI보다 먼저 맞춰 본다(제목 + 네이버 요약만, 본문 금지). set 적중 = 그 값, AI 콜 생략 /
     min 적중 = AI를 돌린 뒤 하한만(max) / 적중 id는 값이 안 바뀌어도 urgency_rule에 남긴다(출처 표시·사내 정본).
@@ -2153,12 +2621,28 @@ def grade_urgency(valid: list, rules: list, classify=None, team_rules=None, chec
     내림 전파 그림자(#327): 기사 루프가 끝난 뒤 최종 긴급인 AI 판정 기사(set 규칙·낱말 하한 긴급 제외)를 모아 propagate(후보들)를
     **한 번** 부르고 두 칸 urgency_propagate_shadow_from·_at만 채운다(모든 행에 키, 안 불렀으면 None) — 등급은 건드리지 않는다.
     shadow라 min 하한 뒤에 불러도 같다(낱말 하한이 긴급인 기사는 건너뛰고, 보통·참고 하한은 긴급을 바꾸지 않는다). propagate 기본값은
-    propagate_shadow_judge(PROPAGATE_MODE 'off'면 없음) — classify를 넘긴 호출(시험)은 propagate도 넘겨야 돈다."""
+    propagate_shadow_judge(PROPAGATE_MODE 'off'면 없음) — classify를 넘긴 호출(시험)은 propagate도 넘겨야 돈다.
+    전파 on(PROPAGATE_MODE 'on', v2 재설계 §3-1): 같은 계기면 prior의 지금 등급으로 저장 → 낱말 min 하한을 한 번 더(전파 → min 하한),
+    urgency_lowered_by 'propagate'·urgency_event_of = prior id. 합본 제목 기사는 후보에서 뺀다(ⓑ).
+    판정기(v2 재설계 §2-1): grader = 'v1'(기본 — 부르는 쪽 save_new_items가 urgency_grader_mode()를 넘긴다) / 'shadow' / 'v2'. v2·shadow면
+    v2(제목, 본문, 요약) — 기본 urgency_v2_judge, classify를 넘긴 호출(시험)은 v2도 넘겨야 돈다 — 를 set 규칙 밖 기사에 병렬로 건다
+    (그림자는 v1 루프와 나란히, v2는 루프 전에 모은다). v2 성공 = 그 등급, 타영역이면 min(등급, 보통)(올리지 않는다), 그 뒤 낱말 min 하한.
+    실패한 기사만 v1 경로(라벨 classify_urgency_fallback) + 2차 확인. 저장 칸(모든 행에 키): urgency_grader('rule'|'v1'|'v2'|'v1-fallback') ·
+    urgency_v2_scope/_grade/_basis·urgency_reason(v2가 판정한 행) · urgency_lowered_by('check'|'propagate'|None) · urgency_event_of.
+    2차 확인 네 칸은 v2에서 **v2 등급이 긴급(즉시대응)인 행에만** v2 출력으로(「check 칸 있음 = 1차 긴급이었다」 뜻 불변), 그림자면 v1 그대로."""
+    production = classify is None
     if check is None and classify is None and URGENCY_CHECK_MODE in ('shadow', 'on'):
         check = urgency_second_check
-    if propagate is None and classify is None and PROPAGATE_MODE == 'shadow':
+    if propagate is None and classify is None and PROPAGATE_MODE in ('shadow', 'on'):
         propagate = propagate_shadow_judge
+    grader = grader if grader in URGENCY_GRADER_MODES else 'v1'
+    if grader != 'v1' and v2 is None:
+        v2 = urgency_v2_judge if production else None
+    if v2 is None:
+        grader = 'v1'
     apply_cap = URGENCY_CHECK_MODE == 'on'
+    prop_on = PROPAGATE_MODE == 'on'
+    omnibus = _propagate_omnibus_active()
     classify = classify or classify_urgency
     team_rules = team_rules or {}
     hits, changed_n, skipped_ai = {}, 0, 0
@@ -2167,18 +2651,49 @@ def grade_urgency(valid: list, rules: list, classify=None, team_rules=None, chec
     ck.clear()                                              # 실행당 한 번 부른다 — 집계는 이번 호출 것만
     _PROPAGATE_RUN.clear()
     _PROPAGATE_HITS.clear()
+    _URGENCY_V2_RUN.clear()
+    _URGENCY_V2_RUN['mode'] = grader
     prop_cands = []                                         # 내림 전파 그림자 후보(#327) — 루프 뒤 한 번에
-    for item in valid:
+    prop_hit = {}                                           # id(기사) → 낱말 규칙 적중(전파 on 뒤 min 하한을 다시 건다)
+    pre_hits, v2h, v2_res = None, None, {}
+    if grader != 'v1':                                      # v2 판정을 먼저 건다(규칙 set 기사는 AI 없음 — v1과 같다)
+        pre_hits = [urgency_rules.match_urgency_rules(rules, it.get('title', ''), _URGENCY_SUMMARY.get(it.get('url', ''), ''))
+                    for it in valid]
+        jobs = [(n, it.get('title', ''), it.get('content', '') or '', _URGENCY_SUMMARY.get(it.get('url', ''), ''))
+                for n, it in enumerate(valid) if not (pre_hits[n] and pre_hits[n]['mode'] == 'set')]
+        v2h = _v2_run_start(jobs, v2)
+        if grader == 'v2':
+            v2_res = _v2_run_collect(v2h)
+    for n, item in enumerate(valid):
         url = item.get('url', '')
         summary = _URGENCY_SUMMARY.get(url, '')
-        hit = urgency_rules.match_urgency_rules(rules, item.get('title', ''), summary)
+        hit = pre_hits[n] if pre_hits is not None else urgency_rules.match_urgency_rules(rules, item.get('title', ''), summary)
         res = None                                          # 2차 확인 결과(부른 경우만)
         capped = None
+        v2r = v2_res.get(n) if grader == 'v2' else None
         if hit and hit['mode'] == 'set':
             val = hit['level']                              # 공통 AI 생략
             skipped_ai += 1
+            item['urgency_grader'] = 'rule'
+        elif v2r is not None and v2r.get('ok'):             # v2 판정(설계 §2-1) — 2차 확인 호출 없음, 영역 상한을 같은 자리에서
+            item['urgency_grader'] = 'v2'
+            val = v2r['grade']
+            if v2r['scope'] == '타영역' and _URGENCY_V2_RANK[val] > _URGENCY_V2_RANK['보통']:
+                val = '보통'
+            if v2r['grade'] == '긴급':                      # check 칸 = 1차(v2) 긴급 행에만, capped = 즉시대응 ∧ 타영역
+                res = {'scope': v2r['scope'], 'grade': v2r['grade'], 'basis': v2r['basis']}
+                capped = v2r['scope'] == '타영역'
+            if hit:                                         # min — v2 값(영역 상한 뒤)에 하한
+                val, _, changed = urgency_rules.combine(hit, val)
+                changed_n += int(changed)
         else:
-            val = classify(item.get('title', ''), item.get('content', '') or '', summary)
+            if grader == 'v2':                              # v2 실패한 기사 — v1 경로 그대로(1차 라벨만 폴백으로)
+                item['urgency_grader'] = 'v1-fallback'
+                with api_usage.site_label(URGENCY_V2_FALLBACK_SITE):
+                    val = classify(item.get('title', ''), item.get('content', '') or '', summary)
+            else:
+                item['urgency_grader'] = 'v1'
+                val = classify(item.get('title', ''), item.get('content', '') or '', summary)
             if val == '긴급' and check:
                 ck['target'] = ck.get('target', 0) + 1
                 if hit and hit['level'] == '긴급':          # ⓐ 낱말 하한이 긴급 — 어차피 긴급
@@ -2214,19 +2729,51 @@ def grade_urgency(valid: list, rules: list, classify=None, team_rules=None, chec
         item['urgency_check_grade'] = res.get('grade') if res else None
         item['urgency_check_basis'] = res.get('basis') if res else None
         item['urgency_check_capped'] = capped
+        # v2 재설계 칸(2026-11-09) — 모든 행에 키(#82·#222). v2 칸은 v2가 판정한 행만(그림자면 루프 뒤에 채운다)
+        ok2 = bool(v2r and v2r.get('ok') and item['urgency_grader'] == 'v2')
+        item['urgency_v2_scope'] = v2r['scope'] if ok2 else None
+        item['urgency_v2_grade'] = v2r['grade'] if ok2 else None
+        item['urgency_v2_basis'] = v2r['basis'] if ok2 else None
+        item['urgency_reason'] = v2r['reason'] if ok2 else None
+        item['urgency_lowered_by'] = 'check' if capped else None
+        item['urgency_event_of'] = None
         # 내림 전파 그림자 두 칸(#327) — 모든 행에 키, 루프 뒤 propagate가 판정한 행만 채운다. 후보 = 최종 긴급인 AI 판정 기사
         # (set 규칙은 AI 없음, 낱말 하한 긴급은 어차피 긴급 — 2차 확인과 같은 건너뜀; 사람 즉시대응 사례는 propagate가 건너뛴다)
         item['urgency_propagate_shadow_from'] = None
         item['urgency_propagate_shadow_at'] = None
-        if propagate and val == '긴급' and not hit:
+        if propagate and val == '긴급' and omnibus and is_omnibus_title(item.get('title', '')) and \
+                not (hit and hit['mode'] == 'min' and hit['level'] == '긴급') and not (hit and hit['mode'] == 'set'):
+            _PROPAGATE_RUN['skip_omnibus'] = _PROPAGATE_RUN.get('skip_omnibus', 0) + 1   # ⓑ 새 기사 쪽이 합본(on에서만)
+        elif propagate and val == '긴급' and not hit:
             prop_cands.append(item)
         elif propagate and val == '긴급' and hit['mode'] == 'min' and hit['level'] == '긴급':
             _PROPAGATE_RUN['skip_rule'] = _PROPAGATE_RUN.get('skip_rule', 0) + 1
         elif propagate and val == '긴급' and hit['mode'] == 'min':
             prop_cands.append(item)
+            prop_hit[id(item)] = hit
         # 수집 때 본 검색 요약 — 모든 행에 키(없으면 None: postgrest 벌크 upsert는 빠진 칸을 NULL로 채운다, #222)
         item['screen_text'] = summary or None
-        # ── 팀 층(#250) — 공통값은 위에서 끝났다. 여기서는 팀별 적중만 옆 dict에 모은다(item 키 금지) ──
+    if grader == 'shadow':                                  # 그림자 — v1 루프와 나란히 돈 v2를 모아 기록 칸에만(운영 칸 불변)
+        v2_res = _v2_run_collect(v2h)
+        for n, item in enumerate(valid):
+            r = v2_res.get(n)
+            if r and r.get('ok'):
+                item['urgency_v2_scope'], item['urgency_v2_grade'] = r['scope'], r['grade']
+                item['urgency_v2_basis'], item['urgency_reason'] = r['basis'], r['reason']
+    if grader != 'v1':
+        _v2_tally(v2_res, _URGENCY_V2_RUN)
+    if prop_cands:
+        if prop_on:
+            _grade_propagate_on(prop_cands, propagate, prop_hit)
+        else:
+            _grade_propagate_shadow(prop_cands, propagate)
+    if grader != 'v1':                                      # 저장될 운영 등급의 긴급 수(전파 on까지 뒤) — 그림자 비교용
+        _URGENCY_V2_RUN['prod_urgent'] = sum(1 for it in valid if it.get('urgency') == '긴급')
+        _URGENCY_V2_RUN['ai_rows'] = sum(1 for it in valid if it.get('urgency_grader') != 'rule')
+    # ── 팀 층(#250) — 공통값(전파 on까지 끝난 최종값)이 정해진 뒤. 팀별 적중만 옆 dict에 모은다(item 키 금지) ──
+    for item in valid:
+        url = item.get('url', '')
+        val = item['urgency']
         _TEAM_RULE_HITS.pop(url, None)
         _SENTENCE_CANDS.pop(url, None)
         if team_rules:
@@ -2253,8 +2800,8 @@ def grade_urgency(valid: list, rules: list, classify=None, team_rules=None, chec
                 team_err += 1
                 if team_err == 1:
                     print(f'[팀 규칙] 판정 오류(그 기사는 모든 팀이 공통값): {str(e)[:80]}')
-    if prop_cands:
-        _grade_propagate_shadow(prop_cands, propagate)
+    if grader != 'v1':
+        _v2_log_and_save(_URGENCY_V2_RUN, save=production)
     if hits:
         print(f'[규칙] 적중 {sum(hits.values())}건 (' + ', '.join(f'{k}×{v}' for k, v in hits.items()) +
               f', 값 변경 {changed_n}건, AI 생략 {skipped_ai}건)')
@@ -2305,6 +2852,158 @@ def _grade_propagate_shadow(cands: list, propagate) -> None:
                 + (f" · 오류 {run['error']}" if run.get('error') else ''))
     print(f"[내림 전파·그림자] 후보 {len(cands)}건(사람 사례 건너뜀 {run.get('skip_human', 0)}, 낱말 하한 긴급 건너뜀 "
           f"{run.get('skip_rule', 0)}) · {tail} · {time.time() - t0:.1f}s — 등급·알림 불변")
+
+
+def _grade_propagate_on(cands: list, propagate, hit_of: dict) -> None:
+    """grade_urgency의 내림 전파 **on** 단계(v2 재설계 §3-1 — PROPAGATE_MODE 'on'일 때만, 지금은 꺼져 있다). 판정은 그림자와 같은 함수
+    (propagate = propagate_shadow_judge — 재보도 대조 바이트 그대로, prior 고르기 = ①-2). 같은 계기면 그 기사 등급 = prior의 **지금** 등급
+    (보통·참고, 모르면 보통) → 낱말 min 하한을 다시(전파 → min 하한), urgency_lowered_by 'propagate', urgency_event_of = prior id,
+    urgency_propagate_shadow_from = prior id(뜻: on이면 「전파로 내린 원천 id」), _at = 지금. importance_feedback에는 쓰지 않는다(#327).
+    어떤 실패도 삼킨다(fail-open — 등급은 그대로 긴급)."""
+    run = _PROPAGATE_RUN
+    t0 = time.time()
+    try:
+        got = propagate(cands)
+    except Exception as e:
+        got = None
+        run['error'] = run.get('error', 0) + 1
+        print(f'[내림 전파] 오류(무시 — 등급 그대로): {str(e)[:100]}')
+    now_iso = datetime.now(timezone.utc).isoformat()
+    same = diff = lowered = 0
+    for it, g in zip(cands, got if isinstance(got, list) else []):
+        if g is None:
+            continue
+        it['urgency_propagate_shadow_at'] = now_iso
+        if not (isinstance(g, dict) and g.get('id')):
+            diff += 1
+            continue
+        same += 1
+        to = _PROPAGATE_PRIOR_GRADE.get(g['id'])
+        to = to if to in ('보통', '참고') else '보통'
+        hit = hit_of.get(id(it))
+        if hit:
+            to, _, _ = urgency_rules.combine(hit, to)
+        it['urgency_propagate_shadow_from'] = g['id']
+        if to == '긴급':                       # min 하한이 긴급을 되돌린 꼴(후보에서 이미 빼므로 드묾) — 내리지 않는다
+            continue
+        it['urgency'] = to
+        it['importance'] = to
+        it['urgency_lowered_by'] = 'propagate'
+        it['urgency_event_of'] = g['id']
+        lowered += 1
+        if it.get('url'):
+            _PROPAGATE_HITS[it['url']] = g.get('title') or ''
+        print(f"  🔽 내림 전파 → {to}: {(it.get('title') or '')[:50]} ← 운영자 내림 {(g.get('title') or '')[:50]}")
+    run['same'], run['diff'], run['lowered'] = same, diff, lowered
+    print(f"[내림 전파] 후보 {len(cands)}건(사람 사례 건너뜀 {run.get('skip_human', 0)}, 낱말 하한 긴급 건너뜀 {run.get('skip_rule', 0)}, "
+          f"합본 건너뜀 {run.get('skip_omnibus', 0)}) · 내림 풀 {run.get('pool', 0)}(복원 원인 제외 {run.get('banned', 0)}) → prior "
+          f"{run.get('prior', 0)} · 호출 {run.get('calls', 0)} · 같은 계기 {same}(내림 {lowered}) · 다름 {diff} · 실패 {run.get('fail', 0)}"
+          + (f" · 오류 {run['error']}" if run.get('error') else '') + f' · {time.time() - t0:.1f}s')
+
+
+def _v2_log_and_save(run: dict, save: bool = True) -> None:
+    """v2 판정기 실행 집계 → 로그 한 줄 + (운영 실행이면) app_config urgency_v2_stats의 오늘(KST) 칸에 더한다(최근 8일만 남김).
+    하루 줄(urgency_v2_daily_notice)·그림자 판정 기준(설계 §6-3 ①②④⑥)의 재료. 실패는 삼킨다."""
+    if not run.get('target'):
+        if run.get('mode') and run.get('mode') != 'v1':
+            print(f"[v2 판정기·{run['mode']}] AI 판정 대상 0건")
+        return
+    fails = {k[5:]: v for k, v in run.items() if k.startswith('fail_')}
+    avg = run.get('ms_sum', 0) / max(1, run.get('ms_n', 0))
+    print(f"[v2 판정기·{run.get('mode')}] 대상 {run['target']} · 성공 {run.get('ok', 0)} · 실패 {sum(fails.values())}"
+          + (f"({', '.join(f'{k} {v}' for k, v in sorted(fails.items()))})" if fails else '')
+          + f" · 모순 {run.get('contradict', 0)} · v2 긴급 {run.get('v2_urgent', 0)}(운영 긴급 {run.get('prod_urgent', 0)}) · 평균 {avg:.0f}ms"
+          + (' — 그림자: 운영 등급은 v1' if run.get('mode') == 'shadow' else ''))
+    if not save:
+        return
+    try:
+        today = datetime.now(KST).strftime('%Y-%m-%d')
+        rows = sb.table('app_config').select('value').eq('key', URGENCY_V2_STATS_KEY).limit(1).execute().data or []
+        raw = rows[0].get('value') if rows else None
+        allv = json.loads(raw) if isinstance(raw, str) and raw else (raw if isinstance(raw, dict) else {})
+        day = allv.get(today) or {}
+        for k in ('target', 'ok', 'contradict', 'v2_urgent', 'prod_urgent', 'ai_rows', 'ms_sum', 'ms_n', 'breaker_runs'):
+            day[k] = day.get(k, 0) + int(run.get(k, 0) or 0)
+        for k, v in fails.items():
+            day['fail_' + k] = day.get('fail_' + k, 0) + int(v)
+        day['runs'] = day.get('runs', 0) + 1
+        day['mode'] = run.get('mode')
+        allv[today] = day
+        keep = sorted(allv)[-8:]
+        allv = {k: allv[k] for k in keep}
+        sb.table('app_config').upsert({'key': URGENCY_V2_STATS_KEY, 'value': json.dumps(allv, ensure_ascii=False)},
+                                      on_conflict='key').execute()
+    except Exception as e:
+        print(f'[v2 판정기] 하루 집계 저장 실패(무시): {str(e)[:100]}')
+
+
+def urgency_v2_daily_notice(grader: str) -> bool:
+    """v2 판정기가 켜졌거나 그림자일 때 하루 한 번(KST 06시 뒤 첫 실행) 어제 집계를 운영자 봇 한 줄로(설계 §2-1·§6-3).
+    보낸 뒤에만 표시(app_config urgency_v2_notice_alerted = 어제 날짜). v1이면 조회도 안 한다. 실패는 삼킨다."""
+    if grader == 'v1':
+        return False
+    try:
+        now_kst = datetime.now(KST)
+        if now_kst.hour < 6:
+            return False
+        yday = (now_kst - timedelta(days=1)).strftime('%Y-%m-%d')
+        mk = sb.table('app_config').select('value').eq('key', URGENCY_V2_NOTICE_MARK).limit(1).execute().data or []
+        if mk and str(mk[0].get('value') or '') == yday:
+            return False
+        rows = sb.table('app_config').select('value').eq('key', URGENCY_V2_STATS_KEY).limit(1).execute().data or []
+        raw = rows[0].get('value') if rows else None
+        allv = json.loads(raw) if isinstance(raw, str) and raw else {}
+        d = allv.get(yday)
+        if not d or not d.get('target'):
+            return False
+        fails = {k[5:]: v for k, v in d.items() if k.startswith('fail_')}
+        nf = sum(fails.values())
+        avg = d.get('ms_sum', 0) / max(1, d.get('ms_n', 0))
+        mode = '그림자(운영 등급은 v1)' if d.get('mode') == 'shadow' else '켬'
+        text = (f"📊 v2 판정기 {mode} — {yday} AI 판정 {d['target']}건 · v2 긴급 {d.get('v2_urgent', 0)}(운영 긴급 {d.get('prod_urgent', 0)}) · "
+                f"실패 {nf}({nf / d['target']:.1%})" + (f" [{', '.join(f'{k} {v}' for k, v in sorted(fails.items()))}]" if fails else '')
+                + f" · 모순 {d.get('contradict', 0)}({d.get('contradict', 0) / d['target']:.1%}) · 차단기 걸린 실행 {d.get('breaker_runs', 0)}"
+                + f" · 예산 초과 {fails.get('budget', 0)} · 평균 {avg:.0f}ms · 실행 {d.get('runs', 0)}")
+        ok = notify.send_telegram(text, chat_id=TELEGRAM_CHAT_ID)
+        if ok:
+            sb.table('app_config').upsert({'key': URGENCY_V2_NOTICE_MARK, 'value': yday}, on_conflict='key').execute()
+        return bool(ok)
+    except Exception as e:
+        print(f'[v2 판정기] 하루 줄 실패(무시): {str(e)[:100]}')
+        return False
+
+
+def propagate_restore_alert() -> bool:
+    """전파 on 안전장치(10-28 판정 §4): 전날(KST) 전파로 내린 기사 ≥ PROPAGATE_RESTORE_ALERT_MIN이고 그중 운영자가 다시 긴급으로 올린
+    (urgency_check_restored_at 있음) 비율 ≥ PROPAGATE_RESTORE_ALERT_RATIO면 운영자 봇 한 줄(하루 한 번, 보낸 뒤에만 표시).
+    PROPAGATE_MODE 'on'이 아니면 조회도 안 한다. 실패는 삼킨다."""
+    if PROPAGATE_MODE != 'on':
+        return False
+    try:
+        now_kst = datetime.now(KST)
+        start = (now_kst - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        end = start + timedelta(days=1)
+        yday = start.strftime('%Y-%m-%d')
+        mk = sb.table('app_config').select('value').eq('key', _PROPAGATE_RESTORE_MARK).limit(1).execute().data or []
+        if mk and str(mk[0].get('value') or '') == yday:
+            return False
+        rows = sb.table('news_feed').select('id,urgency_check_restored_at').eq('urgency_lowered_by', 'propagate') \
+            .gte('created_at', start.astimezone(timezone.utc).isoformat()) \
+            .lt('created_at', end.astimezone(timezone.utc).isoformat()).limit(1000).execute().data or []
+        total = len(rows)
+        back = sum(1 for r in rows if r.get('urgency_check_restored_at'))
+        if total < PROPAGATE_RESTORE_ALERT_MIN or back / max(1, total) < PROPAGATE_RESTORE_ALERT_RATIO:
+            return False
+        ok = notify.send_telegram(f'⚠️ 내림 전파 — {yday} 전파로 내린 {total}건 중 {back}건({back / total:.0%})을 운영자가 다시 긴급으로 '
+                                  f'올렸습니다(경보선 {PROPAGATE_RESTORE_ALERT_RATIO:.0%}). 전파가 다른 사건을 같은 계기로 보고 있을 수 있습니다 — '
+                                  'news_feed.urgency_lowered_by = propagate 목록을 확인하고, 필요하면 PROPAGATE_MODE를 shadow로 되돌려 주세요.',
+                                  chat_id=TELEGRAM_CHAT_ID)
+        if ok:
+            sb.table('app_config').upsert({'key': _PROPAGATE_RESTORE_MARK, 'value': yday}, on_conflict='key').execute()
+        return bool(ok)
+    except Exception as e:
+        print(f'[내림 전파] 복원 비율 경보 확인 실패(무시): {str(e)[:100]}')
+        return False
 
 
 def save_new_items(items: list, existing_data: tuple) -> list:
@@ -2467,7 +3166,8 @@ def save_new_items(items: list, existing_data: tuple) -> list:
     #        없으면 wait_body)만 만들고(저장은 아래 save_sentence_verdict_rows), Haiku 판정과 팀 행 고침은 같은 실행의
     #        main() 끝 process_open_sentence_verdicts(긴급 알림·구독자 큐 뒤)가 한다 — 알림 경로에 AI 지연을 넣지 않는다.
     #    ⑤-4 내림 전파 그림자(#327) — 운영자가 72시간 안에 내린 기사와 같은 계기인지 재보도 대조로 보고 두 칸만 채운다(등급 불변).
-    grade_urgency(valid, load_urgency_rules(), team_rules=load_team_urgency_rules())
+    #    ⑤-5 판정기 스위치(v2 재설계 2026-11-09) — app_config urgency_grader(v1|shadow|v2), 기본·읽기 실패 = v1(지금 운영 그대로)
+    grade_urgency(valid, load_urgency_rules(), team_rules=load_team_urgency_rules(), grader=urgency_grader_mode())
     queue_new_sentence_candidates(valid, load_team_urgency_rules())
 
     try:
@@ -4448,6 +5148,89 @@ def _suppress_core(items: list, prior: list, prior_at: dict, sup_chain: dict, gr
     return reps, sup_rows, remind_rows, len(passed) - len(reps)
 
 
+# ── 사건 연결 칸 A2(v2 재설계 §3-2, 2026-11-09, AI 0) ──
+# 공통 알림 억제(suppress_repeat_alerts → _suppress_core)가 「사건 대표 X의 재보도」라 한 기사(①·①-2·실행내묶음·리마인드·리마인드보류
+# 모두)에 그 대표의 id를 news_feed.urgency_event_of로 적는다 — 대시보드·브리핑의 「관련 보도 N건」 접기 재료. 대표 = 억제 사슬을 끝까지
+# 따라간 기사(_suppress_core의 _rep_of와 같은 규칙, 대표의 대표를 따로 적지 않는다). 등급·알림·억제 기록은 바뀌지 않는다.
+# 받는 단위별 결과는 단위마다 달라 쓰지 않는다(공통 경로만). 긴급(과 그 억제 경로)만 지나므로 보통·참고 기사엔 칸이 없다.
+# 쓰기는 알림·큐·즉시 배달이 끝난 뒤(save_event_links) — 알림을 늦추지 않는다. 어떤 실패도 삼킨다(fail-open).
+_EVENT_LINKS: list = []                 # [{'url', 'rep_title', 'rep_url'}] — suppress_repeat_alerts가 채운다
+EVENT_LINK_CHUNK = 20
+EVENT_LINKS_ON = True                   # 비상 끄개 — False면 save_event_links가 아무것도 쓰지 않는다(모으기는 그대로, AI·DB 0)
+
+
+def _chain_rep(title: str, sup_chain: dict) -> str:
+    """억제 사슬을 끝까지 따라간 사건 대표 제목 — _suppress_core._rep_of와 같은 규칙(고리면 멈춘 자리)."""
+    cur, seen = title, set()
+    while cur and cur in sup_chain and cur not in seen:
+        seen.add(cur)
+        cur = sup_chain[cur]
+    return cur
+
+
+def event_links_from(reps: list, sup_rows: list, remind_rows: list, sup_chain: dict, prior_url: dict = None) -> list:
+    """_suppress_core 결과 → 기사(url)마다 사건 대표(제목·아는 경우 url). 실행 안 대표(알림으로 나간 이번 기사)는 reps에서, 3일 창의 지난
+    대표는 prior_url(제목 → url, 최신 것)에서 url을 찾는다 — 못 찾으면 rep_url None(save_event_links가 제목으로 찾는다). 자기 자신은 뺀다."""
+    run_url = {(r.get('title') or ''): r.get('url') for r in reps or [] if r.get('title') and r.get('url')}
+    prior_url = prior_url or {}
+    out, seen = [], set()
+    for row in list(sup_rows or []) + list(remind_rows or []):
+        url, m = row.get('article_url') or '', row.get('matched_title') or ''
+        if not url or not m or url in seen:
+            continue
+        rt = _chain_rep(m, sup_chain or {})
+        if not rt:
+            continue
+        ru = run_url.get(rt) or prior_url.get(rt)
+        if ru == url:
+            continue
+        seen.add(url)
+        out.append({'url': url, 'rep_title': rt, 'rep_url': ru})
+    return out
+
+
+def save_event_links() -> int:
+    """_EVENT_LINKS → news_feed.urgency_event_of(아직 빈 칸만 — 전파가 적은 원인 id를 덮지 않는다). 반환 = 적은 기사 수.
+    id는 이번 실행에 저장된 기사(_INSERTED_IDS) → url 조회 → (url 모르는 지난 대표) 제목 조회(최신 것, ALERT_CHAIN_DAYS+1일 안) 순."""
+    links = list(_EVENT_LINKS)
+    if not links or not EVENT_LINKS_ON:
+        return 0
+    try:
+        url_id = dict(_INSERTED_IDS)
+        need = sorted({l['url'] for l in links} | {l['rep_url'] for l in links if l.get('rep_url')})
+        missing = [u for u in need if u not in url_id]
+        for i in range(0, len(missing), EVENT_LINK_CHUNK):
+            for r in sb.table('news_feed').select('id,url').in_('url', missing[i:i + EVENT_LINK_CHUNK]).execute().data or []:
+                url_id.setdefault(r.get('url'), r.get('id'))
+        titles = sorted({l['rep_title'] for l in links if not l.get('rep_url') and '"' not in l['rep_title']
+                         and '\\' not in l['rep_title']})
+        title_id = {}
+        since = (datetime.now(timezone.utc) - timedelta(days=ALERT_CHAIN_DAYS + 1)).isoformat()
+        for i in range(0, len(titles), EVENT_LINK_CHUNK):
+            for r in sb.table('news_feed').select('id,title,created_at').in_('title', titles[i:i + EVENT_LINK_CHUNK]) \
+                    .is_('origin', 'null').gte('created_at', since).order('created_at', desc=True).execute().data or []:
+                title_id.setdefault(r.get('title'), r.get('id'))
+        groups, skipped = {}, 0
+        for l in links:
+            aid = url_id.get(l['url'])
+            rid = url_id.get(l['rep_url']) if l.get('rep_url') else title_id.get(l['rep_title'])
+            if not aid or not rid or aid == rid:
+                skipped += 1
+                continue
+            groups.setdefault(rid, []).append(l['url'])
+        n = 0
+        for rid, urls in groups.items():
+            for i in range(0, len(urls), EVENT_LINK_CHUNK):
+                got = sb.table('news_feed').update({'urgency_event_of': rid}).in_('url', urls[i:i + EVENT_LINK_CHUNK]) \
+                    .is_('urgency_event_of', 'null').execute().data or []
+                n += len(got)
+        print(f'[사건 연결] 억제·리마인드 {len(links)}건 → 대표 {len(groups)}개에 {n}건 적음' + (f' · 못 이음 {skipped}' if skipped else ''))
+        return n
+    except Exception as e:
+        print(f'[사건 연결] 실패(무시 — 등급·알림 불변): {str(e)[:100]}')
+        return 0
+
+
 def suppress_repeat_alerts(urgent_items: list) -> list:
     """같은 사건 재보도의 재알림 억제 (배경역사 #44).
 
@@ -4477,6 +5260,7 @@ def suppress_repeat_alerts(urgent_items: list) -> list:
     알림 나간 대표다. 행 모양·접두는 그대로. 그 밖의 갈래는 나누기 전 그대로다."""
     global _COMMON_ALERT
     _COMMON_ALERT = None
+    _EVENT_LINKS.clear()                 # 사건 연결 칸(A2) — 이번 실행 공통 결과만
     if not urgent_items:
         _COMMON_ALERT = {'urls': [], 'reps': [], 'sup_rows': [], 'remind_rows': [], 'fail_open': False}
         return urgent_items
@@ -4544,6 +5328,14 @@ def suppress_repeat_alerts(urgent_items: list) -> list:
                 print(f'[긴급 억제] 로그 저장 실패(무시): {e}')
         if merged:
             print(f'[긴급 억제] 실행분 내 유사 {merged}건 대표에 병합')
+        try:                             # 사건 연결 칸(A2) — 여기서는 모으기만(AI·DB 0), 쓰기는 알림 뒤 save_event_links
+            _purl = {}
+            for r in resp.data or []:    # 최신순 — 같은 제목이면 가장 최근 것
+                if r.get('title') and r.get('url'):
+                    _purl.setdefault(r['title'], r['url'])
+            _EVENT_LINKS[:] = event_links_from(reps, sup_rows, remind_rows, sup_chain, _purl)
+        except Exception as e:
+            print(f'[사건 연결] 모으기 실패(무시): {str(e)[:80]}')
         _COMMON_ALERT = {'urls': [i.get('url') for i in urgent_items], 'reps': list(reps),
                          'sup_rows': list(sup_rows), 'remind_rows': list(remind_rows), 'fail_open': False}
         return reps
@@ -5122,11 +5914,19 @@ URGENCY_RESTORE_LOOKBACK_H = 72    # 구독자 큐 조회 창(send-subscriber-br
 URGENCY_RESTORE_MAX = 20           # 한 실행에 되돌릴 기사 상한(일괄 수정 사고 방어 — 나머지는 다음 실행)
 _RESTORE_COLS = 'id,title,url,source,tags,urgency,published_at,origin,created_at'
 _RESTORE_MARK = '[복원] 2차 확인 되돌림'   # subscriber_alert_log.shared_keywords — 이 경로로 나간 단위 행
+_RESTORE_MARK_PROPAGATE = '[복원] 내림 전파 되돌림'   # 전파(on)로 내린 기사를 관리자가 다시 올린 단위 행(설계 §3-1 — 사내에 알린 뒤 쓰인다)
+_RESTORE_COLS_ON = _RESTORE_COLS + ',urgency_lowered_by'   # 전파 on일 때만(그림자면 조회 글자 그대로)
+
+
+def _capped_line_head(it: dict) -> str:
+    """내린 기사 운영자 줄 머리 — v1(2차 확인)과 v2(같은 호출의 영역 상한)를 가른다(뜻은 같다: 기계가 영역으로 내림)."""
+    return '🔽 v2 영역 상한에서 내림' if it.get('urgency_grader') == 'v2' else '🔽 2차 확인에서 내림'
 
 
 def send_check_capped_notice(items: list) -> bool:
     """① 이번 실행에 2차 확인이 내린 기사(urgency_check_capped) → 운영자 봇 한 메시지, 기사마다 한 줄. 없으면 안 보낸다.
-    운영자 긴급 알림(send_telegram)과 따로 — 억제(#44)·24시간 거름 없이 내린 기사 전부. 실패는 로그만(fail-open)."""
+    운영자 긴급 알림(send_telegram)과 따로 — 억제(#44)·24시간 거름 없이 내린 기사 전부. 실패는 로그만(fail-open).
+    v2 판정기(2026-11-09)가 영역 상한으로 내린 기사도 같은 칸(capped)이라 여기로 온다 — 줄 머리만 다르다."""
     capped = [i for i in items or [] if i.get('urgency_check_capped')]
     if not capped or not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         return False
@@ -5136,14 +5936,14 @@ def send_check_capped_notice(items: list) -> bool:
         t = _html.escape(str(it.get('title', '')), quote=False)
         url = str(it.get('url') or '')
         head = f'<a href="{_html.escape(url, quote=True)}">{t}</a>' if url else t
-        lines.append(f'🔽 2차 확인에서 내림: {head}')
+        lines.append(f'{_capped_line_head(it)}: {head}')
     lines.append('<i>긴급이 맞으면 대시보드 뉴스(<a href="https://radio-policy.github.io/?p=news">열기</a>)에서 그 기사 등급을 '
                  '긴급으로 올리세요 — 다음 수집(10분 안)에 구독자에게 나갑니다.</i>')
     try:
         ok = notify.send_telegram('\n'.join(lines), chat_id=TELEGRAM_CHAT_ID, parse_mode='HTML',
                                   disable_web_page_preview=True)
         if not ok:
-            ok = notify.send_telegram('\n'.join(f'🔽 2차 확인에서 내림: {i.get("title", "")}' for i in capped),
+            ok = notify.send_telegram('\n'.join(f'{_capped_line_head(i)}: {i.get("title", "")}' for i in capped),
                                       chat_id=TELEGRAM_CHAT_ID, disable_web_page_preview=True)
         print(f'[2차 확인] 내린 기사 {len(capped)}건 운영자 알림 ' + ('발송' if ok else '실패'))
         return bool(ok)
@@ -5155,7 +5955,9 @@ def send_check_capped_notice(items: list) -> bool:
 def send_propagate_shadow_notice(items: list) -> bool:
     """내림 전파 그림자(#327) — 이번 실행에 같은 계기로 본 기사(urgency_propagate_shadow_from) → 운영자 봇 한 메시지, 기사마다
     「제목」 ← 운영자 내림 「제목」 한 줄. 없으면 안 보낸다. 그림자라 등급·알림은 그대로라는 것을 머리에 적는다(「내렸다」로 읽히지
-    않게). 실패는 로그만(fail-open). 한 주 뒤 재판정의 눈 확인용 — 운영자가 할 일은 없다."""
+    않게). 실패는 로그만(fail-open). 한 주 뒤 재판정의 눈 확인용 — 운영자가 할 일은 없다. 전파 on이면 send_propagate_on_notice가 맡는다."""
+    if PROPAGATE_MODE == 'on':
+        return False
     hits = [i for i in items or [] if i.get('urgency_propagate_shadow_from')]
     if not hits or not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         return False
@@ -5180,6 +5982,58 @@ def send_propagate_shadow_notice(items: list) -> bool:
     except Exception as e:
         print(f'[내림 전파·그림자] 운영자 알림 실패(무시): {str(e)[:80]}')
         return False
+
+
+def send_propagate_on_notice(items: list) -> bool:
+    """내림 전파 on(설계 §3-1) — 이번 실행에 전파로 내린 기사(urgency_lowered_by 'propagate') → 운영자 봇 한 메시지,
+    「🔽 내림 전파: 「제목」 ← 운영자 내림 「제목」」 한 줄씩 + 되돌리는 법. on이 아니면 안 보낸다. 실패는 로그만(fail-open)."""
+    if PROPAGATE_MODE != 'on':
+        return False
+    hits = [i for i in items or [] if i.get('urgency_lowered_by') == 'propagate']
+    if not hits or not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        return False
+    import html as _html
+    lines, plain = [], []
+    for it in hits:
+        t, p, url = str(it.get('title', '')), _PROPAGATE_HITS.get(it.get('url') or '', ''), str(it.get('url') or '')
+        te = _html.escape(t, quote=False)
+        link = f'<a href="{_html.escape(url, quote=True)}">{te}</a>' if url else te
+        lines.append(f'🔽 내림 전파({it.get("urgency")}): 「{link}」 ← 운영자 내림 「{_html.escape(p, quote=False)}」')
+        plain.append(f'🔽 내림 전파({it.get("urgency")}): 「{t}」 ← 운영자 내림 「{p}」')
+    tail = ('<i>긴급이 맞으면 대시보드 뉴스(<a href="https://radio-policy.github.io/?p=news">열기</a>)에서 그 기사를 긴급으로 올리세요 — '
+            '다음 수집(10분 안)에 구독자에게 나갑니다.</i>')
+    try:
+        ok = notify.send_telegram('\n'.join(lines + [tail]), chat_id=TELEGRAM_CHAT_ID, parse_mode='HTML',
+                                  disable_web_page_preview=True)
+        if not ok:
+            ok = notify.send_telegram('\n'.join(plain), chat_id=TELEGRAM_CHAT_ID, disable_web_page_preview=True)
+        print(f'[내림 전파] 내린 기사 {len(hits)}건 운영자 알림 ' + ('발송' if ok else '실패'))
+        return bool(ok)
+    except Exception as e:
+        print(f'[내림 전파] 운영자 알림 실패(무시): {str(e)[:80]}')
+        return False
+
+
+def _restore_lowered_query(since: str):
+    """복원 후보 조회의 앞부분(표·칸·「기계가 내린 기사」 조건). 전파가 그림자·꺼짐이면 #268 그대로(capped = true, 같은 칸 목록) —
+    on이면 전파로 내린 기사(urgency_lowered_by 'propagate')도 넣는다(설계 §3-1). 운영자 「같은 사건 전부 내리기」(operator-event)는
+    사람이 내린 것이라 넣지 않는다 — 그 기사를 다시 올리는 것은 다른 관리자 수정처럼 화면만 바뀐다."""
+    if PROPAGATE_MODE == 'on':
+        return sb.table('news_feed').select(_RESTORE_COLS_ON) \
+            .or_('urgency_check_capped.eq.true,urgency_lowered_by.eq.propagate')
+    return sb.table('news_feed').select(_RESTORE_COLS).eq('urgency_check_capped', True)
+
+
+def _restore_line(it: dict) -> str:
+    """🔼 운영자 줄 — 전파로 내린 기사의 되돌림은 문구를 가른다."""
+    if it.get('urgency_lowered_by') == 'propagate':
+        return f'🔼 다시 긴급(내림 전파 되돌림) — 구독자에게 보냄: {it.get("title", "")}'
+    return f'🔼 다시 긴급 — 구독자에게 보냄: {it.get("title", "")}'
+
+
+def _restore_mark_of(it: dict) -> str:
+    """복원 단위 행 마크 — 전파(on)로 내린 기사면 「[복원] 내림 전파 되돌림」, 아니면 종전 「[복원] 2차 확인 되돌림」."""
+    return _RESTORE_MARK_PROPAGATE if it.get('urgency_lowered_by') == 'propagate' else _RESTORE_MARK
 
 
 def _restore_unit_rows(items: list) -> tuple:
@@ -5212,7 +6066,7 @@ def _restore_unit_rows(items: list) -> tuple:
             continue
         logs = [{'audience': aud, 'channel': '긴급', 'news_id': it['id'], 'article_title': it.get('title') or '',
                  'article_url': it.get('url') or None, 'outcome': 'sent', 'matched_title': None,
-                 'shared_keywords': _RESTORE_MARK} for it in pick]
+                 'shared_keywords': _restore_mark_of(it)} for it in pick]
         try:
             fresh, _ok, _bad, _e = _save_alert_log(logs)
         except Exception as e:
@@ -5228,7 +6082,7 @@ def restore_raised_checks() -> int:
     던지지 않는다. 공통 큐 적재가 실패하면 선점을 되돌려 다음 실행에서 다시 한다(단위는 기록 표 unique라 두 번 안 간다)."""
     try:
         since = (datetime.now(timezone.utc) - timedelta(hours=URGENCY_RESTORE_LOOKBACK_H)).isoformat()
-        rows = sb.table('news_feed').select(_RESTORE_COLS).eq('urgency_check_capped', True).eq('urgency', '긴급') \
+        rows = _restore_lowered_query(since).eq('urgency', '긴급') \
             .is_('urgency_check_restored_at', 'null').is_('origin', 'null').gte('created_at', since) \
             .order('created_at').limit(URGENCY_RESTORE_MAX).execute().data or []
     except Exception as e:
@@ -5271,7 +6125,7 @@ def restore_raised_checks() -> int:
     print(f'[2차 확인 복원] 관리자가 다시 긴급으로 올린 기사 {len(items)}건 — 공통 큐 {len(items)} · 팀·실 행 {unit_n}'
           + (f' · 단위 오류: {unit_err}' if unit_err else ''))
     try:
-        notify.send_telegram('\n'.join(f'🔼 다시 긴급 — 구독자에게 보냄: {i.get("title", "")}' for i in items)
+        notify.send_telegram('\n'.join(_restore_line(i) for i in items)
                              + (f'\n(팀·실 단위 일부 실패: {unit_err})' if unit_err else ''),
                              chat_id=TELEGRAM_CHAT_ID, disable_web_page_preview=True)
     except Exception:
@@ -5756,6 +6610,7 @@ def main():
     #    운영자 긴급 알림·공통 큐 **뒤**, 즉시 배달 호출(아래 한 번) **앞** — ②의 행도 그 한 번에 실린다. 둘 다 fail-open.
     send_check_capped_notice(new_items)
     send_propagate_shadow_notice(new_items)   # 내림 전파 그림자(#327) — 운영자 봇만, 등급·큐·복원과 무관
+    send_propagate_on_notice(new_items)       # 내림 전파 on(v2 재설계 §3-1) — PROPAGATE_MODE 'on'일 때만(지금은 안 보냄)
     restored = 0
     try:
         restored = restore_raised_checks()
@@ -5777,6 +6632,9 @@ def main():
         run_audience_alerts('collect', new_items=new_items, cutoff_24h=cutoff_24h, channels=('보통',))
     except Exception as e:
         print(f'[팀 알림] 보통 채널 실패(무시): {e}')
+
+    # ── 사건 연결 칸(A2, v2 재설계 §3-2) — 알림·큐·즉시 배달 **뒤**. 공통 억제 결과의 대표 id를 news_feed.urgency_event_of에(fail-open) ──
+    save_event_links()
 
     print('[모닝 브리핑] morning_briefing.yml GitHub Actions 담당 — 건너뜀')
 
@@ -5805,6 +6663,9 @@ def main():
     #    비율 경보는 이번 실행에 2차 확인이 있었을 때만 조회, 지킴 규칙은 이번 실행에 규칙 표를 읽었을 때만(app_config 한 번).
     urgency_check_drift_alert()
     check_guarded_team_rules()
+    # v2 판정기 하루 줄(그림자·켬일 때만 — v1이면 조회 0)·전파 on 복원 비율 경보(on일 때만) — 둘 다 fail-open
+    urgency_v2_daily_notice(_URGENCY_GRADER_LAST[0] or URGENCY_GRADER_DEFAULT)
+    propagate_restore_alert()
 
     # ── 크롤러 heartbeat ── (check_news_health가 '크롤러 정상 vs 고장' 구분에 사용)
     # 신규 0건이어도 '크롤러는 돌았다'를 기록 → 주말 등 '뉴스 없음' 오경보 방지. 실패해도 무시.

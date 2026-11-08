@@ -119,9 +119,9 @@ grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE on
 grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE on public.feedback_rules to service_role;
 
 revoke all on public.importance_feedback from public, anon, authenticated, service_role;
-grant SELECT on public.importance_feedback to anon;
 grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE on public.importance_feedback to authenticated;
 grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE on public.importance_feedback to service_role;
+grant SELECT (id, news_id, title, summary, ai_importance, user_importance, created_at, updated_at, team_id) on public.importance_feedback to anon;
 
 revoke all on sequence public.importance_feedback_id_seq from public, anon, authenticated, service_role;
 grant SELECT, UPDATE, USAGE on sequence public.importance_feedback_id_seq to authenticated;
@@ -260,7 +260,7 @@ revoke all on public.news_feed from public, anon, authenticated, service_role;
 grant SELECT on public.news_feed to anon;
 grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE on public.news_feed to authenticated;
 grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE on public.news_feed to service_role;
-grant UPDATE (is_read, content, summary, importance, urgency, locked, impact_analysis, impact_analyzed_at) on public.news_feed to authenticated;
+grant UPDATE (is_read, content, summary, importance, urgency, locked, impact_analysis, impact_analyzed_at, urgency_lowered_by, urgency_event_of) on public.news_feed to authenticated;
 
 revoke all on public.news_screen_cache from public, anon, authenticated, service_role;
 grant DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE on public.news_screen_cache to authenticated;

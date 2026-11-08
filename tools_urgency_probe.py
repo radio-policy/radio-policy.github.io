@@ -32,6 +32,12 @@
   좁은 질문(--privacy, 등급 호출은 그대로): L1 시제품(모델이 통신 연결까지 판단) / Q2 사실만 적고 내림은 코드(privacy_lower)
     / Q3 Q2 뼈대 + 설명·입력 창 1,200자·이름 관문 S·R-b(privacy_lower_q3) / Q2w Q2 글 + Q3 입력(분리 팔)
   상한(G1·T1 출력 위에서 호출 없이): raw 없음 / R1 타영역 긴급 → 보통 / R2 R1 + 언저리 긴급 중 basis가 R2_KEEP 밖이면 보통
+  V2  1차 판정 v2(2026-11-09 재설계 §2·§4·§5-2) — 기준문 v2 파일 + 구조화 출력(scope → grade → basis → reason) + 검색 예시·
+      최근 7일 내림·유사 블록. 요청·블록·해석은 crawler.urgency_v2_request·urgency_v2_block2·parse_urgency_v2 그대로.  세트 X(--extra)
+        py -3.12 tools_urgency_probe.py --out <폴더> --variants V2 --sets X --extra ids.txt --arm H1 --fb-asof            # 어림(API 0)
+        py -3.12 tools_urgency_probe.py --out <폴더> --variants V2 --sets X --extra ids.txt --arm H1 --fb-asof --allow-api --rep 1
+      팔 --arm H1·H2·H3·S1·O1(crawler.URGENCY_V2_ARMS) 또는 --model/--think/--effort. --criteria-file = 손질본(지문이 key·행에 들어감).
+      결과 행: grade(실패면 None)·scope·basis·reason·parse(ok|refusal|max_tokens|parse|schema|contradict|error)·crit·asof·arm·ms.
 
 읽는 법:
   · 피드백 블록은 '지금' 행으로 운영 함수와 같은 글자를 만들되(스냅숏 때 crawler._feedback_fixed_block과 대조), 기사마다
@@ -65,8 +71,10 @@ PRICE = {'in': 1.00, 'out': 5.00, 'cache_read': 0.10, 'cache_write_1h': 2.00}   
 # 두고 inputs.json을 복사해 같은 입력으로 잰다(비교는 세션이 두 results.jsonl을 읽는다).
 MODEL_PRICES = {'claude-haiku-4-5-20251001': PRICE,
                 'claude-haiku-5-5': {'in': 0.10, 'out': 0.50, 'cache_read': 0.01, 'cache_write_1h': 0.20},
-                'claude-sonnet-5-5': {'in': 2.00, 'out': 10.00, 'cache_read': 0.20, 'cache_write_1h': 4.00}}
+                'claude-sonnet-5-5': {'in': 2.00, 'out': 10.00, 'cache_read': 0.20, 'cache_write_1h': 4.00},
+                'claude-opus-5-5': {'in': 4.00, 'out': 20.00, 'cache_read': 0.20, 'cache_write_1h': 8.00}}
 THINK, EFFORT = 'off', ''
+V2_ARM = ''                     # --arm(H1·H2·H3·S1·O1 — crawler.URGENCY_V2_ARMS) — 비면 --model/--think/--effort로 팔을 만든다
 
 
 def set_model(model: str, think: str = 'off', effort: str = ''):
@@ -522,6 +530,9 @@ VARIANTS = {
     'B0L': {'rubric': 'cur', 'tool': None, 'fb': 'now', 'sets': 'X', 'in': 'legacy'},
     # 개인정보·해킹 원칙(2026-10-06) — 세트 X = --extra 개인정보 세트(정답은 실측 폴더의 gold.json)
     'P1': {'rubric': 'P1', 'tool': None, 'fb': 'now', 'sets': 'ABCX'},
+    # 1차 판정 v2(2026-11-09 재설계 §2·§4·§5-2) — 기준문 v2 파일(--criteria-file) + 구조화 출력 + 검색 예시·최근 7일 내림·유사 블록.
+    # 요청은 crawler.urgency_v2_request·urgency_v2_block2 그대로(잰 것 = 돌리는 것). 세트 X = --extra(P·R·V-fresh id 파일)
+    'V2': {'v2': True, 'sets': 'X'},
 }
 
 
@@ -747,6 +758,8 @@ class Builder:
 
     def call(self, var: str, cid: str) -> dict:
         v = VARIANTS[var]
+        if v.get('v2'):
+            return self.call_v2(var, cid)
         art = self.article(cid)
         fixed, rows = self.fixed(v['fb'], cid)
         crit = criteria_of(self.snap['criteria'], v['rubric'])
@@ -762,6 +775,113 @@ class Builder:
         prefix = hashlib.sha1(((json.dumps(tool, ensure_ascii=False) if tool else '') + '\x00' + sys_text).encode('utf-8')).hexdigest()[:12]
         return {'var': var, 'id': cid, 'sys': sys_text, 'sim': sim, 'tool': tool, 'user': um, 'max_tokens': mt,
                 'key': key, 'prefix': prefix, 'out': v.get('out', '')}
+
+    # ── V2(2026-11-09) ────────────────────────────────────────────────────────────────────────
+    def call_v2(self, var: str, cid: str) -> dict:
+        """V2 호출 재료 — 블록 ① = 기준문 v2 파일 전체, 블록 ② = crawler.urgency_v2_block2(그 기사 자신의 피드백 행은 뺀다,
+        now = 기사 created_at — 「최근 7일 내림」 창은 늘 기사 시각 기준, --fb-asof면 행도 기사 시각 이전 것만). 사용자 메시지는 user_msg
+        (= crawler._urgency_user_msg). key = 모델·팔·스키마·기준문 지문·블록 ②·사용자 메시지의 지문(같은 글자면 같은 key)."""
+        import crawler
+        art = self.article(cid)
+        crit = V2_CTX['criteria']
+        now = self.snap.get('art_created', {}).get(cid)
+        rows = v2_rows_asof(self.snap.get('feedback_v2') or [], now, V2_CTX['asof'])
+        block2 = crawler.urgency_v2_block2(art['title'], art.get('screen_text') or '', rows, now=now, exclude_news_id=cid)
+        arm = v2_arm()
+        um = user_msg(art)
+        req = crawler.urgency_v2_request(um, crit, block2, arm)
+        key = hashlib.sha1('\x00'.join(['V2', json.dumps(arm, ensure_ascii=False, sort_keys=True),
+                                        json.dumps(crawler.URGENCY_V2_SCHEMA, ensure_ascii=False, sort_keys=True),
+                                        V2_CTX['crit_sha'], block2, um]).encode('utf-8')).hexdigest()
+        prefix = hashlib.sha1(('V2\x00' + arm['model'] + '\x00' + crit).encode('utf-8')).hexdigest()[:12]
+        return {'var': var, 'id': cid, 'sys': crit, 'sim': block2, 'tool': None, 'user': um, 'max_tokens': arm['max_tokens'],
+                'key': key, 'prefix': prefix, 'out': '', 'v2': True, 'req': req, 'arm': arm,
+                'crit': V2_CTX['crit_sha'][:12], 'asof': V2_CTX['asof']}
+
+
+# ── V2 공용(2026-11-09) ─────────────────────────────────────────────────────────────────────────
+V2_CTX = {'criteria': '', 'crit_sha': '', 'asof': ''}     # main이 --criteria-file·--fb-asof로 채운다
+V2_OUT_TOK = {'off': 70, 'adaptive': 300}                 # 출력 어림(11-09 첫 실호출 H1 66토큰, adaptive는 추론 몫)
+V2_TOK_PER_CHAR = 1.16                                     # 블록 ① 5,564토큰 / 4,807자(11-09 첫 실호출, 스키마 포함)
+
+
+def v2_arm() -> dict:
+    """V2 팔 — --arm이 있으면 crawler.URGENCY_V2_ARMS 그대로, 없으면 --model/--think/--effort로 만든다(설계 §2-2 규칙:
+    추론 끈 팔 max_tokens 400 / adaptive 2,048 · Sonnet은 disabled 대신 between_tools · Opus는 추론을 끌 수 없다)."""
+    import crawler
+    if V2_ARM:
+        return dict(crawler.URGENCY_V2_ARMS[V2_ARM])
+    if 'haiku-4-5' in MODEL:
+        raise SystemExit('V2는 5.5 계열 팔만 잰다(--arm H1 … 또는 --model claude-haiku-5-5)')
+    if THINK == 'adaptive':
+        return {'model': MODEL, 'thinking': {'type': 'adaptive'}, 'effort': EFFORT or None, 'max_tokens': 2048}
+    if 'opus' in MODEL:
+        raise SystemExit('Opus 5.5는 추론을 끌 수 없다 — --think adaptive --effort low')
+    return {'model': MODEL, 'thinking': {'type': 'between_tools' if 'sonnet' in MODEL else 'disabled'},
+            'effort': None, 'max_tokens': 400}
+
+
+def v2_rows_asof(rows: list, now, mode: str) -> list:
+    """--fb-asof: 'created' = created_at < 기사 created_at인 행만(설계 §4) / 'updated' = updated_at < 기사 created_at(기사 뒤에 고친 행의
+    지금 등급이 새지 않게 — 더 엄격) / '' = 지금 행 전부(운영에서 기사를 판정하던 때가 아니라 오늘의 피드백)."""
+    if not mode or not now:
+        return rows
+    import crawler
+    t = crawler._v2_ts(now)
+    col = 'created_at' if mode == 'created' else 'updated_at'
+    return [r for r in rows if (crawler._v2_ts(r.get(col)) or t) < t]
+
+
+def ensure_v2_snapshot(snap: dict, ids: list, path: str, synth_ids=()) -> None:
+    """V2에 필요한 재료를 스냅숏에 더한다(DB 읽기만, 한 번): 운영 _load_feedback_rows_v2와 같은 조회(공통 행·updated_at 내림차순·500,
+    칸 crawler._URGENCY_V2_FB_COLS) → feedback_v2 · 기사 created_at → art_created. 기존 변형의 key는 바뀌지 않는다."""
+    import crawler
+    changed = False
+    if 'feedback_v2' not in snap:
+        crawler._urgency_v2_rows_cache = None
+        snap['feedback_v2'] = crawler._load_feedback_rows_v2()
+        changed = True
+    have = snap.setdefault('art_created', {})
+    synth_ids = set(synth_ids or ())
+    need = [i for i in ids if i not in have and i not in synth_ids]
+    for i in range(0, len(need), 80):
+        for r in crawler.sb.table('news_feed').select('id,created_at').in_('id', need[i:i + 80]).execute().data or []:
+            have[r['id']] = r.get('created_at')
+        changed = True
+    if changed:
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(snap, f, ensure_ascii=False)
+        print(f"[V2 재료] 피드백 {len(snap['feedback_v2'])}행 · 기사 시각 {len(have)}건 → {path}")
+
+
+def judge_v2(client, item: dict) -> dict:
+    """V2 한 건. ⚠️ client.messages.create를 이 함수 안에서 직접 — api_usage 라벨 'tools_urgency_probe.py:judge_v2'.
+    해석은 crawler.parse_urgency_v2 그대로(성공·refusal·max_tokens·parse·schema·contradict)."""
+    import crawler
+    req = dict(item['req'])
+    if not item.get('cache', True):                  # 한 번만 쓰는 접두는 캐시 쓰기(2배)를 하지 않는다 — 글자는 같다
+        req['system'] = [dict(req['system'][0])] + req['system'][1:]
+        req['system'][0].pop('cache_control', None)
+    last = None
+    for attempt in range(4):
+        try:
+            t0 = time.time()
+            resp = client.messages.create(**req)
+            p = crawler.parse_urgency_v2(resp)
+            u = resp.usage
+            out = {'grade': p.get('grade') if p.get('ok') else None, 'scope': p.get('scope'), 'basis': p.get('basis'),
+                   'reason': p.get('reason'), 'parse': 'ok' if p.get('ok') else p.get('why'),
+                   'raw': p.get('raw') or '', 'ms': int((time.time() - t0) * 1000),
+                   'in': getattr(u, 'input_tokens', 0) or 0, 'out': getattr(u, 'output_tokens', 0) or 0,
+                   'cr': getattr(u, 'cache_read_input_tokens', 0) or 0, 'cw': getattr(u, 'cache_creation_input_tokens', 0) or 0,
+                   'stop': resp.stop_reason}
+            if p.get('why') == 'contradict':          # 모순 출력도 등급 칸 값은 남긴다(비율 집계 — 운영은 실패로 v1)
+                out['contradict_grade'] = p.get('grade')
+            return out
+        except Exception as e:                      # 429·529·연결 — 기다렸다 다시(4번)
+            last = e
+            time.sleep(4 * (attempt + 1))
+    return {'grade': None, 'scope': None, 'basis': None, 'parse': 'error', 'raw': str(last)[:160]}
 
 
 def set_ids(fx: dict, sets: str, snap: dict = None) -> list:
@@ -850,6 +970,20 @@ def est_cost(items: list) -> float:
     by_prefix = {}
     cost = 0.0
     for it in items:
+        if it.get('v2'):                             # V2 — 팔의 모델 단가, 블록 ① 실측 비율, 출력은 추론 여부로 어림
+            pr = MODEL_PRICES.get(it['arm']['model'], PRICE)
+            ptok = len(it['sys']) * V2_TOK_PER_CHAR
+            if not it.get('cache', True):
+                cost += ptok * pr['in'] / 1e6
+            elif it['prefix'] not in by_prefix:
+                by_prefix[it['prefix']] = 1
+                cost += ptok * pr['cache_write_1h'] / 1e6
+            else:
+                cost += ptok * pr['cache_read'] / 1e6
+            cost += (len(it['sim']) + len(it['user'])) * V2_TOK_PER_CHAR * pr['in'] / 1e6
+            think = 'adaptive' if it['arm']['thinking'].get('type') == 'adaptive' else 'off'
+            cost += V2_OUT_TOK[think] * pr['out'] / 1e6
+            continue
         ptok = (len(it['sys']) + (len(json.dumps(it['tool'], ensure_ascii=False)) if it['tool'] else 0)) / CHARS_PER_TOKEN \
             + (TOOL_OVERHEAD_TOK if it['tool'] else 0)
         if not it.get('cache', True):
@@ -868,15 +1002,27 @@ def run_variants(a, fx, snap):
     b = Builder(snap, fx)
     res_path = os.path.join(a.out, 'results.jsonl')
     old = load_results(res_path)
-    done = {(r['var'], r['rep'], r['id']) for r in old if r.get('parse') != 'error'}
+    # V2는 같은 변형 이름으로 기준문(손질)·팔·피드백 시점을 바꿔 가며 재므로 끝남 판단을 프롬프트 지문(key)으로 한다
+    done = {(r['var'], r['rep'], r['key'] if r.get('v2') else r['id']) for r in old if r.get('parse') != 'error'}
     by_key = {r['key']: r for r in old if r.get('rep', 1) == 1 and r.get('parse') != 'error'}
     plan, reuse = [], []
+    v2_vars = [v for v in a.variants.split(',') if VARIANTS[v].get('v2')]
+    if v2_vars:
+        if not V2_CTX['criteria']:
+            raise SystemExit('V2: 기준문 v2 파일을 못 읽었다(--criteria-file)')
+        ids = [cid for var in v2_vars for cid in set_ids(fx, a.sets or VARIANTS[var]['sets'], snap)]
+        ensure_v2_snapshot(snap, ids, os.path.join(a.out, 'inputs.json'), [s['id'] for s in fx['synth']])
+        arm = v2_arm()
+        print(f"[V2] 기준문 {V2_CTX['crit_sha'][:12]}({len(V2_CTX['criteria'])}자) · 팔 {V2_ARM or '(인자)'} {json.dumps(arm, ensure_ascii=False)}"
+              f" · 피드백 시점 {V2_CTX['asof'] or '지금(누설 있음 — 측정은 --fb-asof)'}")
     for var in a.variants.split(','):
         sets = a.sets or VARIANTS[var]['sets']
         for cid in set_ids(fx, sets, snap):
             if (var, a.rep, cid) in done:
                 continue
             it = b.call(var, cid)
+            if it.get('v2') and (var, a.rep, it['key']) in done:
+                continue
             it['rep'] = a.rep
             if a.rep == 1 and it['key'] in by_key:
                 reuse.append(it)
@@ -909,10 +1055,14 @@ def run_variants(a, fx, snap):
     t0 = time.time()
 
     def work(it):
-        out = judge(client, it)
+        out = judge_v2(client, it) if it.get('v2') else judge(client, it)
         row = {'var': it['var'], 'rep': it['rep'], 'id': it['id'], 'key': it['key'], 'prefix': it['prefix'],
                'model': MODEL, 'think': THINK, 'effort': EFFORT,
                'sim': it['sim'].count('\n- ') if it['sim'] else 0, **out}
+        if it.get('v2'):                             # V2 — 팔·기준문 지문·피드백 시점을 결과에(같은 var로 여러 조건을 잰다)
+            row.update({'v2': True, 'model': it['arm']['model'], 'arm': V2_ARM or 'args',
+                        'think': it['arm']['thinking'].get('type'), 'effort': it['arm'].get('effort') or '',
+                        'crit': it['crit'], 'asof': it['asof']})
         with lock:
             fout.write(json.dumps(row, ensure_ascii=False) + '\n'); fout.flush()
             if it['rep'] == 1 and row.get('parse') != 'error':
@@ -1975,6 +2125,7 @@ def report(a, fx, snap):
 
 
 def main() -> int:
+    global V2_ARM
     ap = argparse.ArgumentParser(description='긴급도 판정 구조 실측(순서표 4-2·4-3)')
     ap.add_argument('--dry-run', action='store_true', help='호출 수·어림 비용만(API 0회, 기본)')
     ap.add_argument('--allow-api', action='store_true', help='실제 Haiku 호출(비용 발생, 운영자 고지 뒤)')
@@ -2011,8 +2162,32 @@ def main() -> int:
     ap.add_argument('--think', default='off', choices=['off', 'adaptive'], help='5.5 계열의 추론(기본 off = thinking disabled; 4.5에는 무시)')
     ap.add_argument('--effort', default='', choices=['', 'low', 'medium', 'high'], help='--think adaptive일 때 output_config.effort')
     ap.add_argument('--extra', default='', help='임시 세트 X — 기사 id를 쉼표·줄바꿈으로 적은 파일(스냅숏에 더해 읽는다)')
+    ap.add_argument('--criteria-file', default='', help='V2 기준문 v2 파일(기본 crawler.URGENCY_V2_CRITERIA_FILE) — 지문을 결과 key·행에 적는다')
+    ap.add_argument('--fb-asof', nargs='?', const='created', default='', choices=['', 'created', 'updated'],
+                    help="V2 피드백 행을 기사 시각 이전 것만(설계 §4): 값 없음·created = created_at < 기사 created_at / "
+                         "updated = updated_at < 기사 created_at(뒤에 고친 행까지 뺌). 없으면 지금 행 전부(측정에는 쓰지 말 것)")
+    ap.add_argument('--arm', default='', choices=['', 'H1', 'H2', 'H3', 'S1', 'O1'],
+                    help='V2 팔(crawler.URGENCY_V2_ARMS — 모델·추론·effort·max_tokens). 없으면 --model/--think/--effort로 만든다')
     a = ap.parse_args()
     set_model(a.model, a.think, a.effort)
+    if a.arm:
+        import crawler
+        V2_ARM = a.arm
+        _arm = crawler.URGENCY_V2_ARMS[a.arm]
+        set_model(_arm['model'], 'adaptive' if _arm['thinking'].get('type') == 'adaptive' else 'off', _arm.get('effort') or '')
+    if any(VARIANTS.get(v, {}).get('v2') for v in a.variants.split(',')):
+        import crawler
+        cpath = a.criteria_file or crawler.URGENCY_V2_CRITERIA_FILE
+        try:
+            with open(cpath, encoding='utf-8') as f:
+                V2_CTX['criteria'] = f.read()
+        except OSError as e:
+            raise SystemExit(f'V2 기준문 파일을 못 읽었다: {cpath} ({e})')
+        V2_CTX['crit_sha'] = hashlib.sha256(V2_CTX['criteria'].encode('utf-8')).hexdigest()
+        V2_CTX['asof'] = a.fb_asof
+        if V2_CTX['crit_sha'] != crawler.URGENCY_V2_CRITERIA_SHA256:
+            print(f"⚠️ V2 기준문 지문 {V2_CTX['crit_sha'][:12]}이 운영 잠금 {crawler.URGENCY_V2_CRITERIA_SHA256[:12]}과 다르다 — "
+                  '손질본 측정이면 정상(배포 때 잠금·상수를 이 글자로)')
     up = os.path.dirname(os.path.abspath(a.out))
     a.gold_x = a.gold_x or os.path.join(up, 'gold.json')
     a.gold_w = a.gold_w or os.path.join(up, 'gold_w2.json')

@@ -236,7 +236,9 @@ if not any(p.startswith("⛔") for p in problems):
 #   ⓐ 캐시 적중률: 1시간 캐시를 쓰는 두 콜의 최근 24시간 적중(cache_read>0) 비율 < 80%면 경고(표본 10건 이상).
 #   ⓑ 비용 급증: 최근 24시간 추정 비용 > 그 전 7일(24시간 단위) 중앙값 × 2 이고 $1 이상이면 경고 + 상위 3곳.
 # 단가는 추정용(청구서 아님). 캐시 쓰기는 1시간 캐시 기준 입력 2배, 읽기 0.1배.
-CACHED_SITES = ("crawler.py:_screen_batch_haiku", "crawler.py:classify_urgency")
+# v2 판정기(2026-11-09 재설계)는 자기 라벨로 센다 — 켜지면 v1 1차(classify_urgency)는 드문 폴백만 남는데 그 호출은
+# crawler.py:classify_urgency_fallback으로 갈라 적어 표본·적중률 경보가 섞이지 않게 한다(폴백 라벨은 캐시 경보 대상이 아니다).
+CACHED_SITES = ("crawler.py:_screen_batch_haiku", "crawler.py:classify_urgency", "crawler.py:classify_urgency_v2")
 PRICES = {"haiku-5-5": (0.10, 0.50),   # /law 답변 모델(#304-보론, 2026-10-14) — 부분 일치라 "haiku"보다 앞에 둔다(10만 토큰 이하 프롬프트 단가)
           "haiku": (1.0, 5.0), "sonnet": (2.0, 10.0), "opus": (5.0, 25.0),   # $/백만 토큰 (입력, 출력)
           # voyage-embed가 #29x부터 기록 — 모르는 모델은 sonnet 단가로 세므로 넣지 않으면 KB 임베딩 채우기가 급증 오경보가 된다

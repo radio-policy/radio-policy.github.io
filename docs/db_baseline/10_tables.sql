@@ -265,6 +265,7 @@ create table if not exists public.importance_feedback (
   created_at timestamp with time zone default now() not null,
   updated_at timestamp with time zone default now() not null,
   team_id smallint,
+  reason text,
   constraint importance_feedback_news_team_key UNIQUE NULLS NOT DISTINCT (news_id, team_id),
   constraint importance_feedback_pkey PRIMARY KEY (id)
 );
@@ -594,6 +595,13 @@ create table if not exists public.news_feed (
   ai_summary text,
   urgency_propagate_shadow_from uuid,
   urgency_propagate_shadow_at timestamp with time zone,
+  urgency_grader text,
+  urgency_v2_scope text,
+  urgency_v2_grade text,
+  urgency_v2_basis text,
+  urgency_reason text,
+  urgency_lowered_by text,
+  urgency_event_of uuid,
   constraint news_feed_pkey PRIMARY KEY (id),
   constraint news_feed_urgency_check CHECK ((urgency = ANY (ARRAY['긴급'::text, '보통'::text, '참고'::text])))
 );
