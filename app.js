@@ -1105,11 +1105,13 @@ async function claudeFetch(init) {
   };
   // 비용 기록 라벨(#155) — 프록시가 api_usage.site에 'dashboard:<site>'로 남긴다. 한도·권한과 무관.
   if (init && init.site) headers['x-site'] = String(init.site).replace(/[^\w.:-]/g, '').slice(0, 40);
-  return fetch(base + '/functions/v1/claude-proxy', {
+  var opt = {
     method: 'POST',
     headers: headers,
     body: (init && typeof init.body === 'string') ? init.body : JSON.stringify((init && init.body) || init)
-  });
+  };
+  if (init && init.signal) opt.signal = init.signal;   // 시간 제한(#339 질문 분석·정찰 — AbortController)
+  return fetch(base + '/functions/v1/claude-proxy', opt);
 }
 
 // ── 인용 조문 통째 보강 + [원문 확인됨] 검증 (#155, 2026-09-11) ──
@@ -1229,6 +1231,33 @@ async function fetchDocArticles(docName) {
     .not('article_no', 'is', null).order('chunk_index', { ascending: true }).limit(300);
   return CiteVerify.dropHeadingChunks(r.data || []);   // #338
 }
+// 정찰 색인(#339) 재료 — 한 문서의 조문·별표 개요(본문 없이 id·조 번호·조각 순서), 두 쪽까지. rag.ts fetchDocOutline과 같은 조건.
+async function fetchDocOutline(docName) {
+  if (!sb) return [];
+  var out = [];
+  for (var p = 0; p < 2; p++) {
+    var r = await sb.from('document_chunks').select('id, doc_name, article_no, chunk_index')
+      .eq('doc_name', docName).eq('status', 'current').eq('is_approved', true).not('article_no', 'is', null)
+      .order('chunk_index', { ascending: true }).range(p * 1000, p * 1000 + 999);
+    if (r.error) throw new Error(r.error.message);
+    out = out.concat(r.data || []);
+    if (!r.data || r.data.length < 1000) break;
+  }
+  return out;
+}
+// 자문 품질 1차 묶음(#339) 호출 — 질문 분석·정찰은 Haiku 5.5 도구 강제 한 번씩(claude-proxy — Haiku라 자문 한도가 아니라 백스톱 칸). 요청 본문은 rag_core.js
+// planRequest·scoutRequest(rag.ts와 같은 글), timeoutMs 안에 안 오면 끊고 null(fail-open). 비용 기록은 프록시가 site 라벨로.
+async function callPlanTool(req, site, timeoutMs, toolName) {
+  if (!aiReady()) return null;
+  var ctl = (typeof AbortController === 'function') ? new AbortController() : null;
+  var timer = ctl ? setTimeout(function() { ctl.abort(); }, timeoutMs) : null;
+  try {
+    var res = await claudeFetch({ site: site, body: JSON.stringify(req), signal: ctl ? ctl.signal : undefined });
+    if (!res.ok) { console.warn(site + ' HTTP ' + res.status); return null; }
+    return RagCore.toolInput(await res.json(), toolName);
+  } catch (e) { console.warn(site + ' 실패(없이 진행):', e); return null; }
+  finally { if (timer) clearTimeout(timer); }
+}
 async function verifyCitationsRemote(answer, chunkIds, annexSources) {
   if (!sb) return null;
   // 표시가 없어도 근거 청크가 있으면 부른다(#155-보론7) — 서버가 표시 없는 통째 인용에 표시를 붙여 준다.
@@ -1304,10 +1333,10 @@ let lastAdvChunkIds = [];
 // chat_logs.search_meta에 남긴다. trgm RPC가 statement_timeout(57014)으로 0건이 되는 fail-open 경로를
 // 사후에 셀 수 있는 유일한 기록이다. rag.ts의 SearchMeta와 같은 형식 — 한쪽만 고치지 말 것.
 let lastAdvSearchMeta = null;
-function metaRpc(fn, params) {
+function metaRpc(fn, params, quiet) {   // quiet = search_meta에 안 남김(#339 갈래 칸 검색 — rag.ts가 meta 없이 부르는 것과 같게)
   var t0 = performance.now();
   var rec = function(r, err) {
-    if (!lastAdvSearchMeta) return;
+    if (!lastAdvSearchMeta || quiet) return;
     lastAdvSearchMeta.push({ fn: fn, ms: Math.round(performance.now() - t0),
       rows: (r && Array.isArray(r.data)) ? r.data.length : null,
       error: err ? String(err.message || err) : ((r && r.error) ? (r.error.code || r.error.message || 'error') : null) });
@@ -1331,10 +1360,10 @@ function yakGate(query) {
 function yakIsDoc(docName) {
   return typeof RagCore.isYakDoc === 'function' ? RagCore.isYakDoc(docName) : /^[^(]+\(약관\)/.test(String(docName || ''));
 }
-function yakDropRows(rows, gate) {   // 막히면 약관 행을 뺀 새 배열 + search_meta 한 행(세 입구 합산)
+function yakDropRows(rows, gate, quiet) {   // 막히면 약관 행을 뺀 새 배열 + search_meta 한 행(세 입구 합산). quiet = 기록 없이(#339 갈래 칸)
   rows = rows || [];
   var out = gate.pass ? rows : rows.filter(function(r) { return !(r && yakIsDoc(r.doc_name)); });
-  if (typeof RagCore.yakGateNote === 'function') RagCore.yakGateNote(lastAdvSearchMeta, gate, rows.length - out.length);
+  if (!quiet && typeof RagCore.yakGateNote === 'function') RagCore.yakGateNote(lastAdvSearchMeta, gate, rows.length - out.length);
   return out;
 }
 
@@ -1508,9 +1537,11 @@ var STREAM_IDLE_MS = RagCore.STREAM_IDLE_MS;
 
 // kwQuery = 낱말 자리에만 쓸 글(자문의 끝 요청어 뗀 질문, #330 rag_core.js stripRequestTail) — 없으면 query.
 // 확장(_expandCache 열쇠)·trgm·의미검색·약관 게이트는 query. rag.ts searchChunks와 동일 유지.
-async function searchKeywords(query, kwQuery) {
+// bopt = { noExpand, quiet } — 자문 갈래 칸(#339)의 질의별 검색만: 확장 없이(rag.ts가 expandP로 빈 확장을 넘기는 것과 같게)·search_meta 없이. 없으면 종전 그대로.
+async function searchKeywords(query, kwQuery, bopt) {
   if (!sb) return [];
   var kq = kwQuery || query;
+  var quiet = !!(bopt && bopt.quiet);
   var baseKeywords = extractKeywords(kq);
   // trgm·시맨틱은 확장어를 쓰지 않으므로 Haiku 확장을 **기다리지 않고 먼저** 시작한다(B-2, #201, 2026-09-24).
   // trgm 5~6초(#185, SQL로는 못 줄임)와 임베딩 왕복이 확장 1~2초와 겹친다. 병합 순서는 아래에서 고정하므로 결과 동일.
@@ -1524,7 +1555,7 @@ async function searchKeywords(query, kwQuery) {
       match_threshold: 0.12,
       match_count: 8,
       only_current: true
-    }).then(function(r) { return r.data || []; }).catch(function(e) {
+    }, quiet).then(function(r) { return r.data || []; }).catch(function(e) {
       console.warn('trgm 검색 오류:', e); return [];
     });
     // 시맨틱: Edge Function으로 임베딩 → pgvector 코사인 유사도
@@ -1535,12 +1566,12 @@ async function searchKeywords(query, kwQuery) {
         match_threshold: 0.45,
         match_count: 8,
         only_current: true
-      }).then(function(r) { return r.data || []; }).catch(function(e) {
+      }, quiet).then(function(r) { return r.data || []; }).catch(function(e) {
         console.warn('시맨틱 검색 오류:', e); return [];
       });
     });
   }
-  var expanded = await expandQueryKeywords(query);
+  var expanded = (bopt && bopt.noExpand) ? [] : await expandQueryKeywords(query);
   // 기본 키워드 → 법령 표제어(LAW_SYNONYMS) → 확장 키워드 순으로 합친다.
   // 표제어를 확장보다 앞에 두는 이유: 아래 slice(0,10) 상한에서 LLM 확장어에 밀려
   // '휴업·폐업' 같은 결정적 법령 어휘가 잘리면 안 되기 때문(어휘 간극은 LLM이 못 메운다).
@@ -1567,7 +1598,7 @@ async function searchKeywords(query, kwQuery) {
     if (keywords[ki].length >= 2 && !isTitleStop(keywords[ki], kq)) kwList.push(keywords[ki]);
   }
   var kwRows = kwList.length
-    ? await metaRpc('search_chunks_keywords', { p_keywords: kwList, p_per_kw: 4 })
+    ? await metaRpc('search_chunks_keywords', { p_keywords: kwList, p_per_kw: 4 }, quiet)
         .then(function(resp) { return resp.data || []; })
         .catch(function(e) { console.warn('키워드 검색 오류:', e); return []; })
     : [];
@@ -1628,7 +1659,7 @@ async function searchKeywords(query, kwQuery) {
   // ── RRF 융합·조문 종류별 가점·문서당 상한 — rag_core.js rankChunks (#215) ──
   // results의 _score(키워드)·_hybrid_score(융합)를 채우고 채택분(순위순, 문서당 상한·전체 15)을 돌려준다. 규칙 설명도 그 파일에.
   // 약관 게이트 ⓐ(#312-보론) — 질문 원문에 약관 낱말이 없으면 약관 행을 순위 매기기 전에 뺀다(상위 15·상한 구제 둘 다 약관 없이)
-  results = yakDropRows(results, yakGate(query));
+  results = yakDropRows(results, yakGate(query), quiet);
   var picked = RagCore.rankChunks(results, keywords, baseKeywords, kq);
   // 문서당 상한 때문에만 빠진 조문·별표 후보(L1′ 상한 구제, #283)는 spill에 따로 붙인다 — 채택분(배열 자체)은 그대로라
   // 자문 밖의 호출측(용어·관계도 등)은 영향이 없다. 자문(buildAdvisoryContext)만 읽는다. rag.ts searchChunks와 동일 유지.
@@ -1652,12 +1683,14 @@ async function searchKeywords(query, kwQuery) {
 // ④ 행위(조문 표제어)와 주제(문서명)를 분리해 점수를 매긴다.
 // 점수 규칙은 rag.ts와 동일하게 유지할 것 — 한쪽만 고치면 봇과 대시보드 답이 갈라진다.
 // kwQuery = 낱말 자리에만 쓸 글(자문의 끝 요청어 뗀 질문, #330) — 없으면 query. 확장·약관 게이트는 query.
-async function searchLawArticles(query, limit, kwQuery) {
+// bopt = { noExpand, quiet } — searchKeywords와 같다(#339 갈래 칸)
+async function searchLawArticles(query, limit, kwQuery, bopt) {
   if (!sb) return [];
   limit = limit || 5;
   var kq = kwQuery || query;
+  var quiet = !!(bopt && bopt.quiet);
   var base = extractKeywords(kq);
-  var expanded = await expandQueryKeywords(query);
+  var expanded = (bopt && bopt.noExpand) ? [] : await expandQueryKeywords(query);
 
   var seenNorm = new Set();
   var keywords = [];
@@ -1692,11 +1725,11 @@ async function searchLawArticles(query, limit, kwQuery) {
   var tw = RagCore.titleActWeights(keywords, kq);   // 제외어(#173) 뺀 조회 키워드 + 행위 가중(사전 출신 7·그 외 5) — rag_core.js
   var kwActive = tw.kwActive, actOf = tw.actOf;
   var lawRows = kwActive.length
-    ? await metaRpc('search_law_articles_kw', { p_keywords: kwActive, p_title_limit: 40, p_content_limit: 10 })
+    ? await metaRpc('search_law_articles_kw', { p_keywords: kwActive, p_title_limit: 40, p_content_limit: 10 }, quiet)
         .then(function(r) { return r.data || []; })
         .catch(function(e) { console.warn('조문 정밀검색 오류:', e); return []; })
     : [];
-  lawRows = yakDropRows(lawRows, yakGate(query));   // 약관 게이트 ⓑ(#312-보론) — rankLawHits 앞
+  lawRows = yakDropRows(lawRows, yakGate(query), quiet);   // 약관 게이트 ⓑ(#312-보론) — rankLawHits 앞
   // 반환 순서(키워드 → 제목 적중 → 본문 적중 → 순위)대로 넣는다 — 같은 조문의 대표 청크가 실행마다 같아진다
   lawRows.forEach(function(r) {
     putHit({ id: r.id, doc_name: r.doc_name, article_no: r.article_no, content: r.content },
@@ -3071,6 +3104,17 @@ async function onDeleteCustomFile(docName, btn) {
 //    조립 순서·내용은 callClaude 안에 있던 그대로 — 여기서 순서를 바꾸면 rag.ts buildAdvisoryContext도 같이.
 async function buildAdvisoryContext(userText) {
   lastAdvSearchMeta = [];   // 검색 갈래별 기록 시작(#203)
+  // 자문 품질 1차 묶음(#339, 꺼 둠 — RagCore.PLAN_OPTS.on) — 질문 분석(Haiku 5.5, ≤25초)을 다른 갈래와 함께 띄운다. 꺼져 있으면 호출·search_meta 행 없음(종전과 바이트 같다).
+  // 옛 rag_core.js 캐시면 PLAN_OPTS가 없다 — 꺼진 것으로(가드). 규칙·문구·상한은 rag_core.js, rag.ts buildAdvisoryContext와 같은 자리 — 한쪽만 고치지 말 것.
+  var ctxT0 = performance.now();
+  var PO = (RagCore.PLAN_OPTS && typeof RagCore.fetchScout === 'function') ? RagCore.PLAN_OPTS : { on: false };
+  var planOn = !!(PO.on && sb);
+  var planT0 = performance.now();
+  var planP = planOn
+    ? callPlanTool(RagCore.planRequest(userText), 'adv_plan', PO.analysisMs, RagCore.PLAN_TOOL.name)
+        .then(function(inp) { return RagCore.parsePlan(inp); }).catch(function() { return null; })
+        .then(function(p) { if (lastAdvSearchMeta) lastAdvSearchMeta.push(RagCore.planMeta(p, Math.round(performance.now() - planT0), null)); return p; })
+    : Promise.resolve(null);
   // 보조 컨텍스트 검색 4종을 먼저 동시에 시작 (조문 RAG와 병렬 실행 — 프롬프트 조합 순서는 아래에서 고정)
   const customP     = searchCustomKnowledge(userText).catch(function(e) { console.warn('추가지식 검색 실패(건너뜀):', e); return ''; });
   const newsP       = fetchRecentNewsContext(userText).catch(function(e) { console.warn('뉴스 컨텍스트 실패(건너뜀):', e); return ''; });
@@ -3172,7 +3216,24 @@ async function buildAdvisoryContext(userText) {
   lastRagSources = [];
   lastWebSources = [];
   lastAdvChunkIds = [];
-  var ragChunks = await searchKeywords(userText, reqCut.text);
+  var ragChunksP = searchKeywords(userText, reqCut.text);
+  // 갈래 칸(#339 1-ⓔ) — 질문 분석의 검색 질의마다 정밀검색 + 하이브리드(확장 없이, search_meta 없이). 본 조문 RAG(trgm 3~9초)가 끝난 뒤 시작한다 — 겹치면
+  // 본 검색의 trgm이 statement_timeout에 걸려 기존 15칸이 바뀔 수 있다. 고르기는 기존 근거가 다 모인 뒤(presentP). rag.ts와 같은 자리.
+  var resolvePresent = function() {};
+  var presentP = new Promise(function(r) { resolvePresent = r; });
+  var branchT0 = performance.now();
+  var branchP = (planOn && PO.branch)
+    ? Promise.all([planP, ragChunksP.catch(function() { return []; })]).then(function(r) {
+        var plan = r[0];
+        if (!plan || !(plan.queries.length || plan.named.length)) return [];
+        return RagCore.fetchBranchSlots(plan, {
+          named: function(t) { return RagCore.fetchNamedArticles(t, fetchArticleKeyRows, fetchArticleChunks); },
+          lawSearch: function(q) { return searchLawArticles(q, RagCore.BRANCH_OPTS.precise, q, { noExpand: true, quiet: true }); },
+          hybrid: function(q) { return searchKeywords(q, q, { noExpand: true, quiet: true }); }
+        }, presentP, { yakPass: yakGate(userText).pass });
+      }).catch(function(e) { console.warn('갈래 칸 실패(건너뜀):', e); return []; })
+    : Promise.resolve([]);
+  var ragChunks = await ragChunksP;
   if (ragChunks.length > 0) {
     lastRagSources = ragChunks.map(function(c) { return c.doc_name; });
     console.log('RAG 검색 결과:', ragChunks.length + '개 청크 (' + lastRagSources.join(', ') + ')');
@@ -3204,6 +3265,12 @@ async function buildAdvisoryContext(userText) {
   // L1′ 상한 구제(#283) — 문서당 상한(3) 때문에만 상위 15에서 빠진 조문·별표 중 아직 어디에도 없는 것 ADDON_OPTS.spillMax개(2)를
   // 조문 정밀검색 구역 **끝에** 덧붙인다(상위 15·정밀검색 칸은 그대로). rag.ts buildAdvisoryContext와 동일 유지.
   var spillChunks = RagCore.pickSpill(ragChunks.spill || [], ragChunks.concat(lawExtra), RagCore.ADDON_OPTS.spillMax);
+  // 갈래 칸(#339) — 기존 근거(상위 15·정밀검색·지목·상한 구제)가 다 모였으니 고른다. 꺼져 있으면 []. rag.ts와 같음.
+  resolvePresent(ragChunks.concat(lawExtra, spillChunks));
+  var branchChunks = await branchP;
+  var plan = await planP;
+  if (planOn && PO.branch && plan && lastAdvSearchMeta) lastAdvSearchMeta.push({ fn: 'branch', ms: Math.round(performance.now() - branchT0), rows: branchChunks.length, error: null,
+    named: branchChunks.filter(function(b) { return b._branch === 'named'; }).length });
   if (lawExtra.length) {
     // 출처 목록 **앞쪽**에 놓는다(#89) — 참조 문서 배지는 6개만 보여주므로(sourceTagsHtml(..., 6)),
     // RAG 15개를 먼저 채우면 정작 답변이 인용한 조문이 잘려 나간다. 봇에서 실제로 그랬다:
@@ -3224,13 +3291,16 @@ async function buildAdvisoryContext(userText) {
   if (window.CiteVerify && sb) {
     try {
       // 상한 구제분(#283)은 **맨 뒤** — 보강은 순위순으로 예산을 쓰므로 앞의 결과는 그대로이고 남은 예산만 쓴다
+      // 갈래 칸(#339)은 상한 구제 뒤 맨 끝 — 남은 보강 예산만(rag.ts와 같음)
       var tagged = (lawExtra || []).map(function(h) { return Object.assign({}, h, { _src: 'extra' }); })
         .concat(ragChunks.map(function(c) { return Object.assign({}, c, { _src: 'rag' }); }))
-        .concat(spillChunks.map(function(c) { return Object.assign({}, c, { _src: 'spill' }); }));
+        .concat(spillChunks.map(function(c) { return Object.assign({}, c, { _src: 'spill' }); }))
+        .concat(branchChunks.map(function(c) { return Object.assign({}, c, { _src: 'branch' }); }));
       var ex = await CiteVerify.expandArticles(tagged, fetchArticleChunks, CITE_EXPAND_OPTS);
       lawExtra = ex.chunks.filter(function(c) { return c._src === 'extra'; });
       ragChunks = ex.chunks.filter(function(c) { return c._src === 'rag'; });
       spillChunks = ex.chunks.filter(function(c) { return c._src === 'spill'; });
+      branchChunks = ex.chunks.filter(function(c) { return c._src === 'branch'; });
       _advAddedIds = ex.addedIds || [];
       if (ex.expanded) console.log('조문 통째 보강:', ex.expanded + '개 조문(조각 +' + _advAddedIds.length + ')');
     } catch(e) { console.warn('조문 보강 실패(검색 결과 그대로 진행):', e); }
@@ -3239,12 +3309,13 @@ async function buildAdvisoryContext(userText) {
   // 번호가 정밀검색분 다음부터 간다. 종전(#89~#283)에는 이 글을 보강 **전에** 만들어 대시보드 프롬프트의 정밀검색 조문이 검색이 집은
   // 조각 그대로였다(보강된 전문은 인용 대조 대상에만 쓰였다). 봇은 보강 뒤에 만들어 두 판의 참조 자료가 달랐다.
   // 무료 측정(10-06): 이 구역이 문항당 평균 +2.5K자(개발 20)·+2.0K자(검증 29), 최대 +7.0K자.
-  var lawItems = (lawExtra || []).concat(spillChunks);
+  // 갈래 칸(#339)은 정밀검색 꼬리 뒤·상한 구제 앞 — 분석이 지목한 조문만 머리에 꼬리(RagCore.branchTail, 그 밖엔 ''). rag.ts와 같음.
+  var lawItems = (lawExtra || []).concat(branchChunks, spillChunks);
   var lawArticleContext = lawItems.length
     ? '\n\n---\n\n[조문 정밀검색 결과 — 질문 의도에 직접 대응하는 조문]\n' +
       '위 RAG 결과에 없더라도 아래 조문이 질문의 핵심 근거일 가능성이 높습니다. 우선 확인하세요:\n\n' +
       lawItems.map(function(h, i) {
-        return '[조문 ' + (i + 1) + '] ' + h.doc_name + (h.article_no ? ' ' + h.article_no : '') + '\n' + h.content;
+        return '[조문 ' + (i + 1) + '] ' + h.doc_name + (h.article_no ? ' ' + h.article_no : '') + (typeof RagCore.branchTail === 'function' ? RagCore.branchTail(h) : '') + '\n' + h.content;
       }).join('\n\n---\n\n')
     : '';
   // 관련 법령 체계(관계도 주제, #329) — 근거 목록 조문(정밀검색·상한 구제·RAG, 통째 보강 뒤)의 (법령군, 제N조)가 엣지 설명에 글자로 든 주제를 고른다.
@@ -3261,8 +3332,10 @@ async function buildAdvisoryContext(userText) {
   // 않는다(설계 H5). search_meta의 addons 행은 전체 상한을 적용한 뒤 남긴다(trimmed = 덜어 낸 개수). rag.ts buildAdvisoryContext와 동일 유지.
   var addT0 = performance.now(), addMs = 0, addErr = null;
   var addOnsEmpty = { text: '', chunks: [], ids: [], deleg: [], items: [], chars: 0, annexSources: [], addendum: 0, apply: 0, enforce: 0, enforceRow: 0 };
-  var addOnsP = (sb ? RagCore.fetchAddOns({ extra: lawExtra, spill: spillChunks, rag: ragChunks },
-      { delegations: fetchDelegations, familyDocs: fetchFamilyDocs, familyArticle: fetchFamilyArticle, docArticles: fetchDocArticles,
+  // 갈래 칸(#339)은 씨앗 맨 뒤(branch). 위임 표 행은 정찰 색인 ④가 다시 쓰므로 받아 둔다(rag.ts와 같음).
+  var delegRowsSeen = [];
+  var addOnsP = (sb ? RagCore.fetchAddOns({ extra: lawExtra, spill: spillChunks, rag: ragChunks, branch: branchChunks },
+      { delegations: function(f, k) { return fetchDelegations(f, k).then(function(r) { delegRowsSeen = delegRowsSeen.concat(r); return r; }); }, familyDocs: fetchFamilyDocs, familyArticle: fetchFamilyArticle, docArticles: fetchDocArticles,
         annexRows: function(d, no) { return fetchAnnexRows(d, no, userText); }, addendaRows: fetchAddendaRows,
         citers: fetchCitingChunks },   // 집행 조문 칸(#337) — 역참조 발췌와 같은 조회
       { question: userText })
@@ -3276,7 +3349,7 @@ async function buildAdvisoryContext(userText) {
   // 종전에는 한 건씩 await라 각각의 DB 왕복이 줄줄이 더해졌다. 프롬프트 조립 순서는 아래에서 그대로 고정.
   // 제재 조문(벌칙·과태료·과징금)은 별도 칸으로 먼저 싣고, 금액이 적힌 항 머리 문장을 찾으려 그 조문 전체를 읽는다(fetchArticle, #230).
   var citingP = (window.CiteVerify && sb)
-    ? CiteVerify.buildCitingExcerpts((lawExtra || []).concat(ragChunks), fetchCitingChunks, Object.assign({}, CITING_OPTS, { fetchArticle: fetchArticleChunks }))
+    ? CiteVerify.buildCitingExcerpts((lawExtra || []).concat(ragChunks), fetchCitingChunks, Object.assign({}, CITING_OPTS, { fetchArticle: fetchArticleChunks }))   // 갈래 칸(#339)은 넣지 않는다(rag.ts와 같음 — 발췌가 상한 안에서 자리를 바꿔 기존 것을 밀어냈다)
         .catch(function(e) { console.warn('역참조 발췌 실패(건너뜀):', e); return { text: '', chunks: [], ids: [] }; })
     : Promise.resolve({ text: '', chunks: [], ids: [] });
   var pendingP = buildPendingContext(ragChunks);                              // 인용 조문의 시행예정 개정본(Phase 3)
@@ -3286,7 +3359,7 @@ async function buildAdvisoryContext(userText) {
   // rag.ts buildAdvisoryContext 호출부와 동일 유지 — 한쪽만 고치지 말 것.
   // 덧붙인 조문(상한 구제·위임·공통 인용)의 별표는 여기 넣지 않는다 — 덧붙이기 구역의 따로 1칸(예산 안, rag_core.js fetchAddOns)이다(#283-보론2).
   // 질문이 지목한 별표(#335, annexAskedP)는 상한 2칸의 첫 자리에 — 근거 조문이 그 별표를 인용하지 않아도 싣는다.
-  var annexP = buildAnnexContext(ragChunks.concat(lawExtra || []), userText, annexAskedP);
+  var annexP = buildAnnexContext(ragChunks.concat(lawExtra || []), userText, annexAskedP);   // 갈래 칸(#339)은 넣지 않는다(rag.ts와 같음 — 빈 둘째 칸을 채워 덜 수 없는 구역이 커졌다)
   var citingContext = '', _advCitingIds = [];
   var ce = await citingP;
   citingContext = ce.text || '';
@@ -3297,7 +3370,8 @@ async function buildAdvisoryContext(userText) {
   // 숫자 id만 남긴다(종전 보도자료 의사청크 'press_…' 문자열은 #204로 사라졌지만 방어는 유지)
   // (문서명은 lastRagSources에 그대로 남는다). 덧붙인 조문(#283)의 id는 전체 상한을 적용한 뒤 아래(return 앞)에서 맨 뒤에 붙인다.
   lastAdvChunkIds = [];
-  (lawExtra || []).concat(ragChunks).concat(_advAddedIds.concat(_advCitingIds).map(function(id) { return { id: id }; })).forEach(function(c) {
+  // 갈래 칸(#339)은 보강·역참조 조각 뒤(rag.ts와 같은 순서) — 꺼 두면 없다
+  (lawExtra || []).concat(ragChunks).concat(_advAddedIds.concat(_advCitingIds).map(function(id) { return { id: id }; })).concat(branchChunks).forEach(function(c) {
     if (c && typeof c.id === 'number' && lastAdvChunkIds.indexOf(c.id) === -1) lastAdvChunkIds.push(c.id);
   });
 
@@ -3321,13 +3395,37 @@ async function buildAdvisoryContext(userText) {
   // 나머지 = 프롬프트에 들어가는 다른 구역 전부(관계도 블록 지침은 빼고 — 주제 목록 길이만큼의 차이).
   var restLen = [ragContext, lawArticleContext, citingContext, annexContext, pendingContext, kbContext, customContext, newsContext, lawTrackContext, assemblyContext]
     .reduce(function(a, t) { return a + String(t || '').length; }, 0);
+  var addOnsRaw = await addOnsP;
+  // 정찰(#339 1-ⓓ·2-②, 꺼 둠) — 실린 자료(근거·갈래·상한 구제·덧붙이기·역참조)에서 한 걸음 닿는 조의 색인을 Haiku 5.5가 ≤8개 고르고, 고른 조를
+  // 「[정찰로 보탠 조문]」 구역(덧붙이기 바로 뒤)에 싣는다. 역참조·덧붙이기·별표·주제의 입력에는 넣지 않는다. 늦으면 건너뛰고 실패하면 없이(fail-open). rag.ts와 같은 자리.
+  var scout = RagCore.SCOUT_EMPTY || { text: '', chars: 0, ids: [], parts: [], chunks: [], items: [], annexSources: [] };
+  var scoutT0 = performance.now();
+  if (plan && PO.scout) {
+    if (scoutT0 - ctxT0 > PO.scoutSkipAfterMs) scout = Object.assign({}, RagCore.SCOUT_EMPTY, { skipped: 'late' });
+    else {
+      var scoutSeeds = (lawExtra || []).concat(branchChunks, ragChunks, spillChunks, addOnsRaw.chunks || [], (ce.chunks || []).map(function(c) { return Object.assign({}, c, { _excerpt: true }); }));
+      var scoutLoadedIds = new Set();
+      (lawExtra || []).concat(branchChunks, ragChunks, spillChunks).forEach(function(c) { if (c && typeof c.id === 'number') scoutLoadedIds.add(c.id); });
+      _advAddedIds.concat(addOnsRaw.ids || []).forEach(function(id) { if (typeof id === 'number') scoutLoadedIds.add(id); });
+      scout = await RagCore.fetchScout({ question: userText, aspects: plan.aspects, seeds: scoutSeeds, loadedIds: scoutLoadedIds,
+          annexLoaded: lastAnnexSources.concat(addOnsRaw.annexSources || []), delegRows: delegRowsSeen }, {
+        outline: fetchDocOutline, familyDocs: fetchFamilyDocs, familyArticle: fetchFamilyArticle,
+        annexRows: function(d, no) { return fetchAnnexRows(d, no, userText); },
+        named: function(t) { return RagCore.fetchNamedArticles(t, fetchArticleKeyRows, fetchArticleChunks); },
+        call: function(req) { return callPlanTool(req, 'adv_scout', PO.scoutMs, RagCore.SCOUT_TOOL.name); }
+      }).catch(function(e) { console.warn('정찰 실패(건너뜀):', e); return Object.assign({}, RagCore.SCOUT_EMPTY, { error: String(e && e.message || e) }); });
+    }
+  }
   // 대시보드는 봇에 없는 세 구역(시행예정·팀 추가 지식·개정 동향)이 나머지 길이에 더 들어가므로 상한에 그 몫(dashboardExtraChars)을 더한다(#283-보론2, 운영자 결정)
-  var addOns = RagCore.trimAddOns(await addOnsP, restLen, RagCore.ADDON_OPTS.maxTotalChars + RagCore.ADDON_OPTS.dashboardExtraChars);
+  // 정찰 구역(#339)은 덧붙이기를 먼저 덜고(그 글자를 「나머지」에 더해 넘긴다) 그래도 넘치면 고른 역순으로 덜어 낸다 — 없으면 종전과 같다(rag.ts와 같음).
+  var addOns = RagCore.trimAddOns(addOnsRaw, restLen + (scout.chars || 0), RagCore.ADDON_OPTS.maxTotalChars + RagCore.ADDON_OPTS.dashboardExtraChars);
+  if (scout.chars) scout = RagCore.trimScout(scout, RagCore.ADDON_OPTS.maxTotalChars + RagCore.ADDON_OPTS.dashboardExtraChars - restLen - String(addOns.text || '').length);
   // addendum = L8 경과조치 칸에 실린 부칙 조 수(#290, 전체 상한 뒤) — rag.ts와 같음
   if (lastAdvSearchMeta) lastAdvSearchMeta.push({ fn: 'addons', ms: addMs, rows: addErr ? null : addOns.items.length, error: addErr, trimmed: addOns.trimmed || 0, addendum: addOns.addendum || 0, apply: addOns.apply || 0,
     enforce: addOns.enforce || 0, enforceRow: addOns.enforceRow || 0 });   // apply = L9 준용(#300), enforce = 집행 조문(#337, enforceRow = 그중 고정 행)
-  // 덧붙인 조문의 별표(#283-보론2) — 답변 아래 별표 배지와 인용 대조의 별표 목록에도
-  (addOns.annexSources || []).forEach(function(s) {
+  if (plan && PO.scout && lastAdvSearchMeta) lastAdvSearchMeta.push(RagCore.scoutMeta(scout, Math.round(performance.now() - scoutT0)));   // #339
+  // 덧붙인 조문의 별표(#283-보론2)·정찰이 고른 별표(#339) — 답변 아래 별표 배지와 인용 대조의 별표 목록에도
+  (addOns.annexSources || []).concat(scout.annexSources || []).forEach(function(s) {
     if (lastAnnexSources.indexOf(s) === -1) lastAnnexSources.push(s);
     if (lastRagSources.indexOf(ANNEX_SRC_PREFIX + s) === -1) lastRagSources.push(ANNEX_SRC_PREFIX + s);
   });
@@ -3335,10 +3433,11 @@ async function buildAdvisoryContext(userText) {
   if (_addAnnex) (_addAnnex.cis || []).forEach(function(ci) { lastAnnexIds.push('+' + _addAnnex.doc_name.split('(')[0].trim() + '|별표 ' + _addAnnex.no + '|' + ci); });
   if (addOns.items.length) console.log('덧붙이기:', addOns.items.map(function(x) { return x.sec + (x.dir ? '/' + x.dir : '') + ' ' + x.fam + ' ' + x.key; }).join(', ') + (addOns.trimmed ? ' (전체 상한으로 ' + addOns.trimmed + '개 덜어 냄)' : ''));
   // 덧붙인 조문(#283)의 조각 id·문서는 맨 뒤에 — verify-citations가 그 조문으로도 대조한다. 앞쪽 순서는 종전 그대로.
-  spillChunks.map(function(c) { return c.id; }).concat(addOns.ids || []).forEach(function(id) {
+  // 정찰로 보탠 조문(#339)의 조각 id는 덧붙인 조문 뒤(rag.ts와 같은 순서) — 꺼 두면 없다
+  spillChunks.map(function(c) { return c.id; }).concat(addOns.ids || [], scout.ids || []).forEach(function(id) {
     if (typeof id === 'number' && lastAdvChunkIds.indexOf(id) === -1) lastAdvChunkIds.push(id);
   });
-  spillChunks.concat(addOns.chunks || []).forEach(function(c) {
+  spillChunks.concat(addOns.chunks || [], branchChunks, scout.chunks || []).forEach(function(c) {
     if (c.doc_name && lastRagSources.indexOf(c.doc_name) === -1) lastRagSources.push(c.doc_name);
   });
   // 시행 전 제정 법령(#311)의 조각 id·문서는 그 뒤 맨 끝 — verify-citations가 그 법령 조문 인용을 그 원문과 대조한다(rag.ts와 같은 순서)
@@ -3356,7 +3455,7 @@ async function buildAdvisoryContext(userText) {
   // blocked = 1위 우위(D1′ b)로 비움, present = 주제별 「있음 줄/전체 줄」).
   const topicSel = await topicsP;
   const topic = topicSel.picked.length
-    ? RagCore.buildTopicContext(topicSel.picked, RagCore.topicPresentFams((lawExtra || []).concat(ragChunks, spillChunks, addOns.chunks || [], ce.chunks || [], pendingNew.chunks, yak.chunks), lastAnnexSources))
+    ? RagCore.buildTopicContext(topicSel.picked, RagCore.topicPresentFams((lawExtra || []).concat(ragChunks, spillChunks, addOns.chunks || [], ce.chunks || [], pendingNew.chunks, yak.chunks, branchChunks, scout.chunks || []), lastAnnexSources))
     : TOPIC_CTX_EMPTY;
   if (topicOn && lastAdvSearchMeta) lastAdvSearchMeta.push({ fn: 'topics', ms: topicMs, rows: topicErr ? null : topic.names.length, error: topicErr,
     names: topic.names, scores: topic.scores, raw: topic.raws, chars: topic.chars, present: topic.present,
@@ -3369,11 +3468,14 @@ async function buildAdvisoryContext(userText) {
   return {
     ragContext: ragContext, lawArticleContext: lawArticleContext, citingContext: citingContext, annexContext: annexContext,
     addonContext: addOns.text || '', topicContext: topic.text || '',
+    // 자문 품질 1차 묶음(#339) — 정찰 구역(덧붙이기 바로 뒤)·체크리스트(가변부 맨 끝). 꺼 두면 둘 다 ''
+    scoutContext: scout.text || '', checklistContext: (plan && PO.checklist) ? RagCore.buildChecklistBlock(plan.aspects) : '',
     pendingContext: pendingContext, pendingNewContext: pendingNew.text || '', yakContext: yak.text || '', kbContext: kbContext, customContext: customContext, newsContext: newsContext,
     lawTrackContext: lawTrackContext, assemblyContext: assemblyContext, lawTopics: await lawTopicsP,
     // 회귀 하네스용 단계별 재료 — 프롬프트 조립에는 쓰지 않는다
     ragChunks: ragChunks, lawExtra: lawExtra, addedIds: _advAddedIds, citingIds: _advCitingIds, kbRows: kbRows,
     spillChunks: spillChunks, addOns: addOns, pendingNew: pendingNew, yak: yak, topic: topic, topicSel: topicSel,
+    plan: plan, branch: branchChunks, scout: scout,
     searchMeta: lastAdvSearchMeta
   };
 }
@@ -3425,7 +3527,8 @@ async function callClaude(userText, onDelta) {
   // 오늘 날짜(#321, 2026-10-19): 모델은 학습 시점을 오늘로 알아 「2025년 10월 현재」처럼 묵은 시점을 썼다(지시문의 시제 검증 규칙이
   // 「오늘 날짜」를 전제하는데 어디에도 넣지 않았음). 가변부 맨 앞 — 고정부(systemStable)에 넣으면 날마다 캐시가 깨진다. rag.ts와 같은 문장.
   const todayLine = '\n\n[오늘 날짜: ' + new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10) + ' (KST)] 「현재」·「최근」·「예정」·「N년 N월 현재」 같은 시점 서술과 지시문의 「오늘 날짜」는 이 날짜를 기준으로 합니다.';
-  const systemVariable = todayLine + lawmapGuide + ctx.ragContext + ctx.lawArticleContext + ctx.addonContext + ctx.topicContext + ctx.citingContext + ctx.annexContext + ctx.pendingContext + ctx.pendingNewContext + ctx.yakContext + ctx.kbContext + ctx.customContext + ctx.newsContext + ctx.lawTrackContext + ctx.assemblyContext;
+  // 정찰 구역(#339)은 덧붙이기 바로 뒤, 체크리스트(#339 2-③)는 가변부 맨 끝 — 꺼 두면 둘 다 ''(rag.ts와 같은 자리)
+  const systemVariable = todayLine + lawmapGuide + ctx.ragContext + ctx.lawArticleContext + ctx.addonContext + ctx.scoutContext + ctx.topicContext + ctx.citingContext + ctx.annexContext + ctx.pendingContext + ctx.pendingNewContext + ctx.yakContext + ctx.kbContext + ctx.customContext + ctx.newsContext + ctx.lawTrackContext + ctx.assemblyContext + ctx.checklistContext;
   const systemWithRag = [
     { type: 'text', text: systemStable, cache_control: { type: 'ephemeral' } },
     { type: 'text', text: systemVariable }

@@ -62,7 +62,12 @@ var NAMES = ['PRIORITY_KW_RE', 'VERB_TAIL', 'extractKeywords', 'LAW_SYNONYMS', '
   // 집행 조문 따라가기(#337)
   'ENFORCE_OPTS', 'ENFORCE_ROWS', 'enforceTargets', 'lawsNamedIn', 'enforceRowTargets',
   // 자문 품질 1차 순수 규칙(#338 — 사내 설계 발췌 1-ⓐ~ⓒ)
-  'KW_JE_KEEP', 'KW_DO_KEEP', 'stripJosaWord', 'ARTICLE_CHARS_CANDIDATE', 'addonUse'];
+  'KW_JE_KEEP', 'KW_DO_KEEP', 'stripJosaWord', 'ARTICLE_CHARS_CANDIDATE', 'addonUse',
+  // 자문 품질 1차 묶음(#339 — 사내 설계 발췌 1-ⓓ·1-ⓔ·2-⓪·2-②·2-③, 꺼 둠)
+  'PLAN_OPTS', 'PLAN_KINDS', 'PLAN_SYSTEM', 'PLAN_TOOL', 'planUserText', 'planRequest', 'toolInput', 'parsePlan', 'planMeta',
+  'BRANCH_OPTS', 'pickBranchSlots', 'fetchBranchSlots', 'branchTail',
+  'SCOUT_INDEX_OPTS', 'scoutOutline', 'scoutTargetFams', 'scoutXrefs', 'scoutLoaded', 'buildScoutIndex', 'SCOUT_APPLY_OPTS', 'SCOUT_SYSTEM', 'SCOUT_TOOL',
+  'scoutUserText', 'scoutRequest', 'parseScout', 'buildScoutContext', 'applyScoutPicks', 'trimScout', 'SCOUT_EMPTY', 'fetchScout', 'scoutMeta', 'buildChecklistBlock'];
 NAMES.forEach(function (n) { ok('export ' + n, RC[n] !== undefined); });
 
 // ── 법령 키워드 추출 ──
@@ -1029,8 +1034,9 @@ var enforceTests = (async function () {
 (function () {
   var app = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8');
   var ragTs = fs.readFileSync(path.join(ROOT, 'supabase', 'functions', '_shared', 'rag.ts'), 'utf8');
-  ok('app.js trimAddOns에 대시보드 몫', app.indexOf('RagCore.trimAddOns(await addOnsP, restLen, RagCore.ADDON_OPTS.maxTotalChars + RagCore.ADDON_OPTS.dashboardExtraChars)') >= 0);
-  ok('rag.ts trimAddOns는 기본 상한(봇)', /RagCore\.trimAddOns\(await addOnsP, restLen\);/.test(ragTs));
+  // #339: 정찰 구역 글자를 「나머지」에 더해 넘기는 꼴(addOnsRaw, restLen + (scout.chars || 0))도 같은 뜻 — 정찰이 없으면 0이라 종전과 같다
+  ok('app.js trimAddOns에 대시보드 몫', /RagCore\.trimAddOns\((?:await addOnsP|addOnsRaw), restLen(?: \+ \(scout\.chars \|\| 0\))?, RagCore\.ADDON_OPTS\.maxTotalChars \+ RagCore\.ADDON_OPTS\.dashboardExtraChars\)/.test(app));
+  ok('rag.ts trimAddOns는 기본 상한(봇)', /RagCore\.trimAddOns\((?:await addOnsP|addOnsRaw), restLen(?: \+ \(scout\.chars \|\| 0\))?\);/.test(ragTs));
   // 집행 조문 칸(#337) — 자문 경로 두 판은 citers(역참조 발췌와 같은 조회)를 넘기고, /law(buildLawQueryContext)는 넘기지 않는다(D7)
   var lawFn = ragTs.slice(ragTs.indexOf('async function buildLawQueryContext'), ragTs.indexOf('async function buildLawQueryContext') + 20000);
   var lawCall = lawFn.slice(lawFn.indexOf('RagCore.fetchAddOns('), lawFn.indexOf('RagCore.fetchAddOns(') + 1500);
@@ -1521,9 +1527,9 @@ var topicTests = (async function () {
   var app = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8');
   var ragTs = fs.readFileSync(path.join(ROOT, 'supabase', 'functions', '_shared', 'rag.ts'), 'utf8');
   var n = function (s, re) { return (s.match(re) || []).length; };
-  eq('app.js 관계도 주제 구역 — 가드·자리·restLen 밖·id 목록에 없음', [n(app, /typeof RagCore\.fetchTopics === 'function'/g), n(app, /ctx\.addonContext \+ ctx\.topicContext \+ ctx\.citingContext/g),
+  eq('app.js 관계도 주제 구역 — 가드·자리·restLen 밖·id 목록에 없음', [n(app, /typeof RagCore\.fetchTopics === 'function'/g), n(app, /ctx\.addonContext \+ (?:ctx\.scoutContext \+ )?ctx\.topicContext \+ ctx\.citingContext/g),
     /restLen = \[[^\]]*topic/.test(app), /lastAdvChunkIds\.push\([^)]*topic/.test(app)], [1, 1, false, false]);
-  eq('rag.ts 관계도 주제 구역 — 자리·restLen 밖·대조 조각에 없음', [n(ragTs, /RagCore\.fetchTopics\(/g), n(ragTs, /addOns\.text \+ topic\.text \+ citing\.text/g),
+  eq('rag.ts 관계도 주제 구역 — 자리·restLen 밖·대조 조각에 없음', [n(ragTs, /RagCore\.fetchTopics\(/g), n(ragTs, /addOns\.text \+ (?:\(scout\.text \|\| ''\) \+ )?topic\.text \+ citing\.text/g),
     /const restLen = [^;]*topic/.test(ragTs), /concat\(yak\.chunks\)[^\n]*topic/.test(ragTs)], [1, 1, false, false]);
 })();
 
@@ -1590,7 +1596,160 @@ var wholeArticleTests = (async function () {
   eq('expandArticles 글자 상한 — 끔이면 앞 4조각, 2,500자면 앞 3조각(+집은 조각은 늘)', [e0.addedIds, e1.addedIds, /전체 6조각 중 4조각/.test(e1.chunks[0].content)], [[10, 11, 12, 13], [10, 11, 12], true]);
 })();
 
-Promise.all([asyncTests, namedAnnexTests, addOnTests, addOnTests2, addendumTests, enforceTests, applyTests, pendingNewTests, yakSectionTests, topicTests, wholeArticleTests]).catch(function (e) { fails++; total++; console.log('FAIL  비동기 검사 예외 ' + (e && e.message)); }).then(function () {
+// ── 자문 품질 1차 묶음(#339 — 사내 설계 발췌 1-ⓓ·1-ⓔ·2-⓪·2-②·2-③, 꺼 둠) ──
+var planTests = (async function () {
+  var L = '전파법(법률)(제1호)(20260101)', D = '전파법 시행령(대통령령)(제2호)(20260101)', N = '무선설비규칙(과학기술정보통신부고시)(제2026-1호)(20260101)';
+  // 스위치·상수 고정 — 켜기는 운영자 결정(외부 dev 눈가림 A/B 뒤)
+  eq('PLAN_OPTS 꺼 둠·Haiku 5.5·분석 25초·정찰 45초·늦으면 60초에 건너뜀', [RC.PLAN_OPTS.on, RC.PLAN_OPTS.branch, RC.PLAN_OPTS.scout, RC.PLAN_OPTS.checklist, RC.PLAN_OPTS.model,
+    RC.PLAN_OPTS.analysisMs, RC.PLAN_OPTS.scoutMs, RC.PLAN_OPTS.scoutSkipAfterMs, RC.PLAN_OPTS.maxQueries, RC.PLAN_OPTS.maxNamed, RC.PLAN_OPTS.maxAspects],
+    [false, true, true, true, 'claude-haiku-5-5', 25000, 45000, 60000, 3, 4, 8]);
+  eq('BRANCH_OPTS·SCOUT_INDEX_OPTS·SCOUT_APPLY_OPTS — 갈래 8·정찰 고른 조 8(사내 권고)·색인 150행 15,000자·합 25,000자·조당 8,000자', [RC.BRANCH_OPTS, RC.SCOUT_INDEX_OPTS, RC.SCOUT_APPLY_OPTS],
+    [{ max: 8, maxNamed: 4, precise: 5 }, { maxRows: 150, maxChars: 15000, perNotice: 20, perBase: 8, quoteMax: 100, maxDocs: 8 }, { max: 8, maxNeed: 4, maxChars: 25000, perArticle: 8000 }]);
+  // 질문 분석 요청 — 도구 강제·사고 끔·temperature 없음(5.5는 받지 않는다, #317)
+  var pr = RC.planRequest('전파법 재할당 대가는?');
+  eq('planRequest — 모델·도구 강제·사고 끔·temperature 없음·질문이 끝에', [pr.model, pr.tool_choice, pr.thinking, 'temperature' in pr, pr.tools[0].name, pr.tools[0].input_schema.required,
+    /질문:\n전파법 재할당 대가는\?$/.test(pr.messages[0].content)],
+    ['claude-haiku-5-5', { type: 'tool', name: 'record_analysis' }, { type: 'disabled' }, false, 'record_analysis', ['kind', 'laws', 'queries', 'named', 'aspects'], true]);
+  eq('toolInput — 그 도구의 tool_use 입력만, 없으면 null', [RC.toolInput({ content: [{ type: 'text', text: 'x' }, { type: 'tool_use', name: 'record_analysis', input: { a: 1 } }] }, 'record_analysis'),
+    RC.toolInput({ content: [{ type: 'tool_use', name: 'other', input: { a: 1 } }] }, 'record_analysis'), RC.toolInput(null, 'x')], [{ a: 1 }, null, null]);
+  eq('parsePlan — 공백 정리·중복·너무 긴 것 버림·개수 상한·모르는 꼴은 기타·입력 없음 null', [RC.parsePlan({ kind: '모름', laws: ['전파법', '전파법', ' '], queries: ['a  b', 'c', 'd', 'e', 'x'.repeat(130)],
+    named: ['전파법 제16조'], aspects: ['요건', '기한'] }), RC.parsePlan(null)],
+    [{ kind: '기타', laws: ['전파법'], queries: ['a b', 'c', 'd'], named: ['전파법 제16조'], aspects: ['요건', '기한'] }, null]);
+  eq('planMeta — 한 행(분석 없음이면 error no_plan)', [RC.planMeta({ kind: '요건·절차', laws: ['a'], queries: ['q1', 'q2'], named: [], aspects: ['x'] }, 12, null), RC.planMeta(null, 25000, null).error],
+    [{ fn: 'plan', ms: 12, rows: 2, error: null, kind: '요건·절차', laws: 1, named: 0, aspects: 1 }, 'no_plan']);
+  // 갈래 칸 — 지목 먼저, 질의를 번갈아, 이미 실린 단위·파일 문서·별표·약관(게이트 닫힘) 빼고, 상한
+  var present = [{ id: 1, doc_name: L, article_no: '16조(할당)' }];
+  var br = { named: [{ id: 50, doc_name: L, article_no: '30조(검사)' }, { id: 1, doc_name: L, article_no: '16조(할당)' }],
+    queries: [{ precise: [{ id: 60, doc_name: L, article_no: '16조(할당)' }, { id: 61, doc_name: L, article_no: '40조(x)' }],
+      hybrid: [{ id: 62, doc_name: '보고서.pdf', article_no: '3조' }, { id: 63, doc_name: L, article_no: '별표 1(제3조 관련)' }, { id: 64, doc_name: D, article_no: '20조(y)' },
+        { id: 65, doc_name: '이동통신 이용약관(약관)(SKT)', article_no: '5조(요금)' }] },
+      { precise: [{ id: 70, doc_name: D, article_no: '21조(z)' }], hybrid: [] }] };
+  var bs = RC.pickBranchSlots(br, present);
+  eq('pickBranchSlots — 지목 → 질의 번갈아(질의2 1번째가 질의1 2번째보다 먼저)·중복 단위·파일·별표·약관 뺌', [bs.map(function (c) { return c.id; }), bs.map(function (c) { return c._branch; })],
+    [[50, 70, 61, 64], ['named', 'q2', 'q1', 'q1']]);
+  eq('pickBranchSlots — 상한·약관 게이트 열리면 약관도', [RC.pickBranchSlots(br, present, { max: 2 }).map(function (c) { return c.id; }),
+    RC.pickBranchSlots(br, present, { yakPass: true }).map(function (c) { return c.id; })], [[50, 70], [50, 70, 61, 64, 65]]);
+  eq('branchTail — 분석이 지목한 조문만 꼬리', [RC.branchTail({ _branch: 'named' }), RC.branchTail({ _branch: 'q1' }), RC.branchTail({})], [' (질문 분석이 지목한 조문)', '', '']);
+  var calls = [];
+  var bs2 = await RC.fetchBranchSlots({ queries: ['q가', 'q나'], named: ['전파법 제30조'] }, {
+    named: function (t) { calls.push('n:' + t); return Promise.resolve([{ id: 50, doc_name: L, article_no: '30조(검사)' }]); },
+    lawSearch: function (q) { calls.push('l:' + q); return q === 'q가' ? Promise.reject(new Error('x')) : Promise.resolve([{ id: 70, doc_name: D, article_no: '21조(z)' }]); },
+    hybrid: function (q) { calls.push('h:' + q); return Promise.resolve([]); } }, Promise.resolve(present));
+  eq('fetchBranchSlots — 지목은 한 줄씩·질의마다 정밀+하이브리드, 하나 실패해도 그 갈래만 빔·present는 프라미스도', [bs2.map(function (c) { return c.id; }), calls.sort()],
+    [[50, 70], ['h:q가', 'h:q나', 'l:q가', 'l:q나', 'n:전파법 제30조']]);
+  // 덧붙이기 씨앗 — branch가 없거나 []면 종전과 같은 결과, 있으면 씨앗 맨 뒤
+  var dRows = [{ id: 1, parent_law: '전파법', parent_article: '16조', child_law: '전파법 시행령', child_article: '14조', child_title: '대가', parent_title: '할당' },
+    { id: 2, parent_law: '전파법', parent_article: '30조', child_law: '전파법 시행령', child_article: '40조', child_title: '검사', parent_title: '검사' }];
+  var fx = { delegations: function () { return Promise.resolve(dRows); }, familyDocs: function () { return Promise.resolve([]); }, docArticles: function () { return Promise.resolve([]); },
+    familyArticle: function (fam, key) { return Promise.resolve([{ id: (fam === '전파법 시행령' ? 2000 : 1000) + parseInt(key, 10), doc_name: fam === '전파법 시행령' ? D : L, article_no: key + '(t)', chunk_index: 0, content: '본문 ' + key }]); } };
+  var exA = [{ id: 1, doc_name: L, article_no: '16조(할당)', content: '본문' }];
+  var aoA = await RC.fetchAddOns({ extra: exA, spill: [], rag: [] }, fx, {});
+  var aoC = await RC.fetchAddOns({ extra: exA, spill: [], rag: [], branch: [] }, fx, {});
+  var aoB = await RC.fetchAddOns({ extra: exA, spill: [], rag: [], branch: [{ id: 2, doc_name: L, article_no: '30조(검사)', content: 'y' }] }, fx, {});
+  eq('fetchAddOns — branch 없음 = branch [] (바이트 같음), branch 씨앗은 맨 뒤', [aoA.text === aoC.text && JSON.stringify(aoA.items) === JSON.stringify(aoC.items),
+    aoA.items.map(function (x) { return x.key; }), aoB.items.map(function (x) { return x.key; })], [true, ['14조'], ['14조', '40조']]);
+  var aoT = await RC.fetchAddOns({ extra: exA, spill: [], rag: [], branch: [{ id: 2, doc_name: L, article_no: '30조(검사)', content: 'y' }] }, fx, { budget: aoA.budgetUsed });
+  eq('fetchAddOns 두 판 — 첫 판이 예산을 다 쓰면 갈래 칸 둘째 판은 아무것도 안 더한다(기존 선택·글 그대로), 둘째 판 항목 수 기록', [aoT.text === aoA.text, aoB.branchItems, aoA.branchItems],
+    [true, 1, undefined]);
+  // 정찰 색인
+  var seeds = [
+    { id: 1, doc_name: L, article_no: '16조(할당 신청)', content: '① 할당을 받으려면 제17조에 따라 신청한다. 대가는 제11조에 따른다. 서류는 별표 2에 따른다.', _full: true },
+    { id: 2, doc_name: D, article_no: '14조(대가 산정)', content: '법 제16조에 따른 대가는 별표 3에 따라 산정한다.' },
+    { id: 3, doc_name: N, article_no: '5조(시험)', content: '제7조의 방법으로 시험한다.' },
+    { id: 9, doc_name: L, article_no: '20조(취소)', content: '제16조를 위반한 경우 취소할 수 있다.', _excerpt: true }];
+  var olRows = [
+    { id: 1, doc_name: L, article_no: '16조(할당 신청)', chunk_index: 10 }, { id: 101, doc_name: L, article_no: '16조(할당 신청)', chunk_index: 11 },
+    { id: 102, doc_name: L, article_no: '17조(신청 절차)', chunk_index: 12 }, { id: 103, doc_name: L, article_no: '11조(대가)', chunk_index: 5 },
+    { id: 9, doc_name: L, article_no: '20조(취소)', chunk_index: 20 }, { id: 104, doc_name: L, article_no: '20조(취소)', chunk_index: 21 },
+    { id: 105, doc_name: L, article_no: '별표 2(제16조 관련)', chunk_index: 90 },
+    { id: 3, doc_name: N, article_no: '5조(시험)', chunk_index: 1 }, { id: 201, doc_name: N, article_no: '6조(정의)', chunk_index: 2 },
+    { id: 202, doc_name: N, article_no: '7조(방법)', chunk_index: 3 }, { id: 299, doc_name: N, article_no: '8조', chunk_index: 4 }, { id: 203, doc_name: N, article_no: '8조(판정)', chunk_index: 5 },
+    { id: 2, doc_name: D, article_no: '14조(대가 산정)', chunk_index: 3 }, { id: 302, doc_name: D, article_no: '15조(할당 절차)', chunk_index: 4 },
+    { id: 301, doc_name: D, article_no: '별표 3(제14조 관련)', chunk_index: 50 }];
+  var ol = RC.scoutOutline(olRows);
+  eq('scoutOutline — 단위별 id·조각 수·제목, 괄호 없는 제목 조각 뺌', [ol[N].units['8조'], ol[L].units['16조'].n], [{ key: '8조', title: '8조(판정)', ids: [203], n: 1 }, 2]);
+  var dR = [{ parent_law: '전파법', parent_article: '16조', child_law: '전파법 시행령', child_article: '14조', child_title: '대가 산정', parent_title: '할당' },
+    { parent_law: '전파법', parent_article: '16조', child_law: '전파법 시행령', child_article: '15조', child_title: '할당 절차', parent_title: '할당' },
+    { parent_law: '전파법', parent_article: '16조', child_law: '전파법 시행령', child_article: '2조', child_title: '정의', parent_title: '할당' }];
+  var idx = RC.buildScoutIndex({ seeds: seeds, loadedIds: new Set([1, 2, 3]), outline: ol, famDocs: { '전파법 시행령': D }, delegRows: dR, annexLoaded: [] });
+  eq('buildScoutIndex — ①(같은 법령·「법 제N조」는 모법이라 실린 16조 → 뺌)·③(정의 조 뺌, ①과 겹친 7조 한 번)·④(실린 14조·정의 2조 뺌)·⑤ 별표', idx.rows.map(function (r) { return r.rid + ' ' + r.kind + ' ' + r.fam + '|' + r.key; }),
+    ['R1 x 전파법|17조', 'R2 x 전파법|11조', 'R3 x 무선설비규칙|7조', 'R4 n 무선설비규칙|8조', 'R5 d 전파법 시행령|15조', 'R6 a 전파법|별표2', 'R7 a 전파법 시행령|별표3']);
+  eq('buildScoutIndex — 일부만 실린 조(L) = 개요보다 적게 실린 조(역참조 발췌는 실린 것으로 안 셈)', idx.loaded.map(function (x) { return x.lid + ' ' + x.fam + ' ' + x.key + ' ' + x.have + '/' + x.total; }),
+    ['L1 전파법 16조 1/2', 'L2 전파법 20조 0/2']);
+  ok('buildScoutIndex — 행 꼴(제목·인용·조각 수)·머리의 실린 조 목록(일부만 실린 조는 L 목록에만, 인용 문장만 실린 조는 그렇게)', /R1 전파법\|17조 — 제17조\(신청 절차\) · 인용: "[^"]*제17조[^"]*" · ← 전파법 제16조 · 1조각/.test(idx.text) &&
+    /- 전파법 시행령: 제14조\n- 무선설비규칙: 제5조\n/.test(idx.text) && !/- 전파법: /.test(idx.text) && /L1 전파법 제16조 — 1\/2조각 실림\nL2 전파법 제20조 — 인용 문장만 실림\(전체 2조각\)/.test(idx.text) &&
+    /R5 전파법 시행령\|15조 — 제15조\(할당 절차\) · 위임받음 ← 전파법 제16조/.test(idx.text), idx.text);
+  var big = RC.buildScoutIndex({ seeds: seeds, loadedIds: new Set([1, 2, 3]), outline: ol, famDocs: { '전파법 시행령': D }, delegRows: dR, annexLoaded: [] }, { maxRows: 4 });
+  eq('buildScoutIndex 줄이기 — 넘치면 ④ → ① 뒤에서 순(③·⑤는 나중)', [big.rows.map(function (r) { return r.kind; }), big.trimmed], [['x', 'n', 'a', 'a'], 3]);
+  eq('buildScoutIndex — 씨앗 없으면 빈 글', RC.buildScoutIndex({ seeds: [] }).text, '');
+  eq('scoutTargetFams — ①·④ 대상 중 씨앗 밖 법령군', RC.scoutTargetFams([seeds[0]], dR), ['전파법 시행령']);
+  // 정찰 요청·고르기
+  var sr = RC.scoutRequest('질문', ['요건', '기한'], idx.text);
+  eq('scoutRequest — 도구 강제·사고 끔·다룰 항목·색인·최대 8', [sr.model, sr.tool_choice.name, sr.thinking.type, 'temperature' in sr, /이 질문에서 다룰 항목: 요건 · 기한/.test(sr.messages[0].content),
+    sr.messages[0].content.indexOf(idx.text) > 0, /최대 8개/.test(sr.messages[0].content)], ['claude-haiku-5-5', 'record_scout', 'disabled', false, true, true, true]);
+  var ps = RC.parseScout({ pick: ['R2', 'r1', 'L1', 'X9', 'R2', 'R7 (별표)', 'R99'], need: ['전파법 제30조', ''], missing_aspects: ['수수료'] }, idx);
+  eq('parseScout — 아는 번호만·중복 뺌·소문자·꼬리말 허용, need·missing 다듬기', [ps.picks.map(function (p) { return p.rid + ':' + p.kind; }), ps.need, ps.missing, ps.raw],
+    [['R2:x', 'R1:x', 'L1:rest', 'R7:a'], ['전파법 제30조'], ['수수료'], 7]);
+  // 고른 조 싣기
+  var got = [
+    [{ id: 103, doc_name: L, article_no: '11조(대가)', chunk_index: 5, content: '대가 본문' }],
+    [0, 1, 2].map(function (i) { return { id: 110 + i, doc_name: L, article_no: '17조(신청 절차)', chunk_index: i, content: String.fromCharCode(0xAC00 + i).repeat(4000) }; }),
+    [{ id: 1, doc_name: L, article_no: '16조(할당 신청)', chunk_index: 10, content: '첫 조각' }, { id: 101, doc_name: L, article_no: '16조(할당 신청)', chunk_index: 11, content: '둘째 조각' }],
+    [{ id: 301, doc_name: D, article_no: '별표 3(제14조 관련)', chunk_index: 50, content: '| 구분 | 금액 |' }]];
+  var ap = RC.applyScoutPicks(ps.picks, got, new Set([1, 2, 3]), '질문');
+  eq('applyScoutPicks — 조당 8,000자(조각 경계)·나머지 조각만·별표는 별표 블록·출처', [ap.items.map(function (x) { return x.kind + ' ' + x.key; }), ap.ids, ap.annexSources,
+    /전체 3조각 중 앞 2조각만/.test(ap.text) === false && /전체 3조각 중 앞 1조각만/.test(ap.text), ap.text.indexOf('첫 조각') < 0 && ap.text.indexOf('둘째 조각') > 0,
+    /^\n\n---\n\n\[정찰로 보탠 조문 — /.test(ap.text), /\[정찰 3\] 전파법\(법률\)\(제1호\)\(20260101\) 16조\(할당 신청\) — 위에 일부만 실린 조문의 나머지 조각/.test(ap.text)],
+    [['x 11조', 'x 17조', 'rest 16조', 'a 별표3'], [103, 110, 101, 301], ['전파법 시행령 별표 3'], true, true, true, true]);
+  var apSmall = RC.applyScoutPicks(ps.picks, got, new Set([1, 2, 3]), '질문', { maxChars: 200 });
+  eq('applyScoutPicks — 합 상한을 넘는 항목(17조 8,000자)은 건너뛰고 다음 것(16조), 남은 몫을 넘는 별표도 건너뜀', apSmall.items.map(function (x) { return x.key; }), ['11조', '16조']);
+  var tr = RC.trimScout(ap, ap.chars - 10);
+  eq('trimScout — 고른 역순으로 덜기·남으면 그대로·빈 것 그대로', [tr.items.map(function (x) { return x.key; }), tr.trimmed, RC.trimScout(ap, 1e9) === ap, RC.trimScout(RC.SCOUT_EMPTY, 0) === RC.SCOUT_EMPTY],
+    [['11조', '17조', '16조'], 1, true, true]);
+  // 조회까지(fetchScout) — 가짜 조회
+  var byFamKey = {};
+  olRows.forEach(function (r) { var k = (r.doc_name === L ? '전파법' : r.doc_name === D ? '전파법 시행령' : '무선설비규칙') + '|' + RC.unitKey(r.article_no); (byFamKey[k] = byFamKey[k] || []).push(Object.assign({ content: '본문 ' + r.id }, r)); });
+  byFamKey['전파법|30조'] = [{ id: 500, doc_name: L, article_no: '30조(검사)', chunk_index: 30, content: '검사 본문' }];
+  var sent = null;
+  var fF = { outline: function (d) { return Promise.resolve(olRows.filter(function (r) { return r.doc_name === d; })); },
+    familyDocs: function (f) { return Promise.resolve(f.indexOf('전파법 시행령') >= 0 ? [{ law_name: '전파법 시행령', doc_name: D }] : []); },
+    familyArticle: function (fam, key) { return Promise.resolve(byFamKey[fam + '|' + key] || []); },
+    annexRows: function (d, no) { return Promise.resolve(byFamKey[(d === L ? '전파법' : '전파법 시행령') + '|별표' + no] || []); },
+    named: function (t) { return Promise.resolve(/30조/.test(t) ? [{ id: 500, doc_name: L, article_no: '30조(검사)' }] : []); },
+    call: function (req) { sent = req; return Promise.resolve({ pick: ['R1'], need: ['전파법 제30조', '전파법 제17조'], missing_aspects: ['수수료'] }); } };
+  var ctx = { question: '할당 신청 절차', aspects: ['요건'], seeds: [seeds[0], seeds[1]], loadedIds: new Set([1, 2]), annexLoaded: [], delegRows: dR };
+  var sc = await RC.fetchScout(ctx, fF);
+  eq('fetchScout — 색인 → 호출 → 고른 조 + need(색인에서 고른 조와 겹치면 뺌)', [sc.items.map(function (x) { return x.kind + ' ' + x.fam + ' ' + x.key; }), sc.picks, sc.need, sc.missing, sc.skipped, sent && sent.tool_choice.name],
+    [['x 전파법 17조', 'need 전파법 30조'], 1, 1, ['수수료'], null, 'record_scout']);
+  var scNull = await RC.fetchScout(ctx, Object.assign({}, fF, { call: function () { return Promise.resolve(null); } }));
+  var scThrow = await RC.fetchScout(ctx, Object.assign({}, fF, { call: function () { return Promise.reject(new Error('timeout')); } }));
+  var scEmpty = await RC.fetchScout(Object.assign({}, ctx, { seeds: [] }), fF);
+  eq('fetchScout — 호출 실패·예외 = 빈 구역(call), 색인 없음 = 호출 없이 빈 구역(empty)', [scNull.text, scNull.skipped, scThrow.skipped, scEmpty.skipped, scEmpty.chars],
+    ['', 'call', 'call', 'empty', 0]);
+  eq('scoutMeta — 한 행', RC.scoutMeta(sc, 7), { fn: 'scout', ms: 7, rows: 2, error: null, idx: sc.idx, idxChars: sc.idxChars, picks: 1, need: 1, missing: ['수수료'], skipped: null, trimmed: 0,
+    items: ['x:전파법 17조', 'need:전파법 30조'] });
+  // 체크리스트
+  var cl = RC.buildChecklistBlock(['요건', '기한']);
+  eq('buildChecklistBlock — 머리·항목 목록·없으면 빈 글', [/^\n\n---\n\n\[이 질문에서 다룰 항목\]\n/.test(cl), /\n- 요건\n- 기한$/.test(cl), /「이번 검색 자료에 없음」/.test(cl), RC.buildChecklistBlock([]), RC.buildChecklistBlock(null)],
+    [true, true, true, '', '']);
+  // 두 판 연결 — 같은 함수를 같은 자리에서(정찰 구역은 덧붙이기 바로 뒤, 체크리스트는 가변부 맨 끝), 갈래 칸은 씨앗·별표·역참조·보강의 맨 뒤
+  var app = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8');
+  var ragTs = fs.readFileSync(path.join(ROOT, 'supabase', 'functions', '_shared', 'rag.ts'), 'utf8');
+  var cnt = function (s, re) { return (s.match(re) || []).length; };
+  eq('두 판 #339 연결 — 분석·갈래·정찰·체크리스트 각 1번', [cnt(app, /RagCore\.planRequest\(/g), cnt(ragTs, /RagCore\.planRequest\(/g), cnt(app, /RagCore\.fetchBranchSlots\(/g), cnt(ragTs, /RagCore\.fetchBranchSlots\(/g),
+    cnt(app, /RagCore\.fetchScout\(/g), cnt(ragTs, /RagCore\.fetchScout\(/g), cnt(app, /RagCore\.buildChecklistBlock\(/g), cnt(ragTs, /RagCore\.buildChecklistBlock\(/g)], [1, 1, 1, 1, 1, 1, 1, 1]);
+  eq('두 판 #339 자리 — 정찰은 덧붙이기 바로 뒤·체크리스트는 맨 끝·갈래는 정밀검색 뒤 상한 구제 앞', [
+    /ctx\.addonContext \+ ctx\.scoutContext \+ ctx\.topicContext/.test(app), /ctx\.assemblyContext \+ ctx\.checklistContext;/.test(app),
+    /addOns\.text \+ \(scout\.text \|\| ''\) \+ topic\.text/.test(ragTs), /\+ asm \+ checklist;/.test(ragTs),
+    /\(lawExtra \|\| \[\]\)\.concat\(branchChunks, spillChunks\)/.test(app), /concat\(branch2, spill2\)/.test(ragTs),
+    /rag: ragChunks, branch: branchChunks \}/.test(app), /rag: chunks2, branch: branch2 \}/.test(ragTs)], [true, true, true, true, true, true, true, true]);
+  eq('두 판 #339 — 갈래 검색은 확장 없이·기록 없이(대시보드 noExpand·quiet, 봇은 빈 확장·meta 없음)', [
+    /searchLawArticles\(q, RagCore\.BRANCH_OPTS\.precise, q, \{ noExpand: true, quiet: true \}\)/.test(app), /searchKeywords\(q, q, \{ noExpand: true, quiet: true \}\)/.test(app),
+    /searchLawArticles\(sb, q, RagCore\.BRANCH_OPTS\.precise, undefined, Promise\.resolve\(\[\]\), q\)/.test(ragTs), /searchChunks\(sb, apiKey, q, undefined, Promise\.resolve\(\[\]\), q\)/.test(ragTs)],
+    [true, true, true, true]);
+})();
+
+Promise.all([asyncTests, namedAnnexTests, addOnTests, addOnTests2, addendumTests, enforceTests, applyTests, pendingNewTests, yakSectionTests, topicTests, wholeArticleTests, planTests]).catch(function (e) { fails++; total++; console.log('FAIL  비동기 검사 예외 ' + (e && e.message)); }).then(function () {
   console.log('\n' + (fails ? 'FAIL ' + fails + '/' + total : 'ALL OK ' + total + '/' + total));
   process.exit(fails ? 1 : 0);
 });

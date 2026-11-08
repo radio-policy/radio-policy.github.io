@@ -28,6 +28,12 @@
 //   --topic-rank     관련 법령 체계(#329) — 구역이 꺼져 있어도 질문마다 근거 조문으로 모든 주제의 점수(D1′ 가중·raw)를 매겨 상위 5(raw ≥ 1)를 topicRank 칸에 남긴다([이름, 가중, raw])
 //   --rest-pad N     대시보드 조건 흉내(2차, 10-06) — 전체 상한(trimAddOns)의 「나머지 길이」에 N자를 더한다(대시보드에만 있는
 //                    시행예정·팀 추가 지식·법령 개정 동향 구역 몫). 결과의 meta(search_meta의 addons·law_delegations 행)에 덜어 낸 개수가 남는다.
+// 자문 품질 1차 묶음(#339, 2026-11-08 — rag_core.js PLAN_OPTS, 운영은 꺼 둠):
+//   --plan <경로> --plan-set <세트명>  질문 분석 고정 응답(세션이 쓴 {sets: {세트명: {문항id: {kind, laws, queries, named, aspects}}}})으로 PLAN_OPTS.on을 켠다(API 0).
+//                    고정 응답에 없는 문항은 분석 실패(null)로 — 그 문항은 갈래·정찰·체크리스트 없이(fail-open 경로).
+//   --scout-fixed N  정찰 호출을 고정 규칙으로 — 색인의 앞 N개 R번호 + 첫 L번호를 고른 것으로 친다(기본 4, 0이면 빈 고르기). --scout-null = 정찰 실패(null).
+//   결과 행 plan·branch(갈래 칸 조각 id)·scout({ids, items, idx, idxChars, counts, picks, skipped, trimmed})·lens.scout·lens.checklist,
+//   --with-text면 scoutIndex(정찰에 보낸 색인 글)도.
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 
 const ROOT = new URL('../', import.meta.url);
@@ -72,6 +78,29 @@ if (coreOpts) {
   }
 }
 const set = JSON.parse(await Deno.readTextFile(setPath));
+// 자문 품질 1차 묶음(#339) 고정 응답
+const planPath = argv('--plan'), planSet = argv('--plan-set');
+let scoutIndexText = '';
+if (planPath) {
+  if (!planSet) throw new Error('--plan에는 --plan-set <세트명>이 필요');
+  const fx = JSON.parse(await Deno.readTextFile(new URL(planPath, ROOT)));
+  const bySet = (fx.sets || {})[planSet] || {};
+  const byText = new Map<string, unknown>(set.questions.map((q: { id: string; question: string }) => [q.question, bySet[q.id] || null]));
+  // deno-lint-ignore no-explicit-any
+  (globalThis as any).RagCore.PLAN_OPTS.on = true;
+  rag.testHooks.plan = (question: string) => Promise.resolve((byText.get(question) || null) as Record<string, unknown> | null);
+  const scoutNull = args.includes('--scout-null');
+  const nFixed = argv('--scout-fixed') !== '' ? Number(argv('--scout-fixed')) : 4;
+  rag.testHooks.scout = (req: Record<string, unknown>) => {
+    const msgs = (req.messages || []) as { content: string }[];
+    const text = String(msgs[0]?.content || '');
+    scoutIndexText = text;
+    if (scoutNull) return Promise.resolve(null);
+    const rs = Array.from(text.matchAll(/^(R\d+) /gm)).map((m) => m[1]).slice(0, nFixed);
+    const ls = Array.from(text.matchAll(/^(L\d+) /gm)).map((m) => m[1]).slice(0, nFixed > 0 ? 1 : 0);
+    return Promise.resolve({ pick: rs.concat(ls), need: [], missing_aspects: [] });
+  };
+}
 let cache: Record<string, number[]> = {};
 try { cache = JSON.parse(await Deno.readTextFile(cachePath)); } catch { cache = {}; }
 const cacheMiss: string[] = [];
@@ -169,7 +198,7 @@ const ids = (list: { id?: unknown }[]) => (list || []).map((c) => c && c.id);
 const out = { tag, at: new Date().toISOString(), rag: ragPath.pathname, set: setPath.pathname, noExpand, deterministic, expandDelayMs: expandDelay, coreOpts, restPad, results: [] as Record<string, unknown>[], cacheMiss: [] as string[], totalMs: 0 };
 for (const q of set.questions) {
   if (only && !only.has(q.id)) continue;
-  logLines = []; rpcLog = [];
+  logLines = []; rpcLog = []; scoutIndexText = '';
   const t0 = performance.now();
   let ctx: Record<string, unknown> = {}, err: string | null = null;
   try { ctx = await rag.buildAdvisoryContext(sb, q.question); } catch (e) { err = String((e as Error)?.message || e); }
@@ -198,9 +227,13 @@ for (const q of set.questions) {
     topicRankRow = { bases: bases.map((b: { fam: string; key: string }) => b.fam + ' ' + b.key),
       top: all.map((t: { name: string; score: number; raw: number }) => [t.name, Math.round(t.score * 1000) / 1000, t.raw]) };
   }
+  // 자문 품질 1차 묶음(#339) — 옛 rag.ts엔 없다(undefined)
+  const scout = ctx.scout as { text: string; ids: number[]; chunks: unknown[]; items: unknown[]; idx?: number; idxChars?: number; counts?: unknown; picks?: number; skipped?: string | null; trimmed?: number; need?: number } | undefined;
+  const branchRows = (ctx.branch as { id?: unknown; _branch?: string }[] | undefined) || [];
   const lab: Record<string, string> = {};
   for (const c of ([] as { id?: unknown; doc_name?: string; article_no?: string }[])
-    .concat((ctx.chunks as []) || [], (ctx.extra as []) || [], (citing?.chunks as []) || [], (ctx.spill as []) || [], (addOns?.chunks as []) || [], (pnew?.chunks as []) || [], (yak?.chunks as []) || [])) {
+    .concat((ctx.chunks as []) || [], (ctx.extra as []) || [], (citing?.chunks as []) || [], (ctx.spill as []) || [], (addOns?.chunks as []) || [], (pnew?.chunks as []) || [], (yak?.chunks as []) || [],
+      branchRows as [], (scout?.chunks as []) || [])) {
     if (c && c.id != null) lab[String(c.id)] = String(c.doc_name || '').split('(')[0].slice(0, 30) + ' ' + String(c.article_no || '').split('(')[0];
   }
   out.results.push({
@@ -213,12 +246,18 @@ for (const q of set.questions) {
     topic: topic ? { names: topic.names, scores: topic.scores, raws: topic.raws, present: topic.present, chars: topic.chars, best: topicSel?.best, bestRaw: topicSel?.bestRaw, cands: topicSel?.cands, blocked: topicSel?.blocked, bases: topicSel?.bases } : null,
     ...(topicRank ? { topicRank: topicRankRow } : {}),
     yak: yak ? { ids: yak.ids, keys: yak.keys, chars: yak.chars, top: yak.top, words: yak.words, error: yak.error, approved: yak.approved, textLen: yak.text.length } : null,
+    ...(planPath ? { plan: ctx.plan ?? null, branch: branchRows.map((b) => b.id), branchTags: branchRows.map((b) => b._branch),
+      // deno-lint-ignore no-explicit-any
+      branchUnits: branchRows.map((b) => String((b as any).doc_name || '').split('(')[0].trim() + '|' + (globalThis as any).RagCore.unitKey((b as any).article_no)),
+      scout: scout ? { ids: scout.ids, items: scout.items, idx: scout.idx, idxChars: scout.idxChars, counts: scout.counts, picks: scout.picks, need: scout.need, skipped: scout.skipped, trimmed: scout.trimmed || 0 } : null } : {}),
     lens: { law: String(ctx.lawContext || '').length, citing: (citing?.text || '').length, annex: (annex?.text || '').length,
             news: (news?.text || '').length, asm: String(ctx.asm || '').length, addon: (addOns?.text || '').length, pnew: (pnew?.text || '').length, yak: (yak?.text || '').length, topic: (topic?.text || '').length,
+            ...(planPath ? { scout: (scout?.text || '').length, checklist: String(ctx.checklist || '').length } : {}),
             systemVariable: String(ctx.systemVariable || '').length },
     log: logLines.slice(), rpc: rpcLog.slice(), lab,
-    meta: ((ctx.searchMeta as { fn: string }[]) || []).filter((m) => m.fn === 'addons' || m.fn === 'law_delegations' || m.fn === 'pending_new' || m.fn === 'yak_gate' || m.fn === 'yak_section' || m.fn === 'topics' || m.fn === 'named_annex'),   // yak_gate = 약관 게이트(#312-보론), yak_section = 약관 구역(#312-보론2), named_annex = 질문이 지목한 별표(#335)
-    ...(withText ? { sv: String(ctx.systemVariable || ''), ...(yak?.text ? { yakText: yak.text } : {}), ...(topic?.text ? { topicText: topic.text } : {}) } : {}),
+    meta: ((ctx.searchMeta as { fn: string }[]) || []).filter((m) => m.fn === 'addons' || m.fn === 'law_delegations' || m.fn === 'pending_new' || m.fn === 'yak_gate' || m.fn === 'yak_section' || m.fn === 'topics' || m.fn === 'named_annex'
+      || m.fn === 'plan' || m.fn === 'branch' || m.fn === 'scout'),   // yak_gate = 약관 게이트(#312-보론), yak_section = 약관 구역(#312-보론2), named_annex = 질문이 지목한 별표(#335), plan·branch·scout = #339
+    ...(withText ? { sv: String(ctx.systemVariable || ''), ...(yak?.text ? { yakText: yak.text } : {}), ...(topic?.text ? { topicText: topic.text } : {}), ...(scoutIndexText ? { scoutIndex: scoutIndexText } : {}) } : {}),
   });
   origLog('[ragRegress]', q.id, ms + 'ms', err || '');
 }
