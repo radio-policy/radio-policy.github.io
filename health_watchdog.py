@@ -240,6 +240,8 @@ if not any(p.startswith("⛔") for p in problems):
 # crawler.py:classify_urgency_fallback으로 갈라 적어 표본·적중률 경보가 섞이지 않게 한다(폴백 라벨은 캐시 경보 대상이 아니다).
 CACHED_SITES = ("crawler.py:_screen_batch_haiku", "crawler.py:classify_urgency", "crawler.py:classify_urgency_v2")
 PRICES = {"haiku-5-5": (0.10, 0.50),   # /law 답변 모델(#304-보론, 2026-10-14) — 부분 일치라 "haiku"보다 앞에 둔다(10만 토큰 이하 프롬프트 단가)
+          # 자문 답 모델(#340, 2026-11-09)·인용 2차 판정기 — 부분 일치라 "opus"보다 앞에 둔다(빠지면 Opus 5 단가 5/25로 25 % 과대)
+          "opus-5-5": (4.0, 20.0),
           "haiku": (1.0, 5.0), "sonnet": (2.0, 10.0), "opus": (5.0, 25.0),   # $/백만 토큰 (입력, 출력)
           # voyage-embed가 #29x부터 기록 — 모르는 모델은 sonnet 단가로 세므로 넣지 않으면 KB 임베딩 채우기가 급증 오경보가 된다
           "voyage-law": (0.12, 0.0), "voyage": (0.02, 0.0)}

@@ -108,7 +108,8 @@ Deno.serve(async (req) => {
     const vr = await CiteVerify.verifyCitations({
       answer, chunks, annexSources, systemPrompt,
       callHaiku: ANTHROPIC_KEY
-        ? (sys: string, u: string) => callHaikuText(sb, ANTHROPIC_KEY, sys, u, 'verify-citations:citeJudge', 3000)   // 900은 24건 판정 JSON에 빠듯(#205)
+        // 900은 24건 판정 JSON에 빠듯(#205). 상한 48(#340)이면 1차 출력이 최대 ≈2,800토큰 — 3000에 닿아 잘리지 않게 6000(rag.ts와 같음)
+        ? (sys: string, u: string) => callHaikuText(sb, ANTHROPIC_KEY, sys, u, 'verify-citations:citeJudge', 6000)
         : null,
       // 2차 판정(Opus 5.5) — #284부터 판정 대상 전부를 항목 하나씩 보내고 2차가 표시를 정한다(1차는 기록·예비)
       callJudge2: ANTHROPIC_KEY
@@ -117,6 +118,8 @@ Deno.serve(async (req) => {
       // 판정 원문이 지침서 핵심 조문뿐이면 실DB 조문으로(#284) · 항 구분 확인·검색 자료 밖 조문 대조(#288)
       fetchLawArticle,
       listLawDocs,
+      // 문구 판정 상한 24 → 48(#340) — Opus 5.5 답은 인용이 약 2배. rag.ts ADVISORY_MAX_JUDGE와 같은 값
+      maxJudge: 48,
     });
     console.log('[인용 검증]', user.email || user.id, 'auto+' + (vr.autoTagged || 0), 'quote+' + (vr.quoteTagged || 0), JSON.stringify(vr.verdicts.map((v: { key: string; status: string; reason: string }) => [v.key, v.status, v.reason])));
     return json(200, { answer: vr.answer, verdicts: vr.verdicts, changed: vr.changed, autoTagged: vr.autoTagged || 0, quoteTagged: vr.quoteTagged || 0, citedDocs: vr.citedDocs || [] }, cors);

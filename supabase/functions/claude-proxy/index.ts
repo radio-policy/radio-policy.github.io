@@ -38,9 +38,10 @@ const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
 // CORS 허용 출처 목록은 _shared/http.ts 한 곳(#217) — 이 함수만 'x-site' 헤더를 더 받는다.
 // 모델 화이트리스트 — 임의 모델·초장문 요청으로 비용이 튀는 것을 막는다
 // claude-haiku-5-5(2026-10-17, 모델 전환 판정 §6 #20~#23 — 요약·영향·브리핑 항목·규칙 NL·OKF 초안·연결 확인).
-// claude-haiku-4-5는 검색어 확장(query_expand, 판정 #17 — 회귀 측정 뒤)이 아직 쓴다. 모델명에 'sonnet'이 없으면 한도는 백스톱만.
+// claude-haiku-4-5는 검색어 확장(query_expand, 판정 #17 — 회귀 측정 뒤)이 아직 쓴다. 모델명에 'sonnet'·'opus'가 없으면 한도는 백스톱만.
 // 이 함수를 먼저 재배포한 뒤 app.js를 push한다(반대면 Pages가 먼저 새 모델을 보내 400으로 막힌다).
-const ALLOWED_MODELS = ['claude-sonnet-5', 'claude-haiku-4-5-20251001', 'claude-haiku-5-5'];
+// claude-opus-5-5(2026-11-09, #340 — 자문 답 모델 Sonnet 5 → Opus 5.5, 운영자 결정 (나)). 한도 종류도 함께 바꿨다(아래 kind — 안 고치면 general 백스톱으로 떨어진다).
+const ALLOWED_MODELS = ['claude-sonnet-5', 'claude-haiku-4-5-20251001', 'claude-haiku-5-5', 'claude-opus-5-5'];
 const MAX_TOKENS_CAP = 32000;
 
 /** 대시보드는 Anthropic 오류 형식(err.error.message)을 그대로 화면에 띄운다 — 같은 모양으로 돌려준다. */
@@ -87,7 +88,8 @@ Deno.serve(async (req) => {
   // 한도 종류(#141, 2026-09-09): **Sonnet이면 자문 한도**(스트리밍 여부 불문), Haiku면 백스톱만.
   // 종전 기준(stream===true)은 자문·보고서초안만 잡았고, 비스트리밍 Sonnet(용어 상세 6,000·DIFF 4,000·관계도
   // 2,500·이슈 영향 1,200 등)이 한도 밖이었다. 모델명은 서버가 본문에서 읽는 값이라 위조되지 않는다.
-  const kind = /sonnet/i.test(model) ? 'advisory' : 'general';
+  // 2026-11-09(#340): Opus도 자문 한도(자문 답 모델) — 승인 회원이 다른 화면 호출에 Opus를 보내도 자문 한도에서 깎인다
+  const kind = /sonnet|opus/i.test(model) ? 'advisory' : 'general';
   // 토큰 기록 라벨(#155) — 브라우저가 x-site 헤더로 알려주는 호출 위치(자문·용어·관계도 …).
   // 한도·권한 판정에는 절대 쓰지 않는다(헤더는 위조 가능 — 라벨이 틀려도 비용 표가 어긋날 뿐).
   const site = 'dashboard:' + (req.headers.get('x-site') || 'unknown').replace(/[^\w.:-]/g, '').slice(0, 40);

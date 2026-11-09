@@ -3542,8 +3542,13 @@ async function callClaude(userText, onDelta) {
     method: 'POST',
     site: 'advisory',
     body: JSON.stringify({
-      model: 'claude-sonnet-5',
-      // Sonnet 5 토크나이저(동일 텍스트 +30% 토큰)·적응형 추론 여유분 반영해 상향
+      // 답 모델 Sonnet 5 → Opus 5.5(#340, 2026-11-09, 운영자 결정 (나)) — 텔레그램 rag.ts callSonnet과 같은 모델·노력.
+      // 품질 A/B는 텔레그램 경로만 쟀다(결과_339_261108.md §7 P0o: 지금 운영보다 92 % 나음) — 같은 검색·같은 지시문이라 다시 재지 않음(운영자 결정).
+      // Opus 5.5는 추론을 끌 수 없고(disabled 400) 노력 기본값이 medium — 측정한 꼴대로 적어 둔다. claude-proxy ALLOWED_MODELS를 먼저 배포할 것.
+      // 되돌리기 = model 'claude-sonnet-5' + output_config 줄 삭제(Sonnet 5 기본 노력 high) + index.html app.js 버스터.
+      model: 'claude-opus-5-5',
+      output_config: { effort: 'medium' },
+      // max_tokens는 추론+본문 합계(#281) — Sonnet 5 때 정한 24000이 텔레그램(16,000, #340)보다 넉넉해 그대로
       max_tokens: 24000,
       // ★ 스트리밍 필수: 웹검색+긴 답변은 응답이 2분 이상 걸려, 비스트리밍 시
       //   ~120초 idle 구간에 브라우저·사내망 프록시가 연결을 끊어 "Failed to fetch"가 났음.

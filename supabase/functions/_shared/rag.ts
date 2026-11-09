@@ -408,7 +408,13 @@ export interface WebRef { url: string; title: string }
 const STREAM_IDLE_MS: number = RagCore.STREAM_IDLE_MS;   // 3분 — rag_core.js
 // 요청 모델. api_usage에는 응답 message_start의 model을 적고(실제로 답한 모델 — 10-14 자문 A/B 스크립트가 요청 본문의 model만 바꿔 보낸 호출 56건이
 // 종전 고정 문자열대로 Sonnet 5로 기록됐다), 응답에 없을 때만 이 값으로 적는다. 전환 때 요청 모델만 바꾸고 기록을 잊는 함정도 함께 막는다.
-const ADVISORY_MODEL = 'claude-sonnet-5';
+// 2026-11-09 Sonnet 5 → Opus 5.5(#340, 운영자 결정 (나)): dev 21문항 눈가림 A/B(결과_339_261108.md §7, 조건 P0o — 검색 바이트 같음 + 이 모델·
+// max_tokens 16,000·인용 판정 상한 48)에서 지금 운영보다 92 % 나음, 「다르다고 봄」 7.6 → 7.2 %, 건당 $0.19 → $0.53, 지연 중앙 48 → 60초, 3,000자 넘침 0/21.
+// 되돌리기 = 이 값을 'claude-sonnet-5'로 + 아래 max_tokens 12000 + telegram-webhook 재배포(판정 상한 48은 그대로 둬도 된다).
+// 함수 이름·api_usage 라벨 'rag.ts:callSonnet'은 기록 연속성 때문에 그대로 둔다(실제 모델은 응답 model로 적힌다).
+const ADVISORY_MODEL = 'claude-opus-5-5';
+// 인용 문구 판정 상한(cite_verify.js 기본 24) — 대시보드 verify-citations/index.ts와 같은 값(#340)
+const ADVISORY_MAX_JUDGE = 48;
 async function callSonnet(apiKey: string, system: string | SystemBlock[], question: string): Promise<{ text: string; webRefs: WebRef[]; usage: ApiUsage; model: string | null; stopReason: string | null; sawStop: boolean; cut: string | null }> {
   const res = await fetch(ANTHROPIC_URL, {
     method: 'POST',
@@ -418,7 +424,9 @@ async function callSonnet(apiKey: string, system: string | SystemBlock[], questi
       // Sonnet 5는 thinking 미지정 = 적응형 추론이고 max_tokens는 추론+본문 합계 — 5000이면 추론이 한도를 먹어
       // 20문항 중 7개가 잘렸다(10-05, 본문 0자 포함). 노력 medium + 12000: 잘림 0·빠뜨림은 추론 끔/high와 같음,
       // 출력 최대 5,260·중앙 42초(#281). 답 길이는 아래 텔레그램 지침(3,000자)이 정한다 — 한도는 추론 여유분.
-      max_tokens: 12000,
+      // Opus 5.5(#340): 추론은 끌 수 없고(disabled는 400) 노력 기본값이 medium이라 노력을 명시해 둔다(측정한 꼴 = 적응형 medium).
+      // 인용이 약 2배라 본문 여유로 12000 → 16000(A/B P0o 21답 잘림 0). 이 값을 내리거나 노력을 바꾸려면 다시 잰다.
+      max_tokens: 16000,
       output_config: { effort: 'medium' },
       stream: true,
       system,
@@ -1789,7 +1797,7 @@ export async function answerAdvisory(sb: SupabaseClient, systemPrompt: string, q
   const { webRefs, usage } = sonnet;
   let rawAnswer = sonnet.text;
   await recordApiUsage(sb, 'rag.ts:callSonnet', sonnet.model || ADVISORY_MODEL, usage);
-  // 잘린 답이 정상인 척하지 않게 표시(#205, B-7). 세 경우: 연결 절단 / 길이 상한(max_tokens 12000, #281) / 끝 신호 없이 멈춤.
+  // 잘린 답이 정상인 척하지 않게 표시(#205, B-7). 세 경우: 연결 절단 / 길이 상한(max_tokens 16000 — #281 12000, #340 Opus 5.5) / 끝 신호 없이 멈춤.
   if (sonnet.cut) rawAnswer += `\n\n⚠️ 답변이 도중에 끊겼습니다 — ${sonnet.cut}. 위 내용은 받은 부분까지입니다.`;
   else if (sonnet.stopReason === 'max_tokens') rawAnswer += '\n\n…(길이 제한으로 잘림 — 질문을 좁혀 다시 물어보세요)';
   else if (!sonnet.sawStop) rawAnswer += '\n\n⚠️ 답변 수신이 끝 신호 없이 멈췄습니다(잘렸을 수 있음).';
@@ -1809,12 +1817,15 @@ export async function answerAdvisory(sb: SupabaseClient, systemPrompt: string, q
       // 갈래 칸·정찰로 보탠 조문(#339)도 — 꺼 두면 둘 다 빈 목록(종전과 같은 입력)
       answer: rawAnswer, chunks: (extra2 as unknown as Chunk[]).concat(chunks2).concat(citing.chunks).concat(spill2).concat(branch2).concat(addOns.chunks).concat(scout.chunks).concat(pendingNew.chunks).concat(yak.chunks),
       annexSources: annex.sources.concat(addOns.annexSources || [], scout.annexSources || []), systemPrompt,
-      callHaiku: (sys: string, u: string) => callHaikuText(sb, apiKey, sys, u, 'rag.ts:citeJudge', 3000),   // 900은 24건 판정 JSON에 빠듯(#205)
+      // 900은 24건 판정 JSON에 빠듯(#205). 상한 48(#340)이면 1차 출력이 최대 ≈2,800토큰(A/B P0o 19건 1,085 = 건당 ≈57) — 3000에 닿아 잘리지 않게 6000
+      callHaiku: (sys: string, u: string) => callHaikuText(sb, apiKey, sys, u, 'rag.ts:citeJudge', 6000),
       // 2차 판정(Opus 5.5) — #284부터 판정 대상 전부를 항목 하나씩 보내고 2차가 표시를 정한다(1차는 기록·예비)
       callJudge2: (sys: string, u: string) => callCiteJudge2(sb, apiKey, sys, u, 'rag.ts:citeJudge2'),
       // 판정 원문이 지침서 핵심 조문뿐이면 실DB 조문으로(#284) · 항 구분 확인·검색 자료 밖 조문 대조(#288)
       fetchLawArticle: (fam: string, key: string) => fetchLawArticleByFamily(sb, fam, key),
       listLawDocs: () => lawDocsP,
+      // 문구 판정 상한 24 → 48(#340) — Opus 5.5 답은 인용이 약 2배(A/B 답당 판정 5.6 → 10.6). 넘친 것은 'unjudged'(판정 미실행)로 남는다
+      maxJudge: ADVISORY_MAX_JUDGE,
     });
     answer = vr.answer;
     verdicts = vr.verdicts || [];
