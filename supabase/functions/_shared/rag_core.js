@@ -1891,6 +1891,21 @@
   // 갈래 칸을 씨앗에 그냥 섞으면 갈래가 데려온 위임 후보가 채우기 순서 앞쪽이라 12,000자 예산을 먼저 써서 기존의 같은 고시·공통 인용을 밀어냈다, 11-08 dev q01 실측)
   // ② 갈래 칸만 씨앗으로 위임·준용·공통 인용을 **남은 예산·남은 칸별 상한**으로 고른다(같은 고시·별표·경과조치·집행은 둘째 판에서 안 한다 — 칸이 하나뿐이거나 근거 전용).
   // 둘째 판의 항목은 각 구역 끝에 붙고(번호가 이어진다) 전체 상한 덜기(trimAddOns)는 구역마다 뒤에서부터라 둘째 판 것이 먼저 빠진다.
+  // 겹침 빼기(#339-보론, 2026-11-09 사내 지적): 첫 판은 갈래 칸을 모르고 고르므로 같은 조가 갈래 칸(정밀검색 꼬리)과 덧붙이기에 두 번 실렸다(외부 하네스
+  // 갈래 칸 있는 102문항 중 51문항·72항목). 갈래 칸 사본이 그 조를 **다** 담을 때만(branchCovers) 위임·공통 인용·준용·같은 고시 이웃의 덧붙이기 사본을 뺀다.
+  // 첫 판 고르기·둘째 판의 예산·칸별 상한·제외 목록은 빼기 전 그대로 — 빈 자리를 다른 후보로 채우지 않는다. 첫 판 present에 갈래 조를 넣으면(사내 제안)
+  // 또는 뺀 만큼을 둘째 판에 넘기면 기존 덧붙이기 조 본문이 덜 실리거나(갈래 칸 사본이 앞 조각뿐인 조 — 53조·24조 등) 덧붙이기 별표 칸이 전체 상한에서
+  // 덜렸다(11-09 측정 8·7건). 집행(#337)은 둔다 — 위반 조치 꼬리가 갈래 칸 쪽엔 없다.
+  function branchCovers(branch) {
+    const cover = new Map();
+    (branch || []).forEach(function (b) { const k = famOf(b.doc_name) + '|' + unitKey(b.article_no); if (k && !cover.has(k)) cover.set(k, b); });
+    return function (x) {
+      const b = cover.get((x.fam || famOf(x.doc_name)) + '|' + x.key);
+      if (!b) return false;
+      if (b._full === true) return true;   // 통째 보강(CiteVerify.expandArticles)이 조 전체를 실었다
+      return Array.isArray(x.ids) && x.ids.length === 1 && x.ids[0] === b.id;   // 한 조각짜리 조 — 같은 조각
+    };
+  }
   async function fetchAddOns(lists, fetchers, opts) {
     opts = opts || {};
     lists = lists || {};
@@ -1899,8 +1914,18 @@
     if (!branch.length) return main;
     const budget = opts.budget != null ? opts.budget : ADDON_OPTS.budgetChars;
     const room = budget - (main.budgetUsed || 0);
-    if (room <= 0) return main;
     const p = main.parts;
+    const dupOf = branchCovers(branch);
+    let dup = 0;
+    const keep = function (xs) { return (xs || []).filter(function (x) { if (!dupOf(x)) return true; dup++; return false; }); };
+    const k = { deleg: keep(p.deleg), xref: keep(p.xref), apply: keep(p.apply), neighbor: keep(p.neighbor) };
+    const pack = function (q) {
+      const o = packAddOns({ deleg: k.deleg.concat(q ? q.deleg : []), xref: k.xref.concat(q ? q.xref : []), neighbor: k.neighbor, annex: p.annex, addendum: p.addendum,
+        apply: k.apply.concat(q ? q.apply : []), enforce: p.enforce, spillItems: p.spillItems });
+      o.branchDup = dup;   // 측정용 — 갈래 칸과 겹쳐 뺀 덧붙이기 항목 수
+      return o;
+    };
+    if (room <= 0) { if (!dup) return main; const o = pack(null); o.budgetUsed = main.budgetUsed || 0; return o; }
     const excl = new Set();
     delegationBases([lists.extra || [], lists.spill || [], lists.rag || []]).forEach(function (b) { excl.add(b.fam + '|' + b.key); });
     (p.deleg || []).concat(p.xref || [], p.apply || [], p.enforce || []).forEach(function (x) { excl.add(x.fam + '|' + x.key); });
@@ -1913,10 +1938,10 @@
       apply: opts.apply === false ? false : Object.assign({}, opts.apply || {}, { maxChars: Math.max(0, aMax - lenOf(p.apply, applyTail)) }),
     }));
     const q = br.parts;
-    if (!(q.deleg.length || q.xref.length || q.apply.length)) return main;
-    const out = packAddOns({ deleg: p.deleg.concat(q.deleg), xref: p.xref.concat(q.xref), neighbor: p.neighbor, annex: p.annex, addendum: p.addendum,
-      apply: p.apply.concat(q.apply), enforce: p.enforce, spillItems: p.spillItems });
-    out.budgetUsed = (main.budgetUsed || 0) + (br.budgetUsed || 0);
+    const more = q.deleg.length || q.xref.length || q.apply.length;
+    if (!more && !dup) return main;
+    const out = pack(more ? q : null);
+    out.budgetUsed = (main.budgetUsed || 0) + (more ? (br.budgetUsed || 0) : 0);
     out.branchItems = q.deleg.length + q.xref.length + q.apply.length;   // 측정용(#339) — 둘째 판에서 붙은 항목 수
     return out;
   }

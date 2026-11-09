@@ -1651,6 +1651,16 @@ var planTests = (async function () {
   var aoT = await RC.fetchAddOns({ extra: exA, spill: [], rag: [], branch: [{ id: 2, doc_name: L, article_no: '30조(검사)', content: 'y' }] }, fx, { budget: aoA.budgetUsed });
   eq('fetchAddOns 두 판 — 첫 판이 예산을 다 쓰면 갈래 칸 둘째 판은 아무것도 안 더한다(기존 선택·글 그대로), 둘째 판 항목 수 기록', [aoT.text === aoA.text, aoB.branchItems, aoA.branchItems],
     [true, 1, undefined]);
+  // 겹침 빼기(#339-보론) — 갈래 칸 사본이 조를 다 담을 때만(통째 보강 _full, 한 조각짜리 같은 조각) 덧붙이기 사본을 뺀다. 일부만 담으면 둔다
+  var b14 = function (o) { return Object.assign({ doc_name: D, article_no: '14조(t)', content: '본문 14조' }, o); };
+  var aoS = await RC.fetchAddOns({ extra: exA, spill: [], rag: [], branch: [b14({ id: 2014 })] }, fx, {});
+  var aoF = await RC.fetchAddOns({ extra: exA, spill: [], rag: [], branch: [b14({ id: 2099, _full: true })] }, fx, {});
+  var aoP = await RC.fetchAddOns({ extra: exA, spill: [], rag: [], branch: [b14({ id: 2099 })] }, fx, {});
+  eq('fetchAddOns 겹침 빼기 — 한 조각 같은 조각·통째면 뺌, 일부면 둠, 뺀 수 기록',
+    [aoS.items.map(function (x) { return x.key; }), aoS.branchDup, aoF.items.map(function (x) { return x.key; }), aoP.items.map(function (x) { return x.key; }), aoP.branchDup || 0],
+    [[], 1, [], ['14조'], 0]);
+  var aoT2 = await RC.fetchAddOns({ extra: exA, spill: [], rag: [], branch: [b14({ id: 2014 })] }, fx, { budget: aoA.budgetUsed });
+  eq('fetchAddOns 겹침 빼기 — 예산이 다 찼어도 뺌(빈 자리를 다른 후보로 채우지 않는다)', [aoT2.items.length, aoT2.branchDup, aoT2.budgetUsed === aoA.budgetUsed], [0, 1, true]);
   // 정찰 색인
   var seeds = [
     { id: 1, doc_name: L, article_no: '16조(할당 신청)', content: '① 할당을 받으려면 제17조에 따라 신청한다. 대가는 제11조에 따른다. 서류는 별표 2에 따른다.', _full: true },
