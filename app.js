@@ -3498,8 +3498,11 @@ function fetchKbLawLists() {
   return _kbLawListsP;
 }
 
-async function callClaude(userText, onDelta) {
+async function callClaude(userText, onDelta, onStage) {
   if (!aiReady()) throw new Error(aiGateMsg());
+  // 진행 단계 알림(2026-11-09) — 화면 전용 선택 콜백. 없거나 터져도 자문은 그대로 간다(loadingStage 참고)
+  const stage = function(s) { try { if (typeof onStage === 'function') onStage(s); } catch(e) { /* 표시 실패는 무시 */ } };
+  stage('search');
   const kbLawsP = fetchKbLawLists();   // 검색과 겹치게 지금 띄운다(#332)
   const ctx = await buildAdvisoryContext(userText);
   const webSearchGuide = '\n\n---\n\n[웹 검색 도구 사용 지침]\n해외 규제·제도 비교, 최신 정책 동향 등 위 참조 자료(법령 RAG·추가 지식·뉴스)에 없는 사실 정보가 필요하면 web_search 도구로 확인 후 답변하세요. 특히 "한국 고유", "유일한", "주요국 중 한국만" 등 국가 간 비교 단정 표현은 검색으로 확인하기 전에는 사용하지 마세요. 국내 법령 해석은 RAG 원문을 최우선으로 하고 웹 검색은 보조로만 사용하세요.\n국내 최신 동향(속도·요금·투자·품질평가 수치, 사업 추진 단계 등)은 위 [질문 관련 최신 기사]·[최근 수집 뉴스 동향]을 최우선 근거로 삼고, 웹 검색 결과가 수집 뉴스와 상충하면(수치가 다르거나 시점이 더 과거이면) 수집 뉴스를 따르세요.';
@@ -3538,6 +3541,7 @@ async function callClaude(userText, onDelta) {
   const _hist = trimAdvHistory(chatHistory);
   window._advHistDropped = _hist.dropped;
 
+  stage('answer');
   const res = await claudeFetch({
     method: 'POST',
     site: 'advisory',
@@ -3855,6 +3859,24 @@ function appendLoading() {
   area.appendChild(div);
   area.scrollTop = area.scrollHeight;
   return div;
+}
+
+// 자문 대기 중 진행 단계 + 경과 초(2026-11-09, 운영자 요청 — 사내판 콘솔에는 있던 것). Opus 5.5(#340)는 쓰기 전에
+// 생각하는 시간이 있어 점 셋만 1분 가까이 보였다. 단계는 callClaude가 알린다: search = 검색·조립(buildAdvisoryContext),
+// answer = 모델 호출부터 첫 글자까지(추론·웹 검색). 스트림 파싱은 건드리지 않는다. 반환값 = 타이머 멈춤 함수, .set = 단계 바꾸기.
+var ADV_STAGE_TEXT = { search: '법령·자료 찾는 중', answer: '자료를 읽고 답변 구상 중' };
+function loadingStage(loader) {
+  var el = document.createElement('span');
+  el.className = 'loading-stage';
+  el.style.cssText = 'margin-left:8px;font-size:12px;color:var(--text-secondary)';
+  loader.appendChild(el);
+  var t0 = Date.now(), label = ADV_STAGE_TEXT.search;
+  function draw() { el.textContent = label + ' · ' + Math.floor((Date.now() - t0) / 1000) + '초'; }
+  draw();
+  var timer = setInterval(draw, 1000);
+  function stop() { clearInterval(timer); }
+  stop.set = function(s) { if (ADV_STAGE_TEXT[s]) { label = ADV_STAGE_TEXT[s]; draw(); } };
+  return stop;
 }
 
 function detectCategory(t) {
@@ -4308,6 +4330,7 @@ async function sendChat() {
 
   appendMsg('user', text);
   const loader = appendLoading();
+  const stopStage = loadingStage(loader);   // 진행 단계 + 경과 초(2026-11-09)
   const chatArea = document.getElementById('chat-area');
 
   try {
@@ -4315,15 +4338,15 @@ async function sendChat() {
     let streamEl = null;
     let lastRender = 0;
     const onDelta = function(partial) {
-      if (!streamEl) { loader.remove(); streamEl = appendMsg('ai', ''); }
+      if (!streamEl) { stopStage(); loader.remove(); streamEl = appendMsg('ai', ''); }
       const now = Date.now();
       if (now - lastRender < 120) return;
       lastRender = now;
       streamEl.innerHTML = '<div class="msg-name">통신 정책 AI Agent</div>' + renderMd(partial);
       chatArea.scrollTop = chatArea.scrollHeight;
     };
-    const answer = await callClaude(text, onDelta);
-    if (!streamEl) { loader.remove(); streamEl = appendMsg('ai', ''); }
+    const answer = await callClaude(text, onDelta, stopStage.set);
+    if (!streamEl) { stopStage(); loader.remove(); streamEl = appendMsg('ai', ''); }
     const msgEl = streamEl;
     msgEl.innerHTML = '<div class="msg-name">통신 정책 AI Agent</div>' + renderMd(answer);
     chatArea.scrollTop = chatArea.scrollHeight;
@@ -4479,6 +4502,7 @@ async function sendChat() {
       } catch(e) { console.warn('자문 이력(chat_logs) 저장 실패(답변은 정상):', e); }
     }
   } catch(e) {
+    stopStage();
     loader.remove();
     appendMsg('ai', '⚠️ ' + e.message);
   } finally {
