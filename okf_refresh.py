@@ -26,12 +26,23 @@ DB 우선(번들 파일은 안 쓴다): Actions는 저장소에 커밋하지 않
   python okf_refresh.py --only 금지행위       # 특정 법령만(제목 조각)
   python okf_refresh.py                      # 실행. 한 번에 --limit(기본 5)건까지 — 나머지는 다음 실행
   python okf_refresh.py --limit 20 --allow-api   # 상한을 넘겨 돌릴 때(수동, 비용 확인 후)
+  python okf_refresh.py --only 재난 --from-file 새요약.md --dry-run     # 세션이 쓴 문서의 검증만(DB 무변경)
+  python okf_refresh.py --only 재난 --from-file 새요약.md --no-notify   # 세션 문서를 같은 검증·적재 경로로(모델 호출 0)
+  python okf_refresh.py --only 재난 --retry-failed                     # 실패 기억을 무시하고 다시 호출(비용 확인 후)
 필요 .env: SUPABASE_URL, SUPABASE_SERVICE_KEY, ANTHROPIC_API_KEY, VOYAGE_API_KEY (+ TELEGRAM_*)
+
+실패 기억(2026-11-15, #341): 실패한 대상은 고쳐질 때까지 매일 다시 호출돼 매일 같은 실패에 과금됐다
+(재난안전법 시행령 — 구판 요약 47,339자가 출력 상한을 넘겨 4회, 회당 ≈$0.76). 그래서
+  ① 실패·보류한 대상(요약 path + 새 호수)을 system_health 'okf_refresh_held'에 적어 두고 다음 실행부터는
+     호출하지 않는다 — 운영자 봇에 첫날 한 번, 그 뒤 7일마다 「세션 처리 대기」 한 줄. 더 새 판이 오면 한 번 다시 시도.
+  ② 구판 요약이 OLD_BODY_AUTO_MAX자를 넘으면 처음부터 호출하지 않는다(출력이 잘릴 것이 뻔하다).
+  ③ 대기 건은 세션이 요약을 써서 --from-file로 넣는다(모델 호출만 건너뛰고 검증·적재·구판 보존은 같다).
 """
 
 import os
 import re
 import sys
+import json
 import time
 import argparse
 from datetime import datetime, timezone, timedelta
@@ -66,6 +77,17 @@ DEFAULT_LIMIT = 5                  # 한 실행의 무인 상한(비용 상한 �
 DIFF_MAX_CHARS = 60_000            # 직전 판과의 조문 차이 블록 상한
 DIFF_OLD_EXCERPT = 2_500           # 개정 조문의 구판 원문 발췌 상한(조문당)
 SITE = 'okf_refresh.py:rewrite'
+# 출력 상한 3.2만 토큰 ÷ 실측 0.94~0.98토큰/자(2026-11-10 성공 3건) ≈ 문서 3.3만 자. frontmatter와 재작성 때
+# 늘어나는 분량 ≈3%를 빼면 구판 본문 3.1만 자가 자동 처리의 끝이다 — 넘으면 호출하지 않고 세션 처리로 넘긴다(#341).
+OLD_BODY_AUTO_MAX = 31_000
+HELD_KEY = 'okf_refresh_held'      # system_health: note = JSON {"<path>><새 호수>": {t, why, since, last}}
+HELD_REMIND_DAYS = 7               # 대기 건 다시 알림 간격 — 매일 같은 목록을 보내지 않는다(#197)
+HELD_SOFT_TRIES = 2                # 연결·적재 오류(우리 검증이 아닌 예외)는 이만큼 연속 실패해야 대기로 — 일시 장애는 다음 날 한 번 더
+
+
+class RefreshRejected(ValueError):
+    """이 스크립트가 스스로 내린 기각(입력 초과·출력 잘림·검증 실패·긴 요약 보류). 같은 판을 다시 불러도 같은 결과라
+    한 번이면 대기로 넘긴다. 그 밖의 예외(연결·임베딩·적재 오류)는 일시 장애일 수 있어 HELD_SOFT_TRIES번까지 본다."""
 
 SYSTEM_PROMPT = (
     "너는 대한민국 전파·통신 규제 전문가이자 SK텔레콤 기술정책팀 지식베이스(OKF)의 편집자다. "
@@ -191,18 +213,18 @@ def validate_output(md: str, old_body: str, new_path: str, meta):
     """(fm, body) 또는 ValueError. 잘린 문서·형식 이탈·분량 급변을 적재 전에 막는다."""
     md = strip_fence(md)
     if not md.startswith('---'):
-        raise ValueError('frontmatter 없음')
+        raise RefreshRejected('frontmatter 없음')
     fm, body = ikb.split_frontmatter(md)
     body = body.strip()
     if '# 요약' not in body:
-        raise ValueError("'# 요약' 섹션 없음")
+        raise RefreshRejected("'# 요약' 섹션 없음")
     ok, why = ikb.check_body_complete(new_path, body)
     if not ok:
-        raise ValueError(why)
+        raise RefreshRejected(why)
     # 입력 블록 이름의 '언급'은 표현만 바꾼다(첫 체인 실행에서 국가재정법 시행령이 이걸로 기각돼 $0.38이 버려졌다, #198-보론).
     # 기각은 블록이 통째로 섞인 경우([메타] 머리와 그 값 줄)만.
     if re.search(r'\[메타\]\s*\n\s*title=', body):
-        raise ValueError('프롬프트 블록이 본문에 통째로 섞임')
+        raise RefreshRejected('프롬프트 블록이 본문에 통째로 섞임')
     for label, plain in (('[새 판 전문]', '새 판 조문'), ('[직전 판과의 조문 차이]', '직전 판과의 조문 차이')):
         body = body.replace(label, plain)
     body = re.sub(r'\[구판 요약 문서 전문[^\]\n]*\]', '구판 요약', body)
@@ -210,9 +232,9 @@ def validate_output(md: str, old_body: str, new_path: str, meta):
     body = body.replace('제N호(', meta['new_no'] + '(').replace('제N호 ', meta['new_no'] + ' ')
     lo, hi = len(old_body or '') * 0.5, max(len(old_body or '') * 2.5, 3000)
     if old_body and not (lo <= len(body) <= hi):
-        raise ValueError(f'분량 급변: 구판 {len(old_body)}자 → {len(body)}자')
+        raise RefreshRejected(f'분량 급변: 구판 {len(old_body)}자 → {len(body)}자')
     if meta['new_no'] not in (fm.get('law_number') or '') and meta['new_no'] not in body[:4000]:
-        raise ValueError(f"새 호수 {meta['new_no']}가 문서에 없음")
+        raise RefreshRejected(f"새 호수 {meta['new_no']}가 문서에 없음")
     return fm, body
 
 
@@ -222,7 +244,84 @@ def est_cost(usage) -> float:
         + g('output_tokens') / 1e6 * PRICE_OUT
 
 
-def format_refresh_report(done, fails, skipped, now=None):
+def too_long_for_auto(old_body: str):
+    """구판 요약이 자동 처리 한도를 넘으면 사유(글자), 아니면 None. 사유에 '세션 처리'가 들어가야 보류로 분류된다."""
+    n = len(old_body or '')
+    if n > OLD_BODY_AUTO_MAX:
+        return f'구판 요약 {n:,}자 > 자동 상한 {OLD_BODY_AUTO_MAX:,}자(출력이 잘린다) — 세션 처리'
+    return None
+
+
+# ── 실패 기억(#341): 같은 실패를 매일 다시 호출하지 않는다 ──────────────
+
+def held_key(d) -> str:
+    """기억의 열쇠 = 요약 path + 새 판 호수(okf_drift_check.drift_signature의 낱개와 같은 꼴).
+    더 새 판이 오면 열쇠가 달라져 그 판은 한 번 다시 시도된다."""
+    return f"{d['path']}>{d['cur_no']}"
+
+
+def parse_held(note) -> dict:
+    """system_health note(JSON 글자) → {열쇠: {t, why, since, last}}. 깨진 값은 빈 기억으로 읽는다."""
+    try:
+        v = json.loads(note or '{}')
+    except Exception:
+        return {}
+    return {k: x for k, x in v.items() if isinstance(x, dict)} if isinstance(v, dict) else {}
+
+
+def held_blocks(entry) -> bool:
+    """이 기억이 호출을 막는가 — 우리 기각(soft 아님)은 한 번이면, 그 밖의 예외는 HELD_SOFT_TRIES번 연속이면 막는다."""
+    if not isinstance(entry, dict):
+        return False
+    return (not entry.get('soft')) or int(entry.get('n') or 1) >= HELD_SOFT_TRIES
+
+
+def plan_targets(drift, held, limit):
+    """(호출할 대상, 상한 밖, 대기) — 기억이 막는 대상은 호출하지 않고, 실행당 상한은 나머지에만 건다."""
+    blocked = lambda d: held_blocks(held.get(held_key(d)))
+    waiting = [d for d in drift if blocked(d)]
+    cands = [d for d in drift if not blocked(d)]
+    return cands[:limit], cands[limit:], waiting
+
+
+def next_held(stored, drift_keys, done_keys, failed, today):
+    """다음 기억 = (옛 기억 중 아직 어긋나 있고 이번에 끝나지 않은 것) + 이번 실패.
+    failed = [(d, 사유, soft)] — soft는 우리 기각이 아닌 예외(일시 장애일 수 있음). since는 처음 실패한 날을 지키고,
+    n은 같은 판의 연속 실패 횟수, 새로 실패한 건의 last(마지막 알림)는 오늘."""
+    out = {k: dict(v) for k, v in (stored or {}).items() if k in drift_keys and k not in done_keys}
+    for d, why, soft in failed:
+        k = held_key(d)
+        prev = (stored or {}).get(k) or {}
+        out[k] = {'t': d['title'], 'why': (why or '')[:100], 'since': prev.get('since') or today, 'last': today,
+                  'n': int(prev.get('n') or 0) + 1}
+        if soft:
+            out[k]['soft'] = True
+    return out
+
+
+def _days_between(a: str, b: str):
+    try:
+        return (datetime.strptime(b, '%Y-%m-%d') - datetime.strptime(a, '%Y-%m-%d')).days
+    except Exception:
+        return None
+
+
+def due_reminders(held, waiting, today, every=HELD_REMIND_DAYS):
+    """대기 건 중 오늘 다시 알릴 것 [(열쇠, 제목, 사유, since, 일수)] — 마지막 알림에서 every일이 지난 것만.
+    날짜를 못 읽으면 알린다(조용히 잊히는 쪽보다 한 줄 더 가는 쪽)."""
+    out = []
+    for d in waiting:
+        k = held_key(d)
+        h = held.get(k) or {}
+        gap = _days_between(h.get('last') or h.get('since') or '', today)
+        if gap is None or gap >= every:
+            days = _days_between(h.get('since') or '', today)
+            out.append((k, h.get('t') or d['title'], h.get('why') or '', h.get('since') or '?',
+                        (days + 1) if days is not None else 0))
+    return out
+
+
+def format_refresh_report(done, fails, skipped, now=None, waiting=None):
     now = now or datetime.now(KST).strftime('%m/%d %H:%M')
     lines = []
     if done:
@@ -240,8 +339,15 @@ def format_refresh_report(done, fails, skipped, now=None):
         lines.append(f"❌ <b>자동 갱신 실패 {len(fails)}건</b>" + ("" if done else f" ({now})") + " — 세션 처리 필요")
         for t, why in fails:
             lines.append(f"· {t}: {why}")
+        lines.append("<i>검증·잘림 실패는 같은 판을 자동으로 다시 시도하지 않습니다(반복 과금 방지) — 세션에서 --from-file로 처리. "
+                     "연결·적재 오류만 다음 실행에서 한 번 더 봅니다.</i>")
     if skipped:
         lines.append(f"⏭ 보류 {len(skipped)}건: " + ", ".join(f"{t}({why})" for t, why in skipped))
+    if waiting:
+        lines.append(f"⏳ <b>세션 처리 대기 {len(waiting)}건</b>" + ("" if (done or fails) else f" ({now})")
+                     + " — 자동 재시도 안 함")
+        for _k, t, why, since, days in waiting:
+            lines.append(f"· {t}: {why} · {since}부터 {days}일째")
     return "\n".join(lines)
 
 
@@ -284,6 +390,16 @@ def load_kb_row(sb, path):
     return (r.data or [None])[0]
 
 
+def load_held(sb):
+    """실패 기억 조회 → dict. 행이 없으면 {}, 조회가 실패하면 None(호출자는 기억 없이 진행 — 갱신 본업을 막지 않는다)."""
+    try:
+        r = sb.table('system_health').select('note').eq('key', HELD_KEY).maybe_single().execute()
+        return parse_held((getattr(r, 'data', None) or {}).get('note'))
+    except Exception as e:
+        print(f"  (실패 기억 조회 실패 — 기억 없이 진행) {str(e)[:80]}")
+        return None
+
+
 def call_model(client, user_prompt, dry_run=False):
     """스트리밍(긴 출력) → 최종 메시지. usage는 api_usage에 명시 기록(스트림은 래퍼가 못 잡는다)."""
     kwargs = dict(model=MODEL, max_tokens=MAX_OUTPUT_TOKENS, system=SYSTEM_PROMPT,
@@ -292,7 +408,7 @@ def call_model(client, user_prompt, dry_run=False):
     n_in = client.messages.count_tokens(model=MODEL, system=SYSTEM_PROMPT,
                                         messages=kwargs['messages']).input_tokens
     if n_in > MAX_INPUT_TOKENS:
-        raise ValueError(f'입력 {n_in:,} 토큰 > 상한 {MAX_INPUT_TOKENS:,} — 세션 처리')
+        raise RefreshRejected(f'입력 {n_in:,} 토큰 > 상한 {MAX_INPUT_TOKENS:,} — 세션 처리')
     if dry_run:
         return None, n_in, None
     with client.messages.stream(**kwargs) as s:
@@ -300,7 +416,7 @@ def call_model(client, user_prompt, dry_run=False):
     api_usage.record_usage(SITE, msg.usage, MODEL)
     text = ''.join(b.text for b in msg.content if getattr(b, 'type', '') == 'text')
     if msg.stop_reason == 'max_tokens':
-        raise ValueError('출력이 max_tokens에서 잘림')
+        raise RefreshRejected('출력이 max_tokens에서 잘림')
     return text, n_in, msg.usage
 
 
@@ -335,7 +451,7 @@ def write_kb(sb, kb_row, fm, body, meta, path):
 def refresh_one(sb, client, d, args):
     kb_row = load_kb_row(sb, d['path'])
     if not kb_row:
-        raise ValueError('구판 kb_documents 행을 못 찾음(이미 처리됨?)')
+        raise RefreshRejected('구판 kb_documents 행을 못 찾음(이미 처리됨?)')
     title = kb_row['title']
     if d.get('renamed_to') and d.get('renamed_from') and d['renamed_from'] in title:
         title = title.replace(d['renamed_from'], d['renamed_to'])   # 법제처 명칭 변경(#333) — 제목도 새 이름
@@ -348,7 +464,7 @@ def refresh_one(sb, client, d, args):
         meta['renamed'] = (d['renamed_from'], d['renamed_to'])
     new_chunks = fetch_chunks(sb, d['doc_name'], status='current')
     if not new_chunks:
-        raise ValueError('새 판 조문이 비어 있음')
+        raise RefreshRejected('새 판 조문이 비어 있음')
     w = (sb.table('law_watch').select('law_id').eq('doc_name', d['doc_name']).limit(1).execute().data or [{}])[0]
     prev_doc = find_prev_doc(sb, w.get('law_id'), d['doc_name'], d['kb_enf'])
     diff = article_diff(fetch_chunks(sb, prev_doc), new_chunks) if prev_doc else None
@@ -358,14 +474,33 @@ def refresh_one(sb, client, d, args):
     print(f"\n■ {meta['title']}: {kb_row.get('law_number')} → {meta['new_no']}({meta['new_enf']})")
     print(f"  새 판 {len(new_chunks)}청크 · 구판 요약 {len(old_body):,}자 · 직전 판 {'있음' if prev_doc else '없음'}"
           + (f" (신설 {len(diff['added'])}·삭제 {len(diff['removed'])}·개정 {len(diff['changed'])})" if diff else ''))
-    text, n_in, usage = call_model(client, prompt, dry_run=args.dry_run)
-    print(f"  입력 {n_in:,} 토큰 (예상 ≈ ${n_in / 1e6 * PRICE_IN + 0.10:.2f}) → {path}")
-    if args.dry_run:
-        return None
+    if diff:                                                 # 세션 처리 때 어디가 바뀌었는지 바로 보이게(이름만)
+        for label, key in (('신설', 'added'), ('삭제', 'removed'), ('개정', 'changed')):
+            if diff[key]:
+                print(f"    [{label}] " + ", ".join(a[:40] for a in diff[key][:20]) + (" …" if len(diff[key]) > 20 else ""))
+    from_file = getattr(args, 'from_file', None)
+    if from_file:
+        # 세션이 쓴 문서(#341) — 모델 호출만 건너뛴다. 검증·새 path 적재·임베딩·구판 superseded는 아래 그대로
+        with open(from_file, encoding='utf-8') as f:
+            text = f.read()
+        n_in, usage = 0, None
+        print(f"  세션 문서 {from_file} ({len(text):,}자) → {path}")
+    else:
+        why = too_long_for_auto(old_body)                    # 출력이 잘릴 것이 뻔한 건은 호출 전에 보류
+        if why:
+            raise RefreshRejected(why)
+        text, n_in, usage = call_model(client, prompt, dry_run=args.dry_run)
+        print(f"  입력 {n_in:,} 토큰 (예상 ≈ ${n_in / 1e6 * PRICE_IN + 0.10:.2f}) → {path}")
+        if args.dry_run:
+            return None
     fm, body = validate_output(text, old_body, path, meta)
+    if args.dry_run:                                         # --from-file --dry-run = 검증만
+        print(f"  ✓ 검증 통과(DB 무변경) · 본문 {len(old_body):,} → {len(body):,}자 · law_number={fm.get('law_number')}")
+        return None
     doc_id, n_chunks = write_kb(sb, kb_row, fm, body, meta, path)
     cost = est_cost(usage)
-    print(f"  ✓ 적재 doc_id={doc_id} 청크 {n_chunks} · 본문 {len(body):,}자 · 출력 {usage.output_tokens:,} 토큰 · ${cost:.2f}")
+    out_tok = int(getattr(usage, 'output_tokens', 0) or 0)
+    print(f"  ✓ 적재 doc_id={doc_id} 청크 {n_chunks} · 본문 {len(body):,}자 · 출력 {out_tok:,} 토큰 · ${cost:.2f}")
     return {'title': meta['title'], 'old_no': kb_row.get('law_number'), 'new_no': meta['new_no'],
             'new_enf': meta['new_enf'], 'old_len': len(old_body), 'new_len': len(body),
             'chunks': n_chunks, 'diff': diff, 'cost': cost, 'path': path}
@@ -378,43 +513,80 @@ def main():
     ap.add_argument('--limit', type=int, default=DEFAULT_LIMIT, help=f'한 실행의 처리 상한(기본 {DEFAULT_LIMIT})')
     ap.add_argument('--allow-api', action='store_true', help='기본 상한을 넘겨 돌릴 때 필요')
     ap.add_argument('--no-notify', action='store_true')
+    ap.add_argument('--from-file', help='세션이 쓴 요약 문서(md)를 모델 호출 없이 같은 검증·적재 경로로 넣는다. '
+                                        '--only로 대상이 정확히 1건이어야 함. --dry-run과 함께면 검증만')
+    ap.add_argument('--retry-failed', action='store_true',
+                    help='실패 기억(세션 처리 대기)을 무시하고 다시 호출 — --allow-api 필요(같은 실패면 또 과금)')
     a = ap.parse_args()
 
     url, key = os.getenv('SUPABASE_URL'), os.getenv('SUPABASE_SERVICE_KEY')
-    if not (url and key and os.getenv('ANTHROPIC_API_KEY')):
+    if not (url and key and (a.from_file or os.getenv('ANTHROPIC_API_KEY'))):
         print("오류: .env에 SUPABASE_URL, SUPABASE_SERVICE_KEY, ANTHROPIC_API_KEY 필요")
         sys.exit(1)
     if a.limit > DEFAULT_LIMIT and not a.allow_api:
         print(f"오류: --limit {a.limit} > 기본 {DEFAULT_LIMIT} — --allow-api 필요(비용 확인 후)")
         sys.exit(1)
+    if a.retry_failed and not a.allow_api:
+        print("오류: --retry-failed는 실패했던 대상을 다시 호출한다 — --allow-api 필요(비용 확인 후)")
+        sys.exit(1)
+    if a.from_file and not (a.only and os.path.isfile(a.from_file)):
+        print("오류: --from-file은 --only <제목 조각>과 함께, 있는 파일로")
+        sys.exit(1)
     sb = sb_client.make_client(url, key)
-    import anthropic
-    client = anthropic.Anthropic()
+    client = None
+    if not a.from_file:                                      # 세션 문서 적재는 Anthropic을 부르지 않는다
+        import anthropic
+        client = anthropic.Anthropic()
 
-    drift, n_kb, n_watch = okf_drift_check.run_check(sb)
-    if a.only:
-        drift = [d for d in drift if a.only in d['title']]
-    print(f"어긋남 {len(drift)}건 (kb {n_kb} · 감시 {n_watch}) · 상한 {a.limit} · dry-run={a.dry_run}")
-    targets, deferred = drift[:a.limit], drift[a.limit:]
+    drift_all, n_kb, n_watch = okf_drift_check.run_check(sb)
+    drift = [d for d in drift_all if a.only in d['title']] if a.only else drift_all
+    if a.from_file and len(drift) != 1:
+        print(f"오류: --from-file 대상이 {len(drift)}건 — --only로 정확히 1건이 되게: "
+              + ", ".join(d['title'] for d in drift[:5]))
+        sys.exit(1)
+    stored = load_held(sb)                                   # None = 조회 실패(기억 없이 진행)
+    held = {} if (a.retry_failed or a.from_file) else (stored or {})
+    targets, deferred, waiting = plan_targets(drift, held, a.limit)
+    print(f"어긋남 {len(drift)}건 (kb {n_kb} · 감시 {n_watch}) · 상한 {a.limit} · 대기 {len(waiting)} · dry-run={a.dry_run}")
+    for d in waiting:
+        h = held.get(held_key(d)) or {}
+        print(f"  ⏳ 대기(호출 안 함): {d['title']} — {h.get('why', '')} ({h.get('since', '?')}부터)")
     done, fails, skipped = [], [], [(d['title'], '상한 초과 — 다음 실행') for d in deferred]
+    failed_now, done_keys, held_new = [], set(), 0
     for d in targets:
         try:
             r = refresh_one(sb, client, d, a)
             if r:
                 done.append(r)
+                done_keys.add(held_key(d))
         except Exception as e:
             why = str(e)[:140]
             print(f"  ! 실패({d['title'][:40]}): {why}")
-            (skipped if '세션 처리' in why else fails).append((d['title'], why))
+            session_only = '세션 처리' in why
+            (skipped if session_only else fails).append((d['title'], why))
+            held_new += 1 if session_only else 0
+            # 기억에는 우리 기각 문구만 그대로 — system_health는 공개 읽기라 그 밖의 예외는 종류 이름만 남긴다
+            ours = isinstance(e, RefreshRejected)
+            failed_now.append((d, why if ours else type(e).__name__, not ours))
         time.sleep(0.5)
 
-    print(f"\n=== 완료 {len(done)} · 실패 {len(fails)} · 보류 {len(skipped)} ===")
+    print(f"\n=== 완료 {len(done)} · 실패 {len(fails)} · 보류 {len(skipped)} · 대기 {len(waiting)} ===")
     if a.dry_run:
         return
     sb_client.heartbeat(sb, 'last_okf_refresh_run',
-                        f'targets={len(targets)} done={len(done)} fail={len(fails)} skip={len(skipped)}')
-    if (done or fails) and not a.no_notify:
-        ok = tg_notify.send_telegram(format_refresh_report(done, fails, skipped),
+                        f'targets={len(targets)} done={len(done)} fail={len(fails)} skip={len(skipped)} held={len(waiting)}')
+    # 실패 기억 갱신(#341) — 세션 문서 적재 실패(--from-file)는 기억하지 않는다(문서를 고쳐 다시 넣으면 된다)
+    today = datetime.now(KST).strftime('%Y-%m-%d')
+    base = stored or {}
+    new_held = next_held(base, {held_key(d) for d in drift_all}, done_keys,
+                         [] if a.from_file else failed_now, today)
+    remind = due_reminders(new_held, waiting, today)
+    for k, *_ in remind:
+        new_held[k]['last'] = today
+    if new_held != base and (stored is not None or failed_now):
+        sb_client.heartbeat(sb, HELD_KEY, json.dumps(new_held, ensure_ascii=False, sort_keys=True))
+    if (done or fails or held_new or remind) and not a.no_notify:
+        ok = tg_notify.send_telegram(format_refresh_report(done, fails, skipped, waiting=remind),
                                      parse_mode='HTML', disable_web_page_preview=True)
         print("  ✓ 통지" if ok else "  ! 통지 실패")
     if done:
